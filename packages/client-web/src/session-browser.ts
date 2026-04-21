@@ -168,12 +168,7 @@ export function deriveWorkspaceInfos(
     }
   }
 
-  return [...map.values()].sort((a, b) => {
-    if (a.liveCount !== b.liveCount) {
-      return b.liveCount - a.liveCount;
-    }
-    return b.latestUpdatedAt.localeCompare(a.latestUpdatedAt);
-  });
+  return [...map.values()];
 }
 
 export function deriveWorkspaceSections(

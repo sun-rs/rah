@@ -4,16 +4,18 @@ import type { WorkspaceSection } from "./session-browser";
 import { formatRelativeTime } from "./session-browser";
 import {
   ChevronRight,
-  Folder,
   FolderPlus,
   Plus,
   RefreshCcw,
   X,
 } from "lucide-react";
-import { sessionInteractionLabel, sessionInteractionMode } from "./session-capabilities";
+import {
+  isSessionActivelyRunning,
+  sessionInteractionLabel,
+  sessionInteractionMode,
+} from "./session-capabilities";
 import { providerLabel } from "./types";
 import { WorkspacePicker } from "./components/WorkspacePicker";
-import { ProviderLogo } from "./components/ProviderLogo";
 
 function LiveSessionRow(props: {
   session: SessionSummary;
@@ -22,22 +24,33 @@ function LiveSessionRow(props: {
 }) {
   const session = props.session.session;
   const interactionMode = sessionInteractionMode(props.session);
-  const interactionLabel = sessionInteractionLabel(props.session);
+  const isRunning = isSessionActivelyRunning(props.session);
+
+  const statusColor =
+    interactionMode === "read_only_replay"
+      ? "bg-amber-500"
+      : interactionMode === "observe_only"
+        ? "bg-[var(--app-muted)]"
+        : "bg-emerald-500";
 
   return (
     <button
       type="button"
       onClick={props.onSelect}
-      className={`w-full text-left rounded-md px-2 py-1.5 transition-colors ${
+      className={`w-full text-left rounded-lg px-3 py-2 transition-colors border ${
         props.selected
-          ? "bg-[var(--app-bg)] text-[var(--app-fg)]"
-          : "text-[var(--app-hint)] hover:bg-[var(--app-bg)]/60"
+          ? "bg-[var(--app-bg)]/70 border-[var(--app-border)] text-[var(--app-fg)]"
+          : "border-transparent text-[var(--app-fg)] hover:bg-[var(--app-bg)]/40"
       }`}
     >
       <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2 min-w-0">
-          <ProviderLogo provider={session.provider} className="h-4 w-4" />
-          <span className="text-sm truncate">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <span className={`relative inline-flex h-[7px] w-[7px] rounded-full shrink-0 ${statusColor}`}>
+            {isRunning && interactionMode === "interactive" ? (
+              <span className="absolute inset-0 rounded-full bg-emerald-500 animate-pulse" />
+            ) : null}
+          </span>
+          <span className="text-sm font-medium truncate">
             {session.title ?? providerLabel(session.provider)}
           </span>
         </div>
@@ -45,20 +58,8 @@ function LiveSessionRow(props: {
           {formatRelativeTime(session.updatedAt) ?? ""}
         </span>
       </div>
-      <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-[var(--app-hint)] pl-6">
-        <span>{session.runtimeState}</span>
-        <span className="text-[var(--app-border)]">·</span>
-        <span
-          className={
-            interactionMode === "read_only_replay"
-              ? "text-amber-600 dark:text-amber-400"
-              : interactionMode === "observe_only"
-                ? "text-[var(--app-hint)]"
-                : "text-emerald-600 dark:text-emerald-400"
-          }
-        >
-          {interactionLabel}
-        </span>
+      <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-[var(--app-hint)] pl-[18px]">
+        <span className="capitalize">{session.runtimeState}</span>
       </div>
     </button>
   );
@@ -66,32 +67,27 @@ function LiveSessionRow(props: {
 
 function WorkspaceGroup(props: {
   section: WorkspaceSection;
-  selectedWorkspaceDir: string;
   selectedSessionId: string | null;
   expanded: boolean;
   onToggle: () => void;
-  onSelectWorkspace: () => void;
   onRemoveWorkspace: () => void;
   onSelectSession: (sessionId: string) => void;
 }) {
-  const selected = props.section.workspace.directory === props.selectedWorkspaceDir;
   const hasSessions = props.section.sessions.length > 0;
 
   return (
-    <div className="group">
+    <div className="group/workspace">
       <div
-        className={`flex items-center gap-1.5 rounded-lg px-1.5 py-1.5 transition-colors ${
-          selected ? "bg-[var(--app-bg)]" : "hover:bg-[var(--app-bg)]/50"
-        }`}
+        className="flex items-center gap-1.5 rounded-lg border border-transparent px-2 py-2 transition-colors hover:bg-[var(--app-bg)]/30"
       >
         <button
           type="button"
           onClick={props.onToggle}
-          className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-[var(--app-hint)] hover:text-[var(--app-fg)] hover:bg-[var(--app-bg)] transition-colors"
+          className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-[var(--app-hint)] hover:text-[var(--app-fg)] transition-colors"
           aria-label={props.expanded ? "Collapse" : "Expand"}
         >
           <ChevronRight
-            size={14}
+            size={12}
             className={`transition-transform duration-150 ${
               props.expanded ? "rotate-90" : ""
             }`}
@@ -100,24 +96,18 @@ function WorkspaceGroup(props: {
 
         <button
           type="button"
-          onClick={props.onSelectWorkspace}
+          onClick={props.onToggle}
           className="min-w-0 flex-1 text-left"
           title={props.section.workspace.directory}
         >
-          <div className="flex items-center gap-2">
-            <Folder size={14} className="text-[var(--app-hint)] shrink-0" />
-            <span className={`text-sm truncate ${selected ? "font-medium text-[var(--app-fg)]" : "text-[var(--app-fg)]"}`}>
-              {props.section.workspace.displayName}
-            </span>
-          </div>
+          <span className="text-sm truncate text-[var(--app-fg)]">
+            {props.section.workspace.displayName}
+          </span>
         </button>
 
-        <div className="flex items-center gap-1 shrink-0">
-          {selected ? (
-            <span className="h-1.5 w-1.5 rounded-full bg-primary" />
-          ) : null}
+        <div className="flex items-center gap-1.5 shrink-0">
           {hasSessions ? (
-            <span className="text-[11px] tabular-nums text-[var(--app-hint)] min-w-[1rem] text-right">
+            <span className="text-[11px] tabular-nums text-[var(--app-hint)] bg-[var(--app-bg)]/50 px-1.5 py-0.5 rounded-md">
               {props.section.sessions.length}
             </span>
           ) : null}
@@ -125,20 +115,20 @@ function WorkspaceGroup(props: {
             type="button"
             disabled={props.section.workspace.hasBlockingLiveSessions}
             onClick={props.onRemoveWorkspace}
-            className="inline-flex h-6 w-6 items-center justify-center rounded text-[var(--app-hint)] opacity-40 group-hover:opacity-100 hover:bg-[var(--app-danger)]/10 hover:text-[var(--app-danger)] disabled:opacity-35 disabled:hover:bg-transparent disabled:hover:text-[var(--app-hint)] transition-all"
+            className="inline-flex h-5 w-5 items-center justify-center rounded text-[var(--app-hint)] opacity-0 group-hover/workspace:opacity-100 hover:bg-[var(--app-danger)]/10 hover:text-[var(--app-danger)] disabled:opacity-0 disabled:hover:bg-transparent disabled:hover:text-[var(--app-hint)] transition-all"
             title={
               props.section.workspace.hasBlockingLiveSessions
                 ? "Cannot remove a workspace with live sessions in this folder or its descendants"
                 : "Remove workspace"
             }
           >
-            <X size={12} strokeWidth={2.5} />
+            <X size={11} strokeWidth={2.5} />
           </button>
         </div>
       </div>
 
       {props.expanded ? (
-        <div className="pl-8 pr-1 pb-0.5 space-y-0.5">
+        <div className="pl-7 pr-1 pb-0.5 space-y-0.5">
           {hasSessions ? (
             props.section.sessions.map((session) => (
               <LiveSessionRow
@@ -149,7 +139,7 @@ function WorkspaceGroup(props: {
               />
             ))
           ) : (
-            <div className="px-2 py-1.5 text-xs text-[var(--app-hint)]">No live sessions.</div>
+            <div className="px-3 py-2 text-xs text-[var(--app-hint)]">No live sessions.</div>
           )}
         </div>
       ) : null}
@@ -159,8 +149,6 @@ function WorkspaceGroup(props: {
 
 export function SessionSidebar(props: {
   workspaceSections: WorkspaceSection[];
-  workspaceDir: string;
-  onWorkspaceDirChange: (value: string) => void;
   onAddWorkspace: (value: string) => void;
   onRemoveWorkspace: (value: string) => void;
   onOpenNewSession: () => void;
@@ -181,39 +169,38 @@ export function SessionSidebar(props: {
     setExpandedWorkspaceDirs((current) => {
       const next = current.filter((directory) => workspaceDirs.includes(directory));
       for (const section of props.workspaceSections) {
-        const shouldDefaultExpand =
-          section.workspace.directory === props.workspaceDir || section.workspace.liveCount > 0;
+        const shouldDefaultExpand = section.workspace.liveCount > 0;
         if (shouldDefaultExpand && !next.includes(section.workspace.directory)) {
           next.push(section.workspace.directory);
         }
       }
       return next;
     });
-  }, [props.workspaceDir, props.workspaceSections, workspaceDirs]);
+  }, [props.workspaceSections, workspaceDirs]);
 
   return (
-    <div className="space-y-4">
+    <div className="min-h-full space-y-4 bg-[var(--app-subtle-bg)]">
       {/* Toolbar */}
-      <div className="flex items-center gap-1 rounded-lg bg-[var(--app-bg)] p-1">
+      <div className="flex items-center gap-1.5">
         <WorkspacePicker
           currentDir=""
-          triggerLabel="Workspace"
+          triggerLabel="Add"
           triggerIcon={<FolderPlus size={14} />}
-          triggerClassName="flex-1 h-8 px-3 rounded-md bg-[var(--app-subtle-bg)] text-xs font-medium text-[var(--app-hint)] hover:text-[var(--app-fg)] transition-colors inline-flex items-center justify-center gap-1.5"
+          triggerClassName="h-8 px-3 rounded-lg bg-[var(--app-bg)] text-xs font-medium text-[var(--app-hint)] hover:text-[var(--app-fg)] transition-colors inline-flex items-center justify-center gap-1.5"
           onSelect={props.onAddWorkspace}
         />
         <button
-          className="flex-1 h-8 px-3 rounded-md bg-[var(--app-subtle-bg)] text-xs font-medium text-[var(--app-hint)] hover:text-[var(--app-fg)] transition-colors inline-flex items-center justify-center gap-1.5"
+          className="flex-1 h-8 px-3 rounded-lg bg-[var(--app-bg)] text-xs font-medium text-[var(--app-hint)] hover:text-[var(--app-fg)] transition-colors inline-flex items-center justify-center gap-1.5"
           onClick={props.onOpenNewSession}
           title="New session"
         >
           <Plus size={14} />
-          Session
+          New session
         </button>
         <button
           type="button"
           onClick={props.onRefresh}
-          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-[var(--app-subtle-bg)] text-[var(--app-hint)] hover:text-[var(--app-fg)] transition-colors"
+          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--app-bg)] text-[var(--app-hint)] hover:text-[var(--app-fg)] transition-colors"
           title="Refresh"
         >
           <RefreshCcw size={14} />
@@ -234,7 +221,6 @@ export function SessionSidebar(props: {
               <WorkspaceGroup
                 key={section.workspace.directory}
                 section={section}
-                selectedWorkspaceDir={props.workspaceDir}
                 selectedSessionId={props.selectedSessionId}
                 expanded={expandedWorkspaceDirs.includes(section.workspace.directory)}
                 onToggle={() =>
@@ -244,7 +230,6 @@ export function SessionSidebar(props: {
                       : [...current, section.workspace.directory],
                   )
                 }
-                onSelectWorkspace={() => props.onWorkspaceDirChange(section.workspace.directory)}
                 onRemoveWorkspace={() => props.onRemoveWorkspace(section.workspace.directory)}
                 onSelectSession={props.onSelectSession}
               />
@@ -272,15 +257,12 @@ export function SessionSidebar(props: {
                 key={scenario.id}
                 type="button"
                 onClick={() => props.onStartScenario(scenario)}
-                className="w-full text-left rounded-lg px-2 py-1.5 transition-colors hover:bg-[var(--app-bg)] text-[var(--app-hint)]"
+                className="w-full text-left rounded-lg px-3 py-2 transition-colors hover:bg-[var(--app-bg)]/60"
               >
-                <div className="flex items-center gap-2">
-                  <ProviderLogo provider={scenario.provider} className="h-4 w-4" />
-                  <span className="text-sm font-medium truncate text-[var(--app-fg)]">
-                    {scenario.label}
-                  </span>
-                </div>
-                <div className="mt-0.5 text-[11px] text-[var(--app-hint)] line-clamp-2 pl-6">
+                <span className="text-sm font-medium truncate text-[var(--app-fg)]">
+                  {scenario.label}
+                </span>
+                <div className="mt-0.5 text-[11px] text-[var(--app-hint)] line-clamp-2">
                   {scenario.description}
                 </div>
               </button>

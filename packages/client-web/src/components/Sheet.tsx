@@ -14,8 +14,10 @@ export function Sheet(props: {
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 bg-black/40 z-50" />
         <Dialog.Content
-          className={`fixed top-0 bottom-0 z-50 w-80 max-w-[85vw] bg-[var(--app-bg)] border-[var(--app-border)] shadow-xl outline-none ${
-            props.side === "left" ? "left-0 border-r" : "right-0 border-l"
+          className={`fixed top-0 bottom-0 z-50 w-80 max-w-[85vw] border-[var(--app-border)] shadow-xl outline-none ${
+            props.side === "left"
+              ? "left-0 border-r bg-[var(--app-subtle-bg)]"
+              : "right-0 border-l bg-[var(--app-bg)]"
           } flex flex-col`}
         >
           <div className="flex items-center justify-between border-b border-[var(--app-border)] px-4 py-3 shrink-0">

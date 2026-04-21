@@ -66,6 +66,7 @@ function workspaceSummary(args: {
   cwd?: string;
   steerInput?: boolean;
   livePermissions?: boolean;
+  updatedAt?: string;
 }): SessionSummary {
   return {
     session: {
@@ -74,6 +75,7 @@ function workspaceSummary(args: {
       providerSessionId: `${args.id}-provider`,
       cwd: args.cwd ?? args.rootDir,
       rootDir: args.rootDir,
+      updatedAt: args.updatedAt ?? baseSummary().session.updatedAt,
       capabilities: {
         ...baseSummary().session.capabilities,
         steerInput: args.steerInput ?? true,
@@ -398,5 +400,29 @@ describe("client projection", () => {
 
     assert.equal(workspaces[0]?.liveCount, 0);
     assert.equal(workspaces[0]?.hasBlockingLiveSessions, false);
+  });
+
+  test("preserves workspace display order even when a later workspace is more recently active", () => {
+    const workspaces = deriveWorkspaceInfos(
+      ["/workspace/first", "/workspace/second"],
+      [
+        workspaceSummary({
+          id: "session-second",
+          rootDir: "/workspace/second",
+          updatedAt: "2026-04-16T00:00:00.000Z",
+        }),
+        workspaceSummary({
+          id: "session-first",
+          rootDir: "/workspace/first",
+          updatedAt: "2026-04-15T00:00:00.000Z",
+        }),
+      ],
+      [],
+    );
+
+    assert.deepEqual(
+      workspaces.map((workspace) => workspace.directory),
+      ["/workspace/first", "/workspace/second"],
+    );
   });
 });

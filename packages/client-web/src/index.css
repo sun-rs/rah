@@ -211,4 +211,26 @@
   .custom-scrollbar::-webkit-scrollbar-corner {
     background: transparent;
   }
+
+  .resize-handle {
+    width: 4px;
+    cursor: col-resize;
+    position: relative;
+    flex-shrink: 0;
+  }
+  .resize-handle::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 1px;
+    width: 2px;
+    background-color: var(--app-fg);
+    opacity: 0.12;
+    transition: opacity 0.15s;
+  }
+  .resize-handle:hover::after,
+  .resize-handle.dragging::after {
+    opacity: 0.35;
+  }
 }

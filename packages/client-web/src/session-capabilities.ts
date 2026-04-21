@@ -65,3 +65,13 @@ export function sessionInteractionNotice(summary: SessionSummary): string | null
   }
   return null;
 }
+
+export function isSessionActivelyRunning(summary: SessionSummary): boolean {
+  return [
+    "starting",
+    "running",
+    "thinking",
+    "streaming",
+    "retrying",
+  ].includes(summary.session.runtimeState);
+}

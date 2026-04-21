@@ -12,7 +12,7 @@
     "dev:daemon": "bun --cwd packages/runtime-daemon src/main.ts",
     "serve:workbench": "bun run build:web && bun --cwd packages/runtime-daemon src/main.ts",
     "typecheck": "bunx tsc -p packages/runtime-protocol/tsconfig.json --noEmit && bunx tsc -p packages/runtime-daemon/tsconfig.json --noEmit && bunx tsc -p packages/client-web/tsconfig.json --noEmit",
-    "test:web": "bun test packages/client-web/src/types.test.ts",
+    "test:web": "bun test packages/client-web/src/types.test.ts packages/client-web/src/useSessionStore.test.ts",
     "test:runtime": "bun test packages/runtime-daemon/src/provider-activity.test.ts packages/runtime-daemon/src/rah-event-contract.test.ts packages/runtime-daemon/src/debug-engine.test.ts packages/runtime-daemon/src/workbench-state.test.ts packages/runtime-daemon/src/runtime-engine.test.ts packages/runtime-daemon/src/codex-fixtures.test.ts packages/runtime-daemon/src/codex-rollout-activity.test.ts packages/runtime-daemon/src/codex-app-server-activity.test.ts packages/runtime-daemon/src/codex-adapter.test.ts packages/runtime-daemon/src/codex-live-client.test.ts packages/runtime-daemon/src/claude-session-files.test.ts packages/runtime-daemon/src/claude-adapter.test.ts packages/runtime-daemon/src/gemini-adapter.test.ts packages/runtime-daemon/src/kimi-session-files.test.ts packages/runtime-daemon/src/kimi-adapter.test.ts",
     "test:smoke:history-claim": "bash scripts/history-claim-smoke.sh",
     "test:smoke:tool-flow": "bash scripts/tool-flow-smoke.sh",

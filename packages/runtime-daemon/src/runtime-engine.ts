@@ -85,17 +85,27 @@ function workspaceDirsFromState(
   rememberedWorkspaceDirs: readonly string[],
   liveStates: readonly StoredSessionState[],
 ): string[] {
-  const directories = new Set<string>(rememberedWorkspaceDirs);
+  const directories: string[] = [];
+  const seen = new Set<string>();
+  for (const rememberedWorkspaceDir of rememberedWorkspaceDirs) {
+    const directory = normalizeDirectory(rememberedWorkspaceDir);
+    if (!directory || seen.has(directory)) {
+      continue;
+    }
+    seen.add(directory);
+    directories.push(directory);
+  }
   for (const state of liveStates) {
     if (isReadOnlyReplaySession(state)) {
       continue;
     }
     const directory = normalizeDirectory(state.session.rootDir || state.session.cwd);
-    if (directory) {
-      directories.add(directory);
+    if (directory && !seen.has(directory)) {
+      seen.add(directory);
+      directories.push(directory);
     }
   }
-  return [...directories].sort((a, b) => a.localeCompare(b));
+  return directories;
 }
 
 export class RuntimeEngine {

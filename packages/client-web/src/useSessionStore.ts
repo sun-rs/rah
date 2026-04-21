@@ -94,6 +94,7 @@ const MAX_PENDING_EVENTS_PER_SESSION = 200;
 const MAX_DEFERRED_BOOTSTRAP_EVENTS_PER_SESSION = 500;
 let pendingEventsBySession = new Map<string, RahEvent[]>();
 let deferredBootstrapEventsBySession = new Map<string, RahEvent[]>();
+let hiddenWorkspaceDirs = new Set<string>();
 
 function normalizeWorkspaceDirectory(value: string | undefined): string | null {
   if (!value) {
@@ -114,6 +115,92 @@ function sameWorkspaceDirectory(a: string | undefined, b: string | undefined): b
   const left = normalizeWorkspaceDirectory(a);
   const right = normalizeWorkspaceDirectory(b);
   return left !== null && right !== null && left === right;
+}
+
+function isHiddenWorkspace(dir: string | undefined): boolean {
+  const normalized = normalizeWorkspaceDirectory(dir);
+  return normalized !== null && hiddenWorkspaceDirs.has(normalized);
+}
+
+function hideWorkspace(dir: string): void {
+  const normalized = normalizeWorkspaceDirectory(dir);
+  if (!normalized) {
+    return;
+  }
+  hiddenWorkspaceDirs.add(normalized);
+}
+
+function revealWorkspace(dir: string | undefined): void {
+  const normalized = normalizeWorkspaceDirectory(dir);
+  if (!normalized) {
+    return;
+  }
+  hiddenWorkspaceDirs.delete(normalized);
+}
+
+function revealWorkspaceCandidates(...dirs: Array<string | undefined>): void {
+  for (const dir of dirs) {
+    revealWorkspace(dir);
+  }
+}
+
+function filterHiddenWorkspaceDirs(workspaceDirs: readonly string[]): string[] {
+  return workspaceDirs.filter((dir) => !isHiddenWorkspace(dir));
+}
+
+function appendVisibleWorkspaceDir(
+  workspaceDirs: readonly string[],
+  dir: string | undefined,
+): string[] {
+  const visibleWorkspaceDirs = filterHiddenWorkspaceDirs(workspaceDirs);
+  const normalized = normalizeWorkspaceDirectory(dir);
+  if (!normalized || isHiddenWorkspace(normalized)) {
+    return visibleWorkspaceDirs;
+  }
+  if (visibleWorkspaceDirs.some((workspaceDir) => sameWorkspaceDirectory(workspaceDir, normalized))) {
+    return visibleWorkspaceDirs;
+  }
+  return [...visibleWorkspaceDirs, normalized];
+}
+
+export function reconcileVisibleWorkspaceSelection(args: {
+  workspaceDirs: string[];
+  sessions: SessionSummary[];
+  storedSessions: StoredSessionRef[];
+  activeWorkspaceDir: string | undefined;
+  currentWorkspaceDir: string;
+  hiddenWorkspaceDirs: Iterable<string> | undefined;
+}): {
+  workspaceDirs: string[];
+  workspaceDir: string;
+} {
+  const hiddenWorkspaceDirs = new Set(
+    [...(args.hiddenWorkspaceDirs ?? [])]
+      .map((dir) => normalizeWorkspaceDirectory(dir))
+      .filter((dir): dir is string => dir !== null),
+  );
+  const isHidden = (dir: string | undefined): boolean => {
+    const normalized = normalizeWorkspaceDirectory(dir);
+    return normalized !== null && hiddenWorkspaceDirs.has(normalized);
+  };
+  const workspaceDirs = args.workspaceDirs.filter((dir) => !isHidden(dir));
+  const currentWorkspaceDir = isHidden(args.currentWorkspaceDir) ? "" : args.currentWorkspaceDir;
+  const activeWorkspaceDir = isHidden(args.activeWorkspaceDir)
+    ? undefined
+    : args.activeWorkspaceDir;
+  const workspaceDir = currentWorkspaceDir.trim()
+    ? currentWorkspaceDir
+    : inferWorkspaceDirectory(
+        workspaceDirs,
+        args.sessions,
+        args.storedSessions,
+        activeWorkspaceDir,
+        currentWorkspaceDir,
+      );
+  return {
+    workspaceDirs,
+    workspaceDir,
+  };
 }
 
 function mergeStoredSessionRefs(
@@ -195,25 +282,24 @@ function applySessionsResponse(
   | "selectedSessionId"
 > {
   const projections = mergeSessionsIntoProjections(state.projections, sessionsResponse);
-  const nextWorkspaceDir = state.workspaceDir.trim()
-    ? state.workspaceDir
-    : inferWorkspaceDirectory(
-        sessionsResponse.workspaceDirs,
-        sessionsResponse.sessions,
-        sessionsResponse.storedSessions,
-        sessionsResponse.activeWorkspaceDir,
-        state.workspaceDir,
-      );
+  const workspace = reconcileVisibleWorkspaceSelection({
+    workspaceDirs: sessionsResponse.workspaceDirs,
+    sessions: sessionsResponse.sessions,
+    storedSessions: sessionsResponse.storedSessions,
+    activeWorkspaceDir: sessionsResponse.activeWorkspaceDir,
+    currentWorkspaceDir: state.workspaceDir,
+    hiddenWorkspaceDirs,
+  });
   return {
     projections,
     storedSessions: sessionsResponse.storedSessions,
     recentSessions: sessionsResponse.recentSessions,
-    workspaceDirs: sessionsResponse.workspaceDirs,
-    workspaceDir: nextWorkspaceDir,
+    workspaceDirs: workspace.workspaceDirs,
+    workspaceDir: workspace.workspaceDir,
     selectedSessionId: selectPreferredSessionId(
       projections,
       state.selectedSessionId,
-      nextWorkspaceDir,
+      workspace.workspaceDir,
     ),
   };
 }
@@ -233,26 +319,25 @@ function replaceSessionsResponse(
   | "workspaceDir"
   | "selectedSessionId"
 > {
-  const nextWorkspaceDir = state.workspaceDir.trim()
-    ? state.workspaceDir
-    : inferWorkspaceDirectory(
-        sessionsResponse.workspaceDirs,
-        sessionsResponse.sessions,
-        sessionsResponse.storedSessions,
-        sessionsResponse.activeWorkspaceDir,
-        state.workspaceDir,
-      );
+  const workspace = reconcileVisibleWorkspaceSelection({
+    workspaceDirs: sessionsResponse.workspaceDirs,
+    sessions: sessionsResponse.sessions,
+    storedSessions: sessionsResponse.storedSessions,
+    activeWorkspaceDir: sessionsResponse.activeWorkspaceDir,
+    currentWorkspaceDir: state.workspaceDir,
+    hiddenWorkspaceDirs,
+  });
   const sessionMap = createSessionMap(sessionsResponse);
   return {
     projections: sessionMap.sessions,
     storedSessions: sessionsResponse.storedSessions,
     recentSessions: sessionsResponse.recentSessions,
-    workspaceDirs: sessionsResponse.workspaceDirs,
-    workspaceDir: nextWorkspaceDir,
+    workspaceDirs: workspace.workspaceDirs,
+    workspaceDir: workspace.workspaceDir,
     selectedSessionId: selectPreferredSessionId(
       sessionMap.sessions,
       state.selectedSessionId,
-      nextWorkspaceDir,
+      workspace.workspaceDir,
     ),
   };
 }
@@ -681,10 +766,8 @@ async function maybeRestoreLastHistorySelection(
   }
   if (selection.workspaceDir) {
     useSessionStore.setState((state) => ({
-      workspaceDir: selection.workspaceDir!,
-      workspaceDirs: state.workspaceDirs.includes(selection.workspaceDir!)
-        ? state.workspaceDirs
-        : [...state.workspaceDirs, selection.workspaceDir!],
+      workspaceDir: isHiddenWorkspace(selection.workspaceDir) ? "" : selection.workspaceDir!,
+      workspaceDirs: appendVisibleWorkspaceDir(state.workspaceDirs, selection.workspaceDir),
     }));
   }
   try {
@@ -752,11 +835,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       return;
     }
     set((state) => {
-      const workspaceDirs = state.workspaceDirs.includes(dir)
-        ? state.workspaceDirs
-        : [...state.workspaceDirs, dir];
+      const workspaceDirs = appendVisibleWorkspaceDir(state.workspaceDirs, dir);
       return {
-        workspaceDir: dir,
+        workspaceDir: isHiddenWorkspace(dir) ? "" : dir,
         workspaceDirs,
       };
     });
@@ -775,6 +856,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   addWorkspace: async (dir) => {
     try {
       const sessionsResponse = await api.addWorkspace({ dir });
+      revealWorkspace(dir);
       set((state) => ({
         ...applySessionsResponse(
           {
@@ -792,8 +874,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
   },
   removeWorkspace: async (dir) => {
-    const previousWorkspaceDirs = get().workspaceDirs;
-    const previousWorkspaceDir = get().workspaceDir;
+    hideWorkspace(dir);
     try {
       set((state) => ({
         workspaceDirs: state.workspaceDirs.filter(
@@ -814,11 +895,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         error: null,
       }));
     } catch (error) {
-      set({
-        workspaceDirs: previousWorkspaceDirs,
-        workspaceDir: previousWorkspaceDir,
-        error: readErrorMessage(error),
-      });
+      revealWorkspace(dir);
+      try {
+        const sessionsResponse = await api.listSessions();
+        set((state) => ({
+          ...applySessionsResponse(state, sessionsResponse),
+          error: readErrorMessage(error),
+        }));
+      } catch {
+        set({ error: readErrorMessage(error) });
+      }
       throw error;
     }
   },
@@ -895,6 +981,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         ...(options?.sandbox ? { sandbox: options.sandbox } : {}),
         attach: attachRequest(state.clientId),
       });
+      revealWorkspaceCandidates(cwd);
       set((current) => {
         const next = adoptExistingProjectionForProviderSession(
           new Map(current.projections),
@@ -909,9 +996,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         });
         return {
           projections: next,
-          workspaceDirs: current.workspaceDirs.includes(cwd)
-            ? current.workspaceDirs
-            : [...current.workspaceDirs, cwd],
+          workspaceDirs: appendVisibleWorkspaceDir(current.workspaceDirs, cwd),
           workspaceDir: cwd,
           newSessionProvider: provider,
           selectedSessionId: response.session.session.id,
@@ -933,6 +1018,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         scenarioId: scenario.id,
         attach: attachRequest(get().clientId),
       });
+      revealWorkspaceCandidates(scenario.rootDir);
       set((current) => {
         const next = new Map(current.projections);
         next.set(response.session.session.id, {
@@ -944,9 +1030,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         });
         return {
           projections: next,
-          workspaceDirs: current.workspaceDirs.includes(scenario.rootDir)
-            ? current.workspaceDirs
-            : [...current.workspaceDirs, scenario.rootDir],
+          workspaceDirs: appendVisibleWorkspaceDir(current.workspaceDirs, scenario.rootDir),
           workspaceDir: scenario.rootDir,
           selectedSessionId: response.session.session.id,
           error: null,
@@ -998,6 +1082,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         request.cwd = ref.cwd;
       }
       const response = await api.resumeSession(request);
+      revealWorkspaceCandidates(ref.rootDir, ref.cwd);
       set((current) => {
         const next = adoptExistingProjectionForProviderSession(
           new Map(current.projections),
@@ -1014,12 +1099,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         const replay = takePendingEventsForSessions(new Set([response.session.session.id]));
         return {
           projections: applyEventsToMap(next, replay),
-          workspaceDirs:
-            ref.rootDir || ref.cwd
-              ? current.workspaceDirs.includes(ref.rootDir ?? ref.cwd ?? "")
-                ? current.workspaceDirs
-                : [...current.workspaceDirs, ref.rootDir ?? ref.cwd ?? ""]
-              : current.workspaceDirs,
+          workspaceDirs: appendVisibleWorkspaceDir(current.workspaceDirs, ref.rootDir ?? ref.cwd),
           workspaceDir: ref.rootDir ?? ref.cwd ?? current.workspaceDir,
           selectedSessionId: response.session.session.id,
           error: null,
@@ -1123,6 +1203,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         request.cwd = ref.cwd;
       }
       const response = await api.resumeSession(request);
+      revealWorkspaceCandidates(ref.rootDir, ref.cwd);
       set((current) => {
         const next = new Map(current.projections);
         next.delete(sessionId);
@@ -1133,12 +1214,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         const replay = takePendingEventsForSessions(new Set([response.session.session.id]));
         return {
           projections: applyEventsToMap(next, replay),
-          workspaceDirs:
-            ref.rootDir || ref.cwd
-              ? current.workspaceDirs.includes(ref.rootDir ?? ref.cwd ?? "")
-                ? current.workspaceDirs
-                : [...current.workspaceDirs, ref.rootDir ?? ref.cwd ?? ""]
-              : current.workspaceDirs,
+          workspaceDirs: appendVisibleWorkspaceDir(current.workspaceDirs, ref.rootDir ?? ref.cwd),
           workspaceDir: ref.rootDir ?? ref.cwd ?? current.workspaceDir,
           selectedSessionId: response.session.session.id,
           error: null,

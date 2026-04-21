@@ -27,6 +27,7 @@ import { useChatPreferences } from "./hooks/useChatPreferences";
 import { initializeTheme } from "./hooks/useTheme";
 import {
   canSessionRespondToPermissions,
+  isSessionActivelyRunning,
   canSessionSendInput,
   isReadOnlyReplay,
   sessionInteractionNotice,
@@ -71,6 +72,16 @@ export function App() {
   const [newSessionOpen, setNewSessionOpen] = useState(false);
   const [rightOpen, setRightOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(() => {
+    try { return localStorage.getItem("rah-sidebar-open") !== "false"; } catch { return true; }
+  });
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    try { return Math.max(200, Math.min(480, Number(localStorage.getItem("rah-sidebar-width")) || 288)); } catch { return 288; }
+  });
+  const sidebarWidthRef = useRef(sidebarWidth);
+  sidebarWidthRef.current = sidebarWidth;
+  const lastAutoClaimKeyRef = useRef<string | null>(null);
+  const [isResizing, setIsResizing] = useState(false);
   const { hideToolCallsInChat } = useChatPreferences();
 
   useEffect(() => {
@@ -150,16 +161,16 @@ export function App() {
           : null
       : null;
   const errorDescriptor = error ? describeWorkbenchError(error, selectedSummary) : null;
-  const isGenerating = selectedSummary
-    ? ["thinking", "streaming", "retrying"].includes(selectedSummary.session.runtimeState)
-    : false;
+  const isGenerating = selectedSummary ? isSessionActivelyRunning(selectedSummary) : false;
 
   useEffect(() => {
     if (selectedSummary?.session.providerSessionId && selectedIsReadOnlyReplay) {
+      const historyWorkspaceDir =
+        selectedSummary.session.rootDir || selectedSummary.session.cwd || workspaceDir;
       writeLastHistorySelection({
         provider: selectedSummary.session.provider,
         providerSessionId: selectedSummary.session.providerSessionId,
-        ...(workspaceDir ? { workspaceDir } : {}),
+        ...(historyWorkspaceDir ? { workspaceDir: historyWorkspaceDir } : {}),
       });
       return;
     }
@@ -167,6 +178,19 @@ export function App() {
       clearLastHistorySelection();
     }
   }, [selectedIsReadOnlyReplay, selectedSummary, workspaceDir]);
+
+  useEffect(() => {
+    if (!selectedSummary || !canSendInput || hasControl || selectedIsReadOnlyReplay) {
+      lastAutoClaimKeyRef.current = null;
+      return;
+    }
+    const key = `${selectedSummary.session.id}:${selectedSummary.controlLease.holderClientId ?? ""}`;
+    if (lastAutoClaimKeyRef.current === key) {
+      return;
+    }
+    lastAutoClaimKeyRef.current = key;
+    void claimControl(selectedSummary.session.id).catch(() => {});
+  }, [canSendInput, claimControl, hasControl, selectedIsReadOnlyReplay, selectedSummary]);
 
   const handleSend = async () => {
     if (!selectedSummary || !draft.trim()) return;
@@ -183,6 +207,30 @@ export function App() {
     await respondToPermission(selectedSummary.session.id, requestId, response);
   };
 
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      if (!isResizing) return;
+      setSidebarWidth(Math.max(200, Math.min(480, e.clientX)));
+    };
+    const onUp = () => {
+      if (!isResizing) return;
+      setIsResizing(false);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      try { localStorage.setItem("rah-sidebar-width", String(sidebarWidthRef.current)); } catch {}
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [isResizing]);
+
+  useEffect(() => {
+    try { localStorage.setItem("rah-sidebar-open", String(sidebarOpen)); } catch {}
+  }, [sidebarOpen]);
+
   if (!isInitialLoaded) {
     return (
       <div className="h-screen flex items-center justify-center bg-background text-foreground">
@@ -197,11 +245,6 @@ export function App() {
   const sidebarContent = (
     <SessionSidebar
       workspaceSections={workspaceSections}
-      workspaceDir={workspaceDir}
-      onWorkspaceDirChange={(dir) => {
-        setWorkspaceDir(dir);
-        setLeftOpen(false);
-      }}
       onAddWorkspace={(dir) => {
         void addWorkspace(dir);
         setLeftOpen(false);
@@ -211,12 +254,6 @@ export function App() {
       onRefresh={() => void refreshWorkbenchState()}
       selectedSessionId={selectedSessionId}
       onSelectSession={(id) => {
-        const owner = workspaceSections.find((section) =>
-          section.sessions.some((session) => session.session.id === id),
-        );
-        if (owner) {
-          setWorkspaceDir(owner.workspace.directory);
-        }
         setSelectedSessionId(id);
         setLeftOpen(false);
       }}
@@ -231,14 +268,14 @@ export function App() {
   const handleActivateHistorySession = (ref: typeof storedSessions[number]) => {
     const existingLive = liveSessionByProviderSessionId.get(ref.providerSessionId);
     if (existingLive) {
-      if (existingLive.session.rootDir) {
-        setWorkspaceDir(existingLive.session.rootDir);
-      }
       setSelectedSessionId(existingLive.session.id);
       return;
     }
     void resumeStoredSession(ref, { preferStoredReplay: true });
   };
+
+  const defaultWorkspaceDirForNewSession =
+    selectedSummary?.session.rootDir || selectedSummary?.session.cwd || workspaceDir;
 
   const inspectorContent =
     selectedSummary ? (
@@ -247,20 +284,84 @@ export function App() {
         events={selectedProjection?.events ?? []}
       />
     ) : (
-      <div className="flex h-full items-center justify-center px-4 text-sm text-[var(--app-hint)]">
-        Select a session.
-      </div>
+      <div className="h-full" />
     );
 
   return (
     <div className="h-screen flex overflow-hidden bg-background text-foreground">
       {/* Desktop left sidebar */}
-      <aside className="hidden md:flex w-72 flex-col bg-[var(--app-subtle-bg)] shrink-0">
-        <div className="h-14 px-4 border-b border-[var(--app-border)] bg-[var(--app-bg)]/80 backdrop-blur-sm flex items-center justify-between shrink-0">
-          <div>
-            <div className="text-lg font-semibold tracking-tight">RAH</div>
-            <div className="text-xs text-[var(--app-hint)]">Workbench</div>
-          </div>
+      <aside
+        className="hidden md:flex flex-col bg-[var(--app-subtle-bg)] shrink-0 transition-[width] duration-200 overflow-hidden"
+        style={{ width: sidebarOpen ? sidebarWidth : 0 }}
+      >
+        <div className="h-14 px-4 flex items-center justify-between shrink-0">
+          {sidebarOpen && (
+            <>
+              <div className="shrink-0">
+                <div className="text-lg font-semibold tracking-tight">RAH</div>
+                <div className="text-xs text-[var(--app-hint)]">Workbench</div>
+              </div>
+              <div className="flex items-center gap-1 shrink-0">
+                <SessionHistoryDialog
+                  storedSessions={storedSessions}
+                  recentSessions={recentSessions}
+                  liveSessions={attachedLiveSessionEntries.map((entry) => entry.summary)}
+                  onActivate={handleActivateHistorySession}
+                >
+                  <button
+                    type="button"
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)] transition-colors"
+                    aria-label="Session history"
+                    title="Session history"
+                  >
+                    <History size={18} />
+                  </button>
+                </SessionHistoryDialog>
+                <button
+                  type="button"
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)] transition-colors"
+                  onClick={() => setSettingsOpen(true)}
+                  aria-label="Open settings"
+                  title="Settings"
+                >
+                  <Settings size={16} />
+                </button>
+                <button
+                  type="button"
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)] transition-colors"
+                  onClick={() => setSidebarOpen(false)}
+                  aria-label="Collapse sidebar"
+                  title="Collapse sidebar"
+                >
+                  <Menu size={18} />
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+        <div className="flex-1 overflow-y-auto custom-scrollbar p-3">{sidebarContent}</div>
+      </aside>
+
+      {/* Resize handle */}
+      {sidebarOpen && (
+        <div
+          className={`hidden md:block resize-handle ${isResizing ? "dragging" : ""}`}
+          onMouseDown={(e) => {
+            e.preventDefault();
+            setIsResizing(true);
+            document.body.style.cursor = "col-resize";
+            document.body.style.userSelect = "none";
+          }}
+        />
+      )}
+
+      {/* Mobile left sheet */}
+      <Sheet
+        open={leftOpen}
+        onOpenChange={setLeftOpen}
+        side="left"
+        title="Workbench"
+        headerRight={
           <div className="flex items-center gap-1">
             <SessionHistoryDialog
               storedSessions={storedSessions}
@@ -270,7 +371,7 @@ export function App() {
             >
               <button
                 type="button"
-                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] transition-colors"
+                className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)] transition-colors"
                 aria-label="Session history"
                 title="Session history"
               >
@@ -279,7 +380,7 @@ export function App() {
             </SessionHistoryDialog>
             <button
               type="button"
-              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] transition-colors"
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)] transition-colors"
               onClick={() => setSettingsOpen(true)}
               aria-label="Open settings"
               title="Settings"
@@ -287,26 +388,6 @@ export function App() {
               <Settings size={16} />
             </button>
           </div>
-        </div>
-        <div className="flex-1 overflow-y-auto custom-scrollbar p-3">{sidebarContent}</div>
-      </aside>
-
-      {/* Mobile left sheet */}
-      <Sheet
-        open={leftOpen}
-        onOpenChange={setLeftOpen}
-        side="left"
-        title="Workbench"
-        headerRight={
-          <button
-            type="button"
-            className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] transition-colors"
-            onClick={() => setSettingsOpen(true)}
-            aria-label="Open settings"
-            title="Settings"
-          >
-            <Settings size={16} />
-          </button>
         }
       >
         <div className="p-3">{sidebarContent}</div>
@@ -339,7 +420,7 @@ export function App() {
         open={newSessionOpen}
         onOpenChange={setNewSessionOpen}
         workspaceDirs={workspaceDirs}
-        defaultWorkspaceDir={workspaceDir}
+        defaultWorkspaceDir={defaultWorkspaceDirForNewSession}
         defaultProvider={newSessionProvider}
         onCreate={async (input) => {
           if (!workspaceDirs.includes(input.cwd)) {
@@ -355,7 +436,6 @@ export function App() {
       <main className="flex-1 flex flex-col min-w-0">
         {selectedSummary ? (
           <>
-            {/* Header */}
             <header className="h-14 flex items-center justify-between gap-3 border-b border-[var(--app-border)] px-4 bg-[var(--app-bg)]/80 backdrop-blur-sm shrink-0">
               <div className="flex items-center gap-2 min-w-0">
                 <button
@@ -366,6 +446,17 @@ export function App() {
                 >
                   <Menu size={18} />
                 </button>
+                {!sidebarOpen && (
+                  <button
+                    type="button"
+                    className="hidden md:inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] transition-colors"
+                    onClick={() => setSidebarOpen(true)}
+                    aria-label="Expand sidebar"
+                    title="Expand sidebar"
+                  >
+                    <Menu size={16} />
+                  </button>
+                )}
                 <ProviderLogo provider={selectedSummary.session.provider} className="h-6 w-6" />
                 <div className="min-w-0">
                   <div className="text-sm font-medium truncate text-[var(--app-fg)]">
@@ -432,7 +523,6 @@ export function App() {
               </div>
             ) : null}
 
-            {/* Thread */}
             <ChatThread
               feed={selectedProjection?.feed ?? []}
               hideToolCalls={hideToolCallsInChat}
@@ -478,42 +568,49 @@ export function App() {
                     </div>
                   )}
                 </div>
-              ) : !hasControl ? (
-                <div className="mx-auto max-w-3xl">
-                  <div className="w-full rounded-xl border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-4 py-3 text-sm text-[var(--app-hint)]">
-                    Activating control…
-                  </div>
-                </div>
               ) : (
                 <div className="mx-auto max-w-3xl">
+                  {!hasControl ? (
+                    <div className="mb-2 px-1 text-xs text-[var(--app-hint)]">
+                      Activating control…
+                    </div>
+                  ) : null}
                   <div className="flex items-end gap-2 md:gap-3">
                     <textarea
-                      className="flex-1 resize-none bg-[var(--app-subtle-bg)] rounded-xl border border-[var(--app-border)] px-3 py-2 md:px-4 md:py-3 text-base text-[var(--app-fg)] placeholder-[var(--app-hint)] focus:outline-none focus:ring-1 focus:ring-[var(--ring)] min-h-[48px] md:min-h-[52px] max-h-[160px]"
+                      className="flex-1 resize-none bg-[var(--app-subtle-bg)] rounded-xl border border-[var(--app-border)] px-3 py-2 md:px-4 md:py-3 text-base text-[var(--app-fg)] placeholder-[var(--app-hint)] focus:outline-none focus:ring-1 focus:ring-[var(--ring)] min-h-[44px] md:min-h-[48px] max-h-[160px]"
                       value={draft}
                       onChange={(e) => setDraft(e.currentTarget.value)}
-                      placeholder="Message…"
+                      placeholder={hasControl ? "Message…" : "Activating control…"}
                       rows={1}
+                      disabled={!hasControl}
                       onKeyDown={(e) => {
+                        if (!hasControl) {
+                          return;
+                        }
                         if (e.key === "Enter" && !e.shiftKey) {
                           e.preventDefault();
                           void handleSend();
                         }
                       }}
                     />
-                    {isGenerating && canSendInput ? (
-                      <button
-                        type="button"
-                        onClick={() => void interruptSession(selectedSummary.session.id)}
-                        className="shrink-0 h-10 w-10 md:h-11 md:w-11 rounded-full bg-[var(--app-danger)] text-white flex items-center justify-center hover:opacity-90 transition-colors"
-                      >
-                        <Square size={14} />
-                      </button>
+                    {isGenerating && canSendInput && hasControl ? (
+                      <div className="relative shrink-0">
+                        <div className="pointer-events-none absolute inset-[-6px] rounded-full bg-[var(--app-danger)]/20 animate-ping" />
+                        <div className="pointer-events-none absolute inset-[-5px] rounded-full border-[3px] border-dashed border-[var(--app-danger)]/45 animate-[spin_2.5s_linear_infinite]" />
+                        <button
+                          type="button"
+                          onClick={() => void interruptSession(selectedSummary.session.id)}
+                          className="relative h-11 w-11 md:h-12 md:w-12 rounded-full bg-[var(--app-danger)] text-white shadow-[0_0_0_4px_color-mix(in_oklab,var(--app-danger)_18%,transparent)] flex items-center justify-center hover:opacity-90 transition-colors"
+                        >
+                          <Square size={14} />
+                        </button>
+                      </div>
                     ) : null}
                     <button
                       type="button"
-                      disabled={!draft.trim()}
+                      disabled={!hasControl || !draft.trim()}
                       onClick={() => void handleSend()}
-                      className="shrink-0 h-10 w-10 md:h-11 md:w-11 rounded-full bg-primary text-primary-foreground flex items-center justify-center hover:opacity-90 disabled:opacity-40 transition-colors"
+                      className="shrink-0 h-11 w-11 md:h-12 md:w-12 rounded-full bg-primary text-primary-foreground flex items-center justify-center hover:opacity-90 disabled:opacity-40 transition-colors"
                     >
                       <Send size={18} />
                     </button>
@@ -535,42 +632,32 @@ export function App() {
                 >
                   <Menu size={18} />
                 </button>
+                {!sidebarOpen && (
+                  <button
+                    type="button"
+                    className="hidden md:inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] transition-colors"
+                    onClick={() => setSidebarOpen(true)}
+                    aria-label="Expand sidebar"
+                    title="Expand sidebar"
+                  >
+                    <Menu size={16} />
+                  </button>
+                )}
                 <div className="min-w-0 md:hidden">
                   <div className="text-sm font-medium text-[var(--app-fg)]">RAH</div>
-                  <div className="text-[11px] md:text-xs text-[var(--app-hint)]">
+                  <div className="text-[11px] text-[var(--app-hint)]">
                     Open the sidebar
                   </div>
                 </div>
               </div>
-              <div className="flex items-center gap-1 shrink-0">
-                <SessionHistoryDialog
-                  storedSessions={storedSessions}
-                  recentSessions={recentSessions}
-                  liveSessions={attachedLiveSessionEntries.map((entry) => entry.summary)}
-                  onActivate={handleActivateHistorySession}
-                >
-                  <button
-                    type="button"
-                    className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] transition-colors md:hidden"
-                    aria-label="Session history"
-                    title="Session history"
-                  >
-                    <History size={18} />
-                  </button>
-                </SessionHistoryDialog>
-              </div>
             </header>
-            <div className="flex-1 flex flex-col items-center justify-center px-6">
-              <div className="text-sm text-[var(--app-hint)]">
-                Use the sidebar or history.
-              </div>
-            </div>
+            <div className="flex-1" />
           </>
         )}
       </main>
 
       {/* Desktop right inspector */}
-      <aside className="hidden md:flex w-80 flex-col bg-[var(--app-subtle-bg)] shrink-0">
+      <aside className={`hidden md:flex w-80 flex-col shrink-0 ${selectedSummary ? "bg-[var(--app-subtle-bg)]" : "bg-[var(--app-bg)]"}`}>
         {inspectorContent}
       </aside>
 

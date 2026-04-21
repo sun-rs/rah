@@ -88,6 +88,25 @@ describe("WorkbenchStateStore", () => {
     await engine.shutdown();
   });
 
+  test("preserves workspace add order across restart", async () => {
+    const first = new RuntimeEngine();
+    first.addWorkspace("/workspace/zeta");
+    first.addWorkspace("/workspace/alpha");
+    first.addWorkspace("/workspace/mid");
+    await first.shutdown();
+
+    const second = new RuntimeEngine();
+    const listed = second.listSessions();
+
+    assert.deepEqual(listed.workspaceDirs, [
+      "/workspace/zeta",
+      "/workspace/alpha",
+      "/workspace/mid",
+    ]);
+
+    await second.shutdown();
+  });
+
   test("cannot remove a parent workspace when a descendant live session exists", async () => {
     const engine = new RuntimeEngine();
     engine.addWorkspace("/workspace/demo");
@@ -320,6 +339,39 @@ describe("WorkbenchStateStore", () => {
     assert.deepEqual(afterRemoval.workspaceDirs, []);
 
     await engine.shutdown();
+  });
+
+  test("removed workspace stays removed across restart even if session history still points to it", async () => {
+    const first = new RuntimeEngine();
+    first.addWorkspace("/workspace/demo");
+    const state = first.sessionStore.createManagedSession({
+      provider: "codex",
+      providerSessionId: "thread-removed-1",
+      launchSource: "web",
+      cwd: "/workspace/demo",
+      rootDir: "/workspace/demo",
+      title: "remember me",
+    });
+    first.sessionStore.setRuntimeState(state.session.id, "running");
+    await first.shutdown();
+
+    const second = new RuntimeEngine();
+    const removed = second.removeWorkspace("/workspace/demo");
+    assert.deepEqual(removed.workspaceDirs, []);
+    await second.shutdown();
+
+    const third = new RuntimeEngine();
+    const listed = third.listSessions();
+    assert.deepEqual(listed.workspaceDirs, []);
+    assert.ok(
+      listed.storedSessions.some(
+        (entry) =>
+          entry.provider === "codex" &&
+          entry.providerSessionId === "thread-removed-1" &&
+          entry.cwd === "/workspace/demo",
+      ),
+    );
+    await third.shutdown();
   });
 
   test("listing sessions prunes orphan live sessions with no attached clients", async () => {
