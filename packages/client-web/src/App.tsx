@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { PermissionResponseRequest } from "@rah/runtime-protocol";
-import { Menu, PanelRight, History, ArrowUp, Square, X, Settings, ChevronDown, Folder, FolderPlus } from "lucide-react";
+import { Menu, PanelRight, History, ArrowUp, Plus, Square, X, Settings, ChevronDown, Folder, FolderPlus } from "lucide-react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { InspectorPane } from "./InspectorPane";
 import { SessionSidebar } from "./SessionSidebar";
@@ -14,6 +14,7 @@ import {
 import { providerLabel } from "./types";
 import { useSessionStore } from "./useSessionStore";
 import { ChatThread } from "./components/chat/ChatThread";
+import { FileReferencePicker } from "./components/FileReferencePicker";
 import { ProviderLogo } from "./components/ProviderLogo";
 import { ProviderSelector, type ProviderChoice } from "./components/ProviderSelector";
 import { SettingsPane } from "./components/SettingsPane";
@@ -37,6 +38,7 @@ import {
 } from "./session-capabilities";
 
 const WORKSPACE_SORT_MODE_KEY = "rah.workspace-sort-mode";
+const PINNED_WORKSPACE_SESSION_KEY = "rah.pinned-session-by-workspace";
 
 function readWorkspaceSortMode(): WorkspaceSortMode {
   if (typeof window === "undefined") {
@@ -50,11 +52,32 @@ function readWorkspaceSortMode(): WorkspaceSortMode {
   }
 }
 
+function readPinnedWorkspaceSessions(): Record<string, string> {
+  if (typeof window === "undefined") {
+    return {};
+  }
+  try {
+    const raw = window.localStorage.getItem(PINNED_WORKSPACE_SESSION_KEY);
+    if (!raw) {
+      return {};
+    }
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.entries(parsed).filter(
+        (entry): entry is [string, string] => typeof entry[0] === "string" && typeof entry[1] === "string",
+      ),
+    );
+  } catch {
+    return {};
+  }
+}
+
 export function App() {
   const {
     init,
     refreshWorkbenchState,
     projections,
+    unreadSessionIds,
     storedSessions,
     recentSessions,
     workspaceDirs,
@@ -85,11 +108,16 @@ export function App() {
     respondToPermission,
   } = useSessionStore();
   const [draft, setDraft] = useState("");
+  const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const [leftOpen, setLeftOpen] = useState(false);
   const [rightOpen, setRightOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [fileReferenceOpen, setFileReferenceOpen] = useState(false);
   const [workspaceSortMode, setWorkspaceSortMode] = useState<WorkspaceSortMode>(() =>
     readWorkspaceSortMode(),
+  );
+  const [pinnedSessionIdByWorkspace, setPinnedSessionIdByWorkspace] = useState<Record<string, string>>(
+    () => readPinnedWorkspaceSessions(),
   );
   const [sidebarOpen, setSidebarOpen] = useState(() => {
     try { return localStorage.getItem("rah-sidebar-open") !== "false"; } catch { return true; }
@@ -181,6 +209,35 @@ export function App() {
     [attachedLiveSessionEntries, sortedWorkspaceInfos],
   );
 
+  const sanitizedPinnedSessionIdByWorkspace = useMemo(
+    () =>
+      Object.fromEntries(
+        Object.entries(pinnedSessionIdByWorkspace).filter(([workspaceDir, sessionId]) =>
+          workspaceSections.some(
+            (section) =>
+              section.workspace.directory === workspaceDir &&
+              section.sessions.some((session) => session.session.id === sessionId),
+          ),
+        ),
+      ),
+    [pinnedSessionIdByWorkspace, workspaceSections],
+  );
+
+  const runtimeStatusBySessionId = useMemo(
+    () =>
+      new Map(
+        [...projections.entries()].map(([sessionId, projection]) => [
+          sessionId,
+          projection.currentRuntimeStatus === "thinking" ||
+          projection.currentRuntimeStatus === "streaming" ||
+          projection.currentRuntimeStatus === "retrying"
+            ? projection.currentRuntimeStatus
+            : undefined,
+        ]),
+      ),
+    [projections],
+  );
+
   const selectedProjection = selectedSessionId ? projections.get(selectedSessionId) ?? null : null;
   const selectedSummary = selectedProjection?.summary ?? null;
   const isAttached = Boolean(
@@ -247,6 +304,30 @@ export function App() {
     await sendInput(selectedSummary.session.id, text);
   };
 
+  const insertFileReference = (reference: string) => {
+    setDraft((current) => {
+      const textarea = composerRef.current;
+      if (!textarea) {
+        return current ? `${current} ${reference}` : reference;
+      }
+      const selectionStart = textarea.selectionStart ?? current.length;
+      const selectionEnd = textarea.selectionEnd ?? current.length;
+      const prefixNeedsSpace =
+        selectionStart > 0 && !/\s/.test(current.slice(Math.max(0, selectionStart - 1), selectionStart));
+      const suffixNeedsSpace =
+        selectionEnd < current.length && !/\s/.test(current.slice(selectionEnd, selectionEnd + 1));
+      const inserted = `${prefixNeedsSpace ? " " : ""}${reference}${suffixNeedsSpace ? " " : ""}`;
+      const next = `${current.slice(0, selectionStart)}${inserted}${current.slice(selectionEnd)}`;
+      queueMicrotask(() => {
+        if (!textarea) return;
+        const caret = selectionStart + inserted.length;
+        textarea.focus();
+        textarea.setSelectionRange(caret, caret);
+      });
+      return next;
+    });
+  };
+
   const handleEmptyStateSend = () => {
     const text = emptyStateDraft.trim();
     if (!text || !availableWorkspaceDir) return;
@@ -303,6 +384,17 @@ export function App() {
     }
   }, [workspaceSortMode]);
 
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        PINNED_WORKSPACE_SESSION_KEY,
+        JSON.stringify(sanitizedPinnedSessionIdByWorkspace),
+      );
+    } catch {
+      // ignore
+    }
+  }, [sanitizedPinnedSessionIdByWorkspace]);
+
   if (!isInitialLoaded) {
     return (
       <div className="h-screen flex items-center justify-center bg-background text-foreground">
@@ -319,12 +411,28 @@ export function App() {
       workspaceSections={workspaceSections}
       workspaceSortMode={workspaceSortMode}
       onWorkspaceSortModeChange={setWorkspaceSortMode}
+      pinnedSessionIdByWorkspace={sanitizedPinnedSessionIdByWorkspace}
+      onTogglePinSession={(workspaceDir, sessionId) => {
+        setPinnedSessionIdByWorkspace((current) => {
+          if (current[workspaceDir] === sessionId) {
+            const next = { ...current };
+            delete next[workspaceDir];
+            return next;
+          }
+          return {
+            ...current,
+            [workspaceDir]: sessionId,
+          };
+        });
+      }}
       onAddWorkspace={(dir) => {
         void addWorkspace(dir);
         setLeftOpen(false);
       }}
       onRemoveWorkspace={(dir) => void removeWorkspace(dir)}
       selectedSessionId={selectedSessionId}
+      unreadSessionIds={unreadSessionIds}
+      runtimeStatusBySessionId={runtimeStatusBySessionId}
       onSelectSession={(id) => {
         setSelectedSessionId(id);
         setLeftOpen(false);
@@ -484,6 +592,15 @@ export function App() {
         </Dialog.Portal>
       </Dialog.Root>
 
+      {selectedSummary ? (
+        <FileReferencePicker
+          open={fileReferenceOpen}
+          onOpenChange={setFileReferenceOpen}
+          rootPath={selectedSummary.session.rootDir || selectedSummary.session.cwd}
+          onPick={insertFileReference}
+        />
+      ) : null}
+
       {/* Center chat */}
       <main className="flex-1 flex flex-col min-w-0">
         {selectedSummary ? (
@@ -639,7 +756,17 @@ export function App() {
                     </div>
                   ) : null}
                   <div className="flex items-end gap-2 md:gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setFileReferenceOpen(true)}
+                      disabled={!hasControl}
+                      className="shrink-0 h-11 w-11 md:h-12 md:w-12 rounded-full border border-[var(--app-border)] bg-[var(--app-subtle-bg)] text-[var(--app-hint)] flex items-center justify-center hover:text-[var(--app-fg)] disabled:opacity-40 transition-colors"
+                      title="Insert file or folder reference"
+                    >
+                      <Plus size={18} />
+                    </button>
                     <textarea
+                      ref={composerRef}
                       className="flex-1 resize-none bg-[var(--app-subtle-bg)] rounded-xl border border-[var(--app-border)] px-3 py-2 md:px-4 md:py-3 text-base text-[var(--app-fg)] placeholder-[var(--app-hint)] focus:outline-none focus:ring-1 focus:ring-[var(--ring)] min-h-[44px] md:min-h-[48px] max-h-[160px]"
                       value={draft}
                       onChange={(e) => setDraft(e.currentTarget.value)}
@@ -729,20 +856,11 @@ export function App() {
               </div>
             </header>
             <div className="flex-1 flex flex-col items-center justify-center px-6 overflow-y-auto custom-scrollbar">
-              <div className="w-full max-w-2xl space-y-6">
-                <div className="flex min-h-[4.75rem] flex-col items-center justify-start text-center">
+              <div className="w-full max-w-2xl -translate-y-6 space-y-5 md:-translate-y-8 md:space-y-6">
+                <div className="text-center">
                   <h1 className="text-2xl font-semibold text-[var(--app-fg)]">
                     What would you like to build?
                   </h1>
-                  <div className="mt-1 h-5 w-full max-w-xl px-4">
-                    <p
-                      className={`truncate text-sm text-[var(--app-hint)] ${
-                        availableWorkspaceDir ? "opacity-100" : "opacity-0"
-                      }`}
-                    >
-                      {availableWorkspaceDir ? `in ${availableWorkspaceDir}` : "in /"}
-                    </p>
-                  </div>
                 </div>
                 <div className="relative">
                   <textarea

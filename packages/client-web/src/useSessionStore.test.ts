@@ -1,7 +1,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import type { SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
-import { reconcileVisibleWorkspaceSelection } from "./useSessionStore";
+import type { RahEvent, SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
+import { computeUnreadSessionIds, reconcileVisibleWorkspaceSelection } from "./useSessionStore";
 
 function sessionSummary(rootDir: string): SessionSummary {
   return {
@@ -35,6 +35,22 @@ function sessionSummary(rootDir: string): SessionSummary {
   };
 }
 
+function event(type: RahEvent["type"], sessionId: string): RahEvent {
+  return {
+    id: `${type}:${sessionId}`,
+    seq: 1,
+    ts: "2026-04-21T00:00:00.000Z",
+    sessionId,
+    type,
+    source: {
+      provider: "codex",
+      channel: "structured_live",
+      authority: "derived",
+    },
+    payload: {},
+  } as RahEvent;
+}
+
 describe("workspace response reconciliation", () => {
   test("keeps hidden deletions filtered when an older response still includes them", () => {
     const reconciled = reconcileVisibleWorkspaceSelection({
@@ -62,5 +78,19 @@ describe("workspace response reconciliation", () => {
 
     assert.deepEqual(reconciled.workspaceDirs, []);
     assert.equal(reconciled.workspaceDir, "");
+  });
+
+  test("marks unselected sessions unread for meaningful events and clears the selected session", () => {
+    const unread = computeUnreadSessionIds(
+      new Set<string>(["session:selected"]),
+      "session:selected",
+      [
+        event("timeline.item.added", "session:other"),
+        event("tool.call.completed", "session:other"),
+        event("timeline.item.added", "session:selected"),
+      ],
+    );
+
+    assert.deepEqual([...unread], ["session:other"]);
   });
 });

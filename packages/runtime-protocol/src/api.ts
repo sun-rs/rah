@@ -184,6 +184,7 @@ export interface ReplayGapNotice {
 export interface EventBatch {
   events: RahEvent[];
   replayGap?: ReplayGapNotice;
+  initial?: boolean;
 }
 
 export interface ProviderDiagnostic {

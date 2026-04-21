@@ -12,12 +12,52 @@ import {
   ListFilter,
   MoreHorizontal,
   Pencil,
+  Pin,
   PlusCircle,
-  Terminal,
   X,
 } from "lucide-react";
 import { providerLabel } from "./types";
+import { ProviderLogo } from "./components/ProviderLogo";
 import { WorkspacePicker } from "./components/WorkspacePicker";
+
+type LiveSessionStatus = "ready" | "thinking" | "unread";
+
+function sessionStatus(
+  summary: SessionSummary,
+  runtimeStatus: "thinking" | "streaming" | "retrying" | undefined,
+  unread: boolean,
+): LiveSessionStatus {
+  if (runtimeStatus !== undefined || summary.session.runtimeState === "running") {
+    return "thinking";
+  }
+  if (unread) {
+    return "unread";
+  }
+  return "ready";
+}
+
+function sessionStatusBadge(status: LiveSessionStatus): { label: string; className: string } {
+  switch (status) {
+    case "thinking":
+      return {
+        label: "thinking",
+        className:
+          "border-sky-500/20 bg-sky-500/10 text-sky-600 dark:text-sky-400",
+      };
+    case "unread":
+      return {
+        label: "未读",
+        className:
+          "border-amber-500/20 bg-amber-500/10 text-amber-700 dark:text-amber-400",
+      };
+    case "ready":
+      return {
+        label: "ready",
+        className:
+          "border-[var(--app-border)] bg-[var(--app-bg)]/60 text-[var(--app-hint)]",
+      };
+  }
+}
 
 function WorkspaceSortMenu(props: {
   value: WorkspaceSortMode;
@@ -125,25 +165,53 @@ function WorkspaceSortMenu(props: {
 function LiveSessionRow(props: {
   session: SessionSummary;
   selected: boolean;
+  unread: boolean;
+  runtimeStatus: "thinking" | "streaming" | "retrying" | undefined;
+  pinned: boolean;
+  onTogglePin: () => void;
   onSelect: () => void;
 }) {
   const session = props.session.session;
+  const status = sessionStatus(props.session, props.runtimeStatus, props.unread);
+  const statusBadge = sessionStatusBadge(status);
 
   return (
     <button
       type="button"
       onClick={props.onSelect}
-      className={`group/session w-full text-left rounded-lg px-3 py-2 transition-colors ${
+      className={`group/session w-full text-left rounded-lg px-2 py-2 transition-colors ${
         props.selected
           ? "bg-[var(--app-bg)]/60 text-[var(--app-fg)]"
           : "text-[var(--app-fg)] hover:bg-[var(--app-bg)]/30"
       }`}
     >
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2 min-w-0">
-          <Terminal size={13} className="shrink-0 text-[var(--app-hint)]" />
-          <span className="text-sm truncate">
-            {session.title ?? providerLabel(session.provider)}
+      <div className="flex items-center gap-1.5 min-w-0">
+        <ProviderLogo provider={session.provider} className="h-5 w-5" />
+        <span className="text-sm truncate">
+          {session.title ?? providerLabel(session.provider)}
+        </span>
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            props.onTogglePin();
+          }}
+          className={`ml-auto inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-[var(--app-hint)] transition-all ${
+            props.pinned
+              ? "opacity-100 text-[var(--app-fg)]"
+              : "opacity-0 group-hover/session:opacity-100 hover:text-[var(--app-fg)]"
+          }`}
+          title={props.pinned ? "取消置顶" : "置顶"}
+        >
+          <Pin size={12} className={props.pinned ? "fill-current" : ""} />
+        </button>
+      </div>
+      <div className="mt-1 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5 min-w-0">
+          <span
+            className={`inline-flex shrink-0 items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${statusBadge.className}`}
+          >
+            {statusBadge.label}
           </span>
         </div>
         <span className="text-[11px] text-[var(--app-hint)] shrink-0">
@@ -157,7 +225,11 @@ function LiveSessionRow(props: {
 function WorkspaceRow(props: {
   section: WorkspaceSection;
   selectedSessionId: string | null;
+  unreadSessionIds: ReadonlySet<string>;
+  runtimeStatusBySessionId: ReadonlyMap<string, "thinking" | "streaming" | "retrying" | undefined>;
+  pinnedSessionId?: string;
   onRemoveWorkspace: () => void;
+  onTogglePinSession: (sessionId: string) => void;
   onSelectSession: (sessionId: string) => void;
   expandAllKey: number;
   expandAllValue: boolean;
@@ -168,13 +240,29 @@ function WorkspaceRow(props: {
   const toggleExpanded = () => setExpanded((v) => !v);
 
   useEffect(() => {
+    if (!showRemove) {
+      return;
+    }
+    const timeoutId = window.setTimeout(() => setShowRemove(false), 2000);
+    return () => window.clearTimeout(timeoutId);
+  }, [showRemove]);
+
+  const sortedSessions =
+    props.pinnedSessionId && props.section.sessions.some((session) => session.session.id === props.pinnedSessionId)
+      ? [
+          ...props.section.sessions.filter((session) => session.session.id === props.pinnedSessionId),
+          ...props.section.sessions.filter((session) => session.session.id !== props.pinnedSessionId),
+        ]
+      : props.section.sessions;
+
+  useEffect(() => {
     setExpanded(props.expandAllValue);
   }, [props.expandAllKey]);
 
   return (
     <div className="space-y-0.5">
       {/* Workspace header */}
-      <div className="group/workspace flex items-center gap-2 rounded-lg px-2 py-2 transition-colors hover:bg-[var(--app-bg)]/30">
+      <div className="group/workspace flex items-center gap-2 rounded-lg px-2.5 py-1.5 transition-colors hover:bg-[var(--app-bg)]/30">
         <button
           type="button"
           onClick={(e) => {
@@ -229,12 +317,16 @@ function WorkspaceRow(props: {
 
       {/* Sessions */}
       {hasSessions && expanded ? (
-        <div className="pl-2 pr-1 space-y-0.5">
-          {props.section.sessions.map((session) => (
+        <div className="pl-4 pr-0.5 space-y-0.5">
+          {sortedSessions.map((session) => (
             <LiveSessionRow
               key={session.session.id}
               session={session}
               selected={session.session.id === props.selectedSessionId}
+              unread={props.unreadSessionIds.has(session.session.id)}
+              runtimeStatus={props.runtimeStatusBySessionId.get(session.session.id)}
+              pinned={props.pinnedSessionId === session.session.id}
+              onTogglePin={() => props.onTogglePinSession(session.session.id)}
               onSelect={() => props.onSelectSession(session.session.id)}
             />
           ))}
@@ -248,9 +340,13 @@ export function SessionSidebar(props: {
   workspaceSections: WorkspaceSection[];
   workspaceSortMode: WorkspaceSortMode;
   onWorkspaceSortModeChange: (value: WorkspaceSortMode) => void;
+  pinnedSessionIdByWorkspace: Readonly<Record<string, string>>;
+  onTogglePinSession: (workspaceDir: string, sessionId: string) => void;
   onAddWorkspace: (value: string) => void;
   onRemoveWorkspace: (value: string) => void;
   selectedSessionId: string | null;
+  unreadSessionIds: ReadonlySet<string>;
+  runtimeStatusBySessionId: ReadonlyMap<string, "thinking" | "streaming" | "retrying" | undefined>;
   onSelectSession: (sessionId: string) => void;
   debugScenarios: DebugScenarioDescriptor[];
   onStartScenario: (scenario: DebugScenarioDescriptor) => void;
@@ -269,7 +365,7 @@ export function SessionSidebar(props: {
   };
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-3">
       {/* Toolbar */}
       <div className="flex items-center justify-between px-1">
         <span className="text-xs font-medium text-[var(--app-hint)]">Workspaces</span>
@@ -291,13 +387,21 @@ export function SessionSidebar(props: {
       </div>
 
       {/* Workspace list */}
-      <div className="space-y-4">
+      <div className="space-y-1">
         {props.workspaceSections.map((section) => (
           <WorkspaceRow
             key={section.workspace.directory}
             section={section}
             selectedSessionId={props.selectedSessionId}
+            unreadSessionIds={props.unreadSessionIds}
+            runtimeStatusBySessionId={props.runtimeStatusBySessionId}
+            {...(props.pinnedSessionIdByWorkspace[section.workspace.directory]
+              ? { pinnedSessionId: props.pinnedSessionIdByWorkspace[section.workspace.directory] }
+              : {})}
             onRemoveWorkspace={() => props.onRemoveWorkspace(section.workspace.directory)}
+            onTogglePinSession={(sessionId) =>
+              props.onTogglePinSession(section.workspace.directory, sessionId)
+            }
             onSelectSession={props.onSelectSession}
             expandAllKey={expandAllKey}
             expandAllValue={expandAllValue}

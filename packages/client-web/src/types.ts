@@ -98,6 +98,7 @@ export interface SessionProjection {
   feed: FeedEntry[];
   events: RahEvent[];
   lastSeq: number;
+  currentRuntimeStatus?: Extract<RahEvent, { type: "runtime.status" }>["payload"]["status"];
   history: HistorySyncState;
 }
 
@@ -1108,6 +1109,22 @@ export function applyEventToProjection(
     feed: nextFeed,
     events: [...current.events.slice(-199), event],
     lastSeq: event.seq,
+    ...(event.type === "runtime.status"
+      ? { currentRuntimeStatus: event.payload.status }
+      : event.type === "session.state.changed"
+        ? event.payload.state === "running"
+          ? current.currentRuntimeStatus !== undefined
+            ? { currentRuntimeStatus: current.currentRuntimeStatus }
+            : {}
+          : {}
+        : event.type === "session.failed" ||
+            event.type === "turn.completed" ||
+            event.type === "turn.failed" ||
+            event.type === "turn.canceled"
+          ? {}
+        : current.currentRuntimeStatus !== undefined
+          ? { currentRuntimeStatus: current.currentRuntimeStatus }
+          : {}),
     history: current.history,
   };
 }

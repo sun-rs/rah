@@ -44,6 +44,7 @@ interface LaunchStatus {
 interface SessionState {
   clientId: string;
   projections: Map<string, SessionProjection>;
+  unreadSessionIds: Set<string>;
   storedSessions: StoredSessionRef[];
   recentSessions: StoredSessionRef[];
   workspaceDirs: string[];
@@ -558,6 +559,50 @@ function observeAttachRequest(clientId: string): AttachSessionRequest {
   };
 }
 
+function shouldMarkSessionUnread(event: RahEvent): boolean {
+  switch (event.type) {
+    case "timeline.item.added":
+    case "timeline.item.updated":
+    case "message.part.added":
+    case "message.part.updated":
+    case "message.part.delta":
+    case "tool.call.completed":
+    case "tool.call.failed":
+    case "observation.completed":
+    case "observation.failed":
+    case "permission.requested":
+    case "attention.required":
+    case "notification.emitted":
+    case "turn.completed":
+    case "turn.failed":
+    case "turn.canceled":
+      return true;
+    default:
+      return false;
+  }
+}
+
+export function computeUnreadSessionIds(
+  currentUnreadSessionIds: ReadonlySet<string>,
+  selectedSessionId: string | null,
+  events: readonly RahEvent[],
+): Set<string> {
+  const nextUnreadSessionIds = new Set(currentUnreadSessionIds);
+  for (const event of events) {
+    if (event.type === "session.closed") {
+      nextUnreadSessionIds.delete(event.sessionId);
+      continue;
+    }
+    if (selectedSessionId !== event.sessionId && shouldMarkSessionUnread(event)) {
+      nextUnreadSessionIds.add(event.sessionId);
+    }
+  }
+  if (selectedSessionId) {
+    nextUnreadSessionIds.delete(selectedSessionId);
+  }
+  return nextUnreadSessionIds;
+}
+
 function connectEventSocket() {
   const store = useSessionStore.getState();
   if (eventsSocket && eventsSocket.readyState < WebSocket.CLOSING) {
@@ -576,6 +621,13 @@ function connectEventSocket() {
       }
       useSessionStore.setState((state) => ({
         projections: applyEventsToMap(state.projections, batch.events),
+        unreadSessionIds: batch.initial
+          ? state.unreadSessionIds
+          : computeUnreadSessionIds(
+              state.unreadSessionIds,
+              state.selectedSessionId,
+              batch.events,
+            ),
         error: state.error === "Events socket failed" ? null : state.error,
       }));
     },
@@ -817,6 +869,7 @@ async function recoverFromReplayGap(batch: EventBatch) {
 export const useSessionStore = create<SessionState>((set, get) => ({
   clientId: createClientId(),
   projections: new Map(),
+  unreadSessionIds: new Set(),
   storedSessions: [],
   recentSessions: [],
   workspaceDirs: [],
@@ -910,7 +963,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
   setSelectedSessionId: (id) =>
     {
-      set({ selectedSessionId: id });
+      set((state) => {
+        const unreadSessionIds = new Set(state.unreadSessionIds);
+        if (id) {
+          unreadSessionIds.delete(id);
+        }
+        return { selectedSessionId: id, unreadSessionIds };
+      });
       if (id) {
         void ensureSessionHistoryLoaded(id);
       }
@@ -996,6 +1055,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         });
         return {
           projections: next,
+          unreadSessionIds: new Set(
+            [...current.unreadSessionIds].filter((sessionId) => sessionId !== response.session.session.id),
+          ),
           workspaceDirs: appendVisibleWorkspaceDir(current.workspaceDirs, cwd),
           workspaceDir: cwd,
           newSessionProvider: provider,
@@ -1030,6 +1092,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         });
         return {
           projections: next,
+          unreadSessionIds: new Set(
+            [...current.unreadSessionIds].filter((sessionId) => sessionId !== response.session.session.id),
+          ),
           workspaceDirs: appendVisibleWorkspaceDir(current.workspaceDirs, scenario.rootDir),
           workspaceDir: scenario.rootDir,
           selectedSessionId: response.session.session.id,
@@ -1099,6 +1164,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         const replay = takePendingEventsForSessions(new Set([response.session.session.id]));
         return {
           projections: applyEventsToMap(next, replay),
+          unreadSessionIds: new Set(
+            [...current.unreadSessionIds].filter((sessionId) => sessionId !== response.session.session.id),
+          ),
           workspaceDirs: appendVisibleWorkspaceDir(current.workspaceDirs, ref.rootDir ?? ref.cwd),
           workspaceDir: ref.rootDir ?? ref.cwd ?? current.workspaceDir,
           selectedSessionId: response.session.session.id,
@@ -1214,6 +1282,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         const replay = takePendingEventsForSessions(new Set([response.session.session.id]));
         return {
           projections: applyEventsToMap(next, replay),
+          unreadSessionIds: new Set(
+            [...current.unreadSessionIds].filter(
+              (sessionIdValue) =>
+                sessionIdValue !== sessionId && sessionIdValue !== response.session.session.id,
+            ),
+          ),
           workspaceDirs: appendVisibleWorkspaceDir(current.workspaceDirs, ref.rootDir ?? ref.cwd),
           workspaceDir: ref.rootDir ?? ref.cwd ?? current.workspaceDir,
           selectedSessionId: response.session.session.id,
@@ -1238,7 +1312,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         mode: "observe",
       });
       updateSessionSummary(response.session);
-      set({ selectedSessionId: summary.session.id, error: null });
+      set((state) => {
+        const unreadSessionIds = new Set(state.unreadSessionIds);
+        unreadSessionIds.delete(summary.session.id);
+        return { selectedSessionId: summary.session.id, unreadSessionIds, error: null };
+      });
       void ensureSessionHistoryLoaded(summary.session.id);
     } catch (error) {
       set({ error: readErrorMessage(error) });
@@ -1257,6 +1335,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         const nextState: Partial<SessionState> = {
           projections: new Map(
             [...state.projections.entries()].filter(([id]) => id !== sessionId),
+          ),
+          unreadSessionIds: new Set(
+            [...state.unreadSessionIds].filter((id) => id !== sessionId),
           ),
           selectedSessionId: state.selectedSessionId === sessionId ? null : state.selectedSessionId,
           error: null,

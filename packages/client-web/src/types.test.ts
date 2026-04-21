@@ -273,6 +273,7 @@ describe("client projection", () => {
       assert.equal(runtime.detail, "Reconnecting... 5/5");
       assert.equal(runtime.retryCount, 5);
     }
+    assert.equal(current.currentRuntimeStatus, "retrying");
   });
 
   test("coalesces streaming tool output artifacts into one card detail", () => {

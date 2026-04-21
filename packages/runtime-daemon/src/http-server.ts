@@ -507,6 +507,7 @@ export async function startRahDaemon(options?: { port?: number }): Promise<RahDa
       socket.send(
         JSON.stringify({
           events: initial,
+          initial: true,
           ...(initialReplayGap ? { replayGap: initialReplayGap } : {}),
         }),
       );

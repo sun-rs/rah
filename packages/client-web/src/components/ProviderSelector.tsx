@@ -93,9 +93,72 @@ export function ProviderSelector(props: {
 
   const isDialog = mode === "dialog";
 
+  if (!isDialog) {
+    /* Grid cards for empty state — icon+label on desktop, icon-only on mobile */
+    return (
+      <div
+        className="grid grid-cols-5 gap-3"
+        role="radiogroup"
+        aria-label="Provider selection"
+      >
+        {PROVIDER_OPTIONS.map((option) => {
+          const selected = value === option.value;
+          const diagnostic = diagnosticsMap.get(option.value);
+
+          return (
+            <button
+              key={option.value}
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              onClick={() => onChange(option.value)}
+              className={`
+                group relative inline-flex items-center justify-center gap-2.5
+                rounded-xl transition-all duration-300 ease-out
+                px-4 py-3
+                ${
+                  selected
+                    ? "bg-[var(--app-bg)] text-[var(--app-fg)] border border-[var(--app-border)] shadow-sm -translate-y-px dark:bg-[var(--app-subtle-bg)] dark:shadow-none dark:border-[var(--app-border)] dark:translate-y-0"
+                    : "bg-[var(--app-bg)] sm:bg-[var(--app-subtle-bg)] text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)] hover:shadow-sm hover:-translate-y-px hover:border hover:border-[var(--app-border)] dark:hover:bg-[var(--app-subtle-bg)]/80 dark:hover:shadow-none dark:hover:translate-y-0"
+                }
+              `}
+            >
+              {/* Left accent indicator when selected */}
+              {selected && (
+                <span
+                  className="absolute left-0 top-2.5 bottom-2.5 w-[3px] rounded-full dark:!bg-[var(--app-muted)]"
+                  style={{ backgroundColor: option.accentColor }}
+                />
+              )}
+
+              {/* Logo */}
+              <ProviderLogo
+                provider={option.value}
+                variant="bare"
+                className="h-5.5 w-5.5"
+              />
+
+              {/* Label - hidden on mobile */}
+              <span className="hidden sm:inline text-sm font-medium leading-none tracking-tight">
+                {option.label}
+              </span>
+
+              {/* Status dot - hidden on mobile */}
+              {!selected && diagnostic ? (
+                <span className="hidden sm:inline">
+                  <StatusDot status={diagnostic.status} />
+                </span>
+              ) : null}
+            </button>
+          );
+        })}
+      </div>
+    );
+  }
+
   return (
     <div
-      className={isDialog ? "grid grid-cols-3 gap-2.5" : "grid grid-cols-5 gap-3"}
+      className="grid grid-cols-3 gap-2.5"
       role="radiogroup"
       aria-label="Provider selection"
     >
@@ -113,7 +176,7 @@ export function ProviderSelector(props: {
             className={`
               group relative inline-flex items-center justify-center gap-2.5
               rounded-xl transition-all duration-300 ease-out
-              ${isDialog ? "px-3 py-2" : "px-4 py-3"}
+              px-3 py-2
               ${
                 selected
                   ? "bg-[var(--app-bg)] text-[var(--app-fg)] border border-[var(--app-border)] shadow-sm -translate-y-px dark:bg-[var(--app-subtle-bg)] dark:shadow-none dark:border-[var(--app-border)] dark:translate-y-0"
@@ -133,7 +196,7 @@ export function ProviderSelector(props: {
             <ProviderLogo
               provider={option.value}
               variant="bare"
-              className={isDialog ? "h-5 w-5" : "h-5.5 w-5.5"}
+              className="h-5 w-5"
             />
 
             {/* Label */}
