@@ -1,4 +1,5 @@
 import { mkdir, opendir, stat } from "node:fs/promises";
+import os from "node:os";
 import { resolve } from "node:path";
 import type {
   AttachSessionRequest,
@@ -55,6 +56,17 @@ function normalizeDirectory(value: string | undefined): string | null {
     return withoutTrailing.slice("/private".length);
   }
   return withoutTrailing;
+}
+
+function resolveUserPath(rawPath: string): string {
+  const trimmed = rawPath.trim();
+  if (!trimmed || trimmed === "~") {
+    return os.homedir();
+  }
+  if (trimmed.startsWith("~/") || trimmed.startsWith("~\\")) {
+    return resolve(os.homedir(), trimmed.slice(2));
+  }
+  return resolve(trimmed);
 }
 
 function sessionBelongsToWorkspace(
@@ -462,7 +474,7 @@ export class RuntimeEngine {
   async listDirectory(
     rawPath: string,
   ): Promise<{ path: string; entries: Array<{ name: string; type: "file" | "directory" }> }> {
-    const targetPath = resolve(rawPath || process.cwd());
+    const targetPath = resolveUserPath(rawPath || "~");
     const dir = await opendir(targetPath);
     const entries: Array<{ name: string; type: "file" | "directory" }> = [];
     for await (const entry of dir) {
@@ -486,7 +498,7 @@ export class RuntimeEngine {
   }
 
   async ensureDirectory(rawPath: string): Promise<{ path: string }> {
-    const targetPath = resolve(rawPath || process.cwd());
+    const targetPath = resolveUserPath(rawPath || "~");
     await mkdir(targetPath, { recursive: true });
     return { path: targetPath };
   }

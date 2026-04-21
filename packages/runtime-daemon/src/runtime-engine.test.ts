@@ -89,4 +89,14 @@ describe("RuntimeEngine", () => {
 
     await engine.shutdown();
   });
+
+  test("listDirectory expands tilde to the current user home directory", async () => {
+    const engine = new RuntimeEngine();
+
+    const listing = await engine.listDirectory("~");
+
+    assert.equal(listing.path, os.homedir());
+
+    await engine.shutdown();
+  });
 });

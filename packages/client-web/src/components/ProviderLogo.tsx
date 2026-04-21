@@ -16,18 +16,24 @@ const PROVIDER_FALLBACK_LABEL: Record<ProviderName, string> = {
 export function ProviderLogo(props: {
   provider: ProviderName;
   className?: string;
+  variant?: "card" | "bare";
 }) {
   const label = providerLabel(props.provider);
+  const variant = props.variant ?? "card";
+  const sizeClassName = props.className ?? "h-5 w-5";
   const baseClassName =
-    `inline-flex shrink-0 items-center justify-center overflow-hidden rounded-md border border-[var(--app-border)] bg-[var(--app-bg)] dark:bg-[#27272a] ${
-      props.className ?? "h-5 w-5"
-    }`;
+    variant === "bare"
+      ? `inline-flex shrink-0 items-center justify-center overflow-hidden ${sizeClassName}`
+      : `inline-flex shrink-0 items-center justify-center overflow-hidden rounded-md border border-[var(--app-border)] bg-[var(--app-bg)] dark:bg-[#27272a] ${sizeClassName}`;
+  const imageClassName =
+    variant === "bare"
+      ? "h-full w-full object-contain"
+      : "h-full w-full object-contain p-0.5";
 
   if (props.provider === "opencode") {
     return (
       <span className={baseClassName} title={label}>
-        <img src={implementedProviderLogoRegistry.opencodeLight} alt={`${label} logo`} className="h-full w-full object-contain p-0.5 dark:hidden" />
-        <img src={implementedProviderLogoRegistry.opencodeDark} alt={`${label} logo`} className="hidden h-full w-full object-contain p-0.5 dark:block" />
+        <img src={implementedProviderLogoRegistry.opencodeLight} alt={`${label} logo`} className={imageClassName} />
       </span>
     );
   }
@@ -45,7 +51,7 @@ export function ProviderLogo(props: {
   if (logo) {
     return (
       <span className={baseClassName} title={label}>
-        <img src={logo} alt={`${label} logo`} className="h-full w-full object-contain p-0.5" />
+        <img src={logo} alt={`${label} logo`} className={imageClassName} />
       </span>
     );
   }

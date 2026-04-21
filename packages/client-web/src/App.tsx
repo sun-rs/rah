@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { PermissionResponseRequest } from "@rah/runtime-protocol";
-import { Menu, PanelRight, History, Send, Square, X, Settings } from "lucide-react";
+import { Menu, PanelRight, History, ArrowUp, Square, X, Settings, ChevronDown, Folder, FolderPlus } from "lucide-react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { InspectorPane } from "./InspectorPane";
 import { SessionSidebar } from "./SessionSidebar";
@@ -8,16 +8,19 @@ import {
   deriveWorkspaceInfos,
   deriveWorkspaceSections,
   groupLiveSessionsByDirectory,
+  sortWorkspaceInfos,
+  type WorkspaceSortMode,
 } from "./session-browser";
 import { providerLabel } from "./types";
 import { useSessionStore } from "./useSessionStore";
 import { ChatThread } from "./components/chat/ChatThread";
-import { NewSessionDialog } from "./components/NewSessionDialog";
 import { ProviderLogo } from "./components/ProviderLogo";
+import { ProviderSelector, type ProviderChoice } from "./components/ProviderSelector";
 import { SettingsPane } from "./components/SettingsPane";
 import { SessionHistoryDialog } from "./components/SessionHistoryDialog";
 import { Sheet } from "./components/Sheet";
 import { StatusCallout } from "./components/StatusCallout";
+import { WorkspacePicker } from "./components/WorkspacePicker";
 import { describeWorkbenchError } from "./error-recovery";
 import {
   clearLastHistorySelection,
@@ -32,6 +35,20 @@ import {
   isReadOnlyReplay,
   sessionInteractionNotice,
 } from "./session-capabilities";
+
+const WORKSPACE_SORT_MODE_KEY = "rah.workspace-sort-mode";
+
+function readWorkspaceSortMode(): WorkspaceSortMode {
+  if (typeof window === "undefined") {
+    return "created";
+  }
+  try {
+    const value = window.localStorage.getItem(WORKSPACE_SORT_MODE_KEY);
+    return value === "updated" ? "updated" : "created";
+  } catch {
+    return "created";
+  }
+}
 
 export function App() {
   const {
@@ -69,11 +86,16 @@ export function App() {
   } = useSessionStore();
   const [draft, setDraft] = useState("");
   const [leftOpen, setLeftOpen] = useState(false);
-  const [newSessionOpen, setNewSessionOpen] = useState(false);
   const [rightOpen, setRightOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [workspaceSortMode, setWorkspaceSortMode] = useState<WorkspaceSortMode>(() =>
+    readWorkspaceSortMode(),
+  );
   const [sidebarOpen, setSidebarOpen] = useState(() => {
     try { return localStorage.getItem("rah-sidebar-open") !== "false"; } catch { return true; }
+  });
+  const [rightSidebarOpen, setRightSidebarOpen] = useState(() => {
+    try { return localStorage.getItem("rah-right-sidebar-open") !== "false"; } catch { return true; }
   });
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     try { return Math.max(200, Math.min(480, Number(localStorage.getItem("rah-sidebar-width")) || 288)); } catch { return 288; }
@@ -82,12 +104,27 @@ export function App() {
   sidebarWidthRef.current = sidebarWidth;
   const lastAutoClaimKeyRef = useRef<string | null>(null);
   const [isResizing, setIsResizing] = useState(false);
+  const [emptyStateDraft, setEmptyStateDraft] = useState("");
+  const pendingEmptyDraftRef = useRef("");
+  const [workspacePickerOpen, setWorkspacePickerOpen] = useState(false);
+  const workspacePickerRef = useRef<HTMLDivElement>(null);
   const { hideToolCallsInChat } = useChatPreferences();
 
   useEffect(() => {
     initializeTheme();
     void init();
   }, [init]);
+
+  useEffect(() => {
+    if (!workspacePickerOpen) return;
+    const onPointerDown = (event: MouseEvent) => {
+      if (!workspacePickerRef.current?.contains(event.target as Node)) {
+        setWorkspacePickerOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    return () => document.removeEventListener("mousedown", onPointerDown);
+  }, [workspacePickerOpen]);
 
   const sessionEntries = useMemo(
     () =>
@@ -130,13 +167,18 @@ export function App() {
     [sessionEntries, storedSessions, workspaceDirs],
   );
 
+  const sortedWorkspaceInfos = useMemo(
+    () => sortWorkspaceInfos(workspaceInfos, workspaceSortMode),
+    [workspaceInfos, workspaceSortMode],
+  );
+
   const workspaceSections = useMemo(
     () =>
       deriveWorkspaceSections(
-        workspaceInfos,
+        sortedWorkspaceInfos,
         attachedLiveSessionEntries.map((entry) => entry.summary),
       ),
-    [attachedLiveSessionEntries, workspaceInfos],
+    [attachedLiveSessionEntries, sortedWorkspaceInfos],
   );
 
   const selectedProjection = selectedSessionId ? projections.get(selectedSessionId) ?? null : null;
@@ -192,11 +234,29 @@ export function App() {
     void claimControl(selectedSummary.session.id).catch(() => {});
   }, [canSendInput, claimControl, hasControl, selectedIsReadOnlyReplay, selectedSummary]);
 
+  useEffect(() => {
+    if (!selectedSummary || !pendingEmptyDraftRef.current) return;
+    void sendInput(selectedSummary.session.id, pendingEmptyDraftRef.current);
+    pendingEmptyDraftRef.current = "";
+  }, [selectedSummary?.session.id, sendInput]);
+
   const handleSend = async () => {
     if (!selectedSummary || !draft.trim()) return;
     const text = draft.trim();
     setDraft("");
     await sendInput(selectedSummary.session.id, text);
+  };
+
+  const handleEmptyStateSend = () => {
+    const text = emptyStateDraft.trim();
+    if (!text || !availableWorkspaceDir) return;
+    pendingEmptyDraftRef.current = text;
+    setEmptyStateDraft("");
+    void startSession({
+      provider: newSessionProvider,
+      cwd: availableWorkspaceDir,
+      title: text.slice(0, 50),
+    });
   };
 
   const handlePermissionResponse = async (
@@ -231,6 +291,18 @@ export function App() {
     try { localStorage.setItem("rah-sidebar-open", String(sidebarOpen)); } catch {}
   }, [sidebarOpen]);
 
+  useEffect(() => {
+    try { localStorage.setItem("rah-right-sidebar-open", String(rightSidebarOpen)); } catch {}
+  }, [rightSidebarOpen]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(WORKSPACE_SORT_MODE_KEY, workspaceSortMode);
+    } catch {
+      // ignore
+    }
+  }, [workspaceSortMode]);
+
   if (!isInitialLoaded) {
     return (
       <div className="h-screen flex items-center justify-center bg-background text-foreground">
@@ -245,13 +317,13 @@ export function App() {
   const sidebarContent = (
     <SessionSidebar
       workspaceSections={workspaceSections}
+      workspaceSortMode={workspaceSortMode}
+      onWorkspaceSortModeChange={setWorkspaceSortMode}
       onAddWorkspace={(dir) => {
         void addWorkspace(dir);
         setLeftOpen(false);
       }}
       onRemoveWorkspace={(dir) => void removeWorkspace(dir)}
-      onOpenNewSession={() => setNewSessionOpen(true)}
-      onRefresh={() => void refreshWorkbenchState()}
       selectedSessionId={selectedSessionId}
       onSelectSession={(id) => {
         setSelectedSessionId(id);
@@ -274,14 +346,13 @@ export function App() {
     void resumeStoredSession(ref, { preferStoredReplay: true });
   };
 
-  const defaultWorkspaceDirForNewSession =
-    selectedSummary?.session.rootDir || selectedSummary?.session.cwd || workspaceDir;
-
+  const availableWorkspaceDir = workspaceDirs.length > 0 ? workspaceDir : "";
   const inspectorContent =
     selectedSummary ? (
       <InspectorPane
         sessionId={selectedSummary.session.id}
         events={selectedProjection?.events ?? []}
+        onCollapse={() => setRightSidebarOpen(false)}
       />
     ) : (
       <div className="h-full" />
@@ -297,10 +368,7 @@ export function App() {
         <div className="h-14 px-4 flex items-center justify-between shrink-0">
           {sidebarOpen && (
             <>
-              <div className="shrink-0">
-                <div className="text-lg font-semibold tracking-tight">RAH</div>
-                <div className="text-xs text-[var(--app-hint)]">Workbench</div>
-              </div>
+              <div className="shrink-0 text-lg font-semibold tracking-tight">RAH</div>
               <div className="flex items-center gap-1 shrink-0">
                 <SessionHistoryDialog
                   storedSessions={storedSessions}
@@ -416,22 +484,6 @@ export function App() {
         </Dialog.Portal>
       </Dialog.Root>
 
-      <NewSessionDialog
-        open={newSessionOpen}
-        onOpenChange={setNewSessionOpen}
-        workspaceDirs={workspaceDirs}
-        defaultWorkspaceDir={defaultWorkspaceDirForNewSession}
-        defaultProvider={newSessionProvider}
-        onCreate={async (input) => {
-          if (!workspaceDirs.includes(input.cwd)) {
-            await addWorkspace(input.cwd);
-          }
-          await startSession(input);
-          setNewSessionProvider(input.provider);
-          setLeftOpen(false);
-        }}
-      />
-
       {/* Center chat */}
       <main className="flex-1 flex flex-col min-w-0">
         {selectedSummary ? (
@@ -501,6 +553,17 @@ export function App() {
                   <X size={14} className="mr-1" />
                   <span>Close</span>
                 </button>
+                {!rightSidebarOpen && (
+                  <button
+                    type="button"
+                    className="hidden md:inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] transition-colors"
+                    onClick={() => setRightSidebarOpen(true)}
+                    aria-label="Expand inspector"
+                    title="Expand inspector"
+                  >
+                    <PanelRight size={16} />
+                  </button>
+                )}
                 <button
                   type="button"
                   className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] transition-colors md:hidden"
@@ -595,12 +658,26 @@ export function App() {
                     />
                     {isGenerating && canSendInput && hasControl ? (
                       <div className="relative shrink-0">
-                        <div className="pointer-events-none absolute inset-[-6px] rounded-full bg-[var(--app-danger)]/20 animate-ping" />
-                        <div className="pointer-events-none absolute inset-[-5px] rounded-full border-[3px] border-dashed border-[var(--app-danger)]/45 animate-[spin_2.5s_linear_infinite]" />
+                        {/* Single flowing ring with a gap */}
+                        <svg
+                          className="pointer-events-none absolute -inset-[6px] h-[calc(100%+12px)] w-[calc(100%+12px)] animate-[spin_1.2s_linear_infinite]"
+                          viewBox="0 0 40 40"
+                        >
+                          <circle
+                            cx="20"
+                            cy="20"
+                            r="18"
+                            fill="none"
+                            stroke="color-mix(in oklab, var(--app-danger) 65%, transparent)"
+                            strokeWidth="2.5"
+                            strokeDasharray="80 32"
+                            strokeLinecap="round"
+                          />
+                        </svg>
                         <button
                           type="button"
                           onClick={() => void interruptSession(selectedSummary.session.id)}
-                          className="relative h-11 w-11 md:h-12 md:w-12 rounded-full bg-[var(--app-danger)] text-white shadow-[0_0_0_4px_color-mix(in_oklab,var(--app-danger)_18%,transparent)] flex items-center justify-center hover:opacity-90 transition-colors"
+                          className="relative h-11 w-11 md:h-12 md:w-12 rounded-full bg-[var(--app-danger)] text-white flex items-center justify-center transition-all duration-200 hover:opacity-90 hover:scale-105 active:scale-95"
                         >
                           <Square size={14} />
                         </button>
@@ -612,7 +689,7 @@ export function App() {
                       onClick={() => void handleSend()}
                       className="shrink-0 h-11 w-11 md:h-12 md:w-12 rounded-full bg-primary text-primary-foreground flex items-center justify-center hover:opacity-90 disabled:opacity-40 transition-colors"
                     >
-                      <Send size={18} />
+                      <ArrowUp size={18} />
                     </button>
                   </div>
 
@@ -651,15 +728,119 @@ export function App() {
                 </div>
               </div>
             </header>
-            <div className="flex-1" />
+            <div className="flex-1 flex flex-col items-center justify-center px-6 overflow-y-auto custom-scrollbar">
+              <div className="w-full max-w-2xl space-y-6">
+                <div className="flex min-h-[4.75rem] flex-col items-center justify-start text-center">
+                  <h1 className="text-2xl font-semibold text-[var(--app-fg)]">
+                    What would you like to build?
+                  </h1>
+                  <div className="mt-1 h-5 w-full max-w-xl px-4">
+                    <p
+                      className={`truncate text-sm text-[var(--app-hint)] ${
+                        availableWorkspaceDir ? "opacity-100" : "opacity-0"
+                      }`}
+                    >
+                      {availableWorkspaceDir ? `in ${availableWorkspaceDir}` : "in /"}
+                    </p>
+                  </div>
+                </div>
+                <div className="relative">
+                  <textarea
+                    className="w-full resize-none bg-[var(--app-subtle-bg)] rounded-2xl border border-[var(--app-border)] px-4 py-3 pr-14 pb-12 text-base text-[var(--app-fg)] placeholder-[var(--app-hint)] focus:outline-none focus:ring-1 focus:ring-[var(--ring)] min-h-[120px]"
+                    placeholder="Message…"
+                    rows={3}
+                    value={emptyStateDraft}
+                    onChange={(e) => setEmptyStateDraft(e.currentTarget.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        handleEmptyStateSend();
+                      }
+                    }}
+                  />
+                  {/* Workspace picker — bottom left */}
+                  <div ref={workspacePickerRef} className="absolute bottom-3 left-3 z-10">
+                    {workspaceDirs.length === 0 ? (
+                      <WorkspacePicker
+                        currentDir=""
+                        triggerLabel="Workspace"
+                        triggerIcon={<FolderPlus size={13} />}
+                        triggerClassName="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs text-[var(--app-hint)] hover:text-[var(--app-fg)] hover:bg-[var(--app-bg)] transition-colors"
+                        onSelect={(dir) => {
+                          void addWorkspace(dir);
+                        }}
+                      />
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setWorkspacePickerOpen((v) => !v)}
+                        className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs text-[var(--app-hint)] hover:text-[var(--app-fg)] hover:bg-[var(--app-bg)] transition-colors"
+                      >
+                        <Folder size={13} />
+                        <span className="max-w-[140px] truncate">
+                          {availableWorkspaceDir
+                            ? availableWorkspaceDir.split("/").pop()
+                            : "Workspace"}
+                        </span>
+                        <ChevronDown size={12} className={`transition-transform ${workspacePickerOpen ? "rotate-180" : ""}`} />
+                      </button>
+                    )}
+                    {workspaceDirs.length > 0 && workspacePickerOpen && (
+                      <div className="absolute bottom-full left-0 mb-1 w-56 rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-1.5 shadow-lg">
+                        {workspaceDirs.map((dir) => (
+                          <button
+                            key={dir}
+                            type="button"
+                            onClick={() => {
+                              setWorkspaceDir(dir);
+                              setWorkspacePickerOpen(false);
+                            }}
+                            className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm transition-colors ${
+                              dir === availableWorkspaceDir ? "bg-[var(--app-subtle-bg)] text-[var(--app-fg)]" : "text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)]"
+                            }`}
+                          >
+                            <Folder size={13} className="shrink-0 text-[var(--app-hint)]" />
+                            <span className="truncate">{dir}</span>
+                            {dir === availableWorkspaceDir && <span className="ml-auto text-[10px] text-[var(--app-hint)]">●</span>}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    disabled={!emptyStateDraft.trim() || !availableWorkspaceDir}
+                    onClick={() => handleEmptyStateSend()}
+                    className="absolute bottom-3 right-3 h-10 w-10 rounded-full bg-primary text-primary-foreground flex items-center justify-center hover:opacity-90 disabled:opacity-40 transition-colors"
+                  >
+                    <ArrowUp size={18} />
+                  </button>
+                </div>
+                <div className="w-full max-w-3xl mx-auto">
+                  <ProviderSelector
+                    value={newSessionProvider as ProviderChoice}
+                    onChange={(v) => setNewSessionProvider(v)}
+                    mode="grid"
+                  />
+                </div>
+              </div>
+            </div>
           </>
         )}
       </main>
 
       {/* Desktop right inspector */}
-      <aside className={`hidden md:flex w-80 flex-col shrink-0 ${selectedSummary ? "bg-[var(--app-subtle-bg)]" : "bg-[var(--app-bg)]"}`}>
-        {inspectorContent}
-      </aside>
+      {selectedSummary && (
+        <>
+          {rightSidebarOpen && <div className="hidden md:block resize-handle" />}
+          <aside
+            className="hidden md:flex flex-col shrink-0 transition-[width] duration-200 overflow-hidden bg-[var(--app-subtle-bg)]"
+            style={{ width: rightSidebarOpen ? 320 : 0 }}
+          >
+            {rightSidebarOpen && inspectorContent}
+          </aside>
+        </>
+      )}
 
       {/* Mobile right sheet */}
       <Sheet open={rightOpen} onOpenChange={setRightOpen} side="right" title="Inspector">
@@ -667,7 +848,10 @@ export function App() {
       </Sheet>
 
       {errorDescriptor ? (
-        <div className="fixed bottom-4 left-1/2 z-[60] w-[min(92vw,48rem)] -translate-x-1/2">
+        <div
+          className="fixed left-1/2 z-[60] w-[min(92vw,48rem)] -translate-x-1/2"
+          style={{ bottom: "calc(env(safe-area-inset-bottom, 0px) + 6rem)" }}
+        >
           <StatusCallout
             tone="warning"
             title={errorDescriptor.title}

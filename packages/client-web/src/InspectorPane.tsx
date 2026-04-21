@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { RahEvent, WorkspaceNode } from "@rah/runtime-protocol";
-import { FileText, Folder } from "lucide-react";
+import { FileText, Folder, PanelRight } from "lucide-react";
 import { readWorkspace } from "./api";
 
 function formatEventTimestamp(event: RahEvent): string {
@@ -143,6 +143,7 @@ function EventsList(props: { events: RahEvent[] }) {
 export function InspectorPane(props: {
   sessionId: string;
   events: RahEvent[];
+  onCollapse?: () => void;
 }) {
   const [activeTab, setActiveTab] = useState<"files" | "changes" | "events">("files");
   const [fileNodes, setFileNodes] = useState<WorkspaceNode[]>([]);
@@ -179,6 +180,17 @@ export function InspectorPane(props: {
           <div className="text-sm font-medium text-[var(--app-fg)]">Inspector</div>
           <div className="text-[11px] text-[var(--app-hint)] truncate">{fileCwd}</div>
         </div>
+        {props.onCollapse && (
+          <button
+            type="button"
+            className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)] transition-colors"
+            onClick={props.onCollapse}
+            aria-label="Collapse inspector"
+            title="Collapse inspector"
+          >
+            <PanelRight size={16} />
+          </button>
+        )}
       </div>
       <div className="shrink-0 px-3 py-2">
         <div className="flex items-center gap-0.5 rounded-lg bg-[var(--app-bg)] p-0.5">

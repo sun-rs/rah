@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
-import { Send, Hash, Sparkles } from "lucide-react";
+import { ArrowUp, Hash, Sparkles } from "lucide-react";
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 import * as api from "../api";
@@ -69,7 +69,7 @@ export function ChatInput({ sessionId }: { sessionId: string }) {
                   : "bg-muted text-muted-foreground opacity-50 cursor-not-allowed"
               )}
             >
-              <Send size={18} />
+              <ArrowUp size={18} />
             </button>
           </div>
         </div>

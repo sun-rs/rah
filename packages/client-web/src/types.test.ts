@@ -1,7 +1,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import type { RahEvent, SessionSummary } from "@rah/runtime-protocol";
-import { deriveWorkspaceInfos } from "./session-browser";
+import { deriveWorkspaceInfos, sortWorkspaceInfos } from "./session-browser";
 import {
   appendOptimisticUserMessage,
   applyEventToProjection,
@@ -423,6 +423,32 @@ describe("client projection", () => {
     assert.deepEqual(
       workspaces.map((workspace) => workspace.directory),
       ["/workspace/first", "/workspace/second"],
+    );
+  });
+
+  test("sorts workspaces by latest update when requested", () => {
+    const workspaces = deriveWorkspaceInfos(
+      ["/workspace/first", "/workspace/second"],
+      [
+        workspaceSummary({
+          id: "session-second",
+          rootDir: "/workspace/second",
+          updatedAt: "2026-04-16T00:00:00.000Z",
+        }),
+        workspaceSummary({
+          id: "session-first",
+          rootDir: "/workspace/first",
+          updatedAt: "2026-04-15T00:00:00.000Z",
+        }),
+      ],
+      [],
+    );
+
+    const sorted = sortWorkspaceInfos(workspaces, "updated");
+
+    assert.deepEqual(
+      sorted.map((workspace) => workspace.directory),
+      ["/workspace/second", "/workspace/first"],
     );
   });
 });

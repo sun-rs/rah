@@ -70,6 +70,8 @@ export interface WorkspaceInfo {
   hasBlockingLiveSessions: boolean;
 }
 
+export type WorkspaceSortMode = "created" | "updated";
+
 export interface WorkspaceSection {
   workspace: WorkspaceInfo;
   sessions: SessionSummary[];
@@ -169,6 +171,26 @@ export function deriveWorkspaceInfos(
   }
 
   return [...map.values()];
+}
+
+export function sortWorkspaceInfos(
+  workspaces: WorkspaceInfo[],
+  mode: WorkspaceSortMode,
+): WorkspaceInfo[] {
+  if (mode === "created") {
+    return workspaces;
+  }
+
+  const originalIndex = new Map(
+    workspaces.map((workspace, index) => [workspace.directory, index] as const),
+  );
+
+  return [...workspaces].sort((left, right) => {
+    if (left.latestUpdatedAt !== right.latestUpdatedAt) {
+      return right.latestUpdatedAt.localeCompare(left.latestUpdatedAt);
+    }
+    return (originalIndex.get(left.directory) ?? 0) - (originalIndex.get(right.directory) ?? 0);
+  });
 }
 
 export function deriveWorkspaceSections(

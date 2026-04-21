@@ -1,8 +1,9 @@
-import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { FeedEntry } from "../../types";
 import type { PermissionResponseRequest, TimelineItem } from "@rah/runtime-protocol";
 import {
   AlertCircle,
+  ArrowDown,
   Circle,
   CircleCheckBig,
   CircleDashed,
@@ -315,6 +316,7 @@ export function ChatThread(props: {
   const prependAnchorRef = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
   const lastScrollTopRef = useRef(0);
   const topHistoryAutoLoadArmedRef = useRef(true);
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const entries = useMemo(
     () => visibleFeedEntries(props.feed, props.hideToolCalls ?? false),
     [props.feed, props.hideToolCalls],
@@ -329,7 +331,9 @@ export function ChatThread(props: {
     const updateStickiness = () => {
       const distanceToBottom =
         node.scrollHeight - node.clientHeight - node.scrollTop;
-      stickToBottomRef.current = distanceToBottom <= BOTTOM_STICK_THRESHOLD_PX;
+      const isAtBottom = distanceToBottom <= BOTTOM_STICK_THRESHOLD_PX;
+      stickToBottomRef.current = isAtBottom;
+      setShowScrollToBottom(!isAtBottom && node.scrollHeight > node.clientHeight);
 
        const scrollingUp = node.scrollTop < lastScrollTopRef.current;
        if (node.scrollTop > TOP_HISTORY_REARM_PX) {
@@ -381,8 +385,12 @@ export function ChatThread(props: {
     previousEntryCountRef.current = entries.length;
   }, [entries]);
 
+  const handleScrollToBottom = () => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
   return (
-    <div ref={containerRef} className="flex-1 overflow-y-auto custom-scrollbar px-4 py-5">
+    <div ref={containerRef} className="relative flex-1 overflow-y-auto custom-scrollbar px-4 py-5">
       <div className="mx-auto max-w-3xl space-y-5">
         {props.historyLoading ? (
           <div className="flex justify-center">
@@ -398,6 +406,18 @@ export function ChatThread(props: {
         ))}
         <div ref={bottomRef} />
       </div>
+
+      {/* Scroll-to-bottom button */}
+      {showScrollToBottom ? (
+        <button
+          type="button"
+          onClick={handleScrollToBottom}
+          className="absolute bottom-5 left-1/2 z-10 flex h-9 w-9 -translate-x-1/2 items-center justify-center rounded-full border border-[var(--app-border)] bg-[var(--app-bg)] text-[var(--app-fg)] shadow-lg transition-all duration-200 hover:scale-110 hover:bg-[var(--app-subtle-bg)] active:scale-95"
+          aria-label="Scroll to bottom"
+        >
+          <ArrowDown size={16} />
+        </button>
+      ) : null}
     </div>
   );
 }

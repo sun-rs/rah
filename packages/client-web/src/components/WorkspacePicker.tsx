@@ -3,6 +3,8 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { ChevronUp, Folder, FolderOpen, HardDrive, Search, X } from "lucide-react";
 import { listDirectory, type DirectoryListingResponse } from "../api";
 
+const DEFAULT_WORKSPACE_PICKER_PATH = "~";
+
 function getParentPath(path: string): string {
   if (!path) return "/";
   const normalized = path.replace(/[\\/]+$/, "");
@@ -20,17 +22,17 @@ export function WorkspacePicker(props: {
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const [currentPath, setCurrentPath] = useState(props.currentDir || "/");
+  const [currentPath, setCurrentPath] = useState(DEFAULT_WORKSPACE_PICKER_PATH);
   const [listing, setListing] = useState<DirectoryListingResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (open) {
-      setCurrentPath(props.currentDir || "/");
+      setCurrentPath(DEFAULT_WORKSPACE_PICKER_PATH);
       setQuery("");
     }
-  }, [open, props.currentDir]);
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -109,7 +111,7 @@ export function WorkspacePicker(props: {
           <div className="flex items-center gap-2 border-b border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-3 py-2 shrink-0">
             <button
               type="button"
-              onClick={() => setCurrentPath(getParentPath(currentPath))}
+              onClick={() => setCurrentPath(getParentPath(listing?.path || currentPath))}
               disabled={currentPath === "/"}
               className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)] disabled:opacity-30 transition-colors"
               aria-label="Go up"
