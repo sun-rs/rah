@@ -1,0 +1,214 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: "Inter", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+}
+
+@layer base {
+  :root {
+    --radius: 0.75rem;
+
+    /* Light mode (default) */
+    --background: #ffffff;
+    --foreground: #09090b;
+
+    --card: #ffffff;
+    --card-foreground: #09090b;
+
+    --popover: #ffffff;
+    --popover-foreground: #09090b;
+
+    --primary: #18181b;
+    --primary-foreground: #fafafa;
+
+    --secondary: #f4f4f5;
+    --secondary-foreground: #18181b;
+
+    --muted: #f4f4f5;
+    --muted-foreground: #71717a;
+
+    --accent: #f4f4f5;
+    --accent-foreground: #18181b;
+
+    --destructive: #dc2626;
+    --destructive-foreground: #ffffff;
+
+    --border: #e4e4e7;
+    --input: #e4e4e7;
+    --ring: #a1a1aa;
+
+    /* App semantic tokens - light */
+    --app-bg: #ffffff;
+    --app-fg: #09090b;
+    --app-hint: #71717a;
+    --app-muted: #a1a1aa;
+    --app-link: #18181b;
+    --app-border: #e4e4e7;
+    --app-subtle-bg: #f4f4f5;
+    --app-code-bg: #fafafa;
+    --app-inline-code-bg: rgba(0, 0, 0, 0.06);
+    --app-success: #16a34a;
+    --app-warning: #d97706;
+    --app-danger: #dc2626;
+
+    /* User bubble */
+    --user-bubble-bg: #f4f4f5;
+    --user-bubble-fg: #09090b;
+
+    /* Diff */
+    --diff-header-bg: rgba(0, 0, 0, 0.04);
+    --diff-add-text: #166534;
+    --diff-add-bg: rgba(34, 197, 94, 0.14);
+    --diff-remove-text: #991b1b;
+    --diff-remove-bg: rgba(239, 68, 68, 0.12);
+    --diff-context-text: #3f3f46;
+
+    /* Code block */
+    --code-block-text: #18181b;
+  }
+
+  html.dark {
+    --background: #0a0a0a;
+    --foreground: #fafafa;
+
+    --card: #111111;
+    --card-foreground: #fafafa;
+
+    --popover: #111111;
+    --popover-foreground: #fafafa;
+
+    --primary: #fafafa;
+    --primary-foreground: #0a0a0a;
+
+    --secondary: #1f1f1f;
+    --secondary-foreground: #fafafa;
+
+    --muted: #1f1f1f;
+    --muted-foreground: #a1a1aa;
+
+    --accent: #1f1f1f;
+    --accent-foreground: #fafafa;
+
+    --destructive: #ef4444;
+    --destructive-foreground: #fafafa;
+
+    --border: #27272a;
+    --input: #27272a;
+    --ring: #52525b;
+
+    /* App semantic tokens - dark */
+    --app-bg: #0a0a0a;
+    --app-fg: #fafafa;
+    --app-hint: #a1a1aa;
+    --app-muted: #71717a;
+    --app-link: #e4e4e7;
+    --app-border: #27272a;
+    --app-subtle-bg: #18181b;
+    --app-code-bg: #09090b;
+    --app-inline-code-bg: rgba(255, 255, 255, 0.08);
+    --app-success: #22c55e;
+    --app-warning: #f59e0b;
+    --app-danger: #ef4444;
+
+    /* User bubble */
+    --user-bubble-bg: #27272a;
+    --user-bubble-fg: #fafafa;
+
+    /* Diff */
+    --diff-header-bg: rgba(255, 255, 255, 0.04);
+    --diff-add-text: #bbf7d0;
+    --diff-add-bg: rgba(34, 197, 94, 0.12);
+    --diff-remove-text: #fecaca;
+    --diff-remove-bg: rgba(239, 68, 68, 0.1);
+    --diff-context-text: #d4d4d8;
+
+    /* Code block */
+    --code-block-text: #e5e7eb;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  html {
+    @apply antialiased;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: var(--font-sans);
+  }
+}
+
+@layer utilities {
+  .custom-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+  }
+
+  .custom-scrollbar:hover {
+    scrollbar-color: rgba(128, 128, 128, 0.35) transparent;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background-color: transparent;
+    border-radius: 9999px;
+    border: 1px solid transparent;
+    background-clip: padding-box;
+  }
+
+  .custom-scrollbar:hover::-webkit-scrollbar-thumb {
+    background-color: rgba(128, 128, 128, 0.3);
+  }
+
+  .custom-scrollbar:hover::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(128, 128, 128, 0.5);
+  }
+
+  .custom-scrollbar::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+}

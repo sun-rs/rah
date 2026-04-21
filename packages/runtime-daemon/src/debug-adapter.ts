@@ -1,0 +1,111 @@
+import type {
+  CloseSessionRequest,
+  DebugScenarioDescriptor,
+  ManagedSession,
+  ResumeSessionRequest,
+  ResumeSessionResponse,
+  SessionInputRequest,
+  StartSessionRequest,
+  StartSessionResponse,
+  WorkspaceSnapshotResponse,
+  GitStatusResponse,
+  GitDiffResponse,
+  ContextUsage,
+  DebugReplayScript,
+  InterruptSessionRequest,
+  SessionSummary,
+  StoredSessionRef,
+} from "@rah/runtime-protocol";
+import { DebugEngine } from "./debug-engine";
+import { DEBUG_STORED_SESSIONS } from "./debug-stored-sessions";
+import type {
+  ProviderAdapter,
+  RuntimeServices,
+  StartDebugScenarioRequest,
+} from "./provider-adapter";
+
+const DEBUG_PROVIDERS: ManagedSession["provider"][] = [
+  "claude",
+  "kimi",
+  "gemini",
+  "opencode",
+  "custom",
+];
+
+export class DebugAdapter implements ProviderAdapter {
+  readonly id = "debug";
+  readonly providers = DEBUG_PROVIDERS;
+
+  private readonly engine: DebugEngine;
+
+  constructor(services: RuntimeServices) {
+    this.engine = new DebugEngine({
+      ...services,
+      storedSessions: DEBUG_STORED_SESSIONS,
+    });
+  }
+
+  startSession(request: StartSessionRequest): StartSessionResponse {
+    return this.engine.startSession(request);
+  }
+
+  resumeSession(request: ResumeSessionRequest): ResumeSessionResponse {
+    return this.engine.resumeSession(request);
+  }
+
+  sendInput(sessionId: string, request: SessionInputRequest): void {
+    this.engine.sendInput(sessionId, request);
+  }
+
+  closeSession(sessionId: string, request: CloseSessionRequest): void {
+    this.engine.closeSession(sessionId, request);
+  }
+
+  destroySession(sessionId: string): void {
+    this.engine.destroySession(sessionId);
+  }
+
+  interruptSession(sessionId: string, request: InterruptSessionRequest): SessionSummary {
+    return this.engine.interruptSession(sessionId, request);
+  }
+
+  onPtyInput(sessionId: string, clientId: string, data: string): void {
+    this.engine.onPtyInput(sessionId, clientId, data);
+  }
+
+  onPtyResize(sessionId: string, clientId: string, cols: number, rows: number): void {
+    this.engine.onPtyResize(sessionId, clientId, cols, rows);
+  }
+
+  getWorkspaceSnapshot(sessionId: string): WorkspaceSnapshotResponse {
+    return this.engine.getWorkspaceSnapshot(sessionId);
+  }
+
+  getGitStatus(sessionId: string): GitStatusResponse {
+    return this.engine.getGitStatus(sessionId);
+  }
+
+  getGitDiff(sessionId: string, path: string): GitDiffResponse {
+    return this.engine.getGitDiff(sessionId, path);
+  }
+
+  getContextUsage(sessionId: string): ContextUsage | undefined {
+    return this.engine.getContextUsage(sessionId);
+  }
+
+  listStoredSessions(): StoredSessionRef[] {
+    return [...DEBUG_STORED_SESSIONS];
+  }
+
+  listDebugScenarios(): DebugScenarioDescriptor[] {
+    return this.engine.listScenarios();
+  }
+
+  startDebugScenario(request: StartDebugScenarioRequest): StartSessionResponse {
+    return this.engine.startScenario(request);
+  }
+
+  buildDebugScenarioReplayScript(scenarioId: string): DebugReplayScript {
+    return this.engine.buildScenarioReplayScript(scenarioId);
+  }
+}

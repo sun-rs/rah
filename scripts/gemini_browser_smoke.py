@@ -1,0 +1,363 @@
+from __future__ import annotations
+
+import json
+import os
+import pathlib
+import shutil
+import tempfile
+import time
+from typing import Any
+from urllib import request
+
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+from playwright.sync_api import expect, sync_playwright
+
+
+def request_json(base_url: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    if payload is None:
+        req = request.Request(f"{base_url}{path}")
+    else:
+        req = request.Request(
+            f"{base_url}{path}",
+            data=json.dumps(payload).encode(),
+            headers={"content-type": "application/json"},
+        )
+    with request.urlopen(req, timeout=240) as response:
+        return json.load(response)
+
+
+def close_live_sessions(base_url: str) -> None:
+    sessions = request_json(base_url, "/api/sessions").get("sessions", [])
+    for session in sessions:
+        summary = session.get("session") if isinstance(session, dict) else None
+        if not isinstance(summary, dict):
+            continue
+        session_id = summary.get("id")
+        if not isinstance(session_id, str):
+            continue
+        attached_clients = session.get("attachedClients") if isinstance(session, dict) else None
+        client_id = session.get("controlLease", {}).get("holderClientId") if isinstance(session, dict) else None
+        if not isinstance(client_id, str) and isinstance(attached_clients, list):
+            for attached in attached_clients:
+                if isinstance(attached, dict) and isinstance(attached.get("id"), str):
+                    client_id = attached["id"]
+                    break
+        if not isinstance(client_id, str):
+            client_id = "gemini-browser-smoke"
+        try:
+            request_json(base_url, f"/api/sessions/{session_id}/close", {"clientId": client_id})
+        except Exception:
+            continue
+
+
+def close_session(base_url: str, session_id: str, client_id: str | None = None) -> None:
+    try:
+        if client_id is None:
+            summary = request_json(base_url, f"/api/sessions/{session_id}")["session"]
+            client_id = summary.get("controlLease", {}).get("holderClientId")
+            if not isinstance(client_id, str):
+                attached = summary.get("attachedClients", [])
+                if isinstance(attached, list):
+                    for client in attached:
+                        if isinstance(client, dict) and isinstance(client.get("id"), str):
+                            client_id = client["id"]
+                            break
+        if not isinstance(client_id, str):
+            client_id = "gemini-browser-smoke"
+        request_json(base_url, f"/api/sessions/{session_id}/close", {"clientId": client_id})
+    except Exception:
+        pass
+
+
+def wait_for_idle(base_url: str, session_id: str, timeout_s: int = 240) -> dict[str, Any]:
+    started = time.time()
+    last: dict[str, Any] | None = None
+    while time.time() - started < timeout_s:
+        last = request_json(base_url, f"/api/sessions/{session_id}")["session"]
+        runtime_state = last["session"]["runtimeState"]
+        if runtime_state in ("idle", "failed", "stopped"):
+            return last
+        time.sleep(1)
+    raise TimeoutError(f"Timed out waiting for {session_id}; last={last}")
+
+
+def wait_for_session_match(
+    base_url: str,
+    predicate,
+    *,
+    timeout_s: int = 60,
+) -> dict[str, Any]:
+    started = time.time()
+    while time.time() - started < timeout_s:
+        sessions = request_json(base_url, "/api/sessions").get("sessions", [])
+        for session in sessions:
+            if predicate(session):
+                return session
+        time.sleep(1)
+    raise TimeoutError("Timed out waiting for session match.")
+
+
+def gather_matching_user_events(socket_messages: list[Any], token: str) -> tuple[int, str | None]:
+    count = 0
+    turn_id = None
+    for batch in socket_messages:
+        events = batch.get("events") if isinstance(batch, dict) else None
+        if not isinstance(events, list):
+            continue
+        for event in events:
+            if not isinstance(event, dict) or event.get("type") != "timeline.item.added":
+                continue
+            payload = event.get("payload")
+            if not isinstance(payload, dict):
+                continue
+            item = payload.get("item")
+            if not isinstance(item, dict) or item.get("kind") != "user_message":
+                continue
+            text = item.get("text")
+            if isinstance(text, str) and token in text:
+                count += 1
+                if isinstance(event.get("turnId"), str):
+                    turn_id = event["turnId"]
+    return count, turn_id
+
+
+def gather_tool_names_for_turn(socket_messages: list[Any], turn_id: str | None) -> list[str]:
+    if turn_id is None:
+        return []
+    names: list[str] = []
+    for batch in socket_messages:
+        events = batch.get("events") if isinstance(batch, dict) else None
+        if not isinstance(events, list):
+            continue
+        for event in events:
+            if not isinstance(event, dict) or event.get("turnId") != turn_id:
+                continue
+            if event.get("type") != "tool.call.completed":
+                continue
+            payload = event.get("payload")
+            if not isinstance(payload, dict):
+                continue
+            tool_call = payload.get("toolCall")
+            if not isinstance(tool_call, dict):
+                continue
+            name = tool_call.get("providerToolName")
+            if isinstance(name, str):
+                names.append(name)
+    return names
+
+
+def count_text(haystack: str, needle: str) -> int:
+    count = 0
+    start = 0
+    while True:
+        idx = haystack.find(needle, start)
+        if idx == -1:
+            return count
+        count += 1
+        start = idx + len(needle)
+
+
+def main() -> int:
+    base_url = os.environ.get("RAH_BASE_URL", "http://127.0.0.1:43111")
+    close_live_sessions(base_url)
+
+    workspace = pathlib.Path(tempfile.mkdtemp(prefix="rah-gemini-browser-"))
+    alpha = workspace / "alpha.txt"
+    beta = workspace / "beta.txt"
+    gamma = workspace / "gamma.txt"
+    alpha.write_text("ALPHA-CONTENT\n", encoding="utf-8")
+
+    token = str(int(time.time()))
+    first_marker = f"GEMINI-BROWSER-1-{token}"
+    second_marker = f"GEMINI-BROWSER-2-{token}"
+    first_prompt = (
+        f"Read alpha.txt. Then create beta.txt containing exactly BETA-OK on one line. "
+        f"Finally answer with exactly {first_marker}."
+    )
+    second_prompt = (
+        f"Read beta.txt. Then create gamma.txt containing exactly GAMMA-OK on one line. "
+        f"Finally answer with exactly {second_marker}."
+    )
+
+    request_json(base_url, "/api/workspaces/add", {"dir": str(workspace)})
+    request_json(base_url, "/api/workspaces/select", {"dir": str(workspace)})
+
+    seed_client_id = f"gemini-browser-seed-{token}"
+    seeded = request_json(
+        base_url,
+        "/api/sessions/start",
+        {
+            "provider": "gemini",
+            "cwd": str(workspace),
+            "attach": {
+                "client": {
+                    "id": seed_client_id,
+                    "kind": "web",
+                    "connectionId": seed_client_id,
+                },
+                "mode": "interactive",
+                "claimControl": True,
+            },
+        },
+    )["session"]
+    live_session_id = seeded["session"]["id"]
+    request_json(
+        base_url,
+        f"/api/sessions/{live_session_id}/input",
+        {"clientId": seed_client_id, "text": first_prompt},
+    )
+    first_done = wait_for_idle(base_url, live_session_id)
+    provider_session_id = first_done["session"].get("providerSessionId")
+    if not isinstance(provider_session_id, str) or not provider_session_id:
+        raise AssertionError("Gemini browser seed flow did not publish providerSessionId.")
+    if beta.read_text(encoding="utf-8") != "BETA-OK\n":
+        raise AssertionError("Gemini browser seed flow did not create beta.txt correctly.")
+    close_session(base_url, live_session_id, seed_client_id)
+    live_session_id = None
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page(viewport={"width": 1440, "height": 960})
+        page.add_init_script(
+            """
+            (() => {
+              try {
+                window.localStorage.removeItem('rah.lastHistorySelection');
+                window.sessionStorage.removeItem('rah.lastHistorySelection');
+              } catch {}
+              const NativeWS = window.WebSocket;
+              window.__rahSocketMessages = [];
+              window.WebSocket = function(url, protocols) {
+                const ws = protocols === undefined ? new NativeWS(url) : new NativeWS(url, protocols);
+                ws.addEventListener('message', (event) => {
+                  try {
+                    window.__rahSocketMessages.push(JSON.parse(event.data));
+                  } catch {}
+                });
+                return ws;
+              };
+              window.WebSocket.prototype = NativeWS.prototype;
+            })();
+            """
+        )
+        page.set_default_timeout(30_000)
+
+        replay_session_id: str | None = None
+        resumed_session_id: str | None = None
+
+        try:
+            page.goto(base_url, wait_until="domcontentloaded")
+            page.reload(wait_until="domcontentloaded")
+            page.wait_for_timeout(1500)
+
+            sessions_after_close = request_json(base_url, "/api/sessions")
+            recent = [
+                item
+                for item in sessions_after_close["recentSessions"]
+                if item["provider"] == "gemini" and item["providerSessionId"] == provider_session_id
+            ]
+            stored = [
+                item
+                for item in sessions_after_close["storedSessions"]
+                if item["provider"] == "gemini" and item["providerSessionId"] == provider_session_id
+            ]
+            if not recent or not stored:
+                raise AssertionError("Gemini session did not appear in Recent/Stored after close.")
+
+            page.locator('button[aria-label="Session history"]:visible').first.click()
+            page.get_by_role("button", name="Recent", exact=True).click()
+            page.get_by_placeholder("Filter recent sessions…").fill(provider_session_id)
+            page.locator(
+                f'[role="dialog"] button[data-provider-session-id="{provider_session_id}"]:visible'
+            ).first.click()
+
+            expect(page.get_by_text("Open history only")).to_be_visible(timeout=60_000)
+            if count_text(page.locator("body").inner_text(), first_marker) < 2:
+                raise AssertionError("Gemini history replay did not show the first turn in the UI.")
+            expect(page.get_by_text("ReadFile")).to_be_visible(timeout=60_000)
+            expect(page.get_by_text("WriteFile")).to_be_visible(timeout=60_000)
+
+            replay = wait_for_session_match(
+                base_url,
+                lambda item: item["session"]["provider"] == "gemini"
+                and item["session"].get("providerSessionId") == provider_session_id
+                and item["session"]["capabilities"]["steerInput"] is False,
+                timeout_s=90,
+            )
+            replay_session_id = replay["session"]["id"]
+
+            page.get_by_role("button", name="Claim control").click()
+            expect(page.get_by_placeholder("Message…")).to_be_visible(timeout=90_000)
+
+            resumed = wait_for_session_match(
+                base_url,
+                lambda item: item["session"]["provider"] == "gemini"
+                and item["session"].get("providerSessionId") == provider_session_id
+                and item["session"]["capabilities"]["steerInput"] is True,
+                timeout_s=90,
+            )
+            resumed_session_id = resumed["session"]["id"]
+
+            old_turn_count_before = count_text(page.locator("body").inner_text(), first_marker)
+
+            page.get_by_placeholder("Message…").fill(second_prompt)
+            page.keyboard.press("Enter")
+
+            wait_for_idle(base_url, resumed_session_id)
+            body_after_second = page.locator("body").inner_text()
+            if count_text(body_after_second, second_marker) < 2:
+                raise AssertionError("Expected Gemini browser second turn marker in both user and assistant output.")
+            socket_messages = page.evaluate("window.__rahSocketMessages")
+            second_user_count, second_turn_id = gather_matching_user_events(socket_messages, second_prompt)
+            second_tool_names = gather_tool_names_for_turn(socket_messages, second_turn_id)
+            old_turn_count_after = count_text(body_after_second, first_marker)
+
+            if gamma.read_text(encoding="utf-8") != "GAMMA-OK\n":
+                raise AssertionError("Browser Gemini resume flow did not create gamma.txt correctly.")
+
+            result = {
+                "baseUrl": base_url,
+                "providerSessionId": provider_session_id,
+                "seedFlow": {
+                    "betaContent": beta.read_text(encoding="utf-8"),
+                },
+                "historyReplay": {
+                    "replaySessionId": replay_session_id,
+                    "recentCount": len(recent),
+                    "storedCount": len(stored),
+                    "oldTurnVisibleCount": old_turn_count_before,
+                },
+                "claimFlow": {
+                    "resumedSessionId": resumed_session_id,
+                    "matchingUserEventCount": second_user_count,
+                    "toolNames": second_tool_names,
+                    "oldTurnVisibleCountAfterClaim": old_turn_count_after,
+                },
+                "gammaContent": gamma.read_text(encoding="utf-8"),
+            }
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+
+            if second_user_count != 1:
+                raise AssertionError("Expected exactly one user event for the claimed Gemini browser turn.")
+            if "read_file" not in second_tool_names or "write_file" not in second_tool_names:
+                raise AssertionError("Expected read_file and write_file in the claimed Gemini browser turn.")
+            if old_turn_count_after != old_turn_count_before:
+                raise AssertionError("Claiming Gemini history replayed older history into the UI.")
+
+            return 0
+        except PlaywrightTimeoutError as exc:
+            print(f"Gemini browser smoke timed out: {exc}")
+            return 1
+        finally:
+            browser.close()
+            if resumed_session_id:
+                close_session(base_url, resumed_session_id)
+            if replay_session_id:
+                close_session(base_url, replay_session_id)
+            if live_session_id:
+                close_session(base_url, live_session_id)
+            shutil.rmtree(workspace, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

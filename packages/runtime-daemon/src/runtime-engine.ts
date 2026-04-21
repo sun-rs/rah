@@ -1,0 +1,555 @@
+import { mkdir, opendir, stat } from "node:fs/promises";
+import { resolve } from "node:path";
+import type {
+  AttachSessionRequest,
+  AttachSessionResponse,
+  ClaimControlRequest,
+  CloseSessionRequest,
+  DetachSessionRequest,
+  DebugScenarioDescriptor,
+  DebugReplayScript,
+  EventSubscriptionRequest,
+  InterruptSessionRequest,
+  ListSessionsResponse,
+  ProviderDiagnostic,
+  ProviderKind,
+  PermissionResponseRequest,
+  RahEvent,
+  ReleaseControlRequest,
+  ResumeSessionRequest,
+  ResumeSessionResponse,
+  SessionHistoryPageResponse,
+  SessionSummary,
+  StartSessionRequest,
+  StartSessionResponse,
+  StoredSessionRef,
+} from "@rah/runtime-protocol";
+import { ClaudeAdapter } from "./claude-adapter";
+import { CodexAdapter } from "./codex-adapter";
+import { DebugAdapter } from "./debug-adapter";
+import { EventBus } from "./event-bus";
+import { GeminiAdapter } from "./gemini-adapter";
+import { KimiAdapter } from "./kimi-adapter";
+import { claudeLaunchSpec, probeProviderVersion } from "./provider-diagnostics";
+import type { ProviderAdapter } from "./provider-adapter";
+import { PtyHub } from "./pty-hub";
+import { SessionStore, toSessionSummary, type StoredSessionState } from "./session-store";
+import { WorkbenchStateStore } from "./workbench-state";
+
+const SYSTEM_SOURCE = {
+  provider: "system" as const,
+  channel: "system" as const,
+  authority: "authoritative" as const,
+};
+
+function normalizeDirectory(value: string | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const withoutTrailing = trimmed.replace(/[\\/]+$/, "");
+  if (withoutTrailing.startsWith("/private/var/")) {
+    return withoutTrailing.slice("/private".length);
+  }
+  return withoutTrailing;
+}
+
+function sessionBelongsToWorkspace(
+  sessionPath: string | undefined,
+  workspaceDir: string,
+): boolean {
+  const normalizedSession = normalizeDirectory(sessionPath);
+  const normalizedWorkspace = normalizeDirectory(workspaceDir);
+  if (!normalizedSession || !normalizedWorkspace) {
+    return false;
+  }
+  return (
+    normalizedSession === normalizedWorkspace ||
+    normalizedSession.startsWith(`${normalizedWorkspace}/`) ||
+    normalizedSession.startsWith(`${normalizedWorkspace}\\`)
+  );
+}
+
+function isReadOnlyReplaySession(state: StoredSessionState): boolean {
+  return (
+    state.session.providerSessionId !== undefined &&
+    !state.session.capabilities.steerInput &&
+    !state.session.capabilities.livePermissions
+  );
+}
+
+function workspaceDirsFromState(
+  rememberedWorkspaceDirs: readonly string[],
+  liveStates: readonly StoredSessionState[],
+): string[] {
+  const directories = new Set<string>(rememberedWorkspaceDirs);
+  for (const state of liveStates) {
+    if (isReadOnlyReplaySession(state)) {
+      continue;
+    }
+    const directory = normalizeDirectory(state.session.rootDir || state.session.cwd);
+    if (directory) {
+      directories.add(directory);
+    }
+  }
+  return [...directories].sort((a, b) => a.localeCompare(b));
+}
+
+export class RuntimeEngine {
+  readonly eventBus: EventBus;
+  readonly ptyHub: PtyHub;
+  readonly sessionStore: SessionStore;
+  readonly workbenchState: WorkbenchStateStore;
+  private rememberedSessions: StoredSessionRef[];
+  private rememberedRecentSessions: StoredSessionRef[];
+  private rememberedWorkspaceDirs: string[];
+  private rememberedActiveWorkspaceDir: string | undefined;
+
+  private readonly adaptersById = new Map<string, ProviderAdapter>();
+  private readonly adaptersByProvider = new Map<string, ProviderAdapter>();
+  private readonly sessionOwners = new Map<string, ProviderAdapter>();
+
+  constructor(adapters?: ProviderAdapter[]) {
+    this.workbenchState = new WorkbenchStateStore();
+    this.eventBus = new EventBus();
+    this.ptyHub = new PtyHub();
+    this.sessionStore = new SessionStore({
+      onSnapshot: (states) => {
+        this.workbenchState.persistLiveSessions(states);
+      },
+    });
+    const restored = this.workbenchState.load();
+    this.rememberedSessions = restored.sessions;
+    this.rememberedRecentSessions = restored.recentSessions;
+    this.rememberedWorkspaceDirs = restored.workspaces;
+    this.rememberedActiveWorkspaceDir = restored.activeWorkspaceDir;
+
+    const resolvedAdapters = adapters ?? (() => {
+      const debugAdapter = new DebugAdapter({
+        eventBus: this.eventBus,
+        ptyHub: this.ptyHub,
+        sessionStore: this.sessionStore,
+      });
+      return [
+        debugAdapter,
+        new CodexAdapter({
+          eventBus: this.eventBus,
+          ptyHub: this.ptyHub,
+          sessionStore: this.sessionStore,
+        }),
+        new ClaudeAdapter({
+          eventBus: this.eventBus,
+          ptyHub: this.ptyHub,
+          sessionStore: this.sessionStore,
+        }),
+        new GeminiAdapter({
+          eventBus: this.eventBus,
+          ptyHub: this.ptyHub,
+          sessionStore: this.sessionStore,
+        }),
+        new KimiAdapter({
+          eventBus: this.eventBus,
+          ptyHub: this.ptyHub,
+          sessionStore: this.sessionStore,
+        }),
+      ];
+    })();
+    for (const adapter of resolvedAdapters) {
+      this.registerAdapter(adapter);
+    }
+  }
+
+  listSessions(): ListSessionsResponse {
+    this.pruneOrphanSessions();
+    const liveStates = this.sessionStore.listSessions();
+    const storedSessions = new Map<string, StoredSessionRef>();
+    for (const remembered of this.rememberedSessions) {
+      storedSessions.set(`${remembered.provider}:${remembered.providerSessionId}`, remembered);
+    }
+    for (const adapter of this.adaptersById.values()) {
+      for (const stored of adapter.listStoredSessions?.() ?? []) {
+        storedSessions.set(`${stored.provider}:${stored.providerSessionId}`, stored);
+      }
+    }
+    for (const state of liveStates) {
+      const providerSessionId = state.session.providerSessionId;
+      if (!providerSessionId) {
+        continue;
+      }
+      storedSessions.delete(`${state.session.provider}:${providerSessionId}`);
+    }
+    return {
+      sessions: liveStates.map(toSessionSummary),
+      storedSessions: [...storedSessions.values()],
+      recentSessions: [...this.rememberedRecentSessions],
+      workspaceDirs: workspaceDirsFromState(this.rememberedWorkspaceDirs, liveStates),
+      ...(this.rememberedActiveWorkspaceDir
+        ? { activeWorkspaceDir: this.rememberedActiveWorkspaceDir }
+        : {}),
+    };
+  }
+
+  async listProviderDiagnostics(): Promise<ProviderDiagnostic[]> {
+    const providers: ProviderKind[] = ["codex", "claude", "kimi", "gemini", "opencode"];
+    return Promise.all(
+      providers.map(async (provider) => {
+        const adapter = this.adaptersByProvider.get(provider);
+        if (!adapter?.getProviderDiagnostic) {
+          if (provider === "claude") {
+            return await probeProviderVersion("claude", claudeLaunchSpec());
+          }
+          return {
+            provider,
+            status: "launch_error" as const,
+            launchCommand: "",
+            detail: "Provider adapter is not implemented yet in this runtime.",
+            auth: "provider_managed" as const,
+          };
+        }
+        return await adapter.getProviderDiagnostic();
+      }),
+    );
+  }
+
+  addWorkspace(rawDir: string): ListSessionsResponse {
+    this.workbenchState.selectWorkspace(rawDir);
+    return this.currentWorkbenchSessions();
+  }
+
+  selectWorkspace(rawDir: string): ListSessionsResponse {
+    this.workbenchState.selectWorkspace(rawDir);
+    return this.currentWorkbenchSessions();
+  }
+
+  removeWorkspace(rawDir: string): ListSessionsResponse {
+    const directory = normalizeDirectory(rawDir);
+    if (!directory) {
+      throw new Error("Workspace directory is required.");
+    }
+    const hasLiveSessions = this.sessionStore.listSessions().some((state) =>
+      !isReadOnlyReplaySession(state) &&
+      sessionBelongsToWorkspace(state.session.rootDir || state.session.cwd, directory),
+    );
+    if (hasLiveSessions) {
+      throw new Error("Cannot remove a workspace with active live sessions.");
+    }
+    this.workbenchState.removeWorkspace(directory);
+    return this.currentWorkbenchSessions();
+  }
+
+  getSessionSummary(sessionId: string): SessionSummary {
+    const state = this.sessionStore.getSession(sessionId);
+    if (!state) {
+      throw new Error(`Unknown session ${sessionId}`);
+    }
+    return toSessionSummary(state);
+  }
+
+  async startSession(request: StartSessionRequest): Promise<StartSessionResponse> {
+    this.pruneOrphanSessions();
+    const adapter = this.requireAdapterForProvider(request.provider);
+    const response = await adapter.startSession(request);
+    this.rememberSessionOwner(response.session.session.id, adapter);
+    return response;
+  }
+
+  async resumeSession(request: ResumeSessionRequest): Promise<ResumeSessionResponse> {
+    this.pruneOrphanSessions();
+    const adapter = this.requireAdapterForProvider(request.provider);
+    const response = await adapter.resumeSession(request);
+    this.rememberSessionOwner(response.session.session.id, adapter);
+    return response;
+  }
+
+  attachSession(sessionId: string, request: AttachSessionRequest): AttachSessionResponse {
+    const state = this.sessionStore.attachClient({
+      sessionId,
+      clientId: request.client.id,
+      kind: request.client.kind,
+      connectionId: request.client.connectionId,
+      attachMode: request.mode,
+      focus: true,
+    });
+
+    this.eventBus.publish({
+      sessionId,
+      type: "session.attached",
+      source: SYSTEM_SOURCE,
+      payload: {
+        clientId: request.client.id,
+        clientKind: request.client.kind,
+      },
+    });
+
+    if (request.claimControl) {
+      this.claimControl(sessionId, { client: request.client });
+    }
+
+    return { session: toSessionSummary(state) };
+  }
+
+  claimControl(sessionId: string, request: ClaimControlRequest): SessionSummary {
+    const state = this.sessionStore.attachClient({
+      sessionId,
+      clientId: request.client.id,
+      kind: request.client.kind,
+      connectionId: request.client.connectionId,
+      attachMode: "interactive",
+      focus: true,
+    });
+    this.sessionStore.claimControl(sessionId, request.client.id);
+    this.eventBus.publish({
+      sessionId,
+      type: "control.claimed",
+      source: SYSTEM_SOURCE,
+      payload: {
+        clientId: request.client.id,
+        clientKind: request.client.kind,
+      },
+    });
+    return toSessionSummary(state);
+  }
+
+  releaseControl(sessionId: string, request: ReleaseControlRequest): SessionSummary {
+    const state = this.sessionStore.releaseControl(sessionId, request.clientId);
+    this.eventBus.publish({
+      sessionId,
+      type: "control.released",
+      source: SYSTEM_SOURCE,
+      payload: {
+        clientId: request.clientId,
+      },
+    });
+    return toSessionSummary(state);
+  }
+
+  sendInput(sessionId: string, request: { clientId: string; text: string }): void {
+    this.requireSessionAdapter(sessionId).sendInput(sessionId, request);
+  }
+
+  interruptSession(
+    sessionId: string,
+    request: InterruptSessionRequest,
+  ): SessionSummary {
+    return this.requireSessionAdapter(sessionId).interruptSession(sessionId, request);
+  }
+
+  async closeSession(sessionId: string, request: CloseSessionRequest): Promise<void> {
+    const state = this.sessionStore.getSession(sessionId);
+    if (!state) {
+      throw new Error(`Unknown session ${sessionId}`);
+    }
+    if (!state.clients.some((client) => client.id === request.clientId)) {
+      throw new Error(`Client ${request.clientId} is not attached to ${sessionId}.`);
+    }
+    this.workbenchState.rememberSession(state);
+    this.refreshRememberedState();
+    const adapter = this.requireSessionAdapter(sessionId);
+    await adapter.closeSession?.(sessionId, request);
+    this.sessionStore.removeSession(sessionId);
+    this.ptyHub.removeSession(sessionId);
+    this.sessionOwners.delete(sessionId);
+    this.eventBus.publish({
+      sessionId,
+      type: "session.closed",
+      source: SYSTEM_SOURCE,
+      payload: {
+        clientId: request.clientId,
+      },
+    });
+  }
+
+  detachSession(sessionId: string, request: DetachSessionRequest): SessionSummary {
+    const state = this.sessionStore.detachClient(sessionId, request.clientId);
+    this.eventBus.publish({
+      sessionId,
+      type: "session.detached",
+      source: SYSTEM_SOURCE,
+      payload: {
+        clientId: request.clientId,
+      },
+    });
+    return toSessionSummary(state);
+  }
+
+  async respondToPermission(
+    sessionId: string,
+    requestId: string,
+    response: PermissionResponseRequest,
+  ): Promise<void> {
+    const adapter = this.requireSessionAdapter(sessionId);
+    if (!adapter.respondToPermission) {
+      throw new Error(`Provider ${adapter.id} does not support permission responses.`);
+    }
+    await adapter.respondToPermission(sessionId, requestId, response);
+  }
+
+  onPtyInput(sessionId: string, clientId: string, data: string): void {
+    this.requireSessionAdapter(sessionId).onPtyInput(sessionId, clientId, data);
+  }
+
+  onPtyResize(sessionId: string, clientId: string, cols: number, rows: number): void {
+    this.requireSessionAdapter(sessionId).onPtyResize(sessionId, clientId, cols, rows);
+  }
+
+  getWorkspaceSnapshot(sessionId: string) {
+    return this.requireSessionAdapter(sessionId).getWorkspaceSnapshot(sessionId);
+  }
+
+  getGitStatus(sessionId: string) {
+    return this.requireSessionAdapter(sessionId).getGitStatus(sessionId);
+  }
+
+  getGitDiff(sessionId: string, path: string) {
+    return this.requireSessionAdapter(sessionId).getGitDiff(sessionId, path);
+  }
+
+  getSessionHistoryPage(
+    sessionId: string,
+    options?: { beforeTs?: string; limit?: number },
+  ): SessionHistoryPageResponse {
+    const adapter = this.requireSessionAdapter(sessionId);
+    return adapter.getSessionHistoryPage?.(sessionId, options) ?? { sessionId, events: [] };
+  }
+
+  getContextUsage(sessionId: string) {
+    return this.requireSessionAdapter(sessionId).getContextUsage(sessionId);
+  }
+
+  listScenarios(): DebugScenarioDescriptor[] {
+    const adapter = this.adaptersById.get("debug");
+    return adapter?.listDebugScenarios?.() ?? [];
+  }
+
+  startScenario(args: {
+    scenarioId: string;
+    attach?: AttachSessionRequest;
+  }): StartSessionResponse {
+    const adapter = this.adaptersById.get("debug");
+    if (!adapter?.startDebugScenario) {
+      throw new Error("No debug adapter registered.");
+    }
+    const response = adapter.startDebugScenario(args);
+    this.rememberSessionOwner(response.session.session.id, adapter);
+    return response;
+  }
+
+  buildScenarioReplayScript(scenarioId: string): DebugReplayScript {
+    const adapter = this.adaptersById.get("debug");
+    if (!adapter?.buildDebugScenarioReplayScript) {
+      throw new Error("No debug adapter registered.");
+    }
+    return adapter.buildDebugScenarioReplayScript(scenarioId);
+  }
+
+  listEvents(filter: EventSubscriptionRequest): RahEvent[] {
+    return this.eventBus.list(filter);
+  }
+
+  async listDirectory(
+    rawPath: string,
+  ): Promise<{ path: string; entries: Array<{ name: string; type: "file" | "directory" }> }> {
+    const targetPath = resolve(rawPath || process.cwd());
+    const dir = await opendir(targetPath);
+    const entries: Array<{ name: string; type: "file" | "directory" }> = [];
+    for await (const entry of dir) {
+      if (entry.name.startsWith(".")) continue;
+      let type: "file" | "directory" = entry.isDirectory() ? "directory" : "file";
+      if (entry.isSymbolicLink()) {
+        try {
+          const s = await stat(resolve(targetPath, entry.name));
+          type = s.isDirectory() ? "directory" : "file";
+        } catch {
+          continue;
+        }
+      }
+      entries.push({ name: entry.name, type });
+    }
+    entries.sort((a, b) => {
+      if (a.type === b.type) return a.name.localeCompare(b.name);
+      return a.type === "directory" ? -1 : 1;
+    });
+    return { path: targetPath, entries };
+  }
+
+  async ensureDirectory(rawPath: string): Promise<{ path: string }> {
+    const targetPath = resolve(rawPath || process.cwd());
+    await mkdir(targetPath, { recursive: true });
+    return { path: targetPath };
+  }
+
+  async shutdown(): Promise<void> {
+    for (const adapter of this.adaptersById.values()) {
+      await adapter.shutdown?.();
+    }
+    await this.workbenchState.flush();
+  }
+
+  private registerAdapter(adapter: ProviderAdapter): void {
+    this.adaptersById.set(adapter.id, adapter);
+    for (const provider of adapter.providers) {
+      this.adaptersByProvider.set(provider, adapter);
+    }
+  }
+
+  private rememberSessionOwner(sessionId: string, adapter: ProviderAdapter): void {
+    this.sessionOwners.set(sessionId, adapter);
+  }
+
+  private currentWorkbenchSessions(): ListSessionsResponse {
+    this.refreshRememberedState();
+    return this.listSessions();
+  }
+
+  private refreshRememberedState(): void {
+    const refreshed = this.workbenchState.snapshot();
+    this.rememberedSessions = refreshed.sessions;
+    this.rememberedRecentSessions = refreshed.recentSessions;
+    this.rememberedWorkspaceDirs = refreshed.workspaces;
+    this.rememberedActiveWorkspaceDir = refreshed.activeWorkspaceDir;
+  }
+
+  private pruneOrphanSessions(): void {
+    for (const state of [...this.sessionStore.listSessions()]) {
+      if (state.clients.length > 0) {
+        continue;
+      }
+      const adapter = this.requireSessionAdapter(state.session.id);
+      void adapter.destroySession?.(state.session.id);
+      this.sessionStore.removeSession(state.session.id);
+      this.ptyHub.removeSession(state.session.id);
+      this.sessionOwners.delete(state.session.id);
+      this.eventBus.publish({
+        sessionId: state.session.id,
+        type: "session.closed",
+        source: SYSTEM_SOURCE,
+        payload: {},
+      });
+    }
+  }
+
+  private requireAdapterForProvider(provider: string): ProviderAdapter {
+    const adapter = this.adaptersByProvider.get(provider);
+    if (!adapter) {
+      throw new Error(`No adapter registered for provider ${provider}.`);
+    }
+    return adapter;
+  }
+
+  private requireSessionAdapter(sessionId: string): ProviderAdapter {
+    const owner = this.sessionOwners.get(sessionId);
+    if (owner) {
+      return owner;
+    }
+    const state = this.sessionStore.getSession(sessionId);
+    if (!state) {
+      throw new Error(`Unknown session ${sessionId}`);
+    }
+    const adapter = this.requireAdapterForProvider(state.session.provider);
+    this.sessionOwners.set(sessionId, adapter);
+    return adapter;
+  }
+}

@@ -1,0 +1,402 @@
+import { describe, test } from "node:test";
+import assert from "node:assert/strict";
+import type { RahEvent, SessionSummary } from "@rah/runtime-protocol";
+import { deriveWorkspaceInfos } from "./session-browser";
+import {
+  appendOptimisticUserMessage,
+  applyEventToProjection,
+  initialHistorySyncState,
+  type SessionProjection,
+} from "./types";
+
+function baseSummary(): SessionSummary {
+  return {
+    session: {
+      id: "session-1",
+      provider: "codex",
+      launchSource: "web",
+      cwd: "/workspace/rah",
+      rootDir: "/workspace/rah",
+      runtimeState: "running",
+      ptyId: "pty-1",
+      capabilities: {
+        liveAttach: true,
+        structuredTimeline: true,
+        livePermissions: true,
+        contextUsage: true,
+        resumeByProvider: true,
+        listProviderSessions: true,
+        steerInput: false,
+        queuedInput: false,
+        modelSwitch: false,
+        planMode: false,
+        subagents: false,
+      },
+      createdAt: "2026-04-15T00:00:00.000Z",
+      updatedAt: "2026-04-15T00:00:00.000Z",
+    },
+    attachedClients: [],
+    controlLease: { sessionId: "session-1" },
+  };
+}
+
+function projection(): SessionProjection {
+  return {
+    summary: baseSummary(),
+    feed: [],
+    events: [],
+    lastSeq: 0,
+    history: initialHistorySyncState(),
+  };
+}
+
+function event(event: Omit<RahEvent, "id" | "seq" | "ts" | "sessionId" | "source"> & { seq: number }): RahEvent {
+  return {
+    id: `event-${event.seq}`,
+    ts: `2026-04-15T00:00:${String(event.seq).padStart(2, "0")}.000Z`,
+    sessionId: "session-1",
+    source: { provider: "codex", channel: "structured_live", authority: "derived" },
+    ...event,
+  } as RahEvent;
+}
+
+function workspaceSummary(args: {
+  id: string;
+  rootDir: string;
+  cwd?: string;
+  steerInput?: boolean;
+  livePermissions?: boolean;
+}): SessionSummary {
+  return {
+    session: {
+      ...baseSummary().session,
+      id: args.id,
+      providerSessionId: `${args.id}-provider`,
+      cwd: args.cwd ?? args.rootDir,
+      rootDir: args.rootDir,
+      capabilities: {
+        ...baseSummary().session.capabilities,
+        steerInput: args.steerInput ?? true,
+        livePermissions: args.livePermissions ?? true,
+      },
+    },
+    attachedClients: [],
+    controlLease: { sessionId: args.id },
+  };
+}
+
+describe("client projection", () => {
+  test("does not duplicate optimistic user text or transcript message parts", () => {
+    let current = appendOptimisticUserMessage(projection(), "你是谁");
+
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 1,
+        turnId: "turn-1",
+        type: "message.part.added",
+        payload: {
+          part: {
+            messageId: "user-1",
+            partId: "user-1",
+            kind: "text",
+            text: "你是谁",
+          },
+        },
+      }),
+    );
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 2,
+        turnId: "turn-1",
+        type: "timeline.item.added",
+        payload: {
+          item: { kind: "user_message", text: "你是谁" },
+        },
+      }),
+    );
+
+    assert.deepEqual(
+      current.feed.map((entry) => ({ kind: entry.kind, itemKind: entry.kind === "timeline" ? entry.item.kind : undefined })),
+      [{ kind: "timeline", itemKind: "user_message" }],
+    );
+    assert.equal(current.feed[0]?.turnId, "turn-1");
+  });
+
+  test("keeps non-transcript message parts as structured cards", () => {
+    const current = applyEventToProjection(
+      projection(),
+      event({
+        seq: 1,
+        turnId: "turn-1",
+        type: "message.part.added",
+        payload: {
+          part: {
+            messageId: "file-1",
+            partId: "file-1",
+            kind: "file",
+            text: "package.json",
+          },
+        },
+      }),
+    );
+
+    assert.deepEqual(current.feed.map((entry) => entry.kind), ["message_part"]);
+  });
+
+  test("merges assistant deltas and completed message by messageId", () => {
+    let current = projection();
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 1,
+        turnId: "turn-1",
+        type: "timeline.item.added",
+        payload: {
+          item: { kind: "assistant_message", text: "我是", messageId: "assistant-1" },
+        },
+      }),
+    );
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 2,
+        turnId: "turn-1",
+        type: "timeline.item.added",
+        payload: {
+          item: { kind: "assistant_message", text: " Codex", messageId: "assistant-1" },
+        },
+      }),
+    );
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 3,
+        turnId: "turn-1",
+        type: "timeline.item.added",
+        payload: {
+          item: { kind: "assistant_message", text: "我是 Codex", messageId: "assistant-1" },
+        },
+      }),
+    );
+
+    assert.equal(current.feed.length, 1);
+    const only = current.feed[0];
+    assert.equal(only?.kind, "timeline");
+    if (only?.kind === "timeline" && only.item.kind === "assistant_message") {
+      assert.equal(only.item.text, "我是 Codex");
+      assert.equal(only.item.messageId, "assistant-1");
+    }
+  });
+
+  test("upgrades history assistant text into authoritative live message without duplicating", () => {
+    let current = projection();
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 1,
+        type: "timeline.item.added",
+        payload: {
+          item: { kind: "assistant_message", text: "我是 Codex" },
+        },
+      }),
+    );
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 2,
+        turnId: "turn-1",
+        type: "timeline.item.added",
+        payload: {
+          item: { kind: "assistant_message", text: "我是 Codex", messageId: "assistant-1" },
+        },
+      }),
+    );
+
+    assert.equal(current.feed.length, 1);
+    const only = current.feed[0];
+    assert.equal(only?.kind, "timeline");
+    if (only?.kind === "timeline" && only.item.kind === "assistant_message") {
+      assert.equal(only.turnId, "turn-1");
+      assert.equal(only.item.messageId, "assistant-1");
+      assert.equal(only.item.text, "我是 Codex");
+    }
+  });
+
+  test("coalesces retry runtime status and hides non-actionable runtime status", () => {
+    let current = projection();
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 1,
+        type: "runtime.status",
+        payload: {
+          status: "session_active",
+          detail: "Thread started",
+        },
+      }),
+    );
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 2,
+        turnId: "turn-1",
+        type: "runtime.status",
+        payload: {
+          status: "retrying",
+          detail: "Reconnecting... 2/5",
+          retryCount: 2,
+        },
+      }),
+    );
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 3,
+        turnId: "turn-1",
+        type: "runtime.status",
+        payload: {
+          status: "retrying",
+          detail: "Reconnecting... 5/5",
+          retryCount: 5,
+        },
+      }),
+    );
+
+    assert.deepEqual(current.feed.map((entry) => entry.kind), ["runtime_status"]);
+    const runtime = current.feed[0];
+    assert.equal(runtime?.kind, "runtime_status");
+    if (runtime?.kind === "runtime_status") {
+      assert.equal(runtime.detail, "Reconnecting... 5/5");
+      assert.equal(runtime.retryCount, 5);
+    }
+  });
+
+  test("coalesces streaming tool output artifacts into one card detail", () => {
+    let current = projection();
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 1,
+        turnId: "turn-1",
+        type: "tool.call.started",
+        payload: {
+          toolCall: {
+            id: "tool-1",
+            family: "shell",
+            providerToolName: "exec_command",
+            title: "Run command",
+            detail: {
+              artifacts: [{ kind: "command", command: "printf hi" }],
+            },
+          },
+        },
+      }),
+    );
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 2,
+        turnId: "turn-1",
+        type: "tool.call.delta",
+        payload: {
+          toolCallId: "tool-1",
+          detail: {
+            artifacts: [{ kind: "text", label: "stdout", text: "he" }],
+          },
+        },
+      }),
+    );
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 3,
+        turnId: "turn-1",
+        type: "tool.call.delta",
+        payload: {
+          toolCallId: "tool-1",
+          detail: {
+            artifacts: [{ kind: "text", label: "stdout", text: "llo" }],
+          },
+        },
+      }),
+    );
+
+    const tool = current.feed[0];
+    assert.equal(tool?.kind, "tool_call");
+    if (tool?.kind === "tool_call") {
+      assert.deepEqual(tool.toolCall.detail?.artifacts, [
+        { kind: "command", command: "printf hi" },
+        { kind: "text", label: "stdout", text: "hello" },
+      ]);
+    }
+  });
+
+  test("keeps standalone completed tool calls when started event was not projected", () => {
+    const current = applyEventToProjection(
+      projection(),
+      event({
+        seq: 1,
+        turnId: "turn-1",
+        type: "tool.call.completed",
+        payload: {
+          toolCall: {
+            id: "patch-1",
+            family: "patch",
+            providerToolName: "fileChange",
+            title: "Apply file changes",
+            detail: {
+              artifacts: [{ kind: "diff", format: "unified", text: "@@\n-old\n+new" }],
+            },
+            result: { success: true },
+          },
+        },
+      }),
+    );
+
+    assert.equal(current.feed.length, 1);
+    const tool = current.feed[0];
+    assert.equal(tool?.kind, "tool_call");
+    if (tool?.kind === "tool_call") {
+      assert.equal(tool.status, "completed");
+      assert.equal(tool.toolCall.family, "patch");
+    }
+  });
+
+  test("marks parent workspaces as blocked when a descendant live session exists", () => {
+    const workspaces = deriveWorkspaceInfos(
+      ["/repo", "/repo/app"],
+      [workspaceSummary({ id: "live-1", rootDir: "/repo/app" })],
+      [],
+    );
+
+    assert.equal(workspaces.find((workspace) => workspace.directory === "/repo")?.liveCount, 0);
+    assert.equal(
+      workspaces.find((workspace) => workspace.directory === "/repo")?.hasBlockingLiveSessions,
+      true,
+    );
+    assert.equal(
+      workspaces.find((workspace) => workspace.directory === "/repo/app")?.hasBlockingLiveSessions,
+      true,
+    );
+  });
+
+  test("does not block workspace removal for read-only replay sessions", () => {
+    const workspaces = deriveWorkspaceInfos(
+      ["/repo"],
+      [
+        workspaceSummary({
+          id: "replay-1",
+          rootDir: "/repo",
+          steerInput: false,
+          livePermissions: false,
+        }),
+      ],
+      [],
+    );
+
+    assert.equal(workspaces[0]?.liveCount, 0);
+    assert.equal(workspaces[0]?.hasBlockingLiveSessions, false);
+  });
+});
