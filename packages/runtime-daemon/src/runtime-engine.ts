@@ -12,6 +12,9 @@ import type {
   EventSubscriptionRequest,
   GitFileActionRequest,
   GitHunkActionRequest,
+  IndependentTerminalSession,
+  IndependentTerminalStartRequest,
+  IndependentTerminalStartResponse,
   InterruptSessionRequest,
   ListSessionsResponse,
   ProviderDiagnostic,
@@ -35,6 +38,7 @@ import { DebugAdapter } from "./debug-adapter";
 import { EventBus } from "./event-bus";
 import { GeminiAdapter } from "./gemini-adapter";
 import { HistorySnapshotStore } from "./history-snapshots";
+import { IndependentTerminalProcess } from "./independent-terminal";
 import { KimiAdapter } from "./kimi-adapter";
 import {
   launchSpecForProvider,
@@ -148,6 +152,12 @@ export class RuntimeEngine {
   private readonly adaptersById = new Map<string, ProviderAdapter>();
   private readonly adaptersByProvider = new Map<string, ProviderAdapter>();
   private readonly sessionOwners = new Map<string, ProviderAdapter>();
+  private readonly independentTerminals = new Map<string, {
+    id: string;
+    cwd: string;
+    shell: string;
+    process: IndependentTerminalProcess;
+  }>();
 
   constructor(adapters?: ProviderAdapter[]) {
     this.workbenchState = new WorkbenchStateStore();
@@ -475,10 +485,23 @@ export class RuntimeEngine {
   }
 
   onPtyInput(sessionId: string, clientId: string, data: string): void {
+    const terminal = this.independentTerminals.get(sessionId);
+    if (terminal) {
+      console.error("[runtime-engine independent terminal input]", sessionId, clientId, JSON.stringify(data));
+      void clientId;
+      terminal.process.write(data);
+      return;
+    }
     this.requireSessionAdapter(sessionId).onPtyInput(sessionId, clientId, data);
   }
 
   onPtyResize(sessionId: string, clientId: string, cols: number, rows: number): void {
+    const terminal = this.independentTerminals.get(sessionId);
+    if (terminal) {
+      void clientId;
+      terminal.process.resize(cols, rows);
+      return;
+    }
     this.requireSessionAdapter(sessionId).onPtyResize(sessionId, clientId, cols, rows);
   }
 
@@ -619,8 +642,55 @@ export class RuntimeEngine {
     return { path: targetPath };
   }
 
+  async startIndependentTerminal(
+    request?: IndependentTerminalStartRequest,
+  ): Promise<IndependentTerminalStartResponse> {
+    const cwd = resolveUserPath(request?.cwd || "~");
+    const id = crypto.randomUUID();
+    this.ptyHub.ensureSession(id);
+    const process = new IndependentTerminalProcess({
+      cwd,
+      ...(request?.cols !== undefined ? { cols: request.cols } : {}),
+      ...(request?.rows !== undefined ? { rows: request.rows } : {}),
+      onData: (data) => {
+        this.ptyHub.appendOutput(id, data);
+      },
+      onExit: (args) => {
+        this.ptyHub.emitExit(id, args.exitCode, args.signal);
+        this.independentTerminals.delete(id);
+      },
+    });
+    this.independentTerminals.set(id, {
+      id,
+      cwd,
+      shell: process.shell,
+      process,
+    });
+    const terminal: IndependentTerminalSession = {
+      id,
+      cwd,
+      shell: process.shell,
+    };
+    return { terminal };
+  }
+
+  async closeIndependentTerminal(id: string): Promise<void> {
+    const terminal = this.independentTerminals.get(id);
+    if (!terminal) {
+      return;
+    }
+    this.independentTerminals.delete(id);
+    await terminal.process.close();
+    this.ptyHub.removeSession(id);
+  }
+
   async shutdown(): Promise<void> {
     await this.storedSessionMonitor.shutdown();
+    for (const terminal of this.independentTerminals.values()) {
+      await terminal.process.close();
+      this.ptyHub.removeSession(terminal.id);
+    }
+    this.independentTerminals.clear();
     for (const adapter of this.adaptersById.values()) {
       await adapter.shutdown?.();
     }

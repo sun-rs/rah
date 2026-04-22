@@ -12,6 +12,7 @@ import type {
   EventSubscriptionRequest,
   GitFileActionRequest,
   GitHunkActionRequest,
+  IndependentTerminalStartRequest,
   InterruptSessionRequest,
   ListDebugScenariosResponse,
   ListProvidersResponse,
@@ -220,6 +221,23 @@ export async function startRahDaemon(options?: { port?: number }): Promise<RahDa
   const engine = new RuntimeEngine();
 
   const postRoutes: Array<{ pattern: RegExp; handler: JsonHandler }> = [
+    {
+      pattern: /^\/api\/terminal\/start$/,
+      handler: async (_req, res, _match, body) => {
+        writeJson(
+          res,
+          200,
+          await engine.startIndependentTerminal((body ?? {}) as IndependentTerminalStartRequest),
+        );
+      },
+    },
+    {
+      pattern: /^\/api\/terminal\/([^/]+)\/close$/,
+      handler: async (_req, res, match) => {
+        await engine.closeIndependentTerminal(match[1]!);
+        writeJson(res, 200, { ok: true });
+      },
+    },
     {
       pattern: /^\/api\/sessions\/start$/,
       handler: async (_req, res, _match, body) => {

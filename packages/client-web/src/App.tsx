@@ -9,6 +9,7 @@ import type { ProviderChoice } from "./components/ProviderSelector";
 import {
   ArchiveSessionDialog,
   GlobalWorkbenchCallout,
+  SessionTerminalDialog,
   SettingsDialog,
   WorkbenchEmptyPane,
   WorkbenchInspectorShell,
@@ -70,6 +71,7 @@ export function App() {
   const {
     init,
     refreshWorkbenchState,
+    recoverTransport,
     projections,
     unreadSessionIds,
     storedSessions,
@@ -109,6 +111,7 @@ export function App() {
   const [leftOpen, setLeftOpen] = useState(false);
   const [rightOpen, setRightOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [terminalOpen, setTerminalOpen] = useState(false);
   const [archiveConfirmSessionId, setArchiveConfirmSessionId] = useState<string | null>(null);
   const [archivingSessionId, setArchivingSessionId] = useState<string | null>(null);
   const [fileReferenceOpen, setFileReferenceOpen] = useState(false);
@@ -412,6 +415,11 @@ export function App() {
   };
 
   const availableWorkspaceDir = workspaceDirs.length > 0 ? workspaceDir : "";
+  const terminalCwd =
+    selectedSummary?.session.rootDir ||
+    selectedSummary?.session.cwd ||
+    availableWorkspaceDir ||
+    "~";
   const inspectorContent =
     selectedSummary ? (
       <InspectorPane
@@ -455,6 +463,13 @@ export function App() {
       />
 
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+
+      <SessionTerminalDialog
+        open={terminalOpen}
+        onOpenChange={setTerminalOpen}
+        clientId={clientId}
+        cwd={terminalCwd}
+      />
 
       <ArchiveSessionDialog
         open={archiveConfirmSessionId !== null}
@@ -530,6 +545,7 @@ export function App() {
             onExpandSidebar={() => setSidebarOpen(true)}
             onOpenRight={() => setRightOpen(true)}
             onExpandInspector={() => setRightSidebarOpen(true)}
+            onOpenTerminal={() => setTerminalOpen(true)}
             onArchiveOrClose={() => {
               if (selectedIsReadOnlyReplay) {
                 void closeSession(selectedSummary.session.id);
@@ -544,12 +560,14 @@ export function App() {
             sidebarOpen={sidebarOpen}
             onOpenLeft={() => setLeftOpen(true)}
             onExpandSidebar={() => setSidebarOpen(true)}
+            onOpenTerminal={() => setTerminalOpen(true)}
           />
         ) : (
           <WorkbenchEmptyPane
             sidebarOpen={sidebarOpen}
             onOpenLeft={() => setLeftOpen(true)}
             onExpandSidebar={() => setSidebarOpen(true)}
+            onOpenTerminal={() => setTerminalOpen(true)}
             emptyStateComposerRef={emptyStateComposerRef}
             emptyStateDraft={emptyStateDraft}
             onEmptyStateDraftChange={setEmptyStateDraft}
@@ -584,7 +602,11 @@ export function App() {
       <GlobalWorkbenchCallout
         errorDescriptor={errorDescriptor}
         selectedSummary={selectedSummary}
-        onRefresh={() => void refreshWorkbenchState()}
+        onRefresh={() =>
+          void (errorDescriptor?.title === "Connection issue"
+            ? recoverTransport()
+            : refreshWorkbenchState())
+        }
         onClaimControl={(sessionId) => void claimControl(sessionId)}
         onDismiss={clearError}
       />

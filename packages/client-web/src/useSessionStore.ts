@@ -71,6 +71,7 @@ interface SessionState {
   init: () => Promise<void>;
   clearError: () => void;
   refreshWorkbenchState: () => Promise<void>;
+  recoverTransport: () => Promise<void>;
   setWorkspaceDir: (dir: string) => void;
   addWorkspace: (dir: string) => Promise<void>;
   removeWorkspace: (dir: string) => Promise<void>;
@@ -107,6 +108,8 @@ let reconnectTimer: number | null = null;
 let storedSessionsRefreshTimer: number | null = null;
 let lastEventSeq = 0;
 let attemptedStoredHistoryRestore = false;
+let suppressNextSocketCloseReconnect = false;
+const HISTORY_PAGE_LIMIT = 250;
 const MAX_PENDING_EVENTS_PER_SESSION = 200;
 const MAX_DEFERRED_BOOTSTRAP_EVENTS_PER_SESSION = 500;
 let pendingEventsBySession = new Map<string, RahEvent[]>();
@@ -732,9 +735,12 @@ function connectEventSocket() {
     return;
   }
   const replayFromSeq = lastEventSeq > 0 ? lastEventSeq + 1 : undefined;
-  eventsSocket = api.createEventsSocket(
+  const socket = api.createEventsSocket(
     replayFromSeq === undefined ? {} : { replayFromSeq },
     (batch) => {
+      if (eventsSocket !== socket) {
+        return;
+      }
       const hasStoredSessionDiscovery = batch.events?.some(
         (event) => event.type === "session.discovery",
       );
@@ -763,34 +769,66 @@ function connectEventSocket() {
       }));
     },
     (error) => {
+      if (eventsSocket !== socket) {
+        return;
+      }
       useSessionStore.setState({ error: error.message });
-      if (eventsSocket && eventsSocket.readyState < WebSocket.CLOSING) {
-        eventsSocket.close();
+      if (socket.readyState < WebSocket.CLOSING) {
+        socket.close();
       }
     },
     {
       onOpen: () => {
+        if (eventsSocket !== socket) {
+          return;
+        }
         useSessionStore.setState((state) => ({
           error: state.error === "Events socket failed" ? null : state.error,
         }));
       },
       onClose: () => {
-        eventsSocket = null;
+        const shouldReconnect = !suppressNextSocketCloseReconnect;
+        suppressNextSocketCloseReconnect = false;
+        if (eventsSocket === socket) {
+          eventsSocket = null;
+        }
         if (reconnectTimer !== null) {
           window.clearTimeout(reconnectTimer);
         }
-        reconnectTimer = window.setTimeout(() => {
-          reconnectTimer = null;
-          connectEventSocket();
-        }, 750);
+        if (shouldReconnect) {
+          reconnectTimer = window.setTimeout(() => {
+            reconnectTimer = null;
+            connectEventSocket();
+          }, 750);
+        }
       },
     },
   );
+  eventsSocket = socket;
 
   if (!store.isInitialLoaded) {
+    suppressNextSocketCloseReconnect = true;
     eventsSocket.close();
     eventsSocket = null;
   }
+}
+
+function clearReconnectTimer() {
+  if (reconnectTimer !== null) {
+    window.clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+}
+
+function restartEventSocket() {
+  clearReconnectTimer();
+  const socket = eventsSocket;
+  eventsSocket = null;
+  if (socket && socket.readyState < WebSocket.CLOSING) {
+    suppressNextSocketCloseReconnect = true;
+    socket.close();
+  }
+  connectEventSocket();
 }
 
 function scheduleStoredSessionsRefresh() {
@@ -1020,6 +1058,23 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   error: null,
 
   clearError: () => set({ error: null }),
+  recoverTransport: async () => {
+    try {
+      const workspaceVisibilityVersionAtRequest = get().workspaceVisibilityVersion;
+      const sessionsResponse = await api.listSessions();
+      set((state) => ({
+        ...applySessionsResponse(state, sessionsResponse, {
+          workspaceVisibilityVersionAtRequest,
+        }),
+        error: null,
+      }));
+      restartEventSocket();
+      await maybeRestoreLastHistorySelection(sessionsResponse);
+    } catch (error) {
+      set({ error: readErrorMessage(error) });
+      throw error;
+    }
+  },
   setWorkspaceDir: (dir) => {
     if (!dir.trim()) {
       set({ workspaceDir: "" });
@@ -1777,7 +1832,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       const page = await api.readSessionHistory(sessionId, {
         ...(cursor ? { cursor } : {}),
         ...(beforeTs ? { beforeTs } : {}),
-        limit: 1000,
+        limit: HISTORY_PAGE_LIMIT,
       });
       set((state) => {
         const current = state.projections.get(sessionId);

@@ -245,6 +245,7 @@ sidecar 文件按 **page/chunk** 保存：
 - `Codex / Claude / Kimi` semantic rewind：已完成
 - `Gemini` page-based event cache：已完成
 - `Codex / Claude / Kimi` loader-local semantic cursor：已完成
+- `Codex / Claude / Kimi` phase-1 ephemeral checkpoint：已完成
 
 ### 补充说明：为什么还需要 semantic cursor
 
@@ -280,6 +281,20 @@ sidecar 文件按 **page/chunk** 保存：
 如果连续翻页仍然偏重，再做：
 
 - `Codex / Claude / Kimi` ephemeral checkpoint
+
+当前状态更新：
+
+- 已经完成 **phase-1 ephemeral checkpoint**
+- 这不是大而重的 translator-state snapshot
+- 而是针对同一 `endOffset` 扩窗时，复用一个从安全 user-turn 边界开始的已知 suffix
+
+它的特点是：
+
+- session-local
+- loader-local
+- 不持久化
+- 不改 runtime protocol
+- 不要求 runtime 理解 provider 文件格式
 
 ### Phase 3
 

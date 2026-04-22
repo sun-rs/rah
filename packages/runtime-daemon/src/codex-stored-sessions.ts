@@ -27,6 +27,7 @@ import {
   createCodexRolloutTranslationState,
   translateCodexRolloutLine,
 } from "./codex-rollout-activity";
+import { createLineHistoryWindowTranslator } from "./line-history-checkpoint";
 import { createLineFrozenHistoryPageLoader } from "./line-history-pager";
 import { SessionStore } from "./session-store";
 import { selectSemanticRecentWindow } from "./semantic-history-window";
@@ -97,6 +98,19 @@ function makeCodexFrozenHistoryBoundary(
       endOffset,
     }),
   };
+}
+
+function isCodexUserBoundaryLine(line: string): boolean {
+  try {
+    const parsed = JSON.parse(line) as Record<string, unknown>;
+    const payload =
+      parsed.payload && typeof parsed.payload === "object" && !Array.isArray(parsed.payload)
+        ? (parsed.payload as Record<string, unknown>)
+        : null;
+    return payload?.type === "message" && payload.role === "user";
+  } catch {
+    return false;
+  }
 }
 
 function isCodexBootstrapUserMessage(text: string): boolean {
@@ -864,12 +878,6 @@ export function resumeCodexStoredSession(params: {
       });
     }
   }
-  replayCodexStoredSessionRollout({
-    services,
-    sessionId: state.session.id,
-    record,
-    bannerText: `Rehydrated Codex rollout ${record.ref.providerSessionId}\r\n$ `,
-  });
 
   return { sessionId: state.session.id };
 }
@@ -929,16 +937,34 @@ export function createCodexStoredSessionFrozenHistoryPageLoader(args: {
 }): FrozenHistoryPageLoader {
   const snapshotEndOffset = statSync(args.record.rolloutPath).size;
   const boundary = makeCodexFrozenHistoryBoundary(args.record.rolloutPath, snapshotEndOffset);
+  const translateWindow = createLineHistoryWindowTranslator({
+    sessionId: args.sessionId,
+    findSafeBoundaryIndex: (lines) => lines.findIndex(isCodexUserBoundaryLine),
+    translateLines: (lines) =>
+      translateCodexRolloutWindowToHistoryEvents({
+        sessionId: args.sessionId,
+        providerSessionId: args.record.ref.providerSessionId,
+        cwd: args.record.ref.cwd ?? process.cwd(),
+        rootDir: args.record.ref.rootDir ?? args.record.ref.cwd ?? process.cwd(),
+        ...(args.record.ref.title !== undefined ? { title: args.record.ref.title } : {}),
+        ...(args.record.ref.preview !== undefined ? { preview: args.record.ref.preview } : {}),
+        lines: [...lines],
+      }),
+  });
   return createLineFrozenHistoryPageLoader({
     boundary,
     snapshotEndOffset,
-    readWindow: ({ endOffset, lineBudget }) =>
-      readCodexFrozenHistoryWindow({
-        sessionId: args.sessionId,
-        record: args.record,
+    readWindow: ({ endOffset, lineBudget }) => {
+      const window = readTrailingLinesWindow(args.record.rolloutPath, {
         endOffset,
-        limit: lineBudget,
-      }),
+        maxLines: Math.max(lineBudget, 1),
+        chunkBytes: 8 * 1024,
+      });
+      return {
+        startOffset: window.startOffset,
+        events: translateWindow(window.endOffset, window.lines),
+      };
+    },
     selectPage: selectSemanticRecentWindow,
   });
 }

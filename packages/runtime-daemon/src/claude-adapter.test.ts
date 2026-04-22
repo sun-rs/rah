@@ -114,6 +114,12 @@ describe("ClaudeAdapter", () => {
 
     assert.equal(resumed.session.session.capabilities.steerInput, false);
     assert.equal(resumed.session.session.capabilities.livePermissions, false);
+    assert.equal(
+      services.eventBus
+        .list({ sessionIds: [resumed.session.session.id] })
+        .filter((event) => event.type === "timeline.item.added").length,
+      0,
+    );
 
     const page = adapter.getSessionHistoryPage(resumed.session.session.id, { limit: 20 });
     assert.ok(

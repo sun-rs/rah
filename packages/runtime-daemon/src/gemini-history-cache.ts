@@ -6,12 +6,13 @@ import type { RahEvent } from "@rah/runtime-protocol";
 
 const GEMINI_HISTORY_PAGE_SIZE = 256;
 
-type GeminiHistoryCacheManifest = {
+export type GeminiHistoryCacheManifest = {
   size: number;
   mtimeMs: number;
   pageSize: number;
   totalEvents: number;
   pageCount: number;
+  sourceKind: "json" | "jsonl";
 };
 
 type GeminiHistoryWindow = {
@@ -36,26 +37,49 @@ function pagePath(filePath: string, pageIndex: number): string {
   return path.join(cacheDirPath(filePath), `page-${pageIndex}.json`);
 }
 
-function loadCacheManifest(args: {
+function isGeminiHistoryCacheManifest(value: unknown): value is GeminiHistoryCacheManifest {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "size" in value &&
+    typeof value.size === "number" &&
+    "mtimeMs" in value &&
+    typeof value.mtimeMs === "number" &&
+    "pageSize" in value &&
+    typeof value.pageSize === "number" &&
+    "totalEvents" in value &&
+    typeof value.totalEvents === "number" &&
+    "pageCount" in value &&
+    typeof value.pageCount === "number" &&
+    "sourceKind" in value &&
+    (value.sourceKind === "json" || value.sourceKind === "jsonl")
+  );
+}
+
+export function readCachedGeminiHistoryManifest(
+  filePath: string,
+): GeminiHistoryCacheManifest | null {
+  try {
+    const parsed = JSON.parse(readFileSync(manifestPath(filePath), "utf8")) as unknown;
+    return isGeminiHistoryCacheManifest(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+export function loadCachedGeminiHistoryManifest(args: {
   filePath: string;
   size: number;
   mtimeMs: number;
 }): GeminiHistoryCacheManifest | null {
-  try {
-    const parsed = JSON.parse(readFileSync(manifestPath(args.filePath), "utf8")) as GeminiHistoryCacheManifest;
-    if (
-      parsed.size !== args.size ||
-      parsed.mtimeMs !== args.mtimeMs ||
-      typeof parsed.pageSize !== "number" ||
-      typeof parsed.totalEvents !== "number" ||
-      typeof parsed.pageCount !== "number"
-    ) {
-      return null;
-    }
-    return parsed;
-  } catch {
+  const manifest = readCachedGeminiHistoryManifest(args.filePath);
+  if (!manifest) {
     return null;
   }
+  if (manifest.size !== args.size || manifest.mtimeMs !== args.mtimeMs) {
+    return null;
+  }
+  return manifest;
 }
 
 function readPageEvents(args: {
@@ -75,7 +99,7 @@ export function loadCachedGeminiHistoryEvents(args: {
   size: number;
   mtimeMs: number;
 }): RahEvent[] | null {
-  const manifest = loadCacheManifest(args);
+  const manifest = loadCachedGeminiHistoryManifest(args);
   if (!manifest) {
     return null;
   }
@@ -100,7 +124,7 @@ export function loadCachedGeminiHistoryWindow(args: {
   startOffset: number;
   endOffset: number;
 }): GeminiHistoryWindow | null {
-  const manifest = loadCacheManifest(args);
+  const manifest = loadCachedGeminiHistoryManifest(args);
   if (!manifest) {
     return null;
   }
@@ -140,7 +164,8 @@ export function writeCachedGeminiHistoryEvents(args: {
   size: number;
   mtimeMs: number;
   events: RahEvent[];
-}): void {
+  sourceKind: "json" | "jsonl";
+}): GeminiHistoryCacheManifest {
   const cacheDir = cacheDirPath(args.filePath);
   rmSync(cacheDir, { recursive: true, force: true });
   mkdirSync(cacheDir, { recursive: true });
@@ -155,14 +180,65 @@ export function writeCachedGeminiHistoryEvents(args: {
     );
   }
 
-  writeFileSync(
-    manifestPath(args.filePath),
-    JSON.stringify({
-      size: args.size,
-      mtimeMs: args.mtimeMs,
-      pageSize: GEMINI_HISTORY_PAGE_SIZE,
-      totalEvents: args.events.length,
-      pageCount,
-    } satisfies GeminiHistoryCacheManifest),
-  );
+  const manifest = {
+    size: args.size,
+    mtimeMs: args.mtimeMs,
+    pageSize: GEMINI_HISTORY_PAGE_SIZE,
+    totalEvents: args.events.length,
+    pageCount,
+    sourceKind: args.sourceKind,
+  } satisfies GeminiHistoryCacheManifest;
+  writeFileSync(manifestPath(args.filePath), JSON.stringify(manifest));
+  return manifest;
+}
+
+export function appendCachedGeminiHistoryEvents(args: {
+  filePath: string;
+  previousManifest: GeminiHistoryCacheManifest;
+  size: number;
+  mtimeMs: number;
+  events: RahEvent[];
+}): GeminiHistoryCacheManifest {
+  const cacheDir = cacheDirPath(args.filePath);
+  mkdirSync(cacheDir, { recursive: true });
+
+  let nextPageIndex = args.previousManifest.pageCount;
+  let totalEvents = args.previousManifest.totalEvents;
+  let remainingEvents = args.events;
+
+  if (args.previousManifest.pageCount > 0) {
+    const lastPageIndex = args.previousManifest.pageCount - 1;
+    const lastPage = readPageEvents({
+      filePath: args.filePath,
+      pageIndex: lastPageIndex,
+    });
+    if (!lastPage) {
+      throw new Error("Gemini history cache is missing its last page.");
+    }
+    const freeSlots = Math.max(0, args.previousManifest.pageSize - lastPage.length);
+    if (freeSlots > 0 && remainingEvents.length > 0) {
+      const mergedLastPage = [...lastPage, ...remainingEvents.slice(0, freeSlots)];
+      writeFileSync(pagePath(args.filePath, lastPageIndex), JSON.stringify(mergedLastPage));
+      totalEvents += Math.min(freeSlots, remainingEvents.length);
+      remainingEvents = remainingEvents.slice(freeSlots);
+    }
+  }
+
+  while (remainingEvents.length > 0) {
+    const pageEvents = remainingEvents.slice(0, args.previousManifest.pageSize);
+    writeFileSync(pagePath(args.filePath, nextPageIndex), JSON.stringify(pageEvents));
+    totalEvents += pageEvents.length;
+    remainingEvents = remainingEvents.slice(args.previousManifest.pageSize);
+    nextPageIndex += 1;
+  }
+
+  const manifest = {
+    ...args.previousManifest,
+    size: args.size,
+    mtimeMs: args.mtimeMs,
+    totalEvents,
+    pageCount: Math.ceil(totalEvents / args.previousManifest.pageSize),
+  } satisfies GeminiHistoryCacheManifest;
+  writeFileSync(manifestPath(args.filePath), JSON.stringify(manifest));
+  return manifest;
 }

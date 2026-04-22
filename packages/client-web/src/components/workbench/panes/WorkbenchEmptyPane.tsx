@@ -1,5 +1,5 @@
 import type { RefObject } from "react";
-import { ArrowUp, ChevronDown, Folder, FolderPlus, Menu, Plus } from "lucide-react";
+import { ArrowUp, ChevronDown, Folder, FolderPlus, Menu, Plus, SquareTerminal } from "lucide-react";
 import { ProviderSelector, type ProviderChoice } from "../../ProviderSelector";
 import { TokenizedTextarea } from "../../TokenizedTextarea";
 import { WorkspacePicker } from "../../WorkspacePicker";
@@ -8,6 +8,7 @@ export function WorkbenchEmptyPane(props: {
   sidebarOpen: boolean;
   onOpenLeft: () => void;
   onExpandSidebar: () => void;
+  onOpenTerminal: () => void;
   emptyStateComposerRef: RefObject<HTMLTextAreaElement | null>;
   emptyStateDraft: string;
   onEmptyStateDraftChange: (value: string) => void;
@@ -53,6 +54,15 @@ export function WorkbenchEmptyPane(props: {
             </div>
           </div>
         </div>
+        <button
+          type="button"
+          className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] transition-colors"
+          onClick={props.onOpenTerminal}
+          aria-label="Open terminal"
+          title="Open terminal"
+        >
+          <SquareTerminal size={16} />
+        </button>
       </header>
       <div className="flex-1 flex flex-col items-center justify-center px-6 overflow-y-auto custom-scrollbar">
         <div className="w-full max-w-2xl -translate-y-6 space-y-5 md:-translate-y-8 md:space-y-6">

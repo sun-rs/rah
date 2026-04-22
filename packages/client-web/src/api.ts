@@ -11,6 +11,9 @@ import type {
   GitFileActionResponse,
   GitHunkActionRequest,
   GitHunkActionResponse,
+  IndependentTerminalSession,
+  IndependentTerminalStartRequest,
+  IndependentTerminalStartResponse,
   GitStatusResponse,
   SessionFileSearchResponse,
   ListDebugScenariosResponse,
@@ -173,6 +176,22 @@ export async function ensureDirectory(
   return requestJson<WorkspaceDirectoryResponse>("/api/fs/ensure-dir", {
     method: "POST",
     body: JSON.stringify(request),
+  });
+}
+
+export async function startIndependentTerminal(
+  request: IndependentTerminalStartRequest,
+): Promise<IndependentTerminalSession> {
+  const response = await requestJson<IndependentTerminalStartResponse>("/api/terminal/start", {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
+  return response.terminal;
+}
+
+export async function closeIndependentTerminal(terminalId: string): Promise<void> {
+  await requestJson<{ ok: true }>(`/api/terminal/${terminalId}/close`, {
+    method: "POST",
   });
 }
 

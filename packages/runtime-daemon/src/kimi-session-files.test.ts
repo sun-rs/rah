@@ -207,6 +207,12 @@ describe("Kimi session files", () => {
       services,
       record: record!,
     });
+    assert.equal(
+      services.eventBus
+        .list({ sessionIds: [resumed.sessionId] })
+        .filter((event) => event.type === "timeline.item.added").length,
+      0,
+    );
 
     const page = getKimiStoredSessionHistoryPage({
       sessionId: resumed.sessionId,

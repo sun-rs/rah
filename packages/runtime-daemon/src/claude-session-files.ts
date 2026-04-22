@@ -19,6 +19,7 @@ import type {
   FrozenHistoryBoundary,
   FrozenHistoryPageLoader,
 } from "./history-snapshots";
+import { createLineHistoryWindowTranslator } from "./line-history-checkpoint";
 import { createLineFrozenHistoryPageLoader } from "./line-history-pager";
 import {
   getCachedStoredSessionRef,
@@ -306,16 +307,29 @@ export function createClaudeStoredSessionFrozenHistoryPageLoader(args: {
 }): FrozenHistoryPageLoader {
   const snapshotEndOffset = statSync(args.record.filePath).size;
   const boundary = makeClaudeFrozenHistoryBoundary(args.record.filePath, snapshotEndOffset);
+  const translateWindow = createLineHistoryWindowTranslator({
+    sessionId: args.sessionId,
+    findSafeBoundaryIndex: (lines) =>
+      lines.findIndex((line) => safeParseClaudeRecord(line)?.type === "user"),
+    translateLines: (lines) =>
+      translateClaudeRecords(
+        args.sessionId,
+        lines.map(safeParseClaudeRecord).filter((record): record is ClaudeRawRecord => Boolean(record)),
+      ),
+  });
   return createLineFrozenHistoryPageLoader({
     boundary,
     snapshotEndOffset,
-    readWindow: ({ endOffset, lineBudget }) =>
-      readClaudeFrozenHistoryWindow({
-        sessionId: args.sessionId,
-        record: args.record,
+    readWindow: ({ endOffset, lineBudget }) => {
+      const window = readTrailingLinesWindow(args.record.filePath, {
         endOffset,
-        limit: lineBudget,
-      }),
+        maxLines: Math.max(lineBudget, 1),
+      });
+      return {
+        startOffset: window.startOffset,
+        events: translateWindow(window.endOffset, window.lines),
+      };
+    },
     selectPage: selectSemanticRecentWindow,
   });
 }
@@ -746,15 +760,6 @@ export function resumeClaudeStoredSession(args: {
     source: SYSTEM_SOURCE,
     payload: { session: state.session },
   });
-
-  const lines = readFileSync(args.record.filePath, "utf8")
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-  const parsed = lines.map(safeParseClaudeRecord).filter((record): record is ClaudeRawRecord => Boolean(record));
-  for (const event of translateClaudeRecords(state.session.id, parsed)) {
-    args.services.eventBus.hydrate([...args.services.eventBus.list(), event]);
-  }
 
   if (args.attach) {
     args.services.sessionStore.attachClient({

@@ -80,3 +80,24 @@ export function readTrailingLinesWindow(
     closeSync(fd);
   }
 }
+
+export function readTextRange(
+  filePath: string,
+  options: { startOffset: number; endOffset?: number },
+): string {
+  const fd = openSync(filePath, "r");
+  try {
+    const fileSize = fstatSync(fd).size;
+    const startOffset = Math.max(0, Math.min(options.startOffset, fileSize));
+    const endOffset = Math.max(startOffset, Math.min(options.endOffset ?? fileSize, fileSize));
+    const length = endOffset - startOffset;
+    if (length === 0) {
+      return "";
+    }
+    const buffer = Buffer.allocUnsafe(length);
+    const bytesRead = readSync(fd, buffer, 0, length, startOffset);
+    return buffer.subarray(0, bytesRead).toString("utf8");
+  } finally {
+    closeSync(fd);
+  }
+}

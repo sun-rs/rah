@@ -206,6 +206,12 @@ describe("Claude session files", () => {
       services,
       record,
     });
+    assert.equal(
+      services.eventBus
+        .list({ sessionIds: [resumed.sessionId] })
+        .filter((event) => event.type === "timeline.item.added").length,
+      0,
+    );
     const page = getClaudeStoredSessionHistoryPage({
       sessionId: resumed.sessionId,
       record,

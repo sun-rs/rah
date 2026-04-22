@@ -177,10 +177,16 @@ rl.on('line', (line) => {
     assert.equal(resumed.session.session.capabilities.planMode, false);
     assert.equal(resumed.session.session.capabilities.subagents, false);
 
-    const events = services.eventBus.list({ sessionIds: [resumed.session.session.id] });
-    assert.ok(events.some((event) => event.type === "timeline.item.added"));
-    assert.ok(events.some((event) => event.type === "tool.call.started"));
-    assert.ok(events.some((event) => event.type === "tool.call.completed"));
+    assert.equal(
+      services.eventBus
+        .list({ sessionIds: [resumed.session.session.id] })
+        .filter((event) => event.type === "timeline.item.added").length,
+      0,
+    );
+    const page = adapter.getSessionHistoryPage(resumed.session.session.id, { limit: 20 });
+    assert.ok(page.events.some((event) => event.type === "timeline.item.added"));
+    assert.ok(page.events.some((event) => event.type === "tool.call.started"));
+    assert.ok(page.events.some((event) => event.type === "tool.call.completed"));
 
     assert.throws(
       () =>
@@ -215,6 +221,12 @@ rl.on('line', (line) => {
     assert.equal(resumed.session.session.providerSessionId, sessionId);
     assert.equal(resumed.session.session.capabilities.steerInput, false);
     assert.equal(resumed.session.session.capabilities.livePermissions, false);
+    assert.equal(
+      services.eventBus
+        .list({ sessionIds: [resumed.session.session.id] })
+        .filter((event) => event.type === "timeline.item.added").length,
+      0,
+    );
 
     rmSync(cwd, { recursive: true, force: true });
   });

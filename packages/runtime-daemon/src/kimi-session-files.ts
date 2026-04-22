@@ -16,6 +16,7 @@ import type {
 import type { RuntimeServices } from "./provider-adapter";
 import { EventBus } from "./event-bus";
 import { applyProviderActivity, type ProviderActivity } from "./provider-activity";
+import { createLineHistoryWindowTranslator } from "./line-history-checkpoint";
 import { createLineFrozenHistoryPageLoader } from "./line-history-pager";
 import { PtyHub } from "./pty-hub";
 import { SessionStore } from "./session-store";
@@ -724,10 +725,6 @@ export function resumeKimiStoredSession(params: {
       });
     }
   }
-  const lines = readFileSync(params.record.wirePath, "utf8").split(/\r?\n/).filter(Boolean);
-  for (const event of translateKimiWireLines(state.session.id, lines)) {
-    params.services.eventBus.publish(event);
-  }
   return { sessionId: state.session.id };
 }
 
@@ -806,16 +803,29 @@ export function createKimiStoredSessionFrozenHistoryPageLoader(args: {
 }): FrozenHistoryPageLoader {
   const snapshotEndOffset = statSync(args.record.wirePath).size;
   const boundary = makeKimiFrozenHistoryBoundary(args.record.wirePath, snapshotEndOffset);
+  const translateWindow = createLineHistoryWindowTranslator({
+    sessionId: args.sessionId,
+    findSafeBoundaryIndex: (lines) =>
+      lines.findIndex((line) => {
+        const parsed = parseKimiWireLine(line.trim());
+        return parsed?.type === "TurnBegin" || parsed?.type === "SteerInput";
+      }),
+    translateLines: (lines) => translateKimiWireLines(args.sessionId, [...lines]),
+  });
   return createLineFrozenHistoryPageLoader({
     boundary,
     snapshotEndOffset,
-    readWindow: ({ endOffset, lineBudget }) =>
-      readKimiFrozenHistoryWindow({
-        sessionId: args.sessionId,
-        record: args.record,
+    readWindow: ({ endOffset, lineBudget }) => {
+      const window = readTrailingLinesWindow(args.record.wirePath, {
         endOffset,
-        limit: lineBudget,
-      }),
+        maxLines: Math.max(lineBudget, 1),
+        chunkBytes: 8 * 1024,
+      });
+      return {
+        startOffset: window.startOffset,
+        events: translateWindow(window.endOffset, window.lines),
+      };
+    },
     selectPage: selectSemanticRecentWindow,
   });
 }

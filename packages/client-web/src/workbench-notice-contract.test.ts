@@ -119,5 +119,6 @@ describe("workbench notice contract", () => {
 
     assert.equal(state.errorDescriptor?.title, "Connection issue");
     assert.equal(state.errorDescriptor?.primaryAction, "refresh");
+    assert.equal(state.errorDescriptor?.primaryLabel, "Reconnect");
   });
 });

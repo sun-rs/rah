@@ -17,10 +17,15 @@ import type {
 import type { RuntimeServices } from "./provider-adapter";
 import { EventBus } from "./event-bus";
 import {
+  appendCachedGeminiHistoryEvents,
+  type GeminiHistoryCacheManifest,
   loadCachedGeminiHistoryEvents,
+  loadCachedGeminiHistoryManifest,
   loadCachedGeminiHistoryWindow,
+  readCachedGeminiHistoryManifest,
   writeCachedGeminiHistoryEvents,
 } from "./gemini-history-cache";
+import { readTextRange } from "./file-snippets";
 import { PtyHub } from "./pty-hub";
 import { applyProviderActivity, type ProviderActivity } from "./provider-activity";
 import { SessionStore } from "./session-store";
@@ -292,6 +297,10 @@ function loadGeminiConversationRecord(filePath: string): GeminiConversationRecor
   } catch {
     return null;
   }
+}
+
+function isGeminiJsonlSessionFile(filePath: string): boolean {
+  return filePath.endsWith(".jsonl");
 }
 
 function truncateText(text: string, maxLength = 120): string {
@@ -633,6 +642,109 @@ function materializeGeminiConversationEvents(params: {
     .sort((a, b) => a.ts.localeCompare(b.ts) || a.seq - b.seq);
 }
 
+function parseGeminiAppendOnlyDelta(args: {
+  filePath: string;
+  previousSize: number;
+  size: number;
+}): GeminiConversationRecord | null {
+  if (!isGeminiJsonlSessionFile(args.filePath) || args.previousSize <= 0 || args.size < args.previousSize) {
+    return null;
+  }
+  if (args.size === args.previousSize) {
+    return {
+      sessionId: "",
+      projectHash: "",
+      startTime: new Date().toISOString(),
+      lastUpdated: new Date().toISOString(),
+      messages: [],
+    };
+  }
+  const boundaryText = readTextRange(args.filePath, {
+    startOffset: args.previousSize - 1,
+    endOffset: args.previousSize,
+  });
+  if (boundaryText !== "\n") {
+    return null;
+  }
+  const appendedText = readTextRange(args.filePath, {
+    startOffset: args.previousSize,
+    endOffset: args.size,
+  });
+  if (!appendedText.endsWith("\n")) {
+    return null;
+  }
+
+  const lines = appendedText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const messages: GeminiMessageRecord[] = [];
+  const seenMessageIds = new Set<string>();
+  const metadata: Partial<GeminiConversationRecord> = {};
+
+  for (const line of lines) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      return null;
+    }
+    if (!isObject(parsed)) {
+      return null;
+    }
+    if (typeof parsed.sessionId === "string" && typeof parsed.projectHash === "string") {
+      metadata.sessionId = parsed.sessionId;
+      metadata.projectHash = parsed.projectHash;
+      if (typeof parsed.startTime === "string") {
+        metadata.startTime = parsed.startTime;
+      }
+      if (typeof parsed.lastUpdated === "string") {
+        metadata.lastUpdated = parsed.lastUpdated;
+      }
+      if (typeof parsed.summary === "string") {
+        metadata.summary = parsed.summary;
+      }
+      if (parsed.kind === "main" || parsed.kind === "subagent") {
+        metadata.kind = parsed.kind;
+      }
+      continue;
+    }
+    if (isObject(parsed.$set)) {
+      if (typeof parsed.$set.startTime === "string") {
+        metadata.startTime = parsed.$set.startTime;
+      }
+      if (typeof parsed.$set.lastUpdated === "string") {
+        metadata.lastUpdated = parsed.$set.lastUpdated;
+      }
+      if (typeof parsed.$set.summary === "string") {
+        metadata.summary = parsed.$set.summary;
+      }
+      if (parsed.$set.kind === "main" || parsed.$set.kind === "subagent") {
+        metadata.kind = parsed.$set.kind;
+      }
+      continue;
+    }
+    if (typeof parsed.$rewindTo === "string" || !isMessageRecord(parsed)) {
+      return null;
+    }
+    if (seenMessageIds.has(parsed.id)) {
+      return null;
+    }
+    seenMessageIds.add(parsed.id);
+    messages.push(parsed);
+  }
+
+  return {
+    sessionId: metadata.sessionId ?? "",
+    projectHash: metadata.projectHash ?? "",
+    startTime: metadata.startTime ?? new Date().toISOString(),
+    lastUpdated: metadata.lastUpdated ?? new Date().toISOString(),
+    messages,
+    ...(metadata.summary ? { summary: metadata.summary } : {}),
+    ...(metadata.kind ? { kind: metadata.kind } : {}),
+  };
+}
+
 function resolveGeminiConversation(record: GeminiStoredSessionRecord): GeminiConversationRecord {
   if (record.conversation.messages.length > 0) {
     return record.conversation;
@@ -642,6 +754,91 @@ function resolveGeminiConversation(record: GeminiStoredSessionRecord): GeminiCon
     throw new Error(`Could not load Gemini session file ${record.filePath}.`);
   }
   return loaded;
+}
+
+function tryIncrementalGeminiHistoryCacheRefresh(args: {
+  record: GeminiStoredSessionRecord;
+  size: number;
+  mtimeMs: number;
+}): GeminiHistoryCacheManifest | null {
+  const previousManifest = readCachedGeminiHistoryManifest(args.record.filePath);
+  if (
+    !previousManifest ||
+    previousManifest.sourceKind !== "jsonl" ||
+    args.size < previousManifest.size
+  ) {
+    return null;
+  }
+  const delta = parseGeminiAppendOnlyDelta({
+    filePath: args.record.filePath,
+    previousSize: previousManifest.size,
+    size: args.size,
+  });
+  if (!delta || delta.kind === "subagent") {
+    return null;
+  }
+  const events =
+    delta.messages.length > 0
+      ? materializeGeminiConversationEvents({
+          sessionId: args.record.ref.providerSessionId,
+          conversation: {
+            sessionId: args.record.ref.providerSessionId,
+            projectHash: delta.projectHash,
+            startTime: delta.startTime,
+            lastUpdated: delta.lastUpdated,
+            messages: delta.messages,
+            ...(delta.summary ? { summary: delta.summary } : {}),
+          },
+        })
+      : [];
+  return appendCachedGeminiHistoryEvents({
+    filePath: args.record.filePath,
+    previousManifest,
+    size: args.size,
+    mtimeMs: args.mtimeMs,
+    events,
+  });
+}
+
+function ensureGeminiHistoryCacheRevision(args: {
+  sessionId: string;
+  record: GeminiStoredSessionRecord;
+  size: number;
+  mtimeMs: number;
+}): GeminiHistoryCacheManifest {
+  const exactManifest = loadCachedGeminiHistoryManifest({
+    filePath: args.record.filePath,
+    size: args.size,
+    mtimeMs: args.mtimeMs,
+  });
+  if (exactManifest) {
+    return exactManifest;
+  }
+
+  const incrementallyRefreshed = tryIncrementalGeminiHistoryCacheRefresh({
+    record: args.record,
+    size: args.size,
+    mtimeMs: args.mtimeMs,
+  });
+  if (incrementallyRefreshed) {
+    return incrementallyRefreshed;
+  }
+
+  const currentStats = statSync(args.record.filePath);
+  if (currentStats.size !== args.size || currentStats.mtimeMs !== args.mtimeMs) {
+    throw new Error("Gemini frozen history revision is unavailable.");
+  }
+
+  return writeCachedGeminiHistoryEvents({
+    filePath: args.record.filePath,
+    size: args.size,
+    mtimeMs: args.mtimeMs,
+    events: materializeGeminiConversationEvents({
+      sessionId: args.sessionId,
+      conversation: resolveGeminiConversation(args.record),
+    }),
+    sourceKind: isGeminiJsonlSessionFile(args.record.filePath) ? "jsonl" : "json",
+  });
 }
 
 function rebindGeminiHistoryEvents(sessionId: string, cachedEvents: readonly RahEvent[]): RahEvent[] {
@@ -671,25 +868,21 @@ function materializeGeminiHistoryEventsFromRecord(args: {
   record: GeminiStoredSessionRecord;
 }): RahEvent[] {
   const stats = statSync(args.record.filePath);
+  ensureGeminiHistoryCacheRevision({
+    sessionId: args.sessionId,
+    record: args.record,
+    size: stats.size,
+    mtimeMs: stats.mtimeMs,
+  });
   const cached = loadCachedGeminiHistoryEvents({
     filePath: args.record.filePath,
     size: stats.size,
     mtimeMs: stats.mtimeMs,
   });
-  if (cached) {
-    return rebindGeminiHistoryEvents(args.sessionId, cached);
+  if (!cached) {
+    throw new Error("Gemini history cache became unavailable after refresh.");
   }
-  const materialized = materializeGeminiConversationEvents({
-    sessionId: args.sessionId,
-    conversation: resolveGeminiConversation(args.record),
-  });
-  writeCachedGeminiHistoryEvents({
-    filePath: args.record.filePath,
-    size: stats.size,
-    mtimeMs: stats.mtimeMs,
-    events: materialized,
-  });
-  return materialized;
+  return rebindGeminiHistoryEvents(args.sessionId, cached);
 }
 
 function publishSessionBootstrap(
@@ -762,12 +955,6 @@ export function resumeGeminiStoredSession(params: {
       });
     }
   }
-  for (const event of conversationToEvents({
-    sessionId: state.session.id,
-    conversation: params.record.conversation,
-  })) {
-    params.services.eventBus.publish(event);
-  }
   return { sessionId: state.session.id };
 }
 
@@ -807,57 +994,36 @@ export function createGeminiStoredSessionFrozenHistoryPageLoader(args: {
 
   const pageAt = (offset: number, limit: number): FrozenHistoryPage => {
     const safeLimit = Math.max(1, limit);
-    let pageEvents: RahEvent[];
-
-    if (cachedTotalEvents === undefined) {
-      const cachedWindow = loadCachedGeminiHistoryWindow({
+    const manifest =
+      loadCachedGeminiHistoryManifest({
         filePath: args.record.filePath,
         size: stats.size,
         mtimeMs: stats.mtimeMs,
-        startOffset: 0,
-        endOffset: 0,
-      });
-      if (cachedWindow) {
-        cachedTotalEvents = cachedWindow.totalEvents;
-      }
-    }
-
-    if (cachedTotalEvents !== undefined) {
-      const boundedOffset = Math.max(0, Math.min(offset, cachedTotalEvents));
-      const start = Math.max(0, boundedOffset - safeLimit);
-      const window = loadCachedGeminiHistoryWindow({
-        filePath: args.record.filePath,
-        size: stats.size,
-        mtimeMs: stats.mtimeMs,
-        startOffset: start,
-        endOffset: boundedOffset,
-      });
-      if (!window) {
-        throw new Error("Gemini history cache became unavailable while paging.");
-      }
-      cachedTotalEvents = window.totalEvents;
-      pageEvents = rebindGeminiHistoryWindowEvents({
+      }) ??
+      ensureGeminiHistoryCacheRevision({
         sessionId: args.sessionId,
-        startOffset: start,
-        events: window.events,
+        record: args.record,
+        size: stats.size,
+        mtimeMs: stats.mtimeMs,
       });
-      const nextCursor = start > 0 ? encodeGeminiFrozenHistoryCursor({ offset: start }) : undefined;
-      return {
-        boundary,
-        events: pageEvents,
-        ...(nextCursor ? { nextCursor } : {}),
-        ...(pageEvents[0] ? { nextBeforeTs: pageEvents[0].ts } : {}),
-      };
-    }
-
-    const events = materializeGeminiHistoryEventsFromRecord({
-      sessionId: args.sessionId,
-      record: args.record,
-    });
-    cachedTotalEvents = events.length;
+    cachedTotalEvents = manifest.totalEvents;
     const boundedOffset = Math.max(0, Math.min(offset, cachedTotalEvents));
     const start = Math.max(0, boundedOffset - safeLimit);
-    pageEvents = events.slice(start, boundedOffset);
+    const window = loadCachedGeminiHistoryWindow({
+      filePath: args.record.filePath,
+      size: stats.size,
+      mtimeMs: stats.mtimeMs,
+      startOffset: start,
+      endOffset: boundedOffset,
+    });
+    if (!window) {
+      throw new Error("Gemini history cache became unavailable while paging.");
+    }
+    const pageEvents = rebindGeminiHistoryWindowEvents({
+      sessionId: args.sessionId,
+      startOffset: start,
+      events: window.events,
+    });
     const nextCursor = start > 0 ? encodeGeminiFrozenHistoryCursor({ offset: start }) : undefined;
     return {
       boundary,

@@ -102,7 +102,7 @@ export function TerminalPane(props: TerminalPaneProps) {
   return (
     <div className="terminal-panel">
       <div className="terminal-toolbar">
-        <span>Live terminal</span>
+        <span>Shell terminal</span>
         <span className={props.hasControl ? "control-state control-on" : "control-state"}>
           {props.hasControl ? "interactive" : "observe"}
         </span>

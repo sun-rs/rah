@@ -5,7 +5,9 @@ import os from "node:os";
 import path from "node:path";
 import type { RahEvent } from "@rah/runtime-protocol";
 import {
+  appendCachedGeminiHistoryEvents,
   loadCachedGeminiHistoryEvents,
+  loadCachedGeminiHistoryManifest,
   loadCachedGeminiHistoryWindow,
   writeCachedGeminiHistoryEvents,
 } from "./gemini-history-cache";
@@ -61,6 +63,7 @@ describe("gemini history cache", () => {
       size: 1024,
       mtimeMs: 1700000000000,
       events,
+      sourceKind: "jsonl",
     });
 
     const cacheEntries = readdirSync(path.join(tmpRahHome, "gemini-history-cache"));
@@ -101,6 +104,7 @@ describe("gemini history cache", () => {
       size: 1024,
       mtimeMs: 1700000000000,
       events: [historyEvent("gemini-session", 1)],
+      sourceKind: "jsonl",
     });
 
     assert.equal(
@@ -121,5 +125,49 @@ describe("gemini history cache", () => {
       }),
       null,
     );
+  });
+
+  test("appends incremental Gemini history events into existing page files", () => {
+    const filePath = path.join(tmpRahHome, "session.jsonl");
+    writeFileSync(filePath, "{}\n");
+
+    const initialManifest = writeCachedGeminiHistoryEvents({
+      filePath,
+      size: 1024,
+      mtimeMs: 1700000000000,
+      events: Array.from({ length: 300 }, (_, index) => historyEvent("gemini-session", index + 1)),
+      sourceKind: "jsonl",
+    });
+
+    const nextManifest = appendCachedGeminiHistoryEvents({
+      filePath,
+      previousManifest: initialManifest,
+      size: 2048,
+      mtimeMs: 1700000001000,
+      events: Array.from({ length: 40 }, (_, index) => historyEvent("gemini-session", index + 301)),
+    });
+
+    assert.equal(nextManifest.totalEvents, 340);
+    assert.equal(nextManifest.pageCount, 2);
+    assert.equal(
+      loadCachedGeminiHistoryManifest({
+        filePath,
+        size: 2048,
+        mtimeMs: 1700000001000,
+      })?.sourceKind,
+      "jsonl",
+    );
+
+    const window = loadCachedGeminiHistoryWindow({
+      filePath,
+      size: 2048,
+      mtimeMs: 1700000001000,
+      startOffset: 280,
+      endOffset: 340,
+    });
+    assert.ok(window);
+    assert.equal(window.totalEvents, 340);
+    assert.equal(window.events[0]?.id, "gemini-session-281");
+    assert.equal(window.events.at(-1)?.id, "gemini-session-340");
   });
 });

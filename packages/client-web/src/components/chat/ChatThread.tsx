@@ -302,6 +302,7 @@ function renderEntry(
 }
 
 export function ChatThread(props: {
+  sessionId: string;
   feed: FeedEntry[];
   hideToolCalls?: boolean;
   canLoadOlderHistory?: boolean;
@@ -312,9 +313,11 @@ export function ChatThread(props: {
 }) {
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const contentRef = useRef<HTMLDivElement | null>(null);
   const previousEntryCountRef = useRef(0);
   const loadingOlderRef = useRef(false);
   const stickToBottomRef = useRef(true);
+  const sessionSwitchBottomLockRef = useRef(true);
   const prependAnchorRef = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
   const lastScrollTopRef = useRef(0);
   const topHistoryAutoLoadArmedRef = useRef(true);
@@ -323,6 +326,17 @@ export function ChatThread(props: {
     () => visibleFeedEntries(props.feed, props.hideToolCalls ?? false),
     [props.feed, props.hideToolCalls],
   );
+
+  useEffect(() => {
+    previousEntryCountRef.current = 0;
+    loadingOlderRef.current = false;
+    stickToBottomRef.current = true;
+    sessionSwitchBottomLockRef.current = true;
+    prependAnchorRef.current = null;
+    lastScrollTopRef.current = 0;
+    topHistoryAutoLoadArmedRef.current = true;
+    setShowScrollToBottom(false);
+  }, [props.sessionId]);
 
   useEffect(() => {
     const node = containerRef.current;
@@ -335,6 +349,9 @@ export function ChatThread(props: {
         node.scrollHeight - node.clientHeight - node.scrollTop;
       const isAtBottom = distanceToBottom <= BOTTOM_STICK_THRESHOLD_PX;
       stickToBottomRef.current = isAtBottom;
+      if (!isAtBottom) {
+        sessionSwitchBottomLockRef.current = false;
+      }
       setShowScrollToBottom(!isAtBottom && node.scrollHeight > node.clientHeight);
 
        const scrollingUp = node.scrollTop < lastScrollTopRef.current;
@@ -366,12 +383,41 @@ export function ChatThread(props: {
     return () => {
       node.removeEventListener("scroll", updateStickiness);
     };
-  }, []);
+  }, [props.canLoadOlderHistory, props.historyLoading, props.onLoadOlderHistory, props.sessionId]);
+
+  useEffect(() => {
+    const node = containerRef.current;
+    const content = contentRef.current;
+    if (!node || !content || typeof ResizeObserver === "undefined") {
+      return;
+    }
+
+    const observer = new ResizeObserver(() => {
+      if (prependAnchorRef.current) {
+        return;
+      }
+      if (!stickToBottomRef.current && !sessionSwitchBottomLockRef.current) {
+        return;
+      }
+      node.scrollTop = node.scrollHeight;
+      lastScrollTopRef.current = node.scrollTop;
+      stickToBottomRef.current = true;
+      setShowScrollToBottom(false);
+      if (!props.historyLoading) {
+        sessionSwitchBottomLockRef.current = false;
+      }
+    });
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [props.historyLoading, props.sessionId]);
 
   useLayoutEffect(() => {
     const node = containerRef.current;
+    if (!node) {
+      return;
+    }
     const anchor = prependAnchorRef.current;
-    if (node && anchor) {
+    if (anchor) {
       const nextScrollTop =
         anchor.scrollTop + (node.scrollHeight - anchor.scrollHeight);
       node.scrollTop = nextScrollTop;
@@ -381,11 +427,20 @@ export function ChatThread(props: {
       return;
     }
 
-    if (entries.length > previousEntryCountRef.current && stickToBottomRef.current) {
+    const shouldForceBottom = sessionSwitchBottomLockRef.current;
+    if (shouldForceBottom) {
+      node.scrollTop = node.scrollHeight;
+      lastScrollTopRef.current = node.scrollTop;
+      stickToBottomRef.current = true;
+      setShowScrollToBottom(false);
+      if (!props.historyLoading) {
+        sessionSwitchBottomLockRef.current = false;
+      }
+    } else if (entries.length > previousEntryCountRef.current && stickToBottomRef.current) {
       bottomRef.current?.scrollIntoView({ behavior: "smooth" });
     }
     previousEntryCountRef.current = entries.length;
-  }, [entries]);
+  }, [entries, props.historyLoading, props.sessionId]);
 
   const handleScrollToBottom = () => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -396,7 +451,7 @@ export function ChatThread(props: {
       ref={containerRef}
       className="relative flex-1 overflow-y-auto overflow-x-hidden custom-scrollbar scrollbar-stable px-4 py-5"
     >
-      <div className="mx-auto w-full min-w-0 max-w-3xl space-y-5">
+      <div ref={contentRef} className="mx-auto w-full min-w-0 max-w-3xl space-y-5">
         {props.historyLoading ? (
           <div className="flex justify-center">
             <div className="rounded-full border border-[var(--app-border)] bg-[var(--app-bg)] px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.14em] text-[var(--app-hint)]">

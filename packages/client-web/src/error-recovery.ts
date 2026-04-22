@@ -79,9 +79,9 @@ export function describeWorkbenchError(
     return {
       title: "Connection issue",
       body:
-        "The workbench lost contact with the daemon or event stream. Refresh sessions first; if the problem continues, reload the page.",
+        "The workbench lost contact with the daemon or event stream. Reconnect now; if the problem continues, reload the page.",
       primaryAction: "refresh",
-      primaryLabel: "Refresh sessions",
+      primaryLabel: "Reconnect",
     };
   }
 

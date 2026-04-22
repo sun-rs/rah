@@ -97,6 +97,22 @@ export interface WorkspaceDirectoryResponse {
   path: string;
 }
 
+export interface IndependentTerminalStartRequest {
+  cwd?: string;
+  cols?: number;
+  rows?: number;
+}
+
+export interface IndependentTerminalSession {
+  id: string;
+  cwd: string;
+  shell: string;
+}
+
+export interface IndependentTerminalStartResponse {
+  terminal: IndependentTerminalSession;
+}
+
 export interface PermissionResponseRequest {
   behavior: "allow" | "deny";
   message?: string;
