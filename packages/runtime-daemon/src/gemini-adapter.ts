@@ -16,6 +16,7 @@ import type {
 } from "@rah/runtime-protocol";
 import type { ProviderAdapter, RuntimeServices } from "./provider-adapter";
 import {
+  type GeminiStoredSessionRecord,
   discoverGeminiStoredSessions,
   findGeminiStoredSessionRecord,
   getGeminiStoredSessionHistoryPage,
@@ -36,6 +37,7 @@ import {
 import { geminiLaunchSpec, probeProviderVersion } from "./provider-diagnostics";
 import { getCodexGitDiff, getCodexGitStatus, getCodexWorkspaceSnapshot } from "./codex-stored-sessions";
 import { toSessionSummary } from "./session-store";
+import { movePathToTrash } from "./trash";
 
 export class GeminiAdapter implements ProviderAdapter {
   readonly id = "gemini";
@@ -44,6 +46,7 @@ export class GeminiAdapter implements ProviderAdapter {
   private readonly services: RuntimeServices;
   private readonly liveSessions = new Map<string, LiveGeminiSession>();
   private readonly rehydratedSessionIds = new Set<string>();
+  private storedSessionIndex = new Map<string, GeminiStoredSessionRecord>();
 
   constructor(services: RuntimeServices) {
     this.services = services;
@@ -236,10 +239,28 @@ export class GeminiAdapter implements ProviderAdapter {
   }
 
   listStoredSessions(): StoredSessionRef[] {
-    return discoverGeminiStoredSessions().map((record) => record.ref);
+    return [...this.refreshStoredSessions().values()].map((record) => record.ref);
+  }
+
+  async removeStoredSession(session: StoredSessionRef): Promise<void> {
+    const record =
+      this.storedSessionIndex.get(session.providerSessionId) ??
+      this.refreshStoredSessions().get(session.providerSessionId);
+    if (!record) {
+      throw new Error(`Could not find a stored Gemini history file for ${session.providerSessionId}.`);
+    }
+    await movePathToTrash(record.filePath);
+    this.storedSessionIndex.delete(session.providerSessionId);
   }
 
   getProviderDiagnostic() {
     return probeProviderVersion("gemini", geminiLaunchSpec());
+  }
+
+  private refreshStoredSessions(): Map<string, GeminiStoredSessionRecord> {
+    this.storedSessionIndex = new Map(
+      discoverGeminiStoredSessions().map((record) => [record.ref.providerSessionId, record] as const),
+    );
+    return this.storedSessionIndex;
   }
 }

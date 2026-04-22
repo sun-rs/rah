@@ -452,4 +452,55 @@ describe("client projection", () => {
       ["/workspace/second", "/workspace/first"],
     );
   });
+
+  test("updates session runtimeState to waiting_permission when approval is requested", () => {
+    const current = applyEventToProjection(
+      projection(),
+      event({
+        seq: 1,
+        type: "permission.requested",
+        payload: {
+          request: {
+            id: "perm-1",
+            kind: "tool",
+            title: "Allow command",
+          },
+        },
+      }),
+    );
+
+    assert.equal(current.summary.session.runtimeState, "waiting_permission");
+  });
+
+  test("does not let stale control events override a fresher claimed summary", () => {
+    const current = applyEventToProjection(
+      {
+        ...projection(),
+        summary: {
+          ...baseSummary(),
+          session: {
+            ...baseSummary().session,
+            updatedAt: "2026-04-15T00:00:10.000Z",
+          },
+          controlLease: {
+            sessionId: "session-1",
+            holderClientId: "web-current",
+            holderKind: "web",
+            grantedAt: "2026-04-15T00:00:10.000Z",
+          },
+        },
+      },
+      {
+        ...event({
+          seq: 11,
+          type: "control.released",
+          payload: {},
+        }),
+        ts: "2026-04-15T00:00:09.000Z",
+      },
+    );
+
+    assert.equal(current.summary.controlLease.holderClientId, "web-current");
+    assert.equal(current.summary.session.updatedAt, "2026-04-15T00:00:10.000Z");
+  });
 });

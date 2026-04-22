@@ -61,6 +61,7 @@ export interface ProviderAdapter {
   ): SessionHistoryPageResponse;
   getContextUsage(sessionId: string): ContextUsage | undefined;
   listStoredSessions?(): StoredSessionRef[];
+  removeStoredSession?(session: StoredSessionRef): Promise<void> | void;
   getProviderDiagnostic?(): Promise<ProviderDiagnostic> | ProviderDiagnostic;
 
   listDebugScenarios?(): DebugScenarioDescriptor[];

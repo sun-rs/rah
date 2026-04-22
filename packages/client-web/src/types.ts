@@ -151,6 +151,30 @@ export function initialHistorySyncState(): HistorySyncState {
   };
 }
 
+function isIsoTsAtLeast(left: string | undefined, right: string | undefined): boolean {
+  if (!left || !right) {
+    return true;
+  }
+  return left >= right;
+}
+
+function shouldApplySummaryMutation(current: SessionProjection, event: RahEvent): boolean {
+  switch (event.type) {
+    case "session.started":
+      return isIsoTsAtLeast(event.payload.session.updatedAt, current.summary.session.updatedAt);
+    case "session.state.changed":
+    case "permission.requested":
+    case "permission.resolved":
+    case "control.claimed":
+    case "control.released":
+    case "usage.updated":
+    case "context.updated":
+      return isIsoTsAtLeast(event.ts, current.summary.session.updatedAt);
+    default:
+      return true;
+  }
+}
+
 function createTimelineEntry(
   entry: Omit<Extract<FeedEntry, { kind: "timeline" }>, "turnId">,
   turnId?: string,
@@ -1019,8 +1043,14 @@ export function applyEventToProjection(
     return current;
   }
 
+  const permissionRequestedState: ManagedSession["runtimeState"] = "waiting_permission";
+  const permissionResolvedState: ManagedSession["runtimeState"] = "running";
+  const canMutateSummary = shouldApplySummaryMutation(current, event);
+
   const nextSummary =
-    event.type === "session.started"
+    !canMutateSummary
+      ? current.summary
+      : event.type === "session.started"
       ? { ...current.summary, session: event.payload.session }
       : event.type === "session.state.changed"
         ? {
@@ -1031,6 +1061,24 @@ export function applyEventToProjection(
               updatedAt: event.ts,
             },
           }
+        : event.type === "permission.requested"
+          ? {
+              ...current.summary,
+              session: {
+                ...current.summary.session,
+                runtimeState: permissionRequestedState,
+                updatedAt: event.ts,
+              },
+            }
+          : event.type === "permission.resolved"
+            ? {
+                ...current.summary,
+                session: {
+                  ...current.summary.session,
+                  runtimeState: permissionResolvedState,
+                  updatedAt: event.ts,
+                },
+              }
         : event.type === "control.claimed"
           ? {
               ...current.summary,

@@ -27,6 +27,7 @@ import {
   type LiveClaudeSession,
 } from "./claude-live-client";
 import {
+  type ClaudeStoredSessionRecord,
   discoverClaudeStoredSessions,
   findClaudeStoredSessionRecord,
   getClaudeStoredSessionHistoryPage,
@@ -40,6 +41,7 @@ import {
 import { claudeLaunchSpec, probeProviderVersion } from "./provider-diagnostics";
 import { getCodexGitDiff, getCodexGitStatus, getCodexWorkspaceSnapshot } from "./codex-stored-sessions";
 import { toSessionSummary } from "./session-store";
+import { movePathToTrash } from "./trash";
 
 interface ClaudeAdapterOptions {
   queryFactory?: ClaudeQueryFactory;
@@ -53,6 +55,7 @@ export class ClaudeAdapter implements ProviderAdapter {
   private readonly liveSessions = new Map<string, LiveClaudeSession>();
   private readonly rehydratedSessionIds = new Set<string>();
   private readonly permissionModeByProviderSessionId = new Map<string, LiveClaudeSession["permissionMode"]>();
+  private storedSessionIndex = new Map<string, ClaudeStoredSessionRecord>();
   private readonly queryFactory: ClaudeAdapterOptions["queryFactory"];
 
   constructor(services: RuntimeServices, options: ClaudeAdapterOptions = {}) {
@@ -295,10 +298,28 @@ export class ClaudeAdapter implements ProviderAdapter {
   }
 
   listStoredSessions(): StoredSessionRef[] {
-    return discoverClaudeStoredSessions().map((record) => record.ref);
+    return [...this.refreshStoredSessions().values()].map((record) => record.ref);
+  }
+
+  async removeStoredSession(session: StoredSessionRef): Promise<void> {
+    const record =
+      this.storedSessionIndex.get(session.providerSessionId) ??
+      this.refreshStoredSessions().get(session.providerSessionId);
+    if (!record) {
+      throw new Error(`Could not find a stored Claude history file for ${session.providerSessionId}.`);
+    }
+    await movePathToTrash(record.filePath);
+    this.storedSessionIndex.delete(session.providerSessionId);
   }
 
   getProviderDiagnostic() {
     return probeProviderVersion("claude", claudeLaunchSpec());
+  }
+
+  private refreshStoredSessions(): Map<string, ClaudeStoredSessionRecord> {
+    this.storedSessionIndex = new Map(
+      discoverClaudeStoredSessions().map((record) => [record.ref.providerSessionId, record] as const),
+    );
+    return this.storedSessionIndex;
   }
 }

@@ -3,6 +3,7 @@
 /* Diff viewer */
 .diff-viewer {
   overflow: auto;
+  max-width: 100%;
   border-radius: 0.5rem;
   background: var(--app-code-bg);
   padding: 0.5rem 0;
@@ -61,6 +62,7 @@ html[data-theme="light"] .diff-line.context {
 /* Code blocks */
 .code-block {
   margin: 0;
+  max-width: 100%;
   border-radius: 0.5rem;
   background: var(--app-code-bg);
   padding: 0.75rem 1rem;
@@ -89,7 +91,14 @@ html[data-theme="light"] .code-block {
 }
 
 /* Prose tweaks for assistant markdown */
+.prose-chat {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 .prose-chat pre {
+  max-width: 100%;
   background: var(--app-code-bg);
   border: 1px solid var(--app-border);
   border-radius: 0.5rem;
@@ -140,6 +149,7 @@ html[data-theme="light"] .code-block {
   color: var(--app-link);
   text-decoration: underline;
   text-underline-offset: 2px;
+  overflow-wrap: anywhere;
 }
 
 .provider-choice-rail {

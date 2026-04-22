@@ -129,6 +129,8 @@ export class RuntimeEngine {
   private rememberedRecentSessions: StoredSessionRef[];
   private rememberedWorkspaceDirs: string[];
   private rememberedActiveWorkspaceDir: string | undefined;
+  private rememberedHiddenSessionKeys: string[];
+  private lastDiscoveredStoredSessions: StoredSessionRef[] = [];
 
   private readonly adaptersById = new Map<string, ProviderAdapter>();
   private readonly adaptersByProvider = new Map<string, ProviderAdapter>();
@@ -148,6 +150,7 @@ export class RuntimeEngine {
     this.rememberedRecentSessions = restored.recentSessions;
     this.rememberedWorkspaceDirs = restored.workspaces;
     this.rememberedActiveWorkspaceDir = restored.activeWorkspaceDir;
+    this.rememberedHiddenSessionKeys = restored.hiddenSessionKeys;
 
     const resolvedAdapters = adapters ?? (() => {
       const debugAdapter = new DebugAdapter({
@@ -187,31 +190,8 @@ export class RuntimeEngine {
   listSessions(): ListSessionsResponse {
     this.pruneOrphanSessions();
     const liveStates = this.sessionStore.listSessions();
-    const storedSessions = new Map<string, StoredSessionRef>();
-    for (const remembered of this.rememberedSessions) {
-      storedSessions.set(`${remembered.provider}:${remembered.providerSessionId}`, remembered);
-    }
-    for (const adapter of this.adaptersById.values()) {
-      for (const stored of adapter.listStoredSessions?.() ?? []) {
-        storedSessions.set(`${stored.provider}:${stored.providerSessionId}`, stored);
-      }
-    }
-    for (const state of liveStates) {
-      const providerSessionId = state.session.providerSessionId;
-      if (!providerSessionId) {
-        continue;
-      }
-      storedSessions.delete(`${state.session.provider}:${providerSessionId}`);
-    }
-    return {
-      sessions: liveStates.map(toSessionSummary),
-      storedSessions: [...storedSessions.values()],
-      recentSessions: [...this.rememberedRecentSessions],
-      workspaceDirs: workspaceDirsFromState(this.rememberedWorkspaceDirs, liveStates),
-      ...(this.rememberedActiveWorkspaceDir
-        ? { activeWorkspaceDir: this.rememberedActiveWorkspaceDir }
-        : {}),
-    };
+    this.lastDiscoveredStoredSessions = this.discoverStoredSessions();
+    return this.buildSessionsResponse(liveStates, this.lastDiscoveredStoredSessions);
   }
 
   async listProviderDiagnostics(): Promise<ProviderDiagnostic[]> {
@@ -260,6 +240,55 @@ export class RuntimeEngine {
     }
     this.workbenchState.removeWorkspace(directory);
     return this.currentWorkbenchSessions();
+  }
+
+  async removeStoredSession(
+    provider: ProviderKind,
+    providerSessionId: string,
+  ): Promise<ListSessionsResponse> {
+    const session = this.lastDiscoveredStoredSessions.find(
+      (entry) =>
+        entry.provider === provider && entry.providerSessionId === providerSessionId,
+    );
+    await this.adaptersByProvider.get(provider)?.removeStoredSession?.(
+      session ?? { provider, providerSessionId, source: "provider_history" },
+    );
+    this.workbenchState.hideSession({ provider, providerSessionId });
+    this.refreshRememberedState();
+    this.lastDiscoveredStoredSessions = this.lastDiscoveredStoredSessions.filter(
+      (session) =>
+        session.provider !== provider || session.providerSessionId !== providerSessionId,
+    );
+    return this.buildSessionsResponse(this.sessionStore.listSessions(), this.lastDiscoveredStoredSessions);
+  }
+
+  async removeStoredWorkspaceSessions(rawDir: string): Promise<ListSessionsResponse> {
+    const directory = normalizeDirectory(rawDir);
+    if (!directory) {
+      throw new Error("Workspace directory is required.");
+    }
+    const currentSessions = this.buildSessionsResponse(
+      this.sessionStore.listSessions(),
+      this.lastDiscoveredStoredSessions,
+    );
+    const matchingStoredSessions = [...currentSessions.storedSessions, ...currentSessions.recentSessions].filter((session) =>
+      sessionBelongsToWorkspace(session.rootDir || session.cwd, directory),
+    );
+    const seen = new Set<string>();
+    for (const session of matchingStoredSessions) {
+      const key = `${session.provider}:${session.providerSessionId}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      await this.adaptersByProvider.get(session.provider)?.removeStoredSession?.(session);
+    }
+    this.workbenchState.hideSessionsInWorkspace(directory);
+    this.refreshRememberedState();
+    this.lastDiscoveredStoredSessions = this.lastDiscoveredStoredSessions.filter(
+      (session) => !sessionBelongsToWorkspace(session.rootDir || session.cwd, directory),
+    );
+    return this.buildSessionsResponse(this.sessionStore.listSessions(), this.lastDiscoveredStoredSessions);
   }
 
   getSessionSummary(sessionId: string): SessionSummary {
@@ -526,12 +555,61 @@ export class RuntimeEngine {
     return this.listSessions();
   }
 
+  private discoverStoredSessions(): StoredSessionRef[] {
+    const discovered = new Map<string, StoredSessionRef>();
+    for (const adapter of this.adaptersById.values()) {
+      for (const stored of adapter.listStoredSessions?.() ?? []) {
+        discovered.set(`${stored.provider}:${stored.providerSessionId}`, stored);
+      }
+    }
+    return [...discovered.values()];
+  }
+
+  private buildSessionsResponse(
+    liveStates: readonly StoredSessionState[],
+    discoveredStoredSessions: readonly StoredSessionRef[],
+  ): ListSessionsResponse {
+    const hiddenSessionKeys = new Set(this.rememberedHiddenSessionKeys);
+    const storedSessions = new Map<string, StoredSessionRef>();
+    for (const remembered of this.rememberedSessions) {
+      if (hiddenSessionKeys.has(`${remembered.provider}:${remembered.providerSessionId}`)) {
+        continue;
+      }
+      storedSessions.set(`${remembered.provider}:${remembered.providerSessionId}`, remembered);
+    }
+    for (const stored of discoveredStoredSessions) {
+      if (hiddenSessionKeys.has(`${stored.provider}:${stored.providerSessionId}`)) {
+        continue;
+      }
+      storedSessions.set(`${stored.provider}:${stored.providerSessionId}`, stored);
+    }
+    for (const state of liveStates) {
+      const providerSessionId = state.session.providerSessionId;
+      if (!providerSessionId) {
+        continue;
+      }
+      storedSessions.delete(`${state.session.provider}:${providerSessionId}`);
+    }
+    return {
+      sessions: liveStates.map(toSessionSummary),
+      storedSessions: [...storedSessions.values()],
+      recentSessions: this.rememberedRecentSessions.filter(
+        (session) => !hiddenSessionKeys.has(`${session.provider}:${session.providerSessionId}`),
+      ),
+      workspaceDirs: workspaceDirsFromState(this.rememberedWorkspaceDirs, liveStates),
+      ...(this.rememberedActiveWorkspaceDir
+        ? { activeWorkspaceDir: this.rememberedActiveWorkspaceDir }
+        : {}),
+    };
+  }
+
   private refreshRememberedState(): void {
     const refreshed = this.workbenchState.snapshot();
     this.rememberedSessions = refreshed.sessions;
     this.rememberedRecentSessions = refreshed.recentSessions;
     this.rememberedWorkspaceDirs = refreshed.workspaces;
     this.rememberedActiveWorkspaceDir = refreshed.activeWorkspaceDir;
+    this.rememberedHiddenSessionKeys = refreshed.hiddenSessionKeys;
   }
 
   private pruneOrphanSessions(): void {

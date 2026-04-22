@@ -20,13 +20,16 @@ import { providerLabel } from "./types";
 import { ProviderLogo } from "./components/ProviderLogo";
 import { WorkspacePicker } from "./components/WorkspacePicker";
 
-type LiveSessionStatus = "ready" | "thinking" | "unread";
+type LiveSessionStatus = "ready" | "thinking" | "approval" | "unread";
 
 function sessionStatus(
   summary: SessionSummary,
   runtimeStatus: "thinking" | "streaming" | "retrying" | undefined,
   unread: boolean,
 ): LiveSessionStatus {
+  if (summary.session.runtimeState === "waiting_permission") {
+    return "approval";
+  }
   if (runtimeStatus !== undefined || summary.session.runtimeState === "running") {
     return "thinking";
   }
@@ -38,6 +41,12 @@ function sessionStatus(
 
 function sessionStatusBadge(status: LiveSessionStatus): { label: string; className: string } {
   switch (status) {
+    case "approval":
+      return {
+        label: "approval",
+        className:
+          "border-orange-500/20 bg-orange-500/10 text-orange-700 dark:text-orange-400",
+      };
     case "thinking":
       return {
         label: "thinking",
@@ -46,7 +55,7 @@ function sessionStatusBadge(status: LiveSessionStatus): { label: string; classNa
       };
     case "unread":
       return {
-        label: "未读",
+        label: "unread",
         className:
           "border-amber-500/20 bg-amber-500/10 text-amber-700 dark:text-amber-400",
       };

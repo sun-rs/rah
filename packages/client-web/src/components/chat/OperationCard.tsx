@@ -38,7 +38,7 @@ export function OperationCard(props: {
               <ExternalLink size={12} />
               <span>Input</span>
             </div>
-            <pre className="overflow-x-auto custom-scrollbar text-xs text-[var(--app-fg)]">
+            <pre className="max-w-full overflow-x-auto custom-scrollbar text-xs text-[var(--app-fg)]">
               <code>{JSON.stringify(props.operation.input, null, 2)}</code>
             </pre>
           </div>

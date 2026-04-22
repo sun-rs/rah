@@ -85,7 +85,7 @@ export function ObservationCard(props: {
           </div>
         ) : null}
         {props.error ? (
-          <div className="rounded-lg border border-[var(--app-danger)]/30 bg-[var(--app-danger)]/10 px-3 py-2 text-xs text-[var(--app-fg)]">
+          <div className="rounded-lg border border-[var(--app-danger)] bg-[var(--app-danger-bg)] px-3 py-2 text-xs text-[var(--app-fg)]">
             {props.error}
           </div>
         ) : null}

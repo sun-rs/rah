@@ -87,6 +87,11 @@ export interface WorkspaceDirectoryRequest {
   dir: string;
 }
 
+export interface StoredSessionRemoveRequest {
+  provider: ProviderKind;
+  providerSessionId: string;
+}
+
 export interface WorkspaceDirectoryResponse {
   path: string;
 }

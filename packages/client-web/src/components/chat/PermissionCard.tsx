@@ -163,6 +163,33 @@ export function PermissionCard(props: {
           {statusLabel}
         </span>
       }
+      footer={
+        !props.resolution ? (
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              {actions.map((action) => {
+                const disabled = action.behavior === "allow" && !canSubmit;
+                return (
+                  <button
+                    key={action.id}
+                    type="button"
+                    disabled={disabled}
+                    className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-40 ${actionClassName(action.variant)}`}
+                    onClick={() => submit(action)}
+                  >
+                    {action.label}
+                  </button>
+                );
+              })}
+            </div>
+            {props.canRespond === false ? (
+              <div className="text-xs text-[var(--app-hint)]">
+                This client cannot answer live permission requests for the current session mode.
+              </div>
+            ) : null}
+          </div>
+        ) : undefined
+      }
     >
       <div className="space-y-3">
         <div className="flex items-center gap-2 text-[11px] font-medium text-[var(--app-hint)]">
@@ -268,28 +295,6 @@ export function PermissionCard(props: {
                 ))}
               </div>
             ) : null}
-          </div>
-        ) : (
-          <div className="flex flex-wrap items-center gap-2">
-            {actions.map((action) => {
-              const disabled = action.behavior === "allow" && !canSubmit;
-              return (
-                <button
-                  key={action.id}
-                  type="button"
-                  disabled={disabled}
-                  className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-40 ${actionClassName(action.variant)}`}
-                  onClick={() => submit(action)}
-                >
-                  {action.label}
-                </button>
-              );
-            })}
-          </div>
-        )}
-        {props.canRespond === false && !props.resolution ? (
-          <div className="text-xs text-[var(--app-hint)]">
-            This client cannot answer live permission requests for the current session mode.
           </div>
         ) : null}
       </div>

@@ -84,6 +84,8 @@
     --app-success: #16a34a;
     --app-warning: #d97706;
     --app-danger: #dc2626;
+    --app-warning-bg: #fff4db;
+    --app-danger-bg: #fee7e7;
 
     /* User bubble */
     --user-bubble-bg: #f4f4f5;
@@ -143,6 +145,8 @@
     --app-success: #22c55e;
     --app-warning: #f59e0b;
     --app-danger: #ef4444;
+    --app-warning-bg: #3a2b0f;
+    --app-danger-bg: #3b1717;
 
     /* User bubble */
     --user-bubble-bg: #27272a;
@@ -165,12 +169,21 @@
   * {
     @apply border-border;
   }
+  html,
+  body,
+  #root {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: hidden;
+    overscroll-behavior-x: none;
+  }
   html {
     @apply antialiased;
   }
   body {
     @apply bg-background text-foreground;
     font-family: var(--font-sans);
+    overflow-x: hidden;
   }
 }
 
@@ -223,6 +236,10 @@
 }
 
 @layer utilities {
+  .scrollbar-stable {
+    scrollbar-gutter: stable both-edges;
+  }
+
   .custom-scrollbar {
     scrollbar-width: thin;
     scrollbar-color: transparent transparent;

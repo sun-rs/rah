@@ -8,20 +8,21 @@ export function CompactEventCard(props: {
   status?: React.ReactNode;
   tone?: "default" | "warning" | "danger";
   defaultOpen?: boolean;
+  footer?: React.ReactNode;
   children?: React.ReactNode;
 }) {
   const [open, setOpen] = useState(props.defaultOpen ?? false);
   const expandable = props.children !== undefined && props.children !== null;
   const toneClassName =
     props.tone === "danger"
-      ? "border-[var(--app-danger)]/25 bg-[var(--app-danger)]/8"
+      ? "border-[var(--app-danger)] bg-[var(--app-danger-bg)]"
       : props.tone === "warning"
-        ? "border-[var(--app-warning)]/25 bg-[var(--app-warning)]/8"
+        ? "border-[var(--app-warning)] bg-[var(--app-warning-bg)]"
         : "border-[var(--app-border)] bg-[var(--app-subtle-bg)]";
 
   return (
     <div className="flex items-start justify-start gap-3">
-      <div className={`w-full rounded-lg border ${toneClassName}`}>
+      <div className={`w-full max-w-full rounded-lg border ${toneClassName}`}>
         <button
           type="button"
           disabled={!expandable}
@@ -32,7 +33,7 @@ export function CompactEventCard(props: {
           }}
           className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left disabled:cursor-default"
         >
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--app-hint)]">
               {props.label}
             </div>
@@ -40,7 +41,7 @@ export function CompactEventCard(props: {
               {props.title}
             </div>
             {props.subtitle ? (
-              <div className="mt-0.5 text-[11px] leading-4 text-[var(--app-hint)]">
+              <div className="mt-0.5 text-[11px] leading-4 text-[var(--app-hint)] break-words [overflow-wrap:anywhere]">
                 {props.subtitle}
               </div>
             ) : null}
@@ -54,6 +55,11 @@ export function CompactEventCard(props: {
             ) : null}
           </div>
         </button>
+        {props.footer ? (
+          <div className="border-t border-[var(--app-border)] px-3 py-2.5">
+            {props.footer}
+          </div>
+        ) : null}
         {expandable && open ? (
           <div className="border-t border-[var(--app-border)] px-3 py-2.5">{props.children}</div>
         ) : null}

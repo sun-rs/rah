@@ -14,9 +14,9 @@ export function StatusCallout(props: {
   const tone = props.tone ?? "info";
   const className =
     tone === "danger"
-      ? "border-[var(--app-danger)]/30 bg-[var(--app-danger)]/10"
+      ? "border-[var(--app-danger)] bg-[var(--app-danger-bg)]"
       : tone === "warning"
-        ? "border-[var(--app-warning)]/30 bg-[var(--app-warning)]/10"
+        ? "border-[var(--app-warning)] bg-[var(--app-warning-bg)]"
         : "border-[var(--app-border)] bg-[var(--app-subtle-bg)]";
   const icon =
     props.icon ??
@@ -32,7 +32,9 @@ export function StatusCallout(props: {
         <div className="mt-0.5 shrink-0">{icon}</div>
         <div className="min-w-0 flex-1">
           <div className="text-sm font-medium text-[var(--app-fg)]">{props.title}</div>
-          <div className="mt-1 text-sm text-[var(--app-hint)]">{props.body}</div>
+          <div className="mt-1 text-sm text-[var(--app-hint)] break-words [overflow-wrap:anywhere]">
+            {props.body}
+          </div>
           {props.onPrimary || props.onSecondary ? (
             <div className="mt-3 flex flex-wrap items-center gap-2">
               {props.onPrimary && props.primaryLabel ? (

@@ -12,8 +12,10 @@ export function UserMessage(props: { content: string }) {
 
   return (
     <div className="flex items-start justify-end gap-3">
-      <div className="max-w-[85%] sm:max-w-[75%] rounded-2xl rounded-tr-md border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-4 py-3 text-[var(--app-fg)]">
-        <div className="whitespace-pre-wrap text-[15px] leading-relaxed">{props.content}</div>
+      <div className="min-w-0 max-w-[85%] sm:max-w-[75%] rounded-2xl rounded-tr-md border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-4 py-3 text-[var(--app-fg)]">
+        <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[15px] leading-relaxed">
+          {props.content}
+        </div>
         <div className="mt-2 flex justify-end">
           <button
             type="button"

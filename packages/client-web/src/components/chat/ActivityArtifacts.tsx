@@ -32,7 +32,7 @@ function renderTableRows(rows: Array<Record<string, unknown>>) {
     return null;
   }
   return (
-    <div className="overflow-x-auto custom-scrollbar rounded-lg border border-[var(--app-border)]">
+    <div className="max-w-full overflow-x-auto custom-scrollbar rounded-lg border border-[var(--app-border)]">
       <table className="min-w-full text-left text-sm">
         <thead className="bg-[var(--app-code-bg)] text-[var(--app-hint)]">
           <tr>
@@ -144,7 +144,7 @@ function renderArtifact(artifact: ToolCallArtifact, index: number) {
               <img
                 src={artifact.url}
                 alt={artifact.alt ?? "artifact image"}
-                className="max-h-64 rounded-lg border border-[var(--app-border)]"
+                className="max-h-64 max-w-full rounded-lg border border-[var(--app-border)]"
               />
             ) : null}
             {artifact.path ? (

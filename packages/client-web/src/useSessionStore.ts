@@ -73,6 +73,8 @@ interface SessionState {
   attachSession: (summary: SessionSummary) => Promise<void>;
   closeSession: (sessionId: string) => Promise<void>;
   claimHistorySession: (sessionId: string) => Promise<void>;
+  removeHistorySession: (session: Pick<StoredSessionRef, "provider" | "providerSessionId">) => Promise<void>;
+  removeHistoryWorkspaceSessions: (workspaceDir: string) => Promise<void>;
   claimControl: (sessionId: string) => Promise<void>;
   releaseControl: (sessionId: string) => Promise<void>;
   interruptSession: (sessionId: string) => Promise<void>;
@@ -829,21 +831,6 @@ async function maybeRestoreLastHistorySelection(
   }
 }
 
-function maybeAutoClaimSelectedSession(sessionId: string | null) {
-  if (!sessionId) {
-    return;
-  }
-  const state = useSessionStore.getState();
-  const summary = state.projections.get(sessionId)?.summary;
-  if (!summary || !canSessionSendInput(summary)) {
-    return;
-  }
-  if (summary.controlLease.holderClientId === state.clientId) {
-    return;
-  }
-  void state.claimControl(sessionId).catch(() => {});
-}
-
 async function recoverFromReplayGap(batch: EventBatch) {
   clearBufferedEvents();
   if (batch.replayGap?.newestAvailableSeq !== null && batch.replayGap?.newestAvailableSeq !== undefined) {
@@ -973,7 +960,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       if (id) {
         void ensureSessionHistoryLoaded(id);
       }
-      maybeAutoClaimSelectedSession(id);
     },
   setNewSessionProvider: (provider) => set({ newSessionProvider: provider }),
 
@@ -989,7 +975,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         error: null,
       }));
       await maybeRestoreLastHistorySelection(sessionsResponse);
-      maybeAutoClaimSelectedSession(useSessionStore.getState().selectedSessionId);
     } catch (error) {
       set({ error: readErrorMessage(error) });
       throw error;
@@ -1067,7 +1052,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         };
       });
       void ensureSessionHistoryLoaded(response.session.session.id);
-      maybeAutoClaimSelectedSession(response.session.session.id);
     } catch (error) {
       set({ launchStatus: null, error: readErrorMessage(error) });
       throw error;
@@ -1102,7 +1086,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         };
       });
       void ensureSessionHistoryLoaded(response.session.session.id);
-      maybeAutoClaimSelectedSession(response.session.session.id);
     } catch (error) {
       set({ error: readErrorMessage(error) });
       throw error;
@@ -1174,7 +1157,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         };
       });
       void ensureSessionHistoryLoaded(response.session.session.id);
-      maybeAutoClaimSelectedSession(response.session.session.id);
     } catch (error) {
       const message = readErrorMessage(error);
       if (message.includes("attach instead of resume")) {
@@ -1200,7 +1182,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             };
           });
           void ensureSessionHistoryLoaded(running.session.id);
-          maybeAutoClaimSelectedSession(running.session.id);
           return;
         }
       }
@@ -1294,7 +1275,32 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           error: null,
         };
       });
-      maybeAutoClaimSelectedSession(response.session.session.id);
+    } catch (error) {
+      set({ error: readErrorMessage(error) });
+      throw error;
+    }
+  },
+
+  removeHistorySession: async (session) => {
+    try {
+      const sessionsResponse = await api.removeStoredSession(session);
+      set((state) => ({
+        ...applySessionsResponse(state, sessionsResponse),
+        error: null,
+      }));
+    } catch (error) {
+      set({ error: readErrorMessage(error) });
+      throw error;
+    }
+  },
+
+  removeHistoryWorkspaceSessions: async (workspaceDir) => {
+    try {
+      const sessionsResponse = await api.removeStoredWorkspaceSessions({ dir: workspaceDir });
+      set((state) => ({
+        ...applySessionsResponse(state, sessionsResponse),
+        error: null,
+      }));
     } catch (error) {
       set({ error: readErrorMessage(error) });
       throw error;

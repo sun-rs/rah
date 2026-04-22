@@ -21,6 +21,7 @@ import type {
   SessionInputRequest,
   StartDebugScenarioRequest,
   StartSessionRequest,
+  StoredSessionRemoveRequest,
   WorkspaceDirectoryRequest,
 } from "@rah/runtime-protocol";
 import { RuntimeEngine } from "./runtime-engine";
@@ -120,6 +121,24 @@ function replayGapForSubscription(
     oldestAvailableSeq,
     newestAvailableSeq: engine.eventBus.newestSeq(),
   };
+}
+
+function sameEventSubscription(
+  left: EventSubscriptionRequest,
+  right: EventSubscriptionRequest,
+): boolean {
+  const leftSessionIds = left.sessionIds ?? [];
+  const rightSessionIds = right.sessionIds ?? [];
+  const leftEventTypes = left.eventTypes ?? [];
+  const rightEventTypes = right.eventTypes ?? [];
+
+  return (
+    left.replayFromSeq === right.replayFromSeq &&
+    leftSessionIds.length === rightSessionIds.length &&
+    leftSessionIds.every((value, index) => value === rightSessionIds[index]) &&
+    leftEventTypes.length === rightEventTypes.length &&
+    leftEventTypes.every((value, index) => value === rightEventTypes[index])
+  );
 }
 
 function contentTypeForPath(path: string): string {
@@ -300,6 +319,24 @@ export async function startRahDaemon(options?: { port?: number }): Promise<RahDa
           200,
           engine.removeWorkspace(((body ?? {}) as WorkspaceDirectoryRequest).dir),
         );
+      },
+    },
+    {
+      pattern: /^\/api\/history\/sessions\/remove$/,
+      handler: async (_req, res, _match, body) => {
+        const request = (body ?? {}) as StoredSessionRemoveRequest;
+        writeJson(
+          res,
+          200,
+          await engine.removeStoredSession(request.provider, request.providerSessionId),
+        );
+      },
+    },
+    {
+      pattern: /^\/api\/history\/workspaces\/remove$/,
+      handler: async (_req, res, _match, body) => {
+        const request = (body ?? {}) as WorkspaceDirectoryRequest;
+        writeJson(res, 200, await engine.removeStoredWorkspaceSessions(request.dir));
       },
     },
   ];
@@ -520,6 +557,9 @@ export async function startRahDaemon(options?: { port?: number }): Promise<RahDa
     socket.on("message", (raw) => {
       try {
         const parsed = JSON.parse(raw.toString("utf8")) as EventSubscriptionRequest;
+        if (sameEventSubscription(filter, parsed)) {
+          return;
+        }
         unsubscribe();
         filter = parsed;
         const replay = engine.listEvents(filter);

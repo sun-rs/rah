@@ -38,6 +38,8 @@ import {
 } from "./provider-resume";
 import { kimiLaunchSpec, probeProviderVersion } from "./provider-diagnostics";
 import { toSessionSummary } from "./session-store";
+import { movePathToTrash } from "./trash";
+import path from "node:path";
 
 export class KimiAdapter implements ProviderAdapter {
   readonly id = "kimi";
@@ -254,6 +256,17 @@ export class KimiAdapter implements ProviderAdapter {
 
   listStoredSessions(): StoredSessionRef[] {
     return [...this.refreshStoredSessions().values()].map((record) => record.ref);
+  }
+
+  async removeStoredSession(session: StoredSessionRef): Promise<void> {
+    const record =
+      this.storedSessionIndex.get(session.providerSessionId) ??
+      this.refreshStoredSessions().get(session.providerSessionId);
+    if (!record) {
+      throw new Error(`Could not find a stored Kimi history directory for ${session.providerSessionId}.`);
+    }
+    await movePathToTrash(path.dirname(record.wirePath));
+    this.storedSessionIndex.delete(session.providerSessionId);
   }
 
   getProviderDiagnostic() {

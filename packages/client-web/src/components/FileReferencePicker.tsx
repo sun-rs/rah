@@ -56,7 +56,17 @@ function preferredReferencePath(root: string, target: string): string {
 }
 
 function formatReference(path: string): string {
-  return path.includes(" ") ? `@"${path}"` : `@${path}`;
+  const normalized =
+    !path.startsWith(".") &&
+    !path.startsWith("/") &&
+    !path.startsWith("~") &&
+    !/^[A-Za-z]:[\\/]/.test(path) &&
+    !path.includes("/") &&
+    !path.includes("\\")
+      ? `./${path}`
+      : path;
+  const ref = normalized.includes(" ") ? `@"${normalized}"` : `@${normalized}`;
+  return ref + " ";
 }
 
 export function FileReferencePicker(props: {

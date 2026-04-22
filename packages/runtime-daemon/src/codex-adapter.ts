@@ -37,6 +37,7 @@ import {
 } from "./provider-resume";
 import { codexLaunchSpec, probeProviderVersion } from "./provider-diagnostics";
 import { toSessionSummary } from "./session-store";
+import { movePathToTrash } from "./trash";
 
 export class CodexAdapter implements ProviderAdapter {
   readonly id = "codex";
@@ -360,6 +361,17 @@ export class CodexAdapter implements ProviderAdapter {
 
   listStoredSessions(): StoredSessionRef[] {
     return [...this.refreshStoredSessions().values()].map((record) => record.ref);
+  }
+
+  async removeStoredSession(session: StoredSessionRef): Promise<void> {
+    const record =
+      this.storedSessionIndex.get(session.providerSessionId) ??
+      this.refreshStoredSessions().get(session.providerSessionId);
+    if (!record) {
+      throw new Error(`Could not find a stored Codex history file for ${session.providerSessionId}.`);
+    }
+    await movePathToTrash(record.rolloutPath);
+    this.storedSessionIndex.delete(session.providerSessionId);
   }
 
   getProviderDiagnostic() {

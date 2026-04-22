@@ -78,7 +78,7 @@ export function ToolCallCard(props: {
     (props.toolCall.title !== props.toolCall.providerToolName ? props.toolCall.title : null);
   const toneClassName =
     props.status === "failed"
-      ? "border-[var(--app-danger)]/25 bg-[var(--app-danger)]/8"
+      ? "border-[var(--app-danger)] bg-[var(--app-danger-bg)]"
       : "border-[var(--app-border)] bg-[var(--app-subtle-bg)]";
 
   return (
@@ -131,7 +131,7 @@ export function ToolCallCard(props: {
               <div className="text-xs text-[var(--app-hint)]">{props.toolCall.title}</div>
             ) : null}
             {props.error ? (
-              <div className="rounded-lg border border-[var(--app-danger)]/30 bg-[var(--app-danger)]/10 px-3 py-2 text-xs text-[var(--app-fg)]">
+              <div className="rounded-lg border border-[var(--app-danger)] bg-[var(--app-danger-bg)] px-3 py-2 text-xs text-[var(--app-fg)]">
                 {props.error}
               </div>
             ) : null}

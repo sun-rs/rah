@@ -91,9 +91,9 @@ function TimelineCard(props: {
 }) {
   const toneClassName =
     props.tone === "danger"
-      ? "border-[var(--app-danger)]/30 bg-[var(--app-danger)]/10"
+      ? "border-[var(--app-danger)] bg-[var(--app-danger-bg)]"
       : props.tone === "warning"
-        ? "border-[var(--app-warning)]/30 bg-[var(--app-warning)]/10"
+        ? "border-[var(--app-warning)] bg-[var(--app-warning-bg)]"
         : "border-[var(--app-border)] bg-[var(--app-subtle-bg)]";
 
   return (
@@ -195,10 +195,12 @@ function renderTimelineItem(item: TimelineItem) {
         >
           <div className="space-y-1 text-xs">
             {item.response ? (
-              <div className="rounded-md bg-[var(--app-bg)] px-2 py-1.5">{item.response}</div>
+              <div className="rounded-md bg-[var(--app-bg)] px-2 py-1.5 break-words [overflow-wrap:anywhere]">
+                {item.response}
+              </div>
             ) : null}
             {item.error ? (
-              <div className="rounded-md bg-[var(--app-danger)]/10 px-2 py-1.5 text-[var(--app-danger)]">
+              <div className="rounded-md border border-[var(--app-danger)] bg-[var(--app-danger-bg)] px-2 py-1.5 text-[var(--app-danger)] break-words [overflow-wrap:anywhere]">
                 {item.error}
               </div>
             ) : null}
@@ -222,7 +224,7 @@ function renderTimelineItem(item: TimelineItem) {
                 href={item.url}
                 target="_blank"
                 rel="noreferrer"
-                className="inline-flex items-center gap-1.5 underline underline-offset-2"
+                className="inline-flex max-w-full items-center gap-1.5 break-all underline underline-offset-2"
               >
                 <Link2 size={12} />
                 <span>{item.url}</span>
@@ -390,8 +392,11 @@ export function ChatThread(props: {
   };
 
   return (
-    <div ref={containerRef} className="relative flex-1 overflow-y-auto custom-scrollbar px-4 py-5">
-      <div className="mx-auto max-w-3xl space-y-5">
+    <div
+      ref={containerRef}
+      className="relative flex-1 overflow-y-auto overflow-x-hidden custom-scrollbar scrollbar-stable px-4 py-5"
+    >
+      <div className="mx-auto w-full min-w-0 max-w-3xl space-y-5">
         {props.historyLoading ? (
           <div className="flex justify-center">
             <div className="rounded-full border border-[var(--app-border)] bg-[var(--app-bg)] px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.14em] text-[var(--app-hint)]">
@@ -400,7 +405,7 @@ export function ChatThread(props: {
           </div>
         ) : null}
         {entries.map((entry) => (
-          <div key={entry.key}>
+          <div key={entry.key} className="min-w-0 max-w-full">
             {renderEntry(entry, props.canRespondToPermission, props.onPermissionRespond)}
           </div>
         ))}
@@ -412,7 +417,8 @@ export function ChatThread(props: {
         <button
           type="button"
           onClick={handleScrollToBottom}
-          className="absolute bottom-5 left-1/2 z-10 flex h-9 w-9 -translate-x-1/2 items-center justify-center rounded-full border border-[var(--app-border)] bg-[var(--app-bg)] text-[var(--app-fg)] shadow-lg transition-all duration-200 hover:scale-110 hover:bg-[var(--app-subtle-bg)] active:scale-95"
+          className="fixed left-1/2 z-[55] flex h-9 w-9 -translate-x-1/2 items-center justify-center rounded-full border border-[var(--app-border)] bg-[var(--app-bg)] text-[var(--app-fg)] shadow-lg transition-all duration-200 hover:scale-110 hover:bg-[var(--app-subtle-bg)] active:scale-95"
+          style={{ bottom: "calc(env(safe-area-inset-bottom, 0px) + 5.75rem)" }}
           aria-label="Scroll to bottom"
         >
           <ArrowDown size={16} />

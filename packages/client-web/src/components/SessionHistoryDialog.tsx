@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
 import * as Dialog from "@radix-ui/react-dialog";
-import { ChevronDown, ChevronRight, History, Search, X } from "lucide-react";
+import { ChevronDown, ChevronRight, History, MoreHorizontal, Search, X } from "lucide-react";
 import { providerLabel } from "../types";
 import { formatRelativeTime, getDirectoryDisplayName } from "../session-browser";
 import { ProviderLogo } from "./ProviderLogo";
@@ -103,13 +103,23 @@ function SessionRow(props: {
   session: StoredSessionRef;
   liveSummary: SessionSummary | undefined;
   onActivate: (ref: StoredSessionRef) => void;
+  onRequestRemove: (ref: StoredSessionRef) => void;
 }) {
   const badge = sourceBadge(props.session);
   const live = props.liveSummary !== undefined;
+  const [showRemove, setShowRemove] = useState(false);
+
+  useEffect(() => {
+    if (!showRemove) {
+      return;
+    }
+    const timeoutId = window.setTimeout(() => setShowRemove(false), 2000);
+    return () => window.clearTimeout(timeoutId);
+  }, [showRemove]);
 
   return (
     <div className="w-full rounded-lg border border-transparent px-3 py-2 transition-colors hover:bg-[var(--app-bg)] hover:border-[var(--app-border)] text-[var(--app-hint)]">
-      <div className="flex items-center justify-between gap-2">
+      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
         <button
           type="button"
           onClick={() => props.onActivate(props.session)}
@@ -132,7 +142,7 @@ function SessionRow(props: {
             </div>
           ) : null}
         </button>
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex items-center justify-end gap-2 shrink-0">
           {live ? (
             <span className="inline-flex rounded-full border border-blue-500/20 bg-blue-500/10 px-2 py-0.5 text-[10px] font-medium text-blue-600 dark:text-blue-400">
               Live
@@ -144,9 +154,30 @@ function SessionRow(props: {
               {badge.label}
             </span>
           )}
-          <span className="text-[11px] text-[var(--app-hint)]">
+          <span className="text-[11px] text-[var(--app-hint)] min-w-[3.5rem] text-right">
             {formatRelativeTime(props.session.lastUsedAt ?? props.session.updatedAt) ?? "history"}
           </span>
+          {showRemove ? (
+            <button
+              type="button"
+              onClick={() => props.onRequestRemove(props.session)}
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-danger)] hover:bg-[var(--app-danger-bg)] transition-colors"
+              aria-label="Delete session"
+              title="Delete session"
+            >
+              <X size={14} strokeWidth={2.5} />
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setShowRemove(true)}
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] transition-colors"
+              aria-label="More"
+              title="More"
+            >
+              <MoreHorizontal size={14} />
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -158,6 +189,8 @@ export function SessionHistoryDialog(props: {
   recentSessions: StoredSessionRef[];
   liveSessions: SessionSummary[];
   onActivate: (ref: StoredSessionRef) => void;
+  onRemoveSession: (ref: Pick<StoredSessionRef, "provider" | "providerSessionId">) => void;
+  onRemoveWorkspace: (workspaceDir: string) => void;
   children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
@@ -165,6 +198,8 @@ export function SessionHistoryDialog(props: {
   const [query, setQuery] = useState("");
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());
+  const [pendingRemoveSession, setPendingRemoveSession] = useState<StoredSessionRef | null>(null);
+  const [pendingRemoveWorkspaceDir, setPendingRemoveWorkspaceDir] = useState<string | null>(null);
 
   const liveByProviderSessionId = useMemo(
     () =>
@@ -238,11 +273,12 @@ export function SessionHistoryDialog(props: {
   );
 
   return (
-    <Dialog.Root open={open} onOpenChange={setOpen}>
-      <Dialog.Trigger asChild>{props.children}</Dialog.Trigger>
-      <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 bg-black/40 z-40" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 max-h-[85vh] w-[90vw] max-w-2xl -translate-x-1/2 -translate-y-1/2 rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-0 shadow-xl focus:outline-none z-50 flex flex-col max-sm:left-0 max-sm:top-0 max-sm:h-full max-sm:max-h-full max-sm:w-full max-sm:max-w-full max-sm:-translate-x-0 max-sm:-translate-y-0 max-sm:rounded-none">
+    <>
+      <Dialog.Root open={open} onOpenChange={setOpen}>
+        <Dialog.Trigger asChild>{props.children}</Dialog.Trigger>
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 bg-black/40 z-40" />
+          <Dialog.Content className="fixed left-1/2 top-1/2 max-h-[85vh] w-[90vw] max-w-2xl -translate-x-1/2 -translate-y-1/2 rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-0 shadow-xl focus:outline-none z-50 flex flex-col max-sm:left-0 max-sm:top-0 max-sm:h-full max-sm:max-h-full max-sm:w-full max-sm:max-w-full max-sm:-translate-x-0 max-sm:-translate-y-0 max-sm:rounded-none">
           <div className="flex items-center justify-between border-b border-[var(--app-border)] px-4 py-3 shrink-0">
             <Dialog.Title className="text-sm font-semibold text-[var(--app-fg)]">
               Session History
@@ -310,6 +346,7 @@ export function SessionHistoryDialog(props: {
                         props.onActivate(ref);
                         setOpen(false);
                       }}
+                      onRequestRemove={setPendingRemoveSession}
                     />
                   ))}
                 </div>
@@ -345,7 +382,7 @@ export function SessionHistoryDialog(props: {
                             {group.displayName}
                           </span>
                         </div>
-                        <div className="flex items-center gap-3 shrink-0 min-w-0">
+                        <div className="flex items-center justify-end gap-3 shrink-0 min-w-0">
                           <span
                             className="text-[11px] text-[var(--app-hint)] truncate max-w-[160px] text-right"
                             title={group.directory}
@@ -355,6 +392,10 @@ export function SessionHistoryDialog(props: {
                           <span className="inline-flex items-center justify-center rounded-full bg-[var(--app-bg)] border border-[var(--app-border)] px-2 py-0.5 text-[11px] font-medium text-[var(--app-fg)] tabular-nums min-w-[1.5rem]">
                             {group.items.length}
                           </span>
+                          <WorkspaceRemoveButton
+                            workspaceDir={group.directory}
+                            onRequestRemove={setPendingRemoveWorkspaceDir}
+                          />
                         </div>
                       </button>
 
@@ -369,6 +410,7 @@ export function SessionHistoryDialog(props: {
                                 props.onActivate(ref);
                                 setOpen(false);
                               }}
+                              onRequestRemove={setPendingRemoveSession}
                             />
                           ))}
                           {group.items.length > DEFAULT_GROUP_ITEM_LIMIT ? (
@@ -395,8 +437,185 @@ export function SessionHistoryDialog(props: {
                 : "Previous live sessions and provider history will appear here.",
             )}
           </div>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      <Dialog.Root
+        open={pendingRemoveSession !== null}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) {
+            setPendingRemoveSession(null);
+          }
+        }}
+      >
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 bg-black/40 z-[60]" />
+          <Dialog.Content className="fixed left-1/2 top-1/2 w-[90vw] max-w-sm -translate-x-1/2 -translate-y-1/2 rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-0 shadow-xl focus:outline-none z-[70] flex flex-col">
+            <div className="flex items-center justify-between border-b border-[var(--app-border)] px-4 py-3 shrink-0">
+              <Dialog.Title className="text-sm font-semibold text-[var(--app-fg)]">
+                Delete session?
+              </Dialog.Title>
+              <Dialog.Close asChild>
+                <button
+                  type="button"
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] transition-colors"
+                  aria-label="Close"
+                >
+                  <X size={16} />
+                </button>
+              </Dialog.Close>
+            </div>
+            <div className="px-4 py-4 text-sm text-[var(--app-hint)]">
+              {pendingRemoveSession ? (
+                <>
+                  Move{" "}
+                  <span className="font-medium text-[var(--app-fg)]">
+                    {sessionTitle(pendingRemoveSession)}
+                  </span>{" "}
+                  to the trash?
+                </>
+              ) : null}
+            </div>
+            <div className="flex items-center justify-end gap-2 border-t border-[var(--app-border)] px-4 py-3">
+              <Dialog.Close asChild>
+                <button
+                  type="button"
+                  className="rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] px-3 py-2 text-xs font-medium text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)] transition-colors"
+                >
+                  Cancel
+                </button>
+              </Dialog.Close>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!pendingRemoveSession) {
+                    return;
+                  }
+                  props.onRemoveSession({
+                    provider: pendingRemoveSession.provider,
+                    providerSessionId: pendingRemoveSession.providerSessionId,
+                  });
+                  setPendingRemoveSession(null);
+                }}
+                className="rounded-lg bg-[var(--app-danger)] px-3 py-2 text-xs font-medium text-white hover:opacity-90 transition-colors"
+              >
+                Delete
+              </button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      <Dialog.Root
+        open={pendingRemoveWorkspaceDir !== null}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) {
+            setPendingRemoveWorkspaceDir(null);
+          }
+        }}
+      >
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 bg-black/40 z-[60]" />
+          <Dialog.Content className="fixed left-1/2 top-1/2 w-[90vw] max-w-sm -translate-x-1/2 -translate-y-1/2 rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-0 shadow-xl focus:outline-none z-[70] flex flex-col">
+            <div className="flex items-center justify-between border-b border-[var(--app-border)] px-4 py-3 shrink-0">
+              <Dialog.Title className="text-sm font-semibold text-[var(--app-fg)]">
+                Delete workspace sessions?
+              </Dialog.Title>
+              <Dialog.Close asChild>
+                <button
+                  type="button"
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] transition-colors"
+                  aria-label="Close"
+                >
+                  <X size={16} />
+                </button>
+              </Dialog.Close>
+            </div>
+            <div className="px-4 py-4 text-sm text-[var(--app-hint)]">
+              {pendingRemoveWorkspaceDir ? (
+                <>
+                  Move all session history in{" "}
+                  <span className="font-medium text-[var(--app-fg)]">
+                    {pendingRemoveWorkspaceDir}
+                  </span>{" "}
+                  to the trash?
+                </>
+              ) : null}
+            </div>
+            <div className="flex items-center justify-end gap-2 border-t border-[var(--app-border)] px-4 py-3">
+              <Dialog.Close asChild>
+                <button
+                  type="button"
+                  className="rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] px-3 py-2 text-xs font-medium text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)] transition-colors"
+                >
+                  Cancel
+                </button>
+              </Dialog.Close>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!pendingRemoveWorkspaceDir) {
+                    return;
+                  }
+                  props.onRemoveWorkspace(pendingRemoveWorkspaceDir);
+                  setPendingRemoveWorkspaceDir(null);
+                }}
+                className="rounded-lg bg-[var(--app-danger)] px-3 py-2 text-xs font-medium text-white hover:opacity-90 transition-colors"
+              >
+                Delete
+              </button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+    </>
+  );
+}
+
+function WorkspaceRemoveButton(props: {
+  workspaceDir: string;
+  onRequestRemove: (workspaceDir: string) => void;
+}) {
+  const [showRemove, setShowRemove] = useState(false);
+
+  useEffect(() => {
+    if (!showRemove) {
+      return;
+    }
+    const timeoutId = window.setTimeout(() => setShowRemove(false), 2000);
+    return () => window.clearTimeout(timeoutId);
+  }, [showRemove]);
+
+  if (showRemove) {
+    return (
+      <button
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation();
+          props.onRequestRemove(props.workspaceDir);
+        }}
+        className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-danger)] hover:bg-[var(--app-danger-bg)] transition-colors"
+        aria-label="Delete workspace sessions"
+        title="Delete workspace sessions"
+      >
+        <X size={14} strokeWidth={2.5} />
+      </button>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={(event) => {
+        event.stopPropagation();
+        setShowRemove(true);
+      }}
+      className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] transition-colors"
+      aria-label="More"
+      title="More"
+    >
+      <MoreHorizontal size={14} />
+    </button>
   );
 }

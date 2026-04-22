@@ -15,6 +15,7 @@ interface WorkbenchStateFile {
   activeWorkspaceDir?: string;
   workspaces: string[];
   hiddenWorkspaces?: string[];
+  hiddenSessionKeys?: string[];
   sessions: StoredSessionRef[];
   recentSessions: StoredSessionRef[];
 }
@@ -53,6 +54,19 @@ function filterHiddenDirectories(
 ): string[] {
   const hidden = new Set(uniqueDirectoriesInOrder(hiddenWorkspaces));
   return uniqueDirectoriesInOrder(values).filter((directory) => !hidden.has(directory));
+}
+
+function uniqueStringsInOrder(values: readonly string[]): string[] {
+  const next: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    if (!value || seen.has(value)) {
+      continue;
+    }
+    seen.add(value);
+    next.push(value);
+  }
+  return next;
 }
 
 function resolveRahHome(): string {
@@ -159,9 +173,10 @@ export class WorkbenchStateStore {
     activeWorkspaceDir?: string;
     workspaces: string[];
     hiddenWorkspaces: string[];
+    hiddenSessionKeys: string[];
     sessions: StoredSessionRef[];
     recentSessions: StoredSessionRef[];
-  } = { workspaces: [], hiddenWorkspaces: [], sessions: [], recentSessions: [] };
+  } = { workspaces: [], hiddenWorkspaces: [], hiddenSessionKeys: [], sessions: [], recentSessions: [] };
 
   constructor(rootDir = path.join(resolveRahHome(), "runtime-daemon")) {
     this.rootDir = rootDir;
@@ -173,17 +188,18 @@ export class WorkbenchStateStore {
     activeWorkspaceDir?: string;
     workspaces: string[];
     hiddenWorkspaces: string[];
+    hiddenSessionKeys: string[];
     sessions: StoredSessionRef[];
     recentSessions: StoredSessionRef[];
   } {
     if (!existsSync(this.snapshotPath)) {
-      this.state = { workspaces: [], hiddenWorkspaces: [], sessions: [], recentSessions: [] };
+      this.state = { workspaces: [], hiddenWorkspaces: [], hiddenSessionKeys: [], sessions: [], recentSessions: [] };
       return this.state;
     }
     try {
       const raw = JSON.parse(readFileSync(this.snapshotPath, "utf8")) as WorkbenchStateFile;
       if (!raw || typeof raw !== "object" || !Array.isArray(raw.sessions)) {
-        this.state = { workspaces: [], hiddenWorkspaces: [], sessions: [], recentSessions: [] };
+        this.state = { workspaces: [], hiddenWorkspaces: [], hiddenSessionKeys: [], sessions: [], recentSessions: [] };
         return this.state;
       }
       const sessions = raw.sessions.filter(
@@ -210,6 +226,9 @@ export class WorkbenchStateStore {
       const hiddenWorkspaces = Array.isArray(raw.hiddenWorkspaces)
         ? uniqueDirectoriesInOrder(raw.hiddenWorkspaces)
         : [];
+      const hiddenSessionKeys = Array.isArray(raw.hiddenSessionKeys)
+        ? uniqueStringsInOrder(raw.hiddenSessionKeys.filter((value): value is string => typeof value === "string"))
+        : [];
       const workspaces = filterHiddenDirectories([
         ...(Array.isArray(raw.workspaces) ? raw.workspaces : []),
         ...sanitizedSessions.flatMap((session) => {
@@ -224,12 +243,13 @@ export class WorkbenchStateStore {
           : {}),
         workspaces,
         hiddenWorkspaces,
-        sessions: sanitizedSessions,
-        recentSessions,
+        hiddenSessionKeys,
+        sessions: sanitizedSessions.filter((session) => !hiddenSessionKeys.includes(sessionKey(session))),
+        recentSessions: recentSessions.filter((session) => !hiddenSessionKeys.includes(sessionKey(session))),
       };
       return this.state;
     } catch {
-      this.state = { workspaces: [], hiddenWorkspaces: [], sessions: [], recentSessions: [] };
+      this.state = { workspaces: [], hiddenWorkspaces: [], hiddenSessionKeys: [], sessions: [], recentSessions: [] };
       return this.state;
     }
   }
@@ -254,10 +274,14 @@ export class WorkbenchStateStore {
         : null) ??
       normalizeDirectory(sessions[0]?.rootDir ?? sessions[0]?.cwd) ??
       workspaces[0];
+    const visibleSessionKeys = new Set(
+      sessions.map((session) => sessionKey(session)),
+    );
     this.state = {
       ...(activeWorkspaceDir ? { activeWorkspaceDir } : {}),
       workspaces,
       hiddenWorkspaces: this.state.hiddenWorkspaces,
+      hiddenSessionKeys: this.state.hiddenSessionKeys.filter((key) => !visibleSessionKeys.has(key)),
       sessions: mergeRememberedSessions(this.state.sessions, sessions),
       recentSessions: mergeRecentSessions(this.state.recentSessions, sessions),
     };
@@ -269,6 +293,9 @@ export class WorkbenchStateStore {
     if (!session) {
       return;
     }
+    const hiddenSessionKeys = this.state.hiddenSessionKeys.filter(
+      (key) => key !== sessionKey(session),
+    );
     const hiddenWorkspaces = this.state.hiddenWorkspaces.filter(
       (workspace) => !normalizeDirectory(session.rootDir || session.cwd) || workspace !== normalizeDirectory(session.rootDir || session.cwd),
     );
@@ -284,6 +311,7 @@ export class WorkbenchStateStore {
       ...this.state,
       workspaces,
       hiddenWorkspaces,
+      hiddenSessionKeys,
       sessions: mergeRememberedSessions(this.state.sessions, [session]),
       recentSessions: mergeRecentSessions(this.state.recentSessions, [session]),
     };
@@ -294,6 +322,7 @@ export class WorkbenchStateStore {
     activeWorkspaceDir?: string;
     workspaces: string[];
     hiddenWorkspaces: string[];
+    hiddenSessionKeys: string[];
     sessions: StoredSessionRef[];
     recentSessions: StoredSessionRef[];
   } {
@@ -301,6 +330,7 @@ export class WorkbenchStateStore {
       ...(this.state.activeWorkspaceDir ? { activeWorkspaceDir: this.state.activeWorkspaceDir } : {}),
       workspaces: [...this.state.workspaces],
       hiddenWorkspaces: [...this.state.hiddenWorkspaces],
+      hiddenSessionKeys: [...this.state.hiddenSessionKeys],
       sessions: [...this.state.sessions],
       recentSessions: [...this.state.recentSessions],
     };
@@ -317,6 +347,7 @@ export class WorkbenchStateStore {
       activeWorkspaceDir: directory,
       workspaces,
       hiddenWorkspaces,
+      hiddenSessionKeys: this.state.hiddenSessionKeys,
       sessions: this.state.sessions,
       recentSessions: this.state.recentSessions,
     };
@@ -338,8 +369,57 @@ export class WorkbenchStateStore {
       ...(activeWorkspaceDir ? { activeWorkspaceDir } : {}),
       workspaces,
       hiddenWorkspaces,
+      hiddenSessionKeys: this.state.hiddenSessionKeys,
       sessions: this.state.sessions,
       recentSessions: this.state.recentSessions,
+    };
+    this.persistState();
+  }
+
+  hideSession(session: Pick<StoredSessionRef, "provider" | "providerSessionId">): void {
+    const key = sessionKey(session);
+    this.state = {
+      ...this.state,
+      hiddenSessionKeys: uniqueStringsInOrder([...this.state.hiddenSessionKeys, key]),
+      sessions: this.state.sessions.filter((entry) => sessionKey(entry) !== key),
+      recentSessions: this.state.recentSessions.filter((entry) => sessionKey(entry) !== key),
+    };
+    this.persistState();
+  }
+
+  hideSessionsInWorkspace(rawDir: string): void {
+    const directory = normalizeDirectory(rawDir);
+    if (!directory) {
+      return;
+    }
+    const matchingSessionKeys = [
+      ...this.state.sessions,
+      ...this.state.recentSessions,
+    ]
+      .filter((entry) => {
+        const sessionDir = normalizeDirectory(entry.rootDir || entry.cwd);
+        return (
+          sessionDir === directory ||
+          sessionDir?.startsWith(`${directory}/`) ||
+          sessionDir?.startsWith(`${directory}\\`)
+        );
+      })
+      .map((entry) => sessionKey(entry));
+
+    if (matchingSessionKeys.length === 0) {
+      return;
+    }
+
+    const hiddenSessionKeys = new Set([
+      ...this.state.hiddenSessionKeys,
+      ...matchingSessionKeys,
+    ]);
+
+    this.state = {
+      ...this.state,
+      hiddenSessionKeys: [...hiddenSessionKeys],
+      sessions: this.state.sessions.filter((entry) => !hiddenSessionKeys.has(sessionKey(entry))),
+      recentSessions: this.state.recentSessions.filter((entry) => !hiddenSessionKeys.has(sessionKey(entry))),
     };
     this.persistState();
   }
@@ -351,6 +431,7 @@ export class WorkbenchStateStore {
       ...(this.state.activeWorkspaceDir ? { activeWorkspaceDir: this.state.activeWorkspaceDir } : {}),
       workspaces: this.state.workspaces,
       hiddenWorkspaces: this.state.hiddenWorkspaces,
+      hiddenSessionKeys: this.state.hiddenSessionKeys,
       sessions: this.state.sessions,
       recentSessions: this.state.recentSessions,
     };

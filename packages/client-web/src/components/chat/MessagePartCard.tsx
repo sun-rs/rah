@@ -19,15 +19,15 @@ export function MessagePartCard(props: {
       <div className="space-y-2">
         <div className="flex items-center gap-2 text-[11px] font-medium text-[var(--app-hint)]">
           <Boxes size={13} className="text-[var(--app-hint)]" />
-          <span>{props.part.messageId}</span>
+          <span className="min-w-0 break-all">{props.part.messageId}</span>
         </div>
         {props.part.text ? (
-          <pre className="overflow-x-auto custom-scrollbar rounded-lg bg-[var(--app-code-bg)] px-3 py-2 text-xs text-[var(--app-fg)]">
+          <pre className="max-w-full overflow-x-auto custom-scrollbar rounded-lg bg-[var(--app-code-bg)] px-3 py-2 text-xs text-[var(--app-fg)]">
             <code>{props.part.text}</code>
           </pre>
         ) : null}
         {props.part.metadata ? (
-          <pre className="overflow-x-auto custom-scrollbar rounded-lg bg-[var(--app-code-bg)] px-3 py-2 text-xs text-[var(--app-fg)]">
+          <pre className="max-w-full overflow-x-auto custom-scrollbar rounded-lg bg-[var(--app-code-bg)] px-3 py-2 text-xs text-[var(--app-fg)]">
             <code>{JSON.stringify(props.part.metadata, null, 2)}</code>
           </pre>
         ) : null}

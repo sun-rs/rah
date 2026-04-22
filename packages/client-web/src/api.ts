@@ -23,6 +23,7 @@ import type {
   StartDebugScenarioRequest,
   StartSessionRequest,
   StartSessionResponse,
+  StoredSessionRemoveRequest,
   WorkspaceDirectoryResponse,
   WorkspaceDirectoryRequest,
   WorkbenchResponse,
@@ -127,6 +128,24 @@ export async function removeWorkspace(
   request: WorkspaceDirectoryRequest,
 ): Promise<ListSessionsResponse> {
   return requestJson<ListSessionsResponse>("/api/workspaces/remove", {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
+}
+
+export async function removeStoredSession(
+  request: StoredSessionRemoveRequest,
+): Promise<ListSessionsResponse> {
+  return requestJson<ListSessionsResponse>("/api/history/sessions/remove", {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
+}
+
+export async function removeStoredWorkspaceSessions(
+  request: WorkspaceDirectoryRequest,
+): Promise<ListSessionsResponse> {
+  return requestJson<ListSessionsResponse>("/api/history/workspaces/remove", {
     method: "POST",
     body: JSON.stringify(request),
   });
