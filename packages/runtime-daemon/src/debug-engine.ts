@@ -16,6 +16,7 @@ import type {
   ReleaseControlRequest,
   ResumeSessionRequest,
   ResumeSessionResponse,
+  SessionFileResponse,
   SessionInputRequest,
   SessionSummary,
   StartSessionRequest,
@@ -27,6 +28,7 @@ import { EventBus } from "./event-bus";
 import { PtyHub } from "./pty-hub";
 import { SessionStore } from "./session-store";
 import { DEBUG_SCENARIOS, type DebugScenario } from "./debug-scenarios";
+import { readWorkspaceFile } from "./codex-stored-sessions";
 
 type PendingTurn = {
   sessionId: string;
@@ -673,6 +675,34 @@ export class DebugEngine {
       sessionId,
       path,
       diff: `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@\n-console.log("before");\n+console.log("after");\n`,
+    };
+  }
+
+  readSessionFile(sessionId: string, path: string): SessionFileResponse {
+    const session = this.sessionStore.getSession(sessionId)?.session;
+    if (!session) {
+      throw new Error(`Unknown session ${sessionId}`);
+    }
+    const normalizedPath = path.replace(/\\/g, "/");
+    if (normalizedPath.endsWith("/README.md") || normalizedPath === "README.md") {
+      return {
+        sessionId,
+        path,
+        content: "# Debug workspace\n\nThis is a synthetic file preview for the debug adapter.\n",
+        binary: false,
+      };
+    }
+    if (normalizedPath.endsWith("/src/index.ts") || normalizedPath === "src/index.ts") {
+      return {
+        sessionId,
+        path,
+        content: 'console.log("after");\n',
+        binary: false,
+      };
+    }
+    return {
+      sessionId,
+      ...readWorkspaceFile(session.cwd, path),
     };
   }
 

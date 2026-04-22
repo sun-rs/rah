@@ -1,7 +1,6 @@
-import { useEffect, useRef, useState } from "react";
-import type { DebugScenarioDescriptor, SessionSummary } from "@rah/runtime-protocol";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { DebugScenarioDescriptor } from "@rah/runtime-protocol";
 import type { WorkspaceSection, WorkspaceSortMode } from "./session-browser";
-import { formatRelativeTime } from "./session-browser";
 import {
   Check,
   ChevronDown,
@@ -16,57 +15,10 @@ import {
   PlusCircle,
   X,
 } from "lucide-react";
-import { providerLabel } from "./types";
 import { ProviderLogo } from "./components/ProviderLogo";
 import { WorkspacePicker } from "./components/WorkspacePicker";
-
-type LiveSessionStatus = "ready" | "thinking" | "approval" | "unread";
-
-function sessionStatus(
-  summary: SessionSummary,
-  runtimeStatus: "thinking" | "streaming" | "retrying" | undefined,
-  unread: boolean,
-): LiveSessionStatus {
-  if (summary.session.runtimeState === "waiting_permission") {
-    return "approval";
-  }
-  if (runtimeStatus !== undefined || summary.session.runtimeState === "running") {
-    return "thinking";
-  }
-  if (unread) {
-    return "unread";
-  }
-  return "ready";
-}
-
-function sessionStatusBadge(status: LiveSessionStatus): { label: string; className: string } {
-  switch (status) {
-    case "approval":
-      return {
-        label: "approval",
-        className:
-          "border-orange-500/20 bg-orange-500/10 text-orange-700 dark:text-orange-400",
-      };
-    case "thinking":
-      return {
-        label: "thinking",
-        className:
-          "border-sky-500/20 bg-sky-500/10 text-sky-600 dark:text-sky-400",
-      };
-    case "unread":
-      return {
-        label: "unread",
-        className:
-          "border-amber-500/20 bg-amber-500/10 text-amber-700 dark:text-amber-400",
-      };
-    case "ready":
-      return {
-        label: "ready",
-        className:
-          "border-[var(--app-border)] bg-[var(--app-bg)]/60 text-[var(--app-hint)]",
-      };
-  }
-}
+import { SIDEBAR_LAYOUT } from "./sidebar-layout-contract";
+import { deriveSidebarWorkspaceViewModels, type SidebarWorkspaceViewModel } from "./sidebar-view-model";
 
 function WorkspaceSortMenu(props: {
   value: WorkspaceSortMode;
@@ -112,7 +64,7 @@ function WorkspaceSortMenu(props: {
     <div ref={menuRef} className="relative">
       <button
         type="button"
-        className="h-7 w-7 inline-flex items-center justify-center rounded-md text-[var(--app-hint)] hover:text-[var(--app-fg)] hover:bg-[var(--app-bg)] transition-colors"
+        className={SIDEBAR_LAYOUT.toolbarIconButtonClassName}
         aria-haspopup="menu"
         aria-expanded={open}
         title="Sort"
@@ -122,12 +74,12 @@ function WorkspaceSortMenu(props: {
       </button>
 
       {open ? (
-        <div className="absolute right-0 top-9 z-20 w-44 rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-1.5 shadow-lg">
+        <div className={SIDEBAR_LAYOUT.sortMenuClassName}>
           {sortOptions.map((option) => (
             <button
               key={option.value}
               type="button"
-              className="flex w-full items-center justify-between gap-3 rounded-lg px-2.5 py-1.5 text-left text-sm text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]"
+              className={SIDEBAR_LAYOUT.sortMenuItemClassName}
               onClick={() => {
                 props.onChange(option.value);
                 setOpen(false);
@@ -145,7 +97,7 @@ function WorkspaceSortMenu(props: {
           <div className="my-1 h-px bg-[var(--app-border)]" />
           <button
             type="button"
-            className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]"
+            className={SIDEBAR_LAYOUT.sortMenuActionClassName}
             onClick={() => {
               props.onExpandAll();
               setOpen(false);
@@ -156,7 +108,7 @@ function WorkspaceSortMenu(props: {
           </button>
           <button
             type="button"
-            className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]"
+            className={SIDEBAR_LAYOUT.sortMenuActionClassName}
             onClick={() => {
               props.onCollapseAll();
               setOpen(false);
@@ -172,71 +124,65 @@ function WorkspaceSortMenu(props: {
 }
 
 function LiveSessionRow(props: {
-  session: SessionSummary;
-  selected: boolean;
-  unread: boolean;
-  runtimeStatus: "thinking" | "streaming" | "retrying" | undefined;
-  pinned: boolean;
+  session: SidebarWorkspaceViewModel["sessions"][number];
   onTogglePin: () => void;
   onSelect: () => void;
 }) {
-  const session = props.session.session;
-  const status = sessionStatus(props.session, props.runtimeStatus, props.unread);
-  const statusBadge = sessionStatusBadge(status);
+  const statusBadgeClassName = SIDEBAR_LAYOUT.sessionStatusBadgeClassByStatus[props.session.status];
+  const rowClassName = `${SIDEBAR_LAYOUT.sessionRowBaseClassName} ${
+    props.session.selected
+      ? SIDEBAR_LAYOUT.sessionRowSelectedClassName
+      : SIDEBAR_LAYOUT.sessionRowIdleClassName
+  }`;
 
   return (
-    <button
-      type="button"
-      onClick={props.onSelect}
-      className={`group/session w-full text-left rounded-lg px-2 py-2 transition-colors ${
-        props.selected
-          ? "bg-[var(--app-bg)]/60 text-[var(--app-fg)]"
-          : "text-[var(--app-fg)] hover:bg-[var(--app-bg)]/30"
-      }`}
-    >
-      <div className="flex items-center gap-1.5 min-w-0">
-        <ProviderLogo provider={session.provider} className="h-5 w-5" />
-        <span className="text-sm truncate">
-          {session.title ?? providerLabel(session.provider)}
-        </span>
+    <div className={rowClassName}>
+      <div className="flex items-start gap-1.5">
         <button
           type="button"
-          onClick={(event) => {
-            event.stopPropagation();
-            props.onTogglePin();
-          }}
-          className={`ml-auto inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-[var(--app-hint)] transition-all ${
-            props.pinned
-              ? "opacity-100 text-[var(--app-fg)]"
-              : "opacity-0 group-hover/session:opacity-100 hover:text-[var(--app-fg)]"
-          }`}
-          title={props.pinned ? "取消置顶" : "置顶"}
+          onClick={props.onSelect}
+          className="min-w-0 flex-1 text-left"
         >
-          <Pin size={12} className={props.pinned ? "fill-current" : ""} />
+          <div className={SIDEBAR_LAYOUT.sessionHeaderClassName}>
+            <ProviderLogo provider={props.session.provider} className={SIDEBAR_LAYOUT.sessionIconClassName} />
+            <span className={SIDEBAR_LAYOUT.sessionTitleClassName}>
+              {props.session.title}
+            </span>
+          </div>
+          <div className={SIDEBAR_LAYOUT.sessionMetaRowClassName}>
+            <div className={SIDEBAR_LAYOUT.sessionMetaLeftClassName}>
+              <span
+                className={`${SIDEBAR_LAYOUT.sessionStatusBadgeBaseClassName} ${statusBadgeClassName}`}
+              >
+                {props.session.statusLabel}
+              </span>
+            </div>
+            <span className={SIDEBAR_LAYOUT.sessionTimeClassName}>
+              {props.session.updatedAtLabel}
+            </span>
+          </div>
         </button>
-      </div>
-      <div className="mt-1 flex items-center justify-between gap-2">
-        <div className="flex items-center gap-1.5 min-w-0">
-          <span
-            className={`inline-flex shrink-0 items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${statusBadge.className}`}
+        <span className={SIDEBAR_LAYOUT.sessionPinSlotClassName}>
+          <button
+            type="button"
+            onClick={props.onTogglePin}
+            className={`${SIDEBAR_LAYOUT.sessionPinButtonClassName} ${
+              props.session.pinned
+                ? SIDEBAR_LAYOUT.sessionPinActiveClassName
+                : SIDEBAR_LAYOUT.sessionPinHiddenClassName
+            }`}
+            title={props.session.pinned ? "取消置顶" : "置顶"}
           >
-            {statusBadge.label}
-          </span>
-        </div>
-        <span className="text-[11px] text-[var(--app-hint)] shrink-0">
-          {formatRelativeTime(session.updatedAt) ?? ""}
+            <Pin size={12} className={props.session.pinned ? "fill-current" : ""} />
+          </button>
         </span>
       </div>
-    </button>
+    </div>
   );
 }
 
 function WorkspaceRow(props: {
-  section: WorkspaceSection;
-  selectedSessionId: string | null;
-  unreadSessionIds: ReadonlySet<string>;
-  runtimeStatusBySessionId: ReadonlyMap<string, "thinking" | "streaming" | "retrying" | undefined>;
-  pinnedSessionId?: string;
+  workspace: SidebarWorkspaceViewModel;
   onRemoveWorkspace: () => void;
   onTogglePinSession: (sessionId: string) => void;
   onSelectSession: (sessionId: string) => void;
@@ -245,7 +191,7 @@ function WorkspaceRow(props: {
 }) {
   const [showRemove, setShowRemove] = useState(false);
   const [expanded, setExpanded] = useState(true);
-  const hasSessions = props.section.sessions.length > 0;
+  const hasSessions = props.workspace.sessions.length > 0;
   const toggleExpanded = () => setExpanded((v) => !v);
 
   useEffect(() => {
@@ -256,29 +202,21 @@ function WorkspaceRow(props: {
     return () => window.clearTimeout(timeoutId);
   }, [showRemove]);
 
-  const sortedSessions =
-    props.pinnedSessionId && props.section.sessions.some((session) => session.session.id === props.pinnedSessionId)
-      ? [
-          ...props.section.sessions.filter((session) => session.session.id === props.pinnedSessionId),
-          ...props.section.sessions.filter((session) => session.session.id !== props.pinnedSessionId),
-        ]
-      : props.section.sessions;
-
   useEffect(() => {
     setExpanded(props.expandAllValue);
   }, [props.expandAllKey]);
 
   return (
-    <div className="space-y-0.5">
+    <div className={SIDEBAR_LAYOUT.workspaceBlockClassName}>
       {/* Workspace header */}
-      <div className="group/workspace flex items-center gap-2 rounded-lg px-2.5 py-1.5 transition-colors hover:bg-[var(--app-bg)]/30">
+      <div className={SIDEBAR_LAYOUT.workspaceHeaderClassName}>
         <button
           type="button"
           onClick={(e) => {
             e.stopPropagation();
             toggleExpanded();
           }}
-          className="inline-flex h-5 w-5 items-center justify-center rounded text-[var(--app-hint)] hover:text-[var(--app-fg)] transition-colors shrink-0"
+          className={SIDEBAR_LAYOUT.workspaceToggleButtonClassName}
           title={expanded ? "Collapse" : "Expand"}
         >
           {expanded ? <FolderOpen size={14} /> : <Folder size={14} />}
@@ -286,22 +224,26 @@ function WorkspaceRow(props: {
         <button
           type="button"
           onClick={toggleExpanded}
-          className="text-sm text-[var(--app-fg)] truncate flex-1 text-left"
+          className={SIDEBAR_LAYOUT.workspaceTitleButtonClassName}
         >
-          {props.section.workspace.displayName}
+          {props.workspace.displayName}
         </button>
-        <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover/workspace:opacity-100 transition-opacity">
+        <div
+          className={`${SIDEBAR_LAYOUT.workspaceActionSlotClassName} ${
+            showRemove ? "opacity-100 pointer-events-auto" : SIDEBAR_LAYOUT.workspaceActionHiddenClassName
+          }`}
+        >
           {showRemove ? (
             <button
               type="button"
-              disabled={props.section.workspace.hasBlockingLiveSessions}
+              disabled={props.workspace.hasBlockingLiveSessions}
               onClick={(e) => {
                 e.stopPropagation();
                 props.onRemoveWorkspace();
               }}
-              className="inline-flex h-6 w-6 items-center justify-center rounded text-[var(--app-hint)] hover:bg-[var(--app-danger)]/10 hover:text-[var(--app-danger)] disabled:opacity-30 transition-colors"
+              className={`${SIDEBAR_LAYOUT.workspaceActionButtonClassName} ${SIDEBAR_LAYOUT.workspaceActionDangerClassName}`}
               title={
-                props.section.workspace.hasBlockingLiveSessions
+                props.workspace.hasBlockingLiveSessions
                   ? "Cannot remove a workspace with live sessions"
                   : "Remove workspace"
               }
@@ -311,7 +253,7 @@ function WorkspaceRow(props: {
           ) : (
             <button
               type="button"
-              className="inline-flex h-6 w-6 items-center justify-center rounded text-[var(--app-hint)] hover:text-[var(--app-fg)] transition-colors"
+              className={SIDEBAR_LAYOUT.workspaceActionButtonClassName}
               onClick={(e) => {
                 e.stopPropagation();
                 setShowRemove(true);
@@ -326,17 +268,13 @@ function WorkspaceRow(props: {
 
       {/* Sessions */}
       {hasSessions && expanded ? (
-        <div className="pl-4 pr-0.5 space-y-0.5">
-          {sortedSessions.map((session) => (
+        <div className={SIDEBAR_LAYOUT.sessionListClassName}>
+          {props.workspace.sessions.map((session) => (
             <LiveSessionRow
-              key={session.session.id}
+              key={session.id}
               session={session}
-              selected={session.session.id === props.selectedSessionId}
-              unread={props.unreadSessionIds.has(session.session.id)}
-              runtimeStatus={props.runtimeStatusBySessionId.get(session.session.id)}
-              pinned={props.pinnedSessionId === session.session.id}
-              onTogglePin={() => props.onTogglePinSession(session.session.id)}
-              onSelect={() => props.onSelectSession(session.session.id)}
+              onTogglePin={() => props.onTogglePinSession(session.id)}
+              onSelect={() => props.onSelectSession(session.id)}
             />
           ))}
         </div>
@@ -362,6 +300,23 @@ export function SessionSidebar(props: {
 }) {
   const [expandAllKey, setExpandAllKey] = useState(0);
   const [expandAllValue, setExpandAllValue] = useState(true);
+  const workspaceViewModels = useMemo(
+    () =>
+      deriveSidebarWorkspaceViewModels({
+        workspaceSections: props.workspaceSections,
+        selectedSessionId: props.selectedSessionId,
+        unreadSessionIds: props.unreadSessionIds,
+        runtimeStatusBySessionId: props.runtimeStatusBySessionId,
+        pinnedSessionIdByWorkspace: props.pinnedSessionIdByWorkspace,
+      }),
+    [
+      props.pinnedSessionIdByWorkspace,
+      props.runtimeStatusBySessionId,
+      props.selectedSessionId,
+      props.unreadSessionIds,
+      props.workspaceSections,
+    ],
+  );
 
   const expandAll = () => {
     setExpandAllValue(true);
@@ -374,11 +329,11 @@ export function SessionSidebar(props: {
   };
 
   return (
-    <div className="space-y-3">
+    <div className={SIDEBAR_LAYOUT.rootClassName}>
       {/* Toolbar */}
-      <div className="flex items-center justify-between px-1">
-        <span className="text-xs font-medium text-[var(--app-hint)]">Workspaces</span>
-        <div className="flex items-center gap-0.5">
+      <div className={SIDEBAR_LAYOUT.toolbarClassName}>
+        <span className={SIDEBAR_LAYOUT.toolbarLabelClassName}>Workspaces</span>
+        <div className={SIDEBAR_LAYOUT.toolbarActionsClassName}>
           <WorkspaceSortMenu
             value={props.workspaceSortMode}
             onChange={props.onWorkspaceSortModeChange}
@@ -389,27 +344,21 @@ export function SessionSidebar(props: {
             currentDir=""
             triggerLabel=""
             triggerIcon={<FolderPlus size={14} />}
-            triggerClassName="h-7 w-7 rounded-md text-[var(--app-hint)] hover:text-[var(--app-fg)] hover:bg-[var(--app-bg)] transition-colors inline-flex items-center justify-center"
+            triggerClassName={SIDEBAR_LAYOUT.toolbarIconButtonClassName}
             onSelect={props.onAddWorkspace}
           />
         </div>
       </div>
 
       {/* Workspace list */}
-      <div className="space-y-1">
-        {props.workspaceSections.map((section) => (
+      <div className={SIDEBAR_LAYOUT.workspaceListClassName}>
+        {workspaceViewModels.map((workspace) => (
           <WorkspaceRow
-            key={section.workspace.directory}
-            section={section}
-            selectedSessionId={props.selectedSessionId}
-            unreadSessionIds={props.unreadSessionIds}
-            runtimeStatusBySessionId={props.runtimeStatusBySessionId}
-            {...(props.pinnedSessionIdByWorkspace[section.workspace.directory]
-              ? { pinnedSessionId: props.pinnedSessionIdByWorkspace[section.workspace.directory] }
-              : {})}
-            onRemoveWorkspace={() => props.onRemoveWorkspace(section.workspace.directory)}
+            key={workspace.directory}
+            workspace={workspace}
+            onRemoveWorkspace={() => props.onRemoveWorkspace(workspace.directory)}
             onTogglePinSession={(sessionId) =>
-              props.onTogglePinSession(section.workspace.directory, sessionId)
+              props.onTogglePinSession(workspace.directory, sessionId)
             }
             onSelectSession={props.onSelectSession}
             expandAllKey={expandAllKey}
@@ -420,22 +369,22 @@ export function SessionSidebar(props: {
 
       {/* Debug scenarios */}
       {props.debugScenarios.length > 0 ? (
-        <div className="space-y-2">
-          <div className="px-1">
-            <span className="text-xs font-medium text-[var(--app-hint)]">Lab</span>
+        <div className={SIDEBAR_LAYOUT.labSectionClassName}>
+          <div className={SIDEBAR_LAYOUT.labHeaderClassName}>
+            <span className={SIDEBAR_LAYOUT.labHeaderLabelClassName}>Lab</span>
           </div>
-          <div className="space-y-0.5">
+          <div className={SIDEBAR_LAYOUT.labListClassName}>
             {props.debugScenarios.map((scenario) => (
               <button
                 key={scenario.id}
                 type="button"
                 onClick={() => props.onStartScenario(scenario)}
-                className="w-full text-left rounded-lg px-3 py-2 transition-colors hover:bg-[var(--app-bg)]/60"
+                className={SIDEBAR_LAYOUT.labButtonClassName}
               >
-                <span className="text-sm font-medium truncate text-[var(--app-fg)]">
+                <span className={SIDEBAR_LAYOUT.labTitleClassName}>
                   {scenario.label}
                 </span>
-                <div className="mt-0.5 text-[11px] text-[var(--app-hint)] line-clamp-2">
+                <div className={SIDEBAR_LAYOUT.labDescriptionClassName}>
                   {scenario.description}
                 </div>
               </button>

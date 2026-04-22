@@ -45,6 +45,7 @@ export interface ResumeSessionRequest {
   cwd?: string;
   preferStoredReplay?: boolean;
   historyReplay?: "include" | "skip";
+  historySourceSessionId?: string;
   attach?: {
     client: AttachClientDescriptor;
     mode: AttachMode;
@@ -125,6 +126,7 @@ export interface ListSessionsResponse {
   storedSessions: StoredSessionRef[];
   recentSessions: StoredSessionRef[];
   workspaceDirs: string[];
+  hiddenWorkspaces?: string[];
   activeWorkspaceDir?: string;
 }
 
@@ -168,9 +170,18 @@ export interface GitDiffResponse {
   diff: string;
 }
 
+export interface SessionFileResponse {
+  sessionId: string;
+  path: string;
+  content: string;
+  binary: boolean;
+  truncated?: boolean;
+}
+
 export interface SessionHistoryPageResponse {
   sessionId: string;
   events: RahEvent[];
+  nextCursor?: string;
   nextBeforeTs?: string;
 }
 
@@ -196,7 +207,11 @@ export interface ProviderDiagnostic {
   provider: ProviderKind;
   status: "ready" | "missing_binary" | "launch_error";
   launchCommand: string;
-  version?: string;
+  installedVersion?: string;
+  latestVersion?: string;
+  latestVersionSource?: "npm" | "github" | "cdn";
+  latestVersionError?: string;
+  versionStatus?: "up_to_date" | "update_available" | "unknown";
   detail?: string;
   auth: "provider_managed";
 }

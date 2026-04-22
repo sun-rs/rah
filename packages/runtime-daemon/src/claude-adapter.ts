@@ -7,6 +7,7 @@ import type {
   PermissionResponseRequest,
   ResumeSessionRequest,
   ResumeSessionResponse,
+  SessionFileResponse,
   SessionHistoryPageResponse,
   SessionInputRequest,
   SessionSummary,
@@ -38,8 +39,8 @@ import {
   finalizeStoredReplayResume,
   prepareProviderSessionResume,
 } from "./provider-resume";
-import { claudeLaunchSpec, probeProviderVersion } from "./provider-diagnostics";
-import { getCodexGitDiff, getCodexGitStatus, getCodexWorkspaceSnapshot } from "./codex-stored-sessions";
+import { claudeLaunchSpec, probeProviderDiagnostic } from "./provider-diagnostics";
+import { getCodexGitDiff, getCodexGitStatus, getCodexWorkspaceSnapshot, readWorkspaceFile } from "./codex-stored-sessions";
 import { toSessionSummary } from "./session-store";
 import { movePathToTrash } from "./trash";
 
@@ -270,9 +271,20 @@ export class ClaudeAdapter implements ProviderAdapter {
     };
   }
 
+  readSessionFile(sessionId: string, targetPath: string): SessionFileResponse {
+    const state = this.services.sessionStore.getSession(sessionId);
+    if (!state) {
+      throw new Error(`Unknown session ${sessionId}`);
+    }
+    return {
+      sessionId,
+      ...readWorkspaceFile(state.session.cwd, targetPath),
+    };
+  }
+
   getSessionHistoryPage(
     sessionId: string,
-    options?: { beforeTs?: string; limit?: number },
+    options?: { beforeTs?: string; cursor?: string; limit?: number },
   ): SessionHistoryPageResponse {
     const state = this.services.sessionStore.getSession(sessionId);
     if (!state?.session.providerSessionId) {
@@ -312,8 +324,8 @@ export class ClaudeAdapter implements ProviderAdapter {
     this.storedSessionIndex.delete(session.providerSessionId);
   }
 
-  getProviderDiagnostic() {
-    return probeProviderVersion("claude", claudeLaunchSpec());
+  getProviderDiagnostic(options?: { forceRefresh?: boolean }) {
+    return probeProviderDiagnostic("claude", claudeLaunchSpec(), options);
   }
 
   private refreshStoredSessions(): Map<string, ClaudeStoredSessionRecord> {

@@ -68,6 +68,19 @@ describe("WorkbenchStateStore", () => {
     await second.shutdown();
   });
 
+  test("listSessions exposes hidden workspaces from persisted workbench state", async () => {
+    const engine = new RuntimeEngine();
+    engine.addWorkspace("/workspace/demo");
+    engine.addWorkspace("/workspace/extra");
+
+    const afterRemoval = engine.removeWorkspace("/workspace/demo");
+
+    assert.deepEqual(afterRemoval.workspaceDirs, ["/workspace/extra"]);
+    assert.deepEqual(afterRemoval.hiddenWorkspaces, ["/workspace/demo"]);
+
+    await engine.shutdown();
+  });
+
   test("cannot remove a workspace with active live sessions", async () => {
     const engine = new RuntimeEngine();
     engine.addWorkspace("/workspace/demo");

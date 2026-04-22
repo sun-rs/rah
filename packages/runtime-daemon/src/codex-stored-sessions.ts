@@ -18,10 +18,18 @@ import {
   translateCodexRolloutLine,
 } from "./codex-rollout-activity";
 import { SessionStore } from "./session-store";
+import { readLeadingLines } from "./file-snippets";
+import {
+  getCachedStoredSessionRef,
+  loadStoredSessionMetadataCache,
+  setCachedStoredSessionRef,
+  writeStoredSessionMetadataCache,
+} from "./stored-session-metadata-cache";
 
 const MAX_SEARCH_DEPTH = 4;
 const MAX_HEAD_LINES = 64;
 const MAX_ROLLOUT_FILES = 400;
+const MAX_READABLE_FILE_BYTES = 1_000_000;
 const REHYDRATED_CAPABILITIES = {
   livePermissions: false,
   steerInput: false,
@@ -51,13 +59,7 @@ function resolveCodexSearchRoots(): string[] {
 }
 
 function readHeadLines(filePath: string, maxBytes = 64 * 1024): string[] {
-  const content = readFileSync(filePath, "utf8");
-  return content
-    .slice(0, maxBytes)
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .slice(0, MAX_HEAD_LINES);
+  return readLeadingLines(filePath, { maxBytes, maxLines: MAX_HEAD_LINES });
 }
 
 function truncateText(value: string, maxLength = 120): string {
@@ -203,16 +205,54 @@ function parseStoredSessionRecord(filePath: string): CodexStoredSessionRecord | 
 }
 
 export function discoverCodexStoredSessions(): CodexStoredSessionRecord[] {
+  const cache = loadStoredSessionMetadataCache("codex");
   const records = new Map<string, CodexStoredSessionRecord>();
   for (const root of resolveCodexSearchRoots()) {
     for (const file of listRolloutFiles(root)) {
+      const stats = statSync(file);
+      const cachedRef = getCachedStoredSessionRef({
+        cache,
+        filePath: file,
+        size: stats.size,
+        mtimeMs: stats.mtimeMs,
+      });
+      if (cachedRef) {
+        records.set(cachedRef.providerSessionId, {
+          ref: cachedRef,
+          rolloutPath: file,
+        });
+        continue;
+      }
       const parsed = parseStoredSessionRecord(file);
       if (!parsed) {
         continue;
       }
+      setCachedStoredSessionRef({
+        cache,
+        filePath: file,
+        size: stats.size,
+        mtimeMs: stats.mtimeMs,
+        ref: parsed.ref,
+      });
       records.set(parsed.ref.providerSessionId, parsed);
     }
   }
+  writeStoredSessionMetadataCache(
+    "codex",
+    new Map(
+      [...records.values()].map((record) => {
+        const stats = statSync(record.rolloutPath);
+        return [
+          record.rolloutPath,
+          {
+            ref: record.ref,
+            size: stats.size,
+            mtimeMs: stats.mtimeMs,
+          },
+        ] as const;
+      }),
+    ),
+  );
   return [...records.values()].sort((a, b) =>
     (b.ref.updatedAt ?? "").localeCompare(a.ref.updatedAt ?? ""),
   );
@@ -238,6 +278,41 @@ function tryReadGitStatus(cwd: string): { branch?: string; changedFiles: string[
   } catch {
     return { changedFiles: [] };
   }
+}
+
+function resolveWorkspacePath(cwd: string, targetPath: string): string {
+  const resolvedWorkspace = path.resolve(cwd);
+  const resolvedTarget = path.resolve(resolvedWorkspace, targetPath);
+  const relativePath = path.relative(resolvedWorkspace, resolvedTarget);
+  if (
+    relativePath.startsWith("..") ||
+    path.isAbsolute(relativePath)
+  ) {
+    throw new Error("Path must remain inside the workspace.");
+  }
+  return resolvedTarget;
+}
+
+function toGitPath(cwd: string, targetPath: string): string {
+  const resolvedTarget = resolveWorkspacePath(cwd, targetPath);
+  const relativePath = path.relative(cwd, resolvedTarget);
+  return relativePath || path.basename(resolvedTarget);
+}
+
+function isLikelyBinary(buffer: Buffer): boolean {
+  if (buffer.length === 0) {
+    return false;
+  }
+  let nonPrintableCount = 0;
+  for (const byte of buffer) {
+    if (byte === 0) {
+      return true;
+    }
+    if (byte < 32 && byte !== 9 && byte !== 10 && byte !== 13) {
+      nonPrintableCount += 1;
+    }
+  }
+  return nonPrintableCount / buffer.length > 0.1;
 }
 
 function readWorkspaceNodes(cwd: string) {
@@ -473,10 +548,30 @@ export function getCodexGitDiff(cwd: string, targetPath: string): string {
   try {
     return execFileSync(
       "git",
-      ["-C", cwd, "diff", "--", targetPath],
+      ["-C", cwd, "diff", "--", toGitPath(cwd, targetPath)],
       { encoding: "utf8" },
     );
   } catch {
     return "";
   }
+}
+
+export function readWorkspaceFile(cwd: string, targetPath: string) {
+  const resolvedPath = resolveWorkspacePath(cwd, targetPath);
+  const stats = statSync(resolvedPath);
+  if (!stats.isFile()) {
+    throw new Error("Path is not a file.");
+  }
+  const buffer = readFileSync(resolvedPath);
+  const truncated = buffer.byteLength > MAX_READABLE_FILE_BYTES;
+  const contentBuffer = truncated
+    ? buffer.subarray(0, MAX_READABLE_FILE_BYTES)
+    : buffer;
+  const binary = isLikelyBinary(contentBuffer);
+  return {
+    path: resolvedPath,
+    content: binary ? "" : contentBuffer.toString("utf8"),
+    binary,
+    ...(truncated ? { truncated: true } : {}),
+  };
 }

@@ -14,6 +14,12 @@ import { EventBus } from "./event-bus";
 import { PtyHub } from "./pty-hub";
 import { applyProviderActivity, type ProviderActivity } from "./provider-activity";
 import { SessionStore } from "./session-store";
+import {
+  getCachedStoredSessionRef,
+  loadStoredSessionMetadataCache,
+  setCachedStoredSessionRef,
+  writeStoredSessionMetadataCache,
+} from "./stored-session-metadata-cache";
 
 const REHYDRATED_CAPABILITIES = {
   livePermissions: false,
@@ -296,20 +302,66 @@ function buildStoredSessionRef(
 }
 
 export function discoverGeminiStoredSessions(): GeminiStoredSessionRecord[] {
+  const cache = loadStoredSessionMetadataCache("gemini");
   const records = new Map<string, GeminiStoredSessionRecord>();
   for (const chatsDir of scanGeminiChatsDirs()) {
     for (const filePath of listGeminiSessionFiles(chatsDir)) {
+      const stats = statSync(filePath);
+      const cachedRef = getCachedStoredSessionRef({
+        cache,
+        filePath,
+        size: stats.size,
+        mtimeMs: stats.mtimeMs,
+      });
+      if (cachedRef) {
+        records.set(cachedRef.providerSessionId, {
+          ref: cachedRef,
+          filePath,
+          conversation: {
+            sessionId: cachedRef.providerSessionId,
+            projectHash: "",
+            startTime: cachedRef.updatedAt ?? new Date(stats.mtimeMs).toISOString(),
+            lastUpdated: cachedRef.updatedAt ?? new Date(stats.mtimeMs).toISOString(),
+            messages: [],
+          },
+        });
+        continue;
+      }
       const conversation = loadGeminiConversationRecord(filePath);
       if (!conversation || conversation.kind === "subagent") {
         continue;
       }
+      const ref = buildStoredSessionRef(conversation, filePath);
+      setCachedStoredSessionRef({
+        cache,
+        filePath,
+        size: stats.size,
+        mtimeMs: stats.mtimeMs,
+        ref,
+      });
       records.set(conversation.sessionId, {
-        ref: buildStoredSessionRef(conversation, filePath),
+        ref,
         filePath,
         conversation,
       });
     }
   }
+  writeStoredSessionMetadataCache(
+    "gemini",
+    new Map(
+      [...records.values()].map((record) => {
+        const stats = statSync(record.filePath);
+        return [
+          record.filePath,
+          {
+            ref: record.ref,
+            size: stats.size,
+            mtimeMs: stats.mtimeMs,
+          },
+        ] as const;
+      }),
+    ),
+  );
   return [...records.values()].sort((a, b) =>
     (b.ref.updatedAt ?? "").localeCompare(a.ref.updatedAt ?? ""),
   );

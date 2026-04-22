@@ -17,6 +17,7 @@ import type {
   PermissionResponseRequest,
   ResumeSessionRequest,
   ResumeSessionResponse,
+  SessionFileResponse,
   SessionInputRequest,
   SessionHistoryPageResponse,
   SessionSummary,
@@ -176,8 +177,9 @@ export async function listDebugScenarios(): Promise<DebugScenarioDescriptor[]> {
   return response.scenarios;
 }
 
-export async function listProviders(): Promise<ProviderDiagnostic[]> {
-  const response = await requestJson<ListProvidersResponse>("/api/providers");
+export async function listProviders(options?: { forceRefresh?: boolean }): Promise<ProviderDiagnostic[]> {
+  const search = options?.forceRefresh ? "?refresh=1" : "";
+  const response = await requestJson<ListProvidersResponse>(`/api/providers${search}`);
   return response.providers;
 }
 
@@ -332,13 +334,26 @@ export async function readGitDiff(
   );
 }
 
+export async function readSessionFile(
+  sessionId: string,
+  path: string,
+): Promise<SessionFileResponse> {
+  const query = new URLSearchParams({ path });
+  return requestJson<SessionFileResponse>(
+    `/api/sessions/${sessionId}/file?${query.toString()}`,
+  );
+}
+
 export async function readSessionHistory(
   sessionId: string,
-  options?: { beforeTs?: string; limit?: number },
+  options?: { beforeTs?: string; cursor?: string; limit?: number },
 ): Promise<SessionHistoryPageResponse> {
   const query = new URLSearchParams();
   if (options?.beforeTs) {
     query.set("beforeTs", options.beforeTs);
+  }
+  if (options?.cursor) {
+    query.set("cursor", options.cursor);
   }
   if (options?.limit !== undefined) {
     query.set("limit", String(options.limit));

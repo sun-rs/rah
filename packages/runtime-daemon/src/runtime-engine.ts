@@ -30,8 +30,12 @@ import { CodexAdapter } from "./codex-adapter";
 import { DebugAdapter } from "./debug-adapter";
 import { EventBus } from "./event-bus";
 import { GeminiAdapter } from "./gemini-adapter";
+import { HistorySnapshotStore } from "./history-snapshots";
 import { KimiAdapter } from "./kimi-adapter";
-import { claudeLaunchSpec, probeProviderVersion } from "./provider-diagnostics";
+import {
+  launchSpecForProvider,
+  probeProviderDiagnostic,
+} from "./provider-diagnostics";
 import type { ProviderAdapter } from "./provider-adapter";
 import { PtyHub } from "./pty-hub";
 import { SessionStore, toSessionSummary, type StoredSessionState } from "./session-store";
@@ -125,9 +129,11 @@ export class RuntimeEngine {
   readonly ptyHub: PtyHub;
   readonly sessionStore: SessionStore;
   readonly workbenchState: WorkbenchStateStore;
+  readonly historySnapshots: HistorySnapshotStore;
   private rememberedSessions: StoredSessionRef[];
   private rememberedRecentSessions: StoredSessionRef[];
   private rememberedWorkspaceDirs: string[];
+  private rememberedHiddenWorkspaces: string[];
   private rememberedActiveWorkspaceDir: string | undefined;
   private rememberedHiddenSessionKeys: string[];
   private lastDiscoveredStoredSessions: StoredSessionRef[] = [];
@@ -140,6 +146,7 @@ export class RuntimeEngine {
     this.workbenchState = new WorkbenchStateStore();
     this.eventBus = new EventBus();
     this.ptyHub = new PtyHub();
+    this.historySnapshots = new HistorySnapshotStore();
     this.sessionStore = new SessionStore({
       onSnapshot: (states) => {
         this.workbenchState.persistLiveSessions(states);
@@ -149,6 +156,7 @@ export class RuntimeEngine {
     this.rememberedSessions = restored.sessions;
     this.rememberedRecentSessions = restored.recentSessions;
     this.rememberedWorkspaceDirs = restored.workspaces;
+    this.rememberedHiddenWorkspaces = restored.hiddenWorkspaces;
     this.rememberedActiveWorkspaceDir = restored.activeWorkspaceDir;
     this.rememberedHiddenSessionKeys = restored.hiddenSessionKeys;
 
@@ -194,24 +202,26 @@ export class RuntimeEngine {
     return this.buildSessionsResponse(liveStates, this.lastDiscoveredStoredSessions);
   }
 
-  async listProviderDiagnostics(): Promise<ProviderDiagnostic[]> {
+  async listProviderDiagnostics(options?: { forceRefresh?: boolean }): Promise<ProviderDiagnostic[]> {
     const providers: ProviderKind[] = ["codex", "claude", "kimi", "gemini", "opencode"];
     return Promise.all(
       providers.map(async (provider) => {
         const adapter = this.adaptersByProvider.get(provider);
-        if (!adapter?.getProviderDiagnostic) {
-          if (provider === "claude") {
-            return await probeProviderVersion("claude", claudeLaunchSpec());
-          }
-          return {
-            provider,
-            status: "launch_error" as const,
-            launchCommand: "",
-            detail: "Provider adapter is not implemented yet in this runtime.",
-            auth: "provider_managed" as const,
-          };
+        if (adapter?.getProviderDiagnostic) {
+          return await adapter.getProviderDiagnostic(options);
         }
-        return await adapter.getProviderDiagnostic();
+        const launchSpec = launchSpecForProvider(provider);
+        if (launchSpec) {
+          return await probeProviderDiagnostic(provider, launchSpec, options);
+        }
+        return {
+          provider,
+          status: "launch_error" as const,
+          launchCommand: "",
+          detail: "Provider adapter is not implemented yet in this runtime.",
+          auth: "provider_managed" as const,
+          versionStatus: "unknown" as const,
+        };
       }),
     );
   }
@@ -312,6 +322,15 @@ export class RuntimeEngine {
     const adapter = this.requireAdapterForProvider(request.provider);
     const response = await adapter.resumeSession(request);
     this.rememberSessionOwner(response.session.session.id, adapter);
+    if (
+      request.historySourceSessionId &&
+      request.historySourceSessionId !== response.session.session.id
+    ) {
+      this.historySnapshots.transfer(
+        request.historySourceSessionId,
+        response.session.session.id,
+      );
+    }
     return response;
   }
 
@@ -402,6 +421,7 @@ export class RuntimeEngine {
     await adapter.closeSession?.(sessionId, request);
     this.sessionStore.removeSession(sessionId);
     this.ptyHub.removeSession(sessionId);
+    this.historySnapshots.clear(sessionId);
     this.sessionOwners.delete(sessionId);
     this.eventBus.publish({
       sessionId,
@@ -458,12 +478,30 @@ export class RuntimeEngine {
     return this.requireSessionAdapter(sessionId).getGitDiff(sessionId, path);
   }
 
+  readSessionFile(sessionId: string, path: string) {
+    return this.requireSessionAdapter(sessionId).readSessionFile(sessionId, path);
+  }
+
   getSessionHistoryPage(
     sessionId: string,
-    options?: { beforeTs?: string; limit?: number },
+    options?: { beforeTs?: string; cursor?: string; limit?: number },
   ): SessionHistoryPageResponse {
     const adapter = this.requireSessionAdapter(sessionId);
-    return adapter.getSessionHistoryPage?.(sessionId, options) ?? { sessionId, events: [] };
+    if (!adapter.getSessionHistoryPage) {
+      return { sessionId, events: [] };
+    }
+    return this.historySnapshots.getPage({
+      sessionId,
+      ...(options?.cursor ? { cursor: options.cursor } : {}),
+      ...(options?.limit ? { limit: options.limit } : {}),
+      loadEvents: () =>
+        adapter.getSessionHistoryPage!(
+          sessionId,
+          options?.beforeTs
+            ? { beforeTs: options.beforeTs, limit: Number.MAX_SAFE_INTEGER }
+            : { limit: Number.MAX_SAFE_INTEGER },
+        ).events,
+    });
   }
 
   getContextUsage(sessionId: string) {
@@ -597,6 +635,7 @@ export class RuntimeEngine {
         (session) => !hiddenSessionKeys.has(`${session.provider}:${session.providerSessionId}`),
       ),
       workspaceDirs: workspaceDirsFromState(this.rememberedWorkspaceDirs, liveStates),
+      hiddenWorkspaces: [...this.rememberedHiddenWorkspaces],
       ...(this.rememberedActiveWorkspaceDir
         ? { activeWorkspaceDir: this.rememberedActiveWorkspaceDir }
         : {}),
@@ -608,6 +647,7 @@ export class RuntimeEngine {
     this.rememberedSessions = refreshed.sessions;
     this.rememberedRecentSessions = refreshed.recentSessions;
     this.rememberedWorkspaceDirs = refreshed.workspaces;
+    this.rememberedHiddenWorkspaces = refreshed.hiddenWorkspaces;
     this.rememberedActiveWorkspaceDir = refreshed.activeWorkspaceDir;
     this.rememberedHiddenSessionKeys = refreshed.hiddenSessionKeys;
   }

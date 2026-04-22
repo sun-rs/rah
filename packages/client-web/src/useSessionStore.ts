@@ -10,9 +10,18 @@ import type {
   StoredSessionRef,
 } from "@rah/runtime-protocol";
 import * as api from "./api";
-import { clearLastHistorySelection, readLastHistorySelection } from "./history-selection";
+import {
+  clearLastHistorySelection,
+  readLastHistorySelection,
+  writeLastHistorySelection,
+} from "./history-selection";
 import { isLabModeEnabled } from "./lab-mode";
-import { matchesWorkspace } from "./session-browser";
+import {
+  createPendingScenarioTransition,
+  createPendingStartTransition,
+  createPendingStoredSessionTransition,
+  type PendingSessionTransition,
+} from "./session-transition-contract";
 import { canSessionSendInput, isReadOnlyReplay } from "./session-capabilities";
 import {
   appendOptimisticUserMessage,
@@ -33,12 +42,7 @@ interface StartSessionOptions {
   model?: string;
   approvalPolicy?: string;
   sandbox?: string;
-}
-
-interface LaunchStatus {
-  provider: ProviderChoice;
-  cwd: string;
-  title?: string;
+  initialInput?: string;
 }
 
 interface SessionState {
@@ -48,11 +52,19 @@ interface SessionState {
   storedSessions: StoredSessionRef[];
   recentSessions: StoredSessionRef[];
   workspaceDirs: string[];
+  hiddenWorkspaceDirs: Set<string>;
+  workspaceVisibilityVersion: number;
   debugScenarios: DebugScenarioDescriptor[];
   selectedSessionId: string | null;
   workspaceDir: string;
   newSessionProvider: ProviderChoice;
-  launchStatus: LaunchStatus | null;
+  pendingSessionTransition: PendingSessionTransition | null;
+  pendingSessionAction:
+    | {
+        kind: "attach_session" | "claim_control" | "claim_history";
+        sessionId: string;
+      }
+    | null;
   isInitialLoaded: boolean;
   error: string | null;
 
@@ -66,6 +78,7 @@ interface SessionState {
   setNewSessionProvider: (provider: ProviderChoice) => void;
   startSession: (options?: StartSessionOptions) => Promise<void>;
   startScenario: (scenario: DebugScenarioDescriptor) => Promise<void>;
+  activateHistorySession: (ref: StoredSessionRef) => Promise<void>;
   resumeStoredSession: (
     ref: StoredSessionRef,
     options?: { preferStoredReplay?: boolean; historyReplay?: "include" | "skip" },
@@ -97,7 +110,6 @@ const MAX_PENDING_EVENTS_PER_SESSION = 200;
 const MAX_DEFERRED_BOOTSTRAP_EVENTS_PER_SESSION = 500;
 let pendingEventsBySession = new Map<string, RahEvent[]>();
 let deferredBootstrapEventsBySession = new Map<string, RahEvent[]>();
-let hiddenWorkspaceDirs = new Set<string>();
 
 function normalizeWorkspaceDirectory(value: string | undefined): string | null {
   if (!value) {
@@ -120,50 +132,90 @@ function sameWorkspaceDirectory(a: string | undefined, b: string | undefined): b
   return left !== null && right !== null && left === right;
 }
 
-function isHiddenWorkspace(dir: string | undefined): boolean {
+function isHiddenWorkspace(hiddenWorkspaceDirs: ReadonlySet<string>, dir: string | undefined): boolean {
   const normalized = normalizeWorkspaceDirectory(dir);
   return normalized !== null && hiddenWorkspaceDirs.has(normalized);
 }
 
-function hideWorkspace(dir: string): void {
+function hideWorkspace(
+  hiddenWorkspaceDirs: ReadonlySet<string>,
+  dir: string,
+): Set<string> {
   const normalized = normalizeWorkspaceDirectory(dir);
   if (!normalized) {
-    return;
+    return new Set(hiddenWorkspaceDirs);
   }
-  hiddenWorkspaceDirs.add(normalized);
+  const next = new Set(hiddenWorkspaceDirs);
+  next.add(normalized);
+  return next;
 }
 
-function revealWorkspace(dir: string | undefined): void {
+function revealWorkspace(
+  hiddenWorkspaceDirs: ReadonlySet<string>,
+  dir: string | undefined,
+): Set<string> {
   const normalized = normalizeWorkspaceDirectory(dir);
   if (!normalized) {
-    return;
+    return new Set(hiddenWorkspaceDirs);
   }
-  hiddenWorkspaceDirs.delete(normalized);
+  const next = new Set(hiddenWorkspaceDirs);
+  next.delete(normalized);
+  return next;
 }
 
-function revealWorkspaceCandidates(...dirs: Array<string | undefined>): void {
+function revealWorkspaceCandidates(
+  hiddenWorkspaceDirs: ReadonlySet<string>,
+  ...dirs: Array<string | undefined>
+): Set<string> {
+  let next = new Set(hiddenWorkspaceDirs);
   for (const dir of dirs) {
-    revealWorkspace(dir);
+    next = revealWorkspace(next, dir);
   }
+  return next;
 }
 
-function filterHiddenWorkspaceDirs(workspaceDirs: readonly string[]): string[] {
-  return workspaceDirs.filter((dir) => !isHiddenWorkspace(dir));
+function filterHiddenWorkspaceDirs(
+  hiddenWorkspaceDirs: ReadonlySet<string>,
+  workspaceDirs: readonly string[],
+): string[] {
+  return workspaceDirs.filter((dir) => !isHiddenWorkspace(hiddenWorkspaceDirs, dir));
 }
 
 function appendVisibleWorkspaceDir(
+  hiddenWorkspaceDirs: ReadonlySet<string>,
   workspaceDirs: readonly string[],
   dir: string | undefined,
 ): string[] {
-  const visibleWorkspaceDirs = filterHiddenWorkspaceDirs(workspaceDirs);
+  const visibleWorkspaceDirs = filterHiddenWorkspaceDirs(hiddenWorkspaceDirs, workspaceDirs);
   const normalized = normalizeWorkspaceDirectory(dir);
-  if (!normalized || isHiddenWorkspace(normalized)) {
+  if (!normalized || isHiddenWorkspace(hiddenWorkspaceDirs, normalized)) {
     return visibleWorkspaceDirs;
   }
   if (visibleWorkspaceDirs.some((workspaceDir) => sameWorkspaceDirectory(workspaceDir, normalized))) {
     return visibleWorkspaceDirs;
   }
   return [...visibleWorkspaceDirs, normalized];
+}
+
+function normalizeHiddenWorkspaceDirs(hiddenWorkspaces: readonly string[] | undefined): Set<string> {
+  return new Set(
+    (hiddenWorkspaces ?? []).map((dir) => normalizeWorkspaceDirectory(dir)).filter(
+      (dir): dir is string => dir !== null,
+    ),
+  );
+}
+
+export function resolveHiddenWorkspaceDirsFromSessionsResponse(args: {
+  currentHiddenWorkspaceDirs: ReadonlySet<string>;
+  currentWorkspaceVisibilityVersion: number;
+  workspaceVisibilityVersionAtRequest: number;
+  hiddenWorkspaces: readonly string[] | undefined;
+}): Set<string> {
+  const serverHiddenWorkspaceDirs = normalizeHiddenWorkspaceDirs(args.hiddenWorkspaces);
+  if (args.currentWorkspaceVisibilityVersion > args.workspaceVisibilityVersionAtRequest) {
+    return new Set(args.currentHiddenWorkspaceDirs);
+  }
+  return serverHiddenWorkspaceDirs;
 }
 
 export function reconcileVisibleWorkspaceSelection(args: {
@@ -272,19 +324,35 @@ function inferWorkspaceDirectory(
 function applySessionsResponse(
   state: Pick<
     SessionState,
-    "projections" | "workspaceDir" | "selectedSessionId"
+    | "projections"
+    | "workspaceDir"
+    | "selectedSessionId"
+    | "hiddenWorkspaceDirs"
+    | "workspaceVisibilityVersion"
   >,
   sessionsResponse: Awaited<ReturnType<typeof api.listSessions>>,
+  options?: {
+    workspaceVisibilityVersionAtRequest?: number;
+  },
 ): Pick<
   SessionState,
   | "projections"
   | "storedSessions"
   | "recentSessions"
   | "workspaceDirs"
+  | "hiddenWorkspaceDirs"
+  | "workspaceVisibilityVersion"
   | "workspaceDir"
   | "selectedSessionId"
 > {
   const projections = mergeSessionsIntoProjections(state.projections, sessionsResponse);
+  const hiddenWorkspaceDirs = resolveHiddenWorkspaceDirsFromSessionsResponse({
+    currentHiddenWorkspaceDirs: state.hiddenWorkspaceDirs,
+    currentWorkspaceVisibilityVersion: state.workspaceVisibilityVersion,
+    workspaceVisibilityVersionAtRequest:
+      options?.workspaceVisibilityVersionAtRequest ?? state.workspaceVisibilityVersion,
+    hiddenWorkspaces: sessionsResponse.hiddenWorkspaces,
+  });
   const workspace = reconcileVisibleWorkspaceSelection({
     workspaceDirs: sessionsResponse.workspaceDirs,
     sessions: sessionsResponse.sessions,
@@ -298,11 +366,12 @@ function applySessionsResponse(
     storedSessions: sessionsResponse.storedSessions,
     recentSessions: sessionsResponse.recentSessions,
     workspaceDirs: workspace.workspaceDirs,
+    hiddenWorkspaceDirs,
+    workspaceVisibilityVersion: state.workspaceVisibilityVersion,
     workspaceDir: workspace.workspaceDir,
-    selectedSessionId: selectPreferredSessionId(
+    selectedSessionId: coerceSelectedSessionId(
       projections,
       state.selectedSessionId,
-      workspace.workspaceDir,
     ),
   };
 }
@@ -310,18 +379,33 @@ function applySessionsResponse(
 function replaceSessionsResponse(
   state: Pick<
     SessionState,
-    "workspaceDir" | "selectedSessionId"
+    | "workspaceDir"
+    | "selectedSessionId"
+    | "hiddenWorkspaceDirs"
+    | "workspaceVisibilityVersion"
   >,
   sessionsResponse: Awaited<ReturnType<typeof api.listSessions>>,
+  options?: {
+    workspaceVisibilityVersionAtRequest?: number;
+  },
 ): Pick<
   SessionState,
   | "projections"
   | "storedSessions"
   | "recentSessions"
   | "workspaceDirs"
+  | "hiddenWorkspaceDirs"
+  | "workspaceVisibilityVersion"
   | "workspaceDir"
   | "selectedSessionId"
 > {
+  const hiddenWorkspaceDirs = resolveHiddenWorkspaceDirsFromSessionsResponse({
+    currentHiddenWorkspaceDirs: state.hiddenWorkspaceDirs,
+    currentWorkspaceVisibilityVersion: state.workspaceVisibilityVersion,
+    workspaceVisibilityVersionAtRequest:
+      options?.workspaceVisibilityVersionAtRequest ?? state.workspaceVisibilityVersion,
+    hiddenWorkspaces: sessionsResponse.hiddenWorkspaces,
+  });
   const workspace = reconcileVisibleWorkspaceSelection({
     workspaceDirs: sessionsResponse.workspaceDirs,
     sessions: sessionsResponse.sessions,
@@ -336,43 +420,57 @@ function replaceSessionsResponse(
     storedSessions: sessionsResponse.storedSessions,
     recentSessions: sessionsResponse.recentSessions,
     workspaceDirs: workspace.workspaceDirs,
+    hiddenWorkspaceDirs,
+    workspaceVisibilityVersion: state.workspaceVisibilityVersion,
     workspaceDir: workspace.workspaceDir,
-    selectedSessionId: selectPreferredSessionId(
+    selectedSessionId: coerceSelectedSessionId(
       sessionMap.sessions,
       state.selectedSessionId,
-      workspace.workspaceDir,
     ),
   };
 }
 
-function selectPreferredSessionId(
+export function coerceSelectedSessionId(
   projections: Map<string, SessionProjection>,
   currentSelectedId: string | null,
-  workspaceDir: string,
 ): string | null {
   const current = currentSelectedId ? projections.get(currentSelectedId) ?? null : null;
-  if (current && isReadOnlyReplay(current.summary)) {
+  if (current) {
     return current.summary.session.id;
   }
-  if (
-    current &&
-    matchesWorkspace(current.summary.session.rootDir || current.summary.session.cwd, workspaceDir)
-  ) {
-    return current.summary.session.id;
+  return null;
+}
+
+export function findDaemonLiveSessionForStoredRef(
+  projections: Map<string, SessionProjection>,
+  ref: StoredSessionRef,
+): SessionSummary | null {
+  for (const projection of projections.values()) {
+    const summary = projection.summary;
+    if (isReadOnlyReplay(summary)) {
+      continue;
+    }
+    if (
+      summary.session.provider === ref.provider &&
+      summary.session.providerSessionId === ref.providerSessionId
+    ) {
+      return summary;
+    }
   }
-  const firstLiveInWorkspace = [...projections.values()]
-    .filter(
-      (projection) =>
-        !isReadOnlyReplay(projection.summary) &&
-        matchesWorkspace(
-          projection.summary.session.rootDir || projection.summary.session.cwd,
-          workspaceDir,
-        ),
-    )
-    .sort((left, right) =>
-      right.summary.session.updatedAt.localeCompare(left.summary.session.updatedAt),
-    )[0];
-  return firstLiveInWorkspace?.summary.session.id ?? null;
+  return null;
+}
+
+export function resolveHistoryActivationMode(args: {
+  existingLiveSummary: SessionSummary | null;
+  clientId: string;
+}): "select" | "attach" | "resume" {
+  if (!args.existingLiveSummary) {
+    return "resume";
+  }
+  const currentClientControlsSession =
+    args.existingLiveSummary.controlLease.holderClientId === args.clientId &&
+    args.existingLiveSummary.attachedClients.some((client) => client.id === args.clientId);
+  return currentClientControlsSession ? "select" : "attach";
 }
 
 function applyEventsToMap(
@@ -605,6 +703,28 @@ export function computeUnreadSessionIds(
   return nextUnreadSessionIds;
 }
 
+function syncLastHistorySelectionFromState(
+  state: Pick<SessionState, "selectedSessionId" | "projections" | "workspaceDir">,
+) {
+  const selectedSummary = state.selectedSessionId
+    ? state.projections.get(state.selectedSessionId)?.summary ?? null
+    : null;
+  if (!selectedSummary) {
+    return;
+  }
+  if (selectedSummary.session.providerSessionId && isReadOnlyReplay(selectedSummary)) {
+    const historyWorkspaceDir =
+      selectedSummary.session.rootDir || selectedSummary.session.cwd || state.workspaceDir;
+    writeLastHistorySelection({
+      provider: selectedSummary.session.provider,
+      providerSessionId: selectedSummary.session.providerSessionId,
+      ...(historyWorkspaceDir ? { workspaceDir: historyWorkspaceDir } : {}),
+    });
+    return;
+  }
+  clearLastHistorySelection();
+}
+
 function connectEventSocket() {
   const store = useSessionStore.getState();
   if (eventsSocket && eventsSocket.readyState < WebSocket.CLOSING) {
@@ -731,7 +851,7 @@ function feedEntriesSemanticallyMatch(left: FeedEntry, right: FeedEntry): boolea
 function prependHistoryPage(
   projection: SessionProjection,
   events: RahEvent[],
-  nextBeforeTs?: string,
+  options?: { nextBeforeTs?: string; nextCursor?: string },
 ): SessionProjection {
   if (events.length === 0) {
     return {
@@ -739,7 +859,8 @@ function prependHistoryPage(
       history: {
         ...projection.history,
         phase: "ready",
-        nextBeforeTs: nextBeforeTs ?? null,
+        nextCursor: options?.nextCursor ?? null,
+        nextBeforeTs: options?.nextBeforeTs ?? null,
         authoritativeApplied: true,
         lastError: null,
       },
@@ -768,7 +889,8 @@ function prependHistoryPage(
     history: {
       ...projection.history,
       phase: "ready",
-      nextBeforeTs: nextBeforeTs ?? null,
+      nextCursor: options?.nextCursor ?? null,
+      nextBeforeTs: options?.nextBeforeTs ?? null,
       authoritativeApplied: true,
       lastError: null,
     },
@@ -820,8 +942,12 @@ async function maybeRestoreLastHistorySelection(
   }
   if (selection.workspaceDir) {
     useSessionStore.setState((state) => ({
-      workspaceDir: isHiddenWorkspace(selection.workspaceDir) ? "" : selection.workspaceDir!,
-      workspaceDirs: appendVisibleWorkspaceDir(state.workspaceDirs, selection.workspaceDir),
+      workspaceDir: isHiddenWorkspace(state.hiddenWorkspaceDirs, selection.workspaceDir) ? "" : selection.workspaceDir!,
+      workspaceDirs: appendVisibleWorkspaceDir(
+        state.hiddenWorkspaceDirs,
+        state.workspaceDirs,
+        selection.workspaceDir,
+      ),
     }));
   }
   try {
@@ -836,9 +962,12 @@ async function recoverFromReplayGap(batch: EventBatch) {
   if (batch.replayGap?.newestAvailableSeq !== null && batch.replayGap?.newestAvailableSeq !== undefined) {
     lastEventSeq = Math.max(lastEventSeq, batch.replayGap.newestAvailableSeq);
   }
+  const workspaceVisibilityVersionAtRequest = useSessionStore.getState().workspaceVisibilityVersion;
   const sessionsResponse = await api.listSessions();
   useSessionStore.setState((state) => {
-    const nextState = replaceSessionsResponse(state, sessionsResponse);
+    const nextState = replaceSessionsResponse(state, sessionsResponse, {
+      workspaceVisibilityVersionAtRequest,
+    });
     return {
       ...nextState,
       projections: applyEventsToMap(nextState.projections, batch.events),
@@ -860,11 +989,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   storedSessions: [],
   recentSessions: [],
   workspaceDirs: [],
+  hiddenWorkspaceDirs: new Set(),
+  workspaceVisibilityVersion: 0,
   debugScenarios: [],
   selectedSessionId: null,
   workspaceDir: "",
   newSessionProvider: "codex",
-  launchStatus: null,
+  pendingSessionTransition: null,
+  pendingSessionAction: null,
   isInitialLoaded: false,
   error: null,
 
@@ -874,10 +1006,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       set({ workspaceDir: "" });
       return;
     }
+    const workspaceVisibilityVersionAtRequest = get().workspaceVisibilityVersion;
     set((state) => {
-      const workspaceDirs = appendVisibleWorkspaceDir(state.workspaceDirs, dir);
+      const workspaceDirs = appendVisibleWorkspaceDir(
+        state.hiddenWorkspaceDirs,
+        state.workspaceDirs,
+        dir,
+      );
       return {
-        workspaceDir: isHiddenWorkspace(dir) ? "" : dir,
+        workspaceDir: isHiddenWorkspace(state.hiddenWorkspaceDirs, dir) ? "" : dir,
         workspaceDirs,
       };
     });
@@ -885,7 +1022,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       .selectWorkspace({ dir })
       .then((sessionsResponse) =>
         set((state) => ({
-          ...applySessionsResponse(state, sessionsResponse),
+          ...applySessionsResponse(state, sessionsResponse, {
+            workspaceVisibilityVersionAtRequest,
+          }),
           error: null,
         })),
       )
@@ -896,54 +1035,73 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   addWorkspace: async (dir) => {
     try {
       const sessionsResponse = await api.addWorkspace({ dir });
-      revealWorkspace(dir);
-      set((state) => ({
-        ...applySessionsResponse(
-          {
-            ...state,
-            workspaceDir: dir,
-          },
-          sessionsResponse,
-        ),
-        workspaceDir: dir,
-        error: null,
-      }));
+      set((state) => {
+        const workspaceVisibilityVersion = state.workspaceVisibilityVersion + 1;
+        return {
+          ...applySessionsResponse(
+            {
+              ...state,
+              hiddenWorkspaceDirs: revealWorkspace(state.hiddenWorkspaceDirs, dir),
+              workspaceDir: dir,
+              workspaceVisibilityVersion,
+            },
+            sessionsResponse,
+            { workspaceVisibilityVersionAtRequest: workspaceVisibilityVersion },
+          ),
+          workspaceVisibilityVersion,
+          error: null,
+        };
+      });
     } catch (error) {
       set({ error: readErrorMessage(error) });
       throw error;
     }
   },
   removeWorkspace: async (dir) => {
-    hideWorkspace(dir);
     try {
       set((state) => ({
+        hiddenWorkspaceDirs: hideWorkspace(state.hiddenWorkspaceDirs, dir),
         workspaceDirs: state.workspaceDirs.filter(
           (workspaceDir) => !sameWorkspaceDirectory(workspaceDir, dir),
         ),
         workspaceDir: sameWorkspaceDirectory(state.workspaceDir, dir) ? "" : state.workspaceDir,
+        workspaceVisibilityVersion: state.workspaceVisibilityVersion + 1,
         error: null,
       }));
+      const workspaceVisibilityVersionAtRequest = get().workspaceVisibilityVersion;
       const sessionsResponse = await api.removeWorkspace({ dir });
       set((state) => ({
         ...applySessionsResponse(
           {
             ...state,
+            hiddenWorkspaceDirs: state.hiddenWorkspaceDirs,
             workspaceDir: sameWorkspaceDirectory(state.workspaceDir, dir) ? "" : state.workspaceDir,
           },
           sessionsResponse,
+          { workspaceVisibilityVersionAtRequest },
         ),
         error: null,
       }));
     } catch (error) {
-      revealWorkspace(dir);
       try {
+        set((state) => ({
+          hiddenWorkspaceDirs: revealWorkspace(state.hiddenWorkspaceDirs, dir),
+          workspaceVisibilityVersion: state.workspaceVisibilityVersion + 1,
+        }));
+        const workspaceVisibilityVersionAtRequest = get().workspaceVisibilityVersion;
         const sessionsResponse = await api.listSessions();
         set((state) => ({
-          ...applySessionsResponse(state, sessionsResponse),
+          ...applySessionsResponse(state, sessionsResponse, {
+            workspaceVisibilityVersionAtRequest,
+          }),
           error: readErrorMessage(error),
         }));
       } catch {
-        set({ error: readErrorMessage(error) });
+        set((state) => ({
+          hiddenWorkspaceDirs: revealWorkspace(state.hiddenWorkspaceDirs, dir),
+          workspaceVisibilityVersion: state.workspaceVisibilityVersion + 1,
+          error: readErrorMessage(error),
+        }));
       }
       throw error;
     }
@@ -965,12 +1123,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   refreshWorkbenchState: async () => {
     try {
+      const workspaceVisibilityVersionAtRequest = get().workspaceVisibilityVersion;
       const [sessionsResponse, debugScenarios] = await Promise.all([
         api.listSessions(),
         isLabModeEnabled() ? api.listDebugScenarios() : Promise.resolve([]),
       ]);
       set((state) => ({
-        ...applySessionsResponse(state, sessionsResponse),
+        ...applySessionsResponse(state, sessionsResponse, {
+          workspaceVisibilityVersionAtRequest,
+        }),
         debugScenarios,
         error: null,
       }));
@@ -1009,11 +1170,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       }
       const provider = options?.provider ?? state.newSessionProvider;
       set({
-        launchStatus: {
+        pendingSessionTransition: createPendingStartTransition({
           provider,
           cwd,
           ...(options?.title ? { title: options.title } : {}),
-        },
+        }),
         error: null,
       });
       const response = await api.startSession({
@@ -1025,12 +1186,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         ...(options?.sandbox ? { sandbox: options.sandbox } : {}),
         attach: attachRequest(state.clientId),
       });
-      revealWorkspaceCandidates(cwd);
       set((current) => {
         const next = adoptExistingProjectionForProviderSession(
           new Map(current.projections),
           response.session,
         );
+        const nextHiddenWorkspaceDirs = revealWorkspaceCandidates(current.hiddenWorkspaceDirs, cwd);
+        const workspaceVisibilityVersion = current.workspaceVisibilityVersion + 1;
         next.set(response.session.session.id, {
           summary: response.session,
           feed: [],
@@ -1043,30 +1205,47 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           unreadSessionIds: new Set(
             [...current.unreadSessionIds].filter((sessionId) => sessionId !== response.session.session.id),
           ),
-          workspaceDirs: appendVisibleWorkspaceDir(current.workspaceDirs, cwd),
+          hiddenWorkspaceDirs: nextHiddenWorkspaceDirs,
+          workspaceDirs: appendVisibleWorkspaceDir(
+            nextHiddenWorkspaceDirs,
+            current.workspaceDirs,
+            cwd,
+          ),
+          workspaceVisibilityVersion,
           workspaceDir: cwd,
           newSessionProvider: provider,
           selectedSessionId: response.session.session.id,
-          launchStatus: null,
+          pendingSessionTransition: null,
           error: null,
         };
       });
+      if (options?.initialInput?.trim()) {
+        await get().sendInput(response.session.session.id, options.initialInput.trim());
+      }
       void ensureSessionHistoryLoaded(response.session.session.id);
     } catch (error) {
-      set({ launchStatus: null, error: readErrorMessage(error) });
+      set({ pendingSessionTransition: null, error: readErrorMessage(error) });
       throw error;
     }
   },
 
   startScenario: async (scenario) => {
     try {
+      set({
+        pendingSessionTransition: createPendingScenarioTransition(scenario),
+        error: null,
+      });
       const response = await api.startDebugScenario({
         scenarioId: scenario.id,
         attach: attachRequest(get().clientId),
       });
-      revealWorkspaceCandidates(scenario.rootDir);
       set((current) => {
         const next = new Map(current.projections);
+        const nextHiddenWorkspaceDirs = revealWorkspaceCandidates(
+          current.hiddenWorkspaceDirs,
+          scenario.rootDir,
+        );
+        const workspaceVisibilityVersion = current.workspaceVisibilityVersion + 1;
         next.set(response.session.session.id, {
           summary: response.session,
           feed: [],
@@ -1079,22 +1258,52 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           unreadSessionIds: new Set(
             [...current.unreadSessionIds].filter((sessionId) => sessionId !== response.session.session.id),
           ),
-          workspaceDirs: appendVisibleWorkspaceDir(current.workspaceDirs, scenario.rootDir),
+          hiddenWorkspaceDirs: nextHiddenWorkspaceDirs,
+          workspaceDirs: appendVisibleWorkspaceDir(
+            nextHiddenWorkspaceDirs,
+            current.workspaceDirs,
+            scenario.rootDir,
+          ),
+          workspaceVisibilityVersion,
           workspaceDir: scenario.rootDir,
           selectedSessionId: response.session.session.id,
+          pendingSessionTransition: null,
           error: null,
         };
       });
       void ensureSessionHistoryLoaded(response.session.session.id);
     } catch (error) {
-      set({ error: readErrorMessage(error) });
+      set({ pendingSessionTransition: null, error: readErrorMessage(error) });
       throw error;
     }
   },
 
+  activateHistorySession: async (ref) => {
+    const state = get();
+    const existingLive = findDaemonLiveSessionForStoredRef(state.projections, ref);
+    const mode = resolveHistoryActivationMode({
+      existingLiveSummary: existingLive,
+      clientId: state.clientId,
+    });
+    if (mode === "select" && existingLive) {
+      get().setSelectedSessionId(existingLive.session.id);
+      return;
+    }
+    if (mode === "attach" && existingLive) {
+      await get().attachSession(existingLive);
+      return;
+    }
+    await get().resumeStoredSession(ref, { preferStoredReplay: true });
+  },
+
   resumeStoredSession: async (ref, options) => {
     try {
+      set({
+        pendingSessionTransition: createPendingStoredSessionTransition(ref, "history"),
+        error: null,
+      });
       if (ref.source === "previous_live") {
+        const workspaceVisibilityVersionAtRequest = get().workspaceVisibilityVersion;
         const sessionsResponse = await api.listSessions();
         const running = sessionsResponse.sessions.find(
           (summary) =>
@@ -1103,16 +1312,20 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         );
         if (running) {
           set((state) => ({
-            ...applySessionsResponse(state, sessionsResponse),
+            ...applySessionsResponse(state, sessionsResponse, {
+              workspaceVisibilityVersionAtRequest,
+            }),
             workspaceDir:
               ref.rootDir ??
               ref.cwd ??
               running.session.rootDir ??
               running.session.cwd ??
               state.workspaceDir,
+            pendingSessionTransition: state.pendingSessionTransition,
             error: null,
           }));
           await get().attachSession(running);
+          set({ pendingSessionTransition: null });
           return;
         }
       }
@@ -1130,12 +1343,17 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         request.cwd = ref.cwd;
       }
       const response = await api.resumeSession(request);
-      revealWorkspaceCandidates(ref.rootDir, ref.cwd);
       set((current) => {
         const next = adoptExistingProjectionForProviderSession(
           new Map(current.projections),
           response.session,
         );
+        const nextHiddenWorkspaceDirs = revealWorkspaceCandidates(
+          current.hiddenWorkspaceDirs,
+          ref.rootDir,
+          ref.cwd,
+        );
+        const workspaceVisibilityVersion = current.workspaceVisibilityVersion + 1;
         const replayProjection: SessionProjection = {
           summary: response.session,
           feed: [],
@@ -1150,9 +1368,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           unreadSessionIds: new Set(
             [...current.unreadSessionIds].filter((sessionId) => sessionId !== response.session.session.id),
           ),
-          workspaceDirs: appendVisibleWorkspaceDir(current.workspaceDirs, ref.rootDir ?? ref.cwd),
+          hiddenWorkspaceDirs: nextHiddenWorkspaceDirs,
+          workspaceDirs: appendVisibleWorkspaceDir(
+            nextHiddenWorkspaceDirs,
+            current.workspaceDirs,
+            ref.rootDir ?? ref.cwd,
+          ),
+          workspaceVisibilityVersion,
           workspaceDir: ref.rootDir ?? ref.cwd ?? current.workspaceDir,
           selectedSessionId: response.session.session.id,
+          pendingSessionTransition: null,
           error: null,
         };
       });
@@ -1160,6 +1385,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     } catch (error) {
       const message = readErrorMessage(error);
       if (message.includes("attach instead of resume")) {
+        const workspaceVisibilityVersionAtRequest = get().workspaceVisibilityVersion;
         const sessionsResponse = await api.listSessions();
         const running = sessionsResponse.sessions.find(
           (summary) =>
@@ -1168,24 +1394,26 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         );
         if (running) {
           set((state) => {
-            const next = applySessionsResponse(state, sessionsResponse);
+            const next = applySessionsResponse(state, sessionsResponse, {
+              workspaceVisibilityVersionAtRequest,
+            });
             return {
               ...next,
               workspaceDir:
-                ref.rootDir ??
-                ref.cwd ??
-                running.session.rootDir ??
-                running.session.cwd ??
-                next.workspaceDir,
-              selectedSessionId: running.session.id,
+              ref.rootDir ??
+              ref.cwd ??
+              running.session.rootDir ??
+              running.session.cwd ??
+              next.workspaceDir,
               error: null,
             };
           });
-          void ensureSessionHistoryLoaded(running.session.id);
+          await get().attachSession(running);
+          set({ pendingSessionTransition: null });
           return;
         }
       }
-      set({ error: message });
+      set({ pendingSessionTransition: null, error: message });
       throw error;
     }
   },
@@ -1241,20 +1469,34 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
 
     try {
+      set({
+        pendingSessionAction: {
+          kind: "claim_history",
+          sessionId,
+        },
+        pendingSessionTransition: createPendingStoredSessionTransition(ref, "claim_history"),
+        error: null,
+      });
       const request: ResumeSessionRequest = {
         provider: ref.provider,
         providerSessionId: ref.providerSessionId,
         preferStoredReplay: false,
         historyReplay: "skip",
+        historySourceSessionId: sessionId,
         attach: attachRequest(state.clientId),
       };
       if (ref.cwd !== undefined) {
         request.cwd = ref.cwd;
       }
       const response = await api.resumeSession(request);
-      revealWorkspaceCandidates(ref.rootDir, ref.cwd);
       set((current) => {
         const next = new Map(current.projections);
+        const nextHiddenWorkspaceDirs = revealWorkspaceCandidates(
+          current.hiddenWorkspaceDirs,
+          ref.rootDir,
+          ref.cwd,
+        );
+        const workspaceVisibilityVersion = current.workspaceVisibilityVersion + 1;
         next.delete(sessionId);
         next.set(response.session.session.id, {
           ...preservedProjection,
@@ -1269,23 +1511,38 @@ export const useSessionStore = create<SessionState>((set, get) => ({
                 sessionIdValue !== sessionId && sessionIdValue !== response.session.session.id,
             ),
           ),
-          workspaceDirs: appendVisibleWorkspaceDir(current.workspaceDirs, ref.rootDir ?? ref.cwd),
+          hiddenWorkspaceDirs: nextHiddenWorkspaceDirs,
+          workspaceDirs: appendVisibleWorkspaceDir(
+            nextHiddenWorkspaceDirs,
+            current.workspaceDirs,
+            ref.rootDir ?? ref.cwd,
+          ),
+          workspaceVisibilityVersion,
           workspaceDir: ref.rootDir ?? ref.cwd ?? current.workspaceDir,
           selectedSessionId: response.session.session.id,
+          pendingSessionAction: null,
+          pendingSessionTransition: null,
           error: null,
         };
       });
     } catch (error) {
-      set({ error: readErrorMessage(error) });
+      set({
+        pendingSessionAction: null,
+        pendingSessionTransition: null,
+        error: readErrorMessage(error),
+      });
       throw error;
     }
   },
 
   removeHistorySession: async (session) => {
     try {
+      const workspaceVisibilityVersionAtRequest = get().workspaceVisibilityVersion;
       const sessionsResponse = await api.removeStoredSession(session);
       set((state) => ({
-        ...applySessionsResponse(state, sessionsResponse),
+        ...applySessionsResponse(state, sessionsResponse, {
+          workspaceVisibilityVersionAtRequest,
+        }),
         error: null,
       }));
     } catch (error) {
@@ -1296,9 +1553,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   removeHistoryWorkspaceSessions: async (workspaceDir) => {
     try {
+      const workspaceVisibilityVersionAtRequest = get().workspaceVisibilityVersion;
       const sessionsResponse = await api.removeStoredWorkspaceSessions({ dir: workspaceDir });
       set((state) => ({
-        ...applySessionsResponse(state, sessionsResponse),
+        ...applySessionsResponse(state, sessionsResponse, {
+          workspaceVisibilityVersionAtRequest,
+        }),
         error: null,
       }));
     } catch (error) {
@@ -1309,6 +1569,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   attachSession: async (summary) => {
     try {
+      set({
+        pendingSessionAction: {
+          kind: "attach_session",
+          sessionId: summary.session.id,
+        },
+        error: null,
+      });
       const response = await api.attachSession(summary.session.id, {
         client: {
           id: get().clientId,
@@ -1321,11 +1588,28 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       set((state) => {
         const unreadSessionIds = new Set(state.unreadSessionIds);
         unreadSessionIds.delete(summary.session.id);
-        return { selectedSessionId: summary.session.id, unreadSessionIds, error: null };
+        const targetDir = response.session.session.rootDir || response.session.session.cwd;
+        const nextHiddenWorkspaceDirs = targetDir
+          ? revealWorkspaceCandidates(state.hiddenWorkspaceDirs, targetDir)
+          : state.hiddenWorkspaceDirs;
+        return {
+          selectedSessionId: response.session.session.id,
+          unreadSessionIds,
+          hiddenWorkspaceDirs: nextHiddenWorkspaceDirs,
+          workspaceDirs: targetDir
+            ? appendVisibleWorkspaceDir(nextHiddenWorkspaceDirs, state.workspaceDirs, targetDir)
+            : state.workspaceDirs,
+          workspaceVisibilityVersion: targetDir
+            ? state.workspaceVisibilityVersion + 1
+            : state.workspaceVisibilityVersion,
+          workspaceDir: targetDir ?? state.workspaceDir,
+          pendingSessionAction: null,
+          error: null,
+        };
       });
       void ensureSessionHistoryLoaded(summary.session.id);
     } catch (error) {
-      set({ error: readErrorMessage(error) });
+      set({ pendingSessionAction: null, error: readErrorMessage(error) });
       throw error;
     }
   },
@@ -1375,11 +1659,18 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   claimControl: async (sessionId) => {
     try {
+      set({
+        pendingSessionAction: {
+          kind: "claim_control",
+          sessionId,
+        },
+        error: null,
+      });
       const summary = await api.claimControl(sessionId, get().clientId);
       updateSessionSummary(summary);
-      set({ error: null });
+      set({ pendingSessionAction: null, error: null });
     } catch (error) {
-      set({ error: readErrorMessage(error) });
+      set({ pendingSessionAction: null, error: readErrorMessage(error) });
       throw error;
     }
   },
@@ -1438,7 +1729,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       return;
     }
 
-    const beforeTs = projection.history.nextBeforeTs ?? projection.feed[0]?.ts ?? undefined;
+    const cursor = projection.history.nextCursor ?? undefined;
+    const beforeTs =
+      cursor === undefined
+        ? projection.history.nextBeforeTs ?? projection.feed[0]?.ts ?? undefined
+        : undefined;
     const requestGeneration = projection.history.generation + 1;
 
     set((state) => {
@@ -1461,6 +1756,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
     try {
       const page = await api.readSessionHistory(sessionId, {
+        ...(cursor ? { cursor } : {}),
         ...(beforeTs ? { beforeTs } : {}),
         limit: 1000,
       });
@@ -1470,7 +1766,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           return state;
         }
         const next = new Map(state.projections);
-        const withHistory = prependHistoryPage(current, page.events, page.nextBeforeTs);
+        const withHistory = prependHistoryPage(current, page.events, {
+          ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+          ...(page.nextBeforeTs ? { nextBeforeTs: page.nextBeforeTs } : {}),
+        });
         const replayed = applyEventBatchToProjection(
           withHistory,
           takeDeferredBootstrapEvents(sessionId),
@@ -1510,3 +1809,36 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
   },
 }));
+
+let lastSyncedHistorySelectionKey: string | null = null;
+const CLEARED_HISTORY_SELECTION_KEY = "__cleared__";
+
+useSessionStore.subscribe((state) => {
+  const selectedSummary = state.selectedSessionId
+    ? state.projections.get(state.selectedSessionId)?.summary ?? null
+    : null;
+  if (!selectedSummary) {
+    return;
+  }
+
+  if (selectedSummary.session.providerSessionId && isReadOnlyReplay(selectedSummary)) {
+    const historyWorkspaceDir =
+      selectedSummary.session.rootDir || selectedSummary.session.cwd || state.workspaceDir;
+    const nextKey = JSON.stringify({
+      provider: selectedSummary.session.provider,
+      providerSessionId: selectedSummary.session.providerSessionId,
+      ...(historyWorkspaceDir ? { workspaceDir: historyWorkspaceDir } : {}),
+    });
+    if (nextKey === lastSyncedHistorySelectionKey) {
+      return;
+    }
+    lastSyncedHistorySelectionKey = nextKey;
+    syncLastHistorySelectionFromState(state);
+    return;
+  }
+
+  if (lastSyncedHistorySelectionKey !== CLEARED_HISTORY_SELECTION_KEY) {
+    lastSyncedHistorySelectionKey = CLEARED_HISTORY_SELECTION_KEY;
+    syncLastHistorySelectionFromState(state);
+  }
+});

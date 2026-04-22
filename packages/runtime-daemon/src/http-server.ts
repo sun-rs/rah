@@ -397,8 +397,9 @@ export async function startRahDaemon(options?: { port?: number }): Promise<RahDa
       }
 
       if (req.method === "GET" && pathname === "/api/providers") {
+        const forceRefresh = url.searchParams.get("refresh") === "1";
         const response: ListProvidersResponse = {
-          providers: await engine.listProviderDiagnostics(),
+          providers: await engine.listProviderDiagnostics({ forceRefresh }),
         };
         writeJson(res, 200, response);
         return;
@@ -446,9 +447,21 @@ export async function startRahDaemon(options?: { port?: number }): Promise<RahDa
         return;
       }
 
+      const fileMatch = /^\/api\/sessions\/([^/]+)\/file$/.exec(pathname);
+      if (req.method === "GET" && fileMatch) {
+        const filePath = url.searchParams.get("path");
+        if (!filePath) {
+          writeJson(res, 400, { error: "File path is required." });
+          return;
+        }
+        writeJson(res, 200, engine.readSessionFile(fileMatch[1]!, filePath));
+        return;
+      }
+
       const historyMatch = /^\/api\/sessions\/([^/]+)\/history$/.exec(pathname);
       if (req.method === "GET" && historyMatch) {
         const beforeTs = url.searchParams.get("beforeTs") ?? undefined;
+        const cursor = url.searchParams.get("cursor") ?? undefined;
         const limitRaw = url.searchParams.get("limit");
         const limit =
           limitRaw && Number.isFinite(Number.parseInt(limitRaw, 10))
@@ -456,6 +469,7 @@ export async function startRahDaemon(options?: { port?: number }): Promise<RahDa
             : undefined;
         const options = {
           ...(beforeTs !== undefined ? { beforeTs } : {}),
+          ...(cursor !== undefined ? { cursor } : {}),
           ...(limit !== undefined ? { limit } : {}),
         };
         writeJson(

@@ -104,6 +104,7 @@ export interface SessionProjection {
 
 export interface HistorySyncState {
   phase: "idle" | "loading" | "ready" | "error";
+  nextCursor: string | null;
   nextBeforeTs: string | null;
   generation: number;
   authoritativeApplied: boolean;
@@ -144,6 +145,7 @@ export function createSessionMap(response: SessionsResponse): SessionMap {
 export function initialHistorySyncState(): HistorySyncState {
   return {
     phase: "idle",
+    nextCursor: null,
     nextBeforeTs: null,
     generation: 0,
     authoritativeApplied: false,

@@ -13,6 +13,7 @@ import type {
   ContextUsage,
   DebugReplayScript,
   InterruptSessionRequest,
+  SessionFileResponse,
   SessionSummary,
   StoredSessionRef,
 } from "@rah/runtime-protocol";
@@ -87,6 +88,10 @@ export class DebugAdapter implements ProviderAdapter {
 
   getGitDiff(sessionId: string, path: string): GitDiffResponse {
     return this.engine.getGitDiff(sessionId, path);
+  }
+
+  readSessionFile(sessionId: string, path: string): SessionFileResponse {
+    return this.engine.readSessionFile(sessionId, path);
   }
 
   getContextUsage(sessionId: string): ContextUsage | undefined {

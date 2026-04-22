@@ -1,4 +1,5 @@
 export * from "./event-bus";
+export * from "./history-snapshots";
 export * from "./pty-hub";
 export * from "./session-store";
 export * from "./provider-adapter";

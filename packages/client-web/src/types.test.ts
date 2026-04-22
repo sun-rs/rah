@@ -403,6 +403,18 @@ describe("client projection", () => {
     assert.equal(workspaces[0]?.hasBlockingLiveSessions, false);
   });
 
+  test("can hide uncontrolled live sessions from sidebar while still blocking workspace removal", () => {
+    const workspaces = deriveWorkspaceInfos(
+      ["/repo"],
+      [],
+      [],
+      [workspaceSummary({ id: "live-1", rootDir: "/repo" })],
+    );
+
+    assert.equal(workspaces[0]?.liveCount, 0);
+    assert.equal(workspaces[0]?.hasBlockingLiveSessions, true);
+  });
+
   test("preserves workspace display order even when a later workspace is more recently active", () => {
     const workspaces = deriveWorkspaceInfos(
       ["/workspace/first", "/workspace/second"],

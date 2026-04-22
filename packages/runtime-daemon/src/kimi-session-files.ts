@@ -14,6 +14,13 @@ import { EventBus } from "./event-bus";
 import { applyProviderActivity, type ProviderActivity } from "./provider-activity";
 import { PtyHub } from "./pty-hub";
 import { SessionStore } from "./session-store";
+import { readLeadingLines } from "./file-snippets";
+import {
+  getCachedStoredSessionRef,
+  loadStoredSessionMetadataCache,
+  setCachedStoredSessionRef,
+  writeStoredSessionMetadataCache,
+} from "./stored-session-metadata-cache";
 
 const REHYDRATED_CAPABILITIES = {
   livePermissions: false,
@@ -186,7 +193,7 @@ function parseKimiWireLine(line: string):
 
 function deriveTitleFromWire(wirePath: string): string {
   try {
-    const lines = readFileSync(wirePath, "utf8").split(/\r?\n/);
+    const lines = readLeadingLines(wirePath, { maxBytes: 256 * 1024 });
     for (const line of lines) {
       const parsed = parseKimiWireLine(line.trim());
       if (!parsed || parsed.type !== "TurnBegin") {
@@ -202,6 +209,7 @@ function deriveTitleFromWire(wirePath: string): string {
 }
 
 export function discoverKimiStoredSessions(): KimiStoredSessionRecord[] {
+  const cache = loadStoredSessionMetadataCache("kimi");
   const records: KimiStoredSessionRecord[] = [];
   for (const workDir of loadKimiWorkDirs()) {
     const sessionsDir = sessionsDirForWorkDir(workDir);
@@ -222,23 +230,57 @@ export function discoverKimiStoredSessions(): KimiStoredSessionRecord[] {
       if (!existsSync(wirePath)) {
         continue;
       }
-      const title = deriveTitleFromWire(wirePath);
-      const updatedAt = statSync(wirePath).mtime.toISOString();
-      records.push({
-        ref: {
-          provider: "kimi",
-          providerSessionId: sessionId,
-          cwd: workDir.path,
-          rootDir: workDir.path,
-          title,
-          preview: title,
-          updatedAt,
-          source: "provider_history",
-        },
-        wirePath,
+      const stats = statSync(wirePath);
+      const cachedRef = getCachedStoredSessionRef({
+        cache,
+        filePath: wirePath,
+        size: stats.size,
+        mtimeMs: stats.mtimeMs,
       });
+      if (cachedRef) {
+        records.push({
+          ref: cachedRef,
+          wirePath,
+        });
+        continue;
+      }
+      const title = deriveTitleFromWire(wirePath);
+      const ref: StoredSessionRef = {
+        provider: "kimi",
+        providerSessionId: sessionId,
+        cwd: workDir.path,
+        rootDir: workDir.path,
+        title,
+        preview: title,
+        updatedAt: stats.mtime.toISOString(),
+        source: "provider_history",
+      };
+      setCachedStoredSessionRef({
+        cache,
+        filePath: wirePath,
+        size: stats.size,
+        mtimeMs: stats.mtimeMs,
+        ref,
+      });
+      records.push({ ref, wirePath });
     }
   }
+  writeStoredSessionMetadataCache(
+    "kimi",
+    new Map(
+      records.map((record) => {
+        const stats = statSync(record.wirePath);
+        return [
+          record.wirePath,
+          {
+            ref: record.ref,
+            size: stats.size,
+            mtimeMs: stats.mtimeMs,
+          },
+        ] as const;
+      }),
+    ),
+  );
   return records.sort((a, b) => (b.ref.updatedAt ?? "").localeCompare(a.ref.updatedAt ?? ""));
 }
 

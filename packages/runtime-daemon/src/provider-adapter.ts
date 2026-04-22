@@ -11,6 +11,7 @@ import type {
   PermissionResponseRequest,
   ResumeSessionRequest,
   ResumeSessionResponse,
+  SessionFileResponse,
   SessionHistoryPageResponse,
   SessionInputRequest,
   SessionSummary,
@@ -55,14 +56,17 @@ export interface ProviderAdapter {
   getWorkspaceSnapshot(sessionId: string): WorkspaceSnapshotResponse;
   getGitStatus(sessionId: string): GitStatusResponse;
   getGitDiff(sessionId: string, path: string): GitDiffResponse;
+  readSessionFile(sessionId: string, path: string): SessionFileResponse;
   getSessionHistoryPage?(
     sessionId: string,
-    options?: { beforeTs?: string; limit?: number },
+    options?: { beforeTs?: string; cursor?: string; limit?: number },
   ): SessionHistoryPageResponse;
   getContextUsage(sessionId: string): ContextUsage | undefined;
   listStoredSessions?(): StoredSessionRef[];
   removeStoredSession?(session: StoredSessionRef): Promise<void> | void;
-  getProviderDiagnostic?(): Promise<ProviderDiagnostic> | ProviderDiagnostic;
+  getProviderDiagnostic?(options?: {
+    forceRefresh?: boolean;
+  }): Promise<ProviderDiagnostic> | ProviderDiagnostic;
 
   listDebugScenarios?(): DebugScenarioDescriptor[];
   startDebugScenario?(request: StartDebugScenarioRequest): StartSessionResponse;

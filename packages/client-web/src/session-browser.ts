@@ -101,6 +101,7 @@ export function deriveWorkspaceInfos(
   workspaceDirs: string[],
   sessions: SessionSummary[],
   storedSessions: StoredSessionRef[],
+  blockingSessions: SessionSummary[] = sessions,
 ): WorkspaceInfo[] {
   const map = new Map<
     string,
@@ -127,7 +128,7 @@ export function deriveWorkspaceInfos(
     });
   }
 
-  for (const session of sessions) {
+  for (const session of blockingSessions) {
     const isInteractiveLiveSession = !isReadOnlyReplay(session);
     if (isInteractiveLiveSession) {
       for (const workspace of map.values()) {
@@ -136,6 +137,10 @@ export function deriveWorkspaceInfos(
         }
       }
     }
+  }
+
+  for (const session of sessions) {
+    const isInteractiveLiveSession = !isReadOnlyReplay(session);
 
     const owner = findOwningWorkspace(workspaceDirs, session.session.rootDir || session.session.cwd);
     if (!owner) continue;

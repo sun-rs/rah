@@ -7,6 +7,7 @@ import type {
   PermissionResponseRequest,
   ResumeSessionRequest,
   ResumeSessionResponse,
+  SessionFileResponse,
   SessionHistoryPageResponse,
   SessionInputRequest,
   SessionSummary,
@@ -16,7 +17,7 @@ import type {
   WorkspaceSnapshotResponse,
 } from "@rah/runtime-protocol";
 import type { ProviderAdapter, RuntimeServices } from "./provider-adapter";
-import { getCodexGitDiff, getCodexGitStatus, getCodexWorkspaceSnapshot } from "./codex-stored-sessions";
+import { getCodexGitDiff, getCodexGitStatus, getCodexWorkspaceSnapshot, readWorkspaceFile } from "./codex-stored-sessions";
 import {
   closeKimiLiveSession,
   interruptKimiLiveSession,
@@ -36,7 +37,7 @@ import {
   finalizeStoredReplayResume,
   prepareProviderSessionResume,
 } from "./provider-resume";
-import { kimiLaunchSpec, probeProviderVersion } from "./provider-diagnostics";
+import { kimiLaunchSpec, probeProviderDiagnostic } from "./provider-diagnostics";
 import { toSessionSummary } from "./session-store";
 import { movePathToTrash } from "./trash";
 import path from "node:path";
@@ -228,9 +229,20 @@ export class KimiAdapter implements ProviderAdapter {
     };
   }
 
+  readSessionFile(sessionId: string, targetPath: string): SessionFileResponse {
+    const state = this.services.sessionStore.getSession(sessionId);
+    if (!state) {
+      throw new Error(`Unknown session ${sessionId}`);
+    }
+    return {
+      sessionId,
+      ...readWorkspaceFile(state.session.cwd, targetPath),
+    };
+  }
+
   getSessionHistoryPage(
     sessionId: string,
-    options?: { beforeTs?: string; limit?: number },
+    options?: { beforeTs?: string; cursor?: string; limit?: number },
   ): SessionHistoryPageResponse {
     const state = this.services.sessionStore.getSession(sessionId);
     if (!state?.session.providerSessionId) {
@@ -269,8 +281,8 @@ export class KimiAdapter implements ProviderAdapter {
     this.storedSessionIndex.delete(session.providerSessionId);
   }
 
-  getProviderDiagnostic() {
-    return probeProviderVersion("kimi", kimiLaunchSpec());
+  getProviderDiagnostic(options?: { forceRefresh?: boolean }) {
+    return probeProviderDiagnostic("kimi", kimiLaunchSpec(), options);
   }
 
   private refreshStoredSessions() {

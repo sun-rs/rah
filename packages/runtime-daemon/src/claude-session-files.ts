@@ -13,6 +13,13 @@ import { EventBus } from "./event-bus";
 import { PtyHub } from "./pty-hub";
 import { applyProviderActivity, type ProviderActivity } from "./provider-activity";
 import { SessionStore } from "./session-store";
+import { readLeadingLines } from "./file-snippets";
+import {
+  getCachedStoredSessionRef,
+  loadStoredSessionMetadataCache,
+  setCachedStoredSessionRef,
+  writeStoredSessionMetadataCache,
+} from "./stored-session-metadata-cache";
 
 const REHYDRATED_CAPABILITIES = {
   livePermissions: false,
@@ -503,6 +510,7 @@ function translateClaudeRecords(sessionId: string, records: ClaudeRawRecord[]): 
 }
 
 export function discoverClaudeStoredSessions(cwd?: string): ClaudeStoredSessionRecord[] {
+  const cache = loadStoredSessionMetadataCache("claude");
   const roots = cwd
     ? expandClaudeProjectDirs(cwd)
     : [path.join(resolveClaudeConfigDir(), "projects")];
@@ -543,17 +551,53 @@ export function discoverClaudeStoredSessions(cwd?: string): ClaudeStoredSessionR
 
   const records: ClaudeStoredSessionRecord[] = [];
   for (const filePath of files) {
-    const lines = readFileSync(filePath, "utf8")
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean);
-    const parsed = lines.map(safeParseClaudeRecord).filter((record): record is ClaudeRawRecord => Boolean(record));
+    const stats = statSync(filePath);
+    const cachedRef = getCachedStoredSessionRef({
+      cache,
+      filePath,
+      size: stats.size,
+      mtimeMs: stats.mtimeMs,
+    });
+    if (cachedRef) {
+      records.push({ ref: cachedRef, filePath });
+      continue;
+    }
+    const lines = readLeadingLines(filePath, {
+      maxBytes: 256 * 1024,
+    });
+    const parsed = lines
+      .map(safeParseClaudeRecord)
+      .filter((record): record is ClaudeRawRecord => Boolean(record));
     const ref = deriveStoredSessionRef(filePath, parsed);
     if (!ref) {
       continue;
     }
+    setCachedStoredSessionRef({
+      cache,
+      filePath,
+      size: stats.size,
+      mtimeMs: stats.mtimeMs,
+      ref,
+    });
     records.push({ ref, filePath });
   }
+
+  writeStoredSessionMetadataCache(
+    "claude",
+    new Map(
+      records.map((record) => {
+        const stats = statSync(record.filePath);
+        return [
+          record.filePath,
+          {
+            ref: record.ref,
+            size: stats.size,
+            mtimeMs: stats.mtimeMs,
+          },
+        ] as const;
+      }),
+    ),
+  );
 
   return records.sort((a, b) => (b.ref.updatedAt ?? "").localeCompare(a.ref.updatedAt ?? ""));
 }

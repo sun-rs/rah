@@ -6,6 +6,7 @@ import type {
   PermissionResponseRequest,
   ResumeSessionRequest,
   ResumeSessionResponse,
+  SessionFileResponse,
   SessionHistoryPageResponse,
   SessionInputRequest,
   SessionSummary,
@@ -28,6 +29,7 @@ import {
   getCodexGitStatus,
   getCodexStoredSessionHistoryPage,
   getCodexWorkspaceSnapshot,
+  readWorkspaceFile,
   resumeCodexStoredSession,
   type CodexStoredSessionRecord,
 } from "./codex-stored-sessions";
@@ -35,7 +37,7 @@ import {
   finalizeStoredReplayResume,
   prepareProviderSessionResume,
 } from "./provider-resume";
-import { codexLaunchSpec, probeProviderVersion } from "./provider-diagnostics";
+import { codexLaunchSpec, probeProviderDiagnostic } from "./provider-diagnostics";
 import { toSessionSummary } from "./session-store";
 import { movePathToTrash } from "./trash";
 
@@ -322,9 +324,27 @@ export class CodexAdapter implements ProviderAdapter {
     };
   }
 
+  readSessionFile(sessionId: string, targetPath: string): SessionFileResponse {
+    const session = this.services.sessionStore.getSession(sessionId)?.session;
+    if (!session) {
+      const record = this.rehydratedSessionRecords.get(sessionId);
+      if (!record) {
+        throw new Error(`Unknown session ${sessionId}`);
+      }
+      return {
+        sessionId,
+        ...readWorkspaceFile(record.ref.cwd ?? process.cwd(), targetPath),
+      };
+    }
+    return {
+      sessionId,
+      ...readWorkspaceFile(session.cwd, targetPath),
+    };
+  }
+
   getSessionHistoryPage(
     sessionId: string,
-    options: { beforeTs?: string; limit?: number } = {},
+    options: { beforeTs?: string; cursor?: string; limit?: number } = {},
   ): SessionHistoryPageResponse {
     const session = this.services.sessionStore.getSession(sessionId)?.session;
     if (!session) {
@@ -374,8 +394,8 @@ export class CodexAdapter implements ProviderAdapter {
     this.storedSessionIndex.delete(session.providerSessionId);
   }
 
-  getProviderDiagnostic() {
-    return probeProviderVersion("codex", codexLaunchSpec());
+  getProviderDiagnostic(options?: { forceRefresh?: boolean }) {
+    return probeProviderDiagnostic("codex", codexLaunchSpec(), options);
   }
 
   private refreshStoredSessions(): Map<string, CodexStoredSessionRecord> {
