@@ -7,7 +7,12 @@ import type {
   EventBatch,
   EventSubscriptionRequest,
   GitDiffResponse,
+  GitFileActionRequest,
+  GitFileActionResponse,
+  GitHunkActionRequest,
+  GitHunkActionResponse,
   GitStatusResponse,
+  SessionFileSearchResponse,
   ListDebugScenariosResponse,
   ListProvidersResponse,
   ListSessionsResponse,
@@ -327,11 +332,41 @@ export async function readGitStatus(sessionId: string): Promise<GitStatusRespons
 export async function readGitDiff(
   sessionId: string,
   path: string,
+  options?: {
+    staged?: boolean;
+    ignoreWhitespace?: boolean;
+  },
 ): Promise<GitDiffResponse> {
   const query = new URLSearchParams({ path });
+  if (options?.staged !== undefined) {
+    query.set("staged", options.staged ? "true" : "false");
+  }
+  if (options?.ignoreWhitespace !== undefined) {
+    query.set("ignoreWhitespace", options.ignoreWhitespace ? "true" : "false");
+  }
   return requestJson<GitDiffResponse>(
     `/api/sessions/${sessionId}/git-diff?${query.toString()}`,
   );
+}
+
+export async function applyGitHunkAction(
+  sessionId: string,
+  request: GitHunkActionRequest,
+): Promise<GitHunkActionResponse> {
+  return requestJson<GitHunkActionResponse>(`/api/sessions/${sessionId}/git-hunks/apply`, {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
+}
+
+export async function applyGitFileAction(
+  sessionId: string,
+  request: GitFileActionRequest,
+): Promise<GitFileActionResponse> {
+  return requestJson<GitFileActionResponse>(`/api/sessions/${sessionId}/git-files/apply`, {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
 }
 
 export async function readSessionFile(
@@ -341,6 +376,20 @@ export async function readSessionFile(
   const query = new URLSearchParams({ path });
   return requestJson<SessionFileResponse>(
     `/api/sessions/${sessionId}/file?${query.toString()}`,
+  );
+}
+
+export async function searchSessionFiles(
+  sessionId: string,
+  queryText: string,
+  limit = 100,
+): Promise<SessionFileSearchResponse> {
+  const query = new URLSearchParams({
+    query: queryText,
+    limit: String(limit),
+  });
+  return requestJson<SessionFileSearchResponse>(
+    `/api/sessions/${sessionId}/file-search?${query.toString()}`,
   );
 }
 

@@ -2,6 +2,10 @@ import type {
   CloseSessionRequest,
   ContextUsage,
   GitDiffResponse,
+  GitFileActionRequest,
+  GitFileActionResponse,
+  GitHunkActionRequest,
+  GitHunkActionResponse,
   GitStatusResponse,
   InterruptSessionRequest,
   ResumeSessionRequest,
@@ -17,10 +21,12 @@ import type {
 } from "@rah/runtime-protocol";
 import type { ProviderAdapter, RuntimeServices } from "./provider-adapter";
 import {
+  createGeminiStoredSessionFrozenHistoryPageLoader,
   type GeminiStoredSessionRecord,
   discoverGeminiStoredSessions,
   findGeminiStoredSessionRecord,
   getGeminiStoredSessionHistoryPage,
+  resolveGeminiStoredSessionWatchRoots,
   resumeGeminiStoredSession,
 } from "./gemini-session-files";
 import {
@@ -36,7 +42,14 @@ import {
   prepareProviderSessionResume,
 } from "./provider-resume";
 import { geminiLaunchSpec, probeProviderDiagnostic } from "./provider-diagnostics";
-import { getCodexGitDiff, getCodexGitStatus, getCodexWorkspaceSnapshot, readWorkspaceFile } from "./codex-stored-sessions";
+import {
+  applyCodexGitFileAction,
+  applyCodexGitHunkAction,
+  getCodexGitDiff,
+  getCodexGitStatus,
+  getCodexWorkspaceSnapshot,
+  readWorkspaceFile,
+} from "./codex-stored-sessions";
 import { toSessionSummary } from "./session-store";
 import { movePathToTrash } from "./trash";
 
@@ -197,10 +210,18 @@ export class GeminiAdapter implements ProviderAdapter {
       sessionId,
       ...(status.branch ? { branch: status.branch } : {}),
       changedFiles: status.changedFiles,
+      ...(status.stagedFiles ? { stagedFiles: status.stagedFiles } : {}),
+      ...(status.unstagedFiles ? { unstagedFiles: status.unstagedFiles } : {}),
+      ...(status.totalStaged !== undefined ? { totalStaged: status.totalStaged } : {}),
+      ...(status.totalUnstaged !== undefined ? { totalUnstaged: status.totalUnstaged } : {}),
     };
   }
 
-  getGitDiff(sessionId: string, targetPath: string): GitDiffResponse {
+  getGitDiff(
+    sessionId: string,
+    targetPath: string,
+    options?: { staged?: boolean; ignoreWhitespace?: boolean },
+  ): GitDiffResponse {
     const state = this.services.sessionStore.getSession(sessionId);
     if (!state) {
       throw new Error(`Unknown session ${sessionId}`);
@@ -208,7 +229,29 @@ export class GeminiAdapter implements ProviderAdapter {
     return {
       sessionId,
       path: targetPath,
-      diff: getCodexGitDiff(state.session.cwd, targetPath),
+      diff: getCodexGitDiff(state.session.cwd, targetPath, options),
+    };
+  }
+
+  applyGitFileAction(sessionId: string, request: GitFileActionRequest): GitFileActionResponse {
+    const state = this.services.sessionStore.getSession(sessionId);
+    if (!state) {
+      throw new Error(`Unknown session ${sessionId}`);
+    }
+    return {
+      ...applyCodexGitFileAction(state.session.cwd, request),
+      sessionId,
+    };
+  }
+
+  applyGitHunkAction(sessionId: string, request: GitHunkActionRequest): GitHunkActionResponse {
+    const state = this.services.sessionStore.getSession(sessionId);
+    if (!state) {
+      throw new Error(`Unknown session ${sessionId}`);
+    }
+    return {
+      ...applyCodexGitHunkAction(state.session.cwd, request),
+      sessionId,
     };
   }
 
@@ -246,18 +289,50 @@ export class GeminiAdapter implements ProviderAdapter {
     });
   }
 
+  createFrozenHistoryPageLoader(sessionId: string) {
+    const state = this.services.sessionStore.getSession(sessionId);
+    if (!state?.session.providerSessionId) {
+      return undefined;
+    }
+    const record =
+      this.storedSessionIndex.get(state.session.providerSessionId) ??
+      findGeminiStoredSessionRecord(
+        state.session.providerSessionId,
+        state.session.cwd,
+      );
+    if (!record) {
+      return undefined;
+    }
+    return createGeminiStoredSessionFrozenHistoryPageLoader({
+      sessionId,
+      record,
+    });
+  }
+
   getContextUsage(sessionId: string): ContextUsage | undefined {
     return this.services.sessionStore.getSession(sessionId)?.usage;
   }
 
   listStoredSessions(): StoredSessionRef[] {
-    return [...this.refreshStoredSessions().values()].map((record) => record.ref);
+    if (this.storedSessionIndex.size === 0) {
+      this.refreshStoredSessionIndex();
+    }
+    return [...this.storedSessionIndex.values()].map((record) => record.ref);
+  }
+
+  refreshStoredSessionsCatalog(): StoredSessionRef[] {
+    this.refreshStoredSessionIndex();
+    return this.listStoredSessions();
+  }
+
+  listStoredSessionWatchRoots(): string[] {
+    return resolveGeminiStoredSessionWatchRoots();
   }
 
   async removeStoredSession(session: StoredSessionRef): Promise<void> {
     const record =
       this.storedSessionIndex.get(session.providerSessionId) ??
-      this.refreshStoredSessions().get(session.providerSessionId);
+      this.refreshStoredSessionIndex().get(session.providerSessionId);
     if (!record) {
       throw new Error(`Could not find a stored Gemini history file for ${session.providerSessionId}.`);
     }
@@ -269,7 +344,7 @@ export class GeminiAdapter implements ProviderAdapter {
     return probeProviderDiagnostic("gemini", geminiLaunchSpec(), options);
   }
 
-  private refreshStoredSessions(): Map<string, GeminiStoredSessionRecord> {
+  private refreshStoredSessionIndex(): Map<string, GeminiStoredSessionRecord> {
     this.storedSessionIndex = new Map(
       discoverGeminiStoredSessions().map((record) => [record.ref.providerSessionId, record] as const),
     );

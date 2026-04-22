@@ -158,10 +158,24 @@ export interface WorkspaceSnapshotResponse {
   nodes: WorkspaceNode[];
 }
 
+export interface GitChangedFile {
+  path: string;
+  status: "modified" | "added" | "deleted" | "renamed" | "untracked" | "conflicted";
+  staged: boolean;
+  added: number;
+  removed: number;
+  binary?: boolean;
+  oldPath?: string;
+}
+
 export interface GitStatusResponse {
   sessionId: string;
   branch?: string;
   changedFiles: string[];
+  stagedFiles?: GitChangedFile[];
+  unstagedFiles?: GitChangedFile[];
+  totalStaged?: number;
+  totalUnstaged?: number;
 }
 
 export interface GitDiffResponse {
@@ -170,12 +184,54 @@ export interface GitDiffResponse {
   diff: string;
 }
 
+export interface GitHunkActionRequest {
+  path: string;
+  hunkIndex: number;
+  staged?: boolean;
+  action: "stage" | "unstage" | "revert";
+}
+
+export interface GitHunkActionResponse {
+  sessionId: string;
+  path: string;
+  hunkIndex: number;
+  staged?: boolean;
+  action: "stage" | "unstage" | "revert";
+  ok: true;
+}
+
+export interface GitFileActionRequest {
+  path: string;
+  staged?: boolean;
+  action: "stage" | "unstage";
+}
+
+export interface GitFileActionResponse {
+  sessionId: string;
+  path: string;
+  staged?: boolean;
+  action: "stage" | "unstage";
+  ok: true;
+}
+
 export interface SessionFileResponse {
   sessionId: string;
   path: string;
   content: string;
   binary: boolean;
   truncated?: boolean;
+}
+
+export interface SessionFileSearchItem {
+  path: string;
+  name: string;
+  parentPath: string;
+}
+
+export interface SessionFileSearchResponse {
+  sessionId: string;
+  query: string;
+  files: SessionFileSearchItem[];
 }
 
 export interface SessionHistoryPageResponse {

@@ -6,6 +6,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { EventBus } from "./event-bus";
 import { GeminiAdapter } from "./gemini-adapter";
+import { createGeminiStoredSessionFrozenHistoryPageLoader } from "./gemini-session-files";
 import { PtyHub } from "./pty-hub";
 import { SessionStore } from "./session-store";
 
@@ -341,5 +342,151 @@ emit({ type: "result", timestamp: new Date().toISOString(), status: "success", s
 
     const state = services.sessionStore.getSession(resumed.session.session.id);
     assert.equal(state?.controlLease.holderClientId, "web-1");
+  });
+
+  test("frozen Gemini history loader keeps browsing anchored after newer messages append", () => {
+    const sessionId = "gemini-session-frozen";
+    const chatsDir = path.join(tmpHome, "tmp", getProjectHash(cwd), "chats");
+    mkdirSync(chatsDir, { recursive: true });
+    const filePath = path.join(chatsDir, "session-2026-01-01T00-00-frozen.json");
+
+    const messages = Array.from({ length: 120 }, (_, index) => {
+      const n = index + 1;
+      const minute = String(Math.floor((index * 2) / 60)).padStart(2, "0");
+      const userSecond = String((index * 2) % 60).padStart(2, "0");
+      const assistantSecond = String((index * 2 + 1) % 60).padStart(2, "0");
+      return [
+        {
+          id: `msg-user-${n}`,
+          timestamp: `2026-01-01T00:${minute}:${userSecond}.000Z`,
+          type: "user",
+          content: [{ text: `user ${n}` }],
+        },
+        {
+          id: `msg-gemini-${n}`,
+          timestamp: `2026-01-01T00:${minute}:${assistantSecond}.000Z`,
+          type: "gemini",
+          content: [{ text: `assistant ${n}` }],
+        },
+      ];
+    }).flat();
+
+    writeFileSync(
+      filePath,
+      JSON.stringify({
+        sessionId,
+        projectHash: getProjectHash(cwd),
+        startTime: "2026-01-01T00:00:00.000Z",
+        lastUpdated: "2026-01-01T00:59:59.000Z",
+        messages,
+      }),
+    );
+
+    const loader = createGeminiStoredSessionFrozenHistoryPageLoader({
+      sessionId: "replay-1",
+      record: {
+        ref: {
+          provider: "gemini",
+          providerSessionId: sessionId,
+          title: "gemini frozen",
+          preview: "gemini frozen",
+          updatedAt: "2026-01-01T00:59:59.000Z",
+          source: "provider_history",
+        },
+        filePath,
+        conversation: {
+          sessionId,
+          projectHash: getProjectHash(cwd),
+          startTime: "2026-01-01T00:00:00.000Z",
+          lastUpdated: "2026-01-01T00:59:59.000Z",
+          messages: [],
+        },
+      },
+    });
+
+    const initial = loader.loadInitialPage(2);
+    assert.deepEqual(
+      initial.events.flatMap((event) => {
+        if (
+          event.type === "timeline.item.added" &&
+          (event.payload.item.kind === "user_message" ||
+            event.payload.item.kind === "assistant_message")
+        ) {
+          return [event.payload.item.text];
+        }
+        return [];
+      }),
+      ["user 120", "assistant 120"],
+    );
+    assert.ok(initial.nextCursor);
+
+    const olderBeforeAppend = loader.loadOlderPage(initial.nextCursor!, 2, initial.boundary);
+    const olderBeforeTexts = olderBeforeAppend.events.flatMap((event) => {
+      if (
+        event.type === "timeline.item.added" &&
+        (event.payload.item.kind === "user_message" ||
+          event.payload.item.kind === "assistant_message")
+      ) {
+        return [event.payload.item.text];
+      }
+      return [];
+    });
+
+    writeFileSync(
+      filePath,
+      JSON.stringify({
+        sessionId,
+        projectHash: getProjectHash(cwd),
+        startTime: "2026-01-01T00:00:00.000Z",
+        lastUpdated: "2026-01-01T01:00:01.000Z",
+        messages: [
+          ...messages,
+          {
+            id: "msg-user-121",
+            timestamp: "2026-01-01T01:00:00.000Z",
+            type: "user",
+            content: [{ text: "user 121" }],
+          },
+          {
+            id: "msg-gemini-121",
+            timestamp: "2026-01-01T01:00:01.000Z",
+            type: "gemini",
+            content: [{ text: "assistant 121" }],
+          },
+        ],
+      }),
+    );
+
+    const older = loader.loadOlderPage(initial.nextCursor!, 2, initial.boundary);
+    assert.equal(older.nextCursor ?? null, olderBeforeAppend.nextCursor ?? null);
+    assert.equal(older.nextBeforeTs ?? null, olderBeforeAppend.nextBeforeTs ?? null);
+    assert.deepEqual(
+      older.events.flatMap((event) => {
+        if (
+          event.type === "timeline.item.added" &&
+          (event.payload.item.kind === "user_message" ||
+            event.payload.item.kind === "assistant_message")
+        ) {
+          return [event.payload.item.text];
+        }
+        return [];
+      }),
+      olderBeforeTexts,
+    );
+
+    const initialAgain = loader.loadInitialPage(2);
+    assert.deepEqual(
+      initialAgain.events.flatMap((event) => {
+        if (
+          event.type === "timeline.item.added" &&
+          (event.payload.item.kind === "user_message" ||
+            event.payload.item.kind === "assistant_message")
+        ) {
+          return [event.payload.item.text];
+        }
+        return [];
+      }),
+      ["user 120", "assistant 120"],
+    );
   });
 });

@@ -104,6 +104,7 @@ interface SessionState {
 let initialized = false;
 let eventsSocket: WebSocket | null = null;
 let reconnectTimer: number | null = null;
+let storedSessionsRefreshTimer: number | null = null;
 let lastEventSeq = 0;
 let attemptedStoredHistoryRestore = false;
 const MAX_PENDING_EVENTS_PER_SESSION = 200;
@@ -734,21 +735,29 @@ function connectEventSocket() {
   eventsSocket = api.createEventsSocket(
     replayFromSeq === undefined ? {} : { replayFromSeq },
     (batch) => {
+      const hasStoredSessionDiscovery = batch.events?.some(
+        (event) => event.type === "session.discovery",
+      );
+      if (hasStoredSessionDiscovery) {
+        scheduleStoredSessionsRefresh();
+      }
+      const projectionEvents =
+        batch.events?.filter((event) => event.type !== "session.discovery") ?? [];
       if (batch.replayGap) {
         void recoverFromReplayGap(batch);
         return;
       }
-      if (!batch.events?.length) {
+      if (projectionEvents.length === 0) {
         return;
       }
       useSessionStore.setState((state) => ({
-        projections: applyEventsToMap(state.projections, batch.events),
+        projections: applyEventsToMap(state.projections, projectionEvents),
         unreadSessionIds: batch.initial
           ? state.unreadSessionIds
           : computeUnreadSessionIds(
               state.unreadSessionIds,
               state.selectedSessionId,
-              batch.events,
+              projectionEvents,
             ),
         error: state.error === "Events socket failed" ? null : state.error,
       }));
@@ -782,6 +791,16 @@ function connectEventSocket() {
     eventsSocket.close();
     eventsSocket = null;
   }
+}
+
+function scheduleStoredSessionsRefresh() {
+  if (storedSessionsRefreshTimer !== null) {
+    return;
+  }
+  storedSessionsRefreshTimer = window.setTimeout(() => {
+    storedSessionsRefreshTimer = null;
+    void useSessionStore.getState().refreshWorkbenchState();
+  }, 150);
 }
 
 function updateSessionSummary(session: SessionSummary) {

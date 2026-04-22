@@ -9,8 +9,18 @@ import type {
   SessionHistoryPageResponse,
   StoredSessionRef,
 } from "@rah/runtime-protocol";
+import type {
+  FrozenHistoryBoundary,
+  FrozenHistoryPage,
+  FrozenHistoryPageLoader,
+} from "./history-snapshots";
 import type { RuntimeServices } from "./provider-adapter";
 import { EventBus } from "./event-bus";
+import {
+  loadCachedGeminiHistoryEvents,
+  loadCachedGeminiHistoryWindow,
+  writeCachedGeminiHistoryEvents,
+} from "./gemini-history-cache";
 import { PtyHub } from "./pty-hub";
 import { applyProviderActivity, type ProviderActivity } from "./provider-activity";
 import { SessionStore } from "./session-store";
@@ -82,8 +92,16 @@ export interface GeminiStoredSessionRecord {
   conversation: GeminiConversationRecord;
 }
 
+type GeminiFrozenHistoryCursor = {
+  offset: number;
+};
+
 function resolveGeminiHome(): string {
   return process.env.GEMINI_CLI_HOME ?? path.join(os.homedir(), ".gemini");
+}
+
+export function resolveGeminiStoredSessionWatchRoots(): string[] {
+  return [path.join(resolveGeminiHome(), "tmp")];
 }
 
 function getProjectHash(projectRoot: string): string {
@@ -281,6 +299,44 @@ function truncateText(text: string, maxLength = 120): string {
     return text;
   }
   return `${text.slice(0, maxLength - 1).trimEnd()}…`;
+}
+
+function encodeGeminiFrozenHistoryCursor(cursor: GeminiFrozenHistoryCursor): string {
+  return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
+}
+
+function decodeGeminiFrozenHistoryCursor(cursor: string): GeminiFrozenHistoryCursor {
+  try {
+    const parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as {
+      offset?: unknown;
+    };
+    if (
+      typeof parsed.offset !== "number" ||
+      !Number.isInteger(parsed.offset) ||
+      parsed.offset < 0
+    ) {
+      throw new Error("Invalid Gemini frozen history cursor.");
+    }
+    return { offset: parsed.offset };
+  } catch {
+    throw new Error("Invalid Gemini frozen history cursor.");
+  }
+}
+
+function makeGeminiFrozenHistoryBoundary(
+  filePath: string,
+  fileSize: number,
+  mtimeMs: number,
+): FrozenHistoryBoundary {
+  return {
+    kind: "frozen",
+    sourceRevision: JSON.stringify({
+      provider: "gemini",
+      filePath,
+      fileSize,
+      mtimeMs,
+    }),
+  };
 }
 
 function buildStoredSessionRef(
@@ -564,6 +620,78 @@ function conversationToEvents(params: {
     .map((event) => ({ ...event, sessionId: params.sessionId }));
 }
 
+function materializeGeminiConversationEvents(params: {
+  sessionId: string;
+  conversation: GeminiConversationRecord;
+}): RahEvent[] {
+  return conversationToEvents(params)
+    .map((event) => ({
+      ...event,
+      id: `history:${event.id}`,
+      seq: event.seq + 1_000_000_000,
+    }))
+    .sort((a, b) => a.ts.localeCompare(b.ts) || a.seq - b.seq);
+}
+
+function resolveGeminiConversation(record: GeminiStoredSessionRecord): GeminiConversationRecord {
+  if (record.conversation.messages.length > 0) {
+    return record.conversation;
+  }
+  const loaded = loadGeminiConversationRecord(record.filePath);
+  if (!loaded) {
+    throw new Error(`Could not load Gemini session file ${record.filePath}.`);
+  }
+  return loaded;
+}
+
+function rebindGeminiHistoryEvents(sessionId: string, cachedEvents: readonly RahEvent[]): RahEvent[] {
+  return cachedEvents.map((event, index) => ({
+    ...event,
+    id: `history:gemini-cache:${index + 1}`,
+    seq: 1_000_000_000 + index + 1,
+    sessionId,
+  }));
+}
+
+function rebindGeminiHistoryWindowEvents(args: {
+  sessionId: string;
+  startOffset: number;
+  events: readonly RahEvent[];
+}): RahEvent[] {
+  return args.events.map((event, index) => ({
+    ...event,
+    id: `history:gemini-cache:${args.startOffset + index + 1}`,
+    seq: 1_000_000_000 + args.startOffset + index + 1,
+    sessionId: args.sessionId,
+  }));
+}
+
+function materializeGeminiHistoryEventsFromRecord(args: {
+  sessionId: string;
+  record: GeminiStoredSessionRecord;
+}): RahEvent[] {
+  const stats = statSync(args.record.filePath);
+  const cached = loadCachedGeminiHistoryEvents({
+    filePath: args.record.filePath,
+    size: stats.size,
+    mtimeMs: stats.mtimeMs,
+  });
+  if (cached) {
+    return rebindGeminiHistoryEvents(args.sessionId, cached);
+  }
+  const materialized = materializeGeminiConversationEvents({
+    sessionId: args.sessionId,
+    conversation: resolveGeminiConversation(args.record),
+  });
+  writeCachedGeminiHistoryEvents({
+    filePath: args.record.filePath,
+    size: stats.size,
+    mtimeMs: stats.mtimeMs,
+    events: materialized,
+  });
+  return materialized;
+}
+
 function publishSessionBootstrap(
   services: RuntimeServices,
   sessionId: string,
@@ -649,16 +777,11 @@ export function getGeminiStoredSessionHistoryPage(params: {
   beforeTs?: string;
   limit?: number;
 }): SessionHistoryPageResponse {
-  const all = conversationToEvents({
+  const all = materializeGeminiHistoryEventsFromRecord({
     sessionId: params.sessionId,
-    conversation: params.record.conversation,
+    record: params.record,
   })
     .filter((event) => (params.beforeTs ? event.ts < params.beforeTs : true))
-    .map((event) => ({
-      ...event,
-      id: `history:${event.id}`,
-      seq: event.seq + 1_000_000_000,
-    }))
     .sort((a, b) => a.ts.localeCompare(b.ts) || a.seq - b.seq);
   const limit = Math.max(1, params.limit ?? 1000);
   const start = Math.max(0, all.length - limit);
@@ -667,5 +790,91 @@ export function getGeminiStoredSessionHistoryPage(params: {
     sessionId: params.sessionId,
     events,
     ...(start > 0 && events[0] ? { nextBeforeTs: events[0].ts } : {}),
+  };
+}
+
+export function createGeminiStoredSessionFrozenHistoryPageLoader(args: {
+  sessionId: string;
+  record: GeminiStoredSessionRecord;
+}): FrozenHistoryPageLoader {
+  const stats = statSync(args.record.filePath);
+  const boundary = makeGeminiFrozenHistoryBoundary(
+    args.record.filePath,
+    stats.size,
+    stats.mtimeMs,
+  );
+  let cachedTotalEvents: number | undefined;
+
+  const pageAt = (offset: number, limit: number): FrozenHistoryPage => {
+    const safeLimit = Math.max(1, limit);
+    let pageEvents: RahEvent[];
+
+    if (cachedTotalEvents === undefined) {
+      const cachedWindow = loadCachedGeminiHistoryWindow({
+        filePath: args.record.filePath,
+        size: stats.size,
+        mtimeMs: stats.mtimeMs,
+        startOffset: 0,
+        endOffset: 0,
+      });
+      if (cachedWindow) {
+        cachedTotalEvents = cachedWindow.totalEvents;
+      }
+    }
+
+    if (cachedTotalEvents !== undefined) {
+      const boundedOffset = Math.max(0, Math.min(offset, cachedTotalEvents));
+      const start = Math.max(0, boundedOffset - safeLimit);
+      const window = loadCachedGeminiHistoryWindow({
+        filePath: args.record.filePath,
+        size: stats.size,
+        mtimeMs: stats.mtimeMs,
+        startOffset: start,
+        endOffset: boundedOffset,
+      });
+      if (!window) {
+        throw new Error("Gemini history cache became unavailable while paging.");
+      }
+      cachedTotalEvents = window.totalEvents;
+      pageEvents = rebindGeminiHistoryWindowEvents({
+        sessionId: args.sessionId,
+        startOffset: start,
+        events: window.events,
+      });
+      const nextCursor = start > 0 ? encodeGeminiFrozenHistoryCursor({ offset: start }) : undefined;
+      return {
+        boundary,
+        events: pageEvents,
+        ...(nextCursor ? { nextCursor } : {}),
+        ...(pageEvents[0] ? { nextBeforeTs: pageEvents[0].ts } : {}),
+      };
+    }
+
+    const events = materializeGeminiHistoryEventsFromRecord({
+      sessionId: args.sessionId,
+      record: args.record,
+    });
+    cachedTotalEvents = events.length;
+    const boundedOffset = Math.max(0, Math.min(offset, cachedTotalEvents));
+    const start = Math.max(0, boundedOffset - safeLimit);
+    pageEvents = events.slice(start, boundedOffset);
+    const nextCursor = start > 0 ? encodeGeminiFrozenHistoryCursor({ offset: start }) : undefined;
+    return {
+      boundary,
+      events: pageEvents,
+      ...(nextCursor ? { nextCursor } : {}),
+      ...(pageEvents[0] ? { nextBeforeTs: pageEvents[0].ts } : {}),
+    };
+  };
+
+  return {
+    loadInitialPage: (limit) => pageAt(Number.MAX_SAFE_INTEGER, limit),
+    loadOlderPage: (cursor, limit, frozenBoundary) => {
+      if (frozenBoundary.sourceRevision !== boundary.sourceRevision) {
+        throw new Error("Gemini frozen history boundary changed while paging.");
+      }
+      const decoded = decodeGeminiFrozenHistoryCursor(cursor);
+      return pageAt(decoded.offset, limit);
+    },
   };
 }

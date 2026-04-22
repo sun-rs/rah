@@ -8,6 +8,7 @@ import { EventBus } from "./event-bus";
 import { PtyHub } from "./pty-hub";
 import { SessionStore } from "./session-store";
 import {
+  createKimiStoredSessionFrozenHistoryPageLoader,
   discoverKimiStoredSessions,
   getKimiStoredSessionHistoryPage,
   resumeKimiStoredSession,
@@ -284,6 +285,136 @@ describe("Kimi session files", () => {
           event.payload.usage.cachedInputTokens === 5 &&
           event.payload.usage.outputTokens === 7,
       ),
+    );
+  });
+
+  test("frozen Kimi history loader keeps browsing anchored after newer wire lines append", () => {
+    writeKimiMetadata();
+    const sessionId = "kimi-session-frozen";
+    const sessionDir = path.join(tmpShare, "sessions", md5(workDir), sessionId);
+    mkdirSync(sessionDir, { recursive: true });
+
+    const lines = Array.from({ length: 400 }, (_, index) => {
+      const n = index + 1;
+      return [
+        JSON.stringify({
+          timestamp: 1_700_100_000 + index * 2,
+          message: {
+            type: "TurnBegin",
+            payload: {
+              user_input: [{ text: `user ${n}` }],
+            },
+          },
+        }),
+        JSON.stringify({
+          timestamp: 1_700_100_001 + index * 2,
+          message: {
+            type: "TextPart",
+            payload: { text: `assistant ${n}` },
+          },
+        }),
+      ];
+    }).flat();
+
+    const wirePath = path.join(sessionDir, "wire.jsonl");
+    writeFileSync(
+      wirePath,
+      `${[JSON.stringify({ type: "metadata", protocol_version: "1.9" }), ...lines].join("\n")}\n`,
+    );
+
+    const record = discoverKimiStoredSessions().find(
+      (item) => item.ref.providerSessionId === sessionId,
+    );
+    assert.ok(record);
+
+    const loader = createKimiStoredSessionFrozenHistoryPageLoader({
+      sessionId: "replay-1",
+      record: record!,
+    });
+
+    const initial = loader.loadInitialPage(2);
+    assert.deepEqual(
+      initial.events.flatMap((event) => {
+        if (
+          event.type === "timeline.item.added" &&
+          (event.payload.item.kind === "user_message" ||
+            event.payload.item.kind === "assistant_message")
+        ) {
+          return [event.payload.item.text];
+        }
+        return [];
+      }),
+      ["user 400", "assistant 400"],
+    );
+    assert.ok(initial.nextCursor);
+
+    const olderBeforeAppend = loader.loadOlderPage(initial.nextCursor!, 2, initial.boundary);
+    const olderBeforeTexts = olderBeforeAppend.events.flatMap((event) => {
+      if (
+        event.type === "timeline.item.added" &&
+        (event.payload.item.kind === "user_message" ||
+          event.payload.item.kind === "assistant_message")
+      ) {
+        return [event.payload.item.text];
+      }
+      return [];
+    });
+
+    writeFileSync(
+      wirePath,
+      `${[
+        JSON.stringify({ type: "metadata", protocol_version: "1.9" }),
+        ...lines,
+        JSON.stringify({
+          timestamp: 1_700_200_000,
+          message: {
+            type: "TurnBegin",
+            payload: {
+              user_input: [{ text: "user 401" }],
+            },
+          },
+        }),
+        JSON.stringify({
+          timestamp: 1_700_200_001,
+          message: {
+            type: "TextPart",
+            payload: { text: "assistant 401" },
+          },
+        }),
+      ].join("\n")}\n`,
+    );
+
+    const older = loader.loadOlderPage(initial.nextCursor!, 2, initial.boundary);
+    assert.ok(older.nextCursor);
+    assert.ok(olderBeforeAppend.nextCursor);
+    assert.equal(older.nextBeforeTs ?? null, olderBeforeAppend.nextBeforeTs ?? null);
+    assert.deepEqual(
+      older.events.flatMap((event) => {
+        if (
+          event.type === "timeline.item.added" &&
+          (event.payload.item.kind === "user_message" ||
+            event.payload.item.kind === "assistant_message")
+        ) {
+          return [event.payload.item.text];
+        }
+        return [];
+      }),
+      olderBeforeTexts,
+    );
+
+    const initialAgain = loader.loadInitialPage(2);
+    assert.deepEqual(
+      initialAgain.events.flatMap((event) => {
+        if (
+          event.type === "timeline.item.added" &&
+          (event.payload.item.kind === "user_message" ||
+            event.payload.item.kind === "assistant_message")
+        ) {
+          return [event.payload.item.text];
+        }
+        return [];
+      }),
+      ["user 400", "assistant 400"],
     );
   });
 });

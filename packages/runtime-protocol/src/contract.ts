@@ -55,6 +55,7 @@ export type RahEventFamily =
 export type RahEventTier = "core_workbench" | "infrastructure";
 
 export const RAH_EVENT_TYPE_FAMILY = {
+  "session.discovery": "session",
   "session.created": "session",
   "session.started": "session",
   "session.attached": "session",
@@ -1008,6 +1009,11 @@ function validatePayload(event: RahEvent, sink: IssueSink) {
     case "session.created":
     case "session.started":
       validateManagedSession(payload.session, sink, "payload.session");
+      break;
+    case "session.discovery":
+      if (!isOptionalInteger(payload.version)) {
+        addIssue(sink, "error", "session.discovery.version.invalid", "session discovery version must be an integer", "payload.version");
+      }
       break;
     case "session.attached":
       if (!isNonEmptyString(payload.clientId)) {

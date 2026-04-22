@@ -7,6 +7,7 @@ import { EventBus } from "./event-bus";
 import { PtyHub } from "./pty-hub";
 import { SessionStore } from "./session-store";
 import {
+  createClaudeStoredSessionFrozenHistoryPageLoader,
   discoverClaudeStoredSessions,
   findClaudeStoredSessionRecord,
   getClaudeStoredSessionHistoryPage,
@@ -282,6 +283,125 @@ describe("Claude session files", () => {
           event.payload.title === "Claude API error" &&
           event.payload.body === "Claude upstream rejected the request",
       ),
+    );
+  });
+
+  test("frozen Claude history loader keeps browsing anchored after newer lines append", () => {
+    const lines = Array.from({ length: 400 }, (_, index) => {
+      const n = index + 1;
+      const minute = String(Math.floor((index * 2) / 60)).padStart(2, "0");
+      const userSecond = String((index * 2) % 60).padStart(2, "0");
+      const assistantSecond = String((index * 2 + 1) % 60).padStart(2, "0");
+      return [
+        {
+          type: "user",
+          uuid: `user-${n}`,
+          cwd: workDir,
+          sessionId: "session-frozen",
+          timestamp: `2025-07-19T22:${minute}:${userSecond}.000Z`,
+          message: {
+            content: `user ${n}`,
+          },
+        },
+        {
+          type: "assistant",
+          uuid: `assistant-${n}`,
+          cwd: workDir,
+          sessionId: "session-frozen",
+          timestamp: `2025-07-19T22:${minute}:${assistantSecond}.000Z`,
+          message: {
+            content: [{ type: "text", text: `assistant ${n}` }],
+          },
+        },
+      ];
+    }).flat();
+    writeClaudeSession("session-frozen.jsonl", lines);
+
+    const record = findClaudeStoredSessionRecord("session-frozen", workDir);
+    assert.ok(record);
+    const loader = createClaudeStoredSessionFrozenHistoryPageLoader({
+      sessionId: "replay-1",
+      record,
+    });
+
+    const initial = loader.loadInitialPage(2);
+    assert.deepEqual(
+      initial.events.flatMap((event) => {
+        if (
+          event.type === "timeline.item.added" &&
+          (event.payload.item.kind === "user_message" ||
+            event.payload.item.kind === "assistant_message")
+        ) {
+          return [event.payload.item.text];
+        }
+        return [];
+      }),
+      ["user 400", "assistant 400"],
+    );
+    assert.ok(initial.nextCursor);
+
+    const olderBeforeAppend = loader.loadOlderPage(initial.nextCursor!, 2, initial.boundary);
+
+    writeFileSync(
+      path.join(projectDir, "session-frozen.jsonl"),
+      `${[
+        ...lines,
+        {
+          type: "user",
+          uuid: "user-21",
+          cwd: workDir,
+          sessionId: "session-frozen",
+          timestamp: "2025-07-19T22:22:00.000Z",
+          message: { content: "user 21" },
+        },
+        {
+          type: "assistant",
+          uuid: "assistant-21",
+          cwd: workDir,
+          sessionId: "session-frozen",
+          timestamp: "2025-07-19T22:22:01.000Z",
+          message: { content: [{ type: "text", text: "assistant 21" }] },
+        },
+      ].map((line) => JSON.stringify(line)).join("\n")}\n`,
+    );
+
+    const older = loader.loadOlderPage(initial.nextCursor!, 2, initial.boundary);
+    assert.deepEqual(
+      older.events.flatMap((event) => {
+        if (
+          event.type === "timeline.item.added" &&
+          (event.payload.item.kind === "user_message" ||
+            event.payload.item.kind === "assistant_message")
+        ) {
+          return [event.payload.item.text];
+        }
+        return [];
+      }),
+      olderBeforeAppend.events.flatMap((event) => {
+        if (
+          event.type === "timeline.item.added" &&
+          (event.payload.item.kind === "user_message" ||
+            event.payload.item.kind === "assistant_message")
+        ) {
+          return [event.payload.item.text];
+        }
+        return [];
+      }),
+    );
+
+    const initialAgain = loader.loadInitialPage(2);
+    assert.deepEqual(
+      initialAgain.events.flatMap((event) => {
+        if (
+          event.type === "timeline.item.added" &&
+          (event.payload.item.kind === "user_message" ||
+            event.payload.item.kind === "assistant_message")
+        ) {
+          return [event.payload.item.text];
+        }
+        return [];
+      }),
+      ["user 400", "assistant 400"],
     );
   });
 });

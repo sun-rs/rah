@@ -667,10 +667,26 @@ export class DebugEngine {
       sessionId,
       branch: "main",
       changedFiles: ["src/index.ts"],
+      stagedFiles: [],
+      unstagedFiles: [
+        {
+          path: "src/index.ts",
+          status: "modified",
+          staged: false,
+          added: 1,
+          removed: 1,
+        },
+      ],
+      totalStaged: 0,
+      totalUnstaged: 1,
     };
   }
 
-  getGitDiff(sessionId: string, path: string): GitDiffResponse {
+  getGitDiff(
+    sessionId: string,
+    path: string,
+    _options?: { staged?: boolean; ignoreWhitespace?: boolean },
+  ): GitDiffResponse {
     return {
       sessionId,
       path,

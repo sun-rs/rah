@@ -10,6 +10,8 @@ import type {
   DebugScenarioDescriptor,
   DebugReplayScript,
   EventSubscriptionRequest,
+  GitFileActionRequest,
+  GitHunkActionRequest,
   InterruptSessionRequest,
   ListSessionsResponse,
   ProviderDiagnostic,
@@ -19,6 +21,7 @@ import type {
   ReleaseControlRequest,
   ResumeSessionRequest,
   ResumeSessionResponse,
+  SessionFileSearchResponse,
   SessionHistoryPageResponse,
   SessionSummary,
   StartSessionRequest,
@@ -27,6 +30,7 @@ import type {
 } from "@rah/runtime-protocol";
 import { ClaudeAdapter } from "./claude-adapter";
 import { CodexAdapter } from "./codex-adapter";
+import { searchWorkspaceFiles } from "./codex-stored-sessions";
 import { DebugAdapter } from "./debug-adapter";
 import { EventBus } from "./event-bus";
 import { GeminiAdapter } from "./gemini-adapter";
@@ -39,6 +43,7 @@ import {
 import type { ProviderAdapter } from "./provider-adapter";
 import { PtyHub } from "./pty-hub";
 import { SessionStore, toSessionSummary, type StoredSessionState } from "./session-store";
+import { StoredSessionMonitor } from "./stored-session-monitor";
 import { WorkbenchStateStore } from "./workbench-state";
 
 const SYSTEM_SOURCE = {
@@ -137,6 +142,8 @@ export class RuntimeEngine {
   private rememberedActiveWorkspaceDir: string | undefined;
   private rememberedHiddenSessionKeys: string[];
   private lastDiscoveredStoredSessions: StoredSessionRef[] = [];
+  private storedSessionDiscoveryVersion = 0;
+  private readonly storedSessionMonitor: StoredSessionMonitor;
 
   private readonly adaptersById = new Map<string, ProviderAdapter>();
   private readonly adaptersByProvider = new Map<string, ProviderAdapter>();
@@ -160,7 +167,7 @@ export class RuntimeEngine {
     this.rememberedActiveWorkspaceDir = restored.activeWorkspaceDir;
     this.rememberedHiddenSessionKeys = restored.hiddenSessionKeys;
 
-    const resolvedAdapters = adapters ?? (() => {
+    const resolvedAdapters: ProviderAdapter[] = adapters ?? (() => {
       const debugAdapter = new DebugAdapter({
         eventBus: this.eventBus,
         ptyHub: this.ptyHub,
@@ -193,12 +200,19 @@ export class RuntimeEngine {
     for (const adapter of resolvedAdapters) {
       this.registerAdapter(adapter);
     }
+    this.refreshStoredSessionsCache();
+    this.storedSessionMonitor = new StoredSessionMonitor({
+      roots: resolvedAdapters.flatMap((adapter) => adapter.listStoredSessionWatchRoots?.() ?? []),
+      refresh: () => {
+        this.refreshStoredSessionsCache({ publish: true });
+      },
+    });
+    this.storedSessionMonitor.start();
   }
 
   listSessions(): ListSessionsResponse {
     this.pruneOrphanSessions();
     const liveStates = this.sessionStore.listSessions();
-    this.lastDiscoveredStoredSessions = this.discoverStoredSessions();
     return this.buildSessionsResponse(liveStates, this.lastDiscoveredStoredSessions);
   }
 
@@ -269,6 +283,7 @@ export class RuntimeEngine {
       (session) =>
         session.provider !== provider || session.providerSessionId !== providerSessionId,
     );
+    this.publishStoredSessionDiscovery();
     return this.buildSessionsResponse(this.sessionStore.listSessions(), this.lastDiscoveredStoredSessions);
   }
 
@@ -298,6 +313,7 @@ export class RuntimeEngine {
     this.lastDiscoveredStoredSessions = this.lastDiscoveredStoredSessions.filter(
       (session) => !sessionBelongsToWorkspace(session.rootDir || session.cwd, directory),
     );
+    this.publishStoredSessionDiscovery();
     return this.buildSessionsResponse(this.sessionStore.listSessions(), this.lastDiscoveredStoredSessions);
   }
 
@@ -474,12 +490,44 @@ export class RuntimeEngine {
     return this.requireSessionAdapter(sessionId).getGitStatus(sessionId);
   }
 
-  getGitDiff(sessionId: string, path: string) {
-    return this.requireSessionAdapter(sessionId).getGitDiff(sessionId, path);
+  getGitDiff(
+    sessionId: string,
+    path: string,
+    options?: { staged?: boolean; ignoreWhitespace?: boolean },
+  ) {
+    return this.requireSessionAdapter(sessionId).getGitDiff(sessionId, path, options);
+  }
+
+  applyGitFileAction(sessionId: string, request: GitFileActionRequest) {
+    const adapter = this.requireSessionAdapter(sessionId);
+    if (!adapter.applyGitFileAction) {
+      throw new Error(`Provider ${adapter.id} does not support git file actions.`);
+    }
+    return adapter.applyGitFileAction(sessionId, request);
+  }
+
+  applyGitHunkAction(sessionId: string, request: GitHunkActionRequest) {
+    const adapter = this.requireSessionAdapter(sessionId);
+    if (!adapter.applyGitHunkAction) {
+      throw new Error(`Provider ${adapter.id} does not support git hunk actions.`);
+    }
+    return adapter.applyGitHunkAction(sessionId, request);
   }
 
   readSessionFile(sessionId: string, path: string) {
     return this.requireSessionAdapter(sessionId).readSessionFile(sessionId, path);
+  }
+
+  searchSessionFiles(sessionId: string, query: string, limit = 100): SessionFileSearchResponse {
+    const session = this.sessionStore.getSession(sessionId)?.session;
+    if (!session) {
+      throw new Error(`Unknown session ${sessionId}`);
+    }
+    return {
+      sessionId,
+      query,
+      files: searchWorkspaceFiles(session.cwd, query, limit),
+    };
   }
 
   getSessionHistoryPage(
@@ -494,6 +542,7 @@ export class RuntimeEngine {
       sessionId,
       ...(options?.cursor ? { cursor: options.cursor } : {}),
       ...(options?.limit ? { limit: options.limit } : {}),
+      loadFrozenPage: () => adapter.createFrozenHistoryPageLoader?.(sessionId),
       loadEvents: () =>
         adapter.getSessionHistoryPage!(
           sessionId,
@@ -571,6 +620,7 @@ export class RuntimeEngine {
   }
 
   async shutdown(): Promise<void> {
+    await this.storedSessionMonitor.shutdown();
     for (const adapter of this.adaptersById.values()) {
       await adapter.shutdown?.();
     }
@@ -596,11 +646,61 @@ export class RuntimeEngine {
   private discoverStoredSessions(): StoredSessionRef[] {
     const discovered = new Map<string, StoredSessionRef>();
     for (const adapter of this.adaptersById.values()) {
-      for (const stored of adapter.listStoredSessions?.() ?? []) {
+      const storedSessions =
+        adapter.refreshStoredSessionsCatalog?.() ??
+        adapter.listStoredSessions?.() ??
+        [];
+      for (const stored of storedSessions) {
         discovered.set(`${stored.provider}:${stored.providerSessionId}`, stored);
       }
     }
     return [...discovered.values()];
+  }
+
+  private refreshStoredSessionsCache(options?: { publish?: boolean }): void {
+    const next = this.discoverStoredSessions();
+    if (this.sameStoredSessionRefs(this.lastDiscoveredStoredSessions, next)) {
+      return;
+    }
+    this.lastDiscoveredStoredSessions = next;
+    if (options?.publish) {
+      this.publishStoredSessionDiscovery();
+    }
+  }
+
+  private sameStoredSessionRefs(
+    left: readonly StoredSessionRef[],
+    right: readonly StoredSessionRef[],
+  ): boolean {
+    if (left.length !== right.length) {
+      return false;
+    }
+    return left.every((entry, index) => this.storedSessionRefKey(entry) === this.storedSessionRefKey(right[index]!));
+  }
+
+  private storedSessionRefKey(entry: StoredSessionRef): string {
+    return JSON.stringify([
+      entry.provider,
+      entry.providerSessionId,
+      entry.source ?? "provider_history",
+      entry.cwd ?? "",
+      entry.rootDir ?? "",
+      entry.title ?? "",
+      entry.preview ?? "",
+      entry.updatedAt ?? "",
+      entry.lastUsedAt ?? "",
+    ]);
+  }
+
+  private publishStoredSessionDiscovery(): void {
+    this.eventBus.publish({
+      sessionId: "workbench:stored-sessions",
+      type: "session.discovery",
+      source: SYSTEM_SOURCE,
+      payload: {
+        version: ++this.storedSessionDiscoveryVersion,
+      },
+    });
   }
 
   private buildSessionsResponse(

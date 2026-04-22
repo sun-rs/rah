@@ -2,6 +2,10 @@ import type {
   CloseSessionRequest,
   ContextUsage,
   GitDiffResponse,
+  GitFileActionRequest,
+  GitFileActionResponse,
+  GitHunkActionRequest,
+  GitHunkActionResponse,
   GitStatusResponse,
   InterruptSessionRequest,
   PermissionResponseRequest,
@@ -17,7 +21,14 @@ import type {
   WorkspaceSnapshotResponse,
 } from "@rah/runtime-protocol";
 import type { ProviderAdapter, RuntimeServices } from "./provider-adapter";
-import { getCodexGitDiff, getCodexGitStatus, getCodexWorkspaceSnapshot, readWorkspaceFile } from "./codex-stored-sessions";
+import {
+  applyCodexGitFileAction,
+  applyCodexGitHunkAction,
+  getCodexGitDiff,
+  getCodexGitStatus,
+  getCodexWorkspaceSnapshot,
+  readWorkspaceFile,
+} from "./codex-stored-sessions";
 import {
   closeKimiLiveSession,
   interruptKimiLiveSession,
@@ -28,8 +39,10 @@ import {
   type LiveKimiSession,
 } from "./kimi-live-client";
 import {
+  createKimiStoredSessionFrozenHistoryPageLoader,
   discoverKimiStoredSessions,
   getKimiStoredSessionHistoryPage,
+  resolveKimiStoredSessionWatchRoots,
   resumeKimiStoredSession,
   type KimiStoredSessionRecord,
 } from "./kimi-session-files";
@@ -83,7 +96,7 @@ export class KimiAdapter implements ProviderAdapter {
     }
 
     const record =
-      this.refreshStoredSessions().get(request.providerSessionId) ??
+      this.refreshStoredSessionIndex().get(request.providerSessionId) ??
       this.storedSessionIndex.get(request.providerSessionId);
     if (request.preferStoredReplay) {
       if (!record) {
@@ -214,10 +227,18 @@ export class KimiAdapter implements ProviderAdapter {
       sessionId,
       ...(status.branch ? { branch: status.branch } : {}),
       changedFiles: status.changedFiles,
+      ...(status.stagedFiles ? { stagedFiles: status.stagedFiles } : {}),
+      ...(status.unstagedFiles ? { unstagedFiles: status.unstagedFiles } : {}),
+      ...(status.totalStaged !== undefined ? { totalStaged: status.totalStaged } : {}),
+      ...(status.totalUnstaged !== undefined ? { totalUnstaged: status.totalUnstaged } : {}),
     };
   }
 
-  getGitDiff(sessionId: string, targetPath: string): GitDiffResponse {
+  getGitDiff(
+    sessionId: string,
+    targetPath: string,
+    options?: { staged?: boolean; ignoreWhitespace?: boolean },
+  ): GitDiffResponse {
     const state = this.services.sessionStore.getSession(sessionId);
     if (!state) {
       throw new Error(`Unknown session ${sessionId}`);
@@ -225,7 +246,29 @@ export class KimiAdapter implements ProviderAdapter {
     return {
       sessionId,
       path: targetPath,
-      diff: getCodexGitDiff(state.session.cwd, targetPath),
+      diff: getCodexGitDiff(state.session.cwd, targetPath, options),
+    };
+  }
+
+  applyGitFileAction(sessionId: string, request: GitFileActionRequest): GitFileActionResponse {
+    const state = this.services.sessionStore.getSession(sessionId);
+    if (!state) {
+      throw new Error(`Unknown session ${sessionId}`);
+    }
+    return {
+      ...applyCodexGitFileAction(state.session.cwd, request),
+      sessionId,
+    };
+  }
+
+  applyGitHunkAction(sessionId: string, request: GitHunkActionRequest): GitHunkActionResponse {
+    const state = this.services.sessionStore.getSession(sessionId);
+    if (!state) {
+      throw new Error(`Unknown session ${sessionId}`);
+    }
+    return {
+      ...applyCodexGitHunkAction(state.session.cwd, request),
+      sessionId,
     };
   }
 
@@ -249,7 +292,7 @@ export class KimiAdapter implements ProviderAdapter {
       return { sessionId, events: [] };
     }
     const record =
-      this.refreshStoredSessions().get(state.session.providerSessionId) ??
+      this.refreshStoredSessionIndex().get(state.session.providerSessionId) ??
       this.storedSessionIndex.get(state.session.providerSessionId);
     if (!record) {
       return { sessionId, events: [] };
@@ -262,18 +305,47 @@ export class KimiAdapter implements ProviderAdapter {
     });
   }
 
+  createFrozenHistoryPageLoader(sessionId: string) {
+    const state = this.services.sessionStore.getSession(sessionId);
+    if (!state?.session.providerSessionId) {
+      return undefined;
+    }
+    const record =
+      this.refreshStoredSessionIndex().get(state.session.providerSessionId) ??
+      this.storedSessionIndex.get(state.session.providerSessionId);
+    if (!record) {
+      return undefined;
+    }
+    return createKimiStoredSessionFrozenHistoryPageLoader({
+      sessionId,
+      record,
+    });
+  }
+
   getContextUsage(sessionId: string): ContextUsage | undefined {
     return this.services.sessionStore.getSession(sessionId)?.usage;
   }
 
   listStoredSessions(): StoredSessionRef[] {
-    return [...this.refreshStoredSessions().values()].map((record) => record.ref);
+    if (this.storedSessionIndex.size === 0) {
+      this.refreshStoredSessionIndex();
+    }
+    return [...this.storedSessionIndex.values()].map((record) => record.ref);
+  }
+
+  refreshStoredSessionsCatalog(): StoredSessionRef[] {
+    this.refreshStoredSessionIndex();
+    return this.listStoredSessions();
+  }
+
+  listStoredSessionWatchRoots(): string[] {
+    return resolveKimiStoredSessionWatchRoots();
   }
 
   async removeStoredSession(session: StoredSessionRef): Promise<void> {
     const record =
       this.storedSessionIndex.get(session.providerSessionId) ??
-      this.refreshStoredSessions().get(session.providerSessionId);
+      this.refreshStoredSessionIndex().get(session.providerSessionId);
     if (!record) {
       throw new Error(`Could not find a stored Kimi history directory for ${session.providerSessionId}.`);
     }
@@ -285,7 +357,7 @@ export class KimiAdapter implements ProviderAdapter {
     return probeProviderDiagnostic("kimi", kimiLaunchSpec(), options);
   }
 
-  private refreshStoredSessions() {
+  private refreshStoredSessionIndex() {
     this.storedSessionIndex = new Map(
       discoverKimiStoredSessions().map((record) => [record.ref.providerSessionId, record] as const),
     );

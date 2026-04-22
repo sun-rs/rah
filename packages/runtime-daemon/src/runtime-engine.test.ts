@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type {
@@ -8,6 +8,8 @@ import type {
   CloseSessionRequest,
   ContextUsage,
   GitDiffResponse,
+  GitHunkActionRequest,
+  GitHunkActionResponse,
   GitStatusResponse,
   InterruptSessionRequest,
   PermissionResponseRequest,
@@ -25,6 +27,7 @@ import type {
 } from "@rah/runtime-protocol";
 import { RuntimeEngine } from "./runtime-engine";
 import type { ProviderAdapter } from "./provider-adapter";
+import type { FrozenHistoryBoundary, FrozenHistoryPageLoader } from "./history-snapshots";
 
 class CountingStoredSessionsAdapter implements ProviderAdapter {
   readonly id = "counting";
@@ -37,6 +40,10 @@ class CountingStoredSessionsAdapter implements ProviderAdapter {
   listStoredSessions(): StoredSessionRef[] {
     this.storedSessionCalls += 1;
     return [...this.storedSessions];
+  }
+
+  listStoredSessionWatchRoots(): string[] {
+    return [];
   }
 
   async removeStoredSession(session: StoredSessionRef): Promise<void> {
@@ -87,7 +94,18 @@ class CountingStoredSessionsAdapter implements ProviderAdapter {
     throw new Error("not implemented");
   }
 
-  getGitDiff(_sessionId: string, _path: string): GitDiffResponse {
+  getGitDiff(
+    _sessionId: string,
+    _path: string,
+    _options?: { staged?: boolean; ignoreWhitespace?: boolean },
+  ): GitDiffResponse {
+    throw new Error("not implemented");
+  }
+
+  applyGitHunkAction(
+    _sessionId: string,
+    _request: GitHunkActionRequest,
+  ): GitHunkActionResponse {
     throw new Error("not implemented");
   }
 
@@ -104,6 +122,109 @@ class CountingStoredSessionsAdapter implements ProviderAdapter {
 
   getContextUsage(_sessionId: string): ContextUsage | undefined {
     return undefined;
+  }
+}
+
+class WatchingStoredSessionsAdapter implements ProviderAdapter {
+  readonly id = "watching";
+  readonly providers: Array<"codex"> = ["codex"];
+  storedSessions: StoredSessionRef[];
+  storedSessionCalls = 0;
+
+  constructor(
+    initialStoredSessions: StoredSessionRef[],
+    private readonly watchRoot: string,
+  ) {
+    this.storedSessions = initialStoredSessions;
+  }
+
+  listStoredSessions(): StoredSessionRef[] {
+    this.storedSessionCalls += 1;
+    return [...this.storedSessions];
+  }
+
+  listStoredSessionWatchRoots(): string[] {
+    return [this.watchRoot];
+  }
+
+  startSession(_request: StartSessionRequest): StartSessionResponse | Promise<StartSessionResponse> {
+    throw new Error("not implemented");
+  }
+
+  resumeSession(_request: ResumeSessionRequest): ResumeSessionResponse | Promise<ResumeSessionResponse> {
+    throw new Error("not implemented");
+  }
+
+  sendInput(_sessionId: string, _request: SessionInputRequest): void {
+    throw new Error("not implemented");
+  }
+
+  closeSession?(_sessionId: string, _request: CloseSessionRequest): Promise<void> | void {
+    throw new Error("not implemented");
+  }
+
+  interruptSession(_sessionId: string, _request: InterruptSessionRequest): SessionSummary {
+    throw new Error("not implemented");
+  }
+
+  respondToPermission?(
+    _sessionId: string,
+    _requestId: string,
+    _response: PermissionResponseRequest,
+  ): Promise<void> | void {
+    throw new Error("not implemented");
+  }
+
+  onPtyInput(_sessionId: string, _clientId: string, _data: string): void {
+    throw new Error("not implemented");
+  }
+
+  onPtyResize(_sessionId: string, _clientId: string, _cols: number, _rows: number): void {
+    throw new Error("not implemented");
+  }
+
+  getWorkspaceSnapshot(_sessionId: string): WorkspaceSnapshotResponse {
+    throw new Error("not implemented");
+  }
+
+  getGitStatus(_sessionId: string): GitStatusResponse {
+    throw new Error("not implemented");
+  }
+
+  getGitDiff(
+    _sessionId: string,
+    _path: string,
+    _options?: { staged?: boolean; ignoreWhitespace?: boolean },
+  ): GitDiffResponse {
+    throw new Error("not implemented");
+  }
+
+  applyGitHunkAction(
+    _sessionId: string,
+    _request: GitHunkActionRequest,
+  ): GitHunkActionResponse {
+    throw new Error("not implemented");
+  }
+
+  readSessionFile(_sessionId: string, _path: string): SessionFileResponse {
+    throw new Error("not implemented");
+  }
+
+  getSessionHistoryPage?(
+    _sessionId: string,
+    _options?: { beforeTs?: string; cursor?: string; limit?: number },
+  ): SessionHistoryPageResponse {
+    throw new Error("not implemented");
+  }
+
+  getContextUsage(_sessionId: string): ContextUsage | undefined {
+    return undefined;
+  }
+}
+
+class FailingRemovalStoredSessionsAdapter extends CountingStoredSessionsAdapter {
+  override async removeStoredSession(_session: StoredSessionRef): Promise<void> {
+    throw new Error("provider trash move failed");
   }
 }
 
@@ -126,6 +247,26 @@ function historyEvent(sessionId: string, seq: number, ts: string, text: string):
       },
     },
   };
+}
+
+async function waitFor(
+  assertion: () => void,
+  options?: { timeoutMs?: number; intervalMs?: number },
+): Promise<void> {
+  const timeoutMs = options?.timeoutMs ?? 2_000;
+  const intervalMs = options?.intervalMs ?? 50;
+  const started = Date.now();
+  let lastError: unknown;
+  while (Date.now() - started < timeoutMs) {
+    try {
+      assertion();
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
 function sessionSummary(sessionId: string, providerSessionId: string): SessionSummary {
@@ -216,7 +357,11 @@ class SnapshotPagingAdapter implements ProviderAdapter {
     throw new Error("not implemented");
   }
 
-  getGitDiff(_sessionId: string, _path: string): GitDiffResponse {
+  getGitDiff(
+    _sessionId: string,
+    _path: string,
+    _options?: { staged?: boolean; ignoreWhitespace?: boolean },
+  ): GitDiffResponse {
     throw new Error("not implemented");
   }
 
@@ -236,6 +381,126 @@ class SnapshotPagingAdapter implements ProviderAdapter {
       events: events.slice(start),
       ...(start > 0 && events[start] ? { nextBeforeTs: events[start]!.ts } : {}),
     };
+  }
+
+  getContextUsage(_sessionId: string): ContextUsage | undefined {
+    return undefined;
+  }
+}
+
+class FrozenPagingAdapter implements ProviderAdapter {
+  readonly id = "frozen-paging";
+  readonly providers: Array<"codex"> = ["codex"];
+  loaderCreationCount = 0;
+  readonly pagesBySessionId = new Map<
+    string,
+    {
+      boundary: FrozenHistoryBoundary;
+      initial: SessionHistoryPageResponse;
+      olderByCursor: Map<string, SessionHistoryPageResponse>;
+    }
+  >();
+
+  startSession(_request: StartSessionRequest): StartSessionResponse | Promise<StartSessionResponse> {
+    throw new Error("not implemented");
+  }
+
+  async resumeSession(request: ResumeSessionRequest): Promise<ResumeSessionResponse> {
+    const sessionId = request.preferStoredReplay ? "replay-1" : "live-1";
+    return {
+      session: sessionSummary(sessionId, request.providerSessionId),
+    };
+  }
+
+  sendInput(_sessionId: string, _request: SessionInputRequest): void {
+    throw new Error("not implemented");
+  }
+
+  closeSession?(_sessionId: string, _request: CloseSessionRequest): Promise<void> | void {
+    throw new Error("not implemented");
+  }
+
+  interruptSession(_sessionId: string, _request: InterruptSessionRequest): SessionSummary {
+    throw new Error("not implemented");
+  }
+
+  respondToPermission?(
+    _sessionId: string,
+    _requestId: string,
+    _response: PermissionResponseRequest,
+  ): Promise<void> | void {
+    throw new Error("not implemented");
+  }
+
+  onPtyInput(_sessionId: string, _clientId: string, _data: string): void {
+    throw new Error("not implemented");
+  }
+
+  onPtyResize(_sessionId: string, _clientId: string, _cols: number, _rows: number): void {
+    throw new Error("not implemented");
+  }
+
+  getWorkspaceSnapshot(_sessionId: string): WorkspaceSnapshotResponse {
+    throw new Error("not implemented");
+  }
+
+  getGitStatus(_sessionId: string): GitStatusResponse {
+    throw new Error("not implemented");
+  }
+
+  getGitDiff(
+    _sessionId: string,
+    _path: string,
+    _options?: { staged?: boolean; ignoreWhitespace?: boolean },
+  ): GitDiffResponse {
+    throw new Error("not implemented");
+  }
+
+  applyGitHunkAction(
+    _sessionId: string,
+    _request: GitHunkActionRequest,
+  ): GitHunkActionResponse {
+    throw new Error("not implemented");
+  }
+
+  readSessionFile(_sessionId: string, _path: string): SessionFileResponse {
+    throw new Error("not implemented");
+  }
+
+  createFrozenHistoryPageLoader(sessionId: string): FrozenHistoryPageLoader | undefined {
+    const pages = this.pagesBySessionId.get(sessionId);
+    if (!pages) {
+      return undefined;
+    }
+    this.loaderCreationCount += 1;
+    return {
+      loadInitialPage: (_limit) => ({
+        boundary: pages.boundary,
+        events: pages.initial.events,
+        ...(pages.initial.nextCursor ? { nextCursor: pages.initial.nextCursor } : {}),
+        ...(pages.initial.nextBeforeTs ? { nextBeforeTs: pages.initial.nextBeforeTs } : {}),
+      }),
+      loadOlderPage: (cursor, _limit, boundary) => {
+        assert.equal(boundary.sourceRevision, pages.boundary.sourceRevision);
+        const response = pages.olderByCursor.get(cursor);
+        if (!response) {
+          throw new Error(`Unknown frozen history cursor ${cursor}`);
+        }
+        return {
+          boundary: pages.boundary,
+          events: response.events,
+          ...(response.nextCursor ? { nextCursor: response.nextCursor } : {}),
+          ...(response.nextBeforeTs ? { nextBeforeTs: response.nextBeforeTs } : {}),
+        };
+      },
+    };
+  }
+
+  getSessionHistoryPage?(
+    _sessionId: string,
+    _options?: { beforeTs?: string; cursor?: string; limit?: number },
+  ): SessionHistoryPageResponse {
+    throw new Error("materialized fallback should not be used");
   }
 
   getContextUsage(_sessionId: string): ContextUsage | undefined {
@@ -370,10 +635,15 @@ describe("RuntimeEngine", () => {
       },
     ]);
     const engine = new RuntimeEngine([adapter]);
+    assert.equal(adapter.storedSessionCalls, 1);
 
     const initial = engine.listSessions();
     assert.equal(adapter.storedSessionCalls, 1);
     assert.equal(initial.storedSessions.length, 2);
+
+    const secondList = engine.listSessions();
+    assert.equal(adapter.storedSessionCalls, 1);
+    assert.equal(secondList.storedSessions.length, 2);
 
     const afterSingleRemoval = await engine.removeStoredSession("codex", "session-1");
     assert.equal(adapter.storedSessionCalls, 1);
@@ -446,6 +716,94 @@ describe("RuntimeEngine", () => {
     await engine.shutdown();
   });
 
+  test("stored session watcher refreshes cached sessions after external add and delete", async () => {
+    const watchRoot = mkdtempSync(path.join(os.tmpdir(), "rah-runtime-watch-"));
+    const watchFile = path.join(watchRoot, "probe.txt");
+    const adapter = new WatchingStoredSessionsAdapter([
+      {
+        provider: "codex",
+        providerSessionId: "session-1",
+        cwd: workDir,
+        rootDir: workDir,
+        updatedAt: "2025-07-19T22:21:00.000Z",
+        source: "provider_history",
+      },
+    ], watchRoot);
+    const engine = new RuntimeEngine([adapter]);
+
+    assert.deepEqual(
+      engine.listSessions().storedSessions.map((session) => session.providerSessionId),
+      ["session-1"],
+    );
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    adapter.storedSessions = [
+      ...adapter.storedSessions,
+      {
+        provider: "codex",
+        providerSessionId: "session-2",
+        cwd: workDir,
+        rootDir: workDir,
+        updatedAt: "2025-07-19T22:22:00.000Z",
+        source: "provider_history",
+      },
+    ];
+    writeFileSync(watchFile, "changed");
+
+    await waitFor(() => {
+      assert.deepEqual(
+        [...engine.listSessions().storedSessions.map((session) => session.providerSessionId)].sort(),
+        ["session-1", "session-2"],
+      );
+    });
+    assert.ok(
+      engine
+        .listEvents({ eventTypes: ["session.discovery"] })
+        .some((event) => event.type === "session.discovery"),
+    );
+
+    adapter.storedSessions = adapter.storedSessions.filter(
+      (session) => session.providerSessionId !== "session-2",
+    );
+    unlinkSync(watchFile);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    await waitFor(() => {
+      assert.deepEqual(
+        engine.listSessions().storedSessions.map((session) => session.providerSessionId),
+        ["session-1"],
+      );
+    });
+
+    await engine.shutdown();
+    rmSync(watchRoot, { recursive: true, force: true });
+  });
+
+  test("failed provider removal leaves stored session visible", async () => {
+    const adapter = new FailingRemovalStoredSessionsAdapter([
+      {
+        provider: "codex",
+        providerSessionId: "session-1",
+        cwd: workDir,
+        rootDir: workDir,
+        updatedAt: "2025-07-19T22:21:00.000Z",
+        source: "provider_history",
+      },
+    ]);
+    const engine = new RuntimeEngine([adapter]);
+
+    await assert.rejects(
+      engine.removeStoredSession("codex", "session-1"),
+      /provider trash move failed/,
+    );
+    assert.deepEqual(
+      engine.listSessions().storedSessions.map((session) => session.providerSessionId),
+      ["session-1"],
+    );
+
+    await engine.shutdown();
+  });
+
   test("history snapshot transfers from replay to claimed live session", async () => {
     const adapter = new SnapshotPagingAdapter();
     adapter.historyBySessionId.set("replay-1", [
@@ -490,6 +848,142 @@ describe("RuntimeEngine", () => {
         }
         return null;
       }),
+      ["older"],
+    );
+
+    await engine.shutdown();
+  });
+
+  test("frozen history pager caches provider-owned pages by cursor", async () => {
+    const adapter = new FrozenPagingAdapter();
+    adapter.pagesBySessionId.set("replay-1", {
+      boundary: { kind: "frozen", sourceRevision: "rev-1" },
+      initial: {
+        sessionId: "replay-1",
+        events: [
+          historyEvent("replay-1", 2, "2025-07-19T22:21:02.000Z", "middle"),
+          historyEvent("replay-1", 3, "2025-07-19T22:21:03.000Z", "latest"),
+        ],
+        nextCursor: "older-1",
+        nextBeforeTs: "2025-07-19T22:21:02.000Z",
+      },
+      olderByCursor: new Map([
+        [
+          "older-1",
+          {
+            sessionId: "replay-1",
+            events: [historyEvent("replay-1", 1, "2025-07-19T22:21:01.000Z", "older")],
+          },
+        ],
+      ]),
+    });
+    const engine = new RuntimeEngine([adapter]);
+
+    const replay = await engine.resumeSession({
+      provider: "codex",
+      providerSessionId: "provider-1",
+      preferStoredReplay: true,
+    });
+
+    const firstPage = engine.getSessionHistoryPage(replay.session.session.id, { limit: 2 });
+    assert.deepEqual(
+      firstPage.events.map((event) =>
+        event.type === "timeline.item.added" && event.payload.item.kind === "assistant_message"
+          ? event.payload.item.text
+          : null,
+      ),
+      ["middle", "latest"],
+    );
+    assert.equal(firstPage.nextCursor, "older-1");
+
+    const olderPage = engine.getSessionHistoryPage(replay.session.session.id, {
+      cursor: "older-1",
+      limit: 2,
+    });
+    assert.deepEqual(
+      olderPage.events.map((event) =>
+        event.type === "timeline.item.added" && event.payload.item.kind === "assistant_message"
+          ? event.payload.item.text
+          : null,
+      ),
+      ["older"],
+    );
+
+    const olderPageAgain = engine.getSessionHistoryPage(replay.session.session.id, {
+      cursor: "older-1",
+      limit: 2,
+    });
+    assert.deepEqual(olderPageAgain, olderPage);
+    assert.equal(adapter.loaderCreationCount, 1);
+
+    await engine.shutdown();
+  });
+
+  test("frozen history pager transfers to claimed live session", async () => {
+    const adapter = new FrozenPagingAdapter();
+    adapter.pagesBySessionId.set("replay-1", {
+      boundary: { kind: "frozen", sourceRevision: "rev-1" },
+      initial: {
+        sessionId: "replay-1",
+        events: [
+          historyEvent("replay-1", 2, "2025-07-19T22:21:02.000Z", "middle"),
+          historyEvent("replay-1", 3, "2025-07-19T22:21:03.000Z", "latest"),
+        ],
+        nextCursor: "older-1",
+        nextBeforeTs: "2025-07-19T22:21:02.000Z",
+      },
+      olderByCursor: new Map([
+        [
+          "older-1",
+          {
+            sessionId: "replay-1",
+            events: [historyEvent("replay-1", 1, "2025-07-19T22:21:01.000Z", "older")],
+          },
+        ],
+      ]),
+    });
+    adapter.pagesBySessionId.set("live-1", {
+      boundary: { kind: "frozen", sourceRevision: "rev-1" },
+      initial: {
+        sessionId: "live-1",
+        events: [historyEvent("live-1", 99, "2025-07-19T22:21:09.000Z", "wrong-initial")],
+      },
+      olderByCursor: new Map([
+        [
+          "older-1",
+          {
+            sessionId: "live-1",
+            events: [historyEvent("live-1", 1, "2025-07-19T22:21:01.000Z", "older")],
+          },
+        ],
+      ]),
+    });
+    const engine = new RuntimeEngine([adapter]);
+
+    const replay = await engine.resumeSession({
+      provider: "codex",
+      providerSessionId: "provider-1",
+      preferStoredReplay: true,
+    });
+    const replayPage = engine.getSessionHistoryPage(replay.session.session.id, { limit: 2 });
+    assert.equal(replayPage.nextCursor, "older-1");
+
+    const live = await engine.resumeSession({
+      provider: "codex",
+      providerSessionId: "provider-1",
+      preferStoredReplay: false,
+      historySourceSessionId: replay.session.session.id,
+    });
+    const olderPage = engine.getSessionHistoryPage(live.session.session.id, {
+      cursor: "older-1",
+      limit: 2,
+    });
+    assert.deepEqual(
+      olderPage.events.map((event) =>
+        event.type === "timeline.item.added" && event.payload.item.kind === "assistant_message"
+          ? event.payload.item.text
+          : null,
+      ),
       ["older"],
     );
 

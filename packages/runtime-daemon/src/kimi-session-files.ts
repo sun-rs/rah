@@ -9,12 +9,18 @@ import type {
   SessionHistoryPageResponse,
   StoredSessionRef,
 } from "@rah/runtime-protocol";
+import type {
+  FrozenHistoryBoundary,
+  FrozenHistoryPageLoader,
+} from "./history-snapshots";
 import type { RuntimeServices } from "./provider-adapter";
 import { EventBus } from "./event-bus";
 import { applyProviderActivity, type ProviderActivity } from "./provider-activity";
+import { createLineFrozenHistoryPageLoader } from "./line-history-pager";
 import { PtyHub } from "./pty-hub";
 import { SessionStore } from "./session-store";
-import { readLeadingLines } from "./file-snippets";
+import { selectSemanticRecentWindow } from "./semantic-history-window";
+import { readLeadingLines, readTrailingLinesWindow } from "./file-snippets";
 import {
   getCachedStoredSessionRef,
   loadStoredSessionMetadataCache,
@@ -49,6 +55,10 @@ export type KimiStoredSessionRecord = {
 
 function resolveKimiHome(): string {
   return process.env.KIMI_SHARE_DIR ?? path.join(os.homedir(), ".kimi");
+}
+
+export function resolveKimiStoredSessionWatchRoots(): string[] {
+  return [resolveKimiHome()];
 }
 
 function kimiMetadataPath(): string {
@@ -156,6 +166,20 @@ function truncateText(text: string, maxLength = 120): string {
     return text;
   }
   return `${text.slice(0, maxLength - 1).trimEnd()}…`;
+}
+
+function makeKimiFrozenHistoryBoundary(
+  wirePath: string,
+  endOffset: number,
+): FrozenHistoryBoundary {
+  return {
+    kind: "frozen",
+    sourceRevision: JSON.stringify({
+      provider: "kimi",
+      wirePath,
+      endOffset,
+    }),
+  };
 }
 
 function parseKimiWireLine(line: string):
@@ -730,4 +754,68 @@ export function getKimiStoredSessionHistoryPage(params: {
     events,
     ...(start > 0 && events[0] ? { nextBeforeTs: events[0].ts } : {}),
   };
+}
+
+function readKimiFrozenHistoryWindow(args: {
+  sessionId: string;
+  record: KimiStoredSessionRecord;
+  endOffset: number;
+  limit: number;
+}): { startOffset: number; events: RahEvent[] } {
+  let lineBudget = Math.max(args.limit * 4, 200);
+  let lastStartOffset = args.endOffset;
+  let events: RahEvent[] = [];
+
+  for (;;) {
+    const window = readTrailingLinesWindow(args.record.wirePath, {
+      endOffset: args.endOffset,
+      maxLines: lineBudget,
+      chunkBytes: 8 * 1024,
+    });
+    const previousStartOffset = lastStartOffset;
+    events = translateKimiWireLines(args.sessionId, window.lines)
+      .map((event) => ({
+        ...event,
+        id: `history:${event.id}`,
+        seq: event.seq + 1_000_000_000,
+      }))
+      .sort((a, b) => a.ts.localeCompare(b.ts) || a.seq - b.seq);
+    lastStartOffset = window.startOffset;
+    if (
+      events.length >= args.limit ||
+      window.startOffset === 0 ||
+      window.startOffset === previousStartOffset
+    ) {
+      break;
+    }
+    lineBudget *= 2;
+    if (lineBudget >= 8192) {
+      break;
+    }
+  }
+
+  return {
+    startOffset: lastStartOffset,
+    events,
+  };
+}
+
+export function createKimiStoredSessionFrozenHistoryPageLoader(args: {
+  sessionId: string;
+  record: KimiStoredSessionRecord;
+}): FrozenHistoryPageLoader {
+  const snapshotEndOffset = statSync(args.record.wirePath).size;
+  const boundary = makeKimiFrozenHistoryBoundary(args.record.wirePath, snapshotEndOffset);
+  return createLineFrozenHistoryPageLoader({
+    boundary,
+    snapshotEndOffset,
+    readWindow: ({ endOffset, lineBudget }) =>
+      readKimiFrozenHistoryWindow({
+        sessionId: args.sessionId,
+        record: args.record,
+        endOffset,
+        limit: lineBudget,
+      }),
+    selectPage: selectSemanticRecentWindow,
+  });
 }

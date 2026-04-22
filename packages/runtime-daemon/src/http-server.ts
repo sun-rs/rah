@@ -10,6 +10,8 @@ import type {
   DetachSessionRequest,
   DebugReplayScript,
   EventSubscriptionRequest,
+  GitFileActionRequest,
+  GitHunkActionRequest,
   InterruptSessionRequest,
   ListDebugScenariosResponse,
   ListProvidersResponse,
@@ -261,6 +263,26 @@ export async function startRahDaemon(options?: { port?: number }): Promise<RahDa
       },
     },
     {
+      pattern: /^\/api\/sessions\/([^/]+)\/git-files\/apply$/,
+      handler: async (_req, res, match, body) => {
+        writeJson(
+          res,
+          200,
+          await engine.applyGitFileAction(match[1]!, (body ?? {}) as GitFileActionRequest),
+        );
+      },
+    },
+    {
+      pattern: /^\/api\/sessions\/([^/]+)\/git-hunks\/apply$/,
+      handler: async (_req, res, match, body) => {
+        writeJson(
+          res,
+          200,
+          await engine.applyGitHunkAction(match[1]!, (body ?? {}) as GitHunkActionRequest),
+        );
+      },
+    },
+    {
       pattern: /^\/api\/sessions\/([^/]+)\/interrupt$/,
       handler: async (_req, res, match, body) => {
         const result = engine.interruptSession(
@@ -443,7 +465,18 @@ export async function startRahDaemon(options?: { port?: number }): Promise<RahDa
       const gitDiffMatch = /^\/api\/sessions\/([^/]+)\/git-diff$/.exec(pathname);
       if (req.method === "GET" && gitDiffMatch) {
         const diffPath = url.searchParams.get("path") ?? "src/index.ts";
-        writeJson(res, 200, engine.getGitDiff(gitDiffMatch[1]!, diffPath));
+        const staged = url.searchParams.get("staged");
+        const ignoreWhitespace = url.searchParams.get("ignoreWhitespace");
+        writeJson(
+          res,
+          200,
+          engine.getGitDiff(gitDiffMatch[1]!, diffPath, {
+            ...(staged !== null ? { staged: staged === "true" } : {}),
+            ...(ignoreWhitespace !== null
+              ? { ignoreWhitespace: ignoreWhitespace === "true" }
+              : {}),
+          }),
+        );
         return;
       }
 
@@ -455,6 +488,18 @@ export async function startRahDaemon(options?: { port?: number }): Promise<RahDa
           return;
         }
         writeJson(res, 200, engine.readSessionFile(fileMatch[1]!, filePath));
+        return;
+      }
+
+      const fileSearchMatch = /^\/api\/sessions\/([^/]+)\/file-search$/.exec(pathname);
+      if (req.method === "GET" && fileSearchMatch) {
+        const query = url.searchParams.get("query") ?? "";
+        const limitRaw = url.searchParams.get("limit");
+        const limit =
+          limitRaw && Number.isFinite(Number.parseInt(limitRaw, 10))
+            ? Number.parseInt(limitRaw, 10)
+            : 100;
+        writeJson(res, 200, engine.searchSessionFiles(fileSearchMatch[1]!, query, limit));
         return;
       }
 

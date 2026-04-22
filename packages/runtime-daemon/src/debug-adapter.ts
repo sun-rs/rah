@@ -1,6 +1,8 @@
 import type {
   CloseSessionRequest,
   DebugScenarioDescriptor,
+  GitHunkActionRequest,
+  GitHunkActionResponse,
   ManagedSession,
   ResumeSessionRequest,
   ResumeSessionResponse,
@@ -86,8 +88,19 @@ export class DebugAdapter implements ProviderAdapter {
     return this.engine.getGitStatus(sessionId);
   }
 
-  getGitDiff(sessionId: string, path: string): GitDiffResponse {
-    return this.engine.getGitDiff(sessionId, path);
+  getGitDiff(
+    sessionId: string,
+    path: string,
+    options?: { staged?: boolean; ignoreWhitespace?: boolean },
+  ): GitDiffResponse {
+    return this.engine.getGitDiff(sessionId, path, options);
+  }
+
+  applyGitHunkAction(
+    _sessionId: string,
+    _request: GitHunkActionRequest,
+  ): GitHunkActionResponse {
+    throw new Error("Debug sessions do not support git hunk actions.");
   }
 
   readSessionFile(sessionId: string, path: string): SessionFileResponse {

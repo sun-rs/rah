@@ -252,6 +252,7 @@ export interface AttentionItem {
 }
 
 export type RahEventPayloadMap = {
+  "session.discovery": { version: number };
   "session.created": { session: ManagedSession };
   "session.started": { session: ManagedSession };
   "session.attached": { clientId: string; clientKind: ClientKind };

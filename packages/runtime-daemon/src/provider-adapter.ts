@@ -5,6 +5,10 @@ import type {
   DebugScenarioDescriptor,
   DebugReplayScript,
   GitDiffResponse,
+  GitFileActionRequest,
+  GitFileActionResponse,
+  GitHunkActionRequest,
+  GitHunkActionResponse,
   GitStatusResponse,
   InterruptSessionRequest,
   ProviderDiagnostic,
@@ -22,6 +26,7 @@ import type {
   ManagedSession,
 } from "@rah/runtime-protocol";
 import type { EventBus } from "./event-bus";
+import type { FrozenHistoryPageLoader } from "./history-snapshots";
 import type { PtyHub } from "./pty-hub";
 import type { SessionStore } from "./session-store";
 
@@ -55,14 +60,29 @@ export interface ProviderAdapter {
   onPtyResize(sessionId: string, clientId: string, cols: number, rows: number): void;
   getWorkspaceSnapshot(sessionId: string): WorkspaceSnapshotResponse;
   getGitStatus(sessionId: string): GitStatusResponse;
-  getGitDiff(sessionId: string, path: string): GitDiffResponse;
+  getGitDiff(
+    sessionId: string,
+    path: string,
+    options?: { staged?: boolean; ignoreWhitespace?: boolean },
+  ): GitDiffResponse;
+  applyGitFileAction?(
+    sessionId: string,
+    request: GitFileActionRequest,
+  ): GitFileActionResponse | Promise<GitFileActionResponse>;
+  applyGitHunkAction?(
+    sessionId: string,
+    request: GitHunkActionRequest,
+  ): GitHunkActionResponse | Promise<GitHunkActionResponse>;
   readSessionFile(sessionId: string, path: string): SessionFileResponse;
   getSessionHistoryPage?(
     sessionId: string,
     options?: { beforeTs?: string; cursor?: string; limit?: number },
   ): SessionHistoryPageResponse;
+  createFrozenHistoryPageLoader?(sessionId: string): FrozenHistoryPageLoader | undefined;
   getContextUsage(sessionId: string): ContextUsage | undefined;
   listStoredSessions?(): StoredSessionRef[];
+  refreshStoredSessionsCatalog?(): StoredSessionRef[];
+  listStoredSessionWatchRoots?(): string[];
   removeStoredSession?(session: StoredSessionRef): Promise<void> | void;
   getProviderDiagnostic?(options?: {
     forceRefresh?: boolean;
