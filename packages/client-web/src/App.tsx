@@ -1,24 +1,26 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import type { PermissionResponseRequest } from "@rah/runtime-protocol";
-import { InspectorPane } from "./InspectorPane";
 import { SessionSidebar } from "./SessionSidebar";
 import { providerLabel } from "./types";
 import { useSessionStore } from "./useSessionStore";
 import { FileReferencePicker } from "./components/FileReferencePicker";
 import type { ProviderChoice } from "./components/ProviderSelector";
-import {
-  ArchiveSessionDialog,
-  GlobalWorkbenchCallout,
-  SessionTerminalDialog,
-  SettingsDialog,
-  WorkbenchEmptyPane,
-  WorkbenchInspectorShell,
-  WorkbenchOpeningPane,
-  WorkbenchSelectedPane,
-  WorkbenchSidebarShell,
-} from "./components/workbench";
+import { GlobalWorkbenchCallout } from "./components/workbench/callouts/GlobalWorkbenchCallout";
+import { ArchiveSessionDialog } from "./components/workbench/dialogs/ArchiveSessionDialog";
+import { WorkbenchEmptyPane } from "./components/workbench/panes/WorkbenchEmptyPane";
+import { WorkbenchOpeningPane } from "./components/workbench/panes/WorkbenchOpeningPane";
+import { WorkbenchSelectedPane } from "./components/workbench/panes/WorkbenchSelectedPane";
+import { WorkbenchInspectorShell } from "./components/workbench/shells/WorkbenchInspectorShell";
+import { WorkbenchSidebarShell } from "./components/workbench/shells/WorkbenchSidebarShell";
 import { useChatPreferences } from "./hooks/useChatPreferences";
+import { useWorkbenchComposerState } from "./hooks/useWorkbenchComposerState";
+import { useWorkbenchSelectionState } from "./hooks/useWorkbenchSelectionState";
 import { initializeTheme } from "./hooks/useTheme";
+import { useWorkbenchChromeState } from "./hooks/useWorkbenchChromeState";
+import {
+  useWorkbenchSidebarPreferences,
+  useWorkspaceSortModeState,
+} from "./hooks/useWorkbenchSidebarPreferences";
 import {
   canSessionRespondToPermissions,
   isSessionActivelyRunning,
@@ -30,42 +32,17 @@ import {
   deriveWorkbenchSessionCollections,
 } from "./workbench-selectors";
 import { deriveWorkbenchNoticeState } from "./workbench-notice-contract";
-import type { WorkspaceSortMode } from "./session-browser";
 
-const WORKSPACE_SORT_MODE_KEY = "rah.workspace-sort-mode";
-const PINNED_WORKSPACE_SESSION_KEY = "rah.pinned-session-by-workspace";
-
-function readWorkspaceSortMode(): WorkspaceSortMode {
-  if (typeof window === "undefined") {
-    return "created";
-  }
-  try {
-    const value = window.localStorage.getItem(WORKSPACE_SORT_MODE_KEY);
-    return value === "updated" ? "updated" : "created";
-  } catch {
-    return "created";
-  }
-}
-
-function readPinnedWorkspaceSessions(): Record<string, string> {
-  if (typeof window === "undefined") {
-    return {};
-  }
-  try {
-    const raw = window.localStorage.getItem(PINNED_WORKSPACE_SESSION_KEY);
-    if (!raw) {
-      return {};
-    }
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    return Object.fromEntries(
-      Object.entries(parsed).filter(
-        (entry): entry is [string, string] => typeof entry[0] === "string" && typeof entry[1] === "string",
-      ),
-    );
-  } catch {
-    return {};
-  }
-}
+const SettingsDialog = lazy(async () => ({
+  default: (await import("./components/workbench/dialogs/SettingsDialog")).SettingsDialog,
+}));
+const WorkbenchTerminalDialog = lazy(async () => ({
+  default: (await import("./components/workbench/dialogs/WorkbenchTerminalDialog"))
+    .WorkbenchTerminalDialog,
+}));
+const InspectorPane = lazy(async () => ({
+  default: (await import("./InspectorPane")).InspectorPane,
+}));
 
 export function App() {
   const {
@@ -106,54 +83,44 @@ export function App() {
     loadOlderHistory,
     respondToPermission,
   } = useSessionStore();
-  const [draft, setDraft] = useState("");
-  const composerRef = useRef<HTMLTextAreaElement | null>(null);
-  const [leftOpen, setLeftOpen] = useState(false);
-  const [rightOpen, setRightOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [terminalOpen, setTerminalOpen] = useState(false);
   const [archiveConfirmSessionId, setArchiveConfirmSessionId] = useState<string | null>(null);
   const [archivingSessionId, setArchivingSessionId] = useState<string | null>(null);
-  const [fileReferenceOpen, setFileReferenceOpen] = useState(false);
-  const [workspaceSortMode, setWorkspaceSortMode] = useState<WorkspaceSortMode>(() =>
-    readWorkspaceSortMode(),
-  );
-  const [pinnedSessionIdByWorkspace, setPinnedSessionIdByWorkspace] = useState<Record<string, string>>(
-    () => readPinnedWorkspaceSessions(),
-  );
-  const [sidebarOpen, setSidebarOpen] = useState(() => {
-    try { return localStorage.getItem("rah-sidebar-open") !== "false"; } catch { return true; }
-  });
-  const [rightSidebarOpen, setRightSidebarOpen] = useState(() => {
-    try { return localStorage.getItem("rah-right-sidebar-open") !== "false"; } catch { return true; }
-  });
-  const [sidebarWidth, setSidebarWidth] = useState(() => {
-    try { return Math.max(200, Math.min(480, Number(localStorage.getItem("rah-sidebar-width")) || 288)); } catch { return 288; }
-  });
-  const sidebarWidthRef = useRef(sidebarWidth);
-  sidebarWidthRef.current = sidebarWidth;
-  const [isResizing, setIsResizing] = useState(false);
-  const [emptyStateDraft, setEmptyStateDraft] = useState("");
-  const emptyStateComposerRef = useRef<HTMLTextAreaElement | null>(null);
-  const [workspacePickerOpen, setWorkspacePickerOpen] = useState(false);
-  const workspacePickerRef = useRef<HTMLDivElement>(null);
   const { hideToolCallsInChat } = useChatPreferences();
+  const { setWorkspaceSortMode, workspaceSortMode } = useWorkspaceSortModeState();
+  const {
+    fileReferenceOpen,
+    isResizing,
+    leftOpen,
+    rightOpen,
+    rightSidebarOpen,
+    settingsOpen,
+    sidebarOpen,
+    sidebarWidth,
+    startSidebarResize,
+    terminalOpen,
+    setFileReferenceOpen,
+    setLeftOpen,
+    setRightOpen,
+    setRightSidebarOpen,
+    setSettingsOpen,
+    setSidebarOpen,
+    setTerminalOpen,
+  } = useWorkbenchChromeState();
+  const {
+    selectedWorkspaceOnlyDir,
+    setSelectedWorkspaceOnlyDir,
+    workspacePickerOpen,
+    setWorkspacePickerOpen,
+    workspacePickerRef,
+  } = useWorkbenchSelectionState({
+    selectedSessionId,
+    workspaceDirs,
+  });
 
   useEffect(() => {
     initializeTheme();
     void init();
   }, [init]);
-
-  useEffect(() => {
-    if (!workspacePickerOpen) return;
-    const onPointerDown = (event: MouseEvent) => {
-      if (!workspacePickerRef.current?.contains(event.target as Node)) {
-        setWorkspacePickerOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", onPointerDown);
-    return () => document.removeEventListener("mousedown", onPointerDown);
-  }, [workspacePickerOpen]);
 
   const sessionCollections = useMemo(
     () =>
@@ -173,20 +140,10 @@ export function App() {
     liveGroups,
     workspaceSections,
   } = sessionCollections;
-
-  const sanitizedPinnedSessionIdByWorkspace = useMemo(
-    () =>
-      Object.fromEntries(
-        Object.entries(pinnedSessionIdByWorkspace).filter(([workspaceDir, sessionId]) =>
-          workspaceSections.some(
-            (section) =>
-              section.workspace.directory === workspaceDir &&
-              section.sessions.some((session) => session.session.id === sessionId),
-          ),
-        ),
-      ),
-    [pinnedSessionIdByWorkspace, workspaceSections],
-  );
+  const {
+    sanitizedPinnedSessionIdByWorkspace,
+    togglePinnedSession,
+  } = useWorkbenchSidebarPreferences(workspaceSections);
 
   const runtimeStatusBySessionId = useMemo(
     () =>
@@ -236,73 +193,25 @@ export function App() {
     pendingSessionTransition,
   });
   const activeOpeningSession = primaryPaneState.openingSession;
-
-  const handleSend = async () => {
-    if (!selectedSummary || !draft.trim()) return;
-    const text = draft.trim();
-    setDraft("");
-    await sendInput(selectedSummary.session.id, text);
-  };
-
-  const insertFileReference = (reference: string) => {
-    setDraft((current) => {
-      const textarea = composerRef.current;
-      if (!textarea) {
-        return current ? `${current} ${reference}` : reference;
-      }
-      const selectionStart = textarea.selectionStart ?? current.length;
-      const selectionEnd = textarea.selectionEnd ?? current.length;
-      const prefixNeedsSpace =
-        selectionStart > 0 && !/\s/.test(current.slice(Math.max(0, selectionStart - 1), selectionStart));
-      const suffixNeedsSpace =
-        selectionEnd < current.length && !/\s/.test(current.slice(selectionEnd, selectionEnd + 1));
-      const inserted = `${prefixNeedsSpace ? " " : ""}${reference}${suffixNeedsSpace ? " " : ""}`;
-      const next = `${current.slice(0, selectionStart)}${inserted}${current.slice(selectionEnd)}`;
-      queueMicrotask(() => {
-        if (!textarea) return;
-        const caret = selectionStart + inserted.length;
-        textarea.focus();
-        textarea.setSelectionRange(caret, caret);
-      });
-      return next;
-    });
-  };
-
-  const insertEmptyStateFileReference = (reference: string) => {
-    setEmptyStateDraft((current) => {
-      const textarea = emptyStateComposerRef.current;
-      if (!textarea) {
-        return current ? `${current} ${reference}` : reference;
-      }
-      const selectionStart = textarea.selectionStart ?? current.length;
-      const selectionEnd = textarea.selectionEnd ?? current.length;
-      const prefixNeedsSpace =
-        selectionStart > 0 && !/\s/.test(current.slice(Math.max(0, selectionStart - 1), selectionStart));
-      const suffixNeedsSpace =
-        selectionEnd < current.length && !/\s/.test(current.slice(selectionEnd, selectionEnd + 1));
-      const inserted = `${prefixNeedsSpace ? " " : ""}${reference}${suffixNeedsSpace ? " " : ""}`;
-      const next = `${current.slice(0, selectionStart)}${inserted}${current.slice(selectionEnd)}`;
-      queueMicrotask(() => {
-        if (!textarea) return;
-        const caret = selectionStart + inserted.length;
-        textarea.focus();
-        textarea.setSelectionRange(caret, caret);
-      });
-      return next;
-    });
-  };
-
-  const handleEmptyStateSend = () => {
-    const text = emptyStateDraft.trim();
-    if (!text || !availableWorkspaceDir) return;
-    setEmptyStateDraft("");
-    void startSession({
-      provider: newSessionProvider,
-      cwd: availableWorkspaceDir,
-      title: text.slice(0, 50),
-      initialInput: text,
-    });
-  };
+  const {
+    composerRef,
+    draft,
+    emptyStateComposerRef,
+    emptyStateDraft,
+    sendPending,
+    setDraft,
+    setEmptyStateDraft,
+    handleSend,
+    handleEmptyStateSend,
+    insertDraftReference,
+    insertEmptyStateReference,
+  } = useWorkbenchComposerState({
+    selectedSummary,
+    availableWorkspaceDir: workspaceDirs.length > 0 ? workspaceDir : "",
+    newSessionProvider: newSessionProvider as ProviderChoice,
+    sendInput,
+    startSession,
+  });
 
   const handlePermissionResponse = async (
     requestId: string,
@@ -311,53 +220,6 @@ export function App() {
     if (!selectedSummary) return;
     await respondToPermission(selectedSummary.session.id, requestId, response);
   };
-
-  useEffect(() => {
-    const onMove = (e: MouseEvent) => {
-      if (!isResizing) return;
-      setSidebarWidth(Math.max(200, Math.min(480, e.clientX)));
-    };
-    const onUp = () => {
-      if (!isResizing) return;
-      setIsResizing(false);
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-      try { localStorage.setItem("rah-sidebar-width", String(sidebarWidthRef.current)); } catch {}
-    };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-    return () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-    };
-  }, [isResizing]);
-
-  useEffect(() => {
-    try { localStorage.setItem("rah-sidebar-open", String(sidebarOpen)); } catch {}
-  }, [sidebarOpen]);
-
-  useEffect(() => {
-    try { localStorage.setItem("rah-right-sidebar-open", String(rightSidebarOpen)); } catch {}
-  }, [rightSidebarOpen]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(WORKSPACE_SORT_MODE_KEY, workspaceSortMode);
-    } catch {
-      // ignore
-    }
-  }, [workspaceSortMode]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(
-        PINNED_WORKSPACE_SESSION_KEY,
-        JSON.stringify(sanitizedPinnedSessionIdByWorkspace),
-      );
-    } catch {
-      // ignore
-    }
-  }, [sanitizedPinnedSessionIdByWorkspace]);
 
   if (!isInitialLoaded) {
     return (
@@ -370,35 +232,39 @@ export function App() {
     );
   }
 
+  const availableWorkspaceDir = workspaceDirs.length > 0 ? workspaceDir : "";
+  const selectedInspectorWorkspaceDir = selectedSummary
+    ? availableWorkspaceDir ||
+      selectedSummary.session.rootDir ||
+      selectedSummary.session.cwd ||
+      ""
+    : selectedWorkspaceOnlyDir ?? "";
   const sidebarContent = (
     <SessionSidebar
       workspaceSections={workspaceSections}
       workspaceSortMode={workspaceSortMode}
       onWorkspaceSortModeChange={setWorkspaceSortMode}
       pinnedSessionIdByWorkspace={sanitizedPinnedSessionIdByWorkspace}
-      onTogglePinSession={(workspaceDir, sessionId) => {
-        setPinnedSessionIdByWorkspace((current) => {
-          if (current[workspaceDir] === sessionId) {
-            const next = { ...current };
-            delete next[workspaceDir];
-            return next;
-          }
-          return {
-            ...current,
-            [workspaceDir]: sessionId,
-          };
-        });
-      }}
+      onTogglePinSession={togglePinnedSession}
       onAddWorkspace={(dir) => {
         void addWorkspace(dir);
         setLeftOpen(false);
       }}
       onRemoveWorkspace={(dir) => void removeWorkspace(dir)}
+      selectedWorkspaceDir={selectedInspectorWorkspaceDir}
       selectedSessionId={selectedSessionId}
       unreadSessionIds={unreadSessionIds}
       runtimeStatusBySessionId={runtimeStatusBySessionId}
-      onSelectSession={(id) => {
+      onSelectSession={(workspaceDir, id) => {
+        setSelectedWorkspaceOnlyDir(null);
+        setWorkspaceDir(workspaceDir);
         setSelectedSessionId(id);
+        setLeftOpen(false);
+      }}
+      onSelectWorkspace={(dir) => {
+        setSelectedWorkspaceOnlyDir(dir);
+        setWorkspaceDir(dir);
+        setSelectedSessionId(null);
         setLeftOpen(false);
       }}
       debugScenarios={debugScenarios}
@@ -414,23 +280,31 @@ export function App() {
     void activateHistorySession(ref);
   };
 
-  const availableWorkspaceDir = workspaceDirs.length > 0 ? workspaceDir : "";
   const terminalCwd =
     selectedSummary?.session.rootDir ||
     selectedSummary?.session.cwd ||
     availableWorkspaceDir ||
     "~";
-  const inspectorContent =
-    selectedSummary ? (
+  const inspectorContent = selectedSummary || selectedWorkspaceOnlyDir ? (
+    <Suspense
+      fallback={
+        <div className="flex h-full items-center justify-center text-xs text-[var(--app-hint)]">
+          Loading inspector…
+        </div>
+      }
+    >
       <InspectorPane
-        sessionId={selectedSummary.session.id}
-        workspaceRoot={selectedSummary.session.rootDir || selectedSummary.session.cwd || ""}
+        sessionId={selectedSummary?.session.id ?? null}
+        workspaceRoot={selectedInspectorWorkspaceDir}
         events={selectedProjection?.events ?? []}
         onCollapse={() => setRightSidebarOpen(false)}
       />
-    ) : (
-      <div className="h-full" />
-    );
+    </Suspense>
+  ) : (
+    <div className="flex h-full items-center justify-center px-6 text-center text-sm text-[var(--app-hint)]">
+      Select a workspace or session to inspect files and changes.
+    </div>
+  );
 
   return (
     <div className="h-screen w-full max-w-full flex overflow-hidden overflow-x-hidden bg-background text-foreground">
@@ -441,18 +315,23 @@ export function App() {
         leftOpen={leftOpen}
         onLeftOpenChange={setLeftOpen}
         onResizeStart={(e) => {
-          e.preventDefault();
-          setIsResizing(true);
-          document.body.style.cursor = "col-resize";
-          document.body.style.userSelect = "none";
+          startSidebarResize(e);
         }}
         sidebarContent={sidebarContent}
         storedSessions={storedSessions}
         recentSessions={recentSessions}
         liveSessions={liveSessionEntries.map((entry) => entry.summary)}
-        onDesktopHome={() => setSelectedSessionId(null)}
-        onMobileHome={() => {
+        onDesktopHome={() => {
+          setSelectedWorkspaceOnlyDir(null);
           setSelectedSessionId(null);
+          setRightSidebarOpen(false);
+          setRightOpen(false);
+        }}
+        onMobileHome={() => {
+          setSelectedWorkspaceOnlyDir(null);
+          setSelectedSessionId(null);
+          setRightSidebarOpen(false);
+          setRightOpen(false);
           setLeftOpen(false);
         }}
         onActivateHistory={handleActivateHistorySession}
@@ -462,14 +341,34 @@ export function App() {
         onCollapseSidebar={() => setSidebarOpen(false)}
       />
 
-      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+      {settingsOpen ? (
+        <Suspense
+          fallback={
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 text-sm text-white">
+              Loading settings…
+            </div>
+          }
+        >
+          <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+        </Suspense>
+      ) : null}
 
-      <SessionTerminalDialog
-        open={terminalOpen}
-        onOpenChange={setTerminalOpen}
-        clientId={clientId}
-        cwd={terminalCwd}
-      />
+      {terminalOpen ? (
+        <Suspense
+          fallback={
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 text-sm text-white">
+              Loading terminal…
+            </div>
+          }
+        >
+          <WorkbenchTerminalDialog
+            open={terminalOpen}
+            onOpenChange={setTerminalOpen}
+            clientId={clientId}
+            cwd={terminalCwd}
+          />
+        </Suspense>
+      ) : null}
 
       <ArchiveSessionDialog
         open={archiveConfirmSessionId !== null}
@@ -501,12 +400,12 @@ export function App() {
             availableWorkspaceDir ||
             "/"
           }
-          onPick={selectedSummary ? insertFileReference : insertEmptyStateFileReference}
+          onPick={selectedSummary ? insertDraftReference : insertEmptyStateReference}
         />
       ) : null}
 
       {/* Center chat */}
-      <main className="flex-1 flex flex-col min-w-0 overflow-x-hidden">
+      <main className="flex-1 flex flex-col min-w-0 overflow-x-hidden overflow-y-hidden">
         {primaryPaneState.kind === "active" && selectedSummary ? (
           <WorkbenchSelectedPane
             selectedSummary={selectedSummary}
@@ -530,6 +429,7 @@ export function App() {
             composerSurface={composerSurface}
             composerRef={composerRef}
             draft={draft}
+            sendPending={sendPending}
             onDraftChange={setDraft}
             onSend={() => void handleSend()}
             onClaimHistory={() => {
@@ -558,15 +458,21 @@ export function App() {
           <WorkbenchOpeningPane
             openingSession={activeOpeningSession}
             sidebarOpen={sidebarOpen}
+            rightSidebarOpen={rightSidebarOpen}
             onOpenLeft={() => setLeftOpen(true)}
             onExpandSidebar={() => setSidebarOpen(true)}
+            onOpenRight={() => setRightOpen(true)}
+            onExpandInspector={() => setRightSidebarOpen(true)}
             onOpenTerminal={() => setTerminalOpen(true)}
           />
         ) : (
           <WorkbenchEmptyPane
             sidebarOpen={sidebarOpen}
+            rightSidebarOpen={rightSidebarOpen}
             onOpenLeft={() => setLeftOpen(true)}
             onExpandSidebar={() => setSidebarOpen(true)}
+            onOpenRight={() => setRightOpen(true)}
+            onExpandInspector={() => setRightSidebarOpen(true)}
             onOpenTerminal={() => setTerminalOpen(true)}
             emptyStateComposerRef={emptyStateComposerRef}
             emptyStateDraft={emptyStateDraft}
@@ -592,7 +498,7 @@ export function App() {
       </main>
 
       <WorkbenchInspectorShell
-        showDesktop={Boolean(selectedSummary)}
+        showDesktop={rightSidebarOpen || Boolean(selectedSummary || selectedWorkspaceOnlyDir)}
         desktopOpen={rightSidebarOpen}
         rightOpen={rightOpen}
         onRightOpenChange={setRightOpen}

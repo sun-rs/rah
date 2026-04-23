@@ -187,6 +187,19 @@ function extractTextFromContent(content: unknown): string {
     .trim();
 }
 
+function hashGeminiMessages(messages: readonly GeminiMessageRecord[]): string {
+  const hash = createHash("sha256");
+  for (const message of messages) {
+    hash.update(message.id);
+    hash.update("\u0000");
+    hash.update(message.timestamp);
+    hash.update("\u0000");
+    hash.update(message.type);
+    hash.update("\u0000");
+  }
+  return hash.digest("hex");
+}
+
 function loadGeminiConversationRecord(filePath: string): GeminiConversationRecord | null {
   try {
     const content = readFileSync(filePath, "utf8");
@@ -760,13 +773,58 @@ function tryIncrementalGeminiHistoryCacheRefresh(args: {
   record: GeminiStoredSessionRecord;
   size: number;
   mtimeMs: number;
+  sessionId: string;
 }): GeminiHistoryCacheManifest | null {
   const previousManifest = readCachedGeminiHistoryManifest(args.record.filePath);
   if (
     !previousManifest ||
-    previousManifest.sourceKind !== "jsonl" ||
     args.size < previousManifest.size
   ) {
+    return null;
+  }
+  if (previousManifest.sourceKind === "json") {
+    if (!previousManifest.sourceState) {
+      return null;
+    }
+    const conversation = resolveGeminiConversation(args.record);
+    if (conversation.kind === "subagent") {
+      return null;
+    }
+    if (conversation.messages.length < previousManifest.sourceState.messageCount) {
+      return null;
+    }
+    const prefix = conversation.messages.slice(0, previousManifest.sourceState.messageCount);
+    if (hashGeminiMessages(prefix) !== previousManifest.sourceState.prefixHash) {
+      return null;
+    }
+    const appendedMessages = conversation.messages.slice(previousManifest.sourceState.messageCount);
+    const events =
+      appendedMessages.length > 0
+        ? materializeGeminiConversationEvents({
+            sessionId: args.sessionId,
+            conversation: {
+              sessionId: args.record.ref.providerSessionId,
+              projectHash: conversation.projectHash,
+              startTime: conversation.startTime,
+              lastUpdated: conversation.lastUpdated,
+              messages: appendedMessages,
+              ...(conversation.summary ? { summary: conversation.summary } : {}),
+            },
+          })
+        : [];
+    return appendCachedGeminiHistoryEvents({
+      filePath: args.record.filePath,
+      previousManifest,
+      size: args.size,
+      mtimeMs: args.mtimeMs,
+      events,
+      sourceState: {
+        messageCount: conversation.messages.length,
+        prefixHash: hashGeminiMessages(conversation.messages),
+      },
+    });
+  }
+  if (previousManifest.sourceKind !== "jsonl") {
     return null;
   }
   const delta = parseGeminiAppendOnlyDelta({
@@ -816,6 +874,7 @@ function ensureGeminiHistoryCacheRevision(args: {
   }
 
   const incrementallyRefreshed = tryIncrementalGeminiHistoryCacheRefresh({
+    sessionId: args.sessionId,
     record: args.record,
     size: args.size,
     mtimeMs: args.mtimeMs,
@@ -829,15 +888,25 @@ function ensureGeminiHistoryCacheRevision(args: {
     throw new Error("Gemini frozen history revision is unavailable.");
   }
 
+  const sourceKind = isGeminiJsonlSessionFile(args.record.filePath) ? "jsonl" : "json";
+  const conversation = resolveGeminiConversation(args.record);
   return writeCachedGeminiHistoryEvents({
     filePath: args.record.filePath,
     size: args.size,
     mtimeMs: args.mtimeMs,
     events: materializeGeminiConversationEvents({
       sessionId: args.sessionId,
-      conversation: resolveGeminiConversation(args.record),
+      conversation,
     }),
-    sourceKind: isGeminiJsonlSessionFile(args.record.filePath) ? "jsonl" : "json",
+    sourceKind,
+    ...(sourceKind === "json"
+      ? {
+          sourceState: {
+            messageCount: conversation.messages.length,
+            prefixHash: hashGeminiMessages(conversation.messages),
+          },
+        }
+      : {}),
   });
 }
 

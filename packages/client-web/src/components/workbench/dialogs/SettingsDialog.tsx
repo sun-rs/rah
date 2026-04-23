@@ -10,9 +10,14 @@ export function SettingsDialog(props: {
     <Dialog.Root open={props.open} onOpenChange={props.onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 bg-black/40 z-40" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 max-h-[85vh] w-[90vw] max-w-lg -translate-x-1/2 -translate-y-1/2 rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-0 shadow-xl focus:outline-none z-50 flex flex-col">
-          <div className="flex items-center justify-between border-b border-[var(--app-border)] px-4 py-3 shrink-0">
-            <Dialog.Title className="text-sm font-semibold text-[var(--app-fg)]">Settings</Dialog.Title>
+        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 flex h-[min(88vh,720px)] w-[min(960px,96vw)] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-2xl border border-[var(--app-border)] bg-[var(--app-bg)] p-0 shadow-2xl focus:outline-none">
+          <div className="flex items-center justify-between border-b border-[var(--app-border)] px-4 py-3 shrink-0 md:px-5">
+            <div className="min-w-0">
+              <Dialog.Title className="text-sm font-semibold text-[var(--app-fg)]">Settings</Dialog.Title>
+              <Dialog.Description className="mt-0.5 text-xs text-[var(--app-hint)]">
+                Appearance, chat behavior, version checks, and about information.
+              </Dialog.Description>
+            </div>
             <Dialog.Close asChild>
               <button
                 type="button"
@@ -23,7 +28,7 @@ export function SettingsDialog(props: {
               </button>
             </Dialog.Close>
           </div>
-          <div className="flex-1 overflow-y-auto custom-scrollbar">
+          <div className="min-h-0 flex-1">
             <SettingsPane />
           </div>
         </Dialog.Content>

@@ -16,10 +16,10 @@ and authorized.
 These checks should pass in any normal development or release environment:
 
 ```bash
-bun run typecheck
-bun run test:web
-bun run test:runtime
-bun run build:web
+npm run typecheck
+npm run test:web
+npm run test:runtime
+npm run build:web
 ```
 
 If any of these fail, stop the release.
@@ -42,8 +42,8 @@ Do **not** treat “binary exists” as proof that the provider is usable.
 These validate the workbench behavior rather than a single provider:
 
 ```bash
-bun run test:smoke:history-claim
-bun run test:smoke:tool-flow
+npm run test:smoke:history-claim
+npm run test:smoke:tool-flow
 ```
 
 Recommended whenever the release changes:
@@ -59,17 +59,17 @@ Run when Codex adapter, Codex UI, or shared replay/live semantics changed.
 
 Current practical validation:
 
-- `bun run test:runtime`
-- `bun run test:smoke:history-claim`
-- `bun run test:smoke:tool-flow`
+- `npm run test:runtime`
+- `npm run test:smoke:history-claim`
+- `npm run test:smoke:tool-flow`
 
 If you have a dedicated Codex-enabled release machine, use it here.
 
 ### 2.3 Claude
 
 ```bash
-bun run test:smoke:claude-flow
-bun run test:smoke:claude-browser
+npm run test:smoke:claude-flow
+npm run test:smoke:claude-browser
 ```
 
 Run when release touches:
@@ -82,8 +82,8 @@ Run when release touches:
 ### 2.4 Gemini
 
 ```bash
-bun run test:smoke:gemini-flow
-bun run test:smoke:gemini-browser
+npm run test:smoke:gemini-flow
+npm run test:smoke:gemini-browser
 ```
 
 Run when release touches:
@@ -95,8 +95,8 @@ Run when release touches:
 ### 2.5 Kimi
 
 ```bash
-bun run test:smoke:kimi-flow
-bun run test:smoke:kimi-browser
+npm run test:smoke:kimi-flow
+npm run test:smoke:kimi-browser
 ```
 
 Run when release touches:
@@ -118,10 +118,10 @@ Use this order unless there is a reason to narrow the scope:
 Suggested command flow:
 
 ```bash
-bun run typecheck
-bun run test:web
-bun run test:runtime
-bun run build:web
+npm run typecheck
+npm run test:web
+npm run test:runtime
+npm run build:web
 ```
 
 Then selectively run only the provider smokes that match the release environment and change scope.

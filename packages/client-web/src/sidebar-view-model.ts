@@ -19,6 +19,7 @@ export interface SidebarWorkspaceViewModel {
   directory: string;
   displayName: string;
   hasBlockingLiveSessions: boolean;
+  selected: boolean;
   sessions: SidebarSessionViewModel[];
 }
 
@@ -54,6 +55,7 @@ function sidebarStatusLabel(status: SidebarSessionStatus): string {
 
 export function deriveSidebarWorkspaceViewModels(args: {
   workspaceSections: WorkspaceSection[];
+  selectedWorkspaceDir: string;
   selectedSessionId: string | null;
   unreadSessionIds: ReadonlySet<string>;
   runtimeStatusBySessionId: ReadonlyMap<string, "thinking" | "streaming" | "retrying" | undefined>;
@@ -73,6 +75,7 @@ export function deriveSidebarWorkspaceViewModels(args: {
       directory: section.workspace.directory,
       displayName: section.workspace.displayName,
       hasBlockingLiveSessions: section.workspace.hasBlockingLiveSessions,
+      selected: section.workspace.directory === args.selectedWorkspaceDir,
       sessions: orderedSessions.map((session) => {
         const status = deriveSidebarSessionStatus({
           summary: session,

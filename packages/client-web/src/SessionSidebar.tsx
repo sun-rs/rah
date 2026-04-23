@@ -34,7 +34,7 @@ function WorkspaceSortMenu(props: {
       return;
     }
 
-    const onPointerDown = (event: MouseEvent | TouchEvent) => {
+    const onPointerDown = (event: PointerEvent) => {
       if (!menuRef.current?.contains(event.target as Node)) {
         setOpen(false);
       }
@@ -45,12 +45,10 @@ function WorkspaceSortMenu(props: {
       }
     };
 
-    document.addEventListener("mousedown", onPointerDown);
-    document.addEventListener("touchstart", onPointerDown);
+    document.addEventListener("pointerdown", onPointerDown);
     document.addEventListener("keydown", onKeyDown);
     return () => {
-      document.removeEventListener("mousedown", onPointerDown);
-      document.removeEventListener("touchstart", onPointerDown);
+      document.removeEventListener("pointerdown", onPointerDown);
       document.removeEventListener("keydown", onKeyDown);
     };
   }, [open]);
@@ -186,6 +184,7 @@ function WorkspaceRow(props: {
   onRemoveWorkspace: () => void;
   onTogglePinSession: (sessionId: string) => void;
   onSelectSession: (sessionId: string) => void;
+  onSelectWorkspace: () => void;
   expandAllKey: number;
   expandAllValue: boolean;
 }) {
@@ -209,7 +208,11 @@ function WorkspaceRow(props: {
   return (
     <div className={SIDEBAR_LAYOUT.workspaceBlockClassName}>
       {/* Workspace header */}
-      <div className={SIDEBAR_LAYOUT.workspaceHeaderClassName}>
+      <div
+        className={`${SIDEBAR_LAYOUT.workspaceHeaderClassName} ${
+          props.workspace.selected ? SIDEBAR_LAYOUT.workspaceHeaderSelectedClassName : ""
+        }`}
+      >
         <button
           type="button"
           onClick={(e) => {
@@ -223,7 +226,7 @@ function WorkspaceRow(props: {
         </button>
         <button
           type="button"
-          onClick={toggleExpanded}
+          onClick={props.onSelectWorkspace}
           className={SIDEBAR_LAYOUT.workspaceTitleButtonClassName}
         >
           {props.workspace.displayName}
@@ -291,10 +294,12 @@ export function SessionSidebar(props: {
   onTogglePinSession: (workspaceDir: string, sessionId: string) => void;
   onAddWorkspace: (value: string) => void;
   onRemoveWorkspace: (value: string) => void;
+  selectedWorkspaceDir: string;
   selectedSessionId: string | null;
   unreadSessionIds: ReadonlySet<string>;
   runtimeStatusBySessionId: ReadonlyMap<string, "thinking" | "streaming" | "retrying" | undefined>;
-  onSelectSession: (sessionId: string) => void;
+  onSelectSession: (workspaceDir: string, sessionId: string) => void;
+  onSelectWorkspace: (workspaceDir: string) => void;
   debugScenarios: DebugScenarioDescriptor[];
   onStartScenario: (scenario: DebugScenarioDescriptor) => void;
 }) {
@@ -304,6 +309,7 @@ export function SessionSidebar(props: {
     () =>
       deriveSidebarWorkspaceViewModels({
         workspaceSections: props.workspaceSections,
+        selectedWorkspaceDir: props.selectedWorkspaceDir,
         selectedSessionId: props.selectedSessionId,
         unreadSessionIds: props.unreadSessionIds,
         runtimeStatusBySessionId: props.runtimeStatusBySessionId,
@@ -313,6 +319,7 @@ export function SessionSidebar(props: {
       props.pinnedSessionIdByWorkspace,
       props.runtimeStatusBySessionId,
       props.selectedSessionId,
+      props.selectedWorkspaceDir,
       props.unreadSessionIds,
       props.workspaceSections,
     ],
@@ -360,7 +367,8 @@ export function SessionSidebar(props: {
             onTogglePinSession={(sessionId) =>
               props.onTogglePinSession(workspace.directory, sessionId)
             }
-            onSelectSession={props.onSelectSession}
+            onSelectSession={(sessionId) => props.onSelectSession(workspace.directory, sessionId)}
+            onSelectWorkspace={() => props.onSelectWorkspace(workspace.directory)}
             expandAllKey={expandAllKey}
             expandAllValue={expandAllValue}
           />

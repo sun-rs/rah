@@ -32,6 +32,7 @@
   - 已有 adapter-owned frozen loader
   - 已有 page-based sidecar event cache
   - frozen loader 已优先使用 windowed cache read
+  - append-only `.jsonl` 历史已接入保守增量 page index
 
 ## 设计原则
 
@@ -220,6 +221,62 @@ sidecar 文件按 **page/chunk** 保存：
 - 但读取时不必把整份 events 全反序列化进内存
 - 可以只加载最近一页或少数几页
 
+### 当前实现边界
+
+当前实现已经进一步收成：
+
+- exact revision 命中时：直接按 page/window 读取
+- `.jsonl` 且仅发生 append 时：尝试只解析新增 suffix，并把新增 canonical events 追加到末尾 page
+- 只要遇到以下任一情况，就保守回退到整份 materialize：
+  - monolithic `.json`
+  - `$rewindTo`
+  - 非完整追加边界
+  - 不可解析的新 suffix
+
+这条边界是故意保守的：先把常见 append-only 热路径做快，再把 rewrite/rewind 继续留在安全回退里。
+
+## 方案 D: 前端 feed 虚拟化
+
+### 当前问题
+
+即使后端 recent window 已经明显变轻，长历史在前端仍然可能堆出很多 DOM 节点：
+
+- 长消息 markdown
+- code block
+- tool / permission / notice card
+
+这会直接拉高：
+
+- 初次挂载成本
+- session 切换成本
+- 长历史滚动成本
+
+### 最小设计
+
+只在 **长 feed** 上启用轻量虚拟化：
+
+- 短 feed 继续全量渲染，避免为普通对话引入额外复杂度
+- 长 feed 改成：
+  - measured row height
+  - top/bottom spacer
+  - overscan window
+
+### 当前实现边界
+
+当前实现刻意收得很克制：
+
+- 不引入第三方虚拟列表库
+- 不改变 `FeedEntry` 结构
+- 不改变历史上翻协议
+- 只在 `ChatThread` 渲染层做 windowing
+
+并且保留已有滚动语义：
+
+- 顶部触发 older history load
+- 首次进入长历史时强制落底
+- 新增内容时贴底
+- 历史 prepend 时保持锚点
+
 ### 为什么 Gemini 不跟三家共用 raw tail
 
 因为 Gemini 的源文件经常是 monolithic JSON，而不是稳定的 line-oriented record stream。
@@ -244,8 +301,10 @@ sidecar 文件按 **page/chunk** 保存：
 
 - `Codex / Claude / Kimi` semantic rewind：已完成
 - `Gemini` page-based event cache：已完成
+- `Gemini` append-only incremental page index：已完成
 - `Codex / Claude / Kimi` loader-local semantic cursor：已完成
 - `Codex / Claude / Kimi` phase-1 ephemeral checkpoint：已完成
+- `ChatThread` 长 feed 虚拟化：已完成
 
 ### 补充说明：为什么还需要 semantic cursor
 

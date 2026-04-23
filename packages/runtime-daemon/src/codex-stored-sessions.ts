@@ -302,7 +302,10 @@ export function discoverCodexStoredSessions(): CodexStoredSessionRecord[] {
   );
 }
 
-function tryReadGitStatus(cwd: string): {
+function tryReadGitStatus(
+  cwd: string,
+  options?: { scopeRoot?: string },
+): {
   branch?: string;
   changedFiles: string[];
   stagedFiles: GitChangedFile[];
@@ -311,7 +314,7 @@ function tryReadGitStatus(cwd: string): {
   totalUnstaged: number;
 } {
   try {
-    const scopeRoot = path.resolve(cwd);
+    const scopeRoot = path.resolve(options?.scopeRoot ?? cwd);
     const gitCwd = getGitCommandCwd(cwd);
     const output = execFileSync(
       "git",
@@ -976,18 +979,18 @@ export function getCodexWorkspaceSnapshot(cwd: string) {
   };
 }
 
-export function getCodexGitStatus(cwd: string) {
-  return tryReadGitStatus(cwd);
+export function getCodexGitStatus(cwd: string, options?: { scopeRoot?: string }) {
+  return tryReadGitStatus(cwd, options);
 }
 
 export function getCodexGitDiff(
   cwd: string,
   targetPath: string,
-  options?: { staged?: boolean; ignoreWhitespace?: boolean },
+  options?: { staged?: boolean; ignoreWhitespace?: boolean; scopeRoot?: string },
 ): string {
   try {
     const gitCwd = getGitCommandCwd(cwd);
-    const relativeGitPath = toGitPath(cwd, targetPath);
+    const relativeGitPath = toGitPath(options?.scopeRoot ?? cwd, targetPath);
     const args = ["-C", gitCwd, "diff"];
     if (options?.staged) {
       args.push("--cached");
@@ -1072,9 +1075,10 @@ function execGitFile(
 export function applyCodexGitFileAction(
   cwd: string,
   request: GitFileActionRequest,
+  options?: { scopeRoot?: string },
 ): GitFileActionResponse {
   const gitCwd = getGitCommandCwd(cwd);
-  const relativeGitPath = toGitPath(cwd, request.path);
+  const relativeGitPath = toGitPath(options?.scopeRoot ?? cwd, request.path);
   if (request.action === "stage") {
     execGitFile(gitCwd, ["add", "--", relativeGitPath]);
   } else {
@@ -1092,11 +1096,14 @@ export function applyCodexGitFileAction(
 export function applyCodexGitHunkAction(
   cwd: string,
   request: GitHunkActionRequest,
+  options?: { scopeRoot?: string },
 ): GitHunkActionResponse {
   const gitCwd = getGitCommandCwd(cwd);
+  const scopeRoot = options?.scopeRoot ?? cwd;
   const diff = getCodexGitDiff(cwd, request.path, {
     ...(request.staged !== undefined ? { staged: request.staged } : {}),
     ignoreWhitespace: false,
+    scopeRoot,
   });
   const parsed = parseSingleFileDiff(diff);
   if (!parsed) {
@@ -1160,8 +1167,12 @@ export function searchWorkspaceFiles(
   }
 }
 
-export function readWorkspaceFile(cwd: string, targetPath: string) {
-  const resolvedPath = resolveWorkspacePath(cwd, targetPath);
+export function readWorkspaceFile(
+  cwd: string,
+  targetPath: string,
+  options?: { scopeRoot?: string },
+) {
+  const resolvedPath = resolveWorkspacePath(options?.scopeRoot ?? cwd, targetPath);
   const stats = statSync(resolvedPath);
   if (!stats.isFile()) {
     throw new Error("Path is not a file.");

@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { EventBus } from "./event-bus";
 import { GeminiAdapter } from "./gemini-adapter";
+import { loadCachedGeminiHistoryManifest } from "./gemini-history-cache";
 import { createGeminiStoredSessionFrozenHistoryPageLoader } from "./gemini-session-files";
 import { PtyHub } from "./pty-hub";
 import { SessionStore } from "./session-store";
@@ -494,5 +495,168 @@ emit({ type: "result", timestamp: new Date().toISOString(), status: "success", s
       }),
       ["user 120", "assistant 120"],
     );
+  });
+
+  test("refreshes json-backed Gemini cache incrementally when only new messages append", () => {
+    const sessionId = "gemini-session-json-incremental";
+    const chatsDir = path.join(tmpHome, "tmp", getProjectHash(cwd), "chats");
+    mkdirSync(chatsDir, { recursive: true });
+    const filePath = path.join(chatsDir, "session-2026-01-02T00-00-json.json");
+
+    const baseMessages = [
+      {
+        id: "msg-user-1",
+        timestamp: "2026-01-02T00:00:00.000Z",
+        type: "user",
+        content: [{ text: "user 1" }],
+      },
+      {
+        id: "msg-gemini-1",
+        timestamp: "2026-01-02T00:00:01.000Z",
+        type: "gemini",
+        content: [{ text: "assistant 1" }],
+      },
+      {
+        id: "msg-user-2",
+        timestamp: "2026-01-02T00:00:02.000Z",
+        type: "user",
+        content: [{ text: "user 2" }],
+      },
+      {
+        id: "msg-gemini-2",
+        timestamp: "2026-01-02T00:00:03.000Z",
+        type: "gemini",
+        content: [{ text: "assistant 2" }],
+      },
+    ];
+
+    writeFileSync(
+      filePath,
+      JSON.stringify({
+        sessionId,
+        projectHash: getProjectHash(cwd),
+        startTime: "2026-01-02T00:00:00.000Z",
+        lastUpdated: "2026-01-02T00:00:03.000Z",
+        messages: baseMessages,
+      }),
+    );
+
+    const initialLoader = createGeminiStoredSessionFrozenHistoryPageLoader({
+      sessionId: "replay-json-1",
+      record: {
+        ref: {
+          provider: "gemini",
+          providerSessionId: sessionId,
+          title: "gemini json incremental",
+          preview: "gemini json incremental",
+          updatedAt: "2026-01-02T00:00:03.000Z",
+          source: "provider_history",
+        },
+        filePath,
+        conversation: {
+          sessionId,
+          projectHash: getProjectHash(cwd),
+          startTime: "2026-01-02T00:00:00.000Z",
+          lastUpdated: "2026-01-02T00:00:03.000Z",
+          messages: [],
+        },
+      },
+    });
+    const initialPage = initialLoader.loadInitialPage(10);
+    assert.deepEqual(
+      initialPage.events.flatMap((event) => {
+        if (
+          event.type === "timeline.item.added" &&
+          (event.payload.item.kind === "user_message" ||
+            event.payload.item.kind === "assistant_message")
+        ) {
+          return [event.payload.item.text];
+        }
+        return [];
+      }),
+      ["user 1", "assistant 1", "user 2", "assistant 2"],
+    );
+
+    const initialStats = statSync(filePath);
+    const initialManifest = loadCachedGeminiHistoryManifest({
+      filePath,
+      size: initialStats.size,
+      mtimeMs: initialStats.mtimeMs,
+    });
+    assert.ok(initialManifest);
+    assert.equal(initialManifest?.sourceKind, "json");
+    assert.equal(initialManifest?.sourceState?.messageCount, 4);
+
+    writeFileSync(
+      filePath,
+      JSON.stringify({
+        sessionId,
+        projectHash: getProjectHash(cwd),
+        startTime: "2026-01-02T00:00:00.000Z",
+        lastUpdated: "2026-01-02T00:00:05.000Z",
+        messages: [
+          ...baseMessages,
+          {
+            id: "msg-user-3",
+            timestamp: "2026-01-02T00:00:04.000Z",
+            type: "user",
+            content: [{ text: "user 3" }],
+          },
+          {
+            id: "msg-gemini-3",
+            timestamp: "2026-01-02T00:00:05.000Z",
+            type: "gemini",
+            content: [{ text: "assistant 3" }],
+          },
+        ],
+      }),
+    );
+
+    const reopenedLoader = createGeminiStoredSessionFrozenHistoryPageLoader({
+      sessionId: "replay-json-2",
+      record: {
+        ref: {
+          provider: "gemini",
+          providerSessionId: sessionId,
+          title: "gemini json incremental",
+          preview: "gemini json incremental",
+          updatedAt: "2026-01-02T00:00:05.000Z",
+          source: "provider_history",
+        },
+        filePath,
+        conversation: {
+          sessionId,
+          projectHash: getProjectHash(cwd),
+          startTime: "2026-01-02T00:00:00.000Z",
+          lastUpdated: "2026-01-02T00:00:05.000Z",
+          messages: [],
+        },
+      },
+    });
+
+    const reopenedPage = reopenedLoader.loadInitialPage(2);
+    assert.deepEqual(
+      reopenedPage.events.flatMap((event) => {
+        if (
+          event.type === "timeline.item.added" &&
+          (event.payload.item.kind === "user_message" ||
+            event.payload.item.kind === "assistant_message")
+        ) {
+          return [event.payload.item.text];
+        }
+        return [];
+      }),
+      ["user 3", "assistant 3"],
+    );
+
+    const updatedStats = statSync(filePath);
+    const updatedManifest = loadCachedGeminiHistoryManifest({
+      filePath,
+      size: updatedStats.size,
+      mtimeMs: updatedStats.mtimeMs,
+    });
+    assert.ok(updatedManifest);
+    assert.equal(updatedManifest?.sourceState?.messageCount, 6);
+    assert.equal(updatedManifest?.totalEvents, 6);
   });
 });

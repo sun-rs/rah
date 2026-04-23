@@ -13,6 +13,10 @@ export type GeminiHistoryCacheManifest = {
   totalEvents: number;
   pageCount: number;
   sourceKind: "json" | "jsonl";
+  sourceState?: {
+    messageCount: number;
+    prefixHash: string;
+  };
 };
 
 type GeminiHistoryWindow = {
@@ -52,7 +56,15 @@ function isGeminiHistoryCacheManifest(value: unknown): value is GeminiHistoryCac
     "pageCount" in value &&
     typeof value.pageCount === "number" &&
     "sourceKind" in value &&
-    (value.sourceKind === "json" || value.sourceKind === "jsonl")
+    (value.sourceKind === "json" || value.sourceKind === "jsonl") &&
+    (!("sourceState" in value) ||
+      value.sourceState === undefined ||
+      (typeof value.sourceState === "object" &&
+        value.sourceState !== null &&
+        "messageCount" in value.sourceState &&
+        typeof value.sourceState.messageCount === "number" &&
+        "prefixHash" in value.sourceState &&
+        typeof value.sourceState.prefixHash === "string"))
   );
 }
 
@@ -165,6 +177,10 @@ export function writeCachedGeminiHistoryEvents(args: {
   mtimeMs: number;
   events: RahEvent[];
   sourceKind: "json" | "jsonl";
+  sourceState?: {
+    messageCount: number;
+    prefixHash: string;
+  };
 }): GeminiHistoryCacheManifest {
   const cacheDir = cacheDirPath(args.filePath);
   rmSync(cacheDir, { recursive: true, force: true });
@@ -187,6 +203,7 @@ export function writeCachedGeminiHistoryEvents(args: {
     totalEvents: args.events.length,
     pageCount,
     sourceKind: args.sourceKind,
+    ...(args.sourceState ? { sourceState: args.sourceState } : {}),
   } satisfies GeminiHistoryCacheManifest;
   writeFileSync(manifestPath(args.filePath), JSON.stringify(manifest));
   return manifest;
@@ -198,6 +215,10 @@ export function appendCachedGeminiHistoryEvents(args: {
   size: number;
   mtimeMs: number;
   events: RahEvent[];
+  sourceState?: {
+    messageCount: number;
+    prefixHash: string;
+  };
 }): GeminiHistoryCacheManifest {
   const cacheDir = cacheDirPath(args.filePath);
   mkdirSync(cacheDir, { recursive: true });
@@ -238,6 +259,7 @@ export function appendCachedGeminiHistoryEvents(args: {
     mtimeMs: args.mtimeMs,
     totalEvents,
     pageCount: Math.ceil(totalEvents / args.previousManifest.pageSize),
+    ...(args.sourceState ? { sourceState: args.sourceState } : {}),
   } satisfies GeminiHistoryCacheManifest;
   writeFileSync(manifestPath(args.filePath), JSON.stringify(manifest));
   return manifest;

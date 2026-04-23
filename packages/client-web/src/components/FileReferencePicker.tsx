@@ -91,25 +91,22 @@ export function FileReferencePicker(props: {
 
   useEffect(() => {
     if (!props.open) return;
-    let cancelled = false;
+    const controller = new AbortController();
     setLoading(true);
     setError(null);
-    void listDirectory(currentPath)
+    void listDirectory(currentPath, { signal: controller.signal })
       .then((res) => {
-        if (!cancelled) {
-          setListing(res);
-          setLoading(false);
-        }
+        setListing(res);
+        setLoading(false);
       })
       .catch((err) => {
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : String(err));
-          setLoading(false);
+        if (err instanceof DOMException && err.name === "AbortError") {
+          return;
         }
+        setError(err instanceof Error ? err.message : String(err));
+        setLoading(false);
       });
-    return () => {
-      cancelled = true;
-    };
+    return () => controller.abort();
   }, [currentPath, props.open]);
 
   const filteredEntries = useMemo(() => {

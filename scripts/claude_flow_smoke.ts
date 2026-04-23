@@ -1,3 +1,8 @@
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
+
 const baseUrl = process.env.RAH_BASE_URL ?? "http://127.0.0.1:43111";
 
 type SessionSummary = {
@@ -37,7 +42,7 @@ async function waitForIdle(sessionId: string, timeoutMs = 240_000) {
     if (["idle", "failed", "stopped"].includes(last.session.runtimeState)) {
       return last;
     }
-    await Bun.sleep(1000);
+    await sleep(1000);
   }
   throw new Error(`Timed out waiting for ${sessionId}; last=${JSON.stringify(last)}`);
 }
@@ -147,7 +152,7 @@ async function waitForIdleWithAutoPermissions(
         permissionIds: [...handled],
       };
     }
-    await Bun.sleep(1000);
+    await sleep(1000);
   }
   throw new Error(`Timed out waiting for ${sessionId}; last=${JSON.stringify(last)}`);
 }
@@ -156,9 +161,8 @@ async function main() {
   await cleanupLiveClaudeSessions();
 
   const clientId = `claude-flow-smoke-${Date.now()}`;
-  const cwd = await Bun.$`mktemp -d -t rah-claude-flow`.text();
-  const workdir = cwd.trim();
-  await Bun.write(`${workdir}/alpha.txt`, "ALPHA-CLAUDE\n");
+  const workdir = await mkdtemp(path.join(os.tmpdir(), "rah-claude-flow-"));
+  await writeFile(`${workdir}/alpha.txt`, "ALPHA-CLAUDE\n", "utf8");
 
   let liveSessionId: string | null = null;
   let replaySessionId: string | null = null;
@@ -197,7 +201,7 @@ async function main() {
       throw new Error("Claude live session never published a providerSessionId.");
     }
 
-    const betaContent = await Bun.file(`${workdir}/beta.txt`).text();
+    const betaContent = await readFile(`${workdir}/beta.txt`, "utf8");
     if (betaContent.trim() !== "BETA-CLAUDE") {
       throw new Error(`Unexpected beta.txt content: ${JSON.stringify(betaContent)}`);
     }
@@ -298,7 +302,7 @@ async function main() {
       throw new Error("Claude live resume changed providerSessionId unexpectedly.");
     }
 
-    const gammaContent = await Bun.file(`${workdir}/gamma.txt`).text();
+    const gammaContent = await readFile(`${workdir}/gamma.txt`, "utf8");
     if (gammaContent.trim() !== "GAMMA-CLAUDE") {
       throw new Error(`Unexpected gamma.txt content: ${JSON.stringify(gammaContent)}`);
     }
@@ -332,7 +336,7 @@ async function main() {
     if (liveSessionId) {
       await closeSession(liveSessionId, clientId);
     }
-    await Bun.$`rm -rf ${workdir}`;
+    await rm(workdir, { recursive: true, force: true });
   }
 }
 

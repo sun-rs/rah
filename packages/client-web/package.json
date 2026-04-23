@@ -9,7 +9,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@rah/runtime-protocol": "workspace:*",
+    "@rah/runtime-protocol": "file:../runtime-protocol",
     "@radix-ui/react-dialog": "^1.1.15",
     "@radix-ui/react-scroll-area": "^1.2.4",
     "@radix-ui/react-separator": "^1.1.0",

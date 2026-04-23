@@ -120,9 +120,22 @@ export const TokenizedTextarea = forwardRef<
   const adjustHeight = () => {
     const el = textareaRef.current;
     if (!el) return;
+    const computed = window.getComputedStyle(el);
+    const minHeight = Number.parseFloat(computed.minHeight) || 0;
+    const maxHeight = Number.parseFloat(computed.maxHeight) || Number.POSITIVE_INFINITY;
+    const lineHeight = Number.parseFloat(computed.lineHeight) || 20;
     el.style.height = "auto";
-    const newHeight = el.scrollHeight;
-    el.style.height = `${newHeight}px`;
+    // Force synchronous layout recalculation so scrollHeight is accurate
+    void el.offsetHeight;
+    let nextHeight = Math.max(minHeight, Math.min(maxHeight, el.scrollHeight));
+    // Strict snap: if the computed height is barely above minHeight (within
+    // a quarter line), clamp it down. This prevents the textarea from being
+    // 1–2 px taller than the adjacent buttons on empty or nearly-empty input.
+    const snapThreshold = minHeight + lineHeight * 0.25;
+    if (nextHeight <= snapThreshold) {
+      nextHeight = minHeight;
+    }
+    el.style.height = `${nextHeight}px`;
   };
 
   useEffect(() => {
@@ -130,7 +143,7 @@ export const TokenizedTextarea = forwardRef<
   }, [props.value]);
 
   return (
-    <div className="relative flex-1">
+    <div className="relative flex-1 min-w-0">
       <div
         ref={mirrorRef}
         aria-hidden="true"

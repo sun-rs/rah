@@ -82,31 +82,59 @@ export function getBaseUrl(): string {
   return trimmed;
 }
 
-async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${getBaseUrl()}${path}`, {
-    ...init,
-    headers: {
-      "content-type": "application/json",
-      ...(init?.headers ?? {}),
-    },
-  });
-  if (!response.ok) {
-    const fallback = `Request failed: ${response.status} ${response.statusText}`;
-    let message = fallback;
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError";
+}
+
+function buildRequestHeaders(init?: RequestInit): Headers {
+  const headers = new Headers(init?.headers ?? {});
+  if (init?.body !== undefined && init.body !== null && !headers.has("content-type")) {
+    headers.set("content-type", "application/json");
+  }
+  return headers;
+}
+
+function extractResponseErrorMessage(response: Response, raw: string): string {
+  const fallback = `Request failed: ${response.status} ${response.statusText}`;
+  if (!raw.trim()) {
+    return fallback;
+  }
+  const contentType = response.headers.get("content-type") ?? "";
+  if (contentType.includes("application/json")) {
     try {
-      const raw = await response.text();
-      if (raw.trim()) {
-        try {
-          const parsed = JSON.parse(raw) as { error?: string; message?: string };
-          message = parsed.error ?? parsed.message ?? raw;
-        } catch {
-          message = raw;
-        }
+      const parsed = JSON.parse(raw) as { error?: string; message?: string };
+      const structuredMessage = parsed.error ?? parsed.message;
+      if (typeof structuredMessage === "string" && structuredMessage.trim()) {
+        return structuredMessage;
       }
     } catch {
-      // ignore
+      return fallback;
     }
-    throw new Error(message);
+  }
+  return fallback;
+}
+
+async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
+  let response: Response;
+  try {
+    response = await fetch(`${getBaseUrl()}${path}`, {
+      ...init,
+      headers: buildRequestHeaders(init),
+    });
+  } catch (error) {
+    if (isAbortError(error)) {
+      throw error;
+    }
+    throw new Error(error instanceof Error ? error.message : "Network request failed.");
+  }
+  if (!response.ok) {
+    let raw = "";
+    try {
+      raw = await response.text();
+    } catch {
+      raw = "";
+    }
+    throw new Error(extractResponseErrorMessage(response, raw));
   }
   return (await response.json()) as T;
 }
@@ -165,9 +193,14 @@ export interface DirectoryListingResponse {
   entries: Array<{ name: string; type: "file" | "directory" }>;
 }
 
-export async function listDirectory(path: string): Promise<DirectoryListingResponse> {
+export async function listDirectory(
+  path: string,
+  options?: { signal?: AbortSignal },
+): Promise<DirectoryListingResponse> {
   const encoded = encodeURIComponent(path);
-  return requestJson<DirectoryListingResponse>(`/api/fs/list?path=${encoded}`);
+  return requestJson<DirectoryListingResponse>(`/api/fs/list?path=${encoded}`, {
+    ...(options?.signal ? { signal: options.signal } : {}),
+  });
 }
 
 export async function ensureDirectory(
@@ -201,9 +234,14 @@ export async function listDebugScenarios(): Promise<DebugScenarioDescriptor[]> {
   return response.scenarios;
 }
 
-export async function listProviders(options?: { forceRefresh?: boolean }): Promise<ProviderDiagnostic[]> {
+export async function listProviders(options?: {
+  forceRefresh?: boolean;
+  signal?: AbortSignal;
+}): Promise<ProviderDiagnostic[]> {
   const search = options?.forceRefresh ? "?refresh=1" : "";
-  const response = await requestJson<ListProvidersResponse>(`/api/providers${search}`);
+  const response = await requestJson<ListProvidersResponse>(`/api/providers${search}`, {
+    ...(options?.signal ? { signal: options.signal } : {}),
+  });
   return response.providers;
 }
 
@@ -340,12 +378,31 @@ export async function respondToPermission(
 
 export async function readWorkspace(
   sessionId: string,
+  options?: { scopeRoot?: string },
 ): Promise<WorkspaceSnapshotResponse> {
-  return requestJson<WorkspaceSnapshotResponse>(`/api/sessions/${sessionId}/workspace`);
+  const query = new URLSearchParams();
+  if (options?.scopeRoot) {
+    query.set("scopeRoot", options.scopeRoot);
+  }
+  const suffix = query.size ? `?${query.toString()}` : "";
+  return requestJson<WorkspaceSnapshotResponse>(`/api/sessions/${sessionId}/workspace${suffix}`);
 }
 
-export async function readGitStatus(sessionId: string): Promise<GitStatusResponse> {
-  return requestJson<GitStatusResponse>(`/api/sessions/${sessionId}/git-status`);
+export async function readGitStatus(
+  sessionId: string,
+  options?: { scopeRoot?: string },
+): Promise<GitStatusResponse> {
+  const query = new URLSearchParams();
+  if (options?.scopeRoot) {
+    query.set("scopeRoot", options.scopeRoot);
+  }
+  const suffix = query.size ? `?${query.toString()}` : "";
+  return requestJson<GitStatusResponse>(`/api/sessions/${sessionId}/git-status${suffix}`);
+}
+
+export async function readWorkspaceGitStatus(dir: string): Promise<GitStatusResponse> {
+  const query = new URLSearchParams({ dir });
+  return requestJson<GitStatusResponse>(`/api/workspace/git-status?${query.toString()}`);
 }
 
 export async function readGitDiff(
@@ -354,6 +411,7 @@ export async function readGitDiff(
   options?: {
     staged?: boolean;
     ignoreWhitespace?: boolean;
+    scopeRoot?: string;
   },
 ): Promise<GitDiffResponse> {
   const query = new URLSearchParams({ path });
@@ -363,9 +421,30 @@ export async function readGitDiff(
   if (options?.ignoreWhitespace !== undefined) {
     query.set("ignoreWhitespace", options.ignoreWhitespace ? "true" : "false");
   }
+  if (options?.scopeRoot) {
+    query.set("scopeRoot", options.scopeRoot);
+  }
   return requestJson<GitDiffResponse>(
     `/api/sessions/${sessionId}/git-diff?${query.toString()}`,
   );
+}
+
+export async function readWorkspaceGitDiff(
+  dir: string,
+  path: string,
+  options?: {
+    staged?: boolean;
+    ignoreWhitespace?: boolean;
+  },
+): Promise<GitDiffResponse> {
+  const query = new URLSearchParams({ dir, path });
+  if (options?.staged !== undefined) {
+    query.set("staged", options.staged ? "true" : "false");
+  }
+  if (options?.ignoreWhitespace !== undefined) {
+    query.set("ignoreWhitespace", options.ignoreWhitespace ? "true" : "false");
+  }
+  return requestJson<GitDiffResponse>(`/api/workspace/git-diff?${query.toString()}`);
 }
 
 export async function applyGitHunkAction(
@@ -391,24 +470,55 @@ export async function applyGitFileAction(
 export async function readSessionFile(
   sessionId: string,
   path: string,
+  options?: { scopeRoot?: string },
 ): Promise<SessionFileResponse> {
   const query = new URLSearchParams({ path });
+  if (options?.scopeRoot) {
+    query.set("scopeRoot", options.scopeRoot);
+  }
   return requestJson<SessionFileResponse>(
     `/api/sessions/${sessionId}/file?${query.toString()}`,
   );
+}
+
+export async function readWorkspaceFile(
+  dir: string,
+  path: string,
+): Promise<SessionFileResponse> {
+  const query = new URLSearchParams({ dir, path });
+  return requestJson<SessionFileResponse>(`/api/workspace/file?${query.toString()}`);
 }
 
 export async function searchSessionFiles(
   sessionId: string,
   queryText: string,
   limit = 100,
+  scopeRoot?: string,
 ): Promise<SessionFileSearchResponse> {
   const query = new URLSearchParams({
     query: queryText,
     limit: String(limit),
   });
+  if (scopeRoot) {
+    query.set("scopeRoot", scopeRoot);
+  }
   return requestJson<SessionFileSearchResponse>(
     `/api/sessions/${sessionId}/file-search?${query.toString()}`,
+  );
+}
+
+export async function searchWorkspaceFilesByDirectory(
+  dir: string,
+  queryText: string,
+  limit = 100,
+): Promise<SessionFileSearchResponse> {
+  const query = new URLSearchParams({
+    dir,
+    query: queryText,
+    limit: String(limit),
+  });
+  return requestJson<SessionFileSearchResponse>(
+    `/api/workspace/file-search?${query.toString()}`,
   );
 }
 

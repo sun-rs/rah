@@ -1,4 +1,5 @@
-import { describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
+import { describe, test } from "node:test";
 import type { FeedEntry } from "../../types";
 import {
   buildVirtualFeedLayout,
@@ -32,12 +33,15 @@ describe("virtualized feed layout", () => {
       ]),
     );
 
-    expect(layout.rows.map((row) => ({ key: row.key, height: row.height, offsetTop: row.offsetTop }))).toEqual([
-      { key: "a", height: 80, offsetTop: 0 },
-      { key: "b", height: 120, offsetTop: 80 },
-      { key: "c", height: layout.rows[2]!.height, offsetTop: 200 },
-    ]);
-    expect(layout.totalHeight).toBe(layout.rows[2]!.offsetTop + layout.rows[2]!.height);
+    assert.deepEqual(
+      layout.rows.map((row) => ({ key: row.key, height: row.height, offsetTop: row.offsetTop })),
+      [
+        { key: "a", height: 80, offsetTop: 0 },
+        { key: "b", height: 120, offsetTop: 80 },
+        { key: "c", height: layout.rows[2]!.height, offsetTop: 200 },
+      ],
+    );
+    assert.equal(layout.totalHeight, layout.rows[2]!.offsetTop + layout.rows[2]!.height);
   });
 
   test("derives a stable rendered window with overscan spacers", () => {
@@ -54,7 +58,7 @@ describe("virtualized feed layout", () => {
       overscan: 2,
     });
 
-    expect(window).toEqual({
+    assert.deepEqual(window, {
       startIndex: 2,
       endIndex: 10,
       topSpacerHeight: 200,

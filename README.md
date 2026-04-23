@@ -24,13 +24,13 @@ The Vite server remains a development-only entry:
 Install dependencies:
 
 ```bash
-bun install
+npm install
 ```
 
 Build the web client and serve the unified same-origin workbench:
 
 ```bash
-bun run serve:workbench
+npm run serve:workbench
 ```
 
 Open:
@@ -42,26 +42,26 @@ http://127.0.0.1:43111/
 For local development with split services:
 
 ```bash
-bun run dev:daemon
-bun run dev:web
+npm run dev:daemon
+npm run dev:web
 ```
 
 ## Workspace scripts
 
 ```bash
-bun run build:web
-bun run serve:workbench
-bun run typecheck
-bun run test:web
-bun run test:runtime
-bun run test:smoke:history-claim
-bun run test:smoke:tool-flow
-bun run test:smoke:gemini-flow
-bun run test:smoke:gemini-browser
-bun run test:smoke:kimi-flow
-bun run test:smoke:kimi-browser
-bun run test:smoke:claude-flow
-bun run test:smoke:claude-browser
+npm run build:web
+npm run serve:workbench
+npm run typecheck
+npm run test:web
+npm run test:runtime
+npm run test:smoke:history-claim
+npm run test:smoke:tool-flow
+npm run test:smoke:gemini-flow
+npm run test:smoke:gemini-browser
+npm run test:smoke:kimi-flow
+npm run test:smoke:kimi-browser
+npm run test:smoke:claude-flow
+npm run test:smoke:claude-browser
 ```
 
 ## Test tiers
@@ -69,9 +69,9 @@ bun run test:smoke:claude-browser
 RAH now uses three test tiers:
 
 - default gate
-  - `bun run typecheck`
-  - `bun run test:web`
-  - `bun run test:runtime`
+  - `npm run typecheck`
+  - `npm run test:web`
+  - `npm run test:runtime`
 - provider smoke
   - `history-claim`
   - `tool-flow`
@@ -118,6 +118,8 @@ packages/
 - `DebugAdapter` remains useful for structured scenario replay and non-provider UI exercise.
 - `client-web` consumes the canonical API/events boundary and should not depend on provider-native
   event names.
+- `client-web` store ownership is documented in
+  [`docs/client-web-store-ownership.zh-CN.md`](docs/client-web-store-ownership.zh-CN.md).
 
 ## Provider diagnostics
 

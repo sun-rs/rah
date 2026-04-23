@@ -2,7 +2,7 @@ export { DesktopWorkbenchSidebarHeader } from "./actions/DesktopWorkbenchSidebar
 export { MobileWorkbenchHeaderActions } from "./actions/MobileWorkbenchHeaderActions";
 export { GlobalWorkbenchCallout } from "./callouts/GlobalWorkbenchCallout";
 export { ArchiveSessionDialog } from "./dialogs/ArchiveSessionDialog";
-export { SessionTerminalDialog } from "./dialogs/SessionTerminalDialog";
+export { WorkbenchTerminalDialog } from "./dialogs/WorkbenchTerminalDialog";
 export { SettingsDialog } from "./dialogs/SettingsDialog";
 export { WorkbenchEmptyPane } from "./panes/WorkbenchEmptyPane";
 export { WorkbenchOpeningPane } from "./panes/WorkbenchOpeningPane";

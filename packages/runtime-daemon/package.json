@@ -12,16 +12,16 @@
     }
   },
   "scripts": {
-    "dev": "bun src/main.ts",
+    "dev": "tsx src/main.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.114",
-    "@rah/runtime-protocol": "workspace:*",
-    "node-pty": "^1.1.0",
+    "@rah/runtime-protocol": "file:../runtime-protocol",
     "ws": "^8.18.3"
   },
   "devDependencies": {
+    "tsx": "^4.20.6",
     "@types/ws": "^8.18.1"
   }
 }

@@ -96,7 +96,7 @@ export function classifyCodexCommand(command: string): CodexCommandClassificatio
     };
   }
 
-  if (/\b(?:cargo|bun|npm|pnpm|yarn|pytest|go|uv)\s+(?:test|nextest)\b|\bpytest\b|\bgo\s+test\b/.test(trimmed)) {
+  if (/\b(?:cargo|npm|pnpm|yarn|pytest|go|uv)\s+(?:test|nextest)\b|\bpytest\b|\bgo\s+test\b/.test(trimmed)) {
     return {
       kind: "test.run",
       title: "Run tests",
@@ -105,8 +105,8 @@ export function classifyCodexCommand(command: string): CodexCommandClassificatio
   }
 
   if (
-    /\b(?:cargo|bun|npm|pnpm|yarn|go)\s+(?:build|check)\b/.test(trimmed) ||
-    /\b(?:npm|pnpm|yarn|bun)\s+run\s+build\b/.test(trimmed) ||
+    /\b(?:cargo|npm|pnpm|yarn|go)\s+(?:build|check)\b/.test(trimmed) ||
+    /\b(?:npm|pnpm|yarn)\s+run\s+build\b/.test(trimmed) ||
     /\b(?:tsc|vite|next)\s+(?:--noEmit|build)\b/.test(trimmed)
   ) {
     return {

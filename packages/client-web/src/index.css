@@ -172,10 +172,13 @@
   html,
   body,
   #root {
+    height: 100%;
     width: 100%;
     max-width: 100%;
     overflow-x: hidden;
+    overflow-y: hidden;
     overscroll-behavior-x: none;
+    overscroll-behavior-y: none;
   }
   html {
     @apply antialiased;
@@ -184,6 +187,7 @@
     @apply bg-background text-foreground;
     font-family: var(--font-sans);
     overflow-x: hidden;
+    overflow-y: hidden;
   }
 }
 

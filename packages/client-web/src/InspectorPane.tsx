@@ -15,10 +15,14 @@ import {
 import {
   applyGitFileAction,
   listDirectory,
-  searchSessionFiles,
   readGitDiff,
   readGitStatus,
   readSessionFile,
+  readWorkspaceFile,
+  readWorkspaceGitDiff,
+  readWorkspaceGitStatus,
+  searchSessionFiles,
+  searchWorkspaceFilesByDirectory,
 } from "./api";
 import { useTheme } from "./hooks/useTheme";
 import {
@@ -31,7 +35,7 @@ import {
   shouldHighlightPreview,
   shouldUseProgressiveRender,
 } from "./inspector-performance";
-import { getHighlighter, highlightLines } from "./lib/shiki";
+import { ensureHighlighterLanguage, getHighlighter, highlightLines } from "./lib/shiki";
 
 type InspectorTab = "files" | "changes" | "events";
 type FileDetailMode = "file" | "diff";
@@ -289,8 +293,14 @@ function useHighlightedLineHtml(code: string | null, language: string | null) {
     }
     let cancelled = false;
     void getHighlighter()
-      .then((highlighter) => {
+      .then(async (highlighter) => {
         if (cancelled) return;
+        const loaded = await ensureHighlighterLanguage(language);
+        if (cancelled) return;
+        if (!loaded) {
+          setHtmlByLine([]);
+          return;
+        }
         const theme = colorScheme === "dark" ? "dark-plus" : "light-plus";
         const next = highlightLines(code, language, theme);
         setHtmlByLine(next);
@@ -472,7 +482,7 @@ function FileContentDisplay(props: { content: string; path: string; wrapLines: b
 
   return (
     <div className="space-y-2">
-      <div className="overflow-auto rounded-md border border-[var(--app-border)] bg-[var(--app-code-bg)]">
+      <div className="overflow-auto custom-scrollbar scrollbar-stable rounded-md border border-[var(--app-border)] bg-[var(--app-code-bg)]">
         <div className="grid grid-cols-[4rem_minmax(0,1fr)]">
           {visibleLines.map((line, index) => (
             <div key={`${index}-${line}`} className="contents">
@@ -523,7 +533,7 @@ function EventsList(props: { events: RahEvent[] }) {
   return (
     <div className="space-y-2">
       {props.events.length > 0 ? (
-        props.events.map((event, index) => {
+        props.events.map((event) => {
           const payload = event.payload as Record<string, unknown>;
           let detail: string | null = null;
           if (event.type === "timeline.item.added" || event.type === "timeline.item.updated") {
@@ -547,7 +557,7 @@ function EventsList(props: { events: RahEvent[] }) {
           }
           return (
             <div
-              key={`${event.seq}-${index}`}
+              key={event.seq}
               className="rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] p-3"
             >
               <div className="flex items-center justify-between gap-2">
@@ -664,7 +674,7 @@ function DirectoryTreeNode(props: {
 }
 
 function FileDetailPane(props: {
-  sessionId: string;
+  sessionId: string | null;
   workspaceRoot: string;
   selection: FileDetailSelection;
   onRefreshChanges: () => void;
@@ -704,10 +714,17 @@ function FileDetailPane(props: {
     let cancelled = false;
     setDiffLoading(true);
     setDiffError(null);
-    readGitDiff(props.sessionId, props.selection.path, {
-      ...(props.selection.staged !== undefined ? { staged: props.selection.staged } : {}),
-      ignoreWhitespace: hideWhitespace,
-    })
+    const diffPromise = props.sessionId
+      ? readGitDiff(props.sessionId, props.selection.path, {
+          ...(props.selection.staged !== undefined ? { staged: props.selection.staged } : {}),
+          ignoreWhitespace: hideWhitespace,
+          ...(props.workspaceRoot ? { scopeRoot: props.workspaceRoot } : {}),
+        })
+      : readWorkspaceGitDiff(props.workspaceRoot, props.selection.path, {
+          ...(props.selection.staged !== undefined ? { staged: props.selection.staged } : {}),
+          ignoreWhitespace: hideWhitespace,
+        });
+    diffPromise
       .then((response) => {
         if (cancelled) return;
         setDiffContent(response.diff);
@@ -726,7 +743,12 @@ function FileDetailPane(props: {
     setFileError(null);
     setBinary(false);
     setTruncated(false);
-    readSessionFile(props.sessionId, props.selection.path)
+    const filePromise = props.sessionId
+      ? readSessionFile(props.sessionId, props.selection.path, {
+          ...(props.workspaceRoot ? { scopeRoot: props.workspaceRoot } : {}),
+        })
+      : readWorkspaceFile(props.workspaceRoot, props.selection.path);
+    filePromise
       .then((response) => {
         if (cancelled) return;
         setFileContent(response.content);
@@ -746,7 +768,14 @@ function FileDetailPane(props: {
     return () => {
       cancelled = true;
     };
-  }, [hideWhitespace, props.selection.path, props.selection.staged, props.sessionId, reloadToken]);
+  }, [
+    hideWhitespace,
+    props.selection.path,
+    props.selection.staged,
+    props.sessionId,
+    props.workspaceRoot,
+    reloadToken,
+  ]);
 
   const diffRows = useMemo(() => buildDiffRows(diffContent), [diffContent]);
   const diffSummary = useMemo(() => summarizeDiffRows(diffRows), [diffRows]);
@@ -759,8 +788,12 @@ function FileDetailPane(props: {
   const isBinaryChange = props.selection.source === "changes" && props.selection.binary === true;
   const showDiffUnavailable =
     isBinaryChange && !hasDiff && !diffLoading && !diffError;
+  const canApplyGitFileAction = Boolean(props.sessionId);
 
   const handleApplyFileAction = async (action: "stage" | "unstage") => {
+    if (!props.sessionId) {
+      return;
+    }
     setFileActionPending(action);
     try {
       await applyGitFileAction(props.sessionId, {
@@ -851,7 +884,7 @@ function FileDetailPane(props: {
                   </button>
                 </div>
                 <div className="flex shrink-0 items-center gap-1">
-                  {props.selection.source === "changes" ? (
+                  {props.selection.source === "changes" && canApplyGitFileAction ? (
                     <button
                       type="button"
                       onClick={() => void handleApplyFileAction(props.selection.staged ? "unstage" : "stage")}
@@ -925,7 +958,7 @@ function FileDetailPane(props: {
             </div>
           ) : null}
 
-          <div className="min-h-0 flex-1 overflow-auto p-5">
+          <div className="min-h-0 flex-1 overflow-auto custom-scrollbar scrollbar-stable p-5">
             {displayMode === "diff" ? (
               diffLoading ? (
                 <div className="flex items-center gap-2 text-sm text-[var(--app-hint)]">
@@ -984,7 +1017,7 @@ function FileDetailPane(props: {
 }
 
 export function InspectorPane(props: {
-  sessionId: string;
+  sessionId: string | null;
   workspaceRoot: string;
   events: RahEvent[];
   onCollapse?: () => void;
@@ -1011,6 +1044,12 @@ export function InspectorPane(props: {
   const [fileSearchLoading, setFileSearchLoading] = useState(false);
   const [fileSearchError, setFileSearchError] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<FileDetailSelection | null>(null);
+
+  useEffect(() => {
+    if (!props.sessionId && activeTab === "events") {
+      setActiveTab("changes");
+    }
+  }, [activeTab, props.sessionId]);
 
   const loadDirectory = async (directoryPath: string) => {
     setDirectoryLoadingPaths((current) => new Set(current).add(directoryPath));
@@ -1048,10 +1087,20 @@ export function InspectorPane(props: {
   };
 
   const loadGitStatus = async () => {
+    if (!props.workspaceRoot) {
+      setGitStatus(null);
+      setGitStatusError(null);
+      setGitStatusLoading(false);
+      return;
+    }
     setGitStatusLoading(true);
     setGitStatusError(null);
     try {
-      const response = await readGitStatus(props.sessionId);
+      const response = props.sessionId
+        ? await readGitStatus(props.sessionId, {
+            ...(props.workspaceRoot ? { scopeRoot: props.workspaceRoot } : {}),
+          })
+        : await readWorkspaceGitStatus(props.workspaceRoot);
       setGitStatus({
         ...(response.branch ? { branch: response.branch } : {}),
         changedFiles: response.changedFiles,
@@ -1080,10 +1129,16 @@ export function InspectorPane(props: {
 
   useEffect(() => {
     void loadGitStatus();
-  }, [props.sessionId]);
+  }, [props.sessionId, props.workspaceRoot]);
 
   useEffect(() => {
     if (!fileSearchQuery.trim()) {
+      setFileSearchResults([]);
+      setFileSearchError(null);
+      setFileSearchLoading(false);
+      return;
+    }
+    if (!props.workspaceRoot) {
       setFileSearchResults([]);
       setFileSearchError(null);
       setFileSearchLoading(false);
@@ -1093,7 +1148,15 @@ export function InspectorPane(props: {
     const timeoutId = window.setTimeout(() => {
       setFileSearchLoading(true);
       setFileSearchError(null);
-      void searchSessionFiles(props.sessionId, fileSearchQuery.trim(), 100)
+      const searchPromise = props.sessionId
+        ? searchSessionFiles(
+            props.sessionId,
+            fileSearchQuery.trim(),
+            100,
+            props.workspaceRoot || undefined,
+          )
+        : searchWorkspaceFilesByDirectory(props.workspaceRoot, fileSearchQuery.trim(), 100);
+      void searchPromise
         .then((response) => {
           if (cancelled) return;
           setFileSearchResults(response.files);
@@ -1113,7 +1176,7 @@ export function InspectorPane(props: {
       cancelled = true;
       window.clearTimeout(timeoutId);
     };
-  }, [fileSearchQuery, props.sessionId]);
+  }, [fileSearchQuery, props.sessionId, props.workspaceRoot]);
 
   const toggleDirectory = (directoryPath: string) => {
     setExpandedPaths((current) => {
@@ -1204,20 +1267,22 @@ export function InspectorPane(props: {
           >
             Files
           </button>
-          <button
-            type="button"
-            className={`flex-1 rounded-md px-2 py-1 text-xs font-medium transition-colors ${
-              activeTab === "events"
-                ? "bg-[var(--app-subtle-bg)] text-[var(--app-fg)]"
-                : "text-[var(--app-hint)] hover:text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)]/50"
-            }`}
-            onClick={() => setActiveTab("events")}
-          >
-            Events {props.events.length > 0 ? `(${props.events.length})` : ""}
-          </button>
+          {props.sessionId ? (
+            <button
+              type="button"
+              className={`flex-1 rounded-md px-2 py-1 text-xs font-medium transition-colors ${
+                activeTab === "events"
+                  ? "bg-[var(--app-subtle-bg)] text-[var(--app-fg)]"
+                  : "text-[var(--app-hint)] hover:text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)]/50"
+              }`}
+              onClick={() => setActiveTab("events")}
+            >
+              Events {props.events.length > 0 ? `(${props.events.length})` : ""}
+            </button>
+          ) : null}
         </div>
       </div>
-      <div className="flex-1 overflow-y-auto custom-scrollbar p-3">
+      <div className="flex-1 overflow-y-scroll custom-scrollbar scrollbar-stable p-3">
         {activeTab === "changes" ? (
           <div className="space-y-3">
             <div className="flex items-center justify-between gap-2">
@@ -1451,8 +1516,10 @@ export function InspectorPane(props: {
               )}
             </div>
           )
-        ) : (
+        ) : props.sessionId ? (
           <EventsList events={props.events} />
+        ) : (
+          <div className="text-sm text-[var(--app-hint)]">No events without a selected session.</div>
         )}
       </div>
 

@@ -58,12 +58,15 @@ export interface ProviderAdapter {
   ): Promise<void> | void;
   onPtyInput(sessionId: string, clientId: string, data: string): void;
   onPtyResize(sessionId: string, clientId: string, cols: number, rows: number): void;
-  getWorkspaceSnapshot(sessionId: string): WorkspaceSnapshotResponse;
-  getGitStatus(sessionId: string): GitStatusResponse;
+  getWorkspaceSnapshot(
+    sessionId: string,
+    options?: { scopeRoot?: string },
+  ): WorkspaceSnapshotResponse;
+  getGitStatus(sessionId: string, options?: { scopeRoot?: string }): GitStatusResponse;
   getGitDiff(
     sessionId: string,
     path: string,
-    options?: { staged?: boolean; ignoreWhitespace?: boolean },
+    options?: { staged?: boolean; ignoreWhitespace?: boolean; scopeRoot?: string },
   ): GitDiffResponse;
   applyGitFileAction?(
     sessionId: string,
@@ -73,7 +76,11 @@ export interface ProviderAdapter {
     sessionId: string,
     request: GitHunkActionRequest,
   ): GitHunkActionResponse | Promise<GitHunkActionResponse>;
-  readSessionFile(sessionId: string, path: string): SessionFileResponse;
+  readSessionFile(
+    sessionId: string,
+    path: string,
+    options?: { scopeRoot?: string },
+  ): SessionFileResponse;
   getSessionHistoryPage?(
     sessionId: string,
     options?: { beforeTs?: string; cursor?: string; limit?: number },

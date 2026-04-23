@@ -80,18 +80,21 @@ export class DebugAdapter implements ProviderAdapter {
     this.engine.onPtyResize(sessionId, clientId, cols, rows);
   }
 
-  getWorkspaceSnapshot(sessionId: string): WorkspaceSnapshotResponse {
-    return this.engine.getWorkspaceSnapshot(sessionId);
+  getWorkspaceSnapshot(
+    sessionId: string,
+    options?: { scopeRoot?: string },
+  ): WorkspaceSnapshotResponse {
+    return this.engine.getWorkspaceSnapshot(sessionId, options);
   }
 
-  getGitStatus(sessionId: string): GitStatusResponse {
-    return this.engine.getGitStatus(sessionId);
+  getGitStatus(sessionId: string, options?: { scopeRoot?: string }): GitStatusResponse {
+    return this.engine.getGitStatus(sessionId, options);
   }
 
   getGitDiff(
     sessionId: string,
     path: string,
-    options?: { staged?: boolean; ignoreWhitespace?: boolean },
+    options?: { staged?: boolean; ignoreWhitespace?: boolean; scopeRoot?: string },
   ): GitDiffResponse {
     return this.engine.getGitDiff(sessionId, path, options);
   }
@@ -103,8 +106,12 @@ export class DebugAdapter implements ProviderAdapter {
     throw new Error("Debug sessions do not support git hunk actions.");
   }
 
-  readSessionFile(sessionId: string, path: string): SessionFileResponse {
-    return this.engine.readSessionFile(sessionId, path);
+  readSessionFile(
+    sessionId: string,
+    path: string,
+    options?: { scopeRoot?: string },
+  ): SessionFileResponse {
+    return this.engine.readSessionFile(sessionId, path, options);
   }
 
   getContextUsage(sessionId: string): ContextUsage | undefined {

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { FeedEntry } from "../../types";
 import type { PermissionResponseRequest, TimelineItem } from "@rah/runtime-protocol";
 import {
@@ -14,9 +14,9 @@ import {
   RefreshCcw,
   Sparkles,
 } from "lucide-react";
-import ReactMarkdown from "react-markdown";
 import { AssistantMessage } from "./AssistantMessage";
 import { AttentionCard } from "./AttentionCard";
+import { MarkdownRenderer } from "./MarkdownRenderer";
 import { MessagePartCard } from "./MessagePartCard";
 import { ObservationCard } from "./ObservationCard";
 import { OperationCard } from "./OperationCard";
@@ -25,6 +25,10 @@ import { Reasoning } from "./Reasoning";
 import { SystemNotice } from "./SystemNotice";
 import { ToolCallCard } from "./ToolCallCard";
 import { UserMessage } from "./UserMessage";
+import {
+  buildVirtualFeedLayout,
+  resolveVirtualFeedWindow,
+} from "./virtualized-feed-layout";
 
 const TOOL_BACKED_OBSERVATION_KINDS = new Set([
   "file.read",
@@ -126,9 +130,11 @@ function renderTimelineItem(item: TimelineItem) {
           icon={<Sparkles size={14} className="text-[var(--app-hint)]" />}
           title="Plan"
         >
-          <div className="prose-chat text-sm leading-relaxed">
-            <ReactMarkdown>{item.text}</ReactMarkdown>
-          </div>
+          <MarkdownRenderer
+            className="prose-chat text-sm leading-relaxed"
+            content={item.text}
+            fallbackClassName="whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-sm leading-relaxed"
+          />
         </TimelineCard>
       );
     case "step":
@@ -301,6 +307,40 @@ function renderEntry(
   }
 }
 
+function MeasuredFeedEntry(props: {
+  entryKey: string;
+  onHeightChange: (entryKey: string, height: number) => void;
+  children: React.ReactNode;
+}) {
+  const rowRef = useRef<HTMLDivElement | null>(null);
+
+  useLayoutEffect(() => {
+    const node = rowRef.current;
+    if (!node) {
+      return;
+    }
+
+    const report = () => {
+      props.onHeightChange(props.entryKey, node.offsetHeight);
+    };
+
+    report();
+    if (typeof ResizeObserver === "undefined") {
+      return;
+    }
+
+    const observer = new ResizeObserver(report);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [props.entryKey, props.onHeightChange]);
+
+  return (
+    <div ref={rowRef} className="min-w-0 max-w-full">
+      {props.children}
+    </div>
+  );
+}
+
 export function ChatThread(props: {
   sessionId: string;
   feed: FeedEntry[];
@@ -321,11 +361,61 @@ export function ChatThread(props: {
   const prependAnchorRef = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
   const lastScrollTopRef = useRef(0);
   const topHistoryAutoLoadArmedRef = useRef(true);
+  const measuredHeightsRef = useRef<Map<string, number>>(new Map());
+  const scrollRafRef = useRef<number | null>(null);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
+  const [measuredHeightsVersion, setMeasuredHeightsVersion] = useState(0);
+  const [viewport, setViewport] = useState({ scrollTop: 0, height: 0 });
   const entries = useMemo(
     () => visibleFeedEntries(props.feed, props.hideToolCalls ?? false),
     [props.feed, props.hideToolCalls],
   );
+  const virtualLayout = useMemo(
+    () => buildVirtualFeedLayout(entries, measuredHeightsRef.current),
+    [entries, measuredHeightsVersion],
+  );
+  const shouldVirtualize = entries.length > 140 && viewport.height > 0;
+  const virtualWindow = useMemo(
+    () =>
+      shouldVirtualize
+        ? resolveVirtualFeedWindow({
+            layout: virtualLayout,
+            scrollTop: viewport.scrollTop,
+            viewportHeight: viewport.height,
+          })
+        : {
+            startIndex: 0,
+            endIndex: entries.length,
+            topSpacerHeight: 0,
+            bottomSpacerHeight: 0,
+          },
+    [entries.length, shouldVirtualize, virtualLayout, viewport.height, viewport.scrollTop],
+  );
+  const visibleEntriesWindow = entries.slice(virtualWindow.startIndex, virtualWindow.endIndex);
+
+  const syncViewport = useCallback(() => {
+    const node = containerRef.current;
+    if (!node) {
+      return;
+    }
+    setViewport((current) =>
+      current.scrollTop === node.scrollTop && current.height === node.clientHeight
+        ? current
+        : {
+            scrollTop: node.scrollTop,
+            height: node.clientHeight,
+          },
+    );
+  }, []);
+
+  const handleEntryHeightChange = useCallback((entryKey: string, height: number) => {
+    const roundedHeight = Math.max(1, Math.ceil(height));
+    if (measuredHeightsRef.current.get(entryKey) === roundedHeight) {
+      return;
+    }
+    measuredHeightsRef.current.set(entryKey, roundedHeight);
+    setMeasuredHeightsVersion((version) => version + 1);
+  }, []);
 
   useEffect(() => {
     previousEntryCountRef.current = 0;
@@ -335,6 +425,13 @@ export function ChatThread(props: {
     prependAnchorRef.current = null;
     lastScrollTopRef.current = 0;
     topHistoryAutoLoadArmedRef.current = true;
+    measuredHeightsRef.current = new Map();
+    if (scrollRafRef.current !== null) {
+      cancelAnimationFrame(scrollRafRef.current);
+      scrollRafRef.current = null;
+    }
+    setMeasuredHeightsVersion(0);
+    setViewport({ scrollTop: 0, height: 0 });
     setShowScrollToBottom(false);
   }, [props.sessionId]);
 
@@ -358,9 +455,9 @@ export function ChatThread(props: {
        if (node.scrollTop > TOP_HISTORY_REARM_PX) {
          topHistoryAutoLoadArmedRef.current = true;
        }
-       if (
-         props.canLoadOlderHistory &&
-         props.onLoadOlderHistory &&
+      if (
+        props.canLoadOlderHistory &&
+        props.onLoadOlderHistory &&
          !props.historyLoading &&
          !loadingOlderRef.current &&
          topHistoryAutoLoadArmedRef.current &&
@@ -376,6 +473,13 @@ export function ChatThread(props: {
          props.onLoadOlderHistory();
        }
        lastScrollTopRef.current = node.scrollTop;
+      if (scrollRafRef.current !== null) {
+        cancelAnimationFrame(scrollRafRef.current);
+      }
+      scrollRafRef.current = requestAnimationFrame(() => {
+        scrollRafRef.current = null;
+        syncViewport();
+      });
     };
 
     updateStickiness();
@@ -383,7 +487,20 @@ export function ChatThread(props: {
     return () => {
       node.removeEventListener("scroll", updateStickiness);
     };
-  }, [props.canLoadOlderHistory, props.historyLoading, props.onLoadOlderHistory, props.sessionId]);
+  }, [props.canLoadOlderHistory, props.historyLoading, props.onLoadOlderHistory, props.sessionId, syncViewport]);
+
+  useEffect(() => {
+    const node = containerRef.current;
+    if (!node || typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver(() => {
+      syncViewport();
+    });
+    observer.observe(node);
+    syncViewport();
+    return () => observer.disconnect();
+  }, [props.sessionId, syncViewport]);
 
   useEffect(() => {
     const node = containerRef.current;
@@ -449,7 +566,7 @@ export function ChatThread(props: {
   return (
     <div
       ref={containerRef}
-      className="relative flex-1 overflow-y-auto overflow-x-hidden custom-scrollbar scrollbar-stable px-4 py-5"
+      className="relative flex-1 overflow-y-scroll overflow-x-hidden custom-scrollbar scrollbar-stable px-4 py-5"
     >
       <div ref={contentRef} className="mx-auto w-full min-w-0 max-w-3xl space-y-5">
         {props.historyLoading ? (
@@ -459,11 +576,27 @@ export function ChatThread(props: {
             </div>
           </div>
         ) : null}
-        {entries.map((entry) => (
-          <div key={entry.key} className="min-w-0 max-w-full">
+        {virtualWindow.topSpacerHeight > 0 ? (
+          <div
+            aria-hidden="true"
+            style={{ height: `${virtualWindow.topSpacerHeight}px` }}
+          />
+        ) : null}
+        {visibleEntriesWindow.map((entry) => (
+          <MeasuredFeedEntry
+            key={entry.key}
+            entryKey={entry.key}
+            onHeightChange={handleEntryHeightChange}
+          >
             {renderEntry(entry, props.canRespondToPermission, props.onPermissionRespond)}
-          </div>
+          </MeasuredFeedEntry>
         ))}
+        {virtualWindow.bottomSpacerHeight > 0 ? (
+          <div
+            aria-hidden="true"
+            style={{ height: `${virtualWindow.bottomSpacerHeight}px` }}
+          />
+        ) : null}
         <div ref={bottomRef} />
       </div>
 

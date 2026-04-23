@@ -26,6 +26,7 @@ export function WorkbenchSelectedPane(props: {
   composerSurface: ComposerSurface;
   composerRef: RefObject<HTMLTextAreaElement | null>;
   draft: string;
+  sendPending: boolean;
   onDraftChange: (value: string) => void;
   onSend: () => void;
   onClaimHistory: () => void;
@@ -222,11 +223,17 @@ export function WorkbenchSelectedPane(props: {
           </div>
         ) : (
           <div className="mx-auto max-w-3xl">
-            <div className={COMPOSER_LAYOUT.rowClassName}>
+            <div
+              className={`relative ${
+                props.composerSurface.showStopButton
+                  ? "pl-[52px] pr-[100px] md:pl-[60px] md:pr-[112px]"
+                  : "pl-[52px] pr-[52px] md:pl-[60px] md:pr-[60px]"
+              }`}
+            >
               <button
                 type="button"
                 onClick={props.onOpenFileReference}
-                className={COMPOSER_LAYOUT.roundSecondaryButtonClassName}
+                className={`${COMPOSER_LAYOUT.roundSecondaryButtonClassName} absolute bottom-0 left-0`}
                 title="Insert file or folder reference"
               >
                 <Plus size={18} />
@@ -240,46 +247,42 @@ export function WorkbenchSelectedPane(props: {
                 placeholder="Message…"
                 rows={1}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
+                  const nativeEvent = e.nativeEvent as KeyboardEvent;
+                  if (
+                    e.key === "Enter" &&
+                    !e.shiftKey &&
+                    !nativeEvent.isComposing &&
+                    nativeEvent.keyCode !== 229
+                  ) {
                     e.preventDefault();
-                    props.onSend();
+                    if (!props.sendPending) {
+                      props.onSend();
+                    }
                   }
                 }}
               />
-              {props.composerSurface.showStopButton ? (
-                <div className={COMPOSER_LAYOUT.stopWrapperClassName}>
-                  <svg
-                    className="pointer-events-none absolute inset-0 h-full w-full animate-[spin_1.2s_linear_infinite]"
-                    viewBox="0 0 48 48"
-                  >
-                    <circle
-                      cx="24"
-                      cy="24"
-                      r="20"
-                      fill="none"
-                      stroke="color-mix(in oklab, var(--app-danger) 65%, transparent)"
-                      strokeWidth="2.5"
-                      strokeDasharray="78 30"
-                      strokeLinecap="round"
-                    />
-                  </svg>
-                  <button
-                    type="button"
-                    onClick={props.onInterrupt}
-                    className={COMPOSER_LAYOUT.stopButtonClassName}
-                  >
-                    <Square size={14} />
-                  </button>
-                </div>
-              ) : null}
-              <button
-                type="button"
-                disabled={!props.draft.trim()}
-                onClick={props.onSend}
-                className={COMPOSER_LAYOUT.roundPrimaryButtonClassName}
-              >
-                <ArrowUp size={18} />
-              </button>
+              <div className="absolute bottom-0 right-0 flex items-end gap-2 md:gap-3">
+                {props.composerSurface.showStopButton ? (
+                  <div className={COMPOSER_LAYOUT.stopWrapperClassName}>
+                    <span className="pointer-events-none absolute inset-0 rounded-full border-2 border-[var(--app-danger)] border-r-transparent border-b-transparent animate-[spin_1.05s_linear_infinite]" />
+                    <button
+                      type="button"
+                      onClick={props.onInterrupt}
+                      className={COMPOSER_LAYOUT.stopButtonClassName}
+                    >
+                      <Square size={14} />
+                    </button>
+                  </div>
+                ) : null}
+                <button
+                  type="button"
+                  disabled={props.sendPending || !props.draft.trim()}
+                  onClick={props.onSend}
+                  className={COMPOSER_LAYOUT.roundPrimaryButtonClassName}
+                >
+                  <ArrowUp size={18} />
+                </button>
+              </div>
             </div>
           </div>
         )}

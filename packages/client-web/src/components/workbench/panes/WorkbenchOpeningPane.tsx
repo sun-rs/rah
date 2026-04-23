@@ -1,13 +1,16 @@
 import type { PendingSessionTransition } from "../../../session-transition-contract";
-import { LoaderCircle, Menu, SquareTerminal } from "lucide-react";
+import { LoaderCircle, Menu, PanelRight, SquareTerminal } from "lucide-react";
 import { ProviderLogo } from "../../ProviderLogo";
 import { providerLabel } from "../../../types";
 
 export function WorkbenchOpeningPane(props: {
   openingSession: PendingSessionTransition;
   sidebarOpen: boolean;
+  rightSidebarOpen: boolean;
   onOpenLeft: () => void;
   onExpandSidebar: () => void;
+  onOpenRight: () => void;
+  onExpandInspector: () => void;
   onOpenTerminal: () => void;
 }) {
   return (
@@ -46,15 +49,36 @@ export function WorkbenchOpeningPane(props: {
             </div>
           </div>
         </div>
-        <button
-          type="button"
-          className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] transition-colors"
-          onClick={props.onOpenTerminal}
-          aria-label="Open terminal"
-          title="Open terminal"
-        >
-          <SquareTerminal size={16} />
-        </button>
+        <div className="flex items-center gap-1 shrink-0">
+          <button
+            type="button"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] transition-colors"
+            onClick={props.onOpenTerminal}
+            aria-label="Open terminal"
+            title="Open terminal"
+          >
+            <SquareTerminal size={16} />
+          </button>
+          {!props.rightSidebarOpen && (
+            <button
+              type="button"
+              className="hidden md:inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] transition-colors"
+              onClick={props.onExpandInspector}
+              aria-label="Expand inspector"
+              title="Expand inspector"
+            >
+              <PanelRight size={16} />
+            </button>
+          )}
+          <button
+            type="button"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] transition-colors md:hidden"
+            onClick={props.onOpenRight}
+            aria-label="Open inspector"
+          >
+            <PanelRight size={18} />
+          </button>
+        </div>
       </header>
       <div className="flex-1 overflow-y-auto custom-scrollbar">
         <div className="mx-auto flex min-h-full w-full max-w-2xl items-center justify-center px-6 py-8 md:px-10 md:py-12">

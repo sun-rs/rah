@@ -642,23 +642,24 @@ export class DebugEngine {
     return this.toSummary(this.sessionStore.getSession(sessionId)!);
   }
 
-  getWorkspaceSnapshot(sessionId: string): WorkspaceSnapshotResponse {
+  getWorkspaceSnapshot(sessionId: string, options?: { scopeRoot?: string }): WorkspaceSnapshotResponse {
     const session = this.sessionStore.getSession(sessionId)?.session;
     if (!session) {
       throw new Error(`Unknown session ${sessionId}`);
     }
+    const cwd = options?.scopeRoot ?? session.cwd;
     return {
       sessionId,
-      cwd: session.cwd,
+      cwd,
       nodes: [
-        { path: `${session.cwd}/README.md`, name: "README.md", kind: "file" },
-        { path: `${session.cwd}/src`, name: "src", kind: "directory" },
-        { path: `${session.cwd}/src/index.ts`, name: "index.ts", kind: "file" },
+        { path: `${cwd}/README.md`, name: "README.md", kind: "file" },
+        { path: `${cwd}/src`, name: "src", kind: "directory" },
+        { path: `${cwd}/src/index.ts`, name: "index.ts", kind: "file" },
       ],
     };
   }
 
-  getGitStatus(sessionId: string): GitStatusResponse {
+  getGitStatus(sessionId: string, _options?: { scopeRoot?: string }): GitStatusResponse {
     const session = this.sessionStore.getSession(sessionId)?.session;
     if (!session) {
       throw new Error(`Unknown session ${sessionId}`);
@@ -685,7 +686,7 @@ export class DebugEngine {
   getGitDiff(
     sessionId: string,
     path: string,
-    _options?: { staged?: boolean; ignoreWhitespace?: boolean },
+    _options?: { staged?: boolean; ignoreWhitespace?: boolean; scopeRoot?: string },
   ): GitDiffResponse {
     return {
       sessionId,
@@ -694,7 +695,11 @@ export class DebugEngine {
     };
   }
 
-  readSessionFile(sessionId: string, path: string): SessionFileResponse {
+  readSessionFile(
+    sessionId: string,
+    path: string,
+    _options?: { scopeRoot?: string },
+  ): SessionFileResponse {
     const session = this.sessionStore.getSession(sessionId)?.session;
     if (!session) {
       throw new Error(`Unknown session ${sessionId}`);

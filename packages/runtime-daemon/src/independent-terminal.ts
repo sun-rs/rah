@@ -1,18 +1,71 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { existsSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import readline from "node:readline";
+import { fileURLToPath } from "node:url";
 
-const HOST_SCRIPT_PATH = (() => {
-  const cwdCandidate = resolve(process.cwd(), "src", "independent-terminal-host.mjs");
-  if (existsSync(cwdCandidate)) {
-    return cwdCandidate;
+type TerminalHostMessage =
+  | {
+      type: "ready";
+    }
+  | {
+      type: "output";
+      data: string;
+    }
+  | {
+      type: "error";
+      message: string;
+    }
+  | {
+      type: "exit";
+      exitCode?: number;
+      signal?: string;
+    };
+
+function cleanEnv(args: {
+  cols?: number;
+  rows?: number;
+  shell: string;
+}): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== undefined) {
+      env[key] = value;
+    }
   }
-  return resolve(dirname(fileURLToPath(import.meta.url)), "independent-terminal-host.mjs");
-})();
+  env.TERM = env.TERM || "xterm-256color";
+  env.RAH_TERMINAL_SHELL = args.shell;
+  if (args.cols !== undefined) {
+    env.COLUMNS = String(args.cols);
+  }
+  if (args.rows !== undefined) {
+    env.LINES = String(args.rows);
+  }
+  return env;
+}
 
-function resolveNodeBinary(): string {
-  return process.release?.name === "node" ? process.execPath : "node";
+function resolveShellBinary(): string {
+  return process.env.RAH_TERMINAL_SHELL || process.env.SHELL || "/bin/zsh";
+}
+
+function resolvePythonBinary(): string {
+  return process.env.RAH_TERMINAL_PYTHON || "python3";
+}
+
+function resolveHostScriptPath(): string {
+  const moduleDir = dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    resolve(moduleDir, "independent-terminal-host.py"),
+    resolve(moduleDir, "..", "src", "independent-terminal-host.py"),
+    resolve(process.cwd(), "src", "independent-terminal-host.py"),
+    resolve(process.cwd(), "packages", "runtime-daemon", "src", "independent-terminal-host.py"),
+  ];
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return candidates[0]!;
 }
 
 export interface IndependentTerminalStartOptions {
@@ -23,112 +76,197 @@ export interface IndependentTerminalStartOptions {
   onExit: (args: { exitCode?: number; signal?: string }) => void;
 }
 
-type HostMessage =
-  | { type: "output"; data: string }
-  | { type: "exit"; exitCode?: number; signal?: string }
-  | { type: "error"; message: string };
-
 export class IndependentTerminalProcess {
   readonly shell: string;
   readonly cwd: string;
-  private readonly host: ChildProcessWithoutNullStreams;
+
+  private readonly child: ChildProcessWithoutNullStreams;
+  private readonly stdoutReader: readline.Interface;
+  private readonly onData: (data: string) => void;
+  private readonly onExit: (args: { exitCode?: number; signal?: string }) => void;
+  private readonly readyPromise: Promise<void>;
+  private readySettled = false;
+  private exitHandled = false;
   private closed = false;
 
   constructor(options: IndependentTerminalStartOptions) {
-    this.shell = process.env.SHELL || "/bin/zsh";
+    this.shell = resolveShellBinary();
     this.cwd = options.cwd;
-    this.host = spawn(
-      resolveNodeBinary(),
-      [HOST_SCRIPT_PATH, options.cwd, String(options.cols ?? 100), String(options.rows ?? 32)],
+    this.onData = options.onData;
+    this.onExit = options.onExit;
+
+    this.child = spawn(
+      resolvePythonBinary(),
+      [
+        "-u",
+        resolveHostScriptPath(),
+        options.cwd,
+        String(options.cols ?? 100),
+        String(options.rows ?? 32),
+      ],
       {
+        env: cleanEnv({
+          shell: this.shell,
+          ...(options.cols !== undefined ? { cols: options.cols } : {}),
+          ...(options.rows !== undefined ? { rows: options.rows } : {}),
+        }),
         stdio: "pipe",
       },
     );
+    this.child.stdout.setEncoding("utf8");
+    this.child.stderr.setEncoding("utf8");
+    this.stdoutReader = readline.createInterface({
+      input: this.child.stdout,
+      crlfDelay: Infinity,
+    });
 
-    let bufferedStdout = "";
-    this.host.stdout.setEncoding("utf8");
-    this.host.stdout.on("data", (chunk: string) => {
-      console.error("[independent-terminal stdout]", chunk.slice(0, 200));
-      bufferedStdout += chunk;
-      for (;;) {
-        const newlineIndex = bufferedStdout.indexOf("\n");
-        if (newlineIndex < 0) {
-          break;
+    this.readyPromise = new Promise<void>((resolve, reject) => {
+      const rejectStartup = (message: string) => {
+        if (this.readySettled) {
+          return;
         }
-        const line = bufferedStdout.slice(0, newlineIndex);
-        bufferedStdout = bufferedStdout.slice(newlineIndex + 1);
-        let message: HostMessage;
+        this.readySettled = true;
+        reject(new Error(message));
+      };
+
+      this.stdoutReader.on("line", (line) => {
+        if (!line.trim()) {
+          return;
+        }
+        let message: TerminalHostMessage;
         try {
-          message = JSON.parse(line) as HostMessage;
+          message = JSON.parse(line) as TerminalHostMessage;
         } catch {
-          continue;
+          this.onData(`${line}\r\n`);
+          return;
         }
-        if (message.type === "output") {
-          options.onData(message.data);
-          continue;
-        }
-        if (message.type === "error") {
-          options.onData(`\r\n[terminal host error] ${message.message}\r\n`);
-          continue;
-        }
-        this.closed = true;
-        options.onExit({
-          ...(message.exitCode !== undefined ? { exitCode: message.exitCode } : {}),
-          ...(message.signal !== undefined ? { signal: message.signal } : {}),
-        });
-      }
-    });
 
-    this.host.stderr.setEncoding("utf8");
-    this.host.stderr.on("data", (chunk: string) => {
-      console.error("[independent-terminal stderr]", chunk.slice(0, 200));
-      options.onData(`\r\n[terminal host stderr] ${chunk}`);
-    });
-    this.host.on("error", (error) => {
-      options.onData(`\r\n[terminal host error] ${error.message}\r\n`);
-    });
-    this.host.on("exit", (exitCode, signal) => {
-      if (this.closed) {
-        return;
-      }
-      this.closed = true;
-      options.onExit({
-        ...(exitCode !== null ? { exitCode } : {}),
-        ...(signal !== null ? { signal } : {}),
+        if (message.type === "ready") {
+          if (!this.readySettled) {
+            this.readySettled = true;
+            resolve();
+          }
+          return;
+        }
+
+        if (message.type === "output") {
+          this.onData(message.data);
+          return;
+        }
+
+        if (message.type === "error") {
+          if (!this.readySettled) {
+            rejectStartup(message.message);
+            return;
+          }
+          this.onData(`\r\n[terminal error] ${message.message}\r\n`);
+          return;
+        }
+
+        this.handleExit(message);
+      });
+
+      this.child.stderr.on("data", (chunk: string | Buffer) => {
+        const text = chunk.toString();
+        if (!text.trim()) {
+          return;
+        }
+        if (!this.readySettled) {
+          rejectStartup(text.trim());
+          return;
+        }
+        this.onData(`\r\n[terminal host] ${text.trimEnd()}\r\n`);
+      });
+
+      this.child.on("error", (error) => {
+        if (!this.readySettled) {
+          rejectStartup(error.message);
+          return;
+        }
+        this.onData(`\r\n[terminal host] ${error.message}\r\n`);
+      });
+
+      this.child.on("exit", (exitCode, signal) => {
+        if (!this.readySettled) {
+          rejectStartup(`terminal host exited before ready (${exitCode ?? signal ?? "unknown"})`);
+        }
+        this.handleExit({
+          ...(exitCode !== null ? { exitCode } : {}),
+          ...(signal !== null ? { signal } : {}),
+        });
       });
     });
+  }
+
+  async waitUntilReady(): Promise<void> {
+    await this.readyPromise;
   }
 
   write(data: string): void {
     if (this.closed) {
       return;
     }
-    this.host.stdin.write(`${JSON.stringify({ type: "input", data })}\n`);
+    this.sendMessage({
+      type: "input",
+      data,
+    });
   }
 
   resize(cols: number, rows: number): void {
     if (this.closed) {
       return;
     }
-    this.host.stdin.write(`${JSON.stringify({ type: "resize", cols, rows })}\n`);
+    this.sendMessage({
+      type: "resize",
+      cols,
+      rows,
+    });
   }
 
   async close(): Promise<void> {
     if (this.closed) {
       return;
     }
-    this.host.stdin.write(`${JSON.stringify({ type: "close" })}\n`);
+    this.closed = true;
+    this.sendMessage({ type: "close" });
+
     await new Promise<void>((resolve) => {
       const timeout = setTimeout(() => {
-        if (!this.closed) {
-          this.host.kill("SIGKILL");
+        if (!this.exitHandled) {
+          this.child.kill("SIGTERM");
+        }
+      }, 500);
+      const hardTimeout = setTimeout(() => {
+        if (!this.exitHandled) {
+          this.child.kill("SIGKILL");
         }
         resolve();
-      }, 1000);
-      this.host.once("exit", () => {
+      }, 2_000);
+      this.child.once("exit", () => {
         clearTimeout(timeout);
+        clearTimeout(hardTimeout);
         resolve();
       });
+    });
+  }
+
+  private sendMessage(payload: Record<string, unknown>): void {
+    if (this.child.stdin.destroyed) {
+      return;
+    }
+    this.child.stdin.write(`${JSON.stringify(payload)}\n`);
+  }
+
+  private handleExit(message: { exitCode?: number; signal?: string }): void {
+    if (this.exitHandled) {
+      return;
+    }
+    this.exitHandled = true;
+    this.closed = true;
+    this.stdoutReader.close();
+    this.onExit({
+      ...(message.exitCode !== undefined ? { exitCode: message.exitCode } : {}),
+      ...(message.signal !== undefined ? { signal: message.signal } : {}),
     });
   }
 }

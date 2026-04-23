@@ -246,12 +246,12 @@ export class ClaudeAdapter implements ProviderAdapter {
     // Claude replay sessions do not use PTY-backed rendering.
   }
 
-  getWorkspaceSnapshot(sessionId: string): WorkspaceSnapshotResponse {
+  getWorkspaceSnapshot(sessionId: string, options?: { scopeRoot?: string }): WorkspaceSnapshotResponse {
     const state = this.services.sessionStore.getSession(sessionId);
     if (!state) {
       throw new Error(`Unknown session ${sessionId}`);
     }
-    const snapshot = getCodexWorkspaceSnapshot(state.session.cwd);
+    const snapshot = getCodexWorkspaceSnapshot(options?.scopeRoot ?? state.session.cwd);
     return {
       sessionId,
       cwd: snapshot.cwd,
@@ -259,12 +259,12 @@ export class ClaudeAdapter implements ProviderAdapter {
     };
   }
 
-  getGitStatus(sessionId: string): GitStatusResponse {
+  getGitStatus(sessionId: string, options?: { scopeRoot?: string }): GitStatusResponse {
     const state = this.services.sessionStore.getSession(sessionId);
     if (!state) {
       throw new Error(`Unknown session ${sessionId}`);
     }
-    const status = getCodexGitStatus(state.session.cwd);
+    const status = getCodexGitStatus(state.session.cwd, options);
     return {
       sessionId,
       ...(status.branch ? { branch: status.branch } : {}),
@@ -279,7 +279,7 @@ export class ClaudeAdapter implements ProviderAdapter {
   getGitDiff(
     sessionId: string,
     targetPath: string,
-    options?: { staged?: boolean; ignoreWhitespace?: boolean },
+    options?: { staged?: boolean; ignoreWhitespace?: boolean; scopeRoot?: string },
   ): GitDiffResponse {
     const state = this.services.sessionStore.getSession(sessionId);
     if (!state) {
@@ -298,7 +298,9 @@ export class ClaudeAdapter implements ProviderAdapter {
       throw new Error(`Unknown session ${sessionId}`);
     }
     return {
-      ...applyCodexGitFileAction(state.session.cwd, request),
+      ...applyCodexGitFileAction(state.session.cwd, request, {
+        scopeRoot: state.session.rootDir ?? state.session.cwd,
+      }),
       sessionId,
     };
   }
@@ -309,19 +311,25 @@ export class ClaudeAdapter implements ProviderAdapter {
       throw new Error(`Unknown session ${sessionId}`);
     }
     return {
-      ...applyCodexGitHunkAction(state.session.cwd, request),
+      ...applyCodexGitHunkAction(state.session.cwd, request, {
+        scopeRoot: state.session.rootDir ?? state.session.cwd,
+      }),
       sessionId,
     };
   }
 
-  readSessionFile(sessionId: string, targetPath: string): SessionFileResponse {
+  readSessionFile(
+    sessionId: string,
+    targetPath: string,
+    options?: { scopeRoot?: string },
+  ): SessionFileResponse {
     const state = this.services.sessionStore.getSession(sessionId);
     if (!state) {
       throw new Error(`Unknown session ${sessionId}`);
     }
     return {
       sessionId,
-      ...readWorkspaceFile(state.session.cwd, targetPath),
+      ...readWorkspaceFile(state.session.cwd, targetPath, options),
     };
   }
 

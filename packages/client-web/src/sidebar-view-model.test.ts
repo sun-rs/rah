@@ -59,6 +59,7 @@ describe("sidebar view model", () => {
   test("pins the configured session first inside a workspace", () => {
     const items = deriveSidebarWorkspaceViewModels({
       workspaceSections: [workspaceSection([session({ id: "a" }), session({ id: "b" })])],
+      selectedWorkspaceDir: "/workspace/rah",
       selectedSessionId: null,
       unreadSessionIds: new Set(),
       runtimeStatusBySessionId: new Map(),
@@ -69,6 +70,7 @@ describe("sidebar view model", () => {
 
     assert.deepEqual(items[0]?.sessions.map((entry) => entry.id), ["b", "a"]);
     assert.equal(items[0]?.sessions[0]?.pinned, true);
+    assert.equal(items[0]?.selected, true);
   });
 
   test("uses approval > thinking > unread > ready precedence", () => {
@@ -79,6 +81,7 @@ describe("sidebar view model", () => {
 
     const items = deriveSidebarWorkspaceViewModels({
       workspaceSections: [workspaceSection([approval, thinking, unread, ready])],
+      selectedWorkspaceDir: "/workspace/rah",
       selectedSessionId: "ready",
       unreadSessionIds: new Set(["unread"]),
       runtimeStatusBySessionId: new Map([

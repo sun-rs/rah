@@ -11,27 +11,104 @@ import type {
 } from "@rah/runtime-protocol";
 import * as api from "./api";
 import {
-  clearLastHistorySelection,
-  readLastHistorySelection,
-  writeLastHistorySelection,
-} from "./history-selection";
+  beginSessionStoreInit,
+  maybeRestoreLastHistorySelection as maybeRestoreStoredHistorySelection,
+  readErrorMessage,
+  readOrCreateClientId,
+  resetSessionStoreInit,
+  revealStoredHistoryWorkspace,
+} from "./session-store-bootstrap";
 import { isLabModeEnabled } from "./lab-mode";
+import { type PendingSessionTransition } from "./session-transition-contract";
+import { isReadOnlyReplay } from "./session-capabilities";
 import {
-  createPendingScenarioTransition,
-  createPendingStartTransition,
-  createPendingStoredSessionTransition,
-  type PendingSessionTransition,
-} from "./session-transition-contract";
-import { canSessionSendInput, isReadOnlyReplay } from "./session-capabilities";
+  adoptExistingProjectionForProviderSession as adoptExistingProjectionForProviderSessionImpl,
+  applyEventBatchToProjection as applyEventBatchToProjectionImpl,
+  applyEventsToProjectionMap as applyEventsToProjectionMapImpl,
+  applySessionsResponse as applySessionsResponseImpl,
+  computeUnreadSessionIds as computeUnreadSessionIdsImpl,
+  mergeSessionsIntoProjections as mergeSessionsIntoProjectionsImpl,
+  replaceSessionsResponse as replaceSessionsResponseImpl,
+  updateSessionSummaryInProjectionMap,
+} from "./session-store-projections";
 import {
-  appendOptimisticUserMessage,
-  applyEventToProjection,
-  createSessionMap,
-  initialHistorySyncState,
-  providerLabel,
-  type FeedEntry,
+  applyAttachedSessionState,
+  applyClaimedHistorySessionState,
+  applyClosedSessionState,
+  applyResumedStoredSessionState,
+  applyStartedSessionState,
+  buildFallbackStoredSessionRef,
+  createEmptySessionProjection,
+} from "./session-store-session-lifecycle";
+import {
+  attachSessionCommand,
+  claimControlCommand,
+  closeSessionCommand,
+  createInteractiveAttachRequest,
+  createObserveAttachRequest,
+  interruptSessionCommand,
+  releaseControlCommand,
+  respondToPermissionCommand,
+  sendInputCommand,
+} from "./session-store-session-commands";
+import {
+  activateHistorySessionCommand,
+  claimHistorySessionCommand,
+  resumeStoredSessionCommand,
+  startScenarioCommand,
+  startSessionCommand,
+} from "./session-store-session-startup";
+import {
+  clearHistoryBootstrapBuffers,
+  clearHistoryBootstrapBuffersForSession,
+  queueDeferredBootstrapEvent,
+  queuePendingEvent,
+  shouldDeferEventForHistoryBootstrap,
+  takeDeferredBootstrapEvents,
+  takePendingEventsForSessions,
+} from "./session-store-history-bootstrap";
+import {
+  prependHistoryPage as prependAuthoritativeHistoryPage,
+  replayEventsIntoProjection as replayHistoryEventsIntoProjection,
+  syncLastHistorySelectionFromState as syncHistorySelectionFromState,
+} from "./session-store-history";
+import { syncHistorySelectionSubscription } from "./session-store-history-selection-sync";
+import {
+  ensureSessionHistoryLoadedCommand,
+  loadOlderHistoryCommand,
+} from "./session-store-history-paging";
+import {
+  connectStoreSyncTransport,
+  recoverFromReplayGapCommand,
+  recoverTransportCommand,
+} from "./session-store-sync";
+import {
+  restartSessionStoreTransport,
+} from "./session-store-transport";
+import {
+  appendVisibleWorkspaceDir,
+  hideWorkspace,
+  isHiddenWorkspace,
+  revealWorkspace,
+  sameWorkspaceDirectory,
+} from "./session-store-workspace";
+import {
   type SessionProjection,
 } from "./types";
+
+export {
+  computeUnreadSessionIds,
+} from "./session-store-projections";
+export { readOrCreateClientId } from "./session-store-bootstrap";
+export {
+  coerceSelectedSessionId,
+  findDaemonLiveSessionForStoredRef,
+  normalizeWorkspaceDirectory,
+  reconcileVisibleWorkspaceSelection,
+  resolveHiddenWorkspaceDirsFromSessionsResponse,
+  resolveHistoryActivationMode,
+  sameWorkspaceDirectory,
+} from "./session-store-workspace";
 
 type ProviderChoice = "codex" | "claude" | "kimi" | "gemini" | "opencode";
 
@@ -102,227 +179,31 @@ interface SessionState {
   ) => Promise<void>;
 }
 
-let initialized = false;
-let eventsSocket: WebSocket | null = null;
-let reconnectTimer: number | null = null;
-let storedSessionsRefreshTimer: number | null = null;
 let lastEventSeq = 0;
-let attemptedStoredHistoryRestore = false;
-let suppressNextSocketCloseReconnect = false;
 const HISTORY_PAGE_LIMIT = 250;
-const MAX_PENDING_EVENTS_PER_SESSION = 200;
-const MAX_DEFERRED_BOOTSTRAP_EVENTS_PER_SESSION = 500;
-let pendingEventsBySession = new Map<string, RahEvent[]>();
-let deferredBootstrapEventsBySession = new Map<string, RahEvent[]>();
 
-function normalizeWorkspaceDirectory(value: string | undefined): string | null {
-  if (!value) {
-    return null;
-  }
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const withoutTrailing = trimmed.replace(/[\\/]+$/, "");
-  if (withoutTrailing.startsWith("/private/var/")) {
-    return withoutTrailing.slice("/private".length);
-  }
-  return withoutTrailing;
-}
-
-function sameWorkspaceDirectory(a: string | undefined, b: string | undefined): boolean {
-  const left = normalizeWorkspaceDirectory(a);
-  const right = normalizeWorkspaceDirectory(b);
-  return left !== null && right !== null && left === right;
-}
-
-function isHiddenWorkspace(hiddenWorkspaceDirs: ReadonlySet<string>, dir: string | undefined): boolean {
-  const normalized = normalizeWorkspaceDirectory(dir);
-  return normalized !== null && hiddenWorkspaceDirs.has(normalized);
-}
-
-function hideWorkspace(
-  hiddenWorkspaceDirs: ReadonlySet<string>,
-  dir: string,
-): Set<string> {
-  const normalized = normalizeWorkspaceDirectory(dir);
-  if (!normalized) {
-    return new Set(hiddenWorkspaceDirs);
-  }
-  const next = new Set(hiddenWorkspaceDirs);
-  next.add(normalized);
-  return next;
-}
-
-function revealWorkspace(
-  hiddenWorkspaceDirs: ReadonlySet<string>,
-  dir: string | undefined,
-): Set<string> {
-  const normalized = normalizeWorkspaceDirectory(dir);
-  if (!normalized) {
-    return new Set(hiddenWorkspaceDirs);
-  }
-  const next = new Set(hiddenWorkspaceDirs);
-  next.delete(normalized);
-  return next;
-}
-
-function revealWorkspaceCandidates(
-  hiddenWorkspaceDirs: ReadonlySet<string>,
-  ...dirs: Array<string | undefined>
-): Set<string> {
-  let next = new Set(hiddenWorkspaceDirs);
-  for (const dir of dirs) {
-    next = revealWorkspace(next, dir);
-  }
-  return next;
-}
-
-function filterHiddenWorkspaceDirs(
-  hiddenWorkspaceDirs: ReadonlySet<string>,
-  workspaceDirs: readonly string[],
-): string[] {
-  return workspaceDirs.filter((dir) => !isHiddenWorkspace(hiddenWorkspaceDirs, dir));
-}
-
-function appendVisibleWorkspaceDir(
-  hiddenWorkspaceDirs: ReadonlySet<string>,
-  workspaceDirs: readonly string[],
-  dir: string | undefined,
-): string[] {
-  const visibleWorkspaceDirs = filterHiddenWorkspaceDirs(hiddenWorkspaceDirs, workspaceDirs);
-  const normalized = normalizeWorkspaceDirectory(dir);
-  if (!normalized || isHiddenWorkspace(hiddenWorkspaceDirs, normalized)) {
-    return visibleWorkspaceDirs;
-  }
-  if (visibleWorkspaceDirs.some((workspaceDir) => sameWorkspaceDirectory(workspaceDir, normalized))) {
-    return visibleWorkspaceDirs;
-  }
-  return [...visibleWorkspaceDirs, normalized];
-}
-
-function normalizeHiddenWorkspaceDirs(hiddenWorkspaces: readonly string[] | undefined): Set<string> {
-  return new Set(
-    (hiddenWorkspaces ?? []).map((dir) => normalizeWorkspaceDirectory(dir)).filter(
-      (dir): dir is string => dir !== null,
-    ),
-  );
-}
-
-export function resolveHiddenWorkspaceDirsFromSessionsResponse(args: {
-  currentHiddenWorkspaceDirs: ReadonlySet<string>;
-  currentWorkspaceVisibilityVersion: number;
-  workspaceVisibilityVersionAtRequest: number;
-  hiddenWorkspaces: readonly string[] | undefined;
-}): Set<string> {
-  const serverHiddenWorkspaceDirs = normalizeHiddenWorkspaceDirs(args.hiddenWorkspaces);
-  if (args.currentWorkspaceVisibilityVersion > args.workspaceVisibilityVersionAtRequest) {
-    return new Set(args.currentHiddenWorkspaceDirs);
-  }
-  return serverHiddenWorkspaceDirs;
-}
-
-export function reconcileVisibleWorkspaceSelection(args: {
-  workspaceDirs: string[];
-  sessions: SessionSummary[];
-  storedSessions: StoredSessionRef[];
-  activeWorkspaceDir: string | undefined;
-  currentWorkspaceDir: string;
-  hiddenWorkspaceDirs: Iterable<string> | undefined;
-}): {
-  workspaceDirs: string[];
-  workspaceDir: string;
-} {
-  const hiddenWorkspaceDirs = new Set(
-    [...(args.hiddenWorkspaceDirs ?? [])]
-      .map((dir) => normalizeWorkspaceDirectory(dir))
-      .filter((dir): dir is string => dir !== null),
-  );
-  const isHidden = (dir: string | undefined): boolean => {
-    const normalized = normalizeWorkspaceDirectory(dir);
-    return normalized !== null && hiddenWorkspaceDirs.has(normalized);
-  };
-  const workspaceDirs = args.workspaceDirs.filter((dir) => !isHidden(dir));
-  const currentWorkspaceDir = isHidden(args.currentWorkspaceDir) ? "" : args.currentWorkspaceDir;
-  const activeWorkspaceDir = isHidden(args.activeWorkspaceDir)
-    ? undefined
-    : args.activeWorkspaceDir;
-  const workspaceDir = currentWorkspaceDir.trim()
-    ? currentWorkspaceDir
-    : inferWorkspaceDirectory(
-        workspaceDirs,
-        args.sessions,
-        args.storedSessions,
-        activeWorkspaceDir,
-        currentWorkspaceDir,
-      );
+function createProjectionReplayHandling() {
   return {
-    workspaceDirs,
-    workspaceDir,
+    takePendingEventsForSessions,
+    updateLastSeq: (seq: number) => {
+      lastEventSeq = Math.max(lastEventSeq, seq);
+    },
+    clearBufferedSession: clearHistoryBootstrapBuffersForSession,
+    queuePendingEvent,
+    shouldDeferEvent: shouldDeferEventForHistoryBootstrap,
+    queueDeferredEvent: queueDeferredBootstrapEvent,
   };
 }
 
-function mergeStoredSessionRefs(
-  current: StoredSessionRef[],
-  incoming: StoredSessionRef,
-): StoredSessionRef[] {
-  const next = new Map(
-    current.map((entry) => [`${entry.provider}:${entry.providerSessionId}`, entry] as const),
+function mergeSessionsIntoProjections(
+  current: Map<string, SessionProjection>,
+  sessionsResponse: Awaited<ReturnType<typeof api.listSessions>>,
+): Map<string, SessionProjection> {
+  return mergeSessionsIntoProjectionsImpl(
+    current,
+    sessionsResponse,
+    createProjectionReplayHandling(),
   );
-  next.set(`${incoming.provider}:${incoming.providerSessionId}`, incoming);
-  return [...next.values()].sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""));
-}
-
-function mergeRecentSessionRefs(
-  current: StoredSessionRef[],
-  incoming: StoredSessionRef,
-): StoredSessionRef[] {
-  const next = new Map(
-    current.map((entry) => [`${entry.provider}:${entry.providerSessionId}`, entry] as const),
-  );
-  next.set(`${incoming.provider}:${incoming.providerSessionId}`, incoming);
-  return [...next.values()]
-    .sort((a, b) => (b.lastUsedAt ?? b.updatedAt ?? "").localeCompare(a.lastUsedAt ?? a.updatedAt ?? ""))
-    .slice(0, 15);
-}
-
-function readErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function createClientId(): string {
-  const randomUuid =
-    typeof globalThis.crypto?.randomUUID === "function"
-      ? globalThis.crypto.randomUUID.bind(globalThis.crypto)
-      : null;
-  if (randomUuid) {
-    return `web-${randomUuid()}`;
-  }
-  return `web-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-}
-
-function inferWorkspaceDirectory(
-  workspaceDirs: string[],
-  sessions: SessionSummary[],
-  storedSessions: StoredSessionRef[],
-  rememberedActiveWorkspaceDir: string | undefined,
-  fallback: string,
-): string {
-  if (rememberedActiveWorkspaceDir?.trim()) {
-    return rememberedActiveWorkspaceDir;
-  }
-  const liveCandidate = sessions[0]?.session.rootDir ?? sessions[0]?.session.cwd;
-  if (liveCandidate) {
-    return liveCandidate;
-  }
-  const storedCandidate = storedSessions[0]?.rootDir ?? storedSessions[0]?.cwd;
-  if (storedCandidate) {
-    return storedCandidate;
-  }
-  if (workspaceDirs[0]) {
-    return workspaceDirs[0];
-  }
-  return fallback;
 }
 
 function applySessionsResponse(
@@ -349,35 +230,12 @@ function applySessionsResponse(
   | "workspaceDir"
   | "selectedSessionId"
 > {
-  const projections = mergeSessionsIntoProjections(state.projections, sessionsResponse);
-  const hiddenWorkspaceDirs = resolveHiddenWorkspaceDirsFromSessionsResponse({
-    currentHiddenWorkspaceDirs: state.hiddenWorkspaceDirs,
-    currentWorkspaceVisibilityVersion: state.workspaceVisibilityVersion,
-    workspaceVisibilityVersionAtRequest:
-      options?.workspaceVisibilityVersionAtRequest ?? state.workspaceVisibilityVersion,
-    hiddenWorkspaces: sessionsResponse.hiddenWorkspaces,
-  });
-  const workspace = reconcileVisibleWorkspaceSelection({
-    workspaceDirs: sessionsResponse.workspaceDirs,
-    sessions: sessionsResponse.sessions,
-    storedSessions: sessionsResponse.storedSessions,
-    activeWorkspaceDir: sessionsResponse.activeWorkspaceDir,
-    currentWorkspaceDir: state.workspaceDir,
-    hiddenWorkspaceDirs,
-  });
-  return {
-    projections,
-    storedSessions: sessionsResponse.storedSessions,
-    recentSessions: sessionsResponse.recentSessions,
-    workspaceDirs: workspace.workspaceDirs,
-    hiddenWorkspaceDirs,
-    workspaceVisibilityVersion: state.workspaceVisibilityVersion,
-    workspaceDir: workspace.workspaceDir,
-    selectedSessionId: coerceSelectedSessionId(
-      projections,
-      state.selectedSessionId,
-    ),
-  };
+  return applySessionsResponseImpl(
+    state,
+    sessionsResponse,
+    createProjectionReplayHandling(),
+    options,
+  );
 }
 
 function replaceSessionsResponse(
@@ -403,452 +261,41 @@ function replaceSessionsResponse(
   | "workspaceDir"
   | "selectedSessionId"
 > {
-  const hiddenWorkspaceDirs = resolveHiddenWorkspaceDirsFromSessionsResponse({
-    currentHiddenWorkspaceDirs: state.hiddenWorkspaceDirs,
-    currentWorkspaceVisibilityVersion: state.workspaceVisibilityVersion,
-    workspaceVisibilityVersionAtRequest:
-      options?.workspaceVisibilityVersionAtRequest ?? state.workspaceVisibilityVersion,
-    hiddenWorkspaces: sessionsResponse.hiddenWorkspaces,
-  });
-  const workspace = reconcileVisibleWorkspaceSelection({
-    workspaceDirs: sessionsResponse.workspaceDirs,
-    sessions: sessionsResponse.sessions,
-    storedSessions: sessionsResponse.storedSessions,
-    activeWorkspaceDir: sessionsResponse.activeWorkspaceDir,
-    currentWorkspaceDir: state.workspaceDir,
-    hiddenWorkspaceDirs,
-  });
-  const sessionMap = createSessionMap(sessionsResponse);
-  return {
-    projections: sessionMap.sessions,
-    storedSessions: sessionsResponse.storedSessions,
-    recentSessions: sessionsResponse.recentSessions,
-    workspaceDirs: workspace.workspaceDirs,
-    hiddenWorkspaceDirs,
-    workspaceVisibilityVersion: state.workspaceVisibilityVersion,
-    workspaceDir: workspace.workspaceDir,
-    selectedSessionId: coerceSelectedSessionId(
-      sessionMap.sessions,
-      state.selectedSessionId,
-    ),
-  };
-}
-
-export function coerceSelectedSessionId(
-  projections: Map<string, SessionProjection>,
-  currentSelectedId: string | null,
-): string | null {
-  const current = currentSelectedId ? projections.get(currentSelectedId) ?? null : null;
-  if (current) {
-    return current.summary.session.id;
-  }
-  return null;
-}
-
-export function findDaemonLiveSessionForStoredRef(
-  projections: Map<string, SessionProjection>,
-  ref: StoredSessionRef,
-): SessionSummary | null {
-  for (const projection of projections.values()) {
-    const summary = projection.summary;
-    if (isReadOnlyReplay(summary)) {
-      continue;
-    }
-    if (
-      summary.session.provider === ref.provider &&
-      summary.session.providerSessionId === ref.providerSessionId
-    ) {
-      return summary;
-    }
-  }
-  return null;
-}
-
-export function resolveHistoryActivationMode(args: {
-  existingLiveSummary: SessionSummary | null;
-  clientId: string;
-}): "select" | "attach" | "resume" {
-  if (!args.existingLiveSummary) {
-    return "resume";
-  }
-  const currentClientControlsSession =
-    args.existingLiveSummary.controlLease.holderClientId === args.clientId &&
-    args.existingLiveSummary.attachedClients.some((client) => client.id === args.clientId);
-  return currentClientControlsSession ? "select" : "attach";
+  return replaceSessionsResponseImpl(state, sessionsResponse, options);
 }
 
 function applyEventsToMap(
   current: Map<string, SessionProjection>,
   events: RahEvent[],
 ): Map<string, SessionProjection> {
-  if (events.length === 0) {
-    return current;
-  }
-  const next = new Map(current);
-  for (const event of [...events].sort((a, b) => a.seq - b.seq)) {
-    lastEventSeq = Math.max(lastEventSeq, event.seq);
-    if (event.type === "session.closed") {
-      next.delete(event.sessionId);
-      pendingEventsBySession.delete(event.sessionId);
-      deferredBootstrapEventsBySession.delete(event.sessionId);
-      continue;
-    }
-    const projection = next.get(event.sessionId);
-    if (!projection) {
-      queuePendingEvent(event);
-      continue;
-    }
-    if (shouldDeferEventForHistoryBootstrap(projection, event)) {
-      queueDeferredBootstrapEvent(event);
-      continue;
-    }
-    next.set(event.sessionId, applyEventToProjection(projection, event));
-  }
-  return next;
-}
-
-function mergeSessionsIntoProjections(
-  current: Map<string, SessionProjection>,
-  sessionsResponse: Awaited<ReturnType<typeof api.listSessions>>,
-): Map<string, SessionProjection> {
-  const sessionMap = createSessionMap(sessionsResponse);
-  const next = new Map(sessionMap.sessions);
-  for (const [sessionId, existing] of current) {
-    const fresh = next.get(sessionId);
-    if (fresh) {
-      next.set(sessionId, {
-        ...existing,
-        summary: fresh.summary,
-      });
-    }
-  }
-  const replay = takePendingEventsForSessions(new Set(next.keys()));
-  return applyEventsToMap(next, replay);
+  return applyEventsToProjectionMapImpl(current, events, createProjectionReplayHandling());
 }
 
 function adoptExistingProjectionForProviderSession(
   projections: Map<string, SessionProjection>,
   summary: SessionSummary,
 ): Map<string, SessionProjection> {
-  const providerSessionId = summary.session.providerSessionId;
-  if (!providerSessionId) {
-    return projections;
-  }
-  const existingEntry = [...projections.entries()].find(
-    ([sessionId, projection]) =>
-      sessionId !== summary.session.id &&
-      projection.summary.session.provider === summary.session.provider &&
-      projection.summary.session.providerSessionId === providerSessionId,
-  );
-  if (!existingEntry) {
-    return projections;
-  }
-  const [existingSessionId, existingProjection] = existingEntry;
-  const next = new Map(projections);
-  next.delete(existingSessionId);
-  next.set(summary.session.id, {
-    ...existingProjection,
-    summary,
-  });
-  return next;
-}
-
-function queuePendingEvent(event: RahEvent) {
-  const existing = pendingEventsBySession.get(event.sessionId) ?? [];
-  const next = [...existing, event];
-  if (next.length > MAX_PENDING_EVENTS_PER_SESSION) {
-    next.splice(0, next.length - MAX_PENDING_EVENTS_PER_SESSION);
-  }
-  pendingEventsBySession.set(event.sessionId, next);
-}
-
-function takePendingEventsForSessions(sessionIds: Set<string>): RahEvent[] {
-  const replay: RahEvent[] = [];
-  for (const sessionId of sessionIds) {
-    const events = pendingEventsBySession.get(sessionId);
-    if (!events || events.length === 0) {
-      continue;
-    }
-    replay.push(...events);
-    pendingEventsBySession.delete(sessionId);
-  }
-  return replay;
-}
-
-function shouldDeferEventForHistoryBootstrap(
-  projection: SessionProjection,
-  event: RahEvent,
-): boolean {
-  if (projection.history.phase !== "loading" || projection.history.authoritativeApplied) {
-    return false;
-  }
-  return (
-    event.type === "timeline.item.added" ||
-    event.type === "timeline.item.updated" ||
-    event.type === "message.part.added" ||
-    event.type === "message.part.updated" ||
-    event.type === "message.part.delta" ||
-    event.type === "message.part.removed" ||
-    event.type === "tool.call.started" ||
-    event.type === "tool.call.delta" ||
-    event.type === "tool.call.completed" ||
-    event.type === "tool.call.failed" ||
-    event.type === "observation.started" ||
-    event.type === "observation.updated" ||
-    event.type === "observation.completed" ||
-    event.type === "observation.failed" ||
-    event.type === "permission.requested" ||
-    event.type === "permission.resolved" ||
-    event.type === "operation.started" ||
-    event.type === "operation.resolved" ||
-    event.type === "operation.requested" ||
-    event.type === "runtime.status" ||
-    event.type === "notification.emitted" ||
-    event.type === "attention.required" ||
-    event.type === "attention.cleared"
-  );
-}
-
-function queueDeferredBootstrapEvent(event: RahEvent) {
-  const existing = deferredBootstrapEventsBySession.get(event.sessionId) ?? [];
-  const next = [...existing, event];
-  if (next.length > MAX_DEFERRED_BOOTSTRAP_EVENTS_PER_SESSION) {
-    next.splice(0, next.length - MAX_DEFERRED_BOOTSTRAP_EVENTS_PER_SESSION);
-  }
-  deferredBootstrapEventsBySession.set(event.sessionId, next);
-}
-
-function takeDeferredBootstrapEvents(sessionId: string): RahEvent[] {
-  const events = deferredBootstrapEventsBySession.get(sessionId) ?? [];
-  deferredBootstrapEventsBySession.delete(sessionId);
-  return events;
-}
-
-function clearBufferedEvents() {
-  pendingEventsBySession = new Map();
-  deferredBootstrapEventsBySession = new Map();
+  return adoptExistingProjectionForProviderSessionImpl(projections, summary);
 }
 
 function applyEventBatchToProjection(
   projection: SessionProjection,
   events: RahEvent[],
 ): SessionProjection {
-  let next = projection;
-  for (const event of [...events].sort((a, b) => a.seq - b.seq)) {
-    next = applyEventToProjection(next, event);
-  }
-  return next;
-}
-
-function attachRequest(clientId: string): AttachSessionRequest {
-  return {
-    client: {
-      id: clientId,
-      kind: "web",
-      connectionId: clientId,
-    },
-    mode: "interactive",
-    claimControl: true,
-  };
-}
-
-function observeAttachRequest(clientId: string): AttachSessionRequest {
-  return {
-    client: {
-      id: clientId,
-      kind: "web",
-      connectionId: clientId,
-    },
-    mode: "observe",
-  };
-}
-
-function shouldMarkSessionUnread(event: RahEvent): boolean {
-  switch (event.type) {
-    case "timeline.item.added":
-    case "timeline.item.updated":
-    case "message.part.added":
-    case "message.part.updated":
-    case "message.part.delta":
-    case "tool.call.completed":
-    case "tool.call.failed":
-    case "observation.completed":
-    case "observation.failed":
-    case "permission.requested":
-    case "attention.required":
-    case "notification.emitted":
-    case "turn.completed":
-    case "turn.failed":
-    case "turn.canceled":
-      return true;
-    default:
-      return false;
-  }
-}
-
-export function computeUnreadSessionIds(
-  currentUnreadSessionIds: ReadonlySet<string>,
-  selectedSessionId: string | null,
-  events: readonly RahEvent[],
-): Set<string> {
-  const nextUnreadSessionIds = new Set(currentUnreadSessionIds);
-  for (const event of events) {
-    if (event.type === "session.closed") {
-      nextUnreadSessionIds.delete(event.sessionId);
-      continue;
-    }
-    if (selectedSessionId !== event.sessionId && shouldMarkSessionUnread(event)) {
-      nextUnreadSessionIds.add(event.sessionId);
-    }
-  }
-  if (selectedSessionId) {
-    nextUnreadSessionIds.delete(selectedSessionId);
-  }
-  return nextUnreadSessionIds;
+  return applyEventBatchToProjectionImpl(projection, events);
 }
 
 function syncLastHistorySelectionFromState(
   state: Pick<SessionState, "selectedSessionId" | "projections" | "workspaceDir">,
 ) {
-  const selectedSummary = state.selectedSessionId
-    ? state.projections.get(state.selectedSessionId)?.summary ?? null
-    : null;
-  if (!selectedSummary) {
-    return;
-  }
-  if (selectedSummary.session.providerSessionId && isReadOnlyReplay(selectedSummary)) {
-    const historyWorkspaceDir =
-      selectedSummary.session.rootDir || selectedSummary.session.cwd || state.workspaceDir;
-    writeLastHistorySelection({
-      provider: selectedSummary.session.provider,
-      providerSessionId: selectedSummary.session.providerSessionId,
-      ...(historyWorkspaceDir ? { workspaceDir: historyWorkspaceDir } : {}),
-    });
-    return;
-  }
-  clearLastHistorySelection();
-}
-
-function connectEventSocket() {
-  const store = useSessionStore.getState();
-  if (eventsSocket && eventsSocket.readyState < WebSocket.CLOSING) {
-    return;
-  }
-  const replayFromSeq = lastEventSeq > 0 ? lastEventSeq + 1 : undefined;
-  const socket = api.createEventsSocket(
-    replayFromSeq === undefined ? {} : { replayFromSeq },
-    (batch) => {
-      if (eventsSocket !== socket) {
-        return;
-      }
-      const hasStoredSessionDiscovery = batch.events?.some(
-        (event) => event.type === "session.discovery",
-      );
-      if (hasStoredSessionDiscovery) {
-        scheduleStoredSessionsRefresh();
-      }
-      const projectionEvents =
-        batch.events?.filter((event) => event.type !== "session.discovery") ?? [];
-      if (batch.replayGap) {
-        void recoverFromReplayGap(batch);
-        return;
-      }
-      if (projectionEvents.length === 0) {
-        return;
-      }
-      useSessionStore.setState((state) => ({
-        projections: applyEventsToMap(state.projections, projectionEvents),
-        unreadSessionIds: batch.initial
-          ? state.unreadSessionIds
-          : computeUnreadSessionIds(
-              state.unreadSessionIds,
-              state.selectedSessionId,
-              projectionEvents,
-            ),
-        error: state.error === "Events socket failed" ? null : state.error,
-      }));
-    },
-    (error) => {
-      if (eventsSocket !== socket) {
-        return;
-      }
-      useSessionStore.setState({ error: error.message });
-      if (socket.readyState < WebSocket.CLOSING) {
-        socket.close();
-      }
-    },
-    {
-      onOpen: () => {
-        if (eventsSocket !== socket) {
-          return;
-        }
-        useSessionStore.setState((state) => ({
-          error: state.error === "Events socket failed" ? null : state.error,
-        }));
-      },
-      onClose: () => {
-        const shouldReconnect = !suppressNextSocketCloseReconnect;
-        suppressNextSocketCloseReconnect = false;
-        if (eventsSocket === socket) {
-          eventsSocket = null;
-        }
-        if (reconnectTimer !== null) {
-          window.clearTimeout(reconnectTimer);
-        }
-        if (shouldReconnect) {
-          reconnectTimer = window.setTimeout(() => {
-            reconnectTimer = null;
-            connectEventSocket();
-          }, 750);
-        }
-      },
-    },
-  );
-  eventsSocket = socket;
-
-  if (!store.isInitialLoaded) {
-    suppressNextSocketCloseReconnect = true;
-    eventsSocket.close();
-    eventsSocket = null;
-  }
-}
-
-function clearReconnectTimer() {
-  if (reconnectTimer !== null) {
-    window.clearTimeout(reconnectTimer);
-    reconnectTimer = null;
-  }
-}
-
-function restartEventSocket() {
-  clearReconnectTimer();
-  const socket = eventsSocket;
-  eventsSocket = null;
-  if (socket && socket.readyState < WebSocket.CLOSING) {
-    suppressNextSocketCloseReconnect = true;
-    socket.close();
-  }
-  connectEventSocket();
-}
-
-function scheduleStoredSessionsRefresh() {
-  if (storedSessionsRefreshTimer !== null) {
-    return;
-  }
-  storedSessionsRefreshTimer = window.setTimeout(() => {
-    storedSessionsRefreshTimer = null;
-    void useSessionStore.getState().refreshWorkbenchState();
-  }, 150);
+  return syncHistorySelectionFromState(state);
 }
 
 function updateSessionSummary(session: SessionSummary) {
   useSessionStore.setState((state) => {
-    const next = new Map(state.projections);
-    const projection = next.get(session.session.id);
-    if (projection) {
-      next.set(session.session.id, { ...projection, summary: session });
-    }
-    return { projections: next };
+    return {
+      projections: updateSessionSummaryInProjectionMap(state.projections, session),
+    };
   });
 }
 
@@ -856,53 +303,7 @@ function replayEventsIntoProjection(
   summary: SessionSummary,
   events: RahEvent[],
 ): SessionProjection {
-  let projection: SessionProjection = {
-    summary,
-    feed: [],
-    events: [],
-    lastSeq: 0,
-    history: initialHistorySyncState(),
-  };
-  for (const event of [...events].sort((a, b) => a.seq - b.seq)) {
-    projection = applyEventToProjection(projection, event);
-  }
-  return projection;
-}
-
-function feedEntriesSemanticallyMatch(left: FeedEntry, right: FeedEntry): boolean {
-  if (left.kind !== right.kind) {
-    return false;
-  }
-  if (left.kind !== "timeline" || right.kind !== "timeline") {
-    return false;
-  }
-  if (left.item.kind !== right.item.kind) {
-    return false;
-  }
-  switch (left.item.kind) {
-    case "user_message":
-    case "assistant_message": {
-      const leftItem = left.item;
-      const rightItem = right.item as typeof leftItem;
-      const leftMessageId = leftItem.messageId;
-      const rightMessageId = rightItem.messageId;
-      if (
-        leftMessageId !== undefined &&
-        rightMessageId !== undefined &&
-        leftMessageId === rightMessageId
-      ) {
-        return true;
-      }
-      return leftItem.text === rightItem.text;
-    }
-    case "reasoning": {
-      const leftItem = left.item;
-      const rightItem = right.item as typeof leftItem;
-      return leftItem.text === rightItem.text;
-    }
-    default:
-      return false;
-  }
+  return replayHistoryEventsIntoProjection(summary, events);
 }
 
 function prependHistoryPage(
@@ -910,137 +311,87 @@ function prependHistoryPage(
   events: RahEvent[],
   options?: { nextBeforeTs?: string; nextCursor?: string },
 ): SessionProjection {
-  if (events.length === 0) {
-    return {
-      ...projection,
-      history: {
-        ...projection.history,
-        phase: "ready",
-        nextCursor: options?.nextCursor ?? null,
-        nextBeforeTs: options?.nextBeforeTs ?? null,
-        authoritativeApplied: true,
-        lastError: null,
-      },
-    };
-  }
-
-  const historyProjection = replayEventsIntoProjection(projection.summary, events);
-  const nextFeed = [...projection.feed];
-  const currentKeyIndex = new Map(
-    nextFeed.map((entry, index) => [entry.key, index] as const),
-  );
-  const prepend = historyProjection.feed.filter(
-    (entry) => {
-      const existingIndex = currentKeyIndex.get(entry.key);
-      if (existingIndex !== undefined) {
-        nextFeed[existingIndex] = entry;
-        return false;
-      }
-      return !projection.feed.some((current) => feedEntriesSemanticallyMatch(current, entry));
-    },
-  );
-
-  return {
-    ...projection,
-    feed: [...prepend, ...nextFeed],
-    history: {
-      ...projection.history,
-      phase: "ready",
-      nextCursor: options?.nextCursor ?? null,
-      nextBeforeTs: options?.nextBeforeTs ?? null,
-      authoritativeApplied: true,
-      lastError: null,
-    },
-  };
+  return prependAuthoritativeHistoryPage(projection, events, options);
 }
 
 async function ensureSessionHistoryLoaded(sessionId: string) {
-  const projection = useSessionStore.getState().projections.get(sessionId);
-  if (
-    !projection ||
-    projection.history.phase === "loading" ||
-    projection.history.authoritativeApplied ||
-    !projection.summary.session.providerSessionId
-  ) {
-    return;
-  }
-  await useSessionStore.getState().loadOlderHistory(sessionId);
+  await ensureSessionHistoryLoadedCommand({
+    get: useSessionStore.getState,
+    loadOlderHistory: useSessionStore.getState().loadOlderHistory,
+    sessionId,
+  });
+}
+
+function createStartupDeps(
+  get: () => SessionState,
+  set: (
+    partial:
+      | Partial<SessionState>
+      | ((state: SessionState) => Partial<SessionState> | SessionState),
+  ) => void,
+) {
+  return {
+    get,
+    set,
+    ensureSessionHistoryLoaded,
+    sendInput: get().sendInput,
+    attachSession: get().attachSession,
+    resumeStoredSession: get().resumeStoredSession,
+    applySessionsResponse,
+    adoptExistingProjectionForProviderSession,
+    applyEventsToMap,
+    takePendingEventsForSessions,
+  };
 }
 
 async function maybeRestoreLastHistorySelection(
   sessionsResponse: Awaited<ReturnType<typeof api.listSessions>>,
 ) {
-  if (
-    attemptedStoredHistoryRestore ||
-    useSessionStore.getState().isInitialLoaded ||
-    sessionsResponse.sessions.length > 0
-  ) {
-    return;
-  }
-  attemptedStoredHistoryRestore = true;
-  const selection = readLastHistorySelection();
-  if (!selection) {
-    return;
-  }
-  const ref =
-    sessionsResponse.storedSessions.find(
-      (session) =>
-        session.provider === selection.provider &&
-        session.providerSessionId === selection.providerSessionId,
-    ) ??
-    sessionsResponse.recentSessions.find(
-      (session) =>
-        session.provider === selection.provider &&
-        session.providerSessionId === selection.providerSessionId,
-    );
-  if (!ref) {
-    clearLastHistorySelection();
-    return;
-  }
-  if (selection.workspaceDir) {
-    useSessionStore.setState((state) => ({
-      workspaceDir: isHiddenWorkspace(state.hiddenWorkspaceDirs, selection.workspaceDir) ? "" : selection.workspaceDir!,
-      workspaceDirs: appendVisibleWorkspaceDir(
-        state.hiddenWorkspaceDirs,
-        state.workspaceDirs,
-        selection.workspaceDir,
-      ),
-    }));
-  }
-  try {
-    await useSessionStore.getState().resumeStoredSession(ref, { preferStoredReplay: true });
-  } catch {
-    clearLastHistorySelection();
-  }
+  await maybeRestoreStoredHistorySelection({
+    isInitialLoaded: useSessionStore.getState().isInitialLoaded,
+    sessionsResponse,
+    revealWorkspaceSelection: (workspaceDir) => {
+      useSessionStore.setState((state) =>
+        revealStoredHistoryWorkspace({
+          workspaceDir,
+          hiddenWorkspaceDirs: state.hiddenWorkspaceDirs,
+          workspaceDirs: state.workspaceDirs,
+        }),
+      );
+    },
+    resumeStoredSession: (ref, options) => useSessionStore.getState().resumeStoredSession(ref, options),
+  });
 }
 
 async function recoverFromReplayGap(batch: EventBatch) {
-  clearBufferedEvents();
-  if (batch.replayGap?.newestAvailableSeq !== null && batch.replayGap?.newestAvailableSeq !== undefined) {
-    lastEventSeq = Math.max(lastEventSeq, batch.replayGap.newestAvailableSeq);
-  }
-  const workspaceVisibilityVersionAtRequest = useSessionStore.getState().workspaceVisibilityVersion;
-  const sessionsResponse = await api.listSessions();
-  useSessionStore.setState((state) => {
-    const nextState = replaceSessionsResponse(state, sessionsResponse, {
-      workspaceVisibilityVersionAtRequest,
-    });
-    return {
-      ...nextState,
-      projections: applyEventsToMap(nextState.projections, batch.events),
-      error:
-        `Event stream replay gap detected. Requested seq ${batch.replayGap?.requestedFromSeq ?? "unknown"}, ` +
-        `oldest available ${batch.replayGap?.oldestAvailableSeq ?? "unknown"}. Session views were rebuilt from current state.`,
-    };
+  await recoverFromReplayGapCommand({
+    batch,
+    get: useSessionStore.getState as never,
+    set: useSessionStore.setState as never,
+    clearHistoryBootstrapBuffers,
+    updateLastSeq: (seq) => {
+      lastEventSeq = Math.max(lastEventSeq, seq);
+    },
+    replaceSessionsResponse: replaceSessionsResponse as never,
+    applyEventsToMap,
+    ensureSessionHistoryLoaded,
   });
-  const selectedSessionId = useSessionStore.getState().selectedSessionId;
-  if (selectedSessionId) {
-    void ensureSessionHistoryLoaded(selectedSessionId);
-  }
+}
+
+function connectStoreTransport() {
+  connectStoreSyncTransport({
+    getReplayFromSeq: () => (lastEventSeq > 0 ? lastEventSeq + 1 : undefined),
+    isInitialLoaded: () => useSessionStore.getState().isInitialLoaded,
+    set: useSessionStore.setState as never,
+    applyEventsToMap,
+    computeUnreadSessionIds: computeUnreadSessionIdsImpl,
+    recoverFromReplayGap,
+    refreshWorkbenchState: () => useSessionStore.getState().refreshWorkbenchState(),
+  });
 }
 
 export const useSessionStore = create<SessionState>((set, get) => ({
-  clientId: createClientId(),
+  clientId: readOrCreateClientId(),
   projections: new Map(),
   unreadSessionIds: new Set(),
   storedSessions: [],
@@ -1059,21 +410,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   clearError: () => set({ error: null }),
   recoverTransport: async () => {
-    try {
-      const workspaceVisibilityVersionAtRequest = get().workspaceVisibilityVersion;
-      const sessionsResponse = await api.listSessions();
-      set((state) => ({
-        ...applySessionsResponse(state, sessionsResponse, {
-          workspaceVisibilityVersionAtRequest,
-        }),
-        error: null,
-      }));
-      restartEventSocket();
-      await maybeRestoreLastHistorySelection(sessionsResponse);
-    } catch (error) {
-      set({ error: readErrorMessage(error) });
-      throw error;
-    }
+    await recoverTransportCommand({
+      get: get as never,
+      set: set as never,
+      applySessionsResponse: applySessionsResponse as never,
+      restartTransport: restartSessionStoreTransport,
+      maybeRestoreLastHistorySelection,
+    });
   },
   setWorkspaceDir: (dir) => {
     if (!dir.trim()) {
@@ -1217,16 +560,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   init: async () => {
-    if (initialized) {
+    if (!beginSessionStoreInit()) {
       return;
     }
-    initialized = true;
     try {
       await get().refreshWorkbenchState();
       set({ isInitialLoaded: true });
-      connectEventSocket();
+      connectStoreTransport();
     } catch (error) {
-      initialized = false;
+      resetSessionStoreInit();
       set({
         isInitialLoaded: true,
         error: readErrorMessage(error),
@@ -1235,378 +577,23 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   startSession: async (options) => {
-    try {
-      const state = get();
-      const cwd = options?.cwd?.trim() || state.workspaceDir.trim();
-      if (!cwd) {
-        set({ error: "Choose a workspace directory first." });
-        return;
-      }
-      const provider = options?.provider ?? state.newSessionProvider;
-      set({
-        pendingSessionTransition: createPendingStartTransition({
-          provider,
-          cwd,
-          ...(options?.title ? { title: options.title } : {}),
-        }),
-        error: null,
-      });
-      const response = await api.startSession({
-        provider,
-        cwd,
-        title: options?.title ?? `${providerLabel(provider)} session`,
-        ...(options?.model ? { model: options.model } : {}),
-        ...(options?.approvalPolicy ? { approvalPolicy: options.approvalPolicy } : {}),
-        ...(options?.sandbox ? { sandbox: options.sandbox } : {}),
-        attach: attachRequest(state.clientId),
-      });
-      set((current) => {
-        const next = adoptExistingProjectionForProviderSession(
-          new Map(current.projections),
-          response.session,
-        );
-        const nextHiddenWorkspaceDirs = revealWorkspaceCandidates(current.hiddenWorkspaceDirs, cwd);
-        const workspaceVisibilityVersion = current.workspaceVisibilityVersion + 1;
-        next.set(response.session.session.id, {
-          summary: response.session,
-          feed: [],
-          events: [],
-          lastSeq: 0,
-          history: initialHistorySyncState(),
-        });
-        return {
-          projections: next,
-          unreadSessionIds: new Set(
-            [...current.unreadSessionIds].filter((sessionId) => sessionId !== response.session.session.id),
-          ),
-          hiddenWorkspaceDirs: nextHiddenWorkspaceDirs,
-          workspaceDirs: appendVisibleWorkspaceDir(
-            nextHiddenWorkspaceDirs,
-            current.workspaceDirs,
-            cwd,
-          ),
-          workspaceVisibilityVersion,
-          workspaceDir: cwd,
-          newSessionProvider: provider,
-          selectedSessionId: response.session.session.id,
-          pendingSessionTransition: null,
-          error: null,
-        };
-      });
-      if (options?.initialInput?.trim()) {
-        await get().sendInput(response.session.session.id, options.initialInput.trim());
-      }
-      void ensureSessionHistoryLoaded(response.session.session.id);
-    } catch (error) {
-      set({ pendingSessionTransition: null, error: readErrorMessage(error) });
-      throw error;
-    }
+    await startSessionCommand(createStartupDeps(get, set), options);
   },
 
   startScenario: async (scenario) => {
-    try {
-      set({
-        pendingSessionTransition: createPendingScenarioTransition(scenario),
-        error: null,
-      });
-      const response = await api.startDebugScenario({
-        scenarioId: scenario.id,
-        attach: attachRequest(get().clientId),
-      });
-      set((current) => {
-        const next = new Map(current.projections);
-        const nextHiddenWorkspaceDirs = revealWorkspaceCandidates(
-          current.hiddenWorkspaceDirs,
-          scenario.rootDir,
-        );
-        const workspaceVisibilityVersion = current.workspaceVisibilityVersion + 1;
-        next.set(response.session.session.id, {
-          summary: response.session,
-          feed: [],
-          events: [],
-          lastSeq: 0,
-          history: initialHistorySyncState(),
-        });
-        return {
-          projections: next,
-          unreadSessionIds: new Set(
-            [...current.unreadSessionIds].filter((sessionId) => sessionId !== response.session.session.id),
-          ),
-          hiddenWorkspaceDirs: nextHiddenWorkspaceDirs,
-          workspaceDirs: appendVisibleWorkspaceDir(
-            nextHiddenWorkspaceDirs,
-            current.workspaceDirs,
-            scenario.rootDir,
-          ),
-          workspaceVisibilityVersion,
-          workspaceDir: scenario.rootDir,
-          selectedSessionId: response.session.session.id,
-          pendingSessionTransition: null,
-          error: null,
-        };
-      });
-      void ensureSessionHistoryLoaded(response.session.session.id);
-    } catch (error) {
-      set({ pendingSessionTransition: null, error: readErrorMessage(error) });
-      throw error;
-    }
+    await startScenarioCommand(createStartupDeps(get, set), scenario);
   },
 
   activateHistorySession: async (ref) => {
-    const state = get();
-    const existingLive = findDaemonLiveSessionForStoredRef(state.projections, ref);
-    const mode = resolveHistoryActivationMode({
-      existingLiveSummary: existingLive,
-      clientId: state.clientId,
-    });
-    if (mode === "select" && existingLive) {
-      get().setSelectedSessionId(existingLive.session.id);
-      return;
-    }
-    if (mode === "attach" && existingLive) {
-      await get().attachSession(existingLive);
-      return;
-    }
-    await get().resumeStoredSession(ref, { preferStoredReplay: true });
+    await activateHistorySessionCommand(createStartupDeps(get, set), ref);
   },
 
   resumeStoredSession: async (ref, options) => {
-    try {
-      set({
-        pendingSessionTransition: createPendingStoredSessionTransition(ref, "history"),
-        error: null,
-      });
-      if (ref.source === "previous_live") {
-        const workspaceVisibilityVersionAtRequest = get().workspaceVisibilityVersion;
-        const sessionsResponse = await api.listSessions();
-        const running = sessionsResponse.sessions.find(
-          (summary) =>
-            summary.session.provider === ref.provider &&
-            summary.session.providerSessionId === ref.providerSessionId,
-        );
-        if (running) {
-          set((state) => ({
-            ...applySessionsResponse(state, sessionsResponse, {
-              workspaceVisibilityVersionAtRequest,
-            }),
-            workspaceDir:
-              ref.rootDir ??
-              ref.cwd ??
-              running.session.rootDir ??
-              running.session.cwd ??
-              state.workspaceDir,
-            pendingSessionTransition: state.pendingSessionTransition,
-            error: null,
-          }));
-          await get().attachSession(running);
-          set({ pendingSessionTransition: null });
-          return;
-        }
-      }
-
-      const request: ResumeSessionRequest = {
-        provider: ref.provider,
-        providerSessionId: ref.providerSessionId,
-        preferStoredReplay: options?.preferStoredReplay ?? true,
-        attach: observeAttachRequest(get().clientId),
-      };
-      if (options?.historyReplay !== undefined) {
-        request.historyReplay = options.historyReplay;
-      }
-      if (ref.cwd !== undefined) {
-        request.cwd = ref.cwd;
-      }
-      const response = await api.resumeSession(request);
-      set((current) => {
-        const next = adoptExistingProjectionForProviderSession(
-          new Map(current.projections),
-          response.session,
-        );
-        const nextHiddenWorkspaceDirs = revealWorkspaceCandidates(
-          current.hiddenWorkspaceDirs,
-          ref.rootDir,
-          ref.cwd,
-        );
-        const workspaceVisibilityVersion = current.workspaceVisibilityVersion + 1;
-        const replayProjection: SessionProjection = {
-          summary: response.session,
-          feed: [],
-          events: [],
-          lastSeq: 0,
-          history: initialHistorySyncState(),
-        };
-        next.set(response.session.session.id, replayProjection);
-        const replay = takePendingEventsForSessions(new Set([response.session.session.id]));
-        return {
-          projections: applyEventsToMap(next, replay),
-          unreadSessionIds: new Set(
-            [...current.unreadSessionIds].filter((sessionId) => sessionId !== response.session.session.id),
-          ),
-          hiddenWorkspaceDirs: nextHiddenWorkspaceDirs,
-          workspaceDirs: appendVisibleWorkspaceDir(
-            nextHiddenWorkspaceDirs,
-            current.workspaceDirs,
-            ref.rootDir ?? ref.cwd,
-          ),
-          workspaceVisibilityVersion,
-          workspaceDir: ref.rootDir ?? ref.cwd ?? current.workspaceDir,
-          selectedSessionId: response.session.session.id,
-          pendingSessionTransition: null,
-          error: null,
-        };
-      });
-      void ensureSessionHistoryLoaded(response.session.session.id);
-    } catch (error) {
-      const message = readErrorMessage(error);
-      if (message.includes("attach instead of resume")) {
-        const workspaceVisibilityVersionAtRequest = get().workspaceVisibilityVersion;
-        const sessionsResponse = await api.listSessions();
-        const running = sessionsResponse.sessions.find(
-          (summary) =>
-            summary.session.provider === ref.provider &&
-            summary.session.providerSessionId === ref.providerSessionId,
-        );
-        if (running) {
-          set((state) => {
-            const next = applySessionsResponse(state, sessionsResponse, {
-              workspaceVisibilityVersionAtRequest,
-            });
-            return {
-              ...next,
-              workspaceDir:
-              ref.rootDir ??
-              ref.cwd ??
-              running.session.rootDir ??
-              running.session.cwd ??
-              next.workspaceDir,
-              error: null,
-            };
-          });
-          await get().attachSession(running);
-          set({ pendingSessionTransition: null });
-          return;
-        }
-      }
-      set({ pendingSessionTransition: null, error: message });
-      throw error;
-    }
+    await resumeStoredSessionCommand(createStartupDeps(get, set), ref, options);
   },
 
   claimHistorySession: async (sessionId) => {
-    const state = get();
-    const projection = state.projections.get(sessionId);
-    const summary = projection?.summary;
-    const providerSessionId = summary?.session.providerSessionId;
-    if (!projection || !summary || !providerSessionId) {
-      const error = "Only persisted provider sessions can be claimed from history.";
-      set({ error });
-      throw new Error(error);
-    }
-
-    const ref =
-      state.recentSessions.find(
-        (entry) =>
-          entry.provider === summary.session.provider &&
-          entry.providerSessionId === providerSessionId,
-      ) ??
-      state.storedSessions.find(
-        (entry) =>
-          entry.provider === summary.session.provider &&
-          entry.providerSessionId === providerSessionId,
-      ) ?? {
-        provider: summary.session.provider,
-        providerSessionId,
-        ...(summary.session.cwd ? { cwd: summary.session.cwd } : {}),
-        ...(summary.session.rootDir ? { rootDir: summary.session.rootDir } : {}),
-        ...(summary.session.title ? { title: summary.session.title } : {}),
-        ...(summary.session.preview ? { preview: summary.session.preview } : {}),
-      };
-
-    const preservedProjection: SessionProjection = {
-      ...projection,
-      summary,
-    };
-
-    const targetDir = ref.rootDir ?? ref.cwd ?? null;
-    if (targetDir) {
-      try {
-        await api.listDirectory(targetDir);
-      } catch {
-        const shouldCreate =
-          typeof window !== "undefined" &&
-          window.confirm(`Workspace is missing. Create it before claiming control?\n\n${targetDir}`);
-        if (!shouldCreate) {
-          return;
-        }
-        await api.ensureDirectory({ dir: targetDir });
-      }
-    }
-
-    try {
-      set({
-        pendingSessionAction: {
-          kind: "claim_history",
-          sessionId,
-        },
-        pendingSessionTransition: createPendingStoredSessionTransition(ref, "claim_history"),
-        error: null,
-      });
-      const request: ResumeSessionRequest = {
-        provider: ref.provider,
-        providerSessionId: ref.providerSessionId,
-        preferStoredReplay: false,
-        historyReplay: "skip",
-        historySourceSessionId: sessionId,
-        attach: attachRequest(state.clientId),
-      };
-      if (ref.cwd !== undefined) {
-        request.cwd = ref.cwd;
-      }
-      const response = await api.resumeSession(request);
-      set((current) => {
-        const next = new Map(current.projections);
-        const nextHiddenWorkspaceDirs = revealWorkspaceCandidates(
-          current.hiddenWorkspaceDirs,
-          ref.rootDir,
-          ref.cwd,
-        );
-        const workspaceVisibilityVersion = current.workspaceVisibilityVersion + 1;
-        next.delete(sessionId);
-        next.set(response.session.session.id, {
-          ...preservedProjection,
-          summary: response.session,
-        });
-        const replay = takePendingEventsForSessions(new Set([response.session.session.id]));
-        return {
-          projections: applyEventsToMap(next, replay),
-          unreadSessionIds: new Set(
-            [...current.unreadSessionIds].filter(
-              (sessionIdValue) =>
-                sessionIdValue !== sessionId && sessionIdValue !== response.session.session.id,
-            ),
-          ),
-          hiddenWorkspaceDirs: nextHiddenWorkspaceDirs,
-          workspaceDirs: appendVisibleWorkspaceDir(
-            nextHiddenWorkspaceDirs,
-            current.workspaceDirs,
-            ref.rootDir ?? ref.cwd,
-          ),
-          workspaceVisibilityVersion,
-          workspaceDir: ref.rootDir ?? ref.cwd ?? current.workspaceDir,
-          selectedSessionId: response.session.session.id,
-          pendingSessionAction: null,
-          pendingSessionTransition: null,
-          error: null,
-        };
-      });
-    } catch (error) {
-      set({
-        pendingSessionAction: null,
-        pendingSessionTransition: null,
-        error: readErrorMessage(error),
-      });
-      throw error;
-    }
+    await claimHistorySessionCommand(createStartupDeps(get, set), sessionId);
   },
 
   removeHistorySession: async (session) => {
@@ -1642,155 +629,37 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   attachSession: async (summary) => {
-    try {
-      set({
-        pendingSessionAction: {
-          kind: "attach_session",
-          sessionId: summary.session.id,
-        },
-        error: null,
-      });
-      const response = await api.attachSession(summary.session.id, {
-        client: {
-          id: get().clientId,
-          kind: "web",
-          connectionId: get().clientId,
-        },
-        mode: "observe",
-      });
-      updateSessionSummary(response.session);
-      set((state) => {
-        const unreadSessionIds = new Set(state.unreadSessionIds);
-        unreadSessionIds.delete(summary.session.id);
-        const targetDir = response.session.session.rootDir || response.session.session.cwd;
-        const nextHiddenWorkspaceDirs = targetDir
-          ? revealWorkspaceCandidates(state.hiddenWorkspaceDirs, targetDir)
-          : state.hiddenWorkspaceDirs;
-        return {
-          selectedSessionId: response.session.session.id,
-          unreadSessionIds,
-          hiddenWorkspaceDirs: nextHiddenWorkspaceDirs,
-          workspaceDirs: targetDir
-            ? appendVisibleWorkspaceDir(nextHiddenWorkspaceDirs, state.workspaceDirs, targetDir)
-            : state.workspaceDirs,
-          workspaceVisibilityVersion: targetDir
-            ? state.workspaceVisibilityVersion + 1
-            : state.workspaceVisibilityVersion,
-          workspaceDir: targetDir ?? state.workspaceDir,
-          pendingSessionAction: null,
-          error: null,
-        };
-      });
-      void ensureSessionHistoryLoaded(summary.session.id);
-    } catch (error) {
-      set({ pendingSessionAction: null, error: readErrorMessage(error) });
-      throw error;
-    }
+    await attachSessionCommand({
+      get,
+      set,
+      summary,
+      ensureSessionHistoryLoaded,
+    });
   },
 
   closeSession: async (sessionId) => {
-    try {
-      const projection = get().projections.get(sessionId);
-      const summary = projection?.summary;
-      await api.closeSession(sessionId, {
-        clientId: get().clientId,
-      });
-      set((state) => {
-        const nextState: Partial<SessionState> = {
-          projections: new Map(
-            [...state.projections.entries()].filter(([id]) => id !== sessionId),
-          ),
-          unreadSessionIds: new Set(
-            [...state.unreadSessionIds].filter((id) => id !== sessionId),
-          ),
-          selectedSessionId: state.selectedSessionId === sessionId ? null : state.selectedSessionId,
-          error: null,
-        };
-        const providerSessionId = summary?.session.providerSessionId;
-        if (summary && providerSessionId) {
-          const remembered = {
-            provider: summary.session.provider,
-            providerSessionId,
-            ...(summary.session.cwd ? { cwd: summary.session.cwd } : {}),
-            ...(summary.session.rootDir ? { rootDir: summary.session.rootDir } : {}),
-            ...(summary.session.title ? { title: summary.session.title } : {}),
-            ...(summary.session.preview ? { preview: summary.session.preview } : {}),
-            updatedAt: summary.session.updatedAt,
-            lastUsedAt: summary.session.updatedAt,
-            source: "previous_live" as const,
-          };
-          nextState.storedSessions = mergeStoredSessionRefs(state.storedSessions, remembered);
-          nextState.recentSessions = mergeRecentSessionRefs(state.recentSessions, remembered);
-        }
-        return nextState as SessionState;
-      });
-      await get().refreshWorkbenchState();
-    } catch (error) {
-      set({ error: readErrorMessage(error) });
-      throw error;
-    }
+    await closeSessionCommand({
+      get,
+      set,
+      sessionId,
+      refreshWorkbenchState: get().refreshWorkbenchState,
+    });
   },
 
   claimControl: async (sessionId) => {
-    try {
-      set({
-        pendingSessionAction: {
-          kind: "claim_control",
-          sessionId,
-        },
-        error: null,
-      });
-      const summary = await api.claimControl(sessionId, get().clientId);
-      updateSessionSummary(summary);
-      set({ pendingSessionAction: null, error: null });
-    } catch (error) {
-      set({ pendingSessionAction: null, error: readErrorMessage(error) });
-      throw error;
-    }
+    await claimControlCommand({ get, set, sessionId });
   },
 
   releaseControl: async (sessionId) => {
-    try {
-      const summary = await api.releaseControl(sessionId, get().clientId);
-      updateSessionSummary(summary);
-      set({ error: null });
-    } catch (error) {
-      set({ error: readErrorMessage(error) });
-      throw error;
-    }
+    await releaseControlCommand({ get, set, sessionId });
   },
 
   interruptSession: async (sessionId) => {
-    try {
-      const summary = await api.interruptSession(sessionId, get().clientId);
-      updateSessionSummary(summary);
-      set({ error: null });
-    } catch (error) {
-      set({ error: readErrorMessage(error) });
-      throw error;
-    }
+    await interruptSessionCommand({ get, set, sessionId });
   },
 
   sendInput: async (sessionId, text) => {
-    try {
-      set((state) => {
-        const projection = state.projections.get(sessionId);
-        if (!projection) {
-          return state;
-        }
-        const next = new Map(state.projections);
-        next.set(sessionId, appendOptimisticUserMessage(projection, text));
-        return { projections: next };
-      });
-      await api.sendSessionInput(sessionId, {
-        clientId: get().clientId,
-        text,
-      });
-      set({ error: null });
-    } catch (error) {
-      set({ error: readErrorMessage(error) });
-      throw error;
-    }
+    await sendInputCommand({ get, set, sessionId, text });
   },
 
   ensureSessionHistoryLoaded: async (sessionId) => {
@@ -1798,121 +667,22 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   loadOlderHistory: async (sessionId) => {
-    const projection = get().projections.get(sessionId);
-    if (!projection || projection.history.phase === "loading") {
-      return;
-    }
-
-    const cursor = projection.history.nextCursor ?? undefined;
-    const beforeTs =
-      cursor === undefined
-        ? projection.history.nextBeforeTs ?? projection.feed[0]?.ts ?? undefined
-        : undefined;
-    const requestGeneration = projection.history.generation + 1;
-
-    set((state) => {
-      const current = state.projections.get(sessionId);
-      if (!current) {
-        return state;
-      }
-      const next = new Map(state.projections);
-      next.set(sessionId, {
-        ...current,
-        history: {
-          ...current.history,
-          phase: "loading",
-          generation: requestGeneration,
-          lastError: null,
-        },
-      });
-      return { projections: next };
+    await loadOlderHistoryCommand({
+      get,
+      set,
+      sessionId,
+      historyPageLimit: HISTORY_PAGE_LIMIT,
     });
-
-    try {
-      const page = await api.readSessionHistory(sessionId, {
-        ...(cursor ? { cursor } : {}),
-        ...(beforeTs ? { beforeTs } : {}),
-        limit: HISTORY_PAGE_LIMIT,
-      });
-      set((state) => {
-        const current = state.projections.get(sessionId);
-        if (!current || current.history.generation !== requestGeneration) {
-          return state;
-        }
-        const next = new Map(state.projections);
-        const withHistory = prependHistoryPage(current, page.events, {
-          ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
-          ...(page.nextBeforeTs ? { nextBeforeTs: page.nextBeforeTs } : {}),
-        });
-        const replayed = applyEventBatchToProjection(
-          withHistory,
-          takeDeferredBootstrapEvents(sessionId),
-        );
-        next.set(sessionId, replayed);
-        return { projections: next, error: null };
-      });
-    } catch (error) {
-      set((state) => {
-        const current = state.projections.get(sessionId);
-        if (!current) {
-          return { error: readErrorMessage(error) };
-        }
-        const next = new Map(state.projections);
-        const failed = applyEventBatchToProjection({
-          ...current,
-          history: {
-            ...current.history,
-            phase: "error",
-            lastError: readErrorMessage(error),
-          },
-        }, takeDeferredBootstrapEvents(sessionId));
-        next.set(sessionId, failed);
-        return { projections: next, error: readErrorMessage(error) };
-      });
-      throw error;
-    }
   },
 
   respondToPermission: async (sessionId, requestId, response) => {
-    try {
-      await api.respondToPermission(sessionId, requestId, response);
-      set({ error: null });
-    } catch (error) {
-      set({ error: readErrorMessage(error) });
-      throw error;
-    }
+    await respondToPermissionCommand({ set, sessionId, requestId, response });
   },
 }));
 
-let lastSyncedHistorySelectionKey: string | null = null;
-const CLEARED_HISTORY_SELECTION_KEY = "__cleared__";
-
 useSessionStore.subscribe((state) => {
-  const selectedSummary = state.selectedSessionId
-    ? state.projections.get(state.selectedSessionId)?.summary ?? null
-    : null;
-  if (!selectedSummary) {
-    return;
-  }
-
-  if (selectedSummary.session.providerSessionId && isReadOnlyReplay(selectedSummary)) {
-    const historyWorkspaceDir =
-      selectedSummary.session.rootDir || selectedSummary.session.cwd || state.workspaceDir;
-    const nextKey = JSON.stringify({
-      provider: selectedSummary.session.provider,
-      providerSessionId: selectedSummary.session.providerSessionId,
-      ...(historyWorkspaceDir ? { workspaceDir: historyWorkspaceDir } : {}),
-    });
-    if (nextKey === lastSyncedHistorySelectionKey) {
-      return;
-    }
-    lastSyncedHistorySelectionKey = nextKey;
-    syncLastHistorySelectionFromState(state);
-    return;
-  }
-
-  if (lastSyncedHistorySelectionKey !== CLEARED_HISTORY_SELECTION_KEY) {
-    lastSyncedHistorySelectionKey = CLEARED_HISTORY_SELECTION_KEY;
-    syncLastHistorySelectionFromState(state);
-  }
+  syncHistorySelectionSubscription({
+    state,
+    syncLastHistorySelectionFromState,
+  });
 });

@@ -11,20 +11,20 @@ export const COMPOSER_LAYOUT = {
   bottomPaddingStyle: {
     paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 0.5rem)",
   } as const,
-  rowClassName: "flex items-center gap-2 md:gap-3",
+  rowClassName: "flex items-end gap-2 md:gap-3",
   controlButtonClassName:
-    "shrink-0 h-11 w-11 md:h-12 md:w-12 rounded-full flex items-center justify-center transition-colors",
+    "shrink-0 self-end h-11 w-11 md:h-12 md:w-12 rounded-full flex items-center justify-center transition-colors",
   roundSecondaryButtonClassName:
-    "shrink-0 h-11 w-11 md:h-12 md:w-12 rounded-full border border-[var(--app-border)] bg-[var(--app-subtle-bg)] text-[var(--app-hint)] flex items-center justify-center hover:text-[var(--app-fg)] transition-colors",
+    "shrink-0 self-end h-11 w-11 md:h-12 md:w-12 rounded-full border border-[var(--app-border)] bg-[var(--app-subtle-bg)] text-[var(--app-hint)] flex items-center justify-center hover:text-[var(--app-fg)] transition-colors",
   roundPrimaryButtonClassName:
-    "shrink-0 h-11 w-11 md:h-12 md:w-12 rounded-full bg-primary text-primary-foreground flex items-center justify-center hover:opacity-90 disabled:opacity-40 transition-colors",
-  stopWrapperClassName: "relative shrink-0 h-11 w-11 md:h-12 md:w-12",
+    "shrink-0 self-end h-11 w-11 md:h-12 md:w-12 rounded-full bg-primary text-primary-foreground flex items-center justify-center hover:opacity-90 disabled:opacity-40 transition-colors",
+  stopWrapperClassName: "relative shrink-0 self-end h-11 w-11 md:h-12 md:w-12",
   stopButtonClassName:
     "absolute inset-[2px] rounded-full bg-[var(--app-danger)] text-white flex items-center justify-center transition-all duration-200 hover:opacity-90 hover:scale-105 active:scale-95",
   textareaClassName:
-    "w-full resize-none bg-[var(--app-subtle-bg)] rounded-xl border border-[var(--app-border)] px-3 py-2 md:px-4 md:py-3 text-base leading-5 focus:outline-none focus:ring-1 focus:ring-[var(--ring)] min-h-[44px] md:min-h-[48px] max-h-[160px]",
+    "w-full resize-none overflow-y-auto custom-scrollbar bg-[var(--app-subtle-bg)] rounded-xl border border-[var(--app-border)] px-3 py-2 md:px-4 md:py-3 text-base leading-5 focus:outline-none focus:ring-1 focus:ring-[var(--ring)] min-h-11 md:min-h-12 max-h-[280px]",
   textareaContentClassName:
-    "px-3 py-2 md:px-4 md:py-3 text-base leading-5 min-h-[44px] md:min-h-[48px]",
+    "px-3 py-2 md:px-4 md:py-3 text-base leading-5 min-h-11 md:min-h-12",
 } as const;
 
 export function deriveComposerSurface(args: {

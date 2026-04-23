@@ -989,4 +989,52 @@ describe("RuntimeEngine", () => {
 
     await engine.shutdown();
   });
+
+  test("independent terminal starts as standalone PTY and honors resize", async () => {
+    const engine = new RuntimeEngine([]);
+    const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-terminal-pty-"));
+
+    const terminal = await engine.startIndependentTerminal({
+      cwd: workspace,
+      cols: 100,
+      rows: 32,
+    });
+
+    let transcript = "";
+    let sawExit = false;
+    const unsubscribe = engine.ptyHub.subscribe(terminal.terminal.id, (frame) => {
+      if (frame.type === "pty.replay") {
+        transcript += frame.chunks.join("");
+        return;
+      }
+      if (frame.type === "pty.output") {
+        transcript += frame.data;
+        return;
+      }
+      if (frame.type === "pty.exited") {
+        sawExit = true;
+      }
+    });
+
+    engine.onPtyInput(terminal.terminal.id, "browser", "printf 'RAH_TERMINAL_OK\\n'\r");
+    await waitFor(() => {
+      assert.match(transcript, /RAH_TERMINAL_OK/);
+    });
+
+    engine.onPtyResize(terminal.terminal.id, "browser", 140, 40);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    engine.onPtyInput(terminal.terminal.id, "browser", "stty size\r");
+    await waitFor(() => {
+      assert.match(transcript, /40 140/);
+    });
+
+    await engine.closeIndependentTerminal(terminal.terminal.id);
+    await waitFor(() => {
+      assert.equal(sawExit, true);
+    });
+
+    unsubscribe();
+    await engine.shutdown();
+    rmSync(workspace, { force: true, recursive: true });
+  });
 });

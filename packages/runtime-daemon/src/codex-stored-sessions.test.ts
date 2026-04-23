@@ -75,6 +75,13 @@ describe("codex stored session path resolution", () => {
     assert.equal(status.unstagedFiles[0]?.path, targetRelativePath);
   });
 
+  test("limits git status to an explicit workspace scope when session cwd is repo root", () => {
+    const status = getCodexGitStatus(repoRoot, { scopeRoot: sessionCwd });
+    assert.deepEqual(status.changedFiles, [targetRelativePath]);
+    assert.equal(status.unstagedFiles.length, 1);
+    assert.equal(status.unstagedFiles[0]?.path, targetRelativePath);
+  });
+
   test("reads repo-root-relative file paths from a nested session cwd", () => {
     const file = readWorkspaceFile(sessionCwd, targetRelativePath);
     assert.equal(file.binary, false);
@@ -89,6 +96,16 @@ describe("codex stored session path resolution", () => {
     );
     assert.throws(
       () => readWorkspaceFile(sessionCwd, outsideRelativePath),
+      /ENOENT|Path must remain inside the workspace/,
+    );
+  });
+
+  test("rejects reading files outside an explicit workspace scope", () => {
+    const file = readWorkspaceFile(repoRoot, targetRelativePath, { scopeRoot: sessionCwd });
+    assert.equal(file.binary, false);
+    assert.match(file.content, /changed in scope/);
+    assert.throws(
+      () => readWorkspaceFile(repoRoot, outsideRelativePath, { scopeRoot: sessionCwd }),
       /ENOENT|Path must remain inside the workspace/,
     );
   });

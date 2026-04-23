@@ -266,6 +266,32 @@ html.dark .provider-choice-rail {
   color: rgba(217, 226, 241, 0.78);
 }
 
+.terminal-ios-input-bridge {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(7, 14, 26, 0.96);
+  padding: 0.55rem 0.6rem;
+}
+
+.terminal-ios-input {
+  width: 100%;
+  border-radius: 0.7rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.06);
+  padding: 0.65rem 0.85rem;
+  font-size: 0.9rem;
+  line-height: 1.2;
+  color: rgba(217, 226, 241, 0.96);
+}
+
+.terminal-ios-input::placeholder {
+  color: rgba(217, 226, 241, 0.56);
+}
+
+.terminal-ios-input:focus {
+  outline: 1px solid rgba(59, 130, 246, 0.45);
+  outline-offset: 0;
+}
+
 .terminal-canvas {
   min-height: 0;
   flex: 1;
@@ -293,6 +319,22 @@ html.dark .provider-choice-rail {
 .terminal-canvas .xterm-viewport,
 .terminal-canvas .xterm-screen {
   height: 100% !important;
+}
+
+@media (max-width: 768px) {
+  .terminal-panel {
+    border-radius: 0.875rem;
+    box-shadow: none;
+  }
+
+  .terminal-toolbar {
+    padding: 0.65rem 0.75rem;
+    font-size: 0.72rem;
+  }
+
+  .terminal-canvas {
+    padding: 0.35rem 0.45rem 0.5rem;
+  }
 }
 
 .provider-choice-chip:hover {

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 const HIDE_TOOL_CALLS_KEY = "rah-hide-tool-calls-in-chat";
+const CHAT_PREFERENCES_EVENT = "rah:chat-preferences-updated";
 
 function isBrowser(): boolean {
   return typeof window !== "undefined";
@@ -34,17 +35,30 @@ export function useChatPreferences(): {
 
   useEffect(() => {
     if (!isBrowser()) return;
-    const onStorage = (event: StorageEvent) => {
-      if (event.key !== HIDE_TOOL_CALLS_KEY) return;
+    const syncPreference = () => {
       setHideToolCallsInChatState(readBoolean(HIDE_TOOL_CALLS_KEY));
     };
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== HIDE_TOOL_CALLS_KEY) return;
+      syncPreference();
+    };
+    const onPreferenceEvent = () => {
+      syncPreference();
+    };
     window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
+    window.addEventListener(CHAT_PREFERENCES_EVENT, onPreferenceEvent);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener(CHAT_PREFERENCES_EVENT, onPreferenceEvent);
+    };
   }, []);
 
   const setHideToolCallsInChat = useCallback((value: boolean) => {
     setHideToolCallsInChatState(value);
     writeBoolean(HIDE_TOOL_CALLS_KEY, value);
+    if (isBrowser()) {
+      window.dispatchEvent(new Event(CHAT_PREFERENCES_EVENT));
+    }
   }, []);
 
   return { hideToolCallsInChat, setHideToolCallsInChat };

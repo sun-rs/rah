@@ -211,7 +211,7 @@ async function serveClientApp(pathname: string, res: ServerResponse): Promise<bo
   writeText(
     res,
     503,
-    "RAH client bundle not found. Run `bun --cwd packages/client-web vite build` first.",
+    "RAH client bundle not found. Run `npm --prefix packages/client-web run build` first.",
   );
   return true;
 }
@@ -464,19 +464,40 @@ export async function startRahDaemon(options?: { port?: number }): Promise<RahDa
 
       const workspaceMatch = /^\/api\/sessions\/([^/]+)\/workspace$/.exec(pathname);
       if (req.method === "GET" && workspaceMatch) {
-        writeJson(res, 200, engine.getWorkspaceSnapshot(workspaceMatch[1]!));
+        const scopeRoot = url.searchParams.get("scopeRoot") ?? undefined;
+        writeJson(
+          res,
+          200,
+          engine.getWorkspaceSnapshot(workspaceMatch[1]!, {
+            ...(scopeRoot ? { scopeRoot } : {}),
+          }),
+        );
         return;
       }
 
       const filesMatch = /^\/api\/sessions\/([^/]+)\/files$/.exec(pathname);
       if (req.method === "GET" && filesMatch) {
-        writeJson(res, 200, engine.getWorkspaceSnapshot(filesMatch[1]!));
+        const scopeRoot = url.searchParams.get("scopeRoot") ?? undefined;
+        writeJson(
+          res,
+          200,
+          engine.getWorkspaceSnapshot(filesMatch[1]!, {
+            ...(scopeRoot ? { scopeRoot } : {}),
+          }),
+        );
         return;
       }
 
       const gitStatusMatch = /^\/api\/sessions\/([^/]+)\/git-status$/.exec(pathname);
       if (req.method === "GET" && gitStatusMatch) {
-        writeJson(res, 200, engine.getGitStatus(gitStatusMatch[1]!));
+        const scopeRoot = url.searchParams.get("scopeRoot") ?? undefined;
+        writeJson(
+          res,
+          200,
+          engine.getGitStatus(gitStatusMatch[1]!, {
+            ...(scopeRoot ? { scopeRoot } : {}),
+          }),
+        );
         return;
       }
 
@@ -485,10 +506,81 @@ export async function startRahDaemon(options?: { port?: number }): Promise<RahDa
         const diffPath = url.searchParams.get("path") ?? "src/index.ts";
         const staged = url.searchParams.get("staged");
         const ignoreWhitespace = url.searchParams.get("ignoreWhitespace");
+        const scopeRoot = url.searchParams.get("scopeRoot") ?? undefined;
         writeJson(
           res,
           200,
           engine.getGitDiff(gitDiffMatch[1]!, diffPath, {
+            ...(staged !== null ? { staged: staged === "true" } : {}),
+            ...(ignoreWhitespace !== null
+              ? { ignoreWhitespace: ignoreWhitespace === "true" }
+              : {}),
+            ...(scopeRoot ? { scopeRoot } : {}),
+          }),
+        );
+        return;
+      }
+
+      const fileMatch = /^\/api\/sessions\/([^/]+)\/file$/.exec(pathname);
+      if (req.method === "GET" && fileMatch) {
+        const filePath = url.searchParams.get("path");
+        const scopeRoot = url.searchParams.get("scopeRoot") ?? undefined;
+        if (!filePath) {
+          writeJson(res, 400, { error: "File path is required." });
+          return;
+        }
+        writeJson(
+          res,
+          200,
+          engine.readSessionFile(fileMatch[1]!, filePath, {
+            ...(scopeRoot ? { scopeRoot } : {}),
+          }),
+        );
+        return;
+      }
+
+      const fileSearchMatch = /^\/api\/sessions\/([^/]+)\/file-search$/.exec(pathname);
+      if (req.method === "GET" && fileSearchMatch) {
+        const query = url.searchParams.get("query") ?? "";
+        const limitRaw = url.searchParams.get("limit");
+        const scopeRoot = url.searchParams.get("scopeRoot") ?? undefined;
+        const limit =
+          limitRaw && Number.isFinite(Number.parseInt(limitRaw, 10))
+            ? Number.parseInt(limitRaw, 10)
+            : 100;
+        writeJson(
+          res,
+          200,
+          engine.searchSessionFiles(fileSearchMatch[1]!, query, limit, {
+            ...(scopeRoot ? { scopeRoot } : {}),
+          }),
+        );
+        return;
+      }
+
+      if (req.method === "GET" && pathname === "/api/workspace/git-status") {
+        const dir = url.searchParams.get("dir");
+        if (!dir) {
+          writeJson(res, 400, { error: "Workspace dir is required." });
+          return;
+        }
+        writeJson(res, 200, engine.getWorkspaceGitStatus(dir));
+        return;
+      }
+
+      if (req.method === "GET" && pathname === "/api/workspace/git-diff") {
+        const dir = url.searchParams.get("dir");
+        const diffPath = url.searchParams.get("path");
+        if (!dir || !diffPath) {
+          writeJson(res, 400, { error: "Workspace dir and file path are required." });
+          return;
+        }
+        const staged = url.searchParams.get("staged");
+        const ignoreWhitespace = url.searchParams.get("ignoreWhitespace");
+        writeJson(
+          res,
+          200,
+          engine.getWorkspaceGitDiff(dir, diffPath, {
             ...(staged !== null ? { staged: staged === "true" } : {}),
             ...(ignoreWhitespace !== null
               ? { ignoreWhitespace: ignoreWhitespace === "true" }
@@ -498,26 +590,30 @@ export async function startRahDaemon(options?: { port?: number }): Promise<RahDa
         return;
       }
 
-      const fileMatch = /^\/api\/sessions\/([^/]+)\/file$/.exec(pathname);
-      if (req.method === "GET" && fileMatch) {
+      if (req.method === "GET" && pathname === "/api/workspace/file") {
+        const dir = url.searchParams.get("dir");
         const filePath = url.searchParams.get("path");
-        if (!filePath) {
-          writeJson(res, 400, { error: "File path is required." });
+        if (!dir || !filePath) {
+          writeJson(res, 400, { error: "Workspace dir and file path are required." });
           return;
         }
-        writeJson(res, 200, engine.readSessionFile(fileMatch[1]!, filePath));
+        writeJson(res, 200, engine.readWorkspaceFile(dir, filePath));
         return;
       }
 
-      const fileSearchMatch = /^\/api\/sessions\/([^/]+)\/file-search$/.exec(pathname);
-      if (req.method === "GET" && fileSearchMatch) {
+      if (req.method === "GET" && pathname === "/api/workspace/file-search") {
+        const dir = url.searchParams.get("dir");
         const query = url.searchParams.get("query") ?? "";
+        if (!dir) {
+          writeJson(res, 400, { error: "Workspace dir is required." });
+          return;
+        }
         const limitRaw = url.searchParams.get("limit");
         const limit =
           limitRaw && Number.isFinite(Number.parseInt(limitRaw, 10))
             ? Number.parseInt(limitRaw, 10)
             : 100;
-        writeJson(res, 200, engine.searchSessionFiles(fileSearchMatch[1]!, query, limit));
+        writeJson(res, 200, engine.searchWorkspaceFiles(dir, query, limit));
         return;
       }
 

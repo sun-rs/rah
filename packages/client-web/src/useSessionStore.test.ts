@@ -5,6 +5,7 @@ import {
   coerceSelectedSessionId,
   computeUnreadSessionIds,
   findDaemonLiveSessionForStoredRef,
+  readOrCreateClientId,
   reconcileVisibleWorkspaceSelection,
   resolveHistoryActivationMode,
   resolveHiddenWorkspaceDirsFromSessionsResponse,
@@ -230,5 +231,23 @@ describe("workspace response reconciliation", () => {
       }),
       "resume",
     );
+  });
+
+  test("reuses the same web client id across refreshes within one browser tab", () => {
+    const values = new Map<string, string>();
+    const storage = {
+      getItem(key: string) {
+        return values.get(key) ?? null;
+      },
+      setItem(key: string, value: string) {
+        values.set(key, value);
+      },
+    };
+
+    const first = readOrCreateClientId(storage);
+    const second = readOrCreateClientId(storage);
+
+    assert.equal(first, second);
+    assert.match(first, /^web-/);
   });
 });

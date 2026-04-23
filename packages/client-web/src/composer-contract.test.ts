@@ -158,7 +158,7 @@ describe("composer contract", () => {
   test("keeps composer layout constants centralized", () => {
     assert.match(COMPOSER_LAYOUT.roundSecondaryButtonClassName, /h-11/);
     assert.match(COMPOSER_LAYOUT.roundPrimaryButtonClassName, /h-11/);
-    assert.match(COMPOSER_LAYOUT.textareaClassName, /min-h-\[44px\]/);
+    assert.match(COMPOSER_LAYOUT.textareaClassName, /min-h-11/);
     assert.equal(
       COMPOSER_LAYOUT.bottomPaddingStyle.paddingBottom,
       "calc(env(safe-area-inset-bottom, 0px) + 0.5rem)",

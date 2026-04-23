@@ -122,13 +122,13 @@ const codexRefactorScenario: DebugScenario = {
         providerToolName: "exec_command_end",
         title: "Run TypeScript check",
         input: {
-          command: "bun run typecheck",
+          command: "npm run typecheck",
         },
         detail: {
           artifacts: [
             {
               kind: "command",
-              command: "bun run typecheck",
+              command: "npm run typecheck",
               cwd: "/workspace/rah",
             },
           ],
@@ -139,7 +139,7 @@ const codexRefactorScenario: DebugScenario = {
       delayMs: 260,
       kind: "pty",
       data:
-        "$ bun run typecheck\r\npackages/client-web/src/App.tsx(162,15): error TS2339: Property 'cwd' does not exist ...\r\npackages/client-web/src/types.ts(82,7): error TS2353: Object literal may only specify known properties ...\r\n",
+        "$ npm run typecheck\r\npackages/client-web/src/App.tsx(162,15): error TS2339: Property 'cwd' does not exist ...\r\npackages/client-web/src/types.ts(82,7): error TS2353: Object literal may only specify known properties ...\r\n",
     },
     {
       delayMs: 340,
@@ -300,13 +300,13 @@ const codexRefactorScenario: DebugScenario = {
         providerToolName: "exec_command_end",
         title: "Build client-web",
         input: {
-          command: "bun --cwd packages/client-web vite build",
+          command: "npm run build:web",
         },
         detail: {
           artifacts: [
             {
               kind: "command",
-              command: "bun --cwd packages/client-web vite build",
+              command: "npm run build:web",
               cwd: "/workspace/rah",
             },
           ],
@@ -317,7 +317,7 @@ const codexRefactorScenario: DebugScenario = {
       delayMs: 910,
       kind: "pty",
       data:
-        "$ bun --cwd packages/client-web vite build\r\nvite v7.3.2 building client environment for production...\r\n✓ 39 modules transformed.\r\ndist/assets/index.js   507.08 kB │ gzip: 138.42 kB\r\n(!) Some chunks are larger than 500 kB after minification.\r\n✓ built in 501ms\r\n",
+        "$ npm run build:web\r\nvite v7.3.2 building client environment for production...\r\n✓ 39 modules transformed.\r\ndist/assets/index.js   507.08 kB │ gzip: 138.42 kB\r\n(!) Some chunks are larger than 500 kB after minification.\r\n✓ built in 501ms\r\n",
     },
     {
       delayMs: 1010,
@@ -434,7 +434,7 @@ const permissionScenario: DebugScenario = {
           artifacts: [
             {
               kind: "command",
-              command: "rm -rf dist coverage && bun test",
+              command: "npm run test:runtime",
               cwd: "/workspace/service-api",
             },
             {
@@ -481,7 +481,7 @@ const permissionScenario: DebugScenario = {
           artifacts: [
             {
               kind: "command",
-              command: "rm -rf dist coverage && bun test",
+              command: "npm run test:runtime",
               cwd: "/workspace/service-api",
             },
           ],
@@ -491,7 +491,7 @@ const permissionScenario: DebugScenario = {
     {
       delayMs: 690,
       kind: "pty",
-      data: "$ rm -rf dist coverage && bun test\r\n… test output elided …\r\n",
+      data: "$ npm run test:runtime\r\n… test output elided …\r\n",
     },
     {
       delayMs: 860,
@@ -712,7 +712,7 @@ const structuredUiScenario: DebugScenario = {
         title: "Allow test command",
         description: "Run a safe verification command.",
         detail: {
-          artifacts: [{ kind: "command", command: "bun run test:runtime", cwd: "/workspace/rah" }],
+          artifacts: [{ kind: "command", command: "npm run test:runtime", cwd: "/workspace/rah" }],
         },
         actions: [
           { id: "allow", label: "Allow", behavior: "allow", variant: "primary" },
@@ -828,7 +828,7 @@ const structuredUiScenario: DebugScenario = {
         kind: "test.run",
         status: "failed",
         title: "Run tests",
-        subject: { command: "bun run test:runtime" },
+        subject: { command: "npm run test:runtime" },
         detail: { artifacts: [{ kind: "text", label: "stderr", text: "1 failing fixture" }] },
         exitCode: 1,
       },

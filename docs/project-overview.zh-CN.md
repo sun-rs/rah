@@ -85,13 +85,13 @@ RAH 的中长期目标可以概括为：
 ### 4.1 安装依赖
 
 ```bash
-bun install
+npm install
 ```
 
 ### 4.2 启动统一前后台入口
 
 ```bash
-bun run serve:workbench
+npm run serve:workbench
 ```
 
 然后打开：
@@ -114,8 +114,8 @@ http://127.0.0.1:43111/
 如果要分离开发前后端：
 
 ```bash
-bun run dev:daemon
-bun run dev:web
+npm run dev:daemon
+npm run dev:web
 ```
 
 此时：
@@ -128,11 +128,11 @@ bun run dev:web
 ### 4.4 核心命令
 
 ```bash
-bun run build:web
-bun run serve:workbench
-bun run typecheck
-bun run test:web
-bun run test:runtime
+npm run build:web
+npm run serve:workbench
+npm run typecheck
+npm run test:web
+npm run test:runtime
 ```
 
 ### 4.5 测试分层
@@ -143,22 +143,22 @@ RAH 现在应当把测试分成三层理解：
 
 任何开发环境都应能跑：
 
-- `bun run typecheck`
-- `bun run test:web`
-- `bun run test:runtime`
+- `npm run typecheck`
+- `npm run test:web`
+- `npm run test:runtime`
 
 #### provider smoke
 
 这些测试依赖真实 provider CLI 和对应账号环境：
 
-- `bun run test:smoke:history-claim`
-- `bun run test:smoke:tool-flow`
-- `bun run test:smoke:gemini-flow`
-- `bun run test:smoke:gemini-browser`
-- `bun run test:smoke:kimi-flow`
-- `bun run test:smoke:kimi-browser`
-- `bun run test:smoke:claude-flow`
-- `bun run test:smoke:claude-browser`
+- `npm run test:smoke:history-claim`
+- `npm run test:smoke:tool-flow`
+- `npm run test:smoke:gemini-flow`
+- `npm run test:smoke:gemini-browser`
+- `npm run test:smoke:kimi-flow`
+- `npm run test:smoke:kimi-browser`
+- `npm run test:smoke:claude-flow`
+- `npm run test:smoke:claude-browser`
 
 它们不应被粗暴视为“所有开发者本机默认必须通过”的检查。
 
@@ -395,12 +395,30 @@ Codex 现在已经是 reference adapter，而不是 demo：
 
 虽然已经有 `protocol-freeze-status.md`，但还没有形成最终发布级“冻结决定”。
 
-### 8.2 store ownership 仍未完全收口
+### 8.2 client-web store ownership 已基本收口
 
-虽然这轮已经把一部分历史恢复、自动选中、自动 claim 收回 store，
-但前端还没有完全达到 paseo 那种“状态机几乎全部在 store 内部”的集中程度。
+这条线现在已经不再是主要结构债。
 
-还没有用第二个真实 provider 来证明“协议不改，只改 adapter”。
+`packages/client-web` 当前已经把 ownership 明确分到：
+
+- bootstrap
+- sync / transport
+- projections
+- workspace
+- history
+- history bootstrap / paging / selection sync
+- session lifecycle / commands / startup
+
+`useSessionStore.ts` 现在更接近 orchestration shell，而不是继续承载整团混合逻辑。
+
+剩余工作主要是：
+
+- 少量 local wrapper / deps bridge 的继续压缩
+- 持续防止新逻辑回流进 `useSessionStore.ts`
+
+详细边界见：
+
+- [client-web-store-ownership.zh-CN.md](./client-web-store-ownership.zh-CN.md)
 
 ### 8.3 浏览器级自动化回归还没成为正式门禁
 

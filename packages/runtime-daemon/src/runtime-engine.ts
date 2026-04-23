@@ -33,7 +33,12 @@ import type {
 } from "@rah/runtime-protocol";
 import { ClaudeAdapter } from "./claude-adapter";
 import { CodexAdapter } from "./codex-adapter";
-import { searchWorkspaceFiles } from "./codex-stored-sessions";
+import {
+  getCodexGitDiff,
+  getCodexGitStatus,
+  readWorkspaceFile as readWorkspaceFileFromDirectory,
+  searchWorkspaceFiles as searchWorkspaceFilesInDirectory,
+} from "./codex-stored-sessions";
 import { DebugAdapter } from "./debug-adapter";
 import { EventBus } from "./event-bus";
 import { GeminiAdapter } from "./gemini-adapter";
@@ -487,7 +492,6 @@ export class RuntimeEngine {
   onPtyInput(sessionId: string, clientId: string, data: string): void {
     const terminal = this.independentTerminals.get(sessionId);
     if (terminal) {
-      console.error("[runtime-engine independent terminal input]", sessionId, clientId, JSON.stringify(data));
       void clientId;
       terminal.process.write(data);
       return;
@@ -505,20 +509,36 @@ export class RuntimeEngine {
     this.requireSessionAdapter(sessionId).onPtyResize(sessionId, clientId, cols, rows);
   }
 
-  getWorkspaceSnapshot(sessionId: string) {
-    return this.requireSessionAdapter(sessionId).getWorkspaceSnapshot(sessionId);
+  getWorkspaceSnapshot(sessionId: string, options?: { scopeRoot?: string }) {
+    return this.requireSessionAdapter(sessionId).getWorkspaceSnapshot(sessionId, options);
   }
 
-  getGitStatus(sessionId: string) {
-    return this.requireSessionAdapter(sessionId).getGitStatus(sessionId);
+  getGitStatus(sessionId: string, options?: { scopeRoot?: string }) {
+    return this.requireSessionAdapter(sessionId).getGitStatus(sessionId, options);
   }
 
   getGitDiff(
     sessionId: string,
     path: string,
-    options?: { staged?: boolean; ignoreWhitespace?: boolean },
+    options?: { staged?: boolean; ignoreWhitespace?: boolean; scopeRoot?: string },
   ) {
     return this.requireSessionAdapter(sessionId).getGitDiff(sessionId, path, options);
+  }
+
+  getWorkspaceGitStatus(dir: string) {
+    return getCodexGitStatus(dir, { scopeRoot: dir });
+  }
+
+  getWorkspaceGitDiff(
+    dir: string,
+    path: string,
+    options?: { staged?: boolean; ignoreWhitespace?: boolean },
+  ) {
+    return {
+      sessionId: "",
+      path,
+      diff: getCodexGitDiff(dir, path, { ...options, scopeRoot: dir }),
+    };
   }
 
   applyGitFileAction(sessionId: string, request: GitFileActionRequest) {
@@ -537,11 +557,23 @@ export class RuntimeEngine {
     return adapter.applyGitHunkAction(sessionId, request);
   }
 
-  readSessionFile(sessionId: string, path: string) {
-    return this.requireSessionAdapter(sessionId).readSessionFile(sessionId, path);
+  readSessionFile(sessionId: string, path: string, options?: { scopeRoot?: string }) {
+    return this.requireSessionAdapter(sessionId).readSessionFile(sessionId, path, options);
   }
 
-  searchSessionFiles(sessionId: string, query: string, limit = 100): SessionFileSearchResponse {
+  readWorkspaceFile(dir: string, path: string) {
+    return {
+      sessionId: "",
+      ...readWorkspaceFileFromDirectory(dir, path, { scopeRoot: dir }),
+    };
+  }
+
+  searchSessionFiles(
+    sessionId: string,
+    query: string,
+    limit = 100,
+    options?: { scopeRoot?: string },
+  ): SessionFileSearchResponse {
     const session = this.sessionStore.getSession(sessionId)?.session;
     if (!session) {
       throw new Error(`Unknown session ${sessionId}`);
@@ -549,7 +581,15 @@ export class RuntimeEngine {
     return {
       sessionId,
       query,
-      files: searchWorkspaceFiles(session.cwd, query, limit),
+      files: searchWorkspaceFilesInDirectory(options?.scopeRoot ?? session.cwd, query, limit),
+    };
+  }
+
+  searchWorkspaceFiles(dir: string, query: string, limit = 100): SessionFileSearchResponse {
+    return {
+      sessionId: "",
+      query,
+      files: searchWorkspaceFilesInDirectory(dir, query, limit),
     };
   }
 
@@ -660,6 +700,13 @@ export class RuntimeEngine {
         this.independentTerminals.delete(id);
       },
     });
+    try {
+      await process.waitUntilReady();
+    } catch (error) {
+      await process.close().catch(() => undefined);
+      this.ptyHub.removeSession(id);
+      throw error;
+    }
     this.independentTerminals.set(id, {
       id,
       cwd,

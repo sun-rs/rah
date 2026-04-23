@@ -15,10 +15,12 @@ export const SIDEBAR_LAYOUT = {
   workspaceBlockClassName: "space-y-0.5",
   workspaceHeaderClassName:
     "group/workspace flex min-h-[34px] items-center gap-2 rounded-lg px-2.5 py-1.5 transition-colors hover:bg-[var(--app-bg)]/30",
+  workspaceHeaderSelectedClassName:
+    "bg-[var(--app-bg)]/60",
   workspaceToggleButtonClassName:
     "inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-[var(--app-hint)] transition-colors hover:text-[var(--app-fg)]",
   workspaceTitleButtonClassName:
-    "min-w-0 flex-1 truncate text-left text-sm text-[var(--app-fg)]",
+    "min-w-0 flex-1 truncate rounded-md px-1 py-0.5 text-left text-sm text-[var(--app-fg)] transition-colors hover:bg-[var(--app-bg)]/60",
   workspaceActionSlotClassName:
     "flex w-7 shrink-0 items-center justify-center",
   workspaceActionButtonClassName:

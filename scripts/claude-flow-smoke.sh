@@ -2,4 +2,4 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-bun scripts/claude_flow_smoke.ts
+node --import tsx scripts/claude_flow_smoke.ts
