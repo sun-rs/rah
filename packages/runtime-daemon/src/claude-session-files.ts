@@ -27,6 +27,10 @@ import {
   setCachedStoredSessionRef,
   writeStoredSessionMetadataCache,
 } from "./stored-session-metadata-cache";
+import {
+  listClaudeWrapperHomes,
+  resolveClaudeBaseHome,
+} from "./claude-wrapper-home";
 
 const REHYDRATED_CAPABILITIES = {
   livePermissions: false,
@@ -109,32 +113,32 @@ export type ClaudeStoredSessionRecord = {
   filePath: string;
 };
 
-function resolveClaudeConfigDir(): string {
-  return process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), ".claude");
-}
-
 export function resolveClaudeStoredSessionWatchRoots(): string[] {
-  return [path.join(resolveClaudeConfigDir(), "projects")];
+  const baseHome = resolveClaudeBaseHome();
+  return [
+    path.join(baseHome, "projects"),
+    ...listClaudeWrapperHomes(baseHome).map((wrapperHome) => path.join(wrapperHome, "projects")),
+  ];
 }
 
-function getClaudeProjectDir(cwd: string): string {
+function getClaudeProjectDir(cwd: string, configDir = resolveClaudeBaseHome()): string {
   const projectId = path.resolve(cwd).replace(/[^a-zA-Z0-9]/g, "-");
-  return path.join(resolveClaudeConfigDir(), "projects", projectId);
+  return path.join(configDir, "projects", projectId);
 }
 
-function expandClaudeProjectDirs(cwd: string): string[] {
+function expandClaudeProjectDirs(cwd: string, configDir = resolveClaudeBaseHome()): string[] {
   const candidates = new Set<string>();
   const resolved = path.resolve(cwd);
-  candidates.add(getClaudeProjectDir(resolved));
+  candidates.add(getClaudeProjectDir(resolved, configDir));
   try {
-    candidates.add(getClaudeProjectDir(realpathSync(resolved)));
+    candidates.add(getClaudeProjectDir(realpathSync(resolved), configDir));
   } catch {
     // Ignore realpath failures for removed or synthetic working directories.
   }
   if (resolved.startsWith("/var/")) {
-    candidates.add(getClaudeProjectDir(`/private${resolved}`));
+    candidates.add(getClaudeProjectDir(`/private${resolved}`, configDir));
   } else if (resolved.startsWith("/private/var/")) {
-    candidates.add(getClaudeProjectDir(resolved.slice("/private".length)));
+    candidates.add(getClaudeProjectDir(resolved.slice("/private".length), configDir));
   }
   return [...candidates];
 }
@@ -607,9 +611,11 @@ function translateClaudeRecords(sessionId: string, records: ClaudeRawRecord[]): 
 
 export function discoverClaudeStoredSessions(cwd?: string): ClaudeStoredSessionRecord[] {
   const cache = loadStoredSessionMetadataCache("claude");
+  const baseHome = resolveClaudeBaseHome();
+  const configHomes = [baseHome, ...listClaudeWrapperHomes(baseHome)];
   const roots = cwd
-    ? expandClaudeProjectDirs(cwd)
-    : [path.join(resolveClaudeConfigDir(), "projects")];
+    ? configHomes.flatMap((configDir) => expandClaudeProjectDirs(cwd, configDir))
+    : configHomes.map((configDir) => path.join(configDir, "projects"));
   const files: string[] = [];
 
   for (const root of roots) {

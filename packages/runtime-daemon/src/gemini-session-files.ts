@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type {
@@ -168,6 +168,13 @@ type GeminiProjectIndices = {
   knownRoots: string[];
 };
 
+type RahStoredSessionCacheEntry = {
+  ref?: {
+    cwd?: string;
+    rootDir?: string;
+  };
+};
+
 type GeminiProjectDirectories = {
   cwd?: string;
   rootDir: string;
@@ -207,36 +214,91 @@ const GEMINI_GENERIC_ANCESTOR_NAMES = new Set([
 
 function loadGeminiProjectIndices(): GeminiProjectIndices {
   const filePath = path.join(resolveGeminiHome(), "projects.json");
+  const hashIndex = new Map<string, string>();
+  const aliasIndex = new Map<string, string>();
+  const knownRoots: string[] = [];
+  const addRoot = (rawRoot: string | undefined, sourceAlias?: string) => {
+    const normalized = normalizeDirectory(rawRoot);
+    if (!normalized) {
+      return;
+    }
+    const register = (candidate: string | null) => {
+      if (!candidate) {
+        return;
+      }
+      const hash = getProjectHash(candidate);
+      if (!hashIndex.has(hash)) {
+        hashIndex.set(hash, candidate);
+      }
+      if (!knownRoots.includes(candidate)) {
+        knownRoots.push(candidate);
+      }
+    };
+    register(normalized);
+    try {
+      register(normalizeDirectory(realpathSync(normalized)));
+    } catch {}
+    if (normalized.startsWith("/var/")) {
+      register(`/private${normalized}`);
+    } else if (normalized.startsWith("/private/var/")) {
+      register(normalized.slice("/private".length));
+    }
+    if (sourceAlias) {
+      const normalizedAlias = sourceAlias.trim();
+      if (normalizedAlias) {
+        aliasIndex.set(normalizedAlias, normalized);
+      }
+    }
+  };
   try {
     const parsed = JSON.parse(readFileSync(filePath, "utf8")) as {
       projects?: Record<string, string>;
     };
-    const hashIndex = new Map<string, string>();
-    const aliasIndex = new Map<string, string>();
-    const knownRoots: string[] = [];
     for (const [projectRoot, alias] of Object.entries(parsed.projects ?? {})) {
-      const normalized = normalizeDirectory(projectRoot);
-      if (!normalized) {
+      addRoot(projectRoot, typeof alias === "string" ? alias : undefined);
+    }
+  } catch {}
+
+  const rahHome = process.env.RAH_HOME ?? path.join(os.homedir(), ".rah", "runtime-daemon");
+  try {
+    const workbenchState = JSON.parse(
+      readFileSync(path.join(rahHome, "workbench-state.json"), "utf8"),
+    ) as {
+      workspaces?: string[];
+      hiddenWorkspaces?: string[];
+      activeWorkspaceDir?: string;
+    };
+    for (const workspace of workbenchState.workspaces ?? []) {
+      addRoot(workspace);
+    }
+    for (const workspace of workbenchState.hiddenWorkspaces ?? []) {
+      addRoot(workspace);
+    }
+    if (typeof workbenchState.activeWorkspaceDir === "string") {
+      addRoot(workbenchState.activeWorkspaceDir);
+    }
+  } catch {}
+
+  const storedSessionCacheDir = path.join(rahHome, "stored-session-cache");
+  try {
+    for (const entry of readdirSync(storedSessionCacheDir)) {
+      if (!entry.endsWith(".json")) {
         continue;
       }
-      hashIndex.set(getProjectHash(normalized), normalized);
-      knownRoots.push(normalized);
-      if (typeof alias === "string") {
-        const normalizedAlias = alias.trim();
-        if (normalizedAlias) {
-          aliasIndex.set(normalizedAlias, normalized);
-        }
+      const parsed = JSON.parse(
+        readFileSync(path.join(storedSessionCacheDir, entry), "utf8"),
+      ) as {
+        entries?: Record<string, RahStoredSessionCacheEntry>;
+      };
+      for (const cacheEntry of Object.values(parsed.entries ?? {})) {
+        addRoot(cacheEntry.ref?.cwd);
+        addRoot(cacheEntry.ref?.rootDir);
       }
     }
-    knownRoots.sort((left, right) => right.length - left.length);
-    return { hashIndex, aliasIndex, knownRoots };
-  } catch {
-    return {
-      hashIndex: new Map(),
-      aliasIndex: new Map(),
-      knownRoots: [],
-    };
-  }
+  } catch {}
+
+  knownRoots.sort((left, right) => right.length - left.length);
+  return { hashIndex, aliasIndex, knownRoots };
 }
 
 function isGeminiPathHintIgnored(candidate: string): boolean {

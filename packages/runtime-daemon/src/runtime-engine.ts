@@ -42,25 +42,27 @@ import { DebugAdapter } from "./debug-adapter";
 import { EventBus } from "./event-bus";
 import { GeminiAdapter } from "./gemini-adapter";
 import { HistorySnapshotStore } from "./history-snapshots";
-import { IndependentTerminalProcess } from "./independent-terminal";
 import { KimiAdapter } from "./kimi-adapter";
-import { applyProviderActivity, type ProviderActivity } from "./provider-activity";
-import {
-  launchSpecForProvider,
-  probeProviderDiagnostic,
-} from "./provider-diagnostics";
+import type { ProviderActivity } from "./provider-activity";
 import type { ProviderAdapter } from "./provider-adapter";
 import { PtyHub } from "./pty-hub";
+import { RuntimeProviderCoordinator } from "./runtime-provider-coordinator";
 import { SessionStore, toSessionSummary, type StoredSessionState } from "./session-store";
+import {
+  buildSessionsResponse as buildRuntimeSessionsResponse,
+  discoverStoredSessions as discoverRuntimeStoredSessions,
+  sameStoredSessionRefs,
+} from "./runtime-session-list";
 import { StoredSessionMonitor } from "./stored-session-monitor";
 import {
-  TerminalWrapperRegistry,
   type TerminalWrapperFromDaemonMessage,
   type TerminalWrapperPromptState,
   type WrapperHelloMessage,
   type WrapperProviderBoundMessage,
   type WrapperReadyMessage,
 } from "./terminal-wrapper-control";
+import { RuntimeTerminalCoordinator } from "./runtime-terminal-coordinator";
+import { RuntimeSessionLifecycle } from "./runtime-session-lifecycle";
 import { WorkbenchStateStore } from "./workbench-state";
 import {
   isReadOnlyReplaySession,
@@ -95,22 +97,13 @@ export class RuntimeEngine {
   private storedSessionDiscoveryVersion = 0;
   private readonly storedSessionMonitor: StoredSessionMonitor;
   private readonly workspaceScopeAuthorizer: WorkspaceScopeAuthorizer;
-  private readonly terminalWrappers = new TerminalWrapperRegistry();
-  private readonly terminalWrapperSenders = new Map<
-    string,
-    (message: TerminalWrapperFromDaemonMessage) => void
-  >();
-  private readonly closingTerminalWrapperSessionIds = new Set<string>();
+  private readonly terminals: RuntimeTerminalCoordinator;
+  private readonly sessionLifecycle: RuntimeSessionLifecycle;
+  private readonly providers: RuntimeProviderCoordinator;
 
   private readonly adaptersById = new Map<string, ProviderAdapter>();
   private readonly adaptersByProvider = new Map<string, ProviderAdapter>();
   private readonly sessionOwners = new Map<string, ProviderAdapter>();
-  private readonly independentTerminals = new Map<string, {
-    id: string;
-    cwd: string;
-    shell: string;
-    process: IndependentTerminalProcess;
-  }>();
 
   constructor(adapters?: ProviderAdapter[]) {
     this.workbenchState = new WorkbenchStateStore();
@@ -133,6 +126,50 @@ export class RuntimeEngine {
       this.workbenchState,
       this.sessionStore,
     );
+    this.terminals = new RuntimeTerminalCoordinator({
+      eventBus: this.eventBus,
+      ptyHub: this.ptyHub,
+      sessionStore: this.sessionStore,
+      historySnapshots: this.historySnapshots,
+      onRememberSession: (state) => {
+        this.workbenchState.rememberSession(state);
+        this.refreshRememberedState();
+      },
+      onSessionOwnerRemoved: (sessionId) => {
+        this.sessionOwners.delete(sessionId);
+      },
+    });
+    this.sessionLifecycle = new RuntimeSessionLifecycle({
+      eventBus: this.eventBus,
+      ptyHub: this.ptyHub,
+      sessionStore: this.sessionStore,
+      historySnapshots: this.historySnapshots,
+      terminals: this.terminals,
+      rememberSession: (state) => {
+        this.workbenchState.rememberSession(state);
+      },
+      refreshRememberedState: () => {
+        this.refreshRememberedState();
+      },
+      publishStoredSessionDiscovery: () => {
+        this.publishStoredSessionDiscovery();
+      },
+      removeSessionOwner: (sessionId) => {
+        this.sessionOwners.delete(sessionId);
+      },
+      requireSessionAdapter: (sessionId) => this.requireSessionAdapter(sessionId),
+    });
+    this.providers = new RuntimeProviderCoordinator({
+      adaptersByProvider: this.adaptersByProvider,
+      adaptersById: this.adaptersById,
+      rememberSessionOwner: (sessionId, adapter) => {
+        this.rememberSessionOwner(sessionId, adapter);
+      },
+      pruneOrphanSessions: () => {
+        this.pruneOrphanSessions();
+      },
+      historySnapshots: this.historySnapshots,
+    });
 
     const resolvedAdapters: ProviderAdapter[] = adapters ?? (() => {
       const debugAdapter = new DebugAdapter({
@@ -184,27 +221,7 @@ export class RuntimeEngine {
   }
 
   async listProviderDiagnostics(options?: { forceRefresh?: boolean }): Promise<ProviderDiagnostic[]> {
-    const providers: ProviderKind[] = ["codex", "claude", "kimi", "gemini", "opencode"];
-    return Promise.all(
-      providers.map(async (provider) => {
-        const adapter = this.adaptersByProvider.get(provider);
-        if (adapter?.getProviderDiagnostic) {
-          return await adapter.getProviderDiagnostic(options);
-        }
-        const launchSpec = launchSpecForProvider(provider);
-        if (launchSpec) {
-          return await probeProviderDiagnostic(provider, launchSpec, options);
-        }
-        return {
-          provider,
-          status: "launch_error" as const,
-          launchCommand: "",
-          detail: "Provider adapter is not implemented yet in this runtime.",
-          auth: "provider_managed" as const,
-          versionStatus: "unknown" as const,
-        };
-      }),
-    );
+    return this.providers.listProviderDiagnostics(options);
   }
 
   addWorkspace(rawDir: string): ListSessionsResponse {
@@ -293,123 +310,31 @@ export class RuntimeEngine {
   }
 
   async startSession(request: StartSessionRequest): Promise<StartSessionResponse> {
-    this.pruneOrphanSessions();
-    const adapter = this.requireAdapterForProvider(request.provider);
-    const response = await adapter.startSession(request);
-    this.rememberSessionOwner(response.session.session.id, adapter);
-    return response;
+    return this.providers.startSession(request);
   }
 
   async resumeSession(request: ResumeSessionRequest): Promise<ResumeSessionResponse> {
-    this.pruneOrphanSessions();
-    const adapter = this.requireAdapterForProvider(request.provider);
-    const response = await adapter.resumeSession(request);
-    this.rememberSessionOwner(response.session.session.id, adapter);
-    if (
-      request.historySourceSessionId &&
-      request.historySourceSessionId !== response.session.session.id
-    ) {
-      this.historySnapshots.transfer(
-        request.historySourceSessionId,
-        response.session.session.id,
-      );
-    }
-    return response;
+    return this.providers.resumeSession(request);
   }
 
   attachSession(sessionId: string, request: AttachSessionRequest): AttachSessionResponse {
-    const state = this.sessionStore.attachClient({
-      sessionId,
-      clientId: request.client.id,
-      kind: request.client.kind,
-      connectionId: request.client.connectionId,
-      attachMode: request.mode,
-      focus: true,
-    });
-
-    this.eventBus.publish({
-      sessionId,
-      type: "session.attached",
-      source: SYSTEM_SOURCE,
-      payload: {
-        clientId: request.client.id,
-        clientKind: request.client.kind,
-      },
-    });
-
-    if (request.claimControl) {
-      this.claimControl(sessionId, { client: request.client });
-    }
-
-    return { session: toSessionSummary(state) };
+    return this.sessionLifecycle.attachSession(sessionId, request);
   }
 
   claimControl(sessionId: string, request: ClaimControlRequest): SessionSummary {
-    const state = this.sessionStore.attachClient({
-      sessionId,
-      clientId: request.client.id,
-      kind: request.client.kind,
-      connectionId: request.client.connectionId,
-      attachMode: "interactive",
-      focus: true,
-    });
-    this.sessionStore.claimControl(sessionId, request.client.id, request.client.kind);
-    this.eventBus.publish({
-      sessionId,
-      type: "control.claimed",
-      source: SYSTEM_SOURCE,
-      payload: {
-        clientId: request.client.id,
-        clientKind: request.client.kind,
-      },
-    });
-    return toSessionSummary(state);
+    return this.sessionLifecycle.claimControl(sessionId, request);
   }
 
   releaseControl(sessionId: string, request: ReleaseControlRequest): SessionSummary {
-    const state = this.sessionStore.releaseControl(sessionId, request.clientId);
-    this.eventBus.publish({
-      sessionId,
-      type: "control.released",
-      source: SYSTEM_SOURCE,
-      payload: {
-        clientId: request.clientId,
-      },
-    });
-    return toSessionSummary(state);
+    return this.sessionLifecycle.releaseControl(sessionId, request);
   }
 
   renameSession(sessionId: string, title: string): SessionSummary {
-    const nextTitle = title.trim();
-    if (!nextTitle) {
-      throw new Error("Session title is required.");
-    }
-    const state = this.sessionStore.patchManagedSession(sessionId, { title: nextTitle });
-    this.workbenchState.rememberSession(state);
-    this.refreshRememberedState();
-    this.publishStoredSessionDiscovery();
-    return toSessionSummary(state);
+    return this.sessionLifecycle.renameSession(sessionId, title);
   }
 
   sendInput(sessionId: string, request: { clientId: string; text: string }): void {
-    const wrapper = this.terminalWrappers.get(sessionId);
-    if (wrapper) {
-      const queuedTurn = this.terminalWrappers.enqueueRemoteTurn(
-        sessionId,
-        request.clientId,
-        request.text,
-      );
-      const sender = this.terminalWrapperSenders.get(sessionId);
-      if (sender) {
-        if (wrapper.promptState === "prompt_clean") {
-          const injectable = this.terminalWrappers.dequeueInjectableTurn(sessionId);
-          if (injectable) {
-            sender({ type: "turn.inject", sessionId, queuedTurn: injectable });
-          }
-        } else {
-          sender({ type: "turn.enqueue", sessionId, queuedTurn });
-        }
-      }
+    if (this.terminals.handleWrapperInput(sessionId, request.clientId, request.text)) {
       return;
     }
     this.requireSessionAdapter(sessionId).sendInput(sessionId, request);
@@ -419,71 +344,18 @@ export class RuntimeEngine {
     sessionId: string,
     request: InterruptSessionRequest,
   ): SessionSummary {
-    if (this.terminalWrappers.get(sessionId)) {
-      this.terminalWrapperSenders.get(sessionId)?.({
-        type: "turn.interrupt",
-        sessionId,
-        sourceSurfaceId: request.clientId,
-      });
+    if (this.terminals.handleWrapperInterrupt(sessionId, request.clientId)) {
       return this.getSessionSummary(sessionId);
     }
     return this.requireSessionAdapter(sessionId).interruptSession(sessionId, request);
   }
 
   async closeSession(sessionId: string, request: CloseSessionRequest): Promise<void> {
-    const state = this.sessionStore.getSession(sessionId);
-    if (!state) {
-      throw new Error(`Unknown session ${sessionId}`);
-    }
-    if (!this.sessionStore.hasAttachedClient(sessionId, request.clientId)) {
-      throw new Error(`Client ${request.clientId} is not attached to ${sessionId}.`);
-    }
-    this.workbenchState.rememberSession(state);
-    this.refreshRememberedState();
-    if (this.terminalWrappers.get(sessionId)) {
-      this.closingTerminalWrapperSessionIds.add(sessionId);
-      this.sessionStore.setRuntimeState(sessionId, "stopped");
-      this.terminalWrapperSenders.get(sessionId)?.({
-        type: "wrapper.close",
-        sessionId,
-      });
-      this.eventBus.publish({
-        sessionId,
-        type: "session.closed",
-        source: SYSTEM_SOURCE,
-        payload: {
-          clientId: request.clientId,
-        },
-      });
-      return;
-    }
-    const adapter = this.requireSessionAdapter(sessionId);
-    await adapter.closeSession?.(sessionId, request);
-    this.sessionStore.removeSession(sessionId);
-    this.ptyHub.removeSession(sessionId);
-    this.historySnapshots.clear(sessionId);
-    this.sessionOwners.delete(sessionId);
-    this.eventBus.publish({
-      sessionId,
-      type: "session.closed",
-      source: SYSTEM_SOURCE,
-      payload: {
-        clientId: request.clientId,
-      },
-    });
+    await this.sessionLifecycle.closeSession(sessionId, request);
   }
 
   detachSession(sessionId: string, request: DetachSessionRequest): SessionSummary {
-    const state = this.sessionStore.detachClient(sessionId, request.clientId);
-    this.eventBus.publish({
-      sessionId,
-      type: "session.detached",
-      source: SYSTEM_SOURCE,
-      payload: {
-        clientId: request.clientId,
-      },
-    });
-    return toSessionSummary(state);
+    return this.sessionLifecycle.detachSession(sessionId, request);
   }
 
   async respondToPermission(
@@ -491,13 +363,7 @@ export class RuntimeEngine {
     requestId: string,
     response: PermissionResponseRequest,
   ): Promise<void> {
-    if (this.terminalWrappers.get(sessionId)) {
-      this.terminalWrapperSenders.get(sessionId)?.({
-        type: "permission.resolve",
-        sessionId,
-        requestId,
-        response,
-      });
+    if (this.terminals.handlePermissionResponse(sessionId, requestId, response)) {
       return;
     }
     const adapter = this.requireSessionAdapter(sessionId);
@@ -508,20 +374,16 @@ export class RuntimeEngine {
   }
 
   onPtyInput(sessionId: string, clientId: string, data: string): void {
-    const terminal = this.independentTerminals.get(sessionId);
-    if (terminal) {
+    if (this.terminals.handlePtyInput(sessionId, data)) {
       void clientId;
-      terminal.process.write(data);
       return;
     }
     this.requireSessionAdapter(sessionId).onPtyInput(sessionId, clientId, data);
   }
 
   onPtyResize(sessionId: string, clientId: string, cols: number, rows: number): void {
-    const terminal = this.independentTerminals.get(sessionId);
-    if (terminal) {
+    if (this.terminals.handlePtyResize(sessionId, cols, rows)) {
       void clientId;
-      terminal.process.resize(cols, rows);
       return;
     }
     this.requireSessionAdapter(sessionId).onPtyResize(sessionId, clientId, cols, rows);
@@ -672,29 +534,18 @@ export class RuntimeEngine {
   }
 
   listScenarios(): DebugScenarioDescriptor[] {
-    const adapter = this.adaptersById.get("debug");
-    return adapter?.listDebugScenarios?.() ?? [];
+    return this.providers.listScenarios();
   }
 
   startScenario(args: {
     scenarioId: string;
     attach?: AttachSessionRequest;
   }): StartSessionResponse {
-    const adapter = this.adaptersById.get("debug");
-    if (!adapter?.startDebugScenario) {
-      throw new Error("No debug adapter registered.");
-    }
-    const response = adapter.startDebugScenario(args);
-    this.rememberSessionOwner(response.session.session.id, adapter);
-    return response;
+    return this.providers.startScenario(args);
   }
 
   buildScenarioReplayScript(scenarioId: string): DebugReplayScript {
-    const adapter = this.adaptersById.get("debug");
-    if (!adapter?.buildDebugScenarioReplayScript) {
-      throw new Error("No debug adapter registered.");
-    }
-    return adapter.buildDebugScenarioReplayScript(scenarioId);
+    return this.providers.buildScenarioReplayScript(scenarioId);
   }
 
   listEvents(filter: EventSubscriptionRequest): RahEvent[] {
@@ -736,323 +587,53 @@ export class RuntimeEngine {
   async startIndependentTerminal(
     request?: IndependentTerminalStartRequest,
   ): Promise<IndependentTerminalStartResponse> {
-    const requestedCwd = resolveUserPath(request?.cwd || "~");
-    let cwd = requestedCwd;
-    try {
-      const directoryStat = await stat(requestedCwd);
-      if (!directoryStat.isDirectory()) {
-        cwd = resolveUserPath("~");
-      }
-    } catch {
-      cwd = resolveUserPath("~");
-    }
-    const id = crypto.randomUUID();
-    this.ptyHub.ensureSession(id);
-    const process = new IndependentTerminalProcess({
-      cwd,
-      ...(request?.cols !== undefined ? { cols: request.cols } : {}),
-      ...(request?.rows !== undefined ? { rows: request.rows } : {}),
-      onData: (data) => {
-        this.ptyHub.appendOutput(id, data);
-      },
-      onExit: (args) => {
-        this.ptyHub.emitExit(id, args.exitCode, args.signal);
-        this.independentTerminals.delete(id);
-      },
-    });
-    try {
-      await process.waitUntilReady();
-    } catch (error) {
-      await process.close().catch(() => undefined);
-      this.ptyHub.removeSession(id);
-      throw error;
-    }
-    this.independentTerminals.set(id, {
-      id,
-      cwd,
-      shell: process.shell,
-      process,
-    });
-    const terminal: IndependentTerminalSession = {
-      id,
-      cwd,
-      shell: process.shell,
-    };
-    return { terminal };
+    return this.terminals.startIndependentTerminal(request);
   }
 
   async closeIndependentTerminal(id: string): Promise<void> {
-    const terminal = this.independentTerminals.get(id);
-    if (!terminal) {
-      return;
-    }
-    this.independentTerminals.delete(id);
-    await terminal.process.close();
-    this.ptyHub.removeSession(id);
+    await this.terminals.closeIndependentTerminal(id);
   }
 
   registerTerminalWrapperSession(
     request: WrapperHelloMessage,
     sendMessage: (message: TerminalWrapperFromDaemonMessage) => void,
   ): WrapperReadyMessage {
-    const state = this.sessionStore.createManagedSession({
-      provider: request.provider,
-      ...(request.resumeProviderSessionId
-        ? { providerSessionId: request.resumeProviderSessionId }
-        : {}),
-      launchSource: "terminal",
-      cwd: request.cwd,
-      rootDir: request.rootDir,
-      title: `${request.provider} terminal session`,
-      preview: request.launchCommand.join(" "),
-      capabilities: {
-        steerInput: true,
-        queuedInput: true,
-      },
-    });
-    this.ptyHub.ensureSession(state.session.id);
-    this.sessionStore.setRuntimeState(state.session.id, "running");
-    this.eventBus.publish({
-      sessionId: state.session.id,
-      type: "session.created",
-      source: SYSTEM_SOURCE,
-      payload: { session: state.session },
-    });
-    this.eventBus.publish({
-      sessionId: state.session.id,
-      type: "session.started",
-      source: SYSTEM_SOURCE,
-      payload: { session: state.session },
-    });
-
-    const surfaceId = `terminal:${request.terminalPid}:${crypto.randomUUID()}`;
-    const operatorGroupId = `terminal-group:${state.session.id}`;
-    this.terminalWrappers.register({
-      sessionId: state.session.id,
-      provider: request.provider,
-      cwd: request.cwd,
-      rootDir: request.rootDir,
-      terminalPid: request.terminalPid,
-      launchCommand: request.launchCommand,
-      surfaceId,
-      operatorGroupId,
-      promptState: "agent_busy",
-      ...(request.resumeProviderSessionId
-        ? { resumeProviderSessionId: request.resumeProviderSessionId }
-        : {}),
-    });
-    this.terminalWrapperSenders.set(state.session.id, sendMessage);
-    this.sessionStore.attachClient({
-      sessionId: state.session.id,
-      clientId: surfaceId,
-      kind: "terminal",
-      connectionId: surfaceId,
-      attachMode: "interactive",
-      focus: true,
-    });
-    this.sessionStore.claimControl(state.session.id, surfaceId, "terminal");
-    this.eventBus.publish({
-      sessionId: state.session.id,
-      type: "session.attached",
-      source: SYSTEM_SOURCE,
-      payload: {
-        clientId: surfaceId,
-        clientKind: "terminal",
-      },
-    });
-    this.eventBus.publish({
-      sessionId: state.session.id,
-      type: "control.claimed",
-      source: SYSTEM_SOURCE,
-      payload: {
-        clientId: surfaceId,
-        clientKind: "terminal",
-      },
-    });
-    return {
-      type: "wrapper.ready",
-      sessionId: state.session.id,
-      surfaceId,
-      operatorGroupId,
-    };
+    return this.terminals.registerTerminalWrapperSession(request, sendMessage);
   }
 
   disconnectTerminalWrapperSession(sessionId: string): void {
-    if (!this.terminalWrappers.get(sessionId)) {
-      this.terminalWrapperSenders.delete(sessionId);
-      return;
-    }
-    void this.markTerminalWrapperExited(sessionId);
+    this.terminals.disconnectTerminalWrapperSession(sessionId);
   }
 
   bindTerminalWrapperProviderSession(message: WrapperProviderBoundMessage): void {
-    if (
-      this.closingTerminalWrapperSessionIds.has(message.sessionId) ||
-      !this.terminalWrappers.get(message.sessionId) ||
-      !this.sessionStore.getSession(message.sessionId)
-    ) {
-      return;
-    }
-    const update = this.terminalWrappers.bindProviderSession({
-      sessionId: message.sessionId,
-      providerSessionId: message.providerSessionId,
-      ...(message.providerTitle !== undefined ? { providerTitle: message.providerTitle } : {}),
-      ...(message.providerPreview !== undefined ? { providerPreview: message.providerPreview } : {}),
-      ...(message.reason !== undefined ? { reason: message.reason } : {}),
-    });
-    if (!update.changed) {
-      return;
-    }
-    const isRebind =
-      update.previousProviderSessionId !== undefined &&
-      update.previousProviderSessionId !== message.providerSessionId;
-    this.sessionStore.patchManagedSession(message.sessionId, {
-      providerSessionId: message.providerSessionId,
-      ...(message.providerTitle !== undefined ? { title: message.providerTitle } : {}),
-      ...(message.providerPreview !== undefined ? { preview: message.providerPreview } : {}),
-    });
-    if (isRebind) {
-      this.sessionStore.setActiveTurn(message.sessionId);
-      this.sessionStore.updateUsage(message.sessionId, undefined);
-      this.sessionStore.setRuntimeState(message.sessionId, "idle");
-      this.historySnapshots.clear(message.sessionId);
-    }
-    const state = this.sessionStore.getSession(message.sessionId);
-    if (state) {
-      this.eventBus.publish({
-        sessionId: message.sessionId,
-        type: "session.started",
-        source: SYSTEM_SOURCE,
-        payload: { session: state.session },
-      });
-    }
-    if (
-      !isRebind &&
-      update.binding.resumeProviderSessionId &&
-      update.binding.resumeProviderSessionId !== message.providerSessionId
-    ) {
-      throw new Error(
-        `Wrapper bound provider session ${message.providerSessionId} but expected ${update.binding.resumeProviderSessionId}.`,
-      );
-    }
+    this.terminals.bindTerminalWrapperProviderSession(message);
   }
 
   updateTerminalWrapperPromptState(
     sessionId: string,
     promptState: TerminalWrapperPromptState,
   ): void {
-    const existingState = this.sessionStore.getSession(sessionId);
-    if (
-      this.closingTerminalWrapperSessionIds.has(sessionId) ||
-      !this.terminalWrappers.get(sessionId) ||
-      !existingState
-    ) {
-      return;
-    }
-    this.terminalWrappers.updatePromptState(sessionId, promptState);
-    const nextRuntimeState = promptState === "agent_busy" ? "running" : "idle";
-    if (existingState.session.runtimeState !== nextRuntimeState) {
-      this.sessionStore.setRuntimeState(sessionId, nextRuntimeState);
-      this.eventBus.publish({
-        sessionId,
-        type: "session.state.changed",
-        source: SYSTEM_SOURCE,
-        payload: {
-          state: nextRuntimeState,
-        },
-      });
-    }
-    if (promptState !== "prompt_clean") {
-      return;
-    }
-    const injectable = this.terminalWrappers.dequeueInjectableTurn(sessionId);
-    if (injectable) {
-      this.terminalWrapperSenders.get(sessionId)?.({
-        type: "turn.inject",
-        sessionId,
-        queuedTurn: injectable,
-      });
-    }
+    this.terminals.updateTerminalWrapperPromptState(sessionId, promptState);
   }
 
   applyTerminalWrapperActivity(sessionId: string, activity: ProviderActivity): RahEvent[] {
-    if (this.closingTerminalWrapperSessionIds.has(sessionId)) {
-      return [];
-    }
-    const session = this.sessionStore.getSession(sessionId)?.session;
-    if (!session) {
-      return [];
-    }
-    return applyProviderActivity(
-      {
-        eventBus: this.eventBus,
-        ptyHub: this.ptyHub,
-        sessionStore: this.sessionStore,
-      },
-      sessionId,
-      {
-        provider: session.provider,
-        authority: "authoritative",
-      },
-      activity,
-    );
+    return this.terminals.applyTerminalWrapperActivity(sessionId, activity);
   }
 
   appendTerminalWrapperPtyOutput(sessionId: string, data: string): RahEvent[] {
-    if (
-      this.closingTerminalWrapperSessionIds.has(sessionId) ||
-      !this.sessionStore.getSession(sessionId)
-    ) {
-      return [];
-    }
-    return this.applyTerminalWrapperActivity(sessionId, {
-      type: "terminal_output",
-      data,
-    });
+    return this.terminals.appendTerminalWrapperPtyOutput(sessionId, data);
   }
 
   markTerminalWrapperExited(
     sessionId: string,
     options?: { exitCode?: number; signal?: string },
   ): RahEvent[] {
-    const state = this.sessionStore.getSession(sessionId);
-    if (!state) {
-      this.terminalWrapperSenders.delete(sessionId);
-      this.terminalWrappers.remove(sessionId);
-      this.closingTerminalWrapperSessionIds.delete(sessionId);
-      return [];
-    }
-    const published = this.applyTerminalWrapperActivity(sessionId, {
-      type: "terminal_exited",
-      ...(options?.exitCode !== undefined ? { exitCode: options.exitCode } : {}),
-      ...(options?.signal !== undefined ? { signal: options.signal } : {}),
-    });
-    this.workbenchState.rememberSession(state);
-    this.refreshRememberedState();
-    this.terminalWrapperSenders.delete(sessionId);
-    this.terminalWrappers.remove(sessionId);
-    this.closingTerminalWrapperSessionIds.delete(sessionId);
-    this.sessionStore.removeSession(sessionId);
-    this.ptyHub.removeSession(sessionId);
-    this.historySnapshots.clear(sessionId);
-    this.sessionOwners.delete(sessionId);
-    this.eventBus.publish({
-      sessionId,
-      type: "session.closed",
-      source: SYSTEM_SOURCE,
-      payload: {},
-    });
-    return published;
+    return this.terminals.markTerminalWrapperExited(sessionId, options);
   }
 
   async shutdown(): Promise<void> {
     await this.storedSessionMonitor.shutdown();
-    this.terminalWrapperSenders.clear();
-    for (const terminal of this.independentTerminals.values()) {
-      await terminal.process.close();
-      this.ptyHub.removeSession(terminal.id);
-    }
-    this.independentTerminals.clear();
+    await this.terminals.shutdown();
     for (const adapter of this.adaptersById.values()) {
       await adapter.shutdown?.();
     }
@@ -1076,17 +657,7 @@ export class RuntimeEngine {
   }
 
   private discoverStoredSessions(): StoredSessionRef[] {
-    const discovered = new Map<string, StoredSessionRef>();
-    for (const adapter of this.adaptersById.values()) {
-      const storedSessions =
-        adapter.refreshStoredSessionsCatalog?.() ??
-        adapter.listStoredSessions?.() ??
-        [];
-      for (const stored of storedSessions) {
-        discovered.set(`${stored.provider}:${stored.providerSessionId}`, stored);
-      }
-    }
-    return [...discovered.values()];
+    return discoverRuntimeStoredSessions(this.adaptersById.values());
   }
 
   private refreshStoredSessionsCache(options?: { publish?: boolean }): void {
@@ -1104,24 +675,7 @@ export class RuntimeEngine {
     left: readonly StoredSessionRef[],
     right: readonly StoredSessionRef[],
   ): boolean {
-    if (left.length !== right.length) {
-      return false;
-    }
-    return left.every((entry, index) => this.storedSessionRefKey(entry) === this.storedSessionRefKey(right[index]!));
-  }
-
-  private storedSessionRefKey(entry: StoredSessionRef): string {
-    return JSON.stringify([
-      entry.provider,
-      entry.providerSessionId,
-      entry.source ?? "provider_history",
-      entry.cwd ?? "",
-      entry.rootDir ?? "",
-      entry.title ?? "",
-      entry.preview ?? "",
-      entry.updatedAt ?? "",
-      entry.lastUsedAt ?? "",
-    ]);
+    return sameStoredSessionRefs(left, right);
   }
 
   private publishStoredSessionDiscovery(): void {
@@ -1139,105 +693,21 @@ export class RuntimeEngine {
     liveStates: readonly StoredSessionState[],
     discoveredStoredSessions: readonly StoredSessionRef[],
   ): ListSessionsResponse {
-    const visibleLiveStates = liveStates.filter(
-      (state) => !this.closingTerminalWrapperSessionIds.has(state.session.id),
-    );
-    const hiddenSessionKeys = new Set(this.rememberedHiddenSessionKeys);
-    const availableProviderSessionKeys = new Set<string>();
-    const discoveredByKey = new Map<string, StoredSessionRef>();
-    for (const stored of discoveredStoredSessions) {
-      const key = `${stored.provider}:${stored.providerSessionId}`;
-      availableProviderSessionKeys.add(key);
-      discoveredByKey.set(key, stored);
-    }
-    for (const state of visibleLiveStates) {
-      if (!state.session.providerSessionId) {
-        continue;
-      }
-      availableProviderSessionKeys.add(
-        `${state.session.provider}:${state.session.providerSessionId}`,
-      );
-    }
-    const storedSessions = new Map<string, StoredSessionRef>();
-    for (const remembered of this.rememberedSessions) {
-      const key = `${remembered.provider}:${remembered.providerSessionId}`;
-      if (hiddenSessionKeys.has(key)) {
-        continue;
-      }
-      if (
-        remembered.source === "previous_live" &&
-        !availableProviderSessionKeys.has(key)
-      ) {
-        continue;
-      }
-      storedSessions.set(key, remembered);
-    }
-    for (const stored of discoveredStoredSessions) {
-      if (hiddenSessionKeys.has(`${stored.provider}:${stored.providerSessionId}`)) {
-        continue;
-      }
-      storedSessions.set(`${stored.provider}:${stored.providerSessionId}`, stored);
-    }
-    for (const state of visibleLiveStates) {
-      const providerSessionId = state.session.providerSessionId;
-      if (!providerSessionId) {
-        continue;
-      }
-      storedSessions.delete(`${state.session.provider}:${providerSessionId}`);
-    }
-    return {
-      sessions: visibleLiveStates.map((state) => {
-        const providerSessionId = state.session.providerSessionId;
-        if (!providerSessionId) {
-          return toSessionSummary(state);
-        }
-        const discovered = discoveredByKey.get(`${state.session.provider}:${providerSessionId}`);
-        if (!discovered) {
-          return toSessionSummary(state);
-        }
-        return toSessionSummary({
-          ...state,
-          session: {
-            ...state.session,
-            ...(discovered.title !== undefined ? { title: discovered.title } : {}),
-            ...(discovered.preview !== undefined ? { preview: discovered.preview } : {}),
-          },
-        });
-      }),
-      storedSessions: [...storedSessions.values()],
-      recentSessions: this.rememberedRecentSessions.filter(
-        (session) => {
-          const key = `${session.provider}:${session.providerSessionId}`;
-          if (hiddenSessionKeys.has(key)) {
-            return false;
-          }
-          if (
-            session.source === "previous_live" &&
-            !availableProviderSessionKeys.has(key)
-          ) {
-            return false;
-          }
-          return true;
-        },
-      ).map((session) => {
-        const key = `${session.provider}:${session.providerSessionId}`;
-        const discovered = discoveredByKey.get(key);
-        if (!discovered) {
-          return session;
-        }
-        const lastUsedAt = session.lastUsedAt ?? discovered.lastUsedAt ?? discovered.updatedAt;
-        return {
-          ...session,
-          ...discovered,
-          ...(lastUsedAt ? { lastUsedAt } : {}),
-        };
-      }),
-      workspaceDirs: workspaceDirsFromState(this.rememberedWorkspaceDirs, liveStates),
-      hiddenWorkspaces: [...this.rememberedHiddenWorkspaces],
-      ...(this.rememberedActiveWorkspaceDir
-        ? { activeWorkspaceDir: this.rememberedActiveWorkspaceDir }
-        : {}),
-    };
+    return buildRuntimeSessionsResponse({
+      liveStates,
+      discoveredStoredSessions,
+      remembered: {
+        rememberedSessions: this.rememberedSessions,
+        rememberedRecentSessions: this.rememberedRecentSessions,
+        rememberedWorkspaceDirs: this.rememberedWorkspaceDirs,
+        rememberedHiddenWorkspaces: this.rememberedHiddenWorkspaces,
+        ...(this.rememberedActiveWorkspaceDir
+          ? { rememberedActiveWorkspaceDir: this.rememberedActiveWorkspaceDir }
+          : {}),
+        rememberedHiddenSessionKeys: this.rememberedHiddenSessionKeys,
+      },
+      isClosingSession: (sessionId) => this.terminals.isClosingWrapperSession(sessionId),
+    });
   }
 
   private refreshRememberedState(): void {
@@ -1265,8 +735,7 @@ export class RuntimeEngine {
       this.sessionStore.removeSession(state.session.id);
       this.ptyHub.removeSession(state.session.id);
       this.sessionOwners.delete(state.session.id);
-      this.terminalWrappers.remove(state.session.id);
-      this.terminalWrapperSenders.delete(state.session.id);
+      this.terminals.clearSessionState(state.session.id);
       this.eventBus.publish({
         sessionId: state.session.id,
         type: "session.closed",

@@ -35,16 +35,21 @@ function getProjectHash(projectRoot: string): string {
 
 describe("GeminiAdapter", () => {
   let tmpHome: string;
+  let tmpRahHome: string;
   let previousGeminiHome: string | undefined;
+  let previousRahHome: string | undefined;
   let previousBinary: string | undefined;
   let cwd: string;
 
   beforeEach(() => {
     previousGeminiHome = process.env.GEMINI_CLI_HOME;
+    previousRahHome = process.env.RAH_HOME;
     previousBinary = process.env.RAH_GEMINI_BINARY;
     tmpHome = mkdtempSync(path.join(os.tmpdir(), "rah-gemini-home-"));
+    tmpRahHome = mkdtempSync(path.join(os.tmpdir(), "rah-gemini-rah-home-"));
     cwd = mkdtempSync(path.join(os.tmpdir(), "rah-gemini-cwd-"));
     process.env.GEMINI_CLI_HOME = tmpHome;
+    process.env.RAH_HOME = tmpRahHome;
   });
 
   afterEach(() => {
@@ -53,12 +58,18 @@ describe("GeminiAdapter", () => {
     } else {
       process.env.GEMINI_CLI_HOME = previousGeminiHome;
     }
+    if (previousRahHome === undefined) {
+      delete process.env.RAH_HOME;
+    } else {
+      process.env.RAH_HOME = previousRahHome;
+    }
     if (previousBinary === undefined) {
       delete process.env.RAH_GEMINI_BINARY;
     } else {
       process.env.RAH_GEMINI_BINARY = previousBinary;
     }
     rmSync(tmpHome, { recursive: true, force: true });
+    rmSync(tmpRahHome, { recursive: true, force: true });
     rmSync(cwd, { recursive: true, force: true });
   });
 
@@ -231,6 +242,27 @@ emit({ type: "result", timestamp: new Date().toISOString(), status: "success", s
         "utf8",
       );
     }
+  }
+
+  function writeRahWorkbenchState(workspaces: string[]) {
+    writeFileSync(
+      path.join(tmpRahHome, "workbench-state.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          updatedAt: new Date().toISOString(),
+          workspaces,
+          hiddenWorkspaces: [],
+          activeWorkspaceDir: workspaces[0],
+          hiddenSessionKeys: [],
+          sessions: [],
+          recentSessions: [],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
   }
 
   test("binds provider session id from init and resumes later turns with --resume", async () => {
@@ -409,6 +441,26 @@ emit({ type: "result", timestamp: new Date().toISOString(), status: "success", s
 
     assert.equal(target?.cwd, undefined);
     assert.equal(target?.rootDir, missingRoot);
+  });
+
+  test("recovers workspace metadata for legacy Gemini sessions from remembered workspace candidates", () => {
+    const rememberedRoot = path.join(tmpHome, "remembered-workspace");
+    const projectHash = getProjectHash(rememberedRoot);
+    writeRahWorkbenchState([rememberedRoot]);
+    writeLegacyGeminiSessionFile({
+      sessionId: "gemini-session-legacy-workbench",
+      projectHash,
+      messageText: "No path hints here.",
+    });
+
+    const adapter = new GeminiAdapter(createServices());
+    const stored = adapter.listStoredSessions();
+    const target = stored.find(
+      (session) => session.providerSessionId === "gemini-session-legacy-workbench",
+    );
+
+    assert.equal(target?.cwd, undefined);
+    assert.equal(target?.rootDir, rememberedRoot);
   });
 
   test("upgrades a rehydrated Gemini replay to live resume without changing provider session id", async () => {

@@ -15,6 +15,7 @@ export * from "./codex-rollout-activity";
 export * from "./codex-stored-sessions";
 export * from "./claude-session-files";
 export * from "./claude-live-client";
+export * from "./claude-wrapper-home";
 export * from "./gemini-session-files";
 export * from "./gemini-live-client";
 export * from "./kimi-session-files";
