@@ -94,10 +94,10 @@ export function ProviderSelector(props: {
   const isDialog = mode === "dialog";
 
   if (!isDialog) {
-    /* Grid cards for empty state — icon+label on desktop, icon-only on mobile */
+    /* Empty state selector: one compact mobile row, fuller cards on larger screens */
     return (
       <div
-        className="grid grid-cols-3 gap-2 sm:grid-cols-5 sm:gap-3"
+        className="grid grid-cols-5 gap-1.5 sm:gap-3"
         role="radiogroup"
         aria-label="Provider selection"
       >
@@ -115,7 +115,7 @@ export function ProviderSelector(props: {
               className={`
                 group relative inline-flex items-center justify-center gap-2.5
                 rounded-xl transition-all duration-300 ease-out
-                px-2.5 py-3 sm:px-4
+                min-h-[44px] px-1.5 py-2 sm:px-4 sm:py-3
                 ${
                   selected
                     ? "bg-[var(--app-bg)] text-[var(--app-fg)] border border-[var(--app-border)] shadow-sm -translate-y-px dark:bg-[var(--app-subtle-bg)] dark:shadow-none dark:border-[var(--app-border)] dark:translate-y-0"
@@ -135,7 +135,7 @@ export function ProviderSelector(props: {
               <ProviderLogo
                 provider={option.value}
                 variant="bare"
-                className="h-5.5 w-5.5"
+                className="h-5 w-5 sm:h-5.5 sm:w-5.5"
               />
 
               {/* Label - hidden on mobile */}
