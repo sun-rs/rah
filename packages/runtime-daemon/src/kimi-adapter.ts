@@ -144,7 +144,7 @@ export class KimiAdapter implements ProviderAdapter {
     if (!state) {
       throw new Error(`Unknown session ${sessionId}`);
     }
-    if (!state.clients.some((client) => client.id === request.clientId)) {
+    if (!this.services.sessionStore.hasAttachedClient(sessionId, request.clientId)) {
       throw new Error(`Client ${request.clientId} is not attached to ${sessionId}.`);
     }
     const live = this.liveSessions.get(sessionId);

@@ -605,8 +605,8 @@ export function ChatThread(props: {
         <button
           type="button"
           onClick={handleScrollToBottom}
-          className="fixed left-1/2 z-[55] flex h-9 w-9 -translate-x-1/2 items-center justify-center rounded-full border border-[var(--app-border)] bg-[var(--app-bg)] text-[var(--app-fg)] shadow-lg transition-all duration-200 hover:scale-110 hover:bg-[var(--app-subtle-bg)] active:scale-95"
-          style={{ bottom: "calc(env(safe-area-inset-bottom, 0px) + 5.75rem)" }}
+          className="fixed left-1/2 z-[30] flex h-9 w-9 -translate-x-1/2 items-center justify-center rounded-full border border-[var(--app-border)] bg-[var(--app-bg)] text-[var(--app-fg)] shadow-lg transition-all duration-200 hover:scale-110 hover:bg-[var(--app-subtle-bg)] active:scale-95"
+          style={{ bottom: "var(--workbench-floating-anchor, calc(env(safe-area-inset-bottom, 0px) + 5.75rem))" }}
           aria-label="Scroll to bottom"
         >
           <ArrowDown size={16} />

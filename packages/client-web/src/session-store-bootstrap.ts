@@ -10,6 +10,8 @@ import {
 } from "./session-store-workspace";
 
 const CLIENT_ID_STORAGE_KEY = "rah.web-client-id";
+const CONNECTION_ID_STORAGE_KEY = "rah.web-connection-id";
+const SHARED_WEB_CLIENT_ID = "web-user";
 
 let initialized = false;
 let attemptedStoredHistoryRestore = false;
@@ -30,6 +32,14 @@ function generateClientId(): string {
 }
 
 export function readOrCreateClientId(
+  _storage?:
+    | Pick<Storage, "getItem" | "setItem">
+    | null,
+): string {
+  return SHARED_WEB_CLIENT_ID;
+}
+
+export function readOrCreateConnectionId(
   storage?:
     | Pick<Storage, "getItem" | "setItem">
     | null,
@@ -48,7 +58,7 @@ export function readOrCreateClientId(
 
   if (effectiveStorage) {
     try {
-      const existing = effectiveStorage.getItem(CLIENT_ID_STORAGE_KEY)?.trim();
+      const existing = effectiveStorage.getItem(CONNECTION_ID_STORAGE_KEY)?.trim();
       if (existing) {
         return existing;
       }
@@ -60,7 +70,7 @@ export function readOrCreateClientId(
   const created = generateClientId();
   if (effectiveStorage) {
     try {
-      effectiveStorage.setItem(CLIENT_ID_STORAGE_KEY, created);
+      effectiveStorage.setItem(CONNECTION_ID_STORAGE_KEY, created);
     } catch {
       // ignore
     }

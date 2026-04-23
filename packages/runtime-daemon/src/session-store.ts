@@ -23,6 +23,81 @@ const DEFAULT_CAPABILITIES: SessionCapabilities = {
   subagents: false,
 };
 
+const SHARED_WEB_CLIENT_ID = "web-user";
+
+function isCanonicalWebClientId(clientId: string): boolean {
+  return clientId === SHARED_WEB_CLIENT_ID || clientId.startsWith("web-");
+}
+
+function normalizeSharedWebClientState(state: StoredSessionState): void {
+  let changed = false;
+  const normalizedClients: AttachedClient[] = [];
+  let mergedWebClient: AttachedClient | null = null;
+
+  for (const client of state.clients) {
+    if (client.kind !== "web") {
+      normalizedClients.push(client);
+      continue;
+    }
+
+    const normalizedClient: AttachedClient = {
+      ...client,
+      id: SHARED_WEB_CLIENT_ID,
+    };
+
+    if (!mergedWebClient) {
+      mergedWebClient = normalizedClient;
+    } else {
+      const currentMergedWebClient: AttachedClient = mergedWebClient;
+      if (normalizedClient.lastSeenAt > mergedWebClient.lastSeenAt) {
+        mergedWebClient = {
+          ...normalizedClient,
+          focus: currentMergedWebClient.focus || normalizedClient.focus,
+        };
+      } else {
+        mergedWebClient = {
+          ...currentMergedWebClient,
+          focus: currentMergedWebClient.focus || normalizedClient.focus,
+        };
+      }
+    }
+
+    if (client.id !== SHARED_WEB_CLIENT_ID) {
+      changed = true;
+    }
+  }
+
+  if (mergedWebClient) {
+    normalizedClients.push(mergedWebClient);
+    if (state.clients.filter((client) => client.kind === "web").length !== 1) {
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    state.clients = normalizedClients;
+  }
+
+  if (
+    state.controlLease.holderClientId &&
+    isCanonicalWebClientId(state.controlLease.holderClientId) &&
+    state.clients.some((client) => client.kind === "web")
+  ) {
+    if (state.controlLease.holderClientId !== SHARED_WEB_CLIENT_ID) {
+      state.controlLease = {
+        ...state.controlLease,
+        holderClientId: SHARED_WEB_CLIENT_ID,
+        holderKind: "web",
+      };
+    } else if (state.controlLease.holderKind !== "web") {
+      state.controlLease = {
+        ...state.controlLease,
+        holderKind: "web",
+      };
+    }
+  }
+}
+
 export type StoredSessionState = {
   session: ManagedSession;
   clients: AttachedClient[];
@@ -96,11 +171,19 @@ export class SessionStore {
   }
 
   listSessions(): StoredSessionState[] {
-    return [...this.sessions.values()];
+    const states = [...this.sessions.values()];
+    for (const state of states) {
+      normalizeSharedWebClientState(state);
+    }
+    return states;
   }
 
   getSession(sessionId: string): StoredSessionState | undefined {
-    return this.sessions.get(sessionId);
+    const state = this.sessions.get(sessionId);
+    if (state) {
+      normalizeSharedWebClientState(state);
+    }
+    return state;
   }
 
   getWorkbench(): Workbench {
@@ -179,10 +262,11 @@ export class SessionStore {
 
   attachClient(args: AttachClientArgs): StoredSessionState {
     const state = this.requireSession(args.sessionId);
+    const normalizedClientId = args.kind === "web" ? SHARED_WEB_CLIENT_ID : args.clientId;
     const now = new Date().toISOString();
-    const existingIndex = state.clients.findIndex((item) => item.id === args.clientId);
+    const existingIndex = state.clients.findIndex((item) => item.id === normalizedClientId);
     const nextClient: AttachedClient = {
-      id: args.clientId,
+      id: normalizedClientId,
       kind: args.kind,
       sessionId: args.sessionId,
       connectionId: args.connectionId,
@@ -205,8 +289,9 @@ export class SessionStore {
 
   detachClient(sessionId: string, clientId: string): StoredSessionState {
     const state = this.requireSession(sessionId);
-    state.clients = state.clients.filter((client) => client.id !== clientId);
-    if (state.controlLease.holderClientId === clientId) {
+    const normalizedClientId = isCanonicalWebClientId(clientId) ? SHARED_WEB_CLIENT_ID : clientId;
+    state.clients = state.clients.filter((client) => client.id !== normalizedClientId);
+    if (state.controlLease.holderClientId === normalizedClientId) {
       state.controlLease = {
         sessionId,
       };
@@ -238,9 +323,10 @@ export class SessionStore {
 
   claimControl(sessionId: string, clientId: string): StoredSessionState {
     const state = this.requireSession(sessionId);
-    const client = state.clients.find((item) => item.id === clientId);
+    const normalizedClientId = isCanonicalWebClientId(clientId) ? SHARED_WEB_CLIENT_ID : clientId;
+    const client = state.clients.find((item) => item.id === normalizedClientId);
     if (!client) {
-      throw new Error(`Cannot claim control for unknown client ${clientId}`);
+      throw new Error(`Cannot claim control for unknown client ${normalizedClientId}`);
     }
     state.controlLease = {
       sessionId,
@@ -255,7 +341,12 @@ export class SessionStore {
 
   releaseControl(sessionId: string, clientId?: string): StoredSessionState {
     const state = this.requireSession(sessionId);
-    if (clientId && state.controlLease.holderClientId !== clientId) {
+    const normalizedClientId = clientId
+      ? isCanonicalWebClientId(clientId)
+        ? SHARED_WEB_CLIENT_ID
+        : clientId
+      : undefined;
+    if (normalizedClientId && state.controlLease.holderClientId !== normalizedClientId) {
       return state;
     }
     state.controlLease = { sessionId };
@@ -266,7 +357,14 @@ export class SessionStore {
 
   hasInputControl(sessionId: string, clientId: string): boolean {
     const state = this.requireSession(sessionId);
-    return state.controlLease.holderClientId === clientId;
+    const normalizedClientId = isCanonicalWebClientId(clientId) ? SHARED_WEB_CLIENT_ID : clientId;
+    return state.controlLease.holderClientId === normalizedClientId;
+  }
+
+  hasAttachedClient(sessionId: string, clientId: string): boolean {
+    const state = this.requireSession(sessionId);
+    const normalizedClientId = isCanonicalWebClientId(clientId) ? SHARED_WEB_CLIENT_ID : clientId;
+    return state.clients.some((client) => client.id === normalizedClientId);
   }
 
   setRuntimeState(
@@ -359,6 +457,7 @@ export class SessionStore {
 
     for (const state of states) {
       const nextState = cloneStoredSessionState(state);
+      normalizeSharedWebClientState(nextState);
       this.sessions.set(nextState.session.id, nextState);
       if (nextState.session.providerSessionId) {
         this.providerSessionIndex.set(
@@ -376,6 +475,7 @@ export class SessionStore {
     if (!state) {
       throw new Error(`Unknown session ${sessionId}`);
     }
+    normalizeSharedWebClientState(state);
     return state;
   }
 

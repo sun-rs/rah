@@ -1,4 +1,4 @@
-import type { RefObject } from "react";
+import { useEffect, useRef, type RefObject } from "react";
 import type { PermissionResponseRequest, SessionSummary } from "@rah/runtime-protocol";
 import { Archive, ArrowUp, Menu, PanelRight, Plus, Square, SquareTerminal, X } from "lucide-react";
 import { providerLabel } from "../../../types";
@@ -39,8 +39,32 @@ export function WorkbenchSelectedPane(props: {
   onOpenRight: () => void;
   onExpandInspector: () => void;
   onOpenTerminal: () => void;
+  onFloatingAnchorOffsetChange: (offsetPx: number) => void;
   onArchiveOrClose: () => void;
 }) {
+  const composerContainerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const node = composerContainerRef.current;
+    if (!node) {
+      return;
+    }
+
+    const updateAnchor = () => {
+      props.onFloatingAnchorOffsetChange(Math.ceil(node.getBoundingClientRect().height) + 12);
+    };
+
+    updateAnchor();
+    if (typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver(updateAnchor);
+    observer.observe(node);
+    return () => {
+      observer.disconnect();
+    };
+  }, [props.onFloatingAnchorOffsetChange]);
+
   return (
     <>
       <header className="h-14 flex items-center justify-between gap-3 border-b border-[var(--app-border)] px-4 bg-[var(--app-bg)]/80 backdrop-blur-sm shrink-0">
@@ -178,6 +202,7 @@ export function WorkbenchSelectedPane(props: {
       />
 
       <div
+        ref={composerContainerRef}
         className="shrink-0 bg-[var(--app-bg)] px-3 pt-2 md:px-4 md:pt-3"
         style={COMPOSER_LAYOUT.bottomPaddingStyle}
       >
@@ -224,16 +249,16 @@ export function WorkbenchSelectedPane(props: {
         ) : (
           <div className="mx-auto max-w-3xl">
             <div
-              className={`relative ${
+              className={
                 props.composerSurface.showStopButton
-                  ? "pl-[52px] pr-[100px] md:pl-[60px] md:pr-[112px]"
-                  : "pl-[52px] pr-[52px] md:pl-[60px] md:pr-[60px]"
-              }`}
+                  ? COMPOSER_LAYOUT.composeGridWithStopClassName
+                  : COMPOSER_LAYOUT.composeGridWithoutStopClassName
+              }
             >
               <button
                 type="button"
                 onClick={props.onOpenFileReference}
-                className={`${COMPOSER_LAYOUT.roundSecondaryButtonClassName} absolute bottom-0 left-0`}
+                className={COMPOSER_LAYOUT.roundSecondaryButtonClassName}
                 title="Insert file or folder reference"
               >
                 <Plus size={18} />
@@ -261,28 +286,28 @@ export function WorkbenchSelectedPane(props: {
                   }
                 }}
               />
-              <div className="absolute bottom-0 right-0 flex items-end gap-2 md:gap-3">
-                {props.composerSurface.showStopButton ? (
-                  <div className={COMPOSER_LAYOUT.stopWrapperClassName}>
-                    <span className="pointer-events-none absolute inset-0 rounded-full border-2 border-[var(--app-danger)] border-r-transparent border-b-transparent animate-[spin_1.05s_linear_infinite]" />
-                    <button
-                      type="button"
-                      onClick={props.onInterrupt}
-                      className={COMPOSER_LAYOUT.stopButtonClassName}
-                    >
-                      <Square size={14} />
-                    </button>
-                  </div>
-                ) : null}
-                <button
-                  type="button"
-                  disabled={props.sendPending || !props.draft.trim()}
-                  onClick={props.onSend}
-                  className={COMPOSER_LAYOUT.roundPrimaryButtonClassName}
-                >
-                  <ArrowUp size={18} />
-                </button>
-              </div>
+              {props.composerSurface.showStopButton ? (
+                <div className={COMPOSER_LAYOUT.stopWrapperClassName}>
+                  <span className={COMPOSER_LAYOUT.stopPulseClassName} />
+                  <span className={COMPOSER_LAYOUT.stopOuterRingClassName} />
+                  <span className={COMPOSER_LAYOUT.stopSpinnerClassName} />
+                  <button
+                    type="button"
+                    onClick={props.onInterrupt}
+                    className={COMPOSER_LAYOUT.stopButtonClassName}
+                  >
+                    <Square size={14} />
+                  </button>
+                </div>
+              ) : null}
+              <button
+                type="button"
+                disabled={props.sendPending || !props.draft.trim()}
+                onClick={props.onSend}
+                className={COMPOSER_LAYOUT.roundPrimaryButtonClassName}
+              >
+                <ArrowUp size={18} />
+              </button>
             </div>
           </div>
         )}

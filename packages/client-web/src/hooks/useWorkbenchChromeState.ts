@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 
 function readBooleanPreference(key: string, fallback: boolean): boolean {
   try {
@@ -42,21 +42,29 @@ export function useWorkbenchChromeState() {
   );
   const [isResizing, setIsResizing] = useState(false);
   const sidebarWidthRef = useRef(sidebarWidth);
+  const activePointerIdRef = useRef<number | null>(null);
 
   sidebarWidthRef.current = sidebarWidth;
 
   useEffect(() => {
-    const onMove = (event: MouseEvent) => {
+    const onMove = (event: PointerEvent) => {
       if (!isResizing) {
+        return;
+      }
+      if (activePointerIdRef.current !== null && event.pointerId !== activePointerIdRef.current) {
         return;
       }
       setSidebarWidth(Math.max(200, Math.min(480, event.clientX)));
     };
 
-    const onUp = () => {
+    const onUp = (event: PointerEvent) => {
       if (!isResizing) {
         return;
       }
+      if (activePointerIdRef.current !== null && event.pointerId !== activePointerIdRef.current) {
+        return;
+      }
+      activePointerIdRef.current = null;
       setIsResizing(false);
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
@@ -67,11 +75,13 @@ export function useWorkbenchChromeState() {
       }
     };
 
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
     return () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
     };
   }, [isResizing]);
 
@@ -91,8 +101,10 @@ export function useWorkbenchChromeState() {
     }
   }, [rightSidebarOpen]);
 
-  const startSidebarResize = (event: ReactMouseEvent<HTMLDivElement>) => {
+  const startSidebarResize = (event: ReactPointerEvent<HTMLDivElement>) => {
     event.preventDefault();
+    activePointerIdRef.current = event.pointerId;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
     setIsResizing(true);
     document.body.style.cursor = "col-resize";
     document.body.style.userSelect = "none";

@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useState, type CSSProperties } from "react";
 import type { PermissionResponseRequest } from "@rah/runtime-protocol";
 import { SessionSidebar } from "./SessionSidebar";
 import { providerLabel } from "./types";
@@ -85,6 +85,7 @@ export function App() {
   } = useSessionStore();
   const [archiveConfirmSessionId, setArchiveConfirmSessionId] = useState<string | null>(null);
   const [archivingSessionId, setArchivingSessionId] = useState<string | null>(null);
+  const [floatingAnchorOffsetPx, setFloatingAnchorOffsetPx] = useState(96);
   const { hideToolCallsInChat } = useChatPreferences();
   const { setWorkspaceSortMode, workspaceSortMode } = useWorkspaceSortModeState();
   const {
@@ -221,9 +222,15 @@ export function App() {
     await respondToPermission(selectedSummary.session.id, requestId, response);
   };
 
+  useEffect(() => {
+    if (primaryPaneState.kind !== "active" || !selectedSummary) {
+      setFloatingAnchorOffsetPx(96);
+    }
+  }, [primaryPaneState.kind, selectedSummary]);
+
   if (!isInitialLoaded) {
     return (
-      <div className="h-screen flex items-center justify-center bg-background text-foreground">
+      <div className="h-[100dvh] min-h-[100dvh] flex items-center justify-center bg-background text-foreground">
         <div className="text-center space-y-3 px-6">
           <div className="text-2xl font-semibold tracking-tight">RAH</div>
           <div className="text-[var(--app-hint)]">Initializing workbench…</div>
@@ -306,8 +313,16 @@ export function App() {
     </div>
   );
 
+  const rootStyle = {
+    "--workbench-floating-anchor": `calc(env(safe-area-inset-bottom, 0px) + ${floatingAnchorOffsetPx}px)`,
+    "--workbench-callout-anchor": `calc(var(--workbench-floating-anchor) + 3.5rem)`,
+  } as CSSProperties;
+
   return (
-    <div className="h-screen w-full max-w-full flex overflow-hidden overflow-x-hidden bg-background text-foreground">
+    <div
+      className="h-[100dvh] min-h-[100dvh] w-full max-w-full flex overflow-hidden overflow-x-hidden bg-background text-foreground"
+      style={rootStyle}
+    >
       <WorkbenchSidebarShell
         sidebarOpen={sidebarOpen}
         sidebarWidth={sidebarWidth}
@@ -446,6 +461,7 @@ export function App() {
             onOpenRight={() => setRightOpen(true)}
             onExpandInspector={() => setRightSidebarOpen(true)}
             onOpenTerminal={() => setTerminalOpen(true)}
+            onFloatingAnchorOffsetChange={setFloatingAnchorOffsetPx}
             onArchiveOrClose={() => {
               if (selectedIsReadOnlyReplay) {
                 void closeSession(selectedSummary.session.id);

@@ -127,7 +127,7 @@ export function FileReferencePicker(props: {
     <Dialog.Root open={props.open} onOpenChange={props.onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 bg-black/40 z-40" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 max-h-[85vh] w-[90vw] max-w-xl -translate-x-1/2 -translate-y-1/2 rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-0 shadow-xl focus:outline-none z-50 flex flex-col">
+        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 flex max-h-[85dvh] w-[90vw] max-w-xl -translate-x-1/2 -translate-y-1/2 flex-col rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-0 shadow-xl focus:outline-none max-md:inset-0 max-md:h-[100dvh] max-md:max-h-[100dvh] max-md:w-screen max-md:max-w-none max-md:translate-x-0 max-md:translate-y-0 max-md:rounded-none max-md:border-0 max-md:pt-[env(safe-area-inset-top)] max-md:pb-[env(safe-area-inset-bottom)]">
           <div className="flex items-center justify-between border-b border-[var(--app-border)] px-4 py-3 shrink-0">
             <Dialog.Title className="flex items-center gap-2 text-sm font-semibold text-[var(--app-fg)]">
               <Plus size={16} className="text-[var(--app-hint)]" />
@@ -136,7 +136,7 @@ export function FileReferencePicker(props: {
             <Dialog.Close asChild>
               <button
                 type="button"
-                className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] transition-colors"
+                className="inline-flex h-9 w-9 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] transition-colors"
                 aria-label="Close"
               >
                 <X size={16} />
@@ -149,7 +149,7 @@ export function FileReferencePicker(props: {
               type="button"
               onClick={() => setCurrentPath(getParentPath(listing?.path || currentPath))}
               disabled={normalizePath(currentPath) === "/"}
-              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)] disabled:opacity-30 transition-colors"
+              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)] disabled:opacity-30 transition-colors"
               aria-label="Go up"
               title="Go up"
             >
@@ -198,7 +198,7 @@ export function FileReferencePicker(props: {
                         <button
                           type="button"
                           onClick={() => insertReference(nextPath)}
-                          className="inline-flex h-7 items-center justify-center rounded-md border border-[var(--app-border)] bg-[var(--app-bg)] px-2 text-[11px] font-medium text-[var(--app-hint)] hover:text-[var(--app-fg)] transition-colors"
+                          className="inline-flex h-9 items-center justify-center rounded-md border border-[var(--app-border)] bg-[var(--app-bg)] px-3 text-[11px] font-medium text-[var(--app-hint)] hover:text-[var(--app-fg)] transition-colors"
                         >
                           Insert
                         </button>

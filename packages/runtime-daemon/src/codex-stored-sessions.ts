@@ -315,7 +315,16 @@ function tryReadGitStatus(
 } {
   try {
     const scopeRoot = path.resolve(options?.scopeRoot ?? cwd);
-    const gitCwd = getGitCommandCwd(cwd);
+    const gitCwd = tryResolveGitRoot(options?.scopeRoot ?? cwd);
+    if (!gitCwd) {
+      return {
+        changedFiles: [],
+        stagedFiles: [],
+        unstagedFiles: [],
+        totalStaged: 0,
+        totalUnstaged: 0,
+      };
+    }
     const output = execFileSync(
       "git",
       ["-C", gitCwd, "status", "--porcelain", "--branch"],
@@ -989,8 +998,12 @@ export function getCodexGitDiff(
   options?: { staged?: boolean; ignoreWhitespace?: boolean; scopeRoot?: string },
 ): string {
   try {
-    const gitCwd = getGitCommandCwd(cwd);
-    const relativeGitPath = toGitPath(options?.scopeRoot ?? cwd, targetPath);
+    const gitBase = options?.scopeRoot ?? cwd;
+    const gitCwd = tryResolveGitRoot(gitBase);
+    if (!gitCwd) {
+      return "";
+    }
+    const relativeGitPath = toGitPath(gitBase, targetPath);
     const args = ["-C", gitCwd, "diff"];
     if (options?.staged) {
       args.push("--cached");

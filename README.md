@@ -165,3 +165,4 @@ Core design and freeze documents:
 - [Architecture Benchmark (中文)](./docs/architecture-benchmark.zh-CN.md)
 - [Protocol Freeze Status](./docs/protocol-freeze-status.md)
 - [Release Checklist](./docs/release-checklist.md)
+- [UI 回归清单（中文）](./docs/ui-regression-checklist.zh-CN.md)

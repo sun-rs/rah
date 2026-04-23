@@ -15,8 +15,8 @@ export function GlobalWorkbenchCallout(props: {
 
   return (
     <div
-      className="fixed left-1/2 z-[60] w-[min(92vw,48rem)] -translate-x-1/2"
-      style={{ bottom: "calc(env(safe-area-inset-bottom, 0px) + 6rem)" }}
+      className="fixed left-1/2 z-[30] w-[min(92vw,48rem)] -translate-x-1/2"
+      style={{ bottom: "var(--workbench-callout-anchor, calc(env(safe-area-inset-bottom, 0px) + 9.5rem))" }}
     >
       <StatusCallout
         tone="warning"

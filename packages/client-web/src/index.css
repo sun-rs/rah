@@ -59,7 +59,7 @@
     --secondary-foreground: #18181b;
 
     --muted: #f4f4f5;
-    --muted-foreground: #71717a;
+    --muted-foreground: #5f5f67;
 
     --accent: #f4f4f5;
     --accent-foreground: #18181b;
@@ -74,8 +74,8 @@
     /* App semantic tokens - light */
     --app-bg: #ffffff;
     --app-fg: #09090b;
-    --app-hint: #71717a;
-    --app-muted: #a1a1aa;
+    --app-hint: #5f5f67;
+    --app-muted: #71717a;
     --app-link: #18181b;
     --app-border: #e4e4e7;
     --app-subtle-bg: #f4f4f5;
@@ -120,7 +120,7 @@
     --secondary-foreground: #fafafa;
 
     --muted: #1f1f1f;
-    --muted-foreground: #a1a1aa;
+    --muted-foreground: #c4c4cc;
 
     --accent: #1f1f1f;
     --accent-foreground: #fafafa;
@@ -135,8 +135,8 @@
     /* App semantic tokens - dark */
     --app-bg: #0a0a0a;
     --app-fg: #fafafa;
-    --app-hint: #a1a1aa;
-    --app-muted: #71717a;
+    --app-hint: #c4c4cc;
+    --app-muted: #a1a1aa;
     --app-link: #e4e4e7;
     --app-border: #27272a;
     --app-subtle-bg: #18181b;
@@ -188,6 +188,11 @@
     font-family: var(--font-sans);
     overflow-x: hidden;
     overflow-y: hidden;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
   }
 }
 
@@ -282,17 +287,19 @@
   }
 
   .resize-handle {
-    width: 4px;
+    width: 12px;
+    min-width: 12px;
     cursor: col-resize;
     position: relative;
     flex-shrink: 0;
+    touch-action: none;
   }
   .resize-handle::after {
     content: '';
     position: absolute;
     top: 0;
     bottom: 0;
-    left: 1px;
+    left: 5px;
     width: 2px;
     background-color: var(--app-fg);
     opacity: 0.12;
@@ -301,5 +308,34 @@
   .resize-handle:hover::after,
   .resize-handle.dragging::after {
     opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@media print {
+  html,
+  body,
+  #root {
+    height: auto !important;
+    overflow: visible !important;
+    background: white !important;
+    color: black !important;
+  }
+
+  .resize-handle,
+  [role="dialog"],
+  .fixed,
+  .sticky {
+    display: none !important;
   }
 }

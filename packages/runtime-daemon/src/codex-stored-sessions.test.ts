@@ -82,6 +82,14 @@ describe("codex stored session path resolution", () => {
     assert.equal(status.unstagedFiles[0]?.path, targetRelativePath);
   });
 
+  test("returns no changes when explicit workspace scope is above the git project root", () => {
+    const outerWorkspace = path.dirname(repoRoot);
+    const status = getCodexGitStatus(sessionCwd, { scopeRoot: outerWorkspace });
+    assert.deepEqual(status.changedFiles, []);
+    assert.equal(status.stagedFiles.length, 0);
+    assert.equal(status.unstagedFiles.length, 0);
+  });
+
   test("reads repo-root-relative file paths from a nested session cwd", () => {
     const file = readWorkspaceFile(sessionCwd, targetRelativePath);
     assert.equal(file.binary, false);
@@ -114,6 +122,12 @@ describe("codex stored session path resolution", () => {
     const diff = getCodexGitDiff(sessionCwd, targetRelativePath);
     assert.match(diff, /crates\/solars-time\/src\/lib\.rs/);
     assert.match(diff, /\+    println!\("changed in scope"\);/);
+  });
+
+  test("returns no diff when explicit workspace scope is above the git project root", () => {
+    const outerWorkspace = path.dirname(repoRoot);
+    const diff = getCodexGitDiff(sessionCwd, targetRelativePath, { scopeRoot: outerWorkspace });
+    assert.equal(diff, "");
   });
 
   test("stages, reverts, and unstages individual hunks", () => {

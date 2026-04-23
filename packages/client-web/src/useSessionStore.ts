@@ -15,6 +15,7 @@ import {
   maybeRestoreLastHistorySelection as maybeRestoreStoredHistorySelection,
   readErrorMessage,
   readOrCreateClientId,
+  readOrCreateConnectionId,
   resetSessionStoreInit,
   revealStoredHistoryWorkspace,
 } from "./session-store-bootstrap";
@@ -99,7 +100,7 @@ import {
 export {
   computeUnreadSessionIds,
 } from "./session-store-projections";
-export { readOrCreateClientId } from "./session-store-bootstrap";
+export { readOrCreateClientId, readOrCreateConnectionId } from "./session-store-bootstrap";
 export {
   coerceSelectedSessionId,
   findDaemonLiveSessionForStoredRef,
@@ -124,6 +125,7 @@ interface StartSessionOptions {
 
 interface SessionState {
   clientId: string;
+  connectionId: string;
   projections: Map<string, SessionProjection>;
   unreadSessionIds: Set<string>;
   storedSessions: StoredSessionRef[];
@@ -392,6 +394,7 @@ function connectStoreTransport() {
 
 export const useSessionStore = create<SessionState>((set, get) => ({
   clientId: readOrCreateClientId(),
+  connectionId: readOrCreateConnectionId(),
   projections: new Map(),
   unreadSessionIds: new Set(),
   storedSessions: [],

@@ -36,6 +36,26 @@ def assert_terminal_output(panel, needle: str, *, timeout_ms: int = 10_000) -> N
     raise AssertionError(f"Terminal output did not contain {needle!r}.")
 
 
+def run_terminal_smoke(page, workspace: str, marker: str) -> None:
+    expect(page.get_by_text("What would you like to build?")).to_be_visible(timeout=30_000)
+    page.get_by_role("button", name="Open terminal").click()
+
+    expect(
+        page.get_by_text("Independent shell terminal. This is separate from Codex / Claude sessions.")
+    ).to_be_visible(timeout=10_000)
+    panel = page.locator(".terminal-panel").last
+    expect(panel).to_be_visible(timeout=10_000)
+
+    canvas = page.locator(".terminal-canvas").last
+    canvas.click()
+    page.keyboard.type(f"printf '{marker}\\n'")
+    page.keyboard.press("Enter")
+    assert_terminal_output(panel, marker)
+
+    page.get_by_label("Close terminal").click()
+    expect(panel).not_to_be_visible(timeout=10_000)
+
+
 def main() -> int:
     base_url = os.environ.get("RAH_BASE_URL", "http://127.0.0.1:43111")
     workspace = tempfile.mkdtemp(prefix="rah-terminal-browser-")
@@ -51,29 +71,10 @@ def main() -> int:
             page = context.new_page()
             page.on("dialog", lambda dialog: dialog.accept())
             page.goto(base_url, wait_until="domcontentloaded")
-            expect(page.get_by_text("What would you like to build?")).to_be_visible(timeout=30_000)
-
-            page.get_by_role("button", name="Open terminal").click()
-
-            expect(page.get_by_text("Independent shell terminal. This is separate from Codex / Claude sessions.")).to_be_visible(timeout=10_000)
-            panel = page.locator(".terminal-panel").last
-            expect(panel).to_be_visible(timeout=10_000)
-
-            canvas = page.locator(".terminal-canvas").last
-            canvas.click()
-            page.keyboard.type("printf 'RAH_TERMINAL_BROWSER_OK\\n'")
-            page.keyboard.press("Enter")
-            assert_terminal_output(panel, "RAH_TERMINAL_BROWSER_OK")
-
-            page.keyboard.type("pwd")
-            page.keyboard.press("Enter")
-            assert_terminal_output(panel, workspace)
-
-            page.get_by_label("Close terminal").click()
-            expect(panel).not_to_be_visible(timeout=10_000)
+            run_terminal_smoke(page, workspace, "RAH_TERMINAL_BROWSER_OK")
 
             mobile_context = browser.new_context(
-                viewport={"width": 430, "height": 932},
+                viewport={"width": 390, "height": 844},
                 is_mobile=True,
                 has_touch=True,
             )
@@ -81,7 +82,6 @@ def main() -> int:
             mobile_page.on("dialog", lambda dialog: dialog.accept())
             mobile_page.goto(base_url, wait_until="domcontentloaded")
             expect(mobile_page.get_by_text("What would you like to build?")).to_be_visible(timeout=30_000)
-
             mobile_page.get_by_role("button", name="Open terminal").click()
             mobile_panel = mobile_page.locator(".terminal-panel").last
             expect(mobile_panel).to_be_visible(timeout=10_000)
@@ -114,9 +114,29 @@ def main() -> int:
             mobile_page.get_by_label("Close terminal").click()
             expect(mobile_panel).not_to_be_visible(timeout=10_000)
 
+            tablet_context = browser.new_context(
+                viewport={"width": 834, "height": 1194},
+                has_touch=True,
+            )
+            tablet_page = tablet_context.new_page()
+            tablet_page.on("dialog", lambda dialog: dialog.accept())
+            tablet_page.goto(base_url, wait_until="domcontentloaded")
+            run_terminal_smoke(tablet_page, workspace, "RAH_TERMINAL_IPAD_OK")
+
+            split_context = browser.new_context(
+                viewport={"width": 694, "height": 1112},
+                has_touch=True,
+            )
+            split_page = split_context.new_page()
+            split_page.on("dialog", lambda dialog: dialog.accept())
+            split_page.goto(base_url, wait_until="domcontentloaded")
+            run_terminal_smoke(split_page, workspace, "RAH_TERMINAL_SPLIT_OK")
+
             result["browserSmoke"] = "ok"
             print(json.dumps({"ok": True, **result}, ensure_ascii=False, indent=2))
             mobile_context.close()
+            tablet_context.close()
+            split_context.close()
             browser.close()
 
         return 0

@@ -43,6 +43,7 @@ type StartSessionOptions = {
 
 type SessionStartupState = {
   clientId: string;
+  connectionId: string;
   projections: Map<string, SessionProjection>;
   unreadSessionIds: Set<string>;
   hiddenWorkspaceDirs: Set<string>;
@@ -139,7 +140,7 @@ export async function startSessionCommand(
       ...(options?.model ? { model: options.model } : {}),
       ...(options?.approvalPolicy ? { approvalPolicy: options.approvalPolicy } : {}),
       ...(options?.sandbox ? { sandbox: options.sandbox } : {}),
-      attach: createInteractiveAttachRequest(state.clientId),
+      attach: createInteractiveAttachRequest(state.clientId, state.connectionId),
     });
     deps.set((current) => {
       const next = deps.adoptExistingProjectionForProviderSession(
@@ -173,7 +174,7 @@ export async function startScenarioCommand(
     });
     const response = await api.startDebugScenario({
       scenarioId: scenario.id,
-      attach: createInteractiveAttachRequest(deps.get().clientId),
+      attach: createInteractiveAttachRequest(deps.get().clientId, deps.get().connectionId),
     });
     deps.set((current) => {
       const next = new Map(current.projections);
@@ -252,7 +253,7 @@ export async function resumeStoredSessionCommand(
       provider: ref.provider,
       providerSessionId: ref.providerSessionId,
       preferStoredReplay: options?.preferStoredReplay ?? true,
-      attach: createObserveAttachRequest(deps.get().clientId),
+      attach: createObserveAttachRequest(deps.get().clientId, deps.get().connectionId),
     };
     if (options?.historyReplay !== undefined) {
       request.historyReplay = options.historyReplay;
@@ -376,7 +377,7 @@ export async function claimHistorySessionCommand(
       preferStoredReplay: false,
       historyReplay: "skip",
       historySourceSessionId: sessionId,
-      attach: createInteractiveAttachRequest(state.clientId),
+      attach: createInteractiveAttachRequest(state.clientId, state.connectionId),
     };
     if (ref.cwd !== undefined) {
       request.cwd = ref.cwd;

@@ -137,24 +137,24 @@ function SessionRow(props: {
             <div className="mt-1 text-xs text-[var(--app-hint)] truncate pl-7">{props.session.preview}</div>
           ) : null}
           {(props.session.rootDir ?? props.session.cwd) ? (
-            <div className="mt-1 text-[11px] text-[var(--app-hint)] truncate pl-7">
+            <div className="mt-1 text-xs text-[var(--app-hint)] truncate pl-7">
               {props.session.rootDir ?? props.session.cwd}
             </div>
           ) : null}
         </button>
         <div className="flex items-center justify-end gap-2 shrink-0">
           {live ? (
-            <span className="inline-flex rounded-full border border-blue-500/20 bg-blue-500/10 px-2 py-0.5 text-[10px] font-medium text-blue-600 dark:text-blue-400">
+            <span className="inline-flex rounded-full border border-blue-500/20 bg-blue-500/10 px-2 py-0.5 text-[11px] font-medium text-blue-600 dark:text-blue-400">
               Live
             </span>
           ) : (
             <span
-              className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-medium ${badge.className}`}
+              className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium ${badge.className}`}
             >
               {badge.label}
             </span>
           )}
-          <span className="text-[11px] text-[var(--app-hint)] min-w-[3.5rem] text-right">
+          <span className="text-xs text-[var(--app-hint)] min-w-[3.5rem] text-right">
             {formatRelativeTime(props.session.lastUsedAt ?? props.session.updatedAt) ?? "history"}
           </span>
           {showRemove ? (
@@ -278,7 +278,7 @@ export function SessionHistoryDialog(props: {
         <Dialog.Trigger asChild>{props.children}</Dialog.Trigger>
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 bg-black/40 z-40" />
-          <Dialog.Content className="fixed left-1/2 top-1/2 max-h-[85vh] w-[90vw] max-w-2xl -translate-x-1/2 -translate-y-1/2 rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-0 shadow-xl focus:outline-none z-50 flex flex-col max-sm:left-0 max-sm:top-0 max-sm:h-full max-sm:max-h-full max-sm:w-full max-sm:max-w-full max-sm:-translate-x-0 max-sm:-translate-y-0 max-sm:rounded-none">
+          <Dialog.Content className="fixed left-1/2 top-1/2 z-50 flex max-h-[85dvh] w-[90vw] max-w-2xl -translate-x-1/2 -translate-y-1/2 flex-col rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-0 shadow-xl focus:outline-none max-md:inset-0 max-md:h-[100dvh] max-md:max-h-[100dvh] max-md:w-screen max-md:max-w-none max-md:translate-x-0 max-md:translate-y-0 max-md:rounded-none max-md:border-0 max-md:pt-[env(safe-area-inset-top)] max-md:pb-[env(safe-area-inset-bottom)]">
           <div className="flex items-center justify-between border-b border-[var(--app-border)] px-4 py-3 shrink-0">
             <Dialog.Title className="text-sm font-semibold text-[var(--app-fg)]">
               Session History
@@ -384,12 +384,12 @@ export function SessionHistoryDialog(props: {
                         </div>
                         <div className="flex items-center justify-end gap-3 shrink-0 min-w-0">
                           <span
-                            className="text-[11px] text-[var(--app-hint)] truncate max-w-[160px] text-right"
+                            className="text-xs text-[var(--app-hint)] truncate max-w-[160px] text-right"
                             title={group.directory}
                           >
                             {group.directory}
                           </span>
-                          <span className="inline-flex items-center justify-center rounded-full bg-[var(--app-bg)] border border-[var(--app-border)] px-2 py-0.5 text-[11px] font-medium text-[var(--app-fg)] tabular-nums min-w-[1.5rem]">
+                          <span className="inline-flex items-center justify-center rounded-full bg-[var(--app-bg)] border border-[var(--app-border)] px-2 py-0.5 text-xs font-medium text-[var(--app-fg)] tabular-nums min-w-[1.5rem]">
                             {group.items.length}
                           </span>
                           <WorkspaceRemoveButton

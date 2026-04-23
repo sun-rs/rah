@@ -81,8 +81,8 @@ export function WorkbenchOpeningPane(props: {
         </div>
       </header>
       <div className="flex-1 overflow-y-auto custom-scrollbar">
-        <div className="mx-auto flex min-h-full w-full max-w-2xl items-center justify-center px-6 py-8 md:px-10 md:py-12">
-          <div className="w-full rounded-3xl border border-[var(--app-border)] bg-[var(--app-bg)] px-6 py-8 text-center shadow-sm md:px-12 md:py-14">
+        <div className="mx-auto flex min-h-full w-full max-w-4xl items-center justify-center px-6 py-8 md:px-10 md:py-12 xl:max-w-5xl xl:px-14 xl:py-16">
+          <div className="w-full rounded-3xl border border-[var(--app-border)] bg-[var(--app-bg)] px-6 py-8 text-center shadow-sm md:px-14 md:py-16 xl:px-20 xl:py-20">
             <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-[var(--app-subtle-bg)] md:h-20 md:w-20">
               <ProviderLogo provider={props.openingSession.provider} className="h-8 w-8 md:h-12 md:w-12" />
             </div>
@@ -96,13 +96,13 @@ export function WorkbenchOpeningPane(props: {
                     : "Opening…"}
               </span>
             </div>
-            <div className="mt-4 text-lg font-semibold text-[var(--app-fg)] md:mt-8 md:text-3xl md:tracking-tight">
+            <div className="mt-4 text-lg font-semibold text-[var(--app-fg)] md:mt-8 md:text-4xl md:tracking-tight xl:text-5xl">
               {props.openingSession.title ??
                 (props.openingSession.kind === "new"
                   ? `${providerLabel(props.openingSession.provider)} session`
                   : "History session")}
             </div>
-            <div className="mx-auto mt-2 max-w-md text-sm text-[var(--app-hint)] md:mt-4 md:max-w-lg md:text-base md:leading-7">
+            <div className="mx-auto mt-2 max-w-md text-sm text-[var(--app-hint)] md:mt-4 md:max-w-2xl md:text-lg md:leading-8 xl:max-w-3xl">
               {props.openingSession.kind === "new"
                 ? `Launching ${providerLabel(props.openingSession.provider)} and preparing the workspace.`
                 : props.openingSession.kind === "claim_history"
@@ -110,7 +110,7 @@ export function WorkbenchOpeningPane(props: {
                   : `Restoring ${providerLabel(props.openingSession.provider)} session and rebuilding the timeline.`}
             </div>
             {props.openingSession.cwd ? (
-              <div className="mx-auto mt-4 max-w-lg rounded-2xl bg-[var(--app-subtle-bg)] px-4 py-3 text-left md:mt-8 md:px-6 md:py-5">
+              <div className="mx-auto mt-4 max-w-xl rounded-2xl bg-[var(--app-subtle-bg)] px-4 py-3 text-left md:mt-8 md:max-w-2xl md:px-6 md:py-5 xl:max-w-3xl">
                 <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--app-hint)] md:text-xs">
                   Workspace
                 </div>

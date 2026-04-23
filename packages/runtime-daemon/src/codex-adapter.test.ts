@@ -231,6 +231,28 @@ rl.on('line', (line) => {
     rmSync(cwd, { recursive: true, force: true });
   });
 
+  test("preferStoredReplay rejects missing Codex rollout records before live resume", async () => {
+    const cwd = mkdtempSync(path.join(os.tmpdir(), "rah-codex-missing-stored-cwd-"));
+    const services = {
+      eventBus: new EventBus(),
+      ptyHub: new PtyHub(),
+      sessionStore: new SessionStore(),
+    };
+    const adapter = new CodexAdapter(services);
+
+    await assert.rejects(
+      adapter.resumeSession({
+        provider: "codex",
+        providerSessionId: "019db93e-98c5-7bc0-8d15-a553c1da63f4",
+        cwd,
+        preferStoredReplay: true,
+      }),
+      /Unknown Codex session 019db93e-98c5-7bc0-8d15-a553c1da63f4/,
+    );
+
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
   test("pages stored Codex history from rollout files", async () => {
     const cwd = mkdtempSync(path.join(os.tmpdir(), "rah-codex-history-cwd-"));
     const sessionId = "019d7777-cccc-7ddd-8eee-ffff00001111";

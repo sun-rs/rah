@@ -94,6 +94,9 @@ export class CodexAdapter implements ProviderAdapter {
     const record =
       this.refreshStoredSessionIndex().get(request.providerSessionId) ??
       this.storedSessionIndex.get(request.providerSessionId);
+    if (request.preferStoredReplay && !record) {
+      throw new Error(`Unknown Codex session ${request.providerSessionId}.`);
+    }
     if (!record && request.cwd === undefined) {
       throw new Error(`Unknown Codex session ${request.providerSessionId}.`);
     }
@@ -184,7 +187,7 @@ export class CodexAdapter implements ProviderAdapter {
     if (!state) {
       throw new Error(`Unknown session ${sessionId}`);
     }
-    if (!state.clients.some((client) => client.id === request.clientId)) {
+    if (!this.services.sessionStore.hasAttachedClient(sessionId, request.clientId)) {
       throw new Error(`Client ${request.clientId} is not attached to ${sessionId}.`);
     }
     const live = this.liveSessions.get(sessionId);

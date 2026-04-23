@@ -24,7 +24,7 @@ describe("WorkbenchStateStore", () => {
     rmSync(tmpRoot, { recursive: true, force: true });
   });
 
-  test("remembers previous live resumable sessions without restoring them as live sessions", async () => {
+  test("does not surface stale previous live sessions without provider backing", async () => {
     const first = new RuntimeEngine();
     first.addWorkspace("/workspace/demo");
     first.addWorkspace("/workspace/extra");
@@ -48,20 +48,17 @@ describe("WorkbenchStateStore", () => {
     assert.equal(listed.activeWorkspaceDir, "/workspace/extra");
     assert.deepEqual(listed.workspaceDirs, ["/workspace/demo", "/workspace/extra"]);
     assert.ok(
-      listed.recentSessions.some(
+      !listed.recentSessions.some(
         (entry) =>
           entry.provider === "codex" &&
-          entry.providerSessionId === "thread-remember-1" &&
-          entry.lastUsedAt === entry.updatedAt,
+          entry.providerSessionId === "thread-remember-1",
       ),
     );
     assert.ok(
-      listed.storedSessions.some(
+      !listed.storedSessions.some(
         (entry) =>
           entry.provider === "codex" &&
-          entry.providerSessionId === "thread-remember-1" &&
-          entry.cwd === "/workspace/demo" &&
-          entry.source === "previous_live",
+          entry.providerSessionId === "thread-remember-1",
       ),
     );
 
@@ -160,7 +157,7 @@ describe("WorkbenchStateStore", () => {
               title: "<environment_context> # AGENTS.md instructions",
               preview: "<environment_context> <cwd>/workspace/demo</cwd>",
               updatedAt: "2026-04-19T00:00:00.000Z",
-              source: "previous_live",
+              source: "provider_history",
             },
           ],
           recentSessions: [
@@ -173,7 +170,7 @@ describe("WorkbenchStateStore", () => {
               preview: "<environment_context> <cwd>/workspace/demo</cwd>",
               updatedAt: "2026-04-19T00:00:00.000Z",
               lastUsedAt: "2026-04-19T00:00:00.000Z",
-              source: "previous_live",
+              source: "provider_history",
             },
           ],
         },
@@ -354,7 +351,7 @@ describe("WorkbenchStateStore", () => {
     await engine.shutdown();
   });
 
-  test("removed workspace stays removed across restart even if session history still points to it", async () => {
+  test("removed workspace stays removed across restart even if stale previous live history still points to it", async () => {
     const first = new RuntimeEngine();
     first.addWorkspace("/workspace/demo");
     const state = first.sessionStore.createManagedSession({
@@ -377,11 +374,10 @@ describe("WorkbenchStateStore", () => {
     const listed = third.listSessions();
     assert.deepEqual(listed.workspaceDirs, []);
     assert.ok(
-      listed.storedSessions.some(
+      !listed.storedSessions.some(
         (entry) =>
           entry.provider === "codex" &&
-          entry.providerSessionId === "thread-removed-1" &&
-          entry.cwd === "/workspace/demo",
+          entry.providerSessionId === "thread-removed-1",
       ),
     );
     await third.shutdown();

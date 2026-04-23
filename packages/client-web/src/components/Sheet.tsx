@@ -14,7 +14,7 @@ export function Sheet(props: {
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 bg-black/40 z-50" />
         <Dialog.Content
-          className={`fixed top-0 bottom-0 z-50 w-80 max-w-[85vw] border-[var(--app-border)] shadow-xl outline-none ${
+          className={`fixed top-0 bottom-0 z-50 w-80 max-w-[85vw] border-[var(--app-border)] shadow-xl outline-none pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] ${
             props.side === "left"
               ? "left-0 border-r bg-[var(--app-subtle-bg)]"
               : "right-0 border-l bg-[var(--app-bg)]"
@@ -37,7 +37,9 @@ export function Sheet(props: {
               </Dialog.Close>
             </div>
           </div>
-          <div className="flex-1 overflow-y-auto custom-scrollbar">{props.children}</div>
+          <div className="flex-1 overflow-y-auto overscroll-y-contain custom-scrollbar pb-[env(safe-area-inset-bottom)]">
+            {props.children}
+          </div>
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

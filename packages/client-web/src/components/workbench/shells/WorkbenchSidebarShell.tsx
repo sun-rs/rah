@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import type { SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
 import { DesktopWorkbenchSidebarHeader } from "../actions/DesktopWorkbenchSidebarHeader";
 import { MobileWorkbenchHeaderActions } from "../actions/MobileWorkbenchHeaderActions";
@@ -10,7 +10,7 @@ export function WorkbenchSidebarShell(props: {
   isResizing: boolean;
   leftOpen: boolean;
   onLeftOpenChange: (open: boolean) => void;
-  onResizeStart: (event: React.MouseEvent<HTMLDivElement>) => void;
+  onResizeStart: (event: ReactPointerEvent<HTMLDivElement>) => void;
   sidebarContent: ReactNode;
   storedSessions: StoredSessionRef[];
   recentSessions: StoredSessionRef[];
@@ -50,7 +50,7 @@ export function WorkbenchSidebarShell(props: {
       {props.sidebarOpen ? (
         <div
           className={`hidden md:block resize-handle ${props.isResizing ? "dragging" : ""}`}
-          onMouseDown={props.onResizeStart}
+          onPointerDown={props.onResizeStart}
         />
       ) : null}
 

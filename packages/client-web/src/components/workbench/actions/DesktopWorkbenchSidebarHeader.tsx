@@ -19,7 +19,7 @@ export function DesktopWorkbenchSidebarHeader(props: {
       <div className="flex items-center gap-1 shrink-0">
         <button
           type="button"
-          className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)] transition-colors"
+          className="inline-flex h-10 w-10 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)] transition-colors"
           onClick={props.onHome}
           aria-label="Home"
           title="Home"
@@ -36,7 +36,7 @@ export function DesktopWorkbenchSidebarHeader(props: {
         >
           <button
             type="button"
-            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)] transition-colors"
+            className="inline-flex h-10 w-10 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)] transition-colors"
             aria-label="Session history"
             title="Session history"
           >
@@ -45,7 +45,7 @@ export function DesktopWorkbenchSidebarHeader(props: {
         </SessionHistoryDialog>
         <button
           type="button"
-          className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)] transition-colors"
+          className="inline-flex h-10 w-10 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)] transition-colors"
           onClick={props.onOpenSettings}
           aria-label="Open settings"
           title="Settings"
@@ -54,7 +54,7 @@ export function DesktopWorkbenchSidebarHeader(props: {
         </button>
         <button
           type="button"
-          className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)] transition-colors"
+          className="inline-flex h-10 w-10 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)] transition-colors"
           onClick={props.onCollapseSidebar}
           aria-label="Collapse sidebar"
           title="Collapse sidebar"

@@ -337,7 +337,7 @@ function ChangesFromEvents(props: { events: RahEvent[] }) {
                 <div className="min-w-0 truncate text-sm font-medium text-[var(--app-fg)]">
                   {obs?.path ?? obs?.title ?? "Change"}
                 </div>
-                <div className="shrink-0 rounded border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-1.5 py-0.5 text-[10px] text-[var(--app-hint)]">
+                <div className="shrink-0 rounded border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-1.5 py-0.5 text-[11px] text-[var(--app-hint)]">
                   {obs?.kind ?? "file-change"}
                 </div>
               </div>
@@ -407,10 +407,10 @@ function DiffDisplay(props: {
 
             return (
               <div key={row.key} className={`grid grid-cols-[4rem_2rem_minmax(0,1fr)] ${toneClassName}`}>
-                <div className="select-none border-r border-[var(--app-border)] px-3 py-0.5 text-right text-[11px] font-mono opacity-70">
+                <div className="select-none border-r border-[var(--app-border)] px-3 py-0.5 text-xs font-mono opacity-70 text-right">
                   {row.lineNumber ?? ""}
                 </div>
-                <div className="select-none border-r border-[var(--app-border)] px-2 py-0.5 text-center text-[11px] font-mono">
+                <div className="select-none border-r border-[var(--app-border)] px-2 py-0.5 text-xs font-mono text-center">
                   {row.sign || " "}
                 </div>
                 <div className="px-3 py-0.5 text-xs font-mono">
@@ -435,7 +435,7 @@ function DiffDisplay(props: {
         </div>
       </div>
       {progressive && remainingRows > 0 ? (
-        <div className="flex items-center justify-between gap-3 rounded-md border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-3 py-2 text-[11px] text-[var(--app-hint)]">
+        <div className="flex items-center justify-between gap-3 rounded-md border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-3 py-2 text-xs text-[var(--app-hint)]">
           <span>
             Showing {visibleRows.length.toLocaleString()} of {props.rows.length.toLocaleString()} diff lines.
           </span>
@@ -486,7 +486,7 @@ function FileContentDisplay(props: { content: string; path: string; wrapLines: b
         <div className="grid grid-cols-[4rem_minmax(0,1fr)]">
           {visibleLines.map((line, index) => (
             <div key={`${index}-${line}`} className="contents">
-              <div className="select-none border-r border-[var(--app-border)] px-3 py-0.5 text-right text-[11px] font-mono text-[var(--app-hint)]">
+              <div className="select-none border-r border-[var(--app-border)] px-3 py-0.5 text-xs font-mono text-[var(--app-hint)] text-right">
                 {index + 1}
               </div>
               <div className="px-4 py-0.5 text-xs font-mono text-[var(--code-block-text)]">
@@ -562,7 +562,7 @@ function EventsList(props: { events: RahEvent[] }) {
             >
               <div className="flex items-center justify-between gap-2">
                 <div className="text-xs font-semibold text-[var(--app-fg)]">{event.type}</div>
-                <div className="text-[11px] text-[var(--app-hint)]">
+                <div className="text-xs text-[var(--app-hint)]">
                   {formatEventTimestamp(event)}
                 </div>
               </div>
@@ -821,25 +821,25 @@ function FileDetailPane(props: {
               <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-[var(--app-hint)]">
                 <Dialog.Description className="min-w-0 truncate">{displayPath}</Dialog.Description>
                 {selectionScopeLabel ? (
-                  <span className="rounded border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-1.5 py-0.5 text-[10px] text-[var(--app-fg)]">
+                  <span className="rounded border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-1.5 py-0.5 text-[11px] text-[var(--app-fg)]">
                     {selectionScopeLabel}
                   </span>
                 ) : null}
                 {props.selection.status ? (
                   <span
-                    className={`rounded border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-1.5 py-0.5 text-[10px] ${getChangedFileStatusTone(props.selection.status)}`}
+                    className={`rounded border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-1.5 py-0.5 text-[11px] ${getChangedFileStatusTone(props.selection.status)}`}
                   >
                     {getChangedFileStatusLabel(props.selection.status)}
                   </span>
                 ) : null}
                 {isBinaryChange ? (
-                  <span className="rounded border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-1.5 py-0.5 text-[10px] text-[var(--app-fg)]">
+                  <span className="rounded border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-1.5 py-0.5 text-[11px] text-[var(--app-fg)]">
                     Binary
                   </span>
                 ) : null}
               </div>
               {props.selection.oldPath ? (
-                <div className="mt-1 truncate text-[11px] text-[var(--app-hint)]">
+                <div className="mt-1 truncate text-xs text-[var(--app-hint)]">
                   {props.selection.oldPath} -&gt; {props.selection.path}
                 </div>
               ) : null}
@@ -889,7 +889,7 @@ function FileDetailPane(props: {
                       type="button"
                       onClick={() => void handleApplyFileAction(props.selection.staged ? "unstage" : "stage")}
                       disabled={fileActionPending !== null}
-                      className={`rounded-md px-2.5 py-1.5 text-[11px] font-medium transition-colors disabled:opacity-50 ${
+                    className={`rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors disabled:opacity-50 ${
                         props.selection.staged
                           ? "bg-[var(--app-subtle-bg)] text-[var(--app-fg)]"
                           : "bg-[var(--app-fg)] text-[var(--app-bg)]"
@@ -907,7 +907,7 @@ function FileDetailPane(props: {
                   <button
                     type="button"
                     onClick={() => setWrapLines((value) => !value)}
-                    className={`rounded-md px-2.5 py-1.5 text-[11px] font-medium transition-colors ${
+                    className={`rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors ${
                       wrapLines
                         ? "bg-[var(--app-subtle-bg)] text-[var(--app-fg)]"
                         : "text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)]"
@@ -918,7 +918,7 @@ function FileDetailPane(props: {
                   <button
                     type="button"
                     onClick={() => setHideWhitespace((value) => !value)}
-                    className={`rounded-md px-2.5 py-1.5 text-[11px] font-medium transition-colors ${
+                    className={`rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors ${
                       hideWhitespace
                         ? "bg-[var(--app-subtle-bg)] text-[var(--app-fg)]"
                         : "text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)]"
@@ -935,7 +935,7 @@ function FileDetailPane(props: {
                 <button
                   type="button"
                   onClick={() => setWrapLines((value) => !value)}
-                  className={`rounded-md px-2.5 py-1.5 text-[11px] font-medium transition-colors ${
+                  className={`rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors ${
                     wrapLines
                       ? "bg-[var(--app-subtle-bg)] text-[var(--app-fg)]"
                       : "text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)]"
@@ -946,7 +946,7 @@ function FileDetailPane(props: {
                 <button
                   type="button"
                   onClick={() => setHideWhitespace((value) => !value)}
-                  className={`rounded-md px-2.5 py-1.5 text-[11px] font-medium transition-colors ${
+                  className={`rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors ${
                     hideWhitespace
                       ? "bg-[var(--app-subtle-bg)] text-[var(--app-fg)]"
                       : "text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)]"
@@ -1229,7 +1229,7 @@ export function InspectorPane(props: {
       <div className="h-14 px-4 flex items-center justify-between shrink-0">
         <div className="min-w-0">
           <div className="text-sm font-medium text-[var(--app-fg)]">Inspector</div>
-          <div className="text-[11px] text-[var(--app-hint)] truncate">{props.workspaceRoot}</div>
+                  <div className="text-xs text-[var(--app-hint)] truncate">{props.workspaceRoot}</div>
         </div>
         {props.onCollapse ? (
           <button
@@ -1244,10 +1244,11 @@ export function InspectorPane(props: {
         ) : null}
       </div>
       <div className="shrink-0 px-3 py-2">
-        <div className="flex items-center gap-0.5 rounded-lg bg-[var(--app-bg)] p-0.5">
+        <div className="overflow-x-auto custom-scrollbar scrollbar-stable">
+        <div className="inline-flex min-w-full items-center gap-0.5 rounded-lg bg-[var(--app-bg)] p-0.5">
           <button
             type="button"
-            className={`flex-1 rounded-md px-2 py-1 text-xs font-medium transition-colors ${
+            className={`min-w-[5.5rem] flex-1 overflow-hidden rounded-md px-2 py-1 text-xs font-medium text-ellipsis whitespace-nowrap transition-colors ${
               activeTab === "changes"
                 ? "bg-[var(--app-subtle-bg)] text-[var(--app-fg)]"
                 : "text-[var(--app-hint)] hover:text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)]/50"
@@ -1258,7 +1259,7 @@ export function InspectorPane(props: {
           </button>
           <button
             type="button"
-            className={`flex-1 rounded-md px-2 py-1 text-xs font-medium transition-colors ${
+            className={`min-w-[5.5rem] flex-1 overflow-hidden rounded-md px-2 py-1 text-xs font-medium text-ellipsis whitespace-nowrap transition-colors ${
               activeTab === "files"
                 ? "bg-[var(--app-subtle-bg)] text-[var(--app-fg)]"
                 : "text-[var(--app-hint)] hover:text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)]/50"
@@ -1270,7 +1271,7 @@ export function InspectorPane(props: {
           {props.sessionId ? (
             <button
               type="button"
-              className={`flex-1 rounded-md px-2 py-1 text-xs font-medium transition-colors ${
+              className={`min-w-[5.5rem] flex-1 overflow-hidden rounded-md px-2 py-1 text-xs font-medium text-ellipsis whitespace-nowrap transition-colors ${
                 activeTab === "events"
                   ? "bg-[var(--app-subtle-bg)] text-[var(--app-fg)]"
                   : "text-[var(--app-hint)] hover:text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)]/50"
@@ -1280,6 +1281,7 @@ export function InspectorPane(props: {
               Events {props.events.length > 0 ? `(${props.events.length})` : ""}
             </button>
           ) : null}
+        </div>
         </div>
       </div>
       <div className="flex-1 overflow-y-scroll custom-scrollbar scrollbar-stable p-3">
@@ -1291,7 +1293,7 @@ export function InspectorPane(props: {
                   <GitBranch size={14} className="text-[var(--app-hint)]" />
                   <span>{gitStatus?.branch ?? "detached"}</span>
                 </div>
-                <div className="text-[11px] text-[var(--app-hint)]">
+                <div className="text-xs text-[var(--app-hint)]">
                   {(gitStatus?.totalStaged ?? 0)} staged, {(gitStatus?.totalUnstaged ?? 0)} unstaged
                 </div>
               </div>

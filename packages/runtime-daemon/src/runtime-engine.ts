@@ -443,7 +443,7 @@ export class RuntimeEngine {
     if (!state) {
       throw new Error(`Unknown session ${sessionId}`);
     }
-    if (!state.clients.some((client) => client.id === request.clientId)) {
+    if (!this.sessionStore.hasAttachedClient(sessionId, request.clientId)) {
       throw new Error(`Client ${request.clientId} is not attached to ${sessionId}.`);
     }
     this.workbenchState.rememberSession(state);
@@ -825,12 +825,31 @@ export class RuntimeEngine {
     discoveredStoredSessions: readonly StoredSessionRef[],
   ): ListSessionsResponse {
     const hiddenSessionKeys = new Set(this.rememberedHiddenSessionKeys);
-    const storedSessions = new Map<string, StoredSessionRef>();
-    for (const remembered of this.rememberedSessions) {
-      if (hiddenSessionKeys.has(`${remembered.provider}:${remembered.providerSessionId}`)) {
+    const availableProviderSessionKeys = new Set<string>();
+    for (const stored of discoveredStoredSessions) {
+      availableProviderSessionKeys.add(`${stored.provider}:${stored.providerSessionId}`);
+    }
+    for (const state of liveStates) {
+      if (!state.session.providerSessionId) {
         continue;
       }
-      storedSessions.set(`${remembered.provider}:${remembered.providerSessionId}`, remembered);
+      availableProviderSessionKeys.add(
+        `${state.session.provider}:${state.session.providerSessionId}`,
+      );
+    }
+    const storedSessions = new Map<string, StoredSessionRef>();
+    for (const remembered of this.rememberedSessions) {
+      const key = `${remembered.provider}:${remembered.providerSessionId}`;
+      if (hiddenSessionKeys.has(key)) {
+        continue;
+      }
+      if (
+        remembered.source === "previous_live" &&
+        !availableProviderSessionKeys.has(key)
+      ) {
+        continue;
+      }
+      storedSessions.set(key, remembered);
     }
     for (const stored of discoveredStoredSessions) {
       if (hiddenSessionKeys.has(`${stored.provider}:${stored.providerSessionId}`)) {
@@ -849,7 +868,19 @@ export class RuntimeEngine {
       sessions: liveStates.map(toSessionSummary),
       storedSessions: [...storedSessions.values()],
       recentSessions: this.rememberedRecentSessions.filter(
-        (session) => !hiddenSessionKeys.has(`${session.provider}:${session.providerSessionId}`),
+        (session) => {
+          const key = `${session.provider}:${session.providerSessionId}`;
+          if (hiddenSessionKeys.has(key)) {
+            return false;
+          }
+          if (
+            session.source === "previous_live" &&
+            !availableProviderSessionKeys.has(key)
+          ) {
+            return false;
+          }
+          return true;
+        },
       ),
       workspaceDirs: workspaceDirsFromState(this.rememberedWorkspaceDirs, liveStates),
       hiddenWorkspaces: [...this.rememberedHiddenWorkspaces],

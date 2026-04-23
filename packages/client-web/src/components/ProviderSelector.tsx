@@ -97,7 +97,7 @@ export function ProviderSelector(props: {
     /* Grid cards for empty state — icon+label on desktop, icon-only on mobile */
     return (
       <div
-        className="grid grid-cols-5 gap-2 sm:gap-3"
+        className="grid grid-cols-3 gap-2 sm:grid-cols-5 sm:gap-3"
         role="radiogroup"
         aria-label="Provider selection"
       >

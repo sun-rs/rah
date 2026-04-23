@@ -3,6 +3,7 @@ import { ArrowUp, ChevronDown, Folder, FolderPlus, Menu, PanelRight, Plus, Squar
 import { ProviderSelector, type ProviderChoice } from "../../ProviderSelector";
 import { TokenizedTextarea } from "../../TokenizedTextarea";
 import { WorkspacePicker } from "../../WorkspacePicker";
+import { EMPTY_STATE_COMPOSER_LAYOUT } from "../../../composer-contract";
 
 export function WorkbenchEmptyPane(props: {
   sidebarOpen: boolean;
@@ -98,8 +99,8 @@ export function WorkbenchEmptyPane(props: {
           <div className="relative">
             <TokenizedTextarea
               ref={props.emptyStateComposerRef}
-              textareaClassName="w-full resize-none bg-[var(--app-subtle-bg)] rounded-2xl border border-[var(--app-border)] px-4 py-3 pr-14 pb-12 text-base focus:outline-none focus:ring-1 focus:ring-[var(--ring)] min-h-[120px]"
-              contentClassName="px-4 py-3 pr-14 pb-12 text-base min-h-[120px]"
+              textareaClassName={EMPTY_STATE_COMPOSER_LAYOUT.textareaClassName}
+              contentClassName={EMPTY_STATE_COMPOSER_LAYOUT.textareaContentClassName}
               placeholder="Message…"
               rows={3}
               value={props.emptyStateDraft}
@@ -117,65 +118,73 @@ export function WorkbenchEmptyPane(props: {
                 }
               }}
             />
-            <div ref={props.workspacePickerRef} className="absolute bottom-3 left-3 z-10 flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={props.onOpenFileReference}
-                className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[var(--app-hint)] hover:text-[var(--app-fg)] hover:bg-[var(--app-bg)] transition-colors"
-                title="Insert file or folder reference"
-              >
-                <Plus size={16} />
-              </button>
-              {props.workspaceDirs.length === 0 ? (
-                <WorkspacePicker
-                  currentDir=""
-                  triggerLabel="Workspace"
-                  triggerIcon={<FolderPlus size={13} />}
-                  triggerClassName="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs text-[var(--app-hint)] hover:text-[var(--app-fg)] hover:bg-[var(--app-bg)] transition-colors"
-                  onSelect={props.onAddWorkspace}
-                />
-              ) : (
+            <div
+              ref={props.workspacePickerRef}
+              className={EMPTY_STATE_COMPOSER_LAYOUT.controlsRowClassName}
+            >
+              <div className={EMPTY_STATE_COMPOSER_LAYOUT.leftControlsClassName}>
                 <button
                   type="button"
-                  onClick={props.onToggleWorkspacePicker}
-                  className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs text-[var(--app-hint)] hover:text-[var(--app-fg)] hover:bg-[var(--app-bg)] transition-colors"
+                  onClick={props.onOpenFileReference}
+                  className={EMPTY_STATE_COMPOSER_LAYOUT.roundSecondaryButtonClassName}
+                  title="Insert file or folder reference"
                 >
-                  <Folder size={13} />
-                  <span className="max-w-[140px] truncate">
-                    {props.availableWorkspaceDir
-                      ? props.availableWorkspaceDir.split("/").pop()
-                      : "Workspace"}
-                  </span>
-                  <ChevronDown size={12} className={`transition-transform ${props.workspacePickerOpen ? "rotate-180" : ""}`} />
+                  <Plus size={16} />
                 </button>
-              )}
-              {props.workspaceDirs.length > 0 && props.workspacePickerOpen ? (
-                <div className="absolute bottom-full left-0 mb-1 w-56 rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-1.5 shadow-lg">
-                  {props.workspaceDirs.map((dir) => (
-                    <button
-                      key={dir}
-                      type="button"
-                      onClick={() => props.onSelectWorkspace(dir)}
-                      className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm transition-colors ${
-                        dir === props.availableWorkspaceDir ? "bg-[var(--app-subtle-bg)] text-[var(--app-fg)]" : "text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)]"
-                      }`}
-                    >
-                      <Folder size={13} className="shrink-0 text-[var(--app-hint)]" />
-                      <span className="truncate">{dir}</span>
-                      {dir === props.availableWorkspaceDir ? <span className="ml-auto text-[10px] text-[var(--app-hint)]">●</span> : null}
-                    </button>
-                  ))}
-                </div>
-              ) : null}
+                {props.workspaceDirs.length === 0 ? (
+                  <WorkspacePicker
+                    currentDir=""
+                    triggerLabel="Workspace"
+                    triggerIcon={<FolderPlus size={13} />}
+                    triggerClassName={EMPTY_STATE_COMPOSER_LAYOUT.workspaceTriggerClassName}
+                    onSelect={props.onAddWorkspace}
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    onClick={props.onToggleWorkspacePicker}
+                    className={EMPTY_STATE_COMPOSER_LAYOUT.workspaceTriggerClassName}
+                  >
+                    <Folder size={13} />
+                    <span className="truncate">
+                      {props.availableWorkspaceDir
+                        ? props.availableWorkspaceDir.split("/").pop()
+                        : "Workspace"}
+                    </span>
+                    <ChevronDown
+                      size={12}
+                      className={`shrink-0 transition-transform ${props.workspacePickerOpen ? "rotate-180" : ""}`}
+                    />
+                  </button>
+                )}
+                {props.workspaceDirs.length > 0 && props.workspacePickerOpen ? (
+                  <div className="absolute bottom-full left-0 mb-1 w-56 rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-1.5 shadow-lg">
+                    {props.workspaceDirs.map((dir) => (
+                      <button
+                        key={dir}
+                        type="button"
+                        onClick={() => props.onSelectWorkspace(dir)}
+                        className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm transition-colors ${
+                          dir === props.availableWorkspaceDir ? "bg-[var(--app-subtle-bg)] text-[var(--app-fg)]" : "text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)]"
+                        }`}
+                      >
+                        <Folder size={13} className="shrink-0 text-[var(--app-hint)]" />
+                        <span className="truncate">{dir}</span>
+                        {dir === props.availableWorkspaceDir ? <span className="ml-auto text-[10px] text-[var(--app-hint)]">●</span> : null}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+              <button
+                type="button"
+                disabled={!props.emptyStateDraft.trim() || !props.availableWorkspaceDir}
+                onClick={props.onEmptyStateSend}
+                className={EMPTY_STATE_COMPOSER_LAYOUT.roundPrimaryButtonClassName}
+              >
+                <ArrowUp size={18} />
+              </button>
             </div>
-            <button
-              type="button"
-              disabled={!props.emptyStateDraft.trim() || !props.availableWorkspaceDir}
-              onClick={props.onEmptyStateSend}
-              className="absolute bottom-3 right-3 h-10 w-10 rounded-full bg-primary text-primary-foreground flex items-center justify-center hover:opacity-90 disabled:opacity-40 transition-colors"
-            >
-              <ArrowUp size={18} />
-            </button>
           </div>
           <div className="w-full max-w-3xl mx-auto">
             <ProviderSelector

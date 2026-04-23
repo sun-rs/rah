@@ -18,6 +18,7 @@ import {
 
 type SessionCommandState = {
   clientId: string;
+  connectionId: string;
   projections: Map<string, SessionProjection>;
   unreadSessionIds: Set<string>;
   hiddenWorkspaceDirs: Set<string>;
@@ -49,24 +50,30 @@ type SessionCommandSetState = (
     | ((state: SessionCommandState) => Partial<SessionCommandState> | SessionCommandState),
 ) => void;
 
-export function createInteractiveAttachRequest(clientId: string): AttachSessionRequest {
+export function createInteractiveAttachRequest(
+  clientId: string,
+  connectionId: string,
+): AttachSessionRequest {
   return {
     client: {
       id: clientId,
       kind: "web",
-      connectionId: clientId,
+      connectionId,
     },
     mode: "interactive",
     claimControl: true,
   };
 }
 
-export function createObserveAttachRequest(clientId: string): AttachSessionRequest {
+export function createObserveAttachRequest(
+  clientId: string,
+  connectionId: string,
+): AttachSessionRequest {
   return {
     client: {
       id: clientId,
       kind: "web",
-      connectionId: clientId,
+      connectionId,
     },
     mode: "observe",
   };
@@ -88,7 +95,7 @@ export async function attachSessionCommand(args: {
     });
     const response = await api.attachSession(
       args.summary.session.id,
-      createObserveAttachRequest(args.get().clientId),
+      createObserveAttachRequest(args.get().clientId, args.get().connectionId),
     );
     args.set((state) => ({
       projections: updateSessionSummaryInProjectionMap(state.projections, response.session),
@@ -134,7 +141,11 @@ export async function claimControlCommand(args: {
       },
       error: null,
     });
-    const summary = await api.claimControl(args.sessionId, args.get().clientId);
+    const summary = await api.claimControl(
+      args.sessionId,
+      args.get().clientId,
+      args.get().connectionId,
+    );
     args.set((state) => ({
       projections: updateSessionSummaryInProjectionMap(state.projections, summary),
       pendingSessionAction: null,

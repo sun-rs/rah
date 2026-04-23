@@ -286,7 +286,11 @@ export async function attachSession(
   });
 }
 
-export async function claimControl(sessionId: string, clientId: string): Promise<SessionSummary> {
+export async function claimControl(
+  sessionId: string,
+  clientId: string,
+  connectionId = clientId,
+): Promise<SessionSummary> {
   const response = await requestJson<{ session: SessionSummary }>(
     `/api/sessions/${sessionId}/control/claim`,
     {
@@ -295,7 +299,7 @@ export async function claimControl(sessionId: string, clientId: string): Promise
         client: {
           id: clientId,
           kind: "web",
-          connectionId: clientId,
+          connectionId,
         },
       }),
     },

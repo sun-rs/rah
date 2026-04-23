@@ -180,7 +180,7 @@ export function SettingsPane() {
                             {providerLabel(diagnostic.provider)}
                           </span>
                           <span
-                            className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${
+                            className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${
                               diagnostic.versionStatus === "update_available"
                                 ? "border-[var(--app-warning)]/20 bg-[var(--app-warning-bg)] text-[var(--app-warning)]"
                                 : diagnostic.versionStatus === "up_to_date"
@@ -201,7 +201,7 @@ export function SettingsPane() {
                         </div>
                         <div className="grid gap-3 sm:grid-cols-2">
                           <div className="rounded-xl border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-3 py-2">
-                            <div className="text-[11px] font-medium uppercase tracking-wide text-[var(--app-hint)]">
+                            <div className="text-xs font-medium uppercase tracking-wide text-[var(--app-hint)]">
                               Installed
                             </div>
                             <div className="mt-1 break-words font-mono text-sm text-[var(--app-fg)] [overflow-wrap:anywhere]">
@@ -209,7 +209,7 @@ export function SettingsPane() {
                             </div>
                           </div>
                           <div className="rounded-xl border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-3 py-2">
-                            <div className="text-[11px] font-medium uppercase tracking-wide text-[var(--app-hint)]">
+                            <div className="text-xs font-medium uppercase tracking-wide text-[var(--app-hint)]">
                               Latest
                             </div>
                             <div
@@ -232,7 +232,7 @@ export function SettingsPane() {
                       </div>
                     </div>
                     {diagnostic.latestVersionError ? (
-                      <div className="mt-3 text-[11px] text-[var(--app-danger)] break-words [overflow-wrap:anywhere]">
+                      <div className="mt-3 text-xs text-[var(--app-danger)] break-words [overflow-wrap:anywhere]">
                         Latest version check failed: {diagnostic.latestVersionError}
                       </div>
                     ) : null}

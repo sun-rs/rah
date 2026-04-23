@@ -589,7 +589,7 @@ export class DebugEngine {
     if (!state) {
       throw new Error(`Unknown session ${sessionId}`);
     }
-    if (!state.clients.some((client) => client.id === request.clientId)) {
+    if (!this.sessionStore.hasAttachedClient(sessionId, request.clientId)) {
       throw new Error(`Client ${request.clientId} is not attached to ${sessionId}.`);
     }
     this.abortPendingTurn(sessionId, "closed");

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -199,7 +200,27 @@ def main() -> int:
             file_dialog.get_by_label("Close").click()
             result["filesPreview"] = "ok"
 
+            split_context = browser.new_context(
+                viewport={"width": 694, "height": 1112},
+                has_touch=True,
+            )
+            split_page = split_context.new_page()
+            split_page.goto(base_url, wait_until="domcontentloaded")
+            expect(split_page.get_by_text("What would you like to build?")).to_be_visible(timeout=30_000)
+            split_textarea = split_page.locator("textarea").first
+            split_textarea.fill("Reply only with OK.")
+            split_textarea.press("Enter")
+            expect(split_page.get_by_role("button", name="Open inspector")).to_be_visible(timeout=90_000)
+            split_page.get_by_role("button", name="Open inspector").click()
+            expect(split_page.get_by_role("button", name=re.compile(r"^Changes"))).to_be_visible(timeout=30_000)
+            expect(split_page.get_by_role("button", name="Files", exact=True)).to_be_visible(timeout=30_000)
+            expect(split_page.get_by_role("button", name=re.compile(r"^Events"))).to_be_visible(timeout=30_000)
+            split_page.get_by_role("button", name="Files", exact=True).click()
+            split_page.get_by_role("button", name=re.compile(r"^Events")).click()
+            result["splitInspector"] = "ok"
+
             print(json.dumps({"ok": True, **result}, ensure_ascii=False, indent=2))
+            split_context.close()
             browser.close()
         return 0
     finally:

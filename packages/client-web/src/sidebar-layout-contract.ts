@@ -4,7 +4,7 @@ export const SIDEBAR_LAYOUT = {
   toolbarLabelClassName: "text-xs font-medium text-[var(--app-hint)]",
   toolbarActionsClassName: "flex items-center gap-0.5",
   toolbarIconButtonClassName:
-    "inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)]",
+    "inline-flex h-9 w-9 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)]",
   sortMenuClassName:
     "absolute right-0 top-9 z-20 w-44 rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-1.5 shadow-lg",
   sortMenuItemClassName:
@@ -18,13 +18,13 @@ export const SIDEBAR_LAYOUT = {
   workspaceHeaderSelectedClassName:
     "bg-[var(--app-bg)]/60",
   workspaceToggleButtonClassName:
-    "inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-[var(--app-hint)] transition-colors hover:text-[var(--app-fg)]",
+    "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-bg)]/50 hover:text-[var(--app-fg)]",
   workspaceTitleButtonClassName:
     "min-w-0 flex-1 truncate rounded-md px-1 py-0.5 text-left text-sm text-[var(--app-fg)] transition-colors hover:bg-[var(--app-bg)]/60",
   workspaceActionSlotClassName:
-    "flex w-7 shrink-0 items-center justify-center",
+    "flex w-9 shrink-0 items-center justify-center",
   workspaceActionButtonClassName:
-    "inline-flex h-6 w-6 items-center justify-center rounded text-[var(--app-hint)] transition-colors",
+    "inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors",
   workspaceActionHiddenClassName:
     "opacity-0 pointer-events-none group-hover/workspace:pointer-events-auto group-hover/workspace:opacity-100 transition-opacity",
   workspaceActionDangerClassName:
@@ -40,9 +40,9 @@ export const SIDEBAR_LAYOUT = {
   sessionIconClassName: "h-5 w-5",
   sessionTitleClassName: "min-w-0 flex-1 truncate text-sm",
   sessionPinSlotClassName:
-    "ml-auto flex h-5 w-5 shrink-0 items-center justify-center",
+    "ml-auto flex h-8 w-8 shrink-0 items-center justify-center",
   sessionPinButtonClassName:
-    "inline-flex h-5 w-5 items-center justify-center rounded text-[var(--app-hint)] transition-all hover:text-[var(--app-fg)]",
+    "inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-hint)] transition-all hover:bg-[var(--app-bg)]/50 hover:text-[var(--app-fg)]",
   sessionPinHiddenClassName:
     "opacity-0 pointer-events-none group-hover/session:pointer-events-auto group-hover/session:opacity-100",
   sessionPinActiveClassName: "opacity-100 text-[var(--app-fg)]",
@@ -50,7 +50,7 @@ export const SIDEBAR_LAYOUT = {
     "mt-1 flex min-h-[20px] items-center justify-between gap-2",
   sessionMetaLeftClassName: "flex min-w-0 items-center gap-1.5",
   sessionStatusBadgeBaseClassName:
-    "inline-flex shrink-0 items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium",
+    "inline-flex shrink-0 items-center rounded-full border px-1.5 py-0.5 text-[11px] font-medium",
   sessionStatusBadgeClassByStatus: {
     approval: "border-orange-500/20 bg-orange-500/10 text-orange-700 dark:text-orange-400",
     thinking: "border-sky-500/20 bg-sky-500/10 text-sky-600 dark:text-sky-400",
@@ -58,7 +58,7 @@ export const SIDEBAR_LAYOUT = {
     ready: "border-[var(--app-border)] bg-[var(--app-bg)]/60 text-[var(--app-hint)]",
   },
   sessionTimeClassName:
-    "min-w-[3.25rem] shrink-0 text-right text-[11px] text-[var(--app-hint)]",
+    "min-w-[3.25rem] shrink-0 text-right text-xs text-[var(--app-hint)]",
   labSectionClassName: "space-y-2",
   labHeaderClassName: "px-1",
   labHeaderLabelClassName: "text-xs font-medium text-[var(--app-hint)]",
@@ -68,5 +68,5 @@ export const SIDEBAR_LAYOUT = {
   labTitleClassName:
     "block truncate text-sm font-medium text-[var(--app-fg)]",
   labDescriptionClassName:
-    "mt-0.5 text-[11px] text-[var(--app-hint)] line-clamp-2",
+    "mt-0.5 text-xs text-[var(--app-hint)] line-clamp-2",
 } as const;

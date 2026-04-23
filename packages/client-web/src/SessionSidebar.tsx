@@ -54,8 +54,8 @@ function WorkspaceSortMenu(props: {
   }, [open]);
 
   const sortOptions: Array<{ value: WorkspaceSortMode; label: string }> = [
-    { value: "created", label: "已创建" },
-    { value: "updated", label: "已更新" },
+    { value: "created", label: "按创建顺序" },
+    { value: "updated", label: "按最近更新" },
   ];
 
   return (
@@ -65,7 +65,8 @@ function WorkspaceSortMenu(props: {
         className={SIDEBAR_LAYOUT.toolbarIconButtonClassName}
         aria-haspopup="menu"
         aria-expanded={open}
-        title="Sort"
+        aria-label="排序"
+        title="排序"
         onClick={() => setOpen((current) => !current)}
       >
         <ListFilter size={14} />

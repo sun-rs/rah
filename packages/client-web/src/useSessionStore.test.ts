@@ -6,6 +6,7 @@ import {
   computeUnreadSessionIds,
   findDaemonLiveSessionForStoredRef,
   readOrCreateClientId,
+  readOrCreateConnectionId,
   reconcileVisibleWorkspaceSelection,
   resolveHistoryActivationMode,
   resolveHiddenWorkspaceDirsFromSessionsResponse,
@@ -233,7 +234,7 @@ describe("workspace response reconciliation", () => {
     );
   });
 
-  test("reuses the same web client id across refreshes within one browser tab", () => {
+  test("uses one shared web client id across tabs and devices", () => {
     const values = new Map<string, string>();
     const storage = {
       getItem(key: string) {
@@ -246,6 +247,24 @@ describe("workspace response reconciliation", () => {
 
     const first = readOrCreateClientId(storage);
     const second = readOrCreateClientId(storage);
+
+    assert.equal(first, second);
+    assert.equal(first, "web-user");
+  });
+
+  test("reuses the same web connection id across refreshes within one browser tab", () => {
+    const values = new Map<string, string>();
+    const storage = {
+      getItem(key: string) {
+        return values.get(key) ?? null;
+      },
+      setItem(key: string, value: string) {
+        values.set(key, value);
+      },
+    };
+
+    const first = readOrCreateConnectionId(storage);
+    const second = readOrCreateConnectionId(storage);
 
     assert.equal(first, second);
     assert.match(first, /^web-/);

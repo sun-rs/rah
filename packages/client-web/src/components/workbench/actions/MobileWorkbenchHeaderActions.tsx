@@ -16,7 +16,7 @@ export function MobileWorkbenchHeaderActions(props: {
     <div className="flex items-center gap-1">
       <button
         type="button"
-        className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)] transition-colors"
+        className="inline-flex h-9 w-9 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)] transition-colors"
         onClick={props.onHome}
         aria-label="Home"
         title="Home"
@@ -33,7 +33,7 @@ export function MobileWorkbenchHeaderActions(props: {
       >
         <button
           type="button"
-          className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)] transition-colors"
+          className="inline-flex h-9 w-9 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)] transition-colors"
           aria-label="Session history"
           title="Session history"
         >
@@ -42,7 +42,7 @@ export function MobileWorkbenchHeaderActions(props: {
       </SessionHistoryDialog>
       <button
         type="button"
-        className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)] transition-colors"
+        className="inline-flex h-9 w-9 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)] transition-colors"
         onClick={props.onOpenSettings}
         aria-label="Open settings"
         title="Settings"
