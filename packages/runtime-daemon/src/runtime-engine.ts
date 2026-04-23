@@ -685,7 +685,16 @@ export class RuntimeEngine {
   async startIndependentTerminal(
     request?: IndependentTerminalStartRequest,
   ): Promise<IndependentTerminalStartResponse> {
-    const cwd = resolveUserPath(request?.cwd || "~");
+    const requestedCwd = resolveUserPath(request?.cwd || "~");
+    let cwd = requestedCwd;
+    try {
+      const directoryStat = await stat(requestedCwd);
+      if (!directoryStat.isDirectory()) {
+        cwd = os.homedir();
+      }
+    } catch {
+      cwd = os.homedir();
+    }
     const id = crypto.randomUUID();
     this.ptyHub.ensureSession(id);
     const process = new IndependentTerminalProcess({

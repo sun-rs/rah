@@ -4,6 +4,7 @@ import { LoaderCircle, PencilLine, Plus, RotateCcw, X } from "lucide-react";
 import type { IndependentTerminalSession } from "@rah/runtime-protocol";
 import { closeIndependentTerminal, startIndependentTerminal } from "../../../api";
 import { TerminalPane } from "../../../TerminalPane";
+import { ConfirmDialog } from "./ConfirmDialog";
 
 function terminalTitle(cwd: string): string {
   const parts = cwd.split("/").filter(Boolean);
@@ -16,6 +17,11 @@ export function WorkbenchTerminalDialog(props: {
   clientId: string;
   cwd: string;
 }) {
+  const [closeIntent, setCloseIntent] = useState<
+    | { kind: "single"; terminalId: string; label: string }
+    | { kind: "all"; count: number }
+    | null
+  >(null);
   const [terminals, setTerminals] = useState<IndependentTerminalSession[]>([]);
   const terminalsRef = useRef<IndependentTerminalSession[]>([]);
   const [activeTerminalId, setActiveTerminalId] = useState<string | null>(null);
@@ -29,12 +35,7 @@ export function WorkbenchTerminalDialog(props: {
     [activeTerminalId, terminals],
   );
   const displayCwd = activeTerminal?.cwd ?? props.cwd;
-  const displayTitle = useMemo(() => {
-    if (activeTerminal && labelsByTerminalId[activeTerminal.id]?.trim()) {
-      return labelsByTerminalId[activeTerminal.id]!;
-    }
-    return terminalTitle(displayCwd);
-  }, [activeTerminal, displayCwd, labelsByTerminalId]);
+  const workspaceTitle = useMemo(() => terminalTitle(displayCwd), [displayCwd]);
 
   useEffect(() => {
     terminalsRef.current = terminals;
@@ -87,6 +88,7 @@ export function WorkbenchTerminalDialog(props: {
       setLabelsByTerminalId({});
       setEditingTerminalId(null);
       setEditingLabel("");
+      setCloseIntent(null);
       setLoading(false);
       return;
     }
@@ -103,15 +105,6 @@ export function WorkbenchTerminalDialog(props: {
   }, [props.open]);
 
   const closeSingleTerminal = async (terminalId: string) => {
-    const target = terminalsRef.current.find((terminal) => terminal.id === terminalId);
-    if (typeof window !== "undefined" && target) {
-      const confirmed = window.confirm(
-        `Close terminal "${labelsByTerminalId[terminalId] || terminalTitle(target.cwd)}"?`,
-      );
-      if (!confirmed) {
-        return;
-      }
-    }
     await closeIndependentTerminal(terminalId).catch(() => undefined);
     setTerminals((current) => {
       const next = current.filter((terminal) => terminal.id !== terminalId);
@@ -138,16 +131,36 @@ export function WorkbenchTerminalDialog(props: {
       props.onOpenChange(true);
       return;
     }
-    if (terminalsRef.current.length > 0 && typeof window !== "undefined") {
-      const confirmed = window.confirm(
-        terminalsRef.current.length === 1
-          ? "Close this terminal?"
-          : `Close all ${terminalsRef.current.length} terminals?`,
-      );
-      if (!confirmed) {
-        return;
-      }
+    if (terminalsRef.current.length > 0) {
+      setCloseIntent({ kind: "all", count: terminalsRef.current.length });
+      return;
     }
+    props.onOpenChange(false);
+  };
+
+  const requestCloseSingleTerminal = (terminalId: string) => {
+    const target = terminalsRef.current.find((terminal) => terminal.id === terminalId);
+    if (!target) {
+      return;
+    }
+    setCloseIntent({
+      kind: "single",
+      terminalId,
+      label: labelsByTerminalId[terminalId] || terminalTitle(target.cwd),
+    });
+  };
+
+  const handleConfirmClose = () => {
+    if (!closeIntent) {
+      return;
+    }
+    if (closeIntent.kind === "single") {
+      void closeSingleTerminal(closeIntent.terminalId).finally(() => {
+        setCloseIntent(null);
+      });
+      return;
+    }
+    setCloseIntent(null);
     props.onOpenChange(false);
   };
 
@@ -184,27 +197,17 @@ export function WorkbenchTerminalDialog(props: {
           data-terminal-cwd={activeTerminal?.cwd ?? props.cwd}
           className="fixed inset-0 z-50 flex h-[100dvh] w-screen flex-col overflow-hidden bg-[var(--app-bg)] pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] focus:outline-none md:left-1/2 md:top-1/2 md:h-[82vh] md:w-[min(1280px,96vw)] md:-translate-x-1/2 md:-translate-y-1/2 md:rounded-2xl md:border md:border-[var(--app-border)] md:pt-0 md:pb-0 md:shadow-2xl"
         >
-          <div className="flex items-start justify-between gap-4 border-b border-[var(--app-border)] px-4 py-3 md:px-5 md:py-4">
-            <div className="min-w-0">
-              <Dialog.Title className="truncate text-base font-semibold text-[var(--app-fg)]">
-                {displayTitle}
+          <div className="flex items-center justify-between gap-3 border-b border-[var(--app-border)] px-3 py-2.5 md:px-4 md:py-3">
+            <div className="min-w-0 flex-1">
+              <Dialog.Title className="truncate text-sm font-semibold text-[var(--app-fg)] md:text-base">
+                {workspaceTitle}
               </Dialog.Title>
-              <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-[var(--app-hint)]">
-                <Dialog.Description className="truncate">
-                  {displayCwd}
-                </Dialog.Description>
-                {activeTerminal?.shell ? (
-                  <span className="rounded-full border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-2 py-0.5 text-[10px]">
-                    {activeTerminal.shell.split("/").pop()}
-                  </span>
-                ) : null}
-              </div>
             </div>
             <div className="flex items-center gap-1.5 shrink-0">
               <button
                 type="button"
                 disabled={loading}
-                className="inline-flex h-8 items-center justify-center gap-1 rounded-md border border-[var(--app-border)] px-2.5 text-xs text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] disabled:opacity-50"
+                className="inline-flex h-7 items-center justify-center gap-1 rounded-md border border-[var(--app-border)] px-2 text-[11px] text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] disabled:opacity-50"
                 aria-label="New terminal"
                 title="New terminal"
                 onClick={() => {
@@ -217,7 +220,7 @@ export function WorkbenchTerminalDialog(props: {
               <button
                 type="button"
                 disabled={loading || !activeTerminal}
-                className="inline-flex h-8 items-center justify-center gap-1 rounded-md border border-[var(--app-border)] px-2.5 text-xs text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] disabled:opacity-50"
+                className="inline-flex h-7 items-center justify-center gap-1 rounded-md border border-[var(--app-border)] px-2 text-[11px] text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] disabled:opacity-50"
                 aria-label="Restart terminal"
                 title="Restart terminal"
                 onClick={() => {
@@ -233,7 +236,7 @@ export function WorkbenchTerminalDialog(props: {
               <Dialog.Close asChild>
                 <button
                   type="button"
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
                   aria-label="Close terminal"
                   title="Close terminal"
                 >
@@ -243,19 +246,15 @@ export function WorkbenchTerminalDialog(props: {
             </div>
           </div>
 
-          <div className="border-b border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-4 py-2 text-[11px] text-[var(--app-hint)] md:px-5">
-            Independent shell terminal. This is separate from Codex / Claude sessions.
-          </div>
-
           {terminals.length > 0 ? (
-            <div className="flex gap-2 overflow-x-auto border-b border-[var(--app-border)] bg-[var(--app-bg)] px-3 py-2 md:px-5">
+            <div className="flex gap-1.5 overflow-x-auto bg-[var(--app-bg)] px-3 py-1 md:px-4 md:py-1">
               {terminals.map((terminal) => {
                 const active = terminal.id === activeTerminalId;
                 const tabLabel = labelsByTerminalId[terminal.id] || terminalTitle(terminal.cwd);
                 return (
                   <div
                     key={terminal.id}
-                    className={`group flex items-center gap-2 rounded-lg border px-3 py-1.5 text-left transition-colors ${
+                    className={`group flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-left transition-colors ${
                       active
                         ? "border-[var(--app-border)] bg-[var(--app-subtle-bg)] text-[var(--app-fg)]"
                         : "border-transparent bg-transparent text-[var(--app-hint)] hover:border-[var(--app-border)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
@@ -284,17 +283,14 @@ export function WorkbenchTerminalDialog(props: {
                           className="w-32 rounded bg-transparent text-xs font-medium text-[var(--app-fg)] outline-none"
                         />
                       ) : (
-                        <span className="max-w-[9rem] truncate text-xs font-medium">
+                        <span className="max-w-[10rem] truncate text-[11px] font-medium">
                           {tabLabel}
                         </span>
                       )}
-                      <span className="hidden text-[10px] opacity-70 sm:inline">
-                        {terminal.shell.split("/").pop()}
-                      </span>
                     </button>
                     <button
                       type="button"
-                      className="rounded p-0.5 opacity-70 transition-opacity group-hover:opacity-100"
+                      className="rounded p-0.5 opacity-70 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 coarse-pointer-action-visible"
                       onClick={() => beginRename(terminal)}
                       aria-label={`Rename ${tabLabel} terminal`}
                     >
@@ -302,9 +298,9 @@ export function WorkbenchTerminalDialog(props: {
                     </button>
                     <button
                       type="button"
-                      className="rounded p-0.5 opacity-70 transition-opacity group-hover:opacity-100"
+                      className="rounded p-0.5 opacity-70 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 coarse-pointer-action-visible"
                       onClick={() => {
-                        void closeSingleTerminal(terminal.id);
+                        requestCloseSingleTerminal(terminal.id);
                       }}
                       aria-label={`Close ${tabLabel} terminal`}
                     >
@@ -316,7 +312,7 @@ export function WorkbenchTerminalDialog(props: {
             </div>
           ) : null}
 
-          <div className="min-h-0 flex-1 p-3 md:p-5">
+          <div className="min-h-0 flex-1 px-3 pb-3 pt-0 md:px-5 md:pb-5 md:pt-0">
             {loading ? (
               <div className="flex h-full items-center justify-center gap-2 text-sm text-[var(--app-hint)]">
                 <LoaderCircle size={16} className="animate-spin" />
@@ -337,6 +333,23 @@ export function WorkbenchTerminalDialog(props: {
           </div>
         </Dialog.Content>
       </Dialog.Portal>
+      <ConfirmDialog
+        open={closeIntent !== null}
+        title={closeIntent?.kind === "single" ? "Close terminal?" : "Close terminals?"}
+        description={
+          closeIntent?.kind === "single"
+            ? `Close terminal "${closeIntent.label}"?`
+            : `Close all ${closeIntent?.count ?? 0} terminals?`
+        }
+        confirmLabel="Close"
+        confirmTone="danger"
+        onOpenChange={(open) => {
+          if (!open) {
+            setCloseIntent(null);
+          }
+        }}
+        onConfirm={handleConfirmClose}
+      />
     </Dialog.Root>
   );
 }

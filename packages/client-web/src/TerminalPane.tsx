@@ -13,12 +13,10 @@ function shouldShowMobileInputBridge(): boolean {
   if (typeof navigator === "undefined" || typeof window === "undefined") {
     return false;
   }
-  const platform = navigator.platform || "";
   const userAgent = navigator.userAgent || "";
   const iosLike =
-    /iPad|iPhone|iPod/.test(platform) ||
-    (/Mac/.test(platform) && navigator.maxTouchPoints > 1) ||
-    /iPad|iPhone|iPod/.test(userAgent);
+    /iPad|iPhone|iPod/.test(userAgent) ||
+    (/Macintosh/.test(userAgent) && navigator.maxTouchPoints > 1);
   const touchSmallScreen =
     navigator.maxTouchPoints > 0 && window.matchMedia("(max-width: 768px)").matches;
   return iosLike || touchSmallScreen;
@@ -184,12 +182,6 @@ export function TerminalPane(props: TerminalPaneProps) {
 
   return (
     <div className="terminal-panel" data-testid="terminal-panel">
-      <div className="terminal-toolbar">
-        <span>Shell terminal</span>
-        <span className={props.hasControl ? "control-state control-on" : "control-state"}>
-          {props.hasControl ? "interactive" : "observe"}
-        </span>
-      </div>
       {showIosInputBridge ? (
         <div className="terminal-ios-input-bridge" data-testid="terminal-ios-input-bridge">
           <input

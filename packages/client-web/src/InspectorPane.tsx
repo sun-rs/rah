@@ -10,6 +10,7 @@ import {
   LoaderCircle,
   PanelRight,
   RefreshCcw,
+  SquareTerminal,
   X,
 } from "lucide-react";
 import {
@@ -321,35 +322,35 @@ function useHighlightedLineHtml(code: string | null, language: string | null) {
 function ChangesFromEvents(props: { events: RahEvent[] }) {
   const items = useMemo(() => props.events.filter(isFileChangeObservation), [props.events]);
 
+  if (items.length === 0) {
+    return null;
+  }
+
   return (
     <div className="space-y-3">
-      {items.length > 0 ? (
-        items.map((change, index) => {
-          const obs = (change.payload as {
-            observation?: { title?: string; description?: string; path?: string; kind?: string };
-          }).observation;
-          return (
-            <div
-              key={`${change.seq}-${index}`}
-              className="rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] p-3"
-            >
-              <div className="flex items-center justify-between gap-2">
-                <div className="min-w-0 truncate text-sm font-medium text-[var(--app-fg)]">
-                  {obs?.path ?? obs?.title ?? "Change"}
-                </div>
-                <div className="shrink-0 rounded border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-1.5 py-0.5 text-[11px] text-[var(--app-hint)]">
-                  {obs?.kind ?? "file-change"}
-                </div>
+      {items.map((change, index) => {
+        const obs = (change.payload as {
+          observation?: { title?: string; description?: string; path?: string; kind?: string };
+        }).observation;
+        return (
+          <div
+            key={`${change.seq}-${index}`}
+            className="rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] p-3"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div className="min-w-0 truncate text-sm font-medium text-[var(--app-fg)]">
+                {obs?.path ?? obs?.title ?? "Change"}
               </div>
-              {obs?.description ? (
-                <div className="mt-1 text-xs text-[var(--app-hint)]">{obs.description}</div>
-              ) : null}
+              <div className="shrink-0 rounded border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-1.5 py-0.5 text-[11px] text-[var(--app-hint)]">
+                {obs?.kind ?? "file-change"}
+              </div>
             </div>
-          );
-        })
-      ) : (
-        <div className="text-sm text-[var(--app-hint)]">No file changes yet.</div>
-      )}
+            {obs?.description ? (
+              <div className="mt-1 text-xs text-[var(--app-hint)]">{obs.description}</div>
+            ) : null}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -812,8 +813,8 @@ function FileDetailPane(props: {
     <Dialog.Root open onOpenChange={(open) => (!open ? props.onClose() : undefined)}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-40 bg-black/45" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 flex h-[82vh] w-[min(1100px,92vw)] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-2xl border border-[var(--app-border)] bg-[var(--app-bg)] shadow-2xl focus:outline-none">
-          <div className="flex items-start justify-between gap-4 border-b border-[var(--app-border)] px-5 py-4">
+        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 flex h-[82vh] w-[min(1100px,92vw)] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-2xl border border-[var(--app-border)] bg-[var(--app-bg)] shadow-2xl focus:outline-none max-md:inset-0 max-md:h-[100dvh] max-md:w-screen max-md:max-w-none max-md:translate-x-0 max-md:translate-y-0 max-md:rounded-none max-md:border-0 max-md:pt-[env(safe-area-inset-top)] max-md:pb-[env(safe-area-inset-bottom)]">
+          <div className="flex items-start justify-between gap-4 border-b border-[var(--app-border)] px-4 py-3 md:px-5 md:py-4">
             <div className="min-w-0">
               <Dialog.Title className="truncate text-base font-semibold text-[var(--app-fg)]">
                 {fileName}
@@ -857,9 +858,9 @@ function FileDetailPane(props: {
           </div>
 
           {hasDiff && shouldShowFileTab ? (
-            <div className="border-b border-[var(--app-border)] px-5 py-3">
-              <div className="flex items-center gap-3">
-                <div className="flex flex-1 items-center gap-1 rounded-lg bg-[var(--app-subtle-bg)] p-1">
+            <div className="border-b border-[var(--app-border)] px-3 py-2 md:px-5 md:py-3">
+              <div className="flex flex-col gap-2 md:flex-row md:items-center md:gap-3">
+                <div className="flex w-full items-center gap-1 rounded-lg bg-[var(--app-subtle-bg)] p-1 md:flex-1">
                   <button
                     type="button"
                     onClick={() => setDisplayMode("diff")}
@@ -883,7 +884,7 @@ function FileDetailPane(props: {
                     File
                   </button>
                 </div>
-                <div className="flex shrink-0 items-center gap-1">
+                <div className="flex flex-wrap items-center gap-1 md:shrink-0 md:justify-end">
                   {props.selection.source === "changes" && canApplyGitFileAction ? (
                     <button
                       type="button"
@@ -930,8 +931,8 @@ function FileDetailPane(props: {
               </div>
             </div>
           ) : hasDiff ? (
-            <div className="border-b border-[var(--app-border)] px-5 py-3">
-              <div className="flex items-center justify-end gap-1">
+            <div className="border-b border-[var(--app-border)] px-3 py-2 md:px-5 md:py-3">
+              <div className="flex flex-wrap items-center justify-end gap-1">
                 <button
                   type="button"
                   onClick={() => setWrapLines((value) => !value)}
@@ -958,7 +959,7 @@ function FileDetailPane(props: {
             </div>
           ) : null}
 
-          <div className="min-h-0 flex-1 overflow-auto custom-scrollbar scrollbar-stable p-5">
+          <div className="min-h-0 flex-1 overflow-auto custom-scrollbar scrollbar-stable p-3 md:p-5">
             {displayMode === "diff" ? (
               diffLoading ? (
                 <div className="flex items-center gap-2 text-sm text-[var(--app-hint)]">
@@ -1021,6 +1022,7 @@ export function InspectorPane(props: {
   workspaceRoot: string;
   events: RahEvent[];
   onCollapse?: () => void;
+  onOpenTerminal?: () => void;
 }) {
   const [activeTab, setActiveTab] = useState<InspectorTab>("changes");
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
@@ -1231,17 +1233,30 @@ export function InspectorPane(props: {
           <div className="text-sm font-medium text-[var(--app-fg)]">Inspector</div>
                   <div className="text-xs text-[var(--app-hint)] truncate">{props.workspaceRoot}</div>
         </div>
-        {props.onCollapse ? (
-          <button
-            type="button"
-            className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)] transition-colors"
-            onClick={props.onCollapse}
-            aria-label="Collapse inspector"
-            title="Collapse inspector"
-          >
-            <PanelRight size={16} />
-          </button>
-        ) : null}
+        <div className="flex items-center gap-1">
+          {props.onOpenTerminal ? (
+            <button
+              type="button"
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)] transition-colors"
+              onClick={props.onOpenTerminal}
+              aria-label="Open terminal"
+              title="Open terminal"
+            >
+              <SquareTerminal size={16} />
+            </button>
+          ) : null}
+          {props.onCollapse ? (
+            <button
+              type="button"
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)] transition-colors"
+              onClick={props.onCollapse}
+              aria-label="Collapse inspector"
+              title="Collapse inspector"
+            >
+              <PanelRight size={16} />
+            </button>
+          ) : null}
+        </div>
       </div>
       <div className="shrink-0 px-3 py-2">
         <div className="overflow-x-auto custom-scrollbar scrollbar-stable">
@@ -1316,7 +1331,7 @@ export function InspectorPane(props: {
                 {gitStatusError}
               </div>
             ) : changeCount === 0 ? (
-              <div className="text-sm text-[var(--app-hint)]">No file changes detected.</div>
+              <div className="pt-8 text-center text-sm text-[var(--app-hint)]">No changes.</div>
             ) : (
               <div className="space-y-3">
                 {gitStatus?.stagedFiles.length ? (

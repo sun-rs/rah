@@ -12,53 +12,57 @@ export const SIDEBAR_LAYOUT = {
   sortMenuActionClassName:
     "flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]",
   workspaceListClassName: "space-y-1",
-  workspaceBlockClassName: "space-y-0.5",
+  workspaceBlockClassName: "space-y-1",
   workspaceHeaderClassName:
-    "group/workspace flex min-h-[34px] items-center gap-2 rounded-lg px-2.5 py-1.5 transition-colors hover:bg-[var(--app-bg)]/30",
+    "group/workspace flex min-h-[32px] items-center gap-1.5 rounded-lg px-2 py-1 transition-colors hover:bg-[var(--app-bg)]/30",
   workspaceHeaderSelectedClassName:
     "bg-[var(--app-bg)]/60",
   workspaceToggleButtonClassName:
-    "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-bg)]/50 hover:text-[var(--app-fg)]",
+    "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-bg)]/50 hover:text-[var(--app-fg)]",
   workspaceTitleButtonClassName:
     "min-w-0 flex-1 truncate rounded-md px-1 py-0.5 text-left text-sm text-[var(--app-fg)] transition-colors hover:bg-[var(--app-bg)]/60",
+  workspaceTitleSelectedClassName:
+    "font-semibold",
   workspaceActionSlotClassName:
     "flex w-9 shrink-0 items-center justify-center",
   workspaceActionButtonClassName:
-    "inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors",
+    "inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors",
   workspaceActionHiddenClassName:
-    "opacity-0 pointer-events-none group-hover/workspace:pointer-events-auto group-hover/workspace:opacity-100 transition-opacity",
+    "opacity-0 pointer-events-none transition-opacity group-hover/workspace:pointer-events-auto group-hover/workspace:opacity-100 group-focus-within/workspace:pointer-events-auto group-focus-within/workspace:opacity-100 coarse-pointer-action-visible",
   workspaceActionDangerClassName:
     "hover:bg-[var(--app-danger)]/10 hover:text-[var(--app-danger)] disabled:opacity-30",
-  sessionListClassName: "space-y-0.5 pl-4 pr-0.5",
+  sessionListClassName: "space-y-0.5 pt-0.5 pl-0.5 pr-0.5",
   sessionRowBaseClassName:
-    "group/session w-full min-h-[60px] rounded-lg px-2 py-2 text-left transition-colors",
+    "group/session relative w-full min-h-[32px] rounded-lg border px-2 py-1 text-left transition-colors",
   sessionRowSelectedClassName:
-    "bg-[var(--app-bg)]/60 text-[var(--app-fg)]",
+    "border-emerald-500/20 bg-emerald-500/8 text-[var(--app-fg)] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.02),inset_3px_0_0_0_rgba(52,211,153,0.52)]",
   sessionRowIdleClassName:
-    "text-[var(--app-fg)] hover:bg-[var(--app-bg)]/30",
-  sessionHeaderClassName: "flex min-w-0 items-center gap-1.5",
-  sessionIconClassName: "h-5 w-5",
-  sessionTitleClassName: "min-w-0 flex-1 truncate text-sm",
+    "border-transparent text-[color:color-mix(in_oklab,var(--app-fg)_94%,var(--app-hint))] hover:bg-[var(--app-bg)]/8",
+  sessionInlineRowClassName: "flex items-center gap-1.5",
+  sessionHeaderClassName: "flex min-w-0 flex-1 items-center gap-1.5",
+  sessionIconSlotClassName: "inline-flex h-7 w-7 shrink-0 items-center justify-center",
+  sessionIconClassName: "h-4.5 w-4.5",
+  sessionTitleClassName: "min-w-0 flex-1 truncate text-[12px]",
   sessionPinSlotClassName:
-    "ml-auto flex h-8 w-8 shrink-0 items-center justify-center",
+    "ml-auto flex h-7 w-7 shrink-0 items-center justify-center",
   sessionPinButtonClassName:
-    "inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-hint)] transition-all hover:bg-[var(--app-bg)]/50 hover:text-[var(--app-fg)]",
+    "inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-hint)]/80 transition-all hover:text-[var(--app-fg)]",
   sessionPinHiddenClassName:
-    "opacity-0 pointer-events-none group-hover/session:pointer-events-auto group-hover/session:opacity-100",
+    "opacity-0 pointer-events-none transition-opacity group-hover/session:pointer-events-auto group-hover/session:opacity-100 group-focus-within/session:pointer-events-auto group-focus-within/session:opacity-100 coarse-pointer-action-visible",
   sessionPinActiveClassName: "opacity-100 text-[var(--app-fg)]",
   sessionMetaRowClassName:
-    "mt-1 flex min-h-[20px] items-center justify-between gap-2",
+    "flex shrink-0 items-center gap-1.5",
   sessionMetaLeftClassName: "flex min-w-0 items-center gap-1.5",
   sessionStatusBadgeBaseClassName:
-    "inline-flex shrink-0 items-center rounded-full border px-1.5 py-0.5 text-[11px] font-medium",
+    "inline-flex shrink-0 items-center text-[10px] font-medium tracking-normal",
   sessionStatusBadgeClassByStatus: {
-    approval: "border-orange-500/20 bg-orange-500/10 text-orange-700 dark:text-orange-400",
-    thinking: "border-sky-500/20 bg-sky-500/10 text-sky-600 dark:text-sky-400",
-    unread: "border-amber-500/20 bg-amber-500/10 text-amber-700 dark:text-amber-400",
-    ready: "border-[var(--app-border)] bg-[var(--app-bg)]/60 text-[var(--app-hint)]",
+    approval: "text-orange-700/90 dark:text-orange-400/90",
+    thinking: "text-sky-600/90 dark:text-sky-400/90",
+    unread: "text-amber-700/90 dark:text-amber-400/90",
+    ready: "text-[var(--app-hint)]",
   },
   sessionTimeClassName:
-    "min-w-[3.25rem] shrink-0 text-right text-xs text-[var(--app-hint)]",
+    "min-w-[3.5rem] shrink-0 text-right text-[11px] text-[var(--app-hint)]",
   labSectionClassName: "space-y-2",
   labHeaderClassName: "px-1",
   labHeaderLabelClassName: "text-xs font-medium text-[var(--app-hint)]",

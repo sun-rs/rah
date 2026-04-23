@@ -36,13 +36,36 @@ def assert_terminal_output(panel, needle: str, *, timeout_ms: int = 10_000) -> N
     raise AssertionError(f"Terminal output did not contain {needle!r}.")
 
 
-def run_terminal_smoke(page, workspace: str, marker: str) -> None:
+def wait_for_terminal_entrypoint(page, *, mobile: bool) -> None:
+    started = time.time()
+    while (time.time() - started) * 1000 < 10_000:
+        if page.get_by_role("button", name="Open terminal").count() > 0:
+            return
+        if mobile and page.get_by_role("button", name="Open inspector").count() > 0:
+            page.get_by_role("button", name="Open inspector").click()
+        if not mobile and page.get_by_role("button", name="Expand inspector").count() > 0:
+            page.get_by_role("button", name="Expand inspector").click()
+        page.wait_for_timeout(250)
+    raise AssertionError("Terminal entrypoint did not become visible.")
+
+
+def open_terminal_from_workspace(page, workspace: str, *, mobile: bool) -> None:
     expect(page.get_by_text("What would you like to build?")).to_be_visible(timeout=30_000)
+    workspace_name = Path(workspace).name
+    if mobile:
+        page.get_by_role("button", name="Open sidebar").click()
+        sidebar_scope = page.locator('[role="dialog"]').last
+    else:
+        sidebar_scope = page.locator("aside").first
+    sidebar_scope.get_by_text(workspace_name).first.click()
+    page.wait_for_timeout(500)
+    wait_for_terminal_entrypoint(page, mobile=mobile)
     page.get_by_role("button", name="Open terminal").click()
 
-    expect(
-        page.get_by_text("Independent shell terminal. This is separate from Codex / Claude sessions.")
-    ).to_be_visible(timeout=10_000)
+
+def run_terminal_smoke(page, workspace: str, marker: str, *, mobile: bool = False) -> None:
+    open_terminal_from_workspace(page, workspace, mobile=mobile)
+
     panel = page.locator(".terminal-panel").last
     expect(panel).to_be_visible(timeout=10_000)
 
@@ -81,8 +104,7 @@ def main() -> int:
             mobile_page = mobile_context.new_page()
             mobile_page.on("dialog", lambda dialog: dialog.accept())
             mobile_page.goto(base_url, wait_until="domcontentloaded")
-            expect(mobile_page.get_by_text("What would you like to build?")).to_be_visible(timeout=30_000)
-            mobile_page.get_by_role("button", name="Open terminal").click()
+            open_terminal_from_workspace(mobile_page, workspace, mobile=True)
             mobile_panel = mobile_page.locator(".terminal-panel").last
             expect(mobile_panel).to_be_visible(timeout=10_000)
             bridge = mobile_page.locator(".terminal-ios-input-bridge").last
@@ -130,7 +152,7 @@ def main() -> int:
             split_page = split_context.new_page()
             split_page.on("dialog", lambda dialog: dialog.accept())
             split_page.goto(base_url, wait_until="domcontentloaded")
-            run_terminal_smoke(split_page, workspace, "RAH_TERMINAL_SPLIT_OK")
+            run_terminal_smoke(split_page, workspace, "RAH_TERMINAL_SPLIT_OK", mobile=True)
 
             result["browserSmoke"] = "ok"
             print(json.dumps({"ok": True, **result}, ensure_ascii=False, indent=2))

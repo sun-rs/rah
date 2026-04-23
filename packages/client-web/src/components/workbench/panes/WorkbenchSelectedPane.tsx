@@ -1,6 +1,6 @@
 import { useEffect, useRef, type RefObject } from "react";
 import type { PermissionResponseRequest, SessionSummary } from "@rah/runtime-protocol";
-import { Archive, ArrowUp, Menu, PanelRight, Plus, Square, SquareTerminal, X } from "lucide-react";
+import { Archive, ArrowUp, Menu, PanelRight, Plus, Square, X } from "lucide-react";
 import { providerLabel } from "../../../types";
 import type { SessionProjection } from "../../../types";
 import { ChatThread } from "../../chat/ChatThread";
@@ -38,7 +38,6 @@ export function WorkbenchSelectedPane(props: {
   onExpandSidebar: () => void;
   onOpenRight: () => void;
   onExpandInspector: () => void;
-  onOpenTerminal: () => void;
   onFloatingAnchorOffsetChange: (offsetPx: number) => void;
   onArchiveOrClose: () => void;
 }) {
@@ -122,15 +121,6 @@ export function WorkbenchSelectedPane(props: {
           </div>
         </div>
         <div className="flex items-center gap-1 shrink-0">
-          <button
-            type="button"
-            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] transition-colors"
-            onClick={props.onOpenTerminal}
-            aria-label="Open terminal"
-            title="Open terminal"
-          >
-            <SquareTerminal size={16} />
-          </button>
           <button
             type="button"
             className="inline-flex h-8 items-center justify-center rounded-md border border-[var(--app-border)] px-2 text-xs text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] disabled:opacity-40 transition-colors"
@@ -288,15 +278,13 @@ export function WorkbenchSelectedPane(props: {
               />
               {props.composerSurface.showStopButton ? (
                 <div className={COMPOSER_LAYOUT.stopWrapperClassName}>
-                  <span className={COMPOSER_LAYOUT.stopPulseClassName} />
-                  <span className={COMPOSER_LAYOUT.stopOuterRingClassName} />
                   <span className={COMPOSER_LAYOUT.stopSpinnerClassName} />
                   <button
                     type="button"
                     onClick={props.onInterrupt}
                     className={COMPOSER_LAYOUT.stopButtonClassName}
                   >
-                    <Square size={14} />
+                    <Square size={16} fill="currentColor" />
                   </button>
                 </div>
               ) : null}

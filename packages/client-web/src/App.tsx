@@ -1,4 +1,5 @@
 import { Suspense, lazy, useEffect, useMemo, useState, type CSSProperties } from "react";
+import { PanelRight } from "lucide-react";
 import type { PermissionResponseRequest } from "@rah/runtime-protocol";
 import { SessionSidebar } from "./SessionSidebar";
 import { providerLabel } from "./types";
@@ -7,6 +8,7 @@ import { FileReferencePicker } from "./components/FileReferencePicker";
 import type { ProviderChoice } from "./components/ProviderSelector";
 import { GlobalWorkbenchCallout } from "./components/workbench/callouts/GlobalWorkbenchCallout";
 import { ArchiveSessionDialog } from "./components/workbench/dialogs/ArchiveSessionDialog";
+import { ConfirmDialog } from "./components/workbench/dialogs/ConfirmDialog";
 import { WorkbenchEmptyPane } from "./components/workbench/panes/WorkbenchEmptyPane";
 import { WorkbenchOpeningPane } from "./components/workbench/panes/WorkbenchOpeningPane";
 import { WorkbenchSelectedPane } from "./components/workbench/panes/WorkbenchSelectedPane";
@@ -85,6 +87,7 @@ export function App() {
   } = useSessionStore();
   const [archiveConfirmSessionId, setArchiveConfirmSessionId] = useState<string | null>(null);
   const [archivingSessionId, setArchivingSessionId] = useState<string | null>(null);
+  const [missingWorkspaceConfirmDir, setMissingWorkspaceConfirmDir] = useState<string | null>(null);
   const [floatingAnchorOffsetPx, setFloatingAnchorOffsetPx] = useState(96);
   const { hideToolCallsInChat } = useChatPreferences();
   const { setWorkspaceSortMode, workspaceSortMode } = useWorkspaceSortModeState();
@@ -99,6 +102,7 @@ export function App() {
     sidebarWidth,
     startSidebarResize,
     terminalOpen,
+    visualViewportBottomInsetPx,
     setFileReferenceOpen,
     setLeftOpen,
     setRightOpen,
@@ -189,6 +193,8 @@ export function App() {
   const archiveTargetSummary = archiveConfirmSessionId
     ? projections.get(archiveConfirmSessionId)?.summary ?? null
     : null;
+  const [missingWorkspaceResolver, setMissingWorkspaceResolver] =
+    useState<((confirmed: boolean) => void) | null>(null);
   const primaryPaneState = derivePrimaryPaneState({
     selectedSummary,
     pendingSessionTransition,
@@ -287,11 +293,19 @@ export function App() {
     void activateHistorySession(ref);
   };
 
-  const terminalCwd =
-    selectedSummary?.session.rootDir ||
-    selectedSummary?.session.cwd ||
-    availableWorkspaceDir ||
-    "~";
+  const confirmCreateMissingWorkspace = (dir: string) =>
+    new Promise<boolean>((resolve) => {
+      setMissingWorkspaceConfirmDir(dir);
+      setMissingWorkspaceResolver(() => resolve);
+    });
+
+  const resolveMissingWorkspacePrompt = (confirmed: boolean) => {
+    missingWorkspaceResolver?.(confirmed);
+    setMissingWorkspaceResolver(null);
+    setMissingWorkspaceConfirmDir(null);
+  };
+
+  const terminalCwd = selectedInspectorWorkspaceDir || "~";
   const inspectorContent = selectedSummary || selectedWorkspaceOnlyDir ? (
     <Suspense
       fallback={
@@ -305,16 +319,34 @@ export function App() {
         workspaceRoot={selectedInspectorWorkspaceDir}
         events={selectedProjection?.events ?? []}
         onCollapse={() => setRightSidebarOpen(false)}
+        onOpenTerminal={() => setTerminalOpen(true)}
       />
     </Suspense>
   ) : (
-    <div className="flex h-full items-center justify-center px-6 text-center text-sm text-[var(--app-hint)]">
-      Select a workspace or session to inspect files and changes.
+    <div className="flex h-full flex-col">
+      <div className="h-14 px-4 flex items-center justify-between shrink-0">
+        <div className="min-w-0">
+          <div className="text-sm font-medium text-[var(--app-fg)]">Inspector</div>
+          <div className="text-xs text-[var(--app-hint)] truncate">No workspace or session selected</div>
+        </div>
+        <button
+          type="button"
+          className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)] transition-colors"
+          onClick={() => setRightSidebarOpen(false)}
+          aria-label="Collapse inspector"
+          title="Collapse inspector"
+        >
+          <PanelRight size={16} />
+        </button>
+      </div>
+      <div className="flex flex-1 items-center justify-center px-6 text-center text-sm text-[var(--app-hint)]">
+        Select a workspace or session to inspect files and changes.
+      </div>
     </div>
   );
 
   const rootStyle = {
-    "--workbench-floating-anchor": `calc(env(safe-area-inset-bottom, 0px) + ${floatingAnchorOffsetPx}px)`,
+    "--workbench-floating-anchor": `calc(env(safe-area-inset-bottom, 0px) + ${floatingAnchorOffsetPx + visualViewportBottomInsetPx}px)`,
     "--workbench-callout-anchor": `calc(var(--workbench-floating-anchor) + 3.5rem)`,
   } as CSSProperties;
 
@@ -404,6 +436,27 @@ export function App() {
             .finally(() => setArchivingSessionId(null));
         }}
       />
+      <ConfirmDialog
+        open={missingWorkspaceConfirmDir !== null}
+        title="Workspace is missing"
+        description={
+          missingWorkspaceConfirmDir ? (
+            <>
+              Create this workspace before claiming control?
+              <div className="mt-2 break-all rounded-lg border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-2.5 py-2 font-mono text-xs text-[var(--app-fg)]">
+                {missingWorkspaceConfirmDir}
+              </div>
+            </>
+          ) : null
+        }
+        confirmLabel="Create workspace"
+        onOpenChange={(open) => {
+          if (!open) {
+            resolveMissingWorkspacePrompt(false);
+          }
+        }}
+        onConfirm={() => resolveMissingWorkspacePrompt(true)}
+      />
 
       {selectedSummary || availableWorkspaceDir ? (
         <FileReferencePicker
@@ -448,7 +501,9 @@ export function App() {
             onDraftChange={setDraft}
             onSend={() => void handleSend()}
             onClaimHistory={() => {
-              void claimHistorySession(selectedSummary.session.id);
+              void claimHistorySession(selectedSummary.session.id, {
+                confirmCreateMissingWorkspace,
+              });
             }}
             onClaimControl={() => void claimControl(selectedSummary.session.id)}
             onInterrupt={() => void interruptSession(selectedSummary.session.id)}
@@ -460,7 +515,6 @@ export function App() {
             onExpandSidebar={() => setSidebarOpen(true)}
             onOpenRight={() => setRightOpen(true)}
             onExpandInspector={() => setRightSidebarOpen(true)}
-            onOpenTerminal={() => setTerminalOpen(true)}
             onFloatingAnchorOffsetChange={setFloatingAnchorOffsetPx}
             onArchiveOrClose={() => {
               if (selectedIsReadOnlyReplay) {
@@ -479,7 +533,6 @@ export function App() {
             onExpandSidebar={() => setSidebarOpen(true)}
             onOpenRight={() => setRightOpen(true)}
             onExpandInspector={() => setRightSidebarOpen(true)}
-            onOpenTerminal={() => setTerminalOpen(true)}
           />
         ) : (
           <WorkbenchEmptyPane
@@ -489,7 +542,6 @@ export function App() {
             onExpandSidebar={() => setSidebarOpen(true)}
             onOpenRight={() => setRightOpen(true)}
             onExpandInspector={() => setRightSidebarOpen(true)}
-            onOpenTerminal={() => setTerminalOpen(true)}
             emptyStateComposerRef={emptyStateComposerRef}
             emptyStateDraft={emptyStateDraft}
             onEmptyStateDraftChange={setEmptyStateDraft}
@@ -514,7 +566,7 @@ export function App() {
       </main>
 
       <WorkbenchInspectorShell
-        showDesktop={rightSidebarOpen || Boolean(selectedSummary || selectedWorkspaceOnlyDir)}
+        showDesktop
         desktopOpen={rightSidebarOpen}
         rightOpen={rightOpen}
         onRightOpenChange={setRightOpen}

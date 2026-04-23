@@ -123,6 +123,10 @@ interface StartSessionOptions {
   initialInput?: string;
 }
 
+interface ClaimHistorySessionOptions {
+  confirmCreateMissingWorkspace?: (dir: string) => Promise<boolean>;
+}
+
 interface SessionState {
   clientId: string;
   connectionId: string;
@@ -165,7 +169,7 @@ interface SessionState {
   ) => Promise<void>;
   attachSession: (summary: SessionSummary) => Promise<void>;
   closeSession: (sessionId: string) => Promise<void>;
-  claimHistorySession: (sessionId: string) => Promise<void>;
+  claimHistorySession: (sessionId: string, options?: ClaimHistorySessionOptions) => Promise<void>;
   removeHistorySession: (session: Pick<StoredSessionRef, "provider" | "providerSessionId">) => Promise<void>;
   removeHistoryWorkspaceSessions: (workspaceDir: string) => Promise<void>;
   claimControl: (sessionId: string) => Promise<void>;
@@ -331,6 +335,7 @@ function createStartupDeps(
       | Partial<SessionState>
       | ((state: SessionState) => Partial<SessionState> | SessionState),
   ) => void,
+  options?: ClaimHistorySessionOptions,
 ) {
   return {
     get,
@@ -343,6 +348,9 @@ function createStartupDeps(
     adoptExistingProjectionForProviderSession,
     applyEventsToMap,
     takePendingEventsForSessions,
+    confirmCreateMissingWorkspace:
+      options?.confirmCreateMissingWorkspace ??
+      (async () => false),
   };
 }
 
@@ -595,8 +603,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     await resumeStoredSessionCommand(createStartupDeps(get, set), ref, options);
   },
 
-  claimHistorySession: async (sessionId) => {
-    await claimHistorySessionCommand(createStartupDeps(get, set), sessionId);
+  claimHistorySession: async (sessionId, options) => {
+    await claimHistorySessionCommand(createStartupDeps(get, set, options), sessionId);
   },
 
   removeHistorySession: async (session) => {

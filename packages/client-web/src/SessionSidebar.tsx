@@ -136,14 +136,20 @@ function LiveSessionRow(props: {
 
   return (
     <div className={rowClassName}>
-      <div className="flex items-start gap-1.5">
+      <div className={SIDEBAR_LAYOUT.sessionInlineRowClassName}>
         <button
           type="button"
           onClick={props.onSelect}
-          className="min-w-0 flex-1 text-left"
+          className="min-w-0 flex flex-1 items-center gap-1.5 text-left"
         >
           <div className={SIDEBAR_LAYOUT.sessionHeaderClassName}>
-            <ProviderLogo provider={props.session.provider} className={SIDEBAR_LAYOUT.sessionIconClassName} />
+            <span className={SIDEBAR_LAYOUT.sessionIconSlotClassName}>
+              <ProviderLogo
+                provider={props.session.provider}
+                className={SIDEBAR_LAYOUT.sessionIconClassName}
+                variant="bare"
+              />
+            </span>
             <span className={SIDEBAR_LAYOUT.sessionTitleClassName}>
               {props.session.title}
             </span>
@@ -228,7 +234,9 @@ function WorkspaceRow(props: {
         <button
           type="button"
           onClick={props.onSelectWorkspace}
-          className={SIDEBAR_LAYOUT.workspaceTitleButtonClassName}
+          className={`${SIDEBAR_LAYOUT.workspaceTitleButtonClassName} ${
+            props.workspace.selected ? SIDEBAR_LAYOUT.workspaceTitleSelectedClassName : ""
+          }`}
         >
           {props.workspace.displayName}
         </button>

@@ -111,6 +111,7 @@ type SessionStartupDeps = {
     events: import("@rah/runtime-protocol").RahEvent[],
   ) => Map<string, SessionProjection>;
   takePendingEventsForSessions: (sessionIds: Set<string>) => import("@rah/runtime-protocol").RahEvent[];
+  confirmCreateMissingWorkspace: (dir: string) => Promise<boolean>;
 };
 
 export async function startSessionCommand(
@@ -352,9 +353,7 @@ export async function claimHistorySessionCommand(
     try {
       await api.listDirectory(targetDir);
     } catch {
-      const shouldCreate =
-        typeof window !== "undefined" &&
-        window.confirm(`Workspace is missing. Create it before claiming control?\n\n${targetDir}`);
+      const shouldCreate = await deps.confirmCreateMissingWorkspace(targetDir);
       if (!shouldCreate) {
         return;
       }

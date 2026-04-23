@@ -254,18 +254,6 @@ html.dark .provider-choice-rail {
   box-shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
 }
 
-.terminal-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(5, 10, 20, 0.92);
-  padding: 0.75rem 1rem;
-  font-size: 0.75rem;
-  color: rgba(217, 226, 241, 0.78);
-}
-
 .terminal-ios-input-bridge {
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(7, 14, 26, 0.96);
@@ -278,7 +266,7 @@ html.dark .provider-choice-rail {
   border: 1px solid rgba(255, 255, 255, 0.1);
   background: rgba(255, 255, 255, 0.06);
   padding: 0.65rem 0.85rem;
-  font-size: 0.9rem;
+  font-size: 1rem;
   line-height: 1.2;
   color: rgba(217, 226, 241, 0.96);
 }
@@ -292,27 +280,18 @@ html.dark .provider-choice-rail {
   outline-offset: 0;
 }
 
+@media (hover: none), (pointer: coarse) {
+  .coarse-pointer-action-visible {
+    opacity: 1 !important;
+    pointer-events: auto !important;
+  }
+}
+
 .terminal-canvas {
   min-height: 0;
   flex: 1;
   overflow: hidden;
-  padding: 0.5rem 0.75rem 0.75rem;
-}
-
-.control-state {
-  border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.04);
-  padding: 0.18rem 0.55rem;
-  font-size: 0.7rem;
-  line-height: 1;
-  color: rgba(217, 226, 241, 0.72);
-}
-
-.control-state.control-on {
-  border-color: rgba(52, 211, 153, 0.24);
-  background: rgba(16, 185, 129, 0.14);
-  color: #bbf7d0;
+  padding: 0.65rem 0.8rem 0.8rem;
 }
 
 .terminal-canvas .xterm,
@@ -327,13 +306,8 @@ html.dark .provider-choice-rail {
     box-shadow: none;
   }
 
-  .terminal-toolbar {
-    padding: 0.65rem 0.75rem;
-    font-size: 0.72rem;
-  }
-
   .terminal-canvas {
-    padding: 0.35rem 0.45rem 0.5rem;
+    padding: 0.45rem 0.55rem 0.6rem;
   }
 }
 

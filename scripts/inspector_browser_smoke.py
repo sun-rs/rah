@@ -56,20 +56,6 @@ def close_live_sessions(base_url: str) -> None:
             continue
 
 
-def wait_for_session_by_cwd(base_url: str, cwd: str, *, timeout_s: int = 90) -> dict[str, Any]:
-    started = time.time()
-    while time.time() - started < timeout_s:
-        sessions = request_json(base_url, "/api/sessions").get("sessions", [])
-        for item in sessions:
-            summary = item.get("session") if isinstance(item, dict) else None
-            if not isinstance(summary, dict):
-                continue
-            if summary.get("cwd") == cwd or summary.get("rootDir") == cwd:
-                return item
-        time.sleep(1)
-    raise TimeoutError(f"Timed out waiting for session in {cwd}")
-
-
 def git(cwd: str, *args: str) -> None:
     subprocess.check_call(["git", *args], cwd=cwd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
@@ -132,6 +118,51 @@ def wait_for_file_preview_tokens(dialog, tokens: list[str], *, timeout_ms: int =
     )
 
 
+def assert_dialog_is_mobile_fullscreen(page, dialog) -> None:
+    metrics = page.evaluate(
+        """(node) => {
+            if (!(node instanceof HTMLElement)) {
+              return null;
+            }
+            const rect = node.getBoundingClientRect();
+            return {
+              width: rect.width,
+              height: rect.height,
+              top: rect.top,
+              left: rect.left,
+              viewportWidth: window.innerWidth,
+              viewportHeight: window.innerHeight,
+            };
+        }""",
+        dialog.element_handle(),
+    )
+    if not isinstance(metrics, dict):
+        raise AssertionError("Could not read dialog metrics.")
+    if metrics["left"] > 1 or metrics["top"] > 1:
+        raise AssertionError(f"Expected fullscreen dialog origin, got {metrics}.")
+    if metrics["width"] < metrics["viewportWidth"] - 4:
+        raise AssertionError(f"Expected fullscreen dialog width, got {metrics}.")
+    if metrics["height"] < metrics["viewportHeight"] - 24:
+        raise AssertionError(f"Expected fullscreen dialog height, got {metrics}.")
+
+
+def select_workspace_for_inspector(page, workspace: str, *, mobile: bool) -> None:
+    workspace_name = Path(workspace).name
+    if mobile:
+        page.get_by_role("button", name="Open sidebar").click()
+        sidebar_scope = page.locator('[role="dialog"]').last
+    else:
+        sidebar_scope = page.locator("aside").first
+    sidebar_scope.get_by_text(workspace_name).first.click()
+    page.wait_for_timeout(400)
+    if mobile:
+        if page.get_by_role("button", name="Open inspector").count() > 0:
+            page.get_by_role("button", name="Open inspector").click()
+    else:
+        if page.get_by_role("button", name="Expand inspector").count() > 0:
+            page.get_by_role("button", name="Expand inspector").click()
+
+
 def main() -> int:
     base_url = os.environ.get("RAH_BASE_URL", "http://127.0.0.1:43111")
     workspace = build_workspace()
@@ -148,13 +179,7 @@ def main() -> int:
             page = context.new_page()
             page.goto(base_url, wait_until="domcontentloaded")
             expect(page.get_by_text("What would you like to build?")).to_be_visible(timeout=30_000)
-
-            textarea = page.locator("textarea").first
-            textarea.fill("Reply only with OK.")
-            textarea.press("Enter")
-
-            live = wait_for_session_by_cwd(base_url, workspace)
-            result["liveSessionId"] = live["session"]["id"]
+            select_workspace_for_inspector(page, workspace, mobile=False)
             expect(page.get_by_text("Inspector", exact=True)).to_be_visible(timeout=90_000)
 
             def click_change(section_title: str, file_text: str):
@@ -200,6 +225,24 @@ def main() -> int:
             file_dialog.get_by_label("Close").click()
             result["filesPreview"] = "ok"
 
+            mobile_context = browser.new_context(
+                viewport={"width": 390, "height": 844},
+                is_mobile=True,
+                has_touch=True,
+            )
+            mobile_page = mobile_context.new_page()
+            mobile_page.goto(base_url, wait_until="domcontentloaded")
+            expect(mobile_page.get_by_text("What would you like to build?")).to_be_visible(timeout=30_000)
+            select_workspace_for_inspector(mobile_page, workspace, mobile=True)
+            expect(mobile_page.get_by_text("Inspector", exact=True)).to_be_visible(timeout=30_000)
+            mobile_page.get_by_role("button", name=re.compile(r"^Changes")).click()
+            mobile_page.get_by_text("Unstaged Changes (3)", exact=True).locator("xpath=..").locator("button").filter(has_text="src/large_diff.rs").first.click()
+            mobile_dialog = mobile_page.locator('[role="dialog"]').last
+            expect(mobile_dialog.get_by_role("button", name="Load 400 more")).to_be_visible(timeout=10_000)
+            assert_dialog_is_mobile_fullscreen(mobile_page, mobile_dialog)
+            mobile_dialog.get_by_label("Close").click()
+            result["mobileInspectorDialog"] = "ok"
+
             split_context = browser.new_context(
                 viewport={"width": 694, "height": 1112},
                 has_touch=True,
@@ -207,19 +250,21 @@ def main() -> int:
             split_page = split_context.new_page()
             split_page.goto(base_url, wait_until="domcontentloaded")
             expect(split_page.get_by_text("What would you like to build?")).to_be_visible(timeout=30_000)
-            split_textarea = split_page.locator("textarea").first
-            split_textarea.fill("Reply only with OK.")
-            split_textarea.press("Enter")
-            expect(split_page.get_by_role("button", name="Open inspector")).to_be_visible(timeout=90_000)
-            split_page.get_by_role("button", name="Open inspector").click()
+            select_workspace_for_inspector(split_page, workspace, mobile=True)
+            expect(split_page.get_by_text("Inspector", exact=True)).to_be_visible(timeout=30_000)
             expect(split_page.get_by_role("button", name=re.compile(r"^Changes"))).to_be_visible(timeout=30_000)
             expect(split_page.get_by_role("button", name="Files", exact=True)).to_be_visible(timeout=30_000)
-            expect(split_page.get_by_role("button", name=re.compile(r"^Events"))).to_be_visible(timeout=30_000)
+            split_page.get_by_role("button", name=re.compile(r"^Changes")).click()
+            split_page.get_by_text("Unstaged Changes (3)", exact=True).locator("xpath=..").locator("button").filter(has_text="src/blob.bin").first.click()
+            split_dialog = split_page.locator('[role="dialog"]').last
+            expect(split_dialog.get_by_text("Binary", exact=True)).to_be_visible(timeout=10_000)
+            assert_dialog_is_mobile_fullscreen(split_page, split_dialog)
+            split_dialog.get_by_label("Close").click()
             split_page.get_by_role("button", name="Files", exact=True).click()
-            split_page.get_by_role("button", name=re.compile(r"^Events")).click()
             result["splitInspector"] = "ok"
 
             print(json.dumps({"ok": True, **result}, ensure_ascii=False, indent=2))
+            mobile_context.close()
             split_context.close()
             browser.close()
         return 0

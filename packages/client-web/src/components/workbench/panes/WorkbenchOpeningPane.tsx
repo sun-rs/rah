@@ -1,5 +1,5 @@
 import type { PendingSessionTransition } from "../../../session-transition-contract";
-import { LoaderCircle, Menu, PanelRight, SquareTerminal } from "lucide-react";
+import { LoaderCircle, Menu, PanelRight } from "lucide-react";
 import { ProviderLogo } from "../../ProviderLogo";
 import { providerLabel } from "../../../types";
 
@@ -11,7 +11,6 @@ export function WorkbenchOpeningPane(props: {
   onExpandSidebar: () => void;
   onOpenRight: () => void;
   onExpandInspector: () => void;
-  onOpenTerminal: () => void;
 }) {
   return (
     <>
@@ -50,15 +49,6 @@ export function WorkbenchOpeningPane(props: {
           </div>
         </div>
         <div className="flex items-center gap-1 shrink-0">
-          <button
-            type="button"
-            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] transition-colors"
-            onClick={props.onOpenTerminal}
-            aria-label="Open terminal"
-            title="Open terminal"
-          >
-            <SquareTerminal size={16} />
-          </button>
           {!props.rightSidebarOpen && (
             <button
               type="button"

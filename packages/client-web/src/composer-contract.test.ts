@@ -166,15 +166,18 @@ describe("composer contract", () => {
       COMPOSER_LAYOUT.composeGridWithoutStopClassName,
       /grid-cols-\[2\.75rem_minmax\(0,1fr\)_2\.75rem\]/,
     );
+    assert.match(COMPOSER_LAYOUT.composeGridWithoutStopClassName, /\bgap-2\b/);
     assert.match(
       COMPOSER_LAYOUT.composeGridWithStopClassName,
       /grid-cols-\[2\.75rem_minmax\(0,1fr\)_2\.75rem_2\.75rem\]/,
     );
-    assert.match(COMPOSER_LAYOUT.composeGridWithStopClassName, /\bgap-3\b/);
-    assert.match(COMPOSER_LAYOUT.stopPulseClassName, /status-dot-pulse/);
-    assert.match(COMPOSER_LAYOUT.stopOuterRingClassName, /border-white\/20/);
-    assert.match(COMPOSER_LAYOUT.stopSpinnerClassName, /border-t-white\/95/);
-    assert.match(COMPOSER_LAYOUT.stopButtonClassName, /inset-\[6px\]/);
+    assert.match(COMPOSER_LAYOUT.composeGridWithStopClassName, /\bgap-2\b/);
+    assert.equal(
+      COMPOSER_LAYOUT.controlsGapClassName,
+      "gap-2 md:gap-3",
+    );
+    assert.match(COMPOSER_LAYOUT.stopSpinnerClassName, /animate-\[spin_/);
+    assert.match(COMPOSER_LAYOUT.stopButtonClassName, /inset-\[3px\]/);
     assert.match(COMPOSER_LAYOUT.textareaClassName, /\bblock\b/);
     assert.match(COMPOSER_LAYOUT.textareaClassName, /\bh-11\b/);
     assert.match(COMPOSER_LAYOUT.textareaClassName, /min-h-11/);
@@ -186,6 +189,7 @@ describe("composer contract", () => {
       EMPTY_STATE_COMPOSER_LAYOUT.roundPrimaryButtonClassName,
       COMPOSER_LAYOUT.roundPrimaryButtonClassName,
     );
+    assert.match(EMPTY_STATE_COMPOSER_LAYOUT.leftControlsClassName, /\bgap-2\b/);
     assert.match(EMPTY_STATE_COMPOSER_LAYOUT.textareaClassName, /min-h-\[120px\]/);
     assert.match(EMPTY_STATE_COMPOSER_LAYOUT.controlsRowClassName, /bottom-3/);
     assert.match(EMPTY_STATE_COMPOSER_LAYOUT.workspaceTriggerClassName, /h-11/);

@@ -21,6 +21,16 @@ function readNumberPreference(key: string, fallback: number): number {
   }
 }
 
+function readVisualViewportBottomInset(): number {
+  if (typeof window === "undefined" || !window.visualViewport) {
+    return 0;
+  }
+  return Math.max(
+    0,
+    window.innerHeight - (window.visualViewport.height + window.visualViewport.offsetTop),
+  );
+}
+
 export function useWorkbenchChromeState() {
   const [leftOpen, setLeftOpen] = useState(false);
   const [rightOpen, setRightOpen] = useState(false);
@@ -30,15 +40,14 @@ export function useWorkbenchChromeState() {
   const [sidebarOpen, setSidebarOpen] = useState(() =>
     typeof window === "undefined" ? true : readBooleanPreference("rah-sidebar-open", true),
   );
-  const [rightSidebarOpen, setRightSidebarOpen] = useState(() =>
-    typeof window === "undefined"
-      ? true
-      : readBooleanPreference("rah-right-sidebar-open", true),
-  );
+  const [rightSidebarOpen, setRightSidebarOpen] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(() =>
     typeof window === "undefined"
       ? 288
       : Math.max(200, Math.min(480, readNumberPreference("rah-sidebar-width", 288))),
+  );
+  const [visualViewportBottomInsetPx, setVisualViewportBottomInsetPx] = useState(() =>
+    typeof window === "undefined" ? 0 : readVisualViewportBottomInset(),
   );
   const [isResizing, setIsResizing] = useState(false);
   const sidebarWidthRef = useRef(sidebarWidth);
@@ -94,12 +103,25 @@ export function useWorkbenchChromeState() {
   }, [sidebarOpen]);
 
   useEffect(() => {
-    try {
-      window.localStorage.setItem("rah-right-sidebar-open", String(rightSidebarOpen));
-    } catch {
-      // ignore
+    if (typeof window === "undefined") {
+      return;
     }
-  }, [rightSidebarOpen]);
+
+    const updateVisualViewportInset = () => {
+      setVisualViewportBottomInsetPx(readVisualViewportBottomInset());
+    };
+
+    updateVisualViewportInset();
+    window.addEventListener("resize", updateVisualViewportInset);
+    window.visualViewport?.addEventListener("resize", updateVisualViewportInset);
+    window.visualViewport?.addEventListener("scroll", updateVisualViewportInset);
+
+    return () => {
+      window.removeEventListener("resize", updateVisualViewportInset);
+      window.visualViewport?.removeEventListener("resize", updateVisualViewportInset);
+      window.visualViewport?.removeEventListener("scroll", updateVisualViewportInset);
+    };
+  }, []);
 
   const startSidebarResize = (event: ReactPointerEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -120,6 +142,7 @@ export function useWorkbenchChromeState() {
     sidebarOpen,
     sidebarWidth,
     terminalOpen,
+    visualViewportBottomInsetPx,
     setFileReferenceOpen,
     setLeftOpen,
     setRightOpen,
