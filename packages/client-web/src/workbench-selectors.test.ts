@@ -122,7 +122,7 @@ function uncontrolledSummary(args: {
 }
 
 describe("workbench selectors", () => {
-  test("only exposes controlled live sessions to the sidebar contract", () => {
+  test("sidebar contract includes all daemon live sessions while keeping controlled subsets narrow", () => {
     const clientId = "web-current";
     const controlled = controlledSummary({
       id: "controlled-1",
@@ -165,13 +165,13 @@ describe("workbench selectors", () => {
       collections.workspaceSections.flatMap((section) =>
         section.sessions.map((session) => session.session.id),
       ),
-      ["controlled-1"],
+      ["controlled-1", "uncontrolled-1"],
     );
     assert.equal(
       collections.workspaceSections.find(
         (section) => section.workspace.directory === "/workspace/two",
       )?.sessions.length,
-      0,
+      1,
     );
     assert.equal(
       collections.workspaceSections.find(

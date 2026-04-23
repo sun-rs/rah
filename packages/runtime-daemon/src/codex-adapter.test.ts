@@ -481,6 +481,64 @@ rl.on('line', (line) => {
     rmSync(cwd, { recursive: true, force: true });
   });
 
+  test("stored session discovery reaches the first real user prompt after oversized bootstrap lines", async () => {
+    const cwd = mkdtempSync(path.join(os.tmpdir(), "rah-codex-bootstrap-large-cwd-"));
+    const sessionId = "019d7777-large-7ddd-8eee-ffff00001111";
+    const dir = path.join(tmpHome, "sessions", "2026", "04", "15");
+    mkdirSync(dir, { recursive: true });
+    const rolloutPath = path.join(dir, `rollout-2026-04-15T03-00-00-${sessionId}.jsonl`);
+    const giant = "X".repeat(220_000);
+    writeRolloutLines(rolloutPath, [
+      JSON.stringify({
+        timestamp: "2026-04-15T03:00:00.000Z",
+        type: "session_meta",
+        payload: {
+          id: sessionId,
+          timestamp: "2026-04-15T03:00:00.000Z",
+          cwd,
+          source: "cli",
+          base_instructions: { text: giant },
+        },
+      }),
+      JSON.stringify({
+        timestamp: "2026-04-15T03:00:01.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: `# AGENTS.md instructions\n${giant}\n<environment_context>\n  <cwd>${cwd}</cwd>\n</environment_context>`,
+            },
+          ],
+        },
+      }),
+      JSON.stringify({
+        timestamp: "2026-04-15T03:00:02.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "你好" }],
+        },
+      }),
+    ]);
+
+    const services = {
+      eventBus: new EventBus(),
+      ptyHub: new PtyHub(),
+      sessionStore: new SessionStore(),
+    };
+    const adapter = new CodexAdapter(services);
+    const stored = adapter.listStoredSessions();
+    const match = stored.find((item) => item.providerSessionId === sessionId);
+    assert.equal(match?.preview, "你好");
+    assert.equal(match?.title, "你好");
+
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
   test("rehydrates stored history then attaches to a live external Codex thread", async () => {
     const cwd = mkdtempSync(path.join(os.tmpdir(), "rah-codex-live-cwd-"));
     const sessionId = "019d8888-bbbb-7ccc-8ddd-eeeeffff0000";

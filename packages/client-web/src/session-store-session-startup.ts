@@ -1,4 +1,5 @@
 import type {
+  ApprovalPolicy,
   DebugScenarioDescriptor,
   ResumeSessionRequest,
   SessionSummary,
@@ -36,7 +37,7 @@ type StartSessionOptions = {
   cwd?: string;
   title?: string;
   model?: string;
-  approvalPolicy?: string;
+  approvalPolicy?: ApprovalPolicy;
   sandbox?: string;
   initialInput?: string;
 };

@@ -21,6 +21,24 @@ def resolve_shell() -> str:
     return os.environ.get("RAH_TERMINAL_SHELL") or os.environ.get("SHELL") or "/bin/zsh"
 
 
+def resolve_command() -> Optional[str]:
+    command = os.environ.get("RAH_TERMINAL_COMMAND")
+    return command if command else None
+
+
+def resolve_command_args() -> list[str]:
+    raw = os.environ.get("RAH_TERMINAL_ARGS_JSON")
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [part for part in parsed if isinstance(part, str)]
+
+
 def set_winsize(fd: int, rows: int, cols: int) -> None:
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
 
@@ -56,6 +74,10 @@ def main() -> int:
         env.setdefault("TERM", "xterm-256color")
         env["COLUMNS"] = str(cols)
         env["LINES"] = str(rows)
+        command = resolve_command()
+        if command:
+            args = resolve_command_args()
+            os.execvpe(command, [command, *args], env)
         os.execvpe(shell, [shell, "-i"], env)
 
     try:

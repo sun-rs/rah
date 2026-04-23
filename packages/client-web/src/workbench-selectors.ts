@@ -91,19 +91,19 @@ export function deriveWorkbenchSessionCollections(args: {
       .map((entry) => [entry.summary.session.providerSessionId!, entry.summary] as const),
   );
   const liveGroups = groupLiveSessionsByDirectory(
-    controlledLiveSessionSummaries,
+    liveSessionSummaries,
     args.workspaceDir,
   );
   const workspaceInfos = deriveWorkspaceInfos(
     args.workspaceDirs,
-    controlledLiveSessionSummaries,
+    liveSessionSummaries,
     args.storedSessions,
     liveSessionSummaries,
   );
   const sortedWorkspaceInfos = sortWorkspaceInfos(workspaceInfos, args.workspaceSortMode);
   const workspaceSections = deriveWorkspaceSections(
     sortedWorkspaceInfos,
-    controlledLiveSessionSummaries,
+    liveSessionSummaries,
   );
 
   return {

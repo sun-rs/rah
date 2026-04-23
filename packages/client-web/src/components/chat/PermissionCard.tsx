@@ -1,4 +1,9 @@
-import type { PermissionRequest, PermissionResolution, PermissionResponseRequest } from "@rah/runtime-protocol";
+import {
+  decisionFromPermissionActionId,
+  type PermissionRequest,
+  type PermissionResolution,
+  type PermissionResponseRequest,
+} from "@rah/runtime-protocol";
 import { CheckCircle2, HelpCircle, ShieldAlert, XCircle } from "lucide-react";
 import { useMemo, useState } from "react";
 import { ActivityArtifacts } from "./ActivityArtifacts";
@@ -129,19 +134,11 @@ export function PermissionCard(props: {
   const canSubmit = (!requiresAnswers || answersPayload !== undefined) && (props.canRespond ?? true);
 
   const submit = (action: (typeof actions)[number]) => {
+    const decision = decisionFromPermissionActionId(action.id);
     props.onRespond(props.request.id, {
       behavior: action.behavior,
       selectedActionId: action.id,
-      ...(action.id === "approved" ||
-      action.id === "approved_for_session" ||
-      action.id === "denied" ||
-      action.id === "abort" ||
-      action.id === "accept" ||
-      action.id === "acceptForSession" ||
-      action.id === "decline" ||
-      action.id === "cancel"
-        ? { decision: action.id }
-        : {}),
+      ...(decision ? { decision } : {}),
       ...(answersPayload !== undefined ? { answers: answersPayload } : {}),
     });
   };

@@ -9,6 +9,7 @@ import type { ProviderChoice } from "./components/ProviderSelector";
 import { GlobalWorkbenchCallout } from "./components/workbench/callouts/GlobalWorkbenchCallout";
 import { ArchiveSessionDialog } from "./components/workbench/dialogs/ArchiveSessionDialog";
 import { ConfirmDialog } from "./components/workbench/dialogs/ConfirmDialog";
+import { WorkbenchErrorBoundary } from "./components/workbench/WorkbenchErrorBoundary";
 import { WorkbenchEmptyPane } from "./components/workbench/panes/WorkbenchEmptyPane";
 import { WorkbenchOpeningPane } from "./components/workbench/panes/WorkbenchOpeningPane";
 import { WorkbenchSelectedPane } from "./components/workbench/panes/WorkbenchSelectedPane";
@@ -63,6 +64,7 @@ export function App() {
     pendingSessionTransition,
     pendingSessionAction,
     clientId,
+    connectionId,
     isInitialLoaded,
     error,
     clearError,
@@ -74,6 +76,7 @@ export function App() {
     startSession,
     startScenario,
     activateHistorySession,
+    attachSession,
     closeSession,
     claimHistorySession,
     removeHistorySession,
@@ -87,6 +90,8 @@ export function App() {
   } = useSessionStore();
   const [archiveConfirmSessionId, setArchiveConfirmSessionId] = useState<string | null>(null);
   const [archivingSessionId, setArchivingSessionId] = useState<string | null>(null);
+  const [deleteConfirmSessionId, setDeleteConfirmSessionId] = useState<string | null>(null);
+  const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
   const [missingWorkspaceConfirmDir, setMissingWorkspaceConfirmDir] = useState<string | null>(null);
   const [floatingAnchorOffsetPx, setFloatingAnchorOffsetPx] = useState(96);
   const { hideToolCallsInChat } = useChatPreferences();
@@ -168,7 +173,9 @@ export function App() {
   const selectedProjection = selectedSessionId ? projections.get(selectedSessionId) ?? null : null;
   const selectedSummary = selectedProjection?.summary ?? null;
   const isAttached = Boolean(
-    selectedSummary?.attachedClients.some((client) => client.id === clientId),
+    selectedSummary?.attachedClients.some((client) =>
+      client.kind === "web" ? client.connectionId === connectionId : client.id === clientId,
+    ),
   );
   const hasControl = selectedSummary?.controlLease.holderClientId === clientId;
   const canRespondToPermission = selectedSummary
@@ -192,6 +199,9 @@ export function App() {
   });
   const archiveTargetSummary = archiveConfirmSessionId
     ? projections.get(archiveConfirmSessionId)?.summary ?? null
+    : null;
+  const deleteTargetSummary = deleteConfirmSessionId
+    ? projections.get(deleteConfirmSessionId)?.summary ?? null
     : null;
   const [missingWorkspaceResolver, setMissingWorkspaceResolver] =
     useState<((confirmed: boolean) => void) | null>(null);
@@ -227,6 +237,40 @@ export function App() {
     if (!selectedSummary) return;
     await respondToPermission(selectedSummary.session.id, requestId, response);
   };
+
+  useEffect(() => {
+    if (!selectedSummary) {
+      return;
+    }
+    if (selectedSummary.session.launchSource !== "terminal" || isAttached) {
+      return;
+    }
+    void attachSession(selectedSummary);
+  }, [attachSession, isAttached, selectedSummary]);
+
+  useEffect(() => {
+    const handleForegroundResume = () => {
+      if (document.visibilityState !== "visible") {
+        return;
+      }
+      void recoverTransport();
+    };
+    const handlePageShow = () => {
+      void recoverTransport();
+    };
+    const handleOnline = () => {
+      void recoverTransport();
+    };
+
+    document.addEventListener("visibilitychange", handleForegroundResume);
+    window.addEventListener("pageshow", handlePageShow);
+    window.addEventListener("online", handleOnline);
+    return () => {
+      document.removeEventListener("visibilitychange", handleForegroundResume);
+      window.removeEventListener("pageshow", handlePageShow);
+      window.removeEventListener("online", handleOnline);
+    };
+  }, [recoverTransport]);
 
   useEffect(() => {
     if (primaryPaneState.kind !== "active" || !selectedSummary) {
@@ -437,6 +481,52 @@ export function App() {
         }}
       />
       <ConfirmDialog
+        open={deleteConfirmSessionId !== null}
+        pending={deletingSessionId !== null}
+        confirmTone="danger"
+        title="Delete session?"
+        description={
+          deleteTargetSummary ? (
+            <>
+              {isReadOnlyReplay(deleteTargetSummary)
+                ? "Delete this history session?"
+                : "Archive and then delete this live session?"}
+              <div className="mt-2 rounded-lg border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-2.5 py-2 font-medium text-[var(--app-fg)]">
+                {deleteTargetSummary.session.title ?? deleteTargetSummary.session.id}
+              </div>
+            </>
+          ) : (
+            "Delete this session?"
+          )
+        }
+        confirmLabel={deletingSessionId ? "Deleting…" : "Delete"}
+        onOpenChange={(open) => {
+          if (!open && deletingSessionId === null) {
+            setDeleteConfirmSessionId(null);
+          }
+        }}
+        onConfirm={() => {
+          if (!deleteConfirmSessionId || !deleteTargetSummary) {
+            return;
+          }
+          setDeletingSessionId(deleteConfirmSessionId);
+          const storedRef = deleteTargetSummary.session.providerSessionId
+            ? {
+                provider: deleteTargetSummary.session.provider,
+                providerSessionId: deleteTargetSummary.session.providerSessionId,
+              }
+            : null;
+          void closeSession(deleteConfirmSessionId)
+            .then(async () => {
+              if (storedRef) {
+                await removeHistorySession(storedRef);
+              }
+              setDeleteConfirmSessionId(null);
+            })
+            .finally(() => setDeletingSessionId(null));
+        }}
+      />
+      <ConfirmDialog
         open={missingWorkspaceConfirmDir !== null}
         title="Workspace is missing"
         description={
@@ -472,106 +562,109 @@ export function App() {
         />
       ) : null}
 
-      {/* Center chat */}
-      <main className="flex-1 flex flex-col min-w-0 overflow-x-hidden overflow-y-hidden">
-        {primaryPaneState.kind === "active" && selectedSummary ? (
-          <WorkbenchSelectedPane
-            selectedSummary={selectedSummary}
-            selectedProjection={selectedProjection}
-            selectedIsReadOnlyReplay={selectedIsReadOnlyReplay}
-            sidebarOpen={sidebarOpen}
-            rightSidebarOpen={rightSidebarOpen}
-            isAttached={isAttached}
-            interactionNotice={interactionNotice}
-            historyNotice={historyNotice}
-            hideToolCallsInChat={hideToolCallsInChat}
-            canLoadOlderHistory={Boolean(
-              selectedSummary.session.providerSessionId &&
-                selectedProjection?.history.authoritativeApplied &&
-                (selectedProjection.history.nextCursor ||
-                  selectedProjection.history.nextBeforeTs),
-            )}
-            historyLoading={selectedProjection?.history.phase === "loading"}
-            canRespondToPermission={canRespondToPermission}
-            onPermissionRespond={handlePermissionResponse}
-            composerSurface={composerSurface}
-            composerRef={composerRef}
-            draft={draft}
-            sendPending={sendPending}
-            onDraftChange={setDraft}
-            onSend={() => void handleSend()}
-            onClaimHistory={() => {
-              void claimHistorySession(selectedSummary.session.id, {
-                confirmCreateMissingWorkspace,
-              });
-            }}
-            onClaimControl={() => void claimControl(selectedSummary.session.id)}
-            onInterrupt={() => void interruptSession(selectedSummary.session.id)}
-            onOpenFileReference={() => setFileReferenceOpen(true)}
-            onLoadOlderHistory={() => {
-              void loadOlderHistory(selectedSummary.session.id);
-            }}
-            onOpenLeft={() => setLeftOpen(true)}
-            onExpandSidebar={() => setSidebarOpen(true)}
-            onOpenRight={() => setRightOpen(true)}
-            onExpandInspector={() => setRightSidebarOpen(true)}
-            onFloatingAnchorOffsetChange={setFloatingAnchorOffsetPx}
-            onArchiveOrClose={() => {
-              if (selectedIsReadOnlyReplay) {
-                void closeSession(selectedSummary.session.id);
-                return;
-              }
-              setArchiveConfirmSessionId(selectedSummary.session.id);
-            }}
-          />
-        ) : primaryPaneState.kind === "opening" && activeOpeningSession ? (
-          <WorkbenchOpeningPane
-            openingSession={activeOpeningSession}
-            sidebarOpen={sidebarOpen}
-            rightSidebarOpen={rightSidebarOpen}
-            onOpenLeft={() => setLeftOpen(true)}
-            onExpandSidebar={() => setSidebarOpen(true)}
-            onOpenRight={() => setRightOpen(true)}
-            onExpandInspector={() => setRightSidebarOpen(true)}
-          />
-        ) : (
-          <WorkbenchEmptyPane
-            sidebarOpen={sidebarOpen}
-            rightSidebarOpen={rightSidebarOpen}
-            onOpenLeft={() => setLeftOpen(true)}
-            onExpandSidebar={() => setSidebarOpen(true)}
-            onOpenRight={() => setRightOpen(true)}
-            onExpandInspector={() => setRightSidebarOpen(true)}
-            emptyStateComposerRef={emptyStateComposerRef}
-            emptyStateDraft={emptyStateDraft}
-            onEmptyStateDraftChange={setEmptyStateDraft}
-            onEmptyStateSend={handleEmptyStateSend}
-            workspacePickerRef={workspacePickerRef}
-            onOpenFileReference={() => setFileReferenceOpen(true)}
-            workspaceDirs={workspaceDirs}
-            availableWorkspaceDir={availableWorkspaceDir}
-            workspacePickerOpen={workspacePickerOpen}
-            onToggleWorkspacePicker={() => setWorkspacePickerOpen((v) => !v)}
-            onSelectWorkspace={(dir) => {
-              setWorkspaceDir(dir);
-              setWorkspacePickerOpen(false);
-            }}
-            onAddWorkspace={(dir) => {
-              void addWorkspace(dir);
-            }}
-            newSessionProvider={newSessionProvider as ProviderChoice}
-            onChangeProvider={(value) => setNewSessionProvider(value)}
-          />
-        )}
-      </main>
+      <WorkbenchErrorBoundary resetKey={selectedSessionId ?? primaryPaneState.kind}>
+        {/* Center chat */}
+        <main className="flex-1 flex flex-col min-w-0 overflow-x-hidden overflow-y-hidden">
+          {primaryPaneState.kind === "active" && selectedSummary ? (
+            <WorkbenchSelectedPane
+              selectedSummary={selectedSummary}
+              selectedProjection={selectedProjection}
+              selectedIsReadOnlyReplay={selectedIsReadOnlyReplay}
+              sidebarOpen={sidebarOpen}
+              rightSidebarOpen={rightSidebarOpen}
+              isAttached={isAttached}
+              interactionNotice={interactionNotice}
+              historyNotice={historyNotice}
+              hideToolCallsInChat={hideToolCallsInChat}
+              canLoadOlderHistory={Boolean(
+                selectedSummary.session.providerSessionId &&
+                  selectedProjection?.history.authoritativeApplied &&
+                  (selectedProjection.history.nextCursor ||
+                    selectedProjection.history.nextBeforeTs),
+              )}
+              historyLoading={selectedProjection?.history.phase === "loading"}
+              canRespondToPermission={canRespondToPermission}
+              onPermissionRespond={handlePermissionResponse}
+              composerSurface={composerSurface}
+              composerRef={composerRef}
+              draft={draft}
+              sendPending={sendPending}
+              onDraftChange={setDraft}
+              onSend={() => void handleSend()}
+              onClaimHistory={() => {
+                void claimHistorySession(selectedSummary.session.id, {
+                  confirmCreateMissingWorkspace,
+                });
+              }}
+              onClaimControl={() => void claimControl(selectedSummary.session.id)}
+              onInterrupt={() => void interruptSession(selectedSummary.session.id)}
+              onOpenFileReference={() => setFileReferenceOpen(true)}
+              onLoadOlderHistory={() => {
+                void loadOlderHistory(selectedSummary.session.id);
+              }}
+              onOpenLeft={() => setLeftOpen(true)}
+              onExpandSidebar={() => setSidebarOpen(true)}
+              onOpenRight={() => setRightOpen(true)}
+              onExpandInspector={() => setRightSidebarOpen(true)}
+              onFloatingAnchorOffsetChange={setFloatingAnchorOffsetPx}
+              onArchiveOrClose={() => {
+                if (selectedIsReadOnlyReplay) {
+                  void closeSession(selectedSummary.session.id);
+                  return;
+                }
+                setArchiveConfirmSessionId(selectedSummary.session.id);
+              }}
+              onDeleteSession={() => setDeleteConfirmSessionId(selectedSummary.session.id)}
+            />
+          ) : primaryPaneState.kind === "opening" && activeOpeningSession ? (
+            <WorkbenchOpeningPane
+              openingSession={activeOpeningSession}
+              sidebarOpen={sidebarOpen}
+              rightSidebarOpen={rightSidebarOpen}
+              onOpenLeft={() => setLeftOpen(true)}
+              onExpandSidebar={() => setSidebarOpen(true)}
+              onOpenRight={() => setRightOpen(true)}
+              onExpandInspector={() => setRightSidebarOpen(true)}
+            />
+          ) : (
+            <WorkbenchEmptyPane
+              sidebarOpen={sidebarOpen}
+              rightSidebarOpen={rightSidebarOpen}
+              onOpenLeft={() => setLeftOpen(true)}
+              onExpandSidebar={() => setSidebarOpen(true)}
+              onOpenRight={() => setRightOpen(true)}
+              onExpandInspector={() => setRightSidebarOpen(true)}
+              emptyStateComposerRef={emptyStateComposerRef}
+              emptyStateDraft={emptyStateDraft}
+              onEmptyStateDraftChange={setEmptyStateDraft}
+              onEmptyStateSend={handleEmptyStateSend}
+              workspacePickerRef={workspacePickerRef}
+              onOpenFileReference={() => setFileReferenceOpen(true)}
+              workspaceDirs={workspaceDirs}
+              availableWorkspaceDir={availableWorkspaceDir}
+              workspacePickerOpen={workspacePickerOpen}
+              onToggleWorkspacePicker={() => setWorkspacePickerOpen((v) => !v)}
+              onSelectWorkspace={(dir) => {
+                setWorkspaceDir(dir);
+                setWorkspacePickerOpen(false);
+              }}
+              onAddWorkspace={(dir) => {
+                void addWorkspace(dir);
+              }}
+              newSessionProvider={newSessionProvider as ProviderChoice}
+              onChangeProvider={(value) => setNewSessionProvider(value)}
+            />
+          )}
+        </main>
 
-      <WorkbenchInspectorShell
-        showDesktop
-        desktopOpen={rightSidebarOpen}
-        rightOpen={rightOpen}
-        onRightOpenChange={setRightOpen}
-        content={inspectorContent}
-      />
+        <WorkbenchInspectorShell
+          showDesktop
+          desktopOpen={rightSidebarOpen}
+          rightOpen={rightOpen}
+          onRightOpenChange={setRightOpen}
+          content={inspectorContent}
+        />
+      </WorkbenchErrorBoundary>
 
       <GlobalWorkbenchCallout
         errorDescriptor={errorDescriptor}

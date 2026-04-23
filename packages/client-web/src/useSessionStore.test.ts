@@ -11,6 +11,7 @@ import {
   resolveHistoryActivationMode,
   resolveHiddenWorkspaceDirsFromSessionsResponse,
 } from "./useSessionStore";
+import { applyEventsToProjectionMap } from "./session-store-projections";
 import { initialHistorySyncState, type SessionProjection } from "./types";
 
 function sessionSummary(rootDir: string): SessionSummary {
@@ -170,6 +171,38 @@ describe("workspace response reconciliation", () => {
       findDaemonLiveSessionForStoredRef(projections, liveStoredSessionRef("/workspace/missing")),
       null,
     );
+  });
+
+  test("creates a projection immediately when a new live session arrives over the event stream", () => {
+    const next = applyEventsToProjectionMap(
+      new Map(),
+      [
+        {
+          id: "session-started:new-live",
+          seq: 1,
+          ts: "2026-04-21T00:00:00.000Z",
+          sessionId: "session:new-live",
+          type: "session.started",
+          source: {
+            provider: "codex",
+            channel: "structured_live",
+            authority: "authoritative",
+          },
+          payload: {
+            session: sessionSummary("/workspace/new-live").session,
+          },
+        } as RahEvent,
+      ],
+      {
+        updateLastSeq: () => undefined,
+        clearBufferedSession: () => undefined,
+        queuePendingEvent: () => undefined,
+        shouldDeferEvent: () => false,
+        queueDeferredEvent: () => undefined,
+      },
+    );
+
+    assert.equal(next.get("session:new-live")?.summary.session.rootDir, "/workspace/new-live");
   });
 
   test("resolves history activation as select, attach, or resume", () => {

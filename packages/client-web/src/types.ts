@@ -1045,6 +1045,25 @@ export function applyEventToProjection(
     return current;
   }
 
+  const isProviderSessionRebind =
+    event.type === "session.started" &&
+    current.summary.session.providerSessionId !== undefined &&
+    event.payload.session.providerSessionId !== undefined &&
+    current.summary.session.providerSessionId !== event.payload.session.providerSessionId;
+
+  if (isProviderSessionRebind) {
+    return {
+      summary: {
+        ...current.summary,
+        session: event.payload.session,
+      },
+      feed: [],
+      events: [event],
+      lastSeq: event.seq,
+      history: initialHistorySyncState(),
+    };
+  }
+
   const permissionRequestedState: ManagedSession["runtimeState"] = "waiting_permission";
   const permissionResolvedState: ManagedSession["runtimeState"] = "running";
   const canMutateSummary = shouldApplySummaryMutation(current, event);

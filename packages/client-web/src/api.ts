@@ -23,6 +23,7 @@ import type {
   PtyClientMessage,
   PtyServerMessage,
   PermissionResponseRequest,
+  RenameSessionRequest,
   ResumeSessionRequest,
   ResumeSessionResponse,
   SessionFileResponse,
@@ -90,6 +91,9 @@ function buildRequestHeaders(init?: RequestInit): Headers {
   const headers = new Headers(init?.headers ?? {});
   if (init?.body !== undefined && init.body !== null && !headers.has("content-type")) {
     headers.set("content-type", "application/json");
+  }
+  if (typeof window !== "undefined" && !headers.has("x-rah-client")) {
+    headers.set("x-rah-client", "web");
   }
   return headers;
 }
@@ -364,6 +368,17 @@ export async function closeSession(
     method: "POST",
     body: JSON.stringify(request),
   });
+}
+
+export async function renameSession(
+  sessionId: string,
+  request: RenameSessionRequest,
+): Promise<SessionSummary> {
+  const response = await requestJson<{ session: SessionSummary }>(`/api/sessions/${sessionId}/rename`, {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
+  return response.session;
 }
 
 export async function respondToPermission(

@@ -47,15 +47,21 @@ import {
 } from "./provider-resume";
 import { claudeLaunchSpec, probeProviderDiagnostic } from "./provider-diagnostics";
 import {
-  applyCodexGitFileAction,
-  applyCodexGitHunkAction,
-  getCodexGitDiff,
-  getCodexGitStatus,
-  getCodexWorkspaceSnapshot,
-  readWorkspaceFile,
-} from "./codex-stored-sessions";
+  applyWorkspaceGitFileAction,
+  applyWorkspaceGitHunkAction,
+  getWorkspaceGitDiff,
+  getWorkspaceGitStatus,
+  getWorkspaceSnapshot,
+  readWorkspaceFileFromDirectory,
+} from "./workspace-utils";
 import { toSessionSummary } from "./session-store";
 import { movePathToTrash } from "./trash";
+
+const CLAUDE_EVENT_SOURCE = {
+  provider: "claude" as const,
+  channel: "structured_live" as const,
+  authority: "derived" as const,
+};
 
 interface ClaudeAdapterOptions {
   queryFactory?: ClaudeQueryFactory;
@@ -75,6 +81,19 @@ export class ClaudeAdapter implements ProviderAdapter {
   constructor(services: RuntimeServices, options: ClaudeAdapterOptions = {}) {
     this.services = services;
     this.queryFactory = options.queryFactory;
+  }
+
+  private reportAsyncLiveError(sessionId: string, detail: string): void {
+    this.services.eventBus.publish({
+      sessionId,
+      type: "runtime.status",
+      source: CLAUDE_EVENT_SOURCE,
+      payload: {
+        status: "error",
+        detail,
+      },
+    });
+    this.services.sessionStore.setRuntimeState(sessionId, "failed");
   }
 
   async startSession(request: StartSessionRequest): Promise<StartSessionResponse> {
@@ -165,6 +184,11 @@ export class ClaudeAdapter implements ProviderAdapter {
       services: this.services,
       liveSession: live,
       request,
+    }).catch((error) => {
+      this.reportAsyncLiveError(
+        sessionId,
+        error instanceof Error ? error.message : String(error),
+      );
     });
   }
 
@@ -251,7 +275,7 @@ export class ClaudeAdapter implements ProviderAdapter {
     if (!state) {
       throw new Error(`Unknown session ${sessionId}`);
     }
-    const snapshot = getCodexWorkspaceSnapshot(options?.scopeRoot ?? state.session.cwd);
+    const snapshot = getWorkspaceSnapshot(options?.scopeRoot ?? state.session.cwd);
     return {
       sessionId,
       cwd: snapshot.cwd,
@@ -264,7 +288,7 @@ export class ClaudeAdapter implements ProviderAdapter {
     if (!state) {
       throw new Error(`Unknown session ${sessionId}`);
     }
-    const status = getCodexGitStatus(state.session.cwd, options);
+    const status = getWorkspaceGitStatus(state.session.cwd, options);
     return {
       sessionId,
       ...(status.branch ? { branch: status.branch } : {}),
@@ -288,7 +312,7 @@ export class ClaudeAdapter implements ProviderAdapter {
     return {
       sessionId,
       path: targetPath,
-      diff: getCodexGitDiff(state.session.cwd, targetPath, options),
+      diff: getWorkspaceGitDiff(state.session.cwd, targetPath, options),
     };
   }
 
@@ -298,7 +322,7 @@ export class ClaudeAdapter implements ProviderAdapter {
       throw new Error(`Unknown session ${sessionId}`);
     }
     return {
-      ...applyCodexGitFileAction(state.session.cwd, request, {
+      ...applyWorkspaceGitFileAction(state.session.cwd, request, {
         scopeRoot: state.session.rootDir ?? state.session.cwd,
       }),
       sessionId,
@@ -311,7 +335,7 @@ export class ClaudeAdapter implements ProviderAdapter {
       throw new Error(`Unknown session ${sessionId}`);
     }
     return {
-      ...applyCodexGitHunkAction(state.session.cwd, request, {
+      ...applyWorkspaceGitHunkAction(state.session.cwd, request, {
         scopeRoot: state.session.rootDir ?? state.session.cwd,
       }),
       sessionId,
@@ -328,8 +352,8 @@ export class ClaudeAdapter implements ProviderAdapter {
       throw new Error(`Unknown session ${sessionId}`);
     }
     return {
+      ...readWorkspaceFileFromDirectory(state.session.cwd, targetPath, options),
       sessionId,
-      ...readWorkspaceFile(state.session.cwd, targetPath, options),
     };
   }
 

@@ -18,12 +18,85 @@ export interface AttachClientDescriptor {
   rows?: number;
 }
 
+export type ApprovalPolicy = "default" | "never" | "yolo";
+
+export type PermissionDecision =
+  | "approved"
+  | "approved_for_session"
+  | "denied"
+  | "abort"
+  | "accept"
+  | "acceptForSession"
+  | "decline"
+  | "cancel";
+
+export function decisionFromPermissionActionId(
+  actionId: string | undefined,
+): PermissionDecision | undefined {
+  switch (actionId) {
+    case "allow":
+    case "approve":
+    case "approved":
+      return "approved";
+    case "allow_for_session":
+    case "approve_for_session":
+    case "approved_for_session":
+    case "acceptForSession":
+      return "approved_for_session";
+    case "deny":
+    case "reject":
+    case "denied":
+      return "denied";
+    case "abort":
+      return "abort";
+    case "accept":
+      return "accept";
+    case "decline":
+      return "decline";
+    case "cancel":
+      return "cancel";
+    default:
+      return undefined;
+  }
+}
+
+export function isPermissionSessionGrant(args: {
+  decision?: string;
+  selectedActionId?: string;
+}): boolean {
+  const canonical =
+    (args.decision as PermissionDecision | undefined) ??
+    decisionFromPermissionActionId(args.selectedActionId);
+  return canonical === "approved_for_session";
+}
+
+export function isPermissionDenied(args: {
+  behavior?: string;
+  decision?: string;
+  selectedActionId?: string;
+}): boolean {
+  const canonical =
+    (args.decision as PermissionDecision | undefined) ??
+    decisionFromPermissionActionId(args.selectedActionId);
+  return args.behavior === "deny" || canonical === "denied" || canonical === "decline";
+}
+
+export function isPermissionAbort(args: {
+  decision?: string;
+  selectedActionId?: string;
+}): boolean {
+  const canonical =
+    (args.decision as PermissionDecision | undefined) ??
+    decisionFromPermissionActionId(args.selectedActionId);
+  return canonical === "abort" || canonical === "cancel";
+}
+
 export interface StartSessionRequest {
   provider: ProviderKind;
   cwd: string;
   title?: string;
   model?: string;
-  approvalPolicy?: string;
+  approvalPolicy?: ApprovalPolicy;
   sandbox?: string;
   command?: string;
   args?: string[];
@@ -76,6 +149,10 @@ export interface CloseSessionRequest {
   clientId: string;
 }
 
+export interface RenameSessionRequest {
+  title: string;
+}
+
 export interface ClaimControlRequest {
   client: AttachClientDescriptor;
 }
@@ -117,15 +194,7 @@ export interface PermissionResponseRequest {
   behavior: "allow" | "deny";
   message?: string;
   selectedActionId?: string;
-  decision?:
-    | "approved"
-    | "approved_for_session"
-    | "denied"
-    | "abort"
-    | "accept"
-    | "acceptForSession"
-    | "decline"
-    | "cancel";
+  decision?: PermissionDecision;
   answers?: Record<string, { answers: string[] }>;
   updatedInput?: JsonObject;
 }

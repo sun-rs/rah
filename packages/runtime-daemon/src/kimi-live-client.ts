@@ -1,16 +1,18 @@
 import { randomUUID } from "node:crypto";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import readline from "node:readline";
-import type {
-  AttachSessionRequest,
-  CloseSessionRequest,
-  ContextUsage,
-  InterruptSessionRequest,
-  ManagedSession,
-  PermissionRequest,
-  PermissionResponseRequest,
-  SessionInputRequest,
-  StartSessionRequest,
+import {
+  isPermissionDenied,
+  isPermissionSessionGrant,
+  type AttachSessionRequest,
+  type CloseSessionRequest,
+  type ContextUsage,
+  type InterruptSessionRequest,
+  type ManagedSession,
+  type PermissionRequest,
+  type PermissionResponseRequest,
+  type SessionInputRequest,
+  type StartSessionRequest,
 } from "@rah/runtime-protocol";
 import type { RuntimeServices } from "./provider-adapter";
 import { applyProviderActivity, type ProviderActivity } from "./provider-activity";
@@ -1043,10 +1045,9 @@ export async function respondToKimiLivePermission(params: {
       response.selectedActionId === "approve"
         ? "approve"
         : response.selectedActionId === "approve_for_session" ||
-            response.decision === "approved_for_session"
+            isPermissionSessionGrant(response)
           ? "approve_for_session"
-          : response.behavior === "deny" ||
-              response.decision === "denied"
+          : isPermissionDenied(response)
             ? "reject"
             : "approve";
     liveSession.client.respondSuccess(requestId, {

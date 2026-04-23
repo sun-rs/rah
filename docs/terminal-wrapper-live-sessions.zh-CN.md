@@ -147,6 +147,57 @@ surface 只描述：
 
 surface 不是 session owner。
 
+### 4.2.1 surface 不等于固定 provider session
+
+这是 wrapper 设计里最容易犯错的地方：
+
+- 一个 terminal surface 是稳定的
+- 但它当前绑定的 provider session 可能变化
+
+真实 CLI 都允许在同一个 TUI 里：
+
+- 直接进入一个新 session
+- `/resume` 切到旧 session
+- `/new` 再切到新的 session
+
+所以不能把：
+
+- `一个 rah codex 进程`
+
+等同于：
+
+- `一个固定 providerSessionId`
+
+正确模型应该是：
+
+- terminal surface
+- active provider session binding
+
+其中：
+
+- surface 稳定
+- binding 可变
+
+### 4.2.2 active provider session binding 必须是一等概念
+
+wrapper 必须能够向 daemon 上报：
+
+- 当前 active provider session 是谁
+- 它何时从 A 切到 B
+
+否则系统会犯两个严重错误：
+
+1. 把旧 session 和新 session 的 feed 混在同一个 live session 里
+2. web 继续向已经不是当前 TUI 焦点的 session 发消息
+
+因此，`rah codex` / `rah claude` 的正确建模不是：
+
+- “terminal 对应哪个 session”
+
+而是：
+
+- “terminal surface 当前绑定到哪个 active provider session”
+
 ### 4.3 引入 operator group
 
 RAH 当前已经有：
@@ -482,4 +533,3 @@ RAH 要实现的不是 hapi 式：
 - 同时手机上的 RAH Web UI 立即看到 live session
 - 两边都能继续工作
 - 而且不需要再出现 “按 Esc 切回 local mode” 这类体验
-

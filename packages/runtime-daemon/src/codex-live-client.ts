@@ -1,12 +1,15 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import readline from "node:readline";
-import type {
-  AttachSessionRequest,
-  ManagedSession,
-  PermissionRequest,
-  PermissionResponseRequest,
-  ResumeSessionRequest,
-  StartSessionRequest,
+import {
+  isPermissionAbort,
+  isPermissionDenied,
+  isPermissionSessionGrant,
+  type AttachSessionRequest,
+  type ManagedSession,
+  type PermissionRequest,
+  type PermissionResponseRequest,
+  type ResumeSessionRequest,
+  type StartSessionRequest,
 } from "@rah/runtime-protocol";
 import type { RuntimeServices } from "./provider-adapter";
 import { applyProviderActivity, type ProviderActivity } from "./provider-activity";
@@ -742,7 +745,7 @@ function attachRequestedClient(
   }
 }
 
-async function createCodexAppServerClient(): Promise<CodexJsonRpcClient> {
+export async function createCodexAppServerClient(): Promise<CodexJsonRpcClient> {
   const binary = await resolveCodexBinary();
   const child = spawn(binary, ["app-server"], {
     stdio: ["pipe", "pipe", "pipe"],
@@ -902,13 +905,18 @@ export async function resumeCodexLiveSession(params: {
       cwd,
       rootDir: record?.ref.rootDir ?? cwd,
       ...(thread &&
-      typeof thread.name === "string" &&
-      thread.name.trim() &&
-      !isCodexInternalThreadMetadataText(thread.name)
-        ? { title: thread.name }
+      typeof thread.preview === "string" &&
+      thread.preview.trim() &&
+      !isCodexInternalThreadMetadataText(thread.preview)
+        ? { title: thread.preview }
         : record?.ref.title !== undefined
           ? { title: record.ref.title }
-          : {}),
+          : thread &&
+              typeof thread.name === "string" &&
+              thread.name.trim() &&
+              !isCodexInternalThreadMetadataText(thread.name)
+            ? { title: thread.name }
+            : {}),
       ...(thread &&
       typeof thread.preview === "string" &&
       thread.preview.trim() &&
@@ -916,6 +924,11 @@ export async function resumeCodexLiveSession(params: {
         ? { preview: thread.preview }
         : record?.ref.preview !== undefined
           ? { preview: record.ref.preview }
+          : thread &&
+              typeof thread.name === "string" &&
+              thread.name.trim() &&
+              !isCodexInternalThreadMetadataText(thread.name)
+            ? { preview: thread.name }
           : {}),
       capabilities: {
         steerInput: true,
@@ -1058,18 +1071,13 @@ function resolveCodexApprovalDecision(
   response: PermissionResponseRequest,
   protocol: "v2" | "legacy",
 ): string {
-  const decision = response.decision ?? response.selectedActionId;
-  if (
-    decision === "approved_for_session" ||
-    decision === "acceptForSession" ||
-    decision === "allow_for_session"
-  ) {
+  if (isPermissionSessionGrant(response)) {
     return protocol === "legacy" ? "approved_for_session" : "acceptForSession";
   }
-  if (decision === "abort" || decision === "cancel") {
+  if (isPermissionAbort(response)) {
     return protocol === "legacy" ? "abort" : "cancel";
   }
-  if (decision === "denied" || decision === "decline") {
+  if (isPermissionDenied(response)) {
     return protocol === "legacy" ? "denied" : "decline";
   }
   if (response.behavior === "allow") {

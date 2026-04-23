@@ -3,23 +3,17 @@ import type { SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
 import * as Dialog from "@radix-ui/react-dialog";
 import { ChevronDown, ChevronRight, History, MoreHorizontal, Search, X } from "lucide-react";
 import { providerLabel } from "../types";
-import { formatRelativeTime, getDirectoryDisplayName } from "../session-browser";
+import { formatRelativeTime } from "../session-browser";
 import { ProviderLogo } from "./ProviderLogo";
+import {
+  dedupeStoredSessionsByIdentity,
+  groupAllStoredSessionsByDirectory,
+} from "../session-history-grouping";
 
-const DEFAULT_GROUP_ITEM_LIMIT = 5;
+const DEFAULT_GROUP_ITEM_LIMIT = 10;
+const GROUP_ITEM_INCREMENT = 20;
 
 type HistoryTab = "recent" | "all";
-
-function normalizePath(value: string | undefined): string | null {
-  if (!value) return null;
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  const withoutTrailing = trimmed.replace(/[\\/]+$/, "");
-  if (withoutTrailing.startsWith("/private/var/")) {
-    return withoutTrailing.slice("/private".length);
-  }
-  return withoutTrailing;
-}
 
 function sourceBadge(session: StoredSessionRef) {
   if (session.source === "previous_live") {
@@ -33,52 +27,6 @@ function sourceBadge(session: StoredSessionRef) {
     label: "History",
     className: "border-[var(--app-border)] bg-[var(--app-bg)] text-[var(--app-hint)]",
   };
-}
-
-function groupAllStoredSessionsByDirectory(
-  sessions: StoredSessionRef[],
-): {
-  directory: string;
-  displayName: string;
-  items: StoredSessionRef[];
-  latestUpdatedAt: string;
-}[] {
-  const groups = new Map<
-    string,
-    { directory: string; displayName: string; items: StoredSessionRef[]; latestUpdatedAt: string }
-  >();
-
-  for (const session of sessions) {
-    const directory = normalizePath(session.rootDir || session.cwd);
-    if (!directory) continue;
-    const updatedAt = session.updatedAt ?? session.lastUsedAt ?? "";
-    const existing = groups.get(directory);
-    if (existing) {
-      existing.items.push(session);
-      if (updatedAt > existing.latestUpdatedAt) {
-        existing.latestUpdatedAt = updatedAt;
-      }
-    } else {
-      groups.set(directory, {
-        directory,
-        displayName: getDirectoryDisplayName(directory),
-        items: [session],
-        latestUpdatedAt: updatedAt,
-      });
-    }
-  }
-
-  return [...groups.values()]
-    .map((group) => ({
-      ...group,
-      items: [...group.items].sort((a, b) => {
-        if ((a.source === "previous_live") !== (b.source === "previous_live")) {
-          return a.source === "previous_live" ? -1 : 1;
-        }
-        return (b.updatedAt ?? b.lastUsedAt ?? "").localeCompare(a.updatedAt ?? a.lastUsedAt ?? "");
-      }),
-    }))
-    .sort((a, b) => b.latestUpdatedAt.localeCompare(a.latestUpdatedAt));
 }
 
 function sessionTitle(session: StoredSessionRef): string {
@@ -197,7 +145,7 @@ export function SessionHistoryDialog(props: {
   const [tab, setTab] = useState<HistoryTab>("recent");
   const [query, setQuery] = useState("");
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
-  const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());
+  const [visibleItemCounts, setVisibleItemCounts] = useState<Map<string, number>>(new Map());
   const [pendingRemoveSession, setPendingRemoveSession] = useState<StoredSessionRef | null>(null);
   const [pendingRemoveWorkspaceDir, setPendingRemoveWorkspaceDir] = useState<string | null>(null);
 
@@ -234,7 +182,7 @@ export function SessionHistoryDialog(props: {
 
   const recentSessions = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return props.recentSessions
+    return dedupeStoredSessionsByIdentity(props.recentSessions)
       .filter((session) => matchesQuery(session, q))
       .sort((a, b) => (b.lastUsedAt ?? b.updatedAt ?? "").localeCompare(a.lastUsedAt ?? a.updatedAt ?? ""));
   }, [props.recentSessions, query]);
@@ -242,7 +190,9 @@ export function SessionHistoryDialog(props: {
   useEffect(() => {
     if (query.trim()) {
       setExpandedGroups(new Set(filteredGroups.map((group) => group.directory)));
-      setExpandedItems(new Set(filteredGroups.map((group) => group.directory)));
+      setVisibleItemCounts(
+        new Map(filteredGroups.map((group) => [group.directory, group.items.length] as const)),
+      );
     }
   }, [filteredGroups, query]);
 
@@ -255,11 +205,11 @@ export function SessionHistoryDialog(props: {
     });
   };
 
-  const toggleItems = (directory: string) => {
-    setExpandedItems((prev) => {
-      const next = new Set(prev);
-      if (next.has(directory)) next.delete(directory);
-      else next.add(directory);
+  const showMoreItems = (directory: string, total: number) => {
+    setVisibleItemCounts((prev) => {
+      const next = new Map(prev);
+      const current = next.get(directory) ?? DEFAULT_GROUP_ITEM_LIMIT;
+      next.set(directory, Math.min(total, current + GROUP_ITEM_INCREMENT));
       return next;
     });
   };
@@ -360,8 +310,9 @@ export function SessionHistoryDialog(props: {
               <div className="space-y-2">
                 {filteredGroups.map((group) => {
                   const isExpanded = expandedGroups.has(group.directory);
-                  const showAll = expandedItems.has(group.directory);
-                  const visibleItems = showAll ? group.items : group.items.slice(0, DEFAULT_GROUP_ITEM_LIMIT);
+                  const visibleCount = visibleItemCounts.get(group.directory) ?? DEFAULT_GROUP_ITEM_LIMIT;
+                  const visibleItems = group.items.slice(0, visibleCount);
+                  const remainingCount = Math.max(0, group.items.length - visibleItems.length);
                   return (
                     <section
                       key={group.directory}
@@ -383,19 +334,27 @@ export function SessionHistoryDialog(props: {
                           </span>
                         </div>
                         <div className="flex items-center justify-end gap-3 shrink-0 min-w-0">
-                          <span
-                            className="text-xs text-[var(--app-hint)] truncate max-w-[160px] text-right"
-                            title={group.directory}
-                          >
-                            {group.directory}
-                          </span>
+                          {group.isWorkspaceGroup ? (
+                            <span
+                              className="text-xs text-[var(--app-hint)] truncate max-w-[160px] text-right"
+                              title={group.directory}
+                            >
+                              {group.directory}
+                            </span>
+                          ) : (
+                            <span className="text-xs text-[var(--app-hint)]">
+                              Missing workspace metadata
+                            </span>
+                          )}
                           <span className="inline-flex items-center justify-center rounded-full bg-[var(--app-bg)] border border-[var(--app-border)] px-2 py-0.5 text-xs font-medium text-[var(--app-fg)] tabular-nums min-w-[1.5rem]">
                             {group.items.length}
                           </span>
-                          <WorkspaceRemoveButton
-                            workspaceDir={group.directory}
-                            onRequestRemove={setPendingRemoveWorkspaceDir}
-                          />
+                          {group.isWorkspaceGroup ? (
+                            <WorkspaceRemoveButton
+                              workspaceDir={group.directory}
+                              onRequestRemove={setPendingRemoveWorkspaceDir}
+                            />
+                          ) : null}
                         </div>
                       </button>
 
@@ -414,15 +373,15 @@ export function SessionHistoryDialog(props: {
                             />
                           ))}
                           {group.items.length > DEFAULT_GROUP_ITEM_LIMIT ? (
-                            <button
-                              type="button"
-                              onClick={() => toggleItems(group.directory)}
-                              className="w-full rounded-lg px-3 py-2 text-xs font-medium text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)] transition-colors"
-                            >
-                              {showAll
-                                ? "Show fewer"
-                                : `Show ${group.items.length - DEFAULT_GROUP_ITEM_LIMIT} more`}
-                            </button>
+                            remainingCount > 0 ? (
+                              <button
+                                type="button"
+                                onClick={() => showMoreItems(group.directory, group.items.length)}
+                                className="w-full rounded-lg px-3 py-2 text-xs font-medium text-[var(--app-hint)] transition-colors hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)]"
+                              >
+                                Show more
+                              </button>
+                            ) : null
                           ) : null}
                         </div>
                       ) : null}

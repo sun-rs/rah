@@ -226,6 +226,53 @@ describe("client projection", () => {
     }
   });
 
+  test("resets live projection when the same terminal session rebinds to a new provider session", () => {
+    let current = projection();
+    current.summary = {
+      ...current.summary,
+      session: {
+        ...current.summary.session,
+        launchSource: "terminal",
+        providerSessionId: "thread-1",
+      },
+    };
+    current.feed = [
+      {
+        kind: "timeline",
+        key: "old",
+        item: { kind: "assistant_message", text: "old session output" },
+        ts: "2026-04-15T00:00:01.000Z",
+      },
+    ];
+    current.history = {
+      phase: "ready",
+      nextCursor: "cursor-1",
+      nextBeforeTs: "2026-04-15T00:00:01.000Z",
+      generation: 3,
+      authoritativeApplied: true,
+      lastError: "old error",
+    };
+
+    const reboundEvent = event({
+      seq: 3,
+      type: "session.started",
+      payload: {
+        session: {
+          ...current.summary.session,
+          providerSessionId: "thread-2",
+          title: "New active thread",
+        },
+      },
+    });
+    const rebound = applyEventToProjection(current, reboundEvent);
+
+    assert.equal(rebound.summary.session.providerSessionId, "thread-2");
+    assert.equal(rebound.summary.session.title, "New active thread");
+    assert.deepEqual(rebound.feed, []);
+    assert.deepEqual(rebound.history, initialHistorySyncState());
+    assert.deepEqual(rebound.events, [reboundEvent]);
+  });
+
   test("coalesces retry runtime status and hides non-actionable runtime status", () => {
     let current = projection();
     current = applyEventToProjection(

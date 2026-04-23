@@ -128,6 +128,25 @@ export async function closeSessionCommand(args: {
   }
 }
 
+export async function renameSessionCommand(args: {
+  set: SessionCommandSetState;
+  sessionId: string;
+  title: string;
+  refreshWorkbenchState: () => Promise<void>;
+}) {
+  try {
+    const summary = await api.renameSession(args.sessionId, { title: args.title });
+    args.set((state) => ({
+      projections: updateSessionSummaryInProjectionMap(state.projections, summary),
+      error: null,
+    }));
+    await args.refreshWorkbenchState();
+  } catch (error) {
+    args.set({ error: readErrorMessage(error) });
+    throw error;
+  }
+}
+
 export async function claimControlCommand(args: {
   get: () => SessionCommandState;
   set: SessionCommandSetState;

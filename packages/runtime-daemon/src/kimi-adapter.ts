@@ -22,13 +22,13 @@ import type {
 } from "@rah/runtime-protocol";
 import type { ProviderAdapter, RuntimeServices } from "./provider-adapter";
 import {
-  applyCodexGitFileAction,
-  applyCodexGitHunkAction,
-  getCodexGitDiff,
-  getCodexGitStatus,
-  getCodexWorkspaceSnapshot,
-  readWorkspaceFile,
-} from "./codex-stored-sessions";
+  applyWorkspaceGitFileAction,
+  applyWorkspaceGitHunkAction,
+  getWorkspaceGitDiff,
+  getWorkspaceGitStatus,
+  getWorkspaceSnapshot,
+  readWorkspaceFileFromDirectory,
+} from "./workspace-utils";
 import {
   closeKimiLiveSession,
   interruptKimiLiveSession,
@@ -209,7 +209,7 @@ export class KimiAdapter implements ProviderAdapter {
     if (!state) {
       throw new Error(`Unknown session ${sessionId}`);
     }
-    const snapshot = getCodexWorkspaceSnapshot(options?.scopeRoot ?? state.session.cwd);
+    const snapshot = getWorkspaceSnapshot(options?.scopeRoot ?? state.session.cwd);
     return {
       sessionId,
       cwd: snapshot.cwd,
@@ -222,7 +222,7 @@ export class KimiAdapter implements ProviderAdapter {
     if (!state) {
       throw new Error(`Unknown session ${sessionId}`);
     }
-    const status = getCodexGitStatus(state.session.cwd, options);
+    const status = getWorkspaceGitStatus(state.session.cwd, options);
     return {
       sessionId,
       ...(status.branch ? { branch: status.branch } : {}),
@@ -246,7 +246,7 @@ export class KimiAdapter implements ProviderAdapter {
     return {
       sessionId,
       path: targetPath,
-      diff: getCodexGitDiff(state.session.cwd, targetPath, options),
+      diff: getWorkspaceGitDiff(state.session.cwd, targetPath, options),
     };
   }
 
@@ -256,7 +256,7 @@ export class KimiAdapter implements ProviderAdapter {
       throw new Error(`Unknown session ${sessionId}`);
     }
     return {
-      ...applyCodexGitFileAction(state.session.cwd, request, {
+      ...applyWorkspaceGitFileAction(state.session.cwd, request, {
         scopeRoot: state.session.rootDir ?? state.session.cwd,
       }),
       sessionId,
@@ -269,7 +269,7 @@ export class KimiAdapter implements ProviderAdapter {
       throw new Error(`Unknown session ${sessionId}`);
     }
     return {
-      ...applyCodexGitHunkAction(state.session.cwd, request, {
+      ...applyWorkspaceGitHunkAction(state.session.cwd, request, {
         scopeRoot: state.session.rootDir ?? state.session.cwd,
       }),
       sessionId,
@@ -286,8 +286,8 @@ export class KimiAdapter implements ProviderAdapter {
       throw new Error(`Unknown session ${sessionId}`);
     }
     return {
+      ...readWorkspaceFileFromDirectory(state.session.cwd, targetPath, options),
       sessionId,
-      ...readWorkspaceFile(state.session.cwd, targetPath, options),
     };
   }
 

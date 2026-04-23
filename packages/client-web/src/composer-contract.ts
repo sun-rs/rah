@@ -89,6 +89,12 @@ export function deriveComposerSurface(args: {
   }
 
   if (!hasControl) {
+    if (selectedSummary.session.launchSource === "terminal") {
+      return {
+        kind: "compose",
+        showStopButton: isGenerating,
+      };
+    }
     return {
       kind: "claim_control",
       actionLabel: isClaimingControl ? "Claiming…" : "Claim control",

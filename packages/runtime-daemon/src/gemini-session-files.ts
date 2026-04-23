@@ -109,6 +109,21 @@ export function resolveGeminiStoredSessionWatchRoots(): string[] {
   return [path.join(resolveGeminiHome(), "tmp")];
 }
 
+function normalizeDirectory(value: string | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const withoutTrailing = trimmed.replace(/[\\/]+$/, "");
+  if (withoutTrailing.startsWith("/private/var/")) {
+    return withoutTrailing.slice("/private".length);
+  }
+  return withoutTrailing;
+}
+
 function getProjectHash(projectRoot: string): string {
   return createHash("sha256").update(projectRoot).digest("hex");
 }
@@ -145,6 +160,254 @@ function scanGeminiChatsDirs(): string[] {
   } catch {
     return [];
   }
+}
+
+type GeminiProjectIndices = {
+  hashIndex: Map<string, string>;
+  aliasIndex: Map<string, string>;
+  knownRoots: string[];
+};
+
+type GeminiProjectDirectories = {
+  cwd?: string;
+  rootDir: string;
+};
+
+const GEMINI_ABSOLUTE_PATH_HINT_PATTERN = /\/(?:[A-Za-z0-9._~-]+\/)*[A-Za-z0-9._~-]+/g;
+const GEMINI_GENERIC_ANCESTOR_NAMES = new Set([
+  "src",
+  "lib",
+  "bin",
+  "source",
+  "docs",
+  "doc",
+  "test",
+  "tests",
+  "spec",
+  "specs",
+  "plans",
+  "scripts",
+  "examples",
+  "example",
+  "crates",
+  "packages",
+  "pkg",
+  "cmd",
+  "chat",
+  "chats",
+  "tmp",
+  "temp",
+  "build",
+  "dist",
+  "out",
+  "target",
+  "dev",
+  "mobile",
+]);
+
+function loadGeminiProjectIndices(): GeminiProjectIndices {
+  const filePath = path.join(resolveGeminiHome(), "projects.json");
+  try {
+    const parsed = JSON.parse(readFileSync(filePath, "utf8")) as {
+      projects?: Record<string, string>;
+    };
+    const hashIndex = new Map<string, string>();
+    const aliasIndex = new Map<string, string>();
+    const knownRoots: string[] = [];
+    for (const [projectRoot, alias] of Object.entries(parsed.projects ?? {})) {
+      const normalized = normalizeDirectory(projectRoot);
+      if (!normalized) {
+        continue;
+      }
+      hashIndex.set(getProjectHash(normalized), normalized);
+      knownRoots.push(normalized);
+      if (typeof alias === "string") {
+        const normalizedAlias = alias.trim();
+        if (normalizedAlias) {
+          aliasIndex.set(normalizedAlias, normalized);
+        }
+      }
+    }
+    knownRoots.sort((left, right) => right.length - left.length);
+    return { hashIndex, aliasIndex, knownRoots };
+  } catch {
+    return {
+      hashIndex: new Map(),
+      aliasIndex: new Map(),
+      knownRoots: [],
+    };
+  }
+}
+
+function isGeminiPathHintIgnored(candidate: string): boolean {
+  const normalized = normalizeDirectory(candidate);
+  if (!normalized) {
+    return true;
+  }
+  const geminiTmpRoot = normalizeDirectory(path.join(resolveGeminiHome(), "tmp"));
+  if (geminiTmpRoot && (normalized === geminiTmpRoot || normalized.startsWith(`${geminiTmpRoot}/`))) {
+    return true;
+  }
+  return normalized.includes("/.tmp") || normalized.includes("/tmp/");
+}
+
+function trimGeminiPathHint(raw: string): string {
+  let value = raw.trim();
+  while (value.length > 1 && /[.,:;)\]}`\\]$/.test(value)) {
+    value = value.slice(0, -1);
+  }
+  return value;
+}
+
+function inferGeminiHintDirectory(candidate: string): string {
+  const normalized = normalizeDirectory(candidate) ?? candidate;
+  try {
+    const stats = statSync(normalized);
+    return stats.isDirectory() ? normalized : path.dirname(normalized);
+  } catch {
+    const basename = path.basename(normalized);
+    if (basename.startsWith(".") || basename.includes(".")) {
+      return path.dirname(normalized);
+    }
+    return normalized;
+  }
+}
+
+function listGeminiRecoverableAncestors(directory: string): string[] {
+  const homeDir = normalizeDirectory(os.homedir());
+  const rejected = new Set<string>([
+    "/Users",
+    "/home",
+    ...(homeDir
+      ? [
+          homeDir,
+          path.join(homeDir, "Code"),
+          path.join(homeDir, "Code", "repos"),
+          path.join(homeDir, "Desktop"),
+          path.join(homeDir, "Desktop", "DEV"),
+          path.join(homeDir, "Downloads"),
+          path.join(homeDir, "Library"),
+          path.join(homeDir, "Library", "Mobile"),
+          path.join(homeDir, "Library", "Mobile Documents"),
+          path.join(homeDir, ".config"),
+        ]
+      : []),
+  ]);
+  const ancestors: string[] = [];
+  let current = normalizeDirectory(directory);
+  while (current && !rejected.has(current)) {
+    const parsed = path.parse(current);
+    if (parsed.dir === current) {
+      break;
+    }
+    if (current.split("/").filter(Boolean).length >= 4) {
+      const tail = path.basename(current).toLowerCase();
+      if (!tail.startsWith(".") && !GEMINI_GENERIC_ANCESTOR_NAMES.has(tail)) {
+        ancestors.push(current);
+      }
+    }
+    current = normalizeDirectory(path.dirname(current));
+  }
+  return ancestors;
+}
+
+function resolveGeminiProjectDirectoriesFromRoot(rootDir: string | null): GeminiProjectDirectories | null {
+  if (!rootDir) {
+    return null;
+  }
+  try {
+    if (statSync(rootDir).isDirectory()) {
+      return { cwd: rootDir, rootDir };
+    }
+  } catch {}
+  return { rootDir };
+}
+
+function inferGeminiProjectRootFromHintTexts(
+  texts: readonly string[],
+  projectIndices: GeminiProjectIndices,
+): string | null {
+  const matchingKnownRoots = new Map<string, number>();
+  const ancestorVotes = new Map<string, number>();
+  for (const text of texts) {
+    for (const raw of text.match(GEMINI_ABSOLUTE_PATH_HINT_PATTERN) ?? []) {
+      const trimmed = trimGeminiPathHint(raw);
+      if (isGeminiPathHintIgnored(trimmed)) {
+        continue;
+      }
+      const knownRoot = projectIndices.knownRoots.find(
+        (root) => trimmed === root || trimmed.startsWith(`${root}/`),
+      );
+      if (knownRoot) {
+        matchingKnownRoots.set(knownRoot, (matchingKnownRoots.get(knownRoot) ?? 0) + 1);
+        continue;
+      }
+      const hintedDirectory = inferGeminiHintDirectory(trimmed);
+      for (const ancestor of listGeminiRecoverableAncestors(hintedDirectory)) {
+        ancestorVotes.set(ancestor, (ancestorVotes.get(ancestor) ?? 0) + 1);
+      }
+    }
+  }
+  if (matchingKnownRoots.size > 0) {
+    return [...matchingKnownRoots.entries()].sort(
+      (left, right) => right[1] - left[1] || right[0].length - left[0].length,
+    )[0]?.[0] ?? null;
+  }
+  if (ancestorVotes.size > 0) {
+    return [...ancestorVotes.entries()].sort(
+      (left, right) => right[1] - left[1] || right[0].length - left[0].length,
+    )[0]?.[0] ?? null;
+  }
+  return null;
+}
+
+function resolveGeminiProjectDirectories(
+  conversation: GeminiConversationRecord,
+  filePath: string,
+  projectIndices: GeminiProjectIndices,
+  inferredRootCache: Map<string, GeminiProjectDirectories | null>,
+): GeminiProjectDirectories | null {
+  const projectDir = path.dirname(path.dirname(filePath));
+  try {
+    const explicit = normalizeDirectory(readFileSync(path.join(projectDir, ".project_root"), "utf8"));
+    const explicitDirectories = resolveGeminiProjectDirectoriesFromRoot(explicit);
+    if (explicitDirectories) {
+      return explicitDirectories;
+    }
+  } catch {}
+  const hashedDirectories = resolveGeminiProjectDirectoriesFromRoot(
+    projectIndices.hashIndex.get(conversation.projectHash) ?? null,
+  );
+  if (hashedDirectories) {
+    return hashedDirectories;
+  }
+  const aliasDirectories = resolveGeminiProjectDirectoriesFromRoot(
+    projectIndices.aliasIndex.get(path.basename(projectDir)) ?? null,
+  );
+  if (aliasDirectories) {
+    return aliasDirectories;
+  }
+  if (inferredRootCache.has(projectDir)) {
+    return inferredRootCache.get(projectDir) ?? null;
+  }
+  const hintTexts = [
+    readTextRange(filePath, { startOffset: 0, endOffset: 256 * 1024 }),
+    (() => {
+      try {
+        return readTextRange(path.join(projectDir, "logs.json"), {
+          startOffset: 0,
+          endOffset: 128 * 1024,
+        });
+      } catch {
+        return "";
+      }
+    })(),
+  ].filter((value) => value.length > 0);
+  const inferredDirectories = resolveGeminiProjectDirectoriesFromRoot(
+    inferGeminiProjectRootFromHintTexts(hintTexts, projectIndices),
+  );
+  inferredRootCache.set(projectDir, inferredDirectories);
+  return inferredDirectories;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -364,14 +627,23 @@ function makeGeminiFrozenHistoryBoundary(
 function buildStoredSessionRef(
   conversation: GeminiConversationRecord,
   filePath: string,
+  projectIndices: GeminiProjectIndices,
+  inferredRootCache: Map<string, GeminiProjectDirectories | null>,
 ): StoredSessionRef {
   const firstUserMessage =
     conversation.messages.find((message) => message.type === "user")?.content ?? "";
   const preview = truncateText(extractTextFromContent(firstUserMessage) || "Gemini conversation");
   const stat = statSync(filePath);
+  const projectDirectories = resolveGeminiProjectDirectories(
+    conversation,
+    filePath,
+    projectIndices,
+    inferredRootCache,
+  );
   return {
     provider: "gemini",
     providerSessionId: conversation.sessionId,
+    ...(projectDirectories ?? {}),
     title: truncateText(preview, 72),
     preview,
     updatedAt: conversation.lastUpdated || stat.mtime.toISOString(),
@@ -381,6 +653,8 @@ function buildStoredSessionRef(
 
 export function discoverGeminiStoredSessions(): GeminiStoredSessionRecord[] {
   const cache = loadStoredSessionMetadataCache("gemini");
+  const projectIndices = loadGeminiProjectIndices();
+  const inferredRootCache = new Map<string, GeminiProjectDirectories | null>();
   const records = new Map<string, GeminiStoredSessionRecord>();
   for (const chatsDir of scanGeminiChatsDirs()) {
     for (const filePath of listGeminiSessionFiles(chatsDir)) {
@@ -391,7 +665,7 @@ export function discoverGeminiStoredSessions(): GeminiStoredSessionRecord[] {
         size: stats.size,
         mtimeMs: stats.mtimeMs,
       });
-      if (cachedRef) {
+      if (cachedRef && (cachedRef.cwd || cachedRef.rootDir)) {
         records.set(cachedRef.providerSessionId, {
           ref: cachedRef,
           filePath,
@@ -409,7 +683,7 @@ export function discoverGeminiStoredSessions(): GeminiStoredSessionRecord[] {
       if (!conversation || conversation.kind === "subagent") {
         continue;
       }
-      const ref = buildStoredSessionRef(conversation, filePath);
+      const ref = buildStoredSessionRef(conversation, filePath, projectIndices, inferredRootCache);
       setCachedStoredSessionRef({
         cache,
         filePath,
@@ -450,11 +724,13 @@ export function findGeminiStoredSessionRecord(
   cwd?: string,
 ): GeminiStoredSessionRecord | null {
   if (cwd) {
+    const projectIndices = loadGeminiProjectIndices();
+    const inferredRootCache = new Map<string, GeminiProjectDirectories | null>();
     for (const filePath of listGeminiSessionFiles(getChatsDirForCwd(cwd))) {
       const conversation = loadGeminiConversationRecord(filePath);
       if (conversation?.sessionId === providerSessionId) {
         return {
-          ref: buildStoredSessionRef(conversation, filePath),
+          ref: buildStoredSessionRef(conversation, filePath, projectIndices, inferredRootCache),
           filePath,
           conversation,
         };
@@ -979,13 +1255,13 @@ export function resumeGeminiStoredSession(params: {
   cwd?: string;
   attach?: AttachSessionRequest;
 }): { sessionId: string } {
-  const cwd = params.cwd ?? process.cwd();
+  const cwd = params.cwd ?? params.record.ref.cwd ?? process.cwd();
   const state = params.services.sessionStore.createManagedSession({
     provider: "gemini",
     providerSessionId: params.record.ref.providerSessionId,
     launchSource: "web",
     cwd,
-    rootDir: cwd,
+    rootDir: params.record.ref.rootDir ?? cwd,
     ...(params.record.ref.title ? { title: params.record.ref.title } : {}),
     ...(params.record.ref.preview ? { preview: params.record.ref.preview } : {}),
     capabilities: REHYDRATED_CAPABILITIES,

@@ -1,5 +1,4 @@
 import { mkdir, opendir, stat } from "node:fs/promises";
-import os from "node:os";
 import { resolve } from "node:path";
 import type {
   AttachSessionRequest,
@@ -34,17 +33,18 @@ import type {
 import { ClaudeAdapter } from "./claude-adapter";
 import { CodexAdapter } from "./codex-adapter";
 import {
-  getCodexGitDiff,
-  getCodexGitStatus,
-  readWorkspaceFile as readWorkspaceFileFromDirectory,
-  searchWorkspaceFiles as searchWorkspaceFilesInDirectory,
-} from "./codex-stored-sessions";
+  getWorkspaceGitDiff,
+  getWorkspaceGitStatus,
+  readWorkspaceFileFromDirectory,
+  searchWorkspaceFilesInDirectory,
+} from "./workspace-utils";
 import { DebugAdapter } from "./debug-adapter";
 import { EventBus } from "./event-bus";
 import { GeminiAdapter } from "./gemini-adapter";
 import { HistorySnapshotStore } from "./history-snapshots";
 import { IndependentTerminalProcess } from "./independent-terminal";
 import { KimiAdapter } from "./kimi-adapter";
+import { applyProviderActivity, type ProviderActivity } from "./provider-activity";
 import {
   launchSpecForProvider,
   probeProviderDiagnostic,
@@ -53,7 +53,23 @@ import type { ProviderAdapter } from "./provider-adapter";
 import { PtyHub } from "./pty-hub";
 import { SessionStore, toSessionSummary, type StoredSessionState } from "./session-store";
 import { StoredSessionMonitor } from "./stored-session-monitor";
+import {
+  TerminalWrapperRegistry,
+  type TerminalWrapperFromDaemonMessage,
+  type TerminalWrapperPromptState,
+  type WrapperHelloMessage,
+  type WrapperProviderBoundMessage,
+  type WrapperReadyMessage,
+} from "./terminal-wrapper-control";
 import { WorkbenchStateStore } from "./workbench-state";
+import {
+  isReadOnlyReplaySession,
+  normalizeDirectory,
+  resolveUserPath,
+  sessionBelongsToWorkspace,
+  workspaceDirsFromState,
+} from "./workbench-directory-utils";
+import { WorkspaceScopeAuthorizer } from "./workspace-scope-authorizer";
 
 const SYSTEM_SOURCE = {
   provider: "system" as const,
@@ -61,82 +77,7 @@ const SYSTEM_SOURCE = {
   authority: "authoritative" as const,
 };
 
-function normalizeDirectory(value: string | undefined): string | null {
-  if (!value) {
-    return null;
-  }
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const withoutTrailing = trimmed.replace(/[\\/]+$/, "");
-  if (withoutTrailing.startsWith("/private/var/")) {
-    return withoutTrailing.slice("/private".length);
-  }
-  return withoutTrailing;
-}
-
-function resolveUserPath(rawPath: string): string {
-  const trimmed = rawPath.trim();
-  if (!trimmed || trimmed === "~") {
-    return os.homedir();
-  }
-  if (trimmed.startsWith("~/") || trimmed.startsWith("~\\")) {
-    return resolve(os.homedir(), trimmed.slice(2));
-  }
-  return resolve(trimmed);
-}
-
-function sessionBelongsToWorkspace(
-  sessionPath: string | undefined,
-  workspaceDir: string,
-): boolean {
-  const normalizedSession = normalizeDirectory(sessionPath);
-  const normalizedWorkspace = normalizeDirectory(workspaceDir);
-  if (!normalizedSession || !normalizedWorkspace) {
-    return false;
-  }
-  return (
-    normalizedSession === normalizedWorkspace ||
-    normalizedSession.startsWith(`${normalizedWorkspace}/`) ||
-    normalizedSession.startsWith(`${normalizedWorkspace}\\`)
-  );
-}
-
-function isReadOnlyReplaySession(state: StoredSessionState): boolean {
-  return (
-    state.session.providerSessionId !== undefined &&
-    !state.session.capabilities.steerInput &&
-    !state.session.capabilities.livePermissions
-  );
-}
-
-function workspaceDirsFromState(
-  rememberedWorkspaceDirs: readonly string[],
-  liveStates: readonly StoredSessionState[],
-): string[] {
-  const directories: string[] = [];
-  const seen = new Set<string>();
-  for (const rememberedWorkspaceDir of rememberedWorkspaceDirs) {
-    const directory = normalizeDirectory(rememberedWorkspaceDir);
-    if (!directory || seen.has(directory)) {
-      continue;
-    }
-    seen.add(directory);
-    directories.push(directory);
-  }
-  for (const state of liveStates) {
-    if (isReadOnlyReplaySession(state)) {
-      continue;
-    }
-    const directory = normalizeDirectory(state.session.rootDir || state.session.cwd);
-    if (directory && !seen.has(directory)) {
-      seen.add(directory);
-      directories.push(directory);
-    }
-  }
-  return directories;
-}
+const MAX_MATERIALIZED_HISTORY_EVENTS = 5_000;
 
 export class RuntimeEngine {
   readonly eventBus: EventBus;
@@ -153,6 +94,13 @@ export class RuntimeEngine {
   private lastDiscoveredStoredSessions: StoredSessionRef[] = [];
   private storedSessionDiscoveryVersion = 0;
   private readonly storedSessionMonitor: StoredSessionMonitor;
+  private readonly workspaceScopeAuthorizer: WorkspaceScopeAuthorizer;
+  private readonly terminalWrappers = new TerminalWrapperRegistry();
+  private readonly terminalWrapperSenders = new Map<
+    string,
+    (message: TerminalWrapperFromDaemonMessage) => void
+  >();
+  private readonly closingTerminalWrapperSessionIds = new Set<string>();
 
   private readonly adaptersById = new Map<string, ProviderAdapter>();
   private readonly adaptersByProvider = new Map<string, ProviderAdapter>();
@@ -181,6 +129,10 @@ export class RuntimeEngine {
     this.rememberedHiddenWorkspaces = restored.hiddenWorkspaces;
     this.rememberedActiveWorkspaceDir = restored.activeWorkspaceDir;
     this.rememberedHiddenSessionKeys = restored.hiddenSessionKeys;
+    this.workspaceScopeAuthorizer = new WorkspaceScopeAuthorizer(
+      this.workbenchState,
+      this.sessionStore,
+    );
 
     const resolvedAdapters: ProviderAdapter[] = adapters ?? (() => {
       const debugAdapter = new DebugAdapter({
@@ -427,7 +379,39 @@ export class RuntimeEngine {
     return toSessionSummary(state);
   }
 
+  renameSession(sessionId: string, title: string): SessionSummary {
+    const nextTitle = title.trim();
+    if (!nextTitle) {
+      throw new Error("Session title is required.");
+    }
+    const state = this.sessionStore.patchManagedSession(sessionId, { title: nextTitle });
+    this.workbenchState.rememberSession(state);
+    this.refreshRememberedState();
+    this.publishStoredSessionDiscovery();
+    return toSessionSummary(state);
+  }
+
   sendInput(sessionId: string, request: { clientId: string; text: string }): void {
+    const wrapper = this.terminalWrappers.get(sessionId);
+    if (wrapper) {
+      const queuedTurn = this.terminalWrappers.enqueueRemoteTurn(
+        sessionId,
+        request.clientId,
+        request.text,
+      );
+      const sender = this.terminalWrapperSenders.get(sessionId);
+      if (sender) {
+        if (wrapper.promptState === "prompt_clean") {
+          const injectable = this.terminalWrappers.dequeueInjectableTurn(sessionId);
+          if (injectable) {
+            sender({ type: "turn.inject", sessionId, queuedTurn: injectable });
+          }
+        } else {
+          sender({ type: "turn.enqueue", sessionId, queuedTurn });
+        }
+      }
+      return;
+    }
     this.requireSessionAdapter(sessionId).sendInput(sessionId, request);
   }
 
@@ -435,6 +419,14 @@ export class RuntimeEngine {
     sessionId: string,
     request: InterruptSessionRequest,
   ): SessionSummary {
+    if (this.terminalWrappers.get(sessionId)) {
+      this.terminalWrapperSenders.get(sessionId)?.({
+        type: "turn.interrupt",
+        sessionId,
+        sourceSurfaceId: request.clientId,
+      });
+      return this.getSessionSummary(sessionId);
+    }
     return this.requireSessionAdapter(sessionId).interruptSession(sessionId, request);
   }
 
@@ -448,6 +440,23 @@ export class RuntimeEngine {
     }
     this.workbenchState.rememberSession(state);
     this.refreshRememberedState();
+    if (this.terminalWrappers.get(sessionId)) {
+      this.closingTerminalWrapperSessionIds.add(sessionId);
+      this.sessionStore.setRuntimeState(sessionId, "stopped");
+      this.terminalWrapperSenders.get(sessionId)?.({
+        type: "wrapper.close",
+        sessionId,
+      });
+      this.eventBus.publish({
+        sessionId,
+        type: "session.closed",
+        source: SYSTEM_SOURCE,
+        payload: {
+          clientId: request.clientId,
+        },
+      });
+      return;
+    }
     const adapter = this.requireSessionAdapter(sessionId);
     await adapter.closeSession?.(sessionId, request);
     this.sessionStore.removeSession(sessionId);
@@ -482,6 +491,15 @@ export class RuntimeEngine {
     requestId: string,
     response: PermissionResponseRequest,
   ): Promise<void> {
+    if (this.terminalWrappers.get(sessionId)) {
+      this.terminalWrapperSenders.get(sessionId)?.({
+        type: "permission.resolve",
+        sessionId,
+        requestId,
+        response,
+      });
+      return;
+    }
     const adapter = this.requireSessionAdapter(sessionId);
     if (!adapter.respondToPermission) {
       throw new Error(`Provider ${adapter.id} does not support permission responses.`);
@@ -510,11 +528,23 @@ export class RuntimeEngine {
   }
 
   getWorkspaceSnapshot(sessionId: string, options?: { scopeRoot?: string }) {
-    return this.requireSessionAdapter(sessionId).getWorkspaceSnapshot(sessionId, options);
+    const scopeRoot = this.workspaceScopeAuthorizer.resolveAuthorizedSessionScopeRoot(
+      sessionId,
+      options?.scopeRoot,
+    );
+    return this.requireSessionAdapter(sessionId).getWorkspaceSnapshot(sessionId, {
+      ...(scopeRoot ? { scopeRoot } : {}),
+    });
   }
 
   getGitStatus(sessionId: string, options?: { scopeRoot?: string }) {
-    return this.requireSessionAdapter(sessionId).getGitStatus(sessionId, options);
+    const scopeRoot = this.workspaceScopeAuthorizer.resolveAuthorizedSessionScopeRoot(
+      sessionId,
+      options?.scopeRoot,
+    );
+    return this.requireSessionAdapter(sessionId).getGitStatus(sessionId, {
+      ...(scopeRoot ? { scopeRoot } : {}),
+    });
   }
 
   getGitDiff(
@@ -522,11 +552,22 @@ export class RuntimeEngine {
     path: string,
     options?: { staged?: boolean; ignoreWhitespace?: boolean; scopeRoot?: string },
   ) {
-    return this.requireSessionAdapter(sessionId).getGitDiff(sessionId, path, options);
+    const scopeRoot = this.workspaceScopeAuthorizer.resolveAuthorizedSessionScopeRoot(
+      sessionId,
+      options?.scopeRoot,
+    );
+    return this.requireSessionAdapter(sessionId).getGitDiff(sessionId, path, {
+      ...(options?.staged !== undefined ? { staged: options.staged } : {}),
+      ...(options?.ignoreWhitespace !== undefined
+        ? { ignoreWhitespace: options.ignoreWhitespace }
+        : {}),
+      ...(scopeRoot ? { scopeRoot } : {}),
+    });
   }
 
   getWorkspaceGitStatus(dir: string) {
-    return getCodexGitStatus(dir, { scopeRoot: dir });
+    const workspaceDir = this.workspaceScopeAuthorizer.resolveAuthorizedWorkspaceDirectory(dir);
+    return getWorkspaceGitStatus(workspaceDir, { scopeRoot: workspaceDir });
   }
 
   getWorkspaceGitDiff(
@@ -534,10 +575,11 @@ export class RuntimeEngine {
     path: string,
     options?: { staged?: boolean; ignoreWhitespace?: boolean },
   ) {
+    const workspaceDir = this.workspaceScopeAuthorizer.resolveAuthorizedWorkspaceDirectory(dir);
     return {
       sessionId: "",
       path,
-      diff: getCodexGitDiff(dir, path, { ...options, scopeRoot: dir }),
+      diff: getWorkspaceGitDiff(workspaceDir, path, { ...options, scopeRoot: workspaceDir }),
     };
   }
 
@@ -558,14 +600,18 @@ export class RuntimeEngine {
   }
 
   readSessionFile(sessionId: string, path: string, options?: { scopeRoot?: string }) {
-    return this.requireSessionAdapter(sessionId).readSessionFile(sessionId, path, options);
+    const scopeRoot = this.workspaceScopeAuthorizer.resolveAuthorizedSessionScopeRoot(
+      sessionId,
+      options?.scopeRoot,
+    );
+    return this.requireSessionAdapter(sessionId).readSessionFile(sessionId, path, {
+      ...(scopeRoot ? { scopeRoot } : {}),
+    });
   }
 
   readWorkspaceFile(dir: string, path: string) {
-    return {
-      sessionId: "",
-      ...readWorkspaceFileFromDirectory(dir, path, { scopeRoot: dir }),
-    };
+    const workspaceDir = this.workspaceScopeAuthorizer.resolveAuthorizedWorkspaceDirectory(dir);
+    return readWorkspaceFileFromDirectory(workspaceDir, path, { scopeRoot: workspaceDir });
   }
 
   searchSessionFiles(
@@ -578,18 +624,23 @@ export class RuntimeEngine {
     if (!session) {
       throw new Error(`Unknown session ${sessionId}`);
     }
+    const scopeRoot = this.workspaceScopeAuthorizer.resolveAuthorizedSessionScopeRoot(
+      sessionId,
+      options?.scopeRoot,
+    );
     return {
       sessionId,
       query,
-      files: searchWorkspaceFilesInDirectory(options?.scopeRoot ?? session.cwd, query, limit),
+      files: searchWorkspaceFilesInDirectory(scopeRoot ?? session.cwd, query, limit),
     };
   }
 
   searchWorkspaceFiles(dir: string, query: string, limit = 100): SessionFileSearchResponse {
+    const workspaceDir = this.workspaceScopeAuthorizer.resolveAuthorizedWorkspaceDirectory(dir);
     return {
       sessionId: "",
       query,
-      files: searchWorkspaceFilesInDirectory(dir, query, limit),
+      files: searchWorkspaceFilesInDirectory(workspaceDir, query, limit),
     };
   }
 
@@ -610,8 +661,8 @@ export class RuntimeEngine {
         adapter.getSessionHistoryPage!(
           sessionId,
           options?.beforeTs
-            ? { beforeTs: options.beforeTs, limit: Number.MAX_SAFE_INTEGER }
-            : { limit: Number.MAX_SAFE_INTEGER },
+            ? { beforeTs: options.beforeTs, limit: MAX_MATERIALIZED_HISTORY_EVENTS }
+            : { limit: MAX_MATERIALIZED_HISTORY_EVENTS },
         ).events,
     });
   }
@@ -690,10 +741,10 @@ export class RuntimeEngine {
     try {
       const directoryStat = await stat(requestedCwd);
       if (!directoryStat.isDirectory()) {
-        cwd = os.homedir();
+        cwd = resolveUserPath("~");
       }
     } catch {
-      cwd = os.homedir();
+      cwd = resolveUserPath("~");
     }
     const id = crypto.randomUUID();
     this.ptyHub.ensureSession(id);
@@ -740,8 +791,263 @@ export class RuntimeEngine {
     this.ptyHub.removeSession(id);
   }
 
+  registerTerminalWrapperSession(
+    request: WrapperHelloMessage,
+    sendMessage: (message: TerminalWrapperFromDaemonMessage) => void,
+  ): WrapperReadyMessage {
+    const state = this.sessionStore.createManagedSession({
+      provider: request.provider,
+      ...(request.resumeProviderSessionId
+        ? { providerSessionId: request.resumeProviderSessionId }
+        : {}),
+      launchSource: "terminal",
+      cwd: request.cwd,
+      rootDir: request.rootDir,
+      title: `${request.provider} terminal session`,
+      preview: request.launchCommand.join(" "),
+      capabilities: {
+        steerInput: true,
+        queuedInput: true,
+      },
+    });
+    this.ptyHub.ensureSession(state.session.id);
+    this.sessionStore.setRuntimeState(state.session.id, "running");
+    this.eventBus.publish({
+      sessionId: state.session.id,
+      type: "session.created",
+      source: SYSTEM_SOURCE,
+      payload: { session: state.session },
+    });
+    this.eventBus.publish({
+      sessionId: state.session.id,
+      type: "session.started",
+      source: SYSTEM_SOURCE,
+      payload: { session: state.session },
+    });
+
+    const surfaceId = `terminal:${request.terminalPid}:${crypto.randomUUID()}`;
+    const operatorGroupId = `terminal-group:${state.session.id}`;
+    this.terminalWrappers.register({
+      sessionId: state.session.id,
+      provider: request.provider,
+      cwd: request.cwd,
+      rootDir: request.rootDir,
+      terminalPid: request.terminalPid,
+      launchCommand: request.launchCommand,
+      surfaceId,
+      operatorGroupId,
+      promptState: "agent_busy",
+      ...(request.resumeProviderSessionId
+        ? { resumeProviderSessionId: request.resumeProviderSessionId }
+        : {}),
+    });
+    this.terminalWrapperSenders.set(state.session.id, sendMessage);
+    this.sessionStore.attachClient({
+      sessionId: state.session.id,
+      clientId: surfaceId,
+      kind: "terminal",
+      connectionId: surfaceId,
+      attachMode: "interactive",
+      focus: true,
+    });
+    this.sessionStore.claimControl(state.session.id, surfaceId, "terminal");
+    this.eventBus.publish({
+      sessionId: state.session.id,
+      type: "session.attached",
+      source: SYSTEM_SOURCE,
+      payload: {
+        clientId: surfaceId,
+        clientKind: "terminal",
+      },
+    });
+    this.eventBus.publish({
+      sessionId: state.session.id,
+      type: "control.claimed",
+      source: SYSTEM_SOURCE,
+      payload: {
+        clientId: surfaceId,
+        clientKind: "terminal",
+      },
+    });
+    return {
+      type: "wrapper.ready",
+      sessionId: state.session.id,
+      surfaceId,
+      operatorGroupId,
+    };
+  }
+
+  disconnectTerminalWrapperSession(sessionId: string): void {
+    if (!this.terminalWrappers.get(sessionId)) {
+      this.terminalWrapperSenders.delete(sessionId);
+      return;
+    }
+    void this.markTerminalWrapperExited(sessionId);
+  }
+
+  bindTerminalWrapperProviderSession(message: WrapperProviderBoundMessage): void {
+    if (
+      this.closingTerminalWrapperSessionIds.has(message.sessionId) ||
+      !this.terminalWrappers.get(message.sessionId) ||
+      !this.sessionStore.getSession(message.sessionId)
+    ) {
+      return;
+    }
+    const update = this.terminalWrappers.bindProviderSession({
+      sessionId: message.sessionId,
+      providerSessionId: message.providerSessionId,
+      ...(message.providerTitle !== undefined ? { providerTitle: message.providerTitle } : {}),
+      ...(message.providerPreview !== undefined ? { providerPreview: message.providerPreview } : {}),
+      ...(message.reason !== undefined ? { reason: message.reason } : {}),
+    });
+    if (!update.changed) {
+      return;
+    }
+    const isRebind =
+      update.previousProviderSessionId !== undefined &&
+      update.previousProviderSessionId !== message.providerSessionId;
+    this.sessionStore.patchManagedSession(message.sessionId, {
+      providerSessionId: message.providerSessionId,
+      ...(message.providerTitle !== undefined ? { title: message.providerTitle } : {}),
+      ...(message.providerPreview !== undefined ? { preview: message.providerPreview } : {}),
+    });
+    if (isRebind) {
+      this.sessionStore.setActiveTurn(message.sessionId);
+      this.sessionStore.updateUsage(message.sessionId, undefined);
+      this.sessionStore.setRuntimeState(message.sessionId, "idle");
+      this.historySnapshots.clear(message.sessionId);
+    }
+    const state = this.sessionStore.getSession(message.sessionId);
+    if (state) {
+      this.eventBus.publish({
+        sessionId: message.sessionId,
+        type: "session.started",
+        source: SYSTEM_SOURCE,
+        payload: { session: state.session },
+      });
+    }
+    if (
+      !isRebind &&
+      update.binding.resumeProviderSessionId &&
+      update.binding.resumeProviderSessionId !== message.providerSessionId
+    ) {
+      throw new Error(
+        `Wrapper bound provider session ${message.providerSessionId} but expected ${update.binding.resumeProviderSessionId}.`,
+      );
+    }
+  }
+
+  updateTerminalWrapperPromptState(
+    sessionId: string,
+    promptState: TerminalWrapperPromptState,
+  ): void {
+    const existingState = this.sessionStore.getSession(sessionId);
+    if (
+      this.closingTerminalWrapperSessionIds.has(sessionId) ||
+      !this.terminalWrappers.get(sessionId) ||
+      !existingState
+    ) {
+      return;
+    }
+    this.terminalWrappers.updatePromptState(sessionId, promptState);
+    const nextRuntimeState = promptState === "agent_busy" ? "running" : "idle";
+    if (existingState.session.runtimeState !== nextRuntimeState) {
+      this.sessionStore.setRuntimeState(sessionId, nextRuntimeState);
+      this.eventBus.publish({
+        sessionId,
+        type: "session.state.changed",
+        source: SYSTEM_SOURCE,
+        payload: {
+          state: nextRuntimeState,
+        },
+      });
+    }
+    if (promptState !== "prompt_clean") {
+      return;
+    }
+    const injectable = this.terminalWrappers.dequeueInjectableTurn(sessionId);
+    if (injectable) {
+      this.terminalWrapperSenders.get(sessionId)?.({
+        type: "turn.inject",
+        sessionId,
+        queuedTurn: injectable,
+      });
+    }
+  }
+
+  applyTerminalWrapperActivity(sessionId: string, activity: ProviderActivity): RahEvent[] {
+    if (this.closingTerminalWrapperSessionIds.has(sessionId)) {
+      return [];
+    }
+    const session = this.sessionStore.getSession(sessionId)?.session;
+    if (!session) {
+      return [];
+    }
+    return applyProviderActivity(
+      {
+        eventBus: this.eventBus,
+        ptyHub: this.ptyHub,
+        sessionStore: this.sessionStore,
+      },
+      sessionId,
+      {
+        provider: session.provider,
+        authority: "authoritative",
+      },
+      activity,
+    );
+  }
+
+  appendTerminalWrapperPtyOutput(sessionId: string, data: string): RahEvent[] {
+    if (
+      this.closingTerminalWrapperSessionIds.has(sessionId) ||
+      !this.sessionStore.getSession(sessionId)
+    ) {
+      return [];
+    }
+    return this.applyTerminalWrapperActivity(sessionId, {
+      type: "terminal_output",
+      data,
+    });
+  }
+
+  markTerminalWrapperExited(
+    sessionId: string,
+    options?: { exitCode?: number; signal?: string },
+  ): RahEvent[] {
+    const state = this.sessionStore.getSession(sessionId);
+    if (!state) {
+      this.terminalWrapperSenders.delete(sessionId);
+      this.terminalWrappers.remove(sessionId);
+      this.closingTerminalWrapperSessionIds.delete(sessionId);
+      return [];
+    }
+    const published = this.applyTerminalWrapperActivity(sessionId, {
+      type: "terminal_exited",
+      ...(options?.exitCode !== undefined ? { exitCode: options.exitCode } : {}),
+      ...(options?.signal !== undefined ? { signal: options.signal } : {}),
+    });
+    this.workbenchState.rememberSession(state);
+    this.refreshRememberedState();
+    this.terminalWrapperSenders.delete(sessionId);
+    this.terminalWrappers.remove(sessionId);
+    this.closingTerminalWrapperSessionIds.delete(sessionId);
+    this.sessionStore.removeSession(sessionId);
+    this.ptyHub.removeSession(sessionId);
+    this.historySnapshots.clear(sessionId);
+    this.sessionOwners.delete(sessionId);
+    this.eventBus.publish({
+      sessionId,
+      type: "session.closed",
+      source: SYSTEM_SOURCE,
+      payload: {},
+    });
+    return published;
+  }
+
   async shutdown(): Promise<void> {
     await this.storedSessionMonitor.shutdown();
+    this.terminalWrapperSenders.clear();
     for (const terminal of this.independentTerminals.values()) {
       await terminal.process.close();
       this.ptyHub.removeSession(terminal.id);
@@ -833,12 +1139,18 @@ export class RuntimeEngine {
     liveStates: readonly StoredSessionState[],
     discoveredStoredSessions: readonly StoredSessionRef[],
   ): ListSessionsResponse {
+    const visibleLiveStates = liveStates.filter(
+      (state) => !this.closingTerminalWrapperSessionIds.has(state.session.id),
+    );
     const hiddenSessionKeys = new Set(this.rememberedHiddenSessionKeys);
     const availableProviderSessionKeys = new Set<string>();
+    const discoveredByKey = new Map<string, StoredSessionRef>();
     for (const stored of discoveredStoredSessions) {
-      availableProviderSessionKeys.add(`${stored.provider}:${stored.providerSessionId}`);
+      const key = `${stored.provider}:${stored.providerSessionId}`;
+      availableProviderSessionKeys.add(key);
+      discoveredByKey.set(key, stored);
     }
-    for (const state of liveStates) {
+    for (const state of visibleLiveStates) {
       if (!state.session.providerSessionId) {
         continue;
       }
@@ -866,7 +1178,7 @@ export class RuntimeEngine {
       }
       storedSessions.set(`${stored.provider}:${stored.providerSessionId}`, stored);
     }
-    for (const state of liveStates) {
+    for (const state of visibleLiveStates) {
       const providerSessionId = state.session.providerSessionId;
       if (!providerSessionId) {
         continue;
@@ -874,7 +1186,24 @@ export class RuntimeEngine {
       storedSessions.delete(`${state.session.provider}:${providerSessionId}`);
     }
     return {
-      sessions: liveStates.map(toSessionSummary),
+      sessions: visibleLiveStates.map((state) => {
+        const providerSessionId = state.session.providerSessionId;
+        if (!providerSessionId) {
+          return toSessionSummary(state);
+        }
+        const discovered = discoveredByKey.get(`${state.session.provider}:${providerSessionId}`);
+        if (!discovered) {
+          return toSessionSummary(state);
+        }
+        return toSessionSummary({
+          ...state,
+          session: {
+            ...state.session,
+            ...(discovered.title !== undefined ? { title: discovered.title } : {}),
+            ...(discovered.preview !== undefined ? { preview: discovered.preview } : {}),
+          },
+        });
+      }),
       storedSessions: [...storedSessions.values()],
       recentSessions: this.rememberedRecentSessions.filter(
         (session) => {
@@ -890,7 +1219,19 @@ export class RuntimeEngine {
           }
           return true;
         },
-      ),
+      ).map((session) => {
+        const key = `${session.provider}:${session.providerSessionId}`;
+        const discovered = discoveredByKey.get(key);
+        if (!discovered) {
+          return session;
+        }
+        const lastUsedAt = session.lastUsedAt ?? discovered.lastUsedAt ?? discovered.updatedAt;
+        return {
+          ...session,
+          ...discovered,
+          ...(lastUsedAt ? { lastUsedAt } : {}),
+        };
+      }),
       workspaceDirs: workspaceDirsFromState(this.rememberedWorkspaceDirs, liveStates),
       hiddenWorkspaces: [...this.rememberedHiddenWorkspaces],
       ...(this.rememberedActiveWorkspaceDir
@@ -915,10 +1256,17 @@ export class RuntimeEngine {
         continue;
       }
       const adapter = this.requireSessionAdapter(state.session.id);
-      void adapter.destroySession?.(state.session.id);
+      void Promise.resolve(adapter.destroySession?.(state.session.id)).catch((error: unknown) => {
+        console.error(
+          `[rah] destroySession failed for ${state.session.id}:`,
+          error instanceof Error ? error.message : String(error),
+        );
+      });
       this.sessionStore.removeSession(state.session.id);
       this.ptyHub.removeSession(state.session.id);
       this.sessionOwners.delete(state.session.id);
+      this.terminalWrappers.remove(state.session.id);
+      this.terminalWrapperSenders.delete(state.session.id);
       this.eventBus.publish({
         sessionId: state.session.id,
         type: "session.closed",

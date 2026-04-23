@@ -94,6 +94,22 @@ describe("composer contract", () => {
     });
   });
 
+  test("allows terminal-launched live sessions to compose without an explicit control claim", () => {
+    const surface = deriveComposerSurface({
+      selectedSummary: summary({
+        launchSource: "terminal",
+      }),
+      hasControl: false,
+      isGenerating: true,
+      pendingSessionAction: null,
+    });
+
+    assert.deepEqual(surface, {
+      kind: "compose",
+      showStopButton: true,
+    });
+  });
+
   test("derives compose surface and preserves stop visibility while generating", () => {
     assert.deepEqual(
       deriveComposerSurface({

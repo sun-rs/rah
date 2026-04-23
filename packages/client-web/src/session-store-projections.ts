@@ -7,6 +7,7 @@ import {
 import {
   applyEventToProjection,
   createSessionMap,
+  initialHistorySyncState,
   type SessionProjection,
   type SessionsResponse,
 } from "./types";
@@ -86,6 +87,22 @@ export function applyEventBatchToProjection(
   return next;
 }
 
+function createProjectionFromSessionEvent(
+  event: Extract<RahEvent, { type: "session.created" | "session.started" }>,
+): SessionProjection {
+  return {
+    summary: {
+      session: event.payload.session,
+      attachedClients: [],
+      controlLease: { sessionId: event.payload.session.id },
+    },
+    feed: [],
+    events: [],
+    lastSeq: 0,
+    history: initialHistorySyncState(),
+  };
+}
+
 export function adoptExistingProjectionForProviderSession(
   projections: Map<string, SessionProjection>,
   summary: SessionProjection["summary"],
@@ -141,7 +158,14 @@ export function applyEventsToProjectionMap(
       handling.clearBufferedSession(event.sessionId);
       continue;
     }
-    const projection = next.get(event.sessionId);
+    let projection = next.get(event.sessionId);
+    if (
+      !projection &&
+      (event.type === "session.created" || event.type === "session.started")
+    ) {
+      projection = createProjectionFromSessionEvent(event);
+      next.set(event.sessionId, projection);
+    }
     if (!projection) {
       handling.queuePendingEvent(event);
       continue;

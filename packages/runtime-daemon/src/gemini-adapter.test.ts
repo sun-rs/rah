@@ -108,7 +108,15 @@ emit({ type: "result", timestamp: new Date().toISOString(), status: "success", s
   }
 
   function writeGeminiSessionFile(sessionId: string) {
-    const chatsDir = path.join(tmpHome, "tmp", getProjectHash(cwd), "chats");
+    const hashDir = path.join(tmpHome, "tmp", getProjectHash(cwd));
+    const chatsDir = path.join(hashDir, "chats");
+    mkdirSync(hashDir, { recursive: true });
+    writeFileSync(path.join(hashDir, ".project_root"), `${cwd}\n`);
+    writeFileSync(
+      path.join(tmpHome, "projects.json"),
+      JSON.stringify({ projects: { [cwd]: path.basename(cwd) } }),
+      "utf8",
+    );
     mkdirSync(chatsDir, { recursive: true });
     const filePath = path.join(chatsDir, `session-2026-01-01T00-00-00-${sessionId.slice(0, 8)}.jsonl`);
     writeFileSync(
@@ -164,6 +172,65 @@ emit({ type: "result", timestamp: new Date().toISOString(), status: "success", s
         }),
       ].join("\n") + "\n",
     );
+  }
+
+  function writeLegacyGeminiSessionFile(params: {
+    sessionId: string;
+    projectHash: string;
+    messageText: string;
+    existingRoot?: string;
+    logsMessage?: string;
+  }) {
+    const hashDir = path.join(tmpHome, "tmp", params.projectHash);
+    const chatsDir = path.join(hashDir, "chats");
+    mkdirSync(chatsDir, { recursive: true });
+    if (params.existingRoot) {
+      mkdirSync(params.existingRoot, { recursive: true });
+    }
+    writeFileSync(
+      path.join(
+        chatsDir,
+        `session-2026-01-02T00-00-00-${params.sessionId.slice(0, 8)}.json`,
+      ),
+      JSON.stringify(
+        {
+          sessionId: params.sessionId,
+          projectHash: params.projectHash,
+          startTime: "2026-01-02T00:00:00.000Z",
+          lastUpdated: "2026-01-02T00:00:05.000Z",
+          messages: [
+            {
+              id: "msg-user-legacy-1",
+              timestamp: "2026-01-02T00:00:01.000Z",
+              type: "user",
+              content: params.messageText,
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    if (params.logsMessage) {
+      writeFileSync(
+        path.join(hashDir, "logs.json"),
+        JSON.stringify(
+          [
+            {
+              sessionId: params.sessionId,
+              messageId: 0,
+              type: "user",
+              message: params.logsMessage,
+              timestamp: "2026-01-02T00:00:00.000Z",
+            },
+          ],
+          null,
+          2,
+        ),
+        "utf8",
+      );
+    }
   }
 
   test("binds provider session id from init and resumes later turns with --resume", async () => {
@@ -237,6 +304,8 @@ emit({ type: "result", timestamp: new Date().toISOString(), status: "success", s
     const stored = adapter.listStoredSessions();
     assert.equal(stored.length, 1);
     assert.equal(stored[0]?.providerSessionId, "gemini-session-2");
+    assert.equal(stored[0]?.cwd, cwd);
+    assert.equal(stored[0]?.rootDir, cwd);
 
     const resumed = await adapter.resumeSession({
       provider: "gemini",
@@ -302,6 +371,44 @@ emit({ type: "result", timestamp: new Date().toISOString(), status: "success", s
           event.payload.item.text === "Rate limit almost reached.",
       ),
     );
+  });
+
+  test("recovers workspace metadata for legacy Gemini sessions from absolute path hints", () => {
+    const inferredRoot = path.join(tmpHome, "legacy-project");
+    writeLegacyGeminiSessionFile({
+      sessionId: "gemini-session-legacy-path",
+      projectHash: "legacy-project-hash",
+      existingRoot: inferredRoot,
+      messageText: `Read ${path.join(inferredRoot, "src", "main.ts")} and summarize it.`,
+    });
+
+    const adapter = new GeminiAdapter(createServices());
+    const stored = adapter.listStoredSessions();
+    const target = stored.find(
+      (session) => session.providerSessionId === "gemini-session-legacy-path",
+    );
+
+    assert.equal(target?.cwd, inferredRoot);
+    assert.equal(target?.rootDir, inferredRoot);
+  });
+
+  test("stores rootDir without cwd when legacy Gemini path hints only identify a missing project", () => {
+    const missingRoot = path.join(tmpHome, "removed-project");
+    writeLegacyGeminiSessionFile({
+      sessionId: "gemini-session-legacy-missing",
+      projectHash: "legacy-missing-hash",
+      messageText: "No file path in the chat body.",
+      logsMessage: `Review ${path.join(missingRoot, "lib", "index.ts")} and report the result.`,
+    });
+
+    const adapter = new GeminiAdapter(createServices());
+    const stored = adapter.listStoredSessions();
+    const target = stored.find(
+      (session) => session.providerSessionId === "gemini-session-legacy-missing",
+    );
+
+    assert.equal(target?.cwd, undefined);
+    assert.equal(target?.rootDir, missingRoot);
   });
 
   test("upgrades a rehydrated Gemini replay to live resume without changing provider session id", async () => {

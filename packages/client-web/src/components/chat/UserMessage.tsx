@@ -12,11 +12,13 @@ export function UserMessage(props: { content: string }) {
 
   return (
     <div className="flex items-start justify-end gap-3">
-      <div className="min-w-0 max-w-[85%] sm:max-w-[75%] rounded-2xl rounded-tr-md border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-4 py-3 text-[var(--app-fg)]">
-        <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[15px] leading-relaxed">
-          {props.content}
+      <div className="min-w-0 max-w-[85%] sm:max-w-[75%]">
+        <div className="rounded-2xl rounded-tr-md border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-4 py-3 text-[var(--app-fg)]">
+          <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[15px] leading-relaxed">
+            {props.content}
+          </div>
         </div>
-        <div className="mt-2 flex justify-end">
+        <div className="mt-1.5 flex justify-end">
           <button
             type="button"
             onClick={handleCopy}

@@ -28,15 +28,9 @@ import {
   type LiveCodexSession,
 } from "./codex-live-client";
 import {
-  applyCodexGitFileAction,
   createCodexStoredSessionFrozenHistoryPageLoader,
-  applyCodexGitHunkAction,
   discoverCodexStoredSessions,
-  getCodexGitDiff,
-  getCodexGitStatus,
   getCodexStoredSessionHistoryPage,
-  getCodexWorkspaceSnapshot,
-  readWorkspaceFile,
   resolveCodexStoredSessionWatchRoots,
   resumeCodexStoredSession,
   type CodexStoredSessionRecord,
@@ -48,6 +42,20 @@ import {
 import { codexLaunchSpec, probeProviderDiagnostic } from "./provider-diagnostics";
 import { toSessionSummary } from "./session-store";
 import { movePathToTrash } from "./trash";
+import {
+  applyWorkspaceGitFileAction,
+  applyWorkspaceGitHunkAction,
+  getWorkspaceGitDiff,
+  getWorkspaceGitStatus,
+  getWorkspaceSnapshot,
+  readWorkspaceFileFromDirectory,
+} from "./workspace-utils";
+
+const CODEX_EVENT_SOURCE = {
+  provider: "codex" as const,
+  channel: "structured_live" as const,
+  authority: "derived" as const,
+};
 
 export class CodexAdapter implements ProviderAdapter {
   readonly id = "codex";
@@ -61,6 +69,19 @@ export class CodexAdapter implements ProviderAdapter {
 
   constructor(services: RuntimeServices) {
     this.services = services;
+  }
+
+  private reportAsyncLiveError(sessionId: string, detail: string): void {
+    this.services.eventBus.publish({
+      sessionId,
+      type: "runtime.status",
+      source: CODEX_EVENT_SOURCE,
+      payload: {
+        status: "error",
+        detail,
+      },
+    });
+    this.services.sessionStore.setRuntimeState(sessionId, "failed");
   }
 
   startSession(request: StartSessionRequest): Promise<StartSessionResponse> {
@@ -174,7 +195,12 @@ export class CodexAdapter implements ProviderAdapter {
           cwd: live.cwd,
         },
         90_000,
-      );
+      ).catch((error) => {
+        this.reportAsyncLiveError(
+          sessionId,
+          error instanceof Error ? error.message : String(error),
+        );
+      });
       return;
     }
     throw new Error(
@@ -220,6 +246,11 @@ export class CodexAdapter implements ProviderAdapter {
         void live.client.request("turn/interrupt", {
           threadId: live.threadId,
           turnId,
+        }).catch((error) => {
+          this.reportAsyncLiveError(
+            sessionId,
+            error instanceof Error ? error.message : String(error),
+          );
         });
       }
       const state = this.services.sessionStore.getSession(sessionId);
@@ -278,14 +309,14 @@ export class CodexAdapter implements ProviderAdapter {
       if (!record) {
         throw new Error(`Unknown session ${sessionId}`);
       }
-      const snapshot = getCodexWorkspaceSnapshot(options?.scopeRoot ?? record.ref.cwd ?? process.cwd());
+      const snapshot = getWorkspaceSnapshot(options?.scopeRoot ?? record.ref.cwd ?? process.cwd());
       return {
         sessionId,
         cwd: snapshot.cwd,
         nodes: snapshot.nodes,
       };
     }
-    const snapshot = getCodexWorkspaceSnapshot(options?.scopeRoot ?? session.cwd);
+    const snapshot = getWorkspaceSnapshot(options?.scopeRoot ?? session.cwd);
     return {
       sessionId,
       cwd: snapshot.cwd,
@@ -300,7 +331,7 @@ export class CodexAdapter implements ProviderAdapter {
       if (!record) {
         throw new Error(`Unknown session ${sessionId}`);
       }
-      const status = getCodexGitStatus(record.ref.cwd ?? process.cwd(), options);
+      const status = getWorkspaceGitStatus(record.ref.cwd ?? process.cwd(), options);
       return {
         sessionId,
         ...(status.branch !== undefined ? { branch: status.branch } : {}),
@@ -311,7 +342,7 @@ export class CodexAdapter implements ProviderAdapter {
         ...(status.totalUnstaged !== undefined ? { totalUnstaged: status.totalUnstaged } : {}),
       };
     }
-    const status = getCodexGitStatus(session.cwd, options);
+    const status = getWorkspaceGitStatus(session.cwd, options);
     return {
       sessionId,
       ...(status.branch !== undefined ? { branch: status.branch } : {}),
@@ -337,13 +368,13 @@ export class CodexAdapter implements ProviderAdapter {
       return {
         sessionId,
         path: targetPath,
-        diff: getCodexGitDiff(record.ref.cwd ?? process.cwd(), targetPath, options),
+        diff: getWorkspaceGitDiff(record.ref.cwd ?? process.cwd(), targetPath, options),
       };
     }
     return {
       sessionId,
       path: targetPath,
-      diff: getCodexGitDiff(session.cwd, targetPath, options),
+      diff: getWorkspaceGitDiff(session.cwd, targetPath, options),
     };
   }
 
@@ -355,14 +386,14 @@ export class CodexAdapter implements ProviderAdapter {
         throw new Error(`Unknown session ${sessionId}`);
       }
       return {
-        ...applyCodexGitFileAction(record.ref.cwd ?? process.cwd(), request, {
+        ...applyWorkspaceGitFileAction(record.ref.cwd ?? process.cwd(), request, {
           scopeRoot: record.ref.rootDir ?? record.ref.cwd ?? process.cwd(),
         }),
         sessionId,
       };
     }
     return {
-      ...applyCodexGitFileAction(session.cwd, request, {
+      ...applyWorkspaceGitFileAction(session.cwd, request, {
         scopeRoot: session.rootDir ?? session.cwd,
       }),
       sessionId,
@@ -377,14 +408,14 @@ export class CodexAdapter implements ProviderAdapter {
         throw new Error(`Unknown session ${sessionId}`);
       }
       return {
-        ...applyCodexGitHunkAction(record.ref.cwd ?? process.cwd(), request, {
+        ...applyWorkspaceGitHunkAction(record.ref.cwd ?? process.cwd(), request, {
           scopeRoot: record.ref.rootDir ?? record.ref.cwd ?? process.cwd(),
         }),
         sessionId,
       };
     }
     return {
-      ...applyCodexGitHunkAction(session.cwd, request, {
+      ...applyWorkspaceGitHunkAction(session.cwd, request, {
         scopeRoot: session.rootDir ?? session.cwd,
       }),
       sessionId,
@@ -403,13 +434,13 @@ export class CodexAdapter implements ProviderAdapter {
         throw new Error(`Unknown session ${sessionId}`);
       }
       return {
+        ...readWorkspaceFileFromDirectory(record.ref.cwd ?? process.cwd(), targetPath, options),
         sessionId,
-        ...readWorkspaceFile(record.ref.cwd ?? process.cwd(), targetPath, options),
       };
     }
     return {
+      ...readWorkspaceFileFromDirectory(session.cwd, targetPath, options),
       sessionId,
-      ...readWorkspaceFile(session.cwd, targetPath, options),
     };
   }
 

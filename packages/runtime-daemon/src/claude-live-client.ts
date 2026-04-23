@@ -11,15 +11,16 @@ import {
   type SDKMessage,
   type SDKResultMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-import type {
-  AttachSessionRequest,
-  CloseSessionRequest,
-  ContextUsage,
-  InterruptSessionRequest,
-  ManagedSession,
-  PermissionResponseRequest,
-  SessionInputRequest,
-  StartSessionRequest,
+import {
+  isPermissionSessionGrant,
+  type AttachSessionRequest,
+  type CloseSessionRequest,
+  type ContextUsage,
+  type InterruptSessionRequest,
+  type ManagedSession,
+  type PermissionResponseRequest,
+  type SessionInputRequest,
+  type StartSessionRequest,
 } from "@rah/runtime-protocol";
 import type { RuntimeServices } from "./provider-adapter";
 import { applyProviderActivity, type ProviderActivity } from "./provider-activity";
@@ -39,8 +40,6 @@ type PendingClaudePermission = {
   resolve: (value: PermissionResult) => void;
   reject: (error: Error) => void;
 };
-
-const pendingClaudePermissions = new Map<string, PendingClaudePermission>();
 
 export type LiveClaudeTurn = {
   query: ClaudeQuery;
@@ -62,17 +61,13 @@ export type LiveClaudeSession = {
 export type ClaudeQueryFactory = typeof claudeQuery;
 
 async function waitForPendingClaudePermission(
-  sessionId: string,
   requestId: string,
   liveSession: LiveClaudeSession,
   timeoutMs = 1_000,
 ): Promise<PendingClaudePermission | null> {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
-    const pending =
-      pendingClaudePermissions.get(`${sessionId}:${requestId}`) ??
-      liveSession.pendingPermissions.get(requestId) ??
-      null;
+    const pending = liveSession.pendingPermissions.get(requestId) ?? null;
     if (pending) {
       return pending;
     }
@@ -563,14 +558,6 @@ export async function sendInputToClaudeLiveSession(args: {
         resolve,
         reject,
       });
-      pendingClaudePermissions.set(`${args.liveSession.sessionId}:${requestId}`, {
-        sessionId: args.liveSession.sessionId,
-        requestId,
-        allowResult,
-        ...(allowForSessionResult ? { allowForSessionResult } : {}),
-        resolve,
-        reject,
-      });
     });
     applyActivity(
       args.services,
@@ -633,13 +620,12 @@ export async function respondToClaudeLivePermission(args: {
   response: PermissionResponseRequest;
 }) {
   const pending = await waitForPendingClaudePermission(
-    args.liveSession.sessionId,
     args.requestId,
     args.liveSession,
   );
   if (!pending) {
     throw new Error(
-      `No pending Claude permission request '${args.requestId}'. Known pending keys: ${JSON.stringify([...pendingClaudePermissions.keys()])}`,
+      `No pending Claude permission request '${args.requestId}'. Known pending keys: ${JSON.stringify([...args.liveSession.pendingPermissions.keys()])}`,
     );
   }
   const resolution = {
@@ -661,14 +647,9 @@ export async function respondToClaudeLivePermission(args: {
       ...(args.liveSession.activeTurn ? { turnId: args.liveSession.activeTurn.turnId } : {}),
     },
   );
-  pendingClaudePermissions.delete(`${args.liveSession.sessionId}:${args.requestId}`);
   args.liveSession.pendingPermissions.delete(args.requestId);
   if (args.response.behavior === "allow") {
-    const selectedActionId = args.response.selectedActionId;
-    const useSessionGrant =
-      selectedActionId === "allow_for_session" ||
-      args.response.decision === "approved_for_session" ||
-      args.response.decision === "acceptForSession";
+    const useSessionGrant = isPermissionSessionGrant(args.response);
     pending.resolve(
       useSessionGrant && pending.allowForSessionResult
         ? pending.allowForSessionResult
@@ -689,7 +670,6 @@ export async function closeClaudeLiveSession(
   liveSession.activeTurn?.query.close();
   liveSession.activeTurn = null;
   for (const pending of liveSession.pendingPermissions.values()) {
-    pendingClaudePermissions.delete(`${pending.sessionId}:${pending.requestId}`);
     pending.reject(new Error("Claude session closed"));
   }
   liveSession.pendingPermissions.clear();

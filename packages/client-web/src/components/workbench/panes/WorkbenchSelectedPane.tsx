@@ -1,6 +1,6 @@
-import { useEffect, useRef, type RefObject } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import type { PermissionResponseRequest, SessionSummary } from "@rah/runtime-protocol";
-import { Archive, ArrowUp, Menu, PanelRight, Plus, Square, X } from "lucide-react";
+import { Archive, ArrowUp, Ellipsis, Menu, PanelRight, Plus, Square, Trash2, X } from "lucide-react";
 import { providerLabel } from "../../../types";
 import type { SessionProjection } from "../../../types";
 import { ChatThread } from "../../chat/ChatThread";
@@ -40,8 +40,11 @@ export function WorkbenchSelectedPane(props: {
   onExpandInspector: () => void;
   onFloatingAnchorOffsetChange: (offsetPx: number) => void;
   onArchiveOrClose: () => void;
+  onDeleteSession: () => void;
 }) {
   const composerContainerRef = useRef<HTMLDivElement | null>(null);
+  const sessionMenuRef = useRef<HTMLDivElement | null>(null);
+  const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
 
   useEffect(() => {
     const node = composerContainerRef.current;
@@ -64,9 +67,31 @@ export function WorkbenchSelectedPane(props: {
     };
   }, [props.onFloatingAnchorOffsetChange]);
 
+  useEffect(() => {
+    if (!sessionMenuOpen) {
+      return;
+    }
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!sessionMenuRef.current?.contains(event.target as Node)) {
+        setSessionMenuOpen(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setSessionMenuOpen(false);
+      }
+    };
+    window.addEventListener("pointerdown", handlePointerDown);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [sessionMenuOpen]);
+
   return (
     <>
-      <header className="h-14 flex items-center justify-between gap-3 border-b border-[var(--app-border)] px-4 bg-[var(--app-bg)]/80 backdrop-blur-sm shrink-0">
+      <header className="relative z-20 h-14 flex items-center justify-between gap-3 border-b border-[var(--app-border)] px-4 bg-[var(--app-bg)]/80 backdrop-blur-sm shrink-0">
         <div className="flex items-center gap-2 min-w-0">
           <button
             type="button"
@@ -121,6 +146,32 @@ export function WorkbenchSelectedPane(props: {
           </div>
         </div>
         <div className="flex items-center gap-1 shrink-0">
+          <div ref={sessionMenuRef} className="relative">
+            <button
+              type="button"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-[var(--app-border)] text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
+              onClick={() => setSessionMenuOpen((open) => !open)}
+              aria-label="Session actions"
+              title="Session actions"
+            >
+              <Ellipsis size={16} />
+            </button>
+            {sessionMenuOpen ? (
+              <div className="absolute right-0 top-[calc(100%+0.375rem)] z-50 min-w-[10rem] rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] p-1 shadow-xl">
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm text-[var(--app-danger)] transition-colors hover:bg-[var(--app-subtle-bg)]"
+                  onClick={() => {
+                    setSessionMenuOpen(false);
+                    props.onDeleteSession();
+                  }}
+                >
+                  <Trash2 size={14} />
+                  <span>Delete</span>
+                </button>
+              </div>
+            ) : null}
+          </div>
           <button
             type="button"
             className="inline-flex h-8 items-center justify-center rounded-md border border-[var(--app-border)] px-2 text-xs text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] disabled:opacity-40 transition-colors"

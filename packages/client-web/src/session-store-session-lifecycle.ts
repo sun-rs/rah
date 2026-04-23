@@ -222,12 +222,12 @@ export function buildFallbackStoredSessionRef(
     return null;
   }
   return (
-    recentSessions.find(
+    storedSessions.find(
       (entry) =>
         entry.provider === summary.session.provider &&
         entry.providerSessionId === providerSessionId,
     ) ??
-    storedSessions.find(
+    recentSessions.find(
       (entry) =>
         entry.provider === summary.session.provider &&
         entry.providerSessionId === providerSessionId,

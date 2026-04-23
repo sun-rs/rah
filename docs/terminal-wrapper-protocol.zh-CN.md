@@ -266,6 +266,8 @@ daemon 返回：
 用途：
 
 - wrapper 已经知道 provider 的真实 session / thread id
+- 同一个 terminal surface 如果在 TUI 内 `/new` / `/resume` 切换到别的 session，
+  必须再次发送这条消息
 
 示意：
 
@@ -273,9 +275,27 @@ daemon 返回：
 {
   "type": "wrapper.provider_bound",
   "sessionId": "rah-session-1",
-  "providerSessionId": "thread-abc"
+  "providerSessionId": "thread-abc",
+  "providerTitle": "issue triage",
+  "providerPreview": "Investigate production regression",
+  "reason": "resume"
 }
 ```
+
+字段说明：
+
+- `providerSessionId`
+  - 当前 terminal surface 正在操作的 provider session
+- `providerTitle?`
+  - provider 当前暴露的 session 标题
+- `providerPreview?`
+  - provider 当前暴露的短预览
+- `reason?`
+  - 绑定变化的原因，第一阶段建议值：
+    - `initial`
+    - `resume`
+    - `new`
+    - `switch`
 
 ### `wrapper.prompt_state.changed`
 
@@ -418,6 +438,7 @@ daemon 对 `wrapper.hello` 的响应：
    - `operatorGroupId`
 6. wrapper 启动原生 Codex CLI
 7. 一旦得到 thread id，发送 `wrapper.provider_bound`
+   如果之后 TUI 内又切到别的 session，也必须再次发送
 8. wrapper 持续发 `wrapper.activity`
 9. web 左侧立即看到该 live session
 
@@ -444,6 +465,57 @@ daemon 对 `wrapper.hello` 的响应：
 - terminal 可以看到 AI 对 web 消息的回应
 - 不需要 claim history
 - 不需要 local / remote mode
+
+### 9.1.1 active binding 不是 one-shot
+
+`wrapper.provider_bound` 声明的是：
+
+- 当前这个 terminal surface 此刻正在操作哪个 provider session
+
+它不是历史宣告，而是 **active binding**。
+
+因此：
+
+- 一个 terminal surface 可以稳定存在
+- 但它绑定的 `providerSessionId` 是可变的
+
+这正是为了覆盖 provider CLI 在同一个 TUI 内：
+
+- `/new`
+- `/resume`
+- 直接切 session
+
+这些行为。
+
+### 9.1.2 当前实现的安全边界
+
+当前实现已经允许同一个 terminal surface 重复发送 `wrapper.provider_bound`，
+并把这视为 active binding 的更新。
+
+当前行为是：
+
+- live session 仍然对应同一个 terminal surface
+- 一旦 `providerSessionId` 从 A 变为 B
+  - runtime 会更新 summary 上的 `providerSessionId/title/preview`
+  - 清空该 live session 的 history snapshot
+  - 重置 live projection 的 usage / active turn / runtimeState
+  - 前端在收到新的 `session.started` 后，会把 feed / history 视为新的 active binding
+
+这意味着：
+
+- 不会把旧 provider session 和新 provider session 的 feed 混成一条连续对话
+- web 仍然继续跟随同一个 terminal live session
+
+当前**还没做**的是：
+
+- 当 terminal surface rebind 到新的 provider session 时，
+  旧 provider session 是否要在 RAH 中保留一条独立 live 记录
+
+当前阶段的产品语义是：
+
+- `live session` 表示 terminal surface 当前正在操作的那条会话
+- `/new` / `/resume` 后，它会切换为新的 active binding
+- 旧会话通过 provider history 路线保留，不在 live 列表里继续占一个独立槽位
 
 ### 9.2 有意不做
 
@@ -502,4 +574,3 @@ daemon 对 `wrapper.hello` 的响应：
    - web 发一句话
    - terminal 看到 AI 回复
 6. 再决定哪些字段要冻结进 protocol
-

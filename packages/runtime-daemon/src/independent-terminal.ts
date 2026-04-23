@@ -26,6 +26,9 @@ function cleanEnv(args: {
   cols?: number;
   rows?: number;
   shell: string;
+  command?: string;
+  commandArgs?: string[];
+  extraEnv?: Record<string, string>;
 }): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
@@ -40,6 +43,16 @@ function cleanEnv(args: {
   }
   if (args.rows !== undefined) {
     env.LINES = String(args.rows);
+  }
+  if (args.command) {
+    env.RAH_TERMINAL_COMMAND = args.command;
+    env.RAH_TERMINAL_ARGS_JSON = JSON.stringify(args.commandArgs ?? []);
+  } else {
+    delete env.RAH_TERMINAL_COMMAND;
+    delete env.RAH_TERMINAL_ARGS_JSON;
+  }
+  for (const [key, value] of Object.entries(args.extraEnv ?? {})) {
+    env[key] = value;
   }
   return env;
 }
@@ -72,6 +85,9 @@ export interface IndependentTerminalStartOptions {
   cwd: string;
   cols?: number;
   rows?: number;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
   onData: (data: string) => void;
   onExit: (args: { exitCode?: number; signal?: string }) => void;
 }
@@ -107,6 +123,9 @@ export class IndependentTerminalProcess {
       {
         env: cleanEnv({
           shell: this.shell,
+          ...(options.command ? { command: options.command } : {}),
+          ...(options.args ? { commandArgs: options.args } : {}),
+          ...(options.env ? { extraEnv: options.env } : {}),
           ...(options.cols !== undefined ? { cols: options.cols } : {}),
           ...(options.rows !== undefined ? { rows: options.rows } : {}),
         }),

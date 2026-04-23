@@ -1,16 +1,8 @@
-import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import type {
-  GitChangedFile,
-  GitFileActionRequest,
-  GitFileActionResponse,
-  GitHunkActionRequest,
-  GitHunkActionResponse,
   ManagedSession,
   RahEvent,
-  SessionFileSearchItem,
   SessionHistoryPageResponse,
   StoredSessionRef,
   AttachSessionRequest,
@@ -38,11 +30,23 @@ import {
   setCachedStoredSessionRef,
   writeStoredSessionMetadataCache,
 } from "./stored-session-metadata-cache";
+import {
+  listCodexWrapperHomes,
+  resolveCodexBaseHome,
+} from "./codex-wrapper-home";
+import {
+  applyWorkspaceGitFileAction,
+  applyWorkspaceGitHunkAction,
+  getWorkspaceGitDiff,
+  getWorkspaceGitStatusData,
+  getWorkspaceSnapshot,
+  readWorkspaceFileData,
+  searchWorkspaceFilesInDirectory,
+} from "./workspace-utils";
 
 const MAX_SEARCH_DEPTH = 4;
 const MAX_HEAD_LINES = 64;
 const MAX_ROLLOUT_FILES = 400;
-const MAX_READABLE_FILE_BYTES = 1_000_000;
 const REHYDRATED_CAPABILITIES = {
   livePermissions: false,
   steerInput: false,
@@ -62,20 +66,20 @@ export interface CodexStoredSessionRecord {
   rolloutPath: string;
 }
 
-function resolveCodexHome(): string {
-  return process.env.CODEX_HOME ?? path.join(os.homedir(), ".codex");
-}
-
 export function resolveCodexStoredSessionWatchRoots(): string[] {
-  return [resolveCodexHome()];
+  return [resolveCodexBaseHome()];
 }
 
 function resolveCodexSearchRoots(): string[] {
-  const home = resolveCodexHome();
-  return [path.join(home, "sessions"), path.join(home, "archived_sessions")];
+  const home = resolveCodexBaseHome();
+  const roots = [path.join(home, "sessions"), path.join(home, "archived_sessions")];
+  for (const wrapperHome of listCodexWrapperHomes(home)) {
+    roots.push(path.join(wrapperHome, "sessions"), path.join(wrapperHome, "archived_sessions"));
+  }
+  return roots;
 }
 
-function readHeadLines(filePath: string, maxBytes = 64 * 1024): string[] {
+function readHeadLines(filePath: string, maxBytes = 512 * 1024): string[] {
   return readLeadingLines(filePath, { maxBytes, maxLines: MAX_HEAD_LINES });
 }
 
@@ -248,6 +252,17 @@ function parseStoredSessionRecord(filePath: string): CodexStoredSessionRecord | 
   };
 }
 
+function shouldInvalidateCachedCodexTitle(ref: StoredSessionRef, filePath: string): boolean {
+  const basename = path.basename(filePath);
+  return (
+    !ref.title ||
+    ref.title === basename ||
+    ref.preview === basename ||
+    isCodexBootstrapUserMessage(ref.title) ||
+    isCodexBootstrapUserMessage(ref.preview ?? "")
+  );
+}
+
 export function discoverCodexStoredSessions(): CodexStoredSessionRecord[] {
   const cache = loadStoredSessionMetadataCache("codex");
   const records = new Map<string, CodexStoredSessionRecord>();
@@ -260,7 +275,7 @@ export function discoverCodexStoredSessions(): CodexStoredSessionRecord[] {
         size: stats.size,
         mtimeMs: stats.mtimeMs,
       });
-      if (cachedRef) {
+      if (cachedRef && !shouldInvalidateCachedCodexTitle(cachedRef, file)) {
         records.set(cachedRef.providerSessionId, {
           ref: cachedRef,
           rolloutPath: file,
@@ -300,343 +315,6 @@ export function discoverCodexStoredSessions(): CodexStoredSessionRecord[] {
   return [...records.values()].sort((a, b) =>
     (b.ref.updatedAt ?? "").localeCompare(a.ref.updatedAt ?? ""),
   );
-}
-
-function tryReadGitStatus(
-  cwd: string,
-  options?: { scopeRoot?: string },
-): {
-  branch?: string;
-  changedFiles: string[];
-  stagedFiles: GitChangedFile[];
-  unstagedFiles: GitChangedFile[];
-  totalStaged: number;
-  totalUnstaged: number;
-} {
-  try {
-    const scopeRoot = path.resolve(options?.scopeRoot ?? cwd);
-    const gitCwd = tryResolveGitRoot(options?.scopeRoot ?? cwd);
-    if (!gitCwd) {
-      return {
-        changedFiles: [],
-        stagedFiles: [],
-        unstagedFiles: [],
-        totalStaged: 0,
-        totalUnstaged: 0,
-      };
-    }
-    const output = execFileSync(
-      "git",
-      ["-C", gitCwd, "status", "--porcelain", "--branch"],
-      { encoding: "utf8" },
-    );
-    const lines = output.split(/\r?\n/).filter(Boolean);
-    const branchLine = lines[0] ?? "";
-    const branchMatch = /^## ([^.\s]+)/.exec(branchLine);
-    const unstagedStats = createDiffStatsMap(parseNumStat(runGitNumstat(gitCwd, false)));
-    const stagedStats = createDiffStatsMap(parseNumStat(runGitNumstat(gitCwd, true)));
-    const stagedFiles: GitChangedFile[] = [];
-    const unstagedFiles: GitChangedFile[] = [];
-    const changedFiles = new Set<string>();
-
-    for (const line of lines.slice(1)) {
-      if (line.startsWith("?? ")) {
-        const rawPath = line.slice(3).trim();
-        if (!rawPath || rawPath.endsWith("/")) {
-          continue;
-        }
-        if (!isPathWithinBase(scopeRoot, path.resolve(gitCwd, rawPath))) {
-          continue;
-        }
-        changedFiles.add(rawPath);
-        unstagedFiles.push({
-          path: rawPath,
-          status: "untracked",
-          staged: false,
-          added: 0,
-          removed: 0,
-        });
-        continue;
-      }
-
-      const indexStatus = line[0] ?? " ";
-      const worktreeStatus = line[1] ?? " ";
-      const rawPath = line.slice(3).trim();
-      if (!rawPath) {
-        continue;
-      }
-      const renameMatch = /^(.*?) -> (.*)$/.exec(rawPath);
-      const resolvedPath = renameMatch ? renameMatch[2]!.trim() : rawPath;
-      const oldPath = renameMatch ? renameMatch[1]!.trim() : undefined;
-      if (!isPathWithinBase(scopeRoot, path.resolve(gitCwd, resolvedPath))) {
-        continue;
-      }
-      changedFiles.add(resolvedPath);
-
-      if (indexStatus !== " " && indexStatus !== "?") {
-        const stats = stagedStats[resolvedPath] ?? { added: 0, removed: 0, binary: false };
-        stagedFiles.push({
-          path: resolvedPath,
-          ...(oldPath ? { oldPath } : {}),
-          status: getGitFileStatus(indexStatus),
-          staged: true,
-          added: stats.added,
-          removed: stats.removed,
-          ...(stats.binary ? { binary: true } : {}),
-        });
-      }
-
-      if (worktreeStatus !== " " && worktreeStatus !== "?") {
-        const stats = unstagedStats[resolvedPath] ?? { added: 0, removed: 0, binary: false };
-        unstagedFiles.push({
-          path: resolvedPath,
-          ...(oldPath ? { oldPath } : {}),
-          status: getGitFileStatus(worktreeStatus),
-          staged: false,
-          added: stats.added,
-          removed: stats.removed,
-          ...(stats.binary ? { binary: true } : {}),
-        });
-      }
-    }
-
-    return {
-      ...(branchMatch ? { branch: branchMatch[1] } : {}),
-      changedFiles: [...changedFiles],
-      stagedFiles,
-      unstagedFiles,
-      totalStaged: stagedFiles.length,
-      totalUnstaged: unstagedFiles.length,
-    };
-  } catch {
-    return {
-      changedFiles: [],
-      stagedFiles: [],
-      unstagedFiles: [],
-      totalStaged: 0,
-      totalUnstaged: 0,
-    };
-  }
-}
-
-type DiffStat = {
-  added: number;
-  removed: number;
-  binary: boolean;
-};
-
-type ParsedFileDiff = {
-  headerLines: string[];
-  hunks: Array<{
-    headerLine: string;
-    bodyLines: string[];
-  }>;
-};
-
-function runGitNumstat(cwd: string, staged: boolean): string {
-  try {
-    return execFileSync(
-      "git",
-      ["-C", cwd, "diff", ...(staged ? ["--cached"] : []), "--numstat"],
-      { encoding: "utf8" },
-    );
-  } catch {
-    return "";
-  }
-}
-
-function parseNumStat(numStatOutput: string): Array<{
-  path: string;
-  added: number;
-  removed: number;
-  binary: boolean;
-  oldPath?: string;
-}> {
-  const lines = numStatOutput.split(/\r?\n/).filter(Boolean);
-  return lines.flatMap((line) => {
-    const match = /^(\d+|-)\t(\d+|-)\t(.*)$/.exec(line);
-    if (!match) {
-      return [];
-    }
-    const added = match[1] === "-" ? 0 : Number.parseInt(match[1]!, 10);
-    const removed = match[2] === "-" ? 0 : Number.parseInt(match[2]!, 10);
-    const binary = match[1] === "-" || match[2] === "-";
-    const normalized = normalizeNumstatPath(match[3] ?? "");
-    return [
-      {
-        path: normalized.newPath,
-        ...(normalized.oldPath ? { oldPath: normalized.oldPath } : {}),
-        added,
-        removed,
-        binary,
-      },
-    ];
-  });
-}
-
-function createDiffStatsMap(entries: Array<{ path: string; added: number; removed: number; binary: boolean; oldPath?: string }>): Record<string, DiffStat> {
-  const stats: Record<string, DiffStat> = {};
-  for (const entry of entries) {
-    const value: DiffStat = {
-      added: entry.added,
-      removed: entry.removed,
-      binary: entry.binary,
-    };
-    stats[entry.path] = value;
-    if (entry.oldPath && !stats[entry.oldPath]) {
-      stats[entry.oldPath] = value;
-    }
-  }
-  return stats;
-}
-
-function normalizeNumstatPath(rawPath: string): { newPath: string; oldPath?: string } {
-  const trimmed = rawPath.trim();
-  if (!trimmed) {
-    return { newPath: trimmed };
-  }
-  if (trimmed.includes("{") && trimmed.includes("=>") && trimmed.includes("}")) {
-    const newPath = trimmed.replace(/\{([^{}]+?)\s*=>\s*([^{}]+?)\}/g, (_, _oldPart: string, newPart: string) => newPart.trim());
-    const oldPath = trimmed.replace(/\{([^{}]+?)\s*=>\s*([^{}]+?)\}/g, (_, oldPart: string) => oldPart.trim());
-    return { newPath, oldPath };
-  }
-  if (trimmed.includes("=>")) {
-    const parts = trimmed.split(/\s*=>\s*/);
-    const oldPath = parts[0]?.trim();
-    const newPath = parts.at(-1)?.trim();
-    if (newPath) {
-      return { newPath, ...(oldPath ? { oldPath } : {}) };
-    }
-  }
-  return { newPath: trimmed };
-}
-
-function getGitFileStatus(statusChar: string): GitChangedFile["status"] {
-  switch (statusChar) {
-    case "A":
-      return "added";
-    case "D":
-      return "deleted";
-    case "R":
-    case "C":
-      return "renamed";
-    case "U":
-      return "conflicted";
-    case "?":
-      return "untracked";
-    case "M":
-    default:
-      return "modified";
-  }
-}
-
-function tryResolveGitRoot(cwd: string): string | null {
-  try {
-    const root = execFileSync(
-      "git",
-      ["-C", cwd, "rev-parse", "--show-toplevel"],
-      { encoding: "utf8" },
-    ).trim();
-    return root ? path.resolve(root) : null;
-  } catch {
-    return null;
-  }
-}
-
-function getGitCommandCwd(cwd: string): string {
-  return tryResolveGitRoot(cwd) ?? cwd;
-}
-
-function normalizeComparablePath(value: string): string {
-  const resolved = path.resolve(value);
-  return resolved.startsWith("/private/var/") ? resolved.slice("/private".length) : resolved;
-}
-
-function isPathWithinBase(basePath: string, targetPath: string): boolean {
-  const resolvedBase = normalizeComparablePath(basePath);
-  const resolvedTarget = normalizeComparablePath(targetPath);
-  const relativePath = path.relative(resolvedBase, resolvedTarget);
-  return relativePath === "" || (!relativePath.startsWith("..") && !path.isAbsolute(relativePath));
-}
-
-function tryResolveWithinBase(basePath: string, targetPath: string): string | null {
-  const resolvedBase = path.resolve(basePath);
-  const resolvedTarget = path.resolve(resolvedBase, targetPath);
-  if (!isPathWithinBase(resolvedBase, resolvedTarget)) {
-    return null;
-  }
-  return resolvedTarget;
-}
-
-function pathExists(targetPath: string): boolean {
-  try {
-    statSync(targetPath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function resolveWorkspacePath(cwd: string, targetPath: string): string {
-  const scopeRoot = path.resolve(cwd);
-  const cwdCandidate = tryResolveWithinBase(scopeRoot, targetPath);
-  const gitRoot = tryResolveGitRoot(cwd);
-  const gitRootCandidate =
-    gitRoot && path.resolve(gitRoot) !== scopeRoot
-      ? path.resolve(gitRoot, targetPath)
-      : null;
-
-  if (cwdCandidate && pathExists(cwdCandidate)) {
-    return cwdCandidate;
-  }
-  if (gitRootCandidate && isPathWithinBase(scopeRoot, gitRootCandidate) && pathExists(gitRootCandidate)) {
-    return gitRootCandidate;
-  }
-  if (gitRootCandidate && isPathWithinBase(scopeRoot, gitRootCandidate)) {
-    return gitRootCandidate;
-  }
-  if (cwdCandidate) {
-    return cwdCandidate;
-  }
-  throw new Error("Path must remain inside the workspace.");
-}
-
-function toGitPath(cwd: string, targetPath: string): string {
-  const gitRoot = tryResolveGitRoot(cwd);
-  const resolvedTarget = resolveWorkspacePath(cwd, targetPath);
-  const relativeBase = normalizeComparablePath(gitRoot ?? cwd);
-  const relativePath = path.relative(relativeBase, normalizeComparablePath(resolvedTarget));
-  return relativePath || path.basename(resolvedTarget);
-}
-
-function isLikelyBinary(buffer: Buffer): boolean {
-  if (buffer.length === 0) {
-    return false;
-  }
-  let nonPrintableCount = 0;
-  for (const byte of buffer) {
-    if (byte === 0) {
-      return true;
-    }
-    if (byte < 32 && byte !== 9 && byte !== 10 && byte !== 13) {
-      nonPrintableCount += 1;
-    }
-  }
-  return nonPrintableCount / buffer.length > 0.1;
-}
-
-function readWorkspaceNodes(cwd: string) {
-  try {
-    return readdirSync(cwd, { withFileTypes: true })
-      .slice(0, 200)
-      .map((entry) => ({
-        path: path.join(cwd, entry.name),
-        name: entry.name,
-        kind: entry.isDirectory() ? ("directory" as const) : ("file" as const),
-      }));
-  } catch {
-    return [];
-  }
 }
 
 function sameTimelineText(
@@ -986,14 +664,11 @@ export function createCodexStoredSessionFrozenHistoryPageLoader(args: {
 }
 
 export function getCodexWorkspaceSnapshot(cwd: string) {
-  return {
-    cwd,
-    nodes: readWorkspaceNodes(cwd),
-  };
+  return getWorkspaceSnapshot(cwd);
 }
 
 export function getCodexGitStatus(cwd: string, options?: { scopeRoot?: string }) {
-  return tryReadGitStatus(cwd, options);
+  return getWorkspaceGitStatusData(cwd, options);
 }
 
 export function getCodexGitDiff(
@@ -1001,187 +676,27 @@ export function getCodexGitDiff(
   targetPath: string,
   options?: { staged?: boolean; ignoreWhitespace?: boolean; scopeRoot?: string },
 ): string {
-  try {
-    const gitBase = options?.scopeRoot ?? cwd;
-    const gitCwd = tryResolveGitRoot(gitBase);
-    if (!gitCwd) {
-      return "";
-    }
-    const relativeGitPath = toGitPath(gitBase, targetPath);
-    const args = ["-C", gitCwd, "diff"];
-    if (options?.staged) {
-      args.push("--cached");
-    }
-    if (options?.ignoreWhitespace) {
-      args.push("-w");
-    }
-    args.push("--", relativeGitPath);
-    return execFileSync(
-      "git",
-      args,
-      { encoding: "utf8" },
-    );
-  } catch {
-    return "";
-  }
-}
-
-function parseSingleFileDiff(diffText: string): ParsedFileDiff | null {
-  const lines = diffText.split(/\r?\n/);
-  const headerLines: string[] = [];
-  const hunks: ParsedFileDiff["hunks"] = [];
-  let currentHunk: ParsedFileDiff["hunks"][number] | null = null;
-
-  for (const line of lines) {
-    if (!line) {
-      continue;
-    }
-    if (line.startsWith("diff --git ") || line.startsWith("index ") || line.startsWith("--- ") || line.startsWith("+++ ")) {
-      if (!currentHunk) {
-        headerLines.push(line);
-      }
-      continue;
-    }
-    if (line.startsWith("@@ ")) {
-      currentHunk = {
-        headerLine: line,
-        bodyLines: [],
-      };
-      hunks.push(currentHunk);
-      continue;
-    }
-    if (currentHunk) {
-      currentHunk.bodyLines.push(line);
-    }
-  }
-
-  if (headerLines.length === 0 || hunks.length === 0) {
-    return null;
-  }
-  return { headerLines, hunks };
-}
-
-function buildSingleHunkPatch(parsed: ParsedFileDiff, hunkIndex: number): string {
-  const hunk = parsed.hunks[hunkIndex];
-  if (!hunk) {
-    throw new Error(`Unknown hunk index ${hunkIndex}`);
-  }
-  return [...parsed.headerLines, hunk.headerLine, ...hunk.bodyLines, ""].join("\n");
-}
-
-function execGitApply(
-  cwd: string,
-  args: string[],
-  patch: string,
-): void {
-  execFileSync("git", ["-C", cwd, "apply", "--recount", "--whitespace=nowarn", ...args, "-"], {
-    input: patch,
-    stdio: ["pipe", "pipe", "pipe"],
-  });
-}
-
-function execGitFile(
-  cwd: string,
-  args: string[],
-): void {
-  execFileSync("git", ["-C", cwd, ...args], {
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  return getWorkspaceGitDiff(cwd, targetPath, options);
 }
 
 export function applyCodexGitFileAction(
   cwd: string,
-  request: GitFileActionRequest,
+  request: Parameters<typeof applyWorkspaceGitFileAction>[1],
   options?: { scopeRoot?: string },
-): GitFileActionResponse {
-  const gitCwd = getGitCommandCwd(cwd);
-  const relativeGitPath = toGitPath(options?.scopeRoot ?? cwd, request.path);
-  if (request.action === "stage") {
-    execGitFile(gitCwd, ["add", "--", relativeGitPath]);
-  } else {
-    execGitFile(gitCwd, ["restore", "--staged", "--", relativeGitPath]);
-  }
-  return {
-    sessionId: "",
-    path: request.path,
-    ...(request.staged !== undefined ? { staged: request.staged } : {}),
-    action: request.action,
-    ok: true,
-  };
+) {
+  return applyWorkspaceGitFileAction(cwd, request, options);
 }
 
 export function applyCodexGitHunkAction(
   cwd: string,
-  request: GitHunkActionRequest,
+  request: Parameters<typeof applyWorkspaceGitHunkAction>[1],
   options?: { scopeRoot?: string },
-): GitHunkActionResponse {
-  const gitCwd = getGitCommandCwd(cwd);
-  const scopeRoot = options?.scopeRoot ?? cwd;
-  const diff = getCodexGitDiff(cwd, request.path, {
-    ...(request.staged !== undefined ? { staged: request.staged } : {}),
-    ignoreWhitespace: false,
-    scopeRoot,
-  });
-  const parsed = parseSingleFileDiff(diff);
-  if (!parsed) {
-    throw new Error("No diff available for this file.");
-  }
-  const patch = buildSingleHunkPatch(parsed, request.hunkIndex);
-
-  if (request.action === "stage") {
-    if (request.staged) {
-      throw new Error("Hunk is already staged.");
-    }
-    execGitApply(gitCwd, ["--cached"], patch);
-  } else if (request.action === "unstage") {
-    if (!request.staged) {
-      throw new Error("Only staged hunks can be unstaged.");
-    }
-    execGitApply(gitCwd, ["--cached", "-R"], patch);
-  } else {
-    if (request.staged) {
-      throw new Error("Revert is only supported for unstaged hunks.");
-    }
-    execGitApply(gitCwd, ["-R"], patch);
-  }
-
-  return {
-    sessionId: "",
-    path: request.path,
-    hunkIndex: request.hunkIndex,
-    ...(request.staged !== undefined ? { staged: request.staged } : {}),
-    action: request.action,
-    ok: true,
-  };
+) {
+  return applyWorkspaceGitHunkAction(cwd, request, options);
 }
 
-export function searchWorkspaceFiles(
-  cwd: string,
-  query: string,
-  limit = 100,
-): SessionFileSearchItem[] {
-  const normalizedQuery = query.trim().toLowerCase();
-  if (!normalizedQuery) {
-    return [];
-  }
-  try {
-    const output = execFileSync("rg", ["--files", "."], {
-      cwd,
-      encoding: "utf8",
-    });
-    return output
-      .split(/\r?\n/)
-      .filter(Boolean)
-      .filter((relativePath) => relativePath.toLowerCase().includes(normalizedQuery))
-      .slice(0, limit)
-      .map((relativePath) => ({
-        path: relativePath,
-        name: path.basename(relativePath),
-        parentPath: path.dirname(relativePath) === "." ? "" : path.dirname(relativePath),
-      }));
-  } catch {
-    return [];
-  }
+export function searchWorkspaceFiles(cwd: string, query: string, limit = 100) {
+  return searchWorkspaceFilesInDirectory(cwd, query, limit);
 }
 
 export function readWorkspaceFile(
@@ -1189,21 +704,5 @@ export function readWorkspaceFile(
   targetPath: string,
   options?: { scopeRoot?: string },
 ) {
-  const resolvedPath = resolveWorkspacePath(options?.scopeRoot ?? cwd, targetPath);
-  const stats = statSync(resolvedPath);
-  if (!stats.isFile()) {
-    throw new Error("Path is not a file.");
-  }
-  const buffer = readFileSync(resolvedPath);
-  const truncated = buffer.byteLength > MAX_READABLE_FILE_BYTES;
-  const contentBuffer = truncated
-    ? buffer.subarray(0, MAX_READABLE_FILE_BYTES)
-    : buffer;
-  const binary = isLikelyBinary(contentBuffer);
-  return {
-    path: resolvedPath,
-    content: binary ? "" : contentBuffer.toString("utf8"),
-    binary,
-    ...(truncated ? { truncated: true } : {}),
-  };
+  return readWorkspaceFileData(cwd, targetPath, options);
 }

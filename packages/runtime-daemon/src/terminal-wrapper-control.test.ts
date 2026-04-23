@@ -34,9 +34,47 @@ describe("terminal wrapper registry", () => {
       registry.updatePromptState("session-1", "prompt_dirty").promptState,
       "prompt_dirty",
     );
-    assert.equal(
-      registry.bindProviderSession("session-1", "thread-1").providerSessionId,
-      "thread-1",
+    assert.deepEqual(
+      registry.bindProviderSession({
+        sessionId: "session-1",
+        providerSessionId: "thread-1",
+        providerTitle: "Terminal thread",
+        reason: "initial",
+      }),
+      {
+        binding: createBinding({
+          promptState: "prompt_dirty",
+          providerSessionId: "thread-1",
+          providerTitle: "Terminal thread",
+          bindingReason: "initial",
+        }),
+        changed: true,
+      },
+    );
+  });
+
+  test("reports rebind intent without losing previous provider session id", () => {
+    const registry = new TerminalWrapperRegistry();
+    registry.register(
+      createBinding({
+        providerSessionId: "thread-1",
+      }),
+    );
+
+    assert.deepEqual(
+      registry.bindProviderSession({
+        sessionId: "session-1",
+        providerSessionId: "thread-2",
+        reason: "switch",
+      }),
+      {
+        binding: createBinding({
+          providerSessionId: "thread-2",
+          bindingReason: "switch",
+        }),
+        previousProviderSessionId: "thread-1",
+        changed: true,
+      },
     );
   });
 

@@ -28,7 +28,7 @@ import { EventBus } from "./event-bus";
 import { PtyHub } from "./pty-hub";
 import { SessionStore } from "./session-store";
 import { DEBUG_SCENARIOS, type DebugScenario } from "./debug-scenarios";
-import { readWorkspaceFile } from "./codex-stored-sessions";
+import { readWorkspaceFileFromDirectory } from "./workspace-utils";
 
 type PendingTurn = {
   sessionId: string;
@@ -721,10 +721,7 @@ export class DebugEngine {
         binary: false,
       };
     }
-    return {
-      sessionId,
-      ...readWorkspaceFile(session.cwd, path),
-    };
+    return readWorkspaceFileFromDirectory(session.cwd, path);
   }
 
   getContextUsage(sessionId: string): ContextUsage | undefined {

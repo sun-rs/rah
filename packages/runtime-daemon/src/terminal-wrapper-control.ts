@@ -9,6 +9,12 @@ export type TerminalWrapperPromptState =
   | "prompt_dirty"
   | "agent_busy";
 
+export type TerminalWrapperBindingReason =
+  | "initial"
+  | "resume"
+  | "new"
+  | "switch";
+
 export interface WrapperHelloMessage {
   type: "wrapper.hello";
   provider: ProviderKind;
@@ -23,6 +29,9 @@ export interface WrapperProviderBoundMessage {
   type: "wrapper.provider_bound";
   sessionId: string;
   providerSessionId: string;
+  providerTitle?: string;
+  providerPreview?: string;
+  reason?: TerminalWrapperBindingReason;
 }
 
 export interface WrapperPromptStateChangedMessage {
@@ -96,12 +105,18 @@ export interface PermissionResolveMessage {
   response: PermissionResponseRequest;
 }
 
+export interface WrapperCloseMessage {
+  type: "wrapper.close";
+  sessionId: string;
+}
+
 export type TerminalWrapperFromDaemonMessage =
   | WrapperReadyMessage
   | TurnEnqueueMessage
   | TurnInjectMessage
   | TurnInterruptMessage
-  | PermissionResolveMessage;
+  | PermissionResolveMessage
+  | WrapperCloseMessage;
 
 export interface TerminalWrapperBinding {
   sessionId: string;
@@ -114,7 +129,16 @@ export interface TerminalWrapperBinding {
   operatorGroupId: string;
   promptState: TerminalWrapperPromptState;
   providerSessionId?: string;
+  providerTitle?: string;
+  providerPreview?: string;
+  bindingReason?: TerminalWrapperBindingReason;
   resumeProviderSessionId?: string;
+}
+
+export interface TerminalWrapperBindingUpdate {
+  binding: TerminalWrapperBinding;
+  previousProviderSessionId?: string;
+  changed: boolean;
 }
 
 type RegisteredWrapper = TerminalWrapperBinding & {
@@ -154,10 +178,49 @@ export class TerminalWrapperRegistry {
     return binding;
   }
 
-  bindProviderSession(sessionId: string, providerSessionId: string): TerminalWrapperBinding {
+  bindProviderSession(args: {
+    sessionId: string;
+    providerSessionId: string;
+    providerTitle?: string;
+    providerPreview?: string;
+    reason?: TerminalWrapperBindingReason;
+  }): TerminalWrapperBindingUpdate {
+    const wrapper = this.require(args.sessionId);
+    const previousProviderSessionId = wrapper.providerSessionId;
+    const changed =
+      wrapper.providerSessionId !== args.providerSessionId ||
+      wrapper.providerTitle !== args.providerTitle ||
+      wrapper.providerPreview !== args.providerPreview ||
+      wrapper.bindingReason !== args.reason;
+    wrapper.providerSessionId = args.providerSessionId;
+    if (args.providerTitle !== undefined) {
+      wrapper.providerTitle = args.providerTitle;
+    } else {
+      delete wrapper.providerTitle;
+    }
+    if (args.providerPreview !== undefined) {
+      wrapper.providerPreview = args.providerPreview;
+    } else {
+      delete wrapper.providerPreview;
+    }
+    if (args.reason !== undefined) {
+      wrapper.bindingReason = args.reason;
+    } else {
+      delete wrapper.bindingReason;
+    }
+    return {
+      binding: this.get(args.sessionId)!,
+      ...(previousProviderSessionId ? { previousProviderSessionId } : {}),
+      changed,
+    };
+  }
+
+  rebindsProviderSession(sessionId: string, providerSessionId: string): boolean {
     const wrapper = this.require(sessionId);
-    wrapper.providerSessionId = providerSessionId;
-    return this.get(sessionId)!;
+    return (
+      wrapper.providerSessionId !== undefined &&
+      wrapper.providerSessionId !== providerSessionId
+    );
   }
 
   updatePromptState(

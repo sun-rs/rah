@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type {
+  ApprovalPolicy,
   AttachSessionRequest,
   DebugScenarioDescriptor,
   EventBatch,
@@ -48,6 +49,7 @@ import {
   createInteractiveAttachRequest,
   createObserveAttachRequest,
   interruptSessionCommand,
+  renameSessionCommand,
   releaseControlCommand,
   respondToPermissionCommand,
   sendInputCommand,
@@ -118,7 +120,7 @@ interface StartSessionOptions {
   cwd?: string;
   title?: string;
   model?: string;
-  approvalPolicy?: string;
+  approvalPolicy?: ApprovalPolicy;
   sandbox?: string;
   initialInput?: string;
 }
@@ -169,6 +171,7 @@ interface SessionState {
   ) => Promise<void>;
   attachSession: (summary: SessionSummary) => Promise<void>;
   closeSession: (sessionId: string) => Promise<void>;
+  renameSession: (sessionId: string, title: string) => Promise<void>;
   claimHistorySession: (sessionId: string, options?: ClaimHistorySessionOptions) => Promise<void>;
   removeHistorySession: (session: Pick<StoredSessionRef, "provider" | "providerSessionId">) => Promise<void>;
   removeHistoryWorkspaceSessions: (workspaceDir: string) => Promise<void>;
@@ -653,6 +656,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       get,
       set,
       sessionId,
+      refreshWorkbenchState: get().refreshWorkbenchState,
+    });
+  },
+
+  renameSession: async (sessionId, title) => {
+    await renameSessionCommand({
+      set,
+      sessionId,
+      title,
       refreshWorkbenchState: get().refreshWorkbenchState,
     });
   },

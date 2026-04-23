@@ -28,6 +28,10 @@ import type {
 import { RuntimeEngine } from "./runtime-engine";
 import type { ProviderAdapter } from "./provider-adapter";
 import type { FrozenHistoryBoundary, FrozenHistoryPageLoader } from "./history-snapshots";
+import type {
+  TerminalWrapperFromDaemonMessage,
+  WrapperHelloMessage,
+} from "./terminal-wrapper-control";
 
 class CountingStoredSessionsAdapter implements ProviderAdapter {
   readonly id = "counting";
@@ -1036,5 +1040,284 @@ describe("RuntimeEngine", () => {
     unsubscribe();
     await engine.shutdown();
     rmSync(workspace, { force: true, recursive: true });
+  });
+
+  test("registers terminal wrapper sessions as live and dispatches queued turns when prompt becomes clean", async () => {
+    const adapter = new CountingStoredSessionsAdapter([]);
+    const engine = new RuntimeEngine([adapter]);
+    const outbound: TerminalWrapperFromDaemonMessage[] = [];
+
+    const ready = engine.registerTerminalWrapperSession(
+      {
+        type: "wrapper.hello",
+        provider: "codex",
+        cwd: workDirGlobal,
+        rootDir: workDirGlobal,
+        terminalPid: 4242,
+        launchCommand: ["rah", "codex"],
+      } satisfies WrapperHelloMessage,
+      (message) => outbound.push(message),
+    );
+
+    const sessions = engine.listSessions();
+    assert.equal(sessions.sessions.length, 1);
+    assert.equal(sessions.sessions[0]?.session.launchSource, "terminal");
+    assert.equal(sessions.sessions[0]?.session.capabilities.queuedInput, true);
+    assert.equal(sessions.sessions[0]?.controlLease.holderKind, "terminal");
+
+    engine.updateTerminalWrapperPromptState(ready.sessionId, "prompt_dirty");
+    engine.sendInput(ready.sessionId, { clientId: "web-user", text: "Explain the bug." });
+
+    assert.deepEqual(outbound.at(-1), {
+      type: "turn.enqueue",
+      sessionId: ready.sessionId,
+      queuedTurn: {
+        queuedTurnId: `${ready.sessionId}:queued:1`,
+        sourceSurfaceId: "web-user",
+        text: "Explain the bug.",
+      },
+    });
+
+    engine.updateTerminalWrapperPromptState(ready.sessionId, "prompt_clean");
+
+    assert.deepEqual(outbound.at(-1), {
+      type: "turn.inject",
+      sessionId: ready.sessionId,
+      queuedTurn: {
+        queuedTurnId: `${ready.sessionId}:queued:1`,
+        sourceSurfaceId: "web-user",
+        text: "Explain the bug.",
+      },
+    });
+    assert.equal(engine.listSessions().sessions[0]?.session.runtimeState, "idle");
+    const stateChangedEvents = engine
+      .listEvents({ sessionIds: [ready.sessionId] })
+      .filter((event) => event.type === "session.state.changed");
+    assert.equal(stateChangedEvents.at(-1)?.payload.state, "idle");
+
+    engine.updateTerminalWrapperPromptState(ready.sessionId, "agent_busy");
+    assert.equal(engine.listSessions().sessions[0]?.session.runtimeState, "running");
+    const runningStateChangedEvents = engine
+      .listEvents({ sessionIds: [ready.sessionId] })
+      .filter((event) => event.type === "session.state.changed");
+    assert.equal(runningStateChangedEvents.at(-1)?.payload.state, "running");
+
+    await engine.shutdown();
+  });
+
+  test("applies terminal wrapper activity and PTY output through canonical channels", async () => {
+    const adapter = new CountingStoredSessionsAdapter([]);
+    const engine = new RuntimeEngine([adapter]);
+
+    const ready = engine.registerTerminalWrapperSession(
+      {
+        type: "wrapper.hello",
+        provider: "codex",
+        cwd: workDirGlobal,
+        rootDir: workDirGlobal,
+        terminalPid: 5252,
+        launchCommand: ["rah", "codex"],
+      } satisfies WrapperHelloMessage,
+      () => undefined,
+    );
+
+    engine.bindTerminalWrapperProviderSession({
+      type: "wrapper.provider_bound",
+      sessionId: ready.sessionId,
+      providerSessionId: "thread-wrapper-1",
+      providerTitle: "Wrapper thread",
+      reason: "initial",
+    });
+    engine.applyTerminalWrapperActivity(ready.sessionId, {
+      type: "turn_started",
+      turnId: "turn-1",
+    });
+    engine.appendTerminalWrapperPtyOutput(ready.sessionId, "hello from terminal\n");
+
+    const events = engine.listEvents({ sessionIds: [ready.sessionId] });
+    assert.ok(events.some((event) => event.type === "turn.started" && event.turnId === "turn-1"));
+    assert.ok(
+      events.some(
+        (event) =>
+          event.type === "terminal.output" &&
+          event.payload.data.includes("hello from terminal"),
+      ),
+    );
+    assert.equal(engine.listSessions().sessions[0]?.session.title, "Wrapper thread");
+
+    engine.markTerminalWrapperExited(ready.sessionId, { exitCode: 0 });
+    assert.equal(engine.listSessions().sessions.length, 0);
+
+    await engine.shutdown();
+  });
+
+  test("rebinds a terminal wrapper session to a new provider session without mixing feed ownership", async () => {
+    const adapter = new CountingStoredSessionsAdapter([]);
+    const engine = new RuntimeEngine([adapter]);
+
+    const ready = engine.registerTerminalWrapperSession(
+      {
+        type: "wrapper.hello",
+        provider: "codex",
+        cwd: workDirGlobal,
+        rootDir: workDirGlobal,
+        terminalPid: 6262,
+        launchCommand: ["rah", "codex"],
+      } satisfies WrapperHelloMessage,
+      () => undefined,
+    );
+
+    engine.bindTerminalWrapperProviderSession({
+      type: "wrapper.provider_bound",
+      sessionId: ready.sessionId,
+      providerSessionId: "thread-wrapper-1",
+      providerTitle: "First thread",
+      reason: "initial",
+    });
+    engine.applyTerminalWrapperActivity(ready.sessionId, {
+      type: "turn_started",
+      turnId: "turn-1",
+    });
+
+    engine.bindTerminalWrapperProviderSession({
+      type: "wrapper.provider_bound",
+      sessionId: ready.sessionId,
+      providerSessionId: "thread-wrapper-2",
+      providerTitle: "Second thread",
+      reason: "switch",
+    });
+
+    const summary = engine.listSessions().sessions[0];
+    assert.equal(summary?.session.providerSessionId, "thread-wrapper-2");
+    assert.equal(summary?.session.title, "Second thread");
+    assert.equal(summary?.session.runtimeState, "idle");
+    assert.equal(summary?.usage, undefined);
+    const reboundEvents = engine
+      .listEvents({ sessionIds: [ready.sessionId] })
+      .filter((event) => event.type === "session.started");
+    assert.equal(reboundEvents.at(-1)?.payload.session.providerSessionId, "thread-wrapper-2");
+
+    await engine.shutdown();
+  });
+
+  test("disconnecting a terminal wrapper session removes the live session", async () => {
+    const adapter = new CountingStoredSessionsAdapter([]);
+    const engine = new RuntimeEngine([adapter]);
+
+    const ready = engine.registerTerminalWrapperSession(
+      {
+        type: "wrapper.hello",
+        provider: "codex",
+        cwd: workDirGlobal,
+        rootDir: workDirGlobal,
+        terminalPid: 6363,
+        launchCommand: ["rah", "codex"],
+      } satisfies WrapperHelloMessage,
+      () => undefined,
+    );
+
+    assert.equal(engine.listSessions().sessions.length, 1);
+    engine.disconnectTerminalWrapperSession(ready.sessionId);
+    assert.equal(engine.listSessions().sessions.length, 0);
+
+    await engine.shutdown();
+  });
+
+  test("closing a terminal wrapper session requests wrapper shutdown before removing it", async () => {
+    const adapter = new CountingStoredSessionsAdapter([]);
+    const engine = new RuntimeEngine([adapter]);
+    const outbound: TerminalWrapperFromDaemonMessage[] = [];
+
+    const ready = engine.registerTerminalWrapperSession(
+      {
+        type: "wrapper.hello",
+        provider: "codex",
+        cwd: workDirGlobal,
+        rootDir: workDirGlobal,
+        terminalPid: 7373,
+        launchCommand: ["rah", "codex"],
+      } satisfies WrapperHelloMessage,
+      (message) => outbound.push(message),
+    );
+
+    engine.attachSession(ready.sessionId, {
+      client: {
+        id: "web-user",
+        kind: "web",
+        connectionId: "web-connection",
+      },
+      mode: "observe",
+    });
+
+    await engine.closeSession(ready.sessionId, {
+      clientId: "web-user",
+    });
+
+    assert.deepEqual(outbound.at(-1), {
+      type: "wrapper.close",
+      sessionId: ready.sessionId,
+    });
+    assert.equal(engine.listSessions().sessions.length, 0);
+
+    assert.deepEqual(engine.markTerminalWrapperExited(ready.sessionId, { exitCode: 0 }), []);
+
+    await engine.shutdown();
+  });
+
+  test("ignores stale wrapper messages after a terminal wrapper session is closed", async () => {
+    const adapter = new CountingStoredSessionsAdapter([]);
+    const engine = new RuntimeEngine([adapter]);
+    const outbound: TerminalWrapperFromDaemonMessage[] = [];
+
+    const ready = engine.registerTerminalWrapperSession(
+      {
+        type: "wrapper.hello",
+        provider: "codex",
+        cwd: workDirGlobal,
+        rootDir: workDirGlobal,
+        terminalPid: 7474,
+        launchCommand: ["rah", "codex"],
+      } satisfies WrapperHelloMessage,
+      (message) => outbound.push(message),
+    );
+
+    engine.attachSession(ready.sessionId, {
+      client: {
+        id: "web-user",
+        kind: "web",
+        connectionId: "web-connection",
+      },
+      mode: "observe",
+    });
+
+    await engine.closeSession(ready.sessionId, {
+      clientId: "web-user",
+    });
+
+    assert.deepEqual(outbound.at(-1), {
+      type: "wrapper.close",
+      sessionId: ready.sessionId,
+    });
+    assert.deepEqual(
+      engine.appendTerminalWrapperPtyOutput(ready.sessionId, "late output"),
+      [],
+    );
+    assert.deepEqual(
+      engine.applyTerminalWrapperActivity(ready.sessionId, {
+        type: "runtime_status",
+        status: "thinking",
+      }),
+      [],
+    );
+    engine.updateTerminalWrapperPromptState(ready.sessionId, "prompt_clean");
+    engine.bindTerminalWrapperProviderSession({
+      type: "wrapper.provider_bound",
+      sessionId: ready.sessionId,
+      providerSessionId: "thread-late",
+      reason: "switch",
+    });
+    assert.equal(engine.listSessions().sessions.length, 0);
+
+    await engine.shutdown();
   });
 });

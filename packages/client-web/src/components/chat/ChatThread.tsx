@@ -335,7 +335,11 @@ function MeasuredFeedEntry(props: {
   }, [props.entryKey, props.onHeightChange]);
 
   return (
-    <div ref={rowRef} className="min-w-0 max-w-full">
+    <div
+      ref={rowRef}
+      data-feed-entry-key={props.entryKey}
+      className="min-w-0 max-w-full"
+    >
       {props.children}
     </div>
   );
@@ -351,6 +355,13 @@ export function ChatThread(props: {
   canRespondToPermission?: boolean;
   onPermissionRespond: (requestId: string, response: PermissionResponseRequest) => void;
 }) {
+  type PrependAnchor = {
+    scrollHeight: number;
+    scrollTop: number;
+    entryKey: string | null;
+    offsetTop: number | null;
+    settlePassesRemaining: number;
+  };
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
@@ -358,7 +369,7 @@ export function ChatThread(props: {
   const loadingOlderRef = useRef(false);
   const stickToBottomRef = useRef(true);
   const sessionSwitchBottomLockRef = useRef(true);
-  const prependAnchorRef = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
+  const prependAnchorRef = useRef<PrependAnchor | null>(null);
   const lastScrollTopRef = useRef(0);
   const topHistoryAutoLoadArmedRef = useRef(true);
   const measuredHeightsRef = useRef<Map<string, number>>(new Map());
@@ -417,6 +428,28 @@ export function ChatThread(props: {
     setMeasuredHeightsVersion((version) => version + 1);
   }, []);
 
+  const captureVisiblePrependAnchor = useCallback((): PrependAnchor | null => {
+    const node = containerRef.current;
+    if (!node) {
+      return null;
+    }
+    const containerTop = node.getBoundingClientRect().top;
+    const entryNodes = Array.from(
+      node.querySelectorAll<HTMLElement>("[data-feed-entry-key]"),
+    );
+    const visibleNode =
+      entryNodes.find((entryNode) => entryNode.getBoundingClientRect().bottom > containerTop + 1) ??
+      entryNodes[0] ??
+      null;
+    return {
+      scrollHeight: node.scrollHeight,
+      scrollTop: node.scrollTop,
+      entryKey: visibleNode?.dataset.feedEntryKey ?? null,
+      offsetTop: visibleNode ? visibleNode.getBoundingClientRect().top - containerTop : null,
+      settlePassesRemaining: 3,
+    };
+  }, []);
+
   useEffect(() => {
     previousEntryCountRef.current = 0;
     loadingOlderRef.current = false;
@@ -466,10 +499,7 @@ export function ChatThread(props: {
        ) {
          topHistoryAutoLoadArmedRef.current = false;
          loadingOlderRef.current = true;
-         prependAnchorRef.current = {
-           scrollHeight: node.scrollHeight,
-           scrollTop: node.scrollTop,
-         };
+         prependAnchorRef.current = captureVisiblePrependAnchor();
          props.onLoadOlderHistory();
        }
        lastScrollTopRef.current = node.scrollTop;
@@ -487,7 +517,14 @@ export function ChatThread(props: {
     return () => {
       node.removeEventListener("scroll", updateStickiness);
     };
-  }, [props.canLoadOlderHistory, props.historyLoading, props.onLoadOlderHistory, props.sessionId, syncViewport]);
+  }, [
+    captureVisiblePrependAnchor,
+    props.canLoadOlderHistory,
+    props.historyLoading,
+    props.onLoadOlderHistory,
+    props.sessionId,
+    syncViewport,
+  ]);
 
   useEffect(() => {
     const node = containerRef.current;
@@ -535,11 +572,36 @@ export function ChatThread(props: {
     }
     const anchor = prependAnchorRef.current;
     if (anchor) {
-      const nextScrollTop =
-        anchor.scrollTop + (node.scrollHeight - anchor.scrollHeight);
-      node.scrollTop = nextScrollTop;
-      prependAnchorRef.current = null;
-      loadingOlderRef.current = false;
+      const containerTop = node.getBoundingClientRect().top;
+      const anchorNode =
+        anchor.entryKey === null
+          ? null
+          : Array.from(node.querySelectorAll<HTMLElement>("[data-feed-entry-key]")).find(
+              (entryNode) => entryNode.dataset.feedEntryKey === anchor.entryKey,
+            ) ?? null;
+      if (anchorNode && anchor.offsetTop !== null) {
+        const currentOffsetTop = anchorNode.getBoundingClientRect().top - containerTop;
+        node.scrollTop += currentOffsetTop - anchor.offsetTop;
+      } else {
+        const nextScrollTop =
+          anchor.scrollTop + (node.scrollHeight - anchor.scrollHeight);
+        node.scrollTop = nextScrollTop;
+      }
+      lastScrollTopRef.current = node.scrollTop;
+      const nextSettlePassesRemaining = props.historyLoading
+        ? anchor.settlePassesRemaining
+        : anchor.settlePassesRemaining - 1;
+      if (props.historyLoading || nextSettlePassesRemaining > 0) {
+        prependAnchorRef.current = {
+          ...anchor,
+          scrollHeight: node.scrollHeight,
+          scrollTop: node.scrollTop,
+          settlePassesRemaining: nextSettlePassesRemaining,
+        };
+      } else {
+        prependAnchorRef.current = null;
+        loadingOlderRef.current = false;
+      }
       previousEntryCountRef.current = entries.length;
       return;
     }
@@ -557,7 +619,7 @@ export function ChatThread(props: {
       bottomRef.current?.scrollIntoView({ behavior: "smooth" });
     }
     previousEntryCountRef.current = entries.length;
-  }, [entries, props.historyLoading, props.sessionId]);
+  }, [entries, measuredHeightsVersion, props.historyLoading, props.sessionId]);
 
   const handleScrollToBottom = () => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });

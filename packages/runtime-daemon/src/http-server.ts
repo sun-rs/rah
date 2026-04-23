@@ -28,10 +28,35 @@ import type {
   WorkspaceDirectoryRequest,
 } from "@rah/runtime-protocol";
 import { RuntimeEngine } from "./runtime-engine";
+import type { TerminalWrapperToDaemonMessage } from "./terminal-wrapper-control";
 
 export interface RahDaemon {
   port: number;
   close(): Promise<void>;
+}
+
+function requestErrorStatus(error: unknown): number {
+  const message = error instanceof Error ? error.message : String(error);
+  if (
+    message.includes("Cross-origin requests are not allowed.") ||
+    message.includes("Missing required RAH client header.") ||
+    message.includes("Workspace directory is not registered.") ||
+    message.includes("Requested scope root is outside the session workspace boundary.")
+  ) {
+    return 403;
+  }
+  if (
+    message.includes("is required") ||
+    message.includes("Bad Request") ||
+    message.includes("Path is not a file.") ||
+    message.includes("Workspace directory is required.")
+  ) {
+    return 400;
+  }
+  if (message.startsWith("Unknown session ")) {
+    return 404;
+  }
+  return 500;
 }
 
 const CLIENT_DIST_ROOT = resolve(
@@ -62,10 +87,71 @@ type JsonHandler = (
   body: unknown,
 ) => Promise<void>;
 
-function applyCorsHeaders(res: ServerResponse): void {
-  res.setHeader("access-control-allow-origin", "*");
+function normalizeOriginHostname(hostname: string): string {
+  const normalized = hostname.replace(/^\[(.*)\]$/, "$1").toLowerCase();
+  if (normalized === "localhost" || normalized === "127.0.0.1" || normalized === "::1") {
+    return "loopback";
+  }
+  return normalized;
+}
+
+function requestProtocol(req: IncomingMessage): string {
+  const forwarded = req.headers["x-forwarded-proto"];
+  if (typeof forwarded === "string" && forwarded.length > 0) {
+    return forwarded.split(",")[0]!.trim();
+  }
+  return "http";
+}
+
+function isAllowedOrigin(req: IncomingMessage): boolean {
+  const originHeader = req.headers.origin;
+  if (typeof originHeader !== "string" || !originHeader.trim()) {
+    return true;
+  }
+  const hostHeader = req.headers.host;
+  if (typeof hostHeader !== "string" || !hostHeader.trim()) {
+    return false;
+  }
+  try {
+    const origin = new URL(originHeader);
+    const requestUrl = new URL(`${requestProtocol(req)}://` + hostHeader);
+    const sameHost =
+      normalizeOriginHostname(origin.hostname) === normalizeOriginHostname(requestUrl.hostname);
+    const originPort =
+      origin.port || (origin.protocol === "https:" ? "443" : "80");
+    const requestPort =
+      requestUrl.port || (requestUrl.protocol === "https:" ? "443" : "80");
+    return sameHost && originPort === requestPort;
+  } catch {
+    return false;
+  }
+}
+
+function applyCorsHeaders(req: IncomingMessage, res: ServerResponse): void {
+  const originHeader = req.headers.origin;
+  res.setHeader("vary", "Origin");
+  if (typeof originHeader === "string" && originHeader.trim() && isAllowedOrigin(req)) {
+    res.setHeader("access-control-allow-origin", originHeader);
+  }
   res.setHeader("access-control-allow-methods", "GET,POST,OPTIONS");
-  res.setHeader("access-control-allow-headers", "content-type");
+  res.setHeader("access-control-allow-headers", "content-type, x-rah-client");
+}
+
+function validateApiRequest(req: IncomingMessage, pathname: string): string | null {
+  if (!pathname.startsWith("/api/")) {
+    return null;
+  }
+  if (!isAllowedOrigin(req)) {
+    return "Cross-origin requests are not allowed.";
+  }
+  if (
+    req.method === "POST" &&
+    typeof req.headers.origin === "string" &&
+    req.headers["x-rah-client"] !== "web"
+  ) {
+    return "Missing required RAH client header.";
+  }
+  return null;
 }
 
 function readJsonBody(req: IncomingMessage): Promise<unknown> {
@@ -89,9 +175,9 @@ function readJsonBody(req: IncomingMessage): Promise<unknown> {
   });
 }
 
-function writeJson(res: ServerResponse, status: number, payload: unknown): void {
+function writeJson(req: IncomingMessage, res: ServerResponse, status: number, payload: unknown): void {
   const body = JSON.stringify(payload);
-  applyCorsHeaders(res);
+  applyCorsHeaders(req, res);
   res.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
     "content-length": Buffer.byteLength(body),
@@ -99,8 +185,8 @@ function writeJson(res: ServerResponse, status: number, payload: unknown): void 
   res.end(body);
 }
 
-function writeText(res: ServerResponse, status: number, body: string): void {
-  applyCorsHeaders(res);
+function writeText(req: IncomingMessage, res: ServerResponse, status: number, body: string): void {
+  applyCorsHeaders(req, res);
   res.writeHead(status, {
     "content-type": "text/plain; charset=utf-8",
     "content-length": Buffer.byteLength(body),
@@ -171,6 +257,7 @@ function resolveClientAssetPath(pathname: string): string | null {
 }
 
 async function serveStaticFile(
+  req: IncomingMessage,
   res: ServerResponse,
   path: string,
   options?: { cacheControl?: string },
@@ -179,7 +266,7 @@ async function serveStaticFile(
   if (!body) {
     return false;
   }
-  applyCorsHeaders(res);
+  applyCorsHeaders(req, res);
   res.writeHead(200, {
     "content-type": contentTypeForPath(path),
     "content-length": body.byteLength,
@@ -189,12 +276,12 @@ async function serveStaticFile(
   return true;
 }
 
-async function serveClientApp(pathname: string, res: ServerResponse): Promise<boolean> {
+async function serveClientApp(pathname: string, req: IncomingMessage, res: ServerResponse): Promise<boolean> {
   const assetPath = resolveClientAssetPath(pathname);
   if (assetPath) {
     const cacheControl =
       pathname.startsWith("/assets/") ? "public, max-age=31536000, immutable" : "no-cache";
-    if (await serveStaticFile(res, assetPath, { cacheControl })) {
+    if (await serveStaticFile(req, res, assetPath, { cacheControl })) {
       return true;
     }
   }
@@ -204,11 +291,12 @@ async function serveClientApp(pathname: string, res: ServerResponse): Promise<bo
     return false;
   }
 
-  if (await serveStaticFile(res, CLIENT_INDEX_PATH)) {
+  if (await serveStaticFile(req, res, CLIENT_INDEX_PATH)) {
     return true;
   }
 
   writeText(
+    req,
     res,
     503,
     "RAH client bundle not found. Run `npm --prefix packages/client-web run build` first.",
@@ -216,15 +304,19 @@ async function serveClientApp(pathname: string, res: ServerResponse): Promise<bo
   return true;
 }
 
-export async function startRahDaemon(options?: { port?: number }): Promise<RahDaemon> {
+export async function startRahDaemon(options?: {
+  port?: number;
+  engine?: RuntimeEngine;
+}): Promise<RahDaemon> {
   const port = options?.port ?? 43111;
-  const engine = new RuntimeEngine();
+  const engine = options?.engine ?? new RuntimeEngine();
 
   const postRoutes: Array<{ pattern: RegExp; handler: JsonHandler }> = [
     {
       pattern: /^\/api\/terminal\/start$/,
-      handler: async (_req, res, _match, body) => {
+      handler: async (req, res, _match, body) => {
         writeJson(
+          req,
           res,
           200,
           await engine.startIndependentTerminal((body ?? {}) as IndependentTerminalStartRequest),
@@ -233,57 +325,58 @@ export async function startRahDaemon(options?: { port?: number }): Promise<RahDa
     },
     {
       pattern: /^\/api\/terminal\/([^/]+)\/close$/,
-      handler: async (_req, res, match) => {
+      handler: async (req, res, match) => {
         await engine.closeIndependentTerminal(match[1]!);
-        writeJson(res, 200, { ok: true });
+        writeJson(req, res, 200, { ok: true });
       },
     },
     {
       pattern: /^\/api\/sessions\/start$/,
-      handler: async (_req, res, _match, body) => {
+      handler: async (req, res, _match, body) => {
         const result = await engine.startSession((body ?? {}) as StartSessionRequest);
-        writeJson(res, 200, result);
+        writeJson(req, res, 200, result);
       },
     },
     {
       pattern: /^\/api\/sessions\/resume$/,
-      handler: async (_req, res, _match, body) => {
+      handler: async (req, res, _match, body) => {
         const result = await engine.resumeSession((body ?? {}) as ResumeSessionRequest);
-        writeJson(res, 200, result);
+        writeJson(req, res, 200, result);
       },
     },
     {
       pattern: /^\/api\/sessions\/([^/]+)\/attach$/,
-      handler: async (_req, res, match, body) => {
+      handler: async (req, res, match, body) => {
         const result = engine.attachSession(match[1]!, (body ?? {}) as AttachSessionRequest);
-        writeJson(res, 200, result);
+        writeJson(req, res, 200, result);
       },
     },
     {
       pattern: /^\/api\/sessions\/([^/]+)\/control\/claim$/,
-      handler: async (_req, res, match, body) => {
+      handler: async (req, res, match, body) => {
         const result = engine.claimControl(match[1]!, (body ?? {}) as ClaimControlRequest);
-        writeJson(res, 200, { session: result });
+        writeJson(req, res, 200, { session: result });
       },
     },
     {
       pattern: /^\/api\/sessions\/([^/]+)\/control\/release$/,
-      handler: async (_req, res, match, body) => {
+      handler: async (req, res, match, body) => {
         const result = engine.releaseControl(match[1]!, (body ?? {}) as ReleaseControlRequest);
-        writeJson(res, 200, { session: result });
+        writeJson(req, res, 200, { session: result });
       },
     },
     {
       pattern: /^\/api\/sessions\/([^/]+)\/input$/,
-      handler: async (_req, res, match, body) => {
+      handler: async (req, res, match, body) => {
         engine.sendInput(match[1]!, (body ?? {}) as SessionInputRequest);
-        writeJson(res, 200, { ok: true });
+        writeJson(req, res, 200, { ok: true });
       },
     },
     {
       pattern: /^\/api\/sessions\/([^/]+)\/git-files\/apply$/,
-      handler: async (_req, res, match, body) => {
+      handler: async (req, res, match, body) => {
         writeJson(
+          req,
           res,
           200,
           await engine.applyGitFileAction(match[1]!, (body ?? {}) as GitFileActionRequest),
@@ -292,8 +385,9 @@ export async function startRahDaemon(options?: { port?: number }): Promise<RahDa
     },
     {
       pattern: /^\/api\/sessions\/([^/]+)\/git-hunks\/apply$/,
-      handler: async (_req, res, match, body) => {
+      handler: async (req, res, match, body) => {
         writeJson(
+          req,
           res,
           200,
           await engine.applyGitHunkAction(match[1]!, (body ?? {}) as GitHunkActionRequest),
@@ -302,49 +396,63 @@ export async function startRahDaemon(options?: { port?: number }): Promise<RahDa
     },
     {
       pattern: /^\/api\/sessions\/([^/]+)\/interrupt$/,
-      handler: async (_req, res, match, body) => {
+      handler: async (req, res, match, body) => {
         const result = engine.interruptSession(
           match[1]!,
           (body ?? {}) as InterruptSessionRequest,
         );
-        writeJson(res, 200, { session: result });
+        writeJson(req, res, 200, { session: result });
       },
     },
     {
       pattern: /^\/api\/sessions\/([^/]+)\/detach$/,
-      handler: async (_req, res, match, body) => {
+      handler: async (req, res, match, body) => {
         const result = engine.detachSession(match[1]!, (body ?? {}) as DetachSessionRequest);
-        writeJson(res, 200, { session: result });
+        writeJson(req, res, 200, { session: result });
       },
     },
     {
       pattern: /^\/api\/sessions\/([^/]+)\/close$/,
-      handler: async (_req, res, match, body) => {
+      handler: async (req, res, match, body) => {
         await engine.closeSession(match[1]!, (body ?? {}) as CloseSessionRequest);
-        writeJson(res, 200, { ok: true });
+        writeJson(req, res, 200, { ok: true });
+      },
+    },
+    {
+      pattern: /^\/api\/sessions\/([^/]+)\/rename$/,
+      handler: async (req, res, match, body) => {
+        const request = (body ?? {}) as { title?: string };
+        if (typeof request.title !== "string" || !request.title.trim()) {
+          writeJson(req, res, 400, { error: "Session title is required." });
+          return;
+        }
+        writeJson(req, res, 200, {
+          session: engine.renameSession(match[1]!, request.title),
+        });
       },
     },
     {
       pattern: /^\/api\/sessions\/([^/]+)\/permissions\/([^/]+)\/respond$/,
-      handler: async (_req, res, match, body) => {
+      handler: async (req, res, match, body) => {
         await engine.respondToPermission(
           match[1]!,
           decodeURIComponent(match[2]!),
           (body ?? {}) as PermissionResponseRequest,
         );
-        writeJson(res, 200, { ok: true });
+        writeJson(req, res, 200, { ok: true });
       },
     },
     {
       pattern: /^\/api\/workspaces\/add$/,
-      handler: async (_req, res, _match, body) => {
-        writeJson(res, 200, engine.addWorkspace(((body ?? {}) as WorkspaceDirectoryRequest).dir));
+      handler: async (req, res, _match, body) => {
+        writeJson(req, res, 200, engine.addWorkspace(((body ?? {}) as WorkspaceDirectoryRequest).dir));
       },
     },
     {
       pattern: /^\/api\/workspaces\/select$/,
-      handler: async (_req, res, _match, body) => {
+      handler: async (req, res, _match, body) => {
         writeJson(
+          req,
           res,
           200,
           engine.selectWorkspace(((body ?? {}) as WorkspaceDirectoryRequest).dir),
@@ -353,8 +461,9 @@ export async function startRahDaemon(options?: { port?: number }): Promise<RahDa
     },
     {
       pattern: /^\/api\/workspaces\/remove$/,
-      handler: async (_req, res, _match, body) => {
+      handler: async (req, res, _match, body) => {
         writeJson(
+          req,
           res,
           200,
           engine.removeWorkspace(((body ?? {}) as WorkspaceDirectoryRequest).dir),
@@ -363,9 +472,10 @@ export async function startRahDaemon(options?: { port?: number }): Promise<RahDa
     },
     {
       pattern: /^\/api\/history\/sessions\/remove$/,
-      handler: async (_req, res, _match, body) => {
+      handler: async (req, res, _match, body) => {
         const request = (body ?? {}) as StoredSessionRemoveRequest;
         writeJson(
+          req,
           res,
           200,
           await engine.removeStoredSession(request.provider, request.providerSessionId),
@@ -374,9 +484,9 @@ export async function startRahDaemon(options?: { port?: number }): Promise<RahDa
     },
     {
       pattern: /^\/api\/history\/workspaces\/remove$/,
-      handler: async (_req, res, _match, body) => {
+      handler: async (req, res, _match, body) => {
         const request = (body ?? {}) as WorkspaceDirectoryRequest;
-        writeJson(res, 200, await engine.removeStoredWorkspaceSessions(request.dir));
+        writeJson(req, res, 200, await engine.removeStoredWorkspaceSessions(request.dir));
       },
     },
   ];
@@ -384,36 +494,42 @@ export async function startRahDaemon(options?: { port?: number }): Promise<RahDa
   const server = createServer(async (req, res) => {
     try {
       if (!req.url || !req.method) {
-        writeText(res, 400, "Bad Request");
+        writeText(req, res, 400, "Bad Request");
         return;
       }
 
       const url = new URL(req.url, "http://127.0.0.1");
       const pathname = url.pathname;
 
+      const apiValidationError = validateApiRequest(req, pathname);
+      if (apiValidationError) {
+        writeJson(req, res, 403, { error: apiValidationError });
+        return;
+      }
+
       if (req.method === "OPTIONS") {
-        applyCorsHeaders(res);
+        applyCorsHeaders(req, res);
         res.writeHead(204);
         res.end();
         return;
       }
 
       if (req.method === "GET" && pathname === "/readyz") {
-        writeText(res, 200, "ok");
+        writeText(req, res, 200, "ok");
         return;
       }
 
       if (req.method === "GET" && pathname === "/api/sessions") {
-        writeJson(res, 200, engine.listSessions());
+        writeJson(req, res, 200, engine.listSessions());
         return;
       }
 
       if (req.method === "GET" && pathname === "/api/fs/list") {
         const dirPath = url.searchParams.get("path") ?? process.cwd();
         try {
-          writeJson(res, 200, await engine.listDirectory(dirPath));
+          writeJson(req, res, 200, await engine.listDirectory(dirPath));
         } catch (error) {
-          writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) });
+          writeJson(req, res, 400, { error: error instanceof Error ? error.message : String(error) });
         }
         return;
       }
@@ -421,9 +537,9 @@ export async function startRahDaemon(options?: { port?: number }): Promise<RahDa
       if (req.method === "POST" && pathname === "/api/fs/ensure-dir") {
         const body = (await readJsonBody(req)) as WorkspaceDirectoryRequest | undefined;
         try {
-          writeJson(res, 200, await engine.ensureDirectory(body?.dir ?? process.cwd()));
+          writeJson(req, res, 200, await engine.ensureDirectory(body?.dir ?? process.cwd()));
         } catch (error) {
-          writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) });
+          writeJson(req, res, 400, { error: error instanceof Error ? error.message : String(error) });
         }
         return;
       }
@@ -432,7 +548,7 @@ export async function startRahDaemon(options?: { port?: number }): Promise<RahDa
         const response: ListDebugScenariosResponse = {
           scenarios: engine.listScenarios(),
         };
-        writeJson(res, 200, response);
+        writeJson(req, res, 200, response);
         return;
       }
 
@@ -441,24 +557,24 @@ export async function startRahDaemon(options?: { port?: number }): Promise<RahDa
         const response: ListProvidersResponse = {
           providers: await engine.listProviderDiagnostics({ forceRefresh }),
         };
-        writeJson(res, 200, response);
+        writeJson(req, res, 200, response);
         return;
       }
 
       if (req.method === "GET" && pathname === "/api/workbenches") {
-        writeJson(res, 200, { workbenches: [engine.sessionStore.getWorkbench()] });
+        writeJson(req, res, 200, { workbenches: [engine.sessionStore.getWorkbench()] });
         return;
       }
 
       const workbenchMatch = /^\/api\/workbenches\/([^/]+)$/.exec(pathname);
       if (req.method === "GET" && workbenchMatch) {
-        writeJson(res, 200, { workbench: engine.sessionStore.getWorkbench() });
+        writeJson(req, res, 200, { workbench: engine.sessionStore.getWorkbench() });
         return;
       }
 
       const sessionMatch = /^\/api\/sessions\/([^/]+)$/.exec(pathname);
       if (req.method === "GET" && sessionMatch) {
-        writeJson(res, 200, { session: engine.getSessionSummary(sessionMatch[1]!) });
+        writeJson(req, res, 200, { session: engine.getSessionSummary(sessionMatch[1]!) });
         return;
       }
 
@@ -466,6 +582,7 @@ export async function startRahDaemon(options?: { port?: number }): Promise<RahDa
       if (req.method === "GET" && workspaceMatch) {
         const scopeRoot = url.searchParams.get("scopeRoot") ?? undefined;
         writeJson(
+          req,
           res,
           200,
           engine.getWorkspaceSnapshot(workspaceMatch[1]!, {
@@ -479,6 +596,7 @@ export async function startRahDaemon(options?: { port?: number }): Promise<RahDa
       if (req.method === "GET" && filesMatch) {
         const scopeRoot = url.searchParams.get("scopeRoot") ?? undefined;
         writeJson(
+          req,
           res,
           200,
           engine.getWorkspaceSnapshot(filesMatch[1]!, {
@@ -492,6 +610,7 @@ export async function startRahDaemon(options?: { port?: number }): Promise<RahDa
       if (req.method === "GET" && gitStatusMatch) {
         const scopeRoot = url.searchParams.get("scopeRoot") ?? undefined;
         writeJson(
+          req,
           res,
           200,
           engine.getGitStatus(gitStatusMatch[1]!, {
@@ -508,6 +627,7 @@ export async function startRahDaemon(options?: { port?: number }): Promise<RahDa
         const ignoreWhitespace = url.searchParams.get("ignoreWhitespace");
         const scopeRoot = url.searchParams.get("scopeRoot") ?? undefined;
         writeJson(
+          req,
           res,
           200,
           engine.getGitDiff(gitDiffMatch[1]!, diffPath, {
@@ -526,10 +646,11 @@ export async function startRahDaemon(options?: { port?: number }): Promise<RahDa
         const filePath = url.searchParams.get("path");
         const scopeRoot = url.searchParams.get("scopeRoot") ?? undefined;
         if (!filePath) {
-          writeJson(res, 400, { error: "File path is required." });
+          writeJson(req, res, 400, { error: "File path is required." });
           return;
         }
         writeJson(
+          req,
           res,
           200,
           engine.readSessionFile(fileMatch[1]!, filePath, {
@@ -549,6 +670,7 @@ export async function startRahDaemon(options?: { port?: number }): Promise<RahDa
             ? Number.parseInt(limitRaw, 10)
             : 100;
         writeJson(
+          req,
           res,
           200,
           engine.searchSessionFiles(fileSearchMatch[1]!, query, limit, {
@@ -561,10 +683,10 @@ export async function startRahDaemon(options?: { port?: number }): Promise<RahDa
       if (req.method === "GET" && pathname === "/api/workspace/git-status") {
         const dir = url.searchParams.get("dir");
         if (!dir) {
-          writeJson(res, 400, { error: "Workspace dir is required." });
+          writeJson(req, res, 400, { error: "Workspace dir is required." });
           return;
         }
-        writeJson(res, 200, engine.getWorkspaceGitStatus(dir));
+        writeJson(req, res, 200, engine.getWorkspaceGitStatus(dir));
         return;
       }
 
@@ -572,12 +694,13 @@ export async function startRahDaemon(options?: { port?: number }): Promise<RahDa
         const dir = url.searchParams.get("dir");
         const diffPath = url.searchParams.get("path");
         if (!dir || !diffPath) {
-          writeJson(res, 400, { error: "Workspace dir and file path are required." });
+          writeJson(req, res, 400, { error: "Workspace dir and file path are required." });
           return;
         }
         const staged = url.searchParams.get("staged");
         const ignoreWhitespace = url.searchParams.get("ignoreWhitespace");
         writeJson(
+          req,
           res,
           200,
           engine.getWorkspaceGitDiff(dir, diffPath, {
@@ -594,10 +717,10 @@ export async function startRahDaemon(options?: { port?: number }): Promise<RahDa
         const dir = url.searchParams.get("dir");
         const filePath = url.searchParams.get("path");
         if (!dir || !filePath) {
-          writeJson(res, 400, { error: "Workspace dir and file path are required." });
+          writeJson(req, res, 400, { error: "Workspace dir and file path are required." });
           return;
         }
-        writeJson(res, 200, engine.readWorkspaceFile(dir, filePath));
+        writeJson(req, res, 200, engine.readWorkspaceFile(dir, filePath));
         return;
       }
 
@@ -605,7 +728,7 @@ export async function startRahDaemon(options?: { port?: number }): Promise<RahDa
         const dir = url.searchParams.get("dir");
         const query = url.searchParams.get("query") ?? "";
         if (!dir) {
-          writeJson(res, 400, { error: "Workspace dir is required." });
+          writeJson(req, res, 400, { error: "Workspace dir is required." });
           return;
         }
         const limitRaw = url.searchParams.get("limit");
@@ -613,7 +736,7 @@ export async function startRahDaemon(options?: { port?: number }): Promise<RahDa
           limitRaw && Number.isFinite(Number.parseInt(limitRaw, 10))
             ? Number.parseInt(limitRaw, 10)
             : 100;
-        writeJson(res, 200, engine.searchWorkspaceFiles(dir, query, limit));
+        writeJson(req, res, 200, engine.searchWorkspaceFiles(dir, query, limit));
         return;
       }
 
@@ -632,6 +755,7 @@ export async function startRahDaemon(options?: { port?: number }): Promise<RahDa
           ...(limit !== undefined ? { limit } : {}),
         };
         writeJson(
+          req,
           res,
           200,
           engine.getSessionHistoryPage(historyMatch[1]!, options),
@@ -641,7 +765,7 @@ export async function startRahDaemon(options?: { port?: number }): Promise<RahDa
 
       const usageMatch = /^\/api\/sessions\/([^/]+)\/usage$/.exec(pathname);
       if (req.method === "GET" && usageMatch) {
-        writeJson(res, 200, {
+        writeJson(req, res, 200, {
           sessionId: usageMatch[1],
           usage: engine.getContextUsage(usageMatch[1]!),
         });
@@ -651,12 +775,12 @@ export async function startRahDaemon(options?: { port?: number }): Promise<RahDa
       const replayMatch = /^\/api\/debug\/scenarios\/([^/]+)\/replay$/.exec(pathname);
       if (req.method === "GET" && replayMatch) {
         const script: DebugReplayScript = engine.buildScenarioReplayScript(replayMatch[1]!);
-        writeJson(res, 200, script);
+        writeJson(req, res, 200, script);
         return;
       }
 
       if (req.method === "GET" && !pathname.startsWith("/api/")) {
-        if (await serveClientApp(pathname, res)) {
+        if (await serveClientApp(pathname, req, res)) {
           return;
         }
       }
@@ -666,7 +790,7 @@ export async function startRahDaemon(options?: { port?: number }): Promise<RahDa
           const body = await readJsonBody(req);
           const parsed = (body ?? {}) as Partial<StartDebugScenarioRequest>;
           if (!parsed.scenarioId) {
-            writeJson(res, 400, { error: "scenarioId is required" });
+            writeJson(req, res, 400, { error: "scenarioId is required" });
             return;
           }
           const request = { scenarioId: parsed.scenarioId };
@@ -675,17 +799,17 @@ export async function startRahDaemon(options?: { port?: number }): Promise<RahDa
               ? { ...request, attach: parsed.attach }
               : request,
           );
-          writeJson(res, 200, result);
+          writeJson(req, res, 200, result);
           return;
         }
         const route = postRoutes.find(({ pattern }) => pattern.test(pathname));
         if (!route) {
-          writeText(res, 404, "Not Found");
+          writeText(req, res, 404, "Not Found");
           return;
         }
         const match = route.pattern.exec(pathname);
         if (!match) {
-          writeText(res, 404, "Not Found");
+          writeText(req, res, 404, "Not Found");
           return;
         }
         const body = await readJsonBody(req);
@@ -693,15 +817,16 @@ export async function startRahDaemon(options?: { port?: number }): Promise<RahDa
         return;
       }
 
-      writeText(res, 404, "Not Found");
+      writeText(req, res, 404, "Not Found");
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      writeJson(res, 500, { error: message });
+      writeJson(req, res, requestErrorStatus(error), { error: message });
     }
   });
 
   const wssEvents = new WebSocketServer({ noServer: true });
   const wssPty = new WebSocketServer({ noServer: true });
+  const wssWrapper = new WebSocketServer({ noServer: true });
 
   wssEvents.on("connection", (socket, req) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -789,8 +914,63 @@ export async function startRahDaemon(options?: { port?: number }): Promise<RahDa
     });
   });
 
+  wssWrapper.on("connection", (socket) => {
+    let wrapperSessionId: string | null = null;
+    const send = (message: unknown) => {
+      socket.send(JSON.stringify(message));
+    };
+
+    socket.on("message", (raw) => {
+      try {
+        const parsed = JSON.parse(raw.toString("utf8")) as TerminalWrapperToDaemonMessage;
+        switch (parsed.type) {
+          case "wrapper.hello": {
+            const ready = engine.registerTerminalWrapperSession(parsed, (message) => {
+              send(message);
+            });
+            wrapperSessionId = ready.sessionId;
+            send(ready);
+            break;
+          }
+          case "wrapper.provider_bound":
+            engine.bindTerminalWrapperProviderSession(parsed);
+            break;
+          case "wrapper.prompt_state.changed":
+            engine.updateTerminalWrapperPromptState(parsed.sessionId, parsed.state);
+            break;
+          case "wrapper.activity":
+            engine.applyTerminalWrapperActivity(parsed.sessionId, parsed.activity);
+            break;
+          case "wrapper.pty.output":
+            engine.appendTerminalWrapperPtyOutput(parsed.sessionId, parsed.data);
+            break;
+          case "wrapper.exited":
+            engine.markTerminalWrapperExited(parsed.sessionId, {
+              ...(parsed.exitCode !== undefined ? { exitCode: parsed.exitCode } : {}),
+              ...(parsed.signal !== undefined ? { signal: parsed.signal } : {}),
+            });
+            break;
+          default:
+            send({ error: "Unsupported wrapper control message" });
+        }
+      } catch {
+        send({ error: "Invalid wrapper control payload" });
+      }
+    });
+
+    socket.on("close", () => {
+      if (wrapperSessionId) {
+        engine.disconnectTerminalWrapperSession(wrapperSessionId);
+      }
+    });
+  });
+
   server.on("upgrade", (req, socket, head) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
+    if (url.pathname.startsWith("/api/") && !isAllowedOrigin(req)) {
+      socket.destroy();
+      return;
+    }
     if (url.pathname === "/api/events") {
       wssEvents.handleUpgrade(req, socket, head, (ws) => {
         wssEvents.emit("connection", ws, req);
@@ -800,6 +980,12 @@ export async function startRahDaemon(options?: { port?: number }): Promise<RahDa
     if (/^\/api\/pty\/[^/]+$/.test(url.pathname)) {
       wssPty.handleUpgrade(req, socket, head, (ws) => {
         wssPty.emit("connection", ws, req);
+      });
+      return;
+    }
+    if (url.pathname === "/api/wrapper-control") {
+      wssWrapper.handleUpgrade(req, socket, head, (ws) => {
+        wssWrapper.emit("connection", ws, req);
       });
       return;
     }
@@ -825,6 +1011,7 @@ export async function startRahDaemon(options?: { port?: number }): Promise<RahDa
       });
       wssEvents.close();
       wssPty.close();
+      wssWrapper.close();
     },
   };
 }
