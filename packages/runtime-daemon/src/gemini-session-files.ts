@@ -1012,7 +1012,11 @@ export function resumeGeminiStoredSession(params: {
       },
     });
     if (params.attach.claimControl) {
-      params.services.sessionStore.claimControl(state.session.id, params.attach.client.id);
+      params.services.sessionStore.claimControl(
+        state.session.id,
+        params.attach.client.id,
+        params.attach.client.kind,
+      );
       params.services.eventBus.publish({
         sessionId: state.session.id,
         type: "control.claimed",

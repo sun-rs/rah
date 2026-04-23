@@ -780,7 +780,11 @@ export function resumeClaudeStoredSession(args: {
       },
     });
     if (args.attach.claimControl) {
-      args.services.sessionStore.claimControl(state.session.id, args.attach.client.id);
+      args.services.sessionStore.claimControl(
+        state.session.id,
+        args.attach.client.id,
+        args.attach.client.kind,
+      );
       args.services.eventBus.publish({
         sessionId: state.session.id,
         type: "control.claimed",

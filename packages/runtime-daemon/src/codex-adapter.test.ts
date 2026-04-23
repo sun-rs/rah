@@ -554,7 +554,7 @@ rl.on('line', (line) => {
 
     assert.equal(resumed.session.session.providerSessionId, sessionId);
     assert.equal(resumed.session.session.cwd, cwd);
-    assert.equal(resumed.session.controlLease.holderClientId, "web-client");
+    assert.equal(resumed.session.controlLease.holderClientId, "web-user");
     assert.equal(resumed.session.session.title, "Fix the resume bug");
     assert.equal(resumed.session.session.preview, "Fix the resume bug");
     assert.equal(resumed.session.session.capabilities.steerInput, true);

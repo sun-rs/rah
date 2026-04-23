@@ -878,7 +878,11 @@ export function resumeCodexStoredSession(params: {
       },
     });
     if (params.attach.claimControl) {
-      services.sessionStore.claimControl(state.session.id, params.attach.client.id);
+      services.sessionStore.claimControl(
+        state.session.id,
+        params.attach.client.id,
+        params.attach.client.kind,
+      );
       services.eventBus.publish({
         sessionId: state.session.id,
         type: "control.claimed",

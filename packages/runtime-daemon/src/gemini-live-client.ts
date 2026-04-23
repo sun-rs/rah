@@ -108,7 +108,7 @@ function attachRequestedClient(
     },
   });
   if (attach.claimControl) {
-    services.sessionStore.claimControl(sessionId, attach.client.id);
+    services.sessionStore.claimControl(sessionId, attach.client.id, attach.client.kind);
     services.eventBus.publish({
       sessionId,
       type: "control.claimed",

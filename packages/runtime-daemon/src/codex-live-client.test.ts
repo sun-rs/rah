@@ -142,7 +142,7 @@ rl.on('line', (line) => {
     assert.equal(started.session.session.capabilities.subagents, false);
 
     adapter.sendInput(started.session.session.id, {
-      clientId: "test-client",
+      clientId: "web-user",
       text: "Pick a drink",
     });
 
@@ -266,7 +266,7 @@ rl.on('line', (line) => {
     );
 
     adapter.sendInput(started.session.session.id, {
-      clientId: "test-client",
+      clientId: "web-user",
       text: "Run a command",
     });
 
@@ -378,7 +378,7 @@ rl.on('line', (line) => {
     });
 
     adapter.sendInput(started.session.session.id, {
-      clientId: "test-client",
+      clientId: "web-user",
       text: "Trigger server requests",
     });
 

@@ -126,6 +126,14 @@ These are product-facing diagnostics, not protocol guarantees of auth or quota.
 - terminal-first takeover semantics
 - terminal replay durability beyond the current structured workbench boundary
 
+### Terminal Wrapper Live Sessions
+
+- wrapper <-> daemon control channel
+- operator-group level control semantics
+- surface identity and focus semantics
+- prompt-boundary aware queued input
+- any future `rah codex` / `rah claude` wrapper protocol
+
 ### Adapter Internals
 
 - provider-native parsing logic

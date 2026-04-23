@@ -321,9 +321,16 @@ export class SessionStore {
     this.snapshot();
   }
 
-  claimControl(sessionId: string, clientId: string): StoredSessionState {
+  claimControl(
+    sessionId: string,
+    clientId: string,
+    clientKind?: ClientKind,
+  ): StoredSessionState {
     const state = this.requireSession(sessionId);
-    const normalizedClientId = isCanonicalWebClientId(clientId) ? SHARED_WEB_CLIENT_ID : clientId;
+    const normalizedClientId =
+      clientKind === "web" || isCanonicalWebClientId(clientId)
+        ? SHARED_WEB_CLIENT_ID
+        : clientId;
     const client = state.clients.find((item) => item.id === normalizedClientId);
     if (!client) {
       throw new Error(`Cannot claim control for unknown client ${normalizedClientId}`);

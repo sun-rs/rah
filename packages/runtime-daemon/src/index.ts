@@ -20,5 +20,6 @@ export * from "./gemini-live-client";
 export * from "./kimi-session-files";
 export * from "./kimi-live-client";
 export * from "./workbench-state";
+export * from "./terminal-wrapper-control";
 export * from "./runtime-engine";
 export * from "./http-server";

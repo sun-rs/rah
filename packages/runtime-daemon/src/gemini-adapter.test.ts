@@ -348,7 +348,7 @@ emit({ type: "result", timestamp: new Date().toISOString(), status: "success", s
     assert.equal(resumed.session.session.providerSessionId, "gemini-session-3");
 
     const state = services.sessionStore.getSession(resumed.session.session.id);
-    assert.equal(state?.controlLease.holderClientId, "web-1");
+    assert.equal(state?.controlLease.holderClientId, "web-user");
   });
 
   test("frozen Gemini history loader keeps browsing anchored after newer messages append", () => {

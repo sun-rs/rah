@@ -163,6 +163,8 @@ Core design and freeze documents:
 - [Codex Adapter Event Coverage](./docs/codex-event-coverage.md)
 - [Provider Adapter Maintenance](./docs/provider-adapter-maintenance.md)
 - [Architecture Benchmark (中文)](./docs/architecture-benchmark.zh-CN.md)
+- [Terminal Wrapper Live Sessions（中文）](./docs/terminal-wrapper-live-sessions.zh-CN.md)
+- [Terminal Wrapper Protocol Draft（中文）](./docs/terminal-wrapper-protocol.zh-CN.md)
 - [Protocol Freeze Status](./docs/protocol-freeze-status.md)
 - [Release Checklist](./docs/release-checklist.md)
 - [UI 回归清单（中文）](./docs/ui-regression-checklist.zh-CN.md)

@@ -332,7 +332,7 @@ export class DebugEngine {
       attachMode: "interactive",
       focus: true,
     });
-    this.sessionStore.claimControl(sessionId, request.client.id);
+    this.sessionStore.claimControl(sessionId, request.client.id, request.client.kind);
     this.eventBus.publish({
       sessionId,
       type: "control.claimed",
