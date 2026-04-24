@@ -7,7 +7,11 @@ import { createHash } from "node:crypto";
 import { EventBus } from "./event-bus";
 import { GeminiAdapter } from "./gemini-adapter";
 import { loadCachedGeminiHistoryManifest } from "./gemini-history-cache";
-import { createGeminiStoredSessionFrozenHistoryPageLoader } from "./gemini-session-files";
+import {
+  createGeminiStoredSessionFrozenHistoryPageLoader,
+  findGeminiStoredSessionRecord,
+  isGeminiStoredSessionRecordResumable,
+} from "./gemini-session-files";
 import { PtyHub } from "./pty-hub";
 import { SessionStore } from "./session-store";
 import { WorkbenchStateStore } from "./workbench-state";
@@ -188,6 +192,24 @@ emit({ type: "result", timestamp: new Date().toISOString(), status: "success", s
     );
   }
 
+  function writeGeminiSessionHeaderOnlyFile(sessionId: string) {
+    const hashDir = path.join(tmpHome, "tmp", getProjectHash(cwd));
+    const chatsDir = path.join(hashDir, "chats");
+    mkdirSync(hashDir, { recursive: true });
+    writeFileSync(path.join(hashDir, ".project_root"), `${cwd}\n`);
+    mkdirSync(chatsDir, { recursive: true });
+    writeFileSync(
+      path.join(chatsDir, `session-2026-01-01T00-00-00-${sessionId.slice(0, 8)}.jsonl`),
+      JSON.stringify({
+        sessionId,
+        projectHash: getProjectHash(cwd),
+        startTime: "2026-01-01T00:00:00.000Z",
+        lastUpdated: "2026-01-01T00:00:00.000Z",
+        kind: "main",
+      }) + "\n",
+    );
+  }
+
   function writeLegacyGeminiSessionFile(params: {
     sessionId: string;
     projectHash: string;
@@ -267,6 +289,16 @@ emit({ type: "result", timestamp: new Date().toISOString(), status: "success", s
       "utf8",
     );
   }
+
+  test("does not treat header-only Gemini session files as resumable", () => {
+    writeGeminiSessionHeaderOnlyFile("gemini-empty-session");
+
+    const record = findGeminiStoredSessionRecord("gemini-empty-session", cwd);
+
+    assert.ok(record);
+    assert.equal(record.conversation.messages.length, 0);
+    assert.equal(isGeminiStoredSessionRecordResumable(record), false);
+  });
 
   test("binds provider session id from init and resumes later turns with --resume", async () => {
     const { logPath } = writeMockGeminiBinary();

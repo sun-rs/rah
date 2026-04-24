@@ -65,6 +65,40 @@ const CODEX_EVENT_SOURCE = {
   authority: "derived" as const,
 };
 
+function codexSandboxPolicyForTurn(args: {
+  sandboxMode: string;
+  cwd: string;
+}) {
+  switch (args.sandboxMode) {
+    case "read-only":
+      return {
+        type: "readOnly" as const,
+        access: {
+          type: "restricted" as const,
+          includePlatformDefaults: true,
+          readableRoots: [args.cwd],
+        },
+        networkAccess: false,
+      };
+    case "workspace-write":
+      return {
+        type: "workspaceWrite" as const,
+        writableRoots: [args.cwd],
+        readOnlyAccess: {
+          type: "fullAccess" as const,
+        },
+        networkAccess: false,
+        excludeTmpdirEnvVar: false,
+        excludeSlashTmp: false,
+      };
+    case "danger-full-access":
+    default:
+      return {
+        type: "dangerFullAccess" as const,
+      };
+  }
+}
+
 export class CodexAdapter implements ProviderAdapter {
   readonly id = "codex";
   readonly providers: Array<"codex"> = ["codex"];
@@ -202,7 +236,10 @@ export class CodexAdapter implements ProviderAdapter {
           input: [{ type: "text", text: request.text }],
           cwd: live.cwd,
           approvalPolicy: live.approvalPolicy,
-          sandboxPolicy: { mode: live.sandboxMode },
+          sandboxPolicy: codexSandboxPolicyForTurn({
+            sandboxMode: live.sandboxMode,
+            cwd: live.cwd,
+          }),
           ...(live.activeModeId === "plan" && live.planCollaborationMode
             ? { collaborationMode: live.planCollaborationMode }
             : {}),

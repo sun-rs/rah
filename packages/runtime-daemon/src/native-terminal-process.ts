@@ -5,14 +5,17 @@ export interface NativeTerminalStartOptions {
   command: string;
   args?: string[];
   env?: Record<string, string>;
+  closeTimeoutMs?: number;
   onExit: (args: { exitCode?: number; signal?: string }) => void;
 }
 
 export class NativeTerminalProcess {
   private readonly child: ChildProcess;
+  private readonly closeTimeoutMs: number;
   private closed = false;
 
   constructor(options: NativeTerminalStartOptions) {
+    this.closeTimeoutMs = options.closeTimeoutMs ?? 2_000;
     this.child = spawn(options.command, options.args ?? [], {
       cwd: options.cwd,
       env: {
@@ -42,10 +45,10 @@ export class NativeTerminalProcess {
     this.child.kill(signal);
     await new Promise<void>((resolve) => {
       const timeout = setTimeout(() => {
-        if (this.child.exitCode === null && !this.child.killed) {
+        if (this.child.exitCode === null) {
           this.child.kill("SIGKILL");
         }
-      }, 2_000);
+      }, this.closeTimeoutMs);
       this.child.once("exit", () => {
         clearTimeout(timeout);
         resolve();

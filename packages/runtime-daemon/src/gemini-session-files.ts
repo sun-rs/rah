@@ -475,7 +475,7 @@ export function discoverGeminiStoredSessions(): GeminiStoredSessionRecord[] {
         continue;
       }
       const conversation = loadGeminiConversationRecord(filePath);
-      if (!conversation || conversation.kind === "subagent") {
+      if (!conversation || conversation.kind === "subagent" || conversation.messages.length === 0) {
         continue;
       }
       const ref = buildStoredSessionRef(conversation, filePath, projectIndices, inferredRootCache);
@@ -514,6 +514,31 @@ export function discoverGeminiStoredSessions(): GeminiStoredSessionRecord[] {
   );
 }
 
+export function hydrateGeminiStoredSessionRecord(
+  record: GeminiStoredSessionRecord,
+): GeminiStoredSessionRecord {
+  if (record.conversation.messages.length > 0) {
+    return record;
+  }
+  const conversation = loadGeminiConversationRecord(record.filePath);
+  if (!conversation) {
+    return record;
+  }
+  return {
+    ...record,
+    conversation,
+  };
+}
+
+export function isGeminiStoredSessionRecordResumable(
+  record: GeminiStoredSessionRecord,
+): boolean {
+  const hydrated = hydrateGeminiStoredSessionRecord(record);
+  return hydrated.conversation.messages.some(
+    (message) => message.type === "user" || message.type === "gemini",
+  );
+}
+
 export function findGeminiStoredSessionRecord(
   providerSessionId: string,
   cwd?: string,
@@ -535,7 +560,7 @@ export function findGeminiStoredSessionRecord(
 
   for (const record of discoverGeminiStoredSessions()) {
     if (record.ref.providerSessionId === providerSessionId) {
-      return record;
+      return hydrateGeminiStoredSessionRecord(record);
     }
   }
   return null;

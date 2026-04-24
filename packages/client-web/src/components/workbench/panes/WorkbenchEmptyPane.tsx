@@ -127,13 +127,13 @@ export function WorkbenchEmptyPane(props: {
                   className={EMPTY_STATE_COMPOSER_LAYOUT.roundSecondaryButtonClassName}
                   title="Insert file or folder reference"
                 >
-                  <Plus size={16} />
+                  <Plus size={14} />
                 </button>
                 {props.workspaceDirs.length === 0 ? (
                   <WorkspacePicker
                     currentDir=""
                     triggerLabel="Workspace"
-                    triggerIcon={<FolderPlus size={13} />}
+                    triggerIcon={<FolderPlus size={12} />}
                     triggerClassName={EMPTY_STATE_COMPOSER_LAYOUT.workspaceTriggerClassName}
                     onSelect={props.onAddWorkspace}
                   />
@@ -143,14 +143,14 @@ export function WorkbenchEmptyPane(props: {
                     onClick={props.onToggleWorkspacePicker}
                     className={EMPTY_STATE_COMPOSER_LAYOUT.workspaceTriggerClassName}
                   >
-                    <Folder size={13} />
+                    <Folder size={12} />
                     <span className="truncate">
                       {props.availableWorkspaceDir
                         ? props.availableWorkspaceDir.split("/").pop()
                         : "Workspace"}
                     </span>
                     <ChevronDown
-                      size={12}
+                      size={11}
                       className={`shrink-0 transition-transform ${props.workspacePickerOpen ? "rotate-180" : ""}`}
                     />
                   </button>
@@ -174,7 +174,7 @@ export function WorkbenchEmptyPane(props: {
                   </div>
                 ) : null}
                 <SessionModeControls
-                  compact
+                  variant="toolbar"
                   accessModes={props.accessModes}
                   selectedAccessModeId={props.selectedAccessModeId}
                   planModeAvailable={props.planModeAvailable}
@@ -189,7 +189,7 @@ export function WorkbenchEmptyPane(props: {
                 onClick={props.onEmptyStateSend}
                 className={EMPTY_STATE_COMPOSER_LAYOUT.roundPrimaryButtonClassName}
               >
-                <ArrowUp size={18} />
+                <ArrowUp size={15} />
               </button>
             </div>
           </div>

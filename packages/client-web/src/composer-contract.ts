@@ -45,14 +45,16 @@ export const EMPTY_STATE_COMPOSER_LAYOUT = {
     `${COMPOSER_TEXTAREA_BASE_CLASS_NAME} rounded-2xl ${COMPOSER_TEXT_PADDING_CLASS_NAME} pr-16 pb-16 md:pr-[4.5rem] md:pb-[4.5rem] min-h-[120px]`,
   textareaContentClassName:
     `${COMPOSER_TEXT_PADDING_CLASS_NAME} pr-16 pb-16 md:pr-[4.5rem] md:pb-[4.5rem] ${COMPOSER_TEXT_BASE_CLASS_NAME} min-h-[120px]`,
-  roundSecondaryButtonClassName: COMPOSER_LAYOUT.roundSecondaryButtonClassName,
-  roundPrimaryButtonClassName: COMPOSER_LAYOUT.roundPrimaryButtonClassName,
+  roundSecondaryButtonClassName:
+    "shrink-0 self-end h-8 w-8 md:h-9 md:w-9 rounded-full border border-[var(--app-border)] bg-[var(--app-bg)]/90 text-[var(--app-hint)] flex items-center justify-center hover:text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)] transition-colors",
+  roundPrimaryButtonClassName:
+    "shrink-0 self-end h-8 w-8 md:h-9 md:w-9 rounded-full bg-primary text-primary-foreground flex items-center justify-center hover:opacity-90 disabled:opacity-40 transition-colors",
   controlsInsetClassName: "bottom-3 left-3 right-3",
   controlsRowClassName:
-    "absolute bottom-3 left-3 right-3 z-10 flex items-end justify-between gap-3",
-  leftControlsClassName: `flex min-w-0 items-end ${COMPOSER_CONTROLS_GAP_CLASS_NAME}`,
+    "absolute bottom-3 left-3 right-3 z-10 flex items-end justify-between gap-2",
+  leftControlsClassName: "flex min-w-0 items-end gap-1.5 md:gap-2",
   workspaceTriggerClassName:
-    "inline-flex h-11 md:h-12 max-w-[11rem] items-center gap-1.5 rounded-xl px-3 text-xs text-[var(--app-hint)] hover:text-[var(--app-fg)] hover:bg-[var(--app-bg)] transition-colors",
+    "inline-flex h-8 md:h-9 max-w-[8.5rem] items-center gap-1.5 rounded-full border border-[var(--app-border)] bg-[var(--app-bg)]/90 px-2.5 text-[11px] text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]",
 } as const;
 
 export function deriveComposerSurface(args: {

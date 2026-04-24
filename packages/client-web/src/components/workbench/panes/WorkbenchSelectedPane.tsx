@@ -395,34 +395,45 @@ export function WorkbenchSelectedPane(props: {
               </button>
               <div className="relative">
                 <button
-                type="button"
-                disabled={props.modeChangePending}
-                onClick={() =>
-                  props.onSetSessionMode(
+                  type="button"
+                  disabled={props.modeChangePending}
+                  onClick={() =>
+                    props.onSetSessionMode(
+                      liveModeControl.planModeEnabled
+                        ? liveModeControl.selectedAccessModeId ?? "default"
+                        : "plan",
+                    )
+                  }
+                  className={`absolute bottom-2 left-2 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full transition-colors ${
                     liveModeControl.planModeEnabled
-                      ? liveModeControl.selectedAccessModeId ?? "default"
-                      : "plan",
-                  )
-                }
-                className={`absolute bottom-2 left-2 z-10 inline-flex h-7 items-center gap-1 rounded-md border px-2 text-[11px] transition-colors ${
-                  liveModeControl.planModeEnabled
-                    ? "border-sky-500/40 bg-sky-500/10 text-sky-600 dark:text-sky-400"
-                    : "border-[var(--app-border)] bg-[var(--app-bg)]/80 text-[var(--app-hint)] hover:text-[var(--app-fg)]"
-                } ${liveModeControl.planModeAvailable ? "" : "hidden"}`}
-                title="Toggle plan mode"
-                aria-pressed={liveModeControl.planModeEnabled}
-              >
-                <span>{liveModeControl.planModeEnabled ? "Plan on" : "Plan"}</span>
-              </button>
-              <TokenizedTextarea
-                ref={props.composerRef}
-                textareaClassName={`${COMPOSER_LAYOUT.textareaClassName} ${liveModeControl.planModeAvailable ? "pl-[4.5rem]" : ""}`}
-                contentClassName={COMPOSER_LAYOUT.textareaContentClassName}
-                value={props.draft}
-                onChange={props.onDraftChange}
-                placeholder="Message…"
-                rows={1}
-                onKeyDown={(e) => {
+                      ? "w-auto gap-1.5 bg-sky-500/12 px-2.5 text-sky-700 dark:text-sky-300"
+                      : "w-auto gap-1.5 bg-[var(--app-subtle-bg)]/95 px-2.5 text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
+                  } ${liveModeControl.planModeAvailable ? "" : "hidden"}`}
+                  title="Toggle plan mode"
+                  aria-pressed={liveModeControl.planModeEnabled}
+                >
+                  <span className={`text-[11px] font-medium ${liveModeControl.planModeEnabled ? "tracking-[0.01em]" : ""}`}>
+                    Plan
+                  </span>
+                  <span
+                    className={`rounded-full px-1.5 py-0.5 text-[10px] leading-none ${
+                      liveModeControl.planModeEnabled
+                        ? "bg-sky-500/14 text-sky-700 dark:text-sky-300"
+                        : "bg-[var(--app-bg)]/80 text-[var(--app-hint)]"
+                    }`}
+                  >
+                    {liveModeControl.planModeEnabled ? "On" : "Off"}
+                  </span>
+                </button>
+                <TokenizedTextarea
+                  ref={props.composerRef}
+                  textareaClassName={`${COMPOSER_LAYOUT.textareaClassName} ${liveModeControl.planModeAvailable ? "pl-[4.75rem]" : ""}`}
+                  contentClassName={COMPOSER_LAYOUT.textareaContentClassName}
+                  value={props.draft}
+                  onChange={props.onDraftChange}
+                  placeholder=""
+                  rows={1}
+                  onKeyDown={(e) => {
                   const nativeEvent = e.nativeEvent as KeyboardEvent;
                   if (
                     e.key === "Enter" &&

@@ -12,6 +12,10 @@ import type {
 } from "@rah/runtime-protocol";
 import type { RuntimeServices } from "./provider-adapter";
 import { applyProviderActivity, type ProviderActivity } from "./provider-activity";
+import {
+  findGeminiStoredSessionRecord,
+  isGeminiStoredSessionRecordResumable,
+} from "./gemini-session-files";
 import { buildGeminiModeState } from "./session-mode-utils";
 import { toSessionSummary } from "./session-store";
 
@@ -46,6 +50,9 @@ const SESSION_SOURCE = {
   channel: "system" as const,
   authority: "authoritative" as const,
 };
+
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function classifyGeminiToolFamily(name: string) {
   const normalized = name.toLowerCase();
@@ -122,11 +129,11 @@ function attachRequestedClient(
   }
 }
 
-async function resolveGeminiBinary(): Promise<string> {
+export async function resolveGeminiBinary(): Promise<string> {
   return process.env.RAH_GEMINI_BINARY ?? "gemini";
 }
 
-function buildGeminiArgs(params: {
+export function buildGeminiArgs(params: {
   prompt: string;
   providerSessionId?: string;
   model?: string;
@@ -141,6 +148,23 @@ function buildGeminiArgs(params: {
   }
   args.push("--prompt", params.prompt);
   return args;
+}
+
+function resolveGeminiCliResumeArg(liveSession: LiveGeminiSession): string | undefined {
+  const providerSessionId = liveSession.providerSessionId;
+  if (!providerSessionId) {
+    return undefined;
+  }
+  if (providerSessionId === "latest") {
+    return providerSessionId;
+  }
+  if (!UUID_PATTERN.test(providerSessionId)) {
+    return providerSessionId;
+  }
+  const record = findGeminiStoredSessionRecord(providerSessionId, liveSession.cwd);
+  return record && isGeminiStoredSessionRecordResumable(record)
+    ? providerSessionId
+    : undefined;
 }
 
 function usageFromStats(stats: Record<string, unknown>): ContextUsage {
@@ -200,11 +224,12 @@ async function runGeminiTurn(params: {
   applyActivity(services, liveSession.sessionId, { type: "session_state", state: "running" });
 
   const binary = await resolveGeminiBinary();
+  const resumeSessionId = resolveGeminiCliResumeArg(liveSession);
   const child = spawn(
     binary,
     buildGeminiArgs({
       prompt: request.text,
-      ...(liveSession.providerSessionId ? { providerSessionId: liveSession.providerSessionId } : {}),
+      ...(resumeSessionId ? { providerSessionId: resumeSessionId } : {}),
       ...(liveSession.model ? { model: liveSession.model } : {}),
       approvalMode: liveSession.approvalMode,
     }),
