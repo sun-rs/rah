@@ -230,6 +230,7 @@ export class RuntimeTerminalCoordinator {
       title: `${request.provider} terminal session`,
       preview: request.launchCommand.join(" "),
       capabilities: {
+        renameSession: false,
         steerInput: true,
         queuedInput: true,
       },

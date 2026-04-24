@@ -164,6 +164,8 @@ Core design and freeze documents:
 - [Provider Adapter Maintenance](./docs/provider-adapter-maintenance.md)
 - [Architecture Benchmark (中文)](./docs/architecture-benchmark.zh-CN.md)
 - [rah codex 标准交付文档（中文）](./docs/rah-codex-wrapper.zh-CN.md)
+- [rah codex handoff 模式设计（中文）](./docs/rah-codex-handoff-mode.zh-CN.md)
+- [rah claude handoff 模式设计（中文）](./docs/rah-claude-handoff-mode.zh-CN.md)
 - [Terminal Wrapper Live Sessions（中文）](./docs/terminal-wrapper-live-sessions.zh-CN.md)
 - [Terminal Wrapper Protocol Draft（中文）](./docs/terminal-wrapper-protocol.zh-CN.md)
 - [Protocol Freeze Status](./docs/protocol-freeze-status.md)

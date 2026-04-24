@@ -202,6 +202,7 @@ export function applyClosedSessionState(
       ...(summary.session.rootDir ? { rootDir: summary.session.rootDir } : {}),
       ...(summary.session.title ? { title: summary.session.title } : {}),
       ...(summary.session.preview ? { preview: summary.session.preview } : {}),
+      createdAt: summary.session.createdAt,
       updatedAt: summary.session.updatedAt,
       lastUsedAt: summary.session.updatedAt,
       source: "previous_live" as const,
@@ -238,6 +239,7 @@ export function buildFallbackStoredSessionRef(
       ...(summary.session.rootDir ? { rootDir: summary.session.rootDir } : {}),
       ...(summary.session.title ? { title: summary.session.title } : {}),
       ...(summary.session.preview ? { preview: summary.session.preview } : {}),
+      createdAt: summary.session.createdAt,
     }
   );
 }

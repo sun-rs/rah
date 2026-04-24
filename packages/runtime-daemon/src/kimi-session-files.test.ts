@@ -12,6 +12,7 @@ import {
   discoverKimiStoredSessions,
   getKimiStoredSessionHistoryPage,
   resumeKimiStoredSession,
+  updateKimiSessionTitle,
 } from "./kimi-session-files";
 
 function md5(value: string): string {
@@ -178,6 +179,12 @@ describe("Kimi session files", () => {
     );
   }
 
+  function writeKimiState(sessionId: string, payload: Record<string, unknown>) {
+    const sessionDir = path.join(tmpShare, "sessions", md5(workDir), sessionId);
+    mkdirSync(sessionDir, { recursive: true });
+    writeFileSync(path.join(sessionDir, "state.json"), JSON.stringify(payload, null, 2));
+  }
+
   test("discovers stored kimi sessions from metadata and wire file", () => {
     writeKimiMetadata();
     writeKimiSession("kimi-session-1");
@@ -188,6 +195,22 @@ describe("Kimi session files", () => {
     assert.equal(stored[0]?.ref.providerSessionId, "kimi-session-1");
     assert.equal(stored[0]?.ref.cwd, workDir);
     assert.match(stored[0]?.ref.title ?? "", /Explain the architecture/);
+  });
+
+  test("prefers state.json custom_title over wire-derived title", () => {
+    writeKimiMetadata();
+    writeKimiSession("kimi-session-title");
+    writeKimiState("kimi-session-title", {
+      custom_title: "Renamed Kimi Session",
+      title_generated: true,
+    });
+
+    const stored = discoverKimiStoredSessions();
+    assert.equal(stored[0]?.ref.title, "Renamed Kimi Session");
+
+    updateKimiSessionTitle("kimi-session-title", "Renamed Again", workDir);
+    const refreshed = discoverKimiStoredSessions();
+    assert.equal(refreshed[0]?.ref.title, "Renamed Again");
   });
 
   test("replays kimi wire history into canonical events", () => {

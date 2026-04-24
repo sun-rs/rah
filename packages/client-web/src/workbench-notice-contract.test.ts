@@ -67,6 +67,30 @@ describe("workbench notice contract", () => {
     });
   });
 
+  test("derives terminal-control notice for terminal-owned running turns", () => {
+    const state = deriveWorkbenchNoticeState({
+      selectedSummary: {
+        ...summary({
+          provider: "claude",
+          launchSource: "terminal",
+          runtimeState: "running",
+        }),
+        controlLease: {
+          sessionId: "session-1",
+          holderClientId: "terminal-surface-1",
+          holderKind: "terminal",
+        },
+      },
+      selectedProjection: projection(summary()),
+      error: null,
+    });
+
+    assert.deepEqual(state.interactionNotice, {
+      tone: "info",
+      message: "Terminal is handling this turn. Web can observe it, but can't interrupt it.",
+    });
+  });
+
   test("derives history loading and error notices from projection history state", () => {
     const loadingProjection: SessionProjection = {
       ...projection(summary({ providerSessionId: "provider-1" })),

@@ -1,5 +1,5 @@
-import { execFileSync } from "node:child_process";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { promises as fs, readdirSync } from "node:fs";
 import path from "node:path";
 import type {
   SessionFileResponse,
@@ -10,6 +10,22 @@ const MAX_READABLE_FILE_BYTES = 1_000_000;
 
 export type WorkspaceFileData = Omit<SessionFileResponse, "sessionId">;
 
+async function execFileUtf8(
+  command: string,
+  args: string[],
+  options?: { cwd?: string },
+): Promise<string> {
+  return await new Promise<string>((resolve, reject) => {
+    execFile(command, args, { encoding: "utf8", ...(options?.cwd ? { cwd: options.cwd } : {}) }, (error, stdout) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve(stdout);
+    });
+  });
+}
+
 export function getWorkspaceSnapshot(cwd: string) {
   return {
     cwd,
@@ -17,23 +33,21 @@ export function getWorkspaceSnapshot(cwd: string) {
   };
 }
 
-export function searchWorkspaceFilesInDirectory(
+export async function searchWorkspaceFilesInDirectoryAsync(
   cwd: string,
   query: string,
   limit = 100,
-): SessionFileSearchItem[] {
+): Promise<SessionFileSearchItem[]> {
   const normalizedQuery = query.trim().toLowerCase();
   if (!normalizedQuery) {
     return [];
   }
   try {
-    const output = execFileSync("rg", ["--files", "."], {
-      cwd,
-      encoding: "utf8",
-    });
+    const output = await execFileUtf8("rg", ["--files", "."], { cwd });
     return output
       .split(/\r?\n/)
       .filter(Boolean)
+      .map(normalizeWorkspaceSearchPath)
       .filter((relativePath) => relativePath.toLowerCase().includes(normalizedQuery))
       .slice(0, limit)
       .map((relativePath) => ({
@@ -46,17 +60,17 @@ export function searchWorkspaceFilesInDirectory(
   }
 }
 
-export function readWorkspaceFileData(
+export async function readWorkspaceFileDataAsync(
   cwd: string,
   targetPath: string,
   options?: { scopeRoot?: string },
-): WorkspaceFileData {
-  const resolvedPath = resolveWorkspacePath(options?.scopeRoot ?? cwd, targetPath);
-  const stats = statSync(resolvedPath);
+): Promise<WorkspaceFileData> {
+  const resolvedPath = await resolveWorkspacePathAsync(options?.scopeRoot ?? cwd, targetPath);
+  const stats = await fs.stat(resolvedPath);
   if (!stats.isFile()) {
     throw new Error("Path is not a file.");
   }
-  const buffer = readFileSync(resolvedPath);
+  const buffer = await fs.readFile(resolvedPath);
   const truncated = buffer.byteLength > MAX_READABLE_FILE_BYTES;
   const contentBuffer = truncated ? buffer.subarray(0, MAX_READABLE_FILE_BYTES) : buffer;
   const binary = isLikelyBinary(contentBuffer);
@@ -68,22 +82,20 @@ export function readWorkspaceFileData(
   };
 }
 
-export function readWorkspaceFileFromDirectory(
+export async function readWorkspaceFileFromDirectoryAsync(
   cwd: string,
   targetPath: string,
   options?: { scopeRoot?: string },
-): SessionFileResponse {
+): Promise<SessionFileResponse> {
   return {
     sessionId: "",
-    ...readWorkspaceFileData(cwd, targetPath, options),
+    ...(await readWorkspaceFileDataAsync(cwd, targetPath, options)),
   };
 }
 
-export function tryResolveGitRoot(cwd: string): string | null {
+export async function tryResolveGitRootAsync(cwd: string): Promise<string | null> {
   try {
-    const root = execFileSync("git", ["-C", cwd, "rev-parse", "--show-toplevel"], {
-      encoding: "utf8",
-    }).trim();
+    const root = (await execFileUtf8("git", ["-C", cwd, "rev-parse", "--show-toplevel"])).trim();
     return root ? path.resolve(root) : null;
   } catch {
     return null;
@@ -102,20 +114,20 @@ export function isPathWithinBase(basePath: string, targetPath: string): boolean 
   return relativePath === "" || (!relativePath.startsWith("..") && !path.isAbsolute(relativePath));
 }
 
-export function resolveWorkspacePath(cwd: string, targetPath: string): string {
+export async function resolveWorkspacePathAsync(cwd: string, targetPath: string): Promise<string> {
   const scopeRoot = path.resolve(cwd);
   const cwdCandidate = tryResolveWithinBase(scopeRoot, targetPath);
-  const gitRoot = tryResolveGitRoot(cwd);
+  const gitRoot = await tryResolveGitRootAsync(cwd);
   const gitRootCandidate =
     gitRoot && path.resolve(gitRoot) !== scopeRoot ? path.resolve(gitRoot, targetPath) : null;
 
-  if (cwdCandidate && pathExists(cwdCandidate)) {
+  if (cwdCandidate && (await pathExistsAsync(cwdCandidate))) {
     return cwdCandidate;
   }
   if (
     gitRootCandidate &&
     isPathWithinBase(scopeRoot, gitRootCandidate) &&
-    pathExists(gitRootCandidate)
+    (await pathExistsAsync(gitRootCandidate))
   ) {
     return gitRootCandidate;
   }
@@ -137,9 +149,9 @@ function tryResolveWithinBase(basePath: string, targetPath: string): string | nu
   return resolvedTarget;
 }
 
-function pathExists(targetPath: string): boolean {
+async function pathExistsAsync(targetPath: string): Promise<boolean> {
   try {
-    statSync(targetPath);
+    await fs.stat(targetPath);
     return true;
   } catch {
     return false;
@@ -174,4 +186,8 @@ function readWorkspaceNodes(cwd: string) {
   } catch {
     return [];
   }
+}
+
+function normalizeWorkspaceSearchPath(relativePath: string): string {
+  return relativePath.startsWith("./") ? relativePath.slice(2) : relativePath;
 }

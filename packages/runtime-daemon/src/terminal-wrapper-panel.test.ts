@@ -1,0 +1,126 @@
+import assert from "node:assert/strict";
+import { afterEach, describe, test } from "node:test";
+import process from "node:process";
+import {
+  clearTerminalScreen,
+  enterAlternateScreen,
+  leaveAlternateScreen,
+  renderTerminalWrapperPanel,
+} from "./terminal-wrapper-panel";
+
+const originalWrite = process.stdout.write.bind(process.stdout);
+const originalColumns = process.stdout.columns;
+
+function charDisplayWidth(value: string): number {
+  const codePoint = value.codePointAt(0);
+  if (codePoint === undefined) {
+    return 0;
+  }
+  if (
+    codePoint >= 0x1100 &&
+    (
+      codePoint <= 0x115f ||
+      codePoint === 0x2329 ||
+      codePoint === 0x232a ||
+      (codePoint >= 0x2e80 && codePoint <= 0xa4cf && codePoint !== 0x303f) ||
+      (codePoint >= 0xac00 && codePoint <= 0xd7a3) ||
+      (codePoint >= 0xf900 && codePoint <= 0xfaff) ||
+      (codePoint >= 0xfe10 && codePoint <= 0xfe19) ||
+      (codePoint >= 0xfe30 && codePoint <= 0xfe6f) ||
+      (codePoint >= 0xff00 && codePoint <= 0xff60) ||
+      (codePoint >= 0xffe0 && codePoint <= 0xffe6)
+    )
+  ) {
+    return 2;
+  }
+  return 1;
+}
+
+function stringDisplayWidth(value: string): number {
+  return [...value].reduce((total, char) => total + charDisplayWidth(char), 0);
+}
+
+function captureWrites(run: () => void): string[] {
+  const writes: string[] = [];
+  process.stdout.write = ((chunk: string | Uint8Array) => {
+    writes.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
+    return true;
+  }) as typeof process.stdout.write;
+  try {
+    run();
+  } finally {
+    process.stdout.write = originalWrite as typeof process.stdout.write;
+  }
+  return writes;
+}
+
+afterEach(() => {
+  process.stdout.write = originalWrite as typeof process.stdout.write;
+  Object.defineProperty(process.stdout, "columns", {
+    configurable: true,
+    value: originalColumns,
+  });
+});
+
+describe("terminal wrapper panel helpers", () => {
+  test("renders a minimal fixed panel", () => {
+    const panel = renderTerminalWrapperPanel({
+      title: "RAH Claude Remote Control",
+      status: "Thinking",
+      sessionId: "session-123",
+      prompt: "hello there",
+      footer: "Press Esc to resume local control.",
+    });
+
+    assert.match(panel, /RAH Claude Remote Control/);
+    assert.match(panel, /Status: Thinking/);
+    assert.match(panel, /Session: session-123/);
+    assert.match(panel, /Current prompt:/);
+  });
+
+  test("keeps panel borders aligned with wide characters", () => {
+    const panel = renderTerminalWrapperPanel({
+      title: "RAH Claude Remote Control",
+      status: "Thinking",
+      sessionId: "session-123",
+      prompt: "告诉我现在时间",
+      footer: "Press Esc to resume local control.",
+    });
+
+    const widths = panel.split("\n").map(stringDisplayWidth);
+    assert.equal(new Set(widths).size, 1);
+  });
+
+  test("clamps very long prompt previews to three aligned lines", () => {
+    Object.defineProperty(process.stdout, "columns", {
+      configurable: true,
+      value: 44,
+    });
+    const panel = renderTerminalWrapperPanel({
+      title: "RAH Claude Remote Control",
+      status: "Thinking",
+      sessionId: "session-123",
+      prompt:
+        "这是一个没有空格但是非常非常非常非常非常非常非常非常非常长的提示词，用来验证面板不会因为长文本而把边框顶歪或者无限增长，现在继续追加更多更多更多更多更多更多更多更多更多更多更多更多内容来确保一定会超过三行",
+      footer: "Press Esc to resume local control.",
+    });
+
+    const lines = panel.split("\n");
+    const promptIndex = lines.findIndex((line) => line.includes("Current prompt:"));
+    const promptLines = lines.slice(promptIndex + 1, promptIndex + 4);
+    assert.equal(promptLines.length, 3);
+    assert.ok(promptLines[2]?.includes("…"));
+    const widths = lines.map(stringDisplayWidth);
+    assert.equal(new Set(widths).size, 1);
+  });
+
+  test("writes alternate screen enter, clear, and leave sequences", () => {
+    const writes = captureWrites(() => {
+      enterAlternateScreen();
+      clearTerminalScreen();
+      leaveAlternateScreen();
+    });
+
+    assert.deepEqual(writes, ["\u001b[?1049h", "\u001b[2J\u001b[H", "\u001b[?1049l"]);
+  });
+});

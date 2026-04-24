@@ -32,6 +32,7 @@ export interface SessionCapabilities {
   contextUsage: boolean;
   resumeByProvider: boolean;
   listProviderSessions: boolean;
+  renameSession: boolean;
   steerInput: boolean;
   queuedInput: boolean;
   modelSwitch: boolean;
@@ -71,6 +72,7 @@ export interface StoredSessionRef {
   rootDir?: string;
   title?: string;
   preview?: string;
+  createdAt?: string;
   updatedAt?: string;
   lastUsedAt?: string;
   source?: "provider_history" | "previous_live";

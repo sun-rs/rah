@@ -43,12 +43,12 @@ import {
 } from "./provider-resume";
 import { geminiLaunchSpec, probeProviderDiagnostic } from "./provider-diagnostics";
 import {
-  applyWorkspaceGitFileAction,
-  applyWorkspaceGitHunkAction,
-  getWorkspaceGitDiff,
-  getWorkspaceGitStatus,
+  applyWorkspaceGitFileActionAsync,
+  applyWorkspaceGitHunkActionAsync,
+  getWorkspaceGitDiffAsync,
+  getWorkspaceGitStatusAsync,
   getWorkspaceSnapshot,
-  readWorkspaceFileFromDirectory,
+  readWorkspaceFileFromDirectoryAsync,
 } from "./workspace-utils";
 import { toSessionSummary } from "./session-store";
 import { movePathToTrash } from "./trash";
@@ -200,12 +200,12 @@ export class GeminiAdapter implements ProviderAdapter {
     };
   }
 
-  getGitStatus(sessionId: string, options?: { scopeRoot?: string }): GitStatusResponse {
+  async getGitStatus(sessionId: string, options?: { scopeRoot?: string }): Promise<GitStatusResponse> {
     const state = this.services.sessionStore.getSession(sessionId);
     if (!state) {
       throw new Error(`Unknown session ${sessionId}`);
     }
-    const status = getWorkspaceGitStatus(state.session.cwd, options);
+    const status = await getWorkspaceGitStatusAsync(state.session.cwd, options);
     return {
       sessionId,
       ...(status.branch ? { branch: status.branch } : {}),
@@ -217,11 +217,11 @@ export class GeminiAdapter implements ProviderAdapter {
     };
   }
 
-  getGitDiff(
+  async getGitDiff(
     sessionId: string,
     targetPath: string,
     options?: { staged?: boolean; ignoreWhitespace?: boolean; scopeRoot?: string },
-  ): GitDiffResponse {
+  ): Promise<GitDiffResponse> {
     const state = this.services.sessionStore.getSession(sessionId);
     if (!state) {
       throw new Error(`Unknown session ${sessionId}`);
@@ -229,47 +229,47 @@ export class GeminiAdapter implements ProviderAdapter {
     return {
       sessionId,
       path: targetPath,
-      diff: getWorkspaceGitDiff(state.session.cwd, targetPath, options),
+      diff: await getWorkspaceGitDiffAsync(state.session.cwd, targetPath, options),
     };
   }
 
-  applyGitFileAction(sessionId: string, request: GitFileActionRequest): GitFileActionResponse {
+  async applyGitFileAction(sessionId: string, request: GitFileActionRequest): Promise<GitFileActionResponse> {
     const state = this.services.sessionStore.getSession(sessionId);
     if (!state) {
       throw new Error(`Unknown session ${sessionId}`);
     }
     return {
-      ...applyWorkspaceGitFileAction(state.session.cwd, request, {
+      ...(await applyWorkspaceGitFileActionAsync(state.session.cwd, request, {
         scopeRoot: state.session.rootDir ?? state.session.cwd,
-      }),
+      })),
       sessionId,
     };
   }
 
-  applyGitHunkAction(sessionId: string, request: GitHunkActionRequest): GitHunkActionResponse {
+  async applyGitHunkAction(sessionId: string, request: GitHunkActionRequest): Promise<GitHunkActionResponse> {
     const state = this.services.sessionStore.getSession(sessionId);
     if (!state) {
       throw new Error(`Unknown session ${sessionId}`);
     }
     return {
-      ...applyWorkspaceGitHunkAction(state.session.cwd, request, {
+      ...(await applyWorkspaceGitHunkActionAsync(state.session.cwd, request, {
         scopeRoot: state.session.rootDir ?? state.session.cwd,
-      }),
+      })),
       sessionId,
     };
   }
 
-  readSessionFile(
+  async readSessionFile(
     sessionId: string,
     targetPath: string,
     options?: { scopeRoot?: string },
-  ): SessionFileResponse {
+  ): Promise<SessionFileResponse> {
     const state = this.services.sessionStore.getSession(sessionId);
     if (!state) {
       throw new Error(`Unknown session ${sessionId}`);
     }
     return {
-      ...readWorkspaceFileFromDirectory(state.session.cwd, targetPath, options),
+      ...(await readWorkspaceFileFromDirectoryAsync(state.session.cwd, targetPath, options)),
       sessionId,
     };
   }
@@ -348,8 +348,8 @@ export class GeminiAdapter implements ProviderAdapter {
     this.storedSessionIndex.delete(session.providerSessionId);
   }
 
-  getProviderDiagnostic(options?: { forceRefresh?: boolean }) {
-    return probeProviderDiagnostic("gemini", geminiLaunchSpec(), options);
+  async getProviderDiagnostic(options?: { forceRefresh?: boolean }) {
+    return probeProviderDiagnostic("gemini", await geminiLaunchSpec(), options);
   }
 
   private refreshStoredSessionIndex(): Map<string, GeminiStoredSessionRecord> {

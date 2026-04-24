@@ -150,7 +150,7 @@ export function createPostRoutes(
           return;
         }
         writeJson(req, res, 200, {
-          session: engine.renameSession(match[1]!, request.title),
+          session: await engine.renameSession(match[1]!, request.title),
         });
       },
     },
@@ -343,7 +343,7 @@ export async function handleHttpRequest(args: {
         req,
         res,
         200,
-        engine.getGitStatus(gitStatusMatch[1]!, {
+        await engine.getGitStatus(gitStatusMatch[1]!, {
           ...(scopeRoot ? { scopeRoot } : {}),
         }),
       );
@@ -360,7 +360,7 @@ export async function handleHttpRequest(args: {
         req,
         res,
         200,
-        engine.getGitDiff(gitDiffMatch[1]!, diffPath, {
+        await engine.getGitDiff(gitDiffMatch[1]!, diffPath, {
           ...(staged !== null ? { staged: staged === "true" } : {}),
           ...(ignoreWhitespace !== null
             ? { ignoreWhitespace: ignoreWhitespace === "true" }
@@ -383,7 +383,7 @@ export async function handleHttpRequest(args: {
         req,
         res,
         200,
-        engine.readSessionFile(fileMatch[1]!, filePath, {
+        await engine.readSessionFile(fileMatch[1]!, filePath, {
           ...(scopeRoot ? { scopeRoot } : {}),
         }),
       );
@@ -403,7 +403,7 @@ export async function handleHttpRequest(args: {
         req,
         res,
         200,
-        engine.searchSessionFiles(fileSearchMatch[1]!, query, limit, {
+        await engine.searchSessionFiles(fileSearchMatch[1]!, query, limit, {
           ...(scopeRoot ? { scopeRoot } : {}),
         }),
       );
@@ -416,7 +416,7 @@ export async function handleHttpRequest(args: {
         writeJson(req, res, 400, { error: "Workspace dir is required." });
         return;
       }
-      writeJson(req, res, 200, engine.getWorkspaceGitStatus(dir));
+      writeJson(req, res, 200, await engine.getWorkspaceGitStatus(dir));
       return;
     }
 
@@ -433,7 +433,7 @@ export async function handleHttpRequest(args: {
         req,
         res,
         200,
-        engine.getWorkspaceGitDiff(dir, diffPath, {
+        await engine.getWorkspaceGitDiff(dir, diffPath, {
           ...(staged !== null ? { staged: staged === "true" } : {}),
           ...(ignoreWhitespace !== null
             ? { ignoreWhitespace: ignoreWhitespace === "true" }
@@ -450,7 +450,7 @@ export async function handleHttpRequest(args: {
         writeJson(req, res, 400, { error: "Workspace dir and file path are required." });
         return;
       }
-      writeJson(req, res, 200, engine.readWorkspaceFile(dir, filePath));
+      writeJson(req, res, 200, await engine.readWorkspaceFile(dir, filePath));
       return;
     }
 
@@ -466,7 +466,7 @@ export async function handleHttpRequest(args: {
         limitRaw && Number.isFinite(Number.parseInt(limitRaw, 10))
           ? Number.parseInt(limitRaw, 10)
           : 100;
-      writeJson(req, res, 200, engine.searchWorkspaceFiles(dir, query, limit));
+      writeJson(req, res, 200, await engine.searchWorkspaceFiles(dir, query, limit));
       return;
     }
 

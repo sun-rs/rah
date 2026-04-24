@@ -15,6 +15,7 @@ function storedSession(overrides: Partial<StoredSessionRef> & Pick<StoredSession
     ...(overrides.rootDir ? { rootDir: overrides.rootDir } : {}),
     ...(overrides.title ? { title: overrides.title } : {}),
     ...(overrides.preview ? { preview: overrides.preview } : {}),
+    ...(overrides.createdAt ? { createdAt: overrides.createdAt } : {}),
     ...(overrides.updatedAt ? { updatedAt: overrides.updatedAt } : {}),
     ...(overrides.lastUsedAt ? { lastUsedAt: overrides.lastUsedAt } : {}),
   };
@@ -80,5 +81,51 @@ test("groups deduped sessions and counts each session only once per workspace", 
   assert.deepEqual(
     groups[0]?.items.map((session) => session.providerSessionId).sort(),
     ["session-1", "session-2"],
+  );
+});
+
+test("sorts history workspaces by earliest session createdAt while keeping items newest-first", () => {
+  const groups = groupAllStoredSessionsByDirectory(
+    [
+      storedSession({
+        provider: "codex",
+        providerSessionId: "session-1",
+        rootDir: "/Users/sun/Code/zeta",
+        cwd: "/Users/sun/Code/zeta",
+        title: "older zeta",
+        createdAt: "2026-04-20T10:00:00.000Z",
+        updatedAt: "2026-04-20T10:00:00.000Z",
+      }),
+      storedSession({
+        provider: "codex",
+        providerSessionId: "session-2",
+        rootDir: "/Users/sun/Code/alpha",
+        cwd: "/Users/sun/Code/alpha",
+        title: "alpha session",
+        createdAt: "2026-04-21T10:00:00.000Z",
+        updatedAt: "2026-04-20T10:02:00.000Z",
+      }),
+      storedSession({
+        provider: "codex",
+        providerSessionId: "session-3",
+        rootDir: "/Users/sun/Code/zeta",
+        cwd: "/Users/sun/Code/zeta",
+        title: "newer zeta",
+        createdAt: "2026-04-22T10:00:00.000Z",
+        updatedAt: "2026-04-20T10:03:00.000Z",
+      }),
+    ],
+    {
+      workspaceSortMode: "created",
+    },
+  );
+
+  assert.deepEqual(
+    groups.map((group) => group.directory),
+    ["/Users/sun/Code/zeta", "/Users/sun/Code/alpha"],
+  );
+  assert.deepEqual(
+    groups[0]?.items.map((session) => session.providerSessionId),
+    ["session-3", "session-1"],
   );
 });

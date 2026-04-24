@@ -13,6 +13,10 @@ export function canSessionRespondToPermissions(summary: SessionSummary): boolean
   return summary.session.capabilities.livePermissions;
 }
 
+export function canSessionRename(summary: SessionSummary): boolean {
+  return summary.session.capabilities.renameSession && summary.session.providerSessionId !== undefined;
+}
+
 export function isReadOnlyReplay(summary: SessionSummary): boolean {
   return (
     summary.session.providerSessionId !== undefined &&

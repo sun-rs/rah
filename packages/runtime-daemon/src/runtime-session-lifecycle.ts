@@ -98,16 +98,31 @@ export class RuntimeSessionLifecycle {
     return toSessionSummary(state);
   }
 
-  renameSession(sessionId: string, title: string): SessionSummary {
+  async renameSession(sessionId: string, title: string): Promise<SessionSummary> {
     const nextTitle = title.trim();
     if (!nextTitle) {
       throw new Error("Session title is required.");
     }
-    const state = this.deps.sessionStore.patchManagedSession(sessionId, { title: nextTitle });
-    this.deps.rememberSession(state);
+    const state = this.deps.sessionStore.getSession(sessionId);
+    if (!state) {
+      throw new Error(`Unknown session ${sessionId}`);
+    }
+    if (!state.session.capabilities.renameSession || !state.session.providerSessionId) {
+      throw new Error("This session does not support provider-native rename.");
+    }
+    const adapter = this.deps.requireSessionAdapter(sessionId);
+    if (!adapter.renameSession) {
+      throw new Error(`Provider ${state.session.provider} does not support rename.`);
+    }
+    const summary = await adapter.renameSession(sessionId, nextTitle);
+    const nextState = this.deps.sessionStore.getSession(sessionId);
+    if (!nextState) {
+      throw new Error(`Unknown session ${sessionId}`);
+    }
+    this.deps.rememberSession(nextState);
     this.deps.refreshRememberedState();
     this.deps.publishStoredSessionDiscovery();
-    return toSessionSummary(state);
+    return summary;
   }
 
   async closeSession(sessionId: string, request: CloseSessionRequest): Promise<void> {

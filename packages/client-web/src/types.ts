@@ -170,7 +170,6 @@ function shouldApplySummaryMutation(current: SessionProjection, event: RahEvent)
     case "control.claimed":
     case "control.released":
     case "usage.updated":
-    case "context.updated":
       return isIsoTsAtLeast(event.ts, current.summary.session.updatedAt);
     default:
       return true;
@@ -1117,7 +1116,7 @@ export function applyEventToProjection(
                   sessionId: current.summary.session.id,
                 },
               }
-            : event.type === "usage.updated" || event.type === "context.updated"
+            : event.type === "usage.updated"
               ? {
                   ...current.summary,
                   usage: event.payload.usage,

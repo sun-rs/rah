@@ -20,19 +20,41 @@ export interface AttachClientDescriptor {
 
 export type ApprovalPolicy = "default" | "never" | "yolo";
 
-export type PermissionDecision =
+export type CanonicalPermissionDecision =
   | "approved"
   | "approved_for_session"
   | "denied"
   | "abort"
   | "accept"
-  | "acceptForSession"
   | "decline"
   | "cancel";
 
+export type LegacyPermissionDecision = "acceptForSession";
+
+export type PermissionDecision = CanonicalPermissionDecision | LegacyPermissionDecision;
+
+export function normalizePermissionDecision(
+  decision: string | undefined,
+): CanonicalPermissionDecision | undefined {
+  switch (decision) {
+    case "acceptForSession":
+      return "approved_for_session";
+    case "approved":
+    case "approved_for_session":
+    case "denied":
+    case "abort":
+    case "accept":
+    case "decline":
+    case "cancel":
+      return decision;
+    default:
+      return undefined;
+  }
+}
+
 export function decisionFromPermissionActionId(
   actionId: string | undefined,
-): PermissionDecision | undefined {
+): CanonicalPermissionDecision | undefined {
   switch (actionId) {
     case "allow":
     case "approve":
@@ -65,7 +87,7 @@ export function isPermissionSessionGrant(args: {
   selectedActionId?: string;
 }): boolean {
   const canonical =
-    (args.decision as PermissionDecision | undefined) ??
+    normalizePermissionDecision(args.decision) ??
     decisionFromPermissionActionId(args.selectedActionId);
   return canonical === "approved_for_session";
 }
@@ -76,7 +98,7 @@ export function isPermissionDenied(args: {
   selectedActionId?: string;
 }): boolean {
   const canonical =
-    (args.decision as PermissionDecision | undefined) ??
+    normalizePermissionDecision(args.decision) ??
     decisionFromPermissionActionId(args.selectedActionId);
   return args.behavior === "deny" || canonical === "denied" || canonical === "decline";
 }
@@ -86,7 +108,7 @@ export function isPermissionAbort(args: {
   selectedActionId?: string;
 }): boolean {
   const canonical =
-    (args.decision as PermissionDecision | undefined) ??
+    normalizePermissionDecision(args.decision) ??
     decisionFromPermissionActionId(args.selectedActionId);
   return canonical === "abort" || canonical === "cancel";
 }

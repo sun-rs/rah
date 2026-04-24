@@ -2,6 +2,7 @@ import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import {
   compareVersions,
+  codexLaunchSpec,
   extractVersionString,
   probeProviderDiagnostic,
   resetProviderDiagnosticsCacheForTests,
@@ -57,6 +58,20 @@ describe("provider diagnostics version helpers", () => {
     } finally {
       globalThis.fetch = originalFetch;
       resetProviderDiagnosticsCacheForTests();
+    }
+  });
+
+  test("rejects relative binary overrides", async () => {
+    const previousBinary = process.env.RAH_CODEX_BINARY;
+    process.env.RAH_CODEX_BINARY = "./bin/codex";
+    try {
+      await assert.rejects(() => codexLaunchSpec(), /RAH_CODEX_BINARY must be a bare command or absolute path/);
+    } finally {
+      if (previousBinary === undefined) {
+        delete process.env.RAH_CODEX_BINARY;
+      } else {
+        process.env.RAH_CODEX_BINARY = previousBinary;
+      }
     }
   });
 });

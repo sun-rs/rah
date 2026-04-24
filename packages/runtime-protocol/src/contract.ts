@@ -95,7 +95,6 @@ export const RAH_EVENT_TYPE_FAMILY = {
   "operation.requested": "operation",
   "governance.updated": "governance",
   "usage.updated": "usage",
-  "context.updated": "usage",
   "runtime.status": "runtime",
   "terminal.output": "terminal",
   "terminal.exited": "terminal",
@@ -517,6 +516,7 @@ function validateSessionCapabilities(capabilities: unknown, sink: IssueSink, pat
     "contextUsage",
     "resumeByProvider",
     "listProviderSessions",
+    "renameSession",
     "steerInput",
     "queuedInput",
     "modelSwitch",
@@ -942,7 +942,6 @@ function validatePayload(event: RahEvent, sink: IssueSink) {
       }
       break;
     case "usage.updated":
-    case "context.updated":
       validateContextUsage(payload.usage, sink, "payload.usage");
       break;
     case "runtime.status":

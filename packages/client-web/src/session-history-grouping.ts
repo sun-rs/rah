@@ -1,11 +1,12 @@
 import type { StoredSessionRef } from "@rah/runtime-protocol";
-import { getDirectoryDisplayName } from "./session-browser";
+import { getDirectoryDisplayName, type WorkspaceSortMode } from "./session-browser";
 
 export type SessionHistoryGroup = {
   directory: string;
   displayName: string;
   isWorkspaceGroup: boolean;
   items: StoredSessionRef[];
+  earliestCreatedAt: string;
   latestUpdatedAt: string;
 };
 
@@ -33,6 +34,7 @@ function storedSessionQualityScore(session: StoredSessionRef): number {
     session.cwd ? 2 : 0,
     session.title ? 2 : 0,
     session.preview ? 1 : 0,
+    session.createdAt ? 1 : 0,
     session.updatedAt ? 1 : 0,
     session.lastUsedAt ? 1 : 0,
   ].reduce((sum, value) => sum + value, 0);
@@ -46,6 +48,14 @@ function compareStoredSessionQuality(left: StoredSessionRef, right: StoredSessio
   return (left.lastUsedAt ?? left.updatedAt ?? "").localeCompare(
     right.lastUsedAt ?? right.updatedAt ?? "",
   );
+}
+
+function effectiveSessionCreatedAt(session: StoredSessionRef): string {
+  return session.createdAt ?? session.updatedAt ?? session.lastUsedAt ?? "";
+}
+
+function effectiveSessionUpdatedAt(session: StoredSessionRef): string {
+  return session.updatedAt ?? session.lastUsedAt ?? "";
 }
 
 export function dedupeStoredSessionsByIdentity(sessions: StoredSessionRef[]): StoredSessionRef[] {
@@ -62,6 +72,10 @@ export function dedupeStoredSessionsByIdentity(sessions: StoredSessionRef[]): St
 
 export function groupAllStoredSessionsByDirectory(
   sessions: StoredSessionRef[],
+  options?: {
+    workspaceSortMode?: WorkspaceSortMode;
+    workspaceDirs?: readonly string[];
+  },
 ): SessionHistoryGroup[] {
   const groups = new Map<string, SessionHistoryGroup>();
 
@@ -69,10 +83,14 @@ export function groupAllStoredSessionsByDirectory(
     const directory = normalizeHistorySessionPath(session.rootDir || session.cwd);
     const groupKey = directory ?? "__no_workspace__";
     const displayName = directory ? getDirectoryDisplayName(directory) : "No workspace";
-    const updatedAt = session.updatedAt ?? session.lastUsedAt ?? "";
+    const createdAt = effectiveSessionCreatedAt(session);
+    const updatedAt = effectiveSessionUpdatedAt(session);
     const existing = groups.get(groupKey);
     if (existing) {
       existing.items.push(session);
+      if (!existing.earliestCreatedAt || (createdAt && createdAt < existing.earliestCreatedAt)) {
+        existing.earliestCreatedAt = createdAt;
+      }
       if (updatedAt > existing.latestUpdatedAt) {
         existing.latestUpdatedAt = updatedAt;
       }
@@ -82,12 +100,13 @@ export function groupAllStoredSessionsByDirectory(
         displayName,
         isWorkspaceGroup: Boolean(directory),
         items: [session],
+        earliestCreatedAt: createdAt,
         latestUpdatedAt: updatedAt,
       });
     }
   }
 
-  return [...groups.values()]
+  const grouped = [...groups.values()]
     .map((group) => ({
       ...group,
       items: [...group.items].sort((a, b) => {
@@ -96,6 +115,33 @@ export function groupAllStoredSessionsByDirectory(
         }
         return (b.updatedAt ?? b.lastUsedAt ?? "").localeCompare(a.updatedAt ?? a.lastUsedAt ?? "");
       }),
-    }))
-    .sort((a, b) => b.latestUpdatedAt.localeCompare(a.latestUpdatedAt));
+    }));
+
+  const workspaceSortMode = options?.workspaceSortMode ?? "updated";
+  if (workspaceSortMode === "created") {
+    return grouped.sort((left, right) => {
+      if (left.isWorkspaceGroup !== right.isWorkspaceGroup) {
+        return left.isWorkspaceGroup ? -1 : 1;
+      }
+      if (left.earliestCreatedAt !== right.earliestCreatedAt) {
+        if (!left.earliestCreatedAt) {
+          return 1;
+        }
+        if (!right.earliestCreatedAt) {
+          return -1;
+        }
+        return left.earliestCreatedAt.localeCompare(right.earliestCreatedAt);
+      }
+      if (left.isWorkspaceGroup !== right.isWorkspaceGroup) {
+        return left.isWorkspaceGroup ? -1 : 1;
+      }
+      return compareByLatestUpdated(left, right);
+    });
+  }
+
+  return grouped.sort(compareByLatestUpdated);
+}
+
+function compareByLatestUpdated(left: SessionHistoryGroup, right: SessionHistoryGroup): number {
+  return right.latestUpdatedAt.localeCompare(left.latestUpdatedAt);
 }

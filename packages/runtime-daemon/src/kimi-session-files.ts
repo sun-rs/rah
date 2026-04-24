@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type {
@@ -33,6 +33,7 @@ const REHYDRATED_CAPABILITIES = {
   livePermissions: false,
   steerInput: false,
   queuedInput: false,
+  renameSession: true,
   modelSwitch: false,
   planMode: false,
   subagents: false,
@@ -233,6 +234,120 @@ function deriveTitleFromWire(wirePath: string): string {
   return "Untitled";
 }
 
+function deriveCreatedAtFromWire(wirePath: string): string | undefined {
+  try {
+    const lines = readLeadingLines(wirePath, { maxBytes: 256 * 1024 });
+    for (const line of lines) {
+      const parsed = parseKimiWireLine(line.trim());
+      if (parsed?.timestamp) {
+        return parsed.timestamp;
+      }
+    }
+  } catch {}
+  return undefined;
+}
+
+type KimiSessionState = {
+  custom_title?: string | null;
+  title_generated?: boolean;
+};
+
+function sessionStatePath(sessionDir: string): string {
+  return path.join(sessionDir, "state.json");
+}
+
+function loadKimiSessionState(sessionDir: string): KimiSessionState {
+  try {
+    const parsed = JSON.parse(readFileSync(sessionStatePath(sessionDir), "utf8")) as Record<string, unknown>;
+    return {
+      ...(typeof parsed.custom_title === "string" ? { custom_title: parsed.custom_title } : {}),
+      ...(typeof parsed.title_generated === "boolean"
+        ? { title_generated: parsed.title_generated }
+        : {}),
+    };
+  } catch {
+    return {};
+  }
+}
+
+function resolveKimiSessionTitle(
+  sessionDir: string,
+  wirePath: string,
+): {
+  title: string;
+  preview: string;
+} {
+  const state = loadKimiSessionState(sessionDir);
+  const preview = deriveTitleFromWire(wirePath);
+  const customTitle =
+    typeof state.custom_title === "string" && state.custom_title.trim().length > 0
+      ? state.custom_title.trim()
+      : null;
+  return {
+    title: customTitle ?? preview,
+    preview,
+  };
+}
+
+function writeKimiSessionState(sessionDir: string, patch: KimiSessionState): void {
+  const current = loadKimiSessionState(sessionDir);
+  writeFileSync(
+    sessionStatePath(sessionDir),
+    JSON.stringify(
+      {
+        ...current,
+        ...patch,
+      },
+      null,
+      2,
+    ),
+  );
+}
+
+export function updateKimiSessionTitle(
+  providerSessionId: string,
+  title: string,
+  cwd?: string,
+): { sessionDir: string } {
+  const normalizedCwd = normalizeDirectory(cwd);
+  const candidateSessionDirs = new Set<string>();
+  const workDirs = loadKimiWorkDirs();
+
+  if (normalizedCwd) {
+    for (const workDir of workDirs) {
+      if (normalizeDirectory(workDir.path) === normalizedCwd) {
+        candidateSessionDirs.add(path.join(sessionsDirForWorkDir(workDir), providerSessionId));
+      }
+    }
+  }
+
+  for (const workDir of workDirs) {
+    candidateSessionDirs.add(path.join(sessionsDirForWorkDir(workDir), providerSessionId));
+  }
+
+  if (existsSync(kimiSessionsRoot())) {
+    for (const entry of readdirSync(kimiSessionsRoot(), { withFileTypes: true })) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      candidateSessionDirs.add(path.join(kimiSessionsRoot(), entry.name, providerSessionId));
+    }
+  }
+
+  for (const sessionDir of candidateSessionDirs) {
+    if (!existsSync(sessionDir)) {
+      continue;
+    }
+    writeKimiSessionState(sessionDir, {
+      custom_title: title,
+      title_generated: true,
+    });
+    return { sessionDir };
+  }
+
+  throw new Error(`Unknown Kimi session ${providerSessionId}.`);
+}
+
 export function discoverKimiStoredSessions(): KimiStoredSessionRecord[] {
   const cache = loadStoredSessionMetadataCache("kimi");
   const records: KimiStoredSessionRecord[] = [];
@@ -251,40 +366,67 @@ export function discoverKimiStoredSessions(): KimiStoredSessionRecord[] {
       continue;
     }
     for (const sessionId of sessionIds) {
-      const wirePath = path.join(sessionsDir, sessionId, "wire.jsonl");
+      const sessionDir = path.join(sessionsDir, sessionId);
+      const wirePath = path.join(sessionDir, "wire.jsonl");
       if (!existsSync(wirePath)) {
         continue;
       }
       const stats = statSync(wirePath);
+      const stateStats = existsSync(sessionStatePath(sessionDir))
+        ? statSync(sessionStatePath(sessionDir))
+        : null;
       const cachedRef = getCachedStoredSessionRef({
         cache,
         filePath: wirePath,
-        size: stats.size,
-        mtimeMs: stats.mtimeMs,
+        size: stats.size + (stateStats?.size ?? 0),
+        mtimeMs: Math.max(stats.mtimeMs, stateStats?.mtimeMs ?? 0),
       });
       if (cachedRef) {
+        if (!cachedRef.createdAt) {
+          const createdAt = deriveCreatedAtFromWire(wirePath);
+          if (createdAt) {
+            const nextRef = {
+              ...cachedRef,
+              createdAt,
+            };
+            setCachedStoredSessionRef({
+              cache,
+              filePath: wirePath,
+              size: stats.size + (stateStats?.size ?? 0),
+              mtimeMs: Math.max(stats.mtimeMs, stateStats?.mtimeMs ?? 0),
+              ref: nextRef,
+            });
+            records.push({
+              ref: nextRef,
+              wirePath,
+            });
+            continue;
+          }
+        }
         records.push({
           ref: cachedRef,
           wirePath,
         });
         continue;
       }
-      const title = deriveTitleFromWire(wirePath);
+      const { title, preview } = resolveKimiSessionTitle(sessionDir, wirePath);
+      const createdAt = deriveCreatedAtFromWire(wirePath);
       const ref: StoredSessionRef = {
         provider: "kimi",
         providerSessionId: sessionId,
         cwd: workDir.path,
         rootDir: workDir.path,
         title,
-        preview: title,
+        preview,
+        ...(createdAt ? { createdAt } : {}),
         updatedAt: stats.mtime.toISOString(),
         source: "provider_history",
       };
       setCachedStoredSessionRef({
         cache,
         filePath: wirePath,
-        size: stats.size,
-        mtimeMs: stats.mtimeMs,
+        size: stats.size + (stateStats?.size ?? 0),
+        mtimeMs: Math.max(stats.mtimeMs, stateStats?.mtimeMs ?? 0),
         ref,
       });
       records.push({ ref, wirePath });
@@ -295,12 +437,15 @@ export function discoverKimiStoredSessions(): KimiStoredSessionRecord[] {
     new Map(
       records.map((record) => {
         const stats = statSync(record.wirePath);
+        const stateStats = existsSync(sessionStatePath(path.dirname(record.wirePath)))
+          ? statSync(sessionStatePath(path.dirname(record.wirePath)))
+          : null;
         return [
           record.wirePath,
           {
             ref: record.ref,
-            size: stats.size,
-            mtimeMs: stats.mtimeMs,
+            size: stats.size + (stateStats?.size ?? 0),
+            mtimeMs: Math.max(stats.mtimeMs, stateStats?.mtimeMs ?? 0),
           },
         ] as const;
       }),

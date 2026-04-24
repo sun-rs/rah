@@ -1,3 +1,4 @@
+import { statSync } from "node:fs";
 import type {
   CloseSessionRequest,
   GitDiffResponse,
@@ -22,6 +23,7 @@ import type {
 } from "@rah/runtime-protocol";
 import type { ProviderAdapter, RuntimeServices } from "./provider-adapter";
 import {
+  createCodexAppServerClient,
   respondToCodexLivePermission,
   resumeCodexLiveSession,
   startCodexLiveSession,
@@ -41,14 +43,19 @@ import {
 } from "./provider-resume";
 import { codexLaunchSpec, probeProviderDiagnostic } from "./provider-diagnostics";
 import { toSessionSummary } from "./session-store";
+import {
+  loadStoredSessionMetadataCache,
+  setCachedStoredSessionRef,
+  writeStoredSessionMetadataCache,
+} from "./stored-session-metadata-cache";
 import { movePathToTrash } from "./trash";
 import {
-  applyWorkspaceGitFileAction,
-  applyWorkspaceGitHunkAction,
-  getWorkspaceGitDiff,
-  getWorkspaceGitStatus,
+  applyWorkspaceGitFileActionAsync,
+  applyWorkspaceGitHunkActionAsync,
+  getWorkspaceGitDiffAsync,
+  getWorkspaceGitStatusAsync,
   getWorkspaceSnapshot,
-  readWorkspaceFileFromDirectory,
+  readWorkspaceFileFromDirectoryAsync,
 } from "./workspace-utils";
 
 const CODEX_EVENT_SOURCE = {
@@ -208,6 +215,35 @@ export class CodexAdapter implements ProviderAdapter {
     );
   }
 
+  async renameSession(sessionId: string, title: string): Promise<SessionSummary> {
+    const state = this.services.sessionStore.getSession(sessionId);
+    if (!state?.session.providerSessionId) {
+      throw new Error(`Session ${sessionId} does not have a provider session id.`);
+    }
+
+    const live = this.liveSessions.get(sessionId);
+    if (live) {
+      await live.client.request("thread/name/set", {
+        threadId: live.threadId,
+        name: title,
+      });
+    } else {
+      const client = await createCodexAppServerClient();
+      try {
+        await client.request("thread/name/set", {
+          threadId: state.session.providerSessionId,
+          name: title,
+        });
+      } finally {
+        await client.dispose();
+      }
+    }
+
+    const nextState = this.services.sessionStore.patchManagedSession(sessionId, { title });
+    this.patchStoredTitle(state.session.providerSessionId, title);
+    return toSessionSummary(nextState);
+  }
+
   async closeSession(sessionId: string, request: CloseSessionRequest): Promise<void> {
     const state = this.services.sessionStore.getSession(sessionId);
     if (!state) {
@@ -324,14 +360,14 @@ export class CodexAdapter implements ProviderAdapter {
     };
   }
 
-  getGitStatus(sessionId: string, options?: { scopeRoot?: string }): GitStatusResponse {
+  async getGitStatus(sessionId: string, options?: { scopeRoot?: string }): Promise<GitStatusResponse> {
     const session = this.services.sessionStore.getSession(sessionId)?.session;
     if (!session) {
       const record = this.rehydratedSessionRecords.get(sessionId);
       if (!record) {
         throw new Error(`Unknown session ${sessionId}`);
       }
-      const status = getWorkspaceGitStatus(record.ref.cwd ?? process.cwd(), options);
+      const status = await getWorkspaceGitStatusAsync(record.ref.cwd ?? process.cwd(), options);
       return {
         sessionId,
         ...(status.branch !== undefined ? { branch: status.branch } : {}),
@@ -342,7 +378,7 @@ export class CodexAdapter implements ProviderAdapter {
         ...(status.totalUnstaged !== undefined ? { totalUnstaged: status.totalUnstaged } : {}),
       };
     }
-    const status = getWorkspaceGitStatus(session.cwd, options);
+    const status = await getWorkspaceGitStatusAsync(session.cwd, options);
     return {
       sessionId,
       ...(status.branch !== undefined ? { branch: status.branch } : {}),
@@ -354,11 +390,11 @@ export class CodexAdapter implements ProviderAdapter {
     };
   }
 
-  getGitDiff(
+  async getGitDiff(
     sessionId: string,
     targetPath: string,
     options?: { staged?: boolean; ignoreWhitespace?: boolean; scopeRoot?: string },
-  ): GitDiffResponse {
+  ): Promise<GitDiffResponse> {
     const session = this.services.sessionStore.getSession(sessionId)?.session;
     if (!session) {
       const record = this.rehydratedSessionRecords.get(sessionId);
@@ -368,17 +404,17 @@ export class CodexAdapter implements ProviderAdapter {
       return {
         sessionId,
         path: targetPath,
-        diff: getWorkspaceGitDiff(record.ref.cwd ?? process.cwd(), targetPath, options),
+        diff: await getWorkspaceGitDiffAsync(record.ref.cwd ?? process.cwd(), targetPath, options),
       };
     }
     return {
       sessionId,
       path: targetPath,
-      diff: getWorkspaceGitDiff(session.cwd, targetPath, options),
+      diff: await getWorkspaceGitDiffAsync(session.cwd, targetPath, options),
     };
   }
 
-  applyGitFileAction(sessionId: string, request: GitFileActionRequest): GitFileActionResponse {
+  async applyGitFileAction(sessionId: string, request: GitFileActionRequest): Promise<GitFileActionResponse> {
     const session = this.services.sessionStore.getSession(sessionId)?.session;
     if (!session) {
       const record = this.rehydratedSessionRecords.get(sessionId);
@@ -386,21 +422,21 @@ export class CodexAdapter implements ProviderAdapter {
         throw new Error(`Unknown session ${sessionId}`);
       }
       return {
-        ...applyWorkspaceGitFileAction(record.ref.cwd ?? process.cwd(), request, {
+        ...(await applyWorkspaceGitFileActionAsync(record.ref.cwd ?? process.cwd(), request, {
           scopeRoot: record.ref.rootDir ?? record.ref.cwd ?? process.cwd(),
-        }),
+        })),
         sessionId,
       };
     }
     return {
-      ...applyWorkspaceGitFileAction(session.cwd, request, {
+      ...(await applyWorkspaceGitFileActionAsync(session.cwd, request, {
         scopeRoot: session.rootDir ?? session.cwd,
-      }),
+      })),
       sessionId,
     };
   }
 
-  applyGitHunkAction(sessionId: string, request: GitHunkActionRequest): GitHunkActionResponse {
+  async applyGitHunkAction(sessionId: string, request: GitHunkActionRequest): Promise<GitHunkActionResponse> {
     const session = this.services.sessionStore.getSession(sessionId)?.session;
     if (!session) {
       const record = this.rehydratedSessionRecords.get(sessionId);
@@ -408,25 +444,25 @@ export class CodexAdapter implements ProviderAdapter {
         throw new Error(`Unknown session ${sessionId}`);
       }
       return {
-        ...applyWorkspaceGitHunkAction(record.ref.cwd ?? process.cwd(), request, {
+        ...(await applyWorkspaceGitHunkActionAsync(record.ref.cwd ?? process.cwd(), request, {
           scopeRoot: record.ref.rootDir ?? record.ref.cwd ?? process.cwd(),
-        }),
+        })),
         sessionId,
       };
     }
     return {
-      ...applyWorkspaceGitHunkAction(session.cwd, request, {
+      ...(await applyWorkspaceGitHunkActionAsync(session.cwd, request, {
         scopeRoot: session.rootDir ?? session.cwd,
-      }),
+      })),
       sessionId,
     };
   }
 
-  readSessionFile(
+  async readSessionFile(
     sessionId: string,
     targetPath: string,
     options?: { scopeRoot?: string },
-  ): SessionFileResponse {
+  ): Promise<SessionFileResponse> {
     const session = this.services.sessionStore.getSession(sessionId)?.session;
     if (!session) {
       const record = this.rehydratedSessionRecords.get(sessionId);
@@ -434,12 +470,12 @@ export class CodexAdapter implements ProviderAdapter {
         throw new Error(`Unknown session ${sessionId}`);
       }
       return {
-        ...readWorkspaceFileFromDirectory(record.ref.cwd ?? process.cwd(), targetPath, options),
+        ...(await readWorkspaceFileFromDirectoryAsync(record.ref.cwd ?? process.cwd(), targetPath, options)),
         sessionId,
       };
     }
     return {
-      ...readWorkspaceFileFromDirectory(session.cwd, targetPath, options),
+      ...(await readWorkspaceFileFromDirectoryAsync(session.cwd, targetPath, options)),
       sessionId,
     };
   }
@@ -537,8 +573,8 @@ export class CodexAdapter implements ProviderAdapter {
     this.storedSessionIndex.delete(session.providerSessionId);
   }
 
-  getProviderDiagnostic(options?: { forceRefresh?: boolean }) {
-    return probeProviderDiagnostic("codex", codexLaunchSpec(), options);
+  async getProviderDiagnostic(options?: { forceRefresh?: boolean }) {
+    return probeProviderDiagnostic("codex", await codexLaunchSpec(), options);
   }
 
   private refreshStoredSessionIndex(): Map<string, CodexStoredSessionRecord> {
@@ -546,6 +582,35 @@ export class CodexAdapter implements ProviderAdapter {
       discoverCodexStoredSessions().map((record) => [record.ref.providerSessionId, record]),
     );
     return this.storedSessionIndex;
+  }
+
+  private patchStoredTitle(providerSessionId: string, title: string): void {
+    const patchRecord = (record: CodexStoredSessionRecord | undefined) => {
+      if (!record) {
+        return;
+      }
+      record.ref = {
+        ...record.ref,
+        title,
+      };
+      const stats = statSync(record.rolloutPath);
+      const cache = loadStoredSessionMetadataCache("codex");
+      setCachedStoredSessionRef({
+        cache,
+        filePath: record.rolloutPath,
+        size: stats.size,
+        mtimeMs: stats.mtimeMs,
+        ref: record.ref,
+      });
+      writeStoredSessionMetadataCache("codex", cache);
+    };
+
+    patchRecord(this.storedSessionIndex.get(providerSessionId));
+    for (const record of this.rehydratedSessionRecords.values()) {
+      if (record.ref.providerSessionId === providerSessionId) {
+        patchRecord(record);
+      }
+    }
   }
 
   async shutdown(): Promise<void> {

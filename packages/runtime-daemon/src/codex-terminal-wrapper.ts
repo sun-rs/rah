@@ -41,6 +41,7 @@ import {
   resolveCodexBaseHome,
 } from "./codex-wrapper-home";
 import { IndependentTerminalProcess } from "./independent-terminal";
+import { resolveConfiguredBinary } from "./provider-binary-utils";
 
 function parseArgs(argv: string[]) {
   let daemonUrl = "http://127.0.0.1:43111";
@@ -77,7 +78,7 @@ function wrapperControlUrl(daemonUrl: string): string {
 }
 
 async function resolveCodexBinary(): Promise<string> {
-  return process.env.RAH_CODEX_BINARY ?? "codex";
+  return await resolveConfiguredBinary("RAH_CODEX_BINARY", "codex");
 }
 
 function makeWrapperPermissionRequest(
@@ -206,6 +207,7 @@ async function main() {
   let awaitingTurnStart = false;
   let promptReadyTimer: NodeJS.Timeout | null = null;
   let bindingDetectionSinceMs = startupTimestampMs;
+  let socketErrored = false;
   let ptyStatusBuffer = "";
   const pendingApprovals = new Map<
     string,
@@ -651,6 +653,27 @@ async function main() {
     process.exitCode = childExitCode;
   };
 
+  socket.on("error", (error) => {
+    if (socketErrored) {
+      return;
+    }
+    socketErrored = true;
+    process.stderr.write(
+      `[rah] could not connect to RAH daemon at ${parsed.daemonUrl}. Start the daemon and try again.\n`,
+    );
+    void cleanupAndExit().finally(() => {
+      process.exitCode = 1;
+    });
+  });
+
+  socket.on("close", () => {
+    if (socketErrored || exiting || childExited) {
+      return;
+    }
+    process.stderr.write("[rah] wrapper control channel closed\n");
+    process.exitCode = 1;
+  });
+
   process.on("SIGINT", () => {
     if (!childExited) {
       void terminal.close();
@@ -755,4 +778,7 @@ async function main() {
   await cleanupAndExit();
 }
 
-void main();
+void main().catch((error) => {
+  process.stderr.write(`[rah] ${error instanceof Error ? error.message : String(error)}\n`);
+  process.exitCode = 1;
+});

@@ -3,6 +3,7 @@ import type { SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
 import { DesktopWorkbenchSidebarHeader } from "../actions/DesktopWorkbenchSidebarHeader";
 import { MobileWorkbenchHeaderActions } from "../actions/MobileWorkbenchHeaderActions";
 import { Sheet } from "../../Sheet";
+import type { WorkspaceSortMode } from "../../../session-browser";
 
 export function WorkbenchSidebarShell(props: {
   sidebarOpen: boolean;
@@ -15,6 +16,8 @@ export function WorkbenchSidebarShell(props: {
   storedSessions: StoredSessionRef[];
   recentSessions: StoredSessionRef[];
   liveSessions: SessionSummary[];
+  workspaceSortMode: WorkspaceSortMode;
+  onWorkspaceSortModeChange: (value: WorkspaceSortMode) => void;
   onDesktopHome: () => void;
   onMobileHome: () => void;
   onActivateHistory: (ref: StoredSessionRef) => void;
@@ -35,6 +38,8 @@ export function WorkbenchSidebarShell(props: {
               storedSessions={props.storedSessions}
               recentSessions={props.recentSessions}
               liveSessions={props.liveSessions}
+              workspaceSortMode={props.workspaceSortMode}
+              onWorkspaceSortModeChange={props.onWorkspaceSortModeChange}
               onHome={props.onDesktopHome}
               onActivateHistory={props.onActivateHistory}
               onRemoveHistorySession={props.onRemoveHistorySession}
@@ -64,6 +69,8 @@ export function WorkbenchSidebarShell(props: {
             storedSessions={props.storedSessions}
             recentSessions={props.recentSessions}
             liveSessions={props.liveSessions}
+            workspaceSortMode={props.workspaceSortMode}
+            onWorkspaceSortModeChange={props.onWorkspaceSortModeChange}
             onHome={props.onMobileHome}
             onActivateHistory={props.onActivateHistory}
             onRemoveHistorySession={props.onRemoveHistorySession}

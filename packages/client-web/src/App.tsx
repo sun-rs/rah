@@ -9,6 +9,7 @@ import type { ProviderChoice } from "./components/ProviderSelector";
 import { GlobalWorkbenchCallout } from "./components/workbench/callouts/GlobalWorkbenchCallout";
 import { ArchiveSessionDialog } from "./components/workbench/dialogs/ArchiveSessionDialog";
 import { ConfirmDialog } from "./components/workbench/dialogs/ConfirmDialog";
+import { RenameSessionDialog } from "./components/workbench/dialogs/RenameSessionDialog";
 import { WorkbenchErrorBoundary } from "./components/workbench/WorkbenchErrorBoundary";
 import { WorkbenchEmptyPane } from "./components/workbench/panes/WorkbenchEmptyPane";
 import { WorkbenchOpeningPane } from "./components/workbench/panes/WorkbenchOpeningPane";
@@ -21,10 +22,12 @@ import { useWorkbenchSelectionState } from "./hooks/useWorkbenchSelectionState";
 import { initializeTheme } from "./hooks/useTheme";
 import { useWorkbenchChromeState } from "./hooks/useWorkbenchChromeState";
 import {
+  useHistoryWorkspaceSortModeState,
   useWorkbenchSidebarPreferences,
   useWorkspaceSortModeState,
 } from "./hooks/useWorkbenchSidebarPreferences";
 import {
+  canSessionRename,
   canSessionRespondToPermissions,
   isSessionActivelyRunning,
   isReadOnlyReplay,
@@ -78,6 +81,7 @@ export function App() {
     activateHistorySession,
     attachSession,
     closeSession,
+    renameSession,
     claimHistorySession,
     removeHistorySession,
     removeHistoryWorkspaceSessions,
@@ -92,10 +96,16 @@ export function App() {
   const [archivingSessionId, setArchivingSessionId] = useState<string | null>(null);
   const [deleteConfirmSessionId, setDeleteConfirmSessionId] = useState<string | null>(null);
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
+  const [renameDialogSessionId, setRenameDialogSessionId] = useState<string | null>(null);
+  const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
   const [missingWorkspaceConfirmDir, setMissingWorkspaceConfirmDir] = useState<string | null>(null);
   const [floatingAnchorOffsetPx, setFloatingAnchorOffsetPx] = useState(96);
   const { hideToolCallsInChat } = useChatPreferences();
   const { setWorkspaceSortMode, workspaceSortMode } = useWorkspaceSortModeState();
+  const {
+    setWorkspaceSortMode: setHistoryWorkspaceSortMode,
+    workspaceSortMode: historyWorkspaceSortMode,
+  } = useHistoryWorkspaceSortModeState();
   const {
     fileReferenceOpen,
     isResizing,
@@ -202,6 +212,9 @@ export function App() {
     : null;
   const deleteTargetSummary = deleteConfirmSessionId
     ? projections.get(deleteConfirmSessionId)?.summary ?? null
+    : null;
+  const renameTargetSummary = renameDialogSessionId
+    ? projections.get(renameDialogSessionId)?.summary ?? null
     : null;
   const [missingWorkspaceResolver, setMissingWorkspaceResolver] =
     useState<((confirmed: boolean) => void) | null>(null);
@@ -412,6 +425,8 @@ export function App() {
         storedSessions={storedSessions}
         recentSessions={recentSessions}
         liveSessions={liveSessionEntries.map((entry) => entry.summary)}
+        workspaceSortMode={historyWorkspaceSortMode}
+        onWorkspaceSortModeChange={setHistoryWorkspaceSortMode}
         onDesktopHome={() => {
           setSelectedWorkspaceOnlyDir(null);
           setSelectedSessionId(null);
@@ -526,6 +541,25 @@ export function App() {
             .finally(() => setDeletingSessionId(null));
         }}
       />
+      <RenameSessionDialog
+        open={renameDialogSessionId !== null}
+        pending={renamingSessionId !== null}
+        initialTitle={renameTargetSummary?.session.title ?? ""}
+        onOpenChange={(open) => {
+          if (!open && renamingSessionId === null) {
+            setRenameDialogSessionId(null);
+          }
+        }}
+        onConfirm={(title) => {
+          if (!renameDialogSessionId) {
+            return;
+          }
+          setRenamingSessionId(renameDialogSessionId);
+          void renameSession(renameDialogSessionId, title)
+            .then(() => setRenameDialogSessionId(null))
+            .finally(() => setRenamingSessionId(null));
+        }}
+      />
       <ConfirmDialog
         open={missingWorkspaceConfirmDir !== null}
         title="Workspace is missing"
@@ -615,6 +649,8 @@ export function App() {
                 setArchiveConfirmSessionId(selectedSummary.session.id);
               }}
               onDeleteSession={() => setDeleteConfirmSessionId(selectedSummary.session.id)}
+              canRenameSession={canSessionRename(selectedSummary)}
+              onRenameSession={() => setRenameDialogSessionId(selectedSummary.session.id)}
             />
           ) : primaryPaneState.kind === "opening" && activeOpeningSession ? (
             <WorkbenchOpeningPane

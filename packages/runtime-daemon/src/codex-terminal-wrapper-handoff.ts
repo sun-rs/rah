@@ -1,0 +1,972 @@
+import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import process from "node:process";
+import { setTimeout as delay } from "node:timers/promises";
+import { WebSocket } from "ws";
+import {
+  isPermissionSessionGrant,
+  type PermissionRequest,
+  type PermissionResponseRequest,
+} from "@rah/runtime-protocol";
+import type { ProviderActivity } from "./provider-activity";
+import type {
+  QueuedTurn,
+  TerminalWrapperPromptState,
+} from "./terminal-wrapper-control";
+import {
+  createCodexAppServerClient,
+  type CodexJsonRpcClient,
+} from "./codex-live-client";
+import {
+  createCodexAppServerTranslationState,
+  mapCodexPermissionResolution,
+  mapCodexQuestionRequestToActivities,
+  translateCodexAppServerNotification,
+} from "./codex-app-server-activity";
+import {
+  createCodexRolloutTranslationState,
+  translateCodexRolloutLine,
+  type CodexRolloutTranslationState,
+} from "./codex-rollout-activity";
+import {
+  discoverCodexStoredSessions,
+  type CodexStoredSessionRecord,
+} from "./codex-stored-sessions";
+import {
+  nextPromptStateFromActivity,
+  selectCodexStoredSessionCandidate,
+  sliceUnprocessedRolloutLines,
+} from "./codex-terminal-wrapper-bridge";
+import {
+  createIsolatedCodexWrapperHome,
+  resolveCodexBaseHome,
+} from "./codex-wrapper-home";
+import { NativeTerminalProcess } from "./native-terminal-process";
+import { resolveConfiguredBinary } from "./provider-binary-utils";
+import {
+  clearTerminalScreen,
+  enterAlternateScreen,
+  leaveAlternateScreen,
+  renderTerminalWrapperPanel,
+  renderTerminalWrapperPanelForTerminal,
+} from "./terminal-wrapper-panel";
+
+type WrapperMode = "local_native" | "remote_writer";
+
+function isRemoteWriterMode(mode: WrapperMode): boolean {
+  return mode === "remote_writer";
+}
+
+function parseArgs(argv: string[]) {
+  let daemonUrl = "http://127.0.0.1:43111";
+  let cwd = process.cwd();
+  let resumeProviderSessionId: string | undefined;
+
+  const rest = [...argv];
+  while (rest.length > 0) {
+    const arg = rest.shift();
+    if (arg === "--daemon-url") {
+      daemonUrl = rest.shift() ?? daemonUrl;
+      continue;
+    }
+    if (arg === "--cwd") {
+      cwd = rest.shift() ?? cwd;
+      continue;
+    }
+    if (arg === "--resume-provider-session-id") {
+      resumeProviderSessionId = rest.shift() ?? resumeProviderSessionId;
+      continue;
+    }
+    throw new Error(`Unknown argument: ${arg}`);
+  }
+
+  return { daemonUrl, cwd, ...(resumeProviderSessionId ? { resumeProviderSessionId } : {}) };
+}
+
+function wrapperControlUrl(daemonUrl: string): string {
+  const url = new URL(daemonUrl);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  url.pathname = "/api/wrapper-control";
+  url.search = "";
+  return url.toString();
+}
+
+async function resolveCodexBinary(): Promise<string> {
+  return await resolveConfiguredBinary("RAH_CODEX_BINARY", "codex");
+}
+
+function resolveRahHome(): string {
+  return process.env.RAH_HOME ?? path.join(os.homedir(), ".rah", "runtime-daemon");
+}
+
+function createWrapperLogger(provider: string) {
+  const logDir = path.join(resolveRahHome(), "wrapper-logs");
+  mkdirSync(logDir, { recursive: true });
+  const logPath = path.join(
+    logDir,
+    `${provider}-${new Date().toISOString().replace(/[:.]/g, "-")}-${process.pid}.log`,
+  );
+  return {
+    logPath,
+    log(message: string) {
+      appendFileSync(logPath, `${new Date().toISOString()} ${message}\n`, "utf8");
+    },
+  };
+}
+
+function makeWrapperPermissionRequest(
+  requestId: string,
+  title: string,
+  params: Record<string, unknown>,
+): PermissionRequest {
+  return {
+    id: requestId,
+    kind: "tool",
+    title,
+    ...(typeof params.reason === "string" ? { description: params.reason } : {}),
+    actions: [
+      { id: "allow", label: "Allow", behavior: "allow", variant: "primary" },
+      { id: "deny", label: "Deny", behavior: "deny", variant: "danger" },
+    ],
+  };
+}
+
+function makeQuestionPermissionRequestId(itemId: string): string {
+  return `permission-${itemId}`;
+}
+
+function resolveApprovalDecision(
+  response: PermissionResponseRequest,
+  protocol: "v2" | "legacy",
+): string {
+  if (response.decision) {
+    return response.decision;
+  }
+  if (protocol === "legacy") {
+    return response.behavior === "allow" ? "approved" : "abort";
+  }
+  if (response.behavior === "allow") {
+    return isPermissionSessionGrant(response)
+      ? "approved_for_session"
+      : "approved";
+  }
+  return "denied";
+}
+
+function shouldMirrorControlActivity(activity: ProviderActivity): boolean {
+  switch (activity.type) {
+    case "turn_started":
+    case "turn_completed":
+    case "turn_failed":
+    case "turn_canceled":
+    case "permission_requested":
+    case "permission_resolved":
+    case "runtime_status":
+    case "usage":
+      return true;
+    default:
+      return false;
+  }
+}
+
+function readPersistedTaskLifecycle(line: unknown):
+  | { kind: "started"; turnId: string }
+  | { kind: "completed"; turnId: string }
+  | null {
+  if (!line || typeof line !== "object" || Array.isArray(line)) {
+    return null;
+  }
+  const record = line as Record<string, unknown>;
+  if (record.type !== "event_msg") {
+    return null;
+  }
+  const payload =
+    record.payload && typeof record.payload === "object" && !Array.isArray(record.payload)
+      ? (record.payload as Record<string, unknown>)
+      : null;
+  if (!payload || typeof payload.turn_id !== "string") {
+    return null;
+  }
+  if (payload.type === "task_started") {
+    return { kind: "started", turnId: payload.turn_id };
+  }
+  if (payload.type === "task_complete") {
+    return { kind: "completed", turnId: payload.turn_id };
+  }
+  return null;
+}
+
+async function main() {
+  const parsed = parseArgs(process.argv.slice(2));
+  const startupTimestampMs = Date.now();
+  const logger = createWrapperLogger("codex");
+  const sharedCodexHome = resolveCodexBaseHome();
+  const wrapperCodexHome = parsed.resumeProviderSessionId
+    ? null
+    : createIsolatedCodexWrapperHome(sharedCodexHome);
+  if (wrapperCodexHome) {
+    process.env.CODEX_HOME = wrapperCodexHome;
+    logger.log(`[rah] isolated codex home: ${wrapperCodexHome}`);
+  } else {
+    logger.log(`[rah] using shared codex home: ${sharedCodexHome}`);
+  }
+
+  let translationState: CodexRolloutTranslationState = createCodexRolloutTranslationState();
+  const controlTranslationState = createCodexAppServerTranslationState();
+  let processedLineCount = 0;
+  let wrapperSessionId: string | null = null;
+  let boundRecord: CodexStoredSessionRecord | null = null;
+  let boundProviderSessionId: string | null = null;
+  let promptState: TerminalWrapperPromptState = "prompt_dirty";
+  let exiting = false;
+  let shouldExit = false;
+  let mode: WrapperMode = "local_native";
+  let localTerminal: NativeTerminalProcess | null = null;
+  let localExitCode = 0;
+  let localExitSignal: string | null = null;
+  let pendingRemoteTurn: QueuedTurn | null = null;
+  let remoteKeyboardHandler: ((chunk: Buffer | string) => void) | null = null;
+  let remotePromptText: string | null = null;
+  let lastRenderedRemotePanel: string | null = null;
+  let remoteReclaimRequested = false;
+  let remotePanelActive = false;
+  let historyCursorPrimed = parsed.resumeProviderSessionId === undefined;
+  let controlClient: CodexJsonRpcClient | null = null;
+  let currentTurnId: string | null = null;
+  let bindingDetectionSinceMs = startupTimestampMs;
+  let socketErrored = false;
+  let remoteTurnRequestInFlight = false;
+  const pendingApprovals = new Map<
+    string,
+    {
+      kind: "question" | "approval";
+      resolve: (value: unknown) => void;
+      approvalProtocol?: "v2" | "legacy";
+    }
+  >();
+
+  const binary = await resolveCodexBinary();
+  const socket = new WebSocket(wrapperControlUrl(parsed.daemonUrl));
+
+  const send = (message: unknown) => {
+    socket.send(JSON.stringify(message));
+  };
+
+  const ensureRemotePanelScreen = () => {
+    if (remotePanelActive) {
+      return;
+    }
+    enterAlternateScreen();
+    remotePanelActive = true;
+  };
+
+  const restoreMainTerminalScreen = () => {
+    if (!remotePanelActive) {
+      return;
+    }
+    leaveAlternateScreen();
+    remotePanelActive = false;
+  };
+
+  const renderRemoteModePanel = () => {
+    if (!isRemoteWriterMode(mode) || exiting) {
+      lastRenderedRemotePanel = null;
+      return;
+    }
+    const question = remotePromptText ?? pendingRemoteTurn?.text ?? "";
+    const status = pendingRemoteTurn
+      ? "Queued"
+      : currentTurnId || promptState === "agent_busy" || remoteTurnRequestInFlight
+        ? remoteReclaimRequested
+          ? "Thinking (reclaim pending)"
+          : "Thinking"
+        : "Waiting for Esc reclaim";
+    const footer =
+      currentTurnId || promptState === "agent_busy" || remoteTurnRequestInFlight
+        ? remoteReclaimRequested
+          ? "Will return to local control when this turn finishes."
+          : "Press Esc to reclaim local control after this turn."
+        : "Press Esc to resume local control.";
+    const panel = renderTerminalWrapperPanel({
+      title: "RAH Codex Remote Control",
+      status,
+      sessionId: boundProviderSessionId ?? "Pending session binding",
+      prompt: question || "No active web prompt.",
+      footer,
+    });
+    if (panel === lastRenderedRemotePanel) {
+      return;
+    }
+    lastRenderedRemotePanel = panel;
+    ensureRemotePanelScreen();
+    clearTerminalScreen();
+    process.stdout.write(
+      `${renderTerminalWrapperPanelForTerminal({
+        title: "RAH Codex Remote Control",
+        status,
+        sessionId: boundProviderSessionId ?? "Pending session binding",
+        prompt: question || "No active web prompt.",
+        footer,
+      })}\r\n`,
+    );
+  };
+
+  const updatePromptState = (nextState: TerminalWrapperPromptState) => {
+    if (!wrapperSessionId || nextState === promptState) {
+      return;
+    }
+    promptState = nextState;
+    send({
+      type: "wrapper.prompt_state.changed",
+      sessionId: wrapperSessionId,
+      state: promptState,
+    });
+  };
+
+  const primeResumeHistoryCursor = (record: CodexStoredSessionRecord) => {
+    if (historyCursorPrimed || parsed.resumeProviderSessionId === undefined) {
+      return;
+    }
+    try {
+      const content = readFileSync(record.rolloutPath, "utf8");
+      processedLineCount = sliceUnprocessedRolloutLines(content, 0).nextProcessedLineCount;
+      historyCursorPrimed = true;
+      logger.log(
+        `[rah] primed resume history cursor at line ${processedLineCount} for ${parsed.resumeProviderSessionId}`,
+      );
+    } catch (error) {
+      logger.log(
+        `[rah] failed to prime resume history cursor for ${parsed.resumeProviderSessionId}: ${String(error)}`,
+      );
+    }
+  };
+
+  const mirrorControlActivity = (activity: ProviderActivity) => {
+    if (!wrapperSessionId || !shouldMirrorControlActivity(activity)) {
+      return;
+    }
+    send({
+      type: "wrapper.activity",
+      sessionId: wrapperSessionId,
+      activity,
+    });
+    const nextPromptState = nextPromptStateFromActivity(promptState, activity);
+    updatePromptState(nextPromptState);
+    if (activity.type === "turn_started") {
+      currentTurnId = activity.turnId;
+      remoteTurnRequestInFlight = false;
+    } else if (
+      activity.type === "turn_completed" ||
+      activity.type === "turn_failed" ||
+      activity.type === "turn_canceled"
+    ) {
+      currentTurnId = null;
+      remoteTurnRequestInFlight = false;
+      renderRemoteModePanel();
+        if (isRemoteWriterMode(mode)) {
+        if (remoteReclaimRequested) {
+          startLocalNative();
+        } else {
+          enableRemoteKeyboardControl();
+        }
+      }
+    } else if (activity.type === "session_failed" || activity.type === "session_exited") {
+      remoteTurnRequestInFlight = false;
+      renderRemoteModePanel();
+    }
+  };
+
+  const ensureControlClient = async () => {
+    if (controlClient) {
+      return controlClient;
+    }
+    controlClient = await createCodexAppServerClient();
+    controlClient.setNotificationHandler((notification) => {
+      const translated = translateCodexAppServerNotification(
+        notification,
+        controlTranslationState,
+      );
+      for (const item of translated) {
+        mirrorControlActivity(item.activity);
+      }
+    });
+    controlClient.setRequestHandler((request) => {
+      if (
+        request.method === "item/tool/requestUserInput" ||
+        request.method === "tool/requestUserInput"
+      ) {
+        const params =
+          request.params && typeof request.params === "object" && !Array.isArray(request.params)
+            ? (request.params as Record<string, unknown>)
+            : {};
+        const itemId = typeof params.itemId === "string" ? params.itemId : `question-${request.id}`;
+        const permissionRequestId = makeQuestionPermissionRequestId(itemId);
+        const activities = mapCodexQuestionRequestToActivities({
+          itemId,
+          questions: params.questions,
+        });
+        for (const item of activities) {
+          mirrorControlActivity(item.activity);
+        }
+        return new Promise((resolve) => {
+          pendingApprovals.set(permissionRequestId, {
+            kind: "question",
+            resolve,
+          });
+        });
+      }
+
+      if (
+        request.method === "item/commandExecution/requestApproval" ||
+        request.method === "item/fileChange/requestApproval" ||
+        request.method === "item/permissions/requestApproval" ||
+        request.method === "execCommandApproval" ||
+        request.method === "applyPatchApproval" ||
+        request.method === "mcpServer/elicitation/request"
+      ) {
+        const params =
+          request.params && typeof request.params === "object" && !Array.isArray(request.params)
+            ? (request.params as Record<string, unknown>)
+            : {};
+        const requestId =
+          request.method === "mcpServer/elicitation/request"
+            ? `permission-mcp-${request.id}`
+            : `permission-${typeof params.itemId === "string" ? params.itemId : `approval-${request.id}`}`;
+        const title =
+          request.method === "item/fileChange/requestApproval" ||
+          request.method === "applyPatchApproval"
+            ? "Apply file changes"
+            : request.method === "item/permissions/requestApproval"
+              ? "Grant additional permissions"
+              : request.method === "mcpServer/elicitation/request"
+                ? "MCP elicitation"
+                : "Run command";
+        mirrorControlActivity({
+          type: "permission_requested",
+          ...(currentTurnId ? { turnId: currentTurnId } : {}),
+          request: makeWrapperPermissionRequest(requestId, title, params),
+        });
+        return new Promise((resolve) => {
+          pendingApprovals.set(requestId, {
+            kind: "approval",
+            resolve,
+            approvalProtocol:
+              request.method === "execCommandApproval" ||
+              request.method === "applyPatchApproval"
+                ? "legacy"
+                : "v2",
+          });
+        });
+      }
+
+      return {};
+    });
+    return controlClient;
+  };
+
+  const syncProviderBinding = async (args: {
+    providerSessionId: string;
+    reason: "initial" | "switch";
+    record?: CodexStoredSessionRecord | null;
+  }) => {
+    if (!wrapperSessionId) {
+      return;
+    }
+    const sameProviderSession = boundProviderSessionId === args.providerSessionId;
+    const nextRecord =
+      args.record ??
+      (boundRecord?.ref.providerSessionId === args.providerSessionId ? boundRecord : null);
+    const metadataChanged =
+      sameProviderSession &&
+      nextRecord !== null &&
+      (boundRecord?.rolloutPath !== nextRecord.rolloutPath ||
+        boundRecord?.ref.title !== nextRecord.ref.title ||
+        boundRecord?.ref.preview !== nextRecord.ref.preview);
+    if (sameProviderSession && !metadataChanged) {
+      return;
+    }
+    boundProviderSessionId = args.providerSessionId;
+    boundRecord = nextRecord;
+    bindingDetectionSinceMs = Date.now();
+    processedLineCount = 0;
+    translationState = createCodexRolloutTranslationState();
+    currentTurnId = null;
+    if (nextRecord) {
+      primeResumeHistoryCursor(nextRecord);
+    }
+    logger.log(`[rah] bound provider session: ${args.providerSessionId}`);
+    send({
+      type: "wrapper.provider_bound",
+      sessionId: wrapperSessionId,
+      providerSessionId: args.providerSessionId,
+      ...(boundRecord?.ref.title
+        ? { providerTitle: boundRecord.ref.title }
+        : { providerTitle: args.providerSessionId }),
+      ...(boundRecord?.ref.preview
+        ? { providerPreview: boundRecord.ref.preview }
+        : { providerPreview: args.providerSessionId }),
+      reason: args.reason,
+    });
+    const client = await ensureControlClient();
+    if (!sameProviderSession) {
+      await client.request(
+        "thread/resume",
+        { threadId: args.providerSessionId },
+        90_000,
+      );
+    }
+  };
+
+  const disableRemoteKeyboardControl = () => {
+    if (remoteKeyboardHandler) {
+      process.stdin.off("data", remoteKeyboardHandler);
+      remoteKeyboardHandler = null;
+    }
+    if (process.stdin.isTTY) {
+      process.stdin.setRawMode(false);
+    }
+    process.stdin.pause();
+  };
+
+  let localExitForHandoff = false;
+
+  const maybeStartPendingRemoteTurn = async () => {
+    if (
+      exiting ||
+      !isRemoteWriterMode(mode) ||
+      !pendingRemoteTurn ||
+      !boundProviderSessionId ||
+      remoteTurnRequestInFlight ||
+      currentTurnId
+    ) {
+      return;
+    }
+    const turn = pendingRemoteTurn;
+    pendingRemoteTurn = null;
+    remotePromptText = turn.text;
+    remoteTurnRequestInFlight = true;
+    updatePromptState("agent_busy");
+    renderRemoteModePanel();
+    try {
+      const client = await ensureControlClient();
+      void client
+        .request("turn/start", {
+          threadId: boundProviderSessionId,
+          input: [{ type: "text", text: turn.text }],
+        })
+        .catch((error) => {
+          logger.log(`[rah] remote turn start failed: ${String(error)}`);
+          remoteTurnRequestInFlight = false;
+          updatePromptState("prompt_clean");
+          renderRemoteModePanel();
+          if (wrapperSessionId) {
+            send({
+              type: "wrapper.activity",
+              sessionId: wrapperSessionId,
+              activity: {
+                type: "notification",
+                level: "critical",
+                title: "Codex remote turn failed",
+                body: error instanceof Error ? error.message : String(error),
+              },
+            });
+          }
+          enableRemoteKeyboardControl();
+        });
+    } catch (error) {
+      logger.log(`[rah] remote writer unavailable: ${String(error)}`);
+      remoteTurnRequestInFlight = false;
+      updatePromptState("prompt_clean");
+      renderRemoteModePanel();
+      enableRemoteKeyboardControl();
+    }
+  };
+
+  const startLocalNative = () => {
+    disableRemoteKeyboardControl();
+    mode = "local_native";
+    remotePromptText = null;
+    lastRenderedRemotePanel = null;
+    remoteReclaimRequested = false;
+    remoteTurnRequestInFlight = false;
+    updatePromptState("prompt_clean");
+    restoreMainTerminalScreen();
+    const codexArgs = boundProviderSessionId
+      ? ["resume", boundProviderSessionId]
+      : parsed.resumeProviderSessionId
+        ? ["resume", parsed.resumeProviderSessionId]
+        : [];
+    localTerminal = new NativeTerminalProcess({
+      cwd: parsed.cwd,
+      command: binary,
+      args: codexArgs,
+      env: {
+        CODEX_HOME: process.env.CODEX_HOME ?? sharedCodexHome,
+      },
+      onExit: ({ exitCode, signal }) => {
+        localTerminal = null;
+        if (localExitForHandoff) {
+          localExitForHandoff = false;
+        } else {
+          localExitCode = exitCode ?? 0;
+          localExitSignal = signal ?? null;
+        }
+        if (exiting) {
+          shouldExit = true;
+          return;
+        }
+        if (pendingRemoteTurn) {
+          mode = "remote_writer";
+          void maybeStartPendingRemoteTurn();
+          return;
+        }
+        shouldExit = true;
+      },
+    });
+    logger.log(`[rah] local native codex started (${codexArgs.join(" ") || "new"})`);
+  };
+
+  const enableRemoteKeyboardControl = () => {
+    if (remoteKeyboardHandler || exiting || !isRemoteWriterMode(mode)) {
+      return;
+    }
+    process.stdin.setEncoding("utf8");
+    process.stdin.resume();
+    if (process.stdin.isTTY) {
+      process.stdin.setRawMode(true);
+    }
+    remoteKeyboardHandler = (chunk: Buffer | string) => {
+      const data = chunk.toString();
+      if (data === "\u0003") {
+        logger.log("[rah] Ctrl+C pressed in remote handoff panel; exiting wrapper");
+        localExitCode = 130;
+        void cleanupAndExit().finally(() => {
+          shouldExit = true;
+        });
+        return;
+      }
+      if (data === "\u001b") {
+        if (currentTurnId || promptState === "agent_busy" || remoteTurnRequestInFlight) {
+          remoteReclaimRequested = true;
+          logger.log("[rah] local control reclaim requested; waiting for remote turn to finish");
+          renderRemoteModePanel();
+          return;
+        }
+        logger.log("[rah] local control reclaimed from terminal");
+        startLocalNative();
+      }
+    };
+    process.stdin.on("data", remoteKeyboardHandler);
+    renderRemoteModePanel();
+  };
+
+  const cleanupAndExit = async () => {
+    if (exiting) {
+      return;
+    }
+    exiting = true;
+    disableRemoteKeyboardControl();
+    restoreMainTerminalScreen();
+    if (localTerminal) {
+      await localTerminal.close("SIGTERM").catch(() => undefined);
+      localTerminal = null;
+    }
+    await controlClient?.dispose().catch(() => undefined);
+    controlClient = null;
+    if (wrapperSessionId) {
+      send({
+        type: "wrapper.exited",
+        sessionId: wrapperSessionId,
+        ...(localExitCode !== undefined ? { exitCode: localExitCode } : {}),
+        ...(localExitSignal ? { signal: localExitSignal } : {}),
+      });
+    }
+    socket.close();
+  };
+
+  socket.on("open", () => {
+    logger.log("[rah] wrapper control connected");
+    send({
+      type: "wrapper.hello",
+      provider: "codex",
+      cwd: parsed.cwd,
+      rootDir: parsed.cwd,
+      terminalPid: process.pid,
+      launchCommand: [
+        "rah",
+        "codex",
+        ...(parsed.resumeProviderSessionId ? ["resume", parsed.resumeProviderSessionId] : []),
+      ],
+      ...(parsed.resumeProviderSessionId
+        ? { resumeProviderSessionId: parsed.resumeProviderSessionId }
+        : {}),
+    });
+  });
+
+  socket.on("message", (raw) => {
+    const message = JSON.parse(raw.toString("utf8"));
+    if (message.type === "wrapper.ready") {
+      wrapperSessionId = message.sessionId;
+      logger.log(`[rah] terminal session registered: ${message.sessionId}`);
+      if (parsed.resumeProviderSessionId) {
+        void syncProviderBinding({
+          providerSessionId: parsed.resumeProviderSessionId,
+          reason: "initial",
+        });
+      } else {
+        updatePromptState("prompt_clean");
+      }
+      return;
+    }
+    if (message.type === "turn.inject") {
+      pendingRemoteTurn = message.queuedTurn;
+      if (!boundProviderSessionId) {
+        logger.log("[rah] remote turn queued until local codex session binding is established");
+        if (wrapperSessionId) {
+          send({
+            type: "wrapper.activity",
+            sessionId: wrapperSessionId,
+            activity: {
+              type: "notification",
+              level: "info",
+              title: "Codex session is not ready for web control yet",
+              body: "Send the first turn in the terminal once so RAH can bind this Codex session. After that, web control will work.",
+            },
+          });
+        }
+        return;
+      }
+      if (mode === "local_native" && localTerminal) {
+        localExitForHandoff = true;
+        updatePromptState("agent_busy");
+        void localTerminal.close("SIGTERM");
+        return;
+      }
+      mode = "remote_writer";
+      void maybeStartPendingRemoteTurn();
+      return;
+    }
+    if (message.type === "turn.enqueue") {
+      logger.log(`[rah] remote turn queued: ${message.queuedTurn.text}`);
+      return;
+    }
+    if (message.type === "turn.interrupt") {
+      if (mode === "local_native") {
+        logger.log("[rah] ignoring remote interrupt while terminal holds local control");
+        return;
+      }
+      if (pendingRemoteTurn && !currentTurnId && !remoteTurnRequestInFlight) {
+        logger.log("[rah] canceling queued remote turn before it started");
+        pendingRemoteTurn = null;
+        remotePromptText = null;
+        updatePromptState("prompt_clean");
+        renderRemoteModePanel();
+        enableRemoteKeyboardControl();
+        return;
+      }
+      if (!currentTurnId && !remoteTurnRequestInFlight && promptState !== "agent_busy") {
+        logger.log("[rah] ignoring remote interrupt because no remote Codex turn is running");
+        return;
+      }
+      if (controlClient && boundProviderSessionId) {
+        void controlClient.request("turn/interrupt", {
+          threadId: boundProviderSessionId,
+          ...(currentTurnId ? { turnId: currentTurnId } : {}),
+        }).catch((error) => {
+          logger.log(`[rah] remote interrupt failed: ${String(error)}`);
+        });
+      }
+      return;
+    }
+    if (message.type === "permission.resolve") {
+      const pending = pendingApprovals.get(message.requestId);
+      if (!pending) {
+        logger.log(`[rah] unknown remote permission resolution: ${message.requestId}`);
+        return;
+      }
+      pendingApprovals.delete(message.requestId);
+      mirrorControlActivity(
+        mapCodexPermissionResolution({
+          requestId: message.requestId,
+          behavior: message.response.behavior,
+          ...(message.response.message !== undefined ? { message: message.response.message } : {}),
+          ...(message.response.selectedActionId !== undefined
+            ? { selectedActionId: message.response.selectedActionId }
+            : {}),
+          ...(message.response.decision !== undefined ? { decision: message.response.decision } : {}),
+          ...(message.response.answers !== undefined ? { answers: message.response.answers } : {}),
+        }).activity,
+      );
+      if (pending.kind === "question") {
+        pending.resolve({ answers: message.response.answers ?? {} });
+      } else {
+        pending.resolve({
+          decision: resolveApprovalDecision(message.response, pending.approvalProtocol ?? "v2"),
+        });
+      }
+      return;
+    }
+    if (message.type === "wrapper.close") {
+      void cleanupAndExit();
+    }
+  });
+
+  socket.on("error", (error) => {
+    if (socketErrored) {
+      return;
+    }
+    socketErrored = true;
+    process.stderr.write(
+      `[rah] could not connect to RAH daemon at ${parsed.daemonUrl}. Start the daemon and try again.\n`,
+    );
+    void cleanupAndExit().finally(() => {
+      process.exitCode = 1;
+    });
+  });
+
+  socket.on("close", () => {
+    if (socketErrored || exiting || shouldExit) {
+      return;
+    }
+    logger.log("[rah] wrapper control channel closed");
+    process.exitCode = 1;
+  });
+
+  process.on("SIGINT", () => {
+    if (!exiting) {
+      void cleanupAndExit();
+    }
+  });
+  process.on("SIGTERM", () => {
+    if (!exiting) {
+      void cleanupAndExit();
+    }
+  });
+
+  startLocalNative();
+
+  while (!shouldExit && !exiting) {
+    if (wrapperSessionId) {
+      const records = discoverCodexStoredSessions();
+      const candidate = selectCodexStoredSessionCandidate({
+        records,
+        cwd: parsed.cwd,
+        startupTimestampMs,
+        ...(parsed.resumeProviderSessionId && !boundRecord
+          ? { resumeProviderSessionId: parsed.resumeProviderSessionId }
+          : {}),
+        ...(parsed.resumeProviderSessionId && !boundRecord
+          ? {}
+          : { updatedAfterMs: bindingDetectionSinceMs }),
+      });
+
+      if (candidate) {
+        await syncProviderBinding({
+          providerSessionId: candidate.ref.providerSessionId,
+          reason: boundProviderSessionId ? "switch" : "initial",
+          record: candidate,
+        });
+      }
+    }
+
+    const activeBoundRecord: CodexStoredSessionRecord | null = boundRecord;
+    if (!wrapperSessionId || !activeBoundRecord || boundProviderSessionId === null) {
+      // Continue below.
+    } else {
+      const activeRecord = activeBoundRecord as CodexStoredSessionRecord;
+      if (activeRecord.ref.providerSessionId !== boundProviderSessionId) {
+        await delay(250);
+        continue;
+      }
+      const content = readFileSync(activeRecord.rolloutPath, "utf8");
+      const window = sliceUnprocessedRolloutLines(content, processedLineCount);
+      processedLineCount = window.nextProcessedLineCount;
+      for (const line of window.lines) {
+        let parsedLine: unknown;
+        try {
+          parsedLine = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        const lifecycle = readPersistedTaskLifecycle(parsedLine);
+        if (lifecycle?.kind === "started") {
+          currentTurnId = lifecycle.turnId;
+          remoteTurnRequestInFlight = false;
+          updatePromptState("agent_busy");
+          renderRemoteModePanel();
+        } else if (lifecycle?.kind === "completed") {
+          if (currentTurnId && currentTurnId !== lifecycle.turnId) {
+            continue;
+          }
+          currentTurnId = null;
+          remoteTurnRequestInFlight = false;
+          updatePromptState("prompt_clean");
+          renderRemoteModePanel();
+          if (isRemoteWriterMode(mode)) {
+            if (remoteReclaimRequested) {
+              startLocalNative();
+            } else {
+              enableRemoteKeyboardControl();
+            }
+          }
+        }
+        const translated = translateCodexRolloutLine(parsedLine, translationState);
+        for (const item of translated) {
+          send({
+            type: "wrapper.activity",
+            sessionId: wrapperSessionId,
+            activity: item.activity,
+          });
+          if (item.activity.type === "turn_started") {
+            currentTurnId = item.activity.turnId;
+            remoteTurnRequestInFlight = false;
+          } else if (
+            item.activity.type === "turn_completed" ||
+            item.activity.type === "turn_failed" ||
+            item.activity.type === "turn_canceled"
+          ) {
+            currentTurnId = null;
+            remoteTurnRequestInFlight = false;
+            updatePromptState("prompt_clean");
+            renderRemoteModePanel();
+            if (isRemoteWriterMode(mode)) {
+              if (remoteReclaimRequested) {
+                startLocalNative();
+              } else {
+                enableRemoteKeyboardControl();
+              }
+            }
+          }
+          const nextPromptState = nextPromptStateFromActivity(promptState, item.activity);
+          updatePromptState(nextPromptState);
+        }
+      }
+    }
+
+    const terminalToHandoff: NativeTerminalProcess | null = localTerminal;
+    if (
+      pendingRemoteTurn &&
+      mode === "local_native" &&
+      terminalToHandoff !== null &&
+      boundProviderSessionId &&
+      currentTurnId === null
+    ) {
+      localExitForHandoff = true;
+      updatePromptState("agent_busy");
+      void (terminalToHandoff as NativeTerminalProcess).close("SIGTERM");
+    }
+
+    if (isRemoteWriterMode(mode) && pendingRemoteTurn) {
+      void maybeStartPendingRemoteTurn();
+    }
+
+    await delay(250);
+  }
+
+  logger.log("[rah] codex terminal handoff wrapper exiting");
+  await cleanupAndExit();
+  process.exitCode = localExitCode;
+}
+
+void main();

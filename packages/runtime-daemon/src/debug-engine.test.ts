@@ -27,7 +27,6 @@ describe("DebugEngine structured UI scenarios", () => {
       "runtime.status",
       "notification.emitted",
       "usage.updated",
-      "context.updated",
     ]) {
       assert.equal(types.has(type as never), true, type);
     }

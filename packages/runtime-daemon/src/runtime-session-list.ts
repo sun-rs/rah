@@ -41,6 +41,7 @@ export function storedSessionRefKey(entry: StoredSessionRef): string {
     entry.rootDir ?? "",
     entry.title ?? "",
     entry.preview ?? "",
+    entry.createdAt ?? "",
     entry.updatedAt ?? "",
     entry.lastUsedAt ?? "",
   ]);
@@ -100,13 +101,6 @@ export function buildSessionsResponse(args: {
       continue;
     }
     storedSessions.set(`${stored.provider}:${stored.providerSessionId}`, stored);
-  }
-  for (const state of visibleLiveStates) {
-    const providerSessionId = state.session.providerSessionId;
-    if (!providerSessionId) {
-      continue;
-    }
-    storedSessions.delete(`${state.session.provider}:${providerSessionId}`);
   }
   return {
     sessions: visibleLiveStates.map((state) => {

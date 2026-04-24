@@ -302,7 +302,6 @@ export type RahEventPayloadMap = {
   "governance.updated": { policy: JsonObject };
 
   "usage.updated": { usage: ContextUsage };
-  "context.updated": { usage: ContextUsage };
   "runtime.status": {
     status:
       | "connecting"

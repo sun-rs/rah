@@ -47,6 +47,10 @@ export interface ProviderAdapter {
 
   startSession(request: StartSessionRequest): StartSessionResponse | Promise<StartSessionResponse>;
   resumeSession(request: ResumeSessionRequest): ResumeSessionResponse | Promise<ResumeSessionResponse>;
+  renameSession?(
+    sessionId: string,
+    title: string,
+  ): SessionSummary | Promise<SessionSummary>;
   sendInput(sessionId: string, request: SessionInputRequest): void;
   closeSession?(sessionId: string, request: CloseSessionRequest): Promise<void> | void;
   destroySession?(sessionId: string): Promise<void> | void;
@@ -62,12 +66,15 @@ export interface ProviderAdapter {
     sessionId: string,
     options?: { scopeRoot?: string },
   ): WorkspaceSnapshotResponse;
-  getGitStatus(sessionId: string, options?: { scopeRoot?: string }): GitStatusResponse;
+  getGitStatus(
+    sessionId: string,
+    options?: { scopeRoot?: string },
+  ): GitStatusResponse | Promise<GitStatusResponse>;
   getGitDiff(
     sessionId: string,
     path: string,
     options?: { staged?: boolean; ignoreWhitespace?: boolean; scopeRoot?: string },
-  ): GitDiffResponse;
+  ): GitDiffResponse | Promise<GitDiffResponse>;
   applyGitFileAction?(
     sessionId: string,
     request: GitFileActionRequest,
@@ -80,7 +87,7 @@ export interface ProviderAdapter {
     sessionId: string,
     path: string,
     options?: { scopeRoot?: string },
-  ): SessionFileResponse;
+  ): SessionFileResponse | Promise<SessionFileResponse>;
   getSessionHistoryPage?(
     sessionId: string,
     options?: { beforeTs?: string; cursor?: string; limit?: number },

@@ -65,8 +65,8 @@ describe("codex stored session path resolution", () => {
     rmSync(repoRoot, { recursive: true, force: true });
   });
 
-  test("limits git status to the current workspace boundary", () => {
-    const status = getCodexGitStatus(sessionCwd);
+  test("limits git status to the current workspace boundary", async () => {
+    const status = await getCodexGitStatus(sessionCwd);
     assert.deepEqual(
       status.changedFiles,
       [targetRelativePath],
@@ -75,62 +75,62 @@ describe("codex stored session path resolution", () => {
     assert.equal(status.unstagedFiles[0]?.path, targetRelativePath);
   });
 
-  test("limits git status to an explicit workspace scope when session cwd is repo root", () => {
-    const status = getCodexGitStatus(repoRoot, { scopeRoot: sessionCwd });
+  test("limits git status to an explicit workspace scope when session cwd is repo root", async () => {
+    const status = await getCodexGitStatus(repoRoot, { scopeRoot: sessionCwd });
     assert.deepEqual(status.changedFiles, [targetRelativePath]);
     assert.equal(status.unstagedFiles.length, 1);
     assert.equal(status.unstagedFiles[0]?.path, targetRelativePath);
   });
 
-  test("returns no changes when explicit workspace scope is above the git project root", () => {
+  test("returns no changes when explicit workspace scope is above the git project root", async () => {
     const outerWorkspace = path.dirname(repoRoot);
-    const status = getCodexGitStatus(sessionCwd, { scopeRoot: outerWorkspace });
+    const status = await getCodexGitStatus(sessionCwd, { scopeRoot: outerWorkspace });
     assert.deepEqual(status.changedFiles, []);
     assert.equal(status.stagedFiles.length, 0);
     assert.equal(status.unstagedFiles.length, 0);
   });
 
-  test("reads repo-root-relative file paths from a nested session cwd", () => {
-    const file = readWorkspaceFile(sessionCwd, targetRelativePath);
+  test("reads repo-root-relative file paths from a nested session cwd", async () => {
+    const file = await readWorkspaceFile(sessionCwd, targetRelativePath);
     assert.equal(file.binary, false);
     assert.match(file.content, /changed in scope/);
     assert.ok(file.path.endsWith(targetRelativePath));
   });
 
-  test("rejects reading files outside the current workspace boundary", () => {
-    assert.throws(
+  test("rejects reading files outside the current workspace boundary", async () => {
+    await assert.rejects(
       () => readWorkspaceFile(sessionCwd, "README.md"),
       /ENOENT|Path must remain inside the workspace/,
     );
-    assert.throws(
+    await assert.rejects(
       () => readWorkspaceFile(sessionCwd, outsideRelativePath),
       /ENOENT|Path must remain inside the workspace/,
     );
   });
 
-  test("rejects reading files outside an explicit workspace scope", () => {
-    const file = readWorkspaceFile(repoRoot, targetRelativePath, { scopeRoot: sessionCwd });
+  test("rejects reading files outside an explicit workspace scope", async () => {
+    const file = await readWorkspaceFile(repoRoot, targetRelativePath, { scopeRoot: sessionCwd });
     assert.equal(file.binary, false);
     assert.match(file.content, /changed in scope/);
-    assert.throws(
+    await assert.rejects(
       () => readWorkspaceFile(repoRoot, outsideRelativePath, { scopeRoot: sessionCwd }),
       /ENOENT|Path must remain inside the workspace/,
     );
   });
 
-  test("reads git diff for repo-root-relative paths from a nested session cwd", () => {
-    const diff = getCodexGitDiff(sessionCwd, targetRelativePath);
+  test("reads git diff for repo-root-relative paths from a nested session cwd", async () => {
+    const diff = await getCodexGitDiff(sessionCwd, targetRelativePath);
     assert.match(diff, /crates\/solars-time\/src\/lib\.rs/);
     assert.match(diff, /\+    println!\("changed in scope"\);/);
   });
 
-  test("returns no diff when explicit workspace scope is above the git project root", () => {
+  test("returns no diff when explicit workspace scope is above the git project root", async () => {
     const outerWorkspace = path.dirname(repoRoot);
-    const diff = getCodexGitDiff(sessionCwd, targetRelativePath, { scopeRoot: outerWorkspace });
+    const diff = await getCodexGitDiff(sessionCwd, targetRelativePath, { scopeRoot: outerWorkspace });
     assert.equal(diff, "");
   });
 
-  test("stages, reverts, and unstages individual hunks", () => {
+  test("stages, reverts, and unstages individual hunks", async () => {
     const multiHunkPath = path.join("src", "multi.rs");
     writeFileSync(
       path.join(sessionCwd, multiHunkPath),
@@ -145,39 +145,39 @@ describe("codex stored session path resolution", () => {
       "utf8",
     );
 
-    applyCodexGitHunkAction(sessionCwd, {
+    await applyCodexGitHunkAction(sessionCwd, {
       path: multiHunkPath,
       hunkIndex: 0,
       action: "stage",
       staged: false,
     });
 
-    const stagedDiff = getCodexGitDiff(sessionCwd, multiHunkPath, { staged: true });
-    const unstagedDiff = getCodexGitDiff(sessionCwd, multiHunkPath, { staged: false });
+    const stagedDiff = await getCodexGitDiff(sessionCwd, multiHunkPath, { staged: true });
+    const unstagedDiff = await getCodexGitDiff(sessionCwd, multiHunkPath, { staged: false });
     assert.match(stagedDiff, /one changed/);
     assert.doesNotMatch(stagedDiff, /ten changed/);
     assert.match(unstagedDiff, /ten changed/);
 
-    applyCodexGitHunkAction(sessionCwd, {
+    await applyCodexGitHunkAction(sessionCwd, {
       path: multiHunkPath,
       hunkIndex: 0,
       action: "revert",
       staged: false,
     });
-    const afterRevert = getCodexGitDiff(sessionCwd, multiHunkPath, { staged: false });
+    const afterRevert = await getCodexGitDiff(sessionCwd, multiHunkPath, { staged: false });
     assert.doesNotMatch(afterRevert, /ten changed/);
 
-    applyCodexGitHunkAction(sessionCwd, {
+    await applyCodexGitHunkAction(sessionCwd, {
       path: multiHunkPath,
       hunkIndex: 0,
       action: "unstage",
       staged: true,
     });
-    const afterUnstage = getCodexGitDiff(sessionCwd, multiHunkPath, { staged: true });
+    const afterUnstage = await getCodexGitDiff(sessionCwd, multiHunkPath, { staged: true });
     assert.equal(afterUnstage, "");
   });
 
-  test("stages and unstages an entire file", () => {
+  test("stages and unstages an entire file", async () => {
     const filePath = path.join("src", "file_action.rs");
     writeFileSync(
       path.join(sessionCwd, filePath),
@@ -192,24 +192,24 @@ describe("codex stored session path resolution", () => {
       "utf8",
     );
 
-    applyCodexGitFileAction(sessionCwd, {
+    await applyCodexGitFileAction(sessionCwd, {
       path: filePath,
       action: "stage",
       staged: false,
     });
-    assert.match(getCodexGitDiff(sessionCwd, filePath, { staged: true }), /after/);
-    assert.equal(getCodexGitDiff(sessionCwd, filePath, { staged: false }), "");
+    assert.match(await getCodexGitDiff(sessionCwd, filePath, { staged: true }), /after/);
+    assert.equal(await getCodexGitDiff(sessionCwd, filePath, { staged: false }), "");
 
-    applyCodexGitFileAction(sessionCwd, {
+    await applyCodexGitFileAction(sessionCwd, {
       path: filePath,
       action: "unstage",
       staged: true,
     });
-    assert.equal(getCodexGitDiff(sessionCwd, filePath, { staged: true }), "");
-    assert.match(getCodexGitDiff(sessionCwd, filePath, { staged: false }), /after/);
+    assert.equal(await getCodexGitDiff(sessionCwd, filePath, { staged: true }), "");
+    assert.match(await getCodexGitDiff(sessionCwd, filePath, { staged: false }), /after/);
   });
 
-  test("reports rename metadata for staged renamed files", () => {
+  test("reports rename metadata for staged renamed files", async () => {
     const oldPath = path.join("src", "rename_before.rs");
     const newPath = path.join("src", "rename_after.rs");
     const oldRepoPath = path.relative(repoRoot, path.join(sessionCwd, oldPath));
@@ -220,14 +220,14 @@ describe("codex stored session path resolution", () => {
 
     execFileSync("git", ["mv", oldPath, newPath], { cwd: sessionCwd, stdio: "ignore" });
 
-    const status = getCodexGitStatus(sessionCwd);
+    const status = await getCodexGitStatus(sessionCwd);
     const renamed = status.stagedFiles.find((entry) => entry.path === newRepoPath);
     assert.ok(renamed);
     assert.equal(renamed?.status, "renamed");
     assert.equal(renamed?.oldPath, oldRepoPath);
   });
 
-  test("marks binary files in git status", () => {
+  test("marks binary files in git status", async () => {
     const binaryPath = path.join("src", "blob.bin");
     const binaryRepoPath = path.relative(repoRoot, path.join(sessionCwd, binaryPath));
     writeFileSync(path.join(sessionCwd, binaryPath), Buffer.from([0, 1, 2, 3]));
@@ -236,13 +236,13 @@ describe("codex stored session path resolution", () => {
 
     writeFileSync(path.join(sessionCwd, binaryPath), Buffer.from([4, 5, 6, 7]));
 
-    const status = getCodexGitStatus(sessionCwd);
+    const status = await getCodexGitStatus(sessionCwd);
     const binary = status.unstagedFiles.find((entry) => entry.path === binaryRepoPath);
     assert.ok(binary);
     assert.equal(binary?.binary, true);
   });
 
-  test("keeps the same file visible in both staged and unstaged sections", () => {
+  test("keeps the same file visible in both staged and unstaged sections", async () => {
     const dualPath = path.join("src", "dual_stage.rs");
     const dualRepoPath = path.relative(repoRoot, path.join(sessionCwd, dualPath));
     writeFileSync(path.join(sessionCwd, dualPath), "pub fn dual() {\n    println!(\"base\");\n}\n", "utf8");
@@ -253,7 +253,7 @@ describe("codex stored session path resolution", () => {
     execFileSync("git", ["add", "--", dualPath], { cwd: sessionCwd, stdio: "ignore" });
     writeFileSync(path.join(sessionCwd, dualPath), "pub fn dual() {\n    println!(\"staged\");\n    println!(\"unstaged\");\n}\n", "utf8");
 
-    const status = getCodexGitStatus(sessionCwd);
+    const status = await getCodexGitStatus(sessionCwd);
     assert.ok(status.stagedFiles.some((entry) => entry.path === dualRepoPath));
     assert.ok(status.unstagedFiles.some((entry) => entry.path === dualRepoPath));
   });

@@ -28,7 +28,7 @@ import { EventBus } from "./event-bus";
 import { PtyHub } from "./pty-hub";
 import { SessionStore } from "./session-store";
 import { DEBUG_SCENARIOS, type DebugScenario } from "./debug-scenarios";
-import { readWorkspaceFileFromDirectory } from "./workspace-utils";
+import { readWorkspaceFileFromDirectoryAsync } from "./workspace-utils";
 
 type PendingTurn = {
   sessionId: string;
@@ -119,6 +119,7 @@ export class DebugEngine {
       cwd: request.cwd,
       rootDir: sanitizeRootDir(request.cwd),
       capabilities: {
+        renameSession: false,
         steerInput: true,
       },
     };
@@ -250,6 +251,7 @@ export class DebugEngine {
       cwd,
       rootDir: stored?.rootDir ?? sanitizeRootDir(cwd),
       capabilities: {
+        renameSession: false,
         steerInput: true,
       },
     };
@@ -531,17 +533,6 @@ export class DebugEngine {
         this.eventBus.publish({
           sessionId,
           turnId,
-          type: "context.updated",
-          source: {
-            provider: "custom",
-            channel: "structured_live",
-            authority: "derived",
-          },
-          payload: { usage },
-        });
-        this.eventBus.publish({
-          sessionId,
-          turnId,
           type: "turn.completed",
           source: DEBUG_SOURCE,
           payload: { usage },
@@ -695,11 +686,11 @@ export class DebugEngine {
     };
   }
 
-  readSessionFile(
+  async readSessionFile(
     sessionId: string,
     path: string,
     _options?: { scopeRoot?: string },
-  ): SessionFileResponse {
+  ): Promise<SessionFileResponse> {
     const session = this.sessionStore.getSession(sessionId)?.session;
     if (!session) {
       throw new Error(`Unknown session ${sessionId}`);
@@ -721,7 +712,7 @@ export class DebugEngine {
         binary: false,
       };
     }
-    return readWorkspaceFileFromDirectory(session.cwd, path);
+    return await readWorkspaceFileFromDirectoryAsync(session.cwd, path);
   }
 
   getContextUsage(sessionId: string): ContextUsage | undefined {
@@ -786,6 +777,7 @@ export class DebugEngine {
       rootDir: scenario.rootDir,
       title: scenario.title,
       capabilities: {
+        renameSession: false,
         steerInput: true,
       },
     };
@@ -1094,21 +1086,6 @@ export class DebugEngine {
             {
               sessionId,
               type: "usage.updated",
-              source: {
-                provider: "custom",
-                channel: "structured_live",
-                authority: "derived",
-              },
-              payload: { usage: step.usage },
-            },
-            step.turnId,
-          ),
-        );
-        this.eventBus.publish(
-          withOptionalTurnId(
-            {
-              sessionId,
-              type: "context.updated",
               source: {
                 provider: "custom",
                 channel: "structured_live",
@@ -1529,22 +1506,6 @@ export class DebugEngine {
               {
                 sessionId,
                 type: "usage.updated",
-                source: {
-                  provider: "custom",
-                  channel: "structured_live",
-                  authority: "derived",
-                },
-                payload: { usage: step.usage },
-                ts,
-              },
-              step.turnId,
-            ),
-          );
-          bus.publish(
-            withOptionalTurnId(
-              {
-                sessionId,
-                type: "context.updated",
                 source: {
                   provider: "custom",
                   channel: "structured_live",

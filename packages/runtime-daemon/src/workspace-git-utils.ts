@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import path from "node:path";
 import type {
   GitChangedFile,
@@ -12,8 +12,8 @@ import type {
 import {
   isPathWithinBase,
   normalizeComparablePath,
-  resolveWorkspacePath,
-  tryResolveGitRoot,
+  resolveWorkspacePathAsync,
+  tryResolveGitRootAsync,
 } from "./workspace-path-utils";
 
 type DiffStat = {
@@ -39,35 +39,28 @@ export type WorkspaceGitStatusData = {
   totalUnstaged: number;
 };
 
-export function getWorkspaceGitStatusData(
+export async function getWorkspaceGitStatusAsync(
   cwd: string,
   options?: { scopeRoot?: string },
-): WorkspaceGitStatusData {
-  return tryReadGitStatus(cwd, options);
-}
-
-export function getWorkspaceGitStatus(
-  cwd: string,
-  options?: { scopeRoot?: string },
-): GitStatusResponse {
+): Promise<GitStatusResponse> {
   return {
     sessionId: "",
-    ...getWorkspaceGitStatusData(cwd, options),
+    ...(await getWorkspaceGitStatusDataAsync(cwd, options)),
   };
 }
 
-export function getWorkspaceGitDiff(
+export async function getWorkspaceGitDiffAsync(
   cwd: string,
   targetPath: string,
   options?: { staged?: boolean; ignoreWhitespace?: boolean; scopeRoot?: string },
-): GitDiffResponse["diff"] {
+): Promise<GitDiffResponse["diff"]> {
   try {
     const gitBase = options?.scopeRoot ?? cwd;
-    const gitCwd = tryResolveGitRoot(gitBase);
+    const gitCwd = await tryResolveGitRootAsync(gitBase);
     if (!gitCwd) {
       return "";
     }
-    const relativeGitPath = toGitPath(gitBase, targetPath);
+    const relativeGitPath = await toGitPathAsync(gitBase, targetPath);
     const args = ["-C", gitCwd, "diff"];
     if (options?.staged) {
       args.push("--cached");
@@ -76,23 +69,23 @@ export function getWorkspaceGitDiff(
       args.push("-w");
     }
     args.push("--", relativeGitPath);
-    return execFileSync("git", args, { encoding: "utf8" });
+    return await runGitCommand(gitCwd, args.slice(2));
   } catch {
     return "";
   }
 }
 
-export function applyWorkspaceGitFileAction(
+export async function applyWorkspaceGitFileActionAsync(
   cwd: string,
   request: GitFileActionRequest,
   options?: { scopeRoot?: string },
-): GitFileActionResponse {
-  const gitCwd = getGitCommandCwd(cwd);
-  const relativeGitPath = toGitPath(options?.scopeRoot ?? cwd, request.path);
+): Promise<GitFileActionResponse> {
+  const gitCwd = await getGitCommandCwdAsync(cwd);
+  const relativeGitPath = await toGitPathAsync(options?.scopeRoot ?? cwd, request.path);
   if (request.action === "stage") {
-    execGitFile(gitCwd, ["add", "--", relativeGitPath]);
+    await execGitFileAsync(gitCwd, ["add", "--", relativeGitPath]);
   } else {
-    execGitFile(gitCwd, ["restore", "--staged", "--", relativeGitPath]);
+    await execGitFileAsync(gitCwd, ["restore", "--staged", "--", relativeGitPath]);
   }
   return {
     sessionId: "",
@@ -103,14 +96,14 @@ export function applyWorkspaceGitFileAction(
   };
 }
 
-export function applyWorkspaceGitHunkAction(
+export async function applyWorkspaceGitHunkActionAsync(
   cwd: string,
   request: GitHunkActionRequest,
   options?: { scopeRoot?: string },
-): GitHunkActionResponse {
-  const gitCwd = getGitCommandCwd(cwd);
+): Promise<GitHunkActionResponse> {
+  const gitCwd = await getGitCommandCwdAsync(cwd);
   const scopeRoot = options?.scopeRoot ?? cwd;
-  const diff = getWorkspaceGitDiff(cwd, request.path, {
+  const diff = await getWorkspaceGitDiffAsync(cwd, request.path, {
     ...(request.staged !== undefined ? { staged: request.staged } : {}),
     ignoreWhitespace: false,
     scopeRoot,
@@ -125,17 +118,17 @@ export function applyWorkspaceGitHunkAction(
     if (request.staged) {
       throw new Error("Hunk is already staged.");
     }
-    execGitApply(gitCwd, ["--cached"], patch);
+    await execGitApplyAsync(gitCwd, ["--cached"], patch);
   } else if (request.action === "unstage") {
     if (!request.staged) {
       throw new Error("Only staged hunks can be unstaged.");
     }
-    execGitApply(gitCwd, ["--cached", "-R"], patch);
+    await execGitApplyAsync(gitCwd, ["--cached", "-R"], patch);
   } else {
     if (request.staged) {
       throw new Error("Revert is only supported for unstaged hunks.");
     }
-    execGitApply(gitCwd, ["-R"], patch);
+    await execGitApplyAsync(gitCwd, ["-R"], patch);
   }
 
   return {
@@ -148,13 +141,20 @@ export function applyWorkspaceGitHunkAction(
   };
 }
 
-function tryReadGitStatus(
+export async function getWorkspaceGitStatusDataAsync(
   cwd: string,
   options?: { scopeRoot?: string },
-): WorkspaceGitStatusData {
+): Promise<WorkspaceGitStatusData> {
+  return await tryReadGitStatusAsync(cwd, options);
+}
+
+async function tryReadGitStatusAsync(
+  cwd: string,
+  options?: { scopeRoot?: string },
+): Promise<WorkspaceGitStatusData> {
   try {
     const scopeRoot = path.resolve(options?.scopeRoot ?? cwd);
-    const gitCwd = tryResolveGitRoot(options?.scopeRoot ?? cwd);
+    const gitCwd = await tryResolveGitRootAsync(options?.scopeRoot ?? cwd);
     if (!gitCwd) {
       return {
         changedFiles: [],
@@ -164,14 +164,12 @@ function tryReadGitStatus(
         totalUnstaged: 0,
       };
     }
-    const output = execFileSync("git", ["-C", gitCwd, "status", "--porcelain", "--branch"], {
-      encoding: "utf8",
-    });
+    const output = await runGitCommand(gitCwd, ["status", "--porcelain", "--branch"]);
     const lines = output.split(/\r?\n/).filter(Boolean);
     const branchLine = lines[0] ?? "";
     const branchMatch = /^## ([^.\s]+)/.exec(branchLine);
-    const unstagedStats = createDiffStatsMap(parseNumStat(runGitNumstat(gitCwd, false)));
-    const stagedStats = createDiffStatsMap(parseNumStat(runGitNumstat(gitCwd, true)));
+    const unstagedStats = createDiffStatsMap(parseNumStat(await runGitNumstatAsync(gitCwd, false)));
+    const stagedStats = createDiffStatsMap(parseNumStat(await runGitNumstatAsync(gitCwd, true)));
     const stagedFiles: GitChangedFile[] = [];
     const unstagedFiles: GitChangedFile[] = [];
     const changedFiles = new Set<string>();
@@ -256,25 +254,21 @@ function tryReadGitStatus(
   }
 }
 
-function getGitCommandCwd(cwd: string): string {
-  return tryResolveGitRoot(cwd) ?? cwd;
+async function getGitCommandCwdAsync(cwd: string): Promise<string> {
+  return (await tryResolveGitRootAsync(cwd)) ?? cwd;
 }
 
-function toGitPath(cwd: string, targetPath: string): string {
-  const gitRoot = tryResolveGitRoot(cwd);
-  const resolvedTarget = resolveWorkspacePath(cwd, targetPath);
+async function toGitPathAsync(cwd: string, targetPath: string): Promise<string> {
+  const gitRoot = await tryResolveGitRootAsync(cwd);
+  const resolvedTarget = await resolveWorkspacePathAsync(cwd, targetPath);
   const relativeBase = normalizeComparablePath(gitRoot ?? cwd);
   const relativePath = path.relative(relativeBase, normalizeComparablePath(resolvedTarget));
   return relativePath || path.basename(resolvedTarget);
 }
 
-function runGitNumstat(cwd: string, staged: boolean): string {
+async function runGitNumstatAsync(cwd: string, staged: boolean): Promise<string> {
   try {
-    return execFileSync(
-      "git",
-      ["-C", cwd, "diff", ...(staged ? ["--cached"] : []), "--numstat"],
-      { encoding: "utf8" },
-    );
+    return await runGitCommand(cwd, ["diff", ...(staged ? ["--cached"] : []), "--numstat"]);
   } catch {
     return "";
   }
@@ -421,15 +415,47 @@ function buildSingleHunkPatch(parsed: ParsedFileDiff, hunkIndex: number): string
   return [...parsed.headerLines, hunk.headerLine, ...hunk.bodyLines, ""].join("\n");
 }
 
-function execGitApply(cwd: string, args: string[], patch: string): void {
-  execFileSync("git", ["-C", cwd, "apply", "--recount", "--whitespace=nowarn", ...args, "-"], {
-    input: patch,
-    stdio: ["pipe", "pipe", "pipe"],
+async function runGitCommand(
+  cwd: string,
+  args: string[],
+  options?: { input?: string },
+): Promise<string> {
+  return await new Promise<string>((resolve, reject) => {
+    const child = spawn("git", ["-C", cwd, ...args], {
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) {
+        resolve(stdout);
+        return;
+      }
+      reject(new Error(stderr.trim() || `git ${args[0] ?? "command"} exited with code ${code}`));
+    });
+    if (options?.input !== undefined) {
+      child.stdin.end(options.input);
+      return;
+    }
+    child.stdin.end();
   });
 }
 
-function execGitFile(cwd: string, args: string[]): void {
-  execFileSync("git", ["-C", cwd, ...args], {
-    stdio: ["ignore", "pipe", "pipe"],
+async function execGitApplyAsync(cwd: string, args: string[], patch: string): Promise<void> {
+  await runGitCommand(cwd, ["apply", "--recount", "--whitespace=nowarn", ...args, "-"], {
+    input: patch,
   });
+}
+
+async function execGitFileAsync(cwd: string, args: string[]): Promise<void> {
+  await runGitCommand(cwd, args);
 }

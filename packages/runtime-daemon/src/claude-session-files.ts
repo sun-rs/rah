@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { appendFileSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type {
@@ -36,6 +36,7 @@ const REHYDRATED_CAPABILITIES = {
   livePermissions: false,
   steerInput: false,
   queuedInput: false,
+  renameSession: true,
   modelSwitch: false,
   planMode: false,
   subagents: false,
@@ -107,6 +108,11 @@ type ClaudeRawRecord =
       error?: unknown;
       durationMs?: number;
     };
+type ClaudeCustomTitleRecord = {
+  type: "custom-title";
+  customTitle: string;
+  sessionId?: string;
+};
 
 export type ClaudeStoredSessionRecord = {
   ref: StoredSessionRef;
@@ -282,7 +288,10 @@ function readClaudeFrozenHistoryWindow(args: {
     const previousStartOffset = lastStartOffset;
     const parsed = window.lines
       .map(safeParseClaudeRecord)
-      .filter((record): record is ClaudeRawRecord => Boolean(record));
+      .filter(
+        (record): record is ClaudeRawRecord =>
+          record !== null && record.type !== "custom-title",
+      );
     events = translateClaudeRecords(args.sessionId, parsed)
       .sort((left, right) => left.ts.localeCompare(right.ts) || left.seq - right.seq);
     lastStartOffset = window.startOffset;
@@ -318,7 +327,12 @@ export function createClaudeStoredSessionFrozenHistoryPageLoader(args: {
     translateLines: (lines) =>
       translateClaudeRecords(
         args.sessionId,
-        lines.map(safeParseClaudeRecord).filter((record): record is ClaudeRawRecord => Boolean(record)),
+        lines
+          .map(safeParseClaudeRecord)
+          .filter(
+            (record): record is ClaudeRawRecord =>
+              record !== null && record.type !== "custom-title",
+          ),
       ),
   });
   return createLineFrozenHistoryPageLoader({
@@ -338,7 +352,7 @@ export function createClaudeStoredSessionFrozenHistoryPageLoader(args: {
   });
 }
 
-function safeParseClaudeRecord(line: string): ClaudeRawRecord | null {
+function safeParseClaudeRecord(line: string): ClaudeRawRecord | ClaudeCustomTitleRecord | null {
   try {
     const parsed = JSON.parse(line) as Record<string, unknown>;
     if (!parsed.type || typeof parsed.type !== "string") {
@@ -363,6 +377,9 @@ function safeParseClaudeRecord(line: string): ClaudeRawRecord | null {
     if (parsed.type === "system" && typeof parsed.uuid === "string") {
       return parsed as ClaudeRawRecord;
     }
+    if (parsed.type === "custom-title" && typeof parsed.customTitle === "string") {
+      return parsed as ClaudeCustomTitleRecord;
+    }
     return null;
   } catch {
     return null;
@@ -380,17 +397,31 @@ function recordKey(record: ClaudeRawRecord): string {
   }
 }
 
-function deriveStoredSessionRef(filePath: string, records: ClaudeRawRecord[]): StoredSessionRef | null {
-  const firstWithCwd = records.find((record) => typeof record.cwd === "string");
+function deriveStoredSessionRef(
+  filePath: string,
+  records: Array<ClaudeRawRecord | ClaudeCustomTitleRecord>,
+): StoredSessionRef | null {
+  const activityRecords = records.filter(
+    (record): record is ClaudeRawRecord => record.type !== "custom-title",
+  );
+  const firstWithCwd = activityRecords.find((record) => typeof record.cwd === "string");
   const cwd = normalizeDirectory(firstWithCwd?.cwd);
   const sessionId =
-    records.find((record) => typeof record.sessionId === "string")?.sessionId ??
+    activityRecords.find((record) => typeof record.sessionId === "string")?.sessionId ??
     path.basename(filePath, ".jsonl");
   if (!cwd) {
     return null;
   }
+  const customTitle = [...records]
+    .reverse()
+    .find(
+      (record): record is ClaudeCustomTitleRecord =>
+        record.type === "custom-title" && record.customTitle.trim().length > 0,
+    )
+    ?.customTitle
+    ?.trim();
   const previewSource =
-    records
+    activityRecords
       .flatMap((record) => {
         if (record.type === "user") {
           const text = extractUserMessageText(record.message.content);
@@ -405,17 +436,42 @@ function deriveStoredSessionRef(filePath: string, records: ClaudeRawRecord[]): S
         }
         return [];
       })[0] ?? "Untitled";
+  const createdAt = activityRecords
+    .map((record) => record.timestamp)
+    .filter((value): value is string => typeof value === "string" && !Number.isNaN(Date.parse(value)))
+    .sort((left, right) => left.localeCompare(right))[0];
   const updatedAt = statSync(filePath).mtime.toISOString();
   return {
     provider: "claude",
     providerSessionId: sessionId,
     cwd,
     rootDir: cwd,
-    title: truncateText(previewSource, 72),
+    title: truncateText(customTitle ?? previewSource, 72),
     preview: truncateText(previewSource, 120),
+    ...(createdAt ? { createdAt } : {}),
     updatedAt,
     source: "provider_history",
   };
+}
+
+export function updateClaudeSessionTitle(
+  providerSessionId: string,
+  title: string,
+  cwd?: string,
+): { filePath: string } {
+  const record = findClaudeStoredSessionRecord(providerSessionId, cwd);
+  if (!record) {
+    throw new Error(`Unknown Claude session ${providerSessionId}.`);
+  }
+  appendFileSync(
+    record.filePath,
+    `${JSON.stringify({
+      type: "custom-title",
+      customTitle: title,
+      sessionId: providerSessionId,
+    })}\n`,
+  );
+  return { filePath: record.filePath };
 }
 
 function translateClaudeRecords(sessionId: string, records: ClaudeRawRecord[]): RahEvent[] {
@@ -661,6 +717,30 @@ export function discoverClaudeStoredSessions(cwd?: string): ClaudeStoredSessionR
       mtimeMs: stats.mtimeMs,
     });
     if (cachedRef) {
+      if (!cachedRef.createdAt) {
+        const lines = readLeadingLines(filePath, {
+          maxBytes: 256 * 1024,
+        });
+        const parsed = lines
+          .map(safeParseClaudeRecord)
+          .filter((record): record is ClaudeRawRecord | ClaudeCustomTitleRecord => Boolean(record));
+        const enriched = deriveStoredSessionRef(filePath, parsed);
+        if (enriched?.createdAt) {
+          const nextRef = {
+            ...cachedRef,
+            createdAt: enriched.createdAt,
+          };
+          setCachedStoredSessionRef({
+            cache,
+            filePath,
+            size: stats.size,
+            mtimeMs: stats.mtimeMs,
+            ref: nextRef,
+          });
+          records.push({ ref: nextRef, filePath });
+          continue;
+        }
+      }
       records.push({ ref: cachedRef, filePath });
       continue;
     }

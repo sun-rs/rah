@@ -39,7 +39,7 @@ export class RuntimeProviderCoordinator {
         if (adapter?.getProviderDiagnostic) {
           return await adapter.getProviderDiagnostic(options);
         }
-        const launchSpec = launchSpecForProvider(provider);
+        const launchSpec = await launchSpecForProvider(provider);
         if (launchSpec) {
           return await probeProviderDiagnostic(provider, launchSpec, options);
         }

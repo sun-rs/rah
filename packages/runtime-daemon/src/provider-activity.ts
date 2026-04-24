@@ -1066,24 +1066,7 @@ export function applyProviderActivity(
           meta,
         ),
       );
-      const contextEvent = services.eventBus.publish(
-        withRaw(
-          withTurnId(
-            withTs(
-              {
-                sessionId,
-                type: "context.updated",
-                source,
-                payload: { usage: activity.usage },
-              },
-              ts,
-            ),
-            activity.turnId,
-          ),
-          meta,
-        ),
-      );
-      published.push(usageEvent, contextEvent);
+      published.push(usageEvent);
       break;
     }
     case "runtime_status":

@@ -481,6 +481,7 @@ export function startGeminiLiveSession(params: {
     capabilities: {
       livePermissions: false,
       listProviderSessions: false,
+      renameSession: false,
       steerInput: true,
     },
   });
@@ -525,6 +526,7 @@ export function resumeGeminiLiveSession(params: {
     capabilities: {
       livePermissions: false,
       listProviderSessions: false,
+      renameSession: false,
       steerInput: true,
     },
   });

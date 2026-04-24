@@ -16,6 +16,7 @@ const DEFAULT_CAPABILITIES: SessionCapabilities = {
   contextUsage: true,
   resumeByProvider: true,
   listProviderSessions: true,
+  renameSession: false,
   steerInput: false,
   queuedInput: false,
   modelSwitch: false,

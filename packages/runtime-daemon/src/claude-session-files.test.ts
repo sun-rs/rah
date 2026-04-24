@@ -12,6 +12,7 @@ import {
   findClaudeStoredSessionRecord,
   getClaudeStoredSessionHistoryPage,
   resumeClaudeStoredSession,
+  updateClaudeSessionTitle,
 } from "./claude-session-files";
 
 describe("Claude session files", () => {
@@ -99,6 +100,33 @@ describe("Claude session files", () => {
     const record = findClaudeStoredSessionRecord("session-private", workDir);
     assert.ok(record);
     assert.equal(record.ref.providerSessionId, "session-private");
+  });
+
+  test("prefers custom-title metadata over first user message", () => {
+    writeClaudeSession("session-renamed.jsonl", [
+      {
+        type: "user",
+        uuid: "user-1",
+        cwd: workDir,
+        sessionId: "session-renamed",
+        timestamp: "2025-07-19T22:21:00.000Z",
+        message: {
+          content: "hello there",
+        },
+      },
+      {
+        type: "custom-title",
+        customTitle: "Renamed Claude Session",
+        sessionId: "session-renamed",
+      },
+    ]);
+
+    const stored = discoverClaudeStoredSessions(workDir);
+    assert.equal(stored[0]?.ref.title, "Renamed Claude Session");
+
+    updateClaudeSessionTitle("session-renamed", "Renamed Again", workDir);
+    const refreshed = discoverClaudeStoredSessions(workDir);
+    assert.equal(refreshed[0]?.ref.title, "Renamed Again");
   });
 
   test("deduplicates resumed history and skips internal Claude events", () => {

@@ -158,10 +158,7 @@ describe("applyProviderActivity", () => {
         },
       },
     );
-    assert.deepEqual(usageEvents.map((event) => event.type), [
-      "usage.updated",
-      "context.updated",
-    ]);
+    assert.deepEqual(usageEvents.map((event) => event.type), ["usage.updated"]);
     assert.deepEqual(services.sessionStore.getSession(sessionId)?.usage, {
       usedTokens: 123,
       contextWindow: 10_000,

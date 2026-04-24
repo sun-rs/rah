@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -156,5 +156,83 @@ describe("startRahDaemon", () => {
     });
     assert.equal(response.status, 403);
     assert.deepEqual(response.json, { error: "Workspace directory is not registered." });
+  });
+
+  test("serves workspace file and search routes for a registered workspace", async () => {
+    const nestedDir = path.join(tempHome, "project");
+    writeFileSync(path.join(tempHome, "hello.txt"), "hello rah\n");
+    writeFileSync(path.join(tempHome, "notes.md"), "workspace search target\n");
+
+    const selected = await requestJson({
+      port,
+      path: "/api/workspaces/select",
+      method: "POST",
+      headers: {
+        Origin: `http://127.0.0.1:${port}`,
+        "x-rah-client": "web",
+      },
+      body: { dir: tempHome },
+    });
+    assert.equal(selected.status, 200);
+
+    const fileResponse = await requestJson({
+      port,
+      path:
+        `/api/workspace/file?dir=${encodeURIComponent(tempHome)}` +
+        `&path=${encodeURIComponent("hello.txt")}`,
+      headers: { Origin: `http://127.0.0.1:${port}` },
+    });
+    assert.equal(fileResponse.status, 200);
+    assert.equal(typeof fileResponse.json, "object");
+    assert.equal((fileResponse.json as { content: string }).content, "hello rah\n");
+
+    const searchResponse = await requestJson({
+      port,
+      path:
+        `/api/workspace/file-search?dir=${encodeURIComponent(tempHome)}` +
+        `&query=${encodeURIComponent("notes")}`,
+      headers: { Origin: `http://127.0.0.1:${port}` },
+    });
+    assert.equal(searchResponse.status, 200);
+    assert.equal(typeof searchResponse.json, "object");
+    assert.deepEqual(
+      (searchResponse.json as { files: Array<{ path: string }> }).files.map((entry) => entry.path),
+      ["notes.md"],
+    );
+
+    void nestedDir;
+  });
+
+  test("serves workspace git routes for a registered workspace", async () => {
+    await requestJson({
+      port,
+      path: "/api/workspaces/select",
+      method: "POST",
+      headers: {
+        Origin: `http://127.0.0.1:${port}`,
+        "x-rah-client": "web",
+      },
+      body: { dir: tempHome },
+    });
+
+    const gitStatus = await requestJson({
+      port,
+      path: `/api/workspace/git-status?dir=${encodeURIComponent(tempHome)}`,
+      headers: { Origin: `http://127.0.0.1:${port}` },
+    });
+    assert.equal(gitStatus.status, 200);
+    assert.equal(typeof gitStatus.json, "object");
+    assert.deepEqual((gitStatus.json as { changedFiles: string[] }).changedFiles, []);
+
+    const gitDiff = await requestJson({
+      port,
+      path:
+        `/api/workspace/git-diff?dir=${encodeURIComponent(tempHome)}` +
+        `&path=${encodeURIComponent("hello.txt")}`,
+      headers: { Origin: `http://127.0.0.1:${port}` },
+    });
+    assert.equal(gitDiff.status, 200);
+    assert.equal(typeof gitDiff.json, "object");
+    assert.equal((gitDiff.json as { diff: string }).diff, "");
   });
 });

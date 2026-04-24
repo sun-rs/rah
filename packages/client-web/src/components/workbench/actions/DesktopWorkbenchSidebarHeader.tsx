@@ -1,11 +1,14 @@
 import type { SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
 import { History, Home, Menu, Settings } from "lucide-react";
 import { SessionHistoryDialog } from "../../SessionHistoryDialog";
+import type { WorkspaceSortMode } from "../../../session-browser";
 
 export function DesktopWorkbenchSidebarHeader(props: {
   storedSessions: StoredSessionRef[];
   recentSessions: StoredSessionRef[];
   liveSessions: SessionSummary[];
+  workspaceSortMode: WorkspaceSortMode;
+  onWorkspaceSortModeChange: (value: WorkspaceSortMode) => void;
   onHome: () => void;
   onActivateHistory: (ref: StoredSessionRef) => void;
   onRemoveHistorySession: (session: Pick<StoredSessionRef, "provider" | "providerSessionId">) => void;
@@ -30,6 +33,8 @@ export function DesktopWorkbenchSidebarHeader(props: {
           storedSessions={props.storedSessions}
           recentSessions={props.recentSessions}
           liveSessions={props.liveSessions}
+          workspaceSortMode={props.workspaceSortMode}
+          onWorkspaceSortModeChange={props.onWorkspaceSortModeChange}
           onActivate={props.onActivateHistory}
           onRemoveSession={props.onRemoveHistorySession}
           onRemoveWorkspace={props.onRemoveHistoryWorkspace}

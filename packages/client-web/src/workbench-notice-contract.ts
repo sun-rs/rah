@@ -21,7 +21,13 @@ export function deriveWorkbenchNoticeState(args: {
 }): WorkbenchNoticeState {
   const { selectedSummary, selectedProjection, error } = args;
 
-  const interactionMessage = selectedSummary ? sessionInteractionNotice(selectedSummary) : null;
+  const interactionMessage = selectedSummary
+    ? selectedSummary.session.launchSource === "terminal" &&
+      selectedSummary.controlLease.holderKind === "terminal" &&
+      selectedSummary.session.runtimeState === "running"
+      ? "Terminal is handling this turn. Web can observe it, but can't interrupt it."
+      : sessionInteractionNotice(selectedSummary)
+    : null;
   const interactionNotice = interactionMessage
     ? {
         tone: "info" as const,

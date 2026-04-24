@@ -179,7 +179,6 @@ export function summarizeRahEvents(events: RahEvent[]) {
           name: event.payload.operation.name,
         };
       case "usage.updated":
-      case "context.updated":
         return {
           type: event.type,
           turnId: event.turnId,

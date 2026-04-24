@@ -1,17 +1,18 @@
 export {
   getWorkspaceSnapshot,
-  readWorkspaceFileData,
-  readWorkspaceFileFromDirectory,
-  resolveWorkspacePath,
-  searchWorkspaceFilesInDirectory,
+  readWorkspaceFileDataAsync,
+  readWorkspaceFileFromDirectoryAsync,
+  resolveWorkspacePathAsync,
+  searchWorkspaceFilesInDirectoryAsync,
+  tryResolveGitRootAsync,
   type WorkspaceFileData,
 } from "./workspace-path-utils";
 
 export {
-  applyWorkspaceGitFileAction,
-  applyWorkspaceGitHunkAction,
-  getWorkspaceGitDiff,
-  getWorkspaceGitStatus,
-  getWorkspaceGitStatusData,
+  applyWorkspaceGitFileActionAsync,
+  applyWorkspaceGitHunkActionAsync,
+  getWorkspaceGitDiffAsync,
+  getWorkspaceGitStatusDataAsync,
+  getWorkspaceGitStatusAsync,
   type WorkspaceGitStatusData,
 } from "./workspace-git-utils";

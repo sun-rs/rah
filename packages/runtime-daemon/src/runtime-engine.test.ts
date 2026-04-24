@@ -293,6 +293,7 @@ function sessionSummary(sessionId: string, providerSessionId: string): SessionSu
         listProviderSessions: true,
         steerInput: true,
         queuedInput: false,
+        renameSession: false,
         modelSwitch: false,
         planMode: false,
         subagents: false,

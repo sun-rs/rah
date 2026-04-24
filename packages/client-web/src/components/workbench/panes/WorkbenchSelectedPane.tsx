@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import type { PermissionResponseRequest, SessionSummary } from "@rah/runtime-protocol";
-import { Archive, ArrowUp, Ellipsis, Menu, PanelRight, Plus, Square, Trash2, X } from "lucide-react";
+import { Archive, ArrowUp, Ellipsis, Info, Menu, PanelRight, PencilLine, Plus, Square, Trash2, X } from "lucide-react";
 import { providerLabel } from "../../../types";
 import type { SessionProjection } from "../../../types";
 import { ChatThread } from "../../chat/ChatThread";
@@ -8,6 +8,7 @@ import { ProviderLogo } from "../../ProviderLogo";
 import { TokenizedTextarea } from "../../TokenizedTextarea";
 import { COMPOSER_LAYOUT, type ComposerSurface } from "../../../composer-contract";
 import type { InlineWorkbenchNotice } from "../../../workbench-notice-contract";
+import { SessionInfoDialog } from "../dialogs/SessionInfoDialog";
 
 export function WorkbenchSelectedPane(props: {
   selectedSummary: SessionSummary;
@@ -41,10 +42,13 @@ export function WorkbenchSelectedPane(props: {
   onFloatingAnchorOffsetChange: (offsetPx: number) => void;
   onArchiveOrClose: () => void;
   onDeleteSession: () => void;
+  canRenameSession: boolean;
+  onRenameSession: () => void;
 }) {
   const composerContainerRef = useRef<HTMLDivElement | null>(null);
   const sessionMenuRef = useRef<HTMLDivElement | null>(null);
   const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
+  const [sessionInfoOpen, setSessionInfoOpen] = useState(false);
 
   useEffect(() => {
     const node = composerContainerRef.current;
@@ -158,6 +162,30 @@ export function WorkbenchSelectedPane(props: {
             </button>
             {sessionMenuOpen ? (
               <div className="absolute right-0 top-[calc(100%+0.375rem)] z-50 min-w-[10rem] rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] p-1 shadow-xl">
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]"
+                  onClick={() => {
+                    setSessionMenuOpen(false);
+                    setSessionInfoOpen(true);
+                  }}
+                >
+                  <Info size={14} />
+                  <span>Info</span>
+                </button>
+                {props.canRenameSession ? (
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]"
+                    onClick={() => {
+                      setSessionMenuOpen(false);
+                      props.onRenameSession();
+                    }}
+                  >
+                    <PencilLine size={14} />
+                    <span>Rename</span>
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm text-[var(--app-danger)] transition-colors hover:bg-[var(--app-subtle-bg)]"
@@ -351,6 +379,12 @@ export function WorkbenchSelectedPane(props: {
           </div>
         )}
       </div>
+      <SessionInfoDialog
+        open={sessionInfoOpen}
+        summary={props.selectedSummary}
+        projection={props.selectedProjection}
+        onOpenChange={setSessionInfoOpen}
+      />
     </>
   );
 }

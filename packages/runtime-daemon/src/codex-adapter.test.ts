@@ -200,6 +200,58 @@ rl.on('line', (line) => {
     rmSync(cwd, { recursive: true, force: true });
   });
 
+  test("renames Codex sessions via thread/name/set and persists the title in cache", async () => {
+    const cwd = mkdtempSync(path.join(os.tmpdir(), "rah-codex-rename-cwd-"));
+    const sessionId = "019d9999-rename-7bbb-8ccc-ddddeeeeffff";
+    writeRollout(sessionId, cwd);
+    writeMockCodexServer(`
+const readline = require('node:readline');
+const rl = readline.createInterface({ input: process.stdin });
+function send(msg) { process.stdout.write(JSON.stringify(msg) + "\\n"); }
+rl.on('line', (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method === 'initialize') {
+    send({ id: msg.id, result: {} });
+    return;
+  }
+  if (msg.method === 'thread/name/set') {
+    send({ id: msg.id, result: { ok: true } });
+    return;
+  }
+  send({ id: msg.id, result: {} });
+});
+`);
+
+    const services = {
+      eventBus: new EventBus(),
+      ptyHub: new PtyHub(),
+      sessionStore: new SessionStore(),
+    };
+    const adapter = new CodexAdapter(services);
+    const resumed = await adapter.resumeSession({
+      provider: "codex",
+      providerSessionId: sessionId,
+      preferStoredReplay: true,
+    });
+
+    const renamed = await adapter.renameSession(
+      resumed.session.session.id,
+      "Renamed Codex Session",
+    );
+    assert.equal(renamed.session.title, "Renamed Codex Session");
+    assert.equal(adapter.listStoredSessions()[0]?.title, "Renamed Codex Session");
+
+    const freshServices = {
+      eventBus: new EventBus(),
+      ptyHub: new PtyHub(),
+      sessionStore: new SessionStore(),
+    };
+    const freshAdapter = new CodexAdapter(freshServices);
+    assert.equal(freshAdapter.listStoredSessions()[0]?.title, "Renamed Codex Session");
+
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
   test("opens stored Codex history immediately when preferStoredReplay is requested", async () => {
     const cwd = mkdtempSync(path.join(os.tmpdir(), "rah-codex-prefer-stored-cwd-"));
     const sessionId = "019d9999-stored-7bbb-8ccc-ddddeeeeffff";

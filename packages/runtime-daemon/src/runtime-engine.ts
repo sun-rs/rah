@@ -33,10 +33,10 @@ import type {
 import { ClaudeAdapter } from "./claude-adapter";
 import { CodexAdapter } from "./codex-adapter";
 import {
-  getWorkspaceGitDiff,
-  getWorkspaceGitStatus,
-  readWorkspaceFileFromDirectory,
-  searchWorkspaceFilesInDirectory,
+  getWorkspaceGitDiffAsync,
+  getWorkspaceGitStatusAsync,
+  readWorkspaceFileFromDirectoryAsync,
+  searchWorkspaceFilesInDirectoryAsync,
 } from "./workspace-utils";
 import { DebugAdapter } from "./debug-adapter";
 import { EventBus } from "./event-bus";
@@ -329,7 +329,7 @@ export class RuntimeEngine {
     return this.sessionLifecycle.releaseControl(sessionId, request);
   }
 
-  renameSession(sessionId: string, title: string): SessionSummary {
+  async renameSession(sessionId: string, title: string): Promise<SessionSummary> {
     return this.sessionLifecycle.renameSession(sessionId, title);
   }
 
@@ -399,17 +399,17 @@ export class RuntimeEngine {
     });
   }
 
-  getGitStatus(sessionId: string, options?: { scopeRoot?: string }) {
+  async getGitStatus(sessionId: string, options?: { scopeRoot?: string }) {
     const scopeRoot = this.workspaceScopeAuthorizer.resolveAuthorizedSessionScopeRoot(
       sessionId,
       options?.scopeRoot,
     );
-    return this.requireSessionAdapter(sessionId).getGitStatus(sessionId, {
+    return await this.requireSessionAdapter(sessionId).getGitStatus(sessionId, {
       ...(scopeRoot ? { scopeRoot } : {}),
     });
   }
 
-  getGitDiff(
+  async getGitDiff(
     sessionId: string,
     path: string,
     options?: { staged?: boolean; ignoreWhitespace?: boolean; scopeRoot?: string },
@@ -418,7 +418,7 @@ export class RuntimeEngine {
       sessionId,
       options?.scopeRoot,
     );
-    return this.requireSessionAdapter(sessionId).getGitDiff(sessionId, path, {
+    return await this.requireSessionAdapter(sessionId).getGitDiff(sessionId, path, {
       ...(options?.staged !== undefined ? { staged: options.staged } : {}),
       ...(options?.ignoreWhitespace !== undefined
         ? { ignoreWhitespace: options.ignoreWhitespace }
@@ -427,12 +427,12 @@ export class RuntimeEngine {
     });
   }
 
-  getWorkspaceGitStatus(dir: string) {
+  async getWorkspaceGitStatus(dir: string) {
     const workspaceDir = this.workspaceScopeAuthorizer.resolveAuthorizedWorkspaceDirectory(dir);
-    return getWorkspaceGitStatus(workspaceDir, { scopeRoot: workspaceDir });
+    return await getWorkspaceGitStatusAsync(workspaceDir, { scopeRoot: workspaceDir });
   }
 
-  getWorkspaceGitDiff(
+  async getWorkspaceGitDiff(
     dir: string,
     path: string,
     options?: { staged?: boolean; ignoreWhitespace?: boolean },
@@ -441,47 +441,52 @@ export class RuntimeEngine {
     return {
       sessionId: "",
       path,
-      diff: getWorkspaceGitDiff(workspaceDir, path, { ...options, scopeRoot: workspaceDir }),
+      diff: await getWorkspaceGitDiffAsync(workspaceDir, path, {
+        ...options,
+        scopeRoot: workspaceDir,
+      }),
     };
   }
 
-  applyGitFileAction(sessionId: string, request: GitFileActionRequest) {
+  async applyGitFileAction(sessionId: string, request: GitFileActionRequest) {
     const adapter = this.requireSessionAdapter(sessionId);
     if (!adapter.applyGitFileAction) {
       throw new Error(`Provider ${adapter.id} does not support git file actions.`);
     }
-    return adapter.applyGitFileAction(sessionId, request);
+    return await adapter.applyGitFileAction(sessionId, request);
   }
 
-  applyGitHunkAction(sessionId: string, request: GitHunkActionRequest) {
+  async applyGitHunkAction(sessionId: string, request: GitHunkActionRequest) {
     const adapter = this.requireSessionAdapter(sessionId);
     if (!adapter.applyGitHunkAction) {
       throw new Error(`Provider ${adapter.id} does not support git hunk actions.`);
     }
-    return adapter.applyGitHunkAction(sessionId, request);
+    return await adapter.applyGitHunkAction(sessionId, request);
   }
 
-  readSessionFile(sessionId: string, path: string, options?: { scopeRoot?: string }) {
+  async readSessionFile(sessionId: string, path: string, options?: { scopeRoot?: string }) {
     const scopeRoot = this.workspaceScopeAuthorizer.resolveAuthorizedSessionScopeRoot(
       sessionId,
       options?.scopeRoot,
     );
-    return this.requireSessionAdapter(sessionId).readSessionFile(sessionId, path, {
+    return await this.requireSessionAdapter(sessionId).readSessionFile(sessionId, path, {
       ...(scopeRoot ? { scopeRoot } : {}),
     });
   }
 
-  readWorkspaceFile(dir: string, path: string) {
+  async readWorkspaceFile(dir: string, path: string) {
     const workspaceDir = this.workspaceScopeAuthorizer.resolveAuthorizedWorkspaceDirectory(dir);
-    return readWorkspaceFileFromDirectory(workspaceDir, path, { scopeRoot: workspaceDir });
+    return await readWorkspaceFileFromDirectoryAsync(workspaceDir, path, {
+      scopeRoot: workspaceDir,
+    });
   }
 
-  searchSessionFiles(
+  async searchSessionFiles(
     sessionId: string,
     query: string,
     limit = 100,
     options?: { scopeRoot?: string },
-  ): SessionFileSearchResponse {
+  ): Promise<SessionFileSearchResponse> {
     const session = this.sessionStore.getSession(sessionId)?.session;
     if (!session) {
       throw new Error(`Unknown session ${sessionId}`);
@@ -493,16 +498,16 @@ export class RuntimeEngine {
     return {
       sessionId,
       query,
-      files: searchWorkspaceFilesInDirectory(scopeRoot ?? session.cwd, query, limit),
+      files: await searchWorkspaceFilesInDirectoryAsync(scopeRoot ?? session.cwd, query, limit),
     };
   }
 
-  searchWorkspaceFiles(dir: string, query: string, limit = 100): SessionFileSearchResponse {
+  async searchWorkspaceFiles(dir: string, query: string, limit = 100): Promise<SessionFileSearchResponse> {
     const workspaceDir = this.workspaceScopeAuthorizer.resolveAuthorizedWorkspaceDirectory(dir);
     return {
       sessionId: "",
       query,
-      files: searchWorkspaceFilesInDirectory(workspaceDir, query, limit),
+      files: await searchWorkspaceFilesInDirectoryAsync(workspaceDir, query, limit),
     };
   }
 

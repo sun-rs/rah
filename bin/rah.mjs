@@ -27,9 +27,13 @@ function printUsage() {
       "  --help              Show this help",
       "",
       "Current status:",
-      "  This is the phase-1 wrapper skeleton. It registers a terminal-launched",
-      "  live session with the RAH daemon, but does not yet launch the real",
-      "  provider TUI bridge.",
+      "  codex: stable live terminal wrapper",
+      "  claude: phase-1 live terminal wrapper in progress",
+      "  gemini/kimi: wrapper skeleton only",
+      "",
+      "Claude note:",
+      "  `rah claude resume <providerSessionId>` maps to `claude --resume <id>`.",
+      "  Bare `claude --resume` session-picker mode is intentionally unsupported.",
       "",
     ].join("\n"),
   );
@@ -98,7 +102,9 @@ async function ensureDaemon(daemonUrl) {
     return;
   }
 
-  const daemonLogPath = "/tmp/rah-daemon-43111.log";
+  const parsedUrl = new URL(daemonUrl);
+  const port = parsedUrl.port || (parsedUrl.protocol === "https:" ? "443" : "80");
+  const daemonLogPath = `/tmp/rah-daemon-${port}.log`;
   const daemonCommand = [
     "--import",
     "tsx",
@@ -106,7 +112,10 @@ async function ensureDaemon(daemonUrl) {
   ];
   const child = spawn(process.execPath, daemonCommand, {
     cwd: ROOT_DIR,
-    env: process.env,
+    env: {
+      ...process.env,
+      RAH_PORT: port,
+    },
     stdio: "ignore",
     detached: true,
   });
@@ -134,6 +143,22 @@ function wrapperControlUrl(daemonUrl) {
   return url.toString();
 }
 
+function isDaemonConnectionError(error) {
+  return Boolean(
+    error &&
+      typeof error === "object" &&
+      "code" in error &&
+      error.code === "ECONNREFUSED",
+  );
+}
+
+function formatCliError(error, daemonUrl) {
+  if (isDaemonConnectionError(error)) {
+    return `RAH daemon is not running at ${daemonUrl}. Start it and try again.`;
+  }
+  return error instanceof Error ? error.message : String(error);
+}
+
 async function main() {
   let parsed;
   try {
@@ -151,10 +176,44 @@ async function main() {
   }
 
   if (parsed.provider === "codex") {
+    await ensureDaemon(parsed.daemonUrl);
     const childArgs = [
       "--import",
       "tsx",
-      "packages/runtime-daemon/src/codex-terminal-wrapper.ts",
+      "packages/runtime-daemon/src/codex-terminal-wrapper-handoff.ts",
+      "--daemon-url",
+      parsed.daemonUrl,
+      "--cwd",
+      parsed.cwd,
+      ...(parsed.resumeProviderSessionId
+        ? ["--resume-provider-session-id", parsed.resumeProviderSessionId]
+        : []),
+    ];
+    const child = spawn(process.execPath, childArgs, {
+      cwd: ROOT_DIR,
+      env: process.env,
+      stdio: "inherit",
+    });
+    await new Promise((resolve, reject) => {
+      child.on("error", reject);
+      child.on("exit", (code, signal) => {
+        if (signal) {
+          process.kill(process.pid, signal);
+          return;
+        }
+        process.exitCode = code ?? 0;
+        resolve(undefined);
+      });
+    });
+    return;
+  }
+
+  if (parsed.provider === "claude") {
+    await ensureDaemon(parsed.daemonUrl);
+    const childArgs = [
+      "--import",
+      "tsx",
+      "packages/runtime-daemon/src/claude-terminal-wrapper.ts",
       "--daemon-url",
       parsed.daemonUrl,
       "--cwd",
@@ -290,4 +349,11 @@ async function main() {
   });
 }
 
-void main();
+void main().catch((error) => {
+  const daemonUrl =
+    process.argv.includes("--daemon-url")
+      ? process.argv[process.argv.indexOf("--daemon-url") + 1] ?? DEFAULT_DAEMON_URL
+      : DEFAULT_DAEMON_URL;
+  process.stderr.write(`[rah] ${formatCliError(error, daemonUrl)}\n`);
+  process.exitCode = 1;
+});

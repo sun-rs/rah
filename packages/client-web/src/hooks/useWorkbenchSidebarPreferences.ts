@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { WorkspaceSortMode, WorkspaceSection } from "../session-browser";
 
 const WORKSPACE_SORT_MODE_KEY = "rah.workspace-sort-mode";
+const HISTORY_WORKSPACE_SORT_MODE_KEY = "rah.history-workspace-sort-mode";
 const PINNED_WORKSPACE_SESSION_KEY = "rah.pinned-session-by-workspace";
 
 function readWorkspaceSortMode(): WorkspaceSortMode {
@@ -13,6 +14,18 @@ function readWorkspaceSortMode(): WorkspaceSortMode {
     return value === "updated" ? "updated" : "created";
   } catch {
     return "created";
+  }
+}
+
+function readHistoryWorkspaceSortMode(): WorkspaceSortMode {
+  if (typeof window === "undefined") {
+    return "updated";
+  }
+  try {
+    const value = window.localStorage.getItem(HISTORY_WORKSPACE_SORT_MODE_KEY);
+    return value === "created" ? "created" : "updated";
+  } catch {
+    return "updated";
   }
 }
 
@@ -94,6 +107,25 @@ export function useWorkspaceSortModeState() {
   useEffect(() => {
     try {
       window.localStorage.setItem(WORKSPACE_SORT_MODE_KEY, workspaceSortMode);
+    } catch {
+      // ignore
+    }
+  }, [workspaceSortMode]);
+
+  return {
+    setWorkspaceSortMode,
+    workspaceSortMode,
+  };
+}
+
+export function useHistoryWorkspaceSortModeState() {
+  const [workspaceSortMode, setWorkspaceSortMode] = useState<WorkspaceSortMode>(() =>
+    readHistoryWorkspaceSortMode(),
+  );
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(HISTORY_WORKSPACE_SORT_MODE_KEY, workspaceSortMode);
     } catch {
       // ignore
     }

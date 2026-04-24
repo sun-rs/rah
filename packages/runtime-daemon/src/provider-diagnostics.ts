@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import type { ProviderDiagnostic, ProviderKind } from "@rah/runtime-protocol";
+import { resolveConfiguredBinary } from "./provider-binary-utils";
 
 type LaunchSpec = {
   argv: string[];
@@ -21,27 +22,27 @@ const latestVersionInFlight = new Map<ProviderKind, Promise<LatestVersionResult>
 
 const VERSION_PATTERN = /\bv?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?\b/;
 
-export function codexLaunchSpec(): LaunchSpec {
+export async function codexLaunchSpec(): Promise<LaunchSpec> {
   return {
-    argv: [process.env.RAH_CODEX_BINARY ?? "codex"],
+    argv: [await resolveConfiguredBinary("RAH_CODEX_BINARY", "codex")],
   };
 }
 
-export function claudeLaunchSpec(): LaunchSpec {
+export async function claudeLaunchSpec(): Promise<LaunchSpec> {
   return {
-    argv: [process.env.RAH_CLAUDE_BINARY ?? "claude"],
+    argv: [await resolveConfiguredBinary("RAH_CLAUDE_BINARY", "claude")],
   };
 }
 
-export function geminiLaunchSpec(): LaunchSpec {
+export async function geminiLaunchSpec(): Promise<LaunchSpec> {
   return {
-    argv: [process.env.RAH_GEMINI_BINARY ?? "gemini"],
+    argv: [await resolveConfiguredBinary("RAH_GEMINI_BINARY", "gemini")],
   };
 }
 
-export function kimiLaunchSpec(): LaunchSpec {
+export async function kimiLaunchSpec(): Promise<LaunchSpec> {
   if (process.env.RAH_KIMI_BINARY) {
-    return { argv: [process.env.RAH_KIMI_BINARY] };
+    return { argv: [await resolveConfiguredBinary("RAH_KIMI_BINARY", "kimi")] };
   }
   if (process.env.RAH_KIMI_PROJECT) {
     return {
@@ -53,24 +54,24 @@ export function kimiLaunchSpec(): LaunchSpec {
   };
 }
 
-export function opencodeLaunchSpec(): LaunchSpec {
+export async function opencodeLaunchSpec(): Promise<LaunchSpec> {
   return {
-    argv: [process.env.RAH_OPENCODE_BINARY ?? "opencode"],
+    argv: [await resolveConfiguredBinary("RAH_OPENCODE_BINARY", "opencode")],
   };
 }
 
-export function launchSpecForProvider(provider: ProviderKind): LaunchSpec | null {
+export async function launchSpecForProvider(provider: ProviderKind): Promise<LaunchSpec | null> {
   switch (provider) {
     case "codex":
-      return codexLaunchSpec();
+      return await codexLaunchSpec();
     case "claude":
-      return claudeLaunchSpec();
+      return await claudeLaunchSpec();
     case "gemini":
-      return geminiLaunchSpec();
+      return await geminiLaunchSpec();
     case "kimi":
-      return kimiLaunchSpec();
+      return await kimiLaunchSpec();
     case "opencode":
-      return opencodeLaunchSpec();
+      return await opencodeLaunchSpec();
     default:
       return null;
   }

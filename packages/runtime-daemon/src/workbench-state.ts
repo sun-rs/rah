@@ -85,6 +85,7 @@ function workbenchSessionRef(state: StoredSessionState): StoredSessionRef | null
     rootDir: state.session.rootDir,
     ...(state.session.title !== undefined ? { title: state.session.title } : {}),
     ...(state.session.preview !== undefined ? { preview: state.session.preview } : {}),
+    createdAt: state.session.createdAt,
     updatedAt: state.session.updatedAt,
     lastUsedAt: state.session.updatedAt,
     source: "previous_live",

@@ -9,6 +9,7 @@ export const REHYDRATED_CAPABILITIES = {
   livePermissions: false,
   steerInput: false,
   queuedInput: false,
+  renameSession: true,
   modelSwitch: false,
   planMode: false,
   subagents: false,

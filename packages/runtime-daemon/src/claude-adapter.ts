@@ -39,6 +39,7 @@ import {
   getClaudeStoredSessionHistoryPage,
   resolveClaudeStoredSessionWatchRoots,
   resumeClaudeStoredSession,
+  updateClaudeSessionTitle,
   waitForClaudeStoredSessionRecord,
 } from "./claude-session-files";
 import {
@@ -47,12 +48,12 @@ import {
 } from "./provider-resume";
 import { claudeLaunchSpec, probeProviderDiagnostic } from "./provider-diagnostics";
 import {
-  applyWorkspaceGitFileAction,
-  applyWorkspaceGitHunkAction,
-  getWorkspaceGitDiff,
-  getWorkspaceGitStatus,
+  applyWorkspaceGitFileActionAsync,
+  applyWorkspaceGitHunkActionAsync,
+  getWorkspaceGitDiffAsync,
+  getWorkspaceGitStatusAsync,
   getWorkspaceSnapshot,
-  readWorkspaceFileFromDirectory,
+  readWorkspaceFileFromDirectoryAsync,
 } from "./workspace-utils";
 import { toSessionSummary } from "./session-store";
 import { movePathToTrash } from "./trash";
@@ -192,6 +193,16 @@ export class ClaudeAdapter implements ProviderAdapter {
     });
   }
 
+  renameSession(sessionId: string, title: string): SessionSummary {
+    const state = this.services.sessionStore.getSession(sessionId);
+    if (!state?.session.providerSessionId) {
+      throw new Error(`Session ${sessionId} does not have a provider session id.`);
+    }
+    updateClaudeSessionTitle(state.session.providerSessionId, title, state.session.cwd);
+    const nextState = this.services.sessionStore.patchManagedSession(sessionId, { title });
+    return toSessionSummary(nextState);
+  }
+
   async closeSession(sessionId: string, request: CloseSessionRequest): Promise<void> {
     const state = this.services.sessionStore.getSession(sessionId);
     if (!state) {
@@ -283,12 +294,12 @@ export class ClaudeAdapter implements ProviderAdapter {
     };
   }
 
-  getGitStatus(sessionId: string, options?: { scopeRoot?: string }): GitStatusResponse {
+  async getGitStatus(sessionId: string, options?: { scopeRoot?: string }): Promise<GitStatusResponse> {
     const state = this.services.sessionStore.getSession(sessionId);
     if (!state) {
       throw new Error(`Unknown session ${sessionId}`);
     }
-    const status = getWorkspaceGitStatus(state.session.cwd, options);
+    const status = await getWorkspaceGitStatusAsync(state.session.cwd, options);
     return {
       sessionId,
       ...(status.branch ? { branch: status.branch } : {}),
@@ -300,11 +311,11 @@ export class ClaudeAdapter implements ProviderAdapter {
     };
   }
 
-  getGitDiff(
+  async getGitDiff(
     sessionId: string,
     targetPath: string,
     options?: { staged?: boolean; ignoreWhitespace?: boolean; scopeRoot?: string },
-  ): GitDiffResponse {
+  ): Promise<GitDiffResponse> {
     const state = this.services.sessionStore.getSession(sessionId);
     if (!state) {
       throw new Error(`Unknown session ${sessionId}`);
@@ -312,47 +323,47 @@ export class ClaudeAdapter implements ProviderAdapter {
     return {
       sessionId,
       path: targetPath,
-      diff: getWorkspaceGitDiff(state.session.cwd, targetPath, options),
+      diff: await getWorkspaceGitDiffAsync(state.session.cwd, targetPath, options),
     };
   }
 
-  applyGitFileAction(sessionId: string, request: GitFileActionRequest): GitFileActionResponse {
+  async applyGitFileAction(sessionId: string, request: GitFileActionRequest): Promise<GitFileActionResponse> {
     const state = this.services.sessionStore.getSession(sessionId);
     if (!state) {
       throw new Error(`Unknown session ${sessionId}`);
     }
     return {
-      ...applyWorkspaceGitFileAction(state.session.cwd, request, {
+      ...(await applyWorkspaceGitFileActionAsync(state.session.cwd, request, {
         scopeRoot: state.session.rootDir ?? state.session.cwd,
-      }),
+      })),
       sessionId,
     };
   }
 
-  applyGitHunkAction(sessionId: string, request: GitHunkActionRequest): GitHunkActionResponse {
+  async applyGitHunkAction(sessionId: string, request: GitHunkActionRequest): Promise<GitHunkActionResponse> {
     const state = this.services.sessionStore.getSession(sessionId);
     if (!state) {
       throw new Error(`Unknown session ${sessionId}`);
     }
     return {
-      ...applyWorkspaceGitHunkAction(state.session.cwd, request, {
+      ...(await applyWorkspaceGitHunkActionAsync(state.session.cwd, request, {
         scopeRoot: state.session.rootDir ?? state.session.cwd,
-      }),
+      })),
       sessionId,
     };
   }
 
-  readSessionFile(
+  async readSessionFile(
     sessionId: string,
     targetPath: string,
     options?: { scopeRoot?: string },
-  ): SessionFileResponse {
+  ): Promise<SessionFileResponse> {
     const state = this.services.sessionStore.getSession(sessionId);
     if (!state) {
       throw new Error(`Unknown session ${sessionId}`);
     }
     return {
-      ...readWorkspaceFileFromDirectory(state.session.cwd, targetPath, options),
+      ...(await readWorkspaceFileFromDirectoryAsync(state.session.cwd, targetPath, options)),
       sessionId,
     };
   }
@@ -429,8 +440,8 @@ export class ClaudeAdapter implements ProviderAdapter {
     this.storedSessionIndex.delete(session.providerSessionId);
   }
 
-  getProviderDiagnostic(options?: { forceRefresh?: boolean }) {
-    return probeProviderDiagnostic("claude", claudeLaunchSpec(), options);
+  async getProviderDiagnostic(options?: { forceRefresh?: boolean }) {
+    return probeProviderDiagnostic("claude", await claudeLaunchSpec(), options);
   }
 
   private refreshStoredSessionIndex(): Map<string, ClaudeStoredSessionRecord> {

@@ -3,61 +3,39 @@ import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import { WebSocket } from "ws";
-import type { ContextUsage, TimelineItem } from "@rah/runtime-protocol";
+import type { TimelineItem } from "@rah/runtime-protocol";
 import type { ProviderActivity } from "./provider-activity";
-import type { TerminalWrapperPromptState } from "./terminal-wrapper-control";
+import type { QueuedTurn, TerminalWrapperPromptState } from "./terminal-wrapper-control";
 import {
   findClaudeStoredSessionRecord,
   type ClaudeStoredSessionRecord,
 } from "./claude-session-files";
 import {
-  createIsolatedClaudeWrapperHome,
   resolveClaudeBaseHome,
 } from "./claude-wrapper-home";
-import { IndependentTerminalProcess } from "./independent-terminal";
+import { NativeTerminalProcess } from "./native-terminal-process";
+import {
+  extractAssistantMessageText,
+  extractUserMessageText,
+  safeParseClaudeRecord,
+  sliceUnprocessedLines,
+  toolActivitiesFromAssistantRecord,
+  type ClaudeRawRecord,
+  usageFromAssistant,
+} from "./claude-terminal-wrapper-history";
+import {
+  clearTerminalScreen,
+  enterAlternateScreen,
+  leaveAlternateScreen,
+  renderTerminalWrapperPanel,
+  renderTerminalWrapperPanelForTerminal,
+} from "./terminal-wrapper-panel";
+import { resolveConfiguredBinary } from "./provider-binary-utils";
 
-type ClaudeRawRecord =
-  | {
-      type: "user";
-      uuid: string;
-      timestamp?: string;
-      cwd?: string;
-      sessionId?: string;
-      message: {
-        role?: string;
-        content: unknown;
-      };
-    }
-  | {
-      type: "assistant";
-      uuid: string;
-      timestamp?: string;
-      cwd?: string;
-      sessionId?: string;
-      message?: {
-        id?: string;
-        role?: string;
-        content: unknown;
-        stop_reason?: string | null;
-        usage?: {
-          input_tokens?: number;
-          cache_creation_input_tokens?: number;
-          cache_read_input_tokens?: number;
-          output_tokens?: number;
-        };
-      };
-    }
-  | {
-      type: "system";
-      uuid: string;
-      subtype?: string;
-      timestamp?: string;
-      cwd?: string;
-      sessionId?: string;
-      error?: unknown;
-    };
+type WrapperMode = "local_native" | "remote_writer";
 
 function parseArgs(argv: string[]) {
   let daemonUrl = "http://127.0.0.1:43111";
@@ -94,153 +72,7 @@ function wrapperControlUrl(daemonUrl: string): string {
 }
 
 async function resolveClaudeBinary(): Promise<string> {
-  return process.env.RAH_CLAUDE_BINARY ?? "claude";
-}
-
-function normalizeComparablePath(value: string): string {
-  const resolved = value.trim().replace(/[\\/]+$/, "");
-  if (resolved.startsWith("/private/")) {
-    return resolved.slice("/private".length);
-  }
-  return resolved;
-}
-
-function extractTextParts(content: unknown): string[] {
-  if (typeof content === "string") {
-    const normalized = content.trim();
-    return normalized ? [normalized] : [];
-  }
-  if (!Array.isArray(content)) {
-    return [];
-  }
-  const parts: string[] = [];
-  for (const block of content) {
-    if (!block || typeof block !== "object" || Array.isArray(block)) {
-      continue;
-    }
-    const record = block as Record<string, unknown>;
-    if (typeof record.text === "string" && record.text.trim()) {
-      parts.push(record.text.trim());
-    }
-  }
-  return parts;
-}
-
-function isToolResultOnlyContent(content: unknown): boolean {
-  if (!Array.isArray(content) || content.length === 0) {
-    return false;
-  }
-  return content.every(
-    (block) =>
-      block &&
-      typeof block === "object" &&
-      !Array.isArray(block) &&
-      (block as Record<string, unknown>).type === "tool_result",
-  );
-}
-
-function extractUserMessageText(content: unknown): string | null {
-  if (isToolResultOnlyContent(content)) {
-    return null;
-  }
-  const text = extractTextParts(content).join("\n").trim();
-  return text || null;
-}
-
-function extractAssistantMessageText(content: unknown): string | null {
-  const text = extractTextParts(content).join("\n").trim();
-  return text || null;
-}
-
-function safeParseClaudeRecord(line: string): ClaudeRawRecord | null {
-  try {
-    const parsed = JSON.parse(line) as Record<string, unknown>;
-    if (parsed.type === "user" && typeof parsed.uuid === "string" && parsed.message) {
-      return parsed as ClaudeRawRecord;
-    }
-    if (parsed.type === "assistant" && typeof parsed.uuid === "string") {
-      return parsed as ClaudeRawRecord;
-    }
-    if (parsed.type === "system" && typeof parsed.uuid === "string") {
-      return parsed as ClaudeRawRecord;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-function usageFromAssistant(record: Extract<ClaudeRawRecord, { type: "assistant" }>): ContextUsage | undefined {
-  const usage = record.message?.usage;
-  if (!usage) {
-    return undefined;
-  }
-  return {
-    ...(typeof usage.input_tokens === "number" ? { inputTokens: usage.input_tokens } : {}),
-    ...(typeof usage.cache_creation_input_tokens === "number"
-      ? { cachedInputTokens: usage.cache_creation_input_tokens }
-      : typeof usage.cache_read_input_tokens === "number"
-        ? { cachedInputTokens: usage.cache_read_input_tokens }
-        : {}),
-    ...(typeof usage.output_tokens === "number" ? { outputTokens: usage.output_tokens } : {}),
-  };
-}
-
-function toolActivitiesFromAssistantRecord(
-  record: Extract<ClaudeRawRecord, { type: "assistant" }>,
-  turnId?: string,
-): ProviderActivity[] {
-  const content = Array.isArray(record.message?.content) ? record.message.content : [];
-  const activities: ProviderActivity[] = [];
-  for (const block of content) {
-    if (!block || typeof block !== "object" || Array.isArray(block)) {
-      continue;
-    }
-    const typedBlock = block as Record<string, unknown>;
-    if (typedBlock.type !== "tool_use") {
-      continue;
-    }
-    activities.push({
-      type: "tool_call_completed",
-      ...(turnId ? { turnId } : {}),
-      toolCall: {
-        id: typeof typedBlock.id === "string" ? typedBlock.id : `claude-tool-${randomUUID()}`,
-        family: "other",
-        providerToolName:
-          typeof typedBlock.name === "string" ? typedBlock.name : "unknown",
-        title: typeof typedBlock.name === "string" ? typedBlock.name : "unknown",
-        ...(typedBlock.input &&
-        typeof typedBlock.input === "object" &&
-        !Array.isArray(typedBlock.input)
-          ? { input: typedBlock.input as Record<string, unknown> }
-          : {}),
-      },
-    });
-  }
-  return activities;
-}
-
-async function injectRemoteTurnIntoTerminal(
-  terminal: IndependentTerminalProcess,
-  text: string,
-): Promise<void> {
-  terminal.write(text);
-  await delay(25);
-  terminal.write("\r\n");
-}
-
-function sliceUnprocessedLines(
-  content: string,
-  processedLineCount: number,
-): { lines: string[]; nextProcessedLineCount: number } {
-  const allLines = content
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-  return {
-    lines: allLines.slice(processedLineCount),
-    nextProcessedLineCount: allLines.length,
-  };
+  return await resolveConfiguredBinary("RAH_CLAUDE_BINARY", "claude");
 }
 
 function resolveRahHome(): string {
@@ -262,85 +94,137 @@ function createWrapperLogger(provider: string) {
   };
 }
 
+function buildClaudeRemotePrintArgs(args: {
+  providerSessionId: string;
+  text: string;
+  hasPersistedSession: boolean;
+}): string[] {
+  return [
+    "--print",
+    ...(args.hasPersistedSession
+      ? ["--resume", args.providerSessionId]
+      : ["--session-id", args.providerSessionId]),
+    args.text,
+  ];
+}
+
 async function main() {
   const parsed = parseArgs(process.argv.slice(2));
   const baseClaudeHome = resolveClaudeBaseHome();
   const logger = createWrapperLogger("claude");
   const forcedProviderSessionId = parsed.resumeProviderSessionId ?? randomUUID();
-  const wrapperClaudeHome = parsed.resumeProviderSessionId
-    ? null
-    : createIsolatedClaudeWrapperHome(baseClaudeHome);
-  if (wrapperClaudeHome) {
-    process.env.CLAUDE_CONFIG_DIR = wrapperClaudeHome;
-    logger.log(`[rah] isolated claude home: ${wrapperClaudeHome}`);
-  }
+  process.env.CLAUDE_CONFIG_DIR = baseClaudeHome;
+  logger.log(`[rah] using native claude home: ${baseClaudeHome}`);
 
   let processedLineCount = 0;
   let wrapperSessionId: string | null = null;
   let boundRecord: ClaudeStoredSessionRecord | null = null;
   let promptState: TerminalWrapperPromptState = "prompt_dirty";
-  let childExited = false;
-  let childExitCode = 0;
-  let childExitSignal: string | null = null;
-  let exiting = false;
   let currentTurnId: string | null = null;
-  let awaitingTurnStart = false;
-  let promptReadyTimer: NodeJS.Timeout | null = null;
-  let draftText = "";
+  let exiting = false;
+  let shouldExit = false;
+  let mode: WrapperMode = "local_native";
+  let localTerminal: NativeTerminalProcess | null = null;
+  let localExitCode = 0;
+  let localExitSignal: string | null = null;
+  let pendingRemoteTurn: QueuedTurn | null = null;
+  let remoteTurnProcess: ChildProcess | null = null;
+  let remoteKeyboardHandler: ((chunk: Buffer | string) => void) | null = null;
+  let remotePromptText: string | null = null;
+  let lastRenderedRemotePanel: string | null = null;
+  let remoteReclaimRequested = false;
+  let remotePanelActive = false;
+  let historyCursorPrimed = parsed.resumeProviderSessionId === undefined;
+  let remoteTurnInterrupted = false;
+  let socketErrored = false;
 
   const binary = await resolveClaudeBinary();
-  const claudeArgs = parsed.resumeProviderSessionId
-    ? ["--resume", parsed.resumeProviderSessionId]
-    : ["--session-id", forcedProviderSessionId];
-
-  const terminal = new IndependentTerminalProcess({
-    cwd: parsed.cwd,
-    command: binary,
-    args: claudeArgs,
-    env: {
-      CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR ?? baseClaudeHome,
-    },
-    ...(typeof process.stdout.columns === "number" ? { cols: process.stdout.columns } : {}),
-    ...(typeof process.stdout.rows === "number" ? { rows: process.stdout.rows } : {}),
-    onData: (data) => {
-      process.stdout.write(data);
-      if (wrapperSessionId) {
-        send({
-          type: "wrapper.pty.output",
-          sessionId: wrapperSessionId,
-          data,
-        });
-      }
-    },
-    onExit: ({ exitCode, signal }) => {
-      childExited = true;
-      childExitCode = exitCode ?? 0;
-      childExitSignal = signal ?? null;
-    },
-  });
-
-  try {
-    await terminal.waitUntilReady();
-  } catch (error) {
-    process.stderr.write(
-      `[rah] failed to launch claude terminal: ${error instanceof Error ? error.message : String(error)}\n`,
-    );
-    process.exitCode = 1;
-    return;
-  }
-
   const socket = new WebSocket(wrapperControlUrl(parsed.daemonUrl));
 
   const send = (message: unknown) => {
     socket.send(JSON.stringify(message));
   };
 
+  const ensureRemotePanelScreen = () => {
+    if (remotePanelActive) {
+      return;
+    }
+    enterAlternateScreen();
+    remotePanelActive = true;
+  };
+
+  const restoreMainTerminalScreen = () => {
+    if (!remotePanelActive) {
+      return;
+    }
+    leaveAlternateScreen();
+    remotePanelActive = false;
+  };
+
+  const primeResumeHistoryCursor = (record: ClaudeStoredSessionRecord) => {
+    if (historyCursorPrimed || parsed.resumeProviderSessionId === undefined) {
+      return;
+    }
+    try {
+      const content = readFileSync(record.filePath, "utf8");
+      processedLineCount = sliceUnprocessedLines(content, 0).nextProcessedLineCount;
+      historyCursorPrimed = true;
+      logger.log(
+        `[rah] primed resume history cursor at line ${processedLineCount} for ${forcedProviderSessionId}`,
+      );
+    } catch (error) {
+      logger.log(
+        `[rah] failed to prime resume history cursor for ${forcedProviderSessionId}: ${String(error)}`,
+      );
+    }
+  };
+
+  const renderRemoteModePanel = () => {
+    if (mode !== "remote_writer" || exiting) {
+      lastRenderedRemotePanel = null;
+      return;
+    }
+    const question = remotePromptText ?? pendingRemoteTurn?.text ?? "";
+    const status = pendingRemoteTurn
+      ? "Queued"
+      : remoteTurnProcess || currentTurnId || promptState === "agent_busy"
+        ? remoteReclaimRequested
+          ? "Thinking (reclaim pending)"
+          : "Thinking"
+        : "Waiting for Esc reclaim";
+    const footer =
+      remoteTurnProcess || currentTurnId || promptState === "agent_busy"
+        ? remoteReclaimRequested
+          ? "Will return to local control when this turn finishes."
+          : "Press Esc to reclaim local control after this turn."
+        : "Press Esc to resume local control.";
+    const panelLines = renderTerminalWrapperPanel({
+      title: "RAH Claude Remote Control",
+      status,
+      sessionId: forcedProviderSessionId,
+      prompt: question || "No active web prompt.",
+      footer,
+    });
+    if (panelLines === lastRenderedRemotePanel) {
+      return;
+    }
+    lastRenderedRemotePanel = panelLines;
+    ensureRemotePanelScreen();
+    clearTerminalScreen();
+    process.stdout.write(
+      `${renderTerminalWrapperPanelForTerminal({
+        title: "RAH Claude Remote Control",
+        status,
+        sessionId: forcedProviderSessionId,
+        prompt: question || "No active web prompt.",
+        footer,
+      })}\r\n`,
+    );
+  };
+
   const updatePromptState = (nextState: TerminalWrapperPromptState) => {
     if (!wrapperSessionId || nextState === promptState) {
       return;
-    }
-    if (nextState === "prompt_clean") {
-      draftText = "";
     }
     promptState = nextState;
     send({
@@ -355,7 +239,8 @@ async function main() {
       return;
     }
     const hadBoundRecord = boundRecord !== null;
-    const nextRecord = record ?? findClaudeStoredSessionRecord(forcedProviderSessionId, parsed.cwd) ?? null;
+    const nextRecord =
+      record ?? findClaudeStoredSessionRecord(forcedProviderSessionId, parsed.cwd) ?? null;
     const metadataChanged =
       nextRecord !== null &&
       (boundRecord?.filePath !== nextRecord.filePath ||
@@ -379,73 +264,145 @@ async function main() {
     });
   };
 
-  const armPromptReadyTimer = (delayMs = 1200) => {
-    if (!wrapperSessionId || childExited || awaitingTurnStart || currentTurnId || draftText) {
-      return;
+  const disableRemoteKeyboardControl = () => {
+    if (remoteKeyboardHandler) {
+      process.stdin.off("data", remoteKeyboardHandler);
+      remoteKeyboardHandler = null;
     }
-    if (promptReadyTimer) {
-      clearTimeout(promptReadyTimer);
+    if (process.stdin.isTTY) {
+      process.stdin.setRawMode(false);
     }
-    promptReadyTimer = setTimeout(() => {
-      promptReadyTimer = null;
-      if (!awaitingTurnStart && !currentTurnId && !draftText) {
-        updatePromptState("prompt_clean");
-      }
-    }, delayMs);
-    promptReadyTimer.unref();
+    process.stdin.pause();
   };
 
-  const onTerminalInput = (chunk: Buffer | string) => {
-    const data = chunk.toString();
-    terminal.write(data);
-    if (promptState === "agent_busy") {
-      draftText = "";
-      return;
-    }
-    for (const char of data) {
-      if (char === "\r" || char === "\n") {
-        if (draftText.length > 0) {
-          draftText = "";
-          awaitingTurnStart = true;
-          if (promptReadyTimer) {
-            clearTimeout(promptReadyTimer);
-            promptReadyTimer = null;
-          }
-          updatePromptState("agent_busy");
+  const startLocalNative = () => {
+    disableRemoteKeyboardControl();
+    mode = "local_native";
+    remotePromptText = null;
+    lastRenderedRemotePanel = null;
+    remoteReclaimRequested = false;
+    updatePromptState("prompt_clean");
+    restoreMainTerminalScreen();
+    const claudeArgs = parsed.resumeProviderSessionId || boundRecord
+      ? ["--resume", forcedProviderSessionId]
+      : ["--session-id", forcedProviderSessionId];
+    localTerminal = new NativeTerminalProcess({
+      cwd: parsed.cwd,
+      command: binary,
+      args: claudeArgs,
+      env: {
+        CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR ?? baseClaudeHome,
+      },
+      onExit: ({ exitCode, signal }) => {
+        localTerminal = null;
+        localExitCode = exitCode ?? 0;
+        localExitSignal = signal ?? null;
+        if (exiting) {
+          shouldExit = true;
+          return;
         }
-        continue;
-      }
-      if (char === "\u007f" || char === "\b") {
-        draftText = draftText.slice(0, Math.max(0, draftText.length - 1));
-        continue;
-      }
-      if (char === "\u0015" || char === "\u0003") {
-        draftText = "";
-        continue;
-      }
-      if (char >= " " && char !== "\u007f") {
-        draftText += char;
-      }
-    }
-    updatePromptState(draftText.length > 0 ? "prompt_dirty" : "prompt_clean");
+        if (pendingRemoteTurn) {
+          const turn = pendingRemoteTurn;
+          pendingRemoteTurn = null;
+          mode = "remote_writer";
+          void startRemoteTurn(turn);
+          return;
+        }
+        shouldExit = true;
+      },
+    });
+    logger.log(`[rah] local native claude started (${claudeArgs.join(" ")})`);
   };
 
-  process.stdin.setEncoding("utf8");
-  process.stdin.resume();
-  if (process.stdin.isTTY) {
-    process.stdin.setRawMode(true);
-  }
-  process.stdin.on("data", onTerminalInput);
-
-  const onResize = () => {
-    if (
-      typeof process.stdout.columns === "number" &&
-      typeof process.stdout.rows === "number"
-    ) {
-      terminal.resize(process.stdout.columns, process.stdout.rows);
+  const enableRemoteKeyboardControl = () => {
+    if (remoteKeyboardHandler || exiting || mode !== "remote_writer") {
+      return;
     }
+    process.stdin.setEncoding("utf8");
+    process.stdin.resume();
+    if (process.stdin.isTTY) {
+      process.stdin.setRawMode(true);
+    }
+    remoteKeyboardHandler = (chunk: Buffer | string) => {
+      const data = chunk.toString();
+      if (data === "\u001b") {
+        if (remoteTurnProcess || currentTurnId || promptState === "agent_busy") {
+          remoteReclaimRequested = true;
+          logger.log("[rah] local control reclaim requested; waiting for remote turn to finish");
+          renderRemoteModePanel();
+          return;
+        }
+        logger.log("[rah] local control reclaimed from terminal");
+        startLocalNative();
+      }
+    };
+    process.stdin.on("data", remoteKeyboardHandler);
+    renderRemoteModePanel();
   };
-  process.stdout.on("resize", onResize);
+
+  const startRemoteTurn = async (queuedTurn: QueuedTurn) => {
+    disableRemoteKeyboardControl();
+    mode = "remote_writer";
+    remoteReclaimRequested = false;
+    remoteTurnInterrupted = false;
+    remotePromptText = queuedTurn.text;
+    renderRemoteModePanel();
+    updatePromptState("agent_busy");
+    const args = buildClaudeRemotePrintArgs({
+      providerSessionId: forcedProviderSessionId,
+      text: queuedTurn.text,
+      hasPersistedSession: boundRecord !== null || parsed.resumeProviderSessionId !== undefined,
+    });
+    logger.log(`[rah] remote print turn start ${queuedTurn.queuedTurnId}`);
+    const child = spawn(binary, args, {
+      cwd: parsed.cwd,
+      env: {
+        ...process.env,
+        CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR ?? baseClaudeHome,
+      },
+      stdio: ["ignore", "ignore", "pipe"],
+      shell: false,
+    });
+    remoteTurnProcess = child;
+    child.stderr?.setEncoding("utf8");
+    child.stderr?.on("data", (chunk) => {
+      const text = chunk.toString().trim();
+      if (text) {
+        logger.log(`[rah] remote stderr ${text}`);
+      }
+    });
+    child.on("exit", (exitCode, signal) => {
+      logger.log(
+        `[rah] remote print turn exit ${queuedTurn.queuedTurnId} code=${exitCode ?? "null"} signal=${signal ?? "null"}`,
+      );
+      remoteTurnProcess = null;
+      if (!exiting) {
+        if (wrapperSessionId && remoteTurnInterrupted && currentTurnId) {
+          const canceledTurnId = currentTurnId;
+          currentTurnId = null;
+          send({
+            type: "wrapper.activity",
+            sessionId: wrapperSessionId,
+            activity: {
+              type: "turn_canceled",
+              turnId: canceledTurnId,
+              reason: "interrupted",
+            },
+          });
+        }
+        if (remoteReclaimRequested) {
+          logger.log("[rah] remote turn finished; restoring local control");
+          startLocalNative();
+          return;
+        }
+        renderRemoteModePanel();
+        enableRemoteKeyboardControl();
+        if (!currentTurnId) {
+          updatePromptState("prompt_clean");
+        }
+      }
+    });
+  };
 
   socket.on("open", () => {
     logger.log("[rah] wrapper control connected");
@@ -455,7 +412,7 @@ async function main() {
       cwd: parsed.cwd,
       rootDir: parsed.cwd,
       terminalPid: process.pid,
-      launchCommand: ["rah", "claude", ...claudeArgs],
+      launchCommand: ["rah", "claude", ...(parsed.resumeProviderSessionId ? ["resume", parsed.resumeProviderSessionId] : [])],
       ...(parsed.resumeProviderSessionId
         ? { resumeProviderSessionId: parsed.resumeProviderSessionId }
         : {}),
@@ -468,18 +425,17 @@ async function main() {
       wrapperSessionId = message.sessionId;
       logger.log(`[rah] terminal session registered: ${message.sessionId}`);
       syncProviderBinding();
-      armPromptReadyTimer();
+      updatePromptState("prompt_clean");
       return;
     }
     if (message.type === "turn.inject") {
-      void injectRemoteTurnIntoTerminal(terminal, message.queuedTurn.text);
-      draftText = "";
-      awaitingTurnStart = true;
-      if (promptReadyTimer) {
-        clearTimeout(promptReadyTimer);
-        promptReadyTimer = null;
-      }
-      updatePromptState("agent_busy");
+      if (mode === "local_native" && localTerminal) {
+          pendingRemoteTurn = message.queuedTurn;
+          updatePromptState("agent_busy");
+          void localTerminal.close("SIGTERM");
+          return;
+        }
+      void startRemoteTurn(message.queuedTurn);
       return;
     }
     if (message.type === "turn.enqueue") {
@@ -487,12 +443,24 @@ async function main() {
       return;
     }
     if (message.type === "turn.interrupt") {
-      terminal.write("\u0003");
+      if (mode === "local_native") {
+        logger.log("[rah] ignoring remote interrupt while terminal holds local control");
+        return;
+      }
+      if (remoteTurnProcess && remoteTurnProcess.exitCode === null && !remoteTurnProcess.killed) {
+        remoteTurnInterrupted = true;
+        remoteTurnProcess.kill("SIGINT");
+        setTimeout(() => {
+          if (remoteTurnProcess && remoteTurnProcess.exitCode === null && !remoteTurnProcess.killed) {
+            remoteTurnProcess.kill("SIGTERM");
+          }
+        }, 250).unref();
+      }
       return;
     }
     if (message.type === "permission.resolve") {
       logger.log(
-        `[rah] remote permission resolution is not wired for claude wrapper yet: ${message.requestId}`,
+        `[rah] remote permission resolution is not wired for hapi-like claude wrapper yet: ${message.requestId}`,
       );
       return;
     }
@@ -506,48 +474,85 @@ async function main() {
       return;
     }
     exiting = true;
-    if (promptReadyTimer) {
-      clearTimeout(promptReadyTimer);
-      promptReadyTimer = null;
+    disableRemoteKeyboardControl();
+    restoreMainTerminalScreen();
+    if (localTerminal) {
+      await localTerminal.close("SIGTERM").catch(() => undefined);
+      localTerminal = null;
     }
-    process.stdin.off("data", onTerminalInput);
-    process.stdin.pause();
-    process.stdout.off("resize", onResize);
-    if (process.stdin.isTTY) {
-      process.stdin.setRawMode(false);
+    if (remoteTurnProcess && remoteTurnProcess.exitCode === null && !remoteTurnProcess.killed) {
+      remoteTurnProcess.kill("SIGTERM");
+      await new Promise<void>((resolve) => {
+        const timeout = setTimeout(() => {
+          if (remoteTurnProcess && remoteTurnProcess.exitCode === null && !remoteTurnProcess.killed) {
+            remoteTurnProcess.kill("SIGKILL");
+          }
+        }, 2_000);
+        remoteTurnProcess?.once("exit", () => {
+          clearTimeout(timeout);
+          resolve();
+        });
+      });
     }
-    await terminal.close().catch(() => undefined);
     if (wrapperSessionId) {
       send({
         type: "wrapper.exited",
         sessionId: wrapperSessionId,
-        ...(childExitCode !== undefined ? { exitCode: childExitCode } : {}),
-        ...(childExitSignal ? { signal: childExitSignal } : {}),
+        ...(localExitCode !== undefined ? { exitCode: localExitCode } : {}),
+        ...(localExitSignal ? { signal: localExitSignal } : {}),
       });
     }
     socket.close();
-    process.exitCode = childExitCode;
   };
 
+  socket.on("error", (error) => {
+    if (socketErrored) {
+      return;
+    }
+    socketErrored = true;
+    logger.log(
+      `[rah] wrapper control socket error: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    process.stderr.write(
+      `[rah] could not connect to RAH daemon at ${parsed.daemonUrl}. Start the daemon and try again.\n`,
+    );
+    void cleanupAndExit().finally(() => {
+      shouldExit = true;
+      process.exitCode = 1;
+    });
+  });
+
+  socket.on("close", () => {
+    if (socketErrored || exiting || shouldExit) {
+      return;
+    }
+    process.stderr.write("[rah] wrapper control channel closed\n");
+    shouldExit = true;
+    process.exitCode = 1;
+  });
+
   process.on("SIGINT", () => {
-    if (!childExited) {
-      void terminal.close();
+    if (!exiting) {
+      void cleanupAndExit();
     }
   });
   process.on("SIGTERM", () => {
-    if (!childExited) {
-      void terminal.close();
+    if (!exiting) {
+      void cleanupAndExit();
     }
   });
 
-  while (!childExited) {
+  startLocalNative();
+
+  while (!shouldExit && !exiting) {
     const latestRecord = findClaudeStoredSessionRecord(forcedProviderSessionId, parsed.cwd);
     if (latestRecord) {
       syncProviderBinding(latestRecord);
+      primeResumeHistoryCursor(latestRecord);
     }
 
     const activeBoundRecord = boundRecord as ClaudeStoredSessionRecord | null;
-    if (wrapperSessionId && activeBoundRecord !== null) {
+    if (wrapperSessionId && activeBoundRecord) {
       const content = readFileSync(
         (activeBoundRecord as ClaudeStoredSessionRecord).filePath,
         "utf8",
@@ -565,30 +570,27 @@ async function main() {
             continue;
           }
           currentTurnId = record.uuid;
-          awaitingTurnStart = false;
           updatePromptState("agent_busy");
-          const turnStarted: ProviderActivity = {
-            type: "turn_started",
-            turnId: record.uuid,
-          };
-          const timeline: ProviderActivity = {
-            type: "timeline_item",
-            turnId: record.uuid,
-            item: {
-              kind: "user_message",
-              text,
-              messageId: record.uuid,
-            } satisfies TimelineItem,
-          };
           send({
             type: "wrapper.activity",
             sessionId: wrapperSessionId,
-            activity: turnStarted,
+            activity: {
+              type: "turn_started",
+              turnId: record.uuid,
+            },
           });
           send({
             type: "wrapper.activity",
             sessionId: wrapperSessionId,
-            activity: timeline,
+            activity: {
+              type: "timeline_item",
+              turnId: record.uuid,
+              item: {
+                kind: "user_message",
+                text,
+                messageId: record.uuid,
+              } satisfies TimelineItem,
+            },
           });
           continue;
         }
@@ -619,10 +621,9 @@ async function main() {
           }
           if (record.message.stop_reason === "end_turn") {
             const completedTurnId = currentTurnId;
-            currentTurnId = null;
-            awaitingTurnStart = false;
-            if (completedTurnId) {
-              send({
+          currentTurnId = null;
+          if (completedTurnId) {
+            send({
                 type: "wrapper.activity",
                 sessionId: wrapperSessionId,
                 activity: {
@@ -633,8 +634,11 @@ async function main() {
               });
             }
             updatePromptState("prompt_clean");
+            renderRemoteModePanel();
+            enableRemoteKeyboardControl();
           } else if (record.message.stop_reason === "tool_use") {
             updatePromptState("agent_busy");
+            renderRemoteModePanel();
           }
           continue;
         }
@@ -657,16 +661,22 @@ async function main() {
               body: error,
             },
           });
-          send({
-            type: "wrapper.activity",
-            sessionId: wrapperSessionId,
-            activity: {
-              type: "session_failed",
-              error,
-            },
-          });
+          const failedTurnId = currentTurnId;
           currentTurnId = null;
-          awaitingTurnStart = false;
+          if (wrapperSessionId && failedTurnId) {
+            send({
+              type: "wrapper.activity",
+              sessionId: wrapperSessionId,
+              activity: {
+                type: "turn_failed",
+                turnId: failedTurnId,
+                error,
+              },
+            });
+          }
+          updatePromptState("prompt_clean");
+          renderRemoteModePanel();
+          enableRemoteKeyboardControl();
         }
       }
     }
@@ -676,6 +686,10 @@ async function main() {
 
   logger.log("[rah] claude terminal wrapper exiting");
   await cleanupAndExit();
+  process.exitCode = localExitCode;
 }
 
-void main();
+void main().catch((error) => {
+  process.stderr.write(`[rah] ${error instanceof Error ? error.message : String(error)}\n`);
+  process.exitCode = 1;
+});

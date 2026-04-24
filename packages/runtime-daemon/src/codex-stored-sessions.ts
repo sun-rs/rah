@@ -21,13 +21,13 @@ export {
   resumeCodexStoredSession,
 } from "./codex-stored-session-history";
 import {
-  applyWorkspaceGitFileAction,
-  applyWorkspaceGitHunkAction,
-  getWorkspaceGitDiff,
-  getWorkspaceGitStatusData,
+  applyWorkspaceGitFileActionAsync,
+  applyWorkspaceGitHunkActionAsync,
+  getWorkspaceGitDiffAsync,
+  getWorkspaceGitStatusDataAsync,
   getWorkspaceSnapshot,
-  readWorkspaceFileData,
-  searchWorkspaceFilesInDirectory,
+  readWorkspaceFileDataAsync,
+  searchWorkspaceFilesInDirectoryAsync,
 } from "./workspace-utils";
 
 const MAX_SEARCH_DEPTH = 4;
@@ -45,6 +45,11 @@ function resolveCodexSearchRoots(): string[] {
     roots.push(path.join(wrapperHome, "sessions"), path.join(wrapperHome, "archived_sessions"));
   }
   return roots;
+}
+
+function resolveCodexHomes(): string[] {
+  const home = resolveCodexBaseHome();
+  return [home, ...listCodexWrapperHomes(home)];
 }
 
 function readHeadLines(filePath: string, maxBytes = 512 * 1024): string[] {
@@ -186,6 +191,7 @@ function parseStoredSessionRecord(filePath: string): CodexStoredSessionRecord | 
       ...(cwd ? { rootDir: cwd } : {}),
       title: truncateText(preview, 72),
       preview,
+      ...(createdAt ? { createdAt } : {}),
       updatedAt: stat.mtime.toISOString(),
       source: "provider_history",
     },
@@ -204,8 +210,41 @@ function shouldInvalidateCachedCodexTitle(ref: StoredSessionRef, filePath: strin
   );
 }
 
+function loadCodexThreadTitleIndex(): Map<string, string> {
+  const titles = new Map<string, string>();
+  for (const home of resolveCodexHomes()) {
+    const indexPath = path.join(home, "session_index.jsonl");
+    let content: string;
+    try {
+      content = readFileSync(indexPath, "utf8");
+    } catch {
+      continue;
+    }
+    for (const line of content.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed) {
+        continue;
+      }
+      try {
+        const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+        if (
+          typeof parsed.id === "string" &&
+          typeof parsed.thread_name === "string" &&
+          parsed.thread_name.trim()
+        ) {
+          titles.set(parsed.id, parsed.thread_name.trim());
+        }
+      } catch {
+        continue;
+      }
+    }
+  }
+  return titles;
+}
+
 export function discoverCodexStoredSessions(): CodexStoredSessionRecord[] {
   const cache = loadStoredSessionMetadataCache("codex");
+  const renamedTitles = loadCodexThreadTitleIndex();
   const records = new Map<string, CodexStoredSessionRecord>();
   for (const root of resolveCodexSearchRoots()) {
     for (const file of listRolloutFiles(root)) {
@@ -217,8 +256,34 @@ export function discoverCodexStoredSessions(): CodexStoredSessionRecord[] {
         mtimeMs: stats.mtimeMs,
       });
       if (cachedRef && !shouldInvalidateCachedCodexTitle(cachedRef, file)) {
+        const createdAtRecord = !cachedRef.createdAt ? parseStoredSessionRecord(file) : null;
+        const renamedTitle = renamedTitles.get(cachedRef.providerSessionId);
+        const nextRef =
+          renamedTitle && renamedTitle !== cachedRef.title
+            ? {
+                ...cachedRef,
+                title: renamedTitle,
+                ...(createdAtRecord?.ref.createdAt
+                  ? { createdAt: createdAtRecord.ref.createdAt }
+                  : {}),
+              }
+            : createdAtRecord?.ref.createdAt
+              ? {
+                  ...cachedRef,
+                  createdAt: createdAtRecord.ref.createdAt,
+                }
+              : cachedRef;
+        if (nextRef !== cachedRef) {
+          setCachedStoredSessionRef({
+            cache,
+            filePath: file,
+            size: stats.size,
+            mtimeMs: stats.mtimeMs,
+            ref: nextRef,
+          });
+        }
         records.set(cachedRef.providerSessionId, {
-          ref: cachedRef,
+          ref: nextRef,
           rolloutPath: file,
         });
         continue;
@@ -226,6 +291,13 @@ export function discoverCodexStoredSessions(): CodexStoredSessionRecord[] {
       const parsed = parseStoredSessionRecord(file);
       if (!parsed) {
         continue;
+      }
+      const renamedTitle = renamedTitles.get(parsed.ref.providerSessionId);
+      if (renamedTitle) {
+        parsed.ref = {
+          ...parsed.ref,
+          title: renamedTitle,
+        };
       }
       setCachedStoredSessionRef({
         cache,
@@ -262,42 +334,42 @@ export function getCodexWorkspaceSnapshot(cwd: string) {
   return getWorkspaceSnapshot(cwd);
 }
 
-export function getCodexGitStatus(cwd: string, options?: { scopeRoot?: string }) {
-  return getWorkspaceGitStatusData(cwd, options);
+export async function getCodexGitStatus(cwd: string, options?: { scopeRoot?: string }) {
+  return await getWorkspaceGitStatusDataAsync(cwd, options);
 }
 
-export function getCodexGitDiff(
+export async function getCodexGitDiff(
   cwd: string,
   targetPath: string,
   options?: { staged?: boolean; ignoreWhitespace?: boolean; scopeRoot?: string },
-): string {
-  return getWorkspaceGitDiff(cwd, targetPath, options);
+): Promise<string> {
+  return await getWorkspaceGitDiffAsync(cwd, targetPath, options);
 }
 
-export function applyCodexGitFileAction(
+export async function applyCodexGitFileAction(
   cwd: string,
-  request: Parameters<typeof applyWorkspaceGitFileAction>[1],
+  request: Parameters<typeof applyWorkspaceGitFileActionAsync>[1],
   options?: { scopeRoot?: string },
 ) {
-  return applyWorkspaceGitFileAction(cwd, request, options);
+  return await applyWorkspaceGitFileActionAsync(cwd, request, options);
 }
 
-export function applyCodexGitHunkAction(
+export async function applyCodexGitHunkAction(
   cwd: string,
-  request: Parameters<typeof applyWorkspaceGitHunkAction>[1],
+  request: Parameters<typeof applyWorkspaceGitHunkActionAsync>[1],
   options?: { scopeRoot?: string },
 ) {
-  return applyWorkspaceGitHunkAction(cwd, request, options);
+  return await applyWorkspaceGitHunkActionAsync(cwd, request, options);
 }
 
-export function searchWorkspaceFiles(cwd: string, query: string, limit = 100) {
-  return searchWorkspaceFilesInDirectory(cwd, query, limit);
+export async function searchWorkspaceFiles(cwd: string, query: string, limit = 100) {
+  return await searchWorkspaceFilesInDirectoryAsync(cwd, query, limit);
 }
 
-export function readWorkspaceFile(
+export async function readWorkspaceFile(
   cwd: string,
   targetPath: string,
   options?: { scopeRoot?: string },
 ) {
-  return readWorkspaceFileData(cwd, targetPath, options);
+  return await readWorkspaceFileDataAsync(cwd, targetPath, options);
 }

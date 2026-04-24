@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import type { SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
 import * as Dialog from "@radix-ui/react-dialog";
-import { ChevronDown, ChevronRight, History, MoreHorizontal, Search, X } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, History, ListFilter, MoreHorizontal, Pencil, PlusCircle, Search, X } from "lucide-react";
 import { providerLabel } from "../types";
-import { formatRelativeTime } from "../session-browser";
+import { formatRelativeTime, type WorkspaceSortMode } from "../session-browser";
 import { ProviderLogo } from "./ProviderLogo";
 import {
   dedupeStoredSessionsByIdentity,
@@ -14,6 +14,84 @@ const DEFAULT_GROUP_ITEM_LIMIT = 10;
 const GROUP_ITEM_INCREMENT = 20;
 
 type HistoryTab = "recent" | "all";
+
+function WorkspaceSortMenu(props: {
+  value: WorkspaceSortMode;
+  onChange: (value: WorkspaceSortMode) => void;
+}) {
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (!target?.closest("[data-history-sort-menu]")) {
+        setOpen(false);
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+
+  const sortOptions: Array<{ value: WorkspaceSortMode; label: string }> = [
+    { value: "created", label: "按创建顺序" },
+    { value: "updated", label: "按最近更新" },
+  ];
+
+  return (
+    <div className="relative" data-history-sort-menu>
+      <button
+        type="button"
+        className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)] transition-colors"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label="排序 workspace"
+        title="排序 workspace"
+        onClick={() => setOpen((current) => !current)}
+      >
+        <ListFilter size={14} />
+      </button>
+      {open ? (
+        <div className="absolute right-0 top-9 z-10 min-w-44 rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] p-1 shadow-lg">
+          {sortOptions.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              className="flex w-full items-center justify-between gap-3 rounded-md px-3 py-2 text-sm text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]"
+              onClick={() => {
+                props.onChange(option.value);
+                setOpen(false);
+              }}
+            >
+              <span className="flex items-center gap-2">
+                {option.value === "created" ? (
+                  <PlusCircle size={14} className="text-[var(--app-hint)]" />
+                ) : (
+                  <Pencil size={14} className="text-[var(--app-hint)]" />
+                )}
+                <span>{option.label}</span>
+              </span>
+              <span className="inline-flex h-4 w-4 items-center justify-center text-[var(--app-hint)]">
+                {props.value === option.value ? <Check size={14} /> : null}
+              </span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 function sourceBadge(session: StoredSessionRef) {
   if (session.source === "previous_live") {
@@ -136,6 +214,8 @@ export function SessionHistoryDialog(props: {
   storedSessions: StoredSessionRef[];
   recentSessions: StoredSessionRef[];
   liveSessions: SessionSummary[];
+  workspaceSortMode: WorkspaceSortMode;
+  onWorkspaceSortModeChange: (value: WorkspaceSortMode) => void;
   onActivate: (ref: StoredSessionRef) => void;
   onRemoveSession: (ref: Pick<StoredSessionRef, "provider" | "providerSessionId">) => void;
   onRemoveWorkspace: (workspaceDir: string) => void;
@@ -160,8 +240,11 @@ export function SessionHistoryDialog(props: {
   );
 
   const groups = useMemo(
-    () => groupAllStoredSessionsByDirectory(props.storedSessions),
-    [props.storedSessions],
+    () =>
+      groupAllStoredSessionsByDirectory(props.storedSessions, {
+        workspaceSortMode: props.workspaceSortMode,
+      }),
+    [props.storedSessions, props.workspaceSortMode],
   );
 
   const filteredGroups = useMemo(() => {
@@ -245,29 +328,37 @@ export function SessionHistoryDialog(props: {
           </div>
 
           <div className="px-4 pt-3 pb-2 shrink-0">
-            <div className="grid grid-cols-2 gap-2 rounded-lg bg-[var(--app-subtle-bg)] p-1">
-              <button
-                type="button"
-                onClick={() => setTab("recent")}
-                className={`rounded-md px-3 py-2 text-sm font-medium transition-colors ${
-                  tab === "recent"
-                    ? "bg-[var(--app-bg)] text-[var(--app-fg)] shadow-sm"
-                    : "text-[var(--app-hint)] hover:text-[var(--app-fg)]"
-                }`}
-              >
-                Recent
-              </button>
-              <button
-                type="button"
-                onClick={() => setTab("all")}
-                className={`rounded-md px-3 py-2 text-sm font-medium transition-colors ${
-                  tab === "all"
-                    ? "bg-[var(--app-bg)] text-[var(--app-fg)] shadow-sm"
-                    : "text-[var(--app-hint)] hover:text-[var(--app-fg)]"
-                }`}
-              >
-                All
-              </button>
+            <div className="flex items-center gap-2">
+              <div className="grid flex-1 grid-cols-2 gap-2 rounded-lg bg-[var(--app-subtle-bg)] p-1">
+                <button
+                  type="button"
+                  onClick={() => setTab("recent")}
+                  className={`rounded-md px-3 py-2 text-sm font-medium transition-colors ${
+                    tab === "recent"
+                      ? "bg-[var(--app-bg)] text-[var(--app-fg)] shadow-sm"
+                      : "text-[var(--app-hint)] hover:text-[var(--app-fg)]"
+                  }`}
+                >
+                  Recent
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTab("all")}
+                  className={`rounded-md px-3 py-2 text-sm font-medium transition-colors ${
+                    tab === "all"
+                      ? "bg-[var(--app-bg)] text-[var(--app-fg)] shadow-sm"
+                      : "text-[var(--app-hint)] hover:text-[var(--app-fg)]"
+                  }`}
+                >
+                  All
+                </button>
+              </div>
+              {tab === "all" ? (
+                <WorkspaceSortMenu
+                  value={props.workspaceSortMode}
+                  onChange={props.onWorkspaceSortModeChange}
+                />
+              ) : null}
             </div>
           </div>
 

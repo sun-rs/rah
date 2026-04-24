@@ -14,6 +14,7 @@ import type {
   ManagedSession,
 } from "@rah/runtime-protocol";
 import type { RuntimeServices } from "./provider-adapter";
+import { resolveConfiguredBinary } from "./provider-binary-utils";
 import { applyProviderActivity, type ProviderActivity } from "./provider-activity";
 import type {
   LiveClaudeSession,
@@ -159,7 +160,7 @@ function classifyClaudeToolFamily(name: string) {
 }
 
 async function resolveClaudeBinary(): Promise<string> {
-  return process.env.RAH_CLAUDE_BINARY ?? "claude";
+  return await resolveConfiguredBinary("RAH_CLAUDE_BINARY", "claude");
 }
 
 export function approvalPolicyToPermissionMode(
