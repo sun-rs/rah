@@ -64,6 +64,7 @@ export type LiveKimiSession = {
   cwd: string;
   model?: string;
   approvalMode: string;
+  planMode: boolean;
   client: KimiJsonRpcClient;
   activeTurn: LiveKimiTurn | null;
   pendingRequests: Map<string, PendingInteractiveRequest>;

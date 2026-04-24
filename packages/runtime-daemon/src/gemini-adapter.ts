@@ -42,6 +42,7 @@ import {
   prepareProviderSessionResume,
 } from "./provider-resume";
 import { geminiLaunchSpec, probeProviderDiagnostic } from "./provider-diagnostics";
+import { buildGeminiModeState, isGeminiModeId } from "./session-mode-utils";
 import {
   applyWorkspaceGitFileActionAsync,
   applyWorkspaceGitHunkActionAsync,
@@ -136,6 +137,50 @@ export class GeminiAdapter implements ProviderAdapter {
       sessionId,
       request,
     });
+  }
+
+  async renameSession(sessionId: string, title: string): Promise<SessionSummary> {
+    const state = this.services.sessionStore.getSession(sessionId);
+    if (!state) {
+      throw new Error(`Unknown session ${sessionId}`);
+    }
+    const nextTitle = title.trim();
+    if (!nextTitle) {
+      throw new Error("Session title is required.");
+    }
+    if (state.session.providerSessionId) {
+      this.services.workbenchState?.setSessionTitleOverride(
+        {
+          provider: "gemini",
+          providerSessionId: state.session.providerSessionId,
+        },
+        nextTitle,
+      );
+    } else {
+      this.services.workbenchState?.setPendingSessionTitleOverride(sessionId, nextTitle);
+    }
+    const nextState = this.services.sessionStore.patchManagedSession(sessionId, {
+      title: nextTitle,
+    });
+    return toSessionSummary(nextState);
+  }
+
+  setSessionMode(sessionId: string, modeId: string): SessionSummary {
+    if (!isGeminiModeId(modeId)) {
+      throw new Error(`Unsupported Gemini mode '${modeId}'.`);
+    }
+    const live = this.liveSessions.get(sessionId);
+    if (!live) {
+      throw new Error("Gemini mode switching is only available for live sessions.");
+    }
+    live.approvalMode = modeId;
+    const nextState = this.services.sessionStore.patchManagedSession(sessionId, {
+      mode: buildGeminiModeState({
+        currentModeId: live.approvalMode,
+        mutable: true,
+      }),
+    });
+    return toSessionSummary(nextState);
   }
 
   async closeSession(sessionId: string, request: CloseSessionRequest): Promise<void> {

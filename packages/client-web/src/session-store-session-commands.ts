@@ -147,6 +147,23 @@ export async function renameSessionCommand(args: {
   }
 }
 
+export async function setSessionModeCommand(args: {
+  set: SessionCommandSetState;
+  sessionId: string;
+  modeId: string;
+}) {
+  try {
+    const summary = await api.setSessionMode(args.sessionId, { modeId: args.modeId });
+    args.set((state) => ({
+      projections: updateSessionSummaryInProjectionMap(state.projections, summary),
+      error: null,
+    }));
+  } catch (error) {
+    args.set({ error: readErrorMessage(error) });
+    throw error;
+  }
+}
+
 export async function claimControlCommand(args: {
   get: () => SessionCommandState;
   set: SessionCommandSetState;
@@ -223,7 +240,19 @@ export async function sendInputCommand(args: {
         return state;
       }
       const next = new Map(state.projections);
-      next.set(args.sessionId, appendOptimisticUserMessage(projection, args.text));
+      const optimistic = appendOptimisticUserMessage(projection, args.text);
+      next.set(args.sessionId, {
+        ...optimistic,
+        summary: {
+          ...optimistic.summary,
+          controlLease: {
+            sessionId: optimistic.summary.session.id,
+            holderClientId: state.clientId,
+            holderKind: "web",
+            grantedAt: new Date().toISOString(),
+          },
+        },
+      });
       return { projections: next };
     });
     await api.sendSessionInput(args.sessionId, {

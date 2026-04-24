@@ -25,6 +25,12 @@ function storedSessionState(providerSessionId: string): StoredSessionState {
         steerInput: true,
         queuedInput: false,
         renameSession: true,
+        actions: {
+          info: true,
+          archive: true,
+          delete: true,
+          rename: "native",
+        },
         modelSwitch: false,
         planMode: false,
         subagents: false,
@@ -67,10 +73,11 @@ describe("buildSessionsResponse", () => {
       remembered: {
         rememberedSessions: [],
         rememberedRecentSessions: [],
-        rememberedWorkspaceDirs: ["/workspace/demo"],
-        rememberedHiddenWorkspaces: [],
-        rememberedHiddenSessionKeys: [],
-      },
+      rememberedWorkspaceDirs: ["/workspace/demo"],
+      rememberedHiddenWorkspaces: [],
+      rememberedHiddenSessionKeys: [],
+      rememberedSessionTitleOverrides: {},
+    },
       isClosingSession: () => false,
     });
 

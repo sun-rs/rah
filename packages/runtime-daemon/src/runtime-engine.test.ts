@@ -294,6 +294,12 @@ function sessionSummary(sessionId: string, providerSessionId: string): SessionSu
         steerInput: true,
         queuedInput: false,
         renameSession: false,
+        actions: {
+          info: true,
+          archive: false,
+          delete: true,
+          rename: "none",
+        },
         modelSwitch: false,
         planMode: false,
         subagents: false,
@@ -1068,6 +1074,19 @@ describe("RuntimeEngine", () => {
 
     engine.updateTerminalWrapperPromptState(ready.sessionId, "prompt_dirty");
     engine.sendInput(ready.sessionId, { clientId: "web-user", text: "Explain the bug." });
+    assert.equal(engine.listSessions().sessions[0]?.controlLease.holderKind, "web");
+    assert.equal(engine.listSessions().sessions[0]?.controlLease.holderClientId, "web-user");
+    assert.equal(
+      engine
+        .listEvents({ sessionIds: [ready.sessionId] })
+        .some(
+          (event) =>
+            event.type === "session.attached" &&
+            event.payload.clientId === "web-user" &&
+            event.payload.clientKind === "web",
+        ),
+      true,
+    );
 
     assert.deepEqual(outbound.at(-1), {
       type: "turn.enqueue",
@@ -1102,6 +1121,62 @@ describe("RuntimeEngine", () => {
       .listEvents({ sessionIds: [ready.sessionId] })
       .filter((event) => event.type === "session.state.changed");
     assert.equal(runningStateChangedEvents.at(-1)?.payload.state, "running");
+
+    await engine.shutdown();
+  });
+
+  test("interrupting a terminal wrapper turn before injection cancels the queued web turn", async () => {
+    const adapter = new CountingStoredSessionsAdapter([]);
+    const engine = new RuntimeEngine([adapter]);
+    const outbound: TerminalWrapperFromDaemonMessage[] = [];
+
+    const ready = engine.registerTerminalWrapperSession(
+      {
+        type: "wrapper.hello",
+        provider: "codex",
+        cwd: workDirGlobal,
+        rootDir: workDirGlobal,
+        terminalPid: 4242,
+        launchCommand: ["rah", "codex"],
+      } satisfies WrapperHelloMessage,
+      (message) => outbound.push(message),
+    );
+    engine.updateTerminalWrapperPromptState(ready.sessionId, "prompt_dirty");
+    engine.sendInput(ready.sessionId, { clientId: "web-user", text: "Explain the bug." });
+    assert.equal(outbound.at(-1)?.type, "turn.enqueue");
+
+    engine.interruptSession(ready.sessionId, { clientId: "web-user" });
+    engine.updateTerminalWrapperPromptState(ready.sessionId, "prompt_clean");
+
+    assert.equal(outbound.some((message) => message.type === "turn.inject"), false);
+    assert.equal(outbound.at(-1)?.type, "turn.interrupt");
+
+    await engine.shutdown();
+  });
+
+  test("interrupting before wrapper input arrives suppresses the next same-client input", async () => {
+    const adapter = new CountingStoredSessionsAdapter([]);
+    const engine = new RuntimeEngine([adapter]);
+    const outbound: TerminalWrapperFromDaemonMessage[] = [];
+
+    const ready = engine.registerTerminalWrapperSession(
+      {
+        type: "wrapper.hello",
+        provider: "codex",
+        cwd: workDirGlobal,
+        rootDir: workDirGlobal,
+        terminalPid: 4242,
+        launchCommand: ["rah", "codex"],
+      } satisfies WrapperHelloMessage,
+      (message) => outbound.push(message),
+    );
+
+    engine.updateTerminalWrapperPromptState(ready.sessionId, "prompt_clean");
+    engine.interruptSession(ready.sessionId, { clientId: "web-user" });
+    engine.sendInput(ready.sessionId, { clientId: "web-user", text: "Explain the bug." });
+
+    assert.equal(outbound.some((message) => message.type === "turn.inject"), false);
+    assert.equal(outbound.filter((message) => message.type === "turn.interrupt").length, 1);
 
     await engine.shutdown();
   });

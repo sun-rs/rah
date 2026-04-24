@@ -20,9 +20,9 @@ export const COMPOSER_LAYOUT = {
   rowClassName: `flex items-end ${COMPOSER_CONTROLS_GAP_CLASS_NAME}`,
   controlsGapClassName: COMPOSER_CONTROLS_GAP_CLASS_NAME,
   composeGridWithoutStopClassName:
-    `grid items-end grid-cols-[2.75rem_minmax(0,1fr)_2.75rem] ${COMPOSER_CONTROLS_GAP_CLASS_NAME} md:grid-cols-[3rem_minmax(0,1fr)_3rem]`,
+    `grid items-end grid-cols-[auto_minmax(0,1fr)_2.75rem] ${COMPOSER_CONTROLS_GAP_CLASS_NAME} md:grid-cols-[auto_minmax(0,1fr)_3rem]`,
   composeGridWithStopClassName:
-    `grid items-end grid-cols-[2.75rem_minmax(0,1fr)_2.75rem_2.75rem] ${COMPOSER_CONTROLS_GAP_CLASS_NAME} md:grid-cols-[3rem_minmax(0,1fr)_3rem_3rem]`,
+    `grid items-end grid-cols-[auto_minmax(0,1fr)_2.75rem_2.75rem] ${COMPOSER_CONTROLS_GAP_CLASS_NAME} md:grid-cols-[auto_minmax(0,1fr)_3rem_3rem]`,
   controlButtonClassName:
     `shrink-0 self-end ${COMPOSER_CONTROL_SIZE_CLASS_NAME} rounded-full flex items-center justify-center transition-colors`,
   roundSecondaryButtonClassName:

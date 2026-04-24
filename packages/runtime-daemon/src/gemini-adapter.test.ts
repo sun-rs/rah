@@ -10,6 +10,8 @@ import { loadCachedGeminiHistoryManifest } from "./gemini-history-cache";
 import { createGeminiStoredSessionFrozenHistoryPageLoader } from "./gemini-session-files";
 import { PtyHub } from "./pty-hub";
 import { SessionStore } from "./session-store";
+import { WorkbenchStateStore } from "./workbench-state";
+import { buildSessionsResponse } from "./runtime-session-list";
 
 function waitFor(predicate: () => boolean, timeoutMs = 5000): Promise<void> {
   const started = Date.now();
@@ -78,6 +80,7 @@ describe("GeminiAdapter", () => {
       eventBus: new EventBus(),
       ptyHub: new PtyHub(),
       sessionStore: new SessionStore(),
+      workbenchState: new WorkbenchStateStore(path.join(tmpRahHome, "runtime-daemon")),
     };
   }
 
@@ -328,6 +331,47 @@ emit({ type: "result", timestamp: new Date().toISOString(), status: "success", s
     });
   });
 
+  test("switches Gemini approval mode for subsequent turns", async () => {
+    const { logPath } = writeMockGeminiBinary();
+    const services = createServices();
+    const adapter = new GeminiAdapter(services);
+
+    const started = await adapter.startSession({
+      provider: "gemini",
+      cwd,
+      attach: {
+        client: {
+          id: "web-1",
+          kind: "web",
+          connectionId: "web-1",
+        },
+        mode: "interactive",
+        claimControl: true,
+      },
+    });
+
+    const updated = adapter.setSessionMode(started.session.session.id, "plan");
+    assert.equal(updated.session.mode?.currentModeId, "plan");
+    assert.equal(updated.session.mode?.mutable, true);
+
+    adapter.sendInput(started.session.session.id, {
+      clientId: "web-1",
+      text: "plan prompt",
+    });
+
+    await waitFor(
+      () => services.sessionStore.getSession(started.session.session.id)?.session.runtimeState === "idle",
+    );
+
+    const argsLog = readFileSync(logPath, "utf8")
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as string[]);
+    assert.equal(argsLog.length, 1);
+    assert.ok(argsLog[0]?.includes("--approval-mode"));
+    assert.ok(argsLog[0]?.includes("plan"));
+  });
+
   test("discovers stored sessions and rehydrates replay history", async () => {
     writeGeminiSessionFile("gemini-session-2");
     const services = createServices();
@@ -402,6 +446,98 @@ emit({ type: "result", timestamp: new Date().toISOString(), status: "success", s
           event.payload.item.kind === "system" &&
           event.payload.item.text === "Rate limit almost reached.",
       ),
+    );
+  });
+
+  test("applies local Gemini rename through RAH title overrides", async () => {
+    writeGeminiSessionFile("gemini-session-rename-1");
+    const services = createServices();
+    const adapter = new GeminiAdapter(services);
+
+    const resumed = await adapter.resumeSession({
+      provider: "gemini",
+      providerSessionId: "gemini-session-rename-1",
+      cwd,
+      preferStoredReplay: true,
+    });
+
+    const renamed = await adapter.renameSession(
+      resumed.session.session.id,
+      "Renamed Gemini Session",
+    );
+    assert.equal(renamed.session.title, "Renamed Gemini Session");
+
+    const response = buildSessionsResponse({
+      liveStates: services.sessionStore.listSessions(),
+      discoveredStoredSessions: adapter.listStoredSessions(),
+      remembered: {
+        rememberedSessions: services.workbenchState.snapshot().sessions,
+        rememberedRecentSessions: services.workbenchState.snapshot().recentSessions,
+        rememberedWorkspaceDirs: services.workbenchState.snapshot().workspaces,
+        rememberedHiddenWorkspaces: services.workbenchState.snapshot().hiddenWorkspaces,
+        rememberedHiddenSessionKeys: services.workbenchState.snapshot().hiddenSessionKeys,
+        rememberedSessionTitleOverrides: services.workbenchState.snapshot().sessionTitleOverrides,
+        ...(services.workbenchState.snapshot().activeWorkspaceDir
+          ? { rememberedActiveWorkspaceDir: services.workbenchState.snapshot().activeWorkspaceDir }
+          : {}),
+      },
+      isClosingSession: () => false,
+    });
+
+    assert.equal(
+      response.storedSessions.find(
+        (session) =>
+          session.provider === "gemini" &&
+          session.providerSessionId === "gemini-session-rename-1",
+      )?.title,
+      "Renamed Gemini Session",
+    );
+  });
+
+  test("promotes pending Gemini local rename after provider session id binds", async () => {
+    writeMockGeminiBinary();
+    const services = createServices();
+    const adapter = new GeminiAdapter(services);
+
+    const started = await adapter.startSession({
+      provider: "gemini",
+      cwd,
+      attach: {
+        client: {
+          id: "web-1",
+          kind: "web",
+          connectionId: "web-1",
+        },
+        mode: "interactive",
+        claimControl: true,
+      },
+    });
+
+    await adapter.renameSession(started.session.session.id, "Pending Gemini Title");
+    assert.equal(
+      services.workbenchState.snapshot().pendingSessionTitleOverrides[started.session.session.id],
+      "Pending Gemini Title",
+    );
+
+    adapter.sendInput(started.session.session.id, {
+      clientId: "web-1",
+      text: "first prompt",
+    });
+
+    await waitFor(() => {
+      const state = services.sessionStore.getSession(started.session.session.id);
+      return state?.session.providerSessionId === "gemini-session-1";
+    });
+
+    const snapshot = services.workbenchState.snapshot();
+    assert.equal(snapshot.pendingSessionTitleOverrides[started.session.session.id], undefined);
+    assert.equal(
+      snapshot.sessionTitleOverrides["gemini:gemini-session-1"],
+      "Pending Gemini Title",
+    );
+    assert.equal(
+      services.sessionStore.getSession(started.session.session.id)?.session.title,
+      "Pending Gemini Title",
     );
   });
 

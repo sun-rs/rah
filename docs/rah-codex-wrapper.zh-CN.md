@@ -73,7 +73,7 @@ terminal 和 web 都只是同一个 live session 的 surface。
 
 - [codex-wrapper-home.ts](/Users/sun/Library/Mobile%20Documents/com~apple~CloudDocs/Lab/crates/AI/rah/packages/runtime-daemon/src/codex-wrapper-home.ts)
 - [codex-stored-sessions.ts](/Users/sun/Library/Mobile%20Documents/com~apple~CloudDocs/Lab/crates/AI/rah/packages/runtime-daemon/src/codex-stored-sessions.ts)
-- [codex-terminal-wrapper.ts](/Users/sun/Library/Mobile%20Documents/com~apple~CloudDocs/Lab/crates/AI/rah/packages/runtime-daemon/src/codex-terminal-wrapper.ts)
+- [codex-terminal-wrapper-handoff.ts](/Users/sun/Library/Mobile%20Documents/com~apple~CloudDocs/Lab/crates/AI/rah/packages/runtime-daemon/src/codex-terminal-wrapper-handoff.ts)
 
 ## 4. turn 生命周期
 
@@ -113,12 +113,14 @@ web 发出的消息会：
 
 1. 进入 terminal wrapper queue
 2. 在 `prompt_clean` 时被下发为 `turn.inject`
-3. 注入同一个原生 Codex TUI PTY
+3. 如果已经绑定 provider session，切到 remote writer 并通过 Codex app-server 对同一 thread 发 `turn/start`
+4. 如果还没有绑定 provider session，先通过 Codex app-server `thread/start` 创建 thread，绑定当前 wrapper session，再发送这条首轮 `turn/start`
 
 因此现在已经成立：
 
 - web 里发一句话
-- terminal 里的原生 Codex TUI 也会继续跑这一轮
+- 这一轮会落在同一个 RAH live session
+- terminal 可在 remote turn 结束后按 `Esc` 回到原生 `codex resume <threadId>` TUI
 
 ## 6. 关闭语义
 
@@ -152,6 +154,7 @@ terminal 里的 wrapper / Codex TUI 自己退出后：
 - daemon 是唯一 owner
 - terminal / web 是双 surface
 - 新会话通过 isolated `CODEX_HOME` 精准绑定
+- web-first 首轮通过 Codex app-server bootstrap，不再依赖旧 PTY 注入
 - turn 生命周期以 rollout 强信号驱动
 - close 是双向联动，不是单边 UI 删除
 

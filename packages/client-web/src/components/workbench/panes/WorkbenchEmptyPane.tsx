@@ -1,9 +1,11 @@
 import type { RefObject } from "react";
 import { ArrowUp, ChevronDown, Folder, FolderPlus, Menu, PanelRight, Plus } from "lucide-react";
 import { ProviderSelector, type ProviderChoice } from "../../ProviderSelector";
+import { SessionModeControls } from "../../SessionModeControls";
 import { TokenizedTextarea } from "../../TokenizedTextarea";
 import { WorkspacePicker } from "../../WorkspacePicker";
 import { EMPTY_STATE_COMPOSER_LAYOUT } from "../../../composer-contract";
+import type { SessionModeChoice } from "../../../session-mode-ui";
 
 export function WorkbenchEmptyPane(props: {
   sidebarOpen: boolean;
@@ -26,6 +28,12 @@ export function WorkbenchEmptyPane(props: {
   onAddWorkspace: (dir: string) => void;
   newSessionProvider: ProviderChoice;
   onChangeProvider: (provider: ProviderChoice) => void;
+  accessModes: SessionModeChoice[];
+  selectedAccessModeId: string | null;
+  planModeAvailable: boolean;
+  planModeEnabled: boolean;
+  onAccessModeChange: (modeId: string) => void;
+  onPlanModeToggle: (enabled: boolean) => void;
 }) {
   return (
     <>
@@ -165,6 +173,15 @@ export function WorkbenchEmptyPane(props: {
                     ))}
                   </div>
                 ) : null}
+                <SessionModeControls
+                  compact
+                  accessModes={props.accessModes}
+                  selectedAccessModeId={props.selectedAccessModeId}
+                  planModeAvailable={props.planModeAvailable}
+                  planModeEnabled={props.planModeEnabled}
+                  onAccessModeChange={props.onAccessModeChange}
+                  onPlanModeToggle={props.onPlanModeToggle}
+                />
               </div>
               <button
                 type="button"

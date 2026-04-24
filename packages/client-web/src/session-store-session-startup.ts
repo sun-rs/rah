@@ -39,6 +39,7 @@ type StartSessionOptions = {
   model?: string;
   approvalPolicy?: ApprovalPolicy;
   sandbox?: string;
+  modeId?: string;
   initialInput?: string;
 };
 
@@ -144,21 +145,27 @@ export async function startSessionCommand(
       ...(options?.sandbox ? { sandbox: options.sandbox } : {}),
       attach: createInteractiveAttachRequest(state.clientId, state.connectionId),
     });
+    const session =
+      options?.modeId &&
+      response.session.session.mode?.mutable &&
+      response.session.session.mode.currentModeId !== options.modeId
+        ? await api.setSessionMode(response.session.session.id, { modeId: options.modeId })
+        : response.session;
     deps.set((current) => {
       const next = deps.adoptExistingProjectionForProviderSession(
         new Map(current.projections),
-        response.session,
+        session,
       );
-      return applyStartedSessionState(current, response.session, {
+      return applyStartedSessionState(current, session, {
         cwd,
         provider,
         projections: next,
       });
     });
     if (options?.initialInput?.trim()) {
-      await deps.sendInput(response.session.session.id, options.initialInput.trim());
+      await deps.sendInput(session.session.id, options.initialInput.trim());
     }
-    void deps.ensureSessionHistoryLoaded(response.session.session.id);
+    void deps.ensureSessionHistoryLoaded(session.session.id);
   } catch (error) {
     deps.set({ pendingSessionTransition: null, error: readErrorMessage(error) });
     throw error;
@@ -326,6 +333,7 @@ export async function resumeStoredSessionCommand(
 export async function claimHistorySessionCommand(
   deps: SessionStartupDeps,
   sessionId: string,
+  options?: { modeId?: string },
 ) {
   const state = deps.get();
   const projection = state.projections.get(sessionId);
@@ -383,11 +391,17 @@ export async function claimHistorySessionCommand(
       request.cwd = ref.cwd;
     }
     const response = await api.resumeSession(request);
+    const session =
+      options?.modeId &&
+      response.session.session.mode?.mutable &&
+      response.session.session.mode.currentModeId !== options.modeId
+        ? await api.setSessionMode(response.session.session.id, { modeId: options.modeId })
+        : response.session;
     deps.set((current) => {
       const next = new Map(current.projections);
       const claimedState = applyClaimedHistorySessionState(
         current,
-        response.session,
+        session,
         sessionId,
         preservedProjection,
         ref,
@@ -397,7 +411,7 @@ export async function claimHistorySessionCommand(
         ...claimedState,
         projections: deps.applyEventsToMap(
           claimedState.projections ?? next,
-          deps.takePendingEventsForSessions(new Set([response.session.session.id])),
+          deps.takePendingEventsForSessions(new Set([session.session.id])),
         ),
       };
     });

@@ -6,7 +6,7 @@ import type { StoredSessionRef } from "@rah/runtime-protocol";
 import type { StoredSessionState } from "./session-store";
 
 const SNAPSHOT_FILE = "workbench-state.json";
-const STORAGE_VERSION = 1;
+const STORAGE_VERSION = 2;
 const RECENT_SESSION_LIMIT = 15;
 
 interface WorkbenchStateFile {
@@ -16,6 +16,8 @@ interface WorkbenchStateFile {
   workspaces: string[];
   hiddenWorkspaces?: string[];
   hiddenSessionKeys?: string[];
+  sessionTitleOverrides?: Record<string, string>;
+  pendingSessionTitleOverrides?: Record<string, string>;
   sessions: StoredSessionRef[];
   recentSessions: StoredSessionRef[];
 }
@@ -117,6 +119,27 @@ function sessionKey(session: Pick<StoredSessionRef, "provider" | "providerSessio
   return `${session.provider}:${session.providerSessionId}`;
 }
 
+function applyTitleOverride(
+  session: StoredSessionRef,
+  overrides: Record<string, string>,
+): StoredSessionRef {
+  const nextTitle = overrides[sessionKey(session)];
+  if (!nextTitle || nextTitle === session.title) {
+    return session;
+  }
+  return {
+    ...session,
+    title: nextTitle,
+  };
+}
+
+function applyTitleOverrideToSessions(
+  sessions: readonly StoredSessionRef[],
+  overrides: Record<string, string>,
+): StoredSessionRef[] {
+  return sessions.map((session) => applyTitleOverride(session, overrides));
+}
+
 function mergeRecentSessions(
   current: readonly StoredSessionRef[],
   nextSessions: readonly StoredSessionRef[],
@@ -175,9 +198,19 @@ export class WorkbenchStateStore {
     workspaces: string[];
     hiddenWorkspaces: string[];
     hiddenSessionKeys: string[];
+    sessionTitleOverrides: Record<string, string>;
+    pendingSessionTitleOverrides: Record<string, string>;
     sessions: StoredSessionRef[];
     recentSessions: StoredSessionRef[];
-  } = { workspaces: [], hiddenWorkspaces: [], hiddenSessionKeys: [], sessions: [], recentSessions: [] };
+  } = {
+    workspaces: [],
+    hiddenWorkspaces: [],
+    hiddenSessionKeys: [],
+    sessionTitleOverrides: {},
+    pendingSessionTitleOverrides: {},
+    sessions: [],
+    recentSessions: [],
+  };
 
   constructor(rootDir = path.join(resolveRahHome(), "runtime-daemon")) {
     this.rootDir = rootDir;
@@ -190,17 +223,35 @@ export class WorkbenchStateStore {
     workspaces: string[];
     hiddenWorkspaces: string[];
     hiddenSessionKeys: string[];
+    sessionTitleOverrides: Record<string, string>;
+    pendingSessionTitleOverrides: Record<string, string>;
     sessions: StoredSessionRef[];
     recentSessions: StoredSessionRef[];
   } {
     if (!existsSync(this.snapshotPath)) {
-      this.state = { workspaces: [], hiddenWorkspaces: [], hiddenSessionKeys: [], sessions: [], recentSessions: [] };
+      this.state = {
+        workspaces: [],
+        hiddenWorkspaces: [],
+        hiddenSessionKeys: [],
+        sessionTitleOverrides: {},
+        pendingSessionTitleOverrides: {},
+        sessions: [],
+        recentSessions: [],
+      };
       return this.state;
     }
     try {
       const raw = JSON.parse(readFileSync(this.snapshotPath, "utf8")) as WorkbenchStateFile;
       if (!raw || typeof raw !== "object" || !Array.isArray(raw.sessions)) {
-        this.state = { workspaces: [], hiddenWorkspaces: [], hiddenSessionKeys: [], sessions: [], recentSessions: [] };
+        this.state = {
+          workspaces: [],
+          hiddenWorkspaces: [],
+          hiddenSessionKeys: [],
+          sessionTitleOverrides: {},
+          pendingSessionTitleOverrides: {},
+          sessions: [],
+          recentSessions: [],
+        };
         return this.state;
       }
       const sessions = raw.sessions.filter(
@@ -230,6 +281,24 @@ export class WorkbenchStateStore {
       const hiddenSessionKeys = Array.isArray(raw.hiddenSessionKeys)
         ? uniqueStringsInOrder(raw.hiddenSessionKeys.filter((value): value is string => typeof value === "string"))
         : [];
+      const sessionTitleOverrides =
+        raw.sessionTitleOverrides && typeof raw.sessionTitleOverrides === "object"
+          ? Object.fromEntries(
+              Object.entries(raw.sessionTitleOverrides).filter(
+                (entry): entry is [string, string] =>
+                  typeof entry[0] === "string" && typeof entry[1] === "string" && entry[1].trim().length > 0,
+              ),
+            )
+          : {};
+      const pendingSessionTitleOverrides =
+        raw.pendingSessionTitleOverrides && typeof raw.pendingSessionTitleOverrides === "object"
+          ? Object.fromEntries(
+              Object.entries(raw.pendingSessionTitleOverrides).filter(
+                (entry): entry is [string, string] =>
+                  typeof entry[0] === "string" && typeof entry[1] === "string" && entry[1].trim().length > 0,
+              ),
+            )
+          : {};
       const workspaces = filterHiddenDirectories([
         ...(Array.isArray(raw.workspaces) ? raw.workspaces : []),
         ...sanitizedSessions.flatMap((session) => {
@@ -245,12 +314,28 @@ export class WorkbenchStateStore {
         workspaces,
         hiddenWorkspaces,
         hiddenSessionKeys,
-        sessions: sanitizedSessions.filter((session) => !hiddenSessionKeys.includes(sessionKey(session))),
-        recentSessions: recentSessions.filter((session) => !hiddenSessionKeys.includes(sessionKey(session))),
+        sessionTitleOverrides,
+        pendingSessionTitleOverrides,
+        sessions: applyTitleOverrideToSessions(
+          sanitizedSessions.filter((session) => !hiddenSessionKeys.includes(sessionKey(session))),
+          sessionTitleOverrides,
+        ),
+        recentSessions: applyTitleOverrideToSessions(
+          recentSessions.filter((session) => !hiddenSessionKeys.includes(sessionKey(session))),
+          sessionTitleOverrides,
+        ),
       };
       return this.state;
     } catch {
-      this.state = { workspaces: [], hiddenWorkspaces: [], hiddenSessionKeys: [], sessions: [], recentSessions: [] };
+      this.state = {
+        workspaces: [],
+        hiddenWorkspaces: [],
+        hiddenSessionKeys: [],
+        sessionTitleOverrides: {},
+        pendingSessionTitleOverrides: {},
+        sessions: [],
+        recentSessions: [],
+      };
       return this.state;
     }
   }
@@ -283,6 +368,8 @@ export class WorkbenchStateStore {
       workspaces,
       hiddenWorkspaces: this.state.hiddenWorkspaces,
       hiddenSessionKeys: this.state.hiddenSessionKeys.filter((key) => !visibleSessionKeys.has(key)),
+      sessionTitleOverrides: this.state.sessionTitleOverrides,
+      pendingSessionTitleOverrides: this.state.pendingSessionTitleOverrides,
       sessions: mergeRememberedSessions(this.state.sessions, sessions),
       recentSessions: mergeRecentSessions(this.state.recentSessions, sessions),
     };
@@ -313,6 +400,8 @@ export class WorkbenchStateStore {
       workspaces,
       hiddenWorkspaces,
       hiddenSessionKeys,
+      sessionTitleOverrides: this.state.sessionTitleOverrides,
+      pendingSessionTitleOverrides: this.state.pendingSessionTitleOverrides,
       sessions: mergeRememberedSessions(this.state.sessions, [session]),
       recentSessions: mergeRecentSessions(this.state.recentSessions, [session]),
     };
@@ -324,6 +413,8 @@ export class WorkbenchStateStore {
     workspaces: string[];
     hiddenWorkspaces: string[];
     hiddenSessionKeys: string[];
+    sessionTitleOverrides: Record<string, string>;
+    pendingSessionTitleOverrides: Record<string, string>;
     sessions: StoredSessionRef[];
     recentSessions: StoredSessionRef[];
   } {
@@ -332,6 +423,8 @@ export class WorkbenchStateStore {
       workspaces: [...this.state.workspaces],
       hiddenWorkspaces: [...this.state.hiddenWorkspaces],
       hiddenSessionKeys: [...this.state.hiddenSessionKeys],
+      sessionTitleOverrides: { ...this.state.sessionTitleOverrides },
+      pendingSessionTitleOverrides: { ...this.state.pendingSessionTitleOverrides },
       sessions: [...this.state.sessions],
       recentSessions: [...this.state.recentSessions],
     };
@@ -349,6 +442,8 @@ export class WorkbenchStateStore {
       workspaces,
       hiddenWorkspaces,
       hiddenSessionKeys: this.state.hiddenSessionKeys,
+      sessionTitleOverrides: this.state.sessionTitleOverrides,
+      pendingSessionTitleOverrides: this.state.pendingSessionTitleOverrides,
       sessions: this.state.sessions,
       recentSessions: this.state.recentSessions,
     };
@@ -371,6 +466,8 @@ export class WorkbenchStateStore {
       workspaces,
       hiddenWorkspaces,
       hiddenSessionKeys: this.state.hiddenSessionKeys,
+      sessionTitleOverrides: this.state.sessionTitleOverrides,
+      pendingSessionTitleOverrides: this.state.pendingSessionTitleOverrides,
       sessions: this.state.sessions,
       recentSessions: this.state.recentSessions,
     };
@@ -379,9 +476,12 @@ export class WorkbenchStateStore {
 
   hideSession(session: Pick<StoredSessionRef, "provider" | "providerSessionId">): void {
     const key = sessionKey(session);
+    const nextOverrides = { ...this.state.sessionTitleOverrides };
+    delete nextOverrides[key];
     this.state = {
       ...this.state,
       hiddenSessionKeys: uniqueStringsInOrder([...this.state.hiddenSessionKeys, key]),
+      sessionTitleOverrides: nextOverrides,
       sessions: this.state.sessions.filter((entry) => sessionKey(entry) !== key),
       recentSessions: this.state.recentSessions.filter((entry) => sessionKey(entry) !== key),
     };
@@ -415,14 +515,88 @@ export class WorkbenchStateStore {
       ...this.state.hiddenSessionKeys,
       ...matchingSessionKeys,
     ]);
+    const nextOverrides = { ...this.state.sessionTitleOverrides };
+    for (const key of matchingSessionKeys) {
+      delete nextOverrides[key];
+    }
 
     this.state = {
       ...this.state,
       hiddenSessionKeys: [...hiddenSessionKeys],
+      sessionTitleOverrides: nextOverrides,
       sessions: this.state.sessions.filter((entry) => !hiddenSessionKeys.has(sessionKey(entry))),
       recentSessions: this.state.recentSessions.filter((entry) => !hiddenSessionKeys.has(sessionKey(entry))),
     };
     this.persistState();
+  }
+
+  setSessionTitleOverride(
+    session: Pick<StoredSessionRef, "provider" | "providerSessionId">,
+    title: string,
+  ): void {
+    const nextTitle = title.trim();
+    if (!nextTitle) {
+      throw new Error("Session title is required.");
+    }
+    const key = sessionKey(session);
+    this.state = {
+      ...this.state,
+      sessionTitleOverrides: {
+        ...this.state.sessionTitleOverrides,
+        [key]: nextTitle,
+      },
+      sessions: this.state.sessions.map((entry) =>
+        sessionKey(entry) === key ? { ...entry, title: nextTitle } : entry,
+      ),
+      recentSessions: this.state.recentSessions.map((entry) =>
+        sessionKey(entry) === key ? { ...entry, title: nextTitle } : entry,
+      ),
+    };
+    this.persistState();
+  }
+
+  setPendingSessionTitleOverride(sessionId: string, title: string): void {
+    const nextTitle = title.trim();
+    if (!nextTitle) {
+      throw new Error("Session title is required.");
+    }
+    this.state = {
+      ...this.state,
+      pendingSessionTitleOverrides: {
+        ...this.state.pendingSessionTitleOverrides,
+        [sessionId]: nextTitle,
+      },
+    };
+    this.persistState();
+  }
+
+  promotePendingSessionTitleOverride(
+    sessionId: string,
+    session: Pick<StoredSessionRef, "provider" | "providerSessionId">,
+  ): string | null {
+    const title = this.state.pendingSessionTitleOverrides[sessionId];
+    if (!title) {
+      return null;
+    }
+    const nextPending = { ...this.state.pendingSessionTitleOverrides };
+    delete nextPending[sessionId];
+    const key = sessionKey(session);
+    this.state = {
+      ...this.state,
+      pendingSessionTitleOverrides: nextPending,
+      sessionTitleOverrides: {
+        ...this.state.sessionTitleOverrides,
+        [key]: title,
+      },
+      sessions: this.state.sessions.map((entry) =>
+        sessionKey(entry) === key ? { ...entry, title } : entry,
+      ),
+      recentSessions: this.state.recentSessions.map((entry) =>
+        sessionKey(entry) === key ? { ...entry, title } : entry,
+      ),
+    };
+    this.persistState();
+    return title;
   }
 
   private persistState(): void {
@@ -433,6 +607,8 @@ export class WorkbenchStateStore {
       workspaces: this.state.workspaces,
       hiddenWorkspaces: this.state.hiddenWorkspaces,
       hiddenSessionKeys: this.state.hiddenSessionKeys,
+      sessionTitleOverrides: this.state.sessionTitleOverrides,
+      pendingSessionTitleOverrides: this.state.pendingSessionTitleOverrides,
       sessions: this.state.sessions,
       recentSessions: this.state.recentSessions,
     };

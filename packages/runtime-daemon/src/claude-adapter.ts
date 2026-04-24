@@ -56,6 +56,7 @@ import {
   readWorkspaceFileFromDirectoryAsync,
 } from "./workspace-utils";
 import { toSessionSummary } from "./session-store";
+import { buildClaudeModeState, isClaudeModeId } from "./session-mode-utils";
 import { movePathToTrash } from "./trash";
 
 const CLAUDE_EVENT_SOURCE = {
@@ -200,6 +201,31 @@ export class ClaudeAdapter implements ProviderAdapter {
     }
     updateClaudeSessionTitle(state.session.providerSessionId, title, state.session.cwd);
     const nextState = this.services.sessionStore.patchManagedSession(sessionId, { title });
+    return toSessionSummary(nextState);
+  }
+
+  async setSessionMode(sessionId: string, modeId: string): Promise<SessionSummary> {
+    if (!isClaudeModeId(modeId)) {
+      throw new Error(`Unsupported Claude mode '${modeId}'.`);
+    }
+    const live = this.liveSessions.get(sessionId);
+    if (!live) {
+      throw new Error("Claude mode switching is only available for live sessions.");
+    }
+    const nextMode = modeId as LiveClaudeSession["permissionMode"];
+    live.permissionMode = nextMode;
+    if (live.activeTurn?.query?.setPermissionMode) {
+      await live.activeTurn.query.setPermissionMode(nextMode);
+    }
+    if (live.providerSessionId) {
+      this.permissionModeByProviderSessionId.set(live.providerSessionId, live.permissionMode);
+    }
+    const nextState = this.services.sessionStore.patchManagedSession(sessionId, {
+      mode: buildClaudeModeState({
+        currentModeId: live.permissionMode,
+        mutable: true,
+      }),
+    });
     return toSessionSummary(nextState);
   }
 

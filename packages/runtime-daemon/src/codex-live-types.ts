@@ -30,6 +30,20 @@ export type LiveCodexSession = {
   sessionId: string;
   threadId: string;
   cwd: string;
+  approvalPolicy: string;
+  sandboxMode: string;
+  activeModeId: string;
+  lastNonPlanModeId: string;
+  planCollaborationMode:
+    | {
+        mode: "plan";
+        settings: {
+          model: string;
+          reasoning_effort: string | null;
+          developer_instructions: string | null;
+        };
+      }
+    | null;
   client: CodexJsonRpcClient;
   translationState: CodexAppServerTranslationState;
   currentTurnId: string | null;

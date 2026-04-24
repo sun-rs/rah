@@ -247,7 +247,23 @@ def load_older_history_until_scroll_grows(page, baseline_scroll_height: float, a
     )
 
 
+def ensure_sidebar_open(page) -> None:
+    collapse_button = page.locator('button[aria-label="Collapse sidebar"]:visible').first
+    if collapse_button.count() > 0:
+        return
+    for label in ("Expand sidebar", "Open sidebar"):
+        trigger = page.locator(f'button[aria-label="{label}"]:visible').first
+        if trigger.count() > 0:
+            trigger.click()
+            expect(page.locator('button[aria-label="Session history"]:visible').first).to_be_visible(
+                timeout=30_000
+            )
+            return
+    raise AssertionError("Could not find a visible sidebar toggle to open Session History.")
+
+
 def open_history_session(page) -> None:
+    ensure_sidebar_open(page)
     page.locator('button[aria-label="Session history"]:visible').first.click()
     page.get_by_role("button", name="All").click()
     page.get_by_placeholder("Filter workspaces or sessions…").fill(PROVIDER_SESSION_ID)
@@ -313,6 +329,10 @@ def main() -> int:
                 raise AssertionError(f"Long history did not open anchored to bottom: {metrics}")
 
             older_metrics = load_older_history_until_scroll_grows(page, metrics["scrollHeight"])
+            if older_metrics["scrollTop"] < 120:
+                raise AssertionError(
+                    f"Older history prepend did not preserve viewport anchor: {older_metrics}"
+                )
 
             rendered_rows = rendered_feed_row_count(page)
             if rendered_rows <= 0 or rendered_rows >= 220:

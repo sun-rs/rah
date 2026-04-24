@@ -34,6 +34,12 @@ const REHYDRATED_CAPABILITIES = {
   steerInput: false,
   queuedInput: false,
   renameSession: true,
+  actions: {
+    info: true,
+    archive: false,
+    delete: true,
+    rename: "native",
+  },
   modelSwitch: false,
   planMode: false,
   subagents: false,
@@ -184,7 +190,7 @@ function makeKimiFrozenHistoryBoundary(
   };
 }
 
-function parseKimiWireLine(line: string):
+export function parseKimiWireLine(line: string):
   | { timestamp: string; type: string; payload: Record<string, unknown> }
   | null {
   try {

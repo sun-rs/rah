@@ -8,6 +8,7 @@ type StartSessionInput = {
   cwd: string;
   title: string;
   initialInput: string;
+  modeId?: string;
 };
 
 type SendInputFn = (sessionId: string, text: string) => Promise<unknown>;
@@ -17,6 +18,7 @@ export function useWorkbenchComposerState(args: {
   selectedSummary: SessionSummary | null;
   availableWorkspaceDir: string;
   newSessionProvider: ProviderChoice;
+  startModeId: string | null;
   sendInput: SendInputFn;
   startSession: StartSessionFn;
 }) {
@@ -51,6 +53,7 @@ export function useWorkbenchComposerState(args: {
       cwd: args.availableWorkspaceDir,
       title: text.slice(0, 50),
       initialInput: text,
+      ...(args.startModeId ? { modeId: args.startModeId } : {}),
     });
   };
 

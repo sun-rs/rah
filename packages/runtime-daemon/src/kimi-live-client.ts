@@ -9,6 +9,7 @@ import {
   type StartSessionRequest,
 } from "@rah/runtime-protocol";
 import type { RuntimeServices } from "./provider-adapter";
+import { buildKimiModeState } from "./session-mode-utils";
 import { toSessionSummary } from "./session-store";
 import {
   applyActivity,
@@ -44,11 +45,21 @@ export async function startKimiLiveSession(params: {
     rootDir: request.cwd,
     ...(request.title !== undefined ? { title: request.title } : {}),
     ...(request.initialPrompt !== undefined ? { preview: request.initialPrompt } : {}),
+    mode: buildKimiModeState({
+      currentModeId: "default",
+      mutable: true,
+    }),
     capabilities: {
       livePermissions: true,
       steerInput: true,
       queuedInput: true,
       renameSession: true,
+      actions: {
+        info: true,
+        archive: true,
+        delete: true,
+        rename: "native",
+      },
       planMode: true,
     },
   });
@@ -57,7 +68,8 @@ export async function startKimiLiveSession(params: {
     providerSessionId,
     cwd: request.cwd,
     ...(request.model ? { model: request.model } : {}),
-    approvalMode: request.approvalPolicy ?? "yolo",
+    approvalMode: request.approvalPolicy ?? "default",
+    planMode: false,
     client: await createKimiClient({
       providerSessionId,
       cwd: request.cwd,
@@ -98,11 +110,21 @@ export async function resumeKimiLiveSession(params: {
     launchSource: "web",
     cwd: params.cwd,
     rootDir: params.cwd,
+    mode: buildKimiModeState({
+      currentModeId: "default",
+      mutable: true,
+    }),
     capabilities: {
       livePermissions: true,
       steerInput: true,
       queuedInput: true,
       renameSession: true,
+      actions: {
+        info: true,
+        archive: false,
+        delete: true,
+        rename: "native",
+      },
       planMode: true,
     },
   });
@@ -111,7 +133,8 @@ export async function resumeKimiLiveSession(params: {
     providerSessionId: params.providerSessionId,
     cwd: params.cwd,
     ...(params.model ? { model: params.model } : {}),
-    approvalMode: params.approvalPolicy ?? "yolo",
+    approvalMode: params.approvalPolicy ?? "default",
+    planMode: false,
     client: await createKimiClient({
       providerSessionId: params.providerSessionId,
       cwd: params.cwd,

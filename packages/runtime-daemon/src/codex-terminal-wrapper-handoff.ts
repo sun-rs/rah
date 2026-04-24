@@ -50,13 +50,19 @@ import {
   leaveAlternateScreen,
   renderTerminalWrapperPanel,
   renderTerminalWrapperPanelForTerminal,
+  restoreInheritedTerminalModes,
 } from "./terminal-wrapper-panel";
+import { deriveTerminalWrapperRemoteControlState } from "./terminal-wrapper-remote-control";
 
 type WrapperMode = "local_native" | "remote_writer";
 
 function isRemoteWriterMode(mode: WrapperMode): boolean {
   return mode === "remote_writer";
 }
+
+const CODEX_APP_SERVER_REQUEST_TIMEOUT_MS = 90_000;
+const CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS = 5_000;
+const CODEX_APP_SERVER_INTERRUPT_MAX_ATTEMPTS = 3;
 
 function parseArgs(argv: string[]) {
   let daemonUrl = "http://127.0.0.1:43111";
@@ -170,9 +176,52 @@ function shouldMirrorControlActivity(activity: ProviderActivity): boolean {
   }
 }
 
+function readThreadStartResponse(
+  response: unknown,
+): { threadId: string; title?: string; preview?: string } {
+  const record =
+    response && typeof response === "object" && !Array.isArray(response)
+      ? (response as Record<string, unknown>)
+      : {};
+  const thread =
+    record.thread && typeof record.thread === "object" && !Array.isArray(record.thread)
+      ? (record.thread as Record<string, unknown>)
+      : null;
+  const threadId = thread && typeof thread.id === "string" ? thread.id : null;
+  if (!threadId) {
+    throw new Error("Codex app-server did not return a thread id.");
+  }
+  const title =
+    thread && typeof thread.name === "string" && thread.name.trim()
+      ? thread.name
+      : undefined;
+  const preview =
+    thread && typeof thread.preview === "string" && thread.preview.trim()
+      ? thread.preview
+      : undefined;
+  return {
+    threadId,
+    ...(title !== undefined ? { title } : {}),
+    ...(preview !== undefined ? { preview } : {}),
+  };
+}
+
+function readTurnStartResponse(response: unknown): { turnId?: string } {
+  const record =
+    response && typeof response === "object" && !Array.isArray(response)
+      ? (response as Record<string, unknown>)
+      : {};
+  const turn =
+    record.turn && typeof record.turn === "object" && !Array.isArray(record.turn)
+      ? (record.turn as Record<string, unknown>)
+      : null;
+  return turn && typeof turn.id === "string" ? { turnId: turn.id } : {};
+}
+
 function readPersistedTaskLifecycle(line: unknown):
   | { kind: "started"; turnId: string }
   | { kind: "completed"; turnId: string }
+  | { kind: "canceled"; turnId: string }
   | null {
   if (!line || typeof line !== "object" || Array.isArray(line)) {
     return null;
@@ -193,6 +242,9 @@ function readPersistedTaskLifecycle(line: unknown):
   }
   if (payload.type === "task_complete") {
     return { kind: "completed", turnId: payload.turn_id };
+  }
+  if (payload.type === "turn_aborted") {
+    return { kind: "canceled", turnId: payload.turn_id };
   }
   return null;
 }
@@ -237,6 +289,11 @@ async function main() {
   let bindingDetectionSinceMs = startupTimestampMs;
   let socketErrored = false;
   let remoteTurnRequestInFlight = false;
+  let remoteTurnCancelRequested = false;
+  let remoteInterruptSubmittedForTurnId: string | null = null;
+  let remoteInterruptAttemptCount = 0;
+  let webFirstBootstrapInFlight = false;
+  let webFirstBootstrapCancelRequested = false;
   const pendingApprovals = new Map<
     string,
     {
@@ -269,31 +326,31 @@ async function main() {
     remotePanelActive = false;
   };
 
+  const getRemoteControlState = () =>
+    deriveTerminalWrapperRemoteControlState({
+      providerLabel: "Codex",
+      hasPendingTurn: pendingRemoteTurn !== null,
+      hasActiveTurn: currentTurnId !== null || remoteTurnRequestInFlight,
+      promptState,
+      cancelRequested: remoteTurnCancelRequested,
+      reclaimRequested: remoteReclaimRequested,
+    });
+
   const renderRemoteModePanel = () => {
     if (!isRemoteWriterMode(mode) || exiting) {
       lastRenderedRemotePanel = null;
       return;
     }
     const question = remotePromptText ?? pendingRemoteTurn?.text ?? "";
-    const status = pendingRemoteTurn
-      ? "Queued"
-      : currentTurnId || promptState === "agent_busy" || remoteTurnRequestInFlight
-        ? remoteReclaimRequested
-          ? "Thinking (reclaim pending)"
-          : "Thinking"
-        : "Waiting for Esc reclaim";
-    const footer =
-      currentTurnId || promptState === "agent_busy" || remoteTurnRequestInFlight
-        ? remoteReclaimRequested
-          ? "Will return to local control when this turn finishes."
-          : "Press Esc to reclaim local control after this turn."
-        : "Press Esc to resume local control.";
+    const remoteControl = getRemoteControlState();
     const panel = renderTerminalWrapperPanel({
       title: "RAH Codex Remote Control",
-      status,
+      status: remoteControl.status,
+      statusTone: remoteControl.tone,
       sessionId: boundProviderSessionId ?? "Pending session binding",
       prompt: question || "No active web prompt.",
-      footer,
+      footer: remoteControl.footer,
+      footerTone: remoteControl.tone,
     });
     if (panel === lastRenderedRemotePanel) {
       return;
@@ -304,10 +361,12 @@ async function main() {
     process.stdout.write(
       `${renderTerminalWrapperPanelForTerminal({
         title: "RAH Codex Remote Control",
-        status,
+        status: remoteControl.status,
+        statusTone: remoteControl.tone,
         sessionId: boundProviderSessionId ?? "Pending session binding",
         prompt: question || "No active web prompt.",
-        footer,
+        footer: remoteControl.footer,
+        footerTone: remoteControl.tone,
       })}\r\n`,
     );
   };
@@ -342,8 +401,87 @@ async function main() {
     }
   };
 
+  const finishRemoteCancel = (turnId: string) => {
+    remoteTurnCancelRequested = false;
+    remoteInterruptSubmittedForTurnId = null;
+    remoteInterruptAttemptCount = 0;
+    currentTurnId = null;
+    remoteTurnRequestInFlight = false;
+    updatePromptState("prompt_clean");
+    send({
+      type: "wrapper.activity",
+      sessionId: wrapperSessionId!,
+      activity: {
+        type: "turn_canceled",
+        turnId,
+        reason: "interrupted",
+      },
+    });
+    renderRemoteModePanel();
+    if (isRemoteWriterMode(mode)) {
+      if (remoteReclaimRequested) {
+        startLocalNative();
+      } else {
+        enableRemoteKeyboardControl();
+      }
+    }
+  };
+
+  const submitRemoteInterrupt = (turnId: string) => {
+    if (!controlClient || !boundProviderSessionId || remoteInterruptSubmittedForTurnId === turnId) {
+      return;
+    }
+    if (remoteInterruptAttemptCount >= CODEX_APP_SERVER_INTERRUPT_MAX_ATTEMPTS) {
+      logger.log(`[rah] remote interrupt attempts exhausted for turn ${turnId}`);
+      return;
+    }
+    remoteInterruptSubmittedForTurnId = turnId;
+    remoteInterruptAttemptCount += 1;
+    void controlClient
+      .request(
+        "turn/interrupt",
+        {
+          threadId: boundProviderSessionId,
+          turnId,
+        },
+        CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
+      )
+      .catch((error) => {
+        logger.log(`[rah] remote interrupt failed: ${String(error)}`);
+        if (remoteTurnCancelRequested && remoteInterruptSubmittedForTurnId === turnId) {
+          remoteInterruptSubmittedForTurnId = null;
+          if (remoteInterruptAttemptCount < CODEX_APP_SERVER_INTERRUPT_MAX_ATTEMPTS) {
+            globalThis.setTimeout(() => {
+              if (remoteTurnCancelRequested && currentTurnId === turnId) {
+                submitRemoteInterrupt(turnId);
+              }
+            }, 500);
+          }
+        }
+      });
+  };
+
   const mirrorControlActivity = (activity: ProviderActivity) => {
     if (!wrapperSessionId || !shouldMirrorControlActivity(activity)) {
+      return;
+    }
+    if (remoteTurnCancelRequested) {
+      if (activity.type === "turn_started") {
+        currentTurnId = activity.turnId;
+        remoteTurnRequestInFlight = false;
+        updatePromptState("agent_busy");
+        submitRemoteInterrupt(activity.turnId);
+        renderRemoteModePanel();
+        return;
+      }
+      if (
+        activity.type === "turn_completed" ||
+        activity.type === "turn_failed" ||
+        activity.type === "turn_canceled"
+      ) {
+        finishRemoteCancel(activity.turnId);
+        return;
+      }
       return;
     }
     send({
@@ -364,7 +502,7 @@ async function main() {
       currentTurnId = null;
       remoteTurnRequestInFlight = false;
       renderRemoteModePanel();
-        if (isRemoteWriterMode(mode)) {
+      if (isRemoteWriterMode(mode)) {
         if (remoteReclaimRequested) {
           startLocalNative();
         } else {
@@ -377,7 +515,7 @@ async function main() {
     }
   };
 
-  const ensureControlClient = async () => {
+  const ensureControlClient = async (args?: { skipBoundResume?: boolean }) => {
     if (controlClient) {
       return controlClient;
     }
@@ -462,6 +600,13 @@ async function main() {
 
       return {};
     });
+    if (boundProviderSessionId && !args?.skipBoundResume) {
+      await controlClient.request(
+        "thread/resume",
+        { threadId: boundProviderSessionId },
+        CODEX_APP_SERVER_REQUEST_TIMEOUT_MS,
+      );
+    }
     return controlClient;
   };
 
@@ -469,6 +614,9 @@ async function main() {
     providerSessionId: string;
     reason: "initial" | "switch";
     record?: CodexStoredSessionRecord | null;
+    providerTitle?: string;
+    providerPreview?: string;
+    skipResume?: boolean;
   }) => {
     if (!wrapperSessionId) {
       return;
@@ -502,18 +650,22 @@ async function main() {
       providerSessionId: args.providerSessionId,
       ...(boundRecord?.ref.title
         ? { providerTitle: boundRecord.ref.title }
-        : { providerTitle: args.providerSessionId }),
+        : args.providerTitle
+          ? { providerTitle: args.providerTitle }
+          : { providerTitle: args.providerSessionId }),
       ...(boundRecord?.ref.preview
         ? { providerPreview: boundRecord.ref.preview }
-        : { providerPreview: args.providerSessionId }),
+        : args.providerPreview
+          ? { providerPreview: args.providerPreview }
+          : { providerPreview: args.providerSessionId }),
       reason: args.reason,
     });
-    const client = await ensureControlClient();
-    if (!sameProviderSession) {
+    const client = await ensureControlClient({ skipBoundResume: true });
+    if (!sameProviderSession && !args.skipResume) {
       await client.request(
         "thread/resume",
         { threadId: args.providerSessionId },
-        90_000,
+        CODEX_APP_SERVER_REQUEST_TIMEOUT_MS,
       );
     }
   };
@@ -531,10 +683,171 @@ async function main() {
 
   let localExitForHandoff = false;
 
+  const selectProviderBindingCandidate = (): CodexStoredSessionRecord | null => {
+    const records = discoverCodexStoredSessions();
+    return selectCodexStoredSessionCandidate({
+      records,
+      cwd: parsed.cwd,
+      startupTimestampMs,
+      ...(parsed.resumeProviderSessionId && !boundRecord
+        ? { resumeProviderSessionId: parsed.resumeProviderSessionId }
+        : {}),
+      ...(parsed.resumeProviderSessionId && !boundRecord
+        ? {}
+        : { updatedAfterMs: bindingDetectionSinceMs }),
+    });
+  };
+
+  const notifyWrapper = (activity: ProviderActivity) => {
+    if (!wrapperSessionId) {
+      return;
+    }
+    send({
+      type: "wrapper.activity",
+      sessionId: wrapperSessionId,
+      activity,
+    });
+  };
+
+  const bootstrapWebFirstSession = async () => {
+    if (boundProviderSessionId) {
+      mode = "remote_writer";
+      void maybeStartPendingRemoteTurn();
+      return;
+    }
+    if (webFirstBootstrapInFlight) {
+      return;
+    }
+    webFirstBootstrapInFlight = true;
+    webFirstBootstrapCancelRequested = false;
+
+    try {
+      const existingCandidate = selectProviderBindingCandidate();
+      if (existingCandidate) {
+        await syncProviderBinding({
+          providerSessionId: existingCandidate.ref.providerSessionId,
+          reason: boundProviderSessionId ? "switch" : "initial",
+          record: existingCandidate,
+        });
+        return;
+      }
+
+      mode = "remote_writer";
+      remoteReclaimRequested = false;
+      updatePromptState("agent_busy");
+      renderRemoteModePanel();
+
+      const terminalToClose = localTerminal;
+      if (terminalToClose) {
+        localExitForHandoff = true;
+        await terminalToClose.close("SIGTERM").catch((error) => {
+          logger.log(`[rah] failed to stop local Codex before web-first bootstrap: ${String(error)}`);
+        });
+      }
+
+      if (webFirstBootstrapCancelRequested) {
+        logger.log("[rah] web-first Codex bootstrap canceled before thread creation");
+        pendingRemoteTurn = null;
+        remotePromptText = null;
+        remoteTurnRequestInFlight = false;
+        remoteTurnCancelRequested = false;
+        remoteInterruptSubmittedForTurnId = null;
+        remoteInterruptAttemptCount = 0;
+        updatePromptState("prompt_clean");
+        startLocalNative();
+        return;
+      }
+
+      const candidateAfterLocalStop = selectProviderBindingCandidate();
+      if (candidateAfterLocalStop) {
+        await syncProviderBinding({
+          providerSessionId: candidateAfterLocalStop.ref.providerSessionId,
+          reason: boundProviderSessionId ? "switch" : "initial",
+          record: candidateAfterLocalStop,
+        });
+        return;
+      }
+
+      const client = await ensureControlClient();
+      const threadStart = await client.request(
+        "thread/start",
+        {
+          cwd: parsed.cwd,
+          experimentalRawEvents: false,
+          persistExtendedHistory: true,
+        },
+        CODEX_APP_SERVER_REQUEST_TIMEOUT_MS,
+      );
+      const thread = readThreadStartResponse(threadStart);
+      logger.log(`[rah] web-first Codex thread started: ${thread.threadId}`);
+      const wasCanceled = webFirstBootstrapCancelRequested;
+      await syncProviderBinding({
+        providerSessionId: thread.threadId,
+        reason: "initial",
+        record: null,
+        ...(thread.title !== undefined ? { providerTitle: thread.title } : {}),
+        ...(thread.preview !== undefined ? { providerPreview: thread.preview } : {}),
+        skipResume: true,
+      });
+      if (wasCanceled) {
+        logger.log("[rah] web-first Codex bootstrap completed after cancellation; leaving turn idle");
+        pendingRemoteTurn = null;
+        remotePromptText = null;
+        remoteTurnRequestInFlight = false;
+        remoteTurnCancelRequested = false;
+        remoteInterruptSubmittedForTurnId = null;
+        remoteInterruptAttemptCount = 0;
+        updatePromptState("prompt_clean");
+        renderRemoteModePanel();
+        enableRemoteKeyboardControl();
+        return;
+      }
+      mode = "remote_writer";
+      void maybeStartPendingRemoteTurn();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (webFirstBootstrapCancelRequested) {
+        logger.log(`[rah] web-first Codex bootstrap canceled: ${message}`);
+        pendingRemoteTurn = null;
+        remotePromptText = null;
+        remoteTurnRequestInFlight = false;
+        remoteTurnCancelRequested = false;
+        remoteInterruptSubmittedForTurnId = null;
+        remoteInterruptAttemptCount = 0;
+        updatePromptState("prompt_clean");
+        if (!exiting && !boundProviderSessionId && !localTerminal) {
+          startLocalNative();
+        } else {
+          renderRemoteModePanel();
+          enableRemoteKeyboardControl();
+        }
+        return;
+      }
+      logger.log(`[rah] web-first Codex bootstrap failed: ${message}`);
+      pendingRemoteTurn = null;
+      remoteTurnRequestInFlight = false;
+      updatePromptState("prompt_clean");
+      renderRemoteModePanel();
+      notifyWrapper({
+        type: "notification",
+        level: "critical",
+        title: "Codex web-first start failed",
+        body: message,
+      });
+      if (!exiting && !boundProviderSessionId && !localTerminal) {
+        startLocalNative();
+      }
+    } finally {
+      webFirstBootstrapInFlight = false;
+      webFirstBootstrapCancelRequested = false;
+    }
+  };
+
   const maybeStartPendingRemoteTurn = async () => {
     if (
       exiting ||
       !isRemoteWriterMode(mode) ||
+      remoteTurnCancelRequested ||
       !pendingRemoteTurn ||
       !boundProviderSessionId ||
       remoteTurnRequestInFlight ||
@@ -546,8 +859,11 @@ async function main() {
     pendingRemoteTurn = null;
     remotePromptText = turn.text;
     remoteTurnRequestInFlight = true;
+    remoteInterruptSubmittedForTurnId = null;
+    remoteInterruptAttemptCount = 0;
     updatePromptState("agent_busy");
     renderRemoteModePanel();
+    enableRemoteKeyboardControl();
     try {
       const client = await ensureControlClient();
       void client
@@ -555,7 +871,36 @@ async function main() {
           threadId: boundProviderSessionId,
           input: [{ type: "text", text: turn.text }],
         })
+        .then((response) => {
+          const { turnId } = readTurnStartResponse(response);
+          remoteTurnRequestInFlight = false;
+          if (turnId) {
+            currentTurnId = currentTurnId ?? turnId;
+            if (remoteTurnCancelRequested) {
+              submitRemoteInterrupt(turnId);
+              renderRemoteModePanel();
+            }
+          }
+        })
         .catch((error) => {
+          if (remoteTurnCancelRequested) {
+            logger.log(`[rah] remote turn start canceled: ${String(error)}`);
+            remoteTurnRequestInFlight = false;
+            if (currentTurnId) {
+              submitRemoteInterrupt(currentTurnId);
+              updatePromptState("agent_busy");
+            } else if (String(error).includes("timed out")) {
+              updatePromptState("agent_busy");
+            } else {
+              remoteTurnCancelRequested = false;
+              remoteInterruptSubmittedForTurnId = null;
+              remoteInterruptAttemptCount = 0;
+              updatePromptState("prompt_clean");
+            }
+            renderRemoteModePanel();
+            enableRemoteKeyboardControl();
+            return;
+          }
           logger.log(`[rah] remote turn start failed: ${String(error)}`);
           remoteTurnRequestInFlight = false;
           updatePromptState("prompt_clean");
@@ -605,6 +950,7 @@ async function main() {
         CODEX_HOME: process.env.CODEX_HOME ?? sharedCodexHome,
       },
       onExit: ({ exitCode, signal }) => {
+        restoreInheritedTerminalModes();
         localTerminal = null;
         if (localExitForHandoff) {
           localExitForHandoff = false;
@@ -647,7 +993,7 @@ async function main() {
         return;
       }
       if (data === "\u001b") {
-        if (currentTurnId || promptState === "agent_busy" || remoteTurnRequestInFlight) {
+        if (!getRemoteControlState().controlAvailable) {
           remoteReclaimRequested = true;
           logger.log("[rah] local control reclaim requested; waiting for remote turn to finish");
           renderRemoteModePanel();
@@ -672,6 +1018,7 @@ async function main() {
       await localTerminal.close("SIGTERM").catch(() => undefined);
       localTerminal = null;
     }
+    restoreInheritedTerminalModes();
     await controlClient?.dispose().catch(() => undefined);
     controlClient = null;
     if (wrapperSessionId) {
@@ -720,21 +1067,14 @@ async function main() {
       return;
     }
     if (message.type === "turn.inject") {
+      if (!boundProviderSessionId && webFirstBootstrapInFlight && pendingRemoteTurn) {
+        logger.log("[rah] ignoring additional web-first remote turn while bootstrap is in flight");
+        return;
+      }
       pendingRemoteTurn = message.queuedTurn;
       if (!boundProviderSessionId) {
-        logger.log("[rah] remote turn queued until local codex session binding is established");
-        if (wrapperSessionId) {
-          send({
-            type: "wrapper.activity",
-            sessionId: wrapperSessionId,
-            activity: {
-              type: "notification",
-              level: "info",
-              title: "Codex session is not ready for web control yet",
-              body: "Send the first turn in the terminal once so RAH can bind this Codex session. After that, web control will work.",
-            },
-          });
-        }
+        logger.log("[rah] starting web-first Codex bootstrap");
+        void bootstrapWebFirstSession();
         return;
       }
       if (mode === "local_native" && localTerminal) {
@@ -752,6 +1092,18 @@ async function main() {
       return;
     }
     if (message.type === "turn.interrupt") {
+      if (webFirstBootstrapInFlight && !boundProviderSessionId) {
+        logger.log("[rah] canceling web-first Codex bootstrap before provider binding");
+        webFirstBootstrapCancelRequested = true;
+        remoteTurnCancelRequested = true;
+        pendingRemoteTurn = null;
+        remotePromptText = null;
+        remoteTurnRequestInFlight = false;
+        updatePromptState("agent_busy");
+        renderRemoteModePanel();
+        enableRemoteKeyboardControl();
+        return;
+      }
       if (mode === "local_native") {
         logger.log("[rah] ignoring remote interrupt while terminal holds local control");
         return;
@@ -760,23 +1112,27 @@ async function main() {
         logger.log("[rah] canceling queued remote turn before it started");
         pendingRemoteTurn = null;
         remotePromptText = null;
+        remoteTurnCancelRequested = false;
+        remoteInterruptSubmittedForTurnId = null;
+        remoteInterruptAttemptCount = 0;
         updatePromptState("prompt_clean");
         renderRemoteModePanel();
         enableRemoteKeyboardControl();
         return;
       }
-      if (!currentTurnId && !remoteTurnRequestInFlight && promptState !== "agent_busy") {
-        logger.log("[rah] ignoring remote interrupt because no remote Codex turn is running");
+      if (remoteTurnRequestInFlight || currentTurnId || promptState === "agent_busy") {
+        logger.log("[rah] requesting remote Codex turn interrupt");
+        pendingRemoteTurn = null;
+        remoteTurnCancelRequested = true;
+        updatePromptState("agent_busy");
+        if (currentTurnId) {
+          submitRemoteInterrupt(currentTurnId);
+        }
+        renderRemoteModePanel();
+        enableRemoteKeyboardControl();
         return;
       }
-      if (controlClient && boundProviderSessionId) {
-        void controlClient.request("turn/interrupt", {
-          threadId: boundProviderSessionId,
-          ...(currentTurnId ? { turnId: currentTurnId } : {}),
-        }).catch((error) => {
-          logger.log(`[rah] remote interrupt failed: ${String(error)}`);
-        });
-      }
+      logger.log("[rah] ignoring remote interrupt because no remote Codex turn is running");
       return;
     }
     if (message.type === "permission.resolve") {
@@ -848,19 +1204,7 @@ async function main() {
 
   while (!shouldExit && !exiting) {
     if (wrapperSessionId) {
-      const records = discoverCodexStoredSessions();
-      const candidate = selectCodexStoredSessionCandidate({
-        records,
-        cwd: parsed.cwd,
-        startupTimestampMs,
-        ...(parsed.resumeProviderSessionId && !boundRecord
-          ? { resumeProviderSessionId: parsed.resumeProviderSessionId }
-          : {}),
-        ...(parsed.resumeProviderSessionId && !boundRecord
-          ? {}
-          : { updatedAfterMs: bindingDetectionSinceMs }),
-      });
-
+      const candidate = selectProviderBindingCandidate();
       if (candidate) {
         await syncProviderBinding({
           providerSessionId: candidate.ref.providerSessionId,
@@ -895,12 +1239,19 @@ async function main() {
           remoteTurnRequestInFlight = false;
           updatePromptState("agent_busy");
           renderRemoteModePanel();
-        } else if (lifecycle?.kind === "completed") {
+        } else if (lifecycle?.kind === "completed" || lifecycle?.kind === "canceled") {
           if (currentTurnId && currentTurnId !== lifecycle.turnId) {
+            continue;
+          }
+          if (lifecycle.kind === "canceled" && remoteTurnCancelRequested) {
+            finishRemoteCancel(lifecycle.turnId);
             continue;
           }
           currentTurnId = null;
           remoteTurnRequestInFlight = false;
+          remoteTurnCancelRequested = false;
+          remoteInterruptSubmittedForTurnId = null;
+          remoteInterruptAttemptCount = 0;
           updatePromptState("prompt_clean");
           renderRemoteModePanel();
           if (isRemoteWriterMode(mode)) {
@@ -926,8 +1277,15 @@ async function main() {
             item.activity.type === "turn_failed" ||
             item.activity.type === "turn_canceled"
           ) {
+            if (remoteTurnCancelRequested && item.activity.type === "turn_canceled") {
+              finishRemoteCancel(item.activity.turnId);
+              continue;
+            }
             currentTurnId = null;
             remoteTurnRequestInFlight = false;
+            remoteTurnCancelRequested = false;
+            remoteInterruptSubmittedForTurnId = null;
+            remoteInterruptAttemptCount = 0;
             updatePromptState("prompt_clean");
             renderRemoteModePanel();
             if (isRemoteWriterMode(mode)) {

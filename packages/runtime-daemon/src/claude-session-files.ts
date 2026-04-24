@@ -37,6 +37,12 @@ const REHYDRATED_CAPABILITIES = {
   steerInput: false,
   queuedInput: false,
   renameSession: true,
+  actions: {
+    info: true,
+    archive: false,
+    delete: true,
+    rename: "native",
+  },
   modelSwitch: false,
   planMode: false,
   subagents: false,

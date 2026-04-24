@@ -52,6 +52,7 @@ import {
   prepareProviderSessionResume,
 } from "./provider-resume";
 import { kimiLaunchSpec, probeProviderDiagnostic } from "./provider-diagnostics";
+import { buildKimiModeState, isKimiModeId } from "./session-mode-utils";
 import { toSessionSummary } from "./session-store";
 import { movePathToTrash } from "./trash";
 import path from "node:path";
@@ -154,6 +155,26 @@ export class KimiAdapter implements ProviderAdapter {
         title,
       };
     }
+    return toSessionSummary(nextState);
+  }
+
+  async setSessionMode(sessionId: string, modeId: string): Promise<SessionSummary> {
+    if (!isKimiModeId(modeId)) {
+      throw new Error(`Unsupported Kimi mode '${modeId}'.`);
+    }
+    const live = this.liveSessions.get(sessionId);
+    if (!live) {
+      throw new Error("Kimi mode switching is only available for live sessions.");
+    }
+    const enablePlan = modeId === "plan";
+    await live.client.request("set_plan_mode", { enabled: enablePlan });
+    live.planMode = enablePlan;
+    const nextState = this.services.sessionStore.patchManagedSession(sessionId, {
+      mode: buildKimiModeState({
+        currentModeId: live.planMode ? "plan" : "default",
+        mutable: true,
+      }),
+    });
     return toSessionSummary(nextState);
   }
 

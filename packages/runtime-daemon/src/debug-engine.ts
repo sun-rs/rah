@@ -120,6 +120,12 @@ export class DebugEngine {
       rootDir: sanitizeRootDir(request.cwd),
       capabilities: {
         renameSession: false,
+        actions: {
+          info: true,
+          archive: true,
+          delete: false,
+          rename: "none",
+        },
         steerInput: true,
       },
     };
@@ -252,6 +258,12 @@ export class DebugEngine {
       rootDir: stored?.rootDir ?? sanitizeRootDir(cwd),
       capabilities: {
         renameSession: false,
+        actions: {
+          info: true,
+          archive: true,
+          delete: false,
+          rename: "none",
+        },
         steerInput: true,
       },
     };
@@ -778,6 +790,12 @@ export class DebugEngine {
       title: scenario.title,
       capabilities: {
         renameSession: false,
+        actions: {
+          info: true,
+          archive: true,
+          delete: false,
+          rename: "none",
+        },
         steerInput: true,
       },
     };

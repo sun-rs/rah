@@ -155,6 +155,19 @@ export function createPostRoutes(
       },
     },
     {
+      pattern: /^\/api\/sessions\/([^/]+)\/mode$/,
+      handler: async (req, res, match, body) => {
+        const request = (body ?? {}) as { modeId?: string };
+        if (typeof request.modeId !== "string" || !request.modeId.trim()) {
+          writeJson(req, res, 400, { error: "Session mode is required." });
+          return;
+        }
+        writeJson(req, res, 200, {
+          session: await engine.setSessionMode(match[1]!, request.modeId),
+        });
+      },
+    },
+    {
       pattern: /^\/api\/sessions\/([^/]+)\/permissions\/([^/]+)\/respond$/,
       handler: async (req, res, match, body) => {
         await engine.respondToPermission(

@@ -338,6 +338,51 @@ describe("translateCodexAppServerNotification", () => {
     assert.deepEqual(translated, []);
   });
 
+  test("strips turn_aborted contextual fragments from live user messages", () => {
+    const state = createCodexAppServerTranslationState();
+    const activities = translateCodexAppServerNotification(
+      {
+        method: "item/completed",
+        params: {
+          turnId: "turn-1",
+          item: {
+            type: "userMessage",
+            id: "user-1",
+            content: [
+              {
+                text:
+                  "周几?<turn_aborted>\nThe user interrupted the previous turn on purpose.\n</turn_aborted>",
+              },
+            ],
+          },
+        },
+      },
+      state,
+    );
+
+    assert.deepEqual(activities.map((item) => item.activity), [
+      {
+        type: "message_part_added",
+        turnId: "turn-1",
+        part: {
+          messageId: "user-1",
+          partId: "user-1",
+          kind: "text",
+          text: "周几?",
+        },
+      },
+      {
+        type: "timeline_item",
+        turnId: "turn-1",
+        item: {
+          kind: "user_message",
+          text: "周几?",
+          messageId: "user-1",
+        },
+      },
+    ]);
+  });
+
   test("deduplicates item start/completion transcript using app-server item state", () => {
     const state = createCodexAppServerTranslationState();
 

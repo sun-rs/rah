@@ -1,4 +1,4 @@
-import type { SessionSummary } from "@rah/runtime-protocol";
+import type { SessionModeState, SessionRenameMode, SessionSummary } from "@rah/runtime-protocol";
 
 export type SessionInteractionMode =
   | "interactive"
@@ -13,8 +13,36 @@ export function canSessionRespondToPermissions(summary: SessionSummary): boolean
   return summary.session.capabilities.livePermissions;
 }
 
+export function sessionRenameMode(summary: SessionSummary): SessionRenameMode {
+  return summary.session.capabilities.actions.rename;
+}
+
 export function canSessionRename(summary: SessionSummary): boolean {
-  return summary.session.capabilities.renameSession && summary.session.providerSessionId !== undefined;
+  const mode = sessionRenameMode(summary);
+  if (mode === "none") {
+    return false;
+  }
+  if (mode === "local") {
+    return true;
+  }
+  return summary.session.providerSessionId !== undefined;
+}
+
+export function canSessionDelete(summary: SessionSummary): boolean {
+  return summary.session.capabilities.actions.delete && summary.session.providerSessionId !== undefined;
+}
+
+export function canSessionShowInfo(summary: SessionSummary): boolean {
+  return summary.session.capabilities.actions.info;
+}
+
+export function sessionModeState(summary: SessionSummary): SessionModeState | null {
+  return summary.session.mode ?? null;
+}
+
+export function canSessionSwitchModes(summary: SessionSummary): boolean {
+  const mode = sessionModeState(summary);
+  return Boolean(mode && mode.mutable && mode.availableModes.length > 0);
 }
 
 export function isReadOnlyReplay(summary: SessionSummary): boolean {

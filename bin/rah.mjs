@@ -29,7 +29,8 @@ function printUsage() {
       "Current status:",
       "  codex: stable live terminal wrapper",
       "  claude: phase-1 live terminal wrapper in progress",
-      "  gemini/kimi: wrapper skeleton only",
+      "  kimi: phase-1 live terminal wrapper in progress",
+      "  gemini: wrapper skeleton only",
       "",
       "Claude note:",
       "  `rah claude resume <providerSessionId>` maps to `claude --resume <id>`.",
@@ -214,6 +215,39 @@ async function main() {
       "--import",
       "tsx",
       "packages/runtime-daemon/src/claude-terminal-wrapper.ts",
+      "--daemon-url",
+      parsed.daemonUrl,
+      "--cwd",
+      parsed.cwd,
+      ...(parsed.resumeProviderSessionId
+        ? ["--resume-provider-session-id", parsed.resumeProviderSessionId]
+        : []),
+    ];
+    const child = spawn(process.execPath, childArgs, {
+      cwd: ROOT_DIR,
+      env: process.env,
+      stdio: "inherit",
+    });
+    await new Promise((resolve, reject) => {
+      child.on("error", reject);
+      child.on("exit", (code, signal) => {
+        if (signal) {
+          process.kill(process.pid, signal);
+          return;
+        }
+        process.exitCode = code ?? 0;
+        resolve(undefined);
+      });
+    });
+    return;
+  }
+
+  if (parsed.provider === "kimi") {
+    await ensureDaemon(parsed.daemonUrl);
+    const childArgs = [
+      "--import",
+      "tsx",
+      "packages/runtime-daemon/src/kimi-terminal-wrapper.ts",
       "--daemon-url",
       parsed.daemonUrl,
       "--cwd",

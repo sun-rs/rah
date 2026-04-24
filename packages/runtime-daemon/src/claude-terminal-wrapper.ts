@@ -33,6 +33,7 @@ import {
   renderTerminalWrapperPanel,
   renderTerminalWrapperPanelForTerminal,
 } from "./terminal-wrapper-panel";
+import { deriveTerminalWrapperRemoteControlState } from "./terminal-wrapper-remote-control";
 import { resolveConfiguredBinary } from "./provider-binary-utils";
 
 type WrapperMode = "local_native" | "remote_writer";
@@ -136,7 +137,20 @@ async function main() {
   let remotePanelActive = false;
   let historyCursorPrimed = parsed.resumeProviderSessionId === undefined;
   let remoteTurnInterrupted = false;
+  let remoteTurnCancelRequested = false;
+  let interruptedRemotePromptText: string | null = null;
+  let restartLocalAfterCanceledPendingTurn = false;
   let socketErrored = false;
+
+  const getRemoteControlState = () =>
+    deriveTerminalWrapperRemoteControlState({
+      providerLabel: "Claude",
+      hasPendingTurn: pendingRemoteTurn !== null,
+      hasActiveTurn: remoteTurnProcess !== null || currentTurnId !== null,
+      promptState,
+      cancelRequested: remoteTurnCancelRequested,
+      reclaimRequested: remoteReclaimRequested,
+    });
 
   const binary = await resolveClaudeBinary();
   const socket = new WebSocket(wrapperControlUrl(parsed.daemonUrl));
@@ -185,25 +199,15 @@ async function main() {
       return;
     }
     const question = remotePromptText ?? pendingRemoteTurn?.text ?? "";
-    const status = pendingRemoteTurn
-      ? "Queued"
-      : remoteTurnProcess || currentTurnId || promptState === "agent_busy"
-        ? remoteReclaimRequested
-          ? "Thinking (reclaim pending)"
-          : "Thinking"
-        : "Waiting for Esc reclaim";
-    const footer =
-      remoteTurnProcess || currentTurnId || promptState === "agent_busy"
-        ? remoteReclaimRequested
-          ? "Will return to local control when this turn finishes."
-          : "Press Esc to reclaim local control after this turn."
-        : "Press Esc to resume local control.";
+    const remoteControl = getRemoteControlState();
     const panelLines = renderTerminalWrapperPanel({
       title: "RAH Claude Remote Control",
-      status,
+      status: remoteControl.status,
+      statusTone: remoteControl.tone,
       sessionId: forcedProviderSessionId,
       prompt: question || "No active web prompt.",
-      footer,
+      footer: remoteControl.footer,
+      footerTone: remoteControl.tone,
     });
     if (panelLines === lastRenderedRemotePanel) {
       return;
@@ -214,10 +218,12 @@ async function main() {
     process.stdout.write(
       `${renderTerminalWrapperPanelForTerminal({
         title: "RAH Claude Remote Control",
-        status,
+        status: remoteControl.status,
+        statusTone: remoteControl.tone,
         sessionId: forcedProviderSessionId,
         prompt: question || "No active web prompt.",
-        footer,
+        footer: remoteControl.footer,
+        footerTone: remoteControl.tone,
       })}\r\n`,
     );
   };
@@ -281,6 +287,8 @@ async function main() {
     remotePromptText = null;
     lastRenderedRemotePanel = null;
     remoteReclaimRequested = false;
+    remoteTurnCancelRequested = false;
+    interruptedRemotePromptText = null;
     updatePromptState("prompt_clean");
     restoreMainTerminalScreen();
     const claudeArgs = parsed.resumeProviderSessionId || boundRecord
@@ -299,6 +307,11 @@ async function main() {
         localExitSignal = signal ?? null;
         if (exiting) {
           shouldExit = true;
+          return;
+        }
+        if (restartLocalAfterCanceledPendingTurn) {
+          restartLocalAfterCanceledPendingTurn = false;
+          startLocalNative();
           return;
         }
         if (pendingRemoteTurn) {
@@ -326,7 +339,7 @@ async function main() {
     remoteKeyboardHandler = (chunk: Buffer | string) => {
       const data = chunk.toString();
       if (data === "\u001b") {
-        if (remoteTurnProcess || currentTurnId || promptState === "agent_busy") {
+        if (!getRemoteControlState().controlAvailable) {
           remoteReclaimRequested = true;
           logger.log("[rah] local control reclaim requested; waiting for remote turn to finish");
           renderRemoteModePanel();
@@ -345,9 +358,11 @@ async function main() {
     mode = "remote_writer";
     remoteReclaimRequested = false;
     remoteTurnInterrupted = false;
+    remoteTurnCancelRequested = false;
+    interruptedRemotePromptText = null;
     remotePromptText = queuedTurn.text;
-    renderRemoteModePanel();
     updatePromptState("agent_busy");
+    renderRemoteModePanel();
     const args = buildClaudeRemotePrintArgs({
       providerSessionId: forcedProviderSessionId,
       text: queuedTurn.text,
@@ -364,6 +379,7 @@ async function main() {
       shell: false,
     });
     remoteTurnProcess = child;
+    renderRemoteModePanel();
     child.stderr?.setEncoding("utf8");
     child.stderr?.on("data", (chunk) => {
       const text = chunk.toString().trim();
@@ -377,7 +393,10 @@ async function main() {
       );
       remoteTurnProcess = null;
       if (!exiting) {
-        if (wrapperSessionId && remoteTurnInterrupted && currentTurnId) {
+        const wasInterrupted = remoteTurnInterrupted;
+        remoteTurnInterrupted = false;
+        remoteTurnCancelRequested = false;
+        if (wrapperSessionId && wasInterrupted && currentTurnId) {
           const canceledTurnId = currentTurnId;
           currentTurnId = null;
           send({
@@ -389,6 +408,11 @@ async function main() {
               reason: "interrupted",
             },
           });
+        } else if (wasInterrupted) {
+          interruptedRemotePromptText = queuedTurn.text;
+        }
+        if (!currentTurnId) {
+          updatePromptState("prompt_clean");
         }
         if (remoteReclaimRequested) {
           logger.log("[rah] remote turn finished; restoring local control");
@@ -397,9 +421,6 @@ async function main() {
         }
         renderRemoteModePanel();
         enableRemoteKeyboardControl();
-        if (!currentTurnId) {
-          updatePromptState("prompt_clean");
-        }
       }
     });
   };
@@ -430,11 +451,11 @@ async function main() {
     }
     if (message.type === "turn.inject") {
       if (mode === "local_native" && localTerminal) {
-          pendingRemoteTurn = message.queuedTurn;
-          updatePromptState("agent_busy");
-          void localTerminal.close("SIGTERM");
-          return;
-        }
+        pendingRemoteTurn = message.queuedTurn;
+        updatePromptState("agent_busy");
+        void localTerminal.close("SIGTERM");
+        return;
+      }
       void startRemoteTurn(message.queuedTurn);
       return;
     }
@@ -443,12 +464,31 @@ async function main() {
       return;
     }
     if (message.type === "turn.interrupt") {
+      if (pendingRemoteTurn) {
+        if (mode === "local_native" && localTerminal) {
+          restartLocalAfterCanceledPendingTurn = true;
+        }
+        pendingRemoteTurn = null;
+        remotePromptText = null;
+        remoteTurnInterrupted = false;
+        remoteTurnCancelRequested = false;
+        remoteReclaimRequested = false;
+        interruptedRemotePromptText = null;
+        updatePromptState("prompt_clean");
+        if (mode === "remote_writer") {
+          renderRemoteModePanel();
+          enableRemoteKeyboardControl();
+        }
+        return;
+      }
       if (mode === "local_native") {
         logger.log("[rah] ignoring remote interrupt while terminal holds local control");
         return;
       }
       if (remoteTurnProcess && remoteTurnProcess.exitCode === null && !remoteTurnProcess.killed) {
         remoteTurnInterrupted = true;
+        remoteTurnCancelRequested = true;
+        renderRemoteModePanel();
         remoteTurnProcess.kill("SIGINT");
         setTimeout(() => {
           if (remoteTurnProcess && remoteTurnProcess.exitCode === null && !remoteTurnProcess.killed) {
@@ -569,6 +609,48 @@ async function main() {
           if (!text) {
             continue;
           }
+          if (
+            interruptedRemotePromptText !== null &&
+            text === interruptedRemotePromptText &&
+            !currentTurnId
+          ) {
+            const canceledTurnId = record.uuid;
+            interruptedRemotePromptText = null;
+            send({
+              type: "wrapper.activity",
+              sessionId: wrapperSessionId,
+              activity: {
+                type: "turn_started",
+                turnId: canceledTurnId,
+              },
+            });
+            send({
+              type: "wrapper.activity",
+              sessionId: wrapperSessionId,
+              activity: {
+                type: "timeline_item",
+                turnId: canceledTurnId,
+                item: {
+                  kind: "user_message",
+                  text,
+                  messageId: record.uuid,
+                } satisfies TimelineItem,
+              },
+            });
+            send({
+              type: "wrapper.activity",
+              sessionId: wrapperSessionId,
+              activity: {
+                type: "turn_canceled",
+                turnId: canceledTurnId,
+                reason: "interrupted",
+              },
+            });
+            updatePromptState("prompt_clean");
+            renderRemoteModePanel();
+            enableRemoteKeyboardControl();
+            continue;
+          }
           currentTurnId = record.uuid;
           updatePromptState("agent_busy");
           send({
@@ -592,6 +674,7 @@ async function main() {
               } satisfies TimelineItem,
             },
           });
+          renderRemoteModePanel();
           continue;
         }
 
@@ -621,9 +704,9 @@ async function main() {
           }
           if (record.message.stop_reason === "end_turn") {
             const completedTurnId = currentTurnId;
-          currentTurnId = null;
-          if (completedTurnId) {
-            send({
+            currentTurnId = null;
+            if (completedTurnId) {
+              send({
                 type: "wrapper.activity",
                 sessionId: wrapperSessionId,
                 activity: {

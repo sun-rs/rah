@@ -171,6 +171,15 @@ rl.on("line", (line) => {
     if (pendingPromptId) {
       send({ jsonrpc: "2.0", id: pendingPromptId, result: { status: "cancelled" } });
     }
+    return;
+  }
+  if (msg.method === "set_plan_mode") {
+    send({
+      jsonrpc: "2.0",
+      method: "event",
+      params: { type: "StatusUpdate", payload: { plan_mode: Boolean(msg.params && msg.params.enabled) } }
+    });
+    send({ jsonrpc: "2.0", id: msg.id, result: { status: "ok", plan_mode: Boolean(msg.params && msg.params.enabled) } });
   }
 });
 `,
@@ -236,6 +245,35 @@ rl.on("line", (line) => {
       cachedInputTokens: 20,
       outputTokens: 30,
     });
+  });
+
+  test("switches Kimi plan mode over the wire", async () => {
+    const { logPath } = writeMockKimiBinary("basic");
+    const services = createServices();
+    const adapter = new KimiAdapter(services);
+
+    const started = await adapter.startSession({
+      provider: "kimi",
+      cwd: tmpDir,
+      attach: {
+        client: { id: "web-1", kind: "web", connectionId: "web-1" },
+        mode: "interactive",
+        claimControl: true,
+      },
+    });
+
+    const updated = await adapter.setSessionMode(started.session.session.id, "plan");
+    assert.equal(updated.session.mode?.currentModeId, "plan");
+    assert.equal(updated.session.mode?.mutable, true);
+
+    const requests = readFileSync(logPath, "utf8")
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { method?: string; params?: { enabled?: boolean } });
+    assert.ok(
+      requests.some((entry) => entry.method === "set_plan_mode" && entry.params?.enabled === true),
+    );
   });
 
   test("round-trips Kimi approval requests through permission response", async () => {

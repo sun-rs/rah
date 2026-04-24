@@ -27,11 +27,19 @@ import {
   useWorkspaceSortModeState,
 } from "./hooks/useWorkbenchSidebarPreferences";
 import {
+  canSessionDelete,
   canSessionRename,
   canSessionRespondToPermissions,
+  canSessionSwitchModes,
+  canSessionShowInfo,
   isSessionActivelyRunning,
   isReadOnlyReplay,
 } from "./session-capabilities";
+import {
+  createDefaultModeDraft,
+  resolveSessionModeControlState,
+  type SessionModeDraft,
+} from "./session-mode-ui";
 import { deriveComposerSurface } from "./composer-contract";
 import {
   derivePrimaryPaneState,
@@ -82,6 +90,7 @@ export function App() {
     attachSession,
     closeSession,
     renameSession,
+    setSessionMode,
     claimHistorySession,
     removeHistorySession,
     removeHistoryWorkspaceSessions,
@@ -98,6 +107,15 @@ export function App() {
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
   const [renameDialogSessionId, setRenameDialogSessionId] = useState<string | null>(null);
   const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
+  const [modeChangeSessionId, setModeChangeSessionId] = useState<string | null>(null);
+  const [startModeDrafts, setStartModeDrafts] = useState<Record<ProviderChoice, SessionModeDraft>>({
+    codex: createDefaultModeDraft("codex"),
+    claude: createDefaultModeDraft("claude"),
+    kimi: createDefaultModeDraft("kimi"),
+    gemini: createDefaultModeDraft("gemini"),
+    opencode: createDefaultModeDraft("opencode"),
+  });
+  const [claimModeDrafts, setClaimModeDrafts] = useState<Record<string, SessionModeDraft>>({});
   const [missingWorkspaceConfirmDir, setMissingWorkspaceConfirmDir] = useState<string | null>(null);
   const [floatingAnchorOffsetPx, setFloatingAnchorOffsetPx] = useState(96);
   const { hideToolCallsInChat } = useChatPreferences();
@@ -223,6 +241,18 @@ export function App() {
     pendingSessionTransition,
   });
   const activeOpeningSession = primaryPaneState.openingSession;
+  const currentProvider = newSessionProvider as ProviderChoice;
+  const startModeControl = resolveSessionModeControlState({
+    provider: currentProvider,
+    draft: startModeDrafts[currentProvider],
+  });
+  const claimModeControl = selectedSummary
+    ? resolveSessionModeControlState({
+        provider: selectedSummary.session.provider,
+        draft: claimModeDrafts[selectedSummary.session.id] ?? null,
+        summary: selectedSummary,
+      })
+    : null;
   const {
     composerRef,
     draft,
@@ -238,7 +268,8 @@ export function App() {
   } = useWorkbenchComposerState({
     selectedSummary,
     availableWorkspaceDir: workspaceDirs.length > 0 ? workspaceDir : "",
-    newSessionProvider: newSessionProvider as ProviderChoice,
+    newSessionProvider: currentProvider,
+    startModeId: startModeControl.effectiveModeId,
     sendInput,
     startSession,
   });
@@ -628,7 +659,35 @@ export function App() {
               onClaimHistory={() => {
                 void claimHistorySession(selectedSummary.session.id, {
                   confirmCreateMissingWorkspace,
+                  ...(claimModeControl?.effectiveModeId
+                    ? { modeId: claimModeControl.effectiveModeId }
+                    : {}),
                 });
+              }}
+              claimAccessModes={claimModeControl?.accessModes ?? []}
+              selectedClaimAccessModeId={claimModeControl?.selectedAccessModeId ?? null}
+              claimPlanModeAvailable={claimModeControl?.planModeAvailable ?? false}
+              claimPlanModeEnabled={claimModeControl?.planModeEnabled ?? false}
+              claimModePending={pendingSessionAction?.kind === "claim_history"}
+              onClaimAccessModeChange={(modeId) => {
+                setClaimModeDrafts((current) => ({
+                  ...current,
+                  [selectedSummary.session.id]: {
+                    ...(current[selectedSummary.session.id] ??
+                      createDefaultModeDraft(selectedSummary.session.provider as ProviderChoice)),
+                    accessModeId: modeId,
+                  },
+                }));
+              }}
+              onClaimPlanModeToggle={(enabled) => {
+                setClaimModeDrafts((current) => ({
+                  ...current,
+                  [selectedSummary.session.id]: {
+                    ...(current[selectedSummary.session.id] ??
+                      createDefaultModeDraft(selectedSummary.session.provider as ProviderChoice)),
+                    planEnabled: enabled,
+                  },
+                }));
               }}
               onClaimControl={() => void claimControl(selectedSummary.session.id)}
               onInterrupt={() => void interruptSession(selectedSummary.session.id)}
@@ -649,8 +708,20 @@ export function App() {
                 setArchiveConfirmSessionId(selectedSummary.session.id);
               }}
               onDeleteSession={() => setDeleteConfirmSessionId(selectedSummary.session.id)}
+              canDeleteSession={canSessionDelete(selectedSummary)}
+              canShowSessionInfo={canSessionShowInfo(selectedSummary)}
               canRenameSession={canSessionRename(selectedSummary)}
+              canSwitchSessionModes={canSessionSwitchModes(selectedSummary)}
+              modeChangePending={modeChangeSessionId === selectedSummary.session.id}
               onRenameSession={() => setRenameDialogSessionId(selectedSummary.session.id)}
+              onSetSessionMode={(modeId) => {
+                setModeChangeSessionId(selectedSummary.session.id);
+                void setSessionMode(selectedSummary.session.id, modeId).finally(() =>
+                  setModeChangeSessionId((current) =>
+                    current === selectedSummary.session.id ? null : current,
+                  ),
+                );
+              }}
             />
           ) : primaryPaneState.kind === "opening" && activeOpeningSession ? (
             <WorkbenchOpeningPane
@@ -689,6 +760,28 @@ export function App() {
               }}
               newSessionProvider={newSessionProvider as ProviderChoice}
               onChangeProvider={(value) => setNewSessionProvider(value)}
+              accessModes={startModeControl.accessModes}
+              selectedAccessModeId={startModeControl.selectedAccessModeId}
+              planModeAvailable={startModeControl.planModeAvailable}
+              planModeEnabled={startModeControl.planModeEnabled}
+              onAccessModeChange={(modeId) => {
+                setStartModeDrafts((current) => ({
+                  ...current,
+                  [currentProvider]: {
+                    ...(current[currentProvider] ?? createDefaultModeDraft(currentProvider)),
+                    accessModeId: modeId,
+                  },
+                }));
+              }}
+              onPlanModeToggle={(enabled) => {
+                setStartModeDrafts((current) => ({
+                  ...current,
+                  [currentProvider]: {
+                    ...(current[currentProvider] ?? createDefaultModeDraft(currentProvider)),
+                    planEnabled: enabled,
+                  },
+                }));
+              }}
             />
           )}
         </main>

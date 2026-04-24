@@ -49,6 +49,7 @@ import {
   writeStoredSessionMetadataCache,
 } from "./stored-session-metadata-cache";
 import { movePathToTrash } from "./trash";
+import { buildCodexModeState, parseCodexModeId } from "./session-mode-utils";
 import {
   applyWorkspaceGitFileActionAsync,
   applyWorkspaceGitHunkActionAsync,
@@ -200,6 +201,11 @@ export class CodexAdapter implements ProviderAdapter {
           threadId: live.threadId,
           input: [{ type: "text", text: request.text }],
           cwd: live.cwd,
+          approvalPolicy: live.approvalPolicy,
+          sandboxPolicy: { mode: live.sandboxMode },
+          ...(live.activeModeId === "plan" && live.planCollaborationMode
+            ? { collaborationMode: live.planCollaborationMode }
+            : {}),
         },
         90_000,
       ).catch((error) => {
@@ -213,6 +219,42 @@ export class CodexAdapter implements ProviderAdapter {
     throw new Error(
       "Rehydrated Codex sessions are currently read-only. Live Codex app-server control is not wired yet.",
     );
+  }
+
+  setSessionMode(sessionId: string, modeId: string): SessionSummary {
+    const live = this.liveSessions.get(sessionId);
+    if (!live) {
+      throw new Error("Codex mode switching is only available for live sessions.");
+    }
+    if (modeId === "plan") {
+      if (!live.planCollaborationMode) {
+        throw new Error("Codex plan mode is not available for this session.");
+      }
+      live.activeModeId = "plan";
+      const nextState = this.services.sessionStore.patchManagedSession(sessionId, {
+        mode: buildCodexModeState({
+          currentModeId: "plan",
+          mutable: true,
+          preferredAccessModeId: live.lastNonPlanModeId,
+        }),
+      });
+      return toSessionSummary(nextState);
+    }
+    const parsed = parseCodexModeId(modeId);
+    if (!parsed) {
+      throw new Error(`Unsupported Codex mode '${modeId}'.`);
+    }
+    live.approvalPolicy = parsed.approvalPolicy;
+    live.sandboxMode = parsed.sandboxMode;
+    live.activeModeId = modeId;
+    live.lastNonPlanModeId = modeId;
+    const nextState = this.services.sessionStore.patchManagedSession(sessionId, {
+      mode: buildCodexModeState({
+        currentModeId: modeId,
+        mutable: true,
+      }),
+    });
+    return toSessionSummary(nextState);
   }
 
   async renameSession(sessionId: string, title: string): Promise<SessionSummary> {

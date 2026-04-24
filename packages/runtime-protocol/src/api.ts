@@ -175,6 +175,10 @@ export interface RenameSessionRequest {
   title: string;
 }
 
+export interface SetSessionModeRequest {
+  modeId: string;
+}
+
 export interface ClaimControlRequest {
   client: AttachClientDescriptor;
 }

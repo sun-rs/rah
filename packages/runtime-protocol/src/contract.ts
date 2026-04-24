@@ -534,6 +534,138 @@ function validateSessionCapabilities(capabilities: unknown, sink: IssueSink, pat
       );
     }
   }
+  if (!isRecord(capabilities.actions)) {
+    addIssue(
+      sink,
+      "error",
+      "session.capabilities.actions.invalid",
+      "session capabilities actions must be an object",
+      `${path}.actions`,
+    );
+    return;
+  }
+  for (const field of ["info", "archive", "delete"] as const) {
+    if (typeof capabilities.actions[field] !== "boolean") {
+      addIssue(
+        sink,
+        "error",
+        "session.capabilities.actions.field.invalid",
+        `session capability actions.${field} must be boolean`,
+        `${path}.actions.${field}`,
+      );
+    }
+  }
+  if (!["none", "local", "native"].includes(capabilities.actions.rename as string)) {
+    addIssue(
+      sink,
+      "error",
+      "session.capabilities.actions.rename.invalid",
+      "session capability actions.rename must be none, local, or native",
+      `${path}.actions.rename`,
+    );
+  }
+}
+
+function validateSessionMode(mode: unknown, sink: IssueSink, path: string) {
+  if (!isRecord(mode)) {
+    addIssue(
+      sink,
+      "error",
+      "session.mode.invalid",
+      "session mode must be an object",
+      path,
+    );
+    return;
+  }
+  if (mode.currentModeId !== null && mode.currentModeId !== undefined && !isNonEmptyString(mode.currentModeId)) {
+    addIssue(
+      sink,
+      "error",
+      "session.mode.current.invalid",
+      "session mode currentModeId must be null or a non-empty string",
+      `${path}.currentModeId`,
+    );
+  }
+  if (!Array.isArray(mode.availableModes)) {
+    addIssue(
+      sink,
+      "error",
+      "session.mode.available.invalid",
+      "session mode availableModes must be an array",
+      `${path}.availableModes`,
+    );
+  } else {
+    for (const [index, descriptor] of mode.availableModes.entries()) {
+      if (!isRecord(descriptor)) {
+        addIssue(
+          sink,
+          "error",
+          "session.mode.descriptor.invalid",
+          "session mode descriptor must be an object",
+          `${path}.availableModes[${index}]`,
+        );
+        continue;
+      }
+      if (!isNonEmptyString(descriptor.id)) {
+        addIssue(
+          sink,
+          "error",
+          "session.mode.descriptor.id.invalid",
+          "session mode descriptor id must be non-empty",
+          `${path}.availableModes[${index}].id`,
+        );
+      }
+      if (!isNonEmptyString(descriptor.label)) {
+        addIssue(
+          sink,
+          "error",
+          "session.mode.descriptor.label.invalid",
+          "session mode descriptor label must be non-empty",
+          `${path}.availableModes[${index}].label`,
+        );
+      }
+      if (
+        descriptor.description !== undefined &&
+        descriptor.description !== null &&
+        typeof descriptor.description !== "string"
+      ) {
+        addIssue(
+          sink,
+          "error",
+          "session.mode.descriptor.description.invalid",
+          "session mode descriptor description must be a string when present",
+          `${path}.availableModes[${index}].description`,
+        );
+      }
+      if (typeof descriptor.hotSwitch !== "boolean") {
+        addIssue(
+          sink,
+          "error",
+          "session.mode.descriptor.hotswitch.invalid",
+          "session mode descriptor hotSwitch must be boolean",
+          `${path}.availableModes[${index}].hotSwitch`,
+        );
+      }
+    }
+  }
+  if (typeof mode.mutable !== "boolean") {
+    addIssue(
+      sink,
+      "error",
+      "session.mode.mutable.invalid",
+      "session mode mutable must be boolean",
+      `${path}.mutable`,
+    );
+  }
+  if (!["native", "local", "external_locked"].includes(mode.source as string)) {
+    addIssue(
+      sink,
+      "error",
+      "session.mode.source.invalid",
+      "session mode source must be native, local, or external_locked",
+      `${path}.source`,
+    );
+  }
 }
 
 function validateManagedSession(session: unknown, sink: IssueSink, path: string) {
@@ -588,6 +720,9 @@ function validateManagedSession(session: unknown, sink: IssueSink, path: string)
       "session ptyId must be non-empty",
       `${path}.ptyId`,
     );
+  }
+  if (session.mode !== undefined) {
+    validateSessionMode(session.mode, sink, `${path}.mode`);
   }
   if (!isOptionalInteger(session.pid)) {
     addIssue(sink, "error", "session.pid.invalid", "session pid must be an integer", `${path}.pid`);

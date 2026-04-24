@@ -16,6 +16,7 @@ export type RememberedWorkbenchSessionState = {
   rememberedHiddenWorkspaces: readonly string[];
   rememberedActiveWorkspaceDir?: string;
   rememberedHiddenSessionKeys: readonly string[];
+  rememberedSessionTitleOverrides: Readonly<Record<string, string>>;
 };
 
 export function discoverStoredSessions(adapters: Iterable<ProviderAdapter>): StoredSessionRef[] {
@@ -63,6 +64,18 @@ export function buildSessionsResponse(args: {
   remembered: RememberedWorkbenchSessionState;
   isClosingSession: (sessionId: string) => boolean;
 }): ListSessionsResponse {
+  const applyTitleOverride = (session: StoredSessionRef): StoredSessionRef => {
+    const key = `${session.provider}:${session.providerSessionId}`;
+    const title = args.remembered.rememberedSessionTitleOverrides[key];
+    if (!title || title === session.title) {
+      return session;
+    }
+    return {
+      ...session,
+      title,
+    };
+  };
+
   const visibleLiveStates = args.liveStates.filter(
     (state) => !args.isClosingSession(state.session.id),
   );
@@ -110,9 +123,22 @@ export function buildSessionsResponse(args: {
       }
       const discovered = discoveredByKey.get(`${state.session.provider}:${providerSessionId}`);
       if (!discovered) {
-        return toSessionSummary(state);
+        const summary = toSessionSummary(state);
+        const override = args.remembered.rememberedSessionTitleOverrides[
+          `${summary.session.provider}:${providerSessionId}`
+        ];
+        if (!override || override === summary.session.title) {
+          return summary;
+        }
+        return {
+          ...summary,
+          session: {
+            ...summary.session,
+            title: override,
+          },
+        };
       }
-      return toSessionSummary({
+      const summary = toSessionSummary({
         ...state,
         session: {
           ...state.session,
@@ -120,8 +146,21 @@ export function buildSessionsResponse(args: {
           ...(discovered.preview !== undefined ? { preview: discovered.preview } : {}),
         },
       });
+      const override = args.remembered.rememberedSessionTitleOverrides[
+        `${summary.session.provider}:${providerSessionId}`
+      ];
+      if (!override || override === summary.session.title) {
+        return summary;
+      }
+      return {
+        ...summary,
+        session: {
+          ...summary.session,
+          title: override,
+        },
+      };
     }),
-    storedSessions: [...storedSessions.values()],
+    storedSessions: [...storedSessions.values()].map(applyTitleOverride),
     recentSessions: args.remembered.rememberedRecentSessions.filter((session) => {
       const key = `${session.provider}:${session.providerSessionId}`;
       if (hiddenSessionKeys.has(key)) {
@@ -138,14 +177,14 @@ export function buildSessionsResponse(args: {
       const key = `${session.provider}:${session.providerSessionId}`;
       const discovered = discoveredByKey.get(key);
       if (!discovered) {
-        return session;
+        return applyTitleOverride(session);
       }
       const lastUsedAt = session.lastUsedAt ?? discovered.lastUsedAt ?? discovered.updatedAt;
-      return {
+      return applyTitleOverride({
         ...session,
         ...discovered,
         ...(lastUsedAt ? { lastUsedAt } : {}),
-      };
+      });
     }),
     workspaceDirs: workspaceDirsFromState(
       args.remembered.rememberedWorkspaceDirs,

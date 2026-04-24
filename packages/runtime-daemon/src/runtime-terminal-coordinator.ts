@@ -20,6 +20,7 @@ import {
   type WrapperReadyMessage,
 } from "./terminal-wrapper-control";
 import { EventBus } from "./event-bus";
+import { buildExternalLockedModeState } from "./session-mode-utils";
 import { resolveUserPath } from "./workbench-directory-utils";
 
 const SYSTEM_SOURCE = {
@@ -27,6 +28,8 @@ const SYSTEM_SOURCE = {
   channel: "system" as const,
   authority: "authoritative" as const,
 };
+
+const PREEMPTIVE_WRAPPER_INTERRUPT_TTL_MS = 1_500;
 
 type IndependentTerminalState = {
   id: string;
@@ -50,6 +53,7 @@ export class RuntimeTerminalCoordinator {
     string,
     (message: TerminalWrapperFromDaemonMessage) => void
   >();
+  private readonly preemptiveWrapperInterrupts = new Map<string, Map<string, number>>();
   private readonly closingTerminalWrapperSessionIds = new Set<string>();
   private readonly independentTerminals = new Map<string, IndependentTerminalState>();
 
@@ -66,6 +70,7 @@ export class RuntimeTerminalCoordinator {
   clearSessionState(sessionId: string): void {
     this.terminalWrappers.remove(sessionId);
     this.terminalWrapperSenders.delete(sessionId);
+    this.preemptiveWrapperInterrupts.delete(sessionId);
     this.closingTerminalWrapperSessionIds.delete(sessionId);
   }
 
@@ -73,6 +78,10 @@ export class RuntimeTerminalCoordinator {
     const wrapper = this.terminalWrappers.get(sessionId);
     if (!wrapper) {
       return false;
+    }
+    this.claimWrapperWebControl(sessionId, clientId);
+    if (this.consumePreemptiveWrapperInterrupt(sessionId, clientId)) {
+      return true;
     }
     const queuedTurn = this.terminalWrappers.enqueueRemoteTurn(sessionId, clientId, text);
     const sender = this.terminalWrapperSenders.get(sessionId);
@@ -93,12 +102,75 @@ export class RuntimeTerminalCoordinator {
     if (!this.terminalWrappers.get(sessionId)) {
       return false;
     }
+    this.terminalWrappers.cancelQueuedTurns(sessionId, clientId);
+    this.armPreemptiveWrapperInterrupt(sessionId, clientId);
     this.terminalWrapperSenders.get(sessionId)?.({
       type: "turn.interrupt",
       sessionId,
       sourceSurfaceId: clientId,
     });
     return true;
+  }
+
+  private armPreemptiveWrapperInterrupt(sessionId: string, clientId: string): void {
+    const byClient = this.preemptiveWrapperInterrupts.get(sessionId) ?? new Map<string, number>();
+    byClient.set(clientId, Date.now() + PREEMPTIVE_WRAPPER_INTERRUPT_TTL_MS);
+    this.preemptiveWrapperInterrupts.set(sessionId, byClient);
+  }
+
+  private consumePreemptiveWrapperInterrupt(sessionId: string, clientId: string): boolean {
+    const byClient = this.preemptiveWrapperInterrupts.get(sessionId);
+    if (!byClient) {
+      return false;
+    }
+    const expiresAt = byClient.get(clientId);
+    if (expiresAt === undefined) {
+      return false;
+    }
+    byClient.delete(clientId);
+    if (byClient.size === 0) {
+      this.preemptiveWrapperInterrupts.delete(sessionId);
+    }
+    return expiresAt >= Date.now();
+  }
+
+  private claimWrapperWebControl(sessionId: string, clientId: string): void {
+    const state = this.deps.sessionStore.getSession(sessionId);
+    if (!state) {
+      return;
+    }
+    if (!this.deps.sessionStore.hasAttachedClient(sessionId, clientId)) {
+      this.deps.sessionStore.attachClient({
+        sessionId,
+        clientId,
+        kind: "web",
+        connectionId: clientId,
+        attachMode: "interactive",
+        focus: true,
+      });
+      this.deps.eventBus.publish({
+        sessionId,
+        type: "session.attached",
+        source: SYSTEM_SOURCE,
+        payload: {
+          clientId,
+          clientKind: "web",
+        },
+      });
+    }
+    if (this.deps.sessionStore.hasInputControl(sessionId, clientId)) {
+      return;
+    }
+    this.deps.sessionStore.claimControl(sessionId, clientId, "web");
+    this.deps.eventBus.publish({
+      sessionId,
+      type: "control.claimed",
+      source: SYSTEM_SOURCE,
+      payload: {
+        clientId,
+        clientKind: "web",
+      },
+    });
   }
 
   requestWrapperClose(sessionId: string, request: CloseSessionRequest): boolean {
@@ -229,8 +301,15 @@ export class RuntimeTerminalCoordinator {
       rootDir: request.rootDir,
       title: `${request.provider} terminal session`,
       preview: request.launchCommand.join(" "),
+      mode: buildExternalLockedModeState(),
       capabilities: {
         renameSession: false,
+        actions: {
+          info: true,
+          archive: true,
+          delete: false,
+          rename: "none",
+        },
         steerInput: true,
         queuedInput: true,
       },

@@ -37,6 +37,7 @@ let invalidRolloutSequence = 0;
 const IGNORED_PERSISTED_EVENT_MSG_TYPES = new Set([
   "task_started",
   "task_complete",
+  "turn_aborted",
   "token_count",
   "user_message",
   "exec_command_begin",
@@ -125,6 +126,15 @@ function isCodexBootstrapUserMessage(text: string): boolean {
     text.includes("<cwd>") ||
     text.includes("<approval_policy>")
   );
+}
+
+function stripCodexContextualFragments(text: string): string {
+  return text
+    .replace(/<turn_aborted>[\s\S]*?<\/turn_aborted>/gi, " ")
+    .replace(/<user_shell_command>[\s\S]*?<\/user_shell_command>/gi, " ")
+    .replace(/<subagent_notification>[\s\S]*?<\/subagent_notification>/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function shouldSkipDuplicateTimelineText(
@@ -560,7 +570,9 @@ export function translateCodexRolloutLine(
       return [];
     }
     if (payload.role === "user") {
-      const text = textFromContentItems(payload.content, "input_text");
+      const text = stripCodexContextualFragments(
+        textFromContentItems(payload.content, "input_text") ?? "",
+      );
       if (!text) {
         return invalidRolloutActivity(record, "user message did not contain input_text");
       }
@@ -600,7 +612,9 @@ export function translateCodexRolloutLine(
       ];
     }
     if (payload.role === "assistant") {
-      const text = textFromContentItems(payload.content, "output_text");
+      const text = stripCodexContextualFragments(
+        textFromContentItems(payload.content, "output_text") ?? "",
+      );
       if (!text) {
         return invalidRolloutActivity(record, "assistant message did not contain output_text");
       }

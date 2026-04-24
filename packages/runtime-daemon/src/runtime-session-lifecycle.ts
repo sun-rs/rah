@@ -107,8 +107,8 @@ export class RuntimeSessionLifecycle {
     if (!state) {
       throw new Error(`Unknown session ${sessionId}`);
     }
-    if (!state.session.capabilities.renameSession || !state.session.providerSessionId) {
-      throw new Error("This session does not support provider-native rename.");
+    if (state.session.capabilities.actions.rename === "none") {
+      throw new Error("This session does not support rename.");
     }
     const adapter = this.deps.requireSessionAdapter(sessionId);
     if (!adapter.renameSession) {
@@ -123,6 +123,28 @@ export class RuntimeSessionLifecycle {
     this.deps.refreshRememberedState();
     this.deps.publishStoredSessionDiscovery();
     return summary;
+  }
+
+  async setSessionMode(sessionId: string, modeId: string): Promise<SessionSummary> {
+    const nextModeId = modeId.trim();
+    if (!nextModeId) {
+      throw new Error("Session mode is required.");
+    }
+    const state = this.deps.sessionStore.getSession(sessionId);
+    if (!state) {
+      throw new Error(`Unknown session ${sessionId}`);
+    }
+    if (!state.session.mode) {
+      throw new Error("This session does not expose mode controls.");
+    }
+    if (!state.session.mode.mutable) {
+      throw new Error("This session mode is controlled outside RAH.");
+    }
+    const adapter = this.deps.requireSessionAdapter(sessionId);
+    if (!adapter.setSessionMode) {
+      throw new Error(`Provider ${state.session.provider} does not support mode switching.`);
+    }
+    return await adapter.setSessionMode(sessionId, nextModeId);
   }
 
   async closeSession(sessionId: string, request: CloseSessionRequest): Promise<void> {

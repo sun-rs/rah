@@ -8,6 +8,7 @@
 - remote mode：web 接管输入，terminal 进入固定 handoff 面板
 - transcript：继续以 Codex rollout / session 文件为主真相
 - control：继续使用 Codex app-server 做远端 turn / permission / interrupt
+- web-first：当 provider session 尚未绑定时，web 第一条消息会先用 Codex app-server 创建 thread，再绑定到当前 terminal wrapper
 
 这条线的目标是：
 
@@ -69,6 +70,7 @@
 - wrapper 改为：
   - 保留 session 绑定
   - 用 Codex app-server 对同一 thread 发 `turn/start`
+- 如果 web 抢在 terminal 第一条之前提交，wrapper 会停止空白 native TUI，通过 app-server `thread/start` 创建 thread，并把当前 wrapper session 绑定到这个 thread
 - terminal 切到 handoff 面板，显示：
   - 模式
   - 状态
@@ -109,7 +111,7 @@ Codex 这条线与 Claude 不同的优势是：
 
 - CLI 入口已经开始切到真实 terminal handoff wrapper
 - rollout/app-server/canonical event 仍尽量复用原有稳定层
-- 还没有把所有旧 PTY relay 相关代码完全删除
+- Codex 旧 PTY relay wrapper 已删除，真实 terminal handoff 是唯一 `rah codex` 路径
 
 ## 6. 非目标
 

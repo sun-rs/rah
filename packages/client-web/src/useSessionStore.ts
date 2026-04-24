@@ -53,6 +53,7 @@ import {
   releaseControlCommand,
   respondToPermissionCommand,
   sendInputCommand,
+  setSessionModeCommand,
 } from "./session-store-session-commands";
 import {
   activateHistorySessionCommand,
@@ -172,7 +173,11 @@ interface SessionState {
   attachSession: (summary: SessionSummary) => Promise<void>;
   closeSession: (sessionId: string) => Promise<void>;
   renameSession: (sessionId: string, title: string) => Promise<void>;
-  claimHistorySession: (sessionId: string, options?: ClaimHistorySessionOptions) => Promise<void>;
+  setSessionMode: (sessionId: string, modeId: string) => Promise<void>;
+  claimHistorySession: (
+    sessionId: string,
+    options?: ClaimHistorySessionOptions & { modeId?: string },
+  ) => Promise<void>;
   removeHistorySession: (session: Pick<StoredSessionRef, "provider" | "providerSessionId">) => Promise<void>;
   removeHistoryWorkspaceSessions: (workspaceDir: string) => Promise<void>;
   claimControl: (sessionId: string) => Promise<void>;
@@ -607,7 +612,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   claimHistorySession: async (sessionId, options) => {
-    await claimHistorySessionCommand(createStartupDeps(get, set, options), sessionId);
+    await claimHistorySessionCommand(
+      createStartupDeps(get, set, options),
+      sessionId,
+      options?.modeId ? { modeId: options.modeId } : undefined,
+    );
   },
 
   removeHistorySession: async (session) => {
@@ -666,6 +675,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       sessionId,
       title,
       refreshWorkbenchState: get().refreshWorkbenchState,
+    });
+  },
+
+  setSessionMode: async (sessionId, modeId) => {
+    await setSessionModeCommand({
+      set,
+      sessionId,
+      modeId,
     });
   },
 

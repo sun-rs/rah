@@ -12,6 +12,7 @@ import type {
 } from "@rah/runtime-protocol";
 import type { RuntimeServices } from "./provider-adapter";
 import { applyProviderActivity, type ProviderActivity } from "./provider-activity";
+import { buildGeminiModeState } from "./session-mode-utils";
 import { toSessionSummary } from "./session-store";
 
 export type LiveGeminiTurn = {
@@ -299,6 +300,18 @@ async function runGeminiTurn(params: {
           services.sessionStore.patchManagedSession(liveSession.sessionId, {
             providerSessionId: event.session_id,
           });
+          const promotedTitle = services.workbenchState?.promotePendingSessionTitleOverride(
+            liveSession.sessionId,
+            {
+              provider: "gemini",
+              providerSessionId: event.session_id,
+            },
+          );
+          if (promotedTitle) {
+            services.sessionStore.patchManagedSession(liveSession.sessionId, {
+              title: promotedTitle,
+            });
+          }
         }
         break;
       }
@@ -478,10 +491,20 @@ export function startGeminiLiveSession(params: {
     rootDir: request.cwd,
     ...(request.title !== undefined ? { title: request.title } : {}),
     ...(request.initialPrompt !== undefined ? { preview: request.initialPrompt } : {}),
+    mode: buildGeminiModeState({
+      currentModeId: request.approvalPolicy ?? "yolo",
+      mutable: true,
+    }),
     capabilities: {
       livePermissions: false,
       listProviderSessions: false,
       renameSession: false,
+      actions: {
+        info: true,
+        archive: true,
+        delete: true,
+        rename: "local",
+      },
       steerInput: true,
     },
   });
@@ -523,10 +546,20 @@ export function resumeGeminiLiveSession(params: {
     launchSource: "web",
     cwd,
     rootDir: cwd,
+    mode: buildGeminiModeState({
+      currentModeId: request.approvalPolicy ?? "yolo",
+      mutable: true,
+    }),
     capabilities: {
       livePermissions: false,
       listProviderSessions: false,
       renameSession: false,
+      actions: {
+        info: true,
+        archive: true,
+        delete: true,
+        rename: "local",
+      },
       steerInput: true,
     },
   });

@@ -93,6 +93,7 @@ export class RuntimeEngine {
   private rememberedHiddenWorkspaces: string[];
   private rememberedActiveWorkspaceDir: string | undefined;
   private rememberedHiddenSessionKeys: string[];
+  private rememberedSessionTitleOverrides: Record<string, string>;
   private lastDiscoveredStoredSessions: StoredSessionRef[] = [];
   private storedSessionDiscoveryVersion = 0;
   private readonly storedSessionMonitor: StoredSessionMonitor;
@@ -122,6 +123,7 @@ export class RuntimeEngine {
     this.rememberedHiddenWorkspaces = restored.hiddenWorkspaces;
     this.rememberedActiveWorkspaceDir = restored.activeWorkspaceDir;
     this.rememberedHiddenSessionKeys = restored.hiddenSessionKeys;
+    this.rememberedSessionTitleOverrides = restored.sessionTitleOverrides;
     this.workspaceScopeAuthorizer = new WorkspaceScopeAuthorizer(
       this.workbenchState,
       this.sessionStore,
@@ -183,21 +185,25 @@ export class RuntimeEngine {
           eventBus: this.eventBus,
           ptyHub: this.ptyHub,
           sessionStore: this.sessionStore,
+          workbenchState: this.workbenchState,
         }),
         new ClaudeAdapter({
           eventBus: this.eventBus,
           ptyHub: this.ptyHub,
           sessionStore: this.sessionStore,
+          workbenchState: this.workbenchState,
         }),
         new GeminiAdapter({
           eventBus: this.eventBus,
           ptyHub: this.ptyHub,
           sessionStore: this.sessionStore,
+          workbenchState: this.workbenchState,
         }),
         new KimiAdapter({
           eventBus: this.eventBus,
           ptyHub: this.ptyHub,
           sessionStore: this.sessionStore,
+          workbenchState: this.workbenchState,
         }),
       ];
     })();
@@ -331,6 +337,10 @@ export class RuntimeEngine {
 
   async renameSession(sessionId: string, title: string): Promise<SessionSummary> {
     return this.sessionLifecycle.renameSession(sessionId, title);
+  }
+
+  async setSessionMode(sessionId: string, modeId: string): Promise<SessionSummary> {
+    return this.sessionLifecycle.setSessionMode(sessionId, modeId);
   }
 
   sendInput(sessionId: string, request: { clientId: string; text: string }): void {
@@ -710,6 +720,7 @@ export class RuntimeEngine {
           ? { rememberedActiveWorkspaceDir: this.rememberedActiveWorkspaceDir }
           : {}),
         rememberedHiddenSessionKeys: this.rememberedHiddenSessionKeys,
+        rememberedSessionTitleOverrides: this.rememberedSessionTitleOverrides,
       },
       isClosingSession: (sessionId) => this.terminals.isClosingWrapperSession(sessionId),
     });
@@ -723,6 +734,7 @@ export class RuntimeEngine {
     this.rememberedHiddenWorkspaces = refreshed.hiddenWorkspaces;
     this.rememberedActiveWorkspaceDir = refreshed.activeWorkspaceDir;
     this.rememberedHiddenSessionKeys = refreshed.hiddenSessionKeys;
+    this.rememberedSessionTitleOverrides = refreshed.sessionTitleOverrides;
   }
 
   private pruneOrphanSessions(): void {

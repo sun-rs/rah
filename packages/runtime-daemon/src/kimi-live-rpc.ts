@@ -192,7 +192,7 @@ export class KimiJsonRpcClient {
   }
 }
 
-async function resolveKimiCommand(): Promise<{ command: string; args: string[] }> {
+export async function resolveKimiCommand(): Promise<{ command: string; args: string[] }> {
   if (process.env.RAH_KIMI_BINARY) {
     return { command: await resolveConfiguredBinary("RAH_KIMI_BINARY", "kimi"), args: [] };
   }

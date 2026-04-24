@@ -260,6 +260,21 @@ export class TerminalWrapperRegistry {
     return wrapper.queuedTurns.shift();
   }
 
+  cancelQueuedTurns(sessionId: string, sourceSurfaceId?: string): QueuedTurn[] {
+    const wrapper = this.require(sessionId);
+    const canceled: QueuedTurn[] = [];
+    const remaining: QueuedTurn[] = [];
+    for (const turn of wrapper.queuedTurns) {
+      if (sourceSurfaceId === undefined || turn.sourceSurfaceId === sourceSurfaceId) {
+        canceled.push(turn);
+      } else {
+        remaining.push(turn);
+      }
+    }
+    wrapper.queuedTurns = remaining;
+    return canceled;
+  }
+
   queuedTurnCount(sessionId: string): number {
     return this.require(sessionId).queuedTurns.length;
   }

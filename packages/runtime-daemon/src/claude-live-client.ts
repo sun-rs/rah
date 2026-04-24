@@ -17,6 +17,7 @@ import {
 } from "@rah/runtime-protocol";
 import type { RuntimeServices } from "./provider-adapter";
 import { toSessionSummary } from "./session-store";
+import { buildClaudeModeState } from "./session-mode-utils";
 import {
   approvalPolicyToPermissionMode,
   applyActivity,
@@ -51,11 +52,21 @@ export async function startClaudeLiveSession(args: {
     cwd: args.request.cwd,
     rootDir: args.request.cwd,
     ...(args.request.title ? { title: args.request.title } : {}),
+    mode: buildClaudeModeState({
+      currentModeId: permissionMode,
+      mutable: true,
+    }),
     capabilities: {
       livePermissions: true,
       steerInput: true,
       queuedInput: false,
       renameSession: true,
+      actions: {
+        info: true,
+        archive: true,
+        delete: true,
+        rename: "native",
+      },
       modelSwitch: false,
       planMode: false,
       subagents: false,
@@ -93,11 +104,21 @@ export async function resumeClaudeLiveSession(args: {
     launchSource: "web",
     cwd: args.cwd,
     rootDir: args.cwd,
+    mode: buildClaudeModeState({
+      currentModeId: args.permissionMode ?? "default",
+      mutable: true,
+    }),
     capabilities: {
       livePermissions: true,
       steerInput: true,
       queuedInput: false,
       renameSession: true,
+      actions: {
+        info: true,
+        archive: false,
+        delete: true,
+        rename: "native",
+      },
       modelSwitch: false,
       planMode: false,
       subagents: false,

@@ -26,7 +26,11 @@ function charDisplayWidth(value: string): number {
 }
 
 function stringDisplayWidth(value: string): number {
-  return [...value].reduce((total, char) => total + charDisplayWidth(char), 0);
+  return [...stripAnsi(value)].reduce((total, char) => total + charDisplayWidth(char), 0);
+}
+
+function stripAnsi(value: string): string {
+  return value.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "");
 }
 
 function truncateText(value: string, maxDisplayWidth: number): string {
@@ -87,6 +91,21 @@ function renderPanelLine(content: string, width: number): string {
   return `│ ${padded} │`;
 }
 
+type PanelTone = "danger" | "success" | "warning";
+
+function colorText(value: string, tone?: PanelTone): string {
+  if (tone === "danger") {
+    return `\u001b[31m${value}\u001b[0m`;
+  }
+  if (tone === "success") {
+    return `\u001b[32m${value}\u001b[0m`;
+  }
+  if (tone === "warning") {
+    return `\u001b[33m${value}\u001b[0m`;
+  }
+  return value;
+}
+
 export function clearTerminalScreen(): void {
   process.stdout.write("\u001b[2J\u001b[H");
 }
@@ -99,12 +118,20 @@ export function leaveAlternateScreen(): void {
   process.stdout.write("\u001b[?1049l");
 }
 
+export function restoreInheritedTerminalModes(): void {
+  process.stdout.write(
+    "\u001b[<1u\u001b[?1004l\u001b[?2004l\u001b[?2026l\u001b[?25h\u001b[0m\r",
+  );
+}
+
 export function renderTerminalWrapperPanel(args: {
   title: string;
   status: string;
+  statusTone?: PanelTone;
   sessionId: string;
   prompt: string;
   footer: string;
+  footerTone?: PanelTone;
 }): string {
   const width = Math.min(Math.max((process.stdout.columns ?? 80) - 4, 36), 96);
   const allPromptLines = wrapText(args.prompt || "No active prompt.", width);
@@ -125,7 +152,7 @@ export function renderTerminalWrapperPanel(args: {
   return [
     "╭" + "─".repeat(width + 2) + "╮",
     renderPanelLine(args.title, width),
-    renderPanelLine(`Status: ${args.status}`, width),
+    renderPanelLine(colorText(`Status: ${args.status}`, args.statusTone), width),
     renderPanelLine(
       `Session: ${truncateText(args.sessionId, Math.max(12, width - 9))}`,
       width,
@@ -134,7 +161,7 @@ export function renderTerminalWrapperPanel(args: {
     renderPanelLine("Current prompt:", width),
     ...wrappedPrompt.map((line) => renderPanelLine(line, width)),
     renderPanelLine("", width),
-    renderPanelLine(args.footer, width),
+    renderPanelLine(colorText(args.footer, args.footerTone), width),
     "╰" + "─".repeat(width + 2) + "╯",
   ].join("\n");
 }
@@ -142,9 +169,11 @@ export function renderTerminalWrapperPanel(args: {
 export function renderTerminalWrapperPanelForTerminal(args: {
   title: string;
   status: string;
+  statusTone?: PanelTone;
   sessionId: string;
   prompt: string;
   footer: string;
+  footerTone?: PanelTone;
 }): string {
   return renderTerminalWrapperPanel(args).replace(/\n/g, "\r\n");
 }

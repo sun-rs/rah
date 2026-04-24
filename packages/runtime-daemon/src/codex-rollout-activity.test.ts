@@ -367,6 +367,18 @@ describe("translateCodexRolloutLine", () => {
       },
       state,
     );
+    const turnAborted = translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-14T18:00:10.250Z",
+        type: "event_msg",
+        payload: {
+          type: "turn_aborted",
+          turn_id: "turn-1",
+          reason: "interrupted",
+        },
+      },
+      state,
+    );
     const execCommandEnd = translateCodexRolloutLine(
       {
         timestamp: "2026-04-14T18:00:10.500Z",
@@ -418,6 +430,7 @@ describe("translateCodexRolloutLine", () => {
 
     assert.deepEqual(taskStarted, []);
     assert.deepEqual(tokenCount, []);
+    assert.deepEqual(turnAborted, []);
     assert.deepEqual(execCommandEnd, []);
     assert.deepEqual(patchApplyEnd, []);
     assert.deepEqual(developerMessage, []);
@@ -446,5 +459,35 @@ describe("translateCodexRolloutLine", () => {
     );
 
     assert.deepEqual(bootstrap, []);
+  });
+
+  test("strips turn_aborted contextual fragments from user messages", () => {
+    const state = createCodexRolloutTranslationState();
+
+    const activities = translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-24T06:10:00.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text:
+                "周几?<turn_aborted>\nThe user interrupted the previous turn on purpose.\n</turn_aborted>",
+            },
+          ],
+        },
+      },
+      state,
+    );
+
+    assert.deepEqual(activities.map((item) => item.activity), [
+      {
+        type: "timeline_item",
+        item: { kind: "user_message", text: "周几?" },
+      },
+    ]);
   });
 });

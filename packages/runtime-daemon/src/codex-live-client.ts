@@ -16,6 +16,7 @@ import {
 } from "./codex-stored-sessions";
 import { toSessionSummary } from "./session-store";
 import { resolveConfiguredBinary } from "./provider-binary-utils";
+import { buildCodexModeState, codexModeId } from "./session-mode-utils";
 import {
   attachCurrentTurn,
   attachRequestedClient,
@@ -51,6 +52,29 @@ async function resolveCodexBinary(): Promise<string> {
   return await resolveConfiguredBinary("RAH_CODEX_BINARY", "codex");
 }
 
+async function loadCodexPlanCollaborationMode(client: CodexJsonRpcClient): Promise<LiveCodexSession["planCollaborationMode"]> {
+  const response = (await client.request("collaborationMode/list", {})) as {
+    data?: Array<{
+      name?: string;
+      mode?: string | null;
+      model?: string | null;
+      reasoning_effort?: string | null | null;
+    }>;
+  };
+  const planMask = response.data?.find((entry) => entry.mode === "plan");
+  if (!planMask?.model) {
+    return null;
+  }
+  return {
+    mode: "plan",
+    settings: {
+      model: planMask.model,
+      reasoning_effort: planMask.reasoning_effort ?? null,
+      developer_instructions: null,
+    },
+  };
+}
+
 export async function createCodexAppServerClient(): Promise<CodexJsonRpcClient> {
   const binary = await resolveCodexBinary();
   const child = spawn(binary, ["app-server"], {
@@ -76,6 +100,11 @@ export async function startCodexLiveSession(params: {
   const { services, request } = params;
   const client = await createCodexAppServerClient();
   const bridge = createLiveSessionBridge(services, client);
+  const planCollaborationMode = await loadCodexPlanCollaborationMode(client);
+  const initialAccessModeId = codexModeId({
+    approvalPolicy: request.approvalPolicy ?? "never",
+    sandboxMode: request.sandbox ?? "danger-full-access",
+  });
 
   const threadStart = (await client.request("thread/start", {
     ...(request.cwd ? { cwd: request.cwd } : {}),
@@ -100,8 +129,18 @@ export async function startCodexLiveSession(params: {
     rootDir: request.cwd,
     ...(request.title !== undefined ? { title: request.title } : {}),
     ...(request.initialPrompt !== undefined ? { preview: request.initialPrompt } : {}),
+    mode: buildCodexModeState({
+      currentModeId: initialAccessModeId,
+      mutable: true,
+    }),
     capabilities: {
       renameSession: true,
+      actions: {
+        info: true,
+        archive: true,
+        delete: true,
+        rename: "native",
+      },
       steerInput: true,
     },
   });
@@ -118,6 +157,11 @@ export async function startCodexLiveSession(params: {
     sessionId: state.session.id,
     threadId,
     cwd: request.cwd,
+    approvalPolicy: request.approvalPolicy ?? "never",
+    sandboxMode: request.sandbox ?? "danger-full-access",
+    activeModeId: initialAccessModeId,
+    lastNonPlanModeId: initialAccessModeId,
+    planCollaborationMode,
     client,
     translationState: createCodexAppServerTranslationState(),
     currentTurnId: runtimeSession.activeTurnId ?? null,
@@ -142,6 +186,7 @@ export async function resumeCodexLiveSession(params: {
   const { services, request, record } = params;
   const client = await createCodexAppServerClient();
   const bridge = createLiveSessionBridge(services, client);
+  const planCollaborationMode = await loadCodexPlanCollaborationMode(client);
   try {
     const resumeResponse = (await client.request(
       "thread/resume",
@@ -156,6 +201,8 @@ export async function resumeCodexLiveSession(params: {
         status?: unknown;
       };
       cwd?: string;
+      approval_policy?: string;
+      sandbox?: string;
     };
     const thread = resumeResponse.thread;
     const threadId =
@@ -166,6 +213,16 @@ export async function resumeCodexLiveSession(params: {
       request.cwd ??
       record?.ref.cwd ??
       process.cwd();
+    const resumedAccessModeId = codexModeId({
+      approvalPolicy:
+        typeof resumeResponse.approval_policy === "string"
+          ? resumeResponse.approval_policy
+          : "never",
+      sandboxMode:
+        typeof resumeResponse.sandbox === "string"
+          ? resumeResponse.sandbox
+          : "danger-full-access",
+    });
     const state = services.sessionStore.createManagedSession({
       provider: "codex",
       providerSessionId: threadId,
@@ -198,8 +255,18 @@ export async function resumeCodexLiveSession(params: {
               !isCodexInternalThreadMetadataText(thread.name)
             ? { preview: thread.name }
           : {}),
+      mode: buildCodexModeState({
+        currentModeId: resumedAccessModeId,
+        mutable: true,
+      }),
       capabilities: {
         renameSession: true,
+        actions: {
+          info: true,
+          archive: false,
+          delete: true,
+          rename: "native",
+        },
         steerInput: true,
       },
     });
@@ -245,6 +312,17 @@ export async function resumeCodexLiveSession(params: {
       sessionId: state.session.id,
       threadId,
       cwd,
+      approvalPolicy:
+        typeof resumeResponse.approval_policy === "string"
+          ? resumeResponse.approval_policy
+          : "never",
+      sandboxMode:
+        typeof resumeResponse.sandbox === "string"
+          ? resumeResponse.sandbox
+          : "danger-full-access",
+      activeModeId: resumedAccessModeId,
+      lastNonPlanModeId: resumedAccessModeId,
+      planCollaborationMode,
       client,
       translationState: createCodexAppServerTranslationState(),
       currentTurnId: resumedState.activeTurnId ?? null,

@@ -5,10 +5,12 @@ import { providerLabel } from "../../../types";
 import type { SessionProjection } from "../../../types";
 import { ChatThread } from "../../chat/ChatThread";
 import { ProviderLogo } from "../../ProviderLogo";
+import { SessionModeControls } from "../../SessionModeControls";
 import { TokenizedTextarea } from "../../TokenizedTextarea";
 import { COMPOSER_LAYOUT, type ComposerSurface } from "../../../composer-contract";
 import type { InlineWorkbenchNotice } from "../../../workbench-notice-contract";
 import { SessionInfoDialog } from "../dialogs/SessionInfoDialog";
+import { resolveSessionModeControlState, type SessionModeChoice } from "../../../session-mode-ui";
 
 export function WorkbenchSelectedPane(props: {
   selectedSummary: SessionSummary;
@@ -28,9 +30,16 @@ export function WorkbenchSelectedPane(props: {
   composerRef: RefObject<HTMLTextAreaElement | null>;
   draft: string;
   sendPending: boolean;
+  claimAccessModes: SessionModeChoice[];
+  selectedClaimAccessModeId: string | null;
+  claimPlanModeAvailable: boolean;
+  claimPlanModeEnabled: boolean;
+  claimModePending: boolean;
   onDraftChange: (value: string) => void;
   onSend: () => void;
   onClaimHistory: () => void;
+  onClaimAccessModeChange: (modeId: string) => void;
+  onClaimPlanModeToggle: (enabled: boolean) => void;
   onClaimControl: () => void;
   onInterrupt: () => void;
   onOpenFileReference: () => void;
@@ -42,13 +51,22 @@ export function WorkbenchSelectedPane(props: {
   onFloatingAnchorOffsetChange: (offsetPx: number) => void;
   onArchiveOrClose: () => void;
   onDeleteSession: () => void;
+  canDeleteSession: boolean;
+  canShowSessionInfo: boolean;
   canRenameSession: boolean;
+  canSwitchSessionModes: boolean;
+  modeChangePending: boolean;
   onRenameSession: () => void;
+  onSetSessionMode: (modeId: string) => void;
 }) {
   const composerContainerRef = useRef<HTMLDivElement | null>(null);
   const sessionMenuRef = useRef<HTMLDivElement | null>(null);
   const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
   const [sessionInfoOpen, setSessionInfoOpen] = useState(false);
+  const liveModeControl = resolveSessionModeControlState({
+    provider: props.selectedSummary.session.provider,
+    summary: props.selectedSummary,
+  });
 
   useEffect(() => {
     const node = composerContainerRef.current;
@@ -162,17 +180,19 @@ export function WorkbenchSelectedPane(props: {
             </button>
             {sessionMenuOpen ? (
               <div className="absolute right-0 top-[calc(100%+0.375rem)] z-50 min-w-[10rem] rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] p-1 shadow-xl">
-                <button
-                  type="button"
-                  className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]"
-                  onClick={() => {
-                    setSessionMenuOpen(false);
-                    setSessionInfoOpen(true);
-                  }}
-                >
-                  <Info size={14} />
-                  <span>Info</span>
-                </button>
+                {props.canShowSessionInfo ? (
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]"
+                    onClick={() => {
+                      setSessionMenuOpen(false);
+                      setSessionInfoOpen(true);
+                    }}
+                  >
+                    <Info size={14} />
+                    <span>Info</span>
+                  </button>
+                ) : null}
                 {props.canRenameSession ? (
                   <button
                     type="button"
@@ -186,17 +206,46 @@ export function WorkbenchSelectedPane(props: {
                     <span>Rename</span>
                   </button>
                 ) : null}
-                <button
-                  type="button"
-                  className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm text-[var(--app-danger)] transition-colors hover:bg-[var(--app-subtle-bg)]"
-                  onClick={() => {
-                    setSessionMenuOpen(false);
-                    props.onDeleteSession();
-                  }}
-                >
-                  <Trash2 size={14} />
-                  <span>Delete</span>
-                </button>
+                {props.canSwitchSessionModes &&
+                props.selectedSummary.session.mode &&
+                props.selectedSummary.session.mode.availableModes.length > 0 ? (
+                  <div className="mt-1 border-t border-[var(--app-border)] pt-1">
+                    <div className="px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-[var(--app-hint)]">
+                      Mode
+                    </div>
+                    <div className="px-2.5 py-1">
+                      <SessionModeControls
+                        compact
+                        accessModes={liveModeControl.accessModes}
+                        selectedAccessModeId={liveModeControl.selectedAccessModeId}
+                        planModeAvailable={liveModeControl.planModeAvailable}
+                        planModeEnabled={liveModeControl.planModeEnabled}
+                        disabled={props.modeChangePending}
+                        onAccessModeChange={(modeId) => {
+                          setSessionMenuOpen(false);
+                          props.onSetSessionMode(modeId);
+                        }}
+                        onPlanModeToggle={(enabled) => {
+                          setSessionMenuOpen(false);
+                          props.onSetSessionMode(enabled ? "plan" : liveModeControl.selectedAccessModeId ?? "default");
+                        }}
+                      />
+                    </div>
+                  </div>
+                ) : null}
+                {props.canDeleteSession ? (
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm text-[var(--app-danger)] transition-colors hover:bg-[var(--app-subtle-bg)]"
+                    onClick={() => {
+                      setSessionMenuOpen(false);
+                      props.onDeleteSession();
+                    }}
+                  >
+                    <Trash2 size={14} />
+                    <span>Delete</span>
+                  </button>
+                ) : null}
               </div>
             ) : null}
           </div>
@@ -282,14 +331,26 @@ export function WorkbenchSelectedPane(props: {
                 <div className="text-sm font-medium text-[var(--app-fg)]">History only</div>
                 <div className="text-xs text-[var(--app-hint)]">Claim control to continue here.</div>
               </div>
-              <button
-                type="button"
-                disabled={props.composerSurface.actionPending}
-                onClick={props.onClaimHistory}
-                className="shrink-0 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition-colors hover:opacity-90 disabled:opacity-50"
-              >
-                {props.composerSurface.actionLabel}
-              </button>
+              <div className="flex items-center gap-2">
+                <SessionModeControls
+                  compact
+                  accessModes={props.claimAccessModes}
+                  selectedAccessModeId={props.selectedClaimAccessModeId}
+                  planModeAvailable={false}
+                  planModeEnabled={false}
+                  disabled={props.claimModePending || props.composerSurface.actionPending}
+                  onAccessModeChange={props.onClaimAccessModeChange}
+                  onPlanModeToggle={props.onClaimPlanModeToggle}
+                />
+                <button
+                  type="button"
+                  disabled={props.composerSurface.actionPending}
+                  onClick={props.onClaimHistory}
+                  className="shrink-0 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition-colors hover:opacity-90 disabled:opacity-50"
+                >
+                  {props.composerSurface.actionLabel}
+                </button>
+              </div>
             </div>
           </div>
         ) : props.composerSurface.kind === "unavailable" ? (
@@ -332,9 +393,30 @@ export function WorkbenchSelectedPane(props: {
               >
                 <Plus size={18} />
               </button>
+              <div className="relative">
+                <button
+                type="button"
+                disabled={props.modeChangePending}
+                onClick={() =>
+                  props.onSetSessionMode(
+                    liveModeControl.planModeEnabled
+                      ? liveModeControl.selectedAccessModeId ?? "default"
+                      : "plan",
+                  )
+                }
+                className={`absolute bottom-2 left-2 z-10 inline-flex h-7 items-center gap-1 rounded-md border px-2 text-[11px] transition-colors ${
+                  liveModeControl.planModeEnabled
+                    ? "border-sky-500/40 bg-sky-500/10 text-sky-600 dark:text-sky-400"
+                    : "border-[var(--app-border)] bg-[var(--app-bg)]/80 text-[var(--app-hint)] hover:text-[var(--app-fg)]"
+                } ${liveModeControl.planModeAvailable ? "" : "hidden"}`}
+                title="Toggle plan mode"
+                aria-pressed={liveModeControl.planModeEnabled}
+              >
+                <span>{liveModeControl.planModeEnabled ? "Plan on" : "Plan"}</span>
+              </button>
               <TokenizedTextarea
                 ref={props.composerRef}
-                textareaClassName={COMPOSER_LAYOUT.textareaClassName}
+                textareaClassName={`${COMPOSER_LAYOUT.textareaClassName} ${liveModeControl.planModeAvailable ? "pl-[4.5rem]" : ""}`}
                 contentClassName={COMPOSER_LAYOUT.textareaContentClassName}
                 value={props.draft}
                 onChange={props.onDraftChange}
@@ -355,6 +437,7 @@ export function WorkbenchSelectedPane(props: {
                   }
                 }}
               />
+              </div>
               {props.composerSurface.showStopButton ? (
                 <div className={COMPOSER_LAYOUT.stopWrapperClassName}>
                   <span className={COMPOSER_LAYOUT.stopSpinnerClassName} />

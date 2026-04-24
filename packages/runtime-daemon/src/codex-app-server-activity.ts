@@ -269,6 +269,15 @@ function isCodexInternalEnvironmentMessage(text: string): boolean {
   );
 }
 
+function stripCodexContextualFragments(text: string): string {
+  return text
+    .replace(/<turn_aborted>[\s\S]*?<\/turn_aborted>/gi, " ")
+    .replace(/<user_shell_command>[\s\S]*?<\/user_shell_command>/gi, " ")
+    .replace(/<subagent_notification>[\s\S]*?<\/subagent_notification>/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function itemIdFromParams(params: Record<string, unknown>): string | null {
   return stringField(params, "itemId") ?? stringField(params, "item_id");
 }
@@ -975,11 +984,13 @@ function mapThreadItem(
         return [];
       }
       const content = Array.isArray(item.content) ? item.content : [];
-      const text = content
+      const text = stripCodexContextualFragments(
+        content
         .filter((part): part is Record<string, unknown> => Boolean(part) && typeof part === "object" && !Array.isArray(part))
         .map((part) => stringField(part, "text") ?? stringField(part, "url") ?? stringField(part, "path") ?? "")
         .filter(Boolean)
-        .join("\n");
+        .join("\n"),
+      );
       if (text && isCodexInternalEnvironmentMessage(text)) {
         state.emittedUserMessageItemIds.add(id);
         return [];
@@ -1002,7 +1013,7 @@ function mapThreadItem(
       }
       const text = stringField(item, "text") ?? "";
       const buffered = (state.agentMessageByItemId.get(id) ?? []).join("");
-      const finalText = text || buffered;
+      const finalText = stripCodexContextualFragments(text || buffered);
       state.completedAgentMessageItemIds.add(id);
       state.agentMessageByItemId.delete(id);
       state.lastAgentMessageDeltaByItemId.delete(id);
@@ -1486,11 +1497,15 @@ export function translateCodexAppServerNotification(
       if (!delta) {
         return invalidStreamActivities(notification, "agent message delta payload was not recognized");
       }
+      const visibleDelta = stripCodexContextualFragments(delta.delta);
+      if (!visibleDelta) {
+        return [];
+      }
       if (!appendDeltaIfNew(
         state.agentMessageByItemId,
         state.lastAgentMessageDeltaByItemId,
         delta.itemId,
-        delta.delta,
+        visibleDelta,
       )) {
         return [];
       }
@@ -1502,12 +1517,12 @@ export function translateCodexAppServerNotification(
             messageId: delta.itemId,
             partId: delta.itemId,
             kind: "text",
-            delta: delta.delta,
+            delta: visibleDelta,
           },
         }),
         translated(notification, {
           type: "timeline_item",
-          item: { kind: "assistant_message", text: delta.delta, messageId: delta.itemId },
+          item: { kind: "assistant_message", text: visibleDelta, messageId: delta.itemId },
         }),
       ];
     }

@@ -26,6 +26,7 @@ import type {
   RenameSessionRequest,
   ResumeSessionRequest,
   ResumeSessionResponse,
+  SetSessionModeRequest,
   SessionFileResponse,
   SessionInputRequest,
   SessionHistoryPageResponse,
@@ -375,6 +376,17 @@ export async function renameSession(
   request: RenameSessionRequest,
 ): Promise<SessionSummary> {
   const response = await requestJson<{ session: SessionSummary }>(`/api/sessions/${sessionId}/rename`, {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
+  return response.session;
+}
+
+export async function setSessionMode(
+  sessionId: string,
+  request: SetSessionModeRequest,
+): Promise<SessionSummary> {
+  const response = await requestJson<{ session: SessionSummary }>(`/api/sessions/${sessionId}/mode`, {
     method: "POST",
     body: JSON.stringify(request),
   });

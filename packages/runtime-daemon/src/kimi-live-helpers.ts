@@ -7,6 +7,7 @@ import {
 } from "@rah/runtime-protocol";
 import type { RuntimeServices } from "./provider-adapter";
 import { applyProviderActivity, type ProviderActivity } from "./provider-activity";
+import { buildKimiModeState } from "./session-mode-utils";
 import {
   SESSION_SOURCE,
   type JsonRpcEvent,
@@ -504,6 +505,15 @@ export function handleKimiEvent(
       return;
     }
     case "StatusUpdate": {
+      if (typeof payload.plan_mode === "boolean") {
+        liveSession.planMode = payload.plan_mode;
+        services.sessionStore.patchManagedSession(liveSession.sessionId, {
+          mode: buildKimiModeState({
+            currentModeId: liveSession.planMode ? "plan" : "default",
+            mutable: true,
+          }),
+        });
+      }
       const usage = usageFromStatus(payload);
       if (usage) {
         applyActivity(

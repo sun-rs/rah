@@ -21,6 +21,30 @@ export type ClientKind = "terminal" | "web" | "ios" | "ipad" | "api";
 
 export type AttachMode = "observe" | "interactive";
 
+export type SessionRenameMode = "none" | "local" | "native";
+export type SessionModeSource = "native" | "local" | "external_locked";
+
+export interface SessionModeDescriptor {
+  id: string;
+  label: string;
+  description?: string;
+  hotSwitch: boolean;
+}
+
+export interface SessionModeState {
+  currentModeId: string | null;
+  availableModes: SessionModeDescriptor[];
+  mutable: boolean;
+  source: SessionModeSource;
+}
+
+export interface SessionActionCapabilities {
+  info: boolean;
+  archive: boolean;
+  delete: boolean;
+  rename: SessionRenameMode;
+}
+
 /**
  * Provider-specific feature flags surfaced to clients so the UI can degrade
  * cleanly instead of assuming every adapter supports the same experience.
@@ -33,6 +57,7 @@ export interface SessionCapabilities {
   resumeByProvider: boolean;
   listProviderSessions: boolean;
   renameSession: boolean;
+  actions: SessionActionCapabilities;
   steerInput: boolean;
   queuedInput: boolean;
   modelSwitch: boolean;
@@ -57,6 +82,7 @@ export interface ManagedSession {
   title?: string;
   preview?: string;
   capabilities: SessionCapabilities;
+  mode?: SessionModeState;
   createdAt: string;
   updatedAt: string;
 }

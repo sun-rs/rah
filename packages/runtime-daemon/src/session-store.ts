@@ -17,6 +17,12 @@ const DEFAULT_CAPABILITIES: SessionCapabilities = {
   resumeByProvider: true,
   listProviderSessions: true,
   renameSession: false,
+  actions: {
+    info: true,
+    archive: true,
+    delete: false,
+    rename: "none",
+  },
   steerInput: false,
   queuedInput: false,
   modelSwitch: false,
@@ -131,6 +137,7 @@ export interface CreateManagedSessionArgs {
   rootDir: string;
   title?: string;
   preview?: string;
+  mode?: ManagedSession["mode"];
   capabilities?: Partial<SessionCapabilities>;
 }
 
@@ -149,6 +156,7 @@ export interface PatchManagedSessionArgs {
   preview?: string;
   cwd?: string;
   rootDir?: string;
+  mode?: ManagedSession["mode"];
 }
 
 interface SessionStoreOptions {
@@ -223,6 +231,9 @@ export class SessionStore {
     }
     if (args.preview !== undefined) {
       session.preview = args.preview;
+    }
+    if (args.mode !== undefined) {
+      session.mode = args.mode;
     }
 
     const state: StoredSessionState = {
@@ -407,6 +418,9 @@ export class SessionStore {
     }
     if (patch.rootDir !== undefined) {
       state.session.rootDir = patch.rootDir;
+    }
+    if (patch.mode !== undefined) {
+      state.session.mode = patch.mode;
     }
 
     const nextProviderSessionId = state.session.providerSessionId;

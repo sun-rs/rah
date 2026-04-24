@@ -5,6 +5,12 @@ export const REHYDRATED_CAPABILITIES = {
   steerInput: false,
   queuedInput: false,
   renameSession: false,
+  actions: {
+    info: true,
+    archive: false,
+    delete: true,
+    rename: "local",
+  },
   modelSwitch: false,
   planMode: false,
   subagents: false,

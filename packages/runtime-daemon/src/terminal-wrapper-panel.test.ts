@@ -6,6 +6,7 @@ import {
   enterAlternateScreen,
   leaveAlternateScreen,
   renderTerminalWrapperPanel,
+  restoreInheritedTerminalModes,
 } from "./terminal-wrapper-panel";
 
 const originalWrite = process.stdout.write.bind(process.stdout);
@@ -37,7 +38,10 @@ function charDisplayWidth(value: string): number {
 }
 
 function stringDisplayWidth(value: string): number {
-  return [...value].reduce((total, char) => total + charDisplayWidth(char), 0);
+  return [...value.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")].reduce(
+    (total, char) => total + charDisplayWidth(char),
+    0,
+  );
 }
 
 function captureWrites(run: () => void): string[] {
@@ -91,6 +95,23 @@ describe("terminal wrapper panel helpers", () => {
     assert.equal(new Set(widths).size, 1);
   });
 
+  test("keeps panel borders aligned with colored status and footer", () => {
+    const panel = renderTerminalWrapperPanel({
+      title: "RAH Codex Remote Control",
+      status: "Thinking",
+      statusTone: "danger",
+      sessionId: "session-123",
+      prompt: "hello there",
+      footer: "Only after this turn: Esc works.",
+      footerTone: "danger",
+    });
+
+    assert.match(panel, /\u001b\[31mStatus: Thinking\u001b\[0m/);
+    assert.match(panel, /\u001b\[31mOnly after this turn: Esc works\.\u001b\[0m/);
+    const widths = panel.split("\n").map(stringDisplayWidth);
+    assert.equal(new Set(widths).size, 1);
+  });
+
   test("clamps very long prompt previews to three aligned lines", () => {
     Object.defineProperty(process.stdout, "columns", {
       configurable: true,
@@ -122,5 +143,15 @@ describe("terminal wrapper panel helpers", () => {
     });
 
     assert.deepEqual(writes, ["\u001b[?1049h", "\u001b[2J\u001b[H", "\u001b[?1049l"]);
+  });
+
+  test("restores terminal input modes after inherited tui exits", () => {
+    const writes = captureWrites(() => {
+      restoreInheritedTerminalModes();
+    });
+
+    assert.deepEqual(writes, [
+      "\u001b[<1u\u001b[?1004l\u001b[?2004l\u001b[?2026l\u001b[?25h\u001b[0m\r",
+    ]);
   });
 });

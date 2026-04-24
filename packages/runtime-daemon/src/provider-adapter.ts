@@ -29,11 +29,13 @@ import type { EventBus } from "./event-bus";
 import type { FrozenHistoryPageLoader } from "./history-snapshots";
 import type { PtyHub } from "./pty-hub";
 import type { SessionStore } from "./session-store";
+import type { WorkbenchStateStore } from "./workbench-state";
 
 export interface RuntimeServices {
   eventBus: EventBus;
   ptyHub: PtyHub;
   sessionStore: SessionStore;
+  workbenchState?: WorkbenchStateStore;
 }
 
 export interface StartDebugScenarioRequest {
@@ -50,6 +52,10 @@ export interface ProviderAdapter {
   renameSession?(
     sessionId: string,
     title: string,
+  ): SessionSummary | Promise<SessionSummary>;
+  setSessionMode?(
+    sessionId: string,
+    modeId: string,
   ): SessionSummary | Promise<SessionSummary>;
   sendInput(sessionId: string, request: SessionInputRequest): void;
   closeSession?(sessionId: string, request: CloseSessionRequest): Promise<void> | void;
