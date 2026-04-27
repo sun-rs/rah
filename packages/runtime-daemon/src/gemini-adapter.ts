@@ -8,8 +8,10 @@ import type {
   GitHunkActionResponse,
   GitStatusResponse,
   InterruptSessionRequest,
+  ProviderModelCatalog,
   ResumeSessionRequest,
   ResumeSessionResponse,
+  SetSessionModelRequest,
   SessionFileResponse,
   SessionHistoryPageResponse,
   SessionInputRequest,
@@ -42,6 +44,12 @@ import {
   prepareProviderSessionResume,
 } from "./provider-resume";
 import { geminiLaunchSpec, probeProviderDiagnostic } from "./provider-diagnostics";
+import {
+  buildGeminiModelCatalog,
+  GeminiModelCatalogCache,
+  normalizeGeminiModelId,
+  resolveGeminiRuntimeCapabilityState,
+} from "./gemini-model-catalog";
 import { buildGeminiModeState, isGeminiModeId } from "./session-mode-utils";
 import {
   applyWorkspaceGitFileActionAsync,
@@ -54,6 +62,12 @@ import {
 import { toSessionSummary } from "./session-store";
 import { movePathToTrash } from "./trash";
 
+const GEMINI_EVENT_SOURCE = {
+  provider: "gemini" as const,
+  channel: "structured_live" as const,
+  authority: "derived" as const,
+};
+
 export class GeminiAdapter implements ProviderAdapter {
   readonly id = "gemini";
   readonly providers: Array<"gemini"> = ["gemini"];
@@ -62,22 +76,41 @@ export class GeminiAdapter implements ProviderAdapter {
   private readonly liveSessions = new Map<string, LiveGeminiSession>();
   private readonly rehydratedSessionIds = new Set<string>();
   private storedSessionIndex = new Map<string, GeminiStoredSessionRecord>();
+  private readonly modelCatalog = new GeminiModelCatalogCache();
 
   constructor(services: RuntimeServices) {
     this.services = services;
   }
 
+  private reportAsyncLiveError(sessionId: string, detail: string): void {
+    this.services.eventBus.publish({
+      sessionId,
+      type: "runtime.status",
+      source: GEMINI_EVENT_SOURCE,
+      payload: {
+        status: "error",
+        detail,
+      },
+    });
+    if (this.services.sessionStore.getSession(sessionId)) {
+      this.services.sessionStore.setRuntimeState(sessionId, "failed");
+    }
+  }
+
   async startSession(request: StartSessionRequest): Promise<StartSessionResponse> {
+    const modelCatalog = this.modelCatalog.getCached() ?? buildGeminiModelCatalog();
     const response = startGeminiLiveSession({
       services: this.services,
       request,
+      modelCatalog,
     });
+    void this.modelCatalog.listModels({ cwd: request.cwd }).catch(() => undefined);
     this.liveSessions.set(response.liveSession.sessionId, response.liveSession);
     return { session: response.summary };
   }
 
   async resumeSession(request: ResumeSessionRequest): Promise<ResumeSessionResponse> {
-    prepareProviderSessionResume({
+    const preparedResume = prepareProviderSessionResume({
       services: this.services,
       provider: "gemini",
       providerSessionId: request.providerSessionId,
@@ -114,16 +147,27 @@ export class GeminiAdapter implements ProviderAdapter {
       });
     }
 
-    const response = resumeGeminiLiveSession({
-      services: this.services,
-      request: {
-        providerSessionId: request.providerSessionId,
-        ...(request.cwd ? { cwd: request.cwd } : {}),
-        ...(request.attach ? { attach: request.attach } : {}),
-      },
-    });
-    this.liveSessions.set(response.liveSession.sessionId, response.liveSession);
-    return { session: response.summary };
+    const modelCatalog = this.modelCatalog.getCached() ?? buildGeminiModelCatalog();
+    try {
+      const response = resumeGeminiLiveSession({
+        services: this.services,
+        request: {
+          providerSessionId: request.providerSessionId,
+          ...(request.cwd ? { cwd: request.cwd } : {}),
+          ...(request.attach ? { attach: request.attach } : {}),
+        },
+        modelCatalog,
+      });
+      const catalogCwd = request.cwd ?? record?.ref.cwd;
+      void this.modelCatalog
+        .listModels(catalogCwd ? { cwd: catalogCwd } : undefined)
+        .catch(() => undefined);
+      this.liveSessions.set(response.liveSession.sessionId, response.liveSession);
+      return { session: response.summary };
+    } catch (error) {
+      preparedResume.rollback();
+      throw error;
+    }
   }
 
   sendInput(sessionId: string, request: SessionInputRequest): void {
@@ -136,7 +180,55 @@ export class GeminiAdapter implements ProviderAdapter {
       liveSession: live,
       sessionId,
       request,
+    }).catch((error) => {
+      this.reportAsyncLiveError(
+        sessionId,
+        error instanceof Error ? error.message : String(error),
+      );
     });
+  }
+
+  async listModels(options?: { cwd?: string; forceRefresh?: boolean }): Promise<ProviderModelCatalog> {
+    return await this.modelCatalog.listModels(options);
+  }
+
+  async setSessionModel(
+    sessionId: string,
+    request: SetSessionModelRequest,
+  ): Promise<SessionSummary> {
+    const live = this.liveSessions.get(sessionId);
+    if (!live) {
+      throw new Error("Gemini model switching is only available for live sessions.");
+    }
+    const nextModelId = normalizeGeminiModelId(request.modelId);
+    if (!nextModelId) {
+      throw new Error("Session model is required.");
+    }
+    if (request.reasoningId !== undefined && request.reasoningId !== null) {
+      throw new Error("Gemini does not expose a RAH-controlled reasoning option.");
+    }
+    const catalog = await this.modelCatalog.listModels({ cwd: live.cwd });
+    const model = catalog.models.find((entry) => entry.id === nextModelId);
+    if (!model) {
+      throw new Error(`Unsupported Gemini model '${nextModelId}'.`);
+    }
+    live.model = nextModelId;
+    const runtimeCapabilityState = resolveGeminiRuntimeCapabilityState({
+      catalog,
+      modelId: nextModelId,
+    });
+    const nextState = this.services.sessionStore.patchManagedSession(sessionId, {
+      model: {
+        currentModelId: nextModelId,
+        availableModels: catalog.models,
+        mutable: true,
+        source: catalog.source,
+      },
+      ...(runtimeCapabilityState.modelProfile
+        ? { modelProfile: runtimeCapabilityState.modelProfile }
+        : {}),
+    });
+    return toSessionSummary(nextState);
   }
 
   async renameSession(sessionId: string, title: string): Promise<SessionSummary> {

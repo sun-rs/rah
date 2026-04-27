@@ -383,6 +383,64 @@ describe("translateCodexAppServerNotification", () => {
     ]);
   });
 
+  test("preserves markdown structure while stripping contextual fragments from live assistant messages", () => {
+    const state = createCodexAppServerTranslationState();
+    const markdown = "会涉及抽象。\n\n- AgentAdapter\n- EventModel\n\n```text\nCouncil\n```";
+    const delta = translateCodexAppServerNotification(
+      {
+        method: "item/agentMessage/delta",
+        params: {
+          turnId: "turn-1",
+          itemId: "assistant-1",
+          delta: markdown,
+        },
+      },
+      state,
+    );
+    const completed = translateCodexAppServerNotification(
+      {
+        method: "item/completed",
+        params: {
+          turnId: "turn-1",
+          item: {
+            type: "agentMessage",
+            id: "assistant-1",
+            text: `${markdown}\n<turn_aborted>hidden</turn_aborted>`,
+          },
+        },
+      },
+      state,
+    );
+
+    assert.deepEqual(delta.map((item) => item.activity), [
+      {
+        type: "message_part_delta",
+        part: {
+          messageId: "assistant-1",
+          partId: "assistant-1",
+          kind: "text",
+          delta: markdown,
+        },
+      },
+      {
+        type: "timeline_item",
+        item: { kind: "assistant_message", text: markdown, messageId: "assistant-1" },
+      },
+    ]);
+    assert.deepEqual(completed.map((item) => item.activity), [
+      {
+        type: "message_part_updated",
+        turnId: "turn-1",
+        part: {
+          messageId: "assistant-1",
+          partId: "assistant-1",
+          kind: "text",
+          text: markdown,
+        },
+      },
+    ]);
+  });
+
   test("deduplicates item start/completion transcript using app-server item state", () => {
     const state = createCodexAppServerTranslationState();
 

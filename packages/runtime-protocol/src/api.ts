@@ -1,10 +1,18 @@
 import type {
   AttachMode,
   AttachedClient,
+  CapabilityFreshness,
+  CapabilitySource,
   ClientKind,
   ControlLease,
   ManagedSession,
+  ModelCapabilityProfile,
   ProviderKind,
+  SessionConfigOption,
+  SessionConfigValue,
+  SessionModelDescriptor,
+  SessionModelSource,
+  SessionModeDescriptor,
   StoredSessionRef,
   Workbench,
 } from "./session";
@@ -118,6 +126,8 @@ export interface StartSessionRequest {
   cwd: string;
   title?: string;
   model?: string;
+  reasoningId?: string;
+  providerConfig?: Record<string, SessionConfigValue>;
   approvalPolicy?: ApprovalPolicy;
   sandbox?: string;
   command?: string;
@@ -177,6 +187,11 @@ export interface RenameSessionRequest {
 
 export interface SetSessionModeRequest {
   modeId: string;
+}
+
+export interface SetSessionModelRequest {
+  modelId: string;
+  reasoningId?: string | null;
 }
 
 export interface ClaimControlRequest {
@@ -385,6 +400,27 @@ export interface ProviderDiagnostic {
 
 export interface ListProvidersResponse {
   providers: ProviderDiagnostic[];
+}
+
+export interface ProviderModelCatalog {
+  provider: ProviderKind;
+  currentModelId?: string;
+  currentReasoningId?: string | null;
+  models: SessionModelDescriptor[];
+  fetchedAt: string;
+  source: SessionModelSource;
+  sourceDetail?: CapabilitySource;
+  freshness?: CapabilityFreshness;
+  revision?: string;
+  modelsExact?: boolean;
+  optionsExact?: boolean;
+  modes?: SessionModeDescriptor[];
+  configOptions?: SessionConfigOption[];
+  modelProfiles?: ModelCapabilityProfile[];
+}
+
+export interface ListProviderModelsResponse {
+  catalog: ProviderModelCatalog;
 }
 
 export interface DebugScenarioDescriptor {

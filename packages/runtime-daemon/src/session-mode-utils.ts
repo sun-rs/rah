@@ -75,6 +75,21 @@ const KIMI_MODE_DESCRIPTORS: SessionModeDescriptor[] = [
   },
 ];
 
+const OPENCODE_MODE_DESCRIPTORS: SessionModeDescriptor[] = [
+  {
+    id: "build",
+    label: "Build",
+    description: "Default OpenCode agent mode.",
+    hotSwitch: true,
+  },
+  {
+    id: "plan",
+    label: "Plan",
+    description: "OpenCode plan mode. Edit tools are disabled by the provider.",
+    hotSwitch: true,
+  },
+];
+
 const CODEX_MODE_DESCRIPTORS: SessionModeDescriptor[] = [
   {
     id: "on-request/read-only",
@@ -180,6 +195,23 @@ export function buildKimiModeState(args: {
 
 export function isKimiModeId(modeId: string): boolean {
   return KIMI_MODE_DESCRIPTORS.some((mode) => mode.id === modeId);
+}
+
+export function buildOpenCodeModeState(args: {
+  currentModeId: string;
+  mutable: boolean;
+  source?: SessionModeState["source"];
+}): SessionModeState {
+  return buildModeState({
+    currentModeId: args.currentModeId,
+    availableModes: OPENCODE_MODE_DESCRIPTORS,
+    mutable: args.mutable,
+    source: args.source ?? "native",
+  });
+}
+
+export function isOpenCodeModeId(modeId: string): boolean {
+  return OPENCODE_MODE_DESCRIPTORS.some((mode) => mode.id === modeId);
 }
 
 function codexModeDescriptor(modeId: string): SessionModeDescriptor {

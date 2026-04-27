@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { validateProviderModelCatalog } from "@rah/runtime-protocol";
 import { CodexAdapter } from "./codex-adapter";
 import { DebugAdapter } from "./debug-adapter";
 import { EventBus } from "./event-bus";
@@ -173,6 +174,7 @@ rl.on('line', (line) => {
     assert.equal(resumed.session.session.capabilities.resumeByProvider, true);
     assert.equal(resumed.session.session.capabilities.listProviderSessions, true);
     assert.equal(resumed.session.session.capabilities.queuedInput, false);
+    assert.equal(resumed.session.session.capabilities.actions.archive, false);
     assert.equal(resumed.session.session.capabilities.modelSwitch, false);
     assert.equal(resumed.session.session.capabilities.planMode, false);
     assert.equal(resumed.session.session.capabilities.subagents, false);
@@ -249,6 +251,145 @@ rl.on('line', (line) => {
     const freshAdapter = new CodexAdapter(freshServices);
     assert.equal(freshAdapter.listStoredSessions()[0]?.title, "Renamed Codex Session");
 
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
+  test("lists Codex models and applies model plus effort to the next turn", async () => {
+    const cwd = mkdtempSync(path.join(os.tmpdir(), "rah-codex-model-cwd-"));
+    writeMockCodexServer(`
+const readline = require('node:readline');
+const rl = readline.createInterface({ input: process.stdin });
+function send(msg) { process.stdout.write(JSON.stringify(msg) + "\\n"); }
+rl.on('line', (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method === 'initialize') {
+    send({ id: msg.id, result: {} });
+    return;
+  }
+  if (msg.method === 'model/list') {
+    send({ id: msg.id, result: { data: [
+      {
+        id: 'gpt-alpha',
+        model: 'gpt-alpha',
+        displayName: 'GPT Alpha',
+        description: 'Alpha model',
+        hidden: false,
+        supportedReasoningEfforts: [
+          { reasoningEffort: 'low', description: 'Fast' },
+          { reasoningEffort: 'high', description: 'Deep' }
+        ],
+        defaultReasoningEffort: 'high',
+        isDefault: true
+      },
+      {
+        id: 'gpt-beta',
+        model: 'gpt-beta',
+        displayName: 'GPT Beta',
+        hidden: false,
+        supportedReasoningEfforts: [
+          { reasoningEffort: 'low', description: 'Fast' }
+        ],
+        defaultReasoningEffort: 'low',
+        isDefault: false
+      }
+    ], nextCursor: null } });
+    return;
+  }
+  if (msg.method === 'collaborationMode/list') {
+    send({ id: msg.id, result: { data: [] } });
+    return;
+  }
+  if (msg.method === 'thread/start') {
+    send({ id: msg.id, result: { thread: { id: 'thread-model-1' }, model: 'gpt-alpha', reasoningEffort: 'high' } });
+    return;
+  }
+  if (msg.method === 'turn/start') {
+    send({ id: msg.id, result: { turn: { id: 'turn-model-1' } } });
+    send({ method: 'turn/started', params: { turn: { id: 'turn-model-1' } } });
+    send({
+      method: 'item/agentMessage/delta',
+      params: { itemId: 'assistant-model-1', delta: 'model=' + msg.params.model + ';effort=' + msg.params.effort }
+    });
+    send({ method: 'turn/completed', params: { turn: { id: 'turn-model-1', status: 'completed' } } });
+    return;
+  }
+  send({ id: msg.id, result: {} });
+});
+`);
+
+    const services = {
+      eventBus: new EventBus(),
+      ptyHub: new PtyHub(),
+      sessionStore: new SessionStore(),
+    };
+    const adapter = new CodexAdapter(services);
+    const catalog = await adapter.listModels();
+    assert.equal(catalog.models.length, 2);
+    assert.equal(catalog.models[0]?.id, "gpt-alpha");
+    assert.equal(catalog.models[0]?.defaultReasoningId, "high");
+    assert.equal(catalog.sourceDetail, "native_online");
+    assert.equal(catalog.freshness, "authoritative");
+    assert.equal(catalog.modelsExact, true);
+    assert.equal(catalog.optionsExact, true);
+    assert.ok(Array.isArray(catalog.modelProfiles));
+    assert.equal(catalog.modelProfiles?.[0]?.modelId, "gpt-alpha");
+    assert.equal(
+      catalog.modelProfiles?.[0]?.configOptions[0]?.id,
+      "model_reasoning_effort",
+    );
+    assert.equal(
+      validateProviderModelCatalog(catalog).ok,
+      true,
+    );
+
+    const started = await adapter.startSession({
+      provider: "codex",
+      cwd,
+      title: "model test",
+      attach: {
+        client: {
+          id: "web-client",
+          kind: "web",
+          connectionId: "web-client",
+        },
+        mode: "interactive",
+        claimControl: true,
+      },
+    });
+    assert.equal(started.session.session.capabilities.modelSwitch, true);
+    assert.equal(started.session.session.model?.currentModelId, "gpt-alpha");
+    assert.equal(started.session.session.model?.currentReasoningId, "high");
+    assert.equal(started.session.session.model?.availableModels.length, 2);
+    assert.equal(started.session.session.modelProfile?.modelId, "gpt-alpha");
+    assert.equal(
+      started.session.session.config?.values.model_reasoning_effort,
+      "high",
+    );
+
+    const updated = await adapter.setSessionModel?.(started.session.session.id, {
+      modelId: "gpt-beta",
+      reasoningId: "low",
+    });
+    assert.equal(updated?.session.model?.currentModelId, "gpt-beta");
+    assert.equal(updated?.session.model?.currentReasoningId, "low");
+    assert.equal(updated?.session.modelProfile?.modelId, "gpt-beta");
+    assert.equal(updated?.session.config?.values.model_reasoning_effort, "low");
+
+    adapter.sendInput(started.session.session.id, {
+      clientId: "web-user",
+      text: "use selected model",
+    });
+
+    await waitFor(() =>
+      services.eventBus.list({ sessionIds: [started.session.session.id] }).some(
+        (event) =>
+          event.type === "timeline.item.added" &&
+          event.payload.item.kind === "assistant_message" &&
+          event.payload.item.text.includes("model=gpt-beta;effort=low"),
+      ),
+    );
+
+    await adapter.shutdown?.();
     rmSync(cwd, { recursive: true, force: true });
   });
 
@@ -672,7 +813,8 @@ rl.on('line', (line) => {
     assert.equal(resumed.session.session.capabilities.resumeByProvider, true);
     assert.equal(resumed.session.session.capabilities.listProviderSessions, true);
     assert.equal(resumed.session.session.capabilities.queuedInput, false);
-    assert.equal(resumed.session.session.capabilities.modelSwitch, false);
+    assert.equal(resumed.session.session.capabilities.actions.archive, true);
+    assert.equal(resumed.session.session.capabilities.modelSwitch, true);
     assert.equal(resumed.session.session.capabilities.planMode, false);
     assert.equal(resumed.session.session.capabilities.subagents, false);
 

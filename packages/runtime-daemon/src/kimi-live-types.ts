@@ -63,6 +63,7 @@ export type LiveKimiSession = {
   providerSessionId: string;
   cwd: string;
   model?: string;
+  reasoningId?: string | null;
   approvalMode: string;
   planMode: boolean;
   client: KimiJsonRpcClient;

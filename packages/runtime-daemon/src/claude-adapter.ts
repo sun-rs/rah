@@ -9,8 +9,10 @@ import type {
   GitStatusResponse,
   InterruptSessionRequest,
   PermissionResponseRequest,
+  ProviderModelCatalog,
   ResumeSessionRequest,
   ResumeSessionResponse,
+  SetSessionModelRequest,
   SessionFileResponse,
   SessionHistoryPageResponse,
   SessionInputRequest,
@@ -48,6 +50,12 @@ import {
 } from "./provider-resume";
 import { claudeLaunchSpec, probeProviderDiagnostic } from "./provider-diagnostics";
 import {
+  ClaudeModelCatalogCache,
+  resolveClaudeEffortValue,
+  resolveClaudeRuntimeCapabilityState,
+  resolveClaudeRuntimeModelId,
+} from "./claude-model-catalog";
+import {
   applyWorkspaceGitFileActionAsync,
   applyWorkspaceGitHunkActionAsync,
   getWorkspaceGitDiffAsync,
@@ -79,6 +87,7 @@ export class ClaudeAdapter implements ProviderAdapter {
   private readonly permissionModeByProviderSessionId = new Map<string, LiveClaudeSession["permissionMode"]>();
   private storedSessionIndex = new Map<string, ClaudeStoredSessionRecord>();
   private readonly queryFactory: ClaudeAdapterOptions["queryFactory"];
+  private readonly modelCatalog = new ClaudeModelCatalogCache();
 
   constructor(services: RuntimeServices, options: ClaudeAdapterOptions = {}) {
     this.services = services;
@@ -115,7 +124,7 @@ export class ClaudeAdapter implements ProviderAdapter {
   }
 
   async resumeSession(request: ResumeSessionRequest): Promise<ResumeSessionResponse> {
-    prepareProviderSessionResume({
+    const preparedResume = prepareProviderSessionResume({
       services: this.services,
       provider: "claude",
       providerSessionId: request.providerSessionId,
@@ -164,17 +173,22 @@ export class ClaudeAdapter implements ProviderAdapter {
       });
     }
 
-    const response = await resumeClaudeLiveSession({
-      services: this.services,
-      providerSessionId: request.providerSessionId,
-      cwd: request.cwd ?? record?.ref.cwd ?? process.cwd(),
-      permissionMode:
-        this.permissionModeByProviderSessionId.get(request.providerSessionId) ?? "default",
-      ...(request.attach ? { attach: request.attach } : {}),
-      ...(this.queryFactory ? { queryFactory: this.queryFactory } : {}),
-    });
-    this.liveSessions.set(response.liveSession.sessionId, response.liveSession);
-    return { session: response.summary };
+    try {
+      const response = await resumeClaudeLiveSession({
+        services: this.services,
+        providerSessionId: request.providerSessionId,
+        cwd: request.cwd ?? record?.ref.cwd ?? process.cwd(),
+        permissionMode:
+          this.permissionModeByProviderSessionId.get(request.providerSessionId) ?? "default",
+        ...(request.attach ? { attach: request.attach } : {}),
+        ...(this.queryFactory ? { queryFactory: this.queryFactory } : {}),
+      });
+      this.liveSessions.set(response.liveSession.sessionId, response.liveSession);
+      return { session: response.summary };
+    } catch (error) {
+      preparedResume.rollback();
+      throw error;
+    }
   }
 
   sendInput(sessionId: string, request: SessionInputRequest): void {
@@ -192,6 +206,79 @@ export class ClaudeAdapter implements ProviderAdapter {
         error instanceof Error ? error.message : String(error),
       );
     });
+  }
+
+  async listModels(options?: { cwd?: string; forceRefresh?: boolean }): Promise<ProviderModelCatalog> {
+    return await this.modelCatalog.listModels(options);
+  }
+
+  async setSessionModel(
+    sessionId: string,
+    request: SetSessionModelRequest,
+  ): Promise<SessionSummary> {
+    const live = this.liveSessions.get(sessionId);
+    if (!live) {
+      throw new Error("Claude model switching is only available for live sessions.");
+    }
+    const nextModelId = request.modelId.trim();
+    if (!nextModelId) {
+      throw new Error("Session model is required.");
+    }
+    const catalog = await this.modelCatalog.listModels({ cwd: live.cwd });
+    const model = catalog.models.find((entry) => entry.id === nextModelId);
+    if (!model) {
+      throw new Error(`Unsupported Claude model '${nextModelId}'.`);
+    }
+    const effortOptions = model.reasoningOptions ?? [];
+    const requestedEffort =
+      request.reasoningId === null
+        ? undefined
+        : resolveClaudeEffortValue(request.reasoningId ?? model.defaultReasoningId);
+    if (
+      requestedEffort !== undefined &&
+      effortOptions.length > 0 &&
+      !effortOptions.some((option) => option.id === String(requestedEffort))
+    ) {
+      throw new Error(`Unsupported Claude effort option '${requestedEffort}'.`);
+    }
+
+    const runtimeModelId = resolveClaudeRuntimeModelId(model);
+    if (runtimeModelId) {
+      live.model = runtimeModelId;
+    } else {
+      delete live.model;
+    }
+    if (requestedEffort !== undefined && effortOptions.length > 0) {
+      live.effort = requestedEffort as LiveClaudeSession["effort"];
+    } else {
+      delete live.effort;
+    }
+    if (live.activeTurn?.query?.setModel) {
+      await live.activeTurn.query.setModel(runtimeModelId);
+    }
+
+    const runtimeCapabilityState = resolveClaudeRuntimeCapabilityState({
+      catalog,
+      modelId: nextModelId,
+      effort: live.effort,
+    });
+    const nextState = this.services.sessionStore.patchManagedSession(sessionId, {
+      model: {
+        currentModelId: nextModelId,
+        currentReasoningId: live.effort ?? null,
+        availableModels: catalog.models,
+        mutable: true,
+        source: catalog.source,
+      },
+      ...(runtimeCapabilityState.modelProfile
+        ? { modelProfile: runtimeCapabilityState.modelProfile }
+        : {}),
+      config: runtimeCapabilityState.config ?? {
+        values: {},
+        source: "runtime_session",
+      },
+    });
+    return toSessionSummary(nextState);
   }
 
   renameSession(sessionId: string, title: string): SessionSummary {

@@ -7,6 +7,7 @@ import type {
   ContextUsage,
   InterruptSessionRequest,
   ManagedSession,
+  ProviderModelCatalog,
   SessionInputRequest,
   StartSessionRequest,
 } from "@rah/runtime-protocol";
@@ -16,6 +17,12 @@ import {
   findGeminiStoredSessionRecord,
   isGeminiStoredSessionRecordResumable,
 } from "./gemini-session-files";
+import {
+  buildGeminiModelCatalog,
+  normalizeGeminiModelId,
+  resolveGeminiRuntimeCapabilityState,
+} from "./gemini-model-catalog";
+import { resolveConfiguredBinary } from "./provider-binary-utils";
 import { buildGeminiModeState } from "./session-mode-utils";
 import { toSessionSummary } from "./session-store";
 
@@ -24,6 +31,7 @@ export type LiveGeminiTurn = {
   turnId: string;
   aborted: boolean;
   completed: boolean;
+  stopTimers: NodeJS.Timeout[];
   toolCalls: Map<
     string,
     {
@@ -53,6 +61,8 @@ const SESSION_SOURCE = {
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const GEMINI_STOP_TERM_DELAY_MS = 800;
+const GEMINI_STOP_KILL_DELAY_MS = 2_000;
 
 function classifyGeminiToolFamily(name: string) {
   const normalized = name.toLowerCase();
@@ -130,7 +140,7 @@ function attachRequestedClient(
 }
 
 export async function resolveGeminiBinary(): Promise<string> {
-  return process.env.RAH_GEMINI_BINARY ?? "gemini";
+  return await resolveConfiguredBinary("RAH_GEMINI_BINARY", "gemini");
 }
 
 export function buildGeminiArgs(params: {
@@ -148,6 +158,60 @@ export function buildGeminiArgs(params: {
   }
   args.push("--prompt", params.prompt);
   return args;
+}
+
+export function isNoisyGeminiCliStderr(line: string): boolean {
+  const trimmed = line.trim();
+  return (
+    trimmed.startsWith("YOLO mode is enabled.") ||
+    trimmed.includes("[IDEClient] Failed to connect to IDE companion extension.") ||
+    trimmed.startsWith("Warning: Basic terminal detected ") ||
+    trimmed.startsWith("Warning: 256-color support not detected.")
+  );
+}
+
+function clearGeminiTurnStopTimers(turn: LiveGeminiTurn): void {
+  for (const timer of turn.stopTimers) {
+    clearTimeout(timer);
+  }
+  turn.stopTimers = [];
+}
+
+function signalGeminiTurnProcess(
+  child: ChildProcessWithoutNullStreams,
+  signal: NodeJS.Signals,
+): void {
+  if (child.exitCode !== null) {
+    return;
+  }
+  if (process.platform !== "win32" && child.pid !== undefined) {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {}
+  }
+  child.kill(signal);
+}
+
+function stopGeminiTurn(turn: LiveGeminiTurn): void {
+  turn.aborted = true;
+  if (turn.child.exitCode !== null) {
+    return;
+  }
+  clearGeminiTurnStopTimers(turn);
+  signalGeminiTurnProcess(turn.child, "SIGINT");
+  turn.stopTimers.push(
+    setTimeout(() => {
+      if (turn.child.exitCode === null) {
+        signalGeminiTurnProcess(turn.child, "SIGTERM");
+      }
+    }, GEMINI_STOP_TERM_DELAY_MS),
+    setTimeout(() => {
+      if (turn.child.exitCode === null) {
+        signalGeminiTurnProcess(turn.child, "SIGKILL");
+      }
+    }, GEMINI_STOP_KILL_DELAY_MS),
+  );
 }
 
 function resolveGeminiCliResumeArg(liveSession: LiveGeminiSession): string | undefined {
@@ -236,6 +300,7 @@ async function runGeminiTurn(params: {
     {
       cwd: liveSession.cwd,
       env: process.env,
+      detached: process.platform !== "win32",
       stdio: ["pipe", "pipe", "pipe"],
     },
   );
@@ -246,6 +311,7 @@ async function runGeminiTurn(params: {
     turnId,
     aborted: false,
     completed: false,
+    stopTimers: [],
     toolCalls: new Map(),
   };
   liveSession.activeTurn = activeTurn;
@@ -261,7 +327,7 @@ async function runGeminiTurn(params: {
   });
 
   stderr.on("line", (line) => {
-    if (!line.trim()) {
+    if (activeTurn.aborted || !line.trim() || isNoisyGeminiCliStderr(line)) {
       return;
     }
     applyActivity(
@@ -285,6 +351,7 @@ async function runGeminiTurn(params: {
     }
     finalized = true;
     activeTurn.completed = true;
+    clearGeminiTurnStopTimers(activeTurn);
     applyActivity(services, liveSession.sessionId, activity);
     applyActivity(services, liveSession.sessionId, { type: "session_state", state: "idle" });
     services.sessionStore.setActiveTurn(liveSession.sessionId, undefined);
@@ -315,6 +382,9 @@ async function runGeminiTurn(params: {
       return;
     }
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return;
+    }
+    if (activeTurn.aborted) {
       return;
     }
     const event = parsed as Record<string, unknown>;
@@ -485,6 +555,7 @@ async function runGeminiTurn(params: {
   });
 
   child.once("exit", (code, signal) => {
+    clearGeminiTurnStopTimers(activeTurn);
     if (finalized) {
       return;
     }
@@ -507,8 +578,15 @@ async function runGeminiTurn(params: {
 export function startGeminiLiveSession(params: {
   services: RuntimeServices;
   request: StartSessionRequest;
+  modelCatalog?: ProviderModelCatalog;
 }) {
   const { services, request } = params;
+  const modelCatalog = params.modelCatalog ?? buildGeminiModelCatalog();
+  const currentModelId = normalizeGeminiModelId(request.model) ?? modelCatalog.currentModelId ?? null;
+  const runtimeCapabilityState = resolveGeminiRuntimeCapabilityState({
+    catalog: modelCatalog,
+    modelId: currentModelId,
+  });
   const state = services.sessionStore.createManagedSession({
     provider: "gemini",
     launchSource: "web",
@@ -520,6 +598,19 @@ export function startGeminiLiveSession(params: {
       currentModeId: request.approvalPolicy ?? "yolo",
       mutable: true,
     }),
+    ...(currentModelId || modelCatalog.models.length > 0
+      ? {
+          model: {
+            currentModelId,
+            availableModels: modelCatalog.models,
+            mutable: true,
+            source: modelCatalog.source,
+          },
+        }
+      : {}),
+    ...(runtimeCapabilityState.modelProfile
+      ? { modelProfile: runtimeCapabilityState.modelProfile }
+      : {}),
     capabilities: {
       livePermissions: false,
       listProviderSessions: false,
@@ -531,6 +622,7 @@ export function startGeminiLiveSession(params: {
         rename: "local",
       },
       steerInput: true,
+      modelSwitch: true,
     },
   });
   services.sessionStore.setRuntimeState(state.session.id, "idle");
@@ -544,7 +636,7 @@ export function startGeminiLiveSession(params: {
   const liveSession: LiveGeminiSession = {
     sessionId: state.session.id,
     cwd: request.cwd,
-    ...(request.model ? { model: request.model } : {}),
+    ...(request.model && currentModelId ? { model: currentModelId } : {}),
     approvalMode: request.approvalPolicy ?? "yolo",
   };
   return {
@@ -562,9 +654,16 @@ export function resumeGeminiLiveSession(params: {
     approvalPolicy?: string;
     attach?: AttachSessionRequest;
   };
+  modelCatalog?: ProviderModelCatalog;
 }) {
   const { services, request } = params;
   const cwd = request.cwd ?? process.cwd();
+  const modelCatalog = params.modelCatalog ?? buildGeminiModelCatalog();
+  const currentModelId = normalizeGeminiModelId(request.model) ?? modelCatalog.currentModelId ?? null;
+  const runtimeCapabilityState = resolveGeminiRuntimeCapabilityState({
+    catalog: modelCatalog,
+    modelId: currentModelId,
+  });
   const state = services.sessionStore.createManagedSession({
     provider: "gemini",
     providerSessionId: request.providerSessionId,
@@ -575,6 +674,19 @@ export function resumeGeminiLiveSession(params: {
       currentModeId: request.approvalPolicy ?? "yolo",
       mutable: true,
     }),
+    ...(currentModelId || modelCatalog.models.length > 0
+      ? {
+          model: {
+            currentModelId,
+            availableModels: modelCatalog.models,
+            mutable: true,
+            source: modelCatalog.source,
+          },
+        }
+      : {}),
+    ...(runtimeCapabilityState.modelProfile
+      ? { modelProfile: runtimeCapabilityState.modelProfile }
+      : {}),
     capabilities: {
       livePermissions: false,
       listProviderSessions: false,
@@ -586,6 +698,7 @@ export function resumeGeminiLiveSession(params: {
         rename: "local",
       },
       steerInput: true,
+      modelSwitch: true,
     },
   });
   services.sessionStore.setRuntimeState(state.session.id, "idle");
@@ -598,7 +711,7 @@ export function resumeGeminiLiveSession(params: {
   const liveSession: LiveGeminiSession = {
     sessionId: state.session.id,
     cwd,
-    ...(request.model ? { model: request.model } : {}),
+    ...(request.model && currentModelId ? { model: currentModelId } : {}),
     approvalMode: request.approvalPolicy ?? "yolo",
     providerSessionId: request.providerSessionId,
   };
@@ -632,9 +745,8 @@ export function interruptGeminiLiveSession(params: {
       `Client ${request.clientId} does not hold input control for ${liveSession.sessionId}.`,
     );
   }
-  liveSession.activeTurn?.child.kill("SIGINT");
   if (liveSession.activeTurn) {
-    liveSession.activeTurn.aborted = true;
+    stopGeminiTurn(liveSession.activeTurn);
   }
   const state = services.sessionStore.getSession(liveSession.sessionId);
   if (!state) {
@@ -648,7 +760,6 @@ export async function closeGeminiLiveSession(
   _request?: CloseSessionRequest,
 ) {
   if (liveSession.activeTurn) {
-    liveSession.activeTurn.aborted = true;
-    liveSession.activeTurn.child.kill("SIGTERM");
+    stopGeminiTurn(liveSession.activeTurn);
   }
 }

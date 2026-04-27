@@ -23,6 +23,25 @@ export type AttachMode = "observe" | "interactive";
 
 export type SessionRenameMode = "none" | "local" | "native";
 export type SessionModeSource = "native" | "local" | "external_locked";
+export type SessionModelSource = "native" | "static" | "fallback";
+export type CapabilitySource =
+  | "runtime_session"
+  | "native_online"
+  | "native_local"
+  | "cached_runtime"
+  | "static_builtin";
+export type CapabilityFreshness = "authoritative" | "provisional" | "stale";
+export type SessionReasoningOptionKind =
+  | "reasoning_effort"
+  | "thinking"
+  | "model_variant";
+export type SessionConfigOptionKind = "select" | "boolean" | "number" | "string";
+export type SessionConfigOptionScope = "provider" | "session" | "model";
+export type SessionConfigOptionApplyTiming =
+  | "immediate"
+  | "next_turn"
+  | "restart_required";
+export type SessionConfigValue = string | number | boolean | null;
 
 export interface SessionModeDescriptor {
   id: string;
@@ -36,6 +55,89 @@ export interface SessionModeState {
   availableModes: SessionModeDescriptor[];
   mutable: boolean;
   source: SessionModeSource;
+}
+
+export interface SessionReasoningOption {
+  id: string;
+  label: string;
+  description?: string;
+  kind: SessionReasoningOptionKind;
+}
+
+export interface SessionConfigOptionChoice {
+  id: string;
+  label: string;
+  description?: string;
+}
+
+export interface SessionConfigOptionConstraints {
+  min?: number;
+  max?: number;
+  step?: number;
+}
+
+export interface SessionConfigOptionAvailability {
+  modelIds?: string[];
+  modeIds?: string[];
+  capabilityFlags?: string[];
+}
+
+export interface SessionConfigOption {
+  id: string;
+  label: string;
+  description?: string;
+  kind: SessionConfigOptionKind;
+  scope: SessionConfigOptionScope;
+  source: CapabilitySource;
+  mutable: boolean;
+  applyTiming: SessionConfigOptionApplyTiming;
+  currentValue?: SessionConfigValue;
+  defaultValue?: SessionConfigValue;
+  options?: SessionConfigOptionChoice[];
+  constraints?: SessionConfigOptionConstraints;
+  availability?: SessionConfigOptionAvailability;
+  backendKey?: string;
+}
+
+export interface ModelCapabilityTraits {
+  supportsThinking?: boolean;
+  supportsAdaptiveThinking?: boolean;
+  supportsEffort?: boolean;
+  supportsThinkingBudget?: boolean;
+  supportsThinkingLevel?: boolean;
+  supportsReasoningVariant?: boolean;
+}
+
+export interface ModelCapabilityProfile {
+  modelId: string;
+  source: CapabilitySource;
+  freshness: CapabilityFreshness;
+  traits?: ModelCapabilityTraits;
+  configOptions: SessionConfigOption[];
+}
+
+export interface SessionModelDescriptor {
+  id: string;
+  label: string;
+  description?: string;
+  hidden?: boolean;
+  isDefault?: boolean;
+  reasoningOptions?: SessionReasoningOption[];
+  defaultReasoningId?: string;
+}
+
+export interface SessionModelState {
+  currentModelId: string | null;
+  currentReasoningId?: string | null;
+  availableModels: SessionModelDescriptor[];
+  mutable: boolean;
+  source: SessionModelSource;
+}
+
+export interface SessionResolvedConfig {
+  values: Record<string, SessionConfigValue>;
+  source: CapabilitySource | "fallback";
+  revision?: string;
 }
 
 export interface SessionActionCapabilities {
@@ -83,6 +185,9 @@ export interface ManagedSession {
   preview?: string;
   capabilities: SessionCapabilities;
   mode?: SessionModeState;
+  model?: SessionModelState;
+  config?: SessionResolvedConfig;
+  modelProfile?: ModelCapabilityProfile;
   createdAt: string;
   updatedAt: string;
 }

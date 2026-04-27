@@ -1,4 +1,8 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 export interface NativeTerminalStartOptions {
   cwd: string;
@@ -34,6 +38,50 @@ export class NativeTerminalProcess {
     });
   }
 
+  private async childTreePids(): Promise<number[]> {
+    const rootPid = this.child.pid;
+    if (rootPid === undefined || process.platform === "win32") {
+      return [];
+    }
+    try {
+      const { stdout } = await execFileAsync("ps", ["-axo", "pid=,ppid="], {
+        maxBuffer: 1024 * 1024,
+      });
+      const childrenByParent = new Map<number, number[]>();
+      for (const line of stdout.split("\n")) {
+        const [pidRaw, ppidRaw] = line.trim().split(/\s+/);
+        const pid = Number(pidRaw);
+        const ppid = Number(ppidRaw);
+        if (!Number.isInteger(pid) || !Number.isInteger(ppid)) {
+          continue;
+        }
+        const children = childrenByParent.get(ppid) ?? [];
+        children.push(pid);
+        childrenByParent.set(ppid, children);
+      }
+      const result: number[] = [];
+      const pending = [...(childrenByParent.get(rootPid) ?? [])];
+      while (pending.length > 0) {
+        const pid = pending.shift()!;
+        result.push(pid);
+        pending.push(...(childrenByParent.get(pid) ?? []));
+      }
+      return result.reverse();
+    } catch {
+      return [];
+    }
+  }
+
+  private killPids(pids: number[], signal: NodeJS.Signals): void {
+    for (const pid of pids) {
+      try {
+        process.kill(pid, signal);
+      } catch {
+        // Process already exited.
+      }
+    }
+  }
+
   async close(signal: NodeJS.Signals = "SIGTERM"): Promise<void> {
     if (this.closed) {
       return;
@@ -42,9 +90,14 @@ export class NativeTerminalProcess {
     if (this.child.exitCode !== null || this.child.killed) {
       return;
     }
+    const childTree = await this.childTreePids();
+    this.killPids(childTree, signal);
     this.child.kill(signal);
     await new Promise<void>((resolve) => {
       const timeout = setTimeout(() => {
+        void this.childTreePids().then((lateChildTree) => {
+          this.killPids([...childTree, ...lateChildTree], "SIGKILL");
+        });
         if (this.child.exitCode === null) {
           this.child.kill("SIGKILL");
         }

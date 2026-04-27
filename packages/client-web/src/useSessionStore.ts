@@ -5,8 +5,10 @@ import type {
   DebugScenarioDescriptor,
   EventBatch,
   PermissionResponseRequest,
+  ProviderModelCatalog,
   RahEvent,
   ResumeSessionRequest,
+  SessionConfigValue,
   SessionSummary,
   StoredSessionRef,
 } from "@rah/runtime-protocol";
@@ -121,14 +123,23 @@ interface StartSessionOptions {
   cwd?: string;
   title?: string;
   model?: string;
+  reasoningId?: string;
+  providerConfig?: Record<string, SessionConfigValue>;
   approvalPolicy?: ApprovalPolicy;
   sandbox?: string;
+  modeId?: string;
   initialInput?: string;
 }
 
 interface ClaimHistorySessionOptions {
   confirmCreateMissingWorkspace?: (dir: string) => Promise<boolean>;
 }
+
+type ModelCatalogLoadState = {
+  catalog: ProviderModelCatalog | null;
+  loading: boolean;
+  error: string | null;
+};
 
 interface SessionState {
   clientId: string;
@@ -141,6 +152,7 @@ interface SessionState {
   hiddenWorkspaceDirs: Set<string>;
   workspaceVisibilityVersion: number;
   debugScenarios: DebugScenarioDescriptor[];
+  modelCatalogs: Partial<Record<ProviderChoice, ModelCatalogLoadState>>;
   selectedSessionId: string | null;
   workspaceDir: string;
   newSessionProvider: ProviderChoice;
@@ -163,6 +175,10 @@ interface SessionState {
   removeWorkspace: (dir: string) => Promise<void>;
   setSelectedSessionId: (id: string | null) => void;
   setNewSessionProvider: (provider: ProviderChoice) => void;
+  loadProviderModels: (
+    provider: ProviderChoice,
+    options?: { cwd?: string; forceRefresh?: boolean },
+  ) => Promise<void>;
   startSession: (options?: StartSessionOptions) => Promise<void>;
   startScenario: (scenario: DebugScenarioDescriptor) => Promise<void>;
   activateHistorySession: (ref: StoredSessionRef) => Promise<void>;
@@ -174,6 +190,11 @@ interface SessionState {
   closeSession: (sessionId: string) => Promise<void>;
   renameSession: (sessionId: string, title: string) => Promise<void>;
   setSessionMode: (sessionId: string, modeId: string) => Promise<void>;
+  setSessionModel: (
+    sessionId: string,
+    modelId: string,
+    reasoningId?: string | null,
+  ) => Promise<void>;
   claimHistorySession: (
     sessionId: string,
     options?: ClaimHistorySessionOptions & { modeId?: string },
@@ -195,6 +216,13 @@ interface SessionState {
 
 let lastEventSeq = 0;
 const HISTORY_PAGE_LIMIT = 250;
+const PRELOAD_MODEL_PROVIDERS = new Set<ProviderChoice>([
+  "codex",
+  "claude",
+  "gemini",
+  "kimi",
+  "opencode",
+]);
 
 function createProjectionReplayHandling() {
   return {
@@ -419,6 +447,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   hiddenWorkspaceDirs: new Set(),
   workspaceVisibilityVersion: 0,
   debugScenarios: [],
+  modelCatalogs: {},
   selectedSessionId: null,
   workspaceDir: "",
   newSessionProvider: "codex",
@@ -555,7 +584,67 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         void ensureSessionHistoryLoaded(id);
       }
     },
-  setNewSessionProvider: (provider) => set({ newSessionProvider: provider }),
+  setNewSessionProvider: (provider) => {
+    set({ newSessionProvider: provider });
+    if (PRELOAD_MODEL_PROVIDERS.has(provider)) {
+      void get().loadProviderModels(provider).catch(() => undefined);
+    }
+  },
+
+  loadProviderModels: async (provider, options) => {
+    if (!PRELOAD_MODEL_PROVIDERS.has(provider)) {
+      set((state) => ({
+        modelCatalogs: {
+          ...state.modelCatalogs,
+          [provider]: {
+            catalog: null,
+            loading: false,
+            error: null,
+          },
+        },
+      }));
+      return;
+    }
+    const current = get().modelCatalogs[provider];
+    if (current?.loading && !options?.forceRefresh) {
+      return;
+    }
+    set((state) => ({
+      modelCatalogs: {
+        ...state.modelCatalogs,
+        [provider]: {
+          catalog: current?.catalog ?? null,
+          loading: true,
+          error: null,
+        },
+      },
+    }));
+    try {
+      const catalog = await api.listProviderModels(provider, options);
+      set((state) => ({
+        modelCatalogs: {
+          ...state.modelCatalogs,
+          [provider]: {
+            catalog,
+            loading: false,
+            error: null,
+          },
+        },
+      }));
+    } catch (error) {
+      set((state) => ({
+        modelCatalogs: {
+          ...state.modelCatalogs,
+          [provider]: {
+            catalog: state.modelCatalogs[provider]?.catalog ?? null,
+            loading: false,
+            error: readErrorMessage(error),
+          },
+        },
+      }));
+      throw error;
+    }
+  },
 
   refreshWorkbenchState: async () => {
     try {
@@ -584,6 +673,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
     try {
       await get().refreshWorkbenchState();
+      void get().loadProviderModels("codex").catch(() => undefined);
       set({ isInitialLoaded: true });
       connectStoreTransport();
     } catch (error) {
@@ -684,6 +774,20 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       sessionId,
       modeId,
     });
+  },
+
+  setSessionModel: async (sessionId, modelId, reasoningId) => {
+    try {
+      const summary = await api.setSessionModel(sessionId, {
+        modelId,
+        ...(reasoningId !== undefined ? { reasoningId } : {}),
+      });
+      updateSessionSummary(summary);
+      set({ error: null });
+    } catch (error) {
+      set({ error: readErrorMessage(error) });
+      throw error;
+    }
   },
 
   claimControl: async (sessionId) => {

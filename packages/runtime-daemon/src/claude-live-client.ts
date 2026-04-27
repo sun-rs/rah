@@ -16,6 +16,13 @@ import {
   type StartSessionRequest,
 } from "@rah/runtime-protocol";
 import type { RuntimeServices } from "./provider-adapter";
+import {
+  buildClaudeModelCatalog,
+  resolveClaudeCatalogModelId,
+  resolveClaudeEffortValue,
+  resolveClaudeRuntimeModelId,
+  resolveClaudeRuntimeCapabilityState,
+} from "./claude-model-catalog";
 import { toSessionSummary } from "./session-store";
 import { buildClaudeModeState } from "./session-mode-utils";
 import {
@@ -46,6 +53,25 @@ export async function startClaudeLiveSession(args: {
   queryFactory?: typeof claudeQuery;
 }) {
   const permissionMode = approvalPolicyToPermissionMode(args.request.approvalPolicy);
+  const modelCatalog = await buildClaudeModelCatalog({ cwd: args.request.cwd });
+  const currentModelId =
+    resolveClaudeCatalogModelId(args.request.model, modelCatalog) ??
+    modelCatalog.currentModelId ??
+    null;
+  const effort = resolveClaudeEffortValue(
+    args.request.reasoningId ?? args.request.providerConfig?.effort,
+  ) as
+    | LiveClaudeSession["effort"]
+    | undefined;
+  const currentModel = modelCatalog.models.find((model) => model.id === currentModelId);
+  const runtimeModelId = currentModel && args.request.model
+    ? resolveClaudeRuntimeModelId(currentModel)
+    : undefined;
+  const runtimeCapabilityState = resolveClaudeRuntimeCapabilityState({
+    catalog: modelCatalog,
+    modelId: currentModelId,
+    effort,
+  });
   const state = args.services.sessionStore.createManagedSession({
     provider: "claude",
     launchSource: "web",
@@ -56,6 +82,21 @@ export async function startClaudeLiveSession(args: {
       currentModeId: permissionMode,
       mutable: true,
     }),
+    ...(currentModelId || modelCatalog.models.length > 0
+      ? {
+          model: {
+            currentModelId,
+            currentReasoningId: effort ?? null,
+            availableModels: modelCatalog.models,
+            mutable: true,
+            source: modelCatalog.source,
+          },
+        }
+      : {}),
+    ...(runtimeCapabilityState.modelProfile
+      ? { modelProfile: runtimeCapabilityState.modelProfile }
+      : {}),
+    ...(runtimeCapabilityState.config ? { config: runtimeCapabilityState.config } : {}),
     capabilities: {
       livePermissions: true,
       steerInput: true,
@@ -67,7 +108,7 @@ export async function startClaudeLiveSession(args: {
         delete: true,
         rename: "native",
       },
-      modelSwitch: false,
+      modelSwitch: true,
       planMode: false,
       subagents: false,
     },
@@ -78,7 +119,8 @@ export async function startClaudeLiveSession(args: {
   const liveSession: LiveClaudeSession = {
     sessionId: state.session.id,
     cwd: args.request.cwd,
-    ...(args.request.model ? { model: args.request.model } : {}),
+    ...(runtimeModelId ? { model: runtimeModelId } : {}),
+    ...(effort !== undefined && runtimeCapabilityState.config ? { effort } : {}),
     permissionMode,
     activeTurn: null,
     pendingPermissions: new Map(),
@@ -98,6 +140,13 @@ export async function resumeClaudeLiveSession(args: {
   attach?: AttachSessionRequest;
   queryFactory?: typeof claudeQuery;
 }) {
+  const modelCatalog = await buildClaudeModelCatalog({ cwd: args.cwd });
+  const currentModelId = modelCatalog.currentModelId ?? null;
+  const runtimeCapabilityState = resolveClaudeRuntimeCapabilityState({
+    catalog: modelCatalog,
+    modelId: currentModelId,
+    effort: undefined,
+  });
   const state = args.services.sessionStore.createManagedSession({
     provider: "claude",
     providerSessionId: args.providerSessionId,
@@ -108,6 +157,20 @@ export async function resumeClaudeLiveSession(args: {
       currentModeId: args.permissionMode ?? "default",
       mutable: true,
     }),
+    ...(currentModelId || modelCatalog.models.length > 0
+      ? {
+          model: {
+            currentModelId,
+            currentReasoningId: null,
+            availableModels: modelCatalog.models,
+            mutable: true,
+            source: modelCatalog.source,
+          },
+        }
+      : {}),
+    ...(runtimeCapabilityState.modelProfile
+      ? { modelProfile: runtimeCapabilityState.modelProfile }
+      : {}),
     capabilities: {
       livePermissions: true,
       steerInput: true,
@@ -115,11 +178,11 @@ export async function resumeClaudeLiveSession(args: {
       renameSession: true,
       actions: {
         info: true,
-        archive: false,
+        archive: true,
         delete: true,
         rename: "native",
       },
-      modelSwitch: false,
+      modelSwitch: true,
       planMode: false,
       subagents: false,
     },

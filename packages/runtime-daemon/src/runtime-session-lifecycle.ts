@@ -5,6 +5,7 @@ import type {
   CloseSessionRequest,
   DetachSessionRequest,
   ReleaseControlRequest,
+  SetSessionModelRequest,
   SessionSummary,
 } from "@rah/runtime-protocol";
 import type { HistorySnapshotStore } from "./history-snapshots";
@@ -145,6 +146,34 @@ export class RuntimeSessionLifecycle {
       throw new Error(`Provider ${state.session.provider} does not support mode switching.`);
     }
     return await adapter.setSessionMode(sessionId, nextModeId);
+  }
+
+  async setSessionModel(
+    sessionId: string,
+    request: SetSessionModelRequest,
+  ): Promise<SessionSummary> {
+    const nextModelId = request.modelId.trim();
+    if (!nextModelId) {
+      throw new Error("Session model is required.");
+    }
+    const state = this.deps.sessionStore.getSession(sessionId);
+    if (!state) {
+      throw new Error(`Unknown session ${sessionId}`);
+    }
+    if (!state.session.capabilities.modelSwitch) {
+      throw new Error("This session does not support model switching.");
+    }
+    if (state.session.model && !state.session.model.mutable) {
+      throw new Error("This session model is controlled outside RAH.");
+    }
+    const adapter = this.deps.requireSessionAdapter(sessionId);
+    if (!adapter.setSessionModel) {
+      throw new Error(`Provider ${state.session.provider} does not support model switching.`);
+    }
+    return await adapter.setSessionModel(sessionId, {
+      modelId: nextModelId,
+      ...(request.reasoningId !== undefined ? { reasoningId: request.reasoningId } : {}),
+    });
   }
 
   async closeSession(sessionId: string, request: CloseSessionRequest): Promise<void> {

@@ -176,6 +176,21 @@ function shouldApplySummaryMutation(current: SessionProjection, event: RahEvent)
   }
 }
 
+function summaryWithRuntimeState(
+  current: SessionProjection,
+  state: SessionProjection["summary"]["session"]["runtimeState"],
+  updatedAt: string,
+): SessionProjection["summary"] {
+  return {
+    ...current.summary,
+    session: {
+      ...current.summary.session,
+      runtimeState: state,
+      updatedAt,
+    },
+  };
+}
+
 function createTimelineEntry(
   entry: Omit<Extract<FeedEntry, { kind: "timeline" }>, "turnId">,
   turnId?: string,
@@ -346,12 +361,10 @@ function applyTimelineEvent(
 
   if (event.type === "timeline.item.added" && event.payload.item.kind === "user_message") {
     const incomingUserItem = event.payload.item;
-    const duplicateIndex = feed.findIndex(
-      (candidate) =>
-        candidate.kind === "timeline" &&
-        candidate.item.kind === "user_message" &&
-        candidate.item.text === incomingUserItem.text &&
-        (candidate.turnId === undefined || candidate.turnId === event.turnId),
+    const duplicateIndex = findDuplicateUserMessageIndex(
+      feed,
+      incomingUserItem.text,
+      event.turnId,
     );
     if (duplicateIndex >= 0) {
       const next = [...feed];
@@ -410,6 +423,35 @@ function applyTimelineEvent(
     }
   }
   return [...feed, entry];
+}
+
+function findDuplicateUserMessageIndex(
+  feed: FeedEntry[],
+  text: string,
+  turnId: string | undefined,
+): number {
+  for (let index = feed.length - 1; index >= 0; index--) {
+    const candidate = feed[index];
+    if (
+      candidate?.kind !== "timeline" ||
+      candidate.item.kind !== "user_message" ||
+      candidate.item.text !== text
+    ) {
+      continue;
+    }
+    if (
+      candidate.turnId === undefined ||
+      candidate.turnId === turnId ||
+      isTrailingUserMessageEcho(feed, index)
+    ) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function isTrailingUserMessageEcho(feed: FeedEntry[], index: number): boolean {
+  return feed.slice(index + 1).every((entry) => entry.kind === "runtime_status");
 }
 
 function hasTimelineText(
@@ -1072,6 +1114,12 @@ export function applyEventToProjection(
       ? current.summary
       : event.type === "session.started"
       ? { ...current.summary, session: event.payload.session }
+      : event.type === "turn.started"
+        ? summaryWithRuntimeState(current, "running", event.ts)
+        : event.type === "turn.completed" || event.type === "turn.canceled"
+          ? summaryWithRuntimeState(current, "idle", event.ts)
+          : event.type === "turn.failed"
+            ? summaryWithRuntimeState(current, "failed", event.ts)
       : event.type === "session.state.changed"
         ? {
             ...current.summary,

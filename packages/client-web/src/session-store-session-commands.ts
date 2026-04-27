@@ -233,6 +233,9 @@ export async function sendInputCommand(args: {
   sessionId: string;
   text: string;
 }) {
+  const previousProjection = args.get().projections.get(args.sessionId);
+  const previousRuntimeState = previousProjection?.summary.session.runtimeState;
+  const previousRuntimeStatus = previousProjection?.currentRuntimeStatus;
   try {
     args.set((state) => {
       const projection = state.projections.get(args.sessionId);
@@ -241,15 +244,22 @@ export async function sendInputCommand(args: {
       }
       const next = new Map(state.projections);
       const optimistic = appendOptimisticUserMessage(projection, args.text);
+      const now = new Date().toISOString();
       next.set(args.sessionId, {
         ...optimistic,
+        currentRuntimeStatus: "thinking",
         summary: {
           ...optimistic.summary,
+          session: {
+            ...optimistic.summary.session,
+            runtimeState: "running",
+            updatedAt: now,
+          },
           controlLease: {
             sessionId: optimistic.summary.session.id,
             holderClientId: state.clientId,
             holderKind: "web",
-            grantedAt: new Date().toISOString(),
+            grantedAt: now,
           },
         },
       });
@@ -261,7 +271,31 @@ export async function sendInputCommand(args: {
     });
     args.set({ error: null });
   } catch (error) {
-    args.set({ error: readErrorMessage(error) });
+    const message = readErrorMessage(error);
+    args.set((state) => {
+      const projection = state.projections.get(args.sessionId);
+      if (!projection) {
+        return { error: message };
+      }
+      const next = new Map(state.projections);
+      const restored: SessionProjection = {
+        ...projection,
+        summary: {
+          ...projection.summary,
+          session: {
+            ...projection.summary.session,
+            runtimeState: previousRuntimeState ?? projection.summary.session.runtimeState,
+          },
+        },
+      };
+      if (previousRuntimeStatus === undefined) {
+        delete restored.currentRuntimeStatus;
+      } else {
+        restored.currentRuntimeStatus = previousRuntimeStatus;
+      }
+      next.set(args.sessionId, restored);
+      return { projections: next, error: message };
+    });
     throw error;
   }
 }

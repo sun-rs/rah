@@ -4,9 +4,11 @@ import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writ
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { validateProviderModelCatalog } from "@rah/runtime-protocol";
 import { EventBus } from "./event-bus";
 import { GeminiAdapter } from "./gemini-adapter";
 import { loadCachedGeminiHistoryManifest } from "./gemini-history-cache";
+import { isNoisyGeminiCliStderr } from "./gemini-live-client";
 import {
   createGeminiStoredSessionFrozenHistoryPageLoader,
   findGeminiStoredSessionRecord,
@@ -46,6 +48,7 @@ describe("GeminiAdapter", () => {
   let previousRahHome: string | undefined;
   let previousBinary: string | undefined;
   let cwd: string;
+  let workbenchStores: WorkbenchStateStore[];
 
   beforeEach(() => {
     previousGeminiHome = process.env.GEMINI_CLI_HOME;
@@ -54,11 +57,13 @@ describe("GeminiAdapter", () => {
     tmpHome = mkdtempSync(path.join(os.tmpdir(), "rah-gemini-home-"));
     tmpRahHome = mkdtempSync(path.join(os.tmpdir(), "rah-gemini-rah-home-"));
     cwd = mkdtempSync(path.join(os.tmpdir(), "rah-gemini-cwd-"));
+    workbenchStores = [];
     process.env.GEMINI_CLI_HOME = tmpHome;
     process.env.RAH_HOME = tmpRahHome;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await Promise.all(workbenchStores.map((store) => store.flush()));
     if (previousGeminiHome === undefined) {
       delete process.env.GEMINI_CLI_HOME;
     } else {
@@ -80,11 +85,13 @@ describe("GeminiAdapter", () => {
   });
 
   function createServices() {
+    const workbenchState = new WorkbenchStateStore(path.join(tmpRahHome, "runtime-daemon"));
+    workbenchStores.push(workbenchState);
     return {
       eventBus: new EventBus(),
       ptyHub: new PtyHub(),
       sessionStore: new SessionStore(),
-      workbenchState: new WorkbenchStateStore(path.join(tmpRahHome, "runtime-daemon")),
+      workbenchState,
     };
   }
 
@@ -98,8 +105,36 @@ describe("GeminiAdapter", () => {
 const fs = require("node:fs");
 const args = process.argv.slice(2);
 const logPath = process.env.RAH_GEMINI_ARGS_LOG;
-if (logPath) {
+if (logPath && !args.includes("--acp")) {
   fs.appendFileSync(logPath, JSON.stringify(args) + "\\n");
+}
+if (args.includes("--acp")) {
+  process.stdin.setEncoding("utf8");
+  process.stdin.on("data", (chunk) => {
+    for (const line of chunk.split(/\\r?\\n/).filter(Boolean)) {
+      const request = JSON.parse(line);
+      if (request.method === "initialize") {
+        process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, result: { protocolVersion: 1 } }) + "\\n");
+      }
+      if (request.method === "session/new") {
+        process.stdout.write(JSON.stringify({
+          jsonrpc: "2.0",
+          id: request.id,
+          result: {
+            sessionId: "mock-acp-session",
+            models: {
+              currentModelId: "auto-gemini-3",
+              availableModels: [
+                { modelId: "auto-gemini-3", name: "Auto (Gemini 3)" },
+                { modelId: "gemini-2.5-pro", name: "gemini-2.5-pro" }
+              ]
+            }
+          }
+        }) + "\\n");
+      }
+    }
+  });
+  return;
 }
 const promptIndex = args.indexOf("--prompt");
 const prompt = promptIndex >= 0 ? args[promptIndex + 1] : "";
@@ -300,6 +335,65 @@ emit({ type: "result", timestamp: new Date().toISOString(), status: "success", s
     assert.equal(isGeminiStoredSessionRecordResumable(record), false);
   });
 
+  test("filters recurring Gemini CLI startup stderr noise", () => {
+    assert.equal(
+      isNoisyGeminiCliStderr(
+        "YOLO mode is enabled. All tool calls will be automatically approved.",
+      ),
+      true,
+    );
+    assert.equal(
+      isNoisyGeminiCliStderr(
+        "[ERROR] [IDEClient] Failed to connect to IDE companion extension. Please ensure the extension is running. To install the extension, run /ide install.",
+      ),
+      true,
+    );
+    assert.equal(
+      isNoisyGeminiCliStderr(
+        "Warning: Basic terminal detected (TERM=dumb). Visual rendering will be limited. For the best experience, use a terminal emulator with truecolor support.",
+      ),
+      true,
+    );
+    assert.equal(
+      isNoisyGeminiCliStderr(
+        "Warning: 256-color support not detected. Using a terminal with at least 256-color support is recommended for a better visual experience.",
+      ),
+      true,
+    );
+    assert.equal(isNoisyGeminiCliStderr("Actual Gemini error"), false);
+  });
+
+  test("lists Gemini models before connecting a live session", async () => {
+    process.env.RAH_GEMINI_BINARY = path.join(tmpHome, "missing-gemini");
+    const services = createServices();
+    const adapter = new GeminiAdapter(services);
+    const catalog = await adapter.listModels();
+
+    assert.equal(catalog.provider, "gemini");
+    assert.equal(catalog.source, "static");
+    assert.equal(catalog.currentModelId, "auto-gemini-3");
+    assert.equal(catalog.sourceDetail, "static_builtin");
+    assert.equal(catalog.freshness, "provisional");
+    assert.equal(catalog.modelsExact, false);
+    assert.equal(catalog.optionsExact, false);
+    assert.equal(validateProviderModelCatalog(catalog).ok, true);
+    assert.equal(catalog.modelProfiles?.find((profile) => profile.modelId === "auto-gemini-3")?.configOptions.length, 0);
+    assert.equal(catalog.modelProfiles?.find((profile) => profile.modelId === "gemini-3-flash-preview")?.configOptions.length, 0);
+    assert.deepEqual(
+      catalog.models.map((model) => model.id),
+      [
+        "auto-gemini-3",
+        "auto-gemini-2.5",
+        "gemini-3.1-pro-preview",
+        "gemini-3-flash-preview",
+        "gemini-3.1-flash-lite-preview",
+        "gemini-2.5-pro",
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-lite",
+      ],
+    );
+  });
+
   test("binds provider session id from init and resumes later turns with --resume", async () => {
     const { logPath } = writeMockGeminiBinary();
     const services = createServices();
@@ -318,6 +412,9 @@ emit({ type: "result", timestamp: new Date().toISOString(), status: "success", s
         claimControl: true,
       },
     });
+    assert.equal(started.session.session.model?.currentModelId, "auto-gemini-3");
+    assert.equal(started.session.session.model?.mutable, true);
+    assert.equal(started.session.session.model?.availableModels.length, 8);
 
     adapter.sendInput(started.session.session.id, {
       clientId: "web-1",
@@ -402,6 +499,51 @@ emit({ type: "result", timestamp: new Date().toISOString(), status: "success", s
     assert.equal(argsLog.length, 1);
     assert.ok(argsLog[0]?.includes("--approval-mode"));
     assert.ok(argsLog[0]?.includes("plan"));
+  });
+
+  test("switches Gemini model for subsequent turns", async () => {
+    const { logPath } = writeMockGeminiBinary();
+    const services = createServices();
+    const adapter = new GeminiAdapter(services);
+
+    const started = await adapter.startSession({
+      provider: "gemini",
+      cwd,
+      attach: {
+        client: {
+          id: "web-1",
+          kind: "web",
+          connectionId: "web-1",
+        },
+        mode: "interactive",
+        claimControl: true,
+      },
+    });
+    assert.equal(started.session.session.capabilities.modelSwitch, true);
+
+    const updated = await adapter.setSessionModel?.(started.session.session.id, {
+      modelId: "gemini-2.5-pro",
+    });
+    assert.equal(updated?.session.model?.currentModelId, "gemini-2.5-pro");
+    assert.equal(updated?.session.model?.mutable, true);
+    assert.equal(updated?.session.modelProfile?.modelId, "gemini-2.5-pro");
+
+    adapter.sendInput(started.session.session.id, {
+      clientId: "web-1",
+      text: "model prompt",
+    });
+
+    await waitFor(
+      () => services.sessionStore.getSession(started.session.session.id)?.session.runtimeState === "idle",
+    );
+
+    const argsLog = readFileSync(logPath, "utf8")
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as string[]);
+    assert.equal(argsLog.length, 1);
+    assert.ok(argsLog[0]?.includes("--model"));
+    assert.ok(argsLog[0]?.includes("gemini-2.5-pro"));
   });
 
   test("discovers stored sessions and rehydrates replay history", async () => {
@@ -653,6 +795,7 @@ emit({ type: "result", timestamp: new Date().toISOString(), status: "success", s
     });
 
     assert.equal(replay.session.session.capabilities.steerInput, false);
+    assert.equal(replay.session.session.capabilities.actions.archive, false);
 
     const resumed = await adapter.resumeSession({
       provider: "gemini",
@@ -672,6 +815,7 @@ emit({ type: "result", timestamp: new Date().toISOString(), status: "success", s
     });
 
     assert.equal(resumed.session.session.capabilities.steerInput, true);
+    assert.equal(resumed.session.session.capabilities.actions.archive, true);
     assert.equal(resumed.session.session.providerSessionId, "gemini-session-3");
 
     const state = services.sessionStore.getSession(resumed.session.session.id);

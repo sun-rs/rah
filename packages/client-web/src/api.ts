@@ -17,9 +17,12 @@ import type {
   GitStatusResponse,
   SessionFileSearchResponse,
   ListDebugScenariosResponse,
+  ListProviderModelsResponse,
   ListProvidersResponse,
   ListSessionsResponse,
   ProviderDiagnostic,
+  ProviderKind,
+  ProviderModelCatalog,
   PtyClientMessage,
   PtyServerMessage,
   PermissionResponseRequest,
@@ -27,6 +30,7 @@ import type {
   ResumeSessionRequest,
   ResumeSessionResponse,
   SetSessionModeRequest,
+  SetSessionModelRequest,
   SessionFileResponse,
   SessionInputRequest,
   SessionHistoryPageResponse,
@@ -250,6 +254,31 @@ export async function listProviders(options?: {
   return response.providers;
 }
 
+export async function listProviderModels(
+  provider: ProviderKind,
+  options?: {
+    cwd?: string;
+    forceRefresh?: boolean;
+    signal?: AbortSignal;
+  },
+): Promise<ProviderModelCatalog> {
+  const query = new URLSearchParams();
+  if (options?.cwd) {
+    query.set("cwd", options.cwd);
+  }
+  if (options?.forceRefresh) {
+    query.set("refresh", "1");
+  }
+  const suffix = query.size ? `?${query.toString()}` : "";
+  const response = await requestJson<ListProviderModelsResponse>(
+    `/api/providers/${provider}/models${suffix}`,
+    {
+      ...(options?.signal ? { signal: options.signal } : {}),
+    },
+  );
+  return response.catalog;
+}
+
 export async function readWorkbench(): Promise<WorkbenchResponse> {
   return requestJson<WorkbenchResponse>("/api/workbenches/default");
 }
@@ -387,6 +416,17 @@ export async function setSessionMode(
   request: SetSessionModeRequest,
 ): Promise<SessionSummary> {
   const response = await requestJson<{ session: SessionSummary }>(`/api/sessions/${sessionId}/mode`, {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
+  return response.session;
+}
+
+export async function setSessionModel(
+  sessionId: string,
+  request: SetSessionModelRequest,
+): Promise<SessionSummary> {
+  const response = await requestJson<{ session: SessionSummary }>(`/api/sessions/${sessionId}/model`, {
     method: "POST",
     body: JSON.stringify(request),
   });

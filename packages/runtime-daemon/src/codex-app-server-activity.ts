@@ -271,10 +271,9 @@ function isCodexInternalEnvironmentMessage(text: string): boolean {
 
 function stripCodexContextualFragments(text: string): string {
   return text
-    .replace(/<turn_aborted>[\s\S]*?<\/turn_aborted>/gi, " ")
-    .replace(/<user_shell_command>[\s\S]*?<\/user_shell_command>/gi, " ")
-    .replace(/<subagent_notification>[\s\S]*?<\/subagent_notification>/gi, " ")
-    .replace(/\s+/g, " ")
+    .replace(/<turn_aborted>[\s\S]*?<\/turn_aborted>/gi, "")
+    .replace(/<user_shell_command>[\s\S]*?<\/user_shell_command>/gi, "")
+    .replace(/<subagent_notification>[\s\S]*?<\/subagent_notification>/gi, "")
     .trim();
 }
 

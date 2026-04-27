@@ -490,4 +490,44 @@ describe("translateCodexRolloutLine", () => {
       },
     ]);
   });
+
+  test("preserves markdown structure while stripping contextual fragments from assistant messages", () => {
+    const state = createCodexRolloutTranslationState();
+    const markdown = "会涉及抽象。\n\n- AgentAdapter\n- EventModel\n\n```text\nCouncil\n```";
+
+    const activities = translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-24T06:11:00.000Z",
+        type: "response_item",
+        payload: {
+          id: "assistant-1",
+          type: "message",
+          role: "assistant",
+          content: [
+            {
+              type: "output_text",
+              text: `${markdown}\n<turn_aborted>hidden</turn_aborted>`,
+            },
+          ],
+        },
+      },
+      state,
+    );
+
+    assert.deepEqual(activities.map((item) => item.activity), [
+      {
+        type: "message_part_added",
+        part: {
+          messageId: "assistant-1",
+          partId: "assistant-1",
+          kind: "text",
+          text: markdown,
+        },
+      },
+      {
+        type: "timeline_item",
+        item: { kind: "assistant_message", text: markdown },
+      },
+    ]);
+  });
 });

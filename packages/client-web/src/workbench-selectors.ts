@@ -38,10 +38,14 @@ function sortSessionEntries(projections: Map<string, SessionProjection>): Sessio
   );
 }
 
+export function isSessionAttachedToClient(summary: SessionSummary, clientId: string): boolean {
+  return summary.attachedClients.some((client) => client.id === clientId);
+}
+
 function isControlledByClient(summary: SessionSummary, clientId: string): boolean {
   return (
     summary.controlLease.holderClientId === clientId &&
-    summary.attachedClients.some((client) => client.id === clientId)
+    isSessionAttachedToClient(summary, clientId)
   );
 }
 

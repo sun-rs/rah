@@ -18,11 +18,13 @@ import type {
   ListSessionsResponse,
   ProviderDiagnostic,
   ProviderKind,
+  ProviderModelCatalog,
   PermissionResponseRequest,
   RahEvent,
   ReleaseControlRequest,
   ResumeSessionRequest,
   ResumeSessionResponse,
+  SetSessionModelRequest,
   SessionFileSearchResponse,
   SessionHistoryPageResponse,
   SessionSummary,
@@ -43,6 +45,7 @@ import { EventBus } from "./event-bus";
 import { GeminiAdapter } from "./gemini-adapter";
 import { HistorySnapshotStore } from "./history-snapshots";
 import { KimiAdapter } from "./kimi-adapter";
+import { OpenCodeAdapter } from "./opencode-adapter";
 import type { ProviderActivity } from "./provider-activity";
 import type { ProviderAdapter } from "./provider-adapter";
 import { PtyHub } from "./pty-hub";
@@ -205,6 +208,12 @@ export class RuntimeEngine {
           sessionStore: this.sessionStore,
           workbenchState: this.workbenchState,
         }),
+        new OpenCodeAdapter({
+          eventBus: this.eventBus,
+          ptyHub: this.ptyHub,
+          sessionStore: this.sessionStore,
+          workbenchState: this.workbenchState,
+        }),
       ];
     })();
     for (const adapter of resolvedAdapters) {
@@ -228,6 +237,13 @@ export class RuntimeEngine {
 
   async listProviderDiagnostics(options?: { forceRefresh?: boolean }): Promise<ProviderDiagnostic[]> {
     return this.providers.listProviderDiagnostics(options);
+  }
+
+  async listProviderModels(
+    provider: ProviderKind,
+    options?: { cwd?: string; forceRefresh?: boolean },
+  ): Promise<ProviderModelCatalog> {
+    return this.providers.listProviderModels(provider, options);
   }
 
   addWorkspace(rawDir: string): ListSessionsResponse {
@@ -341,6 +357,13 @@ export class RuntimeEngine {
 
   async setSessionMode(sessionId: string, modeId: string): Promise<SessionSummary> {
     return this.sessionLifecycle.setSessionMode(sessionId, modeId);
+  }
+
+  async setSessionModel(
+    sessionId: string,
+    request: SetSessionModelRequest,
+  ): Promise<SessionSummary> {
+    return this.sessionLifecycle.setSessionModel(sessionId, request);
   }
 
   sendInput(sessionId: string, request: { clientId: string; text: string }): void {

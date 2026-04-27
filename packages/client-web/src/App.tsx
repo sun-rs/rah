@@ -28,7 +28,9 @@ import {
 } from "./hooks/useWorkbenchSidebarPreferences";
 import {
   canSessionDelete,
+  canSessionArchive,
   canSessionRename,
+  canSessionSwitchModel,
   canSessionRespondToPermissions,
   canSessionSwitchModes,
   canSessionShowInfo,
@@ -40,10 +42,12 @@ import {
   resolveSessionModeControlState,
   type SessionModeDraft,
 } from "./session-mode-ui";
+import { resolveSelectedModelDraft } from "./components/SessionModelControls";
 import { deriveComposerSurface } from "./composer-contract";
 import {
   derivePrimaryPaneState,
   deriveWorkbenchSessionCollections,
+  isSessionAttachedToClient,
 } from "./workbench-selectors";
 import { deriveWorkbenchNoticeState } from "./workbench-notice-contract";
 
@@ -69,6 +73,7 @@ export function App() {
     recentSessions,
     workspaceDirs,
     debugScenarios,
+    modelCatalogs,
     selectedSessionId,
     workspaceDir,
     newSessionProvider,
@@ -84,6 +89,7 @@ export function App() {
     removeWorkspace,
     setSelectedSessionId,
     setNewSessionProvider,
+    loadProviderModels,
     startSession,
     startScenario,
     activateHistorySession,
@@ -91,6 +97,7 @@ export function App() {
     closeSession,
     renameSession,
     setSessionMode,
+    setSessionModel,
     claimHistorySession,
     removeHistorySession,
     removeHistoryWorkspaceSessions,
@@ -108,6 +115,16 @@ export function App() {
   const [renameDialogSessionId, setRenameDialogSessionId] = useState<string | null>(null);
   const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
   const [modeChangeSessionId, setModeChangeSessionId] = useState<string | null>(null);
+  const [modelChangeSessionId, setModelChangeSessionId] = useState<string | null>(null);
+  const [startModelDrafts, setStartModelDrafts] = useState<
+    Record<ProviderChoice, { modelId?: string | null; reasoningId?: string | null }>
+  >({
+    codex: {},
+    claude: {},
+    kimi: {},
+    gemini: {},
+    opencode: {},
+  });
   const [startModeDrafts, setStartModeDrafts] = useState<Record<ProviderChoice, SessionModeDraft>>({
     codex: createDefaultModeDraft("codex"),
     claude: createDefaultModeDraft("claude"),
@@ -200,11 +217,7 @@ export function App() {
 
   const selectedProjection = selectedSessionId ? projections.get(selectedSessionId) ?? null : null;
   const selectedSummary = selectedProjection?.summary ?? null;
-  const isAttached = Boolean(
-    selectedSummary?.attachedClients.some((client) =>
-      client.kind === "web" ? client.connectionId === connectionId : client.id === clientId,
-    ),
-  );
+  const isAttached = selectedSummary ? isSessionAttachedToClient(selectedSummary, clientId) : false;
   const hasControl = selectedSummary?.controlLease.holderClientId === clientId;
   const canRespondToPermission = selectedSummary
     ? canSessionRespondToPermissions(selectedSummary)
@@ -246,6 +259,20 @@ export function App() {
     provider: currentProvider,
     draft: startModeDrafts[currentProvider],
   });
+  const currentModelCatalogState = modelCatalogs[currentProvider];
+  const startModelDraft = startModelDrafts[currentProvider];
+  const startModelControl = resolveSelectedModelDraft({
+    catalog: currentModelCatalogState?.catalog,
+    selectedModelId: startModelDraft?.modelId,
+    selectedReasoningId: startModelDraft?.reasoningId,
+    allowProviderDefault: true,
+  });
+  const startModelId =
+    startModelDraft?.modelId ??
+    (startModelDraft?.reasoningId ? startModelControl.model?.id ?? null : null);
+  const selectedModelCatalogState = selectedSummary
+    ? modelCatalogs[selectedSummary.session.provider as ProviderChoice]
+    : undefined;
   const claimModeControl = selectedSummary
     ? resolveSessionModeControlState({
         provider: selectedSummary.session.provider,
@@ -270,9 +297,21 @@ export function App() {
     availableWorkspaceDir: workspaceDirs.length > 0 ? workspaceDir : "",
     newSessionProvider: currentProvider,
     startModeId: startModeControl.effectiveModeId,
+    startModelId,
+    startReasoningId: startModelId ? startModelControl.reasoning?.id ?? null : null,
     sendInput,
     startSession,
   });
+
+  useEffect(() => {
+    void loadProviderModels(currentProvider).catch(() => undefined);
+  }, [currentProvider, loadProviderModels]);
+
+  useEffect(() => {
+    if (selectedSummary?.session.provider !== undefined && selectedSummary.session.provider !== "custom") {
+      void loadProviderModels(selectedSummary.session.provider as ProviderChoice).catch(() => undefined);
+    }
+  }, [loadProviderModels, selectedSummary?.session.provider]);
 
   const handlePermissionResponse = async (
     requestId: string,
@@ -708,16 +747,29 @@ export function App() {
                 setArchiveConfirmSessionId(selectedSummary.session.id);
               }}
               onDeleteSession={() => setDeleteConfirmSessionId(selectedSummary.session.id)}
+              canArchiveSession={canSessionArchive(selectedSummary)}
               canDeleteSession={canSessionDelete(selectedSummary)}
               canShowSessionInfo={canSessionShowInfo(selectedSummary)}
               canRenameSession={canSessionRename(selectedSummary)}
               canSwitchSessionModes={canSessionSwitchModes(selectedSummary)}
+              canSwitchSessionModel={canSessionSwitchModel(selectedSummary)}
               modeChangePending={modeChangeSessionId === selectedSummary.session.id}
+              modelCatalog={selectedModelCatalogState?.catalog ?? null}
+              modelCatalogLoading={selectedModelCatalogState?.loading ?? false}
+              modelChangePending={modelChangeSessionId === selectedSummary.session.id}
               onRenameSession={() => setRenameDialogSessionId(selectedSummary.session.id)}
               onSetSessionMode={(modeId) => {
                 setModeChangeSessionId(selectedSummary.session.id);
                 void setSessionMode(selectedSummary.session.id, modeId).finally(() =>
                   setModeChangeSessionId((current) =>
+                    current === selectedSummary.session.id ? null : current,
+                  ),
+                );
+              }}
+              onSetSessionModel={(modelId, reasoningId) => {
+                setModelChangeSessionId(selectedSummary.session.id);
+                void setSessionModel(selectedSummary.session.id, modelId, reasoningId).finally(() =>
+                  setModelChangeSessionId((current) =>
                     current === selectedSummary.session.id ? null : current,
                   ),
                 );
@@ -760,6 +812,32 @@ export function App() {
               }}
               newSessionProvider={newSessionProvider as ProviderChoice}
               onChangeProvider={(value) => setNewSessionProvider(value)}
+              modelCatalog={currentModelCatalogState?.catalog ?? null}
+              modelCatalogLoading={currentModelCatalogState?.loading ?? false}
+              selectedModelId={startModelControl.model?.id ?? null}
+              selectedReasoningId={startModelControl.reasoning?.id ?? null}
+              onModelChange={(modelId, defaultReasoningId) => {
+                setStartModelDrafts((current) => ({
+                  ...current,
+                  [currentProvider]: {
+                    modelId: modelId || null,
+                    reasoningId: modelId ? defaultReasoningId ?? null : null,
+                  },
+                }));
+              }}
+              onReasoningChange={(reasoningId) => {
+                setStartModelDrafts((current) => ({
+                  ...current,
+                  [currentProvider]: {
+                    ...(current[currentProvider] ?? {}),
+                    modelId:
+                      current[currentProvider]?.modelId ??
+                      startModelControl.model?.id ??
+                      null,
+                    reasoningId,
+                  },
+                }));
+              }}
               accessModes={startModeControl.accessModes}
               selectedAccessModeId={startModeControl.selectedAccessModeId}
               planModeAvailable={startModeControl.planModeAvailable}

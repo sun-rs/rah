@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
-import type { PermissionResponseRequest, SessionSummary } from "@rah/runtime-protocol";
+import type { PermissionResponseRequest, ProviderModelCatalog, SessionSummary } from "@rah/runtime-protocol";
 import { Archive, ArrowUp, Ellipsis, Info, Menu, PanelRight, PencilLine, Plus, Square, Trash2, X } from "lucide-react";
 import { providerLabel } from "../../../types";
 import type { SessionProjection } from "../../../types";
 import { ChatThread } from "../../chat/ChatThread";
 import { ProviderLogo } from "../../ProviderLogo";
+import { SessionModelControls } from "../../SessionModelControls";
 import { SessionModeControls } from "../../SessionModeControls";
 import { TokenizedTextarea } from "../../TokenizedTextarea";
 import { COMPOSER_LAYOUT, type ComposerSurface } from "../../../composer-contract";
@@ -51,18 +52,26 @@ export function WorkbenchSelectedPane(props: {
   onFloatingAnchorOffsetChange: (offsetPx: number) => void;
   onArchiveOrClose: () => void;
   onDeleteSession: () => void;
+  canArchiveSession: boolean;
   canDeleteSession: boolean;
   canShowSessionInfo: boolean;
   canRenameSession: boolean;
   canSwitchSessionModes: boolean;
+  canSwitchSessionModel: boolean;
   modeChangePending: boolean;
+  modelCatalog: ProviderModelCatalog | null;
+  modelCatalogLoading: boolean;
+  modelChangePending: boolean;
   onRenameSession: () => void;
   onSetSessionMode: (modeId: string) => void;
+  onSetSessionModel: (modelId: string, reasoningId?: string | null) => void;
 }) {
   const composerContainerRef = useRef<HTMLDivElement | null>(null);
   const sessionMenuRef = useRef<HTMLDivElement | null>(null);
   const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
   const [sessionInfoOpen, setSessionInfoOpen] = useState(false);
+  const archiveOrCloseDisabled =
+    !props.isAttached || (!props.selectedIsReadOnlyReplay && !props.canArchiveSession);
   const liveModeControl = resolveSessionModeControlState({
     provider: props.selectedSummary.session.provider,
     summary: props.selectedSummary,
@@ -233,6 +242,34 @@ export function WorkbenchSelectedPane(props: {
                     </div>
                   </div>
                 ) : null}
+                {props.canSwitchSessionModel && (props.modelCatalog || props.modelCatalogLoading) ? (
+                  <div className="mt-1 border-t border-[var(--app-border)] pt-1">
+                    <div className="px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-[var(--app-hint)]">
+                      Model
+                    </div>
+                    <div className="px-2.5 py-1">
+                      <SessionModelControls
+                        compact
+                        catalog={props.modelCatalog}
+                        selectedModelId={props.selectedSummary.session.model?.currentModelId ?? null}
+                        selectedReasoningId={props.selectedSummary.session.model?.currentReasoningId ?? null}
+                        loading={props.modelCatalogLoading}
+                        disabled={props.modelChangePending}
+                        onModelChange={(modelId, defaultReasoningId) => {
+                          props.onSetSessionModel(modelId, defaultReasoningId);
+                        }}
+                        onReasoningChange={(reasoningId) => {
+                          props.onSetSessionModel(
+                            props.selectedSummary.session.model?.currentModelId ??
+                              props.modelCatalog?.currentModelId ??
+                              "",
+                            reasoningId,
+                          );
+                        }}
+                      />
+                    </div>
+                  </div>
+                ) : null}
                 {props.canDeleteSession ? (
                   <button
                     type="button"
@@ -252,14 +289,16 @@ export function WorkbenchSelectedPane(props: {
           <button
             type="button"
             className="inline-flex h-8 items-center justify-center rounded-md border border-[var(--app-border)] px-2 text-xs text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] disabled:opacity-40 transition-colors"
-            disabled={!props.isAttached}
+            disabled={archiveOrCloseDisabled}
             onClick={props.onArchiveOrClose}
             title={
               !props.isAttached
                 ? "This client is not attached"
                 : props.selectedIsReadOnlyReplay
                   ? "Close this history view"
-                  : "Archive this live session"
+                  : props.canArchiveSession
+                    ? "Archive this live session"
+                    : "This provider session cannot be archived from RAH"
             }
           >
             {props.selectedIsReadOnlyReplay ? (

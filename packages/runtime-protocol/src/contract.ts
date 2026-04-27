@@ -336,6 +336,17 @@ function isOptionalInteger(value: unknown): value is number | undefined {
   return value === undefined || Number.isInteger(value);
 }
 
+function isSessionConfigScalar(
+  value: unknown,
+): value is string | number | boolean | null {
+  return (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  );
+}
+
 function addIssue(
   sink: IssueSink,
   severity: RahConformanceIssue["severity"],
@@ -668,6 +679,854 @@ function validateSessionMode(mode: unknown, sink: IssueSink, path: string) {
   }
 }
 
+function validateSessionReasoningOption(
+  option: unknown,
+  sink: IssueSink,
+  path: string,
+) {
+  if (!isRecord(option)) {
+    addIssue(
+      sink,
+      "error",
+      "session.model.reasoning_option.invalid",
+      "session model reasoning option must be an object",
+      path,
+    );
+    return;
+  }
+  if (!isNonEmptyString(option.id)) {
+    addIssue(
+      sink,
+      "error",
+      "session.model.reasoning_option.id.invalid",
+      "session model reasoning option id must be non-empty",
+      `${path}.id`,
+    );
+  }
+  if (!isNonEmptyString(option.label)) {
+    addIssue(
+      sink,
+      "error",
+      "session.model.reasoning_option.label.invalid",
+      "session model reasoning option label must be non-empty",
+      `${path}.label`,
+    );
+  }
+  if (
+    option.description !== undefined &&
+    option.description !== null &&
+    typeof option.description !== "string"
+  ) {
+    addIssue(
+      sink,
+      "error",
+      "session.model.reasoning_option.description.invalid",
+      "session model reasoning option description must be a string when present",
+      `${path}.description`,
+    );
+  }
+  if (!["reasoning_effort", "thinking", "model_variant"].includes(option.kind as string)) {
+    addIssue(
+      sink,
+      "error",
+      "session.model.reasoning_option.kind.invalid",
+      "session model reasoning option kind is not canonical",
+      `${path}.kind`,
+    );
+  }
+}
+
+function validateSessionModelDescriptor(
+  descriptor: unknown,
+  sink: IssueSink,
+  path: string,
+) {
+  if (!isRecord(descriptor)) {
+    addIssue(
+      sink,
+      "error",
+      "session.model.descriptor.invalid",
+      "session model descriptor must be an object",
+      path,
+    );
+    return;
+  }
+  if (!isNonEmptyString(descriptor.id)) {
+    addIssue(
+      sink,
+      "error",
+      "session.model.descriptor.id.invalid",
+      "session model descriptor id must be non-empty",
+      `${path}.id`,
+    );
+  }
+  if (!isNonEmptyString(descriptor.label)) {
+    addIssue(
+      sink,
+      "error",
+      "session.model.descriptor.label.invalid",
+      "session model descriptor label must be non-empty",
+      `${path}.label`,
+    );
+  }
+  if (
+    descriptor.description !== undefined &&
+    descriptor.description !== null &&
+    typeof descriptor.description !== "string"
+  ) {
+    addIssue(
+      sink,
+      "error",
+      "session.model.descriptor.description.invalid",
+      "session model descriptor description must be a string when present",
+      `${path}.description`,
+    );
+  }
+  if (
+    descriptor.hidden !== undefined &&
+    descriptor.hidden !== null &&
+    typeof descriptor.hidden !== "boolean"
+  ) {
+    addIssue(
+      sink,
+      "error",
+      "session.model.descriptor.hidden.invalid",
+      "session model descriptor hidden must be boolean when present",
+      `${path}.hidden`,
+    );
+  }
+  if (
+    descriptor.isDefault !== undefined &&
+    descriptor.isDefault !== null &&
+    typeof descriptor.isDefault !== "boolean"
+  ) {
+    addIssue(
+      sink,
+      "error",
+      "session.model.descriptor.default.invalid",
+      "session model descriptor isDefault must be boolean when present",
+      `${path}.isDefault`,
+    );
+  }
+  if (
+    descriptor.defaultReasoningId !== undefined &&
+    descriptor.defaultReasoningId !== null &&
+    !isNonEmptyString(descriptor.defaultReasoningId)
+  ) {
+    addIssue(
+      sink,
+      "error",
+      "session.model.descriptor.default_reasoning.invalid",
+      "session model descriptor defaultReasoningId must be non-empty when present",
+      `${path}.defaultReasoningId`,
+    );
+  }
+  if (descriptor.reasoningOptions !== undefined) {
+    if (!Array.isArray(descriptor.reasoningOptions)) {
+      addIssue(
+        sink,
+        "error",
+        "session.model.reasoning_options.invalid",
+        "session model reasoningOptions must be an array when present",
+        `${path}.reasoningOptions`,
+      );
+    } else {
+      for (const [reasoningIndex, option] of descriptor.reasoningOptions.entries()) {
+        validateSessionReasoningOption(
+          option,
+          sink,
+          `${path}.reasoningOptions[${reasoningIndex}]`,
+        );
+      }
+    }
+  }
+}
+
+function validateSessionConfigOption(
+  option: unknown,
+  sink: IssueSink,
+  path: string,
+) {
+  if (!isRecord(option)) {
+    addIssue(
+      sink,
+      "error",
+      "session.config_option.invalid",
+      "session config option must be an object",
+      path,
+    );
+    return;
+  }
+  if (!isNonEmptyString(option.id)) {
+    addIssue(
+      sink,
+      "error",
+      "session.config_option.id.invalid",
+      "session config option id must be non-empty",
+      `${path}.id`,
+    );
+  }
+  if (!isNonEmptyString(option.label)) {
+    addIssue(
+      sink,
+      "error",
+      "session.config_option.label.invalid",
+      "session config option label must be non-empty",
+      `${path}.label`,
+    );
+  }
+  if (
+    option.description !== undefined &&
+    option.description !== null &&
+    typeof option.description !== "string"
+  ) {
+    addIssue(
+      sink,
+      "error",
+      "session.config_option.description.invalid",
+      "session config option description must be a string when present",
+      `${path}.description`,
+    );
+  }
+  if (!["select", "boolean", "number", "string"].includes(option.kind as string)) {
+    addIssue(
+      sink,
+      "error",
+      "session.config_option.kind.invalid",
+      "session config option kind is not canonical",
+      `${path}.kind`,
+    );
+  }
+  if (!["provider", "session", "model"].includes(option.scope as string)) {
+    addIssue(
+      sink,
+      "error",
+      "session.config_option.scope.invalid",
+      "session config option scope is not canonical",
+      `${path}.scope`,
+    );
+  }
+  if (
+    ![
+      "runtime_session",
+      "native_online",
+      "native_local",
+      "cached_runtime",
+      "static_builtin",
+    ].includes(option.source as string)
+  ) {
+    addIssue(
+      sink,
+      "error",
+      "session.config_option.source.invalid",
+      "session config option source is not canonical",
+      `${path}.source`,
+    );
+  }
+  if (typeof option.mutable !== "boolean") {
+    addIssue(
+      sink,
+      "error",
+      "session.config_option.mutable.invalid",
+      "session config option mutable must be boolean",
+      `${path}.mutable`,
+    );
+  }
+  if (
+    !["immediate", "next_turn", "restart_required"].includes(
+      option.applyTiming as string,
+    )
+  ) {
+    addIssue(
+      sink,
+      "error",
+      "session.config_option.apply_timing.invalid",
+      "session config option applyTiming is not canonical",
+      `${path}.applyTiming`,
+    );
+  }
+  for (const field of ["currentValue", "defaultValue"] as const) {
+    if (
+      option[field] !== undefined &&
+      !isSessionConfigScalar(option[field])
+    ) {
+      addIssue(
+        sink,
+        "error",
+        "session.config_option.value.invalid",
+        `session config option ${field} must be a scalar when present`,
+        `${path}.${field}`,
+      );
+    }
+  }
+  if (option.options !== undefined) {
+    if (!Array.isArray(option.options)) {
+      addIssue(
+        sink,
+        "error",
+        "session.config_option.options.invalid",
+        "session config option options must be an array when present",
+        `${path}.options`,
+      );
+    } else {
+      for (const [index, choice] of option.options.entries()) {
+        if (!isRecord(choice)) {
+          addIssue(
+            sink,
+            "error",
+            "session.config_option.choice.invalid",
+            "session config option choice must be an object",
+            `${path}.options[${index}]`,
+          );
+          continue;
+        }
+        if (!isNonEmptyString(choice.id)) {
+          addIssue(
+            sink,
+            "error",
+            "session.config_option.choice.id.invalid",
+            "session config option choice id must be non-empty",
+            `${path}.options[${index}].id`,
+          );
+        }
+        if (!isNonEmptyString(choice.label)) {
+          addIssue(
+            sink,
+            "error",
+            "session.config_option.choice.label.invalid",
+            "session config option choice label must be non-empty",
+            `${path}.options[${index}].label`,
+          );
+        }
+      }
+    }
+  }
+  if (option.constraints !== undefined) {
+    if (!isRecord(option.constraints)) {
+      addIssue(
+        sink,
+        "error",
+        "session.config_option.constraints.invalid",
+        "session config option constraints must be an object when present",
+        `${path}.constraints`,
+      );
+    } else {
+      for (const field of ["min", "max", "step"] as const) {
+        if (!isOptionalNumber(option.constraints[field])) {
+          addIssue(
+            sink,
+            "error",
+            "session.config_option.constraint.field.invalid",
+            `session config option constraint ${field} must be numeric when present`,
+            `${path}.constraints.${field}`,
+          );
+        }
+      }
+    }
+  }
+  if (option.availability !== undefined) {
+    if (!isRecord(option.availability)) {
+      addIssue(
+        sink,
+        "error",
+        "session.config_option.availability.invalid",
+        "session config option availability must be an object when present",
+        `${path}.availability`,
+      );
+    } else {
+      for (const field of ["modelIds", "modeIds", "capabilityFlags"] as const) {
+        const value = option.availability[field];
+        if (value === undefined) {
+          continue;
+        }
+        if (!Array.isArray(value) || value.some((entry) => !isNonEmptyString(entry))) {
+          addIssue(
+            sink,
+            "error",
+            "session.config_option.availability.field.invalid",
+            `session config option availability ${field} must be an array of non-empty strings when present`,
+            `${path}.availability.${field}`,
+          );
+        }
+      }
+    }
+  }
+  if (
+    option.backendKey !== undefined &&
+    option.backendKey !== null &&
+    typeof option.backendKey !== "string"
+  ) {
+    addIssue(
+      sink,
+      "error",
+      "session.config_option.backend_key.invalid",
+      "session config option backendKey must be a string when present",
+      `${path}.backendKey`,
+    );
+  }
+}
+
+function validateModelCapabilityProfile(
+  profile: unknown,
+  sink: IssueSink,
+  path: string,
+) {
+  if (!isRecord(profile)) {
+    addIssue(
+      sink,
+      "error",
+      "session.model_profile.invalid",
+      "session modelProfile must be an object",
+      path,
+    );
+    return;
+  }
+  if (!isNonEmptyString(profile.modelId)) {
+    addIssue(
+      sink,
+      "error",
+      "session.model_profile.model_id.invalid",
+      "session modelProfile modelId must be non-empty",
+      `${path}.modelId`,
+    );
+  }
+  if (
+    ![
+      "runtime_session",
+      "native_online",
+      "native_local",
+      "cached_runtime",
+      "static_builtin",
+    ].includes(profile.source as string)
+  ) {
+    addIssue(
+      sink,
+      "error",
+      "session.model_profile.source.invalid",
+      "session modelProfile source is not canonical",
+      `${path}.source`,
+    );
+  }
+  if (!["authoritative", "provisional", "stale"].includes(profile.freshness as string)) {
+    addIssue(
+      sink,
+      "error",
+      "session.model_profile.freshness.invalid",
+      "session modelProfile freshness is not canonical",
+      `${path}.freshness`,
+    );
+  }
+  if (profile.traits !== undefined) {
+    if (!isRecord(profile.traits)) {
+      addIssue(
+        sink,
+        "error",
+        "session.model_profile.traits.invalid",
+        "session modelProfile traits must be an object when present",
+        `${path}.traits`,
+      );
+    } else {
+      for (const field of [
+        "supportsThinking",
+        "supportsAdaptiveThinking",
+        "supportsEffort",
+        "supportsThinkingBudget",
+        "supportsThinkingLevel",
+        "supportsReasoningVariant",
+      ] as const) {
+        if (
+          profile.traits[field] !== undefined &&
+          typeof profile.traits[field] !== "boolean"
+        ) {
+          addIssue(
+            sink,
+            "error",
+            "session.model_profile.trait.invalid",
+            `session modelProfile trait ${field} must be boolean when present`,
+            `${path}.traits.${field}`,
+          );
+        }
+      }
+    }
+  }
+  if (!Array.isArray(profile.configOptions)) {
+    addIssue(
+      sink,
+      "error",
+      "session.model_profile.config_options.invalid",
+      "session modelProfile configOptions must be an array",
+      `${path}.configOptions`,
+    );
+  } else {
+    for (const [index, option] of profile.configOptions.entries()) {
+      validateSessionConfigOption(option, sink, `${path}.configOptions[${index}]`);
+    }
+  }
+}
+
+function validateSessionResolvedConfig(
+  config: unknown,
+  sink: IssueSink,
+  path: string,
+) {
+  if (!isRecord(config)) {
+    addIssue(
+      sink,
+      "error",
+      "session.config.invalid",
+      "session config must be an object",
+      path,
+    );
+    return;
+  }
+  if (!isRecord(config.values)) {
+    addIssue(
+      sink,
+      "error",
+      "session.config.values.invalid",
+      "session config values must be an object",
+      `${path}.values`,
+    );
+  } else {
+    for (const [key, value] of Object.entries(config.values)) {
+      if (!isSessionConfigScalar(value)) {
+        addIssue(
+          sink,
+          "error",
+          "session.config.value.invalid",
+          "session config values must be scalar",
+          `${path}.values.${key}`,
+        );
+      }
+    }
+  }
+  if (
+    ![
+      "runtime_session",
+      "native_online",
+      "native_local",
+      "cached_runtime",
+      "static_builtin",
+      "fallback",
+    ].includes(config.source as string)
+  ) {
+    addIssue(
+      sink,
+      "error",
+      "session.config.source.invalid",
+      "session config source is not canonical",
+      `${path}.source`,
+    );
+  }
+  if (
+    config.revision !== undefined &&
+    config.revision !== null &&
+    typeof config.revision !== "string"
+  ) {
+    addIssue(
+      sink,
+      "error",
+      "session.config.revision.invalid",
+      "session config revision must be a string when present",
+      `${path}.revision`,
+    );
+  }
+}
+
+function validateSessionModel(model: unknown, sink: IssueSink, path: string) {
+  if (!isRecord(model)) {
+    addIssue(
+      sink,
+      "error",
+      "session.model.invalid",
+      "session model must be an object",
+      path,
+    );
+    return;
+  }
+  if (
+    model.currentModelId !== null &&
+    model.currentModelId !== undefined &&
+    !isNonEmptyString(model.currentModelId)
+  ) {
+    addIssue(
+      sink,
+      "error",
+      "session.model.current.invalid",
+      "session model currentModelId must be null or a non-empty string",
+      `${path}.currentModelId`,
+    );
+  }
+  if (
+    model.currentReasoningId !== null &&
+    model.currentReasoningId !== undefined &&
+    !isNonEmptyString(model.currentReasoningId)
+  ) {
+    addIssue(
+      sink,
+      "error",
+      "session.model.reasoning.invalid",
+      "session model currentReasoningId must be null or a non-empty string",
+      `${path}.currentReasoningId`,
+    );
+  }
+  if (!Array.isArray(model.availableModels)) {
+    addIssue(
+      sink,
+      "error",
+      "session.model.available.invalid",
+      "session model availableModels must be an array",
+      `${path}.availableModels`,
+    );
+  } else {
+    for (const [index, descriptor] of model.availableModels.entries()) {
+      validateSessionModelDescriptor(
+        descriptor,
+        sink,
+        `${path}.availableModels[${index}]`,
+      );
+    }
+  }
+  if (typeof model.mutable !== "boolean") {
+    addIssue(
+      sink,
+      "error",
+      "session.model.mutable.invalid",
+      "session model mutable must be boolean",
+      `${path}.mutable`,
+    );
+  }
+  if (!["native", "static", "fallback"].includes(model.source as string)) {
+    addIssue(
+      sink,
+      "error",
+      "session.model.source.invalid",
+      "session model source must be native, static, or fallback",
+      `${path}.source`,
+    );
+  }
+}
+
+export function validateProviderModelCatalog(catalog: unknown): RahConformanceReport {
+  const sink: IssueSink = { issues: [] };
+  if (!isRecord(catalog)) {
+    addIssue(
+      sink,
+      "error",
+      "provider.catalog.invalid",
+      "provider model catalog must be an object",
+      "catalog",
+    );
+  } else {
+    if (!PROVIDERS.has(catalog.provider as ProviderKind | "system") || catalog.provider === "system") {
+      addIssue(
+        sink,
+        "error",
+        "provider.catalog.provider.invalid",
+        "provider model catalog provider must be a managed provider",
+        "catalog.provider",
+      );
+    }
+    if (
+      catalog.currentModelId !== undefined &&
+      catalog.currentModelId !== null &&
+      !isNonEmptyString(catalog.currentModelId)
+    ) {
+      addIssue(
+        sink,
+        "error",
+        "provider.catalog.current_model.invalid",
+        "provider model catalog currentModelId must be non-empty when present",
+        "catalog.currentModelId",
+      );
+    }
+    if (
+      catalog.currentReasoningId !== undefined &&
+      catalog.currentReasoningId !== null &&
+      !isNonEmptyString(catalog.currentReasoningId)
+    ) {
+      addIssue(
+        sink,
+        "error",
+        "provider.catalog.current_reasoning.invalid",
+        "provider model catalog currentReasoningId must be non-empty when present",
+        "catalog.currentReasoningId",
+      );
+    }
+    if (!Array.isArray(catalog.models)) {
+      addIssue(
+        sink,
+        "error",
+        "provider.catalog.models.invalid",
+        "provider model catalog models must be an array",
+        "catalog.models",
+      );
+    } else {
+      for (const [index, descriptor] of catalog.models.entries()) {
+        validateSessionModelDescriptor(
+          descriptor,
+          sink,
+          `catalog.models[${index}]`,
+        );
+      }
+    }
+    if (!isNonEmptyString(catalog.fetchedAt) || Number.isNaN(Date.parse(catalog.fetchedAt))) {
+      addIssue(
+        sink,
+        "error",
+        "provider.catalog.fetched_at.invalid",
+        "provider model catalog fetchedAt must be a valid timestamp",
+        "catalog.fetchedAt",
+      );
+    }
+    if (!["native", "static", "fallback"].includes(catalog.source as string)) {
+      addIssue(
+        sink,
+        "error",
+        "provider.catalog.source.invalid",
+        "provider model catalog source must be native, static, or fallback",
+        "catalog.source",
+      );
+    }
+    if (
+      catalog.sourceDetail !== undefined &&
+      ![
+        "runtime_session",
+        "native_online",
+        "native_local",
+        "cached_runtime",
+        "static_builtin",
+      ].includes(catalog.sourceDetail as string)
+    ) {
+      addIssue(
+        sink,
+        "error",
+        "provider.catalog.source_detail.invalid",
+        "provider model catalog sourceDetail is not canonical",
+        "catalog.sourceDetail",
+      );
+    }
+    if (
+      catalog.freshness !== undefined &&
+      !["authoritative", "provisional", "stale"].includes(catalog.freshness as string)
+    ) {
+      addIssue(
+        sink,
+        "error",
+        "provider.catalog.freshness.invalid",
+        "provider model catalog freshness is not canonical",
+        "catalog.freshness",
+      );
+    }
+    if (
+      catalog.revision !== undefined &&
+      catalog.revision !== null &&
+      typeof catalog.revision !== "string"
+    ) {
+      addIssue(
+        sink,
+        "error",
+        "provider.catalog.revision.invalid",
+        "provider model catalog revision must be a string when present",
+        "catalog.revision",
+      );
+    }
+    for (const field of ["modelsExact", "optionsExact"] as const) {
+      if (
+        catalog[field] !== undefined &&
+        typeof catalog[field] !== "boolean"
+      ) {
+        addIssue(
+          sink,
+          "error",
+          "provider.catalog.exactness.invalid",
+          `provider model catalog ${field} must be boolean when present`,
+          `catalog.${field}`,
+        );
+      }
+    }
+    if (catalog.modes !== undefined) {
+      if (!Array.isArray(catalog.modes)) {
+        addIssue(
+          sink,
+          "error",
+          "provider.catalog.modes.invalid",
+          "provider model catalog modes must be an array when present",
+          "catalog.modes",
+        );
+      } else {
+        for (const [index, mode] of catalog.modes.entries()) {
+          if (!isRecord(mode)) {
+            addIssue(
+              sink,
+              "error",
+              "provider.catalog.mode.invalid",
+              "provider model catalog mode must be an object",
+              `catalog.modes[${index}]`,
+            );
+            continue;
+          }
+          if (!isNonEmptyString(mode.id)) {
+            addIssue(
+              sink,
+              "error",
+              "provider.catalog.mode.id.invalid",
+              "provider model catalog mode id must be non-empty",
+              `catalog.modes[${index}].id`,
+            );
+          }
+          if (!isNonEmptyString(mode.label)) {
+            addIssue(
+              sink,
+              "error",
+              "provider.catalog.mode.label.invalid",
+              "provider model catalog mode label must be non-empty",
+              `catalog.modes[${index}].label`,
+            );
+          }
+        }
+      }
+    }
+    if (catalog.configOptions !== undefined) {
+      if (!Array.isArray(catalog.configOptions)) {
+        addIssue(
+          sink,
+          "error",
+          "provider.catalog.config_options.invalid",
+          "provider model catalog configOptions must be an array when present",
+          "catalog.configOptions",
+        );
+      } else {
+        for (const [index, option] of catalog.configOptions.entries()) {
+          validateSessionConfigOption(option, sink, `catalog.configOptions[${index}]`);
+        }
+      }
+    }
+    if (catalog.modelProfiles !== undefined) {
+      if (!Array.isArray(catalog.modelProfiles)) {
+        addIssue(
+          sink,
+          "error",
+          "provider.catalog.model_profiles.invalid",
+          "provider model catalog modelProfiles must be an array when present",
+          "catalog.modelProfiles",
+        );
+      } else {
+        for (const [index, profile] of catalog.modelProfiles.entries()) {
+          validateModelCapabilityProfile(profile, sink, `catalog.modelProfiles[${index}]`);
+        }
+      }
+    }
+  }
+  const errors = sink.issues.filter((issue) => issue.severity === "error");
+  const warnings = sink.issues.filter((issue) => issue.severity === "warning");
+  return {
+    ok: errors.length === 0,
+    errors,
+    warnings,
+  };
+}
+
 function validateManagedSession(session: unknown, sink: IssueSink, path: string) {
   if (!isRecord(session)) {
     addIssue(sink, "error", "session.payload.invalid", "session payload must be an object", path);
@@ -723,6 +1582,15 @@ function validateManagedSession(session: unknown, sink: IssueSink, path: string)
   }
   if (session.mode !== undefined) {
     validateSessionMode(session.mode, sink, `${path}.mode`);
+  }
+  if (session.model !== undefined) {
+    validateSessionModel(session.model, sink, `${path}.model`);
+  }
+  if (session.config !== undefined) {
+    validateSessionResolvedConfig(session.config, sink, `${path}.config`);
+  }
+  if (session.modelProfile !== undefined) {
+    validateModelCapabilityProfile(session.modelProfile, sink, `${path}.modelProfile`);
   }
   if (!isOptionalInteger(session.pid)) {
     addIssue(sink, "error", "session.pid.invalid", "session pid must be an integer", `${path}.pid`);

@@ -209,6 +209,7 @@ rl.on("line", (line) => {
 
     const providerSessionId = started.session.session.providerSessionId;
     assert.ok(typeof providerSessionId === "string");
+    assert.equal(started.session.session.capabilities.actions.archive, true);
 
     adapter.sendInput(started.session.session.id, {
       clientId: "web-1",
@@ -245,6 +246,27 @@ rl.on("line", (line) => {
       cachedInputTokens: 20,
       outputTokens: 30,
     });
+  });
+
+  test("resumed live Kimi sessions can be archived from RAH", async () => {
+    writeMockKimiBinary("basic");
+    const services = createServices();
+    const adapter = new KimiAdapter(services);
+
+    const resumed = await adapter.resumeSession({
+      provider: "kimi",
+      providerSessionId: "kimi-resume-session",
+      cwd: tmpDir,
+      preferStoredReplay: false,
+      attach: {
+        client: { id: "web-1", kind: "web", connectionId: "web-1" },
+        mode: "interactive",
+        claimControl: true,
+      },
+    });
+
+    assert.equal(resumed.session.session.capabilities.steerInput, true);
+    assert.equal(resumed.session.session.capabilities.actions.archive, true);
   });
 
   test("switches Kimi plan mode over the wire", async () => {

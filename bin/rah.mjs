@@ -9,7 +9,7 @@ import { WebSocket } from "ws";
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_DAEMON_URL = "http://127.0.0.1:43111";
-const SUPPORTED_PROVIDERS = new Set(["codex", "claude", "gemini", "kimi"]);
+const SUPPORTED_PROVIDERS = new Set(["codex", "claude", "gemini", "kimi", "opencode"]);
 
 function printUsage() {
   process.stdout.write(
@@ -19,7 +19,7 @@ function printUsage() {
       "  rah <provider> resume <providerSessionId>",
       "",
       "Providers:",
-      "  codex | claude | gemini | kimi",
+      "  codex | claude | gemini | kimi | opencode",
       "",
       "Options:",
       "  --cwd <dir>         Override working directory",
@@ -31,6 +31,7 @@ function printUsage() {
       "  claude: phase-1 live terminal wrapper in progress",
       "  kimi: phase-1 live terminal wrapper in progress",
       "  gemini: phase-1 live terminal wrapper in progress",
+      "  opencode: live terminal wrapper via OpenCode server API",
       "",
       "Claude note:",
       "  `rah claude resume <providerSessionId>` maps to `claude --resume <id>`.",
@@ -281,6 +282,39 @@ async function main() {
       "--import",
       "tsx",
       "packages/runtime-daemon/src/gemini-terminal-wrapper.ts",
+      "--daemon-url",
+      parsed.daemonUrl,
+      "--cwd",
+      parsed.cwd,
+      ...(parsed.resumeProviderSessionId
+        ? ["--resume-provider-session-id", parsed.resumeProviderSessionId]
+        : []),
+    ];
+    const child = spawn(process.execPath, childArgs, {
+      cwd: ROOT_DIR,
+      env: process.env,
+      stdio: "inherit",
+    });
+    await new Promise((resolve, reject) => {
+      child.on("error", reject);
+      child.on("exit", (code, signal) => {
+        if (signal) {
+          process.kill(process.pid, signal);
+          return;
+        }
+        process.exitCode = code ?? 0;
+        resolve(undefined);
+      });
+    });
+    return;
+  }
+
+  if (parsed.provider === "opencode") {
+    await ensureDaemon(parsed.daemonUrl);
+    const childArgs = [
+      "--import",
+      "tsx",
+      "packages/runtime-daemon/src/opencode-terminal-wrapper.ts",
       "--daemon-url",
       parsed.daemonUrl,
       "--cwd",

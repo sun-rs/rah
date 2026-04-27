@@ -5,6 +5,7 @@ import { initialHistorySyncState, type SessionProjection } from "./types";
 import {
   derivePrimaryPaneState,
   deriveWorkbenchSessionCollections,
+  isSessionAttachedToClient,
 } from "./workbench-selectors";
 import type { PendingSessionTransition } from "./session-transition-contract";
 
@@ -122,6 +123,21 @@ function uncontrolledSummary(args: {
 }
 
 describe("workbench selectors", () => {
+  test("treats shared web client attachment as stable across connection ids", () => {
+    const summary = controlledSummary({
+      id: "web-live",
+      clientId: "web-user",
+      rootDir: "/workspace/one",
+    });
+    summary.attachedClients[0] = {
+      ...summary.attachedClients[0]!,
+      connectionId: "web-old-connection",
+    };
+
+    assert.equal(isSessionAttachedToClient(summary, "web-user"), true);
+    assert.equal(isSessionAttachedToClient(summary, "web-new-connection"), false);
+  });
+
   test("sidebar contract includes all daemon live sessions while keeping controlled subsets narrow", () => {
     const clientId = "web-current";
     const controlled = controlledSummary({

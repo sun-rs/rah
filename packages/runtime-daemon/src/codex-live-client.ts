@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import {
+  type ProviderModelCatalog,
   type PermissionResponseRequest,
   type ResumeSessionRequest,
   type StartSessionRequest,
@@ -14,6 +15,7 @@ import {
   replayCodexStoredSessionRollout,
   type CodexStoredSessionRecord,
 } from "./codex-stored-sessions";
+import { resolveCodexRuntimeCapabilityState } from "./codex-model-catalog";
 import { toSessionSummary } from "./session-store";
 import { resolveConfiguredBinary } from "./provider-binary-utils";
 import { buildCodexModeState, codexModeId } from "./session-mode-utils";
@@ -95,6 +97,7 @@ export async function createCodexAppServerClient(): Promise<CodexJsonRpcClient> 
 export async function startCodexLiveSession(params: {
   services: RuntimeServices;
   request: StartSessionRequest;
+  initialModelCatalog?: ProviderModelCatalog | null;
   onLiveSessionReady: (liveSession: LiveCodexSession) => void;
 }) {
   const { services, request } = params;
@@ -114,7 +117,12 @@ export async function startCodexLiveSession(params: {
     experimentalRawEvents: false,
     persistExtendedHistory: true,
     ...(request.title ? { name: request.title } : {}),
-  })) as { thread?: { id?: string } };
+  })) as {
+    thread?: { id?: string };
+    model?: string;
+    reasoningEffort?: string | null;
+    reasoning_effort?: string | null;
+  };
   const threadId = threadStart?.thread?.id;
   if (!threadId) {
     await client.dispose();
@@ -133,7 +141,30 @@ export async function startCodexLiveSession(params: {
       currentModeId: initialAccessModeId,
       mutable: true,
     }),
+    model: {
+      currentModelId: request.model ?? threadStart.model ?? params.initialModelCatalog?.currentModelId ?? null,
+      currentReasoningId:
+        request.reasoningId ??
+        threadStart.reasoningEffort ??
+        threadStart.reasoning_effort ??
+        params.initialModelCatalog?.currentReasoningId ??
+        null,
+      availableModels: params.initialModelCatalog?.models ?? [],
+      mutable: true,
+      source: params.initialModelCatalog?.source ?? "native",
+    },
+    ...resolveCodexRuntimeCapabilityState({
+      catalog: params.initialModelCatalog ?? null,
+      modelId: request.model ?? threadStart.model ?? params.initialModelCatalog?.currentModelId ?? null,
+      reasoningId:
+        request.reasoningId ??
+        threadStart.reasoningEffort ??
+        threadStart.reasoning_effort ??
+        params.initialModelCatalog?.currentReasoningId ??
+        null,
+    }),
     capabilities: {
+      modelSwitch: true,
       renameSession: true,
       actions: {
         info: true,
@@ -159,6 +190,14 @@ export async function startCodexLiveSession(params: {
     cwd: request.cwd,
     approvalPolicy: request.approvalPolicy ?? "never",
     sandboxMode: request.sandbox ?? "danger-full-access",
+    modelId: request.model ?? threadStart.model ?? params.initialModelCatalog?.currentModelId ?? null,
+    reasoningId:
+      request.reasoningId ??
+      threadStart.reasoningEffort ??
+      threadStart.reasoning_effort ??
+      params.initialModelCatalog?.currentReasoningId ??
+      null,
+    modelCatalog: params.initialModelCatalog ?? null,
     activeModeId: initialAccessModeId,
     lastNonPlanModeId: initialAccessModeId,
     planCollaborationMode,
@@ -181,6 +220,7 @@ export async function resumeCodexLiveSession(params: {
   services: RuntimeServices;
   request: ResumeSessionRequest;
   record?: CodexStoredSessionRecord;
+  initialModelCatalog?: ProviderModelCatalog | null;
   onLiveSessionReady: (liveSession: LiveCodexSession) => void;
 }) {
   const { services, request, record } = params;
@@ -203,6 +243,9 @@ export async function resumeCodexLiveSession(params: {
       cwd?: string;
       approval_policy?: string;
       sandbox?: string;
+      model?: string;
+      reasoningEffort?: string | null;
+      reasoning_effort?: string | null;
     };
     const thread = resumeResponse.thread;
     const threadId =
@@ -259,11 +302,32 @@ export async function resumeCodexLiveSession(params: {
         currentModeId: resumedAccessModeId,
         mutable: true,
       }),
+      model: {
+        currentModelId: resumeResponse.model ?? params.initialModelCatalog?.currentModelId ?? null,
+        currentReasoningId:
+          resumeResponse.reasoningEffort ??
+          resumeResponse.reasoning_effort ??
+          params.initialModelCatalog?.currentReasoningId ??
+          null,
+        availableModels: params.initialModelCatalog?.models ?? [],
+        mutable: true,
+        source: params.initialModelCatalog?.source ?? "native",
+      },
+      ...resolveCodexRuntimeCapabilityState({
+        catalog: params.initialModelCatalog ?? null,
+        modelId: resumeResponse.model ?? params.initialModelCatalog?.currentModelId ?? null,
+        reasoningId:
+          resumeResponse.reasoningEffort ??
+          resumeResponse.reasoning_effort ??
+          params.initialModelCatalog?.currentReasoningId ??
+          null,
+      }),
       capabilities: {
+        modelSwitch: true,
         renameSession: true,
         actions: {
           info: true,
-          archive: false,
+          archive: true,
           delete: true,
           rename: "native",
         },
@@ -320,6 +384,13 @@ export async function resumeCodexLiveSession(params: {
         typeof resumeResponse.sandbox === "string"
           ? resumeResponse.sandbox
           : "danger-full-access",
+      modelId: resumeResponse.model ?? params.initialModelCatalog?.currentModelId ?? null,
+      reasoningId:
+        resumeResponse.reasoningEffort ??
+        resumeResponse.reasoning_effort ??
+        params.initialModelCatalog?.currentReasoningId ??
+        null,
+      modelCatalog: params.initialModelCatalog ?? null,
       activeModeId: resumedAccessModeId,
       lastNonPlanModeId: resumedAccessModeId,
       planCollaborationMode,

@@ -32,6 +32,7 @@ import {
   leaveAlternateScreen,
   renderTerminalWrapperPanel,
   renderTerminalWrapperPanelForTerminal,
+  restoreInheritedTerminalModes,
 } from "./terminal-wrapper-panel";
 import { deriveTerminalWrapperRemoteControlState } from "./terminal-wrapper-remote-control";
 import { resolveConfiguredBinary } from "./provider-binary-utils";
@@ -516,6 +517,7 @@ async function main() {
     exiting = true;
     disableRemoteKeyboardControl();
     restoreMainTerminalScreen();
+    restoreInheritedTerminalModes();
     if (localTerminal) {
       await localTerminal.close("SIGTERM").catch(() => undefined);
       localTerminal = null;

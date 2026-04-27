@@ -162,6 +162,8 @@ Core design and freeze documents:
 - [RAH Workbench Boundary](./docs/workbench-boundary.md)
 - [Codex Adapter Event Coverage](./docs/codex-event-coverage.md)
 - [Provider Adapter Maintenance](./docs/provider-adapter-maintenance.md)
+- [Provider Capability Matrix](./docs/provider-capability-matrix.md)
+- [Provider Capability Protocol Draft](./docs/provider-capability-protocol-draft.md)
 - [Architecture Benchmark (中文)](./docs/architecture-benchmark.zh-CN.md)
 - [rah codex 标准交付文档（中文）](./docs/rah-codex-wrapper.zh-CN.md)
 - [rah codex handoff 模式设计（中文）](./docs/rah-codex-handoff-mode.zh-CN.md)

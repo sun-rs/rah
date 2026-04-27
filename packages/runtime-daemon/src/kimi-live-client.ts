@@ -5,6 +5,7 @@ import {
   type CloseSessionRequest,
   type InterruptSessionRequest,
   type PermissionResponseRequest,
+  type ProviderModelCatalog,
   type SessionInputRequest,
   type StartSessionRequest,
 } from "@rah/runtime-protocol";
@@ -28,15 +29,36 @@ import {
   type LiveKimiSession,
   type LiveKimiTurn,
 } from "./kimi-live-types";
+import {
+  resolveKimiCliModelArgs,
+  resolveKimiRuntimeCapabilityState,
+} from "./kimi-model-catalog";
 
 export type { LiveKimiSession, LiveKimiTurn } from "./kimi-live-types";
 
 export async function startKimiLiveSession(params: {
   services: RuntimeServices;
   request: StartSessionRequest;
+  modelCatalog?: ProviderModelCatalog | null;
 }) {
   const { services, request } = params;
   const providerSessionId = randomUUID();
+  const currentModelId = request.model ?? params.modelCatalog?.currentModelId ?? null;
+  const currentReasoningId =
+    request.reasoningId ??
+    (request.model
+      ? params.modelCatalog?.models.find((model) => model.id === request.model)?.defaultReasoningId
+      : params.modelCatalog?.currentReasoningId) ??
+    null;
+  const requestedCliModel = resolveKimiCliModelArgs({
+    modelId: request.model,
+    reasoningId: request.reasoningId,
+  });
+  const runtimeCapabilityState = resolveKimiRuntimeCapabilityState({
+    catalog: params.modelCatalog,
+    modelId: currentModelId,
+    reasoningId: currentReasoningId,
+  });
   const state = services.sessionStore.createManagedSession({
     provider: "kimi",
     providerSessionId,
@@ -49,6 +71,14 @@ export async function startKimiLiveSession(params: {
       currentModeId: "default",
       mutable: true,
     }),
+    model: {
+      currentModelId,
+      currentReasoningId,
+      availableModels: params.modelCatalog?.models ?? [],
+      mutable: false,
+      source: params.modelCatalog?.source ?? "native",
+    },
+    ...runtimeCapabilityState,
     capabilities: {
       livePermissions: true,
       steerInput: true,
@@ -67,12 +97,14 @@ export async function startKimiLiveSession(params: {
     sessionId: state.session.id,
     providerSessionId,
     cwd: request.cwd,
-    ...(request.model ? { model: request.model } : {}),
+    ...(currentModelId ? { model: currentModelId } : {}),
+    ...(currentReasoningId !== undefined ? { reasoningId: currentReasoningId } : {}),
     approvalMode: request.approvalPolicy ?? "default",
     planMode: false,
     client: await createKimiClient({
       providerSessionId,
       cwd: request.cwd,
+      ...requestedCliModel,
       onEvent: (event) => handleKimiEvent(services, liveSession, event),
       onRequest: (requestMessage) => handleKimiRequest(services, liveSession, requestMessage),
     }),
@@ -101,9 +133,27 @@ export async function resumeKimiLiveSession(params: {
   cwd: string;
   attach?: StartSessionRequest["attach"];
   model?: string;
+  reasoningId?: string | null;
+  modelCatalog?: ProviderModelCatalog | null;
   approvalPolicy?: string;
 }) {
   const { services } = params;
+  const currentModelId = params.model ?? params.modelCatalog?.currentModelId ?? null;
+  const currentReasoningId =
+    params.reasoningId ??
+    (params.model
+      ? params.modelCatalog?.models.find((model) => model.id === params.model)?.defaultReasoningId
+      : params.modelCatalog?.currentReasoningId) ??
+    null;
+  const requestedCliModel = resolveKimiCliModelArgs({
+    modelId: params.model,
+    reasoningId: params.reasoningId,
+  });
+  const runtimeCapabilityState = resolveKimiRuntimeCapabilityState({
+    catalog: params.modelCatalog,
+    modelId: currentModelId,
+    reasoningId: currentReasoningId,
+  });
   const state = services.sessionStore.createManagedSession({
     provider: "kimi",
     providerSessionId: params.providerSessionId,
@@ -114,6 +164,14 @@ export async function resumeKimiLiveSession(params: {
       currentModeId: "default",
       mutable: true,
     }),
+    model: {
+      currentModelId,
+      currentReasoningId,
+      availableModels: params.modelCatalog?.models ?? [],
+      mutable: false,
+      source: params.modelCatalog?.source ?? "native",
+    },
+    ...runtimeCapabilityState,
     capabilities: {
       livePermissions: true,
       steerInput: true,
@@ -121,7 +179,7 @@ export async function resumeKimiLiveSession(params: {
       renameSession: true,
       actions: {
         info: true,
-        archive: false,
+        archive: true,
         delete: true,
         rename: "native",
       },
@@ -132,12 +190,14 @@ export async function resumeKimiLiveSession(params: {
     sessionId: state.session.id,
     providerSessionId: params.providerSessionId,
     cwd: params.cwd,
-    ...(params.model ? { model: params.model } : {}),
+    ...(currentModelId ? { model: currentModelId } : {}),
+    ...(currentReasoningId !== undefined ? { reasoningId: currentReasoningId } : {}),
     approvalMode: params.approvalPolicy ?? "default",
     planMode: false,
     client: await createKimiClient({
       providerSessionId: params.providerSessionId,
       cwd: params.cwd,
+      ...requestedCliModel,
       onEvent: (event) => handleKimiEvent(services, liveSession, event),
       onRequest: (requestMessage) => handleKimiRequest(services, liveSession, requestMessage),
     }),

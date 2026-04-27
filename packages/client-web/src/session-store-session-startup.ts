@@ -2,6 +2,7 @@ import type {
   ApprovalPolicy,
   DebugScenarioDescriptor,
   ResumeSessionRequest,
+  SessionConfigValue,
   SessionSummary,
   StoredSessionRef,
 } from "@rah/runtime-protocol";
@@ -37,6 +38,8 @@ type StartSessionOptions = {
   cwd?: string;
   title?: string;
   model?: string;
+  reasoningId?: string;
+  providerConfig?: Record<string, SessionConfigValue>;
   approvalPolicy?: ApprovalPolicy;
   sandbox?: string;
   modeId?: string;
@@ -136,13 +139,18 @@ export async function startSessionCommand(
       }),
       error: null,
     });
+    const initialInput = options?.initialInput?.trim();
+    const providerBootstrapsInitialInput = provider === "opencode" && Boolean(initialInput);
     const response = await api.startSession({
       provider,
       cwd,
       title: options?.title ?? `${providerLabel(provider)} session`,
       ...(options?.model ? { model: options.model } : {}),
+      ...(options?.reasoningId ? { reasoningId: options.reasoningId } : {}),
+      ...(options?.providerConfig ? { providerConfig: options.providerConfig } : {}),
       ...(options?.approvalPolicy ? { approvalPolicy: options.approvalPolicy } : {}),
       ...(options?.sandbox ? { sandbox: options.sandbox } : {}),
+      ...(providerBootstrapsInitialInput && initialInput ? { initialPrompt: initialInput } : {}),
       attach: createInteractiveAttachRequest(state.clientId, state.connectionId),
     });
     const session =
@@ -156,14 +164,21 @@ export async function startSessionCommand(
         new Map(current.projections),
         session,
       );
-      return applyStartedSessionState(current, session, {
+      const startedState = applyStartedSessionState(current, session, {
         cwd,
         provider,
         projections: next,
       });
+      return {
+        ...startedState,
+        projections: deps.applyEventsToMap(
+          startedState.projections ?? next,
+          deps.takePendingEventsForSessions(new Set([session.session.id])),
+        ),
+      };
     });
-    if (options?.initialInput?.trim()) {
-      await deps.sendInput(session.session.id, options.initialInput.trim());
+    if (initialInput && !providerBootstrapsInitialInput) {
+      await deps.sendInput(session.session.id, initialInput);
     }
     void deps.ensureSessionHistoryLoaded(session.session.id);
   } catch (error) {

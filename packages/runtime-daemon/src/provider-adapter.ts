@@ -13,8 +13,10 @@ import type {
   InterruptSessionRequest,
   ProviderDiagnostic,
   PermissionResponseRequest,
+  ProviderModelCatalog,
   ResumeSessionRequest,
   ResumeSessionResponse,
+  SetSessionModelRequest,
   SessionFileResponse,
   SessionHistoryPageResponse,
   SessionInputRequest,
@@ -56,6 +58,14 @@ export interface ProviderAdapter {
   setSessionMode?(
     sessionId: string,
     modeId: string,
+  ): SessionSummary | Promise<SessionSummary>;
+  listModels?(options?: {
+    cwd?: string;
+    forceRefresh?: boolean;
+  }): ProviderModelCatalog | Promise<ProviderModelCatalog>;
+  setSessionModel?(
+    sessionId: string,
+    request: SetSessionModelRequest,
   ): SessionSummary | Promise<SessionSummary>;
   sendInput(sessionId: string, request: SessionInputRequest): void;
   closeSession?(sessionId: string, request: CloseSessionRequest): Promise<void> | void;

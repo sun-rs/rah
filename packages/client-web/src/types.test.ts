@@ -323,6 +323,117 @@ describe("client projection", () => {
     assert.equal(current.currentRuntimeStatus, "retrying");
   });
 
+  test("updates session runtimeState from turn lifecycle events", () => {
+    let current: SessionProjection = {
+      ...projection(),
+      summary: {
+        ...baseSummary(),
+        session: {
+          ...baseSummary().session,
+          runtimeState: "idle",
+        },
+      },
+    };
+
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 1,
+        turnId: "turn-1",
+        type: "turn.started",
+        payload: {},
+      }),
+    );
+
+    assert.equal(current.summary.session.runtimeState, "running");
+
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 2,
+        turnId: "turn-1",
+        type: "turn.completed",
+        payload: {},
+      }),
+    );
+
+    assert.equal(current.summary.session.runtimeState, "idle");
+    assert.equal(current.currentRuntimeStatus, undefined);
+  });
+
+  test("collapses adjacent duplicate user message echoes", () => {
+    let current = applyEventToProjection(
+      projection(),
+      event({
+        seq: 1,
+        turnId: "turn-1",
+        type: "timeline.item.added",
+        payload: {
+          item: { kind: "user_message", text: "重复问题" },
+        },
+      }),
+    );
+
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 2,
+        turnId: "turn-2",
+        type: "timeline.item.added",
+        payload: {
+          item: { kind: "user_message", text: "重复问题" },
+        },
+      }),
+    );
+
+    assert.deepEqual(
+      current.feed.map((entry) => entry.kind === "timeline" ? entry.item.kind : entry.kind),
+      ["user_message"],
+    );
+    assert.equal(current.feed[0]?.turnId, "turn-2");
+  });
+
+  test("keeps intentional repeated user messages after an assistant response", () => {
+    let current = applyEventToProjection(
+      projection(),
+      event({
+        seq: 1,
+        turnId: "turn-1",
+        type: "timeline.item.added",
+        payload: {
+          item: { kind: "user_message", text: "再问一次" },
+        },
+      }),
+    );
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 2,
+        turnId: "turn-1",
+        type: "timeline.item.added",
+        payload: {
+          item: { kind: "assistant_message", text: "回答" },
+        },
+      }),
+    );
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 3,
+        turnId: "turn-2",
+        type: "timeline.item.added",
+        payload: {
+          item: { kind: "user_message", text: "再问一次" },
+        },
+      }),
+    );
+
+    assert.deepEqual(
+      current.feed.map((entry) => entry.kind === "timeline" ? entry.item.kind : entry.kind),
+      ["user_message", "assistant_message", "user_message"],
+    );
+  });
+
   test("coalesces streaming tool output artifacts into one card detail", () => {
     let current = projection();
     current = applyEventToProjection(

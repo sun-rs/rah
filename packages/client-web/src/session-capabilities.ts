@@ -32,6 +32,10 @@ export function canSessionDelete(summary: SessionSummary): boolean {
   return summary.session.capabilities.actions.delete && summary.session.providerSessionId !== undefined;
 }
 
+export function canSessionArchive(summary: SessionSummary): boolean {
+  return summary.session.capabilities.actions.archive;
+}
+
 export function canSessionShowInfo(summary: SessionSummary): boolean {
   return summary.session.capabilities.actions.info;
 }
@@ -43,6 +47,13 @@ export function sessionModeState(summary: SessionSummary): SessionModeState | nu
 export function canSessionSwitchModes(summary: SessionSummary): boolean {
   const mode = sessionModeState(summary);
   return Boolean(mode && mode.mutable && mode.availableModes.length > 0);
+}
+
+export function canSessionSwitchModel(summary: SessionSummary): boolean {
+  if (!summary.session.capabilities.modelSwitch) {
+    return false;
+  }
+  return !summary.session.model || summary.session.model.mutable;
 }
 
 export function isReadOnlyReplay(summary: SessionSummary): boolean {

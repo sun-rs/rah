@@ -9,8 +9,10 @@ import type {
   GitStatusResponse,
   InterruptSessionRequest,
   PermissionResponseRequest,
+  ProviderModelCatalog,
   ResumeSessionRequest,
   ResumeSessionResponse,
+  SetSessionModelRequest,
   SessionFileResponse,
   SessionHistoryPageResponse,
   SessionInputRequest,
@@ -29,6 +31,10 @@ import {
   startCodexLiveSession,
   type LiveCodexSession,
 } from "./codex-live-client";
+import {
+  CodexModelCatalogCache,
+  resolveCodexRuntimeCapabilityState,
+} from "./codex-model-catalog";
 import {
   createCodexStoredSessionFrozenHistoryPageLoader,
   discoverCodexStoredSessions,
@@ -108,6 +114,7 @@ export class CodexAdapter implements ProviderAdapter {
   private readonly rehydratedSessionIds = new Set<string>();
   private readonly rehydratedSessionRecords = new Map<string, CodexStoredSessionRecord>();
   private storedSessionIndex = new Map<string, CodexStoredSessionRecord>();
+  private readonly modelCatalog = new CodexModelCatalogCache();
 
   constructor(services: RuntimeServices) {
     this.services = services;
@@ -127,9 +134,11 @@ export class CodexAdapter implements ProviderAdapter {
   }
 
   startSession(request: StartSessionRequest): Promise<StartSessionResponse> {
+    const cachedModelCatalog = this.modelCatalog.getCached();
     return startCodexLiveSession({
       services: this.services,
       request,
+      ...(cachedModelCatalog ? { initialModelCatalog: cachedModelCatalog } : {}),
       onLiveSessionReady: (liveSession) => {
         this.liveSessions.set(liveSession.sessionId, liveSession);
       },
@@ -137,7 +146,7 @@ export class CodexAdapter implements ProviderAdapter {
   }
 
   async resumeSession(request: ResumeSessionRequest): Promise<ResumeSessionResponse> {
-    prepareProviderSessionResume({
+    const preparedResume = prepareProviderSessionResume({
       services: this.services,
       provider: "codex",
       providerSessionId: request.providerSessionId,
@@ -190,11 +199,13 @@ export class CodexAdapter implements ProviderAdapter {
       };
     }
 
+    const cachedModelCatalog = this.modelCatalog.getCached();
     try {
       const response = await resumeCodexLiveSession({
         services: this.services,
         request,
         ...(record ? { record } : {}),
+        ...(cachedModelCatalog ? { initialModelCatalog: cachedModelCatalog } : {}),
         onLiveSessionReady: (liveSession) => {
           this.liveSessions.set(liveSession.sessionId, liveSession);
         },
@@ -202,6 +213,7 @@ export class CodexAdapter implements ProviderAdapter {
       return { session: response.summary };
     } catch (error) {
       if (!record) {
+        preparedResume.rollback();
         throw error;
       }
     }
@@ -229,6 +241,7 @@ export class CodexAdapter implements ProviderAdapter {
       if (!this.services.sessionStore.hasInputControl(sessionId, request.clientId)) {
         throw new Error(`Client ${request.clientId} does not hold input control for ${sessionId}.`);
       }
+      const usesPlanMode = live.activeModeId === "plan" && live.planCollaborationMode;
       void live.client.request(
         "turn/start",
         {
@@ -240,9 +253,12 @@ export class CodexAdapter implements ProviderAdapter {
             sandboxMode: live.sandboxMode,
             cwd: live.cwd,
           }),
-          ...(live.activeModeId === "plan" && live.planCollaborationMode
+          ...(usesPlanMode
             ? { collaborationMode: live.planCollaborationMode }
-            : {}),
+            : {
+                ...(live.modelId ? { model: live.modelId } : {}),
+                ...(live.reasoningId ? { effort: live.reasoningId } : {}),
+              }),
         },
         90_000,
       ).catch((error) => {
@@ -256,6 +272,60 @@ export class CodexAdapter implements ProviderAdapter {
     throw new Error(
       "Rehydrated Codex sessions are currently read-only. Live Codex app-server control is not wired yet.",
     );
+  }
+
+  async listModels(options?: { cwd?: string; forceRefresh?: boolean }): Promise<ProviderModelCatalog> {
+    void options?.cwd;
+    return await this.modelCatalog.listModels(options);
+  }
+
+  async setSessionModel(
+    sessionId: string,
+    request: SetSessionModelRequest,
+  ): Promise<SessionSummary> {
+    const live = this.liveSessions.get(sessionId);
+    if (!live) {
+      throw new Error("Codex model switching is only available for live sessions.");
+    }
+    const nextModelId = request.modelId.trim();
+    if (!nextModelId) {
+      throw new Error("Session model is required.");
+    }
+    const catalog = await this.modelCatalog.listModels();
+    const model = catalog.models.find((entry) => entry.id === nextModelId);
+    if (!model) {
+      throw new Error(`Unsupported Codex model '${nextModelId}'.`);
+    }
+    const nextReasoningId =
+      request.reasoningId === null
+        ? null
+        : request.reasoningId?.trim() || model.defaultReasoningId || null;
+    if (
+      nextReasoningId &&
+      model.reasoningOptions &&
+      model.reasoningOptions.length > 0 &&
+      !model.reasoningOptions.some((option) => option.id === nextReasoningId)
+    ) {
+      throw new Error(`Unsupported Codex reasoning option '${nextReasoningId}'.`);
+    }
+    live.modelId = nextModelId;
+    live.reasoningId = nextReasoningId;
+    live.modelCatalog = catalog;
+    const nextState = this.services.sessionStore.patchManagedSession(sessionId, {
+      model: {
+        currentModelId: nextModelId,
+        currentReasoningId: nextReasoningId,
+        availableModels: catalog.models,
+        mutable: true,
+        source: catalog.source,
+      },
+      ...resolveCodexRuntimeCapabilityState({
+        catalog,
+        modelId: nextModelId,
+        reasoningId: nextReasoningId,
+      }),
+    });
+    return toSessionSummary(nextState);
   }
 
   setSessionMode(sessionId: string, modeId: string): SessionSummary {

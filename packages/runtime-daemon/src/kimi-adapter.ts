@@ -9,6 +9,7 @@ import type {
   GitStatusResponse,
   InterruptSessionRequest,
   PermissionResponseRequest,
+  ProviderModelCatalog,
   ResumeSessionRequest,
   ResumeSessionResponse,
   SessionFileResponse,
@@ -52,10 +53,20 @@ import {
   prepareProviderSessionResume,
 } from "./provider-resume";
 import { kimiLaunchSpec, probeProviderDiagnostic } from "./provider-diagnostics";
+import {
+  buildKimiFallbackModelCatalog,
+  KimiModelCatalogCache,
+} from "./kimi-model-catalog";
 import { buildKimiModeState, isKimiModeId } from "./session-mode-utils";
 import { toSessionSummary } from "./session-store";
 import { movePathToTrash } from "./trash";
 import path from "node:path";
+
+const KIMI_EVENT_SOURCE = {
+  provider: "kimi" as const,
+  channel: "structured_live" as const,
+  authority: "derived" as const,
+};
 
 export class KimiAdapter implements ProviderAdapter {
   readonly id = "kimi";
@@ -64,23 +75,42 @@ export class KimiAdapter implements ProviderAdapter {
   private readonly services: RuntimeServices;
   private readonly liveSessions = new Map<string, LiveKimiSession>();
   private readonly rehydratedSessionIds = new Set<string>();
+  private readonly modelCatalog = new KimiModelCatalogCache();
   private storedSessionIndex = new Map<string, KimiStoredSessionRecord>();
 
   constructor(services: RuntimeServices) {
     this.services = services;
   }
 
+  private reportAsyncLiveError(sessionId: string, detail: string): void {
+    this.services.eventBus.publish({
+      sessionId,
+      type: "runtime.status",
+      source: KIMI_EVENT_SOURCE,
+      payload: {
+        status: "error",
+        detail,
+      },
+    });
+    if (this.services.sessionStore.getSession(sessionId)) {
+      this.services.sessionStore.setRuntimeState(sessionId, "failed");
+    }
+  }
+
   async startSession(request: StartSessionRequest): Promise<StartSessionResponse> {
+    const modelCatalog = this.modelCatalog.getCached() ?? buildKimiFallbackModelCatalog();
+    void this.modelCatalog.listModels({ cwd: request.cwd }).catch(() => undefined);
     const response = await startKimiLiveSession({
       services: this.services,
       request,
+      modelCatalog,
     });
     this.liveSessions.set(response.liveSession.sessionId, response.liveSession);
     return { session: response.summary };
   }
 
   async resumeSession(request: ResumeSessionRequest): Promise<ResumeSessionResponse> {
-    prepareProviderSessionResume({
+    const preparedResume = prepareProviderSessionResume({
       services: this.services,
       provider: "kimi",
       providerSessionId: request.providerSessionId,
@@ -119,14 +149,26 @@ export class KimiAdapter implements ProviderAdapter {
     }
 
     const cwd = request.cwd ?? record?.ref.cwd ?? process.cwd();
-    const response = await resumeKimiLiveSession({
-      services: this.services,
-      providerSessionId: request.providerSessionId,
-      cwd,
-      ...(request.attach ? { attach: request.attach } : {}),
-    });
-    this.liveSessions.set(response.liveSession.sessionId, response.liveSession);
-    return { session: response.summary };
+    try {
+      const cachedModelCatalog = this.modelCatalog.getCached();
+      void this.modelCatalog.listModels({ cwd }).catch(() => undefined);
+      const response = await resumeKimiLiveSession({
+        services: this.services,
+        providerSessionId: request.providerSessionId,
+        cwd,
+        ...(request.attach ? { attach: request.attach } : {}),
+        ...(cachedModelCatalog ? { modelCatalog: cachedModelCatalog } : {}),
+      });
+      this.liveSessions.set(response.liveSession.sessionId, response.liveSession);
+      return { session: response.summary };
+    } catch (error) {
+      preparedResume.rollback();
+      throw error;
+    }
+  }
+
+  async listModels(options?: { cwd?: string; forceRefresh?: boolean }): Promise<ProviderModelCatalog> {
+    return await this.modelCatalog.listModels(options);
   }
 
   sendInput(sessionId: string, request: SessionInputRequest): void {
@@ -138,6 +180,11 @@ export class KimiAdapter implements ProviderAdapter {
       services: this.services,
       liveSession: live,
       request,
+    }).catch((error) => {
+      this.reportAsyncLiveError(
+        sessionId,
+        error instanceof Error ? error.message : String(error),
+      );
     });
   }
 

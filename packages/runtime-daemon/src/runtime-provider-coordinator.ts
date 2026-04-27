@@ -1,8 +1,13 @@
+import {
+  formatRahConformanceReport,
+  validateProviderModelCatalog,
+} from "@rah/runtime-protocol";
 import type {
   DebugScenarioDescriptor,
   DebugReplayScript,
   ProviderDiagnostic,
   ProviderKind,
+  ProviderModelCatalog,
   ResumeSessionRequest,
   ResumeSessionResponse,
   StartSessionRequest,
@@ -53,6 +58,40 @@ export class RuntimeProviderCoordinator {
         };
       }),
     );
+  }
+
+  async listProviderModels(
+    provider: ProviderKind,
+    options?: { cwd?: string; forceRefresh?: boolean },
+  ): Promise<ProviderModelCatalog> {
+    const adapter = this.deps.adaptersByProvider.get(provider);
+    if (adapter?.listModels) {
+      const catalog = await adapter.listModels(options);
+      const report = validateProviderModelCatalog(catalog);
+      if (!report.ok) {
+        throw new Error(
+          `Adapter ${adapter.id} returned invalid provider model catalog.\n${formatRahConformanceReport(report)}`,
+        );
+      }
+      return catalog;
+    }
+    const catalog: ProviderModelCatalog = {
+      provider,
+      models: [],
+      fetchedAt: new Date().toISOString(),
+      source: "fallback",
+      sourceDetail: "static_builtin",
+      freshness: "stale",
+      modelsExact: false,
+      optionsExact: false,
+    };
+    const report = validateProviderModelCatalog(catalog);
+    if (!report.ok) {
+      throw new Error(
+        `Fallback provider model catalog for ${provider} failed protocol validation.\n${formatRahConformanceReport(report)}`,
+      );
+    }
+    return catalog;
   }
 
   async startSession(request: StartSessionRequest): Promise<StartSessionResponse> {

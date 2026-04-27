@@ -13,6 +13,7 @@ import type {
 import { NativeTerminalProcess } from "./native-terminal-process";
 import {
   buildGeminiArgs,
+  isNoisyGeminiCliStderr,
   resolveGeminiBinary,
 } from "./gemini-live-client";
 import {
@@ -30,6 +31,7 @@ import type {
 } from "./gemini-session-types";
 import {
   clearTerminalScreen,
+  disableTerminalApplicationModes,
   enterAlternateScreen,
   leaveAlternateScreen,
   renderTerminalWrapperPanel,
@@ -39,6 +41,11 @@ import {
 import { deriveTerminalWrapperRemoteControlState } from "./terminal-wrapper-remote-control";
 
 type WrapperMode = "local_native" | "remote_writer";
+
+const REMOTE_STOP_TERM_DELAY_MS = 800;
+const REMOTE_STOP_KILL_DELAY_MS = 2_000;
+const REMOTE_PANEL_SETTLE_MS = 1_500;
+const REMOTE_PANEL_SETTLE_REDRAW_MS = 250;
 
 type GeminiNativeResumeTarget =
   | { kind: "none" }
@@ -226,6 +233,9 @@ async function main() {
   let remoteTurnInterrupted = false;
   let remoteTurnFinalized = false;
   let lastRenderedRemotePanel: string | null = null;
+  let remotePanelForceUntilMs = 0;
+  let lastRemotePanelForceMs = 0;
+  let remoteStopTimers: NodeJS.Timeout[] = [];
   let restartLocalAfterCanceledPendingTurn = false;
   let exiting = false;
   let shouldExit = false;
@@ -336,11 +346,13 @@ async function main() {
     }
   };
 
-  const ensureRemotePanelScreen = () => {
-    if (remotePanelActive) {
+  const ensureRemotePanelScreen = (force = false) => {
+    if (remotePanelActive && !force) {
       return;
     }
+    disableTerminalApplicationModes();
     enterAlternateScreen();
+    disableTerminalApplicationModes();
     remotePanelActive = true;
   };
 
@@ -362,7 +374,7 @@ async function main() {
       reclaimRequested: remoteReclaimRequested,
     });
 
-  const renderRemoteModePanel = () => {
+  const renderRemoteModePanel = (options: { force?: boolean } = {}) => {
     if (mode !== "remote_writer" || exiting) {
       lastRenderedRemotePanel = null;
       return;
@@ -379,11 +391,11 @@ async function main() {
       footer: remoteControl.footer,
       footerTone: remoteControl.tone,
     });
-    if (panel === lastRenderedRemotePanel) {
+    if (!options.force && panel === lastRenderedRemotePanel) {
       return;
     }
     lastRenderedRemotePanel = panel;
-    ensureRemotePanelScreen();
+    ensureRemotePanelScreen(options.force);
     clearTerminalScreen();
     process.stdout.write(
       `${renderTerminalWrapperPanelForTerminal({
@@ -396,7 +408,64 @@ async function main() {
         footerTone: remoteControl.tone,
       })}\r\n`,
     );
+    lastRemotePanelForceMs = Date.now();
   };
+
+  const clearRemoteStopTimers = () => {
+    for (const timer of remoteStopTimers) {
+      clearTimeout(timer);
+    }
+    remoteStopTimers = [];
+  };
+
+  const signalRemoteTurnProcess = (
+    child: ChildProcessWithoutNullStreams,
+    signal: NodeJS.Signals,
+  ) => {
+    if (child.exitCode !== null) {
+      return;
+    }
+    if (process.platform !== "win32" && child.pid !== undefined) {
+      try {
+        process.kill(-child.pid, signal);
+        return;
+      } catch {}
+    }
+    child.kill(signal);
+  };
+
+  const requestRemoteTurnStop = () => {
+    remoteTurnInterrupted = true;
+    remoteTurnCancelRequested = true;
+    renderRemoteModePanel({ force: true });
+    const child = remoteTurnProcess;
+    if (!child || child.exitCode !== null) {
+      return;
+    }
+    clearRemoteStopTimers();
+    signalRemoteTurnProcess(child, "SIGINT");
+    remoteStopTimers.push(
+      setTimeout(() => {
+        if (child.exitCode === null) {
+          signalRemoteTurnProcess(child, "SIGTERM");
+        }
+      }, REMOTE_STOP_TERM_DELAY_MS),
+      setTimeout(() => {
+        if (child.exitCode === null) {
+          signalRemoteTurnProcess(child, "SIGKILL");
+        }
+      }, REMOTE_STOP_KILL_DELAY_MS),
+    );
+  };
+
+  const isMouseOrFocusInput = (data: string) =>
+    data.startsWith("\u001b[<") ||
+    data.startsWith("\u001b[M") ||
+    data === "\u001b[I" ||
+    data === "\u001b[O";
+
+  const isEscReclaimInput = (data: string) =>
+    data === "\u001b" || data.startsWith("\u001b[27;");
 
   const selectBindingCandidate = () => {
     if (boundProviderSessionId) {
@@ -462,6 +531,8 @@ async function main() {
     mode = "local_native";
     remotePromptText = null;
     lastRenderedRemotePanel = null;
+    remotePanelForceUntilMs = 0;
+    lastRemotePanelForceMs = 0;
     remoteReclaimRequested = false;
     remoteTurnCancelRequested = false;
     remoteTurnInterrupted = false;
@@ -518,17 +589,21 @@ async function main() {
         });
         return;
       }
-      if (data === "\u001b") {
+      if (isMouseOrFocusInput(data)) {
+        return;
+      }
+      if (isEscReclaimInput(data)) {
         if (!getRemoteControlState().controlAvailable) {
           remoteReclaimRequested = true;
-          renderRemoteModePanel();
+          renderRemoteModePanel({ force: true });
           return;
         }
         void startLocalNative();
+        return;
       }
     };
     process.stdin.on("data", remoteKeyboardHandler);
-    renderRemoteModePanel();
+    renderRemoteModePanel({ force: true });
   };
 
   const emitUserInput = (text: string, turnId: string) => {
@@ -555,6 +630,7 @@ async function main() {
     remoteTurnCancelRequested = false;
     remoteTurnInterrupted = false;
     remoteTurnProcess = null;
+    clearRemoteStopTimers();
     updatePromptState("prompt_clean");
     syncHistoryCursorToEnd();
     if (remoteReclaimRequested) {
@@ -569,6 +645,8 @@ async function main() {
     disableRemoteKeyboardControl();
     mode = "remote_writer";
     remotePromptText = queuedTurn.text;
+    remotePanelForceUntilMs = Date.now() + REMOTE_PANEL_SETTLE_MS;
+    lastRemotePanelForceMs = 0;
     remoteReclaimRequested = false;
     remoteTurnInterrupted = false;
     remoteTurnCancelRequested = false;
@@ -577,7 +655,7 @@ async function main() {
     currentTurnId = randomUUID();
     remoteToolCalls.clear();
     updatePromptState("agent_busy");
-    renderRemoteModePanel();
+    renderRemoteModePanel({ force: true });
     emitUserInput(queuedTurn.text, currentTurnId);
     notifyActivity({ type: "session_state", state: "running" });
 
@@ -594,13 +672,14 @@ async function main() {
         {
           cwd: parsed.cwd,
           env: process.env,
+          detached: process.platform !== "win32",
           stdio: ["pipe", "pipe", "pipe"],
         },
       );
       remoteTurnProcess = child;
       child.stdin.end();
       if (remoteTurnCancelRequested) {
-        child.kill("SIGINT");
+        requestRemoteTurnStop();
       }
 
       const stdout = readline.createInterface({
@@ -618,7 +697,12 @@ async function main() {
       };
 
       stderr.on("line", (line) => {
-        if (!line.trim() || !currentTurnId) {
+        if (
+          remoteTurnCancelRequested ||
+          !line.trim() ||
+          isNoisyGeminiCliStderr(line) ||
+          !currentTurnId
+        ) {
           return;
         }
         notifyActivity({
@@ -649,6 +733,9 @@ async function main() {
           return;
         }
         if (!parsedLine || typeof parsedLine !== "object" || Array.isArray(parsedLine)) {
+          return;
+        }
+        if (remoteTurnCancelRequested) {
           return;
         }
         const event = parsedLine as Record<string, unknown>;
@@ -783,6 +870,7 @@ async function main() {
 
       child.once("exit", (code, signal) => {
         closeReaders();
+        clearRemoteStopTimers();
         if (remoteTurnFinalized) {
           return;
         }
@@ -928,8 +1016,9 @@ async function main() {
       await localTerminal.close("SIGTERM").catch(() => undefined);
       localTerminal = null;
     }
-    if (remoteTurnProcess && remoteTurnProcess.exitCode === null && !remoteTurnProcess.killed) {
-      remoteTurnProcess.kill("SIGTERM");
+    clearRemoteStopTimers();
+    if (remoteTurnProcess && remoteTurnProcess.exitCode === null) {
+      signalRemoteTurnProcess(remoteTurnProcess, "SIGTERM");
     }
     restoreInheritedTerminalModes();
     if (wrapperSessionId) {
@@ -1023,12 +1112,7 @@ async function main() {
         return;
       }
       if (remoteTurnRequestInFlight) {
-        remoteTurnInterrupted = true;
-        remoteTurnCancelRequested = true;
-        renderRemoteModePanel();
-        if (remoteTurnProcess && remoteTurnProcess.exitCode === null && !remoteTurnProcess.killed) {
-          remoteTurnProcess.kill("SIGINT");
-        }
+        requestRemoteTurnStop();
       }
       return;
     }
@@ -1071,6 +1155,13 @@ async function main() {
   while (!shouldExit && !exiting) {
     if (mode === "local_native" && wrapperSessionId) {
       scanLocalHistory();
+    }
+    if (
+      (mode as WrapperMode) === "remote_writer" &&
+      Date.now() <= remotePanelForceUntilMs &&
+      Date.now() - lastRemotePanelForceMs >= REMOTE_PANEL_SETTLE_REDRAW_MS
+    ) {
+      renderRemoteModePanel({ force: true });
     }
     await delay(250);
   }

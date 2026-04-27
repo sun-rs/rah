@@ -118,10 +118,28 @@ export function leaveAlternateScreen(): void {
   process.stdout.write("\u001b[?1049l");
 }
 
-export function restoreInheritedTerminalModes(): void {
+export function disableTerminalApplicationModes(): void {
   process.stdout.write(
-    "\u001b[<1u\u001b[?1004l\u001b[?2004l\u001b[?2026l\u001b[?25h\u001b[0m\r",
+    [
+      "\u001b[<1u",
+      "\u001b[?1000l",
+      "\u001b[?1002l",
+      "\u001b[?1003l",
+      "\u001b[?1005l",
+      "\u001b[?1006l",
+      "\u001b[?1015l",
+      "\u001b[?1004l",
+      "\u001b[?2004l",
+      "\u001b[?2026l",
+      "\u001b[?25h",
+      "\u001b[0m",
+    ].join(""),
   );
+}
+
+export function restoreInheritedTerminalModes(): void {
+  disableTerminalApplicationModes();
+  process.stdout.write("\r");
 }
 
 export function renderTerminalWrapperPanel(args: {

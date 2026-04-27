@@ -137,7 +137,7 @@ rl.on('line', (line) => {
     assert.equal(started.session.session.capabilities.resumeByProvider, true);
     assert.equal(started.session.session.capabilities.listProviderSessions, true);
     assert.equal(started.session.session.capabilities.queuedInput, false);
-    assert.equal(started.session.session.capabilities.modelSwitch, false);
+    assert.equal(started.session.session.capabilities.modelSwitch, true);
     assert.equal(started.session.session.capabilities.planMode, false);
     assert.equal(started.session.session.capabilities.subagents, false);
 

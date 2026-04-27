@@ -4,6 +4,8 @@ import type {
   ClientKind,
   ControlLease,
   ManagedSession,
+  ModelCapabilityProfile,
+  SessionResolvedConfig,
   SessionCapabilities,
   SessionSummary,
   Workbench,
@@ -138,6 +140,9 @@ export interface CreateManagedSessionArgs {
   title?: string;
   preview?: string;
   mode?: ManagedSession["mode"];
+  model?: ManagedSession["model"];
+  config?: SessionResolvedConfig;
+  modelProfile?: ModelCapabilityProfile;
   capabilities?: Partial<SessionCapabilities>;
 }
 
@@ -157,6 +162,9 @@ export interface PatchManagedSessionArgs {
   cwd?: string;
   rootDir?: string;
   mode?: ManagedSession["mode"];
+  model?: ManagedSession["model"];
+  config?: SessionResolvedConfig;
+  modelProfile?: ModelCapabilityProfile;
 }
 
 interface SessionStoreOptions {
@@ -234,6 +242,15 @@ export class SessionStore {
     }
     if (args.mode !== undefined) {
       session.mode = args.mode;
+    }
+    if (args.model !== undefined) {
+      session.model = args.model;
+    }
+    if (args.config !== undefined) {
+      session.config = args.config;
+    }
+    if (args.modelProfile !== undefined) {
+      session.modelProfile = args.modelProfile;
     }
 
     const state: StoredSessionState = {
@@ -333,6 +350,39 @@ export class SessionStore {
     this.snapshot();
   }
 
+  restoreSession(state: StoredSessionState): StoredSessionState {
+    const nextState = cloneStoredSessionState(state);
+    if (this.sessions.has(nextState.session.id)) {
+      throw new Error(`Session ${nextState.session.id} already exists.`);
+    }
+    if (nextState.session.providerSessionId) {
+      const providerKey = this.providerKey(
+        nextState.session.provider,
+        nextState.session.providerSessionId,
+      );
+      const existingSessionId = this.providerSessionIndex.get(providerKey);
+      if (existingSessionId && existingSessionId !== nextState.session.id) {
+        throw new Error(
+          `Provider session ${nextState.session.provider}:${nextState.session.providerSessionId} is already managed.`,
+        );
+      }
+    }
+    normalizeSharedWebClientState(nextState);
+    this.sessions.set(nextState.session.id, nextState);
+    if (nextState.session.providerSessionId) {
+      this.providerSessionIndex.set(
+        this.providerKey(nextState.session.provider, nextState.session.providerSessionId),
+        nextState.session.id,
+      );
+    }
+    if (!this.workbench.sessionIds.includes(nextState.session.id)) {
+      this.workbench.sessionIds.push(nextState.session.id);
+    }
+    this.workbench.activeSessionId = nextState.session.id;
+    this.snapshot();
+    return nextState;
+  }
+
   claimControl(
     sessionId: string,
     clientId: string,
@@ -421,6 +471,15 @@ export class SessionStore {
     }
     if (patch.mode !== undefined) {
       state.session.mode = patch.mode;
+    }
+    if (patch.model !== undefined) {
+      state.session.model = patch.model;
+    }
+    if (patch.config !== undefined) {
+      state.session.config = patch.config;
+    }
+    if (patch.modelProfile !== undefined) {
+      state.session.modelProfile = patch.modelProfile;
     }
 
     const nextProviderSessionId = state.session.providerSessionId;

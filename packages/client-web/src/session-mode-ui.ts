@@ -95,9 +95,15 @@ const PROVIDER_MODE_PRESETS: Record<SupportedModeProvider, ProviderPreset> = {
     planModeAvailable: true,
   },
   opencode: {
-    accessModes: [],
-    defaultAccessModeId: null,
-    planModeAvailable: false,
+    accessModes: [
+      {
+        id: "build",
+        label: "Build",
+        description: "Default OpenCode agent mode.",
+      },
+    ],
+    defaultAccessModeId: "build",
+    planModeAvailable: true,
   },
   custom: {
     accessModes: [],

@@ -3,6 +3,7 @@ import { afterEach, describe, test } from "node:test";
 import process from "node:process";
 import {
   clearTerminalScreen,
+  disableTerminalApplicationModes,
   enterAlternateScreen,
   leaveAlternateScreen,
   renderTerminalWrapperPanel,
@@ -151,7 +152,20 @@ describe("terminal wrapper panel helpers", () => {
     });
 
     assert.deepEqual(writes, [
-      "\u001b[<1u\u001b[?1004l\u001b[?2004l\u001b[?2026l\u001b[?25h\u001b[0m\r",
+      "\u001b[<1u\u001b[?1000l\u001b[?1002l\u001b[?1003l\u001b[?1005l\u001b[?1006l\u001b[?1015l\u001b[?1004l\u001b[?2004l\u001b[?2026l\u001b[?25h\u001b[0m",
+      "\r",
     ]);
+  });
+
+  test("disables application mouse and focus modes without leaving alternate screen", () => {
+    const writes = captureWrites(() => {
+      disableTerminalApplicationModes();
+    });
+
+    assert.equal(
+      writes[0],
+      "\u001b[<1u\u001b[?1000l\u001b[?1002l\u001b[?1003l\u001b[?1005l\u001b[?1006l\u001b[?1015l\u001b[?1004l\u001b[?2004l\u001b[?2026l\u001b[?25h\u001b[0m",
+    );
+    assert.doesNotMatch(writes[0] ?? "", /\u001b\[\?1049l/);
   });
 });

@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import type { SessionSummary } from "@rah/runtime-protocol";
+import type { SessionConfigValue, SessionSummary } from "@rah/runtime-protocol";
 import type { ProviderChoice } from "../components/ProviderSelector";
 import { insertTextAtSelection } from "../composer-text-insertion";
 
@@ -9,6 +9,9 @@ type StartSessionInput = {
   title: string;
   initialInput: string;
   modeId?: string;
+  model?: string;
+  reasoningId?: string;
+  providerConfig?: Record<string, SessionConfigValue>;
 };
 
 type SendInputFn = (sessionId: string, text: string) => Promise<unknown>;
@@ -19,6 +22,8 @@ export function useWorkbenchComposerState(args: {
   availableWorkspaceDir: string;
   newSessionProvider: ProviderChoice;
   startModeId: string | null;
+  startModelId?: string | null;
+  startReasoningId?: string | null;
   sendInput: SendInputFn;
   startSession: StartSessionFn;
 }) {
@@ -54,6 +59,8 @@ export function useWorkbenchComposerState(args: {
       title: text.slice(0, 50),
       initialInput: text,
       ...(args.startModeId ? { modeId: args.startModeId } : {}),
+      ...(args.startModelId ? { model: args.startModelId } : {}),
+      ...(args.startReasoningId ? { reasoningId: args.startReasoningId } : {}),
     });
   };
 

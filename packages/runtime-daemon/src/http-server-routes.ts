@@ -12,9 +12,11 @@ import type {
   ListDebugScenariosResponse,
   ListProvidersResponse,
   PermissionResponseRequest,
+  ProviderKind,
   ReleaseControlRequest,
   ResumeSessionRequest,
   SessionInputRequest,
+  SetSessionModelRequest,
   StartDebugScenarioRequest,
   StartSessionRequest,
   StoredSessionRemoveRequest,
@@ -168,6 +170,19 @@ export function createPostRoutes(
       },
     },
     {
+      pattern: /^\/api\/sessions\/([^/]+)\/model$/,
+      handler: async (req, res, match, body) => {
+        const request = (body ?? {}) as SetSessionModelRequest;
+        if (typeof request.modelId !== "string" || !request.modelId.trim()) {
+          writeJson(req, res, 400, { error: "Session model is required." });
+          return;
+        }
+        writeJson(req, res, 200, {
+          session: await engine.setSessionModel(match[1]!, request),
+        });
+      },
+    },
+    {
       pattern: /^\/api\/sessions\/([^/]+)\/permissions\/([^/]+)\/respond$/,
       handler: async (req, res, match, body) => {
         await engine.respondToPermission(
@@ -301,6 +316,19 @@ export async function handleHttpRequest(args: {
         providers: await engine.listProviderDiagnostics({ forceRefresh }),
       };
       writeJson(req, res, 200, response);
+      return;
+    }
+
+    const providerModelsMatch = /^\/api\/providers\/([^/]+)\/models$/.exec(pathname);
+    if (req.method === "GET" && providerModelsMatch) {
+      const forceRefresh = url.searchParams.get("refresh") === "1";
+      const cwd = url.searchParams.get("cwd") ?? undefined;
+      writeJson(req, res, 200, {
+        catalog: await engine.listProviderModels(providerModelsMatch[1]! as ProviderKind, {
+          ...(cwd ? { cwd } : {}),
+          forceRefresh,
+        }),
+      });
       return;
     }
 

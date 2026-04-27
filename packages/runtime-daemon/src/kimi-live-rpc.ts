@@ -208,11 +208,23 @@ export async function resolveKimiCommand(): Promise<{ command: string; args: str
 export async function createKimiClient(params: {
   providerSessionId: string;
   cwd: string;
+  model?: string;
+  thinking?: boolean;
   onEvent: (event: JsonRpcEvent) => void;
   onRequest: (request: JsonRpcRequest) => Promise<void>;
 }) {
   const { command, args } = await resolveKimiCommand();
-  const child = spawn(command, [...args, "--wire", "--session", params.providerSessionId], {
+  const cliArgs = [...args];
+  if (params.model) {
+    cliArgs.push("--model", params.model);
+    if (params.thinking === true) {
+      cliArgs.push("--thinking");
+    } else if (params.thinking === false) {
+      cliArgs.push("--no-thinking");
+    }
+  }
+  cliArgs.push("--wire", "--session", params.providerSessionId);
+  const child = spawn(command, cliArgs, {
     cwd: params.cwd,
     env: process.env,
     stdio: ["pipe", "pipe", "pipe"],

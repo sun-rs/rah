@@ -180,12 +180,12 @@ describe("composer contract", () => {
     assert.match(COMPOSER_LAYOUT.roundPrimaryButtonClassName, /h-11/);
     assert.match(
       COMPOSER_LAYOUT.composeGridWithoutStopClassName,
-      /grid-cols-\[2\.75rem_minmax\(0,1fr\)_2\.75rem\]/,
+      /grid-cols-\[auto_minmax\(0,1fr\)_2\.75rem\]/,
     );
     assert.match(COMPOSER_LAYOUT.composeGridWithoutStopClassName, /\bgap-2\b/);
     assert.match(
       COMPOSER_LAYOUT.composeGridWithStopClassName,
-      /grid-cols-\[2\.75rem_minmax\(0,1fr\)_2\.75rem_2\.75rem\]/,
+      /grid-cols-\[auto_minmax\(0,1fr\)_2\.75rem_2\.75rem\]/,
     );
     assert.match(COMPOSER_LAYOUT.composeGridWithStopClassName, /\bgap-2\b/);
     assert.equal(
@@ -197,18 +197,12 @@ describe("composer contract", () => {
     assert.match(COMPOSER_LAYOUT.textareaClassName, /\bblock\b/);
     assert.match(COMPOSER_LAYOUT.textareaClassName, /\bh-11\b/);
     assert.match(COMPOSER_LAYOUT.textareaClassName, /min-h-11/);
-    assert.equal(
-      EMPTY_STATE_COMPOSER_LAYOUT.roundSecondaryButtonClassName,
-      COMPOSER_LAYOUT.roundSecondaryButtonClassName,
-    );
-    assert.equal(
-      EMPTY_STATE_COMPOSER_LAYOUT.roundPrimaryButtonClassName,
-      COMPOSER_LAYOUT.roundPrimaryButtonClassName,
-    );
+    assert.match(EMPTY_STATE_COMPOSER_LAYOUT.roundSecondaryButtonClassName, /h-8/);
+    assert.match(EMPTY_STATE_COMPOSER_LAYOUT.roundPrimaryButtonClassName, /h-8/);
     assert.match(EMPTY_STATE_COMPOSER_LAYOUT.leftControlsClassName, /\bgap-2\b/);
     assert.match(EMPTY_STATE_COMPOSER_LAYOUT.textareaClassName, /min-h-\[120px\]/);
     assert.match(EMPTY_STATE_COMPOSER_LAYOUT.controlsRowClassName, /bottom-3/);
-    assert.match(EMPTY_STATE_COMPOSER_LAYOUT.workspaceTriggerClassName, /h-11/);
+    assert.match(EMPTY_STATE_COMPOSER_LAYOUT.workspaceTriggerClassName, /h-8/);
     assert.equal(
       COMPOSER_LAYOUT.bottomPaddingStyle.paddingBottom,
       "calc(env(safe-area-inset-bottom, 0px) + 0.5rem)",

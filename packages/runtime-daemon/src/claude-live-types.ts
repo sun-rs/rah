@@ -1,5 +1,6 @@
 import {
   query as claudeQuery,
+  type Options as ClaudeOptions,
   type PermissionMode,
   type PermissionResult,
   type Query as ClaudeQuery,
@@ -24,6 +25,7 @@ export type LiveClaudeSession = {
   sessionId: string;
   cwd: string;
   model?: string;
+  effort?: ClaudeOptions["effort"];
   permissionMode: PermissionMode;
   providerSessionId?: string;
   activeTurn: LiveClaudeTurn | null;

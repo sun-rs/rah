@@ -183,6 +183,7 @@ export function buildClaudeOptions(args: {
     settingSources: ["user", "project"],
     ...(args.liveSession.providerSessionId ? { resume: args.liveSession.providerSessionId } : {}),
     ...(args.liveSession.model ? { model: args.liveSession.model } : {}),
+    ...(args.liveSession.effort !== undefined ? { effort: args.liveSession.effort } : {}),
   }));
 }
 

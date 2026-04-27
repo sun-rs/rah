@@ -1,6 +1,8 @@
 import type { RefObject } from "react";
+import type { ProviderModelCatalog } from "@rah/runtime-protocol";
 import { ArrowUp, ChevronDown, Folder, FolderPlus, Menu, PanelRight, Plus } from "lucide-react";
 import { ProviderSelector, type ProviderChoice } from "../../ProviderSelector";
+import { SessionModelControls } from "../../SessionModelControls";
 import { SessionModeControls } from "../../SessionModeControls";
 import { TokenizedTextarea } from "../../TokenizedTextarea";
 import { WorkspacePicker } from "../../WorkspacePicker";
@@ -28,6 +30,12 @@ export function WorkbenchEmptyPane(props: {
   onAddWorkspace: (dir: string) => void;
   newSessionProvider: ProviderChoice;
   onChangeProvider: (provider: ProviderChoice) => void;
+  modelCatalog: ProviderModelCatalog | null;
+  modelCatalogLoading: boolean;
+  selectedModelId: string | null;
+  selectedReasoningId: string | null;
+  onModelChange: (modelId: string, defaultReasoningId?: string | null) => void;
+  onReasoningChange: (reasoningId: string) => void;
   accessModes: SessionModeChoice[];
   selectedAccessModeId: string | null;
   planModeAvailable: boolean;
@@ -173,6 +181,15 @@ export function WorkbenchEmptyPane(props: {
                     ))}
                   </div>
                 ) : null}
+                <SessionModelControls
+                  catalog={props.modelCatalog}
+                  selectedModelId={props.selectedModelId}
+                  selectedReasoningId={props.selectedReasoningId}
+                  loading={props.modelCatalogLoading}
+                  allowProviderDefault
+                  onModelChange={props.onModelChange}
+                  onReasoningChange={props.onReasoningChange}
+                />
                 <SessionModeControls
                   variant="toolbar"
                   accessModes={props.accessModes}

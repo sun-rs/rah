@@ -1,5 +1,6 @@
 import type { CodexAppServerTranslationState } from "./codex-app-server-activity";
 import type { CodexJsonRpcClient } from "./codex-live-rpc";
+import type { ProviderModelCatalog } from "@rah/runtime-protocol";
 
 export type JsonRpcRequest = {
   id: number | string;
@@ -32,6 +33,9 @@ export type LiveCodexSession = {
   cwd: string;
   approvalPolicy: string;
   sandboxMode: string;
+  modelId: string | null;
+  reasoningId: string | null;
+  modelCatalog: ProviderModelCatalog | null;
   activeModeId: string;
   lastNonPlanModeId: string;
   planCollaborationMode:
