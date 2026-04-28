@@ -98,8 +98,13 @@ const PROVIDER_MODE_PRESETS: Record<SupportedModeProvider, ProviderPreset> = {
     accessModes: [
       {
         id: "build",
-        label: "Build",
-        description: "Default OpenCode agent mode.",
+        label: "Default",
+        description: "Use OpenCode's normal permission prompts.",
+      },
+      {
+        id: "opencode/full-auto",
+        label: "Full auto",
+        description: "Allow common OpenCode tool permissions for this session.",
       },
     ],
     defaultAccessModeId: "build",

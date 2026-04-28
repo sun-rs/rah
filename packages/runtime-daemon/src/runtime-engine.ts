@@ -117,6 +117,7 @@ export class RuntimeEngine {
     this.sessionStore = new SessionStore({
       onSnapshot: (states) => {
         this.workbenchState.persistLiveSessions(states);
+        this.refreshRememberedState();
       },
     });
     const restored = this.workbenchState.load();

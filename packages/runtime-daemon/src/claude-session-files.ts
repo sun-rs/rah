@@ -174,6 +174,12 @@ function normalizeClaudeTranscriptText(value: unknown): string | null {
   return normalized.length > 0 ? normalized : null;
 }
 
+function trimClaudeTranscriptBlankLines(value: string): string {
+  return value
+    .replace(/^(?:[ \t]*\r?\n)+/, "")
+    .replace(/(?:\r?\n[ \t]*)+$/, "");
+}
+
 function isClaudeInterruptPlaceholderText(value: unknown): boolean {
   const normalized = normalizeClaudeTranscriptText(value);
   return normalized !== null && /^\[Request interrupted by user(?:[^\]]*)\]$/.test(normalized);
@@ -201,8 +207,8 @@ function isClaudeTranscriptNoiseText(value: unknown): boolean {
 
 function collectClaudeTextContentParts(content: unknown): string[] {
   if (typeof content === "string") {
-    const normalized = normalizeClaudeTranscriptText(content);
-    return normalized ? [normalized] : [];
+    const text = trimClaudeTranscriptBlankLines(content);
+    return text.trim() ? [text] : [];
   }
   if (!Array.isArray(content)) {
     return [];
@@ -213,14 +219,12 @@ function collectClaudeTextContentParts(content: unknown): string[] {
       continue;
     }
     const record = block as Record<string, unknown>;
-    const text = normalizeClaudeTranscriptText(record.text);
-    if (text) {
-      parts.push(text);
+    if (typeof record.text === "string" && record.text.trim()) {
+      parts.push(trimClaudeTranscriptBlankLines(record.text));
       continue;
     }
-    const input = normalizeClaudeTranscriptText(record.input);
-    if (input) {
-      parts.push(input);
+    if (typeof record.input === "string" && record.input.trim()) {
+      parts.push(trimClaudeTranscriptBlankLines(record.input));
     }
   }
   return parts;
@@ -233,11 +237,11 @@ function isClaudeTranscriptNoiseContent(content: unknown): boolean {
 
 function extractUserMessageText(content: unknown): string | null {
   if (typeof content === "string") {
-    const normalized = content.trim();
-    if (!normalized || isClaudeTranscriptNoiseText(normalized)) {
+    const text = trimClaudeTranscriptBlankLines(content);
+    if (!text.trim() || isClaudeTranscriptNoiseText(text)) {
       return null;
     }
-    return normalized;
+    return text;
   }
   const parts = collectClaudeTextContentParts(content).filter(
     (part) => !isClaudeTranscriptNoiseText(part),
@@ -245,7 +249,8 @@ function extractUserMessageText(content: unknown): string | null {
   if (parts.length === 0) {
     return null;
   }
-  return parts.join("\n").trim() || null;
+  const text = trimClaudeTranscriptBlankLines(parts.join("\n"));
+  return text.trim() ? text : null;
 }
 
 function extractAssistantMessageText(content: unknown): string | null {
@@ -255,7 +260,8 @@ function extractAssistantMessageText(content: unknown): string | null {
   if (parts.length === 0) {
     return null;
   }
-  return parts.join("\n").trim() || null;
+  const text = trimClaudeTranscriptBlankLines(parts.join("\n"));
+  return text.trim() ? text : null;
 }
 
 function truncateText(text: string, maxLength = 120): string {

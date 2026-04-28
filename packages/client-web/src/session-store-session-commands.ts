@@ -13,6 +13,7 @@ import {
 import { updateSessionSummaryInProjectionMap } from "./session-store-projections";
 import {
   appendOptimisticUserMessage,
+  removeOptimisticUserMessage,
   type SessionProjection,
 } from "./types";
 
@@ -278,13 +279,17 @@ export async function sendInputCommand(args: {
         return { error: message };
       }
       const next = new Map(state.projections);
+      const baseRestored =
+        previousProjection && projection.lastSeq === previousProjection.lastSeq
+          ? previousProjection
+          : removeOptimisticUserMessage(projection, args.text);
       const restored: SessionProjection = {
-        ...projection,
+        ...baseRestored,
         summary: {
-          ...projection.summary,
+          ...baseRestored.summary,
           session: {
-            ...projection.summary.session,
-            runtimeState: previousRuntimeState ?? projection.summary.session.runtimeState,
+            ...baseRestored.summary.session,
+            runtimeState: previousRuntimeState ?? baseRestored.summary.session.runtimeState,
           },
         },
       };

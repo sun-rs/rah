@@ -4,6 +4,7 @@ import type {
   IndependentTerminalStartRequest,
   IndependentTerminalStartResponse,
   PermissionResponseRequest,
+  SessionCapabilities,
   RahEvent,
 } from "@rah/runtime-protocol";
 import type { HistorySnapshotStore } from "./history-snapshots";
@@ -46,6 +47,23 @@ type RuntimeTerminalCoordinatorDeps = {
   onRememberSession: (state: StoredSessionState) => void;
   onSessionOwnerRemoved: (sessionId: string) => void;
 };
+
+function buildTerminalWrapperCapabilities(
+  provider: WrapperHelloMessage["provider"],
+): Partial<SessionCapabilities> {
+  return {
+    livePermissions: provider !== "claude" && provider !== "gemini",
+    renameSession: false,
+    actions: {
+      info: true,
+      archive: true,
+      delete: false,
+      rename: "none",
+    },
+    steerInput: true,
+    queuedInput: true,
+  };
+}
 
 export class RuntimeTerminalCoordinator {
   private readonly terminalWrappers = new TerminalWrapperRegistry();
@@ -302,17 +320,7 @@ export class RuntimeTerminalCoordinator {
       title: `${request.provider} terminal session`,
       preview: request.launchCommand.join(" "),
       mode: buildExternalLockedModeState(),
-      capabilities: {
-        renameSession: false,
-        actions: {
-          info: true,
-          archive: true,
-          delete: false,
-          rename: "none",
-        },
-        steerInput: true,
-        queuedInput: true,
-      },
+      capabilities: buildTerminalWrapperCapabilities(request.provider),
     });
     this.deps.ptyHub.ensureSession(state.session.id);
     this.deps.sessionStore.setRuntimeState(state.session.id, "running");

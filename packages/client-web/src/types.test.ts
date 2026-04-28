@@ -6,6 +6,7 @@ import {
   appendOptimisticUserMessage,
   applyEventToProjection,
   initialHistorySyncState,
+  removeOptimisticUserMessage,
   type SessionProjection,
 } from "./types";
 
@@ -190,6 +191,139 @@ describe("client projection", () => {
       assert.equal(only.item.text, "我是 Codex");
       assert.equal(only.item.messageId, "assistant-1");
     }
+  });
+
+  test("does not merge different assistant messages in the same turn", () => {
+    let current = projection();
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 1,
+        turnId: "turn-1",
+        type: "timeline.item.added",
+        payload: {
+          item: { kind: "assistant_message", text: "Repeated answer.", messageId: "assistant-1" },
+        },
+      }),
+    );
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 2,
+        turnId: "turn-1",
+        type: "timeline.item.added",
+        payload: {
+          item: { kind: "assistant_message", text: "Repeated answer.", messageId: "assistant-2" },
+        },
+      }),
+    );
+
+    const messages = current.feed.filter(
+      (entry) => entry.kind === "timeline" && entry.item.kind === "assistant_message",
+    );
+    assert.equal(messages.length, 2);
+  });
+
+  test("replaces assistant delta text with authoritative completed text", () => {
+    let current = projection();
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 1,
+        turnId: "turn-1",
+        type: "timeline.item.added",
+        payload: {
+          item: {
+            kind: "assistant_message",
+            text: "核心内容包括：- 项目定位：Gemini CLI",
+            messageId: "assistant-1",
+          },
+        },
+      }),
+    );
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 2,
+        turnId: "turn-1",
+        type: "timeline.item.updated",
+        payload: {
+          item: {
+            kind: "assistant_message",
+            text: "核心内容包括：\n\n- **项目定位**：Gemini CLI",
+            messageId: "assistant-1",
+          },
+        },
+      }),
+    );
+
+    assert.equal(current.feed.length, 1);
+    const only = current.feed[0];
+    assert.equal(only?.kind, "timeline");
+    if (only?.kind === "timeline" && only.item.kind === "assistant_message") {
+      assert.equal(only.item.text, "核心内容包括：\n\n- **项目定位**：Gemini CLI");
+    }
+  });
+
+  test("removes failed optimistic user messages without dropping later events", () => {
+    let current = appendOptimisticUserMessage(projection(), "hello");
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 1,
+        turnId: "turn-local",
+        type: "runtime.status",
+        payload: { status: "thinking" },
+      }),
+    );
+
+    const restored = removeOptimisticUserMessage(current, "hello");
+
+    assert.equal(
+      restored.feed.some(
+        (entry) =>
+          entry.kind === "timeline" &&
+          entry.key.startsWith("optimistic:user:") &&
+          entry.item.kind === "user_message" &&
+          entry.item.text === "hello",
+      ),
+      false,
+    );
+    assert.equal(restored.lastSeq, 1);
+  });
+
+  test("does not merge identity-less assistant messages without a live turn", () => {
+    let current = projection();
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 1,
+        type: "timeline.item.added",
+        payload: {
+          item: { kind: "assistant_message", text: "First stored answer." },
+        },
+      }),
+    );
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 2,
+        type: "timeline.item.added",
+        payload: {
+          item: { kind: "assistant_message", text: "Second stored answer." },
+        },
+      }),
+    );
+
+    assert.equal(current.feed.length, 2);
+    assert.deepEqual(
+      current.feed.map((entry) =>
+        entry.kind === "timeline" && entry.item.kind === "assistant_message"
+          ? entry.item.text
+          : null,
+      ),
+      ["First stored answer.", "Second stored answer."],
+    );
   });
 
   test("upgrades history assistant text into authoritative live message without duplicating", () => {

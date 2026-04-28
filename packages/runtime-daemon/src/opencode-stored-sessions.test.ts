@@ -76,6 +76,45 @@ test("loads OpenCode stored messages and materializes history", { skip: !hasSqli
   }
 });
 
+test("preserves OpenCode stored assistant markdown line breaks and indentation", { skip: !hasSqlite }, () => {
+  const markdown = [
+    "会涉及抽象。",
+    "",
+    "- AgentAdapter",
+    "  - nested item",
+    "",
+    "```text",
+    "  Council",
+    "```",
+  ].join("\n");
+  const dataDir = createOpenCodeFixture({ assistantText: markdown });
+  try {
+    const record = findOpenCodeStoredSessionRecord("ses_active", { dataDir });
+    assert.ok(record);
+
+    const page = getOpenCodeStoredSessionHistoryPage({
+      sessionId: "runtime-session",
+      record,
+      limit: 20,
+    });
+    const assistantMessage = page.events.find(
+      (event) =>
+        event.type === "timeline.item.added" &&
+        event.payload.item.kind === "assistant_message",
+    );
+
+    assert.ok(assistantMessage);
+    if (
+      assistantMessage.type === "timeline.item.added" &&
+      assistantMessage.payload.item.kind === "assistant_message"
+    ) {
+      assert.equal(assistantMessage.payload.item.text, markdown);
+    }
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
 test("archives OpenCode stored sessions so discovery no longer returns them", { skip: !hasSqlite }, () => {
   const dataDir = createOpenCodeFixture();
   try {
@@ -88,16 +127,19 @@ test("archives OpenCode stored sessions so discovery no longer returns them", { 
   }
 });
 
-function createOpenCodeFixture(): string {
+function createOpenCodeFixture(options: { assistantText?: string } = {}): string {
   const dataDir = mkdtempSync(path.join(os.tmpdir(), "rah-opencode-history-"));
   const dbPath = path.join(dataDir, "opencode.db");
   const created = Date.parse("2026-04-26T16:00:00.000Z");
   const updated = Date.parse("2026-04-26T16:00:05.000Z");
-  execFileSync("sqlite3", [dbPath, fixtureSql(created, updated)]);
+  execFileSync("sqlite3", [
+    dbPath,
+    fixtureSql(created, updated, options.assistantText ?? "Assistant answer"),
+  ]);
   return dataDir;
 }
 
-function fixtureSql(created: number, updated: number): string {
+function fixtureSql(created: number, updated: number, assistantText: string): string {
   return `
     create table project (
       id text primary key,
@@ -166,7 +208,7 @@ function fixtureSql(created: number, updated: number): string {
       })}),
       ('prt_c_assistant', 'msg_assistant', 'ses_active', ${created + 202}, ${updated}, ${sqlJson({
         type: "text",
-        text: "Assistant answer",
+        text: assistantText,
       })});
   `;
 }

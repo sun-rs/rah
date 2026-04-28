@@ -57,6 +57,8 @@
 
 - terminal 显示路径和 web 数据路径已经分离
 
+历史读取与 live 判断的边界见 [Codex 历史 liveness 与 pending tool 收口边界](./codex-history-liveness.zh-CN.md)。核心原则是：RAH 只读历史不算 live；只有 RAH 管理写手或外部写手才阻止 EOF pending tool 收口。
+
 ## 3. local / remote 模式
 
 ### 3.1 `local_native`

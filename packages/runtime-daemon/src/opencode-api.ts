@@ -380,6 +380,27 @@ export async function archiveOpenCodeSession(params: {
   );
 }
 
+export type OpenCodePermissionRule = {
+  permission: string;
+  pattern: string;
+  action: "allow" | "deny" | "ask";
+};
+
+export async function setOpenCodeSessionPermission(params: {
+  handle: Pick<OpenCodeServerHandle, "baseUrl" | "cwd" | "authHeader">;
+  providerSessionId: string;
+  permission: OpenCodePermissionRule[];
+}): Promise<OpenCodeSessionInfo> {
+  return await openCodeRequestJson<OpenCodeSessionInfo>(
+    params.handle,
+    `/session/${encodeURIComponent(params.providerSessionId)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ permission: params.permission }),
+    },
+  );
+}
+
 export async function deleteOpenCodeSession(params: {
   handle: Pick<OpenCodeServerHandle, "baseUrl" | "cwd" | "authHeader">;
   providerSessionId: string;

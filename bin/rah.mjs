@@ -5,7 +5,6 @@ import { dirname, resolve } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
-import { WebSocket } from "ws";
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_DAEMON_URL = "http://127.0.0.1:43111";
@@ -28,9 +27,9 @@ function printUsage() {
       "",
       "Current status:",
       "  codex: stable live terminal wrapper",
-      "  claude: phase-1 live terminal wrapper in progress",
-      "  kimi: phase-1 live terminal wrapper in progress",
-      "  gemini: phase-1 live terminal wrapper in progress",
+      "  claude: live terminal wrapper",
+      "  kimi: live terminal wrapper",
+      "  gemini: live terminal wrapper",
       "  opencode: live terminal wrapper via OpenCode server API",
       "",
       "Claude note:",
@@ -135,14 +134,6 @@ async function ensureDaemon(daemonUrl) {
   throw new Error(
     `Timed out waiting for daemon at ${daemonUrl}. Check ${daemonLogPath} for logs.`,
   );
-}
-
-function wrapperControlUrl(daemonUrl) {
-  const url = new URL(daemonUrl);
-  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  url.pathname = "/api/wrapper-control";
-  url.search = "";
-  return url.toString();
 }
 
 function isDaemonConnectionError(error) {
@@ -341,113 +332,6 @@ async function main() {
     });
     return;
   }
-
-  await ensureDaemon(parsed.daemonUrl);
-
-  const socket = new WebSocket(wrapperControlUrl(parsed.daemonUrl));
-  let wrapperSessionId = null;
-  let closed = false;
-
-  const closeGracefully = () => {
-    if (closed) {
-      return;
-    }
-    closed = true;
-    if (wrapperSessionId) {
-      socket.send(
-        JSON.stringify({
-          type: "wrapper.exited",
-          sessionId: wrapperSessionId,
-        }),
-      );
-    }
-    socket.close();
-  };
-
-  process.on("SIGINT", () => {
-    closeGracefully();
-  });
-  process.on("SIGTERM", () => {
-    closeGracefully();
-  });
-
-  socket.on("open", () => {
-    const hello = {
-      type: "wrapper.hello",
-      provider: parsed.provider,
-      cwd: parsed.cwd,
-      rootDir: parsed.cwd,
-      terminalPid: process.pid,
-      launchCommand: process.argv.slice(0),
-      ...(parsed.resumeProviderSessionId
-        ? { resumeProviderSessionId: parsed.resumeProviderSessionId }
-        : {}),
-    };
-    socket.send(JSON.stringify(hello));
-  });
-
-  socket.on("message", (raw) => {
-    const message = JSON.parse(raw.toString("utf8"));
-    if (message.type === "wrapper.ready") {
-      wrapperSessionId = message.sessionId;
-      process.stdout.write(
-        [
-          `[rah] wrapper connected`,
-          `  sessionId: ${message.sessionId}`,
-          `  surfaceId: ${message.surfaceId}`,
-          `  operatorGroupId: ${message.operatorGroupId}`,
-          `  web: ${parsed.daemonUrl}/`,
-          `  note: provider TUI launch is not wired yet in this skeleton`,
-          "",
-        ].join("\n"),
-      );
-      socket.send(
-        JSON.stringify({
-          type: "wrapper.prompt_state.changed",
-          sessionId: message.sessionId,
-          state: "prompt_clean",
-        }),
-      );
-      return;
-    }
-    if (message.type === "turn.enqueue") {
-      process.stdout.write(
-        `[rah] remote turn queued from ${message.queuedTurn.sourceSurfaceId}: ${message.queuedTurn.text}\n`,
-      );
-      return;
-    }
-    if (message.type === "turn.inject") {
-      process.stdout.write(
-        `[rah] remote turn ready to inject: ${message.queuedTurn.text}\n`,
-      );
-      return;
-    }
-    if (message.type === "turn.interrupt") {
-      process.stdout.write(`[rah] remote interrupt requested\n`);
-      return;
-    }
-    if (message.type === "permission.resolve") {
-      process.stdout.write(
-        `[rah] remote permission resolved for ${message.requestId}\n`,
-      );
-      return;
-    }
-    if (message.error) {
-      process.stderr.write(`[rah] ${message.error}\n`);
-    }
-  });
-
-  socket.on("close", () => {
-    if (!closed) {
-      process.stderr.write("[rah] wrapper control channel closed\n");
-      process.exitCode = 1;
-    }
-  });
-
-  socket.on("error", (error) => {
-    process.stderr.write(`[rah] ${error.message}\n`);
-    process.exitCode = 1;
-  });
 }
 
 void main().catch((error) => {

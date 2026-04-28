@@ -168,6 +168,6 @@ terminal 里的 wrapper / Codex TUI 自己退出后：
 
 - 在同一个 Codex TUI 内 `/new` / `/resume` 后，RAH 自动把旧 live session 提升/切换成新的 live session
 - web 侧 assistant 文本真正逐 token 流式显示到和 TUI 一样细
-- `rah claude / gemini / kimi` 已达到和 `rah codex` 同等级别完成度
+- `rah claude / gemini` handoff 没有承诺 web 侧 permission approval；当前策略是 web 接管轮次默认走自动放行，避免卡在不可见 approval 上
 
 这些都属于下一阶段工作，不属于本次 `rah codex` 稳定交付的范围。

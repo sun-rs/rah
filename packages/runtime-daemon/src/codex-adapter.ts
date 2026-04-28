@@ -35,6 +35,7 @@ import {
   CodexModelCatalogCache,
   resolveCodexRuntimeCapabilityState,
 } from "./codex-model-catalog";
+import { canFinalizeCodexStoredHistory } from "./codex-history-liveness";
 import {
   createCodexStoredSessionFrozenHistoryPageLoader,
   discoverCodexStoredSessions,
@@ -105,6 +106,23 @@ function codexSandboxPolicyForTurn(args: {
   }
 }
 
+function codexCollaborationModeForTurn(
+  live: LiveCodexSession,
+): LiveCodexSession["planCollaborationMode"] {
+  if (live.activeModeId !== "plan" || !live.planCollaborationMode) {
+    return null;
+  }
+  return {
+    ...live.planCollaborationMode,
+    settings: {
+      ...live.planCollaborationMode.settings,
+      ...(live.modelId ? { model: live.modelId } : {}),
+      reasoning_effort:
+        live.reasoningId ?? live.planCollaborationMode.settings.reasoning_effort,
+    },
+  };
+}
+
 export class CodexAdapter implements ProviderAdapter {
   readonly id = "codex";
   readonly providers: Array<"codex"> = ["codex"];
@@ -118,6 +136,34 @@ export class CodexAdapter implements ProviderAdapter {
 
   constructor(services: RuntimeServices) {
     this.services = services;
+  }
+
+  private hasRahManagedCodexWriter(providerSessionId: string): boolean {
+    const managed = this.services.sessionStore.findManagedByProviderSession(
+      "codex",
+      providerSessionId,
+    );
+    if (!managed || this.rehydratedSessionIds.has(managed.session.id)) {
+      return false;
+    }
+    if (this.liveSessions.has(managed.session.id)) {
+      return true;
+    }
+    if (managed.session.launchSource !== "terminal") {
+      return false;
+    }
+    return (
+      managed.session.capabilities.steerInput ||
+      managed.session.capabilities.queuedInput ||
+      managed.session.capabilities.actions.archive
+    );
+  }
+
+  private canFinalizeStoredHistory(record: CodexStoredSessionRecord): boolean {
+    return canFinalizeCodexStoredHistory({
+      rolloutPath: record.rolloutPath,
+      hasRahManagedWriter: this.hasRahManagedCodexWriter(record.ref.providerSessionId),
+    });
   }
 
   private reportAsyncLiveError(sessionId: string, detail: string): void {
@@ -241,7 +287,7 @@ export class CodexAdapter implements ProviderAdapter {
       if (!this.services.sessionStore.hasInputControl(sessionId, request.clientId)) {
         throw new Error(`Client ${request.clientId} does not hold input control for ${sessionId}.`);
       }
-      const usesPlanMode = live.activeModeId === "plan" && live.planCollaborationMode;
+      const collaborationMode = codexCollaborationModeForTurn(live);
       void live.client.request(
         "turn/start",
         {
@@ -253,12 +299,9 @@ export class CodexAdapter implements ProviderAdapter {
             sandboxMode: live.sandboxMode,
             cwd: live.cwd,
           }),
-          ...(usesPlanMode
-            ? { collaborationMode: live.planCollaborationMode }
-            : {
-                ...(live.modelId ? { model: live.modelId } : {}),
-                ...(live.reasoningId ? { effort: live.reasoningId } : {}),
-              }),
+          ...(live.modelId ? { model: live.modelId } : {}),
+          ...(live.reasoningId ? { effort: live.reasoningId } : {}),
+          ...(collaborationMode ? { collaborationMode } : {}),
         },
         90_000,
       ).catch((error) => {
@@ -642,6 +685,7 @@ export class CodexAdapter implements ProviderAdapter {
       return getCodexStoredSessionHistoryPage({
         sessionId,
         record,
+        finalizeUnterminatedTools: this.canFinalizeStoredHistory(record),
         ...options,
       });
     }
@@ -658,6 +702,7 @@ export class CodexAdapter implements ProviderAdapter {
     return getCodexStoredSessionHistoryPage({
       sessionId,
       record,
+      finalizeUnterminatedTools: this.canFinalizeStoredHistory(record),
       ...options,
     });
   }
@@ -672,6 +717,7 @@ export class CodexAdapter implements ProviderAdapter {
       return createCodexStoredSessionFrozenHistoryPageLoader({
         sessionId,
         record,
+        finalizeUnterminatedTools: this.canFinalizeStoredHistory(record),
       });
     }
     const providerSessionId = session.providerSessionId;
@@ -688,6 +734,7 @@ export class CodexAdapter implements ProviderAdapter {
     return createCodexStoredSessionFrozenHistoryPageLoader({
       sessionId,
       record,
+      finalizeUnterminatedTools: this.canFinalizeStoredHistory(record),
     });
   }
 

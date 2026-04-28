@@ -98,6 +98,52 @@ describe("WorkbenchStateStore", () => {
     await engine.shutdown();
   });
 
+  test("adds live sessions to recent only after control is claimed", async () => {
+    const engine = new RuntimeEngine();
+    const state = engine.sessionStore.createManagedSession({
+      provider: "codex",
+      providerSessionId: "thread-claim-recent-1",
+      launchSource: "web",
+      cwd: "/workspace/demo",
+      rootDir: "/workspace/demo",
+      title: "claim me",
+    });
+    engine.attachSession(state.session.id, {
+      client: {
+        id: "web-client",
+        kind: "web",
+        connectionId: "web-client",
+      },
+      mode: "observe",
+    });
+
+    assert.ok(
+      !engine.listSessions().recentSessions.some(
+        (entry) =>
+          entry.provider === "codex" &&
+          entry.providerSessionId === "thread-claim-recent-1",
+      ),
+    );
+
+    engine.claimControl(state.session.id, {
+      client: {
+        id: "web-client",
+        kind: "web",
+        connectionId: "web-client",
+      },
+    });
+
+    assert.ok(
+      engine.listSessions().recentSessions.some(
+        (entry) =>
+          entry.provider === "codex" &&
+          entry.providerSessionId === "thread-claim-recent-1",
+      ),
+    );
+
+    await engine.shutdown();
+  });
+
   test("preserves workspace add order across restart", async () => {
     const first = new RuntimeEngine();
     first.addWorkspace("/workspace/zeta");
@@ -192,8 +238,7 @@ describe("WorkbenchStateStore", () => {
 
     assert.equal(stored?.title, "thread-sanitize-1");
     assert.equal(stored?.preview, "thread-sanitize-1");
-    assert.equal(recent?.title, "thread-sanitize-1");
-    assert.equal(recent?.preview, "thread-sanitize-1");
+    assert.equal(recent, undefined);
 
     await engine.shutdown();
   });
@@ -325,6 +370,13 @@ describe("WorkbenchStateStore", () => {
 
       assert.equal(resumed.session.session.capabilities.steerInput, false);
       assert.equal(resumed.session.session.capabilities.livePermissions, false);
+      assert.ok(
+        !engine.listSessions().recentSessions.some(
+          (entry) =>
+            entry.provider === "claude" &&
+            entry.providerSessionId === "session-1",
+        ),
+      );
 
       const afterRemoval = engine.removeWorkspace(workDir);
       assert.deepEqual(afterRemoval.workspaceDirs, []);

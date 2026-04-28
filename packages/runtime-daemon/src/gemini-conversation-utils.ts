@@ -25,12 +25,12 @@ function isMessageRecord(value: unknown): value is GeminiMessageRecord {
 
 export function extractTextFromContent(content: unknown): string {
   if (typeof content === "string") {
-    return content.trim();
+    return trimGeminiContentBlankLines(content);
   }
   if (!Array.isArray(content)) {
     return "";
   }
-  return content
+  const text = content
     .flatMap((part) => {
       if (!isObject(part)) {
         return [];
@@ -46,8 +46,17 @@ export function extractTextFromContent(content: unknown): string {
       }
       return [];
     })
-    .join("")
-    .trim();
+    .join("");
+  return trimGeminiContentBlankLines(text);
+}
+
+function trimGeminiContentBlankLines(value: string): string {
+  if (!value.trim()) {
+    return "";
+  }
+  return value
+    .replace(/^(?:[ \t]*\r?\n)+/, "")
+    .replace(/(?:\r?\n[ \t]*)+$/, "");
 }
 
 export function hashGeminiMessages(messages: readonly GeminiMessageRecord[]): string {

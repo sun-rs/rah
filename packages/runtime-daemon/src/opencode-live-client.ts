@@ -19,8 +19,10 @@ import {
   createOpenCodeSession,
   getOpenCodeSession,
   respondOpenCodePermission,
+  setOpenCodeSessionPermission,
   startOpenCodeServer,
   stopOpenCodeServer,
+  type OpenCodePermissionRule,
   type OpenCodeServerHandle,
   type OpenCodeSessionInfo,
 } from "./opencode-api";
@@ -56,6 +58,37 @@ const SESSION_SOURCE = {
   channel: "system" as const,
   authority: "authoritative" as const,
 };
+
+const OPENCODE_FULL_AUTO_MODE_ID = "opencode/full-auto";
+
+function openCodePermissionOverride(action: OpenCodePermissionRule["action"]): OpenCodePermissionRule[] {
+  return [{ permission: "*", pattern: "*", action }];
+}
+
+function openCodeNativeModeId(modeId: string): "build" | "plan" {
+  return modeId === "plan" ? "plan" : "build";
+}
+
+async function applyOpenCodePermissionMode(
+  liveSession: LiveOpenCodeSession,
+  modeId: string,
+): Promise<void> {
+  if (modeId === OPENCODE_FULL_AUTO_MODE_ID) {
+    await setOpenCodeSessionPermission({
+      handle: liveSession.server,
+      providerSessionId: liveSession.providerSessionId,
+      permission: openCodePermissionOverride("allow"),
+    });
+    return;
+  }
+  if (modeId === "build" && liveSession.modeId === OPENCODE_FULL_AUTO_MODE_ID) {
+    await setOpenCodeSessionPermission({
+      handle: liveSession.server,
+      providerSessionId: liveSession.providerSessionId,
+      permission: openCodePermissionOverride("ask"),
+    });
+  }
+}
 
 function publishSessionBootstrap(
   services: RuntimeServices,
@@ -418,8 +451,9 @@ export async function setOpenCodeLiveSessionMode(params: {
   }
   await params.liveSession.acp.setSessionMode(
     params.liveSession.providerSessionId,
-    params.modeId,
+    openCodeNativeModeId(params.modeId),
   );
+  await applyOpenCodePermissionMode(params.liveSession, params.modeId);
   params.liveSession.modeId = params.modeId;
   const nextState = params.services.sessionStore.patchManagedSession(
     params.liveSession.sessionId,

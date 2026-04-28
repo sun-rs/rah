@@ -21,6 +21,9 @@ type PendingToolCall = {
   observation?: WorkbenchObservation;
 };
 
+const CODEX_INTERRUPTED_PENDING_TOOL_ERROR =
+  "Conversation interrupted before this tool completed.";
+
 export interface CodexRolloutTranslationState {
   pendingToolCalls: Map<string, PendingToolCall>;
   lastTimelineTextSignature: string | null;
@@ -37,7 +40,6 @@ let invalidRolloutSequence = 0;
 const IGNORED_PERSISTED_EVENT_MSG_TYPES = new Set([
   "task_started",
   "task_complete",
-  "turn_aborted",
   "token_count",
   "user_message",
   "exec_command_begin",
@@ -455,6 +457,85 @@ function invalidRolloutActivity(
   ];
 }
 
+function interruptedPendingToolActivities(
+  state: CodexRolloutTranslationState,
+  line: Record<string, unknown>,
+  options: { includeTimelineStatus: boolean },
+): CodexTranslatedActivity[] {
+  if (state.pendingToolCalls.size === 0) {
+    return [];
+  }
+
+  const result: CodexTranslatedActivity[] = [];
+  for (const [callId, pending] of state.pendingToolCalls) {
+    if (pending.observation) {
+      result.push(
+        persistedActivity(
+          line,
+          {
+            type: "observation_failed",
+            observation: {
+              ...pending.observation,
+              status: "failed",
+              summary: CODEX_INTERRUPTED_PENDING_TOOL_ERROR,
+            },
+            error: CODEX_INTERRUPTED_PENDING_TOOL_ERROR,
+          },
+          "derived",
+        ),
+      );
+    }
+    result.push(
+      persistedActivity(
+        line,
+        {
+          type: "tool_call_failed",
+          toolCallId: callId,
+          error: CODEX_INTERRUPTED_PENDING_TOOL_ERROR,
+        },
+        "derived",
+      ),
+    );
+  }
+  state.pendingToolCalls.clear();
+
+  if (options.includeTimelineStatus) {
+    result.push(
+      persistedActivity(
+        line,
+        {
+          type: "timeline_item",
+          item: {
+            kind: "system",
+            text: CODEX_INTERRUPTED_PENDING_TOOL_ERROR,
+          },
+        },
+        "derived",
+      ),
+    );
+  }
+
+  return result;
+}
+
+export function finalizeCodexRolloutTranslationState(
+  state: CodexRolloutTranslationState,
+  options: { timestamp?: string } = {},
+): CodexTranslatedActivity[] {
+  return interruptedPendingToolActivities(
+    state,
+    {
+      ...(options.timestamp ? { timestamp: options.timestamp } : {}),
+      type: "event_msg",
+      payload: {
+        type: "turn_aborted",
+        reason: "history_eof",
+      },
+    },
+    { includeTimelineStatus: true },
+  );
+}
+
 export function translateCodexRolloutLine(
   line: unknown,
   state: CodexRolloutTranslationState,
@@ -505,6 +586,13 @@ export function translateCodexRolloutLine(
           "authoritative",
         ),
       ];
+    }
+    if (payload.type === "turn_aborted") {
+      return interruptedPendingToolActivities(
+        state,
+        record,
+        { includeTimelineStatus: true },
+      );
     }
     if (typeof payload.type === "string" && IGNORED_PERSISTED_EVENT_MSG_TYPES.has(payload.type)) {
       return [];

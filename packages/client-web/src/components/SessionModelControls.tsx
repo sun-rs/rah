@@ -1,4 +1,4 @@
-import { Cpu, Gauge } from "lucide-react";
+import { Cpu } from "lucide-react";
 import type {
   ProviderModelCatalog,
   SessionModelDescriptor,
@@ -80,15 +80,21 @@ export function SessionModelControls(props: {
 
   const controlClassName = props.compact
     ? "h-8 rounded-md border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-2 text-[11px] text-[var(--app-fg)]"
-    : "inline-flex h-8 md:h-9 items-center gap-1.5 rounded-full border border-[var(--app-border)] bg-[var(--app-bg)]/90 pl-2 pr-2 text-[11px] text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]";
+    : "inline-flex h-8 md:h-9 w-[4.25rem] md:w-[12rem] shrink-0 items-center gap-1.5 rounded-full border border-[var(--app-border)] bg-[var(--app-bg)]/90 px-2 text-[11px] text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]";
   const selectClassName = props.compact
     ? "h-8 rounded-md border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-2 text-[11px] text-[var(--app-fg)]"
-    : "max-w-[8.5rem] appearance-none bg-transparent text-[11px] text-[var(--app-fg)] focus:outline-none";
+    : "min-w-0 appearance-none truncate bg-transparent text-[11px] text-[var(--app-fg)] focus:outline-none";
   const reasoningOptions = model?.reasoningOptions ?? [];
+  const title = [
+    model?.label ?? (props.loading ? "Loading models" : "Model"),
+    reasoningOptions.length > 1 ? reasoning?.label : null,
+  ]
+    .filter(Boolean)
+    .join(" / ");
 
   return (
     <div className={`flex items-center gap-1.5 ${props.compact ? "min-h-8" : "min-h-8 md:min-h-9"}`}>
-      <label className={props.compact ? "flex items-center gap-2" : controlClassName}>
+      <div className={props.compact ? "flex items-center gap-2" : controlClassName} title={title}>
         <span className="sr-only">Model</span>
         <Cpu size={12} className="shrink-0 text-[var(--app-hint)]" />
         <select
@@ -102,7 +108,7 @@ export function SessionModelControls(props: {
             const nextModel = models.find((entry) => entry.id === event.target.value);
             props.onModelChange(event.target.value, nextModel?.defaultReasoningId ?? null);
           }}
-          className={props.compact ? `${selectClassName} min-w-[8rem] max-w-[10rem]` : selectClassName}
+          className={props.compact ? `${selectClassName} min-w-[8rem] max-w-[10rem]` : `${selectClassName} flex-1`}
           title="Model"
         >
           {props.loading && models.length === 0 && !props.allowProviderDefault ? (
@@ -115,26 +121,30 @@ export function SessionModelControls(props: {
             </option>
           ))}
         </select>
-      </label>
-      {reasoningOptions.length > 1 ? (
-        <label className={props.compact ? "flex items-center gap-2" : controlClassName}>
-          <span className="sr-only">Reasoning effort</span>
-          <Gauge size={12} className="shrink-0 text-[var(--app-hint)]" />
-          <select
-            value={reasoning?.id ?? ""}
-            disabled={props.disabled || props.loading}
-            onChange={(event) => props.onReasoningChange(event.target.value)}
-            className={props.compact ? `${selectClassName} min-w-[5.5rem] max-w-[7rem]` : selectClassName}
-            title="Reasoning effort"
-          >
-            {reasoningOptions.map((option) => (
-              <option key={option.id} value={option.id}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
-      ) : null}
+        {reasoningOptions.length > 1 ? (
+          <>
+            <span className="hidden shrink-0 text-[var(--app-hint)] md:inline">/</span>
+            <span className="sr-only">Reasoning effort</span>
+            <select
+              value={reasoning?.id ?? ""}
+              disabled={props.disabled || props.loading}
+              onChange={(event) => props.onReasoningChange(event.target.value)}
+              className={
+                props.compact
+                  ? `${selectClassName} min-w-[5.5rem] max-w-[7rem]`
+                  : `${selectClassName} hidden w-[3.75rem] shrink-0 md:block`
+              }
+              title="Reasoning effort"
+            >
+              {reasoningOptions.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </>
+        ) : null}
+      </div>
     </div>
   );
 }

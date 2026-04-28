@@ -173,8 +173,15 @@
 
 - terminal 在 remote mode 下继续保持原生 Claude TUI 活着
 - terminal 与 web 同时写
-- 远端 permission 全量打通到完美体验
+- 远端 permission 全量桥到 web approval
 - `claude --resume` 无 id 进入原生 session 选择列表
+
+当前为了降低日常使用成本，web 接管的 `claude --print` 轮次默认使用
+`--permission-mode bypassPermissions`。这表示：
+
+- 本地 TUI 里发起的轮次，仍按 Claude 原生权限/信任流程处理
+- web 接管发起的轮次，默认不在 web 弹 approval，而是自动放行
+- 如需临时改回 Claude 原生策略，可以设置 `RAH_CLAUDE_REMOTE_PERMISSION_MODE=default`
 
 ### 7.1 为什么不支持原生 session picker
 
@@ -220,6 +227,7 @@ session 绑定，风险明显高于显式 id 绑定。
 
 - 不承担显示
 - 只负责把 prompt 写入同一 provider session
+- 默认附带 `--permission-mode bypassPermissions`，避免 web 远端轮次卡在不可见的 CLI approval 上
 
 ### 8.3 session file scanner
 

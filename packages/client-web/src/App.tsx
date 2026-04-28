@@ -346,10 +346,12 @@ export function App() {
     };
 
     document.addEventListener("visibilitychange", handleForegroundResume);
+    window.addEventListener("focus", handleForegroundResume);
     window.addEventListener("pageshow", handlePageShow);
     window.addEventListener("online", handleOnline);
     return () => {
       document.removeEventListener("visibilitychange", handleForegroundResume);
+      window.removeEventListener("focus", handleForegroundResume);
       window.removeEventListener("pageshow", handlePageShow);
       window.removeEventListener("online", handleOnline);
     };

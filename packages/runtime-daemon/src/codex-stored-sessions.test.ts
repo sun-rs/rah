@@ -10,6 +10,7 @@ import {
   createCodexStoredSessionFrozenHistoryPageLoader,
   getCodexGitDiff,
   getCodexGitStatus,
+  getCodexStoredSessionHistoryPage,
   readWorkspaceFile,
   type CodexStoredSessionRecord,
 } from "./codex-stored-sessions";
@@ -374,5 +375,99 @@ describe("codex stored session path resolution", () => {
 
     const initialAgain = loader.loadInitialPage(2);
     assert.deepEqual(timelineTexts(initialAgain.events), ["user 400", "assistant 400"]);
+  });
+
+  test("stored Codex history marks unterminated commands as interrupted instead of running forever", () => {
+    const rolloutPath = path.join(repoRoot, "rollout-interrupted.jsonl");
+    writeFileSync(
+      rolloutPath,
+      `${[
+        {
+          type: "response_item",
+          timestamp: "2025-07-19T22:00:00.000Z",
+          payload: {
+            type: "message",
+            role: "user",
+            id: "user-1",
+            content: [{ type: "input_text", text: "restart daemon" }],
+          },
+        },
+        {
+          type: "response_item",
+          timestamp: "2025-07-19T22:00:01.000Z",
+          payload: {
+            type: "message",
+            role: "assistant",
+            id: "assistant-1",
+            content: [{ type: "output_text", text: "I will restart it." }],
+          },
+        },
+        {
+          type: "response_item",
+          timestamp: "2025-07-19T22:00:02.000Z",
+          payload: {
+            type: "function_call",
+            name: "exec_command",
+            arguments: JSON.stringify({ cmd: "npm run dev:daemon", workdir: repoRoot }),
+            call_id: "call-interrupted",
+          },
+        },
+      ].map((line) => JSON.stringify(line)).join("\n")}\n`,
+      "utf8",
+    );
+    const record: CodexStoredSessionRecord = {
+      ref: {
+        provider: "codex",
+        providerSessionId: "provider-interrupted",
+        cwd: repoRoot,
+        rootDir: repoRoot,
+        title: "interrupted",
+        preview: "interrupted",
+        updatedAt: "2025-07-19T22:00:02.000Z",
+        source: "provider_history",
+      },
+      rolloutPath,
+    };
+
+    const openPage = getCodexStoredSessionHistoryPage({
+      sessionId: "replay-interrupted",
+      record,
+      limit: 100,
+    });
+    assert.equal(
+      openPage.events.some((event) => event.type === "tool.call.failed"),
+      false,
+    );
+
+    const page = getCodexStoredSessionHistoryPage({
+      sessionId: "replay-interrupted",
+      record,
+      limit: 100,
+      finalizeUnterminatedTools: true,
+    });
+
+    assert.ok(
+      page.events.some(
+        (event) =>
+          event.type === "tool.call.failed" &&
+          event.payload.toolCallId === "call-interrupted" &&
+          /interrupted/i.test(event.payload.error),
+      ),
+    );
+    assert.ok(
+      page.events.some(
+        (event) =>
+          event.type === "observation.failed" &&
+          event.payload.observation.status === "failed",
+      ),
+    );
+    assert.ok(
+      page.events.some(
+        (event) =>
+          event.type === "timeline.item.added" &&
+          event.payload.item.kind === "system" &&
+          /interrupted/i.test(event.payload.item.text),
+      ),
+    );
   });
 });

@@ -2,6 +2,7 @@ import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import {
   createCodexRolloutTranslationState,
+  finalizeCodexRolloutTranslationState,
   translateCodexRolloutLine,
 } from "./codex-rollout-activity";
 
@@ -140,6 +141,85 @@ describe("translateCodexRolloutLine", () => {
           (artifact) => artifact.kind === "text" && artifact.text === "hello",
         ),
       );
+    }
+  });
+
+  test("marks pending shell tools failed when a persisted Codex turn is interrupted", () => {
+    const state = createCodexRolloutTranslationState();
+
+    translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-14T18:00:02.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "exec_command",
+          arguments: '{"cmd":"npm test","workdir":"/workspace/demo"}',
+          call_id: "call-interrupted",
+        },
+      },
+      state,
+    );
+
+    const interrupted = translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-14T18:00:03.000Z",
+        type: "event_msg",
+        payload: {
+          type: "turn_aborted",
+          reason: "interrupted",
+        },
+      },
+      state,
+    );
+
+    assert.deepEqual(interrupted.map((item) => item.activity.type), [
+      "observation_failed",
+      "tool_call_failed",
+      "timeline_item",
+    ]);
+    const failedTool = interrupted.find((item) => item.activity.type === "tool_call_failed");
+    assert.ok(failedTool);
+    if (failedTool.activity.type === "tool_call_failed") {
+      assert.equal(failedTool.activity.toolCallId, "call-interrupted");
+      assert.match(failedTool.activity.error, /interrupted/i);
+    }
+  });
+
+  test("finalizes unterminated pending shell tools at persisted history EOF", () => {
+    const state = createCodexRolloutTranslationState();
+
+    translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-14T18:00:02.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "exec_command",
+          arguments: '{"cmd":"npm run dev:daemon","workdir":"/workspace/demo"}',
+          call_id: "call-eof",
+        },
+      },
+      state,
+    );
+
+    const finalized = finalizeCodexRolloutTranslationState(state, {
+      timestamp: "2026-04-14T18:00:04.000Z",
+    });
+
+    assert.deepEqual(finalized.map((item) => item.activity.type), [
+      "observation_failed",
+      "tool_call_failed",
+      "timeline_item",
+    ]);
+    assert.equal(state.pendingToolCalls.size, 0);
+    const system = finalized.find((item) => item.activity.type === "timeline_item");
+    assert.ok(system);
+    if (system.activity.type === "timeline_item") {
+      assert.deepEqual(system.activity.item, {
+        kind: "system",
+        text: "Conversation interrupted before this tool completed.",
+      });
     }
   });
 

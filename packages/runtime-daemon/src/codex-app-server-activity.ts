@@ -269,12 +269,15 @@ function isCodexInternalEnvironmentMessage(text: string): boolean {
   );
 }
 
-function stripCodexContextualFragments(text: string): string {
-  return text
+function stripCodexContextualFragments(
+  text: string,
+  options: { trim?: boolean } = {},
+): string {
+  const stripped = text
     .replace(/<turn_aborted>[\s\S]*?<\/turn_aborted>/gi, "")
     .replace(/<user_shell_command>[\s\S]*?<\/user_shell_command>/gi, "")
-    .replace(/<subagent_notification>[\s\S]*?<\/subagent_notification>/gi, "")
-    .trim();
+    .replace(/<subagent_notification>[\s\S]*?<\/subagent_notification>/gi, "");
+  return options.trim === false ? stripped : stripped.trim();
 }
 
 function itemIdFromParams(params: Record<string, unknown>): string | null {
@@ -1022,6 +1025,7 @@ function mapThreadItem(
       if (state.emittedAgentMessageDeltaItemIds.has(id)) {
         return [
           { type: "message_part_updated", turnId, part: { messageId: id, partId: id, kind: "text", text: finalText } },
+          { type: "timeline_item_updated", turnId, item: { kind: "assistant_message", text: finalText, messageId: id } },
         ];
       }
       return [
@@ -1496,10 +1500,11 @@ export function translateCodexAppServerNotification(
       if (!delta) {
         return invalidStreamActivities(notification, "agent message delta payload was not recognized");
       }
-      const visibleDelta = stripCodexContextualFragments(delta.delta);
-      if (!visibleDelta) {
+      const visibleDelta = stripCodexContextualFragments(delta.delta, { trim: false });
+      if (visibleDelta.length === 0) {
         return [];
       }
+      const hasEmittedTimeline = state.emittedAgentMessageDeltaItemIds.has(delta.itemId);
       if (!appendDeltaIfNew(
         state.agentMessageByItemId,
         state.lastAgentMessageDeltaByItemId,
@@ -1508,7 +1513,19 @@ export function translateCodexAppServerNotification(
       )) {
         return [];
       }
-      state.emittedAgentMessageDeltaItemIds.add(delta.itemId);
+      const fullText = (state.agentMessageByItemId.get(delta.itemId) ?? []).join("");
+      const timelineActivity =
+        fullText.trim().length > 0
+          ? [
+              translated(notification, {
+                type: hasEmittedTimeline ? "timeline_item_updated" : "timeline_item",
+                item: { kind: "assistant_message", text: fullText, messageId: delta.itemId },
+              }),
+            ]
+          : [];
+      if (timelineActivity.length > 0) {
+        state.emittedAgentMessageDeltaItemIds.add(delta.itemId);
+      }
       return [
         translated(notification, {
           type: "message_part_delta",
@@ -1519,10 +1536,7 @@ export function translateCodexAppServerNotification(
             delta: visibleDelta,
           },
         }),
-        translated(notification, {
-          type: "timeline_item",
-          item: { kind: "assistant_message", text: visibleDelta, messageId: delta.itemId },
-        }),
+        ...timelineActivity,
       ];
     }
     case "item/plan/delta": {

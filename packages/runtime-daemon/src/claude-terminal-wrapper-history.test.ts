@@ -54,4 +54,22 @@ describe("claude terminal wrapper history helpers", () => {
       "world",
     );
   });
+
+  test("preserves markdown line breaks and indentation", () => {
+    const markdown = [
+      "会涉及抽象。",
+      "",
+      "- AgentAdapter",
+      "  - nested item",
+      "",
+      "```text",
+      "  Council",
+      "```",
+    ].join("\n");
+
+    assert.equal(
+      extractAssistantMessageText([{ type: "text", text: `\n${markdown}\n` }]),
+      markdown,
+    );
+  });
 });

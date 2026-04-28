@@ -8,7 +8,7 @@ type CachedSuffix = {
 type CreateLineHistoryWindowTranslatorArgs = {
   sessionId: string;
   findSafeBoundaryIndex(lines: readonly string[]): number | null;
-  translateLines(lines: readonly string[]): RahEvent[];
+  translateLines(lines: readonly string[], context: { endOffset: number }): RahEvent[];
 };
 
 function arraysEndWith<T>(value: readonly T[], suffix: readonly T[]): boolean {
@@ -66,13 +66,13 @@ export function createLineHistoryWindowTranslator(
     const cached = cacheByEndOffset.get(endOffset);
     if (cached && arraysEndWith(lines, cached.suffixLines) && lines.length > cached.suffixLines.length) {
       const prefixLines = lines.slice(0, lines.length - cached.suffixLines.length);
-      const prefixEvents = args.translateLines(prefixLines);
-      const suffixEvents = cached.suffixEvents ?? args.translateLines(cached.suffixLines);
+      const prefixEvents = args.translateLines(prefixLines, { endOffset });
+      const suffixEvents = cached.suffixEvents ?? args.translateLines(cached.suffixLines, { endOffset });
       cached.suffixEvents = suffixEvents;
       return normalizeHistoryWindowEvents(args.sessionId, [...prefixEvents, ...suffixEvents]);
     }
 
-    const translated = normalizeHistoryWindowEvents(args.sessionId, args.translateLines(lines));
+    const translated = normalizeHistoryWindowEvents(args.sessionId, args.translateLines(lines, { endOffset }));
     const safeBoundaryIndex = args.findSafeBoundaryIndex(lines);
     if (safeBoundaryIndex !== null && safeBoundaryIndex > 0) {
       cacheByEndOffset.set(endOffset, {

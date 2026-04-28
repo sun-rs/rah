@@ -438,6 +438,77 @@ describe("translateCodexAppServerNotification", () => {
           text: markdown,
         },
       },
+      {
+        type: "timeline_item_updated",
+        turnId: "turn-1",
+        item: { kind: "assistant_message", text: markdown, messageId: "assistant-1" },
+      },
+    ]);
+  });
+
+  test("publishes accumulated assistant markdown snapshots without trimming delta whitespace", () => {
+    const state = createCodexAppServerTranslationState();
+
+    const first = translateCodexAppServerNotification(
+      {
+        method: "item/agentMessage/delta",
+        params: {
+          turnId: "turn-1",
+          itemId: "assistant-1",
+          delta: "Recent 规则也改了：",
+        },
+      },
+      state,
+    );
+    const second = translateCodexAppServerNotification(
+      {
+        method: "item/agentMessage/delta",
+        params: {
+          turnId: "turn-1",
+          itemId: "assistant-1",
+          delta: "\n- 纯打开 history/read-only replay 不再进入 recent。",
+        },
+      },
+      state,
+    );
+
+    assert.deepEqual(first.map((item) => item.activity), [
+      {
+        type: "message_part_delta",
+        part: {
+          messageId: "assistant-1",
+          partId: "assistant-1",
+          kind: "text",
+          delta: "Recent 规则也改了：",
+        },
+      },
+      {
+        type: "timeline_item",
+        item: {
+          kind: "assistant_message",
+          text: "Recent 规则也改了：",
+          messageId: "assistant-1",
+        },
+      },
+    ]);
+    assert.deepEqual(second.map((item) => item.activity), [
+      {
+        type: "message_part_delta",
+        part: {
+          messageId: "assistant-1",
+          partId: "assistant-1",
+          kind: "text",
+          delta: "\n- 纯打开 history/read-only replay 不再进入 recent。",
+        },
+      },
+      {
+        type: "timeline_item_updated",
+        item: {
+          kind: "assistant_message",
+          text: "Recent 规则也改了：\n- 纯打开 history/read-only replay 不再进入 recent。",
+          messageId: "assistant-1",
+        },
+      },
     ]);
   });
 
@@ -504,7 +575,7 @@ describe("translateCodexAppServerNotification", () => {
     assert.deepEqual(userCompleted, []);
     assert.deepEqual(
       assistantCompleted.map((item) => item.activity.type),
-      ["message_part_updated"],
+      ["message_part_updated", "timeline_item_updated"],
     );
   });
 

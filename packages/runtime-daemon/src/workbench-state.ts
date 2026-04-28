@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import type { StoredSessionRef } from "@rah/runtime-protocol";
 import type { StoredSessionState } from "./session-store";
+import { isReadOnlyReplaySession } from "./workbench-directory-utils";
 
 const SNAPSHOT_FILE = "workbench-state.json";
 const STORAGE_VERSION = 2;
@@ -94,6 +95,14 @@ function workbenchSessionRef(state: StoredSessionState): StoredSessionRef | null
   };
 }
 
+function isRememberableLiveSession(state: StoredSessionState): boolean {
+  return !isReadOnlyReplaySession(state);
+}
+
+function isRecentEligibleLiveSession(state: StoredSessionState): boolean {
+  return isRememberableLiveSession(state) && state.controlLease.holderClientId !== undefined;
+}
+
 function isInternalBootstrapText(value: string | undefined): boolean {
   if (!value) {
     return false;
@@ -113,6 +122,10 @@ function sanitizeStoredSessionRef(session: StoredSessionRef): StoredSessionRef {
     ...(isInternalBootstrapText(session.title) ? { title: session.providerSessionId } : {}),
     ...(isInternalBootstrapText(session.preview) ? { preview: session.providerSessionId } : {}),
   };
+}
+
+function isRecentStoredSessionRef(session: StoredSessionRef): boolean {
+  return session.source === "previous_live";
 }
 
 function sessionKey(session: Pick<StoredSessionRef, "provider" | "providerSessionId">): string {
@@ -151,6 +164,9 @@ function mergeRecentSessions(
   const now = new Date().toISOString();
   for (const session of nextSessions) {
     const normalizedSession = sanitizeStoredSessionRef(session);
+    if (!isRecentStoredSessionRef(normalizedSession)) {
+      continue;
+    }
     const existing = merged.get(sessionKey(normalizedSession));
     merged.set(sessionKey(session), {
       ...existing,
@@ -264,15 +280,17 @@ export class WorkbenchStateStore {
           ),
       );
       const recentSessions = Array.isArray(raw.recentSessions)
-        ? raw.recentSessions.filter(
-            (value): value is StoredSessionRef =>
+        ? raw.recentSessions
+            .filter((value): value is StoredSessionRef =>
               Boolean(
                 value &&
                   typeof value === "object" &&
                   typeof value.provider === "string" &&
                   typeof value.providerSessionId === "string",
               ),
-          ).map(sanitizeStoredSessionRef)
+            )
+            .map(sanitizeStoredSessionRef)
+            .filter(isRecentStoredSessionRef)
         : [];
       const sanitizedSessions = sessions.map(sanitizeStoredSessionRef);
       const hiddenWorkspaces = Array.isArray(raw.hiddenWorkspaces)
@@ -341,11 +359,16 @@ export class WorkbenchStateStore {
   }
 
   persistLiveSessions(states: readonly StoredSessionState[]): void {
-    const sessions = states
+    const rememberableStates = states.filter(isRememberableLiveSession);
+    const recentEligibleStates = rememberableStates.filter(isRecentEligibleLiveSession);
+    const sessions = rememberableStates
       .map(workbenchSessionRef)
       .filter((value): value is StoredSessionRef => value !== null)
       .sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""));
-    const liveWorkspaceDirs = states.flatMap((state) => {
+    const recentSessions = recentEligibleStates
+      .map(workbenchSessionRef)
+      .filter((value): value is StoredSessionRef => value !== null);
+    const liveWorkspaceDirs = rememberableStates.flatMap((state) => {
       const directory = normalizeDirectory(state.session.rootDir || state.session.cwd);
       return directory ? [directory] : [];
     });
@@ -371,12 +394,15 @@ export class WorkbenchStateStore {
       sessionTitleOverrides: this.state.sessionTitleOverrides,
       pendingSessionTitleOverrides: this.state.pendingSessionTitleOverrides,
       sessions: mergeRememberedSessions(this.state.sessions, sessions),
-      recentSessions: mergeRecentSessions(this.state.recentSessions, sessions),
+      recentSessions: mergeRecentSessions(this.state.recentSessions, recentSessions),
     };
     this.persistState();
   }
 
   rememberSession(state: StoredSessionState): void {
+    if (!isRememberableLiveSession(state)) {
+      return;
+    }
     const session = workbenchSessionRef(state);
     if (!session) {
       return;
@@ -403,7 +429,9 @@ export class WorkbenchStateStore {
       sessionTitleOverrides: this.state.sessionTitleOverrides,
       pendingSessionTitleOverrides: this.state.pendingSessionTitleOverrides,
       sessions: mergeRememberedSessions(this.state.sessions, [session]),
-      recentSessions: mergeRecentSessions(this.state.recentSessions, [session]),
+      recentSessions: isRecentEligibleLiveSession(state)
+        ? mergeRecentSessions(this.state.recentSessions, [session])
+        : this.state.recentSessions,
     };
     this.persistState();
   }

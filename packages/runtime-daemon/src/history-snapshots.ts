@@ -88,45 +88,42 @@ export class HistorySnapshotStore {
   }): SessionHistoryPageResponse {
     const existing = this.snapshots.get(args.sessionId);
     if (existing?.mode === "frozen_paged") {
+      if (!args.cursor) {
+        const refreshed = this.createFrozenPagedSnapshot(
+          args.sessionId,
+          args.limit,
+          args.loadFrozenPage,
+        );
+        if (
+          refreshed &&
+          refreshed.boundary.sourceRevision !== existing.boundary.sourceRevision
+        ) {
+          this.snapshots.set(args.sessionId, refreshed);
+          return refreshed.pagesByRequestCursor.get(null)!.response;
+        }
+      }
       return this.getFrozenPagedPage(existing, args.sessionId, args.limit, args.cursor, args.loadFrozenPage);
     }
     if (existing?.mode === "materialized") {
       return this.getMaterializedPage(existing, args.sessionId, args.limit, args.cursor);
     }
 
-    const frozenLoader = args.loadFrozenPage?.();
-    if (frozenLoader) {
-      const limit = Math.max(1, args.limit ?? 1000);
-      const initial = frozenLoader.loadInitialPage(limit);
-      const created: FrozenPagedHistorySnapshot = {
-        mode: "frozen_paged",
-        boundary: initial.boundary,
-        loader: frozenLoader,
-        pagesByRequestCursor: new Map([
-          [
-            null,
-            {
-              requestCursor: null,
-              response: {
-                sessionId: args.sessionId,
-                events: initial.events,
-                ...(initial.nextCursor ? { nextCursor: initial.nextCursor } : {}),
-                ...(initial.nextBeforeTs ? { nextBeforeTs: initial.nextBeforeTs } : {}),
-              },
-            },
-          ],
-        ]),
-      };
+    const created = this.createFrozenPagedSnapshot(
+      args.sessionId,
+      args.limit,
+      args.loadFrozenPage,
+    );
+    if (created) {
       this.snapshots.set(args.sessionId, created);
       return created.pagesByRequestCursor.get(null)!.response;
     }
 
-    const created: MaterializedHistorySnapshot = {
+    const materialized: MaterializedHistorySnapshot = {
       mode: "materialized",
       events: normalizeSnapshotEvents(args.loadEvents()),
     };
-    this.snapshots.set(args.sessionId, created);
-    return this.getMaterializedPage(created, args.sessionId, args.limit, args.cursor);
+    this.snapshots.set(args.sessionId, materialized);
+    return this.getMaterializedPage(materialized, args.sessionId, args.limit, args.cursor);
   }
 
   transfer(sourceSessionId: string, targetSessionId: string): void {
@@ -140,6 +137,38 @@ export class HistorySnapshotStore {
 
   clear(sessionId: string): void {
     this.snapshots.delete(sessionId);
+  }
+
+  private createFrozenPagedSnapshot(
+    sessionId: string,
+    limitValue: number | undefined,
+    loadFrozenPage: (() => FrozenHistoryPageLoader | undefined) | undefined,
+  ): FrozenPagedHistorySnapshot | null {
+    const frozenLoader = loadFrozenPage?.();
+    if (!frozenLoader) {
+      return null;
+    }
+    const limit = Math.max(1, limitValue ?? 1000);
+    const initial = frozenLoader.loadInitialPage(limit);
+    return {
+      mode: "frozen_paged",
+      boundary: initial.boundary,
+      loader: frozenLoader,
+      pagesByRequestCursor: new Map([
+        [
+          null,
+          {
+            requestCursor: null,
+            response: {
+              sessionId,
+              events: initial.events,
+              ...(initial.nextCursor ? { nextCursor: initial.nextCursor } : {}),
+              ...(initial.nextBeforeTs ? { nextBeforeTs: initial.nextBeforeTs } : {}),
+            },
+          },
+        ],
+      ]),
+    };
   }
 
   private getMaterializedPage(

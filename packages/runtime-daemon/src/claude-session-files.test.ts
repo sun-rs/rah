@@ -129,6 +129,62 @@ describe("Claude session files", () => {
     assert.equal(refreshed[0]?.ref.title, "Renamed Again");
   });
 
+  test("preserves Claude assistant markdown line breaks and indentation", () => {
+    const markdown = [
+      "会涉及抽象。",
+      "",
+      "- AgentAdapter",
+      "  - nested item",
+      "",
+      "```text",
+      "  Council",
+      "```",
+    ].join("\n");
+    writeClaudeSession("session-markdown.jsonl", [
+      {
+        type: "user",
+        uuid: "user-1",
+        cwd: workDir,
+        sessionId: "session-markdown",
+        timestamp: "2025-07-19T22:21:00.000Z",
+        message: {
+          content: "show markdown",
+        },
+      },
+      {
+        type: "assistant",
+        uuid: "assistant-1",
+        cwd: workDir,
+        sessionId: "session-markdown",
+        timestamp: "2025-07-19T22:21:04.000Z",
+        message: {
+          content: [{ type: "text", text: `\n${markdown}\n` }],
+        },
+      },
+    ]);
+
+    const record = findClaudeStoredSessionRecord("session-markdown", workDir);
+    assert.ok(record);
+    const page = getClaudeStoredSessionHistoryPage({
+      sessionId: "replay-markdown",
+      record,
+      limit: 100,
+    });
+    const assistantMessage = page.events.find(
+      (event) =>
+        event.type === "timeline.item.added" &&
+        event.payload.item.kind === "assistant_message",
+    );
+
+    assert.ok(assistantMessage);
+    if (
+      assistantMessage.type === "timeline.item.added" &&
+      assistantMessage.payload.item.kind === "assistant_message"
+    ) {
+      assert.equal(assistantMessage.payload.item.text, markdown);
+    }
+  });
+
   test("deduplicates resumed history and skips internal Claude events", () => {
     writeClaudeSession("session-2.jsonl", [
       {

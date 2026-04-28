@@ -54,6 +54,7 @@ function applyLiveFixture(
 function supportsTurnId(activity: ReturnType<typeof translateCodexAppServerNotification>[number]["activity"]): activity is typeof activity & { turnId?: string } {
   return [
     "timeline_item",
+    "timeline_item_updated",
     "message_part_added",
     "message_part_updated",
     "message_part_delta",

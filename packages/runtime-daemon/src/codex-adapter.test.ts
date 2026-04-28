@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { validateProviderModelCatalog } from "@rah/runtime-protocol";
@@ -202,6 +202,70 @@ rl.on('line', (line) => {
     rmSync(cwd, { recursive: true, force: true });
   });
 
+  test("does not finalize pending stored tools while a RAH terminal writer owns the session", () => {
+    const cwd = mkdtempSync(path.join(os.tmpdir(), "rah-codex-terminal-writer-cwd-"));
+    const sessionId = "019d1111-terminal-7ddd-8eee-ffff00001111";
+    const dir = path.join(tmpHome, "sessions", "2026", "04", "15");
+    mkdirSync(dir, { recursive: true });
+    const rolloutPath = path.join(dir, `rollout-2026-04-15T03-00-00-${sessionId}.jsonl`);
+    writeRolloutLines(rolloutPath, [
+      JSON.stringify({
+        timestamp: "2026-04-15T03:00:00.000Z",
+        type: "session_meta",
+        payload: {
+          id: sessionId,
+          timestamp: "2026-04-15T03:00:00.000Z",
+          cwd,
+          source: "cli",
+        },
+      }),
+      JSON.stringify({
+        timestamp: "2026-04-15T03:00:01.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "run tests" }],
+        },
+      }),
+      JSON.stringify({
+        timestamp: "2026-04-15T03:00:02.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "exec_command",
+          arguments: JSON.stringify({ cmd: "npm test", workdir: cwd }),
+          call_id: "call-terminal-live",
+        },
+      }),
+    ]);
+    utimesSync(rolloutPath, new Date(1_000), new Date(1_000));
+
+    const services = {
+      eventBus: new EventBus(),
+      ptyHub: new PtyHub(),
+      sessionStore: new SessionStore(),
+    };
+    const adapter = new CodexAdapter(services);
+    const managed = services.sessionStore.createManagedSession({
+      provider: "codex",
+      providerSessionId: sessionId,
+      launchSource: "terminal",
+      cwd,
+      rootDir: cwd,
+      capabilities: {
+        steerInput: true,
+        queuedInput: true,
+      },
+    });
+
+    const page = adapter.getSessionHistoryPage(managed.session.id, { limit: 20 });
+    assert.ok(page.events.some((event) => event.type === "tool.call.started"));
+    assert.equal(page.events.some((event) => event.type === "tool.call.failed"), false);
+
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
   test("renames Codex sessions via thread/name/set and persists the title in cache", async () => {
     const cwd = mkdtempSync(path.join(os.tmpdir(), "rah-codex-rename-cwd-"));
     const sessionId = "019d9999-rename-7bbb-8ccc-ddddeeeeffff";
@@ -296,7 +360,14 @@ rl.on('line', (line) => {
     return;
   }
   if (msg.method === 'collaborationMode/list') {
-    send({ id: msg.id, result: { data: [] } });
+    send({ id: msg.id, result: { data: [
+      {
+        name: 'Plan',
+        mode: 'plan',
+        model: 'gpt-plan-preset',
+        reasoning_effort: 'high'
+      }
+    ] } });
     return;
   }
   if (msg.method === 'thread/start') {
@@ -308,7 +379,15 @@ rl.on('line', (line) => {
     send({ method: 'turn/started', params: { turn: { id: 'turn-model-1' } } });
     send({
       method: 'item/agentMessage/delta',
-      params: { itemId: 'assistant-model-1', delta: 'model=' + msg.params.model + ';effort=' + msg.params.effort }
+      params: {
+        itemId: 'assistant-model-1',
+        delta:
+          'model=' + msg.params.model +
+          ';effort=' + msg.params.effort +
+          ';collab=' + (msg.params.collaborationMode && msg.params.collaborationMode.settings
+            ? msg.params.collaborationMode.mode + '/' + msg.params.collaborationMode.settings.model + '/' + msg.params.collaborationMode.settings.reasoning_effort
+            : 'none')
+      }
     });
     send({ method: 'turn/completed', params: { turn: { id: 'turn-model-1', status: 'completed' } } });
     return;
@@ -375,6 +454,10 @@ rl.on('line', (line) => {
     assert.equal(updated?.session.modelProfile?.modelId, "gpt-beta");
     assert.equal(updated?.session.config?.values.model_reasoning_effort, "low");
 
+    const planned = adapter.setSessionMode?.(started.session.session.id, "plan");
+    assert.ok(planned?.session.mode);
+    assert.equal(planned?.session.mode.currentModeId, "plan");
+
     adapter.sendInput(started.session.session.id, {
       clientId: "web-user",
       text: "use selected model",
@@ -385,7 +468,9 @@ rl.on('line', (line) => {
         (event) =>
           event.type === "timeline.item.added" &&
           event.payload.item.kind === "assistant_message" &&
-          event.payload.item.text.includes("model=gpt-beta;effort=low"),
+          event.payload.item.text.includes(
+            "model=gpt-beta;effort=low;collab=plan/gpt-beta/low",
+          ),
       ),
     );
 

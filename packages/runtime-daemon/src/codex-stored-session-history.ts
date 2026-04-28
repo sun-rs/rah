@@ -15,6 +15,7 @@ import { PtyHub } from "./pty-hub";
 import { applyProviderActivity } from "./provider-activity";
 import {
   createCodexRolloutTranslationState,
+  finalizeCodexRolloutTranslationState,
   translateCodexRolloutLine,
 } from "./codex-rollout-activity";
 import { createLineHistoryWindowTranslator } from "./line-history-checkpoint";
@@ -102,6 +103,7 @@ function translateCodexRolloutWindowToHistoryEvents(args: {
   title?: string;
   preview?: string;
   lines: string[];
+  finalizePendingTools?: boolean;
 }): RahEvent[] {
   const services = {
     eventBus: new EventBus(),
@@ -118,6 +120,7 @@ function translateCodexRolloutWindowToHistoryEvents(args: {
     ...(args.preview !== undefined ? { preview: args.preview } : {}),
   });
   const translationState = createCodexRolloutTranslationState();
+  let lastTimestamp: string | undefined;
   for (const line of args.lines) {
     let parsed: unknown;
     try {
@@ -125,7 +128,32 @@ function translateCodexRolloutWindowToHistoryEvents(args: {
     } catch {
       continue;
     }
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const timestamp = (parsed as Record<string, unknown>).timestamp;
+      if (typeof timestamp === "string") {
+        lastTimestamp = timestamp;
+      }
+    }
     const translated = translateCodexRolloutLine(parsed, translationState);
+    for (const item of translated) {
+      applyProviderActivity(
+        services,
+        temp.session.id,
+        {
+          provider: "codex",
+          ...(item.channel !== undefined ? { channel: item.channel } : {}),
+          ...(item.authority !== undefined ? { authority: item.authority } : {}),
+          ...(item.raw !== undefined ? { raw: item.raw } : {}),
+          ...(item.ts !== undefined ? { ts: item.ts } : {}),
+        },
+        item.activity,
+      );
+    }
+  }
+  if (args.finalizePendingTools) {
+    const translated = finalizeCodexRolloutTranslationState(translationState, {
+      ...(lastTimestamp !== undefined ? { timestamp: lastTimestamp } : {}),
+    });
     for (const item of translated) {
       applyProviderActivity(
         services,
@@ -178,6 +206,7 @@ export function replayCodexStoredSessionRollout(params: {
   sessionId: string;
   record: CodexStoredSessionRecord;
   bannerText?: string;
+  finalizeUnterminatedTools?: boolean;
 }) {
   const { services, sessionId, record, bannerText } = params;
   if (bannerText !== undefined) {
@@ -189,6 +218,7 @@ export function replayCodexStoredSessionRollout(params: {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);
+  let lastTimestamp: string | undefined;
   for (const line of lines) {
     let parsed: unknown;
     try {
@@ -196,8 +226,33 @@ export function replayCodexStoredSessionRollout(params: {
     } catch {
       continue;
     }
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const timestamp = (parsed as Record<string, unknown>).timestamp;
+      if (typeof timestamp === "string") {
+        lastTimestamp = timestamp;
+      }
+    }
     const translated = translateCodexRolloutLine(parsed, translationState);
     for (const item of translated) {
+      applyProviderActivity(
+        services,
+        sessionId,
+        {
+          provider: "codex",
+          ...(item.channel !== undefined ? { channel: item.channel } : {}),
+          ...(item.authority !== undefined ? { authority: item.authority } : {}),
+          ...(item.raw !== undefined ? { raw: item.raw } : {}),
+          ...(item.ts !== undefined ? { ts: item.ts } : {}),
+        },
+        item.activity,
+      );
+    }
+  }
+  if (params.finalizeUnterminatedTools) {
+    const finalized = finalizeCodexRolloutTranslationState(translationState, {
+      ...(lastTimestamp !== undefined ? { timestamp: lastTimestamp } : {}),
+    });
+    for (const item of finalized) {
       applyProviderActivity(
         services,
         sessionId,
@@ -278,6 +333,7 @@ export function getCodexStoredSessionHistoryPage(params: {
   record: CodexStoredSessionRecord;
   beforeTs?: string;
   limit?: number;
+  finalizeUnterminatedTools?: boolean;
 }): SessionHistoryPageResponse {
   const services = {
     eventBus: new EventBus(),
@@ -298,6 +354,9 @@ export function getCodexStoredSessionHistoryPage(params: {
     services,
     sessionId: temp.session.id,
     record: params.record,
+    ...(params.finalizeUnterminatedTools !== undefined
+      ? { finalizeUnterminatedTools: params.finalizeUnterminatedTools }
+      : {}),
   });
 
   const all: RahEvent[] = services.eventBus
@@ -325,13 +384,14 @@ export function getCodexStoredSessionHistoryPage(params: {
 export function createCodexStoredSessionFrozenHistoryPageLoader(args: {
   sessionId: string;
   record: CodexStoredSessionRecord;
+  finalizeUnterminatedTools?: boolean;
 }): FrozenHistoryPageLoader {
   const snapshotEndOffset = statSync(args.record.rolloutPath).size;
   const boundary = makeCodexFrozenHistoryBoundary(args.record.rolloutPath, snapshotEndOffset);
   const translateWindow = createLineHistoryWindowTranslator({
     sessionId: args.sessionId,
     findSafeBoundaryIndex: (lines) => lines.findIndex(isCodexUserBoundaryLine),
-    translateLines: (lines) =>
+    translateLines: (lines, context) =>
       translateCodexRolloutWindowToHistoryEvents({
         sessionId: args.sessionId,
         providerSessionId: args.record.ref.providerSessionId,
@@ -340,6 +400,8 @@ export function createCodexStoredSessionFrozenHistoryPageLoader(args: {
         ...(args.record.ref.title !== undefined ? { title: args.record.ref.title } : {}),
         ...(args.record.ref.preview !== undefined ? { preview: args.record.ref.preview } : {}),
         lines: [...lines],
+        finalizePendingTools:
+          args.finalizeUnterminatedTools === true && context.endOffset >= snapshotEndOffset,
       }),
   });
   return createLineFrozenHistoryPageLoader({

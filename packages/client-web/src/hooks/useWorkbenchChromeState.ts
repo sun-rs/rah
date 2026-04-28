@@ -107,19 +107,33 @@ export function useWorkbenchChromeState() {
       return;
     }
 
+    let viewportFrame: number | null = null;
     const updateVisualViewportInset = () => {
-      setVisualViewportBottomInsetPx(readVisualViewportBottomInset());
+      viewportFrame = null;
+      const nextInset = readVisualViewportBottomInset();
+      setVisualViewportBottomInsetPx((currentInset) =>
+        currentInset === nextInset ? currentInset : nextInset,
+      );
+    };
+    const scheduleVisualViewportInsetUpdate = () => {
+      if (viewportFrame !== null) {
+        return;
+      }
+      viewportFrame = window.requestAnimationFrame(updateVisualViewportInset);
     };
 
-    updateVisualViewportInset();
-    window.addEventListener("resize", updateVisualViewportInset);
-    window.visualViewport?.addEventListener("resize", updateVisualViewportInset);
-    window.visualViewport?.addEventListener("scroll", updateVisualViewportInset);
+    scheduleVisualViewportInsetUpdate();
+    window.addEventListener("resize", scheduleVisualViewportInsetUpdate);
+    window.visualViewport?.addEventListener("resize", scheduleVisualViewportInsetUpdate);
+    window.visualViewport?.addEventListener("scroll", scheduleVisualViewportInsetUpdate);
 
     return () => {
-      window.removeEventListener("resize", updateVisualViewportInset);
-      window.visualViewport?.removeEventListener("resize", updateVisualViewportInset);
-      window.visualViewport?.removeEventListener("scroll", updateVisualViewportInset);
+      window.removeEventListener("resize", scheduleVisualViewportInsetUpdate);
+      window.visualViewport?.removeEventListener("resize", scheduleVisualViewportInsetUpdate);
+      window.visualViewport?.removeEventListener("scroll", scheduleVisualViewportInsetUpdate);
+      if (viewportFrame !== null) {
+        window.cancelAnimationFrame(viewportFrame);
+      }
     };
   }, []);
 

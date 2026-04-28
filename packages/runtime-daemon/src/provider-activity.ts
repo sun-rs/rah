@@ -90,6 +90,11 @@ export type ProviderActivity =
       turnId?: string;
     }
   | {
+      type: "timeline_item_updated";
+      item: TimelineItem;
+      turnId?: string;
+    }
+  | {
       type: "message_part_added";
       part: MessagePartRef;
       turnId?: string;
@@ -599,6 +604,27 @@ export function applyProviderActivity(
                 {
                   sessionId,
                   type: "timeline.item.added",
+                  source,
+                  payload: { item: activity.item },
+                },
+                ts,
+              ),
+              activity.turnId,
+            ),
+            meta,
+          ),
+        ),
+      );
+      break;
+    case "timeline_item_updated":
+      published.push(
+        services.eventBus.publish(
+          withRaw(
+            withTurnId(
+              withTs(
+                {
+                  sessionId,
+                  type: "timeline.item.updated",
                   source,
                   payload: { item: activity.item },
                 },

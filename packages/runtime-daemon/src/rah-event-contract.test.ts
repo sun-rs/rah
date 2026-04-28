@@ -94,6 +94,11 @@ describe("RAH event contract", () => {
       item: { kind: "assistant_message", text: "Working" },
     });
     applyActivity(services, sessionId, {
+      type: "timeline_item_updated",
+      turnId,
+      item: { kind: "assistant_message", text: "Working now" },
+    });
+    applyActivity(services, sessionId, {
       type: "message_part_added",
       turnId,
       part: {
@@ -356,6 +361,7 @@ describe("RAH event contract", () => {
     function supportsTurnId(activity: CodexLiveTranslatedActivity["activity"]): activity is typeof activity & { turnId?: string } {
       return [
         "timeline_item",
+        "timeline_item_updated",
         "message_part_added",
         "message_part_updated",
         "message_part_delta",

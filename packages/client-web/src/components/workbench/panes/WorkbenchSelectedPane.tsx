@@ -68,6 +68,7 @@ export function WorkbenchSelectedPane(props: {
 }) {
   const composerContainerRef = useRef<HTMLDivElement | null>(null);
   const sessionMenuRef = useRef<HTMLDivElement | null>(null);
+  const lastFloatingAnchorOffsetRef = useRef<number | null>(null);
   const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
   const [sessionInfoOpen, setSessionInfoOpen] = useState(false);
   const archiveOrCloseDisabled =
@@ -76,6 +77,7 @@ export function WorkbenchSelectedPane(props: {
     provider: props.selectedSummary.session.provider,
     summary: props.selectedSummary,
   });
+  const composerPlanInsetClassName = liveModeControl.planModeAvailable ? "pl-[4.75rem]" : "";
 
   useEffect(() => {
     const node = composerContainerRef.current;
@@ -84,7 +86,12 @@ export function WorkbenchSelectedPane(props: {
     }
 
     const updateAnchor = () => {
-      props.onFloatingAnchorOffsetChange(Math.ceil(node.getBoundingClientRect().height) + 12);
+      const nextOffset = Math.ceil(node.getBoundingClientRect().height) + 12;
+      if (lastFloatingAnchorOffsetRef.current === nextOffset) {
+        return;
+      }
+      lastFloatingAnchorOffsetRef.current = nextOffset;
+      props.onFloatingAnchorOffsetChange(nextOffset);
     };
 
     updateAnchor();
@@ -466,8 +473,8 @@ export function WorkbenchSelectedPane(props: {
                 </button>
                 <TokenizedTextarea
                   ref={props.composerRef}
-                  textareaClassName={`${COMPOSER_LAYOUT.textareaClassName} ${liveModeControl.planModeAvailable ? "pl-[4.75rem]" : ""}`}
-                  contentClassName={COMPOSER_LAYOUT.textareaContentClassName}
+                  textareaClassName={`${COMPOSER_LAYOUT.textareaClassName} ${composerPlanInsetClassName}`}
+                  contentClassName={`${COMPOSER_LAYOUT.textareaContentClassName} ${composerPlanInsetClassName}`}
                   value={props.draft}
                   onChange={props.onDraftChange}
                   placeholder=""

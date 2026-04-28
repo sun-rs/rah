@@ -46,6 +46,15 @@ const REMOTE_STOP_TERM_DELAY_MS = 800;
 const REMOTE_STOP_KILL_DELAY_MS = 2_000;
 const REMOTE_PANEL_SETTLE_MS = 1_500;
 const REMOTE_PANEL_SETTLE_REDRAW_MS = 250;
+const GEMINI_REMOTE_APPROVAL_MODES = new Set(["default", "auto_edit", "yolo", "plan"]);
+
+function resolveGeminiRemoteApprovalMode(): string {
+  const value = process.env.RAH_GEMINI_REMOTE_APPROVAL_MODE?.trim();
+  if (value && GEMINI_REMOTE_APPROVAL_MODES.has(value)) {
+    return value;
+  }
+  return "yolo";
+}
 
 type GeminiNativeResumeTarget =
   | { kind: "none" }
@@ -662,12 +671,13 @@ async function main() {
     try {
       const binary = await resolveGeminiBinary();
       const nativeResumeArg = getNativeResumeArg();
+      const approvalMode = resolveGeminiRemoteApprovalMode();
       const child = spawn(
         binary,
         buildGeminiArgs({
           prompt: queuedTurn.text,
           ...(nativeResumeArg ? { providerSessionId: nativeResumeArg } : {}),
-          approvalMode: "yolo",
+          approvalMode,
         }),
         {
           cwd: parsed.cwd,

@@ -2,46 +2,13 @@ import {
   forwardRef,
   useEffect,
   useImperativeHandle,
-  useMemo,
   useRef,
   type KeyboardEventHandler,
   type TextareaHTMLAttributes,
 } from "react";
 
-type TextSegment = {
-  kind: "text" | "reference";
-  value: string;
-};
-
-function tokenizeReferences(value: string): TextSegment[] {
-  const segments: TextSegment[] = [];
-  const pattern = /@(?:"[^"]+"|[^\s]+)/g;
-  let lastIndex = 0;
-
-  for (const match of value.matchAll(pattern)) {
-    const start = match.index ?? 0;
-    if (start > lastIndex) {
-      segments.push({
-        kind: "text",
-        value: value.slice(lastIndex, start),
-      });
-    }
-    segments.push({
-      kind: "reference",
-      value: match[0],
-    });
-    lastIndex = start + match[0].length;
-  }
-
-  if (lastIndex < value.length) {
-    segments.push({
-      kind: "text",
-      value: value.slice(lastIndex),
-    });
-  }
-
-  return segments.length > 0 ? segments : [{ kind: "text", value }];
-}
+const TEXTAREA_TEXT_LAYOUT_CLASS_NAME =
+  "whitespace-pre-wrap break-words [overflow-wrap:anywhere]";
 
 export const TokenizedTextarea = forwardRef<
   HTMLTextAreaElement,
@@ -57,18 +24,8 @@ export const TokenizedTextarea = forwardRef<
 } & Pick<TextareaHTMLAttributes<HTMLTextAreaElement>, "spellCheck">
 >(function TokenizedTextarea(props, forwardedRef) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const mirrorRef = useRef<HTMLDivElement | null>(null);
-  const segments = useMemo(() => tokenizeReferences(props.value), [props.value]);
 
   useImperativeHandle(forwardedRef, () => textareaRef.current as HTMLTextAreaElement, []);
-
-  const syncScroll = () => {
-    if (!textareaRef.current || !mirrorRef.current) {
-      return;
-    }
-    mirrorRef.current.scrollTop = textareaRef.current.scrollTop;
-    mirrorRef.current.scrollLeft = textareaRef.current.scrollLeft;
-  };
 
   // Auto-resize on iOS and other browsers
   const adjustHeight = () => {
@@ -103,38 +60,11 @@ export const TokenizedTextarea = forwardRef<
 
   return (
     <div className="relative flex-1 min-w-0">
-      <div
-        ref={mirrorRef}
-        aria-hidden="true"
-        className="pointer-events-none absolute inset-0 overflow-hidden rounded-[inherit]"
-      >
-        <div
-          className={`${props.contentClassName} whitespace-pre-wrap break-words text-[var(--app-fg)]`}
-        >
-          {props.value ? (
-            segments.map((segment, index) => (
-              <span
-                key={`${segment.kind}:${index}`}
-                className={
-                  segment.kind === "reference"
-                    ? "font-medium text-sky-700 dark:text-sky-400"
-                    : undefined
-                }
-              >
-                {segment.value}
-              </span>
-            ))
-          ) : (
-            <span className="text-[var(--app-hint)]">{props.placeholder}</span>
-          )}
-          {"\n"}
-        </div>
-      </div>
-
       <textarea
         ref={textareaRef}
-        className={`${props.textareaClassName} text-transparent caret-[var(--app-fg)] selection:bg-primary/20`}
+        className={`${props.textareaClassName} ${TEXTAREA_TEXT_LAYOUT_CLASS_NAME} text-[var(--app-fg)] caret-[var(--app-fg)] selection:bg-primary/20`}
         value={props.value}
+        placeholder={props.placeholder}
         onChange={(event) => {
           props.onChange(event.currentTarget.value);
           queueMicrotask(adjustHeight);
@@ -143,7 +73,6 @@ export const TokenizedTextarea = forwardRef<
         disabled={props.disabled}
         rows={props.rows}
         spellCheck={props.spellCheck}
-        onScroll={syncScroll}
         onInput={adjustHeight}
       />
     </div>

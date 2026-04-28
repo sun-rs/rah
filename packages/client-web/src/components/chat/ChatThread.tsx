@@ -374,6 +374,7 @@ export function ChatThread(props: {
   const topHistoryAutoLoadArmedRef = useRef(true);
   const measuredHeightsRef = useRef<Map<string, number>>(new Map());
   const scrollRafRef = useRef<number | null>(null);
+  const measuredHeightsRafRef = useRef<number | null>(null);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [measuredHeightsVersion, setMeasuredHeightsVersion] = useState(0);
   const [viewport, setViewport] = useState({ scrollTop: 0, height: 0 });
@@ -425,7 +426,13 @@ export function ChatThread(props: {
       return;
     }
     measuredHeightsRef.current.set(entryKey, roundedHeight);
-    setMeasuredHeightsVersion((version) => version + 1);
+    if (measuredHeightsRafRef.current !== null) {
+      return;
+    }
+    measuredHeightsRafRef.current = requestAnimationFrame(() => {
+      measuredHeightsRafRef.current = null;
+      setMeasuredHeightsVersion((version) => version + 1);
+    });
   }, []);
 
   const captureVisiblePrependAnchor = useCallback((): PrependAnchor | null => {
@@ -463,10 +470,27 @@ export function ChatThread(props: {
       cancelAnimationFrame(scrollRafRef.current);
       scrollRafRef.current = null;
     }
+    if (measuredHeightsRafRef.current !== null) {
+      cancelAnimationFrame(measuredHeightsRafRef.current);
+      measuredHeightsRafRef.current = null;
+    }
     setMeasuredHeightsVersion(0);
     setViewport({ scrollTop: 0, height: 0 });
     setShowScrollToBottom(false);
   }, [props.sessionId]);
+
+  useEffect(() => {
+    return () => {
+      if (scrollRafRef.current !== null) {
+        cancelAnimationFrame(scrollRafRef.current);
+        scrollRafRef.current = null;
+      }
+      if (measuredHeightsRafRef.current !== null) {
+        cancelAnimationFrame(measuredHeightsRafRef.current);
+        measuredHeightsRafRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const node = containerRef.current;

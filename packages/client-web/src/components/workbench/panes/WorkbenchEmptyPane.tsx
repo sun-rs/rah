@@ -150,9 +150,10 @@ export function WorkbenchEmptyPane(props: {
                     type="button"
                     onClick={props.onToggleWorkspacePicker}
                     className={EMPTY_STATE_COMPOSER_LAYOUT.workspaceTriggerClassName}
+                    title={props.availableWorkspaceDir || "Workspace"}
                   >
                     <Folder size={12} />
-                    <span className="truncate">
+                    <span className="min-w-0 flex-1 truncate text-left">
                       {props.availableWorkspaceDir
                         ? props.availableWorkspaceDir.split("/").pop()
                         : "Workspace"}
@@ -181,15 +182,6 @@ export function WorkbenchEmptyPane(props: {
                     ))}
                   </div>
                 ) : null}
-                <SessionModelControls
-                  catalog={props.modelCatalog}
-                  selectedModelId={props.selectedModelId}
-                  selectedReasoningId={props.selectedReasoningId}
-                  loading={props.modelCatalogLoading}
-                  allowProviderDefault
-                  onModelChange={props.onModelChange}
-                  onReasoningChange={props.onReasoningChange}
-                />
                 <SessionModeControls
                   variant="toolbar"
                   accessModes={props.accessModes}
@@ -198,6 +190,15 @@ export function WorkbenchEmptyPane(props: {
                   planModeEnabled={props.planModeEnabled}
                   onAccessModeChange={props.onAccessModeChange}
                   onPlanModeToggle={props.onPlanModeToggle}
+                />
+                <SessionModelControls
+                  catalog={props.modelCatalog}
+                  selectedModelId={props.selectedModelId}
+                  selectedReasoningId={props.selectedReasoningId}
+                  loading={props.modelCatalogLoading}
+                  allowProviderDefault
+                  onModelChange={props.onModelChange}
+                  onReasoningChange={props.onReasoningChange}
                 />
               </div>
               <button

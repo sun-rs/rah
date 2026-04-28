@@ -197,6 +197,68 @@ describe("Kimi session files", () => {
     assert.match(stored[0]?.ref.title ?? "", /Explain the architecture/);
   });
 
+  test("preserves Kimi assistant markdown line breaks and indentation", () => {
+    writeKimiMetadata();
+    const sessionId = "kimi-session-markdown";
+    const sessionDir = path.join(tmpShare, "sessions", md5(workDir), sessionId);
+    const markdown = [
+      "会涉及抽象。",
+      "",
+      "- AgentAdapter",
+      "  - nested item",
+      "",
+      "```text",
+      "  Council",
+      "```",
+    ].join("\n");
+    mkdirSync(sessionDir, { recursive: true });
+    writeFileSync(
+      path.join(sessionDir, "wire.jsonl"),
+      [
+        JSON.stringify({ type: "metadata", protocol_version: "1.9" }),
+        JSON.stringify({
+          timestamp: 1_700_000_000,
+          message: {
+            type: "TurnBegin",
+            payload: {
+              user_input: [{ text: "show markdown" }],
+            },
+          },
+        }),
+        JSON.stringify({
+          timestamp: 1_700_000_001,
+          message: {
+            type: "TextPart",
+            payload: { text: markdown },
+          },
+        }),
+      ].join("\n") + "\n",
+    );
+
+    const record = discoverKimiStoredSessions().find(
+      (item) => item.ref.providerSessionId === sessionId,
+    );
+    assert.ok(record);
+    const page = getKimiStoredSessionHistoryPage({
+      sessionId: "replay-markdown",
+      record,
+      limit: 100,
+    });
+    const assistantMessage = page.events.find(
+      (event) =>
+        event.type === "timeline.item.added" &&
+        event.payload.item.kind === "assistant_message",
+    );
+
+    assert.ok(assistantMessage);
+    if (
+      assistantMessage.type === "timeline.item.added" &&
+      assistantMessage.payload.item.kind === "assistant_message"
+    ) {
+      assert.equal(assistantMessage.payload.item.text, markdown);
+    }
+  });
+
   test("prefers state.json custom_title over wire-derived title", () => {
     writeKimiMetadata();
     writeKimiSession("kimi-session-title");

@@ -4,11 +4,11 @@ Runtime-owned AI workbench for local-first, cross-device session continuity.
 
 ## Current status
 
-RAH is now centered on four main lines:
+RAH is now centered on five main lines:
 
 - canonical protocol and contract validation
 - runtime daemon with provider adapter seam
-- real provider adapters (`codex`, `claude`, `gemini`, `kimi`)
+- real provider adapters (`codex`, `claude`, `gemini`, `kimi`, `opencode`)
 - same-origin workbench with stored history, replay, claim, and live upgrade
 
 The workbench is served through the daemon itself. The stable entry is:

@@ -77,6 +77,23 @@ async function resolveClaudeBinary(): Promise<string> {
   return await resolveConfiguredBinary("RAH_CLAUDE_BINARY", "claude");
 }
 
+const CLAUDE_REMOTE_PERMISSION_MODES = new Set([
+  "acceptEdits",
+  "auto",
+  "bypassPermissions",
+  "default",
+  "dontAsk",
+  "plan",
+]);
+
+function resolveClaudeRemotePermissionMode(): string {
+  const value = process.env.RAH_CLAUDE_REMOTE_PERMISSION_MODE?.trim();
+  if (value && CLAUDE_REMOTE_PERMISSION_MODES.has(value)) {
+    return value;
+  }
+  return "bypassPermissions";
+}
+
 function resolveRahHome(): string {
   return process.env.RAH_HOME ?? path.join(os.homedir(), ".rah", "runtime-daemon");
 }
@@ -100,9 +117,12 @@ function buildClaudeRemotePrintArgs(args: {
   providerSessionId: string;
   text: string;
   hasPersistedSession: boolean;
+  permissionMode: string;
 }): string[] {
   return [
     "--print",
+    "--permission-mode",
+    args.permissionMode,
     ...(args.hasPersistedSession
       ? ["--resume", args.providerSessionId]
       : ["--session-id", args.providerSessionId]),
@@ -364,12 +384,16 @@ async function main() {
     remotePromptText = queuedTurn.text;
     updatePromptState("agent_busy");
     renderRemoteModePanel();
+    const permissionMode = resolveClaudeRemotePermissionMode();
     const args = buildClaudeRemotePrintArgs({
       providerSessionId: forcedProviderSessionId,
       text: queuedTurn.text,
       hasPersistedSession: boundRecord !== null || parsed.resumeProviderSessionId !== undefined,
+      permissionMode,
     });
-    logger.log(`[rah] remote print turn start ${queuedTurn.queuedTurnId}`);
+    logger.log(
+      `[rah] remote print turn start ${queuedTurn.queuedTurnId} permissionMode=${permissionMode}`,
+    );
     const child = spawn(binary, args, {
       cwd: parsed.cwd,
       env: {

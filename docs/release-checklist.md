@@ -105,6 +105,22 @@ Run when release touches:
 - Kimi approval flow
 - Kimi replay/history logic
 
+### 2.6 OpenCode
+
+Current practical validation:
+
+- start an OpenCode session from the workbench new-session control
+- send a first prompt and verify Stop appears immediately and clears when idle
+- interrupt a long turn and verify the next prompt is not merged with the interrupted prompt
+- reopen the session from history/recent and verify assistant markdown keeps line breaks and lists
+
+Run when release touches:
+
+- OpenCode ACP/server adapter logic
+- OpenCode replay/history discovery
+- shared runtime status or Stop-button semantics
+- shared Markdown/projection merge logic
+
 ## 3. Recommended Release Order
 
 Use this order unless there is a reason to narrow the scope:

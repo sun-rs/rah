@@ -99,7 +99,7 @@ function mapOpenCodeReasoningOptions(
   const options: SessionReasoningOption[] = [
     {
       id: "default",
-      label: "Default",
+      label: "Base",
       kind: "model_variant",
     },
   ];

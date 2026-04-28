@@ -930,6 +930,75 @@ describe("RuntimeEngine", () => {
     await engine.shutdown();
   });
 
+  test("frozen history pager refreshes the initial page when the source revision changes", async () => {
+    const adapter = new FrozenPagingAdapter();
+    adapter.pagesBySessionId.set("replay-1", {
+      boundary: { kind: "frozen", sourceRevision: "rev-1" },
+      initial: {
+        sessionId: "replay-1",
+        events: [
+          historyEvent("replay-1", 2, "2025-07-19T22:21:02.000Z", "middle"),
+          historyEvent("replay-1", 3, "2025-07-19T22:21:03.000Z", "latest"),
+        ],
+        nextCursor: "older-1",
+        nextBeforeTs: "2025-07-19T22:21:02.000Z",
+      },
+      olderByCursor: new Map([
+        [
+          "older-1",
+          {
+            sessionId: "replay-1",
+            events: [historyEvent("replay-1", 1, "2025-07-19T22:21:01.000Z", "older")],
+          },
+        ],
+      ]),
+    });
+    const engine = new RuntimeEngine([adapter]);
+
+    const replay = await engine.resumeSession({
+      provider: "codex",
+      providerSessionId: "provider-1",
+      preferStoredReplay: true,
+    });
+    const firstPage = engine.getSessionHistoryPage(replay.session.session.id, { limit: 2 });
+    assert.equal(firstPage.nextCursor, "older-1");
+
+    adapter.pagesBySessionId.set("replay-1", {
+      boundary: { kind: "frozen", sourceRevision: "rev-2" },
+      initial: {
+        sessionId: "replay-1",
+        events: [
+          historyEvent("replay-1", 3, "2025-07-19T22:21:03.000Z", "latest"),
+          historyEvent("replay-1", 4, "2025-07-19T22:21:04.000Z", "appended"),
+        ],
+        nextCursor: "older-2",
+        nextBeforeTs: "2025-07-19T22:21:03.000Z",
+      },
+      olderByCursor: new Map([
+        [
+          "older-2",
+          {
+            sessionId: "replay-1",
+            events: [historyEvent("replay-1", 2, "2025-07-19T22:21:02.000Z", "middle")],
+          },
+        ],
+      ]),
+    });
+
+    const refreshedPage = engine.getSessionHistoryPage(replay.session.session.id, { limit: 2 });
+    assert.deepEqual(
+      refreshedPage.events.map((event) =>
+        event.type === "timeline.item.added" && event.payload.item.kind === "assistant_message"
+          ? event.payload.item.text
+          : null,
+      ),
+      ["latest", "appended"],
+    );
+    assert.equal(refreshedPage.nextCursor, "older-2");
+
+    await engine.shutdown();
+  });
+
   test("frozen history pager transfers to claimed live session", async () => {
     const adapter = new FrozenPagingAdapter();
     adapter.pagesBySessionId.set("replay-1", {
@@ -1121,6 +1190,48 @@ describe("RuntimeEngine", () => {
       .listEvents({ sessionIds: [ready.sessionId] })
       .filter((event) => event.type === "session.state.changed");
     assert.equal(runningStateChangedEvents.at(-1)?.payload.state, "running");
+
+    await engine.shutdown();
+  });
+
+  test("terminal wrapper permission capability matches provider support", async () => {
+    const adapter = new CountingStoredSessionsAdapter([]);
+    const engine = new RuntimeEngine([adapter]);
+
+    const claude = engine.registerTerminalWrapperSession(
+      {
+        type: "wrapper.hello",
+        provider: "claude",
+        cwd: workDirGlobal,
+        rootDir: workDirGlobal,
+        terminalPid: 4242,
+        launchCommand: ["rah", "claude"],
+      } satisfies WrapperHelloMessage,
+      () => undefined,
+    );
+    const codex = engine.registerTerminalWrapperSession(
+      {
+        type: "wrapper.hello",
+        provider: "codex",
+        cwd: workDirGlobal,
+        rootDir: workDirGlobal,
+        terminalPid: 4243,
+        launchCommand: ["rah", "codex"],
+      } satisfies WrapperHelloMessage,
+      () => undefined,
+    );
+
+    const sessions = engine.listSessions().sessions;
+    assert.equal(
+      sessions.find((session) => session.session.id === claude.sessionId)?.session.capabilities
+        .livePermissions,
+      false,
+    );
+    assert.equal(
+      sessions.find((session) => session.session.id === codex.sessionId)?.session.capabilities
+        .livePermissions,
+      true,
+    );
 
     await engine.shutdown();
   });

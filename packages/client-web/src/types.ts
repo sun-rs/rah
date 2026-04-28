@@ -311,15 +311,17 @@ function applyTimelineEvent(
       const next = [...feed];
       const current = next[messageIndex] as Extract<FeedEntry, { kind: "timeline" }>;
       const item =
-        canMergeTimelineText(current.item, event.payload.item)
-          ? {
-              ...event.payload.item,
-              text: mergeTimelineText(
-                current.item as MergeableTimelineItem,
-                event.payload.item as MergeableTimelineItem,
-              ),
-            }
-          : event.payload.item;
+        event.type === "timeline.item.updated"
+          ? event.payload.item
+          : canMergeTimelineText(current.item, event.payload.item)
+            ? {
+                ...event.payload.item,
+                text: mergeTimelineText(
+                  current.item as MergeableTimelineItem,
+                  event.payload.item as MergeableTimelineItem,
+                ),
+              }
+            : event.payload.item;
       next[messageIndex] = createTimelineEntry(
         {
           key: current.key,
@@ -385,9 +387,11 @@ function applyTimelineEvent(
   const latestEntry = feed.at(-1);
   if (
     event.type === "timeline.item.added" &&
+    event.turnId !== undefined &&
     latestEntry?.kind === "timeline" &&
     latestEntry.turnId === event.turnId &&
-    canMergeTimelineText(latestEntry.item, event.payload.item)
+    canMergeTimelineText(latestEntry.item, event.payload.item) &&
+    canMergeTimelineIdentity(latestEntry.item, event.payload.item)
   ) {
     const next = [...feed];
     next[next.length - 1] = {
@@ -473,9 +477,15 @@ function isTimelineMetadataUpgrade(
   }
   const candidateMessageId = readTimelineMessageId(candidate.item);
   const eventMessageId = readTimelineMessageId(event.payload.item);
+  if (candidateMessageId !== undefined && eventMessageId !== undefined) {
+    return candidateMessageId === eventMessageId;
+  }
+  if (candidateMessageId !== undefined && eventMessageId === undefined) {
+    return false;
+  }
   const hasUpgradedIdentity =
     (candidate.turnId === undefined && event.turnId !== undefined) ||
-    (candidateMessageId === undefined && eventMessageId !== undefined);
+    eventMessageId !== undefined;
   if (hasUpgradedIdentity) {
     return true;
   }
@@ -487,6 +497,15 @@ function readTimelineMessageId(item: TimelineItem): string | undefined {
     return item.messageId;
   }
   return undefined;
+}
+
+function canMergeTimelineIdentity(current: TimelineItem, incoming: TimelineItem): boolean {
+  const currentMessageId = readTimelineMessageId(current);
+  const incomingMessageId = readTimelineMessageId(incoming);
+  if (currentMessageId !== undefined || incomingMessageId !== undefined) {
+    return currentMessageId !== undefined && currentMessageId === incomingMessageId;
+  }
+  return true;
 }
 
 function canMergeTimelineText(
@@ -1271,6 +1290,28 @@ export function appendOptimisticUserMessage(
         ts,
       },
     ],
+  };
+}
+
+export function removeOptimisticUserMessage(
+  current: SessionProjection,
+  text: string,
+): SessionProjection {
+  const feed = current.feed.filter(
+    (entry) =>
+      !(
+        entry.kind === "timeline" &&
+        entry.key.startsWith("optimistic:user:") &&
+        entry.item.kind === "user_message" &&
+        entry.item.text === text
+      ),
+  );
+  if (feed.length === current.feed.length) {
+    return current;
+  }
+  return {
+    ...current,
+    feed,
   };
 }
 

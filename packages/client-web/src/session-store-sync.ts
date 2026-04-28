@@ -4,6 +4,8 @@ import { readErrorMessage } from "./session-store-bootstrap";
 import { connectSessionStoreTransport } from "./session-store-transport";
 import type { SessionProjection } from "./types";
 
+let recoverTransportInFlight: Promise<void> | null = null;
+
 type SessionSyncState = {
   projections: Map<string, SessionProjection>;
   unreadSessionIds: Set<string>;
@@ -161,10 +163,52 @@ export async function recoverTransportCommand(args: {
   maybeRestoreLastHistorySelection: (
     sessionsResponse: Awaited<ReturnType<typeof api.listSessions>>,
   ) => Promise<void>;
+  listSessions?: typeof api.listSessions;
+}) {
+  if (recoverTransportInFlight) {
+    return recoverTransportInFlight;
+  }
+  recoverTransportInFlight = recoverTransportCommandInner(args).finally(() => {
+    recoverTransportInFlight = null;
+  });
+  return recoverTransportInFlight;
+}
+
+async function recoverTransportCommandInner(args: {
+  get: () => SessionSyncState & {
+    workspaceDir: string;
+    hiddenWorkspaceDirs: Set<string>;
+  };
+  set: SessionSyncSetState;
+  applySessionsResponse: (
+    state: Pick<
+      SessionSyncState,
+      "projections" | "selectedSessionId" | "workspaceVisibilityVersion"
+    > & {
+      workspaceDir: string;
+      hiddenWorkspaceDirs: Set<string>;
+    },
+    sessionsResponse: Awaited<ReturnType<typeof api.listSessions>>,
+    options?: { workspaceVisibilityVersionAtRequest?: number },
+  ) => {
+    projections: Map<string, SessionProjection>;
+    selectedSessionId: string | null;
+    workspaceDir: string;
+    hiddenWorkspaceDirs: Set<string>;
+    workspaceVisibilityVersion: number;
+    storedSessions: unknown;
+    recentSessions: unknown;
+    workspaceDirs: string[];
+  };
+  restartTransport: () => void;
+  maybeRestoreLastHistorySelection: (
+    sessionsResponse: Awaited<ReturnType<typeof api.listSessions>>,
+  ) => Promise<void>;
+  listSessions?: typeof api.listSessions;
 }) {
   try {
     const workspaceVisibilityVersionAtRequest = args.get().workspaceVisibilityVersion;
-    const sessionsResponse = await api.listSessions();
+    const sessionsResponse = await (args.listSessions ?? api.listSessions)();
     args.set((state) => ({
       ...args.applySessionsResponse(state as never, sessionsResponse, {
         workspaceVisibilityVersionAtRequest,

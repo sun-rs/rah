@@ -45,8 +45,8 @@ export type ClaudeRawRecord =
 
 function extractTextParts(content: unknown): string[] {
   if (typeof content === "string") {
-    const normalized = content.trim();
-    return normalized ? [normalized] : [];
+    const text = trimClaudeTranscriptBlankLines(content);
+    return text.trim() ? [text] : [];
   }
   if (!Array.isArray(content)) {
     return [];
@@ -58,10 +58,16 @@ function extractTextParts(content: unknown): string[] {
     }
     const record = block as Record<string, unknown>;
     if (typeof record.text === "string" && record.text.trim()) {
-      parts.push(record.text.trim());
+      parts.push(trimClaudeTranscriptBlankLines(record.text));
     }
   }
   return parts;
+}
+
+function trimClaudeTranscriptBlankLines(value: string): string {
+  return value
+    .replace(/^(?:[ \t]*\r?\n)+/, "")
+    .replace(/(?:\r?\n[ \t]*)+$/, "");
 }
 
 function normalizeClaudeTranscriptText(value: unknown): string | null {
@@ -116,18 +122,16 @@ export function extractUserMessageText(content: unknown): string | null {
   if (isToolResultOnlyContent(content)) {
     return null;
   }
-  const text = extractTextParts(content)
+  const text = trimClaudeTranscriptBlankLines(extractTextParts(content)
     .filter((part) => !isClaudeTranscriptNoiseText(part))
-    .join("\n")
-    .trim();
+    .join("\n"));
   return text || null;
 }
 
 export function extractAssistantMessageText(content: unknown): string | null {
-  const text = extractTextParts(content)
+  const text = trimClaudeTranscriptBlankLines(extractTextParts(content)
     .filter((part) => !isClaudeTranscriptNoiseText(part))
-    .join("\n")
-    .trim();
+    .join("\n"));
   return text || null;
 }
 

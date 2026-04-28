@@ -51,6 +51,16 @@ describe("applyProviderActivity", () => {
       sessionId,
       { provider: "codex" },
       {
+        type: "timeline_item_updated",
+        turnId: "turn-1",
+        item: { kind: "assistant_message", text: "hello final" },
+      },
+    );
+    applyProviderActivity(
+      services,
+      sessionId,
+      { provider: "codex" },
+      {
         type: "tool_call_started",
         turnId: "turn-1",
         toolCall,
@@ -58,7 +68,7 @@ describe("applyProviderActivity", () => {
     );
 
     const events = services.eventBus.list({ sessionIds: [sessionId] });
-    assert.equal(events.length, 2);
+    assert.equal(events.length, 3);
     assert.deepEqual(
       {
         type: events[0]?.type,
@@ -67,21 +77,33 @@ describe("applyProviderActivity", () => {
         raw: events[0]?.raw,
       },
       {
-      type: "timeline.item.added",
-      turnId: "turn-1",
-      payload: { item: { kind: "assistant_message", text: "hello" } },
-      raw: { rawType: "message.part.delta" },
+        type: "timeline.item.added",
+        turnId: "turn-1",
+        payload: { item: { kind: "assistant_message", text: "hello" } },
+        raw: { rawType: "message.part.delta" },
       },
     );
     assert.deepEqual(
       {
         type: events[1]?.type,
         turnId: events[1]?.turnId,
+        payload: events[1]?.payload,
+      },
+      {
+        type: "timeline.item.updated",
+        turnId: "turn-1",
+        payload: { item: { kind: "assistant_message", text: "hello final" } },
+      },
+    );
+    assert.deepEqual(
+      {
+        type: events[2]?.type,
+        turnId: events[2]?.turnId,
         toolCallId:
-          events[1]?.type === "tool.call.started" ? events[1].payload.toolCall.id : undefined,
+          events[2]?.type === "tool.call.started" ? events[2].payload.toolCall.id : undefined,
         toolCallFamily:
-          events[1]?.type === "tool.call.started"
-            ? events[1].payload.toolCall.family
+          events[2]?.type === "tool.call.started"
+            ? events[2].payload.toolCall.family
             : undefined,
       },
       {

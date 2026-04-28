@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import http from "node:http";
 import { EventBus } from "./event-bus";
 import {
   interruptOpenCodeLiveSession,
@@ -83,4 +84,87 @@ test("setOpenCodeLiveSessionMode applies ACP mode changes", async () => {
   assert.deepEqual(calls, [{ sessionId: "opencode-1", modeId: "plan" }]);
   assert.equal(liveSession.modeId, "plan");
   assert.equal(summary.session.mode?.currentModeId, "plan");
+});
+
+test("setOpenCodeLiveSessionMode maps full auto to OpenCode session permissions", async () => {
+  const requests: Array<{ method: string; url: string; body: unknown }> = [];
+  const server = http.createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    req.on("end", () => {
+      const rawBody = Buffer.concat(chunks).toString("utf8");
+      requests.push({
+        method: req.method ?? "",
+        url: req.url ?? "",
+        body: rawBody ? JSON.parse(rawBody) : null,
+      });
+      res.setHeader("Content-Type", "application/json");
+      res.end(
+        JSON.stringify({
+          id: "opencode-1",
+          directory: "/tmp/rah-opencode",
+          title: "OpenCode",
+          time: { created: 1, updated: 1 },
+        }),
+      );
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+
+  try {
+    const services = {
+      eventBus: new EventBus(),
+      ptyHub: new PtyHub(),
+      sessionStore: new SessionStore(),
+    };
+    const session = services.sessionStore.createManagedSession({
+      provider: "opencode",
+      providerSessionId: "opencode-1",
+      launchSource: "web",
+      cwd: "/tmp/rah-opencode",
+      rootDir: "/tmp/rah-opencode",
+      mode: buildOpenCodeModeState({ currentModeId: "build", mutable: true }),
+    });
+    const acpCalls: Array<{ sessionId: string; modeId: string }> = [];
+    const liveSession = {
+      sessionId: session.session.id,
+      providerSessionId: "opencode-1",
+      modeId: "build",
+      server: {
+        baseUrl: `http://127.0.0.1:${address.port}`,
+        cwd: "/tmp/rah-opencode",
+      },
+      acp: {
+        setSessionMode: async (sessionId: string, modeId: string) => {
+          acpCalls.push({ sessionId, modeId });
+        },
+      },
+    } as unknown as LiveOpenCodeSession;
+
+    const fullAuto = await setOpenCodeLiveSessionMode({
+      services,
+      liveSession,
+      modeId: "opencode/full-auto",
+    });
+    assert.deepEqual(acpCalls[0], { sessionId: "opencode-1", modeId: "build" });
+    assert.equal(fullAuto.session.mode?.currentModeId, "opencode/full-auto");
+    assert.deepEqual(requests[0]?.body, {
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    });
+
+    const normal = await setOpenCodeLiveSessionMode({
+      services,
+      liveSession,
+      modeId: "build",
+    });
+    assert.deepEqual(acpCalls[1], { sessionId: "opencode-1", modeId: "build" });
+    assert.equal(normal.session.mode?.currentModeId, "build");
+    assert.deepEqual(requests[1]?.body, {
+      permission: [{ permission: "*", pattern: "*", action: "ask" }],
+    });
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 });

@@ -78,8 +78,14 @@ const KIMI_MODE_DESCRIPTORS: SessionModeDescriptor[] = [
 const OPENCODE_MODE_DESCRIPTORS: SessionModeDescriptor[] = [
   {
     id: "build",
-    label: "Build",
-    description: "Default OpenCode agent mode.",
+    label: "Default",
+    description: "Use OpenCode's normal permission prompts.",
+    hotSwitch: true,
+  },
+  {
+    id: "opencode/full-auto",
+    label: "Full auto",
+    description: "Allow common OpenCode tool permissions for this session.",
     hotSwitch: true,
   },
   {

@@ -111,6 +111,7 @@ function makeMcpElicitationPermissionRequest(requestId: string, params: Record<s
 function shouldAttachCurrentTurn(activity: ProviderActivity): boolean {
   switch (activity.type) {
     case "timeline_item":
+    case "timeline_item_updated":
     case "message_part_added":
     case "message_part_updated":
     case "message_part_delta":
