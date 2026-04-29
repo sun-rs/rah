@@ -4,6 +4,8 @@ Runtime-owned AI workbench for local-first, cross-device session continuity.
 
 ## Current status
 
+Version: `1.0.0`.
+
 RAH is now centered on five main lines:
 
 - canonical protocol and contract validation
