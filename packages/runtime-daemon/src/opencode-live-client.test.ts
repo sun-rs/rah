@@ -287,6 +287,31 @@ test("OpenCodeAdapter setSessionModel applies provider model and reasoning throu
         ],
       },
     ],
+    modelProfiles: [
+      {
+        modelId: "openai/gpt-5.5",
+        source: "native_online",
+        freshness: "authoritative",
+        configOptions: [
+          {
+            id: "model_reasoning_variant",
+            label: "Reasoning variant",
+            kind: "select",
+            scope: "model",
+            source: "native_online",
+            mutable: true,
+            applyTiming: "next_turn",
+            defaultValue: "default",
+            options: [
+              { id: "default", label: "Base" },
+              { id: "xhigh", label: "XHigh" },
+            ],
+            availability: { modelIds: ["openai/gpt-5.5"] },
+            backendKey: "variant",
+          },
+        ],
+      },
+    ],
     fetchedAt: new Date().toISOString(),
     source: "native",
   };
@@ -314,7 +339,7 @@ test("OpenCodeAdapter setSessionModel applies provider model and reasoning throu
 
   const updated = await adapter.setSessionModel(session.session.id, {
     modelId: "openai/gpt-5.5",
-    reasoningId: "xhigh",
+    optionValues: { model_reasoning_variant: "xhigh" },
   });
 
   assert.deepEqual(calls, [
