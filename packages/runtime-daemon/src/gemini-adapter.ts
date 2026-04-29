@@ -210,6 +210,9 @@ export class GeminiAdapter implements ProviderAdapter {
     if (request.reasoningId !== undefined && request.reasoningId !== null) {
       throw new Error("Gemini does not expose a RAH-controlled reasoning option.");
     }
+    if (request.optionValues !== undefined && Object.keys(request.optionValues).length > 0) {
+      throw new Error("Gemini does not expose RAH-controlled model options.");
+    }
     const catalog = await this.modelCatalog.listModels({ cwd: live.cwd });
     const model = catalog.models.find((entry) => entry.id === nextModelId);
     if (!model) {

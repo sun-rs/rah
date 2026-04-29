@@ -1,6 +1,7 @@
 import type {
   DebugScenarioDescriptor,
   ResumeSessionRequest,
+  SessionConfigValue,
   SessionSummary,
   StoredSessionRef,
 } from "@rah/runtime-protocol";
@@ -36,6 +37,7 @@ type StartSessionOptions = {
   cwd?: string;
   title?: string;
   model?: string;
+  optionValues?: Record<string, SessionConfigValue>;
   reasoningId?: string;
   modeId?: string;
   initialInput?: string;
@@ -140,6 +142,7 @@ export async function startSessionCommand(
       cwd,
       title: options?.title ?? `${providerLabel(provider)} session`,
       ...(options?.model ? { model: options.model } : {}),
+      ...(options?.optionValues !== undefined ? { optionValues: options.optionValues } : {}),
       ...(options?.reasoningId ? { reasoningId: options.reasoningId } : {}),
       ...(options?.modeId ? { modeId: options.modeId } : {}),
       attach: createInteractiveAttachRequest(state.clientId, state.connectionId),
@@ -340,7 +343,12 @@ export async function resumeStoredSessionCommand(
 export async function claimHistorySessionCommand(
   deps: SessionStartupDeps,
   sessionId: string,
-  options?: { modeId?: string; modelId?: string; reasoningId?: string | null },
+  options?: {
+    modeId?: string;
+    modelId?: string;
+    optionValues?: Record<string, SessionConfigValue>;
+    reasoningId?: string | null;
+  },
 ) {
   const state = deps.get();
   const projection = state.projections.get(sessionId);
@@ -390,6 +398,7 @@ export async function claimHistorySessionCommand(
       provider: ref.provider,
       providerSessionId: ref.providerSessionId,
       ...(options?.modelId ? { model: options.modelId } : {}),
+      ...(options?.optionValues !== undefined ? { optionValues: options.optionValues } : {}),
       ...(options?.modelId && options.reasoningId !== undefined
         ? { reasoningId: options.reasoningId }
         : {}),
@@ -415,11 +424,13 @@ export async function claimHistorySessionCommand(
       options?.modelId &&
       session.session.model?.mutable &&
       (session.session.model.currentModelId !== options.modelId ||
+        options.optionValues !== undefined ||
         (options.reasoningId !== undefined &&
           session.session.model.currentReasoningId !== options.reasoningId))
     ) {
       session = await api.setSessionModel(session.session.id, {
         modelId: options.modelId,
+        ...(options.optionValues !== undefined ? { optionValues: options.optionValues } : {}),
         ...(options.reasoningId !== undefined ? { reasoningId: options.reasoningId } : {}),
       });
     }

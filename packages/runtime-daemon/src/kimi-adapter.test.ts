@@ -158,6 +158,7 @@ rl.on("line", (line) => {
       params: {
         type: "StatusUpdate",
         payload: {
+          plan_mode: false,
           context_usage: 0.25,
           context_tokens: 1000,
           max_context_tokens: 4000,
@@ -256,6 +257,7 @@ rl.on("line", (line) => {
       ),
     );
     const state = services.sessionStore.getSession(started.session.session.id);
+    assert.equal(state?.session.mode?.currentModeId, "yolo");
     assert.deepEqual(state?.usage, {
       usedTokens: 1000,
       contextWindow: 4000,

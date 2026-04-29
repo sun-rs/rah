@@ -148,8 +148,8 @@ export function resolveModelOptionValues(args: {
   const next = validateModelOptionValues({
     catalog: args.catalog,
     modelId: args.model.id,
-    optionValues: args.optionValues,
-    requireMutable: args.requireMutable,
+    ...(args.optionValues !== undefined ? { optionValues: args.optionValues } : {}),
+    ...(args.requireMutable !== undefined ? { requireMutable: args.requireMutable } : {}),
   });
   const legacyOption = findLegacyReasoningConfigOption({
     catalog: args.catalog,
@@ -157,13 +157,7 @@ export function resolveModelOptionValues(args: {
   });
 
   if (args.reasoningId !== undefined) {
-    if (!legacyOption) {
-      if (args.reasoningId !== null) {
-        throw new Error(
-          `Model '${args.model.id}' does not expose a legacy reasoning option.`,
-        );
-      }
-    } else {
+    if (legacyOption) {
       const legacyValue =
         args.reasoningId === null ? null : args.reasoningId.trim();
       if (legacyValue === "") {
@@ -197,7 +191,7 @@ export function resolveModelOptionValues(args: {
     catalog: args.catalog,
     modelId: args.model.id,
     optionValues: next,
-    requireMutable: args.requireMutable,
+    ...(args.requireMutable !== undefined ? { requireMutable: args.requireMutable } : {}),
   });
 }
 

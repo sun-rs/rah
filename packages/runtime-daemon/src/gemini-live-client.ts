@@ -617,6 +617,9 @@ export function startGeminiLiveSession(params: {
     modeId: request.modeId,
     approvalPolicy: request.approvalPolicy,
   });
+  if (request.optionValues !== undefined && Object.keys(request.optionValues).length > 0) {
+    throw new Error("Gemini does not expose RAH-controlled model options.");
+  }
   const modelCatalog = params.modelCatalog ?? buildGeminiModelCatalog();
   const currentModelId = normalizeGeminiModelId(request.model) ?? modelCatalog.currentModelId ?? null;
   const runtimeCapabilityState = resolveGeminiRuntimeCapabilityState({

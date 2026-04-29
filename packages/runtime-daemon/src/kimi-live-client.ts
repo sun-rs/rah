@@ -33,6 +33,7 @@ import {
   resolveKimiCliModelArgs,
   resolveKimiRuntimeCapabilityState,
 } from "./kimi-model-catalog";
+import { optionValueAsString, resolveModelOptionValues } from "./session-model-options";
 
 export type { LiveKimiSession, LiveKimiTurn } from "./kimi-live-types";
 
@@ -75,7 +76,23 @@ export async function startKimiLiveSession(params: {
     approvalPolicy: request.approvalPolicy,
   });
   const currentModelId = request.model ?? params.modelCatalog?.currentModelId ?? null;
+  const currentModel = currentModelId
+    ? params.modelCatalog?.models.find((model) => model.id === currentModelId)
+    : undefined;
+  if (request.optionValues !== undefined && !currentModel) {
+    throw new Error(`Unsupported Kimi model '${currentModelId ?? ""}'.`);
+  }
+  const optionValues = currentModel
+    ? resolveModelOptionValues({
+        catalog: params.modelCatalog ?? null,
+        model: currentModel,
+        optionValues: request.optionValues,
+        reasoningId: request.reasoningId,
+        useDefaults: Boolean(request.model),
+      })
+    : {};
   const currentReasoningId =
+    optionValueAsString(optionValues, "model_thinking") ??
     request.reasoningId ??
     (request.model
       ? params.modelCatalog?.models.find((model) => model.id === request.model)?.defaultReasoningId
@@ -83,12 +100,13 @@ export async function startKimiLiveSession(params: {
     null;
   const requestedCliModel = resolveKimiCliModelArgs({
     modelId: request.model,
-    reasoningId: request.reasoningId,
+    reasoningId: currentReasoningId,
   });
   const runtimeCapabilityState = resolveKimiRuntimeCapabilityState({
     catalog: params.modelCatalog,
     modelId: currentModelId,
     reasoningId: currentReasoningId,
+    ...(Object.keys(optionValues).length > 0 ? { optionValues } : {}),
   });
   const state = services.sessionStore.createManagedSession({
     provider: "kimi",
@@ -175,6 +193,7 @@ export async function resumeKimiLiveSession(params: {
   cwd: string;
   attach?: StartSessionRequest["attach"];
   model?: string;
+  optionValues?: StartSessionRequest["optionValues"];
   reasoningId?: string | null;
   modelCatalog?: ProviderModelCatalog | null;
   modeId?: string;
@@ -186,7 +205,23 @@ export async function resumeKimiLiveSession(params: {
     approvalPolicy: params.approvalPolicy,
   });
   const currentModelId = params.model ?? params.modelCatalog?.currentModelId ?? null;
+  const currentModel = currentModelId
+    ? params.modelCatalog?.models.find((model) => model.id === currentModelId)
+    : undefined;
+  if (params.optionValues !== undefined && !currentModel) {
+    throw new Error(`Unsupported Kimi model '${currentModelId ?? ""}'.`);
+  }
+  const optionValues = currentModel
+    ? resolveModelOptionValues({
+        catalog: params.modelCatalog ?? null,
+        model: currentModel,
+        optionValues: params.optionValues,
+        reasoningId: params.reasoningId,
+        useDefaults: Boolean(params.model),
+      })
+    : {};
   const currentReasoningId =
+    optionValueAsString(optionValues, "model_thinking") ??
     params.reasoningId ??
     (params.model
       ? params.modelCatalog?.models.find((model) => model.id === params.model)?.defaultReasoningId
@@ -194,12 +229,13 @@ export async function resumeKimiLiveSession(params: {
     null;
   const requestedCliModel = resolveKimiCliModelArgs({
     modelId: params.model,
-    reasoningId: params.reasoningId,
+    reasoningId: currentReasoningId,
   });
   const runtimeCapabilityState = resolveKimiRuntimeCapabilityState({
     catalog: params.modelCatalog,
     modelId: currentModelId,
     reasoningId: currentReasoningId,
+    ...(Object.keys(optionValues).length > 0 ? { optionValues } : {}),
   });
   const state = services.sessionStore.createManagedSession({
     provider: "kimi",

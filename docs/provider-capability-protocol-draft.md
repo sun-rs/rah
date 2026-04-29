@@ -240,7 +240,7 @@ The expected runtime flow is:
 
 1. user sees prelaunch catalog
 2. user selects model/mode/config
-3. session starts with `model`, `reasoningId`, and `modeId`
+3. session starts with `model`, `optionValues`, and `modeId`
 4. provider returns runtime capability truth
 5. runtime reconciles the draft against the live truth
 

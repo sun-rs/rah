@@ -50,6 +50,7 @@ import {
   OpenCodeModelCatalogCache,
   resolveOpenCodeRuntimeCapabilityState,
 } from "./opencode-model-catalog";
+import { optionValueAsString, resolveModelOptionValues } from "./session-model-options";
 import {
   finalizeStoredReplayResume,
   prepareProviderSessionResume,
@@ -80,7 +81,10 @@ export class OpenCodeAdapter implements ProviderAdapter {
   }
 
   async startSession(request: StartSessionRequest): Promise<StartSessionResponse> {
-    const modelCatalog = this.modelCatalog.getCached() ?? buildOpenCodeFallbackModelCatalog();
+    const modelCatalog =
+      request.model || request.reasoningId !== undefined || request.optionValues !== undefined
+        ? await this.modelCatalog.listModels({ cwd: request.cwd })
+        : this.modelCatalog.getCached() ?? buildOpenCodeFallbackModelCatalog();
     void this.modelCatalog.listModels({ cwd: request.cwd }).catch(() => undefined);
     const response = await startOpenCodeLiveSession({
       services: this.services,
@@ -133,17 +137,20 @@ export class OpenCodeAdapter implements ProviderAdapter {
       });
     }
     try {
-      const cachedModelCatalog = this.modelCatalog.getCached();
-      void this.modelCatalog
-        .listModels({ cwd: request.cwd ?? record?.ref.cwd ?? process.cwd() })
-        .catch(() => undefined);
+      const resumeCwd = request.cwd ?? record?.ref.cwd ?? process.cwd();
+      const cachedModelCatalog =
+        request.model || request.reasoningId !== undefined || request.optionValues !== undefined
+          ? await this.modelCatalog.listModels({ cwd: resumeCwd })
+          : this.modelCatalog.getCached();
+      void this.modelCatalog.listModels({ cwd: resumeCwd }).catch(() => undefined);
       const response = await resumeOpenCodeLiveSession({
         services: this.services,
         providerSessionId: request.providerSessionId,
-        cwd: request.cwd ?? record?.ref.cwd ?? process.cwd(),
+        cwd: resumeCwd,
         ...(request.attach ? { attach: request.attach } : {}),
         ...(request.modeId ? { modeId: request.modeId } : {}),
         ...(request.model ? { model: request.model } : {}),
+        ...(request.optionValues !== undefined ? { optionValues: request.optionValues } : {}),
         ...(request.reasoningId !== undefined ? { reasoningId: request.reasoningId } : {}),
         ...(request.providerConfig ? { providerConfig: request.providerConfig } : {}),
         ...(cachedModelCatalog ? { modelCatalog: cachedModelCatalog } : {}),
@@ -173,19 +180,21 @@ export class OpenCodeAdapter implements ProviderAdapter {
     if (!model) {
       throw new Error(`Unsupported OpenCode model '${request.modelId}'.`);
     }
+    const optionValues = resolveModelOptionValues({
+      catalog,
+      model,
+      optionValues: request.optionValues,
+      reasoningId: request.reasoningId,
+      useDefaults: true,
+      requireMutable: true,
+    });
+    const optionReasoningId = optionValueAsString(optionValues, "model_reasoning_variant");
     const reasoningId =
-      request.reasoningId !== undefined
-        ? request.reasoningId
-        : model.defaultReasoningId ?? null;
-    if (
-      reasoningId !== null &&
-      reasoningId !== undefined &&
-      !(model.reasoningOptions ?? []).some((option) => option.id === reasoningId)
-    ) {
-      throw new Error(
-        `Unsupported OpenCode reasoning variant '${reasoningId}' for model '${request.modelId}'.`,
-      );
-    }
+      optionReasoningId !== undefined
+        ? optionReasoningId
+        : request.reasoningId !== undefined
+          ? request.reasoningId
+          : model.defaultReasoningId ?? null;
     await live.acp.setSessionModel(
       live.providerSessionId,
       buildOpenCodeProviderModelId({
@@ -199,6 +208,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
       catalog,
       modelId: request.modelId,
       reasoningId,
+      optionValues,
     });
     const nextState = this.services.sessionStore.patchManagedSession(sessionId, {
       model: {

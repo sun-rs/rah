@@ -52,9 +52,9 @@ export interface ProviderAdapterIdentity {
 
 export interface ProviderLifecycleAdapter {
   /**
-   * Start/resume requests carry RAH-level model/mode ids. Adapters own all
-   * translation into provider-native flags, config files, SDK parameters, or
-   * permission rulesets.
+   * Start/resume requests carry RAH-level mode/model ids plus model-scoped
+   * optionValues. Adapters own all translation into provider-native flags,
+   * config files, SDK parameters, or permission rulesets.
    */
   startSession(request: StartSessionRequest): StartSessionResponse | Promise<StartSessionResponse>;
   resumeSession(request: ResumeSessionRequest): ResumeSessionResponse | Promise<ResumeSessionResponse>;

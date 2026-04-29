@@ -462,7 +462,7 @@ describe("ClaudeAdapter", () => {
     });
     const updated = await adapter.setSessionModel?.(started.session.session.id, {
       modelId: "default",
-      reasoningId: "max",
+      optionValues: { effort: "max" },
     });
 
     assert.equal(updated?.session.model?.currentModelId, "default");

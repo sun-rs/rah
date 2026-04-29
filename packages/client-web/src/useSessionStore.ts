@@ -7,6 +7,7 @@ import type {
   ProviderModelCatalog,
   RahEvent,
   ResumeSessionRequest,
+  SessionConfigValue,
   SessionSummary,
   StoredSessionRef,
 } from "@rah/runtime-protocol";
@@ -121,6 +122,7 @@ interface StartSessionOptions {
   cwd?: string;
   title?: string;
   model?: string;
+  optionValues?: Record<string, SessionConfigValue>;
   reasoningId?: string;
   modeId?: string;
   initialInput?: string;
@@ -130,6 +132,7 @@ interface ClaimHistorySessionOptions {
   confirmCreateMissingWorkspace?: (dir: string) => Promise<boolean>;
   modeId?: string;
   modelId?: string;
+  optionValues?: Record<string, SessionConfigValue>;
   reasoningId?: string | null;
 }
 
@@ -192,6 +195,7 @@ interface SessionState {
     sessionId: string,
     modelId: string,
     reasoningId?: string | null,
+    optionValues?: Record<string, SessionConfigValue>,
   ) => Promise<void>;
   claimHistorySession: (
     sessionId: string,
@@ -706,6 +710,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       {
         ...(options?.modeId ? { modeId: options.modeId } : {}),
         ...(options?.modelId ? { modelId: options.modelId } : {}),
+        ...(options?.optionValues !== undefined ? { optionValues: options.optionValues } : {}),
         ...(options?.reasoningId !== undefined ? { reasoningId: options.reasoningId } : {}),
       },
     );
@@ -778,10 +783,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     });
   },
 
-  setSessionModel: async (sessionId, modelId, reasoningId) => {
+  setSessionModel: async (sessionId, modelId, reasoningId, optionValues) => {
     try {
       const summary = await api.setSessionModel(sessionId, {
         modelId,
+        ...(optionValues !== undefined ? { optionValues } : {}),
         ...(reasoningId !== undefined ? { reasoningId } : {}),
       });
       updateSessionSummary(summary);

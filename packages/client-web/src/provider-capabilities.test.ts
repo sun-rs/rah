@@ -20,6 +20,7 @@ import {
   resolveSessionConfigPreviewRows,
   resolveConfigOptionPreviewRows,
   resolveVisibleConfigOptionLabels,
+  buildModelOptionValuesFromReasoning,
 } from "./provider-capabilities";
 
 function catalog(): ProviderModelCatalog {
@@ -305,6 +306,17 @@ describe("provider capability helpers", () => {
     assert.equal(formatSessionConfigValue("high"), "high");
     assert.equal(formatSessionConfigValue(null), null);
     assert.equal(formatSessionConfigValue(undefined), null);
+  });
+
+  test("builds optionValues from the selected model reasoning option", () => {
+    assert.deepEqual(
+      buildModelOptionValuesFromReasoning({
+        catalog: catalog(),
+        modelId: "gpt-5.5",
+        reasoningId: "medium",
+      }),
+      { model_reasoning_effort: "medium" },
+    );
   });
 
   test("builds preview rows for visible config options", () => {

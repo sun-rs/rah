@@ -447,7 +447,7 @@ rl.on('line', (line) => {
 
     const updated = await adapter.setSessionModel?.(started.session.session.id, {
       modelId: "gpt-beta",
-      reasoningId: "low",
+      optionValues: { model_reasoning_effort: "low" },
     });
     assert.equal(updated?.session.model?.currentModelId, "gpt-beta");
     assert.equal(updated?.session.model?.currentReasoningId, "low");

@@ -4,6 +4,7 @@ import type {
   ModelCapabilityProfile,
   ProviderModelCatalog,
   SessionConfigOption,
+  SessionConfigValue,
   SessionModelDescriptor,
   SessionReasoningOption,
   SessionResolvedConfig,
@@ -439,7 +440,14 @@ export function resolveKimiCliModelArgs(args: {
 
 export function buildKimiResolvedConfig(args: {
   reasoningId: string | null | undefined;
+  optionValues?: Record<string, SessionConfigValue>;
 }): SessionResolvedConfig | undefined {
+  if (args.optionValues !== undefined) {
+    return {
+      values: args.optionValues,
+      source: "runtime_session",
+    };
+  }
   if (args.reasoningId === undefined || args.reasoningId === null) {
     return undefined;
   }
@@ -455,6 +463,7 @@ export function resolveKimiRuntimeCapabilityState(args: {
   catalog: ProviderModelCatalog | null | undefined;
   modelId: string | null | undefined;
   reasoningId: string | null | undefined;
+  optionValues?: Record<string, SessionConfigValue>;
 }): {
   modelProfile?: ModelCapabilityProfile;
   config?: SessionResolvedConfig;
@@ -465,6 +474,7 @@ export function resolveKimiRuntimeCapabilityState(args: {
   });
   const config = buildKimiResolvedConfig({
     reasoningId: args.reasoningId,
+    ...(args.optionValues !== undefined ? { optionValues: args.optionValues } : {}),
   });
   return {
     ...(modelProfile ? { modelProfile } : {}),

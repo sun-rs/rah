@@ -355,8 +355,13 @@ export class CodexAdapter implements ProviderAdapter {
       useDefaults: true,
       requireMutable: true,
     });
+    const optionReasoningId = optionValueAsString(optionValues, "model_reasoning_effort");
     const nextReasoningId =
-      optionValueAsString(optionValues, "model_reasoning_effort") ?? null;
+      optionReasoningId !== undefined
+        ? optionReasoningId
+        : request.reasoningId === null
+          ? null
+          : request.reasoningId?.trim() || model.defaultReasoningId || null;
     live.modelId = nextModelId;
     live.reasoningId = nextReasoningId;
     live.modelCatalog = catalog;

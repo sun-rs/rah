@@ -523,7 +523,11 @@ export function handleKimiEvent(
         liveSession.planMode = payload.plan_mode;
         services.sessionStore.patchManagedSession(liveSession.sessionId, {
           mode: buildKimiModeState({
-            currentModeId: liveSession.planMode ? "plan" : "default",
+            currentModeId: liveSession.planMode
+              ? "plan"
+              : liveSession.nativeYolo
+                ? "yolo"
+                : "default",
             mutable: true,
           }),
         });

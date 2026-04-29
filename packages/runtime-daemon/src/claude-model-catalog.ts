@@ -10,6 +10,7 @@ import type {
   ModelCapabilityProfile,
   ProviderModelCatalog,
   SessionConfigOption,
+  SessionConfigValue,
   SessionResolvedConfig,
   SessionModelDescriptor,
   SessionReasoningOption,
@@ -485,7 +486,14 @@ export function resolveClaudeEffortValue(
 
 export function buildClaudeResolvedConfig(args: {
   effort: string | number | undefined;
+  optionValues?: Record<string, SessionConfigValue>;
 }): SessionResolvedConfig | undefined {
+  if (args.optionValues !== undefined) {
+    return {
+      values: args.optionValues,
+      source: "runtime_session",
+    };
+  }
   if (args.effort === undefined) {
     return undefined;
   }
@@ -501,6 +509,7 @@ export function resolveClaudeRuntimeCapabilityState(args: {
   catalog: ProviderModelCatalog | null | undefined;
   modelId: string | null | undefined;
   effort: string | number | undefined;
+  optionValues?: Record<string, SessionConfigValue>;
 }): {
   modelProfile?: ModelCapabilityProfile;
   config?: SessionResolvedConfig;
@@ -511,7 +520,10 @@ export function resolveClaudeRuntimeCapabilityState(args: {
   });
   const supportsEffort = modelProfile?.configOptions.some((option) => option.id === "effort") === true;
   const config = supportsEffort
-    ? buildClaudeResolvedConfig({ effort: args.effort })
+    ? buildClaudeResolvedConfig({
+        effort: args.effort,
+        ...(args.optionValues !== undefined ? { optionValues: args.optionValues } : {}),
+      })
     : undefined;
   return {
     ...(modelProfile ? { modelProfile } : {}),

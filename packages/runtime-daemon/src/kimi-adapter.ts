@@ -99,7 +99,10 @@ export class KimiAdapter implements ProviderAdapter {
   }
 
   async startSession(request: StartSessionRequest): Promise<StartSessionResponse> {
-    const modelCatalog = this.modelCatalog.getCached() ?? buildKimiFallbackModelCatalog();
+    const modelCatalog =
+      request.model || request.reasoningId !== undefined || request.optionValues !== undefined
+        ? await this.modelCatalog.listModels({ cwd: request.cwd })
+        : this.modelCatalog.getCached() ?? buildKimiFallbackModelCatalog();
     void this.modelCatalog.listModels({ cwd: request.cwd }).catch(() => undefined);
     const response = await startKimiLiveSession({
       services: this.services,
@@ -151,13 +154,17 @@ export class KimiAdapter implements ProviderAdapter {
 
     const cwd = request.cwd ?? record?.ref.cwd ?? process.cwd();
     try {
-      const cachedModelCatalog = this.modelCatalog.getCached();
+      const cachedModelCatalog =
+        request.model || request.reasoningId !== undefined || request.optionValues !== undefined
+          ? await this.modelCatalog.listModels({ cwd })
+          : this.modelCatalog.getCached();
       void this.modelCatalog.listModels({ cwd }).catch(() => undefined);
       const response = await resumeKimiLiveSession({
         services: this.services,
         providerSessionId: request.providerSessionId,
         cwd,
         ...(request.model ? { model: request.model } : {}),
+        ...(request.optionValues !== undefined ? { optionValues: request.optionValues } : {}),
         ...(request.reasoningId !== undefined ? { reasoningId: request.reasoningId } : {}),
         ...(request.attach ? { attach: request.attach } : {}),
         ...(request.modeId ? { modeId: request.modeId } : {}),

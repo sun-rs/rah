@@ -44,6 +44,7 @@ import {
   withModelContextWindow,
 } from "./model-context-window";
 import { buildOpenCodeModeState, isOpenCodeModeId } from "./session-mode-utils";
+import { optionValueAsString, resolveModelOptionValues } from "./session-model-options";
 
 export interface LiveOpenCodeSession {
   sessionId: string;
@@ -230,15 +231,35 @@ export async function startOpenCodeLiveSession(params: {
   const { services, request } = params;
   const initialModeId = resolveRequestedOpenCodeModeId(request.modeId, request.providerConfig);
   const currentModelId = request.model ?? params.modelCatalog?.currentModelId ?? null;
-  const currentReasoningId = resolveOpenCodeReasoningId({
-    catalog: params.modelCatalog,
-    modelId: currentModelId,
-    requestedReasoningId: request.reasoningId,
-  });
+  const currentModel = currentModelId
+    ? params.modelCatalog?.models.find((model) => model.id === currentModelId)
+    : undefined;
+  if (request.optionValues !== undefined && !currentModel) {
+    throw new Error(`Unsupported OpenCode model '${currentModelId ?? ""}'.`);
+  }
+  const optionValues = currentModel
+    ? resolveModelOptionValues({
+        catalog: params.modelCatalog ?? null,
+        model: currentModel,
+        optionValues: request.optionValues,
+        reasoningId: request.reasoningId,
+        useDefaults: Boolean(request.model),
+      })
+    : {};
+  const optionReasoningId = optionValueAsString(optionValues, "model_reasoning_variant");
+  const currentReasoningId =
+    optionReasoningId !== undefined
+      ? optionReasoningId
+      : resolveOpenCodeReasoningId({
+          catalog: params.modelCatalog,
+          modelId: currentModelId,
+          requestedReasoningId: request.reasoningId,
+        });
   const runtimeCapabilityState = resolveOpenCodeRuntimeCapabilityState({
     catalog: params.modelCatalog,
     modelId: currentModelId,
     reasoningId: currentReasoningId,
+    ...(Object.keys(optionValues).length > 0 ? { optionValues } : {}),
   });
   const contextWindow = resolveModelContextWindow({
     provider: "opencode",
@@ -353,21 +374,42 @@ export async function resumeOpenCodeLiveSession(params: {
   providerConfig?: StartSessionRequest["providerConfig"];
   modeId?: string;
   model?: string;
+  optionValues?: StartSessionRequest["optionValues"];
   reasoningId?: string | null | undefined;
   modelCatalog?: ProviderModelCatalog | null;
 }): Promise<{ liveSession: LiveOpenCodeSession; summary: ReturnType<typeof toSessionSummary> }> {
   const { services } = params;
   const initialModeId = resolveRequestedOpenCodeModeId(params.modeId, params.providerConfig);
   const currentModelId = params.model ?? params.modelCatalog?.currentModelId ?? null;
-  const currentReasoningId = resolveOpenCodeReasoningId({
-    catalog: params.modelCatalog,
-    modelId: currentModelId,
-    requestedReasoningId: params.reasoningId,
-  });
+  const currentModel = currentModelId
+    ? params.modelCatalog?.models.find((model) => model.id === currentModelId)
+    : undefined;
+  if (params.optionValues !== undefined && !currentModel) {
+    throw new Error(`Unsupported OpenCode model '${currentModelId ?? ""}'.`);
+  }
+  const optionValues = currentModel
+    ? resolveModelOptionValues({
+        catalog: params.modelCatalog ?? null,
+        model: currentModel,
+        optionValues: params.optionValues,
+        reasoningId: params.reasoningId,
+        useDefaults: Boolean(params.model),
+      })
+    : {};
+  const optionReasoningId = optionValueAsString(optionValues, "model_reasoning_variant");
+  const currentReasoningId =
+    optionReasoningId !== undefined
+      ? optionReasoningId
+      : resolveOpenCodeReasoningId({
+          catalog: params.modelCatalog,
+          modelId: currentModelId,
+          requestedReasoningId: params.reasoningId,
+        });
   const runtimeCapabilityState = resolveOpenCodeRuntimeCapabilityState({
     catalog: params.modelCatalog,
     modelId: currentModelId,
     reasoningId: currentReasoningId,
+    ...(Object.keys(optionValues).length > 0 ? { optionValues } : {}),
   });
   const contextWindow = resolveModelContextWindow({
     provider: "opencode",

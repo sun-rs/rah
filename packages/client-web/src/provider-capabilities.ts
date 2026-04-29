@@ -119,6 +119,41 @@ export function resolveVisibleConfigOptionLabels(args: {
   return resolveVisibleConfigOptions(args).map((option) => option.label);
 }
 
+export function buildModelOptionValuesFromReasoning(args: {
+  catalog?: ProviderModelCatalog | null | undefined;
+  modelId?: string | null | undefined;
+  reasoningId?: string | null | undefined;
+}): Record<string, SessionConfigValue> | undefined {
+  if (!args.catalog || !args.modelId || args.reasoningId === undefined) {
+    return undefined;
+  }
+  const model = args.catalog.models.find((entry) => entry.id === args.modelId);
+  if (!model) {
+    return undefined;
+  }
+  const reasoningOptionIds = new Set(
+    (model.reasoningOptions ?? []).map((option) => option.id),
+  );
+  const options = resolveVisibleConfigOptions({
+    catalog: args.catalog,
+    selectedModelId: args.modelId,
+  });
+  const option =
+    options.find(
+      (candidate) =>
+        candidate.kind === "select" &&
+        candidate.options?.some((choice) => reasoningOptionIds.has(choice.id)),
+    ) ??
+    options.find((candidate) => candidate.kind === "select" && candidate.backendKey) ??
+    options.find((candidate) => candidate.kind === "select");
+  if (!option) {
+    return undefined;
+  }
+  return {
+    [option.id]: args.reasoningId,
+  };
+}
+
 export function formatSessionConfigValue(
   value: SessionConfigValue | undefined,
 ): string | null {

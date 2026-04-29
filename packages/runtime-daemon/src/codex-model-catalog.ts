@@ -220,7 +220,7 @@ export function resolveCodexRuntimeCapabilityState(args: {
   });
   const config = buildCodexResolvedConfig({
     reasoningId: args.reasoningId,
-    optionValues: args.optionValues,
+    ...(args.optionValues !== undefined ? { optionValues: args.optionValues } : {}),
   });
   return {
     ...(modelProfile ? { modelProfile } : {}),

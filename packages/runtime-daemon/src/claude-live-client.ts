@@ -26,6 +26,7 @@ import {
 import { toSessionSummary } from "./session-store";
 import { buildClaudeModeState, isClaudeModeId } from "./session-mode-utils";
 import { resolveModelContextWindow } from "./model-context-window";
+import { resolveModelOptionValues } from "./session-model-options";
 import {
   approvalPolicyToPermissionMode,
   applyActivity,
@@ -80,12 +81,26 @@ export async function startClaudeLiveSession(args: {
     resolveClaudeCatalogModelId(args.request.model, modelCatalog) ??
     modelCatalog.currentModelId ??
     null;
-  const effort = resolveClaudeEffortValue(
-    args.request.reasoningId ?? args.request.providerConfig?.effort,
-  ) as
+  const currentModel = modelCatalog.models.find((model) => model.id === currentModelId);
+  if (args.request.optionValues !== undefined && !currentModel) {
+    throw new Error(`Unsupported Claude model '${currentModelId ?? ""}'.`);
+  }
+  const requestedOptionValues =
+    args.request.optionValues ??
+    (args.request.providerConfig?.effort !== undefined
+      ? { effort: args.request.providerConfig.effort }
+      : undefined);
+  const optionValues = currentModel
+    ? resolveModelOptionValues({
+        catalog: modelCatalog,
+        model: currentModel,
+        optionValues: requestedOptionValues,
+        reasoningId: args.request.reasoningId,
+      })
+    : {};
+  const effort = resolveClaudeEffortValue(optionValues.effort) as
     | LiveClaudeSession["effort"]
     | undefined;
-  const currentModel = modelCatalog.models.find((model) => model.id === currentModelId);
   const runtimeModelId = currentModel && args.request.model
     ? resolveClaudeRuntimeModelId(currentModel)
     : undefined;
@@ -93,6 +108,7 @@ export async function startClaudeLiveSession(args: {
     catalog: modelCatalog,
     modelId: currentModelId,
     effort,
+    ...(Object.keys(optionValues).length > 0 ? { optionValues } : {}),
   });
   const contextWindow = resolveModelContextWindow({
     provider: "claude",
@@ -165,6 +181,7 @@ export async function resumeClaudeLiveSession(args: {
   providerSessionId: string;
   cwd: string;
   model?: string;
+  optionValues?: StartSessionRequest["optionValues"];
   reasoningId?: string | null;
   modeId?: string;
   permissionMode?: PermissionMode;
@@ -180,10 +197,21 @@ export async function resumeClaudeLiveSession(args: {
     resolveClaudeCatalogModelId(args.model, modelCatalog) ??
     modelCatalog.currentModelId ??
     null;
-  const effort = resolveClaudeEffortValue(args.reasoningId ?? undefined) as
+  const currentModel = modelCatalog.models.find((model) => model.id === currentModelId);
+  if (args.optionValues !== undefined && !currentModel) {
+    throw new Error(`Unsupported Claude model '${currentModelId ?? ""}'.`);
+  }
+  const optionValues = currentModel
+    ? resolveModelOptionValues({
+        catalog: modelCatalog,
+        model: currentModel,
+        optionValues: args.optionValues,
+        reasoningId: args.reasoningId,
+      })
+    : {};
+  const effort = resolveClaudeEffortValue(optionValues.effort) as
     | LiveClaudeSession["effort"]
     | undefined;
-  const currentModel = modelCatalog.models.find((model) => model.id === currentModelId);
   const runtimeModelId = currentModel && args.model
     ? resolveClaudeRuntimeModelId(currentModel)
     : undefined;
@@ -191,6 +219,7 @@ export async function resumeClaudeLiveSession(args: {
     catalog: modelCatalog,
     modelId: currentModelId,
     effort,
+    ...(Object.keys(optionValues).length > 0 ? { optionValues } : {}),
   });
   const contextWindow = resolveModelContextWindow({
     provider: "claude",

@@ -38,6 +38,7 @@ import {
   TURN_START_TIMEOUT_MS,
   type LiveCodexSession,
 } from "./codex-live-types";
+import { optionValueAsString, resolveModelOptionValues } from "./session-model-options";
 
 export { CodexJsonRpcClient } from "./codex-live-rpc";
 export type { LiveCodexSession } from "./codex-live-types";
@@ -191,6 +192,30 @@ export async function startCodexLiveSession(params: {
     await client.dispose();
     throw new Error("Codex app-server did not return a thread id.");
   }
+  const currentModelId =
+    request.model ?? threadStart.model ?? params.initialModelCatalog?.currentModelId ?? null;
+  const currentModel = currentModelId
+    ? params.initialModelCatalog?.models.find((model) => model.id === currentModelId)
+    : undefined;
+  if (request.optionValues !== undefined && !currentModel) {
+    await client.dispose();
+    throw new Error(`Unsupported Codex model '${currentModelId ?? ""}'.`);
+  }
+  const currentOptionValues = currentModel
+    ? resolveModelOptionValues({
+        catalog: params.initialModelCatalog ?? null,
+        model: currentModel,
+        optionValues: request.optionValues,
+        reasoningId: request.reasoningId,
+      })
+    : {};
+  const currentReasoningId =
+    optionValueAsString(currentOptionValues, "model_reasoning_effort") ??
+    request.reasoningId ??
+    threadStart.reasoningEffort ??
+    threadStart.reasoning_effort ??
+    params.initialModelCatalog?.currentReasoningId ??
+    null;
 
   const state = services.sessionStore.createManagedSession({
     provider: "codex",
@@ -207,26 +232,19 @@ export async function startCodexLiveSession(params: {
       planAvailable: Boolean(planCollaborationMode),
     }),
     model: {
-      currentModelId: request.model ?? threadStart.model ?? params.initialModelCatalog?.currentModelId ?? null,
-      currentReasoningId:
-        request.reasoningId ??
-        threadStart.reasoningEffort ??
-        threadStart.reasoning_effort ??
-        params.initialModelCatalog?.currentReasoningId ??
-        null,
+      currentModelId,
+      currentReasoningId,
       availableModels: params.initialModelCatalog?.models ?? [],
       mutable: true,
       source: params.initialModelCatalog?.source ?? "native",
     },
     ...resolveCodexRuntimeCapabilityState({
       catalog: params.initialModelCatalog ?? null,
-      modelId: request.model ?? threadStart.model ?? params.initialModelCatalog?.currentModelId ?? null,
-      reasoningId:
-        request.reasoningId ??
-        threadStart.reasoningEffort ??
-        threadStart.reasoning_effort ??
-        params.initialModelCatalog?.currentReasoningId ??
-        null,
+      modelId: currentModelId,
+      reasoningId: currentReasoningId,
+      ...(Object.keys(currentOptionValues).length > 0
+        ? { optionValues: currentOptionValues }
+        : {}),
     }),
     capabilities: {
       modelSwitch: true,
@@ -255,13 +273,8 @@ export async function startCodexLiveSession(params: {
     cwd: request.cwd,
     approvalPolicy: initialMode.approvalPolicy,
     sandboxMode: initialMode.sandboxMode,
-    modelId: request.model ?? threadStart.model ?? params.initialModelCatalog?.currentModelId ?? null,
-    reasoningId:
-      request.reasoningId ??
-      threadStart.reasoningEffort ??
-      threadStart.reasoning_effort ??
-      params.initialModelCatalog?.currentReasoningId ??
-      null,
+    modelId: currentModelId,
+    reasoningId: currentReasoningId,
     modelCatalog: params.initialModelCatalog ?? null,
     activeModeId: initialMode.activeModeId,
     lastNonPlanModeId: initialMode.accessModeId,
@@ -337,7 +350,22 @@ export async function resumeCodexLiveSession(params: {
       resumeResponse.model ??
       params.initialModelCatalog?.currentModelId ??
       null;
+    const currentModel = currentModelId
+      ? params.initialModelCatalog?.models.find((model) => model.id === currentModelId)
+      : undefined;
+    if (request.optionValues !== undefined && !currentModel) {
+      throw new Error(`Unsupported Codex model '${currentModelId ?? ""}'.`);
+    }
+    const currentOptionValues = currentModel
+      ? resolveModelOptionValues({
+          catalog: params.initialModelCatalog ?? null,
+          model: currentModel,
+          optionValues: request.optionValues,
+          reasoningId: request.reasoningId,
+        })
+      : {};
     const currentReasoningId =
+      optionValueAsString(currentOptionValues, "model_reasoning_effort") ??
       request.reasoningId ??
       resumeResponse.reasoningEffort ??
       resumeResponse.reasoning_effort ??
@@ -395,6 +423,9 @@ export async function resumeCodexLiveSession(params: {
         catalog: params.initialModelCatalog ?? null,
         modelId: currentModelId,
         reasoningId: currentReasoningId,
+        ...(Object.keys(currentOptionValues).length > 0
+          ? { optionValues: currentOptionValues }
+          : {}),
       }),
       capabilities: {
         modelSwitch: true,

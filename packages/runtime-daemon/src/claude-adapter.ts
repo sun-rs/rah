@@ -67,6 +67,7 @@ import { toSessionSummary } from "./session-store";
 import { buildClaudeModeState, isClaudeModeId } from "./session-mode-utils";
 import { approvalPolicyToPermissionMode } from "./claude-live-helpers";
 import { movePathToTrash } from "./trash";
+import { resolveModelOptionValues } from "./session-model-options";
 
 const CLAUDE_EVENT_SOURCE = {
   provider: "claude" as const,
@@ -180,6 +181,7 @@ export class ClaudeAdapter implements ProviderAdapter {
         providerSessionId: request.providerSessionId,
         cwd: request.cwd ?? record?.ref.cwd ?? process.cwd(),
         ...(request.model ? { model: request.model } : {}),
+        ...(request.optionValues !== undefined ? { optionValues: request.optionValues } : {}),
         ...(request.reasoningId !== undefined ? { reasoningId: request.reasoningId } : {}),
         ...(request.modeId ? { modeId: request.modeId } : {}),
         permissionMode:
@@ -236,18 +238,21 @@ export class ClaudeAdapter implements ProviderAdapter {
     if (!model) {
       throw new Error(`Unsupported Claude model '${nextModelId}'.`);
     }
+    const optionValues = resolveModelOptionValues({
+      catalog,
+      model,
+      optionValues: request.optionValues,
+      reasoningId: request.reasoningId,
+      useDefaults: true,
+      requireMutable: true,
+    });
     const effortOptions = model.reasoningOptions ?? [];
-    const requestedEffort =
-      request.reasoningId === null
-        ? undefined
-        : resolveClaudeEffortValue(request.reasoningId ?? model.defaultReasoningId);
-    if (
-      requestedEffort !== undefined &&
-      effortOptions.length > 0 &&
-      !effortOptions.some((option) => option.id === String(requestedEffort))
-    ) {
-      throw new Error(`Unsupported Claude effort option '${requestedEffort}'.`);
-    }
+    const requestedEffort = resolveClaudeEffortValue(
+      optionValues.effort ??
+        (request.reasoningId === null
+          ? undefined
+          : request.reasoningId ?? model.defaultReasoningId),
+    );
 
     const runtimeModelId = resolveClaudeRuntimeModelId(model);
     if (runtimeModelId) {
@@ -268,6 +273,7 @@ export class ClaudeAdapter implements ProviderAdapter {
       catalog,
       modelId: nextModelId,
       effort: live.effort,
+      optionValues,
     });
     const nextState = this.services.sessionStore.patchManagedSession(sessionId, {
       model: {

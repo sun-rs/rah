@@ -138,7 +138,7 @@ export interface StartSessionRequest {
   reasoningId?: string;
   /**
    * @deprecated Compatibility escape hatch for provider/API callers. Web clients
-   * should pass modeId/model/reasoningId and let the adapter translate them.
+   * should pass modeId/model/optionValues and let the adapter translate them.
    */
   providerConfig?: Record<string, SessionConfigValue>;
   modeId?: string;
@@ -183,7 +183,7 @@ export interface ResumeSessionRequest {
   reasoningId?: string | null;
   /**
    * @deprecated Compatibility escape hatch for provider/API callers. Web clients
-   * should pass modeId/model/reasoningId and let the adapter translate them.
+   * should pass modeId/model/optionValues and let the adapter translate them.
    */
   providerConfig?: Record<string, SessionConfigValue>;
   modeId?: string;
