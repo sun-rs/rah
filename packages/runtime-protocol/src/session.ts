@@ -211,6 +211,12 @@ export interface ManagedSession {
   updatedAt: string;
 }
 
+export interface StoredSessionHistoryMeta {
+  bytes?: number;
+  lines?: number;
+  messages?: number;
+}
+
 /**
  * A provider-owned persisted session reference that is known to the system but
  * is not currently running under runtime control.
@@ -225,6 +231,7 @@ export interface StoredSessionRef {
   createdAt?: string;
   updatedAt?: string;
   lastUsedAt?: string;
+  historyMeta?: StoredSessionHistoryMeta;
   source?: "provider_history" | "previous_live";
 }
 

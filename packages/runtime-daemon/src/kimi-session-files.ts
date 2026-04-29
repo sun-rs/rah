@@ -28,6 +28,7 @@ import {
   setCachedStoredSessionRef,
   writeStoredSessionMetadataCache,
 } from "./stored-session-metadata-cache";
+import { withHistoryFileMeta } from "./stored-session-history-meta";
 
 const REHYDRATED_CAPABILITIES = {
   livePermissions: false,
@@ -388,13 +389,18 @@ export function discoverKimiStoredSessions(): KimiStoredSessionRecord[] {
         mtimeMs: Math.max(stats.mtimeMs, stateStats?.mtimeMs ?? 0),
       });
       if (cachedRef) {
+        const cachedWithMeta = withHistoryFileMeta(cachedRef, wirePath, stats, {
+          bytes: stats.size + (stateStats?.size ?? 0),
+        });
         if (!cachedRef.createdAt) {
           const createdAt = deriveCreatedAtFromWire(wirePath);
           if (createdAt) {
-            const nextRef = {
-              ...cachedRef,
+            const nextRef = withHistoryFileMeta({
+              ...cachedWithMeta,
               createdAt,
-            };
+            }, wirePath, stats, {
+              bytes: stats.size + (stateStats?.size ?? 0),
+            });
             setCachedStoredSessionRef({
               cache,
               filePath: wirePath,
@@ -410,14 +416,14 @@ export function discoverKimiStoredSessions(): KimiStoredSessionRecord[] {
           }
         }
         records.push({
-          ref: cachedRef,
+          ref: cachedWithMeta,
           wirePath,
         });
         continue;
       }
       const { title, preview } = resolveKimiSessionTitle(sessionDir, wirePath);
       const createdAt = deriveCreatedAtFromWire(wirePath);
-      const ref: StoredSessionRef = {
+      const ref: StoredSessionRef = withHistoryFileMeta({
         provider: "kimi",
         providerSessionId: sessionId,
         cwd: workDir.path,
@@ -427,7 +433,9 @@ export function discoverKimiStoredSessions(): KimiStoredSessionRecord[] {
         ...(createdAt ? { createdAt } : {}),
         updatedAt: stats.mtime.toISOString(),
         source: "provider_history",
-      };
+      }, wirePath, stats, {
+        bytes: stats.size + (stateStats?.size ?? 0),
+      });
       setCachedStoredSessionRef({
         cache,
         filePath: wirePath,

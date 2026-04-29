@@ -141,6 +141,7 @@ export class RuntimeSessionLifecycle {
     if (!state.session.mode.mutable) {
       throw new Error("This session mode is controlled outside RAH.");
     }
+    this.requireIdleForSessionControl(state, "Session mode");
     const adapter = this.deps.requireSessionAdapter(sessionId);
     if (!adapter.setSessionMode) {
       throw new Error(`Provider ${state.session.provider} does not support mode switching.`);
@@ -166,6 +167,7 @@ export class RuntimeSessionLifecycle {
     if (state.session.model && !state.session.model.mutable) {
       throw new Error("This session model is controlled outside RAH.");
     }
+    this.requireIdleForSessionControl(state, "Session model");
     const adapter = this.deps.requireSessionAdapter(sessionId);
     if (!adapter.setSessionModel) {
       throw new Error(`Provider ${state.session.provider} does not support model switching.`);
@@ -217,5 +219,14 @@ export class RuntimeSessionLifecycle {
       },
     });
     return toSessionSummary(state);
+  }
+
+  private requireIdleForSessionControl(
+    state: StoredSessionState,
+    controlName: string,
+  ): void {
+    if (state.session.runtimeState !== "idle") {
+      throw new Error(`${controlName} can only be changed while the session is idle.`);
+    }
   }
 }

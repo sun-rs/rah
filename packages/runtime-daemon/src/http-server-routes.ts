@@ -1,26 +1,9 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type {
-  AttachSessionRequest,
-  ClaimControlRequest,
-  CloseSessionRequest,
-  DetachSessionRequest,
   DebugReplayScript,
-  GitFileActionRequest,
-  GitHunkActionRequest,
-  IndependentTerminalStartRequest,
-  InterruptSessionRequest,
   ListDebugScenariosResponse,
   ListProvidersResponse,
-  PermissionResponseRequest,
   ProviderKind,
-  ReleaseControlRequest,
-  ResumeSessionRequest,
-  SessionInputRequest,
-  SetSessionModelRequest,
-  StartDebugScenarioRequest,
-  StartSessionRequest,
-  StoredSessionRemoveRequest,
-  WorkspaceDirectoryRequest,
 } from "@rah/runtime-protocol";
 import { RuntimeEngine } from "./runtime-engine";
 import { applyCorsHeaders, validateApiRequest } from "./http-server-cors";
@@ -31,6 +14,27 @@ import {
   writeJson,
   writeText,
 } from "./http-server-response";
+import {
+  parseAttachSessionRequest,
+  parseClaimControlRequest,
+  parseCloseSessionRequest,
+  parseDetachSessionRequest,
+  parseGitFileActionRequest,
+  parseGitHunkActionRequest,
+  parseIndependentTerminalStartRequest,
+  parseInterruptSessionRequest,
+  parsePermissionResponseRequest,
+  parseReleaseControlRequest,
+  parseRenameSessionRequest,
+  parseResumeSessionRequest,
+  parseSessionInputRequest,
+  parseSetSessionModeRequest,
+  parseSetSessionModelRequest,
+  parseStartDebugScenarioRequest,
+  parseStartSessionRequest,
+  parseStoredSessionRemoveRequest,
+  parseWorkspaceDirectoryRequest,
+} from "./http-server-request-validation";
 import { serveClientApp } from "./http-server-static";
 
 export function createPostRoutes(
@@ -44,7 +48,7 @@ export function createPostRoutes(
           req,
           res,
           200,
-          await engine.startIndependentTerminal((body ?? {}) as IndependentTerminalStartRequest),
+          await engine.startIndependentTerminal(parseIndependentTerminalStartRequest(body)),
         );
       },
     },
@@ -58,42 +62,42 @@ export function createPostRoutes(
     {
       pattern: /^\/api\/sessions\/start$/,
       handler: async (req, res, _match, body) => {
-        const result = await engine.startSession((body ?? {}) as StartSessionRequest);
+        const result = await engine.startSession(parseStartSessionRequest(body));
         writeJson(req, res, 200, result);
       },
     },
     {
       pattern: /^\/api\/sessions\/resume$/,
       handler: async (req, res, _match, body) => {
-        const result = await engine.resumeSession((body ?? {}) as ResumeSessionRequest);
+        const result = await engine.resumeSession(parseResumeSessionRequest(body));
         writeJson(req, res, 200, result);
       },
     },
     {
       pattern: /^\/api\/sessions\/([^/]+)\/attach$/,
       handler: async (req, res, match, body) => {
-        const result = engine.attachSession(match[1]!, (body ?? {}) as AttachSessionRequest);
+        const result = engine.attachSession(match[1]!, parseAttachSessionRequest(body));
         writeJson(req, res, 200, result);
       },
     },
     {
       pattern: /^\/api\/sessions\/([^/]+)\/control\/claim$/,
       handler: async (req, res, match, body) => {
-        const result = engine.claimControl(match[1]!, (body ?? {}) as ClaimControlRequest);
+        const result = engine.claimControl(match[1]!, parseClaimControlRequest(body));
         writeJson(req, res, 200, { session: result });
       },
     },
     {
       pattern: /^\/api\/sessions\/([^/]+)\/control\/release$/,
       handler: async (req, res, match, body) => {
-        const result = engine.releaseControl(match[1]!, (body ?? {}) as ReleaseControlRequest);
+        const result = engine.releaseControl(match[1]!, parseReleaseControlRequest(body));
         writeJson(req, res, 200, { session: result });
       },
     },
     {
       pattern: /^\/api\/sessions\/([^/]+)\/input$/,
       handler: async (req, res, match, body) => {
-        engine.sendInput(match[1]!, (body ?? {}) as SessionInputRequest);
+        engine.sendInput(match[1]!, parseSessionInputRequest(body));
         writeJson(req, res, 200, { ok: true });
       },
     },
@@ -104,7 +108,7 @@ export function createPostRoutes(
           req,
           res,
           200,
-          await engine.applyGitFileAction(match[1]!, (body ?? {}) as GitFileActionRequest),
+          await engine.applyGitFileAction(match[1]!, parseGitFileActionRequest(body)),
         );
       },
     },
@@ -115,7 +119,7 @@ export function createPostRoutes(
           req,
           res,
           200,
-          await engine.applyGitHunkAction(match[1]!, (body ?? {}) as GitHunkActionRequest),
+          await engine.applyGitHunkAction(match[1]!, parseGitHunkActionRequest(body)),
         );
       },
     },
@@ -124,7 +128,7 @@ export function createPostRoutes(
       handler: async (req, res, match, body) => {
         const result = engine.interruptSession(
           match[1]!,
-          (body ?? {}) as InterruptSessionRequest,
+            parseInterruptSessionRequest(body),
         );
         writeJson(req, res, 200, { session: result });
       },
@@ -132,25 +136,21 @@ export function createPostRoutes(
     {
       pattern: /^\/api\/sessions\/([^/]+)\/detach$/,
       handler: async (req, res, match, body) => {
-        const result = engine.detachSession(match[1]!, (body ?? {}) as DetachSessionRequest);
+        const result = engine.detachSession(match[1]!, parseDetachSessionRequest(body));
         writeJson(req, res, 200, { session: result });
       },
     },
     {
       pattern: /^\/api\/sessions\/([^/]+)\/close$/,
       handler: async (req, res, match, body) => {
-        await engine.closeSession(match[1]!, (body ?? {}) as CloseSessionRequest);
+        await engine.closeSession(match[1]!, parseCloseSessionRequest(body));
         writeJson(req, res, 200, { ok: true });
       },
     },
     {
       pattern: /^\/api\/sessions\/([^/]+)\/rename$/,
       handler: async (req, res, match, body) => {
-        const request = (body ?? {}) as { title?: string };
-        if (typeof request.title !== "string" || !request.title.trim()) {
-          writeJson(req, res, 400, { error: "Session title is required." });
-          return;
-        }
+        const request = parseRenameSessionRequest(body);
         writeJson(req, res, 200, {
           session: await engine.renameSession(match[1]!, request.title),
         });
@@ -159,11 +159,7 @@ export function createPostRoutes(
     {
       pattern: /^\/api\/sessions\/([^/]+)\/mode$/,
       handler: async (req, res, match, body) => {
-        const request = (body ?? {}) as { modeId?: string };
-        if (typeof request.modeId !== "string" || !request.modeId.trim()) {
-          writeJson(req, res, 400, { error: "Session mode is required." });
-          return;
-        }
+        const request = parseSetSessionModeRequest(body);
         writeJson(req, res, 200, {
           session: await engine.setSessionMode(match[1]!, request.modeId),
         });
@@ -172,11 +168,7 @@ export function createPostRoutes(
     {
       pattern: /^\/api\/sessions\/([^/]+)\/model$/,
       handler: async (req, res, match, body) => {
-        const request = (body ?? {}) as SetSessionModelRequest;
-        if (typeof request.modelId !== "string" || !request.modelId.trim()) {
-          writeJson(req, res, 400, { error: "Session model is required." });
-          return;
-        }
+        const request = parseSetSessionModelRequest(body);
         writeJson(req, res, 200, {
           session: await engine.setSessionModel(match[1]!, request),
         });
@@ -188,7 +180,7 @@ export function createPostRoutes(
         await engine.respondToPermission(
           match[1]!,
           decodeURIComponent(match[2]!),
-          (body ?? {}) as PermissionResponseRequest,
+          parsePermissionResponseRequest(body),
         );
         writeJson(req, res, 200, { ok: true });
       },
@@ -196,7 +188,7 @@ export function createPostRoutes(
     {
       pattern: /^\/api\/workspaces\/add$/,
       handler: async (req, res, _match, body) => {
-        writeJson(req, res, 200, engine.addWorkspace(((body ?? {}) as WorkspaceDirectoryRequest).dir));
+        writeJson(req, res, 200, engine.addWorkspace(parseWorkspaceDirectoryRequest(body).dir));
       },
     },
     {
@@ -206,7 +198,7 @@ export function createPostRoutes(
           req,
           res,
           200,
-          engine.selectWorkspace(((body ?? {}) as WorkspaceDirectoryRequest).dir),
+          engine.selectWorkspace(parseWorkspaceDirectoryRequest(body).dir),
         );
       },
     },
@@ -217,14 +209,14 @@ export function createPostRoutes(
           req,
           res,
           200,
-          engine.removeWorkspace(((body ?? {}) as WorkspaceDirectoryRequest).dir),
+          engine.removeWorkspace(parseWorkspaceDirectoryRequest(body).dir),
         );
       },
     },
     {
       pattern: /^\/api\/history\/sessions\/remove$/,
       handler: async (req, res, _match, body) => {
-        const request = (body ?? {}) as StoredSessionRemoveRequest;
+        const request = parseStoredSessionRemoveRequest(body);
         writeJson(
           req,
           res,
@@ -236,7 +228,7 @@ export function createPostRoutes(
     {
       pattern: /^\/api\/history\/workspaces\/remove$/,
       handler: async (req, res, _match, body) => {
-        const request = (body ?? {}) as WorkspaceDirectoryRequest;
+        const request = parseWorkspaceDirectoryRequest(body);
         writeJson(req, res, 200, await engine.removeStoredWorkspaceSessions(request.dir));
       },
     },
@@ -293,9 +285,10 @@ export async function handleHttpRequest(args: {
     }
 
     if (req.method === "POST" && pathname === "/api/fs/ensure-dir") {
-      const body = (await readJsonBody(req)) as WorkspaceDirectoryRequest | undefined;
+      const body = await readJsonBody(req);
       try {
-        writeJson(req, res, 200, await engine.ensureDirectory(body?.dir ?? process.cwd()));
+        const dir = body === undefined ? process.cwd() : parseWorkspaceDirectoryRequest(body).dir;
+        writeJson(req, res, 200, await engine.ensureDirectory(dir));
       } catch (error) {
         writeJson(req, res, 400, { error: error instanceof Error ? error.message : String(error) });
       }
@@ -554,15 +547,8 @@ export async function handleHttpRequest(args: {
     if (req.method === "POST") {
       if (pathname === "/api/debug/scenarios/start") {
         const body = await readJsonBody(req);
-        const parsed = (body ?? {}) as Partial<StartDebugScenarioRequest>;
-        if (!parsed.scenarioId) {
-          writeJson(req, res, 400, { error: "scenarioId is required" });
-          return;
-        }
-        const request = { scenarioId: parsed.scenarioId };
-        const result = engine.startScenario(
-          parsed.attach !== undefined ? { ...request, attach: parsed.attach } : request,
-        );
+        const parsed = parseStartDebugScenarioRequest(body);
+        const result = engine.startScenario(parsed);
         writeJson(req, res, 200, result);
         return;
       }

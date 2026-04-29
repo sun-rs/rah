@@ -38,6 +38,10 @@ test("discovers OpenCode stored sessions from opencode.db", { skip: !hasSqlite }
       createdAt: "2026-04-26T16:00:00.000Z",
       updatedAt: "2026-04-26T16:00:05.000Z",
       lastUsedAt: "2026-04-26T16:00:05.000Z",
+      historyMeta: {
+        bytes: 317,
+        messages: 2,
+      },
     });
   } finally {
     rmSync(dataDir, { recursive: true, force: true });

@@ -303,6 +303,17 @@ export function App() {
     : null;
   const [missingWorkspaceResolver, setMissingWorkspaceResolver] =
     useState<((confirmed: boolean) => void) | null>(null);
+  const confirmCreateMissingWorkspace = (dir: string) =>
+    new Promise<boolean>((resolve) => {
+      setMissingWorkspaceConfirmDir(dir);
+      setMissingWorkspaceResolver(() => resolve);
+    });
+
+  const resolveMissingWorkspacePrompt = (confirmed: boolean) => {
+    missingWorkspaceResolver?.(confirmed);
+    setMissingWorkspaceResolver(null);
+    setMissingWorkspaceConfirmDir(null);
+  };
   const primaryPaneState = derivePrimaryPaneState({
     selectedSummary,
     pendingSessionTransition,
@@ -373,6 +384,7 @@ export function App() {
     startModelId,
     startReasoningId: startModelId ? startModelControl.reasoning?.id ?? null : null,
     ...(startOptionValues !== undefined ? { startOptionValues } : {}),
+    confirmCreateMissingWorkspace,
     sendInput,
     startSession,
   });
@@ -493,19 +505,7 @@ export function App() {
 
   const handleActivateHistorySession = (ref: typeof storedSessions[number]) => {
     setLeftOpen(false);
-    void activateHistorySession(ref);
-  };
-
-  const confirmCreateMissingWorkspace = (dir: string) =>
-    new Promise<boolean>((resolve) => {
-      setMissingWorkspaceConfirmDir(dir);
-      setMissingWorkspaceResolver(() => resolve);
-    });
-
-  const resolveMissingWorkspacePrompt = (confirmed: boolean) => {
-    missingWorkspaceResolver?.(confirmed);
-    setMissingWorkspaceResolver(null);
-    setMissingWorkspaceConfirmDir(null);
+    void activateHistorySession(ref, { confirmCreateMissingWorkspace });
   };
 
   const terminalCwd = selectedInspectorWorkspaceDir || "~";
@@ -712,7 +712,7 @@ export function App() {
         description={
           missingWorkspaceConfirmDir ? (
             <>
-              Create this workspace before claiming control?
+              Create this workspace before starting the session?
               <div className="mt-2 break-all rounded-lg border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-2.5 py-2 font-mono text-xs text-[var(--app-fg)]">
                 {missingWorkspaceConfirmDir}
               </div>

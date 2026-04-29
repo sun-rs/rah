@@ -365,6 +365,10 @@ emit({ type: "result", timestamp: new Date().toISOString(), status: "success", s
       ),
       true,
     );
+    assert.equal(
+      isNoisyGeminiCliStderr("Ripgrep is not available. Falling back to GrepTool."),
+      true,
+    );
     assert.equal(isNoisyGeminiCliStderr("headers: {"), true);
     assert.equal(isNoisyGeminiCliStderr("'alt-svc': 'h3=\":443\"; ma=2592000',"), true);
     assert.equal(isNoisyGeminiCliStderr("status: 429,"), true);

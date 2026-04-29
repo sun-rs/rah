@@ -41,6 +41,7 @@ type StartSessionOptions = {
   reasoningId?: string;
   modeId?: string;
   initialInput?: string;
+  confirmCreateMissingWorkspace?: (dir: string) => Promise<boolean>;
 };
 
 type SessionStartupState = {
@@ -80,7 +81,11 @@ type SessionStartupDeps = {
   attachSession: (summary: SessionSummary) => Promise<void>;
   resumeStoredSession: (
     ref: StoredSessionRef,
-    options?: { preferStoredReplay?: boolean; historyReplay?: "include" | "skip" },
+    options?: {
+      preferStoredReplay?: boolean;
+      historyReplay?: "include" | "skip";
+      confirmCreateMissingWorkspace?: (dir: string) => Promise<boolean>;
+    },
   ) => Promise<void>;
   applySessionsResponse: (
     state: Pick<
@@ -128,6 +133,9 @@ export async function startSessionCommand(
       return;
     }
     const provider = options?.provider ?? state.newSessionProvider;
+    if (!(await ensureLaunchWorkspaceAvailable(deps, cwd))) {
+      return;
+    }
     deps.set({
       pendingSessionTransition: createPendingStartTransition({
         provider,
@@ -211,6 +219,7 @@ export async function startScenarioCommand(
 export async function activateHistorySessionCommand(
   deps: SessionStartupDeps,
   ref: StoredSessionRef,
+  options?: { confirmCreateMissingWorkspace?: (dir: string) => Promise<boolean> },
 ) {
   const state = deps.get();
   const existingLive = findDaemonLiveSessionForStoredRef(state.projections, ref);
@@ -227,15 +236,28 @@ export async function activateHistorySessionCommand(
     await deps.attachSession(existingLive);
     return;
   }
-  await deps.resumeStoredSession(ref, { preferStoredReplay: true });
+  await deps.resumeStoredSession(ref, {
+    preferStoredReplay: true,
+    ...(options?.confirmCreateMissingWorkspace
+      ? { confirmCreateMissingWorkspace: options.confirmCreateMissingWorkspace }
+      : {}),
+  });
 }
 
 export async function resumeStoredSessionCommand(
   deps: SessionStartupDeps,
   ref: StoredSessionRef,
-  options?: { preferStoredReplay?: boolean; historyReplay?: "include" | "skip" },
+  options?: {
+    preferStoredReplay?: boolean;
+    historyReplay?: "include" | "skip";
+    confirmCreateMissingWorkspace?: (dir: string) => Promise<boolean>;
+  },
 ) {
   try {
+    const targetDir = ref.cwd ?? ref.rootDir;
+    if (!(await ensureLaunchWorkspaceAvailable(deps, targetDir))) {
+      return;
+    }
     deps.set({
       pendingSessionTransition: createPendingStoredSessionTransition(ref, "history"),
       error: null,
@@ -277,8 +299,8 @@ export async function resumeStoredSessionCommand(
     if (options?.historyReplay !== undefined) {
       request.historyReplay = options.historyReplay;
     }
-    if (ref.cwd !== undefined) {
-      request.cwd = ref.cwd;
+    if (targetDir !== undefined) {
+      request.cwd = targetDir;
     }
     const response = await api.resumeSession(request);
     deps.set((current) => {
@@ -373,16 +395,8 @@ export async function claimHistorySessionCommand(
   };
 
   const targetDir = ref.rootDir ?? ref.cwd ?? null;
-  if (targetDir) {
-    try {
-      await api.listDirectory(targetDir);
-    } catch {
-      const shouldCreate = await deps.confirmCreateMissingWorkspace(targetDir);
-      if (!shouldCreate) {
-        return;
-      }
-      await api.ensureDirectory({ dir: targetDir });
-    }
+  if (!(await ensureLaunchWorkspaceAvailable(deps, targetDir))) {
+    return;
   }
 
   try {
@@ -408,8 +422,9 @@ export async function claimHistorySessionCommand(
       historySourceSessionId: sessionId,
       attach: createInteractiveAttachRequest(state.clientId, state.connectionId),
     };
-    if (ref.cwd !== undefined) {
-      request.cwd = ref.cwd;
+    const requestCwd = ref.cwd ?? targetDir;
+    if (requestCwd !== null) {
+      request.cwd = requestCwd;
     }
     const response = await api.resumeSession(request);
     let session = response.session;
@@ -460,4 +475,38 @@ export async function claimHistorySessionCommand(
     });
     throw error;
   }
+}
+
+async function ensureLaunchWorkspaceAvailable(
+  deps: SessionStartupDeps,
+  dir: string | null | undefined,
+): Promise<boolean> {
+  const targetDir = dir?.trim();
+  if (!targetDir) {
+    return true;
+  }
+  try {
+    await api.listDirectory(targetDir);
+    return true;
+  } catch (error) {
+    if (!isMissingWorkspaceError(error)) {
+      throw error;
+    }
+    const shouldCreate = await deps.confirmCreateMissingWorkspace(targetDir);
+    if (!shouldCreate) {
+      deps.set({
+        pendingSessionAction: null,
+        pendingSessionTransition: null,
+        error: null,
+      });
+      return false;
+    }
+    await api.ensureDirectory({ dir: targetDir });
+    return true;
+  }
+}
+
+function isMissingWorkspaceError(error: unknown): boolean {
+  const message = readErrorMessage(error).toLowerCase();
+  return message.includes("enoent") || message.includes("no such file or directory");
 }

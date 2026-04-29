@@ -1,4 +1,4 @@
-import type { RefObject } from "react";
+import { useLayoutEffect, useRef, useState, type RefObject } from "react";
 import type { ProviderModelCatalog } from "@rah/runtime-protocol";
 import { ArrowUp, ChevronDown, Folder, FolderPlus, Menu, PanelRight, Plus } from "lucide-react";
 import { ProviderSelector, type ProviderChoice } from "../../ProviderSelector";
@@ -7,7 +7,10 @@ import { SessionModelControls } from "../../SessionModelControls";
 import { SessionModeControls } from "../../SessionModeControls";
 import { TokenizedTextarea } from "../../TokenizedTextarea";
 import { WorkspacePicker } from "../../WorkspacePicker";
-import { EMPTY_STATE_COMPOSER_LAYOUT } from "../../../composer-contract";
+import {
+  EMPTY_STATE_COMPOSER_LAYOUT,
+  shouldCompactEmptyStateSessionControls,
+} from "../../../composer-contract";
 import type { SessionModeChoice } from "../../../session-mode-ui";
 
 export function WorkbenchEmptyPane(props: {
@@ -44,10 +47,29 @@ export function WorkbenchEmptyPane(props: {
   onAccessModeChange: (modeId: string) => void;
   onPlanModeToggle: (enabled: boolean) => void;
 }) {
+  const controlsRowRef = useRef<HTMLDivElement | null>(null);
+  const [controlsRowWidth, setControlsRowWidth] = useState<number | null>(null);
   const workspaceLabel = props.availableWorkspaceDir
     ? props.availableWorkspaceDir.split("/").filter(Boolean).pop() ?? props.availableWorkspaceDir
     : "Workspace";
   const workspaceShouldMarquee = workspaceLabel.length > 6;
+  const compactSessionControls = shouldCompactEmptyStateSessionControls(controlsRowWidth);
+
+  useLayoutEffect(() => {
+    const node = controlsRowRef.current;
+    if (!node) return;
+    const updateWidth = () => {
+      setControlsRowWidth(Math.floor(node.getBoundingClientRect().width));
+    };
+    updateWidth();
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", updateWidth);
+      return () => window.removeEventListener("resize", updateWidth);
+    }
+    const observer = new ResizeObserver(updateWidth);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
 
   return (
     <>
@@ -133,7 +155,10 @@ export function WorkbenchEmptyPane(props: {
             />
 
             {/* Controls anchored to the bottom edge of the textarea card */}
-            <div className={EMPTY_STATE_COMPOSER_LAYOUT.controlsRowClassName}>
+            <div
+              ref={controlsRowRef}
+              className={EMPTY_STATE_COMPOSER_LAYOUT.controlsRowClassName}
+            >
               <div className={EMPTY_STATE_COMPOSER_LAYOUT.leftControlsClassName}>
                 <button
                   type="button"
@@ -211,14 +236,20 @@ export function WorkbenchEmptyPane(props: {
                   selectedReasoningId={props.selectedReasoningId}
                   allowProviderDefault
                   showModel
-                  buttonClassName={`${EMPTY_STATE_COMPOSER_LAYOUT.attachButtonClassName} md:hidden`}
+                  buttonClassName={`${EMPTY_STATE_COMPOSER_LAYOUT.attachButtonClassName} ${
+                    compactSessionControls ? "" : "hidden"
+                  }`}
                   onAccessModeChange={props.onAccessModeChange}
                   onPlanModeToggle={props.onPlanModeToggle}
                   onModelChange={props.onModelChange}
                   onReasoningChange={props.onReasoningChange}
                 />
 
-                <div className="hidden items-center gap-2 md:flex">
+                <div
+                  className={`items-center gap-2 ${
+                    compactSessionControls ? "hidden" : "flex"
+                  }`}
+                >
                   <SessionModeControls
                     variant="toolbar"
                     accessModes={props.accessModes}

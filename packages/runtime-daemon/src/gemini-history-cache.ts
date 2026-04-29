@@ -5,7 +5,7 @@ import path from "node:path";
 import type { RahEvent } from "@rah/runtime-protocol";
 
 const GEMINI_HISTORY_PAGE_SIZE = 256;
-const GEMINI_HISTORY_CACHE_FORMAT_VERSION = 2;
+const GEMINI_HISTORY_CACHE_FORMAT_VERSION = 4;
 
 export type GeminiHistoryCacheManifest = {
   formatVersion: number;

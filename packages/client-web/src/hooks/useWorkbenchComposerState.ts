@@ -12,6 +12,7 @@ type StartSessionInput = {
   model?: string;
   optionValues?: Record<string, SessionConfigValue>;
   reasoningId?: string;
+  confirmCreateMissingWorkspace?: (dir: string) => Promise<boolean>;
 };
 
 type SendInputFn = (sessionId: string, text: string) => Promise<unknown>;
@@ -25,6 +26,7 @@ export function useWorkbenchComposerState(args: {
   startModelId?: string | null;
   startReasoningId?: string | null;
   startOptionValues?: Record<string, SessionConfigValue>;
+  confirmCreateMissingWorkspace?: (dir: string) => Promise<boolean>;
   sendInput: SendInputFn;
   startSession: StartSessionFn;
 }) {
@@ -43,6 +45,8 @@ export function useWorkbenchComposerState(args: {
     setSendPending(true);
     try {
       await args.sendInput(args.selectedSummary.session.id, text);
+    } catch {
+      setDraft((current) => (current.trim() ? current : text));
     } finally {
       setSendPending(false);
     }
@@ -54,16 +58,23 @@ export function useWorkbenchComposerState(args: {
       return;
     }
     setEmptyStateDraft("");
-    void args.startSession({
-      provider: args.newSessionProvider,
-      cwd: args.availableWorkspaceDir,
-      title: text.slice(0, 50),
-      initialInput: text,
-      ...(args.startModeId ? { modeId: args.startModeId } : {}),
-      ...(args.startModelId ? { model: args.startModelId } : {}),
-      ...(args.startOptionValues ? { optionValues: args.startOptionValues } : {}),
-      ...(args.startReasoningId ? { reasoningId: args.startReasoningId } : {}),
-    });
+    void args
+      .startSession({
+        provider: args.newSessionProvider,
+        cwd: args.availableWorkspaceDir,
+        title: text.slice(0, 50),
+        initialInput: text,
+        ...(args.startModeId ? { modeId: args.startModeId } : {}),
+        ...(args.startModelId ? { model: args.startModelId } : {}),
+        ...(args.startOptionValues ? { optionValues: args.startOptionValues } : {}),
+        ...(args.startReasoningId ? { reasoningId: args.startReasoningId } : {}),
+        ...(args.confirmCreateMissingWorkspace
+          ? { confirmCreateMissingWorkspace: args.confirmCreateMissingWorkspace }
+          : {}),
+      })
+      .catch(() => {
+        setEmptyStateDraft((current) => (current.trim() ? current : text));
+      });
   };
 
   const insertDraftReference = (reference: string) => {

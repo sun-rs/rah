@@ -185,6 +185,7 @@ export function isNoisyGeminiCliStderr(line: string): boolean {
   return (
     trimmed.startsWith("YOLO mode is enabled.") ||
     trimmed.includes("[IDEClient] Failed to connect to IDE companion extension.") ||
+    trimmed === "Ripgrep is not available. Falling back to GrepTool." ||
     trimmed.startsWith("Warning: Basic terminal detected ") ||
     trimmed.startsWith("Warning: 256-color support not detected.") ||
     trimmed === "headers: {" ||

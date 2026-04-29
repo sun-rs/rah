@@ -76,6 +76,14 @@ export function hashGeminiMessages(messages: readonly GeminiMessageRecord[]): st
     hash.update("\u0000");
     hash.update(JSON.stringify(message.content ?? null));
     hash.update("\u0000");
+    hash.update(JSON.stringify(message.toolCalls ?? null));
+    hash.update("\u0000");
+    hash.update(JSON.stringify(message.thoughts ?? null));
+    hash.update("\u0000");
+    hash.update(JSON.stringify(message.tokens ?? null));
+    hash.update("\u0000");
+    hash.update(JSON.stringify(message.model ?? null));
+    hash.update("\u0000");
   }
   return hash.digest("hex");
 }
@@ -168,8 +176,10 @@ export function loadGeminiConversationRecord(filePath: string): GeminiConversati
       if (!isMessageRecord(parsed)) {
         continue;
       }
+      if (!messages.has(parsed.id)) {
+        messageOrder.push(parsed.id);
+      }
       messages.set(parsed.id, parsed);
-      messageOrder.push(parsed.id);
     }
 
     if (typeof metadata.sessionId !== "string" || typeof metadata.projectHash !== "string") {
@@ -220,6 +230,27 @@ function classifyGeminiToolFamily(name: string) {
   return "other" as const;
 }
 
+function extractGeminiToolError(value: unknown): string {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const error = extractGeminiToolError(item);
+      if (error) return error;
+    }
+    return "";
+  }
+  if (!isObject(value)) {
+    return "";
+  }
+  if (typeof value.error === "string" && value.error.trim()) {
+    return value.error.trim();
+  }
+  for (const child of Object.values(value)) {
+    const error = extractGeminiToolError(child);
+    if (error) return error;
+  }
+  return "";
+}
+
 function toolActivitiesForMessage(message: GeminiMessageRecord, turnId: string): ProviderActivity[] {
   if (!Array.isArray(message.toolCalls)) {
     return [];
@@ -248,9 +279,11 @@ function toolActivitiesForMessage(message: GeminiMessageRecord, turnId: string):
           }
         : {}),
     };
+    const resultError = extractGeminiToolError(toolCall.result);
     const failed =
-      typeof toolCall.status === "string" &&
-      ["error", "failed", "cancelled", "canceled"].includes(toolCall.status.toLowerCase());
+      resultError !== "" ||
+      (typeof toolCall.status === "string" &&
+        ["error", "failed", "cancelled", "canceled"].includes(toolCall.status.toLowerCase()));
     return [
       { type: "tool_call_started", turnId, toolCall: tool },
       failed
@@ -258,7 +291,8 @@ function toolActivitiesForMessage(message: GeminiMessageRecord, turnId: string):
             type: "tool_call_failed" as const,
             turnId,
             toolCallId: toolCall.id,
-            error: extractTextFromContent(toolCall.result) || toolCall.status || "Tool failed",
+            error:
+              resultError || extractTextFromContent(toolCall.result) || toolCall.status || "Tool failed",
           }
         : {
             type: "tool_call_completed" as const,

@@ -55,7 +55,7 @@ function effectiveSessionCreatedAt(session: StoredSessionRef): string {
 }
 
 function effectiveSessionUpdatedAt(session: StoredSessionRef): string {
-  return session.updatedAt ?? session.lastUsedAt ?? "";
+  return session.lastUsedAt ?? session.updatedAt ?? "";
 }
 
 export function dedupeStoredSessionsByIdentity(sessions: StoredSessionRef[]): StoredSessionRef[] {
@@ -113,7 +113,7 @@ export function groupAllStoredSessionsByDirectory(
         if ((a.source === "previous_live") !== (b.source === "previous_live")) {
           return a.source === "previous_live" ? -1 : 1;
         }
-        return (b.updatedAt ?? b.lastUsedAt ?? "").localeCompare(a.updatedAt ?? a.lastUsedAt ?? "");
+        return (b.lastUsedAt ?? b.updatedAt ?? "").localeCompare(a.lastUsedAt ?? a.updatedAt ?? "");
       }),
     }));
 

@@ -8,6 +8,7 @@ import {
   setCachedStoredSessionRef,
   writeStoredSessionMetadataCache,
 } from "./stored-session-metadata-cache";
+import { withHistoryFileMeta } from "./stored-session-history-meta";
 import {
   listCodexWrapperHomes,
   resolveCodexBaseHome,
@@ -258,7 +259,7 @@ export function discoverCodexStoredSessions(): CodexStoredSessionRecord[] {
       if (cachedRef && !shouldInvalidateCachedCodexTitle(cachedRef, file)) {
         const createdAtRecord = !cachedRef.createdAt ? parseStoredSessionRecord(file) : null;
         const renamedTitle = renamedTitles.get(cachedRef.providerSessionId);
-        const nextRef =
+        const nextRef = withHistoryFileMeta(
           renamedTitle && renamedTitle !== cachedRef.title
             ? {
                 ...cachedRef,
@@ -272,7 +273,10 @@ export function discoverCodexStoredSessions(): CodexStoredSessionRecord[] {
                   ...cachedRef,
                   createdAt: createdAtRecord.ref.createdAt,
                 }
-              : cachedRef;
+              : cachedRef,
+          file,
+          stats,
+        );
         if (nextRef !== cachedRef) {
           setCachedStoredSessionRef({
             cache,
@@ -299,6 +303,7 @@ export function discoverCodexStoredSessions(): CodexStoredSessionRecord[] {
           title: renamedTitle,
         };
       }
+      parsed.ref = withHistoryFileMeta(parsed.ref, file, stats);
       setCachedStoredSessionRef({
         cache,
         filePath: file,

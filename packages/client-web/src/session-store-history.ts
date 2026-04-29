@@ -57,7 +57,7 @@ export function replayEventsIntoProjection(
   return projection;
 }
 
-function feedEntriesSemanticallyMatch(left: FeedEntry, right: FeedEntry): boolean {
+function feedEntriesShareTimelineIdentity(left: FeedEntry, right: FeedEntry): boolean {
   if (left.kind !== right.kind) {
     return false;
   }
@@ -74,19 +74,25 @@ function feedEntriesSemanticallyMatch(left: FeedEntry, right: FeedEntry): boolea
       const rightItem = right.item as typeof leftItem;
       const leftMessageId = leftItem.messageId;
       const rightMessageId = rightItem.messageId;
-      if (
-        leftMessageId !== undefined &&
-        rightMessageId !== undefined &&
-        leftMessageId === rightMessageId
-      ) {
-        return true;
+      if (leftMessageId !== undefined && rightMessageId !== undefined) {
+        return leftMessageId === rightMessageId;
       }
-      return leftItem.text === rightItem.text;
+      return Boolean(
+        left.turnId &&
+          right.turnId &&
+          left.turnId === right.turnId &&
+          leftItem.text === rightItem.text,
+      );
     }
     case "reasoning": {
       const leftItem = left.item;
       const rightItem = right.item as typeof leftItem;
-      return leftItem.text === rightItem.text;
+      return Boolean(
+        left.turnId &&
+          right.turnId &&
+          left.turnId === right.turnId &&
+          leftItem.text === rightItem.text,
+      );
     }
     default:
       return false;
@@ -123,7 +129,7 @@ export function prependHistoryPage(
       nextFeed[existingIndex] = entry;
       return false;
     }
-    return !projection.feed.some((current) => feedEntriesSemanticallyMatch(current, entry));
+    return !projection.feed.some((current) => feedEntriesShareTimelineIdentity(current, entry));
   });
 
   return {

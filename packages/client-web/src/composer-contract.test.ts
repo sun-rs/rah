@@ -4,7 +4,9 @@ import type { SessionSummary } from "@rah/runtime-protocol";
 import {
   COMPOSER_LAYOUT,
   EMPTY_STATE_COMPOSER_LAYOUT,
+  EMPTY_STATE_EXPANDED_CONTROLS_MIN_WIDTH_PX,
   deriveComposerSurface,
+  shouldCompactEmptyStateSessionControls,
 } from "./composer-contract";
 
 function summary(args?: Partial<SessionSummary["session"]>): SessionSummary {
@@ -107,6 +109,8 @@ describe("composer contract", () => {
     assert.deepEqual(surface, {
       kind: "compose",
       showStopButton: true,
+      stopDisabled: true,
+      stopTitle: "Terminal is handling this turn. Web can observe it, but can't interrupt it.",
     });
   });
 
@@ -214,6 +218,18 @@ describe("composer contract", () => {
     assert.equal(
       COMPOSER_LAYOUT.bottomPaddingStyle.paddingRight,
       "max(0.75rem, env(safe-area-inset-right))",
+    );
+  });
+
+  test("compacts empty-state session controls based on actual composer width", () => {
+    assert.equal(shouldCompactEmptyStateSessionControls(null), true);
+    assert.equal(
+      shouldCompactEmptyStateSessionControls(EMPTY_STATE_EXPANDED_CONTROLS_MIN_WIDTH_PX - 1),
+      true,
+    );
+    assert.equal(
+      shouldCompactEmptyStateSessionControls(EMPTY_STATE_EXPANDED_CONTROLS_MIN_WIDTH_PX),
+      false,
     );
   });
 });

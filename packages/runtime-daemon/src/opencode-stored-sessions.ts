@@ -29,6 +29,7 @@ import { applyProviderActivity } from "./provider-activity";
 import type { RuntimeServices } from "./provider-adapter";
 import { SessionStore } from "./session-store";
 import { normalizeDirectory } from "./workbench-directory-utils";
+import { withHistoryMeta } from "./stored-session-history-meta";
 
 export interface OpenCodeStoredSessionRecord {
   ref: StoredSessionRef;
@@ -72,6 +73,8 @@ type OpenCodeSessionRow = {
   time_archived: number | null;
   project_worktree: string | null;
   preview: string | null;
+  message_count: number | null;
+  history_bytes: number | null;
 };
 
 type OpenCodeMessageRow = {
@@ -163,7 +166,23 @@ export function discoverOpenCodeStoredSessions(options: {
             and coalesce(json_extract(pp.data, '$.ignored'), 0) = 0
           order by pp.time_created desc, pp.id desc
           limit 1
-        ) as preview
+        ) as preview,
+        (
+          select count(*)
+          from message mm
+          where mm.session_id = s.id
+        ) as message_count,
+        (
+          coalesce((
+            select sum(length(mm.data))
+            from message mm
+            where mm.session_id = s.id
+          ), 0) + coalesce((
+            select sum(length(pp.data))
+            from part pp
+            where pp.session_id = s.id
+          ), 0)
+        ) as history_bytes
       from session s
       left join project p on p.id = s.project_id
       where s.parent_id is null
@@ -201,7 +220,23 @@ export function findOpenCodeStoredSessionRecord(
             and coalesce(json_extract(pp.data, '$.ignored'), 0) = 0
           order by pp.time_created desc, pp.id desc
           limit 1
-        ) as preview
+        ) as preview,
+        (
+          select count(*)
+          from message mm
+          where mm.session_id = s.id
+        ) as message_count,
+        (
+          coalesce((
+            select sum(length(mm.data))
+            from message mm
+            where mm.session_id = s.id
+          ), 0) + coalesce((
+            select sum(length(pp.data))
+            from part pp
+            where pp.session_id = s.id
+          ), 0)
+        ) as history_bytes
       from session s
       left join project p on p.id = s.project_id
       where s.id = ${quoteSql(providerSessionId)}
@@ -477,7 +512,7 @@ function buildStoredSessionRecord(
   const cwd = normalizeDirectory(row.directory ?? undefined) ?? undefined;
   const projectRoot = normalizeDirectory(row.project_worktree ?? undefined);
   const rootDir = projectRoot && projectRoot !== "/" ? projectRoot : cwd;
-  const ref: StoredSessionRef = {
+  const ref: StoredSessionRef = withHistoryMeta({
     provider: "opencode",
     providerSessionId: row.id,
     source: "provider_history",
@@ -488,7 +523,10 @@ function buildStoredSessionRecord(
     ...(toIso(row.time_created) ? { createdAt: toIso(row.time_created)! } : {}),
     ...(toIso(row.time_updated) ? { updatedAt: toIso(row.time_updated)! } : {}),
     ...(toIso(row.time_updated) ? { lastUsedAt: toIso(row.time_updated)! } : {}),
-  };
+  }, {
+    ...(typeof row.history_bytes === "number" ? { bytes: row.history_bytes } : {}),
+    ...(typeof row.message_count === "number" ? { messages: row.message_count } : {}),
+  });
   return [{ ref, databasePath }];
 }
 

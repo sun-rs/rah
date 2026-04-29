@@ -149,6 +149,28 @@ function classifyGeminiToolFamily(name: string) {
   return "other" as const;
 }
 
+function extractGeminiToolError(value: unknown): string {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const error = extractGeminiToolError(item);
+      if (error) return error;
+    }
+    return "";
+  }
+  if (value === null || typeof value !== "object") {
+    return "";
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record.error === "string" && record.error.trim()) {
+    return record.error.trim();
+  }
+  for (const child of Object.values(record)) {
+    const error = extractGeminiToolError(child);
+    if (error) return error;
+  }
+  return "";
+}
+
 function usageFromStats(stats: Record<string, unknown>) {
   return withModelContextWindow({
     ...(typeof stats.total_tokens === "number" ? { usedTokens: stats.total_tokens } : {}),
@@ -187,6 +209,7 @@ function toolActivitiesFromGeminiMessage(
       toolCall.result !== undefined
         ? extractTextFromContent(toolCall.result) || JSON.stringify(toolCall.result)
         : "";
+    const resultError = extractGeminiToolError(toolCall.result);
     const tool = {
       id: toolCall.id,
       family: classifyGeminiToolFamily(providerToolName),
@@ -202,8 +225,9 @@ function toolActivitiesFromGeminiMessage(
         : {}),
     };
     const failed =
-      typeof toolCall.status === "string" &&
-      ["error", "failed", "cancelled", "canceled"].includes(toolCall.status.toLowerCase());
+      resultError !== "" ||
+      (typeof toolCall.status === "string" &&
+        ["error", "failed", "cancelled", "canceled"].includes(toolCall.status.toLowerCase()));
     return [
       { type: "tool_call_started" as const, turnId, toolCall: tool },
       failed
@@ -211,7 +235,7 @@ function toolActivitiesFromGeminiMessage(
             type: "tool_call_failed" as const,
             turnId,
             toolCallId: toolCall.id,
-            error: detailText || toolCall.status || "Tool failed",
+            error: resultError || detailText || toolCall.status || "Tool failed",
           }
         : {
             type: "tool_call_completed" as const,

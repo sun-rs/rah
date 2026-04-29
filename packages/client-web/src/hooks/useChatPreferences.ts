@@ -7,12 +7,14 @@ function isBrowser(): boolean {
   return typeof window !== "undefined";
 }
 
-function readBoolean(key: string): boolean {
-  if (!isBrowser()) return false;
+function readBoolean(key: string, defaultValue: boolean): boolean {
+  if (!isBrowser()) return defaultValue;
   try {
-    return localStorage.getItem(key) === "true";
+    const value = localStorage.getItem(key);
+    if (value === null) return defaultValue;
+    return value === "true";
   } catch {
-    return false;
+    return defaultValue;
   }
 }
 
@@ -30,13 +32,13 @@ export function useChatPreferences(): {
   setHideToolCallsInChat: (value: boolean) => void;
 } {
   const [hideToolCallsInChat, setHideToolCallsInChatState] = useState<boolean>(() =>
-    readBoolean(HIDE_TOOL_CALLS_KEY),
+    readBoolean(HIDE_TOOL_CALLS_KEY, true),
   );
 
   useEffect(() => {
     if (!isBrowser()) return;
     const syncPreference = () => {
-      setHideToolCallsInChatState(readBoolean(HIDE_TOOL_CALLS_KEY));
+      setHideToolCallsInChatState(readBoolean(HIDE_TOOL_CALLS_KEY, true));
     };
     const onStorage = (event: StorageEvent) => {
       if (event.key !== HIDE_TOOL_CALLS_KEY) return;

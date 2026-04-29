@@ -19,6 +19,7 @@ import type {
   SessionFileResponse,
   SessionHistoryPageResponse,
   SessionInputRequest,
+  SetSessionModelRequest,
   SessionSummary,
   StartSessionRequest,
   StartSessionResponse,
@@ -26,6 +27,7 @@ import type {
   WorkspaceSnapshotResponse,
 } from "@rah/runtime-protocol";
 import { RuntimeEngine } from "./runtime-engine";
+import { toSessionSummary } from "./session-store";
 import type { ProviderAdapter } from "./provider-adapter";
 import type { FrozenHistoryBoundary, FrozenHistoryPageLoader } from "./history-snapshots";
 import type {
@@ -312,6 +314,92 @@ function sessionSummary(sessionId: string, providerSessionId: string): SessionSu
       sessionId,
     },
   };
+}
+
+class MutableControlsAdapter extends CountingStoredSessionsAdapter {
+  engine: RuntimeEngine | undefined;
+  modeCalls = 0;
+  modelCalls = 0;
+
+  constructor() {
+    super([]);
+  }
+
+  override startSession(request: StartSessionRequest): StartSessionResponse {
+    if (!this.engine) {
+      throw new Error("engine missing");
+    }
+    const state = this.engine.sessionStore.createManagedSession({
+      provider: "codex",
+      providerSessionId: "controls-1",
+      launchSource: "web",
+      cwd: request.cwd,
+      rootDir: request.cwd,
+      capabilities: {
+        modelSwitch: true,
+        planMode: true,
+      },
+      mode: {
+        currentModeId: "default",
+        availableModes: [
+          { id: "default", label: "Default", hotSwitch: true, applyTiming: "idle_only" },
+          { id: "plan", label: "Plan", hotSwitch: true, applyTiming: "idle_only" },
+        ],
+        mutable: true,
+        source: "native",
+      },
+      model: {
+        currentModelId: "alpha",
+        availableModels: [
+          { id: "alpha", label: "Alpha" },
+          { id: "beta", label: "Beta" },
+        ],
+        mutable: true,
+        source: "native",
+      },
+    });
+    const idleState = this.engine.sessionStore.setRuntimeState(state.session.id, "idle");
+    return { session: toSessionSummary(idleState) };
+  }
+
+  setSessionMode(sessionId: string, modeId: string): SessionSummary {
+    if (!this.engine) {
+      throw new Error("engine missing");
+    }
+    this.modeCalls += 1;
+    const currentMode = this.engine.sessionStore.getSession(sessionId)?.session.mode;
+    if (!currentMode) {
+      throw new Error("mode missing");
+    }
+    return toSessionSummary(
+      this.engine.sessionStore.patchManagedSession(sessionId, {
+        mode: {
+          ...currentMode,
+          currentModeId: modeId,
+        },
+      }),
+    );
+  }
+
+  setSessionModel(sessionId: string, request: SetSessionModelRequest): SessionSummary {
+    if (!this.engine) {
+      throw new Error("engine missing");
+    }
+    this.modelCalls += 1;
+    const currentModel = this.engine.sessionStore.getSession(sessionId)?.session.model;
+    if (!currentModel) {
+      throw new Error("model missing");
+    }
+    return toSessionSummary(
+      this.engine.sessionStore.patchManagedSession(sessionId, {
+        model: {
+          ...currentModel,
+          currentModelId: request.modelId,
+          ...(request.reasoningId !== undefined ? { currentReasoningId: request.reasoningId } : {}),
+        },
+      }),
+    );
+  }
 }
 
 let workDirGlobal = "";
@@ -622,6 +710,38 @@ describe("RuntimeEngine", () => {
     const listing = await engine.listDirectory("~");
 
     assert.equal(listing.path, os.homedir());
+
+    await engine.shutdown();
+  });
+
+  test("blocks mode and model changes while a session is not idle", async () => {
+    const adapter = new MutableControlsAdapter();
+    const engine = new RuntimeEngine([adapter]);
+    adapter.engine = engine;
+
+    const started = await engine.startSession({
+      provider: "codex",
+      cwd: workDirGlobal,
+    });
+    const sessionId = started.session.session.id;
+    engine.sessionStore.setRuntimeState(sessionId, "running");
+
+    await assert.rejects(
+      () => engine.setSessionMode(sessionId, "plan"),
+      /Session mode can only be changed while the session is idle/,
+    );
+    await assert.rejects(
+      () => engine.setSessionModel(sessionId, { modelId: "beta" }),
+      /Session model can only be changed while the session is idle/,
+    );
+    assert.equal(adapter.modeCalls, 0);
+    assert.equal(adapter.modelCalls, 0);
+
+    engine.sessionStore.setRuntimeState(sessionId, "idle");
+    await engine.setSessionMode(sessionId, "plan");
+    await engine.setSessionModel(sessionId, { modelId: "beta" });
+    assert.equal(adapter.modeCalls, 1);
+    assert.equal(adapter.modelCalls, 1);
 
     await engine.shutdown();
   });

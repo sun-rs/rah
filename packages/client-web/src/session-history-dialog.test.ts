@@ -129,3 +129,29 @@ test("sorts history workspaces by earliest session createdAt while keeping items
     ["session-3", "session-1"],
   );
 });
+
+test("sorts grouped sessions by lastUsedAt before updatedAt", () => {
+  const groups = groupAllStoredSessionsByDirectory([
+    storedSession({
+      provider: "codex",
+      providerSessionId: "recently-used",
+      rootDir: "/Users/sun/Code/rah",
+      cwd: "/Users/sun/Code/rah",
+      updatedAt: "2026-04-20T10:00:00.000Z",
+      lastUsedAt: "2026-04-20T10:10:00.000Z",
+    }),
+    storedSession({
+      provider: "codex",
+      providerSessionId: "recently-updated",
+      rootDir: "/Users/sun/Code/rah",
+      cwd: "/Users/sun/Code/rah",
+      updatedAt: "2026-04-20T10:05:00.000Z",
+      lastUsedAt: "2026-04-20T10:01:00.000Z",
+    }),
+  ]);
+
+  assert.deepEqual(
+    groups[0]?.items.map((session) => session.providerSessionId),
+    ["recently-used", "recently-updated"],
+  );
+});

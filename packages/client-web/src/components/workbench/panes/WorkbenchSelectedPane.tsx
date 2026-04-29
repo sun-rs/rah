@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import type { ContextUsage, PermissionResponseRequest, ProviderModelCatalog, SessionSummary } from "@rah/runtime-protocol";
-import { Archive, ArrowUp, Ellipsis, Info, Menu, PanelRight, PencilLine, Plus, Square, Trash2, X } from "lucide-react";
+import { Archive, ArrowUp, Ellipsis, Info, Menu, PanelRight, PencilLine, Plus, Trash2, X } from "lucide-react";
 import { providerLabel } from "../../../types";
 import type { SessionProjection } from "../../../types";
 import { ChatThread } from "../../chat/ChatThread";
@@ -18,24 +18,13 @@ function formatContextPercent(value: number): string {
   return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
 }
 
-function formatCompactTokens(value: number): string {
-  const rounded = Math.max(0, Math.round(value));
-  if (rounded >= 1_000_000) {
-    const compact = Math.round((rounded / 1_000_000) * 10) / 10;
-    return `${Number.isInteger(compact) ? compact.toFixed(0) : compact.toFixed(1)}M`;
-  }
-  if (rounded >= 1_000) {
-    const compact = Math.round((rounded / 1_000) * 10) / 10;
-    return `${Number.isInteger(compact) ? compact.toFixed(0) : compact.toFixed(1)}K`;
-  }
-  return String(rounded);
-}
-
 function formatFullTokens(value: number): string {
   return Math.max(0, Math.round(value)).toLocaleString("en-US");
 }
 
-function resolveContextUsageDisplay(usage: ContextUsage | undefined): { label: string; title: string } | null {
+function resolveContextUsageDisplay(
+  usage: ContextUsage | undefined,
+): { label: string; ariaLabel: string; tooltip: string } | null {
   if (usage?.percentUsed === undefined && usage?.percentRemaining === undefined) {
     return null;
   }
@@ -54,16 +43,19 @@ function resolveContextUsageDisplay(usage: ContextUsage | undefined): { label: s
   ) {
     return {
       label,
-      title: `Context remaining: ${percentRemaining}%`,
+      ariaLabel: `Context remaining: ${percentRemaining}%`,
+      tooltip: `Remaining ${percentRemaining}%`,
     };
   }
 
   const qualifier = usage.precision === "estimated" ? "Estimated used context" : "Used context";
+  const tooltip = `${qualifier}: ${formatFullTokens(usedTokens)} / ${formatFullTokens(
+    contextWindow,
+  )} tokens`;
   return {
     label,
-    title: `${qualifier}: ${formatCompactTokens(usedTokens)} / ${formatFullTokens(
-      contextWindow,
-    )} tokens · ${percentRemaining}% remaining`,
+    ariaLabel: `${tooltip} · ${percentRemaining}% remaining`,
+    tooltip,
   };
 }
 
@@ -158,8 +150,8 @@ export function WorkbenchSelectedPane(props: {
     props.claimModePending ||
     props.modelChangePending ||
     composerActionPending;
-  const liveSessionControlDisabled =
-    sessionControlBusy || props.modeChangePending || props.modelChangePending;
+  const stopDisabled =
+    props.composerSurface.kind === "compose" && props.composerSurface.stopDisabled === true;
 
   useEffect(() => {
     const node = composerContainerRef.current;
@@ -246,13 +238,19 @@ export function WorkbenchSelectedPane(props: {
               )}
               {contextUsageDisplay ? (
                 <>
-                  <span className="hidden sm:inline">·</span>
+                  <span className="inline">·</span>
                   <span
-                    className="hidden sm:inline"
-                    title={contextUsageDisplay.title}
-                    aria-label={contextUsageDisplay.title}
+                    className="group relative inline-flex items-center"
+                    aria-label={contextUsageDisplay.ariaLabel}
+                    tabIndex={0}
                   >
-                    {contextUsageDisplay.label}
+                    <span className="cursor-default">{contextUsageDisplay.label}</span>
+                    <span
+                      role="tooltip"
+                      className="pointer-events-none absolute left-1/2 top-full z-50 mt-1.5 -translate-x-1/2 whitespace-nowrap rounded-md border border-[var(--app-border)] bg-[var(--app-bg)] px-2 py-1 text-[11px] font-medium text-[var(--app-fg)] opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100 group-focus:opacity-100"
+                    >
+                      {contextUsageDisplay.tooltip}
+                    </span>
                   </span>
                 </>
               ) : null}
@@ -494,15 +492,17 @@ export function WorkbenchSelectedPane(props: {
                   selectedAccessModeId={liveModeControl.selectedAccessModeId}
                   planModeAvailable={showLivePlanModeControl}
                   planModeEnabled={liveModeControl.planModeEnabled}
-                  modeDisabled={props.modeChangePending}
+                  modeDisabled={sessionControlBusy || props.modeChangePending}
                   modelCatalog={props.modelCatalog}
                   modelCatalogLoading={props.modelCatalogLoading}
                   selectedModelId={props.selectedSummary.session.model?.currentModelId ?? null}
                   selectedReasoningId={
                     props.selectedSummary.session.model?.currentReasoningId ?? null
                   }
-                  modelDisabled={props.modelChangePending}
-                  disabled={liveSessionControlDisabled}
+                  modelDisabled={sessionControlBusy || props.modelChangePending}
+                  disabled={props.modeChangePending || props.modelChangePending}
+                  locked={sessionControlBusy}
+                  lockedMessage="Session controls are locked while this session is thinking."
                   showModel={showLiveModelControl}
                   buttonClassName={COMPOSER_LAYOUT.settingsButtonClassName}
                   onAccessModeChange={props.onSetSessionMode}
@@ -553,10 +553,16 @@ export function WorkbenchSelectedPane(props: {
                     <span className={COMPOSER_LAYOUT.stopSpinnerClassName} />
                     <button
                       type="button"
-                      onClick={props.onInterrupt}
+                      disabled={stopDisabled}
+                      onClick={stopDisabled ? undefined : props.onInterrupt}
+                      title={
+                        props.composerSurface.kind === "compose"
+                          ? props.composerSurface.stopTitle
+                          : undefined
+                      }
                       className={COMPOSER_LAYOUT.stopButtonClassName}
                     >
-                      <Square size={18} fill="currentColor" />
+                      <span className="sr-only">Stop generating</span>
                     </button>
                   </div>
                 ) : null}

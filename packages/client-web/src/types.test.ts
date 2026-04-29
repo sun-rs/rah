@@ -659,6 +659,52 @@ describe("client projection", () => {
     }
   });
 
+  test("does not reopen completed tool calls when duplicate starts arrive later", () => {
+    let current = projection();
+    const started = {
+      toolCall: {
+        id: "tool-1",
+        family: "search" as const,
+        providerToolName: "grep_search",
+        title: "SearchText",
+      },
+    };
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 1,
+        turnId: "turn-1",
+        type: "tool.call.started",
+        payload: started,
+      }),
+    );
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 2,
+        turnId: "turn-1",
+        type: "tool.call.completed",
+        payload: started,
+      }),
+    );
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 3,
+        turnId: "turn-1",
+        type: "tool.call.started",
+        payload: started,
+      }),
+    );
+
+    const tools = current.feed.filter((entry) => entry.kind === "tool_call");
+    assert.equal(tools.length, 1);
+    assert.equal(tools[0]?.kind, "tool_call");
+    if (tools[0]?.kind === "tool_call") {
+      assert.equal(tools[0].status, "completed");
+    }
+  });
+
   test("marks parent workspaces as blocked when a descendant live session exists", () => {
     const workspaces = deriveWorkspaceInfos(
       ["/repo", "/repo/app"],

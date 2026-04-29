@@ -4,7 +4,7 @@ import { canSessionSendInput, isReadOnlyReplay } from "./session-capabilities";
 export type ComposerSurface =
   | { kind: "history_claim"; actionLabel: string; actionPending: boolean }
   | { kind: "claim_control"; actionLabel: string; actionPending: boolean }
-  | { kind: "compose"; showStopButton: boolean }
+  | { kind: "compose"; showStopButton: boolean; stopDisabled?: boolean; stopTitle?: string }
   | { kind: "unavailable" };
 
 /* ── Unified sizing tokens ── */
@@ -49,7 +49,7 @@ export const COMPOSER_LAYOUT = {
   stopSpinnerClassName:
     "pointer-events-none absolute inset-0 rounded-full border-2 border-[var(--app-danger)]/30 border-t-white/90 animate-[spin_0.95s_linear_infinite]",
   stopButtonClassName:
-    "absolute inset-[3px] rounded-full bg-[var(--app-danger)] text-white flex items-center justify-center transition-all duration-200 hover:opacity-90 active:scale-95",
+    "absolute inset-[3px] rounded-full bg-[var(--app-danger)] text-white flex items-center justify-center transition-all duration-200 hover:opacity-90 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:opacity-50",
 
   textareaClassName:
     `${TEXTAREA_BASE} ${ROUNDED} min-h-10 md:min-h-9 lg:min-h-8 px-3 py-2 md:px-3 md:py-2 lg:py-1.5 max-h-[280px]`,
@@ -87,6 +87,12 @@ export const EMPTY_STATE_COMPOSER_LAYOUT = {
   configRowClassName:
     `flex flex-wrap items-center gap-2 mt-3 md:mt-4`,
 } as const;
+
+export const EMPTY_STATE_EXPANDED_CONTROLS_MIN_WIDTH_PX = 620;
+
+export function shouldCompactEmptyStateSessionControls(widthPx: number | null): boolean {
+  return widthPx === null || widthPx < EMPTY_STATE_EXPANDED_CONTROLS_MIN_WIDTH_PX;
+}
 
 export function deriveComposerSurface(args: {
   selectedSummary: SessionSummary | null;
@@ -126,6 +132,8 @@ export function deriveComposerSurface(args: {
       return {
         kind: "compose",
         showStopButton: isGenerating,
+        stopDisabled: isGenerating,
+        stopTitle: "Terminal is handling this turn. Web can observe it, but can't interrupt it.",
       };
     }
     return {

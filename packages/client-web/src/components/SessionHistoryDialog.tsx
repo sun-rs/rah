@@ -8,18 +8,30 @@ import { ProviderLogo } from "./ProviderLogo";
 import {
   dedupeStoredSessionsByIdentity,
   groupAllStoredSessionsByDirectory,
+  sessionIdentityKey,
 } from "../session-history-grouping";
 
 const DEFAULT_GROUP_ITEM_LIMIT = 10;
 const GROUP_ITEM_INCREMENT = 20;
+const HISTORY_PROVIDER_OPTIONS = ["codex", "claude", "kimi", "gemini", "opencode"] as const;
 
 type HistoryTab = "recent" | "all";
+type HistoryProviderFilter = (typeof HISTORY_PROVIDER_OPTIONS)[number];
 
-function WorkspaceSortMenu(props: {
-  value: WorkspaceSortMode;
-  onChange: (value: WorkspaceSortMode) => void;
+function isHistoryProviderFilter(provider: StoredSessionRef["provider"]): provider is HistoryProviderFilter {
+  return (HISTORY_PROVIDER_OPTIONS as readonly string[]).includes(provider);
+}
+
+function HistoryFilterMenu(props: {
+  sortMode: WorkspaceSortMode;
+  onSortModeChange: (value: WorkspaceSortMode) => void;
+  selectedProviders: ReadonlySet<HistoryProviderFilter>;
+  onToggleProvider: (provider: HistoryProviderFilter) => void;
+  onToggleAllProviders: () => void;
+  disabled: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const [disabledHintVisible, setDisabledHintVisible] = useState(false);
 
   useEffect(() => {
     if (!open) {
@@ -44,34 +56,62 @@ function WorkspaceSortMenu(props: {
     };
   }, [open]);
 
+  useEffect(() => {
+    if (!disabledHintVisible) {
+      return;
+    }
+    const timeoutId = window.setTimeout(() => setDisabledHintVisible(false), 1600);
+    return () => window.clearTimeout(timeoutId);
+  }, [disabledHintVisible]);
+
   const sortOptions: Array<{ value: WorkspaceSortMode; label: string }> = [
     { value: "created", label: "按创建顺序" },
     { value: "updated", label: "按最近更新" },
   ];
+  const allProvidersSelected = props.selectedProviders.size === HISTORY_PROVIDER_OPTIONS.length;
 
   return (
     <div className="relative" data-history-sort-menu>
       <button
         type="button"
-        className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)] transition-colors"
+        className={`inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors ${
+          props.disabled
+            ? "text-[var(--app-hint)] opacity-55 hover:bg-[var(--app-bg)]"
+            : "text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)]"
+        }`}
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label="排序 workspace"
-        title="排序 workspace"
-        onClick={() => setOpen((current) => !current)}
+        aria-disabled={props.disabled}
+        aria-label="Filter and sort history"
+        title={props.disabled ? "Filters are available in All" : "Filter and sort history"}
+        onClick={() => {
+          if (props.disabled) {
+            setOpen(false);
+            setDisabledHintVisible(true);
+            return;
+          }
+          setOpen((current) => !current);
+        }}
       >
         <ListFilter size={14} />
       </button>
+      {disabledHintVisible ? (
+        <div className="absolute right-0 top-9 z-20 w-44 rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] px-3 py-2 text-xs text-[var(--app-hint)] shadow-lg">
+          Switch to All to use filters.
+        </div>
+      ) : null}
       {open ? (
-        <div className="absolute right-0 top-9 z-10 min-w-44 rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] p-1 shadow-lg">
+        <div className="absolute right-0 top-9 z-10 w-56 rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] p-1 shadow-lg">
+          <div className="px-2 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--app-hint)]">
+            Workspace sort
+          </div>
           {sortOptions.map((option) => (
             <button
               key={option.value}
               type="button"
               className="flex w-full items-center justify-between gap-3 rounded-md px-3 py-2 text-sm text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]"
               onClick={() => {
-                props.onChange(option.value);
-                setOpen(false);
+                props.onSortModeChange(option.value);
               }}
             >
               <span className="flex items-center gap-2">
@@ -83,7 +123,37 @@ function WorkspaceSortMenu(props: {
                 <span>{option.label}</span>
               </span>
               <span className="inline-flex h-4 w-4 items-center justify-center text-[var(--app-hint)]">
-                {props.value === option.value ? <Check size={14} /> : null}
+                {props.sortMode === option.value ? <Check size={14} /> : null}
+              </span>
+            </button>
+          ))}
+          <div className="my-1 h-px bg-[var(--app-border)]" />
+          <div className="px-2 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--app-hint)]">
+            Providers
+          </div>
+          <button
+            type="button"
+            className="flex w-full items-center justify-between gap-3 rounded-md px-3 py-2 text-sm text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]"
+            onClick={props.onToggleAllProviders}
+          >
+            <span>All providers</span>
+            <span className="inline-flex h-4 w-4 items-center justify-center text-[var(--app-hint)]">
+              {allProvidersSelected ? <Check size={14} /> : null}
+            </span>
+          </button>
+          {HISTORY_PROVIDER_OPTIONS.map((provider) => (
+            <button
+              key={provider}
+              type="button"
+              className="flex w-full items-center justify-between gap-3 rounded-md px-3 py-2 text-sm text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]"
+              onClick={() => props.onToggleProvider(provider)}
+            >
+              <span className="flex items-center gap-2">
+                <ProviderLogo provider={provider} className="h-4 w-4" />
+                <span>{providerLabel(provider)}</span>
+              </span>
+              <span className="inline-flex h-4 w-4 items-center justify-center text-[var(--app-hint)]">
+                {props.selectedProviders.has(provider) ? <Check size={14} /> : null}
               </span>
             </button>
           ))}
@@ -111,6 +181,55 @@ function sessionTitle(session: StoredSessionRef): string {
   return session.title ?? session.preview ?? session.providerSessionId;
 }
 
+function formatCount(value: number, unit: string): string {
+  if (value >= 1_000_000) {
+    return `${(value / 1_000_000).toFixed(1)}m ${unit}`;
+  }
+  if (value >= 1_000) {
+    return `${(value / 1_000).toFixed(1)}k ${unit}`;
+  }
+  return `${value} ${unit}`;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) {
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+  if (bytes >= 1024) {
+    return `${Math.round(bytes / 1024)} KB`;
+  }
+  return `${bytes} B`;
+}
+
+function historyMetaLabel(session: StoredSessionRef): string | null {
+  const meta = session.historyMeta;
+  if (!meta) {
+    return null;
+  }
+  if (typeof meta.lines === "number") {
+    return formatCount(meta.lines, "lines");
+  }
+  if (typeof meta.messages === "number") {
+    return formatCount(meta.messages, "msgs");
+  }
+  if (typeof meta.bytes === "number") {
+    return formatBytes(meta.bytes);
+  }
+  return null;
+}
+
+function historyMetaTitle(session: StoredSessionRef): string | undefined {
+  const meta = session.historyMeta;
+  if (!meta) {
+    return undefined;
+  }
+  return [
+    typeof meta.lines === "number" ? formatCount(meta.lines, "lines") : null,
+    typeof meta.messages === "number" ? formatCount(meta.messages, "msgs") : null,
+    typeof meta.bytes === "number" ? formatBytes(meta.bytes) : null,
+  ].filter(Boolean).join(" · ") || undefined;
+}
+
 function matchesQuery(session: StoredSessionRef, query: string): boolean {
   const q = query.trim().toLowerCase();
   if (!q) {
@@ -133,6 +252,8 @@ function SessionRow(props: {
 }) {
   const badge = sourceBadge(props.session);
   const live = props.liveSummary !== undefined;
+  const metaLabel = historyMetaLabel(props.session);
+  const metaTitle = historyMetaTitle(props.session);
   const [showRemove, setShowRemove] = useState(false);
 
   useEffect(() => {
@@ -180,6 +301,14 @@ function SessionRow(props: {
               {badge.label}
             </span>
           )}
+          {metaLabel ? (
+            <span
+              className="inline-flex rounded-full border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-2 py-0.5 text-[11px] font-medium tabular-nums text-[var(--app-hint)]"
+              title={metaTitle}
+            >
+              {metaLabel}
+            </span>
+          ) : null}
           <span className="text-xs text-[var(--app-hint)] min-w-[3.5rem] text-right">
             {formatRelativeTime(props.session.lastUsedAt ?? props.session.updatedAt) ?? "history"}
           </span>
@@ -228,13 +357,22 @@ export function SessionHistoryDialog(props: {
   const [visibleItemCounts, setVisibleItemCounts] = useState<Map<string, number>>(new Map());
   const [pendingRemoveSession, setPendingRemoveSession] = useState<StoredSessionRef | null>(null);
   const [pendingRemoveWorkspaceDir, setPendingRemoveWorkspaceDir] = useState<string | null>(null);
+  const [selectedProviders, setSelectedProviders] = useState<Set<HistoryProviderFilter>>(
+    () => new Set(HISTORY_PROVIDER_OPTIONS),
+  );
 
   const liveByProviderSessionId = useMemo(
     () =>
       new Map(
         props.liveSessions
           .filter((session) => session.session.providerSessionId)
-          .map((session) => [session.session.providerSessionId!, session]),
+          .map((session) => [
+            sessionIdentityKey({
+              provider: session.session.provider,
+              providerSessionId: session.session.providerSessionId!,
+            }),
+            session,
+          ]),
       ),
     [props.liveSessions],
   );
@@ -249,19 +387,31 @@ export function SessionHistoryDialog(props: {
 
   const filteredGroups = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return groups;
+    const matchesProvider = (session: StoredSessionRef) => {
+      if (!isHistoryProviderFilter(session.provider)) {
+        return selectedProviders.size === HISTORY_PROVIDER_OPTIONS.length;
+      }
+      return selectedProviders.has(session.provider);
+    };
     return groups
       .map((group) => {
+        const providerMatchedItems = group.items.filter(matchesProvider);
+        if (providerMatchedItems.length === 0) {
+          return null;
+        }
+        if (!q) {
+          return { ...group, items: providerMatchedItems };
+        }
         const groupMatches =
           group.displayName.toLowerCase().includes(q) ||
           group.directory.toLowerCase().includes(q);
-        const matchedItems = group.items.filter((session) => matchesQuery(session, q));
-        if (groupMatches) return group;
+        const matchedItems = providerMatchedItems.filter((session) => matchesQuery(session, q));
+        if (groupMatches) return { ...group, items: providerMatchedItems };
         if (matchedItems.length > 0) return { ...group, items: matchedItems };
         return null;
       })
       .filter((group): group is NonNullable<typeof group> => group !== null);
-  }, [groups, query]);
+  }, [groups, query, selectedProviders]);
 
   const recentSessions = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -295,6 +445,26 @@ export function SessionHistoryDialog(props: {
       next.set(directory, Math.min(total, current + GROUP_ITEM_INCREMENT));
       return next;
     });
+  };
+
+  const toggleProvider = (provider: HistoryProviderFilter) => {
+    setSelectedProviders((current) => {
+      const next = new Set(current);
+      if (next.has(provider)) {
+        next.delete(provider);
+      } else {
+        next.add(provider);
+      }
+      return next;
+    });
+  };
+
+  const toggleAllProviders = () => {
+    setSelectedProviders((current) =>
+      current.size === HISTORY_PROVIDER_OPTIONS.length
+        ? new Set()
+        : new Set(HISTORY_PROVIDER_OPTIONS),
+    );
   };
 
   const renderEmpty = (message: string, detail: string) => (
@@ -353,12 +523,14 @@ export function SessionHistoryDialog(props: {
                   All
                 </button>
               </div>
-              {tab === "all" ? (
-                <WorkspaceSortMenu
-                  value={props.workspaceSortMode}
-                  onChange={props.onWorkspaceSortModeChange}
-                />
-              ) : null}
+              <HistoryFilterMenu
+                sortMode={props.workspaceSortMode}
+                onSortModeChange={props.onWorkspaceSortModeChange}
+                selectedProviders={selectedProviders}
+                onToggleProvider={toggleProvider}
+                onToggleAllProviders={toggleAllProviders}
+                disabled={tab === "recent"}
+              />
             </div>
           </div>
 
@@ -367,7 +539,11 @@ export function SessionHistoryDialog(props: {
               <Search size={14} className="text-[var(--app-hint)] shrink-0" />
               <input
                 className="flex-1 bg-transparent text-sm text-[var(--app-fg)] placeholder-[var(--app-hint)] focus:outline-none"
-                placeholder={tab === "recent" ? "Filter recent sessions…" : "Filter workspaces or sessions…"}
+                placeholder={
+                  tab === "recent"
+                    ? "Search recent title, id, provider, or path…"
+                    : "Search title, preview, id, provider, or path…"
+                }
                 value={query}
                 onChange={(e) => setQuery(e.currentTarget.value)}
               />
@@ -382,7 +558,7 @@ export function SessionHistoryDialog(props: {
                     <SessionRow
                       key={`recent:${session.provider}:${session.providerSessionId}`}
                       session={session}
-                      liveSummary={liveByProviderSessionId.get(session.providerSessionId)}
+                      liveSummary={liveByProviderSessionId.get(sessionIdentityKey(session))}
                       onActivate={(ref) => {
                         props.onActivate(ref);
                         setOpen(false);
@@ -455,7 +631,7 @@ export function SessionHistoryDialog(props: {
                             <SessionRow
                               key={`${session.provider}:${session.providerSessionId}`}
                               session={session}
-                              liveSummary={liveByProviderSessionId.get(session.providerSessionId)}
+                              liveSummary={liveByProviderSessionId.get(sessionIdentityKey(session))}
                               onActivate={(ref) => {
                                 props.onActivate(ref);
                                 setOpen(false);

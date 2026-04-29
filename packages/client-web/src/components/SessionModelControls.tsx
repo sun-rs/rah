@@ -241,7 +241,7 @@ export function SessionModelControls(props: {
     : props.compact
       ? `${pillBase} h-9 w-full justify-start px-2.5`
       : props.mobileIconOnly
-        ? `${pillBase} h-10 w-10 shrink-0 justify-center p-0 md:h-9 md:w-auto md:justify-start md:px-3 lg:h-8`
+        ? `${pillBase} h-10 w-10 shrink-0 justify-center p-0 min-[700px]:h-9 min-[700px]:w-auto min-[700px]:justify-start min-[700px]:px-3 lg:h-8`
         : `${pillBase} h-8 md:h-9 px-2.5 md:px-3`;
 
   const optionBtn = (isSelected: boolean) =>
@@ -270,7 +270,7 @@ export function SessionModelControls(props: {
         {props.iconOnly ? null : (
           <span
             className={`min-w-0 truncate ${
-              props.mobileIconOnly ? "hidden md:inline" : ""
+              props.mobileIconOnly ? "hidden min-[700px]:inline" : ""
             }`}
           >
             {label}
@@ -281,7 +281,7 @@ export function SessionModelControls(props: {
             size={12}
             className={`shrink-0 text-[var(--app-hint)] transition-transform ${
               open ? "rotate-180" : ""
-            } ${props.mobileIconOnly ? "hidden md:block" : ""}`}
+            } ${props.mobileIconOnly ? "hidden min-[700px]:block" : ""}`}
           />
         )}
       </button>

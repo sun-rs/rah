@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -116,6 +116,18 @@ describe("codex stored session path resolution", () => {
     await assert.rejects(
       () => readWorkspaceFile(repoRoot, outsideRelativePath, { scopeRoot: sessionCwd }),
       /ENOENT|Path must remain inside the workspace/,
+    );
+  });
+
+  test("rejects reading symlinks that resolve outside the workspace boundary", async () => {
+    const secretPath = path.join(repoRoot, "outside-secret.txt");
+    const linkPath = path.join(sessionCwd, "leak.txt");
+    writeFileSync(secretPath, "secret outside workspace\n", "utf8");
+    symlinkSync(secretPath, linkPath);
+
+    await assert.rejects(
+      () => readWorkspaceFile(sessionCwd, "leak.txt"),
+      /Path must remain inside the workspace/,
     );
   });
 

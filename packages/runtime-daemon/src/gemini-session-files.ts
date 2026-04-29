@@ -26,6 +26,7 @@ import {
   setCachedStoredSessionRef,
   writeStoredSessionMetadataCache,
 } from "./stored-session-metadata-cache";
+import { withHistoryFileMeta, withHistoryMeta } from "./stored-session-history-meta";
 
 const SESSION_FILE_PREFIX = "session-";
 const GEMINI_STORED_SESSION_CACHE_VERSION = 2;
@@ -419,7 +420,7 @@ function buildStoredSessionRef(
     projectIndices,
     inferredRootCache,
   );
-  return {
+  return withHistoryMeta({
     provider: "gemini",
     providerSessionId: conversation.sessionId,
     ...(projectDirectories ?? {}),
@@ -428,7 +429,10 @@ function buildStoredSessionRef(
     ...(conversation.startTime ? { createdAt: conversation.startTime } : {}),
     updatedAt: conversation.lastUpdated || stat.mtime.toISOString(),
     source: "provider_history",
-  };
+  }, {
+    bytes: stat.size,
+    messages: conversation.messages.length,
+  });
 }
 
 export function discoverGeminiStoredSessions(): GeminiStoredSessionRecord[] {
@@ -449,13 +453,19 @@ export function discoverGeminiStoredSessions(): GeminiStoredSessionRecord[] {
       if (cachedRef && (cachedRef.cwd || cachedRef.rootDir)) {
         const conversation =
           !cachedRef.createdAt ? loadGeminiConversationRecord(filePath) : null;
-        const nextRef =
+        const nextRef = withHistoryFileMeta(
           conversation?.startTime
             ? {
                 ...cachedRef,
                 createdAt: conversation.startTime,
               }
-            : cachedRef;
+            : cachedRef,
+          filePath,
+          stats,
+          conversation?.messages.length !== undefined
+            ? { messages: conversation.messages.length }
+            : undefined,
+        );
         if (nextRef !== cachedRef) {
           setCachedStoredSessionRef({
             cache,

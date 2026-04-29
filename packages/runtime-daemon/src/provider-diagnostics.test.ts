@@ -1,5 +1,8 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import {
   compareVersions,
   codexLaunchSpec,
@@ -7,6 +10,7 @@ import {
   probeProviderDiagnostic,
   resetProviderDiagnosticsCacheForTests,
 } from "./provider-diagnostics";
+import { resolveConfiguredBinary } from "./provider-binary-utils";
 
 describe("provider diagnostics version helpers", () => {
   test("extractVersionString pulls a semver token out of cli output", () => {
@@ -72,6 +76,35 @@ describe("provider diagnostics version helpers", () => {
       } else {
         process.env.RAH_CODEX_BINARY = previousBinary;
       }
+    }
+  });
+
+  test("resolves bare provider commands to executable paths", async () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "rah-provider-bin-"));
+    const binaryPath = path.join(tempDir, "rah-test-provider");
+    const previousPath = process.env.PATH;
+    const previousBinary = process.env.RAH_TEST_BINARY;
+    try {
+      writeFileSync(binaryPath, "#!/bin/sh\nexit 0\n");
+      chmodSync(binaryPath, 0o755);
+      process.env.PATH = tempDir;
+      delete process.env.RAH_TEST_BINARY;
+      assert.equal(
+        await resolveConfiguredBinary("RAH_TEST_BINARY", "rah-test-provider"),
+        binaryPath,
+      );
+    } finally {
+      if (previousPath === undefined) {
+        delete process.env.PATH;
+      } else {
+        process.env.PATH = previousPath;
+      }
+      if (previousBinary === undefined) {
+        delete process.env.RAH_TEST_BINARY;
+      } else {
+        process.env.RAH_TEST_BINARY = previousBinary;
+      }
+      rmSync(tempDir, { recursive: true, force: true });
     }
   });
 });

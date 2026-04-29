@@ -126,6 +126,7 @@ interface StartSessionOptions {
   reasoningId?: string;
   modeId?: string;
   initialInput?: string;
+  confirmCreateMissingWorkspace?: (dir: string) => Promise<boolean>;
 }
 
 interface ClaimHistorySessionOptions {
@@ -182,10 +183,17 @@ interface SessionState {
   ) => Promise<void>;
   startSession: (options?: StartSessionOptions) => Promise<void>;
   startScenario: (scenario: DebugScenarioDescriptor) => Promise<void>;
-  activateHistorySession: (ref: StoredSessionRef) => Promise<void>;
+  activateHistorySession: (
+    ref: StoredSessionRef,
+    options?: { confirmCreateMissingWorkspace?: (dir: string) => Promise<boolean> },
+  ) => Promise<void>;
   resumeStoredSession: (
     ref: StoredSessionRef,
-    options?: { preferStoredReplay?: boolean; historyReplay?: "include" | "skip" },
+    options?: {
+      preferStoredReplay?: boolean;
+      historyReplay?: "include" | "skip";
+      confirmCreateMissingWorkspace?: (dir: string) => Promise<boolean>;
+    },
   ) => Promise<void>;
   attachSession: (summary: SessionSummary) => Promise<void>;
   closeSession: (sessionId: string) => Promise<void>;
@@ -688,19 +696,22 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   startSession: async (options) => {
-    await startSessionCommand(createStartupDeps(get, set), options);
+    await startSessionCommand(createStartupDeps(get, set, options), options);
   },
 
   startScenario: async (scenario) => {
     await startScenarioCommand(createStartupDeps(get, set), scenario);
   },
 
-  activateHistorySession: async (ref) => {
-    await activateHistorySessionCommand(createStartupDeps(get, set), ref);
+  activateHistorySession: async (
+    ref,
+    options?: { confirmCreateMissingWorkspace?: (dir: string) => Promise<boolean> },
+  ) => {
+    await activateHistorySessionCommand(createStartupDeps(get, set, options), ref, options);
   },
 
   resumeStoredSession: async (ref, options) => {
-    await resumeStoredSessionCommand(createStartupDeps(get, set), ref, options);
+    await resumeStoredSessionCommand(createStartupDeps(get, set, options), ref, options);
   },
 
   claimHistorySession: async (sessionId, options) => {

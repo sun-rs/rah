@@ -676,13 +676,44 @@ function applyToolCallEvent(
   >,
 ): FeedEntry[] {
   if (event.type === "tool.call.started") {
+    const key = `tool:${event.payload.toolCall.id}`;
+    const existingIndex = feed.findIndex(
+      (candidate) => candidate.kind === "tool_call" && candidate.key === key,
+    );
+    if (existingIndex >= 0) {
+      const existing = feed[existingIndex];
+      if (!existing || existing.kind !== "tool_call") {
+        return feed;
+      }
+      if (existing.status === "completed" || existing.status === "failed") {
+        return feed;
+      }
+      const mergedDetail = mergeToolCallDetail(
+        existing.toolCall.detail,
+        event.payload.toolCall.detail,
+      );
+      const nextFeed = [...feed];
+      nextFeed[existingIndex] = createToolCallEntry(
+        {
+          ...existing,
+          toolCall: {
+            ...event.payload.toolCall,
+            ...(mergedDetail !== undefined ? { detail: mergedDetail } : {}),
+          },
+          status: "running",
+          ts: event.ts,
+        },
+        event.turnId ?? existing.turnId,
+      );
+      return nextFeed;
+    }
     const next = createToolCallEntry(
       {
-      key: `tool:${event.payload.toolCall.id}`,
-      kind: "tool_call",
-      toolCall: event.payload.toolCall,
-      status: "running",
-      ts: event.ts,
+        key,
+        kind: "tool_call",
+        toolCall: event.payload.toolCall,
+        status: "running",
+        ts: event.ts,
       },
       event.turnId,
     );
@@ -786,13 +817,13 @@ function applyToolCallEvent(
       : withMergedToolDetail(current.toolCall, event.payload.detail);
   const nextEntry = createToolCallEntry(
     {
-    key: current.key,
-    kind: "tool_call",
-    toolCall: nextToolCall,
-    status: event.type === "tool.call.completed" ? "completed" : "failed",
-    ts: event.ts,
-    ...(event.type === "tool.call.failed" ? { error: event.payload.error } : {}),
-  },
+      key: current.key,
+      kind: "tool_call",
+      toolCall: nextToolCall,
+      status: event.type === "tool.call.completed" ? "completed" : "failed",
+      ts: event.ts,
+      ...(event.type === "tool.call.failed" ? { error: event.payload.error } : {}),
+    },
     current.turnId,
   );
   const next = [...feed];

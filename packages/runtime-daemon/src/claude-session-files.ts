@@ -27,6 +27,7 @@ import {
   setCachedStoredSessionRef,
   writeStoredSessionMetadataCache,
 } from "./stored-session-metadata-cache";
+import { withHistoryFileMeta } from "./stored-session-history-meta";
 import {
   listClaudeWrapperHomes,
   resolveClaudeBaseHome,
@@ -729,6 +730,7 @@ export function discoverClaudeStoredSessions(cwd?: string): ClaudeStoredSessionR
       mtimeMs: stats.mtimeMs,
     });
     if (cachedRef) {
+      const cachedWithMeta = withHistoryFileMeta(cachedRef, filePath, stats);
       if (!cachedRef.createdAt) {
         const lines = readLeadingLines(filePath, {
           maxBytes: 256 * 1024,
@@ -738,10 +740,10 @@ export function discoverClaudeStoredSessions(cwd?: string): ClaudeStoredSessionR
           .filter((record): record is ClaudeRawRecord | ClaudeCustomTitleRecord => Boolean(record));
         const enriched = deriveStoredSessionRef(filePath, parsed);
         if (enriched?.createdAt) {
-          const nextRef = {
-            ...cachedRef,
+          const nextRef = withHistoryFileMeta({
+            ...cachedWithMeta,
             createdAt: enriched.createdAt,
-          };
+          }, filePath, stats);
           setCachedStoredSessionRef({
             cache,
             filePath,
@@ -753,7 +755,7 @@ export function discoverClaudeStoredSessions(cwd?: string): ClaudeStoredSessionR
           continue;
         }
       }
-      records.push({ ref: cachedRef, filePath });
+      records.push({ ref: cachedWithMeta, filePath });
       continue;
     }
     const lines = readLeadingLines(filePath, {
@@ -766,14 +768,15 @@ export function discoverClaudeStoredSessions(cwd?: string): ClaudeStoredSessionR
     if (!ref) {
       continue;
     }
+    const refWithMeta = withHistoryFileMeta(ref, filePath, stats);
     setCachedStoredSessionRef({
       cache,
       filePath,
       size: stats.size,
       mtimeMs: stats.mtimeMs,
-      ref,
+      ref: refWithMeta,
     });
-    records.push({ ref, filePath });
+    records.push({ ref: refWithMeta, filePath });
   }
 
   writeStoredSessionMetadataCache(

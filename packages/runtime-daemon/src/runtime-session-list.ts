@@ -47,6 +47,9 @@ export function storedSessionRefKey(entry: StoredSessionRef): string {
     entry.createdAt ?? "",
     entry.updatedAt ?? "",
     entry.lastUsedAt ?? "",
+    entry.historyMeta?.bytes ?? "",
+    entry.historyMeta?.lines ?? "",
+    entry.historyMeta?.messages ?? "",
   ]);
 }
 

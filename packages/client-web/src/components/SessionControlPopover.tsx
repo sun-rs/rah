@@ -18,6 +18,8 @@ export function SessionControlPopover(props: {
   selectedReasoningId: string | null;
   modelDisabled?: boolean;
   disabled?: boolean;
+  locked?: boolean;
+  lockedMessage?: string;
   allowProviderDefault?: boolean;
   showModel: boolean;
   buttonClassName: string;
@@ -31,16 +33,25 @@ export function SessionControlPopover(props: {
   const panelRef = useRef<HTMLDivElement | null>(null);
   const [open, setOpen] = useState(false);
   const [panelStyle, setPanelStyle] = useState<CSSProperties>({});
+  const [lockedNoticeStyle, setLockedNoticeStyle] = useState<CSSProperties | null>(null);
   const hasModes = props.accessModes.length > 0 || props.planModeAvailable;
   const hasModel =
     props.showModel && Boolean(props.modelCatalog || props.modelCatalogLoading);
-  const enabled = (hasModes || hasModel) && !props.disabled;
+  const hasControls = hasModes || hasModel;
+  const enabled = hasControls && !props.disabled;
+  const locked = enabled && props.locked === true;
 
   useEffect(() => {
     if (props.disabled) {
       setOpen(false);
     }
   }, [props.disabled]);
+
+  useEffect(() => {
+    if (locked) {
+      setOpen(false);
+    }
+  }, [locked]);
 
   useLayoutEffect(() => {
     if (!open || !triggerRef.current) return;
@@ -94,20 +105,57 @@ export function SessionControlPopover(props: {
     };
   }, [open]);
 
+  useEffect(() => {
+    if (!lockedNoticeStyle) return;
+    const timeout = window.setTimeout(() => setLockedNoticeStyle(null), 1800);
+    return () => window.clearTimeout(timeout);
+  }, [lockedNoticeStyle]);
+
+  const showLockedNotice = () => {
+    const rect = triggerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const width = 236;
+    const pad = 8;
+    const left = Math.max(pad, Math.min(rect.left, window.innerWidth - width - pad));
+    const top = Math.max(pad, rect.top - 46);
+    setLockedNoticeStyle({ top, left, width });
+  };
+
   return (
     <>
       <button
         ref={triggerRef}
         type="button"
         disabled={!enabled}
-        onClick={() => setOpen((current) => !current)}
-        className={props.buttonClassName}
-        title="Session control"
+        onClick={() => {
+          if (locked) {
+            showLockedNotice();
+            return;
+          }
+          setOpen((current) => !current);
+        }}
+        className={`${props.buttonClassName} ${
+          locked ? "cursor-not-allowed opacity-45 grayscale hover:bg-[var(--app-subtle-bg)]" : ""
+        }`}
+        title={locked ? props.lockedMessage ?? "Session controls are locked." : "Session control"}
         aria-label="Session control"
+        aria-disabled={locked || undefined}
         aria-expanded={open}
       >
         <SlidersHorizontal size={16} />
       </button>
+      {lockedNoticeStyle
+        ? createPortal(
+            <div
+              className="rah-popover-panel fixed z-[70] rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] px-2.5 py-2 text-xs font-medium text-[var(--app-fg)] shadow-xl"
+              style={lockedNoticeStyle}
+              role="status"
+            >
+              {props.lockedMessage ?? "Session controls are locked while this session is busy."}
+            </div>,
+            document.body,
+          )
+        : null}
       {open
         ? createPortal(
             <div

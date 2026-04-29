@@ -54,13 +54,21 @@ export class CodexJsonRpcClient {
       return Promise.reject(new Error("Codex JSON-RPC client is closed"));
     }
     const id = this.nextId++;
-    this.child.stdin.write(`${JSON.stringify({ id, method, params })}\n`);
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`Codex app-server request timed out: ${method}`));
       }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
+      try {
+        this.child.stdin.write(`${JSON.stringify({ id, method, params })}\n`, (error) => {
+          if (error) {
+            this.rejectPending(id, error instanceof Error ? error : new Error(String(error)));
+          }
+        });
+      } catch (error) {
+        this.rejectPending(id, error instanceof Error ? error : new Error(String(error)));
+      }
     });
   }
 
@@ -77,7 +85,50 @@ export class CodexJsonRpcClient {
     }
     this.disposed = true;
     this.rl.close();
-    this.child.kill("SIGTERM");
+    this.disposePending(new Error("Codex JSON-RPC client is closed"));
+    if (this.child.exitCode !== null || this.child.signalCode !== null) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      let sigkillTimer: ReturnType<typeof setTimeout> | undefined;
+      let settleTimer: ReturnType<typeof setTimeout> | undefined;
+      const finish = () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        if (sigkillTimer) {
+          clearTimeout(sigkillTimer);
+        }
+        if (settleTimer) {
+          clearTimeout(settleTimer);
+        }
+        this.child.off("exit", finish);
+        resolve();
+      };
+      this.child.once("exit", finish);
+      try {
+        if (!this.child.kill("SIGTERM")) {
+          finish();
+          return;
+        }
+      } catch {
+        finish();
+        return;
+      }
+      sigkillTimer = setTimeout(() => {
+        if (this.child.exitCode === null && this.child.signalCode === null) {
+          try {
+            this.child.kill("SIGKILL");
+          } catch {
+            finish();
+            return;
+          }
+        }
+        settleTimer = setTimeout(finish, 500);
+      }, 500);
+    });
   }
 
   private disposePending(error: Error) {
@@ -87,6 +138,16 @@ export class CodexJsonRpcClient {
     }
     this.pending.clear();
     this.disposed = true;
+  }
+
+  private rejectPending(id: number, error: Error): void {
+    const pending = this.pending.get(id);
+    if (!pending) {
+      return;
+    }
+    clearTimeout(pending.timer);
+    this.pending.delete(id);
+    pending.reject(error);
   }
 
   private async handleLine(line: string) {

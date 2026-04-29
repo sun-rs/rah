@@ -122,6 +122,7 @@ export async function resolveWorkspacePathAsync(cwd: string, targetPath: string)
     gitRoot && path.resolve(gitRoot) !== scopeRoot ? path.resolve(gitRoot, targetPath) : null;
 
   if (cwdCandidate && (await pathExistsAsync(cwdCandidate))) {
+    await assertExistingPathWithinBaseAsync(scopeRoot, cwdCandidate);
     return cwdCandidate;
   }
   if (
@@ -129,6 +130,7 @@ export async function resolveWorkspacePathAsync(cwd: string, targetPath: string)
     isPathWithinBase(scopeRoot, gitRootCandidate) &&
     (await pathExistsAsync(gitRootCandidate))
   ) {
+    await assertExistingPathWithinBaseAsync(scopeRoot, gitRootCandidate);
     return gitRootCandidate;
   }
   if (gitRootCandidate && isPathWithinBase(scopeRoot, gitRootCandidate)) {
@@ -138,6 +140,16 @@ export async function resolveWorkspacePathAsync(cwd: string, targetPath: string)
     return cwdCandidate;
   }
   throw new Error("Path must remain inside the workspace.");
+}
+
+async function assertExistingPathWithinBaseAsync(basePath: string, targetPath: string): Promise<void> {
+  const [realBase, realTarget] = await Promise.all([
+    fs.realpath(basePath),
+    fs.realpath(targetPath),
+  ]);
+  if (!isPathWithinBase(realBase, realTarget)) {
+    throw new Error("Path must remain inside the workspace.");
+  }
 }
 
 function tryResolveWithinBase(basePath: string, targetPath: string): string | null {

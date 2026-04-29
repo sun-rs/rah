@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, test } from "node:test";
 import type { SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
 import {
   claimHistorySessionCommand,
+  resumeStoredSessionCommand,
   startSessionCommand,
 } from "./session-store-session-startup";
 import { createEmptySessionProjection } from "./session-store-session-lifecycle";
@@ -158,6 +159,9 @@ afterEach(() => {
 describe("session startup model and mode requests", () => {
   test("new session sends selected mode, model, and optionValues to the daemon", async () => {
     const requests = installWebApiMocks((request) => {
+      if (request.url.includes("/api/fs/list")) {
+        return { path: "/tmp/rah", entries: [] };
+      }
       if (request.url.endsWith("/api/sessions/start")) {
         const body = request.body as {
           provider: "codex";
@@ -323,5 +327,96 @@ describe("session startup model and mode requests", () => {
       optionValues: { model_reasoning_effort: "xhigh" },
       reasoningId: "xhigh",
     });
+  });
+
+  test("new session asks to create a missing workspace before launching", async () => {
+    const requests = installWebApiMocks((request) => {
+      if (request.url.includes("/api/fs/list")) {
+        throw new Error("ENOENT");
+      }
+      if (request.url.endsWith("/api/fs/ensure-dir")) {
+        return { path: (request.body as { dir: string }).dir };
+      }
+      if (request.url.endsWith("/api/sessions/start")) {
+        const body = request.body as { provider: "codex"; cwd: string };
+        return {
+          session: summary({
+            id: "started",
+            provider: body.provider,
+            cwd: body.cwd,
+          }),
+        };
+      }
+      throw new Error(`Unexpected request ${request.url}`);
+    });
+
+    await startSessionCommand(
+      startupDeps({
+        workspaceDir: "/tmp/missing",
+      }),
+      {
+        provider: "codex",
+        cwd: "/tmp/missing",
+        title: "test",
+        initialInput: "",
+      },
+    );
+
+    assert.deepEqual(
+      requests.map((request) => request.url.replace(/^http:\/\/127\.0\.0\.1:43111/, "")),
+      [
+        "/api/fs/list?path=%2Ftmp%2Fmissing",
+        "/api/fs/ensure-dir",
+        "/api/sessions/start",
+      ],
+    );
+  });
+
+  test("history resume asks to create a missing workspace before launching", async () => {
+    const requests = installWebApiMocks((request) => {
+      if (request.url.includes("/api/fs/list")) {
+        throw new Error("ENOENT");
+      }
+      if (request.url.endsWith("/api/fs/ensure-dir")) {
+        return { path: (request.body as { dir: string }).dir };
+      }
+      if (request.url.endsWith("/api/sessions/resume")) {
+        const body = request.body as {
+          provider: "codex";
+          providerSessionId: string;
+          cwd?: string;
+        };
+        return {
+          session: summary({
+            id: "resumed",
+            provider: body.provider,
+            providerSessionId: body.providerSessionId,
+            cwd: body.cwd,
+          }),
+        };
+      }
+      throw new Error(`Unexpected request ${request.url}`);
+    });
+
+    await resumeStoredSessionCommand(
+      startupDeps(),
+      {
+        provider: "codex",
+        providerSessionId: "thread-1",
+        cwd: "/tmp/missing",
+        rootDir: "/tmp/missing",
+        createdAt: "2026-04-29T00:00:00.000Z",
+      },
+      { preferStoredReplay: true },
+    );
+
+    assert.deepEqual(
+      requests.map((request) => request.url.replace(/^http:\/\/127\.0\.0\.1:43111/, "")),
+      [
+        "/api/fs/list?path=%2Ftmp%2Fmissing",
+        "/api/fs/ensure-dir",
+        "/api/sessions/resume",
+      ],
+    );
   });
 });
