@@ -133,6 +133,9 @@ interface StartSessionOptions {
 
 interface ClaimHistorySessionOptions {
   confirmCreateMissingWorkspace?: (dir: string) => Promise<boolean>;
+  modeId?: string;
+  modelId?: string;
+  reasoningId?: string | null;
 }
 
 type ModelCatalogLoadState = {
@@ -197,7 +200,7 @@ interface SessionState {
   ) => Promise<void>;
   claimHistorySession: (
     sessionId: string,
-    options?: ClaimHistorySessionOptions & { modeId?: string },
+    options?: ClaimHistorySessionOptions,
   ) => Promise<void>;
   removeHistorySession: (session: Pick<StoredSessionRef, "provider" | "providerSessionId">) => Promise<void>;
   removeHistoryWorkspaceSessions: (workspaceDir: string) => Promise<void>;
@@ -705,7 +708,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     await claimHistorySessionCommand(
       createStartupDeps(get, set, options),
       sessionId,
-      options?.modeId ? { modeId: options.modeId } : undefined,
+      {
+        ...(options?.modeId ? { modeId: options.modeId } : {}),
+        ...(options?.modelId ? { modelId: options.modelId } : {}),
+        ...(options?.reasoningId !== undefined ? { reasoningId: options.reasoningId } : {}),
+      },
     );
   },
 

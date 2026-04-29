@@ -48,8 +48,8 @@ const REMOTE_PANEL_SETTLE_MS = 1_500;
 const REMOTE_PANEL_SETTLE_REDRAW_MS = 250;
 const GEMINI_REMOTE_APPROVAL_MODES = new Set(["default", "auto_edit", "yolo", "plan"]);
 
-function resolveGeminiRemoteApprovalMode(): string {
-  const value = process.env.RAH_GEMINI_REMOTE_APPROVAL_MODE?.trim();
+function resolveGeminiHandoffApprovalMode(cliApprovalMode?: string): string {
+  const value = cliApprovalMode ?? process.env.RAH_GEMINI_REMOTE_APPROVAL_MODE?.trim();
   if (value && GEMINI_REMOTE_APPROVAL_MODES.has(value)) {
     return value;
   }
@@ -65,6 +65,7 @@ function parseArgs(argv: string[]) {
   let daemonUrl = "http://127.0.0.1:43111";
   let cwd = process.cwd();
   let resumeProviderSessionId: string | undefined;
+  let approvalMode: string | undefined;
 
   const rest = [...argv];
   while (rest.length > 0) {
@@ -81,10 +82,23 @@ function parseArgs(argv: string[]) {
       resumeProviderSessionId = rest.shift() ?? resumeProviderSessionId;
       continue;
     }
+    if (arg === "--approval-mode") {
+      const value = rest.shift();
+      if (!value || !GEMINI_REMOTE_APPROVAL_MODES.has(value)) {
+        throw new Error(`Unsupported Gemini approval mode: ${value ?? "<missing>"}`);
+      }
+      approvalMode = value;
+      continue;
+    }
     throw new Error(`Unknown argument: ${arg}`);
   }
 
-  return { daemonUrl, cwd, ...(resumeProviderSessionId ? { resumeProviderSessionId } : {}) };
+  return {
+    daemonUrl,
+    cwd,
+    ...(resumeProviderSessionId ? { resumeProviderSessionId } : {}),
+    ...(approvalMode ? { approvalMode } : {}),
+  };
 }
 
 function wrapperControlUrl(daemonUrl: string): string {
@@ -204,6 +218,7 @@ function toolActivitiesFromGeminiMessage(
 
 async function main() {
   const parsed = parseArgs(process.argv.slice(2));
+  const handoffApprovalMode = resolveGeminiHandoffApprovalMode(parsed.approvalMode);
   const requestedResumeProviderSessionId = parsed.resumeProviderSessionId;
   const discoveredRequestedResumeRecord =
     requestedResumeProviderSessionId && requestedResumeProviderSessionId !== "latest"
@@ -550,7 +565,11 @@ async function main() {
     restoreMainTerminalScreen();
     const binary = await resolveGeminiBinary();
     const nativeResumeArg = getNativeResumeArg();
-    const args = nativeResumeArg ? ["--resume", nativeResumeArg] : [];
+    const args = [
+      "--approval-mode",
+      handoffApprovalMode,
+      ...(nativeResumeArg ? ["--resume", nativeResumeArg] : []),
+    ];
     localTerminal = new NativeTerminalProcess({
       cwd: parsed.cwd,
       command: binary,
@@ -671,13 +690,12 @@ async function main() {
     try {
       const binary = await resolveGeminiBinary();
       const nativeResumeArg = getNativeResumeArg();
-      const approvalMode = resolveGeminiRemoteApprovalMode();
       const child = spawn(
         binary,
         buildGeminiArgs({
           prompt: queuedTurn.text,
           ...(nativeResumeArg ? { providerSessionId: nativeResumeArg } : {}),
-          approvalMode,
+          approvalMode: handoffApprovalMode,
         }),
         {
           cwd: parsed.cwd,
@@ -1053,6 +1071,8 @@ async function main() {
         "rah",
         "gemini",
         ...(requestedResumeProviderSessionId ? ["resume", requestedResumeProviderSessionId] : []),
+        "--approval-mode",
+        handoffApprovalMode,
       ],
       ...(initialBoundProviderSessionId
         ? { resumeProviderSessionId: initialBoundProviderSessionId }

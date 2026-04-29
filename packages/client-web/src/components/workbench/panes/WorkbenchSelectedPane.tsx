@@ -5,8 +5,7 @@ import { providerLabel } from "../../../types";
 import type { SessionProjection } from "../../../types";
 import { ChatThread } from "../../chat/ChatThread";
 import { ProviderLogo } from "../../ProviderLogo";
-import { SessionModelControls } from "../../SessionModelControls";
-import { SessionModeControls } from "../../SessionModeControls";
+import { SessionControlPopover } from "../../SessionControlPopover";
 import { TokenizedTextarea } from "../../TokenizedTextarea";
 import { COMPOSER_LAYOUT, type ComposerSurface } from "../../../composer-contract";
 import type { InlineWorkbenchNotice } from "../../../workbench-notice-contract";
@@ -36,11 +35,15 @@ export function WorkbenchSelectedPane(props: {
   claimPlanModeAvailable: boolean;
   claimPlanModeEnabled: boolean;
   claimModePending: boolean;
+  selectedClaimModelId: string | null;
+  selectedClaimReasoningId: string | null;
   onDraftChange: (value: string) => void;
   onSend: () => void;
   onClaimHistory: () => void;
   onClaimAccessModeChange: (modeId: string) => void;
   onClaimPlanModeToggle: (enabled: boolean) => void;
+  onClaimModelChange: (modelId: string, defaultReasoningId?: string | null) => void;
+  onClaimReasoningChange: (reasoningId: string) => void;
   onClaimControl: () => void;
   onInterrupt: () => void;
   onOpenFileReference: () => void;
@@ -77,47 +80,43 @@ export function WorkbenchSelectedPane(props: {
     provider: props.selectedSummary.session.provider,
     summary: props.selectedSummary,
   });
-  const composerPlanInsetClassName = liveModeControl.planModeAvailable ? "pl-[4.75rem]" : "";
+  const showLiveAccessModeControl = Boolean(
+    props.canSwitchSessionModes &&
+      props.selectedSummary.session.mode &&
+      props.selectedSummary.session.mode.availableModes.length > 0,
+  );
+  const showLivePlanModeControl =
+    props.canSwitchSessionModes && liveModeControl.planModeAvailable;
+  const showLiveModelControl =
+    props.canSwitchSessionModel && Boolean(props.modelCatalog || props.modelCatalogLoading);
 
   useEffect(() => {
     const node = composerContainerRef.current;
-    if (!node) {
-      return;
-    }
+    if (!node) return;
 
     const updateAnchor = () => {
       const nextOffset = Math.ceil(node.getBoundingClientRect().height) + 12;
-      if (lastFloatingAnchorOffsetRef.current === nextOffset) {
-        return;
-      }
+      if (lastFloatingAnchorOffsetRef.current === nextOffset) return;
       lastFloatingAnchorOffsetRef.current = nextOffset;
       props.onFloatingAnchorOffsetChange(nextOffset);
     };
 
     updateAnchor();
-    if (typeof ResizeObserver === "undefined") {
-      return;
-    }
+    if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(updateAnchor);
     observer.observe(node);
-    return () => {
-      observer.disconnect();
-    };
+    return () => observer.disconnect();
   }, [props.onFloatingAnchorOffsetChange]);
 
   useEffect(() => {
-    if (!sessionMenuOpen) {
-      return;
-    }
+    if (!sessionMenuOpen) return;
     const handlePointerDown = (event: PointerEvent) => {
       if (!sessionMenuRef.current?.contains(event.target as Node)) {
         setSessionMenuOpen(false);
       }
     };
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setSessionMenuOpen(false);
-      }
+      if (event.key === "Escape") setSessionMenuOpen(false);
     };
     window.addEventListener("pointerdown", handlePointerDown);
     window.addEventListener("keydown", handleKeyDown);
@@ -222,61 +221,6 @@ export function WorkbenchSelectedPane(props: {
                     <span>Rename</span>
                   </button>
                 ) : null}
-                {props.canSwitchSessionModes &&
-                props.selectedSummary.session.mode &&
-                props.selectedSummary.session.mode.availableModes.length > 0 ? (
-                  <div className="mt-1 border-t border-[var(--app-border)] pt-1">
-                    <div className="px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-[var(--app-hint)]">
-                      Mode
-                    </div>
-                    <div className="px-2.5 py-1">
-                      <SessionModeControls
-                        compact
-                        accessModes={liveModeControl.accessModes}
-                        selectedAccessModeId={liveModeControl.selectedAccessModeId}
-                        planModeAvailable={liveModeControl.planModeAvailable}
-                        planModeEnabled={liveModeControl.planModeEnabled}
-                        disabled={props.modeChangePending}
-                        onAccessModeChange={(modeId) => {
-                          setSessionMenuOpen(false);
-                          props.onSetSessionMode(modeId);
-                        }}
-                        onPlanModeToggle={(enabled) => {
-                          setSessionMenuOpen(false);
-                          props.onSetSessionMode(enabled ? "plan" : liveModeControl.selectedAccessModeId ?? "default");
-                        }}
-                      />
-                    </div>
-                  </div>
-                ) : null}
-                {props.canSwitchSessionModel && (props.modelCatalog || props.modelCatalogLoading) ? (
-                  <div className="mt-1 border-t border-[var(--app-border)] pt-1">
-                    <div className="px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-[var(--app-hint)]">
-                      Model
-                    </div>
-                    <div className="px-2.5 py-1">
-                      <SessionModelControls
-                        compact
-                        catalog={props.modelCatalog}
-                        selectedModelId={props.selectedSummary.session.model?.currentModelId ?? null}
-                        selectedReasoningId={props.selectedSummary.session.model?.currentReasoningId ?? null}
-                        loading={props.modelCatalogLoading}
-                        disabled={props.modelChangePending}
-                        onModelChange={(modelId, defaultReasoningId) => {
-                          props.onSetSessionModel(modelId, defaultReasoningId);
-                        }}
-                        onReasoningChange={(reasoningId) => {
-                          props.onSetSessionModel(
-                            props.selectedSummary.session.model?.currentModelId ??
-                              props.modelCatalog?.currentModelId ??
-                              "",
-                            reasoningId,
-                          );
-                        }}
-                      />
-                    </div>
-                  </div>
-                ) : null}
                 {props.canDeleteSession ? (
                   <button
                     type="button"
@@ -367,26 +311,35 @@ export function WorkbenchSelectedPane(props: {
 
       <div
         ref={composerContainerRef}
-        className="shrink-0 bg-[var(--app-bg)] px-3 pt-2 md:px-4 md:pt-3"
+        className="shrink-0 bg-[var(--app-bg)]"
         style={COMPOSER_LAYOUT.bottomPaddingStyle}
       >
-        {props.composerSurface.kind === "history_claim" ? (
-          <div className="mx-auto max-w-3xl">
+        <div className="mx-auto max-w-3xl px-3 pt-2 md:px-4 md:pt-3">
+          {props.composerSurface.kind === "history_claim" ? (
             <div className="flex items-center justify-between gap-3 rounded-xl border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-4 py-3">
               <div className="min-w-0">
                 <div className="text-sm font-medium text-[var(--app-fg)]">History only</div>
                 <div className="text-xs text-[var(--app-hint)]">Claim control to continue here.</div>
               </div>
               <div className="flex items-center gap-2">
-                <SessionModeControls
-                  compact
+                <SessionControlPopover
                   accessModes={props.claimAccessModes}
                   selectedAccessModeId={props.selectedClaimAccessModeId}
-                  planModeAvailable={false}
-                  planModeEnabled={false}
-                  disabled={props.claimModePending || props.composerSurface.actionPending}
+                  planModeAvailable={props.claimPlanModeAvailable}
+                  planModeEnabled={props.claimPlanModeEnabled}
+                  modeDisabled={props.claimModePending || props.composerSurface.actionPending}
+                  modelCatalog={props.modelCatalog}
+                  modelCatalogLoading={props.modelCatalogLoading}
+                  selectedModelId={props.selectedClaimModelId}
+                  selectedReasoningId={props.selectedClaimReasoningId}
+                  modelDisabled={props.modelChangePending || props.composerSurface.actionPending}
+                  showModel
+                  align="right"
+                  buttonClassName="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[var(--app-border)] bg-[var(--app-bg)] text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] disabled:opacity-40"
                   onAccessModeChange={props.onClaimAccessModeChange}
                   onPlanModeToggle={props.onClaimPlanModeToggle}
+                  onModelChange={props.onClaimModelChange}
+                  onReasoningChange={props.onClaimReasoningChange}
                 />
                 <button
                   type="button"
@@ -398,126 +351,148 @@ export function WorkbenchSelectedPane(props: {
                 </button>
               </div>
             </div>
-          </div>
-        ) : props.composerSurface.kind === "unavailable" ? (
-          <div className="mx-auto max-w-3xl">
+          ) : props.composerSurface.kind === "unavailable" ? (
             <div className="w-full rounded-xl border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-4 py-3 text-sm text-[var(--app-hint)]">
               Input is unavailable for this session.
             </div>
-          </div>
-        ) : props.composerSurface.kind === "claim_control" ? (
-          <div className="mx-auto max-w-3xl">
+          ) : props.composerSurface.kind === "claim_control" ? (
             <div className="flex items-center justify-between gap-3 rounded-xl border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-4 py-3">
               <div className="min-w-0">
                 <div className="text-sm font-medium text-[var(--app-fg)]">Claim control</div>
                 <div className="text-xs text-[var(--app-hint)]">Claim control to continue here.</div>
               </div>
-              <button
-                type="button"
-                disabled={props.composerSurface.actionPending}
-                onClick={props.onClaimControl}
-                className="shrink-0 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition-colors hover:opacity-90 disabled:opacity-50"
-              >
-                {props.composerSurface.actionLabel}
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div className="mx-auto max-w-3xl">
-            <div
-              className={
-                props.composerSurface.showStopButton
-                  ? COMPOSER_LAYOUT.composeGridWithStopClassName
-                  : COMPOSER_LAYOUT.composeGridWithoutStopClassName
-              }
-            >
-              <button
-                type="button"
-                onClick={props.onOpenFileReference}
-                className={COMPOSER_LAYOUT.roundSecondaryButtonClassName}
-                title="Insert file or folder reference"
-              >
-                <Plus size={18} />
-              </button>
-              <div className="relative">
+              <div className="flex items-center gap-2">
+                <SessionControlPopover
+                  accessModes={props.claimAccessModes}
+                  selectedAccessModeId={props.selectedClaimAccessModeId}
+                  planModeAvailable={props.claimPlanModeAvailable}
+                  planModeEnabled={props.claimPlanModeEnabled}
+                  modeDisabled={props.claimModePending || props.composerSurface.actionPending}
+                  modelCatalog={props.modelCatalog}
+                  modelCatalogLoading={props.modelCatalogLoading}
+                  selectedModelId={props.selectedClaimModelId}
+                  selectedReasoningId={props.selectedClaimReasoningId}
+                  modelDisabled={props.modelChangePending || props.composerSurface.actionPending}
+                  showModel
+                  align="right"
+                  buttonClassName="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[var(--app-border)] bg-[var(--app-bg)] text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] disabled:opacity-40"
+                  onAccessModeChange={props.onClaimAccessModeChange}
+                  onPlanModeToggle={props.onClaimPlanModeToggle}
+                  onModelChange={props.onClaimModelChange}
+                  onReasoningChange={props.onClaimReasoningChange}
+                />
                 <button
                   type="button"
-                  disabled={props.modeChangePending}
-                  onClick={() =>
-                    props.onSetSessionMode(
-                      liveModeControl.planModeEnabled
-                        ? liveModeControl.selectedAccessModeId ?? "default"
-                        : "plan",
-                    )
-                  }
-                  className={`absolute bottom-2 left-2 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full transition-colors ${
-                    liveModeControl.planModeEnabled
-                      ? "w-auto gap-1.5 bg-sky-500/12 px-2.5 text-sky-700 dark:text-sky-300"
-                      : "w-auto gap-1.5 bg-[var(--app-subtle-bg)]/95 px-2.5 text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
-                  } ${liveModeControl.planModeAvailable ? "" : "hidden"}`}
-                  title="Toggle plan mode"
-                  aria-pressed={liveModeControl.planModeEnabled}
+                  disabled={props.composerSurface.actionPending}
+                  onClick={props.onClaimControl}
+                  className="shrink-0 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition-colors hover:opacity-90 disabled:opacity-50"
                 >
-                  <span className={`text-[11px] font-medium ${liveModeControl.planModeEnabled ? "tracking-[0.01em]" : ""}`}>
-                    Plan
-                  </span>
-                  <span
-                    className={`rounded-full px-1.5 py-0.5 text-[10px] leading-none ${
-                      liveModeControl.planModeEnabled
-                        ? "bg-sky-500/14 text-sky-700 dark:text-sky-300"
-                        : "bg-[var(--app-bg)]/80 text-[var(--app-hint)]"
-                    }`}
-                  >
-                    {liveModeControl.planModeEnabled ? "On" : "Off"}
-                  </span>
+                  {props.composerSurface.actionLabel}
                 </button>
-                <TokenizedTextarea
-                  ref={props.composerRef}
-                  textareaClassName={`${COMPOSER_LAYOUT.textareaClassName} ${composerPlanInsetClassName}`}
-                  contentClassName={`${COMPOSER_LAYOUT.textareaContentClassName} ${composerPlanInsetClassName}`}
-                  value={props.draft}
-                  onChange={props.onDraftChange}
-                  placeholder=""
-                  rows={1}
-                  onKeyDown={(e) => {
-                  const nativeEvent = e.nativeEvent as KeyboardEvent;
-                  if (
-                    e.key === "Enter" &&
-                    !e.shiftKey &&
-                    !nativeEvent.isComposing &&
-                    nativeEvent.keyCode !== 229
-                  ) {
-                    e.preventDefault();
-                    if (!props.sendPending) {
-                      props.onSend();
-                    }
-                  }
-                }}
-              />
               </div>
-              {props.composerSurface.showStopButton ? (
-                <div className={COMPOSER_LAYOUT.stopWrapperClassName}>
-                  <span className={COMPOSER_LAYOUT.stopSpinnerClassName} />
-                  <button
-                    type="button"
-                    onClick={props.onInterrupt}
-                    className={COMPOSER_LAYOUT.stopButtonClassName}
-                  >
-                    <Square size={16} fill="currentColor" />
-                  </button>
-                </div>
-              ) : null}
-              <button
-                type="button"
-                disabled={props.sendPending || !props.draft.trim()}
-                onClick={props.onSend}
-                className={COMPOSER_LAYOUT.roundPrimaryButtonClassName}
-              >
-                <ArrowUp size={18} />
-              </button>
             </div>
-          </div>
-        )}
+          ) : (
+            <div className="relative">
+              {/* Compose grid: attach | settings | textarea | [stop] | send */}
+              <div
+                className={
+                  props.composerSurface.showStopButton
+                    ? COMPOSER_LAYOUT.composeGridWithStopClassName
+                    : COMPOSER_LAYOUT.composeGridWithoutStopClassName
+                }
+              >
+                <button
+                  type="button"
+                  onClick={props.onOpenFileReference}
+                  className={COMPOSER_LAYOUT.attachButtonClassName}
+                  title="Insert file or folder reference"
+                >
+                  <Plus size={18} />
+                </button>
+
+                <SessionControlPopover
+                  accessModes={showLiveAccessModeControl ? liveModeControl.accessModes : []}
+                  selectedAccessModeId={liveModeControl.selectedAccessModeId}
+                  planModeAvailable={showLivePlanModeControl}
+                  planModeEnabled={liveModeControl.planModeEnabled}
+                  modeDisabled={props.modeChangePending}
+                  modelCatalog={props.modelCatalog}
+                  modelCatalogLoading={props.modelCatalogLoading}
+                  selectedModelId={props.selectedSummary.session.model?.currentModelId ?? null}
+                  selectedReasoningId={
+                    props.selectedSummary.session.model?.currentReasoningId ?? null
+                  }
+                  modelDisabled={props.modelChangePending}
+                  showModel={showLiveModelControl}
+                  buttonClassName={COMPOSER_LAYOUT.settingsButtonClassName}
+                  onAccessModeChange={props.onSetSessionMode}
+                  onPlanModeToggle={(enabled) => {
+                    props.onSetSessionMode(
+                      enabled ? "plan" : liveModeControl.selectedAccessModeId ?? "default",
+                    );
+                  }}
+                  onModelChange={(modelId, defaultReasoningId) => {
+                    props.onSetSessionModel(modelId, defaultReasoningId);
+                  }}
+                  onReasoningChange={(reasoningId) => {
+                    props.onSetSessionModel(
+                      props.selectedSummary.session.model?.currentModelId ?? "",
+                      reasoningId,
+                    );
+                  }}
+                />
+
+                <div className="relative min-w-0">
+                  <TokenizedTextarea
+                    ref={props.composerRef}
+                    textareaClassName={COMPOSER_LAYOUT.textareaClassName}
+                    contentClassName={COMPOSER_LAYOUT.textareaContentClassName}
+                    value={props.draft}
+                    onChange={props.onDraftChange}
+                    placeholder=""
+                    rows={1}
+                    onKeyDown={(e) => {
+                      const nativeEvent = e.nativeEvent as KeyboardEvent;
+                      if (
+                        e.key === "Enter" &&
+                        !e.shiftKey &&
+                        !nativeEvent.isComposing &&
+                        nativeEvent.keyCode !== 229
+                      ) {
+                        e.preventDefault();
+                        if (!props.sendPending) {
+                          props.onSend();
+                        }
+                      }
+                    }}
+                  />
+                </div>
+
+                {props.composerSurface.showStopButton ? (
+                  <div className={COMPOSER_LAYOUT.stopWrapperClassName}>
+                    <span className={COMPOSER_LAYOUT.stopSpinnerClassName} />
+                    <button
+                      type="button"
+                      onClick={props.onInterrupt}
+                      className={COMPOSER_LAYOUT.stopButtonClassName}
+                    >
+                      <Square size={18} fill="currentColor" />
+                    </button>
+                  </div>
+                ) : null}
+
+                <button
+                  type="button"
+                  disabled={props.sendPending || !props.draft.trim()}
+                  onClick={props.onSend}
+                  className={COMPOSER_LAYOUT.sendButtonClassName}
+                >
+                  <ArrowUp size={18} />
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
       <SessionInfoDialog
         open={sessionInfoOpen}

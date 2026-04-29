@@ -16,7 +16,8 @@ RAH 需要把这种“已经结束的历史”显示成 interrupted/failed，但
 - RAH 管理写手：RAH 自己拉起并仍可继续控制的 Codex session，例如 web live session、`rah codex` terminal wrapper。
 - RAH 历史读取：Web 打开历史、翻页、replay provider history。它只读 rollout，不算 live，也不算写手。
 - 外部写手：非 RAH 当前进程对 rollout 文件持有写或读写 fd，通常是用户自己开的裸 `codex` TUI。
-- closed history：没有 RAH 管理写手、没有外部写手，并且 rollout 文件一段时间内没有变化。
+- 活跃外部写手：外部 Codex 写手仍有子进程在运行，通常意味着 shell/tool 还没结束。
+- closed history：没有 RAH 管理写手、没有活跃外部写手，并且 rollout 文件一段时间内没有变化。
 
 ## 收口规则
 
@@ -28,8 +29,10 @@ RAH 需要把这种“已经结束的历史”显示成 interrupted/failed，但
 EOF pending tool 只在 closed history 下收口：
 
 - 如果有 RAH 管理写手，不收口。
-- 如果 `lsof` 发现外部写手，不收口。
 - 如果 rollout 文件最近仍在变化，不收口。
+- 如果 `lsof` 发现非 Codex 外部写手，不收口。
+- 如果 `lsof` 发现外部 Codex 写手，继续用 `ps` 判断该 Codex 进程是否仍有子进程；有子进程时不收口。
+- 如果外部 Codex TUI 只是空闲地持有 rollout 写 fd、没有子进程，并且文件稳定，则允许收口。
 - 只有上述条件都不成立时，才把 EOF 处仍 pending 的 tool 标记为 interrupted。
 
 ## 为什么 RAH 自己打开历史不算 live
@@ -44,9 +47,11 @@ Web 历史读取会短暂打开 rollout 文件，但它不会继续写入 sessio
 
 ## 外部 TUI 的边界
 
-RAH 会用 `lsof` 判断 rollout 是否有外部写手。
+RAH 会用 `lsof` 判断 rollout 是否有外部写手，并用 `ps` 区分“外部 Codex TUI 空闲打开文件”和“外部 Codex TUI 正在跑 tool 子进程”。
 
-这能覆盖“外部 TUI 正持有文件写 fd”的情况。如果某个 provider 只在追加瞬间打开文件、写完立即关闭 fd，那么没有 wrapper 或 provider pid 元信息时，无法 100% 证明它仍在运行；RAH 会退回到“文件稳定 + 无写手”的 closed-history 规则。
+这能覆盖 Codex TUI 中断后仍保持打开状态的情况：TUI 可能继续持有 rollout 写 fd，但旧的 pending `exec_command` 已不会再完成；此时如果文件稳定且没有子进程，RAH 会把它收口为 interrupted。
+
+如果某个 provider 只在追加瞬间打开文件、写完立即关闭 fd，那么没有 wrapper 或 provider pid 元信息时，无法 100% 证明它仍在运行；RAH 会退回到“文件稳定 + 无活跃写手”的 closed-history 规则。
 
 精确 liveness 的强保证只能来自：
 
@@ -57,8 +62,8 @@ RAH 会用 `lsof` 判断 rollout 是否有外部写手。
 ## UI 语义
 
 - live / thinking：存在 RAH 管理写手，或 provider 事件明确仍在进行。
-- external live：发现非 RAH 写手正在写 rollout。
-- closed history：无写手且文件稳定，此时 EOF pending tool 可以显示为 interrupted。
+- external live：发现非 RAH 写手正在写 rollout，且外部 Codex 写手仍有活跃子进程。
+- closed history：无 RAH 写手、无活跃外部写手且文件稳定，此时 EOF pending tool 可以显示为 interrupted。
 
 这个边界避免两类错误：
 

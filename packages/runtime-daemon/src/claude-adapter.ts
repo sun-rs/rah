@@ -65,6 +65,7 @@ import {
 } from "./workspace-utils";
 import { toSessionSummary } from "./session-store";
 import { buildClaudeModeState, isClaudeModeId } from "./session-mode-utils";
+import { approvalPolicyToPermissionMode } from "./claude-live-helpers";
 import { movePathToTrash } from "./trash";
 
 const CLAUDE_EVENT_SOURCE = {
@@ -179,7 +180,10 @@ export class ClaudeAdapter implements ProviderAdapter {
         providerSessionId: request.providerSessionId,
         cwd: request.cwd ?? record?.ref.cwd ?? process.cwd(),
         permissionMode:
-          this.permissionModeByProviderSessionId.get(request.providerSessionId) ?? "default",
+          request.approvalPolicy !== undefined
+            ? approvalPolicyToPermissionMode(request.approvalPolicy)
+            : this.permissionModeByProviderSessionId.get(request.providerSessionId) ??
+              "bypassPermissions",
         ...(request.attach ? { attach: request.attach } : {}),
         ...(this.queryFactory ? { queryFactory: this.queryFactory } : {}),
       });

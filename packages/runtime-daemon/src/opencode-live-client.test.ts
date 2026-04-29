@@ -164,6 +164,91 @@ test("setOpenCodeLiveSessionMode maps full auto to OpenCode session permissions"
     assert.deepEqual(requests[1]?.body, {
       permission: [{ permission: "*", pattern: "*", action: "ask" }],
     });
+
+    await setOpenCodeLiveSessionMode({
+      services,
+      liveSession,
+      modeId: "opencode/full-auto",
+    });
+    const plan = await setOpenCodeLiveSessionMode({
+      services,
+      liveSession,
+      modeId: "plan",
+    });
+    assert.deepEqual(acpCalls[2], { sessionId: "opencode-1", modeId: "build" });
+    assert.deepEqual(acpCalls[3], { sessionId: "opencode-1", modeId: "plan" });
+    assert.equal(plan.session.mode?.currentModeId, "plan");
+    assert.deepEqual(requests[2]?.body, {
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    });
+    assert.deepEqual(requests[3]?.body, {
+      permission: [{ permission: "*", pattern: "*", action: "ask" }],
+    });
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("setOpenCodeLiveSessionMode maps build to ask permissions", async () => {
+  const requests: Array<{ body: unknown }> = [];
+  const server = http.createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    req.on("end", () => {
+      const rawBody = Buffer.concat(chunks).toString("utf8");
+      requests.push({ body: rawBody ? JSON.parse(rawBody) : null });
+      res.setHeader("Content-Type", "application/json");
+      res.end(
+        JSON.stringify({
+          id: "opencode-1",
+          directory: "/tmp/rah-opencode",
+          title: "OpenCode",
+          time: { created: 1, updated: 1 },
+        }),
+      );
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+
+  try {
+    const services = {
+      eventBus: new EventBus(),
+      ptyHub: new PtyHub(),
+      sessionStore: new SessionStore(),
+    };
+    const session = services.sessionStore.createManagedSession({
+      provider: "opencode",
+      providerSessionId: "opencode-1",
+      launchSource: "web",
+      cwd: "/tmp/rah-opencode",
+      rootDir: "/tmp/rah-opencode",
+      mode: buildOpenCodeModeState({ currentModeId: "build", mutable: true }),
+    });
+    const liveSession = {
+      sessionId: session.session.id,
+      providerSessionId: "opencode-1",
+      modeId: "build",
+      server: {
+        baseUrl: `http://127.0.0.1:${address.port}`,
+        cwd: "/tmp/rah-opencode",
+      },
+      acp: {
+        setSessionMode: async () => undefined,
+      },
+    } as unknown as LiveOpenCodeSession;
+
+    const summary = await setOpenCodeLiveSessionMode({
+      services,
+      liveSession,
+      modeId: "build",
+    });
+
+    assert.equal(summary.session.mode?.currentModeId, "build");
+    assert.deepEqual(requests[0]?.body, {
+      permission: [{ permission: "*", pattern: "*", action: "ask" }],
+    });
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }

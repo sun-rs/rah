@@ -70,6 +70,7 @@ let pendingPromptId = null;
 function log(obj) {
   if (logPath) fs.appendFileSync(logPath, JSON.stringify(obj) + "\\n");
 }
+log({ type: "argv", args });
 function send(obj) {
   process.stdout.write(JSON.stringify(obj) + "\\n");
 }
@@ -192,8 +193,8 @@ rl.on("line", (line) => {
     return { logPath };
   }
 
-  test("starts a live Kimi session and streams tool and usage events", async () => {
-    writeMockKimiBinary("basic");
+  test("starts a live Kimi session in yolo mode by default and streams tool and usage events", async () => {
+    const { logPath } = writeMockKimiBinary("basic");
     const services = createServices();
     const adapter = new KimiAdapter(services);
 
@@ -209,6 +210,7 @@ rl.on("line", (line) => {
 
     const providerSessionId = started.session.session.providerSessionId;
     assert.ok(typeof providerSessionId === "string");
+    assert.equal(started.session.session.mode?.currentModeId, "yolo");
     assert.equal(started.session.session.capabilities.actions.archive, true);
 
     adapter.sendInput(started.session.session.id, {
@@ -246,6 +248,18 @@ rl.on("line", (line) => {
       cachedInputTokens: 20,
       outputTokens: 30,
     });
+    const logLines = readFileSync(logPath, "utf8")
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    assert.ok(
+      logLines.some(
+        (line) =>
+          line.type === "argv" &&
+          Array.isArray(line.args) &&
+          line.args.includes("--yolo"),
+      ),
+    );
   });
 
   test("resumed live Kimi sessions can be archived from RAH", async () => {
@@ -306,6 +320,7 @@ rl.on("line", (line) => {
     const started = await adapter.startSession({
       provider: "kimi",
       cwd: tmpDir,
+      approvalPolicy: "default",
       attach: {
         client: { id: "web-1", kind: "web", connectionId: "web-1" },
         mode: "interactive",

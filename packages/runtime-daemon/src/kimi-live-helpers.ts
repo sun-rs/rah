@@ -278,6 +278,13 @@ export async function handleKimiRequest(
 ) {
   switch (request.params.type) {
     case "ApprovalRequest": {
+      if (liveSession.approvalMode === "yolo") {
+        liveSession.client.respondSuccess(request.id, {
+          request_id: request.id,
+          response: "approve",
+        });
+        return;
+      }
       liveSession.pendingRequests.set(request.id, { kind: "approval" });
       applyActivity(
         services,
@@ -293,6 +300,13 @@ export async function handleKimiRequest(
     }
     case "QuestionRequest": {
       const mapped = questionRequestFromPayload(request.id, request.params.payload);
+      if (liveSession.approvalMode === "yolo") {
+        liveSession.client.respondSuccess(request.id, {
+          request_id: request.id,
+          answers: {},
+        });
+        return;
+      }
       liveSession.pendingRequests.set(request.id, {
         kind: "question",
         questions: mapped.questions,

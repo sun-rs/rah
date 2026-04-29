@@ -33,8 +33,8 @@ const PROVIDER_MODE_PRESETS: Record<SupportedModeProvider, ProviderPreset> = {
     accessModes: [
       {
         id: "on-request/workspace-write",
-        label: "Default",
-        description: "Ask for approvals, allow workspace edits.",
+        label: "Auto edit",
+        description: "Codex low-friction mode: workspace-write sandbox, ask before leaving it.",
       },
       {
         id: "on-request/read-only",
@@ -42,17 +42,22 @@ const PROVIDER_MODE_PRESETS: Record<SupportedModeProvider, ProviderPreset> = {
         description: "Ask for approvals, keep the sandbox read-only.",
       },
       {
+        id: "never/workspace-write",
+        label: "Full auto · sandboxed",
+        description: "Skip approvals while staying inside the workspace sandbox.",
+      },
+      {
         id: "never/danger-full-access",
         label: "Full auto",
         description: "Skip approvals and allow unrestricted access.",
       },
     ],
-    defaultAccessModeId: "on-request/workspace-write",
+    defaultAccessModeId: "never/danger-full-access",
     planModeAvailable: true,
   },
   claude: {
     accessModes: [
-      { id: "default", label: "Default", description: "Standard permission prompts." },
+      { id: "default", label: "Ask", description: "Ask before actions that need approval." },
       {
         id: "acceptEdits",
         label: "Auto edit",
@@ -63,18 +68,13 @@ const PROVIDER_MODE_PRESETS: Record<SupportedModeProvider, ProviderPreset> = {
         label: "Full auto",
         description: "Skip permission prompts for all actions.",
       },
-      {
-        id: "dontAsk",
-        label: "Don't ask",
-        description: "Refuse unapproved actions instead of prompting.",
-      },
     ],
-    defaultAccessModeId: "default",
+    defaultAccessModeId: "bypassPermissions",
     planModeAvailable: true,
   },
   gemini: {
     accessModes: [
-      { id: "default", label: "Default", description: "Normal approval prompts." },
+      { id: "default", label: "Ask", description: "Ask before actions that need approval." },
       {
         id: "auto_edit",
         label: "Auto edit",
@@ -86,20 +86,23 @@ const PROVIDER_MODE_PRESETS: Record<SupportedModeProvider, ProviderPreset> = {
         description: "Auto-approve all actions.",
       },
     ],
-    defaultAccessModeId: "default",
+    defaultAccessModeId: "yolo",
     planModeAvailable: true,
   },
   kimi: {
-    accessModes: [],
-    defaultAccessModeId: null,
+    accessModes: [
+      { id: "default", label: "Ask", description: "Ask before actions that need approval." },
+      { id: "yolo", label: "Full auto", description: "Auto-approve all actions." },
+    ],
+    defaultAccessModeId: "yolo",
     planModeAvailable: true,
   },
   opencode: {
     accessModes: [
       {
         id: "build",
-        label: "Default",
-        description: "Use OpenCode's normal permission prompts.",
+        label: "Ask",
+        description: "Use OpenCode build mode and ask before tool actions.",
       },
       {
         id: "opencode/full-auto",
@@ -107,7 +110,7 @@ const PROVIDER_MODE_PRESETS: Record<SupportedModeProvider, ProviderPreset> = {
         description: "Allow common OpenCode tool permissions for this session.",
       },
     ],
-    defaultAccessModeId: "build",
+    defaultAccessModeId: "opencode/full-auto",
     planModeAvailable: true,
   },
   custom: {
@@ -127,14 +130,34 @@ function extractPlanDescriptor(
   return availableModes.find((mode) => mode.id === "plan") ?? null;
 }
 
+function normalizeModeLabel(
+  provider: SupportedModeProvider,
+  mode: SessionModeDescriptor,
+): string {
+  if (provider === "codex") {
+    switch (mode.id) {
+      case "on-request/read-only":
+        return "Read only";
+      case "on-request/workspace-write":
+        return "Auto edit";
+      case "never/workspace-write":
+        return "Full auto · sandboxed";
+      case "never/danger-full-access":
+        return "Full auto";
+    }
+  }
+  return mode.label;
+}
+
 function extractAccessModes(
   availableModes: readonly SessionModeDescriptor[],
+  provider: SupportedModeProvider,
 ): SessionModeChoice[] {
   return availableModes
     .filter((mode) => mode.id !== "plan")
     .map((mode) => ({
       id: mode.id,
-      label: mode.label,
+      label: normalizeModeLabel(provider, mode),
       ...(mode.description ? { description: mode.description } : {}),
     }));
 }
@@ -159,8 +182,9 @@ export function resolveSessionModeControlState(args: {
   const preset = resolvePreset(args.provider);
   if (args.summary?.session.mode) {
     const availableModes = args.summary.session.mode.availableModes;
-    const accessModes = extractAccessModes(availableModes);
+    const accessModes = extractAccessModes(availableModes, args.provider);
     const planMode = extractPlanDescriptor(availableModes);
+    const planModeAvailable = Boolean(planMode) || preset.planModeAvailable;
     const currentModeId = args.summary.session.mode.currentModeId;
     const selectedAccessModeId =
       currentModeId && currentModeId !== "plan"
@@ -169,11 +193,11 @@ export function resolveSessionModeControlState(args: {
     const planEnabled =
       currentModeId === "plan"
         ? true
-        : args.draft?.planEnabled ?? false;
+        : planModeAvailable && (args.draft?.planEnabled ?? false);
     return {
       accessModes,
       selectedAccessModeId,
-      planModeAvailable: preset.planModeAvailable || Boolean(planMode),
+      planModeAvailable,
       planModeEnabled: planEnabled,
       effectiveModeId: planEnabled ? "plan" : selectedAccessModeId,
     };

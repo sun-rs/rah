@@ -1,11 +1,15 @@
 import { afterEach, beforeEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import type { IncomingMessage } from "node:http";
 import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { RuntimeEngine } from "./runtime-engine";
 import { startRahDaemon, type RahDaemon } from "./http-server";
+import { MAX_JSON_BODY_BYTES, readJsonBody } from "./http-server-response";
+import { isLoopbackRemoteAddress } from "./http-server-websocket";
 
 function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -112,6 +116,23 @@ describe("startRahDaemon", () => {
     });
     assert.equal(response.status, 200);
     assert.equal(typeof response.json, "object");
+  });
+
+  test("rejects oversized JSON request bodies before buffering them", async () => {
+    const request = Readable.from([]) as unknown as IncomingMessage;
+    Object.defineProperty(request, "headers", {
+      value: { "content-length": String(MAX_JSON_BODY_BYTES + 1) },
+    });
+
+    await assert.rejects(readJsonBody(request), /Request body too large/);
+  });
+
+  test("limits wrapper control upgrades to loopback clients", () => {
+    assert.equal(isLoopbackRemoteAddress("127.0.0.1"), true);
+    assert.equal(isLoopbackRemoteAddress("::1"), true);
+    assert.equal(isLoopbackRemoteAddress("::ffff:127.0.0.1"), true);
+    assert.equal(isLoopbackRemoteAddress("192.168.1.20"), false);
+    assert.equal(isLoopbackRemoteAddress(undefined), false);
   });
 
   test("rejects unregistered workspace file reads", async () => {

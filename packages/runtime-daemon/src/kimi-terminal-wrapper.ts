@@ -43,11 +43,13 @@ import {
 import { deriveTerminalWrapperRemoteControlState } from "./terminal-wrapper-remote-control";
 
 type WrapperMode = "local_native" | "remote_writer";
+const KIMI_REMOTE_APPROVAL_MODES = new Set(["default", "yolo"]);
 
 function parseArgs(argv: string[]) {
   let daemonUrl = "http://127.0.0.1:43111";
   let cwd = process.cwd();
   let resumeProviderSessionId: string | undefined;
+  let approvalMode: string | undefined;
 
   const rest = [...argv];
   while (rest.length > 0) {
@@ -64,10 +66,27 @@ function parseArgs(argv: string[]) {
       resumeProviderSessionId = rest.shift() ?? resumeProviderSessionId;
       continue;
     }
+    if (arg === "--approval-mode") {
+      const value = rest.shift();
+      if (!value || !KIMI_REMOTE_APPROVAL_MODES.has(value)) {
+        throw new Error(`Unsupported Kimi approval mode: ${value ?? "<missing>"}`);
+      }
+      approvalMode = value;
+      continue;
+    }
+    if (arg === "--yolo") {
+      approvalMode = "yolo";
+      continue;
+    }
     throw new Error(`Unknown argument: ${arg}`);
   }
 
-  return { daemonUrl, cwd, ...(resumeProviderSessionId ? { resumeProviderSessionId } : {}) };
+  return {
+    daemonUrl,
+    cwd,
+    ...(resumeProviderSessionId ? { resumeProviderSessionId } : {}),
+    approvalMode: approvalMode ?? "yolo",
+  };
 }
 
 function wrapperControlUrl(daemonUrl: string): string {
@@ -374,7 +393,12 @@ async function main() {
     remoteTurnInFlight = false;
     updatePromptState("prompt_clean");
     restoreMainTerminalScreen();
-    const args = [...kimiCommand.args, "--session", providerSessionId];
+    const args = [
+      ...kimiCommand.args,
+      ...(parsed.approvalMode === "yolo" ? ["--yolo"] : []),
+      "--session",
+      providerSessionId,
+    ];
     localTerminal = new NativeTerminalProcess({
       cwd: parsed.cwd,
       command: kimiCommand.command,
@@ -714,6 +738,13 @@ async function main() {
 
   const handleRemoteRequest = async (request: JsonRpcRequest) => {
     if (request.params.type === "ApprovalRequest") {
+      if (parsed.approvalMode === "yolo") {
+        remoteClient?.respondSuccess(request.id, {
+          request_id: request.id,
+          response: "approve",
+        });
+        return;
+      }
       pendingRequests.set(request.id, { kind: "approval" });
       notifyActivity({
         type: "permission_requested",
@@ -774,6 +805,13 @@ async function main() {
                 )
             : [],
         }));
+      if (parsed.approvalMode === "yolo") {
+        remoteClient?.respondSuccess(request.id, {
+          request_id: request.id,
+          answers: {},
+        });
+        return;
+      }
       pendingRequests.set(request.id, {
         kind: "question",
         questions: questions.map((question) => ({
@@ -844,6 +882,7 @@ async function main() {
       remoteClient = await createKimiClient({
         providerSessionId,
         cwd: parsed.cwd,
+        yolo: parsed.approvalMode === "yolo",
         onEvent: (event: JsonRpcEvent) => {
           applyKimiEventPayload({
             eventType: event.params.type,

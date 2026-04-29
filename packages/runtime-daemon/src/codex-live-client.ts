@@ -54,7 +54,7 @@ async function resolveCodexBinary(): Promise<string> {
   return await resolveConfiguredBinary("RAH_CODEX_BINARY", "codex");
 }
 
-async function loadCodexPlanCollaborationMode(client: CodexJsonRpcClient): Promise<LiveCodexSession["planCollaborationMode"]> {
+export async function loadCodexPlanCollaborationMode(client: CodexJsonRpcClient): Promise<LiveCodexSession["planCollaborationMode"]> {
   const response = (await client.request("collaborationMode/list", {})) as {
     data?: Array<{
       name?: string;
@@ -140,6 +140,7 @@ export async function startCodexLiveSession(params: {
     mode: buildCodexModeState({
       currentModeId: initialAccessModeId,
       mutable: true,
+      planAvailable: Boolean(planCollaborationMode),
     }),
     model: {
       currentModelId: request.model ?? threadStart.model ?? params.initialModelCatalog?.currentModelId ?? null,
@@ -301,6 +302,7 @@ export async function resumeCodexLiveSession(params: {
       mode: buildCodexModeState({
         currentModeId: resumedAccessModeId,
         mutable: true,
+        planAvailable: Boolean(planCollaborationMode),
       }),
       model: {
         currentModelId: resumeResponse.model ?? params.initialModelCatalog?.currentModelId ?? null,

@@ -3,26 +3,14 @@ import type { SessionModeDescriptor, SessionModeState } from "@rah/runtime-proto
 const CLAUDE_MODE_DESCRIPTORS: SessionModeDescriptor[] = [
   {
     id: "default",
-    label: "Default",
-    description: "Standard permission prompts for tool actions.",
+    label: "Ask",
+    description: "Ask before actions that need approval.",
     hotSwitch: true,
   },
   {
     id: "acceptEdits",
-    label: "Accept edits",
+    label: "Auto edit",
     description: "Auto-accept file edits while still prompting for riskier actions.",
-    hotSwitch: true,
-  },
-  {
-    id: "bypassPermissions",
-    label: "Bypass permissions",
-    description: "Skip permission prompts for all actions.",
-    hotSwitch: true,
-  },
-  {
-    id: "dontAsk",
-    label: "Don't ask",
-    description: "Deny actions that are not already approved instead of prompting.",
     hotSwitch: true,
   },
   {
@@ -31,13 +19,19 @@ const CLAUDE_MODE_DESCRIPTORS: SessionModeDescriptor[] = [
     description: "Read-only planning mode.",
     hotSwitch: true,
   },
+  {
+    id: "bypassPermissions",
+    label: "Full auto",
+    description: "Skip permission prompts for all actions.",
+    hotSwitch: true,
+  },
 ];
 
 const GEMINI_MODE_DESCRIPTORS: SessionModeDescriptor[] = [
   {
     id: "default",
-    label: "Default",
-    description: "Prompt for approval when tools need it.",
+    label: "Ask",
+    description: "Ask before actions that need approval.",
     hotSwitch: true,
   },
   {
@@ -63,8 +57,8 @@ const GEMINI_MODE_DESCRIPTORS: SessionModeDescriptor[] = [
 const KIMI_MODE_DESCRIPTORS: SessionModeDescriptor[] = [
   {
     id: "default",
-    label: "Default",
-    description: "Standard interactive mode.",
+    label: "Ask",
+    description: "Ask before actions that need approval.",
     hotSwitch: true,
   },
   {
@@ -73,13 +67,19 @@ const KIMI_MODE_DESCRIPTORS: SessionModeDescriptor[] = [
     description: "Read-only planning mode.",
     hotSwitch: true,
   },
+  {
+    id: "yolo",
+    label: "YOLO",
+    description: "Auto-approve all actions.",
+    hotSwitch: true,
+  },
 ];
 
 const OPENCODE_MODE_DESCRIPTORS: SessionModeDescriptor[] = [
   {
     id: "build",
-    label: "Default",
-    description: "Use OpenCode's normal permission prompts.",
+    label: "Ask",
+    description: "Use OpenCode build mode and ask before tool actions.",
     hotSwitch: true,
   },
   {
@@ -99,23 +99,36 @@ const OPENCODE_MODE_DESCRIPTORS: SessionModeDescriptor[] = [
 const CODEX_MODE_DESCRIPTORS: SessionModeDescriptor[] = [
   {
     id: "on-request/read-only",
-    label: "On request · Read only",
+    label: "Read only",
     description: "Ask for approvals and keep the sandbox read-only.",
     hotSwitch: true,
   },
   {
     id: "on-request/workspace-write",
-    label: "On request · Workspace write",
-    description: "Ask for approvals and allow writing inside the workspace.",
+    label: "Auto edit",
+    description: "Codex low-friction mode: workspace-write sandbox, ask before leaving it.",
+    hotSwitch: true,
+  },
+  {
+    id: "never/workspace-write",
+    label: "Full auto · sandboxed",
+    description: "Skip approvals while keeping Codex inside the workspace sandbox.",
     hotSwitch: true,
   },
   {
     id: "never/danger-full-access",
-    label: "Never · Danger full access",
+    label: "Full auto",
     description: "Skip approvals and allow unrestricted access.",
     hotSwitch: true,
   },
 ];
+
+const CODEX_PLAN_MODE_DESCRIPTOR: SessionModeDescriptor = {
+  id: "plan",
+  label: "Plan",
+  description: "Codex plan collaboration mode.",
+  hotSwitch: true,
+};
 
 function cloneDescriptor(descriptor: SessionModeDescriptor): SessionModeDescriptor {
   return {
@@ -235,8 +248,12 @@ export function buildCodexModeState(args: {
   mutable: boolean;
   source?: SessionModeState["source"];
   preferredAccessModeId?: string;
+  planAvailable?: boolean;
 }): SessionModeState {
   const availableModes = cloneDescriptors(CODEX_MODE_DESCRIPTORS);
+  if (args.planAvailable || args.currentModeId === "plan") {
+    availableModes.splice(1, 0, cloneDescriptor(CODEX_PLAN_MODE_DESCRIPTOR));
+  }
   if (args.preferredAccessModeId) {
     const preferredIndex = availableModes.findIndex((mode) => mode.id === args.preferredAccessModeId);
     if (preferredIndex > 0) {

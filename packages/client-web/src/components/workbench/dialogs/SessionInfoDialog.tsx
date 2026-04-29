@@ -111,13 +111,13 @@ export function SessionInfoDialog(props: {
           <div className="min-h-0 flex-1 overflow-y-auto custom-scrollbar">
             <InfoRow label="Provider" value={session ? providerLabel(session.provider) : "Unavailable"} />
             <InfoRow
-              label="Provider ID"
+              label="Session ID"
               mono
               value={
                 <div className="flex flex-wrap items-start gap-2">
                   <span className="min-w-0 flex-1">{providerSessionId}</span>
                   {session?.providerSessionId ? (
-                    <CopyValueButton value={session.providerSessionId} label="provider session ID" />
+                    <CopyValueButton value={session.providerSessionId} label="session ID" />
                   ) : null}
                 </div>
               }

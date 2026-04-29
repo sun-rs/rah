@@ -469,5 +469,34 @@ describe("codex stored session path resolution", () => {
           /interrupted/i.test(event.payload.item.text),
       ),
     );
+
+    const openLoader = createCodexStoredSessionFrozenHistoryPageLoader({
+      sessionId: "replay-interrupted",
+      record,
+      finalizeUnterminatedTools: false,
+    });
+    const finalizedLoader = createCodexStoredSessionFrozenHistoryPageLoader({
+      sessionId: "replay-interrupted",
+      record,
+      finalizeUnterminatedTools: true,
+    });
+    const openFrozenPage = openLoader.loadInitialPage(100);
+    const finalizedFrozenPage = finalizedLoader.loadInitialPage(100);
+
+    assert.notEqual(
+      openFrozenPage.boundary.sourceRevision,
+      finalizedFrozenPage.boundary.sourceRevision,
+    );
+    assert.equal(
+      openFrozenPage.events.some((event) => event.type === "tool.call.failed"),
+      false,
+    );
+    assert.ok(
+      finalizedFrozenPage.events.some(
+        (event) =>
+          event.type === "tool.call.failed" &&
+          event.payload.toolCallId === "call-interrupted",
+      ),
+    );
   });
 });

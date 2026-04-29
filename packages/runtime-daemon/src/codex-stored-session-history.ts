@@ -37,6 +37,7 @@ const SYSTEM_SOURCE = {
 function makeCodexFrozenHistoryBoundary(
   rolloutPath: string,
   endOffset: number,
+  finalizeUnterminatedTools: boolean,
 ): FrozenHistoryBoundary {
   return {
     kind: "frozen",
@@ -44,6 +45,7 @@ function makeCodexFrozenHistoryBoundary(
       provider: "codex",
       rolloutPath,
       endOffset,
+      finalizeUnterminatedTools,
     }),
   };
 }
@@ -387,7 +389,12 @@ export function createCodexStoredSessionFrozenHistoryPageLoader(args: {
   finalizeUnterminatedTools?: boolean;
 }): FrozenHistoryPageLoader {
   const snapshotEndOffset = statSync(args.record.rolloutPath).size;
-  const boundary = makeCodexFrozenHistoryBoundary(args.record.rolloutPath, snapshotEndOffset);
+  const shouldFinalizeUnterminatedTools = args.finalizeUnterminatedTools === true;
+  const boundary = makeCodexFrozenHistoryBoundary(
+    args.record.rolloutPath,
+    snapshotEndOffset,
+    shouldFinalizeUnterminatedTools,
+  );
   const translateWindow = createLineHistoryWindowTranslator({
     sessionId: args.sessionId,
     findSafeBoundaryIndex: (lines) => lines.findIndex(isCodexUserBoundaryLine),
@@ -401,7 +408,7 @@ export function createCodexStoredSessionFrozenHistoryPageLoader(args: {
         ...(args.record.ref.preview !== undefined ? { preview: args.record.ref.preview } : {}),
         lines: [...lines],
         finalizePendingTools:
-          args.finalizeUnterminatedTools === true && context.endOffset >= snapshotEndOffset,
+          shouldFinalizeUnterminatedTools && context.endOffset >= snapshotEndOffset,
       }),
   });
   return createLineFrozenHistoryPageLoader({

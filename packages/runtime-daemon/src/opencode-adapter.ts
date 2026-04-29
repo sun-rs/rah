@@ -141,6 +141,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
         providerSessionId: request.providerSessionId,
         cwd: request.cwd ?? record?.ref.cwd ?? process.cwd(),
         ...(request.attach ? { attach: request.attach } : {}),
+        ...(request.providerConfig ? { providerConfig: request.providerConfig } : {}),
         ...(cachedModelCatalog ? { modelCatalog: cachedModelCatalog } : {}),
       });
       this.liveSessions.set(response.liveSession.sessionId, response.liveSession);

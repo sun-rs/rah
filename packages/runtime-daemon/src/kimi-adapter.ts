@@ -34,6 +34,7 @@ import {
   closeKimiLiveSession,
   interruptKimiLiveSession,
   respondToKimiLivePermission,
+  restartKimiLiveClient,
   resumeKimiLiveSession,
   sendInputToKimiLiveSession,
   startKimiLiveSession,
@@ -157,6 +158,7 @@ export class KimiAdapter implements ProviderAdapter {
         providerSessionId: request.providerSessionId,
         cwd,
         ...(request.attach ? { attach: request.attach } : {}),
+        ...(request.approvalPolicy ? { approvalPolicy: request.approvalPolicy } : {}),
         ...(cachedModelCatalog ? { modelCatalog: cachedModelCatalog } : {}),
       });
       this.liveSessions.set(response.liveSession.sessionId, response.liveSession);
@@ -213,12 +215,24 @@ export class KimiAdapter implements ProviderAdapter {
     if (!live) {
       throw new Error("Kimi mode switching is only available for live sessions.");
     }
+    if (live.activeTurn) {
+      throw new Error("Kimi mode switching is only available while the session is idle.");
+    }
     const enablePlan = modeId === "plan";
+    const nextYolo = modeId === "yolo";
+    if (live.nativeYolo !== nextYolo) {
+      await restartKimiLiveClient({
+        services: this.services,
+        liveSession: live,
+        yolo: nextYolo,
+      });
+    }
     await live.client.request("set_plan_mode", { enabled: enablePlan });
     live.planMode = enablePlan;
+    live.approvalMode = nextYolo ? "yolo" : "default";
     const nextState = this.services.sessionStore.patchManagedSession(sessionId, {
       mode: buildKimiModeState({
-        currentModeId: live.planMode ? "plan" : "default",
+        currentModeId: modeId,
         mutable: true,
       }),
     });

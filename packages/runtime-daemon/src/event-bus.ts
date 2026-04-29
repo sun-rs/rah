@@ -22,6 +22,16 @@ type Subscriber = {
 interface EventBusOptions {
   maxEvents?: number;
   onPersistEvent?: (event: RahEvent) => void;
+  onSubscriberError?: (error: unknown, event: RahEvent) => void;
+}
+
+function defaultSubscriberErrorHandler(error: unknown, event: RahEvent): void {
+  console.error("[rah] event subscriber failed", {
+    error,
+    eventId: event.id,
+    eventType: event.type,
+    sessionId: event.sessionId,
+  });
 }
 
 /**
@@ -34,10 +44,12 @@ export class EventBus {
   private readonly subscribers = new Set<Subscriber>();
   private readonly maxEvents: number;
   private readonly onPersistEvent: ((event: RahEvent) => void) | undefined;
+  private readonly onSubscriberError: ((error: unknown, event: RahEvent) => void) | undefined;
 
   constructor(options: EventBusOptions = {}) {
     this.maxEvents = options.maxEvents ?? 2_000;
     this.onPersistEvent = options.onPersistEvent;
+    this.onSubscriberError = options.onSubscriberError ?? defaultSubscriberErrorHandler;
   }
 
   publish<K extends RahEventType>(args: {
@@ -87,7 +99,11 @@ export class EventBus {
 
     for (const subscriber of this.subscribers) {
       if (this.matchesFilter(event as RahEvent, subscriber.filter)) {
-        subscriber.onEvent(event as RahEvent);
+        try {
+          subscriber.onEvent(event as RahEvent);
+        } catch (error) {
+          this.onSubscriberError?.(error, event as RahEvent);
+        }
       }
     }
 

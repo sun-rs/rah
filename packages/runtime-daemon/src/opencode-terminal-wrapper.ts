@@ -12,6 +12,7 @@ import {
   promptOpenCodeSessionAsync,
   respondOpenCodePermission,
   resolveOpenCodeBinary,
+  setOpenCodeSessionPermission,
   startOpenCodeServer,
   stopOpenCodeServer,
   subscribeOpenCodeEvents,
@@ -63,6 +64,7 @@ interface ParsedArgs {
 }
 
 const DEFAULT_DAEMON_URL = "http://127.0.0.1:43111";
+const OPENCODE_FULL_AUTO_PERMISSION = [{ permission: "*", pattern: "*", action: "allow" as const }];
 
 function parseArgs(argv: string[]): ParsedArgs {
   let daemonUrl = DEFAULT_DAEMON_URL;
@@ -865,6 +867,11 @@ async function main(): Promise<void> {
       ? await getOpenCodeSession(server, args.resumeProviderSessionId)
       : await createOpenCodeSession(server, { title: "OpenCode terminal session" });
     providerSessionId = session.id;
+    await setOpenCodeSessionPermission({
+      handle: server,
+      providerSessionId: session.id,
+      permission: OPENCODE_FULL_AUTO_PERMISSION,
+    });
     activityState = createOpenCodeActivityState(session.id);
     send(socket, {
       type: "wrapper.provider_bound",

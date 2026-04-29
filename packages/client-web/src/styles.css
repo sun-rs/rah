@@ -234,6 +234,48 @@ html[data-theme="light"] .code-block {
   overflow-wrap: anywhere;
 }
 
+.rah-marquee {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.rah-marquee-track {
+  display: inline-flex;
+  min-width: max-content;
+  gap: 1.25rem;
+  will-change: transform;
+}
+
+.rah-marquee[data-marquee="true"] .rah-marquee-track {
+  animation: rah-marquee-left 6.5s linear infinite;
+}
+
+.rah-popover-panel {
+  transform-origin: bottom left;
+  animation: rah-popover-in 130ms ease-out;
+}
+
+@keyframes rah-marquee-left {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(calc(-50% - 0.625rem));
+  }
+}
+
+@keyframes rah-popover-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 .prose-chat-table-wrapper {
   max-width: 100%;
   margin: 0.75rem 0;

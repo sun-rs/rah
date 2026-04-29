@@ -9,6 +9,15 @@ import { setTimeout as delay } from "node:timers/promises";
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_DAEMON_URL = "http://127.0.0.1:43111";
 const SUPPORTED_PROVIDERS = new Set(["codex", "claude", "gemini", "kimi", "opencode"]);
+const CLAUDE_PERMISSION_MODES = new Set([
+  "acceptEdits",
+  "auto",
+  "bypassPermissions",
+  "default",
+  "plan",
+]);
+const GEMINI_APPROVAL_MODES = new Set(["default", "auto_edit", "yolo", "plan"]);
+const KIMI_APPROVAL_MODES = new Set(["default", "yolo"]);
 
 function printUsage() {
   process.stdout.write(
@@ -23,6 +32,13 @@ function printUsage() {
       "Options:",
       "  --cwd <dir>         Override working directory",
       "  --daemon-url <url>  Override daemon base URL",
+      "  --permission-mode <mode>",
+      "                      Claude handoff mode (default: bypassPermissions)",
+      "                      Values: default | acceptEdits | auto | bypassPermissions | plan",
+      "  --approval-mode <mode>",
+      "                      Gemini/Kimi handoff mode (default: yolo)",
+      "                      Gemini values: default | auto_edit | yolo | plan",
+      "                      Kimi values: default | yolo",
       "  --help              Show this help",
       "",
       "Current status:",
@@ -53,6 +69,9 @@ function parseArgs(argv) {
   let resumeProviderSessionId;
   let cwd = process.cwd();
   let daemonUrl = DEFAULT_DAEMON_URL;
+  let claudePermissionMode;
+  let geminiApprovalMode;
+  let kimiApprovalMode;
 
   const rest = [...argv.slice(1)];
   if (rest[0] === "resume") {
@@ -73,6 +92,50 @@ function parseArgs(argv) {
       daemonUrl = rest.shift() ?? daemonUrl;
       continue;
     }
+    if (option === "--permission-mode") {
+      if (provider !== "claude") {
+        throw new Error("`--permission-mode` is only supported for `rah claude`.");
+      }
+      const value = rest.shift();
+      if (!value || !CLAUDE_PERMISSION_MODES.has(value)) {
+        throw new Error(
+          `Unsupported Claude permission mode: ${value ?? "<missing>"}. ` +
+            "Use default, acceptEdits, auto, bypassPermissions, or plan.",
+        );
+      }
+      claudePermissionMode = value;
+      continue;
+    }
+    if (option === "--approval-mode") {
+      if (provider !== "gemini" && provider !== "kimi") {
+        throw new Error("`--approval-mode` is only supported for `rah gemini` and `rah kimi`.");
+      }
+      const value = rest.shift();
+      const supported = provider === "gemini" ? GEMINI_APPROVAL_MODES : KIMI_APPROVAL_MODES;
+      if (!value || !supported.has(value)) {
+        throw new Error(
+          `Unsupported ${provider} approval mode: ${value ?? "<missing>"}. ` +
+            (provider === "gemini" ? "Use default, auto_edit, yolo, or plan." : "Use default or yolo."),
+        );
+      }
+      if (provider === "gemini") {
+        geminiApprovalMode = value;
+      } else {
+        kimiApprovalMode = value;
+      }
+      continue;
+    }
+    if (option === "--yolo") {
+      if (provider !== "gemini" && provider !== "kimi") {
+        throw new Error("`--yolo` is only supported for `rah gemini` and `rah kimi`.");
+      }
+      if (provider === "gemini") {
+        geminiApprovalMode = "yolo";
+      } else {
+        kimiApprovalMode = "yolo";
+      }
+      continue;
+    }
     throw new Error(`Unknown argument: ${option}`);
   }
 
@@ -82,6 +145,9 @@ function parseArgs(argv) {
     cwd: resolve(cwd),
     daemonUrl,
     ...(resumeProviderSessionId ? { resumeProviderSessionId } : {}),
+    ...(claudePermissionMode ? { claudePermissionMode } : {}),
+    ...(geminiApprovalMode ? { geminiApprovalMode } : {}),
+    ...(kimiApprovalMode ? { kimiApprovalMode } : {}),
   };
 }
 
@@ -214,6 +280,9 @@ async function main() {
       ...(parsed.resumeProviderSessionId
         ? ["--resume-provider-session-id", parsed.resumeProviderSessionId]
         : []),
+      ...(parsed.claudePermissionMode
+        ? ["--permission-mode", parsed.claudePermissionMode]
+        : []),
     ];
     const child = spawn(process.execPath, childArgs, {
       cwd: ROOT_DIR,
@@ -247,6 +316,9 @@ async function main() {
       ...(parsed.resumeProviderSessionId
         ? ["--resume-provider-session-id", parsed.resumeProviderSessionId]
         : []),
+      ...(parsed.kimiApprovalMode
+        ? ["--approval-mode", parsed.kimiApprovalMode]
+        : []),
     ];
     const child = spawn(process.execPath, childArgs, {
       cwd: ROOT_DIR,
@@ -279,6 +351,9 @@ async function main() {
       parsed.cwd,
       ...(parsed.resumeProviderSessionId
         ? ["--resume-provider-session-id", parsed.resumeProviderSessionId]
+        : []),
+      ...(parsed.geminiApprovalMode
+        ? ["--approval-mode", parsed.geminiApprovalMode]
         : []),
     ];
     const child = spawn(process.execPath, childArgs, {

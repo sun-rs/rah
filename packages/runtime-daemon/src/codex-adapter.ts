@@ -26,6 +26,7 @@ import type {
 import type { ProviderAdapter, RuntimeServices } from "./provider-adapter";
 import {
   createCodexAppServerClient,
+  loadCodexPlanCollaborationMode,
   respondToCodexLivePermission,
   resumeCodexLiveSession,
   startCodexLiveSession,
@@ -371,12 +372,15 @@ export class CodexAdapter implements ProviderAdapter {
     return toSessionSummary(nextState);
   }
 
-  setSessionMode(sessionId: string, modeId: string): SessionSummary {
+  async setSessionMode(sessionId: string, modeId: string): Promise<SessionSummary> {
     const live = this.liveSessions.get(sessionId);
     if (!live) {
       throw new Error("Codex mode switching is only available for live sessions.");
     }
     if (modeId === "plan") {
+      if (!live.planCollaborationMode) {
+        live.planCollaborationMode = await loadCodexPlanCollaborationMode(live.client);
+      }
       if (!live.planCollaborationMode) {
         throw new Error("Codex plan mode is not available for this session.");
       }
@@ -386,6 +390,7 @@ export class CodexAdapter implements ProviderAdapter {
           currentModeId: "plan",
           mutable: true,
           preferredAccessModeId: live.lastNonPlanModeId,
+          planAvailable: true,
         }),
       });
       return toSessionSummary(nextState);
@@ -402,6 +407,7 @@ export class CodexAdapter implements ProviderAdapter {
       mode: buildCodexModeState({
         currentModeId: modeId,
         mutable: true,
+        planAvailable: Boolean(live.planCollaborationMode),
       }),
     });
     return toSessionSummary(nextState);

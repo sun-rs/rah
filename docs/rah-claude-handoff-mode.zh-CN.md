@@ -179,9 +179,10 @@
 当前为了降低日常使用成本，web 接管的 `claude --print` 轮次默认使用
 `--permission-mode bypassPermissions`。这表示：
 
-- 本地 TUI 里发起的轮次，仍按 Claude 原生权限/信任流程处理
+- 本地 TUI 和 web 接管轮次默认都使用 `bypassPermissions`
 - web 接管发起的轮次，默认不在 web 弹 approval，而是自动放行
-- 如需临时改回 Claude 原生策略，可以设置 `RAH_CLAUDE_REMOTE_PERMISSION_MODE=default`
+- 如需改回 Claude 原生策略，可以使用 `rah claude --permission-mode default`
+- 环境变量 `RAH_CLAUDE_REMOTE_PERMISSION_MODE` 仍保留为 fallback，但 CLI 参数优先
 
 ### 7.1 为什么不支持原生 session picker
 
@@ -227,7 +228,7 @@ session 绑定，风险明显高于显式 id 绑定。
 
 - 不承担显示
 - 只负责把 prompt 写入同一 provider session
-- 默认附带 `--permission-mode bypassPermissions`，避免 web 远端轮次卡在不可见的 CLI approval 上
+- 默认附带和 terminal TUI 相同的 `--permission-mode`，默认值为 `bypassPermissions`
 
 ### 8.3 session file scanner
 

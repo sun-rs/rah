@@ -1,6 +1,8 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { applyCorsHeaders } from "./http-server-cors";
 
+export const MAX_JSON_BODY_BYTES = 5 * 1024 * 1024;
+
 export type JsonHandler = (
   req: IncomingMessage,
   res: ServerResponse,
@@ -14,15 +16,19 @@ export function requestErrorStatus(error: unknown): number {
     message.includes("Cross-origin requests are not allowed.") ||
     message.includes("Missing required RAH client header.") ||
     message.includes("Workspace directory is not registered.") ||
-    message.includes("Requested scope root is outside the session workspace boundary.")
+    message.includes("Requested workspace scope is outside the session workspace boundary.")
   ) {
     return 403;
+  }
+  if (message.includes("Request body too large.")) {
+    return 413;
   }
   if (
     message.includes("is required") ||
     message.includes("Bad Request") ||
     message.includes("Path is not a file.") ||
-    message.includes("Workspace directory is required.")
+    message.includes("Workspace directory is required.") ||
+    message.includes("Cannot remove a workspace with active live sessions.")
   ) {
     return 400;
   }
@@ -32,13 +38,51 @@ export function requestErrorStatus(error: unknown): number {
   return 500;
 }
 
-export function readJsonBody(req: IncomingMessage): Promise<unknown> {
+export function readJsonBody(
+  req: IncomingMessage,
+  maxBytes = MAX_JSON_BODY_BYTES,
+): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
+    const contentLength = req.headers["content-length"];
+    let settled = false;
+    let totalBytes = 0;
+
+    const fail = (error: Error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      chunks.splice(0, chunks.length);
+      req.resume();
+      reject(error);
+    };
+
+    if (typeof contentLength === "string") {
+      const parsed = Number.parseInt(contentLength, 10);
+      if (Number.isFinite(parsed) && parsed > maxBytes) {
+        fail(new Error("Request body too large."));
+        return;
+      }
+    }
+
     req.on("data", (chunk) => {
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      if (settled) {
+        return;
+      }
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      totalBytes += buffer.byteLength;
+      if (totalBytes > maxBytes) {
+        fail(new Error("Request body too large."));
+        return;
+      }
+      chunks.push(buffer);
     });
     req.on("end", () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
       if (chunks.length === 0) {
         resolve(undefined);
         return;
@@ -49,7 +93,13 @@ export function readJsonBody(req: IncomingMessage): Promise<unknown> {
         reject(error);
       }
     });
-    req.on("error", reject);
+    req.on("error", (error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      reject(error);
+    });
   });
 }
 

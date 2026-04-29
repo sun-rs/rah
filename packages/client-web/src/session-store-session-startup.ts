@@ -1,6 +1,7 @@
 import type {
   ApprovalPolicy,
   DebugScenarioDescriptor,
+  ProviderKind,
   ResumeSessionRequest,
   SessionConfigValue,
   SessionSummary,
@@ -32,6 +33,8 @@ import {
 import { providerLabel, type SessionProjection } from "./types";
 
 type ProviderChoice = "codex" | "claude" | "kimi" | "gemini" | "opencode";
+
+const RAH_SESSION_MODE_CONFIG_KEY = "rah_session_mode";
 
 type StartSessionOptions = {
   provider?: ProviderChoice;
@@ -119,6 +122,57 @@ type SessionStartupDeps = {
   confirmCreateMissingWorkspace: (dir: string) => Promise<boolean>;
 };
 
+function modeStartupOverrides(
+  provider: ProviderKind,
+  modeId: string | undefined,
+  providerConfig: Record<string, SessionConfigValue> | undefined,
+): {
+  providerConfig?: Record<string, SessionConfigValue>;
+  approvalPolicy?: ApprovalPolicy;
+  sandbox?: string;
+} {
+  const config = providerConfig ? { ...providerConfig } : undefined;
+  if (!modeId) {
+    return config ? { providerConfig: config } : {};
+  }
+  if (provider === "codex" && modeId !== "plan") {
+    const [approvalPolicy, sandbox] = modeId.split("/", 2);
+    return {
+      ...(config ? { providerConfig: config } : {}),
+      ...(approvalPolicy ? { approvalPolicy: approvalPolicy as ApprovalPolicy } : {}),
+      ...(sandbox ? { sandbox } : {}),
+    };
+  }
+  if (provider === "claude") {
+    return {
+      ...(config ? { providerConfig: config } : {}),
+      ...(modeId === "bypassPermissions" ? { approvalPolicy: "never" as const } : {}),
+      ...(modeId === "default" ? { approvalPolicy: "default" as const } : {}),
+    };
+  }
+  if (provider === "gemini" && modeId !== "plan") {
+    return {
+      ...(config ? { providerConfig: config } : {}),
+      approvalPolicy: modeId as ApprovalPolicy,
+    };
+  }
+  if (provider === "kimi" && modeId !== "plan") {
+    return {
+      ...(config ? { providerConfig: config } : {}),
+      approvalPolicy: modeId === "yolo" ? "yolo" : "default",
+    };
+  }
+  if (provider === "opencode") {
+    return {
+      providerConfig: {
+        ...(config ?? {}),
+        [RAH_SESSION_MODE_CONFIG_KEY]: modeId,
+      },
+    };
+  }
+  return config ? { providerConfig: config } : {};
+}
+
 export async function startSessionCommand(
   deps: SessionStartupDeps,
   options?: StartSessionOptions,
@@ -141,13 +195,14 @@ export async function startSessionCommand(
     });
     const initialInput = options?.initialInput?.trim();
     const providerBootstrapsInitialInput = provider === "opencode" && Boolean(initialInput);
+    const startupMode = modeStartupOverrides(provider, options?.modeId, options?.providerConfig);
     const response = await api.startSession({
       provider,
       cwd,
       title: options?.title ?? `${providerLabel(provider)} session`,
       ...(options?.model ? { model: options.model } : {}),
       ...(options?.reasoningId ? { reasoningId: options.reasoningId } : {}),
-      ...(options?.providerConfig ? { providerConfig: options.providerConfig } : {}),
+      ...startupMode,
       ...(options?.approvalPolicy ? { approvalPolicy: options.approvalPolicy } : {}),
       ...(options?.sandbox ? { sandbox: options.sandbox } : {}),
       ...(providerBootstrapsInitialInput && initialInput ? { initialPrompt: initialInput } : {}),
@@ -348,7 +403,7 @@ export async function resumeStoredSessionCommand(
 export async function claimHistorySessionCommand(
   deps: SessionStartupDeps,
   sessionId: string,
-  options?: { modeId?: string },
+  options?: { modeId?: string; modelId?: string; reasoningId?: string | null },
 ) {
   const state = deps.get();
   const projection = state.projections.get(sessionId);
@@ -397,6 +452,7 @@ export async function claimHistorySessionCommand(
     const request: ResumeSessionRequest = {
       provider: ref.provider,
       providerSessionId: ref.providerSessionId,
+      ...modeStartupOverrides(ref.provider, options?.modeId, undefined),
       preferStoredReplay: false,
       historyReplay: "skip",
       historySourceSessionId: sessionId,
@@ -406,12 +462,26 @@ export async function claimHistorySessionCommand(
       request.cwd = ref.cwd;
     }
     const response = await api.resumeSession(request);
-    const session =
+    let session = response.session;
+    if (
       options?.modeId &&
-      response.session.session.mode?.mutable &&
-      response.session.session.mode.currentModeId !== options.modeId
-        ? await api.setSessionMode(response.session.session.id, { modeId: options.modeId })
-        : response.session;
+      session.session.mode?.mutable &&
+      session.session.mode.currentModeId !== options.modeId
+    ) {
+      session = await api.setSessionMode(session.session.id, { modeId: options.modeId });
+    }
+    if (
+      options?.modelId &&
+      session.session.model?.mutable &&
+      (session.session.model.currentModelId !== options.modelId ||
+        (options.reasoningId !== undefined &&
+          session.session.model.currentReasoningId !== options.reasoningId))
+    ) {
+      session = await api.setSessionModel(session.session.id, {
+        modelId: options.modelId,
+        ...(options.reasoningId !== undefined ? { reasoningId: options.reasoningId } : {}),
+      });
+    }
     deps.set((current) => {
       const next = new Map(current.projections);
       const claimedState = applyClaimedHistorySessionState(

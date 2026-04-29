@@ -26,7 +26,7 @@ export interface AttachClientDescriptor {
   rows?: number;
 }
 
-export type ApprovalPolicy = "default" | "never" | "yolo";
+export type ApprovalPolicy = "default" | "on-request" | "never" | "auto_edit" | "yolo";
 
 export type CanonicalPermissionDecision =
   | "approved"
@@ -148,6 +148,9 @@ export interface ResumeSessionRequest {
   provider: ProviderKind;
   providerSessionId: string;
   cwd?: string;
+  providerConfig?: Record<string, SessionConfigValue>;
+  approvalPolicy?: ApprovalPolicy;
+  sandbox?: string;
   preferStoredReplay?: boolean;
   historyReplay?: "include" | "skip";
   historySourceSessionId?: string;

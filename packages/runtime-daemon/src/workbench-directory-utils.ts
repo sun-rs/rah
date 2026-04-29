@@ -10,7 +10,7 @@ export function normalizeDirectory(value: string | undefined): string | null {
   if (!trimmed) {
     return null;
   }
-  const withoutTrailing = trimmed.replace(/[\\/]+$/, "");
+  const withoutTrailing = trimmed.replace(/[\\/]+$/, "") || trimmed[0] || "";
   if (withoutTrailing.startsWith("/private/var/")) {
     return withoutTrailing.slice("/private".length);
   }

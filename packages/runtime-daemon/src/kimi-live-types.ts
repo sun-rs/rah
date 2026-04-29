@@ -65,6 +65,7 @@ export type LiveKimiSession = {
   model?: string;
   reasoningId?: string | null;
   approvalMode: string;
+  nativeYolo: boolean;
   planMode: boolean;
   client: KimiJsonRpcClient;
   activeTurn: LiveKimiTurn | null;

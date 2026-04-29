@@ -2,6 +2,7 @@ import type { RefObject } from "react";
 import type { ProviderModelCatalog } from "@rah/runtime-protocol";
 import { ArrowUp, ChevronDown, Folder, FolderPlus, Menu, PanelRight, Plus } from "lucide-react";
 import { ProviderSelector, type ProviderChoice } from "../../ProviderSelector";
+import { SessionControlPopover } from "../../SessionControlPopover";
 import { SessionModelControls } from "../../SessionModelControls";
 import { SessionModeControls } from "../../SessionModeControls";
 import { TokenizedTextarea } from "../../TokenizedTextarea";
@@ -43,6 +44,11 @@ export function WorkbenchEmptyPane(props: {
   onAccessModeChange: (modeId: string) => void;
   onPlanModeToggle: (enabled: boolean) => void;
 }) {
+  const workspaceLabel = props.availableWorkspaceDir
+    ? props.availableWorkspaceDir.split("/").filter(Boolean).pop() ?? props.availableWorkspaceDir
+    : "Workspace";
+  const workspaceShouldMarquee = workspaceLabel.length > 6;
+
   return (
     <>
       <header className="h-14 flex items-center justify-between gap-3 border-b border-[var(--app-border)] px-4 bg-[var(--app-bg)]/80 backdrop-blur-sm shrink-0">
@@ -95,13 +101,14 @@ export function WorkbenchEmptyPane(props: {
           </button>
         </div>
       </header>
-      <div className="flex-1 flex flex-col items-center justify-center px-6 overflow-y-auto custom-scrollbar">
+      <div className="flex-1 flex flex-col items-center justify-center px-4 md:px-6 overflow-y-auto custom-scrollbar">
         <div className="w-full max-w-2xl -translate-y-6 space-y-5 md:-translate-y-8 md:space-y-6">
           <div className="text-center">
             <h1 className="text-2xl font-semibold text-[var(--app-fg)]">
               What would you like to build?
             </h1>
           </div>
+
           <div className="relative">
             <TokenizedTextarea
               ref={props.emptyStateComposerRef}
@@ -124,93 +131,128 @@ export function WorkbenchEmptyPane(props: {
                 }
               }}
             />
-            <div
-              ref={props.workspacePickerRef}
-              className={EMPTY_STATE_COMPOSER_LAYOUT.controlsRowClassName}
-            >
+
+            {/* Controls anchored to the bottom edge of the textarea card */}
+            <div className={EMPTY_STATE_COMPOSER_LAYOUT.controlsRowClassName}>
               <div className={EMPTY_STATE_COMPOSER_LAYOUT.leftControlsClassName}>
                 <button
                   type="button"
                   onClick={props.onOpenFileReference}
-                  className={EMPTY_STATE_COMPOSER_LAYOUT.roundSecondaryButtonClassName}
+                  className={EMPTY_STATE_COMPOSER_LAYOUT.attachButtonClassName}
                   title="Insert file or folder reference"
                 >
-                  <Plus size={14} />
+                  <Plus size={18} />
                 </button>
+
                 {props.workspaceDirs.length === 0 ? (
                   <WorkspacePicker
                     currentDir=""
                     triggerLabel="Workspace"
                     triggerIcon={<FolderPlus size={12} />}
-                    triggerClassName={EMPTY_STATE_COMPOSER_LAYOUT.workspaceTriggerClassName}
+                    triggerClassName={EMPTY_STATE_COMPOSER_LAYOUT.pillClassName}
                     onSelect={props.onAddWorkspace}
                   />
                 ) : (
-                  <button
-                    type="button"
-                    onClick={props.onToggleWorkspacePicker}
-                    className={EMPTY_STATE_COMPOSER_LAYOUT.workspaceTriggerClassName}
-                    title={props.availableWorkspaceDir || "Workspace"}
-                  >
-                    <Folder size={12} />
-                    <span className="min-w-0 flex-1 truncate text-left">
-                      {props.availableWorkspaceDir
-                        ? props.availableWorkspaceDir.split("/").pop()
-                        : "Workspace"}
-                    </span>
-                    <ChevronDown
-                      size={11}
-                      className={`shrink-0 transition-transform ${props.workspacePickerOpen ? "rotate-180" : ""}`}
-                    />
-                  </button>
-                )}
-                {props.workspaceDirs.length > 0 && props.workspacePickerOpen ? (
-                  <div className="absolute bottom-full left-0 mb-1 w-56 rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-1.5 shadow-lg">
-                    {props.workspaceDirs.map((dir) => (
-                      <button
-                        key={dir}
-                        type="button"
-                        onClick={() => props.onSelectWorkspace(dir)}
-                        className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm transition-colors ${
-                          dir === props.availableWorkspaceDir ? "bg-[var(--app-subtle-bg)] text-[var(--app-fg)]" : "text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)]"
-                        }`}
+                  <div className="relative" ref={props.workspacePickerRef}>
+                    <button
+                      type="button"
+                      onClick={props.onToggleWorkspacePicker}
+                      className={EMPTY_STATE_COMPOSER_LAYOUT.pillClassName}
+                      title={props.availableWorkspaceDir || "Workspace"}
+                    >
+                      <Folder size={12} />
+                      <span
+                        className="rah-marquee min-w-0 flex-1 text-left"
+                        data-marquee={workspaceShouldMarquee ? "true" : "false"}
                       >
-                        <Folder size={13} className="shrink-0 text-[var(--app-hint)]" />
-                        <span className="truncate">{dir}</span>
-                        {dir === props.availableWorkspaceDir ? <span className="ml-auto text-[10px] text-[var(--app-hint)]">●</span> : null}
-                      </button>
-                    ))}
+                        <span className={workspaceShouldMarquee ? "rah-marquee-track" : "block truncate"}>
+                          <span>{workspaceLabel}</span>
+                          {workspaceShouldMarquee ? <span aria-hidden="true">{workspaceLabel}</span> : null}
+                        </span>
+                      </span>
+                      <ChevronDown
+                        size={11}
+                        className={`shrink-0 transition-transform ${props.workspacePickerOpen ? "rotate-180" : ""}`}
+                      />
+                    </button>
+                    {props.workspaceDirs.length > 0 && props.workspacePickerOpen ? (
+                      <div className="rah-popover-panel absolute bottom-full left-0 z-20 mb-1.5 w-56 rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-1.5 shadow-lg">
+                        {props.workspaceDirs.map((dir) => (
+                          <button
+                            key={dir}
+                            type="button"
+                            onClick={() => props.onSelectWorkspace(dir)}
+                            className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm transition-colors ${
+                              dir === props.availableWorkspaceDir
+                                ? "bg-[var(--app-subtle-bg)] text-[var(--app-fg)]"
+                                : "text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)]"
+                            }`}
+                          >
+                            <Folder size={13} className="shrink-0 text-[var(--app-hint)]" />
+                            <span className="truncate">{dir}</span>
+                            {dir === props.availableWorkspaceDir ? (
+                              <span className="ml-auto text-[10px] text-[var(--app-hint)]">●</span>
+                            ) : null}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
                   </div>
-                ) : null}
-                <SessionModeControls
-                  variant="toolbar"
+                )}
+
+                <SessionControlPopover
                   accessModes={props.accessModes}
                   selectedAccessModeId={props.selectedAccessModeId}
                   planModeAvailable={props.planModeAvailable}
                   planModeEnabled={props.planModeEnabled}
-                  onAccessModeChange={props.onAccessModeChange}
-                  onPlanModeToggle={props.onPlanModeToggle}
-                />
-                <SessionModelControls
-                  catalog={props.modelCatalog}
+                  modelCatalog={props.modelCatalog}
+                  modelCatalogLoading={props.modelCatalogLoading}
                   selectedModelId={props.selectedModelId}
                   selectedReasoningId={props.selectedReasoningId}
-                  loading={props.modelCatalogLoading}
                   allowProviderDefault
+                  showModel
+                  buttonClassName={`${EMPTY_STATE_COMPOSER_LAYOUT.attachButtonClassName} md:hidden`}
+                  onAccessModeChange={props.onAccessModeChange}
+                  onPlanModeToggle={props.onPlanModeToggle}
                   onModelChange={props.onModelChange}
                   onReasoningChange={props.onReasoningChange}
                 />
+
+                <div className="hidden items-center gap-2 md:flex">
+                  <SessionModeControls
+                    variant="toolbar"
+                    accessModes={props.accessModes}
+                    selectedAccessModeId={props.selectedAccessModeId}
+                    planModeAvailable={props.planModeAvailable}
+                    planModeEnabled={props.planModeEnabled}
+                    onAccessModeChange={props.onAccessModeChange}
+                    onPlanModeToggle={props.onPlanModeToggle}
+                  />
+
+                  <SessionModelControls
+                    catalog={props.modelCatalog}
+                    selectedModelId={props.selectedModelId}
+                    selectedReasoningId={props.selectedReasoningId}
+                    loading={props.modelCatalogLoading}
+                    allowProviderDefault
+                    mobileIconOnly
+                    onModelChange={props.onModelChange}
+                    onReasoningChange={props.onReasoningChange}
+                  />
+                </div>
               </div>
+
               <button
                 type="button"
                 disabled={!props.emptyStateDraft.trim() || !props.availableWorkspaceDir}
                 onClick={props.onEmptyStateSend}
-                className={EMPTY_STATE_COMPOSER_LAYOUT.roundPrimaryButtonClassName}
+                className={EMPTY_STATE_COMPOSER_LAYOUT.sendButtonClassName}
               >
-                <ArrowUp size={15} />
+                <ArrowUp size={18} />
               </button>
             </div>
           </div>
+
           <div className="w-full max-w-3xl mx-auto">
             <ProviderSelector
               value={props.newSessionProvider}

@@ -773,6 +773,8 @@ async function main() {
         "thread/start",
         {
           cwd: parsed.cwd,
+          approvalPolicy: "never",
+          sandbox: "danger-full-access",
           experimentalRawEvents: false,
           persistExtendedHistory: true,
         },
@@ -942,10 +944,11 @@ async function main() {
       : parsed.resumeProviderSessionId
         ? ["resume", parsed.resumeProviderSessionId]
         : [];
+    const fullAutoCodexArgs = ["--dangerously-bypass-approvals-and-sandbox", ...codexArgs];
     localTerminal = new NativeTerminalProcess({
       cwd: parsed.cwd,
       command: binary,
-      args: codexArgs,
+      args: fullAutoCodexArgs,
       env: {
         CODEX_HOME: process.env.CODEX_HOME ?? sharedCodexHome,
       },
@@ -970,7 +973,7 @@ async function main() {
         shouldExit = true;
       },
     });
-    logger.log(`[rah] local native codex started (${codexArgs.join(" ") || "new"})`);
+    logger.log(`[rah] local native codex started (${fullAutoCodexArgs.join(" ") || "new"})`);
   };
 
   const enableRemoteKeyboardControl = () => {

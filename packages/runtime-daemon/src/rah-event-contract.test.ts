@@ -704,4 +704,38 @@ describe("RAH event contract", () => {
     assert.equal(bus.oldestSeq(), 2);
     assert.equal(bus.newestSeq(), 4);
   });
+
+  test("event bus isolates subscriber failures", () => {
+    const subscriberErrors: unknown[] = [];
+    const bus = new EventBus({
+      onSubscriberError: (error) => {
+        subscriberErrors.push(error);
+      },
+    });
+    let secondSubscriberCalled = false;
+
+    bus.subscribe({}, () => {
+      throw new Error("subscriber failed");
+    });
+    bus.subscribe({}, () => {
+      secondSubscriberCalled = true;
+    });
+
+    assert.doesNotThrow(() => {
+      bus.publish({
+        sessionId: "session-1",
+        type: "runtime.status",
+        source: {
+          provider: "system",
+          channel: "system",
+          authority: "authoritative",
+        },
+        payload: {
+          status: "session_active",
+        },
+      });
+    });
+    assert.equal(secondSubscriberCalled, true);
+    assert.equal(subscriberErrors.length, 1);
+  });
 });

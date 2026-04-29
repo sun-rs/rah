@@ -1,5 +1,5 @@
 import type { Server } from "node:http";
-import { WebSocketServer } from "ws";
+import { WebSocket, WebSocketServer } from "ws";
 import type {
   EventSubscriptionRequest,
   PtyClientMessage,
@@ -8,6 +8,61 @@ import type {
 import { RuntimeEngine } from "./runtime-engine";
 import { isAllowedOrigin } from "./http-server-cors";
 import type { TerminalWrapperToDaemonMessage } from "./terminal-wrapper-control";
+
+const WEBSOCKET_HEARTBEAT_INTERVAL_MS = 30_000;
+
+export function isLoopbackRemoteAddress(remoteAddress: string | undefined): boolean {
+  return (
+    remoteAddress === "127.0.0.1" ||
+    remoteAddress === "::1" ||
+    remoteAddress === "::ffff:127.0.0.1" ||
+    remoteAddress === "localhost"
+  );
+}
+
+function installWebSocketHeartbeat(servers: WebSocketServer[]): () => void {
+  const alive = new Map<WebSocket, boolean>();
+  for (const server of servers) {
+    server.on("connection", (socket) => {
+      alive.set(socket, true);
+      socket.on("pong", () => {
+        alive.set(socket, true);
+      });
+      socket.on("close", () => {
+        alive.delete(socket);
+      });
+    });
+  }
+
+  const timer = setInterval(() => {
+    for (const server of servers) {
+      for (const socket of server.clients) {
+        if (socket.readyState !== WebSocket.OPEN) {
+          alive.delete(socket);
+          continue;
+        }
+        if (alive.get(socket) === false) {
+          socket.terminate();
+          alive.delete(socket);
+          continue;
+        }
+        alive.set(socket, false);
+        try {
+          socket.ping();
+        } catch {
+          socket.terminate();
+          alive.delete(socket);
+        }
+      }
+    }
+  }, WEBSOCKET_HEARTBEAT_INTERVAL_MS);
+  timer.unref?.();
+
+  return () => {
+    clearInterval(timer);
+    alive.clear();
+  };
+}
 
 function replayGapForSubscription(
   engine: RuntimeEngine,
@@ -51,6 +106,7 @@ export function attachWebSocketHandlers(server: Server, engine: RuntimeEngine): 
   const wssEvents = new WebSocketServer({ noServer: true });
   const wssPty = new WebSocketServer({ noServer: true });
   const wssWrapper = new WebSocketServer({ noServer: true });
+  const stopHeartbeat = installWebSocketHeartbeat([wssEvents, wssPty, wssWrapper]);
 
   wssEvents.on("connection", (socket, req) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -208,6 +264,10 @@ export function attachWebSocketHandlers(server: Server, engine: RuntimeEngine): 
       return;
     }
     if (url.pathname === "/api/wrapper-control") {
+      if (!isLoopbackRemoteAddress(req.socket.remoteAddress)) {
+        socket.destroy();
+        return;
+      }
       wssWrapper.handleUpgrade(req, socket, head, (ws) => {
         wssWrapper.emit("connection", ws, req);
       });
@@ -218,6 +278,7 @@ export function attachWebSocketHandlers(server: Server, engine: RuntimeEngine): 
 
   return {
     close() {
+      stopHeartbeat();
       wssEvents.close();
       wssPty.close();
       wssWrapper.close();

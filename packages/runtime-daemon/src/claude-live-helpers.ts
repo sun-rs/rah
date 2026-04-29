@@ -166,7 +166,10 @@ async function resolveClaudeBinary(): Promise<string> {
 export function approvalPolicyToPermissionMode(
   approvalPolicy: string | undefined,
 ): PermissionMode {
-  return approvalPolicy === "never" ? "bypassPermissions" : "default";
+  if (approvalPolicy === "default") {
+    return "default";
+  }
+  return "bypassPermissions";
 }
 
 export function buildClaudeOptions(args: {

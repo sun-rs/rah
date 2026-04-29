@@ -133,6 +133,9 @@ export function App() {
     opencode: createDefaultModeDraft("opencode"),
   });
   const [claimModeDrafts, setClaimModeDrafts] = useState<Record<string, SessionModeDraft>>({});
+  const [claimModelDrafts, setClaimModelDrafts] = useState<
+    Record<string, { modelId?: string | null; reasoningId?: string | null }>
+  >({});
   const [missingWorkspaceConfirmDir, setMissingWorkspaceConfirmDir] = useState<string | null>(null);
   const [floatingAnchorOffsetPx, setFloatingAnchorOffsetPx] = useState(96);
   const { hideToolCallsInChat } = useChatPreferences();
@@ -273,6 +276,18 @@ export function App() {
   const selectedModelCatalogState = selectedSummary
     ? modelCatalogs[selectedSummary.session.provider as ProviderChoice]
     : undefined;
+  const claimModelDraft = selectedSummary ? claimModelDrafts[selectedSummary.session.id] : undefined;
+  const claimModelControl = selectedSummary
+    ? resolveSelectedModelDraft({
+        catalog: selectedModelCatalogState?.catalog,
+        selectedModelId:
+          claimModelDraft?.modelId ?? selectedSummary.session.model?.currentModelId ?? null,
+        selectedReasoningId:
+          claimModelDraft?.reasoningId ??
+          selectedSummary.session.model?.currentReasoningId ??
+          null,
+      })
+    : null;
   const claimModeControl = selectedSummary
     ? resolveSessionModeControlState({
         provider: selectedSummary.session.provider,
@@ -698,11 +713,15 @@ export function App() {
               onDraftChange={setDraft}
               onSend={() => void handleSend()}
               onClaimHistory={() => {
-                void claimHistorySession(selectedSummary.session.id, {
+                const sessionId = selectedSummary.session.id;
+                const modelDraft = claimModelDrafts[sessionId];
+                void claimHistorySession(sessionId, {
                   confirmCreateMissingWorkspace,
                   ...(claimModeControl?.effectiveModeId
                     ? { modeId: claimModeControl.effectiveModeId }
                     : {}),
+                  ...(modelDraft?.modelId ? { modelId: modelDraft.modelId } : {}),
+                  ...(modelDraft?.reasoningId ? { reasoningId: modelDraft.reasoningId } : {}),
                 });
               }}
               claimAccessModes={claimModeControl?.accessModes ?? []}
@@ -710,6 +729,8 @@ export function App() {
               claimPlanModeAvailable={claimModeControl?.planModeAvailable ?? false}
               claimPlanModeEnabled={claimModeControl?.planModeEnabled ?? false}
               claimModePending={pendingSessionAction?.kind === "claim_history"}
+              selectedClaimModelId={claimModelControl?.model?.id ?? null}
+              selectedClaimReasoningId={claimModelControl?.reasoning?.id ?? null}
               onClaimAccessModeChange={(modeId) => {
                 setClaimModeDrafts((current) => ({
                   ...current,
@@ -730,7 +751,59 @@ export function App() {
                   },
                 }));
               }}
-              onClaimControl={() => void claimControl(selectedSummary.session.id)}
+              onClaimModelChange={(modelId, defaultReasoningId) => {
+                setClaimModelDrafts((current) => ({
+                  ...current,
+                  [selectedSummary.session.id]: {
+                    modelId: modelId || null,
+                    reasoningId: modelId ? defaultReasoningId ?? null : null,
+                  },
+                }));
+              }}
+              onClaimReasoningChange={(reasoningId) => {
+                setClaimModelDrafts((current) => ({
+                  ...current,
+                  [selectedSummary.session.id]: {
+                    ...(current[selectedSummary.session.id] ?? {}),
+                    modelId:
+                      current[selectedSummary.session.id]?.modelId ??
+                      claimModelControl?.model?.id ??
+                      null,
+                    reasoningId,
+                  },
+                }));
+              }}
+              onClaimControl={() => {
+                const sessionId = selectedSummary.session.id;
+                const modeId = claimModeControl?.effectiveModeId ?? null;
+                const modelDraft = claimModelDrafts[sessionId];
+                const modelId = modelDraft?.modelId ?? null;
+                const reasoningId =
+                  modelDraft?.reasoningId ?? claimModelControl?.reasoning?.id ?? null;
+                void (async () => {
+                  try {
+                    await claimControl(sessionId);
+                    if (modeId) {
+                      setModeChangeSessionId(sessionId);
+                      await setSessionMode(sessionId, modeId).finally(() =>
+                        setModeChangeSessionId((current) =>
+                          current === sessionId ? null : current,
+                        ),
+                      );
+                    }
+                    if (modelId) {
+                      setModelChangeSessionId(sessionId);
+                      await setSessionModel(sessionId, modelId, reasoningId).finally(() =>
+                        setModelChangeSessionId((current) =>
+                          current === sessionId ? null : current,
+                        ),
+                      );
+                    }
+                  } catch {
+                    // Store commands already surface errors through the global workbench error.
+                  }
+                })();
+              }}
               onInterrupt={() => void interruptSession(selectedSummary.session.id)}
               onOpenFileReference={() => setFileReferenceOpen(true)}
               onLoadOlderHistory={() => {

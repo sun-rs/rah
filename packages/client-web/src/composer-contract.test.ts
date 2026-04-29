@@ -176,36 +176,44 @@ describe("composer contract", () => {
   });
 
   test("keeps composer layout constants centralized", () => {
-    assert.match(COMPOSER_LAYOUT.roundSecondaryButtonClassName, /h-11/);
-    assert.match(COMPOSER_LAYOUT.roundPrimaryButtonClassName, /h-11/);
+    assert.match(COMPOSER_LAYOUT.attachButtonClassName, /h-10/);
+    assert.match(COMPOSER_LAYOUT.settingsButtonClassName, /h-10/);
+    assert.match(COMPOSER_LAYOUT.sendButtonClassName, /h-10/);
     assert.match(
       COMPOSER_LAYOUT.composeGridWithoutStopClassName,
-      /grid-cols-\[auto_minmax\(0,1fr\)_2\.75rem\]/,
+      /grid-cols-\[auto_auto_1fr_auto\]/,
     );
-    assert.match(COMPOSER_LAYOUT.composeGridWithoutStopClassName, /\bgap-2\b/);
+    assert.match(COMPOSER_LAYOUT.composeGridWithoutStopClassName, /\bgap-1\.5\b/);
     assert.match(
       COMPOSER_LAYOUT.composeGridWithStopClassName,
-      /grid-cols-\[auto_minmax\(0,1fr\)_2\.75rem_2\.75rem\]/,
+      /grid-cols-\[auto_auto_1fr_auto_auto\]/,
     );
-    assert.match(COMPOSER_LAYOUT.composeGridWithStopClassName, /\bgap-2\b/);
+    assert.match(COMPOSER_LAYOUT.composeGridWithStopClassName, /\bgap-1\.5\b/);
     assert.equal(
       COMPOSER_LAYOUT.controlsGapClassName,
-      "gap-2 md:gap-3",
+      "gap-1.5 md:gap-2",
     );
     assert.match(COMPOSER_LAYOUT.stopSpinnerClassName, /animate-\[spin_/);
     assert.match(COMPOSER_LAYOUT.stopButtonClassName, /inset-\[3px\]/);
     assert.match(COMPOSER_LAYOUT.textareaClassName, /\bblock\b/);
-    assert.match(COMPOSER_LAYOUT.textareaClassName, /\bh-11\b/);
-    assert.match(COMPOSER_LAYOUT.textareaClassName, /min-h-11/);
-    assert.match(EMPTY_STATE_COMPOSER_LAYOUT.roundSecondaryButtonClassName, /h-8/);
-    assert.match(EMPTY_STATE_COMPOSER_LAYOUT.roundPrimaryButtonClassName, /h-8/);
-    assert.match(EMPTY_STATE_COMPOSER_LAYOUT.leftControlsClassName, /\bgap-2\b/);
-    assert.match(EMPTY_STATE_COMPOSER_LAYOUT.textareaClassName, /min-h-\[120px\]/);
+    assert.match(COMPOSER_LAYOUT.textareaClassName, /min-h-10/);
+    assert.match(EMPTY_STATE_COMPOSER_LAYOUT.attachButtonClassName, /h-10/);
+    assert.match(EMPTY_STATE_COMPOSER_LAYOUT.sendButtonClassName, /h-10/);
+    assert.match(EMPTY_STATE_COMPOSER_LAYOUT.leftControlsClassName, /\bgap-1\b/);
+    assert.match(EMPTY_STATE_COMPOSER_LAYOUT.textareaClassName, /min-h-\[7\.5rem\]/);
     assert.match(EMPTY_STATE_COMPOSER_LAYOUT.controlsRowClassName, /bottom-3/);
-    assert.match(EMPTY_STATE_COMPOSER_LAYOUT.workspaceTriggerClassName, /h-8/);
+    assert.match(EMPTY_STATE_COMPOSER_LAYOUT.configRowClassName, /\bgap-2\b/);
     assert.equal(
       COMPOSER_LAYOUT.bottomPaddingStyle.paddingBottom,
-      "calc(env(safe-area-inset-bottom, 0px) + 0.5rem)",
+      "calc(env(safe-area-inset-bottom, 0px) + 0.75rem)",
+    );
+    assert.equal(
+      COMPOSER_LAYOUT.bottomPaddingStyle.paddingLeft,
+      "max(0.75rem, env(safe-area-inset-left))",
+    );
+    assert.equal(
+      COMPOSER_LAYOUT.bottomPaddingStyle.paddingRight,
+      "max(0.75rem, env(safe-area-inset-right))",
     );
   });
 });

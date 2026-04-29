@@ -454,7 +454,7 @@ rl.on('line', (line) => {
     assert.equal(updated?.session.modelProfile?.modelId, "gpt-beta");
     assert.equal(updated?.session.config?.values.model_reasoning_effort, "low");
 
-    const planned = adapter.setSessionMode?.(started.session.session.id, "plan");
+    const planned = await adapter.setSessionMode?.(started.session.session.id, "plan");
     assert.ok(planned?.session.mode);
     assert.equal(planned?.session.mode.currentModeId, "plan");
 

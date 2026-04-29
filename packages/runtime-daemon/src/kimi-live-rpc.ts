@@ -210,6 +210,7 @@ export async function createKimiClient(params: {
   cwd: string;
   model?: string;
   thinking?: boolean;
+  yolo?: boolean;
   onEvent: (event: JsonRpcEvent) => void;
   onRequest: (request: JsonRpcRequest) => Promise<void>;
 }) {
@@ -222,6 +223,9 @@ export async function createKimiClient(params: {
     } else if (params.thinking === false) {
       cliArgs.push("--no-thinking");
     }
+  }
+  if (params.yolo) {
+    cliArgs.push("--yolo");
   }
   cliArgs.push("--wire", "--session", params.providerSessionId);
   const child = spawn(command, cliArgs, {

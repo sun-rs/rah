@@ -43,6 +43,7 @@ function parseArgs(argv: string[]) {
   let daemonUrl = "http://127.0.0.1:43111";
   let cwd = process.cwd();
   let resumeProviderSessionId: string | undefined;
+  let permissionMode: string | undefined;
 
   const rest = [...argv];
   while (rest.length > 0) {
@@ -59,10 +60,23 @@ function parseArgs(argv: string[]) {
       resumeProviderSessionId = rest.shift() ?? resumeProviderSessionId;
       continue;
     }
+    if (arg === "--permission-mode") {
+      const value = rest.shift();
+      if (!value || !CLAUDE_REMOTE_PERMISSION_MODES.has(value)) {
+        throw new Error(`Unsupported Claude permission mode: ${value ?? "<missing>"}`);
+      }
+      permissionMode = value;
+      continue;
+    }
     throw new Error(`Unknown argument: ${arg}`);
   }
 
-  return { daemonUrl, cwd, ...(resumeProviderSessionId ? { resumeProviderSessionId } : {}) };
+  return {
+    daemonUrl,
+    cwd,
+    ...(resumeProviderSessionId ? { resumeProviderSessionId } : {}),
+    ...(permissionMode ? { permissionMode } : {}),
+  };
 }
 
 function wrapperControlUrl(daemonUrl: string): string {
@@ -82,12 +96,11 @@ const CLAUDE_REMOTE_PERMISSION_MODES = new Set([
   "auto",
   "bypassPermissions",
   "default",
-  "dontAsk",
   "plan",
 ]);
 
-function resolveClaudeRemotePermissionMode(): string {
-  const value = process.env.RAH_CLAUDE_REMOTE_PERMISSION_MODE?.trim();
+function resolveClaudeHandoffPermissionMode(cliPermissionMode?: string): string {
+  const value = cliPermissionMode ?? process.env.RAH_CLAUDE_REMOTE_PERMISSION_MODE?.trim();
   if (value && CLAUDE_REMOTE_PERMISSION_MODES.has(value)) {
     return value;
   }
@@ -135,8 +148,10 @@ async function main() {
   const baseClaudeHome = resolveClaudeBaseHome();
   const logger = createWrapperLogger("claude");
   const forcedProviderSessionId = parsed.resumeProviderSessionId ?? randomUUID();
+  const handoffPermissionMode = resolveClaudeHandoffPermissionMode(parsed.permissionMode);
   process.env.CLAUDE_CONFIG_DIR = baseClaudeHome;
   logger.log(`[rah] using native claude home: ${baseClaudeHome}`);
+  logger.log(`[rah] claude handoff permission mode: ${handoffPermissionMode}`);
 
   let processedLineCount = 0;
   let wrapperSessionId: string | null = null;
@@ -313,8 +328,8 @@ async function main() {
     updatePromptState("prompt_clean");
     restoreMainTerminalScreen();
     const claudeArgs = parsed.resumeProviderSessionId || boundRecord
-      ? ["--resume", forcedProviderSessionId]
-      : ["--session-id", forcedProviderSessionId];
+      ? ["--permission-mode", handoffPermissionMode, "--resume", forcedProviderSessionId]
+      : ["--permission-mode", handoffPermissionMode, "--session-id", forcedProviderSessionId];
     localTerminal = new NativeTerminalProcess({
       cwd: parsed.cwd,
       command: binary,
@@ -384,15 +399,14 @@ async function main() {
     remotePromptText = queuedTurn.text;
     updatePromptState("agent_busy");
     renderRemoteModePanel();
-    const permissionMode = resolveClaudeRemotePermissionMode();
     const args = buildClaudeRemotePrintArgs({
       providerSessionId: forcedProviderSessionId,
       text: queuedTurn.text,
       hasPersistedSession: boundRecord !== null || parsed.resumeProviderSessionId !== undefined,
-      permissionMode,
+      permissionMode: handoffPermissionMode,
     });
     logger.log(
-      `[rah] remote print turn start ${queuedTurn.queuedTurnId} permissionMode=${permissionMode}`,
+      `[rah] remote print turn start ${queuedTurn.queuedTurnId} permissionMode=${handoffPermissionMode}`,
     );
     const child = spawn(binary, args, {
       cwd: parsed.cwd,
@@ -458,7 +472,13 @@ async function main() {
       cwd: parsed.cwd,
       rootDir: parsed.cwd,
       terminalPid: process.pid,
-      launchCommand: ["rah", "claude", ...(parsed.resumeProviderSessionId ? ["resume", parsed.resumeProviderSessionId] : [])],
+      launchCommand: [
+        "rah",
+        "claude",
+        ...(parsed.resumeProviderSessionId ? ["resume", parsed.resumeProviderSessionId] : []),
+        "--permission-mode",
+        handoffPermissionMode,
+      ],
       ...(parsed.resumeProviderSessionId
         ? { resumeProviderSessionId: parsed.resumeProviderSessionId }
         : {}),

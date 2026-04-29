@@ -5,8 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import {
   canFinalizeCodexStoredHistory,
+  externalWriterRecordsFromLsofOutput,
   hasExternalWriterFromLsofOutput,
   parseLsofFileRecords,
+  parseProcessParentRecords,
+  processTableHasDescendantOf,
 } from "./codex-history-liveness";
 
 describe("codex history liveness", () => {
@@ -52,6 +55,9 @@ describe("codex history liveness", () => {
       { pid: 12346, command: "codex", fd: "9", access: "w" },
     ]);
     assert.equal(hasExternalWriterFromLsofOutput(output), true);
+    assert.deepEqual(externalWriterRecordsFromLsofOutput(output), [
+      { pid: 12346, command: "codex", fd: "9", access: "w" },
+    ]);
   });
 
   test("ignores self and read-only lsof owners", () => {
@@ -70,7 +76,25 @@ describe("codex history liveness", () => {
     assert.equal(hasExternalWriterFromLsofOutput(output), false);
   });
 
-  test("finalizes only when there is no managed writer, no external writer, and the file is stable", () => {
+  test("parses process parent records and detects descendants", () => {
+    const output = [
+      "12345     1",
+      "12346 12345",
+      "12347 12346",
+      "not-a-process",
+      "",
+    ].join("\n");
+
+    assert.deepEqual(parseProcessParentRecords(output), [
+      { pid: 12345, ppid: 1 },
+      { pid: 12346, ppid: 12345 },
+      { pid: 12347, ppid: 12346 },
+    ]);
+    assert.equal(processTableHasDescendantOf([12345], output), true);
+    assert.equal(processTableHasDescendantOf([99999], output), false);
+  });
+
+  test("finalizes only when there is no managed writer, no active external writer, and the file is stable", () => {
     const rolloutPath = writeRolloutWithMtime(1_000);
 
     assert.equal(
@@ -99,7 +123,7 @@ describe("codex history liveness", () => {
         hasRahManagedWriter: false,
         nowMs: 4_000,
         stableMs: 2_000,
-        lsofOutput: "p12345\nccodex\nf8\nau\n",
+        lsofOutput: "p12345\ncnode\nf8\nau\n",
       }),
       false,
     );
@@ -110,6 +134,34 @@ describe("codex history liveness", () => {
         nowMs: 2_000,
         stableMs: 2_000,
         lsofOutput: "",
+      }),
+      false,
+    );
+  });
+
+  test("allows stable idle Codex TUI writers but blocks writers with active child processes", () => {
+    const rolloutPath = writeRolloutWithMtime(1_000);
+    const lsofOutput = "p12345\nccodex-aarch64-apple-darwin\nf8\naw\n";
+
+    assert.equal(
+      canFinalizeCodexStoredHistory({
+        rolloutPath,
+        hasRahManagedWriter: false,
+        nowMs: 4_000,
+        stableMs: 2_000,
+        lsofOutput,
+        psOutput: "12345 1\n",
+      }),
+      true,
+    );
+    assert.equal(
+      canFinalizeCodexStoredHistory({
+        rolloutPath,
+        hasRahManagedWriter: false,
+        nowMs: 4_000,
+        stableMs: 2_000,
+        lsofOutput,
+        psOutput: "12345 1\n12346 12345\n",
       }),
       false,
     );

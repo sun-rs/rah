@@ -60,6 +60,7 @@ const SESSION_SOURCE = {
 };
 
 const OPENCODE_FULL_AUTO_MODE_ID = "opencode/full-auto";
+const RAH_SESSION_MODE_CONFIG_KEY = "rah_session_mode";
 
 function openCodePermissionOverride(action: OpenCodePermissionRule["action"]): OpenCodePermissionRule[] {
   return [{ permission: "*", pattern: "*", action }];
@@ -67,6 +68,15 @@ function openCodePermissionOverride(action: OpenCodePermissionRule["action"]): O
 
 function openCodeNativeModeId(modeId: string): "build" | "plan" {
   return modeId === "plan" ? "plan" : "build";
+}
+
+function resolveRequestedOpenCodeModeId(
+  providerConfig: StartSessionRequest["providerConfig"] | undefined,
+): string {
+  const requestedMode = providerConfig?.[RAH_SESSION_MODE_CONFIG_KEY];
+  return typeof requestedMode === "string" && isOpenCodeModeId(requestedMode)
+    ? requestedMode
+    : OPENCODE_FULL_AUTO_MODE_ID;
 }
 
 async function applyOpenCodePermissionMode(
@@ -81,7 +91,7 @@ async function applyOpenCodePermissionMode(
     });
     return;
   }
-  if (modeId === "build" && liveSession.modeId === OPENCODE_FULL_AUTO_MODE_ID) {
+  if (modeId === "build" || liveSession.modeId === OPENCODE_FULL_AUTO_MODE_ID) {
     await setOpenCodeSessionPermission({
       handle: liveSession.server,
       providerSessionId: liveSession.providerSessionId,
@@ -206,6 +216,7 @@ export async function startOpenCodeLiveSession(params: {
   modelCatalog?: ProviderModelCatalog | null;
 }): Promise<{ liveSession: LiveOpenCodeSession; summary: ReturnType<typeof toSessionSummary> }> {
   const { services, request } = params;
+  const initialModeId = resolveRequestedOpenCodeModeId(request.providerConfig);
   const currentModelId = request.model ?? params.modelCatalog?.currentModelId ?? null;
   const currentReasoningId = resolveOpenCodeReasoningId({
     catalog: params.modelCatalog,
@@ -258,7 +269,7 @@ export async function startOpenCodeLiveSession(params: {
       source: params.modelCatalog?.source ?? "native",
     },
     mode: buildOpenCodeModeState({
-      currentModeId: "build",
+      currentModeId: initialModeId,
       mutable: true,
     }),
     ...runtimeCapabilityState,
@@ -287,10 +298,12 @@ export async function startOpenCodeLiveSession(params: {
       emitUserMessages: false,
     }),
     lastAcpActivityAt: Date.now(),
-    modeId: "build",
+    modeId: initialModeId,
     ...(currentModelId ? { model: currentModelId } : {}),
     ...(currentReasoningId !== undefined ? { reasoningId: currentReasoningId } : {}),
   };
+  await acp.setSessionMode(providerSession.id, openCodeNativeModeId(initialModeId));
+  await applyOpenCodePermissionMode(liveSession, initialModeId);
   attachAcpActivitySink({ services, liveSession });
   services.sessionStore.setRuntimeState(state.session.id, "idle");
   const session = services.sessionStore.getSession(state.session.id);
@@ -319,11 +332,13 @@ export async function resumeOpenCodeLiveSession(params: {
   providerSessionId: string;
   cwd: string;
   attach?: StartSessionRequest["attach"];
+  providerConfig?: StartSessionRequest["providerConfig"];
   model?: string;
   reasoningId?: string | null | undefined;
   modelCatalog?: ProviderModelCatalog | null;
 }): Promise<{ liveSession: LiveOpenCodeSession; summary: ReturnType<typeof toSessionSummary> }> {
   const { services } = params;
+  const initialModeId = resolveRequestedOpenCodeModeId(params.providerConfig);
   const currentModelId = params.model ?? params.modelCatalog?.currentModelId ?? null;
   const currentReasoningId = resolveOpenCodeReasoningId({
     catalog: params.modelCatalog,
@@ -372,7 +387,7 @@ export async function resumeOpenCodeLiveSession(params: {
       source: params.modelCatalog?.source ?? "native",
     },
     mode: buildOpenCodeModeState({
-      currentModeId: "build",
+      currentModeId: initialModeId,
       mutable: true,
     }),
     ...runtimeCapabilityState,
@@ -401,10 +416,12 @@ export async function resumeOpenCodeLiveSession(params: {
       emitUserMessages: false,
     }),
     lastAcpActivityAt: Date.now(),
-    modeId: "build",
+    modeId: initialModeId,
     ...(currentModelId ? { model: currentModelId } : {}),
     ...(currentReasoningId !== undefined ? { reasoningId: currentReasoningId } : {}),
   };
+  await acp.setSessionMode(params.providerSessionId, openCodeNativeModeId(initialModeId));
+  await applyOpenCodePermissionMode(liveSession, initialModeId);
   attachAcpActivitySink({ services, liveSession });
   services.sessionStore.setRuntimeState(state.session.id, "idle");
   const session = services.sessionStore.getSession(state.session.id);

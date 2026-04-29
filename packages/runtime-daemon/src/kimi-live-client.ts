@@ -43,6 +43,8 @@ export async function startKimiLiveSession(params: {
 }) {
   const { services, request } = params;
   const providerSessionId = randomUUID();
+  const approvalMode = request.approvalPolicy ?? "yolo";
+  const nativeYolo = approvalMode === "yolo";
   const currentModelId = request.model ?? params.modelCatalog?.currentModelId ?? null;
   const currentReasoningId =
     request.reasoningId ??
@@ -68,7 +70,7 @@ export async function startKimiLiveSession(params: {
     ...(request.title !== undefined ? { title: request.title } : {}),
     ...(request.initialPrompt !== undefined ? { preview: request.initialPrompt } : {}),
     mode: buildKimiModeState({
-      currentModeId: "default",
+      currentModeId: nativeYolo ? "yolo" : "default",
       mutable: true,
     }),
     model: {
@@ -99,11 +101,13 @@ export async function startKimiLiveSession(params: {
     cwd: request.cwd,
     ...(currentModelId ? { model: currentModelId } : {}),
     ...(currentReasoningId !== undefined ? { reasoningId: currentReasoningId } : {}),
-    approvalMode: request.approvalPolicy ?? "default",
+    approvalMode: nativeYolo ? "yolo" : "default",
+    nativeYolo,
     planMode: false,
     client: await createKimiClient({
       providerSessionId,
       cwd: request.cwd,
+      yolo: nativeYolo,
       ...requestedCliModel,
       onEvent: (event) => handleKimiEvent(services, liveSession, event),
       onRequest: (requestMessage) => handleKimiRequest(services, liveSession, requestMessage),
@@ -138,6 +142,8 @@ export async function resumeKimiLiveSession(params: {
   approvalPolicy?: string;
 }) {
   const { services } = params;
+  const approvalMode = params.approvalPolicy ?? "yolo";
+  const nativeYolo = approvalMode === "yolo";
   const currentModelId = params.model ?? params.modelCatalog?.currentModelId ?? null;
   const currentReasoningId =
     params.reasoningId ??
@@ -161,7 +167,7 @@ export async function resumeKimiLiveSession(params: {
     cwd: params.cwd,
     rootDir: params.cwd,
     mode: buildKimiModeState({
-      currentModeId: "default",
+      currentModeId: nativeYolo ? "yolo" : "default",
       mutable: true,
     }),
     model: {
@@ -192,11 +198,13 @@ export async function resumeKimiLiveSession(params: {
     cwd: params.cwd,
     ...(currentModelId ? { model: currentModelId } : {}),
     ...(currentReasoningId !== undefined ? { reasoningId: currentReasoningId } : {}),
-    approvalMode: params.approvalPolicy ?? "default",
+    approvalMode: nativeYolo ? "yolo" : "default",
+    nativeYolo,
     planMode: false,
     client: await createKimiClient({
       providerSessionId: params.providerSessionId,
       cwd: params.cwd,
+      yolo: nativeYolo,
       ...requestedCliModel,
       onEvent: (event) => handleKimiEvent(services, liveSession, event),
       onRequest: (requestMessage) => handleKimiRequest(services, liveSession, requestMessage),
@@ -217,6 +225,30 @@ export async function resumeKimiLiveSession(params: {
     liveSession,
     summary: toSessionSummary(services.sessionStore.getSession(state.session.id)!),
   };
+}
+
+export async function restartKimiLiveClient(params: {
+  services: RuntimeServices;
+  liveSession: LiveKimiSession;
+  yolo: boolean;
+}) {
+  const { services, liveSession, yolo } = params;
+  const nextClient = await createKimiClient({
+    providerSessionId: liveSession.providerSessionId,
+    cwd: liveSession.cwd,
+    yolo,
+    ...resolveKimiCliModelArgs({
+      modelId: liveSession.model,
+      reasoningId: liveSession.reasoningId,
+    }),
+    onEvent: (event) => handleKimiEvent(services, liveSession, event),
+    onRequest: (requestMessage) => handleKimiRequest(services, liveSession, requestMessage),
+  });
+  const previousClient = liveSession.client;
+  liveSession.client = nextClient;
+  liveSession.nativeYolo = yolo;
+  bindKimiClientStderr(services, liveSession);
+  await previousClient.dispose();
 }
 
 export async function sendInputToKimiLiveSession(params: {
