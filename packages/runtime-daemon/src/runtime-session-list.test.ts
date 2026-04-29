@@ -47,6 +47,7 @@ function storedSessionState(providerSessionId: string): StoredSessionState {
     usage: {
       usedTokens: 0,
       contextWindow: 1_000_000,
+      percentUsed: 0,
       percentRemaining: 100,
     },
   };
@@ -96,5 +97,55 @@ describe("buildSessionsResponse", () => {
           entry.title === "History title",
       ),
     );
+  });
+
+  test("builds recent sessions from the global provider history order", () => {
+    const response = buildSessionsResponse({
+      liveStates: [],
+      discoveredStoredSessions: [
+        {
+          ...storedRef("external-new"),
+          title: "External new",
+          updatedAt: "2026-04-29T10:00:00.000Z",
+        },
+        {
+          ...storedRef("rah-known"),
+          title: "Provider title",
+          updatedAt: "2026-04-28T10:00:00.000Z",
+        },
+        {
+          ...storedRef("external-old"),
+          title: "External old",
+          updatedAt: "2026-04-27T10:00:00.000Z",
+        },
+      ],
+      remembered: {
+        rememberedSessions: [],
+        rememberedRecentSessions: [
+          {
+            provider: "codex",
+            providerSessionId: "rah-known",
+            cwd: "/workspace/demo",
+            rootDir: "/workspace/demo",
+            title: "Remembered title",
+            updatedAt: "2026-04-28T09:00:00.000Z",
+            lastUsedAt: "2026-04-29T09:00:00.000Z",
+            source: "previous_live",
+          },
+        ],
+        rememberedWorkspaceDirs: ["/workspace/demo"],
+        rememberedHiddenWorkspaces: [],
+        rememberedHiddenSessionKeys: [],
+        rememberedSessionTitleOverrides: {},
+      },
+      isClosingSession: () => false,
+    });
+
+    assert.deepEqual(
+      response.recentSessions.map((session) => session.providerSessionId),
+      ["external-new", "rah-known", "external-old"],
+    );
+    assert.equal(response.recentSessions[1]?.title, "Provider title");
+    assert.equal(response.recentSessions[1]?.lastUsedAt, "2026-04-29T09:00:00.000Z");
   });
 });

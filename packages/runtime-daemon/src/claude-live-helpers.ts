@@ -20,6 +20,7 @@ import type {
   LiveClaudeSession,
   PendingClaudePermission,
 } from "./claude-live-types";
+import { withModelContextWindow } from "./model-context-window";
 
 const SESSION_SOURCE = {
   provider: "system" as const,
@@ -190,15 +191,23 @@ export function buildClaudeOptions(args: {
   }));
 }
 
-function usageFromResult(result: SDKResultMessage): ContextUsage | undefined {
+function usageFromResult(
+  result: SDKResultMessage,
+  liveSession: LiveClaudeSession,
+): ContextUsage | undefined {
   if (result.type !== "result" || result.subtype !== "success") {
     return undefined;
   }
-  return {
+  const cachedInputTokens = result.usage.cache_read_input_tokens ?? 0;
+  const usedTokens =
+    result.usage.input_tokens + cachedInputTokens + result.usage.output_tokens;
+  return withModelContextWindow({
+    usedTokens,
     inputTokens: result.usage.input_tokens,
-    cachedInputTokens: result.usage.cache_read_input_tokens,
+    cachedInputTokens,
     outputTokens: result.usage.output_tokens,
-  };
+    source: "claude.sdk.result_usage",
+  }, liveSession.contextWindow);
 }
 
 function patchProviderSessionId(
@@ -324,7 +333,7 @@ export async function consumeClaudeQuery(args: {
           handleAssistantMessage(args.services, args.liveSession, args.turnId, message);
           break;
         case "result": {
-          const usage = usageFromResult(message);
+          const usage = usageFromResult(message, args.liveSession);
           applyActivity(
             args.services,
             args.liveSession.sessionId,

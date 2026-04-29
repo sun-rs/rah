@@ -157,7 +157,10 @@ export class KimiAdapter implements ProviderAdapter {
         services: this.services,
         providerSessionId: request.providerSessionId,
         cwd,
+        ...(request.model ? { model: request.model } : {}),
+        ...(request.reasoningId !== undefined ? { reasoningId: request.reasoningId } : {}),
         ...(request.attach ? { attach: request.attach } : {}),
+        ...(request.modeId ? { modeId: request.modeId } : {}),
         ...(request.approvalPolicy ? { approvalPolicy: request.approvalPolicy } : {}),
         ...(cachedModelCatalog ? { modelCatalog: cachedModelCatalog } : {}),
       });

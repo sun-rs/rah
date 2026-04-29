@@ -128,10 +128,24 @@ export interface PermissionResolution {
   answers?: JsonObject;
 }
 
+export type ContextUsageBasis = "context_window" | "turn";
+
+export type ContextUsagePrecision = "exact" | "estimated";
+
 export interface ContextUsage {
+  /**
+   * Token count represented by this payload. When `basis` is `context_window`,
+   * this is the current context-window occupancy and can be displayed as
+   * used-context tokens. When `basis` is `turn`, this is provider-reported
+   * turn usage and must not be treated as remaining-context occupancy.
+  */
   usedTokens?: number;
   contextWindow?: number;
+  percentUsed?: number;
   percentRemaining?: number;
+  basis?: ContextUsageBasis;
+  precision?: ContextUsagePrecision;
+  source?: string;
   inputTokens?: number;
   cachedInputTokens?: number;
   outputTokens?: number;

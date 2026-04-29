@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
-import type { PermissionResponseRequest, ProviderModelCatalog, SessionSummary } from "@rah/runtime-protocol";
+import type { ContextUsage, PermissionResponseRequest, ProviderModelCatalog, SessionSummary } from "@rah/runtime-protocol";
 import { Archive, ArrowUp, Ellipsis, Info, Menu, PanelRight, PencilLine, Plus, Square, Trash2, X } from "lucide-react";
 import { providerLabel } from "../../../types";
 import type { SessionProjection } from "../../../types";
@@ -11,6 +11,61 @@ import { COMPOSER_LAYOUT, type ComposerSurface } from "../../../composer-contrac
 import type { InlineWorkbenchNotice } from "../../../workbench-notice-contract";
 import { SessionInfoDialog } from "../dialogs/SessionInfoDialog";
 import { resolveSessionModeControlState, type SessionModeChoice } from "../../../session-mode-ui";
+
+function formatContextPercent(value: number): string {
+  const clamped = Math.max(0, Math.min(100, value));
+  const rounded = Math.round(clamped * 10) / 10;
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+}
+
+function formatCompactTokens(value: number): string {
+  const rounded = Math.max(0, Math.round(value));
+  if (rounded >= 1_000_000) {
+    const compact = Math.round((rounded / 1_000_000) * 10) / 10;
+    return `${Number.isInteger(compact) ? compact.toFixed(0) : compact.toFixed(1)}M`;
+  }
+  if (rounded >= 1_000) {
+    const compact = Math.round((rounded / 1_000) * 10) / 10;
+    return `${Number.isInteger(compact) ? compact.toFixed(0) : compact.toFixed(1)}K`;
+  }
+  return String(rounded);
+}
+
+function formatFullTokens(value: number): string {
+  return Math.max(0, Math.round(value)).toLocaleString("en-US");
+}
+
+function resolveContextUsageDisplay(usage: ContextUsage | undefined): { label: string; title: string } | null {
+  if (usage?.percentUsed === undefined && usage?.percentRemaining === undefined) {
+    return null;
+  }
+
+  const percentRemainingValue = usage.percentRemaining ?? 100 - usage.percentUsed!;
+  const percentRemaining = formatContextPercent(percentRemainingValue);
+  const label = `${percentRemaining}% context`;
+  const usedTokens = usage.usedTokens;
+  const contextWindow = usage.contextWindow;
+
+  if (
+    usedTokens === undefined ||
+    contextWindow === undefined ||
+    !Number.isFinite(usedTokens) ||
+    !Number.isFinite(contextWindow)
+  ) {
+    return {
+      label,
+      title: `Context remaining: ${percentRemaining}%`,
+    };
+  }
+
+  const qualifier = usage.precision === "estimated" ? "Estimated used context" : "Used context";
+  return {
+    label,
+    title: `${qualifier}: ${formatCompactTokens(usedTokens)} / ${formatFullTokens(
+      contextWindow,
+    )} tokens · ${percentRemaining}% remaining`,
+  };
+}
 
 export function WorkbenchSelectedPane(props: {
   selectedSummary: SessionSummary;
@@ -47,7 +102,7 @@ export function WorkbenchSelectedPane(props: {
   onClaimControl: () => void;
   onInterrupt: () => void;
   onOpenFileReference: () => void;
-  onLoadOlderHistory: () => void;
+  onLoadOlderHistory: () => void | Promise<void>;
   onOpenLeft: () => void;
   onExpandSidebar: () => void;
   onOpenRight: () => void;
@@ -79,7 +134,9 @@ export function WorkbenchSelectedPane(props: {
   const liveModeControl = resolveSessionModeControlState({
     provider: props.selectedSummary.session.provider,
     summary: props.selectedSummary,
+    catalog: props.modelCatalog,
   });
+  const contextUsageDisplay = resolveContextUsageDisplay(props.selectedSummary.usage);
   const showLiveAccessModeControl = Boolean(
     props.canSwitchSessionModes &&
       props.selectedSummary.session.mode &&
@@ -89,6 +146,20 @@ export function WorkbenchSelectedPane(props: {
     props.canSwitchSessionModes && liveModeControl.planModeAvailable;
   const showLiveModelControl =
     props.canSwitchSessionModel && Boolean(props.modelCatalog || props.modelCatalogLoading);
+  const composerActionPending =
+    props.composerSurface.kind === "history_claim" ||
+    props.composerSurface.kind === "claim_control"
+      ? props.composerSurface.actionPending
+      : false;
+  const sessionControlBusy =
+    !props.selectedIsReadOnlyReplay && props.selectedSummary.session.runtimeState !== "idle";
+  const claimSessionControlDisabled =
+    sessionControlBusy ||
+    props.claimModePending ||
+    props.modelChangePending ||
+    composerActionPending;
+  const liveSessionControlDisabled =
+    sessionControlBusy || props.modeChangePending || props.modelChangePending;
 
   useEffect(() => {
     const node = composerContainerRef.current;
@@ -173,10 +244,16 @@ export function WorkbenchSelectedPane(props: {
                   </span>
                 </>
               )}
-              {props.selectedSummary.usage?.percentRemaining !== undefined ? (
+              {contextUsageDisplay ? (
                 <>
                   <span className="hidden sm:inline">·</span>
-                  <span className="hidden sm:inline">{props.selectedSummary.usage.percentRemaining}% context</span>
+                  <span
+                    className="hidden sm:inline"
+                    title={contextUsageDisplay.title}
+                    aria-label={contextUsageDisplay.title}
+                  >
+                    {contextUsageDisplay.label}
+                  </span>
                 </>
               ) : null}
             </div>
@@ -333,6 +410,7 @@ export function WorkbenchSelectedPane(props: {
                   selectedModelId={props.selectedClaimModelId}
                   selectedReasoningId={props.selectedClaimReasoningId}
                   modelDisabled={props.modelChangePending || props.composerSurface.actionPending}
+                  disabled={claimSessionControlDisabled}
                   showModel
                   align="right"
                   buttonClassName="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[var(--app-border)] bg-[var(--app-bg)] text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] disabled:opacity-40"
@@ -373,6 +451,7 @@ export function WorkbenchSelectedPane(props: {
                   selectedModelId={props.selectedClaimModelId}
                   selectedReasoningId={props.selectedClaimReasoningId}
                   modelDisabled={props.modelChangePending || props.composerSurface.actionPending}
+                  disabled={claimSessionControlDisabled}
                   showModel
                   align="right"
                   buttonClassName="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[var(--app-border)] bg-[var(--app-bg)] text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] disabled:opacity-40"
@@ -423,6 +502,7 @@ export function WorkbenchSelectedPane(props: {
                     props.selectedSummary.session.model?.currentReasoningId ?? null
                   }
                   modelDisabled={props.modelChangePending}
+                  disabled={liveSessionControlDisabled}
                   showModel={showLiveModelControl}
                   buttonClassName={COMPOSER_LAYOUT.settingsButtonClassName}
                   onAccessModeChange={props.onSetSessionMode}

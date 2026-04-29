@@ -15,6 +15,7 @@ export {
   resumeGeminiStoredSession,
 } from "./gemini-session-history";
 import {
+  extractGeminiUserDisplayText,
   extractTextFromContent,
   loadGeminiConversationRecord,
   truncateText,
@@ -27,6 +28,7 @@ import {
 } from "./stored-session-metadata-cache";
 
 const SESSION_FILE_PREFIX = "session-";
+const GEMINI_STORED_SESSION_CACHE_VERSION = 2;
 
 function resolveGeminiHome(): string {
   return process.env.GEMINI_CLI_HOME ?? path.join(os.homedir(), ".gemini");
@@ -405,9 +407,11 @@ function buildStoredSessionRef(
   projectIndices: GeminiProjectIndices,
   inferredRootCache: Map<string, GeminiProjectDirectories | null>,
 ): StoredSessionRef {
-  const firstUserMessage =
-    conversation.messages.find((message) => message.type === "user")?.content ?? "";
-  const preview = truncateText(extractTextFromContent(firstUserMessage) || "Gemini conversation");
+  const firstUserMessage = conversation.messages.find((message) => message.type === "user");
+  const preview = truncateText(
+    (firstUserMessage ? extractGeminiUserDisplayText(firstUserMessage) : "") ||
+      "Gemini conversation",
+  );
   const stat = statSync(filePath);
   const projectDirectories = resolveGeminiProjectDirectories(
     conversation,
@@ -440,6 +444,7 @@ export function discoverGeminiStoredSessions(): GeminiStoredSessionRecord[] {
         filePath,
         size: stats.size,
         mtimeMs: stats.mtimeMs,
+        version: GEMINI_STORED_SESSION_CACHE_VERSION,
       });
       if (cachedRef && (cachedRef.cwd || cachedRef.rootDir)) {
         const conversation =
@@ -458,6 +463,7 @@ export function discoverGeminiStoredSessions(): GeminiStoredSessionRecord[] {
             size: stats.size,
             mtimeMs: stats.mtimeMs,
             ref: nextRef,
+            version: GEMINI_STORED_SESSION_CACHE_VERSION,
           });
         }
         records.set(nextRef.providerSessionId, {
@@ -485,6 +491,7 @@ export function discoverGeminiStoredSessions(): GeminiStoredSessionRecord[] {
         size: stats.size,
         mtimeMs: stats.mtimeMs,
         ref,
+        version: GEMINI_STORED_SESSION_CACHE_VERSION,
       });
       records.set(conversation.sessionId, {
         ref,

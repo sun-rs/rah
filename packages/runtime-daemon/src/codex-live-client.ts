@@ -18,7 +18,12 @@ import {
 import { resolveCodexRuntimeCapabilityState } from "./codex-model-catalog";
 import { toSessionSummary } from "./session-store";
 import { resolveConfiguredBinary } from "./provider-binary-utils";
-import { buildCodexModeState, codexModeId } from "./session-mode-utils";
+import {
+  buildCodexModeState,
+  codexModeId,
+  isCodexModeId,
+  parseCodexModeId,
+} from "./session-mode-utils";
 import {
   attachCurrentTurn,
   attachRequestedClient,
@@ -54,6 +59,59 @@ async function resolveCodexBinary(): Promise<string> {
   return await resolveConfiguredBinary("RAH_CODEX_BINARY", "codex");
 }
 
+function resolveCodexStartupMode(args: {
+  modeId?: string | undefined;
+  approvalPolicy?: string | undefined;
+  sandbox?: string | undefined;
+  fallbackApprovalPolicy?: string | undefined;
+  fallbackSandboxMode?: string | undefined;
+}): {
+  activeModeId: string;
+  accessModeId: string;
+  approvalPolicy: string;
+  sandboxMode: string;
+} {
+  const fallbackApprovalPolicy = args.fallbackApprovalPolicy ?? "never";
+  const fallbackSandboxMode = args.fallbackSandboxMode ?? "danger-full-access";
+  const requestedModeId = args.modeId?.trim();
+  if (requestedModeId) {
+    if (!isCodexModeId(requestedModeId)) {
+      throw new Error(`Unsupported Codex mode '${requestedModeId}'.`);
+    }
+    if (requestedModeId === "plan") {
+      const accessModeId = codexModeId({
+        approvalPolicy: fallbackApprovalPolicy,
+        sandboxMode: fallbackSandboxMode,
+      });
+      return {
+        activeModeId: "plan",
+        accessModeId,
+        approvalPolicy: fallbackApprovalPolicy,
+        sandboxMode: fallbackSandboxMode,
+      };
+    }
+    const parsed = parseCodexModeId(requestedModeId);
+    if (!parsed) {
+      throw new Error(`Unsupported Codex mode '${requestedModeId}'.`);
+    }
+    return {
+      activeModeId: requestedModeId,
+      accessModeId: requestedModeId,
+      approvalPolicy: parsed.approvalPolicy,
+      sandboxMode: parsed.sandboxMode,
+    };
+  }
+  const approvalPolicy = args.approvalPolicy ?? fallbackApprovalPolicy;
+  const sandboxMode = args.sandbox ?? fallbackSandboxMode;
+  const accessModeId = codexModeId({ approvalPolicy, sandboxMode });
+  return {
+    activeModeId: accessModeId,
+    accessModeId,
+    approvalPolicy,
+    sandboxMode,
+  };
+}
+
 export async function loadCodexPlanCollaborationMode(client: CodexJsonRpcClient): Promise<LiveCodexSession["planCollaborationMode"]> {
   const response = (await client.request("collaborationMode/list", {})) as {
     data?: Array<{
@@ -64,13 +122,13 @@ export async function loadCodexPlanCollaborationMode(client: CodexJsonRpcClient)
     }>;
   };
   const planMask = response.data?.find((entry) => entry.mode === "plan");
-  if (!planMask?.model) {
+  if (!planMask) {
     return null;
   }
   return {
     mode: "plan",
     settings: {
-      model: planMask.model,
+      model: planMask.model ?? null,
       reasoning_effort: planMask.reasoning_effort ?? null,
       developer_instructions: null,
     },
@@ -104,15 +162,20 @@ export async function startCodexLiveSession(params: {
   const client = await createCodexAppServerClient();
   const bridge = createLiveSessionBridge(services, client);
   const planCollaborationMode = await loadCodexPlanCollaborationMode(client);
-  const initialAccessModeId = codexModeId({
-    approvalPolicy: request.approvalPolicy ?? "never",
-    sandboxMode: request.sandbox ?? "danger-full-access",
+  const initialMode = resolveCodexStartupMode({
+    modeId: request.modeId,
+    approvalPolicy: request.approvalPolicy,
+    sandbox: request.sandbox,
   });
+  if (initialMode.activeModeId === "plan" && !planCollaborationMode) {
+    await client.dispose();
+    throw new Error("Codex plan mode is not available for this session.");
+  }
 
   const threadStart = (await client.request("thread/start", {
     ...(request.cwd ? { cwd: request.cwd } : {}),
-    approvalPolicy: request.approvalPolicy ?? "never",
-    sandbox: request.sandbox ?? "danger-full-access",
+    approvalPolicy: initialMode.approvalPolicy,
+    sandbox: initialMode.sandboxMode,
     ...(request.model ? { model: request.model } : {}),
     experimentalRawEvents: false,
     persistExtendedHistory: true,
@@ -138,8 +201,9 @@ export async function startCodexLiveSession(params: {
     ...(request.title !== undefined ? { title: request.title } : {}),
     ...(request.initialPrompt !== undefined ? { preview: request.initialPrompt } : {}),
     mode: buildCodexModeState({
-      currentModeId: initialAccessModeId,
+      currentModeId: initialMode.activeModeId,
       mutable: true,
+      preferredAccessModeId: initialMode.accessModeId,
       planAvailable: Boolean(planCollaborationMode),
     }),
     model: {
@@ -189,8 +253,8 @@ export async function startCodexLiveSession(params: {
     sessionId: state.session.id,
     threadId,
     cwd: request.cwd,
-    approvalPolicy: request.approvalPolicy ?? "never",
-    sandboxMode: request.sandbox ?? "danger-full-access",
+    approvalPolicy: initialMode.approvalPolicy,
+    sandboxMode: initialMode.sandboxMode,
     modelId: request.model ?? threadStart.model ?? params.initialModelCatalog?.currentModelId ?? null,
     reasoningId:
       request.reasoningId ??
@@ -199,8 +263,8 @@ export async function startCodexLiveSession(params: {
       params.initialModelCatalog?.currentReasoningId ??
       null,
     modelCatalog: params.initialModelCatalog ?? null,
-    activeModeId: initialAccessModeId,
-    lastNonPlanModeId: initialAccessModeId,
+    activeModeId: initialMode.activeModeId,
+    lastNonPlanModeId: initialMode.accessModeId,
     planCollaborationMode,
     client,
     translationState: createCodexAppServerTranslationState(),
@@ -257,16 +321,31 @@ export async function resumeCodexLiveSession(params: {
       request.cwd ??
       record?.ref.cwd ??
       process.cwd();
-    const resumedAccessModeId = codexModeId({
-      approvalPolicy:
+    const resumedMode = resolveCodexStartupMode({
+      modeId: request.modeId,
+      fallbackApprovalPolicy:
         typeof resumeResponse.approval_policy === "string"
           ? resumeResponse.approval_policy
-          : "never",
-      sandboxMode:
+          : undefined,
+      fallbackSandboxMode:
         typeof resumeResponse.sandbox === "string"
           ? resumeResponse.sandbox
-          : "danger-full-access",
+        : undefined,
     });
+    const currentModelId =
+      request.model ??
+      resumeResponse.model ??
+      params.initialModelCatalog?.currentModelId ??
+      null;
+    const currentReasoningId =
+      request.reasoningId ??
+      resumeResponse.reasoningEffort ??
+      resumeResponse.reasoning_effort ??
+      params.initialModelCatalog?.currentReasoningId ??
+      null;
+    if (resumedMode.activeModeId === "plan" && !planCollaborationMode) {
+      throw new Error("Codex plan mode is not available for this session.");
+    }
     const state = services.sessionStore.createManagedSession({
       provider: "codex",
       providerSessionId: threadId,
@@ -300,29 +379,22 @@ export async function resumeCodexLiveSession(params: {
             ? { preview: thread.name }
           : {}),
       mode: buildCodexModeState({
-        currentModeId: resumedAccessModeId,
+        currentModeId: resumedMode.activeModeId,
         mutable: true,
+        preferredAccessModeId: resumedMode.accessModeId,
         planAvailable: Boolean(planCollaborationMode),
       }),
       model: {
-        currentModelId: resumeResponse.model ?? params.initialModelCatalog?.currentModelId ?? null,
-        currentReasoningId:
-          resumeResponse.reasoningEffort ??
-          resumeResponse.reasoning_effort ??
-          params.initialModelCatalog?.currentReasoningId ??
-          null,
+        currentModelId,
+        currentReasoningId,
         availableModels: params.initialModelCatalog?.models ?? [],
         mutable: true,
         source: params.initialModelCatalog?.source ?? "native",
       },
       ...resolveCodexRuntimeCapabilityState({
         catalog: params.initialModelCatalog ?? null,
-        modelId: resumeResponse.model ?? params.initialModelCatalog?.currentModelId ?? null,
-        reasoningId:
-          resumeResponse.reasoningEffort ??
-          resumeResponse.reasoning_effort ??
-          params.initialModelCatalog?.currentReasoningId ??
-          null,
+        modelId: currentModelId,
+        reasoningId: currentReasoningId,
       }),
       capabilities: {
         modelSwitch: true,
@@ -378,23 +450,13 @@ export async function resumeCodexLiveSession(params: {
       sessionId: state.session.id,
       threadId,
       cwd,
-      approvalPolicy:
-        typeof resumeResponse.approval_policy === "string"
-          ? resumeResponse.approval_policy
-          : "never",
-      sandboxMode:
-        typeof resumeResponse.sandbox === "string"
-          ? resumeResponse.sandbox
-          : "danger-full-access",
-      modelId: resumeResponse.model ?? params.initialModelCatalog?.currentModelId ?? null,
-      reasoningId:
-        resumeResponse.reasoningEffort ??
-        resumeResponse.reasoning_effort ??
-        params.initialModelCatalog?.currentReasoningId ??
-        null,
+      approvalPolicy: resumedMode.approvalPolicy,
+      sandboxMode: resumedMode.sandboxMode,
+      modelId: currentModelId,
+      reasoningId: currentReasoningId,
       modelCatalog: params.initialModelCatalog ?? null,
-      activeModeId: resumedAccessModeId,
-      lastNonPlanModeId: resumedAccessModeId,
+      activeModeId: resumedMode.activeModeId,
+      lastNonPlanModeId: resumedMode.accessModeId,
       planCollaborationMode,
       client,
       translationState: createCodexAppServerTranslationState(),

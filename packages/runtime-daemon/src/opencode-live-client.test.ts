@@ -1,7 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
+import type { ProviderModelCatalog } from "@rah/runtime-protocol";
 import { EventBus } from "./event-bus";
+import { OpenCodeAdapter } from "./opencode-adapter";
 import {
   interruptOpenCodeLiveSession,
   setOpenCodeLiveSessionMode,
@@ -252,4 +254,75 @@ test("setOpenCodeLiveSessionMode maps build to ask permissions", async () => {
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
+});
+
+test("OpenCodeAdapter setSessionModel applies provider model and reasoning through ACP", async () => {
+  const services = {
+    eventBus: new EventBus(),
+    ptyHub: new PtyHub(),
+    sessionStore: new SessionStore(),
+  };
+  const adapter = new OpenCodeAdapter(services);
+  const session = services.sessionStore.createManagedSession({
+    provider: "opencode",
+    providerSessionId: "opencode-1",
+    launchSource: "web",
+    cwd: "/tmp/rah-opencode",
+    rootDir: "/tmp/rah-opencode",
+    capabilities: {
+      modelSwitch: true,
+    },
+    mode: buildOpenCodeModeState({ currentModeId: "build", mutable: true }),
+  });
+  const catalog: ProviderModelCatalog = {
+    provider: "opencode",
+    models: [
+      {
+        id: "openai/gpt-5.5",
+        label: "OpenAI/GPT-5.5",
+        defaultReasoningId: "default",
+        reasoningOptions: [
+          { id: "default", label: "Base", kind: "model_variant" },
+          { id: "xhigh", label: "XHigh", kind: "reasoning_effort" },
+        ],
+      },
+    ],
+    fetchedAt: new Date().toISOString(),
+    source: "native",
+  };
+  const calls: Array<{ sessionId: string; modelId: string }> = [];
+  const internals = adapter as unknown as {
+    liveSessions: Map<string, LiveOpenCodeSession>;
+    modelCatalog: {
+      listModels: () => ProviderModelCatalog;
+    };
+  };
+  internals.modelCatalog = {
+    listModels: () => catalog,
+  };
+  internals.liveSessions.set(session.session.id, {
+    sessionId: session.session.id,
+    providerSessionId: "opencode-1",
+    cwd: "/tmp/rah-opencode",
+    modeId: "build",
+    acp: {
+      setSessionModel: async (sessionId: string, modelId: string) => {
+        calls.push({ sessionId, modelId });
+      },
+    },
+  } as unknown as LiveOpenCodeSession);
+
+  const updated = await adapter.setSessionModel(session.session.id, {
+    modelId: "openai/gpt-5.5",
+    reasoningId: "xhigh",
+  });
+
+  assert.deepEqual(calls, [
+    {
+      sessionId: "opencode-1",
+      modelId: "openai/gpt-5.5/xhigh",
+    },
+  ]);
+  assert.equal(updated.session.model?.currentModelId, "openai/gpt-5.5");
+  assert.equal(updated.session.model?.currentReasoningId, "xhigh");
 });

@@ -32,26 +32,66 @@ function InfoRow(props: { label: string; value: React.ReactNode; mono?: boolean 
   );
 }
 
+function copyTextWithSelection(value: string): boolean {
+  if (typeof document === "undefined") {
+    return false;
+  }
+  const previousActiveElement =
+    document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.style.position = "fixed";
+  textarea.style.left = "0";
+  textarea.style.top = "0";
+  textarea.style.opacity = "0";
+  textarea.style.pointerEvents = "none";
+  document.body.appendChild(textarea);
+  textarea.focus({ preventScroll: true });
+  textarea.select();
+  textarea.setSelectionRange(0, value.length);
+  try {
+    return document.execCommand("copy");
+  } catch {
+    return false;
+  } finally {
+    textarea.remove();
+    previousActiveElement?.focus({ preventScroll: true });
+  }
+}
+
+async function copyTextToClipboard(value: string): Promise<boolean> {
+  // iOS Safari requires the legacy selection copy to happen synchronously in
+  // the tap handler. Try it before awaiting Clipboard API fallback.
+  if (copyTextWithSelection(value)) {
+    return true;
+  }
+
+  try {
+    if (window.isSecureContext && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value);
+      return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
 function CopyValueButton(props: { value: string; label: string }) {
-  const [copied, setCopied] = useState(false);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
 
   useEffect(() => {
-    if (!copied) {
+    if (copyState === "idle") {
       return;
     }
-    const timeout = window.setTimeout(() => setCopied(false), 1200);
+    const timeout = window.setTimeout(() => setCopyState("idle"), 1200);
     return () => {
       window.clearTimeout(timeout);
     };
-  }, [copied]);
+  }, [copyState]);
 
   const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(props.value);
-      setCopied(true);
-    } catch {
-      setCopied(false);
-    }
+    setCopyState((await copyTextToClipboard(props.value)) ? "copied" : "failed");
   };
 
   return (
@@ -63,8 +103,8 @@ function CopyValueButton(props: { value: string; label: string }) {
       className="inline-flex h-7 items-center gap-1 rounded-md border border-[var(--app-border)] px-2 text-[11px] text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
       title={`Copy ${props.label}`}
     >
-      {copied ? <Check size={12} /> : <Copy size={12} />}
-      <span>{copied ? "Copied" : "Copy"}</span>
+      {copyState === "copied" ? <Check size={12} /> : <Copy size={12} />}
+      <span>{copyState === "copied" ? "Copied" : copyState === "failed" ? "Failed" : "Copy"}</span>
     </button>
   );
 }

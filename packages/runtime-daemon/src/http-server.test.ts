@@ -8,7 +8,11 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { RuntimeEngine } from "./runtime-engine";
 import { startRahDaemon, type RahDaemon } from "./http-server";
-import { MAX_JSON_BODY_BYTES, readJsonBody } from "./http-server-response";
+import {
+  MAX_JSON_BODY_BYTES,
+  readJsonBody,
+  requestErrorStatus,
+} from "./http-server-response";
 import { isLoopbackRemoteAddress } from "./http-server-websocket";
 
 function freePort(): Promise<number> {
@@ -125,6 +129,19 @@ describe("startRahDaemon", () => {
     });
 
     await assert.rejects(readJsonBody(request), /Request body too large/);
+  });
+
+  test("maps known request errors to client-facing HTTP statuses", () => {
+    assert.equal(
+      requestErrorStatus(
+        new Error("Requested workspace scope is outside the session workspace boundary."),
+      ),
+      403,
+    );
+    assert.equal(
+      requestErrorStatus(new Error("Cannot remove a workspace with active live sessions.")),
+      400,
+    );
   });
 
   test("limits wrapper control upgrades to loopback clients", () => {

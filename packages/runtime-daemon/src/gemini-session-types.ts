@@ -4,7 +4,7 @@ export const REHYDRATED_CAPABILITIES = {
   livePermissions: false,
   steerInput: false,
   queuedInput: false,
-  renameSession: false,
+  renameSession: true,
   actions: {
     info: true,
     archive: false,
@@ -32,6 +32,7 @@ export type GeminiMessageRecord = {
   timestamp: string;
   type: "user" | "gemini" | "info" | "error" | "warning";
   content: unknown;
+  displayContent?: unknown;
   toolCalls?: GeminiToolCallRecord[];
   thoughts?: Array<{ timestamp?: string; subject?: string; text?: string }>;
   tokens?: {

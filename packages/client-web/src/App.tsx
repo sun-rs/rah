@@ -62,6 +62,56 @@ const InspectorPane = lazy(async () => ({
   default: (await import("./InspectorPane")).InspectorPane,
 }));
 
+type ModelDraft = { modelId?: string | null; reasoningId?: string | null };
+
+const MODEL_DRAFT_STORAGE_KEY = "rah.modelDrafts.v1";
+const PROVIDER_CHOICES: ProviderChoice[] = ["codex", "claude", "kimi", "gemini", "opencode"];
+
+function emptyModelDrafts(): Record<ProviderChoice, ModelDraft> {
+  return {
+    codex: {},
+    claude: {},
+    kimi: {},
+    gemini: {},
+    opencode: {},
+  };
+}
+
+function readRememberedModelDrafts(): Record<ProviderChoice, ModelDraft> {
+  if (typeof window === "undefined") return emptyModelDrafts();
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(MODEL_DRAFT_STORAGE_KEY) ?? "{}") as
+      Partial<Record<ProviderChoice, ModelDraft>>;
+    return PROVIDER_CHOICES.reduce((drafts, provider) => {
+      drafts[provider] = {
+        ...(parsed[provider]?.modelId ? { modelId: parsed[provider]?.modelId } : {}),
+        ...(parsed[provider]?.modelId && parsed[provider]?.reasoningId
+          ? { reasoningId: parsed[provider]?.reasoningId }
+          : {}),
+      };
+      return drafts;
+    }, emptyModelDrafts());
+  } catch {
+    return emptyModelDrafts();
+  }
+}
+
+function rememberModelDraft(provider: ProviderChoice, draft: ModelDraft): void {
+  if (typeof window === "undefined") return;
+  try {
+    const current = readRememberedModelDrafts();
+    current[provider] = draft.modelId
+      ? {
+          modelId: draft.modelId,
+          ...(draft.reasoningId ? { reasoningId: draft.reasoningId } : {}),
+        }
+      : {};
+    window.localStorage.setItem(MODEL_DRAFT_STORAGE_KEY, JSON.stringify(current));
+  } catch {
+    // Ignore storage failures; the in-memory draft still applies for this page.
+  }
+}
+
 export function App() {
   const {
     init,
@@ -116,15 +166,9 @@ export function App() {
   const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
   const [modeChangeSessionId, setModeChangeSessionId] = useState<string | null>(null);
   const [modelChangeSessionId, setModelChangeSessionId] = useState<string | null>(null);
-  const [startModelDrafts, setStartModelDrafts] = useState<
-    Record<ProviderChoice, { modelId?: string | null; reasoningId?: string | null }>
-  >({
-    codex: {},
-    claude: {},
-    kimi: {},
-    gemini: {},
-    opencode: {},
-  });
+  const [startModelDrafts, setStartModelDrafts] = useState<Record<ProviderChoice, ModelDraft>>(
+    () => readRememberedModelDrafts(),
+  );
   const [startModeDrafts, setStartModeDrafts] = useState<Record<ProviderChoice, SessionModeDraft>>({
     codex: createDefaultModeDraft("codex"),
     claude: createDefaultModeDraft("claude"),
@@ -258,11 +302,12 @@ export function App() {
   });
   const activeOpeningSession = primaryPaneState.openingSession;
   const currentProvider = newSessionProvider as ProviderChoice;
+  const currentModelCatalogState = modelCatalogs[currentProvider];
   const startModeControl = resolveSessionModeControlState({
     provider: currentProvider,
     draft: startModeDrafts[currentProvider],
+    catalog: currentModelCatalogState?.catalog ?? null,
   });
-  const currentModelCatalogState = modelCatalogs[currentProvider];
   const startModelDraft = startModelDrafts[currentProvider];
   const startModelControl = resolveSelectedModelDraft({
     catalog: currentModelCatalogState?.catalog,
@@ -270,9 +315,7 @@ export function App() {
     selectedReasoningId: startModelDraft?.reasoningId,
     allowProviderDefault: true,
   });
-  const startModelId =
-    startModelDraft?.modelId ??
-    (startModelDraft?.reasoningId ? startModelControl.model?.id ?? null : null);
+  const startModelId = startModelControl.model?.id ?? null;
   const selectedModelCatalogState = selectedSummary
     ? modelCatalogs[selectedSummary.session.provider as ProviderChoice]
     : undefined;
@@ -293,6 +336,7 @@ export function App() {
         provider: selectedSummary.session.provider,
         draft: claimModeDrafts[selectedSummary.session.id] ?? null,
         summary: selectedSummary,
+        catalog: selectedModelCatalogState?.catalog ?? null,
       })
     : null;
   const {
@@ -752,25 +796,39 @@ export function App() {
                 }));
               }}
               onClaimModelChange={(modelId, defaultReasoningId) => {
+                const provider = selectedSummary.session.provider as ProviderChoice;
+                const nextDraft = {
+                  modelId: modelId || null,
+                  reasoningId: modelId ? defaultReasoningId ?? null : null,
+                };
+                rememberModelDraft(provider, nextDraft);
+                setStartModelDrafts((current) => ({
+                  ...current,
+                  [provider]: modelId ? nextDraft : {},
+                }));
                 setClaimModelDrafts((current) => ({
                   ...current,
-                  [selectedSummary.session.id]: {
-                    modelId: modelId || null,
-                    reasoningId: modelId ? defaultReasoningId ?? null : null,
-                  },
+                  [selectedSummary.session.id]: nextDraft,
                 }));
               }}
               onClaimReasoningChange={(reasoningId) => {
+                const provider = selectedSummary.session.provider as ProviderChoice;
+                const nextDraft = {
+                  ...(claimModelDrafts[selectedSummary.session.id] ?? {}),
+                  modelId:
+                    claimModelDrafts[selectedSummary.session.id]?.modelId ??
+                    claimModelControl?.model?.id ??
+                    null,
+                  reasoningId,
+                };
+                rememberModelDraft(provider, nextDraft);
+                setStartModelDrafts((current) => ({
+                  ...current,
+                  [provider]: nextDraft.modelId ? nextDraft : {},
+                }));
                 setClaimModelDrafts((current) => ({
                   ...current,
-                  [selectedSummary.session.id]: {
-                    ...(current[selectedSummary.session.id] ?? {}),
-                    modelId:
-                      current[selectedSummary.session.id]?.modelId ??
-                      claimModelControl?.model?.id ??
-                      null,
-                    reasoningId,
-                  },
+                  [selectedSummary.session.id]: nextDraft,
                 }));
               }}
               onClaimControl={() => {
@@ -806,9 +864,7 @@ export function App() {
               }}
               onInterrupt={() => void interruptSession(selectedSummary.session.id)}
               onOpenFileReference={() => setFileReferenceOpen(true)}
-              onLoadOlderHistory={() => {
-                void loadOlderHistory(selectedSummary.session.id);
-              }}
+              onLoadOlderHistory={() => loadOlderHistory(selectedSummary.session.id)}
               onOpenLeft={() => setLeftOpen(true)}
               onExpandSidebar={() => setSidebarOpen(true)}
               onOpenRight={() => setRightOpen(true)}
@@ -842,6 +898,13 @@ export function App() {
                 );
               }}
               onSetSessionModel={(modelId, reasoningId) => {
+                const provider = selectedSummary.session.provider as ProviderChoice;
+                const nextDraft = { modelId, reasoningId: reasoningId ?? null };
+                rememberModelDraft(provider, nextDraft);
+                setStartModelDrafts((current) => ({
+                  ...current,
+                  [provider]: modelId ? nextDraft : {},
+                }));
                 setModelChangeSessionId(selectedSummary.session.id);
                 void setSessionModel(selectedSummary.session.id, modelId, reasoningId).finally(() =>
                   setModelChangeSessionId((current) =>
@@ -892,25 +955,31 @@ export function App() {
               selectedModelId={startModelControl.model?.id ?? null}
               selectedReasoningId={startModelControl.reasoning?.id ?? null}
               onModelChange={(modelId, defaultReasoningId) => {
+                const nextDraft = {
+                  modelId: modelId || null,
+                  reasoningId: modelId ? defaultReasoningId ?? null : null,
+                };
+                rememberModelDraft(currentProvider, nextDraft);
                 setStartModelDrafts((current) => ({
                   ...current,
-                  [currentProvider]: {
-                    modelId: modelId || null,
-                    reasoningId: modelId ? defaultReasoningId ?? null : null,
-                  },
+                  [currentProvider]: nextDraft,
                 }));
               }}
               onReasoningChange={(reasoningId) => {
                 setStartModelDrafts((current) => ({
                   ...current,
-                  [currentProvider]: {
-                    ...(current[currentProvider] ?? {}),
-                    modelId:
-                      current[currentProvider]?.modelId ??
-                      startModelControl.model?.id ??
-                      null,
-                    reasoningId,
-                  },
+                  [currentProvider]: (() => {
+                    const nextDraft = {
+                      ...(current[currentProvider] ?? {}),
+                      modelId:
+                        current[currentProvider]?.modelId ??
+                        startModelControl.model?.id ??
+                        null,
+                      reasoningId,
+                    };
+                    rememberModelDraft(currentProvider, nextDraft);
+                    return nextDraft;
+                  })(),
                 }));
               }}
               accessModes={startModeControl.accessModes}

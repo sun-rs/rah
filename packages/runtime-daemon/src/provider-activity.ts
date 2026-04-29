@@ -16,6 +16,7 @@ import type {
   ToolCallDetail,
   WorkbenchObservation,
 } from "@rah/runtime-protocol";
+import { normalizeContextUsage } from "./context-usage";
 import type { RuntimeServices } from "./provider-adapter";
 
 export interface ProviderActivityMeta {
@@ -418,8 +419,9 @@ export function applyProviderActivity(
     case "turn_completed":
       services.sessionStore.setActiveTurn(sessionId, undefined);
       services.sessionStore.setRuntimeState(sessionId, "idle");
+      const completedUsage = activity.usage ? normalizeContextUsage(activity.usage) : undefined;
       if (activity.usage) {
-        services.sessionStore.updateUsage(sessionId, activity.usage);
+        services.sessionStore.updateUsage(sessionId, completedUsage);
       }
       published.push(
         services.eventBus.publish(
@@ -429,7 +431,7 @@ export function applyProviderActivity(
                 sessionId,
                 type: "turn.completed",
                 source,
-                payload: activity.usage ? { usage: activity.usage } : {},
+                payload: completedUsage ? { usage: completedUsage } : {},
                 turnId: activity.turnId,
               },
               ts,
@@ -1074,7 +1076,8 @@ export function applyProviderActivity(
       );
       break;
     case "usage": {
-      services.sessionStore.updateUsage(sessionId, activity.usage);
+      const usage = normalizeContextUsage(activity.usage);
+      services.sessionStore.updateUsage(sessionId, usage);
       const usageEvent = services.eventBus.publish(
         withRaw(
           withTurnId(
@@ -1083,7 +1086,7 @@ export function applyProviderActivity(
                 sessionId,
                 type: "usage.updated",
                 source,
-                payload: { usage: activity.usage },
+                payload: { usage },
               },
               ts,
             ),

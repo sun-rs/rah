@@ -184,7 +184,10 @@ describe("applyProviderActivity", () => {
     assert.deepEqual(services.sessionStore.getSession(sessionId)?.usage, {
       usedTokens: 123,
       contextWindow: 10_000,
-      percentRemaining: 98,
+      percentUsed: 1.2,
+      percentRemaining: 98.8,
+      basis: "context_window",
+      precision: "exact",
     });
   });
 

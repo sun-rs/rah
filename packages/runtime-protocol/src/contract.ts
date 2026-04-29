@@ -489,6 +489,7 @@ function validateContextUsage(usage: unknown, sink: IssueSink, path: string) {
   const numericFields = [
     "usedTokens",
     "contextWindow",
+    "percentUsed",
     "percentRemaining",
     "inputTokens",
     "cachedInputTokens",
@@ -506,6 +507,33 @@ function validateContextUsage(usage: unknown, sink: IssueSink, path: string) {
         `${path}.${field}`,
       );
     }
+  }
+  if (usage.basis !== undefined && !["context_window", "turn"].includes(usage.basis as string)) {
+    addIssue(
+      sink,
+      "error",
+      "usage.basis.invalid",
+      "usage basis must be context_window or turn when present",
+      `${path}.basis`,
+    );
+  }
+  if (usage.precision !== undefined && !["exact", "estimated"].includes(usage.precision as string)) {
+    addIssue(
+      sink,
+      "error",
+      "usage.precision.invalid",
+      "usage precision must be exact or estimated when present",
+      `${path}.precision`,
+    );
+  }
+  if (!isOptionalString(usage.source)) {
+    addIssue(
+      sink,
+      "error",
+      "usage.source.invalid",
+      "usage source must be a string when present",
+      `${path}.source`,
+    );
   }
 }
 
@@ -574,6 +602,17 @@ function validateSessionCapabilities(capabilities: unknown, sink: IssueSink, pat
       "session capability actions.rename must be none, local, or native",
       `${path}.actions.rename`,
     );
+  } else if (
+    typeof capabilities.renameSession === "boolean" &&
+    capabilities.renameSession !== (capabilities.actions.rename !== "none")
+  ) {
+    addIssue(
+      sink,
+      "warning",
+      "session.capabilities.rename_legacy_mismatch",
+      "legacy renameSession should match actions.rename support",
+      `${path}.renameSession`,
+    );
   }
 }
 
@@ -636,6 +675,18 @@ function validateSessionMode(mode: unknown, sink: IssueSink, path: string) {
         );
       }
       if (
+        descriptor.role !== undefined &&
+        !["ask", "auto_edit", "full_auto", "plan", "custom"].includes(descriptor.role as string)
+      ) {
+        addIssue(
+          sink,
+          "error",
+          "session.mode.descriptor.role.invalid",
+          "session mode descriptor role must be ask, auto_edit, full_auto, plan, or custom",
+          `${path}.availableModes[${index}].role`,
+        );
+      }
+      if (
         descriptor.description !== undefined &&
         descriptor.description !== null &&
         typeof descriptor.description !== "string"
@@ -646,6 +697,20 @@ function validateSessionMode(mode: unknown, sink: IssueSink, path: string) {
           "session.mode.descriptor.description.invalid",
           "session mode descriptor description must be a string when present",
           `${path}.availableModes[${index}].description`,
+        );
+      }
+      if (
+        descriptor.applyTiming !== undefined &&
+        !["immediate", "next_turn", "idle_only", "restart_required", "startup_only"].includes(
+          descriptor.applyTiming as string,
+        )
+      ) {
+        addIssue(
+          sink,
+          "error",
+          "session.mode.descriptor.apply_timing.invalid",
+          "session mode descriptor applyTiming must be immediate, next_turn, idle_only, restart_required, or startup_only",
+          `${path}.availableModes[${index}].applyTiming`,
         );
       }
       if (typeof descriptor.hotSwitch !== "boolean") {
@@ -780,6 +845,19 @@ function validateSessionModelDescriptor(
       "session.model.descriptor.description.invalid",
       "session model descriptor description must be a string when present",
       `${path}.description`,
+    );
+  }
+  if (
+    descriptor.contextWindow !== undefined &&
+    descriptor.contextWindow !== null &&
+    !isOptionalNumber(descriptor.contextWindow)
+  ) {
+    addIssue(
+      sink,
+      "error",
+      "session.model.descriptor.context_window.invalid",
+      "session model descriptor contextWindow must be numeric when present",
+      `${path}.contextWindow`,
     );
   }
   if (
@@ -1116,6 +1194,15 @@ function validateModelCapabilityProfile(
       `${path}.freshness`,
     );
   }
+  if (!isOptionalNumber(profile.contextWindow)) {
+    addIssue(
+      sink,
+      "error",
+      "session.model_profile.context_window.invalid",
+      "session modelProfile contextWindow must be numeric when present",
+      `${path}.contextWindow`,
+    );
+  }
   if (profile.traits !== undefined) {
     if (!isRecord(profile.traits)) {
       addIssue(
@@ -1445,6 +1532,19 @@ export function validateProviderModelCatalog(catalog: unknown): RahConformanceRe
         );
       }
     }
+    if (
+      catalog.defaultModeId !== undefined &&
+      catalog.defaultModeId !== null &&
+      !isNonEmptyString(catalog.defaultModeId)
+    ) {
+      addIssue(
+        sink,
+        "error",
+        "provider.catalog.default_mode.invalid",
+        "provider model catalog defaultModeId must be non-empty when present",
+        "catalog.defaultModeId",
+      );
+    }
     if (catalog.modes !== undefined) {
       if (!Array.isArray(catalog.modes)) {
         addIssue(
@@ -1482,6 +1582,32 @@ export function validateProviderModelCatalog(catalog: unknown): RahConformanceRe
               "provider.catalog.mode.label.invalid",
               "provider model catalog mode label must be non-empty",
               `catalog.modes[${index}].label`,
+            );
+          }
+          if (
+            mode.role !== undefined &&
+            !["ask", "auto_edit", "full_auto", "plan", "custom"].includes(mode.role as string)
+          ) {
+            addIssue(
+              sink,
+              "error",
+              "provider.catalog.mode.role.invalid",
+              "provider model catalog mode role must be ask, auto_edit, full_auto, plan, or custom",
+              `catalog.modes[${index}].role`,
+            );
+          }
+          if (
+            mode.applyTiming !== undefined &&
+            !["immediate", "next_turn", "idle_only", "restart_required", "startup_only"].includes(
+              mode.applyTiming as string,
+            )
+          ) {
+            addIssue(
+              sink,
+              "error",
+              "provider.catalog.mode.apply_timing.invalid",
+              "provider model catalog mode applyTiming must be immediate, next_turn, idle_only, restart_required, or startup_only",
+              `catalog.modes[${index}].applyTiming`,
             );
           }
         }

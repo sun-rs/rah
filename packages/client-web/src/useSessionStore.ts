@@ -1,6 +1,5 @@
 import { create } from "zustand";
 import type {
-  ApprovalPolicy,
   AttachSessionRequest,
   DebugScenarioDescriptor,
   EventBatch,
@@ -8,7 +7,6 @@ import type {
   ProviderModelCatalog,
   RahEvent,
   ResumeSessionRequest,
-  SessionConfigValue,
   SessionSummary,
   StoredSessionRef,
 } from "@rah/runtime-protocol";
@@ -124,9 +122,6 @@ interface StartSessionOptions {
   title?: string;
   model?: string;
   reasoningId?: string;
-  providerConfig?: Record<string, SessionConfigValue>;
-  approvalPolicy?: ApprovalPolicy;
-  sandbox?: string;
   modeId?: string;
   initialInput?: string;
 }

@@ -16,7 +16,15 @@ import type {
   OpenCodeMessageWithParts,
   OpenCodePart,
 } from "./opencode-api";
-import { translateOpenCodeHistory } from "./opencode-activity";
+import {
+  completeOpenCodeTurn,
+  createOpenCodeActivityState,
+  translateOpenCodeMessage,
+} from "./opencode-activity";
+import type {
+  FrozenHistoryBoundary,
+  FrozenHistoryPageLoader,
+} from "./history-snapshots";
 import { applyProviderActivity } from "./provider-activity";
 import type { RuntimeServices } from "./provider-adapter";
 import { SessionStore } from "./session-store";
@@ -80,6 +88,40 @@ type OpenCodePartRow = {
   message_id: string;
   data: string | null;
 };
+
+type OpenCodeFrozenHistoryCursor = {
+  beforeTs: string;
+};
+
+function encodeOpenCodeFrozenHistoryCursor(cursor: OpenCodeFrozenHistoryCursor): string {
+  return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
+}
+
+function decodeOpenCodeFrozenHistoryCursor(cursor: string): OpenCodeFrozenHistoryCursor {
+  try {
+    const parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as {
+      beforeTs?: unknown;
+    };
+    if (typeof parsed.beforeTs !== "string" || !parsed.beforeTs) {
+      throw new Error("Invalid OpenCode frozen history cursor.");
+    }
+    return { beforeTs: parsed.beforeTs };
+  } catch {
+    throw new Error("Invalid OpenCode frozen history cursor.");
+  }
+}
+
+function makeOpenCodeFrozenHistoryBoundary(record: OpenCodeStoredSessionRecord): FrozenHistoryBoundary {
+  return {
+    kind: "frozen",
+    sourceRevision: JSON.stringify({
+      provider: "opencode",
+      databasePath: record.databasePath,
+      providerSessionId: record.ref.providerSessionId,
+      sessionUpdatedAt: record.ref.updatedAt ?? null,
+    }),
+  };
+}
 
 export function resolveOpenCodeDataDir(): string {
   const xdgData = process.env.XDG_DATA_HOME?.trim();
@@ -256,8 +298,39 @@ export function getOpenCodeStoredSessionHistoryPage(params: {
     ...(params.beforeTs ? { beforeTs: params.beforeTs } : {}),
     limit: messageLimit,
   });
-  for (const activity of translateOpenCodeHistory(messages)) {
-    applyProviderActivity(services, temp.session.id, HISTORY_SOURCE, activity);
+  const historyState = createOpenCodeActivityState(
+    messages[0]?.info.sessionID ?? params.record.ref.providerSessionId,
+  );
+  let lastMessageTs: string | undefined;
+  for (const message of messages) {
+    const messageTs = toIso(message.info.time?.created) ?? lastMessageTs;
+    if (messageTs) {
+      lastMessageTs = messageTs;
+    }
+    for (const activity of translateOpenCodeMessage(historyState, message)) {
+      applyProviderActivity(
+        services,
+        temp.session.id,
+        {
+          ...HISTORY_SOURCE,
+          ...(messageTs ? { ts: messageTs } : {}),
+        },
+        activity,
+      );
+    }
+  }
+  if (historyState.currentTurnId) {
+    for (const activity of completeOpenCodeTurn(historyState)) {
+      applyProviderActivity(
+        services,
+        temp.session.id,
+        {
+          ...HISTORY_SOURCE,
+          ...(lastMessageTs ? { ts: lastMessageTs } : {}),
+        },
+        activity,
+      );
+    }
   }
 
   const all: RahEvent[] = services.eventBus
@@ -277,6 +350,40 @@ export function getOpenCodeStoredSessionHistoryPage(params: {
     sessionId: params.sessionId,
     events,
     ...(start > 0 && events[0] ? { nextBeforeTs: events[0].ts } : {}),
+  };
+}
+
+export function createOpenCodeStoredSessionFrozenHistoryPageLoader(args: {
+  sessionId: string;
+  record: OpenCodeStoredSessionRecord;
+}): FrozenHistoryPageLoader {
+  const boundary = makeOpenCodeFrozenHistoryBoundary(args.record);
+  const pageAt = (beforeTs: string | undefined, limit: number) => {
+    const page = getOpenCodeStoredSessionHistoryPage({
+      sessionId: args.sessionId,
+      record: args.record,
+      ...(beforeTs ? { beforeTs } : {}),
+      limit,
+    });
+    const nextCursor = page.nextBeforeTs
+      ? encodeOpenCodeFrozenHistoryCursor({ beforeTs: page.nextBeforeTs })
+      : undefined;
+    return {
+      boundary,
+      events: page.events,
+      ...(nextCursor ? { nextCursor } : {}),
+      ...(page.nextBeforeTs ? { nextBeforeTs: page.nextBeforeTs } : {}),
+    };
+  };
+
+  return {
+    loadInitialPage: (limit) => pageAt(undefined, limit),
+    loadOlderPage: (cursor, limit, frozenBoundary) => {
+      if (frozenBoundary.sourceRevision !== boundary.sourceRevision) {
+        throw new Error("OpenCode frozen history boundary changed while paging.");
+      }
+      return pageAt(decodeOpenCodeFrozenHistoryCursor(cursor).beforeTs, limit);
+    },
   };
 }
 

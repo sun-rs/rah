@@ -25,6 +25,12 @@ This keeps adapter drift adapter-owned.
 
 The canonical protocol should not change just because one provider added one new raw event.
 
+Adapter-owned also means provider modes, model parameters, rename semantics, and stored-history
+metadata recovery should not leak into `client-web`. The UI may render `SessionModeDescriptor.role`
+and `SessionModeDescriptor.applyTiming`, then submit `modeId`, but only the adapter may interpret
+the provider-native mode id or decide whether applying it means immediate, next-turn, idle-only,
+restart-required, or startup-only behavior.
+
 ## 2. Browser Smoke Principle
 
 Browser smoke should validate:
@@ -83,6 +89,14 @@ Gemini live currently covers:
 - read/write file tool flow
 - usage updates
 - notification fallback for non-core runtime signals
+- local rename override when Gemini has no native rename surface
+- mode catalog roles for `default` / `auto_edit` / `yolo` / `plan`
+
+Important display rule:
+
+- Gemini stored user messages should prefer `displayContent` over expanded `content`. Gemini may
+  persist `@file` expansions inside `content`; RAH must not show that expanded file body as the
+  original user prompt.
 
 ### Verification
 
@@ -125,6 +139,8 @@ Kimi live currently covers:
 - approval round-trip
 - replay -> live upgrade
 - read/write file flow
+- startup `modeId` handling, including direct startup into `plan`
+- idle-only switching between `default` and `yolo` because this affects the wire client process
 
 ### Verification
 
@@ -167,6 +183,8 @@ Claude live follows the paseo-style SDK route instead of raw CLI text parsing:
 - permission request / response bridge
 - replay -> live upgrade
 - read/write tool flow
+- native rename against Claude stored session files
+- mode catalog roles for `default` / `acceptEdits` / `bypassPermissions` / `plan`
 
 ### Known operational lessons
 
@@ -190,6 +208,9 @@ Codex remains the reference adapter, but some of the hardest-earned lessons are 
   session titles
 - replay -> live upgrade must never replay old turns into the visible timeline again
 - browser smoke should validate event counts and visible state, not one historical sentence
+- `StartSessionRequest.modeId` and `ResumeSessionRequest.modeId` must be interpreted by the
+  adapter before the first user turn is sent; frontend-side conversion to provider-native startup
+  args is not allowed.
 
 ## 7. When To Add A New Coverage Doc
 

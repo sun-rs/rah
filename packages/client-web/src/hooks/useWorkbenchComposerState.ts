@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import type { SessionConfigValue, SessionSummary } from "@rah/runtime-protocol";
+import type { SessionSummary } from "@rah/runtime-protocol";
 import type { ProviderChoice } from "../components/ProviderSelector";
 import { insertTextAtSelection } from "../composer-text-insertion";
 
@@ -11,7 +11,6 @@ type StartSessionInput = {
   modeId?: string;
   model?: string;
   reasoningId?: string;
-  providerConfig?: Record<string, SessionConfigValue>;
 };
 
 type SendInputFn = (sessionId: string, text: string) => Promise<unknown>;

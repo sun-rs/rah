@@ -172,6 +172,7 @@ export class RuntimeSessionLifecycle {
     }
     return await adapter.setSessionModel(sessionId, {
       modelId: nextModelId,
+      ...(request.optionValues !== undefined ? { optionValues: request.optionValues } : {}),
       ...(request.reasoningId !== undefined ? { reasoningId: request.reasoningId } : {}),
     });
   }

@@ -265,7 +265,7 @@ describe("RAH event contract", () => {
     applyActivity(services, sessionId, {
       type: "usage",
       turnId,
-      usage: { usedTokens: 100, contextWindow: 1000, percentRemaining: 90 },
+      usage: { usedTokens: 100, contextWindow: 1000, percentUsed: 10, percentRemaining: 90 },
     });
     applyActivity(services, sessionId, {
       type: "attention",

@@ -35,6 +35,7 @@ import {
 } from "./opencode-live-client";
 import {
   archiveOpenCodeStoredSession,
+  createOpenCodeStoredSessionFrozenHistoryPageLoader,
   discoverOpenCodeStoredSessions,
   findOpenCodeStoredSessionRecord,
   getOpenCodeStoredSessionHistoryPage,
@@ -141,6 +142,9 @@ export class OpenCodeAdapter implements ProviderAdapter {
         providerSessionId: request.providerSessionId,
         cwd: request.cwd ?? record?.ref.cwd ?? process.cwd(),
         ...(request.attach ? { attach: request.attach } : {}),
+        ...(request.modeId ? { modeId: request.modeId } : {}),
+        ...(request.model ? { model: request.model } : {}),
+        ...(request.reasoningId !== undefined ? { reasoningId: request.reasoningId } : {}),
         ...(request.providerConfig ? { providerConfig: request.providerConfig } : {}),
         ...(cachedModelCatalog ? { modelCatalog: cachedModelCatalog } : {}),
       });
@@ -418,6 +422,28 @@ export class OpenCodeAdapter implements ProviderAdapter {
       record,
       ...(options?.beforeTs ? { beforeTs: options.beforeTs } : {}),
       ...(options?.limit ? { limit: options.limit } : {}),
+    });
+  }
+
+  createFrozenHistoryPageLoader(sessionId: string) {
+    const state = this.services.sessionStore.getSession(sessionId);
+    const providerSessionId =
+      state?.session.providerSessionId ??
+      this.rehydratedSessionRecords.get(sessionId)?.ref.providerSessionId;
+    if (!providerSessionId) {
+      return undefined;
+    }
+    const record =
+      this.rehydratedSessionRecords.get(sessionId) ??
+      this.storedSessionIndex.get(providerSessionId) ??
+      this.refreshStoredSessionIndex().get(providerSessionId) ??
+      findOpenCodeStoredSessionRecord(providerSessionId);
+    if (!record) {
+      return undefined;
+    }
+    return createOpenCodeStoredSessionFrozenHistoryPageLoader({
+      sessionId,
+      record,
     });
   }
 

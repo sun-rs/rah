@@ -179,6 +179,9 @@ export class ClaudeAdapter implements ProviderAdapter {
         services: this.services,
         providerSessionId: request.providerSessionId,
         cwd: request.cwd ?? record?.ref.cwd ?? process.cwd(),
+        ...(request.model ? { model: request.model } : {}),
+        ...(request.reasoningId !== undefined ? { reasoningId: request.reasoningId } : {}),
+        ...(request.modeId ? { modeId: request.modeId } : {}),
         permissionMode:
           request.approvalPolicy !== undefined
             ? approvalPolicyToPermissionMode(request.approvalPolicy)

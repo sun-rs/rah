@@ -23,8 +23,13 @@ import {
   type GeminiStoredSessionRecord,
 } from "./gemini-session-files";
 import {
+  extractGeminiUserDisplayText,
   extractTextFromContent,
 } from "./gemini-conversation-utils";
+import {
+  knownModelContextWindow,
+  withModelContextWindow,
+} from "./model-context-window";
 import type {
   GeminiMessageRecord,
   GeminiToolCallRecord,
@@ -47,6 +52,7 @@ const REMOTE_STOP_KILL_DELAY_MS = 2_000;
 const REMOTE_PANEL_SETTLE_MS = 1_500;
 const REMOTE_PANEL_SETTLE_REDRAW_MS = 250;
 const GEMINI_REMOTE_APPROVAL_MODES = new Set(["default", "auto_edit", "yolo", "plan"]);
+const GEMINI_CONTEXT_WINDOW = knownModelContextWindow({ provider: "gemini" });
 
 function resolveGeminiHandoffApprovalMode(cliApprovalMode?: string): string {
   const value = cliApprovalMode ?? process.env.RAH_GEMINI_REMOTE_APPROVAL_MODE?.trim();
@@ -144,12 +150,12 @@ function classifyGeminiToolFamily(name: string) {
 }
 
 function usageFromStats(stats: Record<string, unknown>) {
-  return {
+  return withModelContextWindow({
     ...(typeof stats.total_tokens === "number" ? { usedTokens: stats.total_tokens } : {}),
     ...(typeof stats.input_tokens === "number" ? { inputTokens: stats.input_tokens } : {}),
     ...(typeof stats.cached === "number" ? { cachedInputTokens: stats.cached } : {}),
     ...(typeof stats.output_tokens === "number" ? { outputTokens: stats.output_tokens } : {}),
-  };
+  }, GEMINI_CONTEXT_WINDOW);
 }
 
 function usageFromMessage(
@@ -161,12 +167,12 @@ function usageFromMessage(
   }
   return {
     type: "usage",
-    usage: {
+    usage: withModelContextWindow({
       ...(typeof tokens.total === "number" ? { usedTokens: tokens.total } : {}),
       ...(typeof tokens.input === "number" ? { inputTokens: tokens.input } : {}),
       ...(typeof tokens.cached === "number" ? { cachedInputTokens: tokens.cached } : {}),
       ...(typeof tokens.output === "number" ? { outputTokens: tokens.output } : {}),
-    },
+    }, GEMINI_CONTEXT_WINDOW),
   };
 }
 
@@ -937,7 +943,7 @@ async function main() {
       currentTurnId = `gemini-local:${message.id || localTurnCounter++}`;
       updatePromptState("agent_busy");
       notifyActivity({ type: "turn_started", turnId: currentTurnId });
-      const text = extractTextFromContent(message.content);
+      const text = extractGeminiUserDisplayText(message);
       if (text) {
         notifyActivity({
           type: "timeline_item",

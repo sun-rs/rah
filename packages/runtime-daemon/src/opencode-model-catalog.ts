@@ -12,6 +12,7 @@ import {
   startOpenCodeServer,
   stopOpenCodeServer,
 } from "./opencode-api";
+import { defaultProviderModeId, providerModeDescriptors } from "./session-mode-utils";
 
 const OPENCODE_MODEL_CACHE_TTL_MS = 5 * 60 * 1000;
 
@@ -36,6 +37,7 @@ type OpenCodeModelRecord = {
   name?: unknown;
   description?: unknown;
   status?: unknown;
+  limit?: unknown;
   capabilities?: unknown;
   variants?: unknown;
 };
@@ -54,6 +56,16 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+function positiveNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value
+    : undefined;
+}
+
+function openCodeContextWindow(model: OpenCodeModelRecord | null | undefined): number | undefined {
+  return positiveNumber(asRecord(model?.limit)?.context);
 }
 
 function profileRevision(input: unknown): string {
@@ -129,9 +141,11 @@ function mapOpenCodeModel(args: {
   const variants = asRecord(args.model.variants) ?? {};
   const reasoningOptions =
     Object.keys(variants).length > 0 ? mapOpenCodeReasoningOptions(variants) : [];
+  const contextWindow = openCodeContextWindow(args.model);
   return {
     id,
     label,
+    ...(contextWindow !== undefined ? { contextWindow } : {}),
     ...(asNonEmptyString(args.model.description)
       ? { description: asNonEmptyString(args.model.description)! }
       : {}),
@@ -177,6 +191,7 @@ function buildOpenCodeModelProfiles(args: {
     const rawModel = args.providerModels.get(model.id);
     const capabilities = asRecord(rawModel?.capabilities) ?? {};
     const variants = asRecord(rawModel?.variants) ?? {};
+    const contextWindow = openCodeContextWindow(rawModel);
     const variantValues = Object.values(variants).flatMap((value) => {
       const record = asRecord(value);
       return record ? [record as OpenCodeVariantRecord] : [];
@@ -192,6 +207,7 @@ function buildOpenCodeModelProfiles(args: {
       modelId: model.id,
       source: "native_online",
       freshness: "authoritative",
+      ...(contextWindow !== undefined ? { contextWindow } : {}),
       traits: {
         ...(capabilities.reasoning === true || hasThinkingVariant
           ? { supportsThinking: true }
@@ -289,11 +305,14 @@ function buildOpenCodeCatalog(args: {
       models.map((model) => ({
         id: model.id,
         label: model.label,
+        contextWindow: model.contextWindow ?? null,
         reasoningOptions: model.reasoningOptions?.map((option) => option.id) ?? [],
       })),
     ),
     modelsExact: true,
     optionsExact: true,
+    defaultModeId: defaultProviderModeId("opencode")!,
+    modes: providerModeDescriptors("opencode"),
     modelProfiles: buildOpenCodeModelProfiles({ models, providerModels }),
   };
 }
@@ -308,6 +327,8 @@ export function buildOpenCodeFallbackModelCatalog(): ProviderModelCatalog {
     freshness: "stale",
     modelsExact: false,
     optionsExact: false,
+    defaultModeId: defaultProviderModeId("opencode")!,
+    modes: providerModeDescriptors("opencode"),
     modelProfiles: [],
   };
 }

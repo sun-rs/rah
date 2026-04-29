@@ -371,7 +371,10 @@ describe("Kimi session files", () => {
           event.type === "usage.updated" &&
           event.payload.usage.usedTokens === 123 &&
           event.payload.usage.contextWindow === 1000 &&
-          event.payload.usage.percentRemaining === 90 &&
+          event.payload.usage.percentUsed === 12.3 &&
+          event.payload.usage.percentRemaining === 87.7 &&
+          event.payload.usage.basis === "context_window" &&
+          event.payload.usage.precision === "exact" &&
           event.payload.usage.inputTokens === 11 &&
           event.payload.usage.cachedInputTokens === 5 &&
           event.payload.usage.outputTokens === 7,

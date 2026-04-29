@@ -38,6 +38,11 @@ import {
   buildOpenCodeProviderModelId,
   resolveOpenCodeRuntimeCapabilityState,
 } from "./opencode-model-catalog";
+import {
+  resolveModelContextWindow,
+  type ModelContextWindowResolution,
+  withModelContextWindow,
+} from "./model-context-window";
 import { buildOpenCodeModeState, isOpenCodeModeId } from "./session-mode-utils";
 
 export interface LiveOpenCodeSession {
@@ -49,6 +54,7 @@ export interface LiveOpenCodeSession {
   activityState: OpenCodeActivityState;
   lastAcpActivityAt: number;
   model?: string;
+  contextWindow?: ModelContextWindowResolution;
   reasoningId?: string | null;
   modeId: string;
 }
@@ -71,12 +77,18 @@ function openCodeNativeModeId(modeId: string): "build" | "plan" {
 }
 
 function resolveRequestedOpenCodeModeId(
+  modeId: string | undefined,
   providerConfig: StartSessionRequest["providerConfig"] | undefined,
 ): string {
-  const requestedMode = providerConfig?.[RAH_SESSION_MODE_CONFIG_KEY];
-  return typeof requestedMode === "string" && isOpenCodeModeId(requestedMode)
-    ? requestedMode
-    : OPENCODE_FULL_AUTO_MODE_ID;
+  const requestedMode = modeId ?? providerConfig?.[RAH_SESSION_MODE_CONFIG_KEY];
+  if (typeof requestedMode === "string" && requestedMode.trim()) {
+    const normalized = requestedMode.trim();
+    if (!isOpenCodeModeId(normalized)) {
+      throw new Error(`Unsupported OpenCode mode '${normalized}'.`);
+    }
+    return normalized;
+  }
+  return OPENCODE_FULL_AUTO_MODE_ID;
 }
 
 async function applyOpenCodePermissionMode(
@@ -216,7 +228,7 @@ export async function startOpenCodeLiveSession(params: {
   modelCatalog?: ProviderModelCatalog | null;
 }): Promise<{ liveSession: LiveOpenCodeSession; summary: ReturnType<typeof toSessionSummary> }> {
   const { services, request } = params;
-  const initialModeId = resolveRequestedOpenCodeModeId(request.providerConfig);
+  const initialModeId = resolveRequestedOpenCodeModeId(request.modeId, request.providerConfig);
   const currentModelId = request.model ?? params.modelCatalog?.currentModelId ?? null;
   const currentReasoningId = resolveOpenCodeReasoningId({
     catalog: params.modelCatalog,
@@ -227,6 +239,11 @@ export async function startOpenCodeLiveSession(params: {
     catalog: params.modelCatalog,
     modelId: currentModelId,
     reasoningId: currentReasoningId,
+  });
+  const contextWindow = resolveModelContextWindow({
+    provider: "opencode",
+    modelId: currentModelId,
+    catalog: params.modelCatalog ?? null,
   });
   const server = await startOpenCodeServer({ cwd: request.cwd });
   let providerSession: OpenCodeSessionInfo;
@@ -300,6 +317,7 @@ export async function startOpenCodeLiveSession(params: {
     lastAcpActivityAt: Date.now(),
     modeId: initialModeId,
     ...(currentModelId ? { model: currentModelId } : {}),
+    ...(contextWindow ? { contextWindow } : {}),
     ...(currentReasoningId !== undefined ? { reasoningId: currentReasoningId } : {}),
   };
   await acp.setSessionMode(providerSession.id, openCodeNativeModeId(initialModeId));
@@ -333,12 +351,13 @@ export async function resumeOpenCodeLiveSession(params: {
   cwd: string;
   attach?: StartSessionRequest["attach"];
   providerConfig?: StartSessionRequest["providerConfig"];
+  modeId?: string;
   model?: string;
   reasoningId?: string | null | undefined;
   modelCatalog?: ProviderModelCatalog | null;
 }): Promise<{ liveSession: LiveOpenCodeSession; summary: ReturnType<typeof toSessionSummary> }> {
   const { services } = params;
-  const initialModeId = resolveRequestedOpenCodeModeId(params.providerConfig);
+  const initialModeId = resolveRequestedOpenCodeModeId(params.modeId, params.providerConfig);
   const currentModelId = params.model ?? params.modelCatalog?.currentModelId ?? null;
   const currentReasoningId = resolveOpenCodeReasoningId({
     catalog: params.modelCatalog,
@@ -349,6 +368,11 @@ export async function resumeOpenCodeLiveSession(params: {
     catalog: params.modelCatalog,
     modelId: currentModelId,
     reasoningId: currentReasoningId,
+  });
+  const contextWindow = resolveModelContextWindow({
+    provider: "opencode",
+    modelId: currentModelId,
+    catalog: params.modelCatalog ?? null,
   });
   const server = await startOpenCodeServer({ cwd: params.cwd });
   let providerSession: OpenCodeSessionInfo;
@@ -418,6 +442,7 @@ export async function resumeOpenCodeLiveSession(params: {
     lastAcpActivityAt: Date.now(),
     modeId: initialModeId,
     ...(currentModelId ? { model: currentModelId } : {}),
+    ...(contextWindow ? { contextWindow } : {}),
     ...(currentReasoningId !== undefined ? { reasoningId: currentReasoningId } : {}),
   };
   await acp.setSessionMode(params.providerSessionId, openCodeNativeModeId(initialModeId));
@@ -507,7 +532,10 @@ function submitOpenCodePrompt(params: {
       if (liveSession.activityState.currentTurnId !== turnId) {
         return;
       }
-      const usage = contextUsageFromAcpPrompt(response.usage);
+      const usage = contextUsageFromAcpPrompt(
+        response.usage,
+        liveSession.contextWindow,
+      );
       if (usage) {
         applyActivity(services, liveSession.sessionId, {
           type: "usage",
@@ -555,21 +583,22 @@ function attachAcpActivitySink(params: {
   });
 }
 
-function contextUsageFromAcpPrompt(usage: OpenCodeAcpPromptUsage | undefined) {
+function contextUsageFromAcpPrompt(
+  usage: OpenCodeAcpPromptUsage | undefined,
+  contextWindow?: ModelContextWindowResolution,
+) {
   if (usage?.totalTokens === undefined) {
     return undefined;
   }
-  const contextWindow = 1_000_000;
-  return {
+  return withModelContextWindow({
     usedTokens: usage.totalTokens,
-    contextWindow,
-    percentRemaining: Math.max(0, Math.min(100, ((contextWindow - usage.totalTokens) / contextWindow) * 100)),
+    source: "opencode.prompt_response.usage",
     ...(usage.outputTokens !== undefined ? { outputTokens: usage.outputTokens } : {}),
     ...(usage.inputTokens !== undefined ? { inputTokens: usage.inputTokens } : {}),
     ...(usage.thoughtTokens !== undefined && usage.thoughtTokens !== null
       ? { reasoningOutputTokens: usage.thoughtTokens }
       : {}),
-  };
+  }, contextWindow);
 }
 
 export async function closeOpenCodeLiveSession(

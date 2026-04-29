@@ -26,6 +26,7 @@ This document should be treated as a prerequisite for any protocol or UI change 
 - thinking / effort / reasoning / variant controls
 - capability caching
 - session-start reconciliation
+- adapter-owned mode/model/config semantics
 
 ## 1. Core Rule
 
@@ -106,6 +107,8 @@ RAH consequence:
 - RAH must not hard-code one universal "Claude advanced panel".
 - RAH should treat local Claude config as `native_local`.
 - The actual session response must be allowed to invalidate or refine prelaunch Claude options.
+- Claude modes are exposed through `SessionModeDescriptor` with stable roles; the UI should not
+  special-case `bypassPermissions` beyond submitting its opaque `modeId`.
 
 ### 3.2 Codex
 
@@ -136,6 +139,8 @@ RAH consequence:
 - Codex remains the reference implementation for dynamic model capability ingestion.
 - The protocol should preserve model-level reasoning options without assuming other providers work
   the same way.
+- Codex mode ids encode `approvalPolicy/sandbox`, but only the Codex adapter should parse that
+  encoding. The UI sees `role=ask/auto_edit/full_auto/plan`.
 
 ### 3.3 Gemini
 
@@ -167,6 +172,8 @@ RAH consequence:
   "if model starts with gemini-2.5 show budget".
 - RAH should parse Gemini local capability metadata when possible and downgrade to static fallback
   only if that parse is unavailable.
+- Gemini history display must prefer native `displayContent` for user prompts. Expanded `content`
+  may include full referenced file bodies and is not the user-visible prompt.
 
 ### 3.4 Kimi
 
@@ -195,6 +202,8 @@ RAH consequence:
 - RAH should normalize this into:
   - model = base model
   - config option `thinking = on/off`
+- Kimi `default/yolo/plan` modes are adapter-owned; switching `default` and `yolo` may require an
+  idle-only wire client restart.
 
 ### 3.5 OpenCode
 
@@ -222,6 +231,8 @@ RAH consequence:
 
 - RAH should keep OpenCode `variant` as an option id, not re-label it into a fake universal
   `reasoning_effort`.
+- OpenCode full auto is a RAH adapter overlay over OpenCode session permission rules. The UI should
+  only submit `modeId=opencode/full-auto`.
 
 ## 4. Parameter Matrix
 

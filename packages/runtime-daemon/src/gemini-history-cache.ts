@@ -5,8 +5,10 @@ import path from "node:path";
 import type { RahEvent } from "@rah/runtime-protocol";
 
 const GEMINI_HISTORY_PAGE_SIZE = 256;
+const GEMINI_HISTORY_CACHE_FORMAT_VERSION = 2;
 
 export type GeminiHistoryCacheManifest = {
+  formatVersion: number;
   size: number;
   mtimeMs: number;
   pageSize: number;
@@ -45,6 +47,8 @@ function isGeminiHistoryCacheManifest(value: unknown): value is GeminiHistoryCac
   return (
     typeof value === "object" &&
     value !== null &&
+    "formatVersion" in value &&
+    value.formatVersion === GEMINI_HISTORY_CACHE_FORMAT_VERSION &&
     "size" in value &&
     typeof value.size === "number" &&
     "mtimeMs" in value &&
@@ -197,6 +201,7 @@ export function writeCachedGeminiHistoryEvents(args: {
   }
 
   const manifest = {
+    formatVersion: GEMINI_HISTORY_CACHE_FORMAT_VERSION,
     size: args.size,
     mtimeMs: args.mtimeMs,
     pageSize: GEMINI_HISTORY_PAGE_SIZE,
@@ -255,6 +260,7 @@ export function appendCachedGeminiHistoryEvents(args: {
 
   const manifest = {
     ...args.previousManifest,
+    formatVersion: GEMINI_HISTORY_CACHE_FORMAT_VERSION,
     size: args.size,
     mtimeMs: args.mtimeMs,
     totalEvents,

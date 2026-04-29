@@ -106,32 +106,33 @@ Web 入口不是 handoff，不需要兼顾真实 terminal TUI。
 
 - 默认值统一选择“最大权限/最低打断”：Codex `never/danger-full-access`、Claude `bypassPermissions`、Gemini `yolo`、Kimi `yolo`、OpenCode `opencode/full-auto`。
 - UI 的权限列表避免展示含糊的 `Default`；需要 approval 的默认策略统一叫 `Ask`。只有 OpenCode `opencode/full-auto` 是 RAH 在 OpenCode session permission API 上补出来的 overlay。
-- 如果用户在创建前手动选择低权限，前端会把 mode 转成启动参数传给 daemon，避免带首条 prompt 的 session 先按默认 full-auto 执行。
+- 如果用户在创建前手动选择低权限，前端只把 RAH 标准 `modeId` 传给 daemon；具体如何转成 provider-native 启动参数由 adapter 负责，避免 provider 语义泄漏到 Web UI。
 
 ## 6. Web 权限项与 provider 原生能力映射
 
 `Plan` 是独立模式开关，不属于权限下拉。下表只描述前端主权限列表。
 
-| Provider | 前端权限项 | RAH mode id | 启动时实际传递/设置 | live 后切换边界 |
-| --- | --- | --- | --- | --- |
-| Codex | `Auto edit` | `on-request/workspace-write` | `approvalPolicy=on-request` + `sandbox=workspace-write` | web-owned live 可切；更新后用于后续 Codex turn |
-| Codex | `Read only` | `on-request/read-only` | `approvalPolicy=on-request` + `sandbox=read-only` | web-owned live 可切；更新后用于后续 Codex turn |
-| Codex | `Full auto · sandboxed` | `never/workspace-write` | `approvalPolicy=never` + `sandbox=workspace-write` | web-owned live 可切；更新后用于后续 Codex turn |
-| Codex | `Full auto · no sandbox` | `never/danger-full-access` | `approvalPolicy=never` + `sandbox=danger-full-access` | web-owned live 可切；默认值 |
-| Claude | `Ask` | `default` | Claude SDK permission mode `default` | web-owned live 可切；如果当前 SDK query 支持，也会同步到当前 query |
-| Claude | `Auto edit` | `acceptEdits` | Claude SDK permission mode `acceptEdits` | web-owned live 可切；如果当前 SDK query 支持，也会同步到当前 query |
-| Claude | `Full auto` | `bypassPermissions` | 启动时转成 `approvalPolicy=never`，runtime 使用 Claude permission mode `bypassPermissions` | web-owned live 可切；默认值 |
-| Gemini | `Ask` | `default` | `approvalPolicy=default` / Gemini approval mode `default` | web-owned live 可切；主要影响后续 `gemini --prompt` turn |
-| Gemini | `Auto edit` | `auto_edit` | `approvalPolicy=auto_edit` / Gemini approval mode `auto_edit` | web-owned live 可切；主要影响后续 turn |
-| Gemini | `Full auto` | `yolo` | `approvalPolicy=yolo` / Gemini approval mode `yolo` | web-owned live 可切；默认值 |
-| Kimi | `Ask` | `default` | 不加 `--yolo`，Kimi wire client 走默认审批 | web-owned live 仅 idle 时可切；从/to `yolo` 会重启 Kimi wire client |
-| Kimi | `Full auto` | `yolo` | `--yolo` / auto approve all actions | web-owned live 仅 idle 时可切；默认值 |
-| OpenCode | `Ask` | `build` | native mode `build` + session permission `[{ permission:"*", pattern:"*", action:"ask" }]` | web-owned live 可切；通过 OpenCode ACP/API 写 session permission |
-| OpenCode | `Full auto` | `opencode/full-auto` | native mode `build` + session permission `[{ permission:"*", pattern:"*", action:"allow" }]` | web-owned live 可切；默认值 |
+| Provider | 前端权限项 | RAH mode id | role | applyTiming | Adapter 启动/切换实现 |
+| --- | --- | --- | --- | --- | --- |
+| Codex | `Ask` | `on-request/read-only` | `ask` | `next_turn` | Adapter 转成 `approvalPolicy=on-request` + `sandbox=read-only`；写操作仍可请求提升，不是绝对只读 |
+| Codex | `Auto edit` | `on-request/workspace-write` | `auto_edit` | `next_turn` | Adapter 转成 `approvalPolicy=on-request` + `sandbox=workspace-write` |
+| Codex | `Full auto · sandboxed` | `never/workspace-write` | `full_auto` | `next_turn` | Adapter 转成 `approvalPolicy=never` + `sandbox=workspace-write` |
+| Codex | `Full auto` | `never/danger-full-access` | `full_auto` | `next_turn` | Adapter 转成 `approvalPolicy=never` + `sandbox=danger-full-access`；默认值 |
+| Claude | `Ask` | `default` | `ask` | `immediate` | Adapter 使用 Claude SDK permission mode `default` |
+| Claude | `Auto edit` | `acceptEdits` | `auto_edit` | `immediate` | Adapter 使用 Claude SDK permission mode `acceptEdits` |
+| Claude | `Full auto` | `bypassPermissions` | `full_auto` | `immediate` | Adapter 使用 Claude SDK permission mode `bypassPermissions`；默认值 |
+| Gemini | `Ask` | `default` | `ask` | `next_turn` | Adapter 使用 Gemini approval mode `default` |
+| Gemini | `Auto edit` | `auto_edit` | `auto_edit` | `next_turn` | Adapter 使用 Gemini approval mode `auto_edit` |
+| Gemini | `Full auto` | `yolo` | `full_auto` | `next_turn` | Adapter 使用 Gemini approval mode `yolo`；默认值 |
+| Kimi | `Ask` | `default` | `ask` | `idle_only` | Adapter 启动 Kimi wire client 时不加 `--yolo` |
+| Kimi | `Full auto` | `yolo` | `full_auto` | `idle_only` | Adapter 启动 Kimi wire client 时加 `--yolo`；默认值 |
+| OpenCode | `Ask` | `build` | `ask` | `next_turn` | Adapter 使用 native `build` mode，并写 `ask` permission ruleset |
+| OpenCode | `Full auto` | `opencode/full-auto` | `full_auto` | `next_turn` | Adapter 使用 native `build` mode，并写 `allow` permission ruleset；默认值 |
 
 实现边界：
 
 - `web new` 和 `web resume` 创建的是 daemon-owned live session，mode state 为 `mutable: true` 时，前端可以显示并切换上述权限项。
+- 前端展示权限项时依赖 `SessionModeDescriptor.role`，不依赖 provider-native `id`。`id` 只作为提交给 adapter 的 opaque value；是否 immediate / next turn / idle-only 由 `applyTiming` 表达。
 - `rah xxx` 和 `rah xxx resume <id>` 创建的是 terminal handoff live session。Web 侧只观察、接管输入、关闭/归档，以及在 provider 支持时回答 live approval；不在 session mode 下拉里修改 provider 原生权限。这类 session 的权限应在启动时通过 `rah xxx` 参数或 provider 原生 TUI 配置确定。
 - terminal handoff 中，Codex / Kimi / OpenCode 的 `livePermissions=true` 表示可以处理运行时 approval；Claude / Gemini handoff 不接 provider-native web approval，默认用全批准模式降低卡住概率。
 - Kimi 是唯一明确要求 idle 切换权限的 provider，因为 `default` / `yolo` 会影响 wire client 启动参数；active turn 中切换会被拒绝。
@@ -171,7 +172,7 @@ RAH 里有两个容易混淆的能力：
 
 差异只在实现时机：
 
-- 创建/claim 前：前端把选中的 mode 放进 `startSession` / `resumeSession` 请求，daemon 在创建 live session 时尽量直接按该 mode 启动 provider。
+- 创建/claim 前：前端把选中的 `modeId` 放进 `startSession` / `resumeSession` 请求，daemon 交给对应 adapter 在创建 live session 时直接按该 mode 启动 provider。
 - 创建/claim 后：前端调用 `setSessionMode`，daemon 对已经 live 的 provider adapter 执行 mode switch。
 
 这不是“claim 前只能靠 CLI `--xxx`，claim 后就失控”的设计。Web-owned session 一旦 claim 成功，owner 是 daemon，mode state 为 `mutable:true`，后续仍可通过 Web 控制权限模式。
@@ -180,11 +181,11 @@ RAH 里有两个容易混淆的能力：
 
 | Provider | 创建/claim 前如何应用 | live 后如何应用 | 是否存在首轮空窗 |
 | --- | --- | --- | --- |
-| Codex | 转成 `approvalPolicy` + `sandbox` 启动参数 | 更新 live session 的 `approvalPolicy` / `sandboxMode`，用于后续 turn | 无；首条输入在 mode 对齐后发送 |
-| Claude | `default` / `bypassPermissions` 转成 startup approval；`acceptEdits` 若启动响应未对齐，会立即 `setSessionMode` | 更新 SDK permission mode；当前 query 支持时同步到 query | 无；首条输入在 mode 对齐后发送 |
-| Gemini | 转成 startup `approvalPolicy` | 更新 live session approval mode，用于后续 turn | 无；首条输入在 mode 对齐后发送 |
-| Kimi | 转成 startup `approvalPolicy`，`yolo` 会用 `--yolo` | idle 时重启 Kimi wire client 对齐 `default` / `yolo`，并设置 plan mode | 无；但 active turn 中不能切 |
-| OpenCode | 通过 providerConfig 指定 RAH mode，启动后写 OpenCode session permission | 通过 ACP/API 切 native mode，并写 session permission ruleset | 无；OpenCode 可在启动时 bootstrap 首条 prompt，mode 已先传入 providerConfig |
+| Codex | Adapter 解释 `modeId`，转成 `approvalPolicy` + `sandbox` 启动参数 | 更新 live session 的 `approvalPolicy` / `sandboxMode`，用于后续 turn | 无；首条输入在 mode 对齐后发送 |
+| Claude | Adapter 解释 `modeId`，设置 SDK permission mode | 更新 SDK permission mode；当前 query 支持时同步到 query | 无；首条输入在 mode 对齐后发送 |
+| Gemini | Adapter 解释 `modeId`，设置 Gemini approval mode | 更新 live session approval mode，用于后续 turn | 无；首条输入在 mode 对齐后发送 |
+| Kimi | Adapter 解释 `modeId`，`yolo` 会用 `--yolo`，`plan` 会调用 `set_plan_mode` | idle 时重启 Kimi wire client 对齐 `default` / `yolo`，并设置 plan mode | 无；但 active turn 中不能切 |
+| OpenCode | Adapter 解释 `modeId`，设置 native mode 并写 OpenCode session permission | 通过 ACP/API 切 native mode，并写 session permission ruleset | 无；首条输入在 mode/model 对齐后通过标准 `sendInput` 发送 |
 
 因此：
 

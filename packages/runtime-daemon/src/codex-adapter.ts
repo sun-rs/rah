@@ -58,6 +58,7 @@ import {
 } from "./stored-session-metadata-cache";
 import { movePathToTrash } from "./trash";
 import { buildCodexModeState, parseCodexModeId } from "./session-mode-utils";
+import { optionValueAsString, resolveModelOptionValues } from "./session-model-options";
 import {
   applyWorkspaceGitFileActionAsync,
   applyWorkspaceGitHunkActionAsync,
@@ -180,9 +181,12 @@ export class CodexAdapter implements ProviderAdapter {
     this.services.sessionStore.setRuntimeState(sessionId, "failed");
   }
 
-  startSession(request: StartSessionRequest): Promise<StartSessionResponse> {
-    const cachedModelCatalog = this.modelCatalog.getCached();
-    return startCodexLiveSession({
+  async startSession(request: StartSessionRequest): Promise<StartSessionResponse> {
+    const cachedModelCatalog =
+      request.model || request.reasoningId !== undefined || request.optionValues !== undefined
+        ? await this.modelCatalog.listModels()
+        : this.modelCatalog.getCached();
+    return await startCodexLiveSession({
       services: this.services,
       request,
       ...(cachedModelCatalog ? { initialModelCatalog: cachedModelCatalog } : {}),
@@ -246,7 +250,10 @@ export class CodexAdapter implements ProviderAdapter {
       };
     }
 
-    const cachedModelCatalog = this.modelCatalog.getCached();
+    const cachedModelCatalog =
+      request.model || request.reasoningId !== undefined || request.optionValues !== undefined
+        ? await this.modelCatalog.listModels()
+        : this.modelCatalog.getCached();
     try {
       const response = await resumeCodexLiveSession({
         services: this.services,
@@ -340,18 +347,16 @@ export class CodexAdapter implements ProviderAdapter {
     if (!model) {
       throw new Error(`Unsupported Codex model '${nextModelId}'.`);
     }
+    const optionValues = resolveModelOptionValues({
+      catalog,
+      model,
+      optionValues: request.optionValues,
+      reasoningId: request.reasoningId,
+      useDefaults: true,
+      requireMutable: true,
+    });
     const nextReasoningId =
-      request.reasoningId === null
-        ? null
-        : request.reasoningId?.trim() || model.defaultReasoningId || null;
-    if (
-      nextReasoningId &&
-      model.reasoningOptions &&
-      model.reasoningOptions.length > 0 &&
-      !model.reasoningOptions.some((option) => option.id === nextReasoningId)
-    ) {
-      throw new Error(`Unsupported Codex reasoning option '${nextReasoningId}'.`);
-    }
+      optionValueAsString(optionValues, "model_reasoning_effort") ?? null;
     live.modelId = nextModelId;
     live.reasoningId = nextReasoningId;
     live.modelCatalog = catalog;
@@ -367,6 +372,7 @@ export class CodexAdapter implements ProviderAdapter {
         catalog,
         modelId: nextModelId,
         reasoningId: nextReasoningId,
+        optionValues,
       }),
     });
     return toSessionSummary(nextState);

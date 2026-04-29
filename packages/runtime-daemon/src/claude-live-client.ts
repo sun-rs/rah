@@ -24,7 +24,8 @@ import {
   resolveClaudeRuntimeCapabilityState,
 } from "./claude-model-catalog";
 import { toSessionSummary } from "./session-store";
-import { buildClaudeModeState } from "./session-mode-utils";
+import { buildClaudeModeState, isClaudeModeId } from "./session-mode-utils";
+import { resolveModelContextWindow } from "./model-context-window";
 import {
   approvalPolicyToPermissionMode,
   applyActivity,
@@ -47,12 +48,33 @@ export type {
   PendingClaudePermission,
 } from "./claude-live-types";
 
+function resolveClaudeStartupMode(args: {
+  modeId?: string | undefined;
+  approvalPolicy?: StartSessionRequest["approvalPolicy"] | undefined;
+  fallback?: PermissionMode | undefined;
+}): PermissionMode {
+  const requestedModeId = args.modeId?.trim();
+  if (requestedModeId) {
+    if (!isClaudeModeId(requestedModeId)) {
+      throw new Error(`Unsupported Claude mode '${requestedModeId}'.`);
+    }
+    return requestedModeId as PermissionMode;
+  }
+  if (args.approvalPolicy !== undefined) {
+    return approvalPolicyToPermissionMode(args.approvalPolicy);
+  }
+  return args.fallback ?? "bypassPermissions";
+}
+
 export async function startClaudeLiveSession(args: {
   services: RuntimeServices;
   request: StartSessionRequest;
   queryFactory?: typeof claudeQuery;
 }) {
-  const permissionMode = approvalPolicyToPermissionMode(args.request.approvalPolicy);
+  const permissionMode = resolveClaudeStartupMode({
+    modeId: args.request.modeId,
+    approvalPolicy: args.request.approvalPolicy,
+  });
   const modelCatalog = await buildClaudeModelCatalog({ cwd: args.request.cwd });
   const currentModelId =
     resolveClaudeCatalogModelId(args.request.model, modelCatalog) ??
@@ -71,6 +93,11 @@ export async function startClaudeLiveSession(args: {
     catalog: modelCatalog,
     modelId: currentModelId,
     effort,
+  });
+  const contextWindow = resolveModelContextWindow({
+    provider: "claude",
+    modelId: currentModelId,
+    catalog: modelCatalog,
   });
   const state = args.services.sessionStore.createManagedSession({
     provider: "claude",
@@ -120,6 +147,7 @@ export async function startClaudeLiveSession(args: {
     sessionId: state.session.id,
     cwd: args.request.cwd,
     ...(runtimeModelId ? { model: runtimeModelId } : {}),
+    ...(contextWindow ? { contextWindow } : {}),
     ...(effort !== undefined && runtimeCapabilityState.config ? { effort } : {}),
     permissionMode,
     activeTurn: null,
@@ -136,16 +164,38 @@ export async function resumeClaudeLiveSession(args: {
   services: RuntimeServices;
   providerSessionId: string;
   cwd: string;
+  model?: string;
+  reasoningId?: string | null;
+  modeId?: string;
   permissionMode?: PermissionMode;
   attach?: AttachSessionRequest;
   queryFactory?: typeof claudeQuery;
 }) {
+  const permissionMode = resolveClaudeStartupMode({
+    modeId: args.modeId,
+    fallback: args.permissionMode ?? "bypassPermissions",
+  });
   const modelCatalog = await buildClaudeModelCatalog({ cwd: args.cwd });
-  const currentModelId = modelCatalog.currentModelId ?? null;
+  const currentModelId =
+    resolveClaudeCatalogModelId(args.model, modelCatalog) ??
+    modelCatalog.currentModelId ??
+    null;
+  const effort = resolveClaudeEffortValue(args.reasoningId ?? undefined) as
+    | LiveClaudeSession["effort"]
+    | undefined;
+  const currentModel = modelCatalog.models.find((model) => model.id === currentModelId);
+  const runtimeModelId = currentModel && args.model
+    ? resolveClaudeRuntimeModelId(currentModel)
+    : undefined;
   const runtimeCapabilityState = resolveClaudeRuntimeCapabilityState({
     catalog: modelCatalog,
     modelId: currentModelId,
-    effort: undefined,
+    effort,
+  });
+  const contextWindow = resolveModelContextWindow({
+    provider: "claude",
+    modelId: currentModelId,
+    catalog: modelCatalog,
   });
   const state = args.services.sessionStore.createManagedSession({
     provider: "claude",
@@ -154,14 +204,14 @@ export async function resumeClaudeLiveSession(args: {
     cwd: args.cwd,
     rootDir: args.cwd,
     mode: buildClaudeModeState({
-      currentModeId: args.permissionMode ?? "default",
+      currentModeId: permissionMode,
       mutable: true,
     }),
     ...(currentModelId || modelCatalog.models.length > 0
       ? {
           model: {
             currentModelId,
-            currentReasoningId: null,
+            currentReasoningId: effort ?? null,
             availableModels: modelCatalog.models,
             mutable: true,
             source: modelCatalog.source,
@@ -194,7 +244,10 @@ export async function resumeClaudeLiveSession(args: {
     sessionId: state.session.id,
     cwd: args.cwd,
     providerSessionId: args.providerSessionId,
-    permissionMode: args.permissionMode ?? "default",
+    ...(runtimeModelId ? { model: runtimeModelId } : {}),
+    ...(contextWindow ? { contextWindow } : {}),
+    ...(effort !== undefined && runtimeCapabilityState.config ? { effort } : {}),
+    permissionMode,
     activeTurn: null,
     pendingPermissions: new Map(),
     queryFactory: args.queryFactory ?? claudeQuery,

@@ -1,8 +1,8 @@
 # Provider Capability Protocol Draft
 
-Status: draft
+Status: implemented incrementally
 
-Date: 2026-04-27
+Date: 2026-04-29
 
 This document defines the first incremental protocol shape for provider capability handling in
 RAH. It is intentionally migration-oriented:
@@ -144,6 +144,7 @@ It answers:
 - `revision`
 - `modelsExact`
 - `optionsExact`
+- `defaultModeId`
 - `modes`
 - `configOptions`
 - `modelProfiles`
@@ -191,6 +192,46 @@ This lets RAH compare:
 - what the user saw prelaunch
 - what the session resolved at runtime
 
+## 5.4 `defaultModeId` and `modes`
+
+`defaultModeId` is the adapter-owned startup default for the provider.
+
+`modes` is the adapter-owned mode catalog. Each `SessionModeDescriptor` may include:
+
+- `id`: provider/adapter executable mode id
+- `role`: RAH-stable UI semantics
+- `label`
+- `description`
+- `applyTiming`: when a live switch can take effect
+- `hotSwitch`
+
+Allowed `role` values are:
+
+- `ask`
+- `auto_edit`
+- `full_auto`
+- `plan`
+- `custom`
+
+The UI must treat `id` as opaque. It may render stable labels from `role`, but must submit the
+original `id` back to the daemon as `modeId`.
+
+Allowed `applyTiming` values are:
+
+- `immediate`
+- `next_turn`
+- `idle_only`
+- `restart_required`
+- `startup_only`
+
+`hotSwitch` is the broad compatibility boolean. `applyTiming` is the precise semantic field. New
+adapter code should set both; frontend behavior should prefer `applyTiming` when it needs to reason
+about disabled states or explanatory copy.
+
+This is the current replacement for frontend-side provider mode guessing. For example, the web app
+does not decompose Codex mode ids into `approvalPolicy + sandbox`, and it does not write OpenCode
+permission rules directly. It only sends `modeId`; the adapter owns the translation.
+
 ## 6. Reconciliation Model
 
 Prelaunch capability data is not final truth.
@@ -199,7 +240,7 @@ The expected runtime flow is:
 
 1. user sees prelaunch catalog
 2. user selects model/mode/config
-3. session starts
+3. session starts with `model`, `reasoningId`, and `modeId`
 4. provider returns runtime capability truth
 5. runtime reconciles the draft against the live truth
 
@@ -229,6 +270,7 @@ The UI should:
 
 - always show model selector from provider catalog
 - always show mode selector from provider catalog or session mode state
+- render mode labels from `SessionModeDescriptor.role` when present
 - render advanced controls from dynamic `configOptions`
 - display source/freshness when data is provisional
 
@@ -236,6 +278,8 @@ The UI should not hardcode provider logic such as:
 
 - "Gemini 2.5 always shows budget"
 - "Claude always shows effort"
+- "Codex full auto means this exact approval/sandbox tuple"
+- "OpenCode full auto means this exact permission ruleset"
 
 Those decisions belong to adapter-produced capability profiles.
 

@@ -22,8 +22,13 @@ import {
   normalizeGeminiModelId,
   resolveGeminiRuntimeCapabilityState,
 } from "./gemini-model-catalog";
+import {
+  resolveModelContextWindow,
+  type ModelContextWindowResolution,
+  withModelContextWindow,
+} from "./model-context-window";
 import { resolveConfiguredBinary } from "./provider-binary-utils";
-import { buildGeminiModeState } from "./session-mode-utils";
+import { buildGeminiModeState, isGeminiModeId } from "./session-mode-utils";
 import { toSessionSummary } from "./session-store";
 
 export type LiveGeminiTurn = {
@@ -44,10 +49,25 @@ export type LiveGeminiTurn = {
   >;
 };
 
+function resolveGeminiStartupMode(args: {
+  modeId?: string | undefined;
+  approvalPolicy?: string | undefined;
+}): string {
+  const requestedModeId = args.modeId?.trim();
+  if (requestedModeId) {
+    if (!isGeminiModeId(requestedModeId)) {
+      throw new Error(`Unsupported Gemini mode '${requestedModeId}'.`);
+    }
+    return requestedModeId;
+  }
+  return args.approvalPolicy ?? "yolo";
+}
+
 export type LiveGeminiSession = {
   sessionId: string;
   cwd: string;
   model?: string;
+  contextWindow?: ModelContextWindowResolution;
   approvalMode: string;
   providerSessionId?: string;
   activeTurn?: LiveGeminiTurn;
@@ -166,7 +186,13 @@ export function isNoisyGeminiCliStderr(line: string): boolean {
     trimmed.startsWith("YOLO mode is enabled.") ||
     trimmed.includes("[IDEClient] Failed to connect to IDE companion extension.") ||
     trimmed.startsWith("Warning: Basic terminal detected ") ||
-    trimmed.startsWith("Warning: 256-color support not detected.")
+    trimmed.startsWith("Warning: 256-color support not detected.") ||
+    trimmed === "headers: {" ||
+    trimmed === "}" ||
+    trimmed === "}," ||
+    /^'[-a-z0-9]+': /i.test(trimmed) ||
+    /^status: \d{3},?$/.test(trimmed) ||
+    /^statusText: '[^']+',?$/.test(trimmed)
   );
 }
 
@@ -231,13 +257,16 @@ function resolveGeminiCliResumeArg(liveSession: LiveGeminiSession): string | und
     : undefined;
 }
 
-function usageFromStats(stats: Record<string, unknown>): ContextUsage {
-  return {
+function usageFromStats(
+  stats: Record<string, unknown>,
+  contextWindow?: ModelContextWindowResolution,
+): ContextUsage {
+  return withModelContextWindow({
     ...(typeof stats.total_tokens === "number" ? { usedTokens: stats.total_tokens } : {}),
     ...(typeof stats.input_tokens === "number" ? { inputTokens: stats.input_tokens } : {}),
     ...(typeof stats.cached === "number" ? { cachedInputTokens: stats.cached } : {}),
     ...(typeof stats.output_tokens === "number" ? { outputTokens: stats.output_tokens } : {}),
-  };
+  }, contextWindow);
 }
 
 function applyActivity(
@@ -527,7 +556,10 @@ async function runGeminiTurn(params: {
             applyActivity(services, liveSession.sessionId, {
               type: "usage",
               turnId,
-              usage: usageFromStats(event.stats as Record<string, unknown>),
+              usage: usageFromStats(
+                event.stats as Record<string, unknown>,
+                liveSession.contextWindow,
+              ),
             });
           }
           finalize({ type: "turn_completed", turnId });
@@ -581,11 +613,20 @@ export function startGeminiLiveSession(params: {
   modelCatalog?: ProviderModelCatalog;
 }) {
   const { services, request } = params;
+  const approvalMode = resolveGeminiStartupMode({
+    modeId: request.modeId,
+    approvalPolicy: request.approvalPolicy,
+  });
   const modelCatalog = params.modelCatalog ?? buildGeminiModelCatalog();
   const currentModelId = normalizeGeminiModelId(request.model) ?? modelCatalog.currentModelId ?? null;
   const runtimeCapabilityState = resolveGeminiRuntimeCapabilityState({
     catalog: modelCatalog,
     modelId: currentModelId,
+  });
+  const contextWindow = resolveModelContextWindow({
+    provider: "gemini",
+    modelId: currentModelId,
+    catalog: modelCatalog,
   });
   const state = services.sessionStore.createManagedSession({
     provider: "gemini",
@@ -595,7 +636,7 @@ export function startGeminiLiveSession(params: {
     ...(request.title !== undefined ? { title: request.title } : {}),
     ...(request.initialPrompt !== undefined ? { preview: request.initialPrompt } : {}),
     mode: buildGeminiModeState({
-      currentModeId: request.approvalPolicy ?? "yolo",
+      currentModeId: approvalMode,
       mutable: true,
     }),
     ...(currentModelId || modelCatalog.models.length > 0
@@ -614,7 +655,7 @@ export function startGeminiLiveSession(params: {
     capabilities: {
       livePermissions: false,
       listProviderSessions: false,
-      renameSession: false,
+      renameSession: true,
       actions: {
         info: true,
         archive: true,
@@ -637,7 +678,8 @@ export function startGeminiLiveSession(params: {
     sessionId: state.session.id,
     cwd: request.cwd,
     ...(request.model && currentModelId ? { model: currentModelId } : {}),
-    approvalMode: request.approvalPolicy ?? "yolo",
+    ...(contextWindow ? { contextWindow } : {}),
+    approvalMode,
   };
   return {
     liveSession,
@@ -651,6 +693,7 @@ export function resumeGeminiLiveSession(params: {
     providerSessionId: string;
     cwd?: string;
     model?: string;
+    modeId?: string;
     approvalPolicy?: string;
     attach?: AttachSessionRequest;
   };
@@ -658,11 +701,20 @@ export function resumeGeminiLiveSession(params: {
 }) {
   const { services, request } = params;
   const cwd = request.cwd ?? process.cwd();
+  const approvalMode = resolveGeminiStartupMode({
+    modeId: request.modeId,
+    approvalPolicy: request.approvalPolicy,
+  });
   const modelCatalog = params.modelCatalog ?? buildGeminiModelCatalog();
   const currentModelId = normalizeGeminiModelId(request.model) ?? modelCatalog.currentModelId ?? null;
   const runtimeCapabilityState = resolveGeminiRuntimeCapabilityState({
     catalog: modelCatalog,
     modelId: currentModelId,
+  });
+  const contextWindow = resolveModelContextWindow({
+    provider: "gemini",
+    modelId: currentModelId,
+    catalog: modelCatalog,
   });
   const state = services.sessionStore.createManagedSession({
     provider: "gemini",
@@ -671,7 +723,7 @@ export function resumeGeminiLiveSession(params: {
     cwd,
     rootDir: cwd,
     mode: buildGeminiModeState({
-      currentModeId: request.approvalPolicy ?? "yolo",
+      currentModeId: approvalMode,
       mutable: true,
     }),
     ...(currentModelId || modelCatalog.models.length > 0
@@ -690,7 +742,7 @@ export function resumeGeminiLiveSession(params: {
     capabilities: {
       livePermissions: false,
       listProviderSessions: false,
-      renameSession: false,
+      renameSession: true,
       actions: {
         info: true,
         archive: true,
@@ -712,7 +764,8 @@ export function resumeGeminiLiveSession(params: {
     sessionId: state.session.id,
     cwd,
     ...(request.model && currentModelId ? { model: currentModelId } : {}),
-    approvalMode: request.approvalPolicy ?? "yolo",
+    ...(contextWindow ? { contextWindow } : {}),
+    approvalMode,
     providerSessionId: request.providerSessionId,
   };
   return {

@@ -12,11 +12,11 @@
 
 - 不重写 canonical protocol
 - 不重写 `HistorySnapshotStore`
-- 不把四家 provider 强行收成一个完全相同的底层实现
+- 不把五家 provider 强行收成一个完全相同的底层实现
 
 ## 当前基线
 
-当前四家 provider 都已经具备：
+当前五家 provider 都已经具备：
 
 - adapter-owned metadata catalog
 - adapter-owned frozen history loader
@@ -33,6 +33,12 @@
   - 已有 page-based sidecar event cache
   - frozen loader 已优先使用 windowed cache read
   - append-only `.jsonl` 历史已接入保守增量 page index
+- `OpenCode`
+  - 已有 adapter-owned frozen loader
+  - 使用 SQLite message store
+  - older page 主要按 `beforeTs` 读取并翻译 message window
+
+当前稳定加载模型见 [历史浏览与分页边界](./history-browsing.zh-CN.md)。
 
 ## 设计原则
 

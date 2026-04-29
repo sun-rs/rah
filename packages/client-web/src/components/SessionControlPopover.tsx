@@ -17,6 +17,7 @@ export function SessionControlPopover(props: {
   selectedModelId: string | null;
   selectedReasoningId: string | null;
   modelDisabled?: boolean;
+  disabled?: boolean;
   allowProviderDefault?: boolean;
   showModel: boolean;
   buttonClassName: string;
@@ -33,7 +34,13 @@ export function SessionControlPopover(props: {
   const hasModes = props.accessModes.length > 0 || props.planModeAvailable;
   const hasModel =
     props.showModel && Boolean(props.modelCatalog || props.modelCatalogLoading);
-  const enabled = hasModes || hasModel;
+  const enabled = (hasModes || hasModel) && !props.disabled;
+
+  useEffect(() => {
+    if (props.disabled) {
+      setOpen(false);
+    }
+  }, [props.disabled]);
 
   useLayoutEffect(() => {
     if (!open || !triggerRef.current) return;
@@ -120,7 +127,7 @@ export function SessionControlPopover(props: {
                     selectedAccessModeId={props.selectedAccessModeId}
                     planModeAvailable={props.planModeAvailable}
                     planModeEnabled={props.planModeEnabled}
-                    disabled={props.modeDisabled ?? false}
+                    disabled={props.disabled || (props.modeDisabled ?? false)}
                     onAccessModeChange={props.onAccessModeChange}
                     onPlanModeToggle={props.onPlanModeToggle}
                   />
@@ -132,7 +139,7 @@ export function SessionControlPopover(props: {
                     selectedModelId={props.selectedModelId}
                     selectedReasoningId={props.selectedReasoningId}
                     loading={props.modelCatalogLoading}
-                    disabled={props.modelDisabled ?? false}
+                    disabled={props.disabled || (props.modelDisabled ?? false)}
                     {...(props.allowProviderDefault !== undefined
                       ? { allowProviderDefault: props.allowProviderDefault }
                       : {})}

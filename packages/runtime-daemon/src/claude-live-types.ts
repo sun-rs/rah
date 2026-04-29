@@ -5,6 +5,7 @@ import {
   type PermissionResult,
   type Query as ClaudeQuery,
 } from "@anthropic-ai/claude-agent-sdk";
+import type { ModelContextWindowResolution } from "./model-context-window";
 
 export type PendingClaudePermission = {
   sessionId: string;
@@ -25,6 +26,7 @@ export type LiveClaudeSession = {
   sessionId: string;
   cwd: string;
   model?: string;
+  contextWindow?: ModelContextWindowResolution;
   effort?: ClaudeOptions["effort"];
   permissionMode: PermissionMode;
   providerSessionId?: string;

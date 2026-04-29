@@ -24,6 +24,7 @@ function selectedModel(
 }
 
 function selectedReasoning(
+  catalog: ProviderModelCatalog | null | undefined,
   model: SessionModelDescriptor | null,
   selectedReasoningId: string | null | undefined,
 ): SessionReasoningOption | null {
@@ -33,8 +34,35 @@ function selectedReasoning(
   }
   return (
     options.find((option) => option.id === selectedReasoningId) ??
+    (catalog?.currentModelId === model?.id
+      ? options.find((option) => option.id === catalog?.currentReasoningId)
+      : undefined) ??
     options.find((option) => option.id === model?.defaultReasoningId) ??
     options[0] ??
+    null
+  );
+}
+
+function defaultReasoningIdForModel(
+  catalog: ProviderModelCatalog | null | undefined,
+  model: SessionModelDescriptor | undefined,
+): string | null {
+  if (!model) {
+    return null;
+  }
+  const options = model.reasoningOptions ?? [];
+  if (options.length === 0) {
+    return null;
+  }
+  if (
+    catalog?.currentModelId === model.id &&
+    options.some((option) => option.id === catalog.currentReasoningId)
+  ) {
+    return catalog.currentReasoningId ?? null;
+  }
+  return (
+    model.defaultReasoningId ??
+    options[0]?.id ??
     null
   );
 }
@@ -58,7 +86,7 @@ export function resolveSelectedModelDraft(args: {
   const model = selectedModel(args.catalog, args.selectedModelId);
   return {
     model,
-    reasoning: selectedReasoning(model, args.selectedReasoningId),
+    reasoning: selectedReasoning(args.catalog, model, args.selectedReasoningId),
   };
 }
 
@@ -176,7 +204,7 @@ export function SessionModelControls(props: {
   const handleModelSelect = (modelId: string) => {
     const nextModel = models.find((m) => m.id === modelId);
     const nextReasoningOptions = nextModel?.reasoningOptions ?? [];
-    props.onModelChange(modelId, nextModel?.defaultReasoningId ?? null);
+    props.onModelChange(modelId, defaultReasoningIdForModel(props.catalog, nextModel));
 
     if (nextReasoningOptions.length > 1) {
       setPanelView("param-list");

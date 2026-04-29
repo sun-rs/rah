@@ -4,11 +4,13 @@ import type {
   ProviderModelCatalog,
   SessionResolvedConfig,
   SessionConfigOption,
+  SessionConfigValue,
   SessionModelDescriptor,
   SessionReasoningOption,
 } from "@rah/runtime-protocol";
 import type { CodexJsonRpcClient } from "./codex-live-rpc";
 import { createCodexAppServerClient } from "./codex-live-client";
+import { defaultProviderModeId, providerModeDescriptors } from "./session-mode-utils";
 
 const CODEX_MODEL_CACHE_TTL_MS = 5 * 60 * 1000;
 
@@ -184,7 +186,14 @@ export function resolveCodexModelProfile(args: {
 
 export function buildCodexResolvedConfig(args: {
   reasoningId: string | null | undefined;
+  optionValues?: Record<string, SessionConfigValue>;
 }): SessionResolvedConfig | undefined {
+  if (args.optionValues !== undefined) {
+    return {
+      values: args.optionValues,
+      source: "runtime_session",
+    };
+  }
   if (args.reasoningId === undefined || args.reasoningId === null) {
     return undefined;
   }
@@ -200,6 +209,7 @@ export function resolveCodexRuntimeCapabilityState(args: {
   catalog: ProviderModelCatalog | null | undefined;
   modelId: string | null | undefined;
   reasoningId: string | null | undefined;
+  optionValues?: Record<string, SessionConfigValue>;
 }): {
   modelProfile?: ModelCapabilityProfile;
   config?: SessionResolvedConfig;
@@ -210,6 +220,7 @@ export function resolveCodexRuntimeCapabilityState(args: {
   });
   const config = buildCodexResolvedConfig({
     reasoningId: args.reasoningId,
+    optionValues: args.optionValues,
   });
   return {
     ...(modelProfile ? { modelProfile } : {}),
@@ -275,6 +286,8 @@ export async function fetchCodexModelCatalogWithClient(
     }),
     modelsExact: true,
     optionsExact: true,
+    defaultModeId: defaultProviderModeId("codex")!,
+    modes: providerModeDescriptors("codex", { planAvailable: true }),
     modelProfiles,
   };
 }

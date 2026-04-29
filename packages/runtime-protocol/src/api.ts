@@ -126,9 +126,31 @@ export interface StartSessionRequest {
   cwd: string;
   title?: string;
   model?: string;
+  /**
+   * Model-scoped option values keyed by the selected model's declared
+   * SessionConfigOption ids. Unknown keys are invalid.
+   */
+  optionValues?: Record<string, SessionConfigValue>;
+  /**
+   * @deprecated Use optionValues. Kept as a compatibility alias for the first
+   * model reasoning/thinking/variant option exposed by the provider catalog.
+   */
   reasoningId?: string;
+  /**
+   * @deprecated Compatibility escape hatch for provider/API callers. Web clients
+   * should pass modeId/model/reasoningId and let the adapter translate them.
+   */
   providerConfig?: Record<string, SessionConfigValue>;
+  modeId?: string;
+  /**
+   * @deprecated Compatibility field. Provider permission policy belongs behind
+   * adapter-owned modeId translation.
+   */
   approvalPolicy?: ApprovalPolicy;
+  /**
+   * @deprecated Compatibility field. Provider sandbox policy belongs behind
+   * adapter-owned modeId translation.
+   */
   sandbox?: string;
   command?: string;
   args?: string[];
@@ -148,8 +170,32 @@ export interface ResumeSessionRequest {
   provider: ProviderKind;
   providerSessionId: string;
   cwd?: string;
+  model?: string;
+  /**
+   * Model-scoped option values keyed by the selected model's declared
+   * SessionConfigOption ids. Unknown keys are invalid.
+   */
+  optionValues?: Record<string, SessionConfigValue>;
+  /**
+   * @deprecated Use optionValues. Kept as a compatibility alias for the first
+   * model reasoning/thinking/variant option exposed by the provider catalog.
+   */
+  reasoningId?: string | null;
+  /**
+   * @deprecated Compatibility escape hatch for provider/API callers. Web clients
+   * should pass modeId/model/reasoningId and let the adapter translate them.
+   */
   providerConfig?: Record<string, SessionConfigValue>;
+  modeId?: string;
+  /**
+   * @deprecated Compatibility field. Provider permission policy belongs behind
+   * adapter-owned modeId translation.
+   */
   approvalPolicy?: ApprovalPolicy;
+  /**
+   * @deprecated Compatibility field. Provider sandbox policy belongs behind
+   * adapter-owned modeId translation.
+   */
   sandbox?: string;
   preferStoredReplay?: boolean;
   historyReplay?: "include" | "skip";
@@ -194,7 +240,23 @@ export interface SetSessionModeRequest {
 
 export interface SetSessionModelRequest {
   modelId: string;
+  /**
+   * Model-scoped option values keyed by the selected model's declared
+   * SessionConfigOption ids. Unknown keys are invalid.
+   */
+  optionValues?: Record<string, SessionConfigValue>;
+  /**
+   * @deprecated Use optionValues. Kept as a compatibility alias for the first
+   * model reasoning/thinking/variant option exposed by the provider catalog.
+   */
   reasoningId?: string | null;
+}
+
+export interface SetSessionConfigRequest {
+  /**
+   * Session/model option values keyed by provider catalog SessionConfigOption ids.
+   */
+  optionValues: Record<string, SessionConfigValue>;
 }
 
 export interface ClaimControlRequest {
@@ -417,6 +479,15 @@ export interface ProviderModelCatalog {
   revision?: string;
   modelsExact?: boolean;
   optionsExact?: boolean;
+  /**
+   * Adapter-owned default permission/behavior mode. Clients must submit this
+   * opaque id back as modeId, not decompose it into provider-native flags.
+   */
+  defaultModeId?: string;
+  /**
+   * Adapter-owned permission/behavior modes. role is the stable cross-provider
+   * UI semantic; id remains provider/adapter specific.
+   */
   modes?: SessionModeDescriptor[];
   configOptions?: SessionConfigOption[];
   modelProfiles?: ModelCapabilityProfile[];

@@ -92,6 +92,24 @@ Rehydrated Codex sessions:
 This boundary is intentional: replayed history remains inspectable, but live interaction requires a
 live Codex thread.
 
+### Adapter Capability Semantics
+
+The following surfaces are now stable enough to treat as adapter protocol commitments:
+
+- `StartSessionRequest.modeId`
+- `ResumeSessionRequest.modeId`
+- `ProviderModelCatalog.defaultModeId`
+- `ProviderModelCatalog.modes`
+- `SessionModeDescriptor.role`
+- `SessionModeDescriptor.applyTiming`
+- `ProviderAdapter.renameSession`
+- `ProviderAdapter.setSessionMode`
+- `ProviderAdapter.listModels`
+- `ProviderAdapter.setSessionModel`
+
+Frontend code may render `role`, `label`, and `description`, but it must not interpret provider
+mode ids. Provider-native translation remains adapter-owned.
+
 ## Not Frozen Yet
 
 These areas should remain changeable without calling the protocol unstable:
@@ -110,6 +128,7 @@ These areas should remain changeable without calling the protocol unstable:
 - reconnect wording
 - inspector labels
 - provider diagnostic wording
+- exact mode button labels, as long as `SessionModeDescriptor.role` semantics remain stable
 
 ### Provider Diagnostics
 

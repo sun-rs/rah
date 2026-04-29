@@ -11,9 +11,12 @@ RAH is now centered on five main lines:
 - real provider adapters (`codex`, `claude`, `gemini`, `kimi`, `opencode`)
 - same-origin workbench with stored history, replay, claim, and live upgrade
 
-The workbench is served through the daemon itself. The stable entry is:
+The workbench is served through the daemon itself. The stable local entry is:
 
 - `http://127.0.0.1:43111/`
+
+The daemon intentionally listens on `0.0.0.0` so phones/tablets on the LAN can reach the same
+workbench when the host firewall/network allows it.
 
 The Vite server remains a development-only entry:
 
@@ -38,6 +41,8 @@ Open:
 ```text
 http://127.0.0.1:43111/
 ```
+
+For LAN access, use the Mac's LAN IP with port `43111`.
 
 For local development with split services:
 
@@ -114,7 +119,8 @@ packages/
 - `ProviderAdapter` is the seam where concrete providers plug into the runtime.
 - `ProviderActivity` is the adapter-facing normalization layer.
 - `CodexAdapter` remains the reference-standard adapter.
-- `ClaudeAdapter`, `GeminiAdapter`, and `KimiAdapter` are now real adapters, not placeholders.
+- `ClaudeAdapter`, `GeminiAdapter`, `KimiAdapter`, and `OpenCodeAdapter` are now real adapters,
+  not placeholders.
 - `DebugAdapter` remains useful for structured scenario replay and non-provider UI exercise.
 - `client-web` consumes the canonical API/events boundary and should not depend on provider-native
   event names.
@@ -152,12 +158,15 @@ RAH stays close to the proven hapi/paseo product boundary:
 
 ## Docs
 
-Start here for the complete project description in Chinese:
+Start here:
 
+- [Docs Index](./docs/README.md)
+- [当前系统设计总览（中文）](./docs/current-system-design.zh-CN.md)
 - [项目总览（中文）](./docs/project-overview.zh-CN.md)
 
 Core design and freeze documents:
 
+- [历史浏览与分页边界（中文）](./docs/history-browsing.zh-CN.md)
 - [RAH Canonical Event Taxonomy](./docs/canonical-event-taxonomy.md)
 - [RAH Workbench Boundary](./docs/workbench-boundary.md)
 - [Codex Adapter Event Coverage](./docs/codex-event-coverage.md)

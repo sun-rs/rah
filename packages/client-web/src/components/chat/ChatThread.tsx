@@ -351,7 +351,7 @@ export function ChatThread(props: {
   hideToolCalls?: boolean;
   canLoadOlderHistory?: boolean;
   historyLoading?: boolean;
-  onLoadOlderHistory?: () => void;
+  onLoadOlderHistory?: () => void | Promise<void>;
   canRespondToPermission?: boolean;
   onPermissionRespond: (requestId: string, response: PermissionResponseRequest) => void;
 }) {
@@ -502,31 +502,35 @@ export function ChatThread(props: {
       const distanceToBottom =
         node.scrollHeight - node.clientHeight - node.scrollTop;
       const isAtBottom = distanceToBottom <= BOTTOM_STICK_THRESHOLD_PX;
+      const contentNeedsMoreHistory =
+        node.scrollHeight <= node.clientHeight + TOP_HISTORY_TRIGGER_PX;
       stickToBottomRef.current = isAtBottom;
       if (!isAtBottom) {
         sessionSwitchBottomLockRef.current = false;
       }
       setShowScrollToBottom(!isAtBottom && node.scrollHeight > node.clientHeight);
 
-       const scrollingUp = node.scrollTop < lastScrollTopRef.current;
-       if (node.scrollTop > TOP_HISTORY_REARM_PX) {
-         topHistoryAutoLoadArmedRef.current = true;
-       }
+      const scrollingUp = node.scrollTop < lastScrollTopRef.current;
+      if (node.scrollTop > TOP_HISTORY_REARM_PX || contentNeedsMoreHistory) {
+        topHistoryAutoLoadArmedRef.current = true;
+      }
       if (
         props.canLoadOlderHistory &&
         props.onLoadOlderHistory &&
-         !props.historyLoading &&
-         !loadingOlderRef.current &&
-         topHistoryAutoLoadArmedRef.current &&
-         scrollingUp &&
-         node.scrollTop <= TOP_HISTORY_TRIGGER_PX
-       ) {
-         topHistoryAutoLoadArmedRef.current = false;
-         loadingOlderRef.current = true;
-         prependAnchorRef.current = captureVisiblePrependAnchor();
-         props.onLoadOlderHistory();
-       }
-       lastScrollTopRef.current = node.scrollTop;
+        !props.historyLoading &&
+        !loadingOlderRef.current &&
+        topHistoryAutoLoadArmedRef.current &&
+        ((scrollingUp && node.scrollTop <= TOP_HISTORY_TRIGGER_PX) || contentNeedsMoreHistory)
+      ) {
+        topHistoryAutoLoadArmedRef.current = false;
+        loadingOlderRef.current = true;
+        prependAnchorRef.current = captureVisiblePrependAnchor();
+        const loadResult = props.onLoadOlderHistory();
+        void Promise.resolve(loadResult).finally(() => {
+          loadingOlderRef.current = false;
+        });
+      }
+      lastScrollTopRef.current = node.scrollTop;
       if (scrollRafRef.current !== null) {
         cancelAnimationFrame(scrollRafRef.current);
       }
@@ -612,9 +616,18 @@ export function ChatThread(props: {
         node.scrollTop = nextScrollTop;
       }
       lastScrollTopRef.current = node.scrollTop;
+      if (
+        node.scrollTop > TOP_HISTORY_REARM_PX ||
+        node.scrollHeight <= node.clientHeight + TOP_HISTORY_TRIGGER_PX
+      ) {
+        topHistoryAutoLoadArmedRef.current = true;
+      }
       const nextSettlePassesRemaining = props.historyLoading
         ? anchor.settlePassesRemaining
         : anchor.settlePassesRemaining - 1;
+      if (!props.historyLoading) {
+        loadingOlderRef.current = false;
+      }
       if (props.historyLoading || nextSettlePassesRemaining > 0) {
         prependAnchorRef.current = {
           ...anchor,

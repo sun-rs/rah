@@ -11,6 +11,7 @@ import {
   resolveHistoryActivationMode,
   resolveHiddenWorkspaceDirsFromSessionsResponse,
 } from "./useSessionStore";
+import { activateHistorySessionCommand } from "./session-store-session-startup";
 import { applyEventsToProjectionMap } from "./session-store-projections";
 import { initialHistorySyncState, type SessionProjection } from "./types";
 
@@ -265,6 +266,76 @@ describe("workspace response reconciliation", () => {
       }),
       "resume",
     );
+  });
+
+  test("loads history when activating an already selected live projection from history", async () => {
+    type ActivateDeps = Parameters<typeof activateHistorySessionCommand>[0];
+    let historyLoadSessionId: string | null = null;
+    const existingProjection = projection("/workspace/a");
+    existingProjection.summary.attachedClients = [
+      {
+        id: "web-current",
+        kind: "web",
+        sessionId: existingProjection.summary.session.id,
+        connectionId: "web-current",
+        attachMode: "interactive",
+        focus: true,
+        lastSeenAt: existingProjection.summary.session.updatedAt,
+      },
+    ];
+    existingProjection.summary.controlLease = {
+      sessionId: existingProjection.summary.session.id,
+      holderClientId: "web-current",
+      holderKind: "web",
+      grantedAt: existingProjection.summary.session.updatedAt,
+    };
+    let state = {
+      clientId: "web-current",
+      connectionId: "web-current",
+      projections: new Map<string, SessionProjection>([
+        ["session:/workspace/a", existingProjection],
+      ]),
+      unreadSessionIds: new Set<string>(),
+      hiddenWorkspaceDirs: new Set<string>(),
+      workspaceDirs: ["/workspace/a"],
+      workspaceVisibilityVersion: 0,
+      workspaceDir: "/workspace/a",
+      selectedSessionId: null as string | null,
+      newSessionProvider: "codex" as const,
+      pendingSessionTransition: null,
+      pendingSessionAction: null,
+      storedSessions: [liveStoredSessionRef("/workspace/a")],
+      recentSessions: [],
+      error: null,
+    };
+    const deps: ActivateDeps = {
+      get: () => state,
+      set: (partial) => {
+        const patch = typeof partial === "function" ? partial(state) : partial;
+        state = { ...state, ...patch };
+      },
+      ensureSessionHistoryLoaded: async (sessionId) => {
+        historyLoadSessionId = sessionId;
+      },
+      sendInput: async () => undefined,
+      attachSession: async () => undefined,
+      resumeStoredSession: async () => undefined,
+      applySessionsResponse: (current) => ({
+        ...current,
+        storedSessions: state.storedSessions,
+        recentSessions: state.recentSessions,
+        workspaceDirs: state.workspaceDirs,
+      }),
+      adoptExistingProjectionForProviderSession: (projections) => projections,
+      applyEventsToMap: (projections) => projections,
+      takePendingEventsForSessions: () => [],
+      confirmCreateMissingWorkspace: async () => true,
+    };
+
+    await activateHistorySessionCommand(deps, liveStoredSessionRef("/workspace/a"));
+
+    assert.equal(state.selectedSessionId, "session:/workspace/a");
+    assert.equal(historyLoadSessionId, "session:/workspace/a");
   });
 
   test("uses one shared web client id across tabs and devices", () => {

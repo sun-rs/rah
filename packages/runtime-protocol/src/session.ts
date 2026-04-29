@@ -23,6 +23,18 @@ export type AttachMode = "observe" | "interactive";
 
 export type SessionRenameMode = "none" | "local" | "native";
 export type SessionModeSource = "native" | "local" | "external_locked";
+export type SessionModeRole =
+  | "ask"
+  | "auto_edit"
+  | "full_auto"
+  | "plan"
+  | "custom";
+export type SessionModeApplyTiming =
+  | "immediate"
+  | "next_turn"
+  | "idle_only"
+  | "restart_required"
+  | "startup_only";
 export type SessionModelSource = "native" | "static" | "fallback";
 export type CapabilitySource =
   | "runtime_session"
@@ -45,8 +57,10 @@ export type SessionConfigValue = string | number | boolean | null;
 
 export interface SessionModeDescriptor {
   id: string;
+  role?: SessionModeRole;
   label: string;
   description?: string;
+  applyTiming?: SessionModeApplyTiming;
   hotSwitch: boolean;
 }
 
@@ -112,6 +126,7 @@ export interface ModelCapabilityProfile {
   modelId: string;
   source: CapabilitySource;
   freshness: CapabilityFreshness;
+  contextWindow?: number;
   traits?: ModelCapabilityTraits;
   configOptions: SessionConfigOption[];
 }
@@ -120,6 +135,7 @@ export interface SessionModelDescriptor {
   id: string;
   label: string;
   description?: string;
+  contextWindow?: number;
   hidden?: boolean;
   isDefault?: boolean;
   reasoningOptions?: SessionReasoningOption[];
@@ -158,6 +174,9 @@ export interface SessionCapabilities {
   contextUsage: boolean;
   resumeByProvider: boolean;
   listProviderSessions: boolean;
+  /**
+   * @deprecated Use actions.rename. Kept for compatibility with older clients.
+   */
   renameSession: boolean;
   actions: SessionActionCapabilities;
   steerInput: boolean;

@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   archiveOpenCodeStoredSession,
+  createOpenCodeStoredSessionFrozenHistoryPageLoader,
   discoverOpenCodeStoredSessions,
   findOpenCodeStoredSessionRecord,
   getOpenCodeStoredSessionHistoryPage,
@@ -70,6 +71,32 @@ test("loads OpenCode stored messages and materializes history", { skip: !hasSqli
       { kind: "user_message", text: "Hello", messageId: "msg_user" },
       { kind: "reasoning", text: "Thinking" },
       { kind: "assistant_message", text: "Assistant answer", messageId: "msg_assistant" },
+    ]);
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("pages OpenCode stored history through a frozen loader", { skip: !hasSqlite }, () => {
+  const dataDir = createOpenCodeFixture();
+  try {
+    const record = findOpenCodeStoredSessionRecord("ses_active", { dataDir });
+    assert.ok(record);
+
+    const loader = createOpenCodeStoredSessionFrozenHistoryPageLoader({
+      sessionId: "runtime-session",
+      record,
+    });
+    const first = loader.loadInitialPage(3);
+    assert.equal(first.events.length, 3);
+    assert.ok(first.nextCursor);
+
+    const older = loader.loadOlderPage(first.nextCursor, 3, first.boundary);
+    const timelineItems = older.events
+      .filter((event) => event.type === "timeline.item.added")
+      .map((event) => event.payload.item);
+    assert.deepEqual(timelineItems, [
+      { kind: "user_message", text: "Hello", messageId: "msg_user" },
     ]);
   } finally {
     rmSync(dataDir, { recursive: true, force: true });

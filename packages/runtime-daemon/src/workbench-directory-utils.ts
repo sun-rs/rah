@@ -37,6 +37,9 @@ export function sessionBelongsToWorkspace(
   if (!normalizedSession || !normalizedWorkspace) {
     return false;
   }
+  if (normalizedWorkspace === "/" || normalizedWorkspace === "\\") {
+    return true;
+  }
   return (
     normalizedSession === normalizedWorkspace ||
     normalizedSession.startsWith(`${normalizedWorkspace}/`) ||

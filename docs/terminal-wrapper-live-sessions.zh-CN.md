@@ -286,7 +286,7 @@ web ui
 
 优先顺序：
 
-1. localhost WebSocket
+1. daemon HTTP/WS 入口上的本机连接
 2. 未来如有需要，再评估 Unix domain socket
 
 第一阶段不要过度设计，直接复用现有 daemon HTTP/WS 入口更稳。

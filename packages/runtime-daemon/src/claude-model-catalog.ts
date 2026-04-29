@@ -14,6 +14,8 @@ import type {
   SessionModelDescriptor,
   SessionReasoningOption,
 } from "@rah/runtime-protocol";
+import { knownModelContextWindow } from "./model-context-window";
+import { defaultProviderModeId, providerModeDescriptors } from "./session-mode-utils";
 
 type ClaudeSettingsFile = {
   env?: Record<string, unknown>;
@@ -247,6 +249,7 @@ function buildClaudeModelProfiles(models: SessionModelDescriptor[]): ModelCapabi
       modelId: model.id,
       source: "native_online",
       freshness: "authoritative",
+      ...(model.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),
       traits: {
         supportsEffort: levels.length > 0,
         supportsThinkingLevel: levels.length > 0,
@@ -262,9 +265,14 @@ function descriptorFromClaudeModelInfo(info: ClaudeSdkModelInfo): SessionModelDe
     : [];
   const defaultReasoningId = defaultClaudeEffort(levels, info.value);
   const description = info.description.trim();
+  const contextWindow = knownModelContextWindow({
+    provider: "claude",
+    modelId: info.value,
+  })?.contextWindow;
   const descriptor: SessionModelDescriptor = {
     id: info.value,
     label: versionedClaudeLabel(info),
+    ...(contextWindow !== undefined ? { contextWindow } : {}),
     ...(description ? { description } : {}),
     ...(info.value === "default" ? { isDefault: true } : {}),
   };
@@ -347,11 +355,14 @@ function buildClaudeCatalogFromModelInfos(args: {
       models: models.map((model) => ({
         id: model.id,
         label: model.label,
+        contextWindow: model.contextWindow ?? null,
         defaultReasoningId: model.defaultReasoningId ?? null,
       })),
     }),
     modelsExact: args.modelsExact,
     optionsExact: args.optionsExact,
+    defaultModeId: defaultProviderModeId("claude")!,
+    modes: providerModeDescriptors("claude"),
     modelProfiles: buildClaudeModelProfiles(models).map((profile) => ({
       ...profile,
       source: args.sourceDetail,

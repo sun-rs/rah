@@ -9,6 +9,8 @@ import {
 } from "./session-store";
 import { workspaceDirsFromState } from "./workbench-directory-utils";
 
+const RECENT_SESSION_LIMIT = 15;
+
 export type RememberedWorkbenchSessionState = {
   rememberedSessions: readonly StoredSessionRef[];
   rememberedRecentSessions: readonly StoredSessionRef[];
@@ -58,6 +60,105 @@ export function sameStoredSessionRefs(
   return left.every((entry, index) => storedSessionRefKey(entry) === storedSessionRefKey(right[index]!));
 }
 
+function sessionProviderKey(session: Pick<StoredSessionRef, "provider" | "providerSessionId">): string {
+  return `${session.provider}:${session.providerSessionId}`;
+}
+
+function sessionRecentTimestamp(session: StoredSessionRef): string {
+  return session.lastUsedAt ?? session.updatedAt ?? session.createdAt ?? "";
+}
+
+function newestTimestamp(...values: Array<string | undefined>): string | undefined {
+  return values.filter((value): value is string => Boolean(value)).sort().at(-1);
+}
+
+function preferProviderHistoryMetadata(left: StoredSessionRef, right: StoredSessionRef): StoredSessionRef {
+  if (left.source === "provider_history" && right.source !== "provider_history") {
+    return left;
+  }
+  if (right.source === "provider_history" && left.source !== "provider_history") {
+    return right;
+  }
+  return sessionRecentTimestamp(right) >= sessionRecentTimestamp(left) ? right : left;
+}
+
+function mergeStoredSessionRef(left: StoredSessionRef, right: StoredSessionRef): StoredSessionRef {
+  const metadata = preferProviderHistoryMetadata(left, right);
+  const fallback = metadata === left ? right : left;
+  const lastUsedAt = newestTimestamp(
+    left.lastUsedAt,
+    right.lastUsedAt,
+    left.updatedAt,
+    right.updatedAt,
+    left.createdAt,
+    right.createdAt,
+  );
+  return {
+    ...fallback,
+    ...metadata,
+    ...(lastUsedAt ? { lastUsedAt } : {}),
+  };
+}
+
+function liveSessionRef(state: StoredSessionState): StoredSessionRef | null {
+  const providerSessionId = state.session.providerSessionId;
+  if (!providerSessionId) {
+    return null;
+  }
+  return {
+    provider: state.session.provider,
+    providerSessionId,
+    cwd: state.session.cwd,
+    rootDir: state.session.rootDir,
+    ...(state.session.title !== undefined ? { title: state.session.title } : {}),
+    ...(state.session.preview !== undefined ? { preview: state.session.preview } : {}),
+    createdAt: state.session.createdAt,
+    updatedAt: state.session.updatedAt,
+    lastUsedAt: state.session.updatedAt,
+    source: "previous_live",
+  };
+}
+
+function buildGlobalRecentSessions(args: {
+  storedSessions: Iterable<StoredSessionRef>;
+  rememberedRecentSessions: readonly StoredSessionRef[];
+  visibleLiveStates: readonly StoredSessionState[];
+  hiddenSessionKeys: ReadonlySet<string>;
+  availableProviderSessionKeys: ReadonlySet<string>;
+  applyTitleOverride: (session: StoredSessionRef) => StoredSessionRef;
+}): StoredSessionRef[] {
+  const recentByKey = new Map<string, StoredSessionRef>();
+  const addCandidate = (session: StoredSessionRef) => {
+    const key = sessionProviderKey(session);
+    if (args.hiddenSessionKeys.has(key)) {
+      return;
+    }
+    if (session.source === "previous_live" && !args.availableProviderSessionKeys.has(key)) {
+      return;
+    }
+    const existing = recentByKey.get(key);
+    recentByKey.set(key, existing ? mergeStoredSessionRef(existing, session) : session);
+  };
+
+  for (const session of args.storedSessions) {
+    addCandidate(session);
+  }
+  for (const session of args.rememberedRecentSessions) {
+    addCandidate(session);
+  }
+  for (const state of args.visibleLiveStates) {
+    const session = liveSessionRef(state);
+    if (session) {
+      addCandidate(session);
+    }
+  }
+
+  return [...recentByKey.values()]
+    .sort((a, b) => sessionRecentTimestamp(b).localeCompare(sessionRecentTimestamp(a)))
+    .slice(0, RECENT_SESSION_LIMIT)
+    .map(args.applyTitleOverride);
+}
+
 export function buildSessionsResponse(args: {
   liveStates: readonly StoredSessionState[];
   discoveredStoredSessions: readonly StoredSessionRef[];
@@ -83,7 +184,7 @@ export function buildSessionsResponse(args: {
   const availableProviderSessionKeys = new Set<string>();
   const discoveredByKey = new Map<string, StoredSessionRef>();
   for (const stored of args.discoveredStoredSessions) {
-    const key = `${stored.provider}:${stored.providerSessionId}`;
+    const key = sessionProviderKey(stored);
     availableProviderSessionKeys.add(key);
     discoveredByKey.set(key, stored);
   }
@@ -92,12 +193,15 @@ export function buildSessionsResponse(args: {
       continue;
     }
     availableProviderSessionKeys.add(
-      `${state.session.provider}:${state.session.providerSessionId}`,
+      sessionProviderKey({
+        provider: state.session.provider,
+        providerSessionId: state.session.providerSessionId,
+      }),
     );
   }
   const storedSessions = new Map<string, StoredSessionRef>();
   for (const remembered of args.remembered.rememberedSessions) {
-    const key = `${remembered.provider}:${remembered.providerSessionId}`;
+    const key = sessionProviderKey(remembered);
     if (hiddenSessionKeys.has(key)) {
       continue;
     }
@@ -110,10 +214,10 @@ export function buildSessionsResponse(args: {
     storedSessions.set(key, remembered);
   }
   for (const stored of args.discoveredStoredSessions) {
-    if (hiddenSessionKeys.has(`${stored.provider}:${stored.providerSessionId}`)) {
+    if (hiddenSessionKeys.has(sessionProviderKey(stored))) {
       continue;
     }
-    storedSessions.set(`${stored.provider}:${stored.providerSessionId}`, stored);
+    storedSessions.set(sessionProviderKey(stored), stored);
   }
   return {
     sessions: visibleLiveStates.map((state) => {
@@ -121,11 +225,17 @@ export function buildSessionsResponse(args: {
       if (!providerSessionId) {
         return toSessionSummary(state);
       }
-      const discovered = discoveredByKey.get(`${state.session.provider}:${providerSessionId}`);
+      const discovered = discoveredByKey.get(sessionProviderKey({
+        provider: state.session.provider,
+        providerSessionId,
+      }));
       if (!discovered) {
         const summary = toSessionSummary(state);
         const override = args.remembered.rememberedSessionTitleOverrides[
-          `${summary.session.provider}:${providerSessionId}`
+          sessionProviderKey({
+            provider: summary.session.provider,
+            providerSessionId,
+          })
         ];
         if (!override || override === summary.session.title) {
           return summary;
@@ -147,7 +257,10 @@ export function buildSessionsResponse(args: {
         },
       });
       const override = args.remembered.rememberedSessionTitleOverrides[
-        `${summary.session.provider}:${providerSessionId}`
+        sessionProviderKey({
+          provider: summary.session.provider,
+          providerSessionId,
+        })
       ];
       if (!override || override === summary.session.title) {
         return summary;
@@ -161,30 +274,13 @@ export function buildSessionsResponse(args: {
       };
     }),
     storedSessions: [...storedSessions.values()].map(applyTitleOverride),
-    recentSessions: args.remembered.rememberedRecentSessions.filter((session) => {
-      const key = `${session.provider}:${session.providerSessionId}`;
-      if (hiddenSessionKeys.has(key)) {
-        return false;
-      }
-      if (
-        session.source === "previous_live" &&
-        !availableProviderSessionKeys.has(key)
-      ) {
-        return false;
-      }
-      return true;
-    }).map((session) => {
-      const key = `${session.provider}:${session.providerSessionId}`;
-      const discovered = discoveredByKey.get(key);
-      if (!discovered) {
-        return applyTitleOverride(session);
-      }
-      const lastUsedAt = session.lastUsedAt ?? discovered.lastUsedAt ?? discovered.updatedAt;
-      return applyTitleOverride({
-        ...session,
-        ...discovered,
-        ...(lastUsedAt ? { lastUsedAt } : {}),
-      });
+    recentSessions: buildGlobalRecentSessions({
+      storedSessions: storedSessions.values(),
+      rememberedRecentSessions: args.remembered.rememberedRecentSessions,
+      visibleLiveStates,
+      hiddenSessionKeys,
+      availableProviderSessionKeys,
+      applyTitleOverride,
     }),
     workspaceDirs: workspaceDirsFromState(
       args.remembered.rememberedWorkspaceDirs,

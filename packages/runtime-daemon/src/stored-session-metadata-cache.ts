@@ -7,6 +7,7 @@ type StoredSessionMetadataCacheEntry = {
   ref: StoredSessionRef;
   size: number;
   mtimeMs: number;
+  version?: number;
 };
 
 type StoredSessionMetadataCacheFile = {
@@ -53,9 +54,13 @@ export function getCachedStoredSessionRef(args: {
   filePath: string;
   size: number;
   mtimeMs: number;
+  version?: number;
 }): StoredSessionRef | null {
   const cached = args.cache.get(args.filePath);
   if (!cached) {
+    return null;
+  }
+  if (args.version !== undefined && cached.version !== args.version) {
     return null;
   }
   return cached.size === args.size && cached.mtimeMs === args.mtimeMs ? cached.ref : null;
@@ -67,10 +72,12 @@ export function setCachedStoredSessionRef(args: {
   size: number;
   mtimeMs: number;
   ref: StoredSessionRef;
+  version?: number;
 }): void {
   args.cache.set(args.filePath, {
     ref: args.ref,
     size: args.size,
     mtimeMs: args.mtimeMs,
+    ...(args.version !== undefined ? { version: args.version } : {}),
   });
 }

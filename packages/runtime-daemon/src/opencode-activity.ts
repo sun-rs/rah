@@ -597,7 +597,16 @@ export function openCodeUsageFromMessage(info: OpenCodeMessageInfo): ContextUsag
   if (!tokens && typeof info.cost !== "number") {
     return undefined;
   }
+  const tokenTotal =
+    tokens !== undefined
+      ? (tokens.input ?? 0) +
+        (tokens.output ?? 0) +
+        (tokens.reasoning ?? 0) +
+        (tokens.cache?.read ?? 0) +
+        (tokens.cache?.write ?? 0)
+      : undefined;
   return {
+    ...(tokenTotal !== undefined && tokenTotal > 0 ? { usedTokens: tokenTotal } : {}),
     ...(tokens?.input !== undefined ? { inputTokens: tokens.input } : {}),
     ...(tokens?.output !== undefined ? { outputTokens: tokens.output } : {}),
     ...(tokens?.reasoning !== undefined ? { reasoningOutputTokens: tokens.reasoning } : {}),

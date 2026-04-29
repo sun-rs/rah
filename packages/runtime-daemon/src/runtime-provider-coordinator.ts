@@ -16,6 +16,7 @@ import type {
 import { launchSpecForProvider, probeProviderDiagnostic } from "./provider-diagnostics";
 import type { ProviderAdapter } from "./provider-adapter";
 import type { HistorySnapshotStore } from "./history-snapshots";
+import { defaultProviderModeId, providerModeDescriptors } from "./session-mode-utils";
 
 type RuntimeProviderCoordinatorDeps = {
   adaptersByProvider: Map<string, ProviderAdapter>;
@@ -75,6 +76,8 @@ export class RuntimeProviderCoordinator {
       }
       return catalog;
     }
+    const defaultModeId = defaultProviderModeId(provider);
+    const modes = providerModeDescriptors(provider);
     const catalog: ProviderModelCatalog = {
       provider,
       models: [],
@@ -84,6 +87,8 @@ export class RuntimeProviderCoordinator {
       freshness: "stale",
       modelsExact: false,
       optionsExact: false,
+      ...(defaultModeId ? { defaultModeId } : {}),
+      ...(modes.length > 0 ? { modes } : {}),
     };
     const report = validateProviderModelCatalog(catalog);
     if (!report.ok) {

@@ -200,7 +200,7 @@ wrapper 向 daemon 上报的最小输入边界状态。
 
 第一阶段建议：
 
-- 直接复用 daemon 同源入口上的 localhost WebSocket
+- 直接复用 daemon 同源入口上的 HTTP/WS 连接；wrapper 默认连本机地址，daemon 仍可为 Web/PWA 提供局域网入口
 
 理由：
 

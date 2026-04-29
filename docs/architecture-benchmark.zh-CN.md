@@ -14,7 +14,7 @@ RAH 现在已经完成了：
 
 - canonical event contract
 - runtime-owned workbench
-- `Codex / Claude / Gemini / Kimi` 四条真实 provider 主线
+- `Codex / Claude / Gemini / Kimi / OpenCode` 五条真实 provider 主线
 - history replay / claim / live upgrade / tool flow / browser smoke
 
 因此，RAH 当前已经不是“架构是否成立”的阶段，而是“如何继续强化”的阶段。
@@ -115,7 +115,7 @@ AionUi ACP 2.0 的价值不在“它能替代一切”，而在：
 
 ### 5.1 不该把所有 provider 都统一迁到 ACP-first
 
-现在 `Codex / Claude / Gemini / Kimi` 已经有 provider-native adapter，而且真实链路已验证。
+现在 `Codex / Claude / Gemini / Kimi / OpenCode` 已经有 provider-native adapter，而且真实链路已验证。
 
 因此不应该为了“架构统一感”就把它们全部塞进 ACP runtime。
 

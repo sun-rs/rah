@@ -5,7 +5,9 @@ import type {
   ProviderModelCatalog,
   SessionModelDescriptor,
 } from "@rah/runtime-protocol";
+import { knownModelContextWindow } from "./model-context-window";
 import { resolveConfiguredBinary } from "./provider-binary-utils";
+import { defaultProviderModeId, providerModeDescriptors } from "./session-mode-utils";
 
 const GEMINI_MODEL_DESCRIPTORS: SessionModelDescriptor[] = [
   {
@@ -63,10 +65,12 @@ function buildGeminiModelProfiles(
   freshness: ModelCapabilityProfile["freshness"],
 ): ModelCapabilityProfile[] {
   return models.map((model) => {
+    const contextWindow = model.contextWindow ?? geminiContextWindow(model.id);
     return {
       modelId: model.id,
       source,
       freshness,
+      ...(contextWindow !== undefined ? { contextWindow } : {}),
       configOptions: [],
     };
   });
@@ -81,6 +85,10 @@ function profileRevision(input: unknown): string {
 
 function asNonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function geminiContextWindow(modelId: string): number | undefined {
+  return knownModelContextWindow({ provider: "gemini", modelId })?.contextWindow;
 }
 
 export function normalizeGeminiModelId(value: string | null | undefined): string | null {
@@ -101,9 +109,11 @@ function mapGeminiAcpModel(entry: unknown): SessionModelDescriptor | null {
   if (!id) {
     return null;
   }
+  const contextWindow = geminiContextWindow(id);
   return {
     id,
     label: asNonEmptyString(record.name) ?? asNonEmptyString(record.label) ?? id,
+    ...(contextWindow !== undefined ? { contextWindow } : {}),
     ...(asNonEmptyString(record.description)
       ? { description: asNonEmptyString(record.description)! }
       : {}),
@@ -143,6 +153,8 @@ function buildGeminiCatalog(args: {
     ),
     modelsExact: args.modelsExact,
     optionsExact: args.optionsExact,
+    defaultModeId: defaultProviderModeId("gemini")!,
+    modes: providerModeDescriptors("gemini"),
     modelProfiles: buildGeminiModelProfiles(
       models,
       args.sourceDetail,

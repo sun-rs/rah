@@ -50,6 +50,10 @@ export function extractTextFromContent(content: unknown): string {
   return trimGeminiContentBlankLines(text);
 }
 
+export function extractGeminiUserDisplayText(message: Pick<GeminiMessageRecord, "content" | "displayContent">): string {
+  return extractTextFromContent(message.displayContent) || extractTextFromContent(message.content);
+}
+
 function trimGeminiContentBlankLines(value: string): string {
   if (!value.trim()) {
     return "";
@@ -67,6 +71,10 @@ export function hashGeminiMessages(messages: readonly GeminiMessageRecord[]): st
     hash.update(message.timestamp);
     hash.update("\u0000");
     hash.update(message.type);
+    hash.update("\u0000");
+    hash.update(JSON.stringify(message.displayContent ?? null));
+    hash.update("\u0000");
+    hash.update(JSON.stringify(message.content ?? null));
     hash.update("\u0000");
   }
   return hash.digest("hex");
@@ -291,7 +299,7 @@ function conversationToEvents(params: {
           {
             type: "timeline_item",
             turnId,
-            item: { kind: "user_message", text: extractTextFromContent(message.content) },
+            item: { kind: "user_message", text: extractGeminiUserDisplayText(message) },
           },
         );
         break;

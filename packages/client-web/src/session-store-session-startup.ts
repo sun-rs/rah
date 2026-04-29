@@ -1,9 +1,6 @@
 import type {
-  ApprovalPolicy,
   DebugScenarioDescriptor,
-  ProviderKind,
   ResumeSessionRequest,
-  SessionConfigValue,
   SessionSummary,
   StoredSessionRef,
 } from "@rah/runtime-protocol";
@@ -34,17 +31,12 @@ import { providerLabel, type SessionProjection } from "./types";
 
 type ProviderChoice = "codex" | "claude" | "kimi" | "gemini" | "opencode";
 
-const RAH_SESSION_MODE_CONFIG_KEY = "rah_session_mode";
-
 type StartSessionOptions = {
   provider?: ProviderChoice;
   cwd?: string;
   title?: string;
   model?: string;
   reasoningId?: string;
-  providerConfig?: Record<string, SessionConfigValue>;
-  approvalPolicy?: ApprovalPolicy;
-  sandbox?: string;
   modeId?: string;
   initialInput?: string;
 };
@@ -122,57 +114,6 @@ type SessionStartupDeps = {
   confirmCreateMissingWorkspace: (dir: string) => Promise<boolean>;
 };
 
-function modeStartupOverrides(
-  provider: ProviderKind,
-  modeId: string | undefined,
-  providerConfig: Record<string, SessionConfigValue> | undefined,
-): {
-  providerConfig?: Record<string, SessionConfigValue>;
-  approvalPolicy?: ApprovalPolicy;
-  sandbox?: string;
-} {
-  const config = providerConfig ? { ...providerConfig } : undefined;
-  if (!modeId) {
-    return config ? { providerConfig: config } : {};
-  }
-  if (provider === "codex" && modeId !== "plan") {
-    const [approvalPolicy, sandbox] = modeId.split("/", 2);
-    return {
-      ...(config ? { providerConfig: config } : {}),
-      ...(approvalPolicy ? { approvalPolicy: approvalPolicy as ApprovalPolicy } : {}),
-      ...(sandbox ? { sandbox } : {}),
-    };
-  }
-  if (provider === "claude") {
-    return {
-      ...(config ? { providerConfig: config } : {}),
-      ...(modeId === "bypassPermissions" ? { approvalPolicy: "never" as const } : {}),
-      ...(modeId === "default" ? { approvalPolicy: "default" as const } : {}),
-    };
-  }
-  if (provider === "gemini" && modeId !== "plan") {
-    return {
-      ...(config ? { providerConfig: config } : {}),
-      approvalPolicy: modeId as ApprovalPolicy,
-    };
-  }
-  if (provider === "kimi" && modeId !== "plan") {
-    return {
-      ...(config ? { providerConfig: config } : {}),
-      approvalPolicy: modeId === "yolo" ? "yolo" : "default",
-    };
-  }
-  if (provider === "opencode") {
-    return {
-      providerConfig: {
-        ...(config ?? {}),
-        [RAH_SESSION_MODE_CONFIG_KEY]: modeId,
-      },
-    };
-  }
-  return config ? { providerConfig: config } : {};
-}
-
 export async function startSessionCommand(
   deps: SessionStartupDeps,
   options?: StartSessionOptions,
@@ -194,18 +135,13 @@ export async function startSessionCommand(
       error: null,
     });
     const initialInput = options?.initialInput?.trim();
-    const providerBootstrapsInitialInput = provider === "opencode" && Boolean(initialInput);
-    const startupMode = modeStartupOverrides(provider, options?.modeId, options?.providerConfig);
     const response = await api.startSession({
       provider,
       cwd,
       title: options?.title ?? `${providerLabel(provider)} session`,
       ...(options?.model ? { model: options.model } : {}),
       ...(options?.reasoningId ? { reasoningId: options.reasoningId } : {}),
-      ...startupMode,
-      ...(options?.approvalPolicy ? { approvalPolicy: options.approvalPolicy } : {}),
-      ...(options?.sandbox ? { sandbox: options.sandbox } : {}),
-      ...(providerBootstrapsInitialInput && initialInput ? { initialPrompt: initialInput } : {}),
+      ...(options?.modeId ? { modeId: options.modeId } : {}),
       attach: createInteractiveAttachRequest(state.clientId, state.connectionId),
     });
     const session =
@@ -232,7 +168,7 @@ export async function startSessionCommand(
         ),
       };
     });
-    if (initialInput && !providerBootstrapsInitialInput) {
+    if (initialInput) {
       await deps.sendInput(session.session.id, initialInput);
     }
     void deps.ensureSessionHistoryLoaded(session.session.id);
@@ -281,6 +217,7 @@ export async function activateHistorySessionCommand(
   });
   if (mode === "select" && existingLive) {
     deps.set({ selectedSessionId: existingLive.session.id });
+    void deps.ensureSessionHistoryLoaded(existingLive.session.id);
     return;
   }
   if (mode === "attach" && existingLive) {
@@ -452,7 +389,11 @@ export async function claimHistorySessionCommand(
     const request: ResumeSessionRequest = {
       provider: ref.provider,
       providerSessionId: ref.providerSessionId,
-      ...modeStartupOverrides(ref.provider, options?.modeId, undefined),
+      ...(options?.modelId ? { model: options.modelId } : {}),
+      ...(options?.modelId && options.reasoningId !== undefined
+        ? { reasoningId: options.reasoningId }
+        : {}),
+      ...(options?.modeId ? { modeId: options.modeId } : {}),
       preferStoredReplay: false,
       historyReplay: "skip",
       historySourceSessionId: sessionId,

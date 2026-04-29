@@ -185,7 +185,12 @@ emit({ type: "result", timestamp: new Date().toISOString(), status: "success", s
           id: "msg-user-1",
           timestamp: "2026-01-01T00:00:01.000Z",
           type: "user",
-          content: [{ text: "Explain this repo" }],
+          content: [
+            { text: "Explain this repo" },
+            { text: "\n--- Content from referenced files ---" },
+            { text: "\n# Expanded README contents\n" },
+          ],
+          displayContent: [{ text: "Explain this repo" }],
         }),
         JSON.stringify({
           id: "msg-gemini-1",
@@ -360,6 +365,10 @@ emit({ type: "result", timestamp: new Date().toISOString(), status: "success", s
       ),
       true,
     );
+    assert.equal(isNoisyGeminiCliStderr("headers: {"), true);
+    assert.equal(isNoisyGeminiCliStderr("'alt-svc': 'h3=\":443\"; ma=2592000',"), true);
+    assert.equal(isNoisyGeminiCliStderr("status: 429,"), true);
+    assert.equal(isNoisyGeminiCliStderr("statusText: 'Too Many Requests',"), true);
     assert.equal(isNoisyGeminiCliStderr("Actual Gemini error"), false);
   });
 
@@ -457,6 +466,12 @@ emit({ type: "result", timestamp: new Date().toISOString(), status: "success", s
       inputTokens: 30,
       cachedInputTokens: 5,
       outputTokens: 12,
+      contextWindow: 1048576,
+      percentUsed: 0,
+      percentRemaining: 100,
+      basis: "context_window",
+      precision: "estimated",
+      source: "gemini.model_profile.context_window",
     });
   });
 
@@ -556,6 +571,7 @@ emit({ type: "result", timestamp: new Date().toISOString(), status: "success", s
     assert.equal(stored[0]?.providerSessionId, "gemini-session-2");
     assert.equal(stored[0]?.cwd, cwd);
     assert.equal(stored[0]?.rootDir, cwd);
+    assert.equal(stored[0]?.title, "Explain this repo");
 
     const resumed = await adapter.resumeSession({
       provider: "gemini",

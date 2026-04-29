@@ -1,6 +1,7 @@
 import type {
   EventAuthority,
   EventChannel,
+  ContextUsage,
   PermissionRequest,
   PermissionResolution,
   RuntimeOperation,
@@ -9,6 +10,7 @@ import type {
   WorkbenchObservation,
 } from "@rah/runtime-protocol";
 import { classifyCodexCommand } from "./codex-command-classifier";
+import { normalizeContextUsage } from "./context-usage";
 import type { ProviderActivity } from "./provider-activity";
 
 export interface CodexLiveTranslatedActivity {
@@ -321,28 +323,27 @@ function parseUsage(notification: JsonRpcNotification) {
     tokenUsage.last && typeof tokenUsage.last === "object" && !Array.isArray(tokenUsage.last)
       ? (tokenUsage.last as Record<string, unknown>)
       : null;
-  const usage: Record<string, number> = {};
+  const usage: ContextUsage = {};
+  let hasUsage = false;
   if (typeof last?.total_tokens === "number") {
     usage.usedTokens = last.total_tokens;
+    hasUsage = true;
   } else if (typeof last?.totalTokens === "number") {
     usage.usedTokens = last.totalTokens;
+    hasUsage = true;
   }
   if (typeof tokenUsage.model_context_window === "number") {
     usage.contextWindow = tokenUsage.model_context_window;
+    hasUsage = true;
   } else if (typeof tokenUsage.modelContextWindow === "number") {
     usage.contextWindow = tokenUsage.modelContextWindow;
+    hasUsage = true;
   }
-  if (
-    typeof usage.usedTokens === "number" &&
-    typeof usage.contextWindow === "number" &&
-    usage.contextWindow > 0
-  ) {
-    usage.percentRemaining = Math.max(
-      0,
-      Math.round(((usage.contextWindow - usage.usedTokens) / usage.contextWindow) * 100),
-    );
+  if (!hasUsage) {
+    return null;
   }
-  return Object.keys(usage).length > 0 ? usage : null;
+  usage.source = "codex.app_server.token_usage";
+  return normalizeContextUsage(usage);
 }
 
 function parseExecCommandStart(notification: JsonRpcNotification): {

@@ -29,13 +29,15 @@ function waitFor(predicate: () => boolean, timeoutMs = 5000): Promise<void> {
 describe("KimiAdapter", () => {
   let tmpDir: string;
   let previousBinary: string | undefined;
+  const cleanupTasks: Array<() => Promise<void>> = [];
 
   beforeEach(() => {
     previousBinary = process.env.RAH_KIMI_BINARY;
     tmpDir = mkdtempSync(path.join(os.tmpdir(), "rah-kimi-live-"));
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await Promise.allSettled(cleanupTasks.splice(0).map((cleanup) => cleanup()));
     if (previousBinary === undefined) {
       delete process.env.RAH_KIMI_BINARY;
     } else {
@@ -50,6 +52,20 @@ describe("KimiAdapter", () => {
       ptyHub: new PtyHub(),
       sessionStore: new SessionStore(),
     };
+  }
+
+  function trackAdapter(
+    adapter: KimiAdapter,
+    services: ReturnType<typeof createServices>,
+  ): KimiAdapter {
+    cleanupTasks.push(async () => {
+      await Promise.allSettled(
+        services.sessionStore
+          .listSessions()
+          .map((state) => adapter.destroySession(state.session.id)),
+      );
+    });
+    return adapter;
   }
 
   function writeMockKimiBinary(mode: "basic" | "approval") {
@@ -196,7 +212,7 @@ rl.on("line", (line) => {
   test("starts a live Kimi session in yolo mode by default and streams tool and usage events", async () => {
     const { logPath } = writeMockKimiBinary("basic");
     const services = createServices();
-    const adapter = new KimiAdapter(services);
+    const adapter = trackAdapter(new KimiAdapter(services), services);
 
     const started = await adapter.startSession({
       provider: "kimi",
@@ -243,7 +259,10 @@ rl.on("line", (line) => {
     assert.deepEqual(state?.usage, {
       usedTokens: 1000,
       contextWindow: 4000,
+      percentUsed: 25,
       percentRemaining: 75,
+      basis: "context_window",
+      precision: "exact",
       inputTokens: 100,
       cachedInputTokens: 20,
       outputTokens: 30,
@@ -265,7 +284,7 @@ rl.on("line", (line) => {
   test("resumed live Kimi sessions can be archived from RAH", async () => {
     writeMockKimiBinary("basic");
     const services = createServices();
-    const adapter = new KimiAdapter(services);
+    const adapter = trackAdapter(new KimiAdapter(services), services);
 
     const resumed = await adapter.resumeSession({
       provider: "kimi",
@@ -283,10 +302,50 @@ rl.on("line", (line) => {
     assert.equal(resumed.session.session.capabilities.actions.archive, true);
   });
 
+  test("resumes Kimi with the requested model and reasoning before live control", async () => {
+    const { logPath } = writeMockKimiBinary("basic");
+    const services = createServices();
+    const adapter = trackAdapter(new KimiAdapter(services), services);
+
+    const resumed = await adapter.resumeSession({
+      provider: "kimi",
+      providerSessionId: "kimi-resume-model-session",
+      cwd: tmpDir,
+      model: "moonshot-v1",
+      reasoningId: "thinking",
+      preferStoredReplay: false,
+      attach: {
+        client: { id: "web-1", kind: "web", connectionId: "web-1" },
+        mode: "interactive",
+        claimControl: true,
+      },
+    });
+
+    assert.equal(resumed.session.session.model?.currentModelId, "moonshot-v1");
+    assert.equal(resumed.session.session.model?.currentReasoningId, "thinking");
+    assert.equal(resumed.session.session.model?.mutable, false);
+
+    const logLines = readFileSync(logPath, "utf8")
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const argv = logLines.find(
+      (line) =>
+        line.type === "argv" &&
+        Array.isArray(line.args) &&
+        line.args.includes("--session") &&
+        line.args.includes("kimi-resume-model-session"),
+    )?.args;
+    assert.ok(Array.isArray(argv));
+    assert.ok(argv.includes("--model"));
+    assert.ok(argv.includes("moonshot-v1"));
+    assert.ok(argv.includes("--thinking"));
+  });
+
   test("switches Kimi plan mode over the wire", async () => {
     const { logPath } = writeMockKimiBinary("basic");
     const services = createServices();
-    const adapter = new KimiAdapter(services);
+    const adapter = trackAdapter(new KimiAdapter(services), services);
 
     const started = await adapter.startSession({
       provider: "kimi",
@@ -312,10 +371,37 @@ rl.on("line", (line) => {
     );
   });
 
+  test("starts Kimi with requested plan mode", async () => {
+    const { logPath } = writeMockKimiBinary("basic");
+    const services = createServices();
+    const adapter = trackAdapter(new KimiAdapter(services), services);
+
+    const started = await adapter.startSession({
+      provider: "kimi",
+      cwd: tmpDir,
+      modeId: "plan",
+      attach: {
+        client: { id: "web-1", kind: "web", connectionId: "web-1" },
+        mode: "interactive",
+        claimControl: true,
+      },
+    });
+
+    assert.equal(started.session.session.mode?.currentModeId, "plan");
+    const requests = readFileSync(logPath, "utf8")
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { method?: string; params?: { enabled?: boolean } });
+    assert.ok(
+      requests.some((entry) => entry.method === "set_plan_mode" && entry.params?.enabled === true),
+    );
+  });
+
   test("round-trips Kimi approval requests through permission response", async () => {
     const { logPath } = writeMockKimiBinary("approval");
     const services = createServices();
-    const adapter = new KimiAdapter(services);
+    const adapter = trackAdapter(new KimiAdapter(services), services);
 
     const started = await adapter.startSession({
       provider: "kimi",

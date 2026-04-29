@@ -9,6 +9,7 @@ import type {
   SessionResolvedConfig,
 } from "@rah/runtime-protocol";
 import { resolveKimiCommand } from "./kimi-live-rpc";
+import { defaultProviderModeId, providerModeDescriptors } from "./session-mode-utils";
 
 const KIMI_MODEL_CACHE_TTL_MS = 5 * 60 * 1000;
 const KIMI_ACP_MODEL_TIMEOUT_MS = 8_000;
@@ -212,6 +213,8 @@ function buildKimiCatalog(args: {
     ),
     modelsExact: true,
     optionsExact: true,
+    defaultModeId: defaultProviderModeId("kimi")!,
+    modes: providerModeDescriptors("kimi"),
     modelProfiles: buildKimiModelProfiles(models),
   };
 }
@@ -226,6 +229,8 @@ export function buildKimiFallbackModelCatalog(): ProviderModelCatalog {
     freshness: "stale",
     modelsExact: false,
     optionsExact: false,
+    defaultModeId: defaultProviderModeId("kimi")!,
+    modes: providerModeDescriptors("kimi"),
     modelProfiles: [],
   };
 }

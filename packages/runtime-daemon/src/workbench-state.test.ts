@@ -4,6 +4,11 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { RuntimeEngine } from "./runtime-engine";
+import { SessionStore } from "./session-store";
+import {
+  normalizeDirectory,
+  sessionBelongsToWorkspace,
+} from "./workbench-directory-utils";
 
 describe("WorkbenchStateStore", () => {
   let tmpRoot: string;
@@ -98,7 +103,7 @@ describe("WorkbenchStateStore", () => {
     await engine.shutdown();
   });
 
-  test("adds live sessions to recent only after control is claimed", async () => {
+  test("surfaces visible live sessions in global recent before control is claimed", async () => {
     const engine = new RuntimeEngine();
     const state = engine.sessionStore.createManagedSession({
       provider: "codex",
@@ -118,7 +123,7 @@ describe("WorkbenchStateStore", () => {
     });
 
     assert.ok(
-      !engine.listSessions().recentSessions.some(
+      engine.listSessions().recentSessions.some(
         (entry) =>
           entry.provider === "codex" &&
           entry.providerSessionId === "thread-claim-recent-1",
@@ -371,7 +376,7 @@ describe("WorkbenchStateStore", () => {
       assert.equal(resumed.session.session.capabilities.steerInput, false);
       assert.equal(resumed.session.session.capabilities.livePermissions, false);
       assert.ok(
-        !engine.listSessions().recentSessions.some(
+        engine.listSessions().recentSessions.some(
           (entry) =>
             entry.provider === "claude" &&
             entry.providerSessionId === "session-1",
@@ -401,6 +406,69 @@ describe("WorkbenchStateStore", () => {
     assert.deepEqual(afterRemoval.workspaceDirs, []);
 
     await engine.shutdown();
+  });
+
+  test("root workspace normalization keeps root as a valid boundary", () => {
+    assert.equal(normalizeDirectory("/"), "/");
+    assert.equal(sessionBelongsToWorkspace("/Users/sun/project", "/"), true);
+    assert.equal(sessionBelongsToWorkspace(undefined, "/"), false);
+  });
+
+  test("session store read methods normalize shared web clients without mutating stored state", () => {
+    const store = new SessionStore();
+    const state = store.createManagedSession({
+      provider: "codex",
+      providerSessionId: "thread-shared-web-read-1",
+      launchSource: "web",
+      cwd: "/workspace/demo",
+      rootDir: "/workspace/demo",
+    });
+    state.clients.push(
+      {
+        id: "web-alpha",
+        kind: "web",
+        sessionId: state.session.id,
+        connectionId: "web-alpha",
+        attachMode: "interactive",
+        focus: false,
+        lastSeenAt: "2026-04-29T01:00:00.000Z",
+      },
+      {
+        id: "web-beta",
+        kind: "web",
+        sessionId: state.session.id,
+        connectionId: "web-beta",
+        attachMode: "observe",
+        focus: true,
+        lastSeenAt: "2026-04-29T01:01:00.000Z",
+      },
+    );
+    state.controlLease = {
+      sessionId: state.session.id,
+      holderClientId: "web-alpha",
+      holderKind: "web",
+      grantedAt: "2026-04-29T01:00:10.000Z",
+    };
+
+    const listed = store.listSessions()[0];
+    assert.deepEqual(
+      listed?.clients.map((client) => client.id),
+      ["web-user"],
+    );
+    assert.equal(listed?.controlLease.holderClientId, "web-user");
+
+    const fetched = store.getSession(state.session.id);
+    assert.deepEqual(
+      fetched?.clients.map((client) => client.id),
+      ["web-user"],
+    );
+    assert.equal(fetched?.controlLease.holderClientId, "web-user");
+
+    assert.deepEqual(
+      state.clients.map((client) => client.id),
+      ["web-alpha", "web-beta"],
+    );
+    assert.equal(state.controlLease.holderClientId, "web-alpha");
   });
 
   test("removed workspace stays removed across restart even if stale previous live history still points to it", async () => {

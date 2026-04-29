@@ -42,7 +42,7 @@ export type LiveCodexSession = {
     | {
         mode: "plan";
         settings: {
-          model: string;
+          model: string | null;
           reasoning_effort: string | null;
           developer_instructions: string | null;
         };

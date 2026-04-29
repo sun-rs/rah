@@ -2,6 +2,7 @@ import type {
   AttachedClient,
   AttachMode,
   ClientKind,
+  ContextUsage,
   ControlLease,
   ManagedSession,
   ModelCapabilityProfile,
@@ -10,6 +11,7 @@ import type {
   SessionSummary,
   Workbench,
 } from "@rah/runtime-protocol";
+import { normalizeContextUsage } from "./context-usage";
 
 const DEFAULT_CAPABILITIES: SessionCapabilities = {
   liveAttach: true,
@@ -38,16 +40,18 @@ function isCanonicalWebClientId(clientId: string): boolean {
   return clientId === SHARED_WEB_CLIENT_ID || clientId.startsWith("web-");
 }
 
-function normalizeSharedWebClientState(state: StoredSessionState): void {
-  let changed = false;
+function normalizeSharedWebClientState(state: StoredSessionState): StoredSessionState {
+  let clientsChanged = false;
   const normalizedClients: AttachedClient[] = [];
   let mergedWebClient: AttachedClient | null = null;
+  let webClientCount = 0;
 
   for (const client of state.clients) {
     if (client.kind !== "web") {
       normalizedClients.push(client);
       continue;
     }
+    webClientCount += 1;
 
     const normalizedClient: AttachedClient = {
       ...client,
@@ -72,50 +76,55 @@ function normalizeSharedWebClientState(state: StoredSessionState): void {
     }
 
     if (client.id !== SHARED_WEB_CLIENT_ID) {
-      changed = true;
+      clientsChanged = true;
     }
   }
 
   if (mergedWebClient) {
     normalizedClients.push(mergedWebClient);
-    if (state.clients.filter((client) => client.kind === "web").length !== 1) {
-      changed = true;
+    if (webClientCount !== 1) {
+      clientsChanged = true;
     }
   }
 
-  if (changed) {
-    state.clients = normalizedClients;
-  }
+  const nextClients = clientsChanged ? normalizedClients : state.clients;
+  let nextControlLease = state.controlLease;
 
   if (
     state.controlLease.holderClientId &&
     isCanonicalWebClientId(state.controlLease.holderClientId) &&
-    state.clients.some((client) => client.kind === "web")
+    nextClients.some((client) => client.kind === "web")
   ) {
     if (state.controlLease.holderClientId !== SHARED_WEB_CLIENT_ID) {
-      state.controlLease = {
+      nextControlLease = {
         ...state.controlLease,
         holderClientId: SHARED_WEB_CLIENT_ID,
         holderKind: "web",
       };
     } else if (state.controlLease.holderKind !== "web") {
-      state.controlLease = {
+      nextControlLease = {
         ...state.controlLease,
         holderKind: "web",
       };
     }
   }
+
+  if (!clientsChanged && nextControlLease === state.controlLease) {
+    return state;
+  }
+
+  return {
+    ...state,
+    clients: nextClients,
+    controlLease: nextControlLease,
+  };
 }
 
 export type StoredSessionState = {
   session: ManagedSession;
   clients: AttachedClient[];
   controlLease: ControlLease;
-  usage?: {
-    usedTokens?: number;
-    contextWindow?: number;
-    percentRemaining?: number;
-  };
+  usage?: ContextUsage;
   activeTurnId?: string;
 };
 
@@ -188,19 +197,14 @@ export class SessionStore {
   }
 
   listSessions(): StoredSessionState[] {
-    const states = [...this.sessions.values()];
-    for (const state of states) {
-      normalizeSharedWebClientState(state);
-    }
-    return states;
+    return [...this.sessions.values()].map((state) =>
+      normalizeSharedWebClientState(cloneStoredSessionState(state)),
+    );
   }
 
   getSession(sessionId: string): StoredSessionState | undefined {
     const state = this.sessions.get(sessionId);
-    if (state) {
-      normalizeSharedWebClientState(state);
-    }
-    return state;
+    return state ? normalizeSharedWebClientState(cloneStoredSessionState(state)) : undefined;
   }
 
   getWorkbench(): Workbench {
@@ -258,11 +262,6 @@ export class SessionStore {
       clients: [],
       controlLease: {
         sessionId: session.id,
-      },
-      usage: {
-        usedTokens: 0,
-        contextWindow: 1_000_000,
-        percentRemaining: 100,
       },
     };
 
@@ -367,20 +366,23 @@ export class SessionStore {
         );
       }
     }
-    normalizeSharedWebClientState(nextState);
-    this.sessions.set(nextState.session.id, nextState);
-    if (nextState.session.providerSessionId) {
+    const normalizedState = normalizeSharedWebClientState(nextState);
+    this.sessions.set(normalizedState.session.id, normalizedState);
+    if (normalizedState.session.providerSessionId) {
       this.providerSessionIndex.set(
-        this.providerKey(nextState.session.provider, nextState.session.providerSessionId),
-        nextState.session.id,
+        this.providerKey(
+          normalizedState.session.provider,
+          normalizedState.session.providerSessionId,
+        ),
+        normalizedState.session.id,
       );
     }
-    if (!this.workbench.sessionIds.includes(nextState.session.id)) {
-      this.workbench.sessionIds.push(nextState.session.id);
+    if (!this.workbench.sessionIds.includes(normalizedState.session.id)) {
+      this.workbench.sessionIds.push(normalizedState.session.id);
     }
-    this.workbench.activeSessionId = nextState.session.id;
+    this.workbench.activeSessionId = normalizedState.session.id;
     this.snapshot();
-    return nextState;
+    return normalizedState;
   }
 
   claimControl(
@@ -523,7 +525,7 @@ export class SessionStore {
     if (usage === undefined) {
       delete state.usage;
     } else {
-      state.usage = usage;
+      state.usage = normalizeContextUsage(usage);
     }
     state.session.updatedAt = new Date().toISOString();
     this.snapshot();
@@ -538,16 +540,19 @@ export class SessionStore {
 
     for (const state of states) {
       const nextState = cloneStoredSessionState(state);
-      normalizeSharedWebClientState(nextState);
-      this.sessions.set(nextState.session.id, nextState);
-      if (nextState.session.providerSessionId) {
+      const normalizedState = normalizeSharedWebClientState(nextState);
+      this.sessions.set(normalizedState.session.id, normalizedState);
+      if (normalizedState.session.providerSessionId) {
         this.providerSessionIndex.set(
-          this.providerKey(nextState.session.provider, nextState.session.providerSessionId),
-          nextState.session.id,
+          this.providerKey(
+            normalizedState.session.provider,
+            normalizedState.session.providerSessionId,
+          ),
+          normalizedState.session.id,
         );
       }
-      this.workbench.sessionIds.push(nextState.session.id);
-      this.workbench.activeSessionId = nextState.session.id;
+      this.workbench.sessionIds.push(normalizedState.session.id);
+      this.workbench.activeSessionId = normalizedState.session.id;
     }
   }
 
@@ -556,8 +561,11 @@ export class SessionStore {
     if (!state) {
       throw new Error(`Unknown session ${sessionId}`);
     }
-    normalizeSharedWebClientState(state);
-    return state;
+    const normalizedState = normalizeSharedWebClientState(state);
+    if (normalizedState !== state) {
+      this.sessions.set(sessionId, normalizedState);
+    }
+    return normalizedState;
   }
 
   private providerKey(provider: string, providerSessionId: string): string {

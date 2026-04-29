@@ -154,7 +154,9 @@ export class GeminiAdapter implements ProviderAdapter {
         request: {
           providerSessionId: request.providerSessionId,
           ...(request.cwd ? { cwd: request.cwd } : {}),
+          ...(request.model ? { model: request.model } : {}),
           ...(request.attach ? { attach: request.attach } : {}),
+          ...(request.modeId ? { modeId: request.modeId } : {}),
           ...(request.approvalPolicy ? { approvalPolicy: request.approvalPolicy } : {}),
         },
         modelCatalog,

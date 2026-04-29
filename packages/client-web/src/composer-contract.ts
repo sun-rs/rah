@@ -73,7 +73,7 @@ export const EMPTY_STATE_COMPOSER_LAYOUT = {
 
   /* Secondary pills */
   pillClassName:
-    `inline-flex h-10 md:h-9 lg:h-8 w-[3.75rem] md:w-[7.25rem] lg:w-[8rem] shrink-0 min-w-0 items-center gap-1.5 rounded-full border border-[var(--app-border)] bg-[var(--app-bg)] px-2 md:px-3 text-[11px] text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]`,
+    `inline-flex h-10 md:h-9 lg:h-8 w-[5.5rem] md:w-[7rem] lg:w-[7.25rem] shrink-0 min-w-0 items-center gap-1.5 rounded-full border border-[var(--app-border)] bg-[var(--app-bg)] px-2 md:px-3 text-[11px] text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]`,
 
   /* Attach button */
   attachButtonClassName:

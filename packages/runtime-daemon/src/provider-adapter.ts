@@ -45,20 +45,35 @@ export interface StartDebugScenarioRequest {
   attach?: AttachSessionRequest;
 }
 
-export interface ProviderAdapter {
+export interface ProviderAdapterIdentity {
   readonly id: string;
   readonly providers: ManagedSession["provider"][];
+}
 
+export interface ProviderLifecycleAdapter {
+  /**
+   * Start/resume requests carry RAH-level model/mode ids. Adapters own all
+   * translation into provider-native flags, config files, SDK parameters, or
+   * permission rulesets.
+   */
   startSession(request: StartSessionRequest): StartSessionResponse | Promise<StartSessionResponse>;
   resumeSession(request: ResumeSessionRequest): ResumeSessionResponse | Promise<ResumeSessionResponse>;
-  renameSession?(
-    sessionId: string,
-    title: string,
-  ): SessionSummary | Promise<SessionSummary>;
+  closeSession?(sessionId: string, request: CloseSessionRequest): Promise<void> | void;
+  destroySession?(sessionId: string): Promise<void> | void;
+}
+
+export interface ProviderModeCapabilityAdapter {
   setSessionMode?(
     sessionId: string,
     modeId: string,
   ): SessionSummary | Promise<SessionSummary>;
+}
+
+export interface ProviderModelCapabilityAdapter {
+  /**
+   * Returns the provider catalog including adapter-owned mode descriptors. The
+   * frontend must treat mode/model/config ids as opaque and submit them back.
+   */
   listModels?(options?: {
     cwd?: string;
     forceRefresh?: boolean;
@@ -67,17 +82,31 @@ export interface ProviderAdapter {
     sessionId: string,
     request: SetSessionModelRequest,
   ): SessionSummary | Promise<SessionSummary>;
+}
+
+export interface ProviderActionCapabilityAdapter {
+  renameSession?(
+    sessionId: string,
+    title: string,
+  ): SessionSummary | Promise<SessionSummary>;
+}
+
+export interface ProviderInputControlAdapter {
   sendInput(sessionId: string, request: SessionInputRequest): void;
-  closeSession?(sessionId: string, request: CloseSessionRequest): Promise<void> | void;
-  destroySession?(sessionId: string): Promise<void> | void;
   interruptSession(sessionId: string, request: InterruptSessionRequest): SessionSummary;
+  onPtyInput(sessionId: string, clientId: string, data: string): void;
+  onPtyResize(sessionId: string, clientId: string, cols: number, rows: number): void;
+}
+
+export interface ProviderPermissionCapabilityAdapter {
   respondToPermission?(
     sessionId: string,
     requestId: string,
     response: PermissionResponseRequest,
   ): Promise<void> | void;
-  onPtyInput(sessionId: string, clientId: string, data: string): void;
-  onPtyResize(sessionId: string, clientId: string, cols: number, rows: number): void;
+}
+
+export interface ProviderWorkspaceCapabilityAdapter {
   getWorkspaceSnapshot(
     sessionId: string,
     options?: { scopeRoot?: string },
@@ -104,22 +133,51 @@ export interface ProviderAdapter {
     path: string,
     options?: { scopeRoot?: string },
   ): SessionFileResponse | Promise<SessionFileResponse>;
+}
+
+export interface ProviderStoredHistoryAdapter {
   getSessionHistoryPage?(
     sessionId: string,
     options?: { beforeTs?: string; cursor?: string; limit?: number },
   ): SessionHistoryPageResponse;
   createFrozenHistoryPageLoader?(sessionId: string): FrozenHistoryPageLoader | undefined;
-  getContextUsage(sessionId: string): ContextUsage | undefined;
   listStoredSessions?(): StoredSessionRef[];
   refreshStoredSessionsCatalog?(): StoredSessionRef[];
   listStoredSessionWatchRoots?(): string[];
   removeStoredSession?(session: StoredSessionRef): Promise<void> | void;
+}
+
+export interface ProviderContextCapabilityAdapter {
+  getContextUsage(sessionId: string): ContextUsage | undefined;
+}
+
+export interface ProviderDiagnosticAdapter {
   getProviderDiagnostic?(options?: {
     forceRefresh?: boolean;
   }): Promise<ProviderDiagnostic> | ProviderDiagnostic;
+}
 
+export interface ProviderDebugAdapter {
   listDebugScenarios?(): DebugScenarioDescriptor[];
   startDebugScenario?(request: StartDebugScenarioRequest): StartSessionResponse;
   buildDebugScenarioReplayScript?(scenarioId: string): DebugReplayScript;
+}
+
+export interface ProviderShutdownAdapter {
   shutdown?(): Promise<void> | void;
 }
+
+export interface ProviderAdapter
+  extends ProviderAdapterIdentity,
+    ProviderLifecycleAdapter,
+    ProviderModeCapabilityAdapter,
+    ProviderModelCapabilityAdapter,
+    ProviderActionCapabilityAdapter,
+    ProviderInputControlAdapter,
+    ProviderPermissionCapabilityAdapter,
+    ProviderWorkspaceCapabilityAdapter,
+    ProviderStoredHistoryAdapter,
+    ProviderContextCapabilityAdapter,
+    ProviderDiagnosticAdapter,
+    ProviderDebugAdapter,
+    ProviderShutdownAdapter {}

@@ -132,6 +132,9 @@ function translateUsageUpdate(
     usedTokens: used,
     contextWindow: size,
     percentRemaining: size > 0 ? Math.max(0, Math.min(100, ((size - used) / size) * 100)) : 100,
+    basis: "context_window",
+    precision: "exact",
+    source: "opencode.acp.usage_update",
   };
   return [{ type: "usage", usage, ...(state.currentTurnId ? { turnId: state.currentTurnId } : {}) }];
 }

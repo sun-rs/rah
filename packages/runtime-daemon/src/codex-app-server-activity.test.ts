@@ -59,7 +59,11 @@ describe("translateCodexAppServerNotification", () => {
       usage: {
         usedTokens: 100,
         contextWindow: 1000,
+        percentUsed: 10,
         percentRemaining: 90,
+        basis: "context_window",
+        precision: "exact",
+        source: "codex.app_server.token_usage",
       },
     });
     assert.deepEqual(turnCompleted[0]?.activity, {

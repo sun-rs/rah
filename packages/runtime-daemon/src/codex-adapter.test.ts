@@ -364,7 +364,7 @@ rl.on('line', (line) => {
       {
         name: 'Plan',
         mode: 'plan',
-        model: 'gpt-plan-preset',
+        model: null,
         reasoning_effort: 'high'
       }
     ] } });
