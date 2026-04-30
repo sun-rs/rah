@@ -13,7 +13,6 @@ import type {
   PermissionRequest,
   PermissionResolution,
   RahEvent,
-  RahEventPayloadMap,
   RahEventType,
   RuntimeOperation,
   TimelineItem,

@@ -309,6 +309,34 @@
   .resize-handle.dragging::after {
     opacity: 0.35;
   }
+
+  .inspector-divider {
+    width: 12px;
+    min-width: 12px;
+    position: relative;
+    flex-shrink: 0;
+    pointer-events: none;
+  }
+
+  .inspector-divider::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 5px;
+    width: 2px;
+    background-color: var(--app-fg);
+    opacity: 0.12;
+  }
+
+  .icon-click-feedback {
+    transition-property: transform, background-color, color, border-color, opacity, box-shadow;
+    transition-duration: 100ms;
+  }
+
+  .icon-click-feedback:active:not(:disabled) {
+    transform: scale(0.95);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -319,6 +347,10 @@
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+  }
+
+  .icon-click-feedback:active:not(:disabled) {
+    transform: none;
   }
 }
 

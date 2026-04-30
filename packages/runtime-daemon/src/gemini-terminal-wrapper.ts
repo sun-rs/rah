@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { readFileSync } from "node:fs";
 import process from "node:process";
 import readline from "node:readline";
 import { setTimeout as delay } from "node:timers/promises";
@@ -13,6 +12,7 @@ import type {
 import { NativeTerminalProcess } from "./native-terminal-process";
 import {
   buildGeminiArgs,
+  geminiHeadlessEnv,
   isNoisyGeminiCliStderr,
   resolveGeminiBinary,
 } from "./gemini-live-client";
@@ -44,6 +44,7 @@ import {
   restoreInheritedTerminalModes,
 } from "./terminal-wrapper-panel";
 import { deriveTerminalWrapperRemoteControlState } from "./terminal-wrapper-remote-control";
+import { assertExistingWorkingDirectorySync } from "./provider-working-directory";
 
 type WrapperMode = "local_native" | "remote_writer";
 
@@ -248,6 +249,7 @@ function toolActivitiesFromGeminiMessage(
 
 async function main() {
   const parsed = parseArgs(process.argv.slice(2));
+  assertExistingWorkingDirectorySync(parsed.cwd, "Session working directory");
   const handoffApprovalMode = resolveGeminiHandoffApprovalMode(parsed.approvalMode);
   const requestedResumeProviderSessionId = parsed.resumeProviderSessionId;
   const discoveredRequestedResumeRecord =
@@ -293,7 +295,6 @@ async function main() {
   let restartLocalAfterCanceledPendingTurn = false;
   let exiting = false;
   let shouldExit = false;
-  let boundRecord: GeminiStoredSessionRecord | null = requestedResumeRecord;
   let historyCursorPrimed = requestedResumeProviderSessionId === undefined;
   let localTurnCounter = 0;
   const processedMessageIds = new Set<string>();
@@ -349,9 +350,6 @@ async function main() {
     record?: GeminiStoredSessionRecord | null,
   ) => {
     boundProviderSessionId = providerSessionId;
-    if (record !== undefined) {
-      boundRecord = record;
-    }
     if (record) {
       nativeResumeTarget = { kind: "session", sessionId: record.ref.providerSessionId };
     }
@@ -560,7 +558,6 @@ async function main() {
     if (!boundProviderSessionId || boundProviderSessionId !== record.ref.providerSessionId) {
       bindProviderSession(record.ref.providerSessionId, record);
     } else {
-      boundRecord = record;
       nativeResumeTarget = { kind: "session", sessionId: record.ref.providerSessionId };
     }
     for (const message of record.conversation.messages) {
@@ -729,7 +726,7 @@ async function main() {
         }),
         {
           cwd: parsed.cwd,
-          env: process.env,
+          env: geminiHeadlessEnv(),
           detached: process.platform !== "win32",
           stdio: ["pipe", "pipe", "pipe"],
         },
@@ -1054,8 +1051,6 @@ async function main() {
     }
     if (!boundProviderSessionId) {
       bindProviderSession(record.ref.providerSessionId, record);
-    } else {
-      boundRecord = record;
     }
     primeResumeHistoryCursor(record);
     for (const message of record.conversation.messages) {
@@ -1117,7 +1112,6 @@ async function main() {
       if (boundProviderSessionId) {
         const record = findGeminiStoredSessionRecord(boundProviderSessionId, parsed.cwd);
         if (record) {
-          boundRecord = record;
           primeResumeHistoryCursor(record);
         }
         bindProviderSession(boundProviderSessionId, record);

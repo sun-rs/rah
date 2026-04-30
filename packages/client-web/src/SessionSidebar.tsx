@@ -124,6 +124,7 @@ function WorkspaceSortMenu(props: {
 
 function LiveSessionRow(props: {
   session: SidebarWorkspaceViewModel["sessions"][number];
+  draggable: boolean;
   onTogglePin: () => void;
   onSelect: () => void;
 }) {
@@ -135,7 +136,17 @@ function LiveSessionRow(props: {
   }`;
 
   return (
-    <div className={rowClassName}>
+    <div
+      className={rowClassName}
+      draggable={props.draggable}
+      onDragStart={(event) => {
+        if (!props.draggable) {
+          return;
+        }
+        event.dataTransfer.setData("application/x-rah-session-id", props.session.id);
+        event.dataTransfer.effectAllowed = "move";
+      }}
+    >
       <div className={SIDEBAR_LAYOUT.sessionInlineRowClassName}>
         <button
           type="button"
@@ -188,6 +199,7 @@ function LiveSessionRow(props: {
 
 function WorkspaceRow(props: {
   workspace: SidebarWorkspaceViewModel;
+  enableSessionDrag: boolean;
   onRemoveWorkspace: () => void;
   onTogglePinSession: (sessionId: string) => void;
   onSelectSession: (sessionId: string) => void;
@@ -285,6 +297,7 @@ function WorkspaceRow(props: {
             <LiveSessionRow
               key={session.id}
               session={session}
+              draggable={props.enableSessionDrag}
               onTogglePin={() => props.onTogglePinSession(session.id)}
               onSelect={() => props.onSelectSession(session.id)}
             />
@@ -309,6 +322,7 @@ export function SessionSidebar(props: {
   runtimeStatusBySessionId: ReadonlyMap<string, "thinking" | "streaming" | "retrying" | undefined>;
   onSelectSession: (workspaceDir: string, sessionId: string) => void;
   onSelectWorkspace: (workspaceDir: string) => void;
+  enableSessionDrag?: boolean;
   debugScenarios: DebugScenarioDescriptor[];
   onStartScenario: (scenario: DebugScenarioDescriptor) => void;
 }) {
@@ -333,6 +347,11 @@ export function SessionSidebar(props: {
       props.workspaceSections,
     ],
   );
+  const workspaceCount = workspaceViewModels.length;
+  const liveSessionCount = workspaceViewModels.reduce(
+    (count, workspace) => count + workspace.sessions.length,
+    0,
+  );
 
   const expandAll = () => {
     setExpandAllValue(true);
@@ -348,7 +367,21 @@ export function SessionSidebar(props: {
     <div className={SIDEBAR_LAYOUT.rootClassName}>
       {/* Toolbar */}
       <div className={SIDEBAR_LAYOUT.toolbarClassName}>
-        <span className={SIDEBAR_LAYOUT.toolbarLabelClassName}>Workspaces</span>
+        <div className="flex min-w-0 items-center gap-1.5">
+          <span className={SIDEBAR_LAYOUT.toolbarLabelClassName}>Workspaces</span>
+          <span
+            className={SIDEBAR_LAYOUT.toolbarCountBadgeClassName}
+            title={`${workspaceCount} workspaces`}
+          >
+            {workspaceCount}
+          </span>
+          <span
+            className={SIDEBAR_LAYOUT.toolbarCountBadgeClassName}
+            title={`${liveSessionCount} live sessions`}
+          >
+            {liveSessionCount}
+          </span>
+        </div>
         <div className={SIDEBAR_LAYOUT.toolbarActionsClassName}>
           <WorkspaceSortMenu
             value={props.workspaceSortMode}
@@ -372,6 +405,7 @@ export function SessionSidebar(props: {
           <WorkspaceRow
             key={workspace.directory}
             workspace={workspace}
+            enableSessionDrag={props.enableSessionDrag === true}
             onRemoveWorkspace={() => props.onRemoveWorkspace(workspace.directory)}
             onTogglePinSession={(sessionId) =>
               props.onTogglePinSession(workspace.directory, sessionId)

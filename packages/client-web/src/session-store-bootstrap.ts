@@ -9,7 +9,6 @@ import {
   isHiddenWorkspace,
 } from "./session-store-workspace";
 
-const CLIENT_ID_STORAGE_KEY = "rah.web-client-id";
 const CONNECTION_ID_STORAGE_KEY = "rah.web-connection-id";
 const SHARED_WEB_CLIENT_ID = "web-user";
 

@@ -77,22 +77,39 @@ async function resolveBareCommand(command: string): Promise<string | null> {
   return (await findCommandInPath(command)) ?? (await findCommandFromLoginShell(command));
 }
 
+function missingExecutableMessage(envVar: string, command: string): string {
+  return `Could not find executable '${command}'. Install it or set ${envVar} to a valid executable path.`;
+}
+
 export async function resolveConfiguredBinary(
   envVar: string,
   fallback: string,
 ): Promise<string> {
   const raw = process.env[envVar]?.trim();
   if (!raw) {
-    return (await resolveBareCommand(fallback)) ?? fallback;
+    const resolved = await resolveBareCommand(fallback);
+    if (!resolved) {
+      throw new Error(missingExecutableMessage(envVar, fallback));
+    }
+    return resolved;
   }
   if (!containsPathSeparator(raw)) {
-    return (await resolveBareCommand(raw)) ?? raw;
+    const resolved = await resolveBareCommand(raw);
+    if (!resolved) {
+      throw new Error(missingExecutableMessage(envVar, raw));
+    }
+    return resolved;
   }
   if (!path.isAbsolute(raw)) {
     throw new Error(`${envVar} must be a bare command or absolute path.`);
   }
-  const stats = statSync(raw);
-  if (!stats.isFile()) {
+  let isFile = false;
+  try {
+    isFile = statSync(raw).isFile();
+  } catch {
+    isFile = false;
+  }
+  if (!isFile) {
     throw new Error(`${envVar} must point to an executable file.`);
   }
   await access(raw, constants.X_OK);

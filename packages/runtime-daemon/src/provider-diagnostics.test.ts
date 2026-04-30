@@ -107,4 +107,28 @@ describe("provider diagnostics version helpers", () => {
       rmSync(tempDir, { recursive: true, force: true });
     }
   });
+
+  test("rejects unavailable bare provider commands before spawn", async () => {
+    const previousPath = process.env.PATH;
+    const previousBinary = process.env.RAH_TEST_BINARY;
+    try {
+      process.env.PATH = "";
+      delete process.env.RAH_TEST_BINARY;
+      await assert.rejects(
+        () => resolveConfiguredBinary("RAH_TEST_BINARY", "rah-definitely-missing-provider"),
+        /Could not find executable 'rah-definitely-missing-provider'/,
+      );
+    } finally {
+      if (previousPath === undefined) {
+        delete process.env.PATH;
+      } else {
+        process.env.PATH = previousPath;
+      }
+      if (previousBinary === undefined) {
+        delete process.env.RAH_TEST_BINARY;
+      } else {
+        process.env.RAH_TEST_BINARY = previousBinary;
+      }
+    }
+  });
 });

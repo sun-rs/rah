@@ -1,9 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
+import os from "node:os";
+import path from "node:path";
 import type { ProviderModelCatalog } from "@rah/runtime-protocol";
 import { EventBus } from "./event-bus";
 import { OpenCodeAdapter } from "./opencode-adapter";
+import { startOpenCodeServer } from "./opencode-api";
 import {
   interruptOpenCodeLiveSession,
   setOpenCodeLiveSessionMode,
@@ -12,6 +15,24 @@ import {
 import { PtyHub } from "./pty-hub";
 import { SessionStore } from "./session-store";
 import { buildOpenCodeModeState } from "./session-mode-utils";
+
+test("startOpenCodeServer rejects missing working directories before spawn", async () => {
+  const previousBinary = process.env.RAH_OPENCODE_BINARY;
+  const missingCwd = path.join(os.tmpdir(), `rah-opencode-missing-${Date.now()}`);
+  try {
+    process.env.RAH_OPENCODE_BINARY = process.execPath;
+    await assert.rejects(
+      () => startOpenCodeServer({ cwd: missingCwd }),
+      /OpenCode working directory does not exist/i,
+    );
+  } finally {
+    if (previousBinary === undefined) {
+      delete process.env.RAH_OPENCODE_BINARY;
+    } else {
+      process.env.RAH_OPENCODE_BINARY = previousBinary;
+    }
+  }
+});
 
 test("interruptOpenCodeLiveSession requires input control before canceling", () => {
   const services = {

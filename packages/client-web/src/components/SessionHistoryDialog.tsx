@@ -15,7 +15,7 @@ const DEFAULT_GROUP_ITEM_LIMIT = 10;
 const GROUP_ITEM_INCREMENT = 20;
 const HISTORY_PROVIDER_OPTIONS = ["codex", "claude", "kimi", "gemini", "opencode"] as const;
 
-type HistoryTab = "recent" | "all";
+type HistoryTab = "live" | "recent" | "all";
 type HistoryProviderFilter = (typeof HISTORY_PROVIDER_OPTIONS)[number];
 
 function isHistoryProviderFilter(provider: StoredSessionRef["provider"]): provider is HistoryProviderFilter {
@@ -83,7 +83,7 @@ function HistoryFilterMenu(props: {
         aria-expanded={open}
         aria-disabled={props.disabled}
         aria-label="Filter and sort history"
-        title={props.disabled ? "Filters are available in All" : "Filter and sort history"}
+        title={props.disabled ? "Filters are available in All" : "Filter and sort sessions"}
         onClick={() => {
           if (props.disabled) {
             setOpen(false);
@@ -244,6 +244,71 @@ function matchesQuery(session: StoredSessionRef, query: string): boolean {
   );
 }
 
+function liveSessionTitle(summary: SessionSummary): string {
+  return summary.session.title ?? summary.session.preview ?? summary.session.providerSessionId ?? summary.session.id;
+}
+
+function liveSessionPath(summary: SessionSummary): string {
+  return summary.session.rootDir || summary.session.cwd;
+}
+
+function liveMatchesQuery(summary: SessionSummary, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) {
+    return true;
+  }
+  return (
+    liveSessionTitle(summary).toLowerCase().includes(q) ||
+    (summary.session.preview ?? "").toLowerCase().includes(q) ||
+    summary.session.id.toLowerCase().includes(q) ||
+    (summary.session.providerSessionId ?? "").toLowerCase().includes(q) ||
+    providerLabel(summary.session.provider).toLowerCase().includes(q) ||
+    liveSessionPath(summary).toLowerCase().includes(q)
+  );
+}
+
+function LiveSessionRow(props: {
+  summary: SessionSummary;
+  onActivate: (sessionId: string) => void;
+}) {
+  const title = liveSessionTitle(props.summary);
+  const path = liveSessionPath(props.summary);
+  return (
+    <button
+      type="button"
+      onClick={() => props.onActivate(props.summary.session.id)}
+      className="w-full rounded-lg border border-transparent px-3 py-2 text-left text-[var(--app-hint)] transition-colors hover:border-[var(--app-border)] hover:bg-[var(--app-bg)]"
+      data-session-id={props.summary.session.id}
+      data-session-source="live"
+    >
+      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
+        <div className="min-w-0">
+          <div className="flex min-w-0 items-center gap-2">
+            <ProviderLogo provider={props.summary.session.provider} className="h-5 w-5" />
+            <span className="truncate text-sm font-medium text-[var(--app-fg)]">{title}</span>
+          </div>
+          {props.summary.session.preview && props.summary.session.title ? (
+            <div className="mt-1 truncate pl-7 text-xs text-[var(--app-hint)]">
+              {props.summary.session.preview}
+            </div>
+          ) : null}
+          {path ? (
+            <div className="mt-1 truncate pl-7 text-xs text-[var(--app-hint)]">{path}</div>
+          ) : null}
+        </div>
+        <div className="flex shrink-0 items-center justify-end gap-2">
+          <span className="inline-flex rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-600 dark:text-emerald-400">
+            {props.summary.session.runtimeState}
+          </span>
+          <span className="min-w-[3.5rem] text-right text-xs text-[var(--app-hint)]">
+            {formatRelativeTime(props.summary.session.updatedAt) ?? "live"}
+          </span>
+        </div>
+      </div>
+    </button>
+  );
+}
+
 function SessionRow(props: {
   session: StoredSessionRef;
   liveSummary: SessionSummary | undefined;
@@ -346,12 +411,14 @@ export function SessionHistoryDialog(props: {
   workspaceSortMode: WorkspaceSortMode;
   onWorkspaceSortModeChange: (value: WorkspaceSortMode) => void;
   onActivate: (ref: StoredSessionRef) => void;
+  onActivateLive?: (sessionId: string) => void;
   onRemoveSession: (ref: Pick<StoredSessionRef, "provider" | "providerSessionId">) => void;
   onRemoveWorkspace: (workspaceDir: string) => void;
+  defaultTab?: HistoryTab;
   children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
-  const [tab, setTab] = useState<HistoryTab>("recent");
+  const [tab, setTab] = useState<HistoryTab>(props.defaultTab ?? "recent");
   const [query, setQuery] = useState("");
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [visibleItemCounts, setVisibleItemCounts] = useState<Map<string, number>>(new Map());
@@ -376,6 +443,12 @@ export function SessionHistoryDialog(props: {
       ),
     [props.liveSessions],
   );
+
+  useEffect(() => {
+    if (open) {
+      setTab(props.defaultTab ?? "recent");
+    }
+  }, [open, props.defaultTab]);
 
   const groups = useMemo(
     () =>
@@ -419,6 +492,13 @@ export function SessionHistoryDialog(props: {
       .filter((session) => matchesQuery(session, q))
       .sort((a, b) => (b.lastUsedAt ?? b.updatedAt ?? "").localeCompare(a.lastUsedAt ?? a.updatedAt ?? ""));
   }, [props.recentSessions, query]);
+
+  const liveSessions = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return [...props.liveSessions]
+      .filter((session) => liveMatchesQuery(session, q))
+      .sort((a, b) => b.session.updatedAt.localeCompare(a.session.updatedAt));
+  }, [props.liveSessions, query]);
 
   useEffect(() => {
     if (query.trim()) {
@@ -481,10 +561,10 @@ export function SessionHistoryDialog(props: {
         <Dialog.Trigger asChild>{props.children}</Dialog.Trigger>
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 bg-black/40 z-40" />
-          <Dialog.Content className="fixed left-1/2 top-1/2 z-50 flex max-h-[85dvh] w-[90vw] max-w-2xl -translate-x-1/2 -translate-y-1/2 flex-col rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-0 shadow-xl focus:outline-none max-md:inset-0 max-md:h-[100dvh] max-md:max-h-[100dvh] max-md:w-screen max-md:max-w-none max-md:translate-x-0 max-md:translate-y-0 max-md:rounded-none max-md:border-0 max-md:pt-[env(safe-area-inset-top)] max-md:pb-[env(safe-area-inset-bottom)]">
+          <Dialog.Content className="fixed left-1/2 top-1/2 z-50 flex h-[90dvh] max-h-[56rem] w-[92vw] max-w-3xl -translate-x-1/2 -translate-y-1/2 flex-col rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-0 shadow-xl focus:outline-none max-[699px]:inset-0 max-[699px]:h-[100dvh] max-[699px]:max-h-[100dvh] max-[699px]:w-screen max-[699px]:max-w-none max-[699px]:translate-x-0 max-[699px]:translate-y-0 max-[699px]:rounded-none max-[699px]:border-0 max-[699px]:pt-[env(safe-area-inset-top)] max-[699px]:pb-[env(safe-area-inset-bottom)]">
           <div className="flex items-center justify-between border-b border-[var(--app-border)] px-4 py-3 shrink-0">
             <Dialog.Title className="text-sm font-semibold text-[var(--app-fg)]">
-              Session History
+              Sessions
             </Dialog.Title>
             <Dialog.Close asChild>
               <button
@@ -499,7 +579,18 @@ export function SessionHistoryDialog(props: {
 
           <div className="px-4 pt-3 pb-2 shrink-0">
             <div className="flex items-center gap-2">
-              <div className="grid flex-1 grid-cols-2 gap-2 rounded-lg bg-[var(--app-subtle-bg)] p-1">
+              <div className="grid flex-1 grid-cols-3 gap-2 rounded-lg bg-[var(--app-subtle-bg)] p-1">
+                <button
+                  type="button"
+                  onClick={() => setTab("live")}
+                  className={`rounded-md px-3 py-2 text-sm font-medium transition-colors ${
+                    tab === "live"
+                      ? "bg-[var(--app-bg)] text-[var(--app-fg)] shadow-sm"
+                      : "text-[var(--app-hint)] hover:text-[var(--app-fg)]"
+                  }`}
+                >
+                  Live
+                </button>
                 <button
                   type="button"
                   onClick={() => setTab("recent")}
@@ -529,7 +620,7 @@ export function SessionHistoryDialog(props: {
                 selectedProviders={selectedProviders}
                 onToggleProvider={toggleProvider}
                 onToggleAllProviders={toggleAllProviders}
-                disabled={tab === "recent"}
+                disabled={tab !== "all"}
               />
             </div>
           </div>
@@ -540,7 +631,9 @@ export function SessionHistoryDialog(props: {
               <input
                 className="flex-1 bg-transparent text-sm text-[var(--app-fg)] placeholder-[var(--app-hint)] focus:outline-none"
                 placeholder={
-                  tab === "recent"
+                  tab === "live"
+                    ? "Search live title, id, provider, or path..."
+                    : tab === "recent"
                     ? "Search recent title, id, provider, or path…"
                     : "Search title, preview, id, provider, or path…"
                 }
@@ -551,7 +644,27 @@ export function SessionHistoryDialog(props: {
           </div>
 
           <div className="flex-1 overflow-y-auto custom-scrollbar p-4">
-            {tab === "recent" ? (
+            {tab === "live" ? (
+              liveSessions.length > 0 ? (
+                <div className="space-y-1">
+                  {liveSessions.map((summary) => (
+                    <LiveSessionRow
+                      key={summary.session.id}
+                      summary={summary}
+                      onActivate={(sessionId) => {
+                        props.onActivateLive?.(sessionId);
+                        setOpen(false);
+                      }}
+                    />
+                  ))}
+                </div>
+              ) : renderEmpty(
+                query.trim() ? "No matching live sessions" : "No live sessions",
+                query.trim()
+                  ? "Try a different search term."
+                  : "Live sessions will appear here while they are open.",
+              )
+            ) : tab === "recent" ? (
               recentSessions.length > 0 ? (
                 <div className="space-y-1">
                   {recentSessions.map((session) => (

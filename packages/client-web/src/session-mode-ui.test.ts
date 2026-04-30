@@ -243,7 +243,7 @@ describe("session mode UI defaults", () => {
 });
 
 describe("session model UI defaults", () => {
-  test("uses catalog current model and current reasoning when no explicit draft exists", () => {
+  test("uses the first model and strongest reasoning when no explicit draft exists", () => {
     const state = resolveSelectedModelDraft({
       catalog: modelCatalog({
         currentModelId: "gpt-current",
@@ -251,8 +251,8 @@ describe("session model UI defaults", () => {
       }),
     });
 
-    assert.equal(state.model?.id, "gpt-current");
-    assert.equal(state.reasoning?.id, "medium");
+    assert.equal(state.model?.id, "gpt-default");
+    assert.equal(state.reasoning?.id, "high");
   });
 
   test("uses explicit model and reasoning drafts over catalog defaults", () => {
@@ -269,7 +269,17 @@ describe("session model UI defaults", () => {
     assert.equal(state.reasoning?.id, "xhigh");
   });
 
-  test("falls back to provider default model instead of the last model in the list", () => {
+  test("uses the strongest reasoning option for a remembered model", () => {
+    const state = resolveSelectedModelDraft({
+      catalog: modelCatalog({}),
+      selectedModelId: "gpt-current",
+    });
+
+    assert.equal(state.model?.id, "gpt-current");
+    assert.equal(state.reasoning?.id, "xhigh");
+  });
+
+  test("falls back to the first model instead of provider defaults", () => {
     const state = resolveSelectedModelDraft({
       catalog: modelCatalog({}),
     });

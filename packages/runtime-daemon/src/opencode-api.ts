@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { stat } from "node:fs/promises";
 import net from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
 import { resolveConfiguredBinary } from "./provider-binary-utils";
@@ -154,6 +155,7 @@ export async function startOpenCodeServer(params: {
   port?: number;
   onOutput?: (data: string) => void;
 }): Promise<OpenCodeServerHandle> {
+  await assertOpenCodeWorkingDirectory(params.cwd);
   const port = params.port ?? (await allocateOpenCodePort());
   const binary = await resolveOpenCodeBinary();
   const child = spawn(binary, ["serve", "--hostname", "127.0.0.1", "--port", String(port)], {
@@ -161,6 +163,14 @@ export async function startOpenCodeServer(params: {
     env: process.env,
     detached: process.platform !== "win32",
     stdio: ["ignore", "pipe", "pipe"],
+  });
+  let rejectStartup: ((error: Error) => void) | null = null;
+  const startupError = new Promise<never>((_, reject) => {
+    rejectStartup = reject;
+  });
+  child.on("error", (error) => {
+    params.onOutput?.(`${error.message}\n`);
+    rejectStartup?.(error);
   });
   child.stdout.on("data", (chunk: Buffer) => {
     params.onOutput?.(chunk.toString("utf8"));
@@ -177,8 +187,30 @@ export async function startOpenCodeServer(params: {
       ? { authHeader: `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}` }
       : {}),
   };
-  await waitForOpenCodeServer(handle);
-  return handle;
+  try {
+    await Promise.race([waitForOpenCodeServer(handle), startupError]);
+    return handle;
+  } catch (error) {
+    await stopOpenCodeServer(handle).catch(() => undefined);
+    throw error;
+  } finally {
+    rejectStartup = null;
+  }
+}
+
+async function assertOpenCodeWorkingDirectory(cwd: string): Promise<void> {
+  try {
+    const stats = await stat(cwd);
+    if (!stats.isDirectory()) {
+      throw new Error(`OpenCode working directory is not a directory: ${cwd}`);
+    }
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      throw new Error(`OpenCode working directory does not exist: ${cwd}`);
+    }
+    throw error;
+  }
 }
 
 export async function stopOpenCodeServer(handle: OpenCodeServerHandle): Promise<void> {

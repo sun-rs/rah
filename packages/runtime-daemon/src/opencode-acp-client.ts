@@ -88,6 +88,10 @@ export class OpenCodeAcpClient {
     child.stderr.on("data", (chunk: string) => {
       this.stderrBuffer = (this.stderrBuffer + chunk).slice(-8192);
     });
+    const spawned = new Promise<void>((resolve, reject) => {
+      child.once("spawn", resolve);
+      child.once("error", reject);
+    });
     child.once("exit", (code, signal) => {
       if (this.closed) {
         return;
@@ -95,6 +99,24 @@ export class OpenCodeAcpClient {
       this.closed = true;
       const suffix = this.stderrBuffer.trim() ? `: ${this.stderrBuffer.trim()}` : "";
       const error = new Error(`OpenCode ACP exited with code ${code ?? "null"} signal ${signal ?? "null"}${suffix}`);
+      for (const [id, pending] of this.pending) {
+        clearTimeout(pending.timeout);
+        pending.reject(error);
+        this.pending.delete(id);
+      }
+    });
+    try {
+      await spawned;
+    } catch (error) {
+      this.closed = true;
+      this.child = null;
+      throw error;
+    }
+    child.once("error", (error) => {
+      if (this.closed) {
+        return;
+      }
+      this.closed = true;
       for (const [id, pending] of this.pending) {
         clearTimeout(pending.timeout);
         pending.reject(error);

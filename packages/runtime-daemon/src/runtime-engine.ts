@@ -11,7 +11,6 @@ import type {
   EventSubscriptionRequest,
   GitFileActionRequest,
   GitHunkActionRequest,
-  IndependentTerminalSession,
   IndependentTerminalStartRequest,
   IndependentTerminalStartResponse,
   InterruptSessionRequest,
@@ -72,7 +71,6 @@ import {
   normalizeDirectory,
   resolveUserPath,
   sessionBelongsToWorkspace,
-  workspaceDirsFromState,
 } from "./workbench-directory-utils";
 import { WorkspaceScopeAuthorizer } from "./workspace-scope-authorizer";
 

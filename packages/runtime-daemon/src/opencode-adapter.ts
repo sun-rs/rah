@@ -137,7 +137,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
       });
     }
     try {
-      const resumeCwd = request.cwd ?? record?.ref.cwd ?? process.cwd();
+      const resumeCwd = request.cwd ?? record?.ref.cwd ?? record?.ref.rootDir ?? process.cwd();
       const cachedModelCatalog =
         request.model || request.reasoningId !== undefined || request.optionValues !== undefined
           ? await this.modelCatalog.listModels({ cwd: resumeCwd })

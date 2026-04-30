@@ -4,7 +4,6 @@ import { mkdtempSync, mkdirSync, rmSync, unlinkSync, writeFileSync } from "node:
 import os from "node:os";
 import path from "node:path";
 import type {
-  AttachSessionRequest,
   CloseSessionRequest,
   ContextUsage,
   GitDiffResponse,
@@ -710,6 +709,38 @@ describe("RuntimeEngine", () => {
     const listing = await engine.listDirectory("~");
 
     assert.equal(listing.path, os.homedir());
+
+    await engine.shutdown();
+  });
+
+  test("live start and resume reject missing working directories before adapter launch", async () => {
+    const missingDir = path.join(os.tmpdir(), `rah-runtime-missing-cwd-${Date.now()}`);
+    rmSync(missingDir, { recursive: true, force: true });
+    const adapter = new SnapshotPagingAdapter();
+    const engine = new RuntimeEngine([adapter]);
+
+    await assert.rejects(
+      () => engine.startSession({ provider: "codex", cwd: missingDir }),
+      /Session working directory does not exist/,
+    );
+    await assert.rejects(
+      () =>
+        engine.resumeSession({
+          provider: "codex",
+          providerSessionId: "thread-missing-cwd",
+          cwd: missingDir,
+          preferStoredReplay: false,
+        }),
+      /Session working directory does not exist/,
+    );
+
+    const replay = await engine.resumeSession({
+      provider: "codex",
+      providerSessionId: "thread-missing-cwd",
+      cwd: missingDir,
+      preferStoredReplay: true,
+    });
+    assert.equal(replay.session.session.id, "replay-1");
 
     await engine.shutdown();
   });

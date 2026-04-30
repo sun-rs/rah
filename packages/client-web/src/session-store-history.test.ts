@@ -98,6 +98,27 @@ test("prependHistoryPage still dedupes matching timeline message identities", ()
   );
 });
 
+test("prependHistoryPage treats provider history ids as metadata for recent live user echoes", () => {
+  const current = replayEventsIntoProjection(summary(), [
+    timelineEvent({ seq: 2, turnId: "live-turn", text: "hello" }),
+  ]);
+
+  const next = prependHistoryPage(current, [
+    timelineEvent({ seq: 1, turnId: "opencode:message-1", text: "hello", messageId: "message-1" }),
+  ]);
+
+  assert.equal(next.feed.length, 1);
+  const [entry] = next.feed;
+  assert.equal(entry?.kind, "timeline");
+  assert.equal(entry?.kind === "timeline" ? entry.item.kind : null, "user_message");
+  assert.equal(
+    entry?.kind === "timeline" && entry.item.kind === "user_message"
+      ? entry.item.messageId
+      : null,
+    "message-1",
+  );
+});
+
 test("prependHistoryPage does not dedupe conflicting message identities", () => {
   const current = replayEventsIntoProjection(summary(), [
     timelineEvent({ seq: 2, turnId: "turn-1", text: "继续", messageId: "message-2" }),

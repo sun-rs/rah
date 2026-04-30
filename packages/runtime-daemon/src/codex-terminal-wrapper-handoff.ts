@@ -53,6 +53,7 @@ import {
   restoreInheritedTerminalModes,
 } from "./terminal-wrapper-panel";
 import { deriveTerminalWrapperRemoteControlState } from "./terminal-wrapper-remote-control";
+import { assertExistingWorkingDirectorySync } from "./provider-working-directory";
 
 type WrapperMode = "local_native" | "remote_writer";
 
@@ -251,6 +252,7 @@ function readPersistedTaskLifecycle(line: unknown):
 
 async function main() {
   const parsed = parseArgs(process.argv.slice(2));
+  assertExistingWorkingDirectorySync(parsed.cwd, "Session working directory");
   const startupTimestampMs = Date.now();
   const logger = createWrapperLogger("codex");
   const sharedCodexHome = resolveCodexBaseHome();
@@ -1171,7 +1173,7 @@ async function main() {
     }
   });
 
-  socket.on("error", (error) => {
+  socket.on("error", () => {
     if (socketErrored) {
       return;
     }
@@ -1330,4 +1332,8 @@ async function main() {
   process.exitCode = localExitCode;
 }
 
-void main();
+void main().catch((error) => {
+  process.stderr.write(`[rah] ${error instanceof Error ? error.message : String(error)}\n`);
+  restoreInheritedTerminalModes();
+  process.exitCode = 1;
+});

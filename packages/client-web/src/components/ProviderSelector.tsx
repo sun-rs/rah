@@ -36,13 +36,14 @@ function StatusDot({ status }: { status: ProviderDiagnostic["status"] }) {
  * Modes:
  * - "grid": For empty states. 5-column grid, spacious.
  * - "rail": Compact inline pill rail with expand animation.
+ * - "icons": Dense icon-only row for constrained panes.
  * - "dialog": Dense 3-column grid for modals.
  */
 export function ProviderSelector(props: {
   value: ProviderChoice;
   onChange: (value: ProviderChoice) => void;
   diagnostics?: ProviderDiagnostic[];
-  mode?: "grid" | "rail" | "dialog";
+  mode?: "grid" | "rail" | "icons" | "dialog";
 }) {
   const { value, onChange, diagnostics, mode = "grid" } = props;
 
@@ -85,6 +86,44 @@ export function ProviderSelector(props: {
                 </span>
               </button>
             </div>
+          );
+        })}
+      </div>
+    );
+  }
+
+  if (mode === "icons") {
+    return (
+      <div
+        className="grid grid-cols-5 gap-1.5"
+        role="radiogroup"
+        aria-label="Provider selection"
+      >
+        {PROVIDER_OPTIONS.map((option) => {
+          const selected = value === option.value;
+          const diagnostic = diagnosticsMap.get(option.value);
+          return (
+            <button
+              key={option.value}
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              onClick={() => onChange(option.value)}
+              className={`relative inline-flex h-8 min-w-0 items-center justify-center rounded-lg border transition-colors ${
+                selected
+                  ? "border-[var(--app-border)] bg-[var(--app-bg)] text-[var(--app-fg)] shadow-sm"
+                  : "border-transparent bg-[var(--app-subtle-bg)] text-[var(--app-hint)] hover:border-[var(--app-border)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)]"
+              }`}
+              aria-label={option.label}
+              title={option.label}
+            >
+              <ProviderLogo provider={option.value} variant="bare" className="h-4.5 w-4.5" />
+              {!selected && diagnostic ? (
+                <span className="absolute right-1 top-1 scale-75">
+                  <StatusDot status={diagnostic.status} />
+                </span>
+              ) : null}
+            </button>
           );
         })}
       </div>

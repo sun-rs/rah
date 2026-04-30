@@ -249,11 +249,12 @@ describe("WorkbenchStateStore", () => {
   });
 
   test("closing a managed session removes it from live sessions and unblocks workspace removal", async () => {
+    const rootDir = mkdtempSync(path.join(tmpRoot, "workspace-close-"));
     const engine = new RuntimeEngine();
-    engine.addWorkspace("/workspace/demo");
+    engine.addWorkspace(rootDir);
     const started = await engine.startSession({
       provider: "claude",
-      cwd: "/workspace/demo",
+      cwd: rootDir,
       title: "close me",
       attach: {
         client: {
@@ -278,7 +279,7 @@ describe("WorkbenchStateStore", () => {
         .some((event) => event.type === "session.closed"),
     );
 
-    const afterRemoval = engine.removeWorkspace("/workspace/demo");
+    const afterRemoval = engine.removeWorkspace(rootDir);
     assert.deepEqual(afterRemoval.workspaceDirs, []);
 
     await engine.shutdown();

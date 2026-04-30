@@ -180,6 +180,13 @@ export function buildGeminiArgs(params: {
   return args;
 }
 
+export function geminiHeadlessEnv(): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    GEMINI_CLI_TRUST_WORKSPACE: process.env.GEMINI_CLI_TRUST_WORKSPACE ?? "true",
+  };
+}
+
 export function isNoisyGeminiCliStderr(line: string): boolean {
   const trimmed = line.trim();
   return (
@@ -329,7 +336,7 @@ async function runGeminiTurn(params: {
     }),
     {
       cwd: liveSession.cwd,
-      env: process.env,
+      env: geminiHeadlessEnv(),
       detached: process.platform !== "win32",
       stdio: ["pipe", "pipe", "pipe"],
     },

@@ -32,19 +32,43 @@ Install dependencies:
 npm install
 ```
 
-Build the web client and serve the unified same-origin workbench:
+If the `rah` binary is not already on your PATH, link it once from this checkout:
 
 ```bash
-npm run serve:workbench
+npm link
 ```
 
-Open:
+Start the source checkout as a local workbench:
+
+```bash
+rah start
+```
+
+`rah start` builds the web client, starts the daemon in the background, opens the local workbench,
+and writes daemon pid/log files under `~/.rah/runtime-daemon`.
+
+Open manually if needed:
 
 ```text
 http://127.0.0.1:43111/
 ```
 
 For LAN access, use the Mac's LAN IP with port `43111`.
+
+Useful daemon commands:
+
+```bash
+rah status
+rah logs --follow
+rah stop
+rah restart
+```
+
+For a foreground one-shot process, the old npm command still works:
+
+```bash
+npm run serve:workbench
+```
 
 For local development with split services:
 

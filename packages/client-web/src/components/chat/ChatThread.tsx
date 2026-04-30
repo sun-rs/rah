@@ -11,7 +11,6 @@ import {
   Info,
   Link2,
   ListChecks,
-  RefreshCcw,
   Sparkles,
 } from "lucide-react";
 import { AssistantMessage } from "./AssistantMessage";
@@ -663,11 +662,12 @@ export function ChatThread(props: {
   };
 
   return (
-    <div
-      ref={containerRef}
-      className="relative flex-1 overflow-y-scroll overflow-x-hidden custom-scrollbar scrollbar-stable px-4 py-5"
-    >
-      <div ref={contentRef} className="mx-auto w-full min-w-0 max-w-3xl space-y-5">
+    <div className="relative min-h-0 flex-1">
+      <div
+        ref={containerRef}
+        className="h-full overflow-y-scroll overflow-x-hidden custom-scrollbar scrollbar-stable px-4 py-5"
+      >
+        <div ref={contentRef} className="mx-auto w-full min-w-0 max-w-3xl space-y-5">
         {props.historyLoading ? (
           <div className="flex justify-center">
             <div className="rounded-full border border-[var(--app-border)] bg-[var(--app-bg)] px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.14em] text-[var(--app-hint)]">
@@ -697,6 +697,7 @@ export function ChatThread(props: {
           />
         ) : null}
         <div ref={bottomRef} />
+        </div>
       </div>
 
       {/* Scroll-to-bottom button */}
@@ -704,8 +705,7 @@ export function ChatThread(props: {
         <button
           type="button"
           onClick={handleScrollToBottom}
-          className="fixed left-1/2 z-[30] flex h-9 w-9 -translate-x-1/2 items-center justify-center rounded-full border border-[var(--app-border)] bg-[var(--app-bg)] text-[var(--app-fg)] shadow-lg transition-all duration-200 hover:scale-110 hover:bg-[var(--app-subtle-bg)] active:scale-95"
-          style={{ bottom: "var(--workbench-floating-anchor, calc(env(safe-area-inset-bottom, 0px) + 5.75rem))" }}
+          className="absolute bottom-4 left-1/2 z-[30] flex h-9 w-9 -translate-x-1/2 items-center justify-center rounded-full border border-[var(--app-border)] bg-[var(--app-bg)] text-[var(--app-fg)] shadow-lg transition-all duration-200 hover:scale-110 hover:bg-[var(--app-subtle-bg)] active:scale-95"
           aria-label="Scroll to bottom"
         >
           <ArrowDown size={16} />

@@ -27,7 +27,6 @@ import {
   JSON_RPC_TIMEOUT_MS,
   PROMPT_TIMEOUT_MS,
   type LiveKimiSession,
-  type LiveKimiTurn,
 } from "./kimi-live-types";
 import {
   resolveKimiCliModelArgs,

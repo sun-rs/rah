@@ -7,7 +7,6 @@ import {
   searchSessionFiles,
   searchWorkspaceFilesByDirectory,
 } from "./api";
-import { LoaderCircle } from "lucide-react";
 import { InspectorChangesPane } from "./inspector/InspectorChangesPane";
 import { InspectorEventsPane } from "./inspector/InspectorEventsPane";
 import { InspectorFileDetailDialog } from "./inspector/InspectorFileDetailDialog";
@@ -19,7 +18,6 @@ export function InspectorPane(props: {
   sessionId: string | null;
   workspaceRoot: string;
   events: RahEvent[];
-  onCollapse?: () => void;
   onOpenTerminal?: () => void;
 }) {
   const [activeTab, setActiveTab] = useState<InspectorTab>("changes");
@@ -224,7 +222,6 @@ export function InspectorPane(props: {
         eventCount={props.events.length}
         hasSession={Boolean(props.sessionId)}
         onTabChange={setActiveTab}
-        {...(props.onCollapse ? { onCollapse: props.onCollapse } : {})}
         {...(props.onOpenTerminal ? { onOpenTerminal: props.onOpenTerminal } : {})}
       />
       <div className="flex-1 overflow-y-scroll custom-scrollbar scrollbar-stable p-3">

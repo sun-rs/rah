@@ -11,6 +11,8 @@ import {
   type SessionProjection,
 } from "./types";
 
+const LIVE_HISTORY_ECHO_WINDOW_MS = 60_000;
+
 type HistorySelectionState = Pick<
   {
     selectedSessionId: string | null;
@@ -77,6 +79,9 @@ function feedEntriesShareTimelineIdentity(left: FeedEntry, right: FeedEntry): bo
       if (leftMessageId !== undefined && rightMessageId !== undefined) {
         return leftMessageId === rightMessageId;
       }
+      if (entriesLookLikeSameLiveHistoryEcho(left, right)) {
+        return true;
+      }
       return Boolean(
         left.turnId &&
           right.turnId &&
@@ -97,6 +102,29 @@ function feedEntriesShareTimelineIdentity(left: FeedEntry, right: FeedEntry): bo
     default:
       return false;
   }
+}
+
+function entriesLookLikeSameLiveHistoryEcho(left: FeedEntry, right: FeedEntry): boolean {
+  if (left.kind !== "timeline" || right.kind !== "timeline") {
+    return false;
+  }
+  if (left.item.kind !== "user_message" || right.item.kind !== "user_message") {
+    return false;
+  }
+  if (left.item.text !== right.item.text) {
+    return false;
+  }
+  const leftHasMessageId = left.item.messageId !== undefined;
+  const rightHasMessageId = right.item.messageId !== undefined;
+  if (leftHasMessageId === rightHasMessageId) {
+    return false;
+  }
+  const leftTs = Date.parse(left.ts);
+  const rightTs = Date.parse(right.ts);
+  if (!Number.isFinite(leftTs) || !Number.isFinite(rightTs)) {
+    return false;
+  }
+  return Math.abs(leftTs - rightTs) <= LIVE_HISTORY_ECHO_WINDOW_MS;
 }
 
 export function prependHistoryPage(
@@ -129,7 +157,14 @@ export function prependHistoryPage(
       nextFeed[existingIndex] = entry;
       return false;
     }
-    return !projection.feed.some((current) => feedEntriesShareTimelineIdentity(current, entry));
+    const identityIndex = nextFeed.findIndex((current) =>
+      feedEntriesShareTimelineIdentity(current, entry),
+    );
+    if (identityIndex >= 0) {
+      nextFeed[identityIndex] = entry;
+      return false;
+    }
+    return true;
   });
 
   return {

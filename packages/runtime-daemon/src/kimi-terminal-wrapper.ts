@@ -41,6 +41,7 @@ import {
   restoreInheritedTerminalModes,
 } from "./terminal-wrapper-panel";
 import { deriveTerminalWrapperRemoteControlState } from "./terminal-wrapper-remote-control";
+import { assertExistingWorkingDirectorySync } from "./provider-working-directory";
 
 type WrapperMode = "local_native" | "remote_writer";
 const KIMI_REMOTE_APPROVAL_MODES = new Set(["default", "yolo"]);
@@ -196,6 +197,7 @@ function countWireLines(filePath: string): number {
 
 async function main() {
   const parsed = parseArgs(process.argv.slice(2));
+  assertExistingWorkingDirectorySync(parsed.cwd, "Session working directory");
   const providerSessionId = parsed.resumeProviderSessionId ?? randomUUID();
   const kimiCommand = await resolveKimiCommand();
   const socket = new WebSocket(wrapperControlUrl(parsed.daemonUrl));

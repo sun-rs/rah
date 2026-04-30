@@ -939,17 +939,6 @@ function makeMcpToolCall(item: Record<string, unknown>): ToolCall {
   };
 }
 
-function makeGenericToolCall(item: Record<string, unknown>, family: ToolCall["family"], providerToolName: string): ToolCall {
-  const id = stringField(item, "id") ?? `${providerToolName}-${Date.now().toString(36)}`;
-  return {
-    id,
-    family,
-    providerToolName,
-    title: providerToolName,
-    input: item as never,
-  };
-}
-
 function makeGenericObservation(
   item: Record<string, unknown>,
   kind: WorkbenchObservation["kind"],

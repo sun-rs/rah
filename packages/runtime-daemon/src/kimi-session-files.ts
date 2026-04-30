@@ -15,7 +15,7 @@ import type {
 } from "./history-snapshots";
 import type { RuntimeServices } from "./provider-adapter";
 import { EventBus } from "./event-bus";
-import { applyProviderActivity, type ProviderActivity } from "./provider-activity";
+import { applyProviderActivity } from "./provider-activity";
 import { createLineHistoryWindowTranslator } from "./line-history-checkpoint";
 import { createLineFrozenHistoryPageLoader } from "./line-history-pager";
 import { PtyHub } from "./pty-hub";
@@ -913,50 +913,6 @@ export function getKimiStoredSessionHistoryPage(params: {
     sessionId: params.sessionId,
     events,
     ...(start > 0 && events[0] ? { nextBeforeTs: events[0].ts } : {}),
-  };
-}
-
-function readKimiFrozenHistoryWindow(args: {
-  sessionId: string;
-  record: KimiStoredSessionRecord;
-  endOffset: number;
-  limit: number;
-}): { startOffset: number; events: RahEvent[] } {
-  let lineBudget = Math.max(args.limit * 4, 200);
-  let lastStartOffset = args.endOffset;
-  let events: RahEvent[] = [];
-
-  for (;;) {
-    const window = readTrailingLinesWindow(args.record.wirePath, {
-      endOffset: args.endOffset,
-      maxLines: lineBudget,
-      chunkBytes: 8 * 1024,
-    });
-    const previousStartOffset = lastStartOffset;
-    events = translateKimiWireLines(args.sessionId, window.lines)
-      .map((event) => ({
-        ...event,
-        id: `history:${event.id}`,
-        seq: event.seq + 1_000_000_000,
-      }))
-      .sort((a, b) => a.ts.localeCompare(b.ts) || a.seq - b.seq);
-    lastStartOffset = window.startOffset;
-    if (
-      events.length >= args.limit ||
-      window.startOffset === 0 ||
-      window.startOffset === previousStartOffset
-    ) {
-      break;
-    }
-    lineBudget *= 2;
-    if (lineBudget >= 8192) {
-      break;
-    }
-  }
-
-  return {
-    startOffset: lastStartOffset,
-    events,
   };
 }
 

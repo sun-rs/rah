@@ -47,15 +47,6 @@ import type {
 
 const DEFAULT_DAEMON_PORT = 43111;
 
-function isLoopbackHostname(hostname: string): boolean {
-  return (
-    hostname === "localhost" ||
-    hostname === "127.0.0.1" ||
-    hostname === "::1" ||
-    hostname === "[::1]"
-  );
-}
-
 function computeDefaultBaseUrl(): string {
   if (typeof window === "undefined") {
     return `http://127.0.0.1:${DEFAULT_DAEMON_PORT}`;

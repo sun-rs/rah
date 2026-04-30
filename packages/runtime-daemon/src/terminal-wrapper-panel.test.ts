@@ -12,6 +12,7 @@ import {
 
 const originalWrite = process.stdout.write.bind(process.stdout);
 const originalColumns = process.stdout.columns;
+const originalIsTTY = process.stdout.isTTY;
 
 function charDisplayWidth(value: string): number {
   const codePoint = value.codePointAt(0);
@@ -64,6 +65,10 @@ afterEach(() => {
   Object.defineProperty(process.stdout, "columns", {
     configurable: true,
     value: originalColumns,
+  });
+  Object.defineProperty(process.stdout, "isTTY", {
+    configurable: true,
+    value: originalIsTTY,
   });
 });
 
@@ -147,6 +152,10 @@ describe("terminal wrapper panel helpers", () => {
   });
 
   test("restores terminal input modes after inherited tui exits", () => {
+    Object.defineProperty(process.stdout, "isTTY", {
+      configurable: true,
+      value: true,
+    });
     const writes = captureWrites(() => {
       restoreInheritedTerminalModes();
     });
@@ -155,6 +164,18 @@ describe("terminal wrapper panel helpers", () => {
       "\u001b[<1u\u001b[?1000l\u001b[?1002l\u001b[?1003l\u001b[?1005l\u001b[?1006l\u001b[?1015l\u001b[?1004l\u001b[?2004l\u001b[?2026l\u001b[?25h\u001b[0m",
       "\r",
     ]);
+  });
+
+  test("does not write terminal restore sequences outside a tty", () => {
+    Object.defineProperty(process.stdout, "isTTY", {
+      configurable: true,
+      value: false,
+    });
+    const writes = captureWrites(() => {
+      restoreInheritedTerminalModes();
+    });
+
+    assert.deepEqual(writes, []);
   });
 
   test("disables application mouse and focus modes without leaving alternate screen", () => {

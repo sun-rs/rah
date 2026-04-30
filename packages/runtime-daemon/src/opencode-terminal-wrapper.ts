@@ -37,6 +37,7 @@ import {
 } from "./terminal-wrapper-panel";
 import type { ProviderActivity } from "./provider-activity";
 import { deriveTerminalWrapperRemoteControlState } from "./terminal-wrapper-remote-control";
+import { assertExistingWorkingDirectorySync } from "./provider-working-directory";
 import type {
   QueuedTurn,
   TerminalWrapperFromDaemonMessage,
@@ -110,6 +111,7 @@ function send(socket: WebSocket, message: TerminalWrapperToDaemonMessage): void 
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
+  assertExistingWorkingDirectorySync(args.cwd, "Session working directory");
   const socket = new WebSocket(wrapperControlUrl(args.daemonUrl));
 
   let wrapperSessionId: string | null = null;

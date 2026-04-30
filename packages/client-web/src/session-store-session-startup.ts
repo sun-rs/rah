@@ -42,6 +42,7 @@ type StartSessionOptions = {
   modeId?: string;
   initialInput?: string;
   confirmCreateMissingWorkspace?: (dir: string) => Promise<boolean>;
+  onSessionCreated?: (sessionId: string) => void;
 };
 
 type SessionStartupState = {
@@ -124,17 +125,17 @@ type SessionStartupDeps = {
 export async function startSessionCommand(
   deps: SessionStartupDeps,
   options?: StartSessionOptions,
-) {
+): Promise<string | null> {
   try {
     const state = deps.get();
     const cwd = options?.cwd?.trim() || state.workspaceDir.trim();
     if (!cwd) {
       deps.set({ error: "Choose a workspace directory first." });
-      return;
+      return null;
     }
     const provider = options?.provider ?? state.newSessionProvider;
     if (!(await ensureLaunchWorkspaceAvailable(deps, cwd))) {
-      return;
+      return null;
     }
     deps.set({
       pendingSessionTransition: createPendingStartTransition({
@@ -179,10 +180,12 @@ export async function startSessionCommand(
         ),
       };
     });
+    options?.onSessionCreated?.(session.session.id);
     if (initialInput) {
       await deps.sendInput(session.session.id, initialInput);
     }
     void deps.ensureSessionHistoryLoaded(session.session.id);
+    return session.session.id;
   } catch (error) {
     deps.set({ pendingSessionTransition: null, error: readErrorMessage(error) });
     throw error;
@@ -254,8 +257,9 @@ export async function resumeStoredSessionCommand(
   },
 ) {
   try {
+    const preferStoredReplay = options?.preferStoredReplay ?? true;
     const targetDir = ref.cwd ?? ref.rootDir;
-    if (!(await ensureLaunchWorkspaceAvailable(deps, targetDir))) {
+    if (!preferStoredReplay && !(await ensureLaunchWorkspaceAvailable(deps, targetDir))) {
       return;
     }
     deps.set({
@@ -293,7 +297,7 @@ export async function resumeStoredSessionCommand(
     const request: ResumeSessionRequest = {
       provider: ref.provider,
       providerSessionId: ref.providerSessionId,
-      preferStoredReplay: options?.preferStoredReplay ?? true,
+      preferStoredReplay,
       attach: createObserveAttachRequest(deps.get().clientId, deps.get().connectionId),
     };
     if (options?.historyReplay !== undefined) {
@@ -394,7 +398,7 @@ export async function claimHistorySessionCommand(
     summary,
   };
 
-  const targetDir = ref.rootDir ?? ref.cwd ?? null;
+  const targetDir = ref.cwd ?? ref.rootDir ?? null;
   if (!(await ensureLaunchWorkspaceAvailable(deps, targetDir))) {
     return;
   }
@@ -422,9 +426,8 @@ export async function claimHistorySessionCommand(
       historySourceSessionId: sessionId,
       attach: createInteractiveAttachRequest(state.clientId, state.connectionId),
     };
-    const requestCwd = ref.cwd ?? targetDir;
-    if (requestCwd !== null) {
-      request.cwd = requestCwd;
+    if (targetDir !== null) {
+      request.cwd = targetDir;
     }
     const response = await api.resumeSession(request);
     let session = response.session;

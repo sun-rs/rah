@@ -159,27 +159,6 @@ export function TerminalPane(props: TerminalPaneProps) {
     setBridgeValue(nextValue);
   };
 
-  const commitBridgeInsertion = (text: string) => {
-    if (!text) {
-      return;
-    }
-    sendDataRef.current(text, { focusTerminal: false });
-    const nextValue = `${committedBridgeValueRef.current}${text}`;
-    committedBridgeValueRef.current = nextValue;
-    setBridgeValue(nextValue);
-  };
-
-  const commitBridgeBackspace = () => {
-    if (committedBridgeValueRef.current.length === 0) {
-      sendDataRef.current("\u007f", { focusTerminal: false });
-      return;
-    }
-    sendDataRef.current("\u007f", { focusTerminal: false });
-    const nextValue = committedBridgeValueRef.current.slice(0, -1);
-    committedBridgeValueRef.current = nextValue;
-    setBridgeValue(nextValue);
-  };
-
   return (
     <div className="terminal-panel" data-testid="terminal-panel">
       {showIosInputBridge ? (

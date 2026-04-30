@@ -1,4 +1,4 @@
-import { PanelRight, SquareTerminal } from "lucide-react";
+import { SquareTerminal } from "lucide-react";
 import type { InspectorTab } from "./shared";
 
 export function InspectorHeader(props: {
@@ -8,12 +8,11 @@ export function InspectorHeader(props: {
   eventCount: number;
   hasSession: boolean;
   onTabChange: (tab: InspectorTab) => void;
-  onCollapse?: () => void;
   onOpenTerminal?: () => void;
 }) {
   return (
     <>
-      <div className="h-14 shrink-0 px-4 flex items-center justify-between">
+      <div className="h-14 shrink-0 px-4 pr-12 flex items-center justify-between">
         <div className="min-w-0">
           <div className="text-sm font-medium text-[var(--app-fg)]">Inspector</div>
           <div className="truncate text-xs text-[var(--app-hint)]">{props.workspaceRoot}</div>
@@ -28,17 +27,6 @@ export function InspectorHeader(props: {
               title="Open terminal"
             >
               <SquareTerminal size={16} />
-            </button>
-          ) : null}
-          {props.onCollapse ? (
-            <button
-              type="button"
-              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)]"
-              onClick={props.onCollapse}
-              aria-label="Collapse inspector"
-              title="Collapse inspector"
-            >
-              <PanelRight size={16} />
             </button>
           ) : null}
         </div>

@@ -7,7 +7,6 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import { WebSocket } from "ws";
 import type { TimelineItem } from "@rah/runtime-protocol";
-import type { ProviderActivity } from "./provider-activity";
 import type { QueuedTurn, TerminalWrapperPromptState } from "./terminal-wrapper-control";
 import {
   findClaudeStoredSessionRecord,
@@ -23,7 +22,6 @@ import {
   safeParseClaudeRecord,
   sliceUnprocessedLines,
   toolActivitiesFromAssistantRecord,
-  type ClaudeRawRecord,
   usageFromAssistant,
 } from "./claude-terminal-wrapper-history";
 import {
@@ -35,6 +33,7 @@ import {
   restoreInheritedTerminalModes,
 } from "./terminal-wrapper-panel";
 import { deriveTerminalWrapperRemoteControlState } from "./terminal-wrapper-remote-control";
+import { assertExistingWorkingDirectorySync } from "./provider-working-directory";
 import { resolveConfiguredBinary } from "./provider-binary-utils";
 
 type WrapperMode = "local_native" | "remote_writer";
@@ -145,6 +144,7 @@ function buildClaudeRemotePrintArgs(args: {
 
 async function main() {
   const parsed = parseArgs(process.argv.slice(2));
+  assertExistingWorkingDirectorySync(parsed.cwd, "Session working directory");
   const baseClaudeHome = resolveClaudeBaseHome();
   const logger = createWrapperLogger("claude");
   const forcedProviderSessionId = parsed.resumeProviderSessionId ?? randomUUID();

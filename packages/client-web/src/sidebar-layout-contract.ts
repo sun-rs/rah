@@ -2,6 +2,8 @@ export const SIDEBAR_LAYOUT = {
   rootClassName: "space-y-3",
   toolbarClassName: "flex items-center justify-between px-1",
   toolbarLabelClassName: "text-xs font-medium text-[var(--app-hint)]",
+  toolbarCountBadgeClassName:
+    "relative top-px inline-flex h-5 min-w-5 items-center justify-center rounded-md border border-[var(--app-border)] bg-[var(--app-bg)] px-1.5 text-[10px] font-semibold tabular-nums text-[var(--app-hint)]",
   toolbarActionsClassName: "flex items-center gap-0.5",
   toolbarIconButtonClassName:
     "inline-flex h-9 w-9 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)]",

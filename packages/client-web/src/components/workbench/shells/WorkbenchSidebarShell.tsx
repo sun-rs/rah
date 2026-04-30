@@ -18,9 +18,13 @@ export function WorkbenchSidebarShell(props: {
   liveSessions: SessionSummary[];
   workspaceSortMode: WorkspaceSortMode;
   onWorkspaceSortModeChange: (value: WorkspaceSortMode) => void;
+  canvasActive: boolean;
   onDesktopHome: () => void;
+  onDesktopToggleCanvas: () => void;
+  onMobileToggleCanvas: () => void;
   onMobileHome: () => void;
   onActivateHistory: (ref: StoredSessionRef) => void;
+  onActivateLive: (sessionId: string) => void;
   onRemoveHistorySession: (session: Pick<StoredSessionRef, "provider" | "providerSessionId">) => void;
   onRemoveHistoryWorkspace: (workspaceDir: string) => void;
   onOpenSettings: () => void;
@@ -40,8 +44,11 @@ export function WorkbenchSidebarShell(props: {
               liveSessions={props.liveSessions}
               workspaceSortMode={props.workspaceSortMode}
               onWorkspaceSortModeChange={props.onWorkspaceSortModeChange}
+              canvasActive={props.canvasActive}
               onHome={props.onDesktopHome}
+              onToggleCanvas={props.onDesktopToggleCanvas}
               onActivateHistory={props.onActivateHistory}
+              onActivateLive={props.onActivateLive}
               onRemoveHistorySession={props.onRemoveHistorySession}
               onRemoveHistoryWorkspace={props.onRemoveHistoryWorkspace}
               onOpenSettings={props.onOpenSettings}
@@ -71,8 +78,11 @@ export function WorkbenchSidebarShell(props: {
             liveSessions={props.liveSessions}
             workspaceSortMode={props.workspaceSortMode}
             onWorkspaceSortModeChange={props.onWorkspaceSortModeChange}
+            canvasActive={props.canvasActive}
             onHome={props.onMobileHome}
+            onToggleCanvas={props.onMobileToggleCanvas}
             onActivateHistory={props.onActivateHistory}
+            onActivateLive={props.onActivateLive}
             onRemoveHistorySession={props.onRemoveHistorySession}
             onRemoveHistoryWorkspace={props.onRemoveHistoryWorkspace}
             onOpenSettings={props.onOpenSettings}

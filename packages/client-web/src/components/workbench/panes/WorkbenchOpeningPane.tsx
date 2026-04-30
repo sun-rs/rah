@@ -1,5 +1,5 @@
 import type { PendingSessionTransition } from "../../../session-transition-contract";
-import { LoaderCircle, Menu, PanelRight } from "lucide-react";
+import { LoaderCircle, Menu } from "lucide-react";
 import { ProviderLogo } from "../../ProviderLogo";
 import { providerLabel } from "../../../types";
 
@@ -18,7 +18,7 @@ export function WorkbenchOpeningPane(props: {
         <div className="flex items-center gap-2 min-w-0">
           <button
             type="button"
-            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] transition-colors md:hidden"
+            className="icon-click-feedback inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] md:hidden"
             onClick={props.onOpenLeft}
             aria-label="Open sidebar"
           >
@@ -27,7 +27,7 @@ export function WorkbenchOpeningPane(props: {
           {!props.sidebarOpen && (
             <button
               type="button"
-              className="hidden md:inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] transition-colors"
+              className="icon-click-feedback hidden md:inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
               onClick={props.onExpandSidebar}
               aria-label="Expand sidebar"
               title="Expand sidebar"
@@ -47,27 +47,6 @@ export function WorkbenchOpeningPane(props: {
               Preparing content…
             </div>
           </div>
-        </div>
-        <div className="flex items-center gap-1 shrink-0">
-          {!props.rightSidebarOpen && (
-            <button
-              type="button"
-              className="hidden md:inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] transition-colors"
-              onClick={props.onExpandInspector}
-              aria-label="Expand inspector"
-              title="Expand inspector"
-            >
-              <PanelRight size={16} />
-            </button>
-          )}
-          <button
-            type="button"
-            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] transition-colors md:hidden"
-            onClick={props.onOpenRight}
-            aria-label="Open inspector"
-          >
-            <PanelRight size={18} />
-          </button>
         </div>
       </header>
       <div className="flex-1 overflow-y-auto custom-scrollbar">

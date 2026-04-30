@@ -16,7 +16,6 @@ export {
 } from "./gemini-session-history";
 import {
   extractGeminiUserDisplayText,
-  extractTextFromContent,
   loadGeminiConversationRecord,
   truncateText,
 } from "./gemini-conversation-utils";

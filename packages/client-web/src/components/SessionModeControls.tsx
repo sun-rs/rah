@@ -76,7 +76,7 @@ export function SessionModeControls(props: {
   const compactControlClassName =
     "h-9 rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] px-2.5 text-xs text-[var(--app-fg)]";
   const toolbarAccessClassName = props.iconOnly
-    ? "relative inline-flex h-10 w-10 md:h-9 md:w-9 lg:h-8 lg:w-8 shrink-0 items-center justify-center rounded-full border border-[var(--app-border)] bg-[var(--app-bg)]/90 text-[11px] text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]"
+    ? "icon-click-feedback relative inline-flex h-10 w-10 md:h-9 md:w-9 lg:h-8 lg:w-8 shrink-0 items-center justify-center rounded-full border border-[var(--app-border)] bg-[var(--app-bg)]/90 text-[11px] text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)]"
     : "relative inline-flex h-10 min-[700px]:h-9 lg:h-8 w-10 min-[700px]:w-[7.25rem] shrink-0 items-center justify-center min-[700px]:justify-start gap-1.5 rounded-full border border-[var(--app-border)] bg-[var(--app-bg)]/90 px-0 min-[700px]:px-2.5 text-[11px] text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]";
   const showAccessSelect = props.accessModes.length > 0;
   const selectedAccessLabel =
@@ -96,7 +96,7 @@ export function SessionModeControls(props: {
               type="button"
               disabled={props.disabled}
               onClick={() => setAccessOpen((open) => !open)}
-              className="relative inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[var(--app-border)] bg-[var(--app-bg)] text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] disabled:opacity-50"
+              className="icon-click-feedback relative inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[var(--app-border)] bg-[var(--app-bg)] text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] disabled:opacity-50"
               title={selectedAccessLabel}
               aria-haspopup="listbox"
               aria-expanded={accessOpen}

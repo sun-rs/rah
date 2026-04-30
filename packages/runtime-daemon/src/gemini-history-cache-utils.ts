@@ -5,7 +5,6 @@ import {
   type GeminiHistoryCacheManifest,
   loadCachedGeminiHistoryEvents,
   loadCachedGeminiHistoryManifest,
-  loadCachedGeminiHistoryWindow,
   readCachedGeminiHistoryManifest,
   writeCachedGeminiHistoryEvents,
 } from "./gemini-history-cache";

@@ -38,7 +38,6 @@ import {
   waitForPendingClaudePermission,
 } from "./claude-live-helpers";
 import type {
-  ClaudeQueryFactory,
   LiveClaudeSession,
 } from "./claude-live-types";
 

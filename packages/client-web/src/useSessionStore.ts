@@ -1,12 +1,10 @@
 import { create } from "zustand";
 import type {
-  AttachSessionRequest,
   DebugScenarioDescriptor,
   EventBatch,
   PermissionResponseRequest,
   ProviderModelCatalog,
   RahEvent,
-  ResumeSessionRequest,
   SessionConfigValue,
   SessionSummary,
   StoredSessionRef,
@@ -23,32 +21,18 @@ import {
 } from "./session-store-bootstrap";
 import { isLabModeEnabled } from "./lab-mode";
 import { type PendingSessionTransition } from "./session-transition-contract";
-import { isReadOnlyReplay } from "./session-capabilities";
 import {
   adoptExistingProjectionForProviderSession as adoptExistingProjectionForProviderSessionImpl,
-  applyEventBatchToProjection as applyEventBatchToProjectionImpl,
   applyEventsToProjectionMap as applyEventsToProjectionMapImpl,
   applySessionsResponse as applySessionsResponseImpl,
   computeUnreadSessionIds as computeUnreadSessionIdsImpl,
-  mergeSessionsIntoProjections as mergeSessionsIntoProjectionsImpl,
   replaceSessionsResponse as replaceSessionsResponseImpl,
   updateSessionSummaryInProjectionMap,
 } from "./session-store-projections";
 import {
-  applyAttachedSessionState,
-  applyClaimedHistorySessionState,
-  applyClosedSessionState,
-  applyResumedStoredSessionState,
-  applyStartedSessionState,
-  buildFallbackStoredSessionRef,
-  createEmptySessionProjection,
-} from "./session-store-session-lifecycle";
-import {
   attachSessionCommand,
   claimControlCommand,
   closeSessionCommand,
-  createInteractiveAttachRequest,
-  createObserveAttachRequest,
   interruptSessionCommand,
   renameSessionCommand,
   releaseControlCommand,
@@ -69,12 +53,9 @@ import {
   queueDeferredBootstrapEvent,
   queuePendingEvent,
   shouldDeferEventForHistoryBootstrap,
-  takeDeferredBootstrapEvents,
   takePendingEventsForSessions,
 } from "./session-store-history-bootstrap";
 import {
-  prependHistoryPage as prependAuthoritativeHistoryPage,
-  replayEventsIntoProjection as replayHistoryEventsIntoProjection,
   syncLastHistorySelectionFromState as syncHistorySelectionFromState,
 } from "./session-store-history";
 import { syncHistorySelectionSubscription } from "./session-store-history-selection-sync";
@@ -127,6 +108,7 @@ interface StartSessionOptions {
   modeId?: string;
   initialInput?: string;
   confirmCreateMissingWorkspace?: (dir: string) => Promise<boolean>;
+  onSessionCreated?: (sessionId: string) => void;
 }
 
 interface ClaimHistorySessionOptions {
@@ -181,7 +163,7 @@ interface SessionState {
     provider: ProviderChoice,
     options?: { cwd?: string; forceRefresh?: boolean },
   ) => Promise<void>;
-  startSession: (options?: StartSessionOptions) => Promise<void>;
+  startSession: (options?: StartSessionOptions) => Promise<string | null>;
   startScenario: (scenario: DebugScenarioDescriptor) => Promise<void>;
   activateHistorySession: (
     ref: StoredSessionRef,
@@ -245,17 +227,6 @@ function createProjectionReplayHandling() {
     shouldDeferEvent: shouldDeferEventForHistoryBootstrap,
     queueDeferredEvent: queueDeferredBootstrapEvent,
   };
-}
-
-function mergeSessionsIntoProjections(
-  current: Map<string, SessionProjection>,
-  sessionsResponse: Awaited<ReturnType<typeof api.listSessions>>,
-): Map<string, SessionProjection> {
-  return mergeSessionsIntoProjectionsImpl(
-    current,
-    sessionsResponse,
-    createProjectionReplayHandling(),
-  );
 }
 
 function applySessionsResponse(
@@ -330,13 +301,6 @@ function adoptExistingProjectionForProviderSession(
   return adoptExistingProjectionForProviderSessionImpl(projections, summary);
 }
 
-function applyEventBatchToProjection(
-  projection: SessionProjection,
-  events: RahEvent[],
-): SessionProjection {
-  return applyEventBatchToProjectionImpl(projection, events);
-}
-
 function syncLastHistorySelectionFromState(
   state: Pick<SessionState, "selectedSessionId" | "projections" | "workspaceDir">,
 ) {
@@ -349,21 +313,6 @@ function updateSessionSummary(session: SessionSummary) {
       projections: updateSessionSummaryInProjectionMap(state.projections, session),
     };
   });
-}
-
-function replayEventsIntoProjection(
-  summary: SessionSummary,
-  events: RahEvent[],
-): SessionProjection {
-  return replayHistoryEventsIntoProjection(summary, events);
-}
-
-function prependHistoryPage(
-  projection: SessionProjection,
-  events: RahEvent[],
-  options?: { nextBeforeTs?: string; nextCursor?: string },
-): SessionProjection {
-  return prependAuthoritativeHistoryPage(projection, events, options);
 }
 
 async function ensureSessionHistoryLoaded(sessionId: string) {
@@ -696,7 +645,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   startSession: async (options) => {
-    await startSessionCommand(createStartupDeps(get, set, options), options);
+    return startSessionCommand(createStartupDeps(get, set, options), options);
   },
 
   startScenario: async (scenario) => {

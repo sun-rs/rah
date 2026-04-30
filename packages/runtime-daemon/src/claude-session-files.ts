@@ -1,9 +1,7 @@
 import { appendFileSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import type {
   AttachSessionRequest,
-  ManagedSession,
   RahEvent,
   SessionHistoryPageResponse,
   StoredSessionRef,
@@ -283,50 +281,6 @@ function makeClaudeFrozenHistoryBoundary(filePath: string, endOffset: number): F
   };
 }
 
-function readClaudeFrozenHistoryWindow(args: {
-  sessionId: string;
-  record: ClaudeStoredSessionRecord;
-  endOffset: number;
-  limit: number;
-}): { startOffset: number; events: RahEvent[] } {
-  let lineBudget = Math.max(args.limit * 4, 200);
-  let lastStartOffset = args.endOffset;
-  let events: RahEvent[] = [];
-
-  for (;;) {
-    const window = readTrailingLinesWindow(args.record.filePath, {
-      endOffset: args.endOffset,
-      maxLines: lineBudget,
-    });
-    const previousStartOffset = lastStartOffset;
-    const parsed = window.lines
-      .map(safeParseClaudeRecord)
-      .filter(
-        (record): record is ClaudeRawRecord =>
-          record !== null && record.type !== "custom-title",
-      );
-    events = translateClaudeRecords(args.sessionId, parsed)
-      .sort((left, right) => left.ts.localeCompare(right.ts) || left.seq - right.seq);
-    lastStartOffset = window.startOffset;
-    if (
-      events.length >= args.limit ||
-      window.startOffset === 0 ||
-      window.startOffset === previousStartOffset
-    ) {
-      break;
-    }
-    lineBudget *= 2;
-    if (lineBudget >= 8192) {
-      break;
-    }
-  }
-
-  return {
-    startOffset: lastStartOffset,
-    events,
-  };
-}
-
 export function createClaudeStoredSessionFrozenHistoryPageLoader(args: {
   sessionId: string;
   record: ClaudeStoredSessionRecord;
@@ -339,7 +293,6 @@ export function createClaudeStoredSessionFrozenHistoryPageLoader(args: {
       lines.findIndex((line) => safeParseClaudeRecord(line)?.type === "user"),
     translateLines: (lines) =>
       translateClaudeRecords(
-        args.sessionId,
         lines
           .map(safeParseClaudeRecord)
           .filter(
@@ -487,7 +440,7 @@ export function updateClaudeSessionTitle(
   return { filePath: record.filePath };
 }
 
-function translateClaudeRecords(sessionId: string, records: ClaudeRawRecord[]): RahEvent[] {
+function translateClaudeRecords(records: ClaudeRawRecord[]): RahEvent[] {
   const services = {
     eventBus: new EventBus(),
     ptyHub: new PtyHub(),
@@ -913,7 +866,7 @@ export function getClaudeStoredSessionHistoryPage(args: {
     .map((line) => line.trim())
     .filter(Boolean);
   const parsed = lines.map(safeParseClaudeRecord).filter((record): record is ClaudeRawRecord => Boolean(record));
-  const events = translateClaudeRecords(args.sessionId, parsed);
+  const events = translateClaudeRecords(parsed);
   const ordered = [...events].sort((left, right) => left.ts.localeCompare(right.ts));
   const filtered = args.beforeTs
     ? ordered.filter((event) => event.ts < args.beforeTs!)

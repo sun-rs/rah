@@ -16,15 +16,12 @@ function selectedModel(
   }
   return (
     catalog.models.find((model) => model.id === selectedModelId) ??
-    catalog.models.find((model) => model.id === catalog.currentModelId) ??
-    catalog.models.find((model) => model.isDefault) ??
     catalog.models[0] ??
     null
   );
 }
 
 function selectedReasoning(
-  catalog: ProviderModelCatalog | null | undefined,
   model: SessionModelDescriptor | null,
   selectedReasoningId: string | null | undefined,
 ): SessionReasoningOption | null {
@@ -34,17 +31,12 @@ function selectedReasoning(
   }
   return (
     options.find((option) => option.id === selectedReasoningId) ??
-    (catalog?.currentModelId === model?.id
-      ? options.find((option) => option.id === catalog?.currentReasoningId)
-      : undefined) ??
-    options.find((option) => option.id === model?.defaultReasoningId) ??
-    options[0] ??
+    options.at(-1) ??
     null
   );
 }
 
 function defaultReasoningIdForModel(
-  catalog: ProviderModelCatalog | null | undefined,
   model: SessionModelDescriptor | undefined,
 ): string | null {
   if (!model) {
@@ -54,17 +46,7 @@ function defaultReasoningIdForModel(
   if (options.length === 0) {
     return null;
   }
-  if (
-    catalog?.currentModelId === model.id &&
-    options.some((option) => option.id === catalog.currentReasoningId)
-  ) {
-    return catalog.currentReasoningId ?? null;
-  }
-  return (
-    model.defaultReasoningId ??
-    options[0]?.id ??
-    null
-  );
+  return options.at(-1)?.id ?? null;
 }
 
 export function resolveSelectedModelDraft(args: {
@@ -86,7 +68,7 @@ export function resolveSelectedModelDraft(args: {
   const model = selectedModel(args.catalog, args.selectedModelId);
   return {
     model,
-    reasoning: selectedReasoning(args.catalog, model, args.selectedReasoningId),
+    reasoning: selectedReasoning(model, args.selectedReasoningId),
   };
 }
 
@@ -204,7 +186,7 @@ export function SessionModelControls(props: {
   const handleModelSelect = (modelId: string) => {
     const nextModel = models.find((m) => m.id === modelId);
     const nextReasoningOptions = nextModel?.reasoningOptions ?? [];
-    props.onModelChange(modelId, defaultReasoningIdForModel(props.catalog, nextModel));
+    props.onModelChange(modelId, defaultReasoningIdForModel(nextModel));
 
     if (nextReasoningOptions.length > 1) {
       setPanelView("param-list");
@@ -237,11 +219,11 @@ export function SessionModelControls(props: {
   const pillBase =
     "inline-flex items-center gap-1.5 rounded-full border border-[var(--app-border)] bg-[var(--app-bg)] text-[11px] text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]";
   const triggerClass = props.iconOnly
-    ? `${pillBase} h-8 w-8 shrink-0 justify-center p-0`
+    ? `${pillBase} icon-click-feedback h-8 w-8 shrink-0 justify-center p-0`
     : props.compact
       ? `${pillBase} h-9 w-full justify-start px-2.5`
       : props.mobileIconOnly
-        ? `${pillBase} h-10 w-10 shrink-0 justify-center p-0 min-[700px]:h-9 min-[700px]:w-auto min-[700px]:justify-start min-[700px]:px-3 lg:h-8`
+        ? `${pillBase} icon-click-feedback h-10 w-10 shrink-0 justify-center p-0 min-[700px]:h-9 min-[700px]:w-auto min-[700px]:justify-start min-[700px]:px-3 lg:h-8`
         : `${pillBase} h-8 md:h-9 px-2.5 md:px-3`;
 
   const optionBtn = (isSelected: boolean) =>

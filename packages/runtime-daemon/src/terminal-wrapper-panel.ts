@@ -138,6 +138,9 @@ export function disableTerminalApplicationModes(): void {
 }
 
 export function restoreInheritedTerminalModes(): void {
+  if (!process.stdout.isTTY) {
+    return;
+  }
   disableTerminalApplicationModes();
   process.stdout.write("\r");
 }

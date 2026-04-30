@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import type { ContextUsage, PermissionResponseRequest, ProviderModelCatalog, SessionSummary } from "@rah/runtime-protocol";
-import { Archive, ArrowUp, Ellipsis, Info, Menu, PanelRight, PencilLine, Plus, Trash2, X } from "lucide-react";
+import { Archive, ArrowUp, Ellipsis, EyeOff, Info, Menu, PanelRight, PencilLine, Plus, Trash2, X } from "lucide-react";
 import { providerLabel } from "../../../types";
 import type { SessionProjection } from "../../../types";
 import { ChatThread } from "../../chat/ChatThread";
@@ -24,7 +24,7 @@ function formatFullTokens(value: number): string {
 
 function resolveContextUsageDisplay(
   usage: ContextUsage | undefined,
-): { label: string; ariaLabel: string; tooltip: string } | null {
+): { label: string; compactLabel: string; ariaLabel: string; tooltip: string } | null {
   if (usage?.percentUsed === undefined && usage?.percentRemaining === undefined) {
     return null;
   }
@@ -32,6 +32,7 @@ function resolveContextUsageDisplay(
   const percentRemainingValue = usage.percentRemaining ?? 100 - usage.percentUsed!;
   const percentRemaining = formatContextPercent(percentRemainingValue);
   const label = `${percentRemaining}% context`;
+  const compactLabel = `${percentRemaining}%`;
   const usedTokens = usage.usedTokens;
   const contextWindow = usage.contextWindow;
 
@@ -43,6 +44,7 @@ function resolveContextUsageDisplay(
   ) {
     return {
       label,
+      compactLabel,
       ariaLabel: `Context remaining: ${percentRemaining}%`,
       tooltip: `Remaining ${percentRemaining}%`,
     };
@@ -54,6 +56,7 @@ function resolveContextUsageDisplay(
   )} tokens`;
   return {
     label,
+    compactLabel,
     ariaLabel: `${tooltip} · ${percentRemaining}% remaining`,
     tooltip,
   };
@@ -94,12 +97,15 @@ export function WorkbenchSelectedPane(props: {
   onClaimControl: () => void;
   onInterrupt: () => void;
   onOpenFileReference: () => void;
+  fileReferenceDisabled?: boolean;
   onLoadOlderHistory: () => void | Promise<void>;
   onOpenLeft: () => void;
   onExpandSidebar: () => void;
   onOpenRight: () => void;
   onExpandInspector: () => void;
+  onToggleInspector?: () => void;
   onFloatingAnchorOffsetChange: (offsetPx: number) => void;
+  onHideSession?: () => void;
   onArchiveOrClose: () => void;
   onDeleteSession: () => void;
   canArchiveSession: boolean;
@@ -115,12 +121,27 @@ export function WorkbenchSelectedPane(props: {
   onRenameSession: () => void;
   onSetSessionMode: (modeId: string) => void;
   onSetSessionModel: (modelId: string, reasoningId?: string | null) => void;
+  compactComposerPrompts?: boolean | "auto";
+  compactSessionMeta?: boolean | "auto";
+  showInspectorToggle?: boolean;
+  reserveInspectorToggleSpace?: boolean;
 }) {
+  const rootRef = useRef<HTMLDivElement | null>(null);
   const composerContainerRef = useRef<HTMLDivElement | null>(null);
   const sessionMenuRef = useRef<HTMLDivElement | null>(null);
   const lastFloatingAnchorOffsetRef = useRef<number | null>(null);
   const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
   const [sessionInfoOpen, setSessionInfoOpen] = useState(false);
+  const [paneWidth, setPaneWidth] = useState<number | null>(null);
+  const effectivePaneWidth = paneWidth ?? Number.POSITIVE_INFINITY;
+  const compactSessionMeta =
+    props.compactSessionMeta === "auto"
+      ? effectivePaneWidth < 560
+      : props.compactSessionMeta === true;
+  const compactComposerPrompts =
+    props.compactComposerPrompts === "auto"
+      ? effectivePaneWidth < 640
+      : props.compactComposerPrompts === true;
   const archiveOrCloseDisabled =
     !props.isAttached || (!props.selectedIsReadOnlyReplay && !props.canArchiveSession);
   const liveModeControl = resolveSessionModeControlState({
@@ -152,6 +173,76 @@ export function WorkbenchSelectedPane(props: {
     composerActionPending;
   const stopDisabled =
     props.composerSurface.kind === "compose" && props.composerSurface.stopDisabled === true;
+  const showInspectorToggle = props.showInspectorToggle !== false;
+  const claimComposerButtonClassName =
+    "inline-flex h-8 shrink-0 items-center justify-center rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground transition-colors hover:opacity-90 disabled:opacity-50";
+  const claimControlButtonClassName =
+    "icon-click-feedback inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] disabled:opacity-40";
+  const renderClaimComposer = (args: {
+    title: string;
+    actionLabel: string;
+    actionPending: boolean;
+    onClaim: () => void;
+  }) => (
+    <div className="flex min-h-10 w-full items-center justify-between gap-2 rounded-xl border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-2 py-1 md:min-h-9 lg:min-h-8">
+      <div className="min-w-0 flex-1 truncate px-1">
+        <span className="text-sm font-medium text-[var(--app-fg)]">{args.title}</span>
+        {!compactComposerPrompts ? (
+          <span className="ml-2 text-xs text-[var(--app-hint)]">
+            Claim control to continue here.
+          </span>
+        ) : null}
+      </div>
+      <div className="flex shrink-0 items-center gap-2.5">
+      <SessionControlPopover
+        accessModes={props.claimAccessModes}
+        selectedAccessModeId={props.selectedClaimAccessModeId}
+        planModeAvailable={props.claimPlanModeAvailable}
+        planModeEnabled={props.claimPlanModeEnabled}
+        modeDisabled={props.claimModePending || args.actionPending}
+        modelCatalog={props.modelCatalog}
+        modelCatalogLoading={props.modelCatalogLoading}
+        selectedModelId={props.selectedClaimModelId}
+        selectedReasoningId={props.selectedClaimReasoningId}
+        modelDisabled={props.modelChangePending || args.actionPending}
+        disabled={claimSessionControlDisabled}
+        showModel
+        align="right"
+        buttonClassName={claimControlButtonClassName}
+        onAccessModeChange={props.onClaimAccessModeChange}
+        onPlanModeToggle={props.onClaimPlanModeToggle}
+        onModelChange={props.onClaimModelChange}
+        onReasoningChange={props.onClaimReasoningChange}
+      />
+      <button
+        type="button"
+        disabled={args.actionPending}
+        onClick={args.onClaim}
+        className={claimComposerButtonClassName}
+      >
+        {args.actionLabel}
+      </button>
+      </div>
+    </div>
+  );
+
+  useEffect(() => {
+    const node = rootRef.current;
+    if (!node) return;
+
+    const updateWidth = () => {
+      setPaneWidth(Math.floor(node.getBoundingClientRect().width));
+    };
+
+    updateWidth();
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", updateWidth);
+      return () => window.removeEventListener("resize", updateWidth);
+    }
+    const observer = new ResizeObserver(updateWidth);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     const node = composerContainerRef.current;
@@ -190,12 +281,16 @@ export function WorkbenchSelectedPane(props: {
   }, [sessionMenuOpen]);
 
   return (
-    <>
-      <header className="relative z-20 h-14 flex items-center justify-between gap-3 border-b border-[var(--app-border)] px-4 bg-[var(--app-bg)]/80 backdrop-blur-sm shrink-0">
+    <div ref={rootRef} className="flex h-full min-h-0 flex-col">
+      <header
+        className={`relative z-20 h-14 flex items-center justify-between gap-3 border-b border-[var(--app-border)] pl-4 ${
+          props.reserveInspectorToggleSpace ? "pr-14" : "pr-4"
+        } bg-[var(--app-bg)]/80 backdrop-blur-sm shrink-0`}
+      >
         <div className="flex items-center gap-2 min-w-0">
           <button
             type="button"
-            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] transition-colors md:hidden"
+            className="icon-click-feedback inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] md:hidden"
             onClick={props.onOpenLeft}
             aria-label="Open sidebar"
           >
@@ -204,7 +299,7 @@ export function WorkbenchSelectedPane(props: {
           {!props.sidebarOpen && (
             <button
               type="button"
-              className="hidden md:inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] transition-colors"
+              className="icon-click-feedback hidden md:inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
               onClick={props.onExpandSidebar}
               aria-label="Expand sidebar"
               title="Expand sidebar"
@@ -217,6 +312,34 @@ export function WorkbenchSelectedPane(props: {
             <div className="text-sm font-medium truncate text-[var(--app-fg)]">
               {props.selectedSummary.session.title ?? props.selectedSummary.session.id}
             </div>
+            {compactSessionMeta ? (
+              <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] text-[var(--app-hint)]">
+                {props.selectedIsReadOnlyReplay ? (
+                  <span className="inline-flex shrink-0 rounded-full border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--app-hint)]">
+                    History
+                  </span>
+                ) : (
+                  <span className="inline-flex shrink-0 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+                    Live
+                  </span>
+                )}
+                {contextUsageDisplay ? (
+                  <span
+                    className="group relative inline-flex min-w-0 items-center"
+                    aria-label={contextUsageDisplay.ariaLabel}
+                    tabIndex={0}
+                  >
+                    <span className="cursor-default truncate">{contextUsageDisplay.compactLabel}</span>
+                    <span
+                      role="tooltip"
+                      className="pointer-events-none absolute left-0 top-full z-50 mt-1 hidden max-w-[16rem] whitespace-nowrap rounded-md border border-[var(--app-border)] bg-[var(--app-bg)] px-2 py-1 text-[11px] text-[var(--app-fg)] shadow-lg group-hover:block group-focus:block"
+                    >
+                      {contextUsageDisplay.tooltip}
+                    </span>
+                  </span>
+                ) : null}
+              </div>
+            ) : (
             <div className="flex items-center gap-2 text-[11px] md:text-xs text-[var(--app-hint)] mt-0.5">
               <span className="capitalize hidden sm:inline">{providerLabel(props.selectedSummary.session.provider)}</span>
               <span className="hidden sm:inline">·</span>
@@ -252,16 +375,17 @@ export function WorkbenchSelectedPane(props: {
                       {contextUsageDisplay.tooltip}
                     </span>
                   </span>
-                </>
-              ) : null}
+                  </>
+                ) : null}
+              </div>
+            )}
             </div>
           </div>
-        </div>
         <div className="flex items-center gap-1 shrink-0">
           <div ref={sessionMenuRef} className="relative">
             <button
               type="button"
-              className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-[var(--app-border)] text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
+              className="icon-click-feedback inline-flex h-8 w-8 items-center justify-center rounded-md border border-[var(--app-border)] text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
               onClick={() => setSessionMenuOpen((open) => !open)}
               aria-label="Session actions"
               title="Session actions"
@@ -339,25 +463,38 @@ export function WorkbenchSelectedPane(props: {
               </>
             )}
           </button>
-          {!props.rightSidebarOpen && (
+          {props.onHideSession && !props.selectedIsReadOnlyReplay ? (
             <button
               type="button"
-              className="hidden md:inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] transition-colors"
-              onClick={props.onExpandInspector}
-              aria-label="Expand inspector"
-              title="Expand inspector"
+              className="inline-flex h-8 items-center justify-center rounded-md border border-[var(--app-border)] px-2 text-xs text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
+              onClick={props.onHideSession}
+              title="Hide this session without closing it"
+            >
+              <EyeOff size={14} className="mr-1" />
+              <span>Hide</span>
+            </button>
+          ) : null}
+          {showInspectorToggle ? (
+            <button
+              type="button"
+              className="icon-click-feedback hidden h-8 w-8 items-center justify-center rounded-md border border-[var(--app-border)] text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] md:inline-flex"
+              onClick={props.onToggleInspector ?? props.onExpandInspector}
+              aria-label={props.rightSidebarOpen ? "Collapse inspector" : "Expand inspector"}
+              title={props.rightSidebarOpen ? "Collapse inspector" : "Expand inspector"}
             >
               <PanelRight size={16} />
             </button>
-          )}
-          <button
-            type="button"
-            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] transition-colors md:hidden"
-            onClick={props.onOpenRight}
-            aria-label="Open inspector"
-          >
-            <PanelRight size={18} />
-          </button>
+          ) : null}
+          {showInspectorToggle ? (
+            <button
+              type="button"
+              className="icon-click-feedback inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] md:hidden"
+              onClick={props.onOpenRight}
+              aria-label="Open inspector"
+            >
+              <PanelRight size={18} />
+            </button>
+          ) : null}
         </div>
       </header>
 
@@ -391,83 +528,23 @@ export function WorkbenchSelectedPane(props: {
       >
         <div className="mx-auto max-w-3xl px-3 pt-2 md:px-4 md:pt-3">
           {props.composerSurface.kind === "history_claim" ? (
-            <div className="flex items-center justify-between gap-3 rounded-xl border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-4 py-3">
-              <div className="min-w-0">
-                <div className="text-sm font-medium text-[var(--app-fg)]">History only</div>
-                <div className="text-xs text-[var(--app-hint)]">Claim control to continue here.</div>
-              </div>
-              <div className="flex items-center gap-2">
-                <SessionControlPopover
-                  accessModes={props.claimAccessModes}
-                  selectedAccessModeId={props.selectedClaimAccessModeId}
-                  planModeAvailable={props.claimPlanModeAvailable}
-                  planModeEnabled={props.claimPlanModeEnabled}
-                  modeDisabled={props.claimModePending || props.composerSurface.actionPending}
-                  modelCatalog={props.modelCatalog}
-                  modelCatalogLoading={props.modelCatalogLoading}
-                  selectedModelId={props.selectedClaimModelId}
-                  selectedReasoningId={props.selectedClaimReasoningId}
-                  modelDisabled={props.modelChangePending || props.composerSurface.actionPending}
-                  disabled={claimSessionControlDisabled}
-                  showModel
-                  align="right"
-                  buttonClassName="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[var(--app-border)] bg-[var(--app-bg)] text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] disabled:opacity-40"
-                  onAccessModeChange={props.onClaimAccessModeChange}
-                  onPlanModeToggle={props.onClaimPlanModeToggle}
-                  onModelChange={props.onClaimModelChange}
-                  onReasoningChange={props.onClaimReasoningChange}
-                />
-                <button
-                  type="button"
-                  disabled={props.composerSurface.actionPending}
-                  onClick={props.onClaimHistory}
-                  className="shrink-0 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition-colors hover:opacity-90 disabled:opacity-50"
-                >
-                  {props.composerSurface.actionLabel}
-                </button>
-              </div>
-            </div>
+            renderClaimComposer({
+              title: "History only",
+              actionLabel: props.composerSurface.actionLabel,
+              actionPending: props.composerSurface.actionPending,
+              onClaim: props.onClaimHistory,
+            })
           ) : props.composerSurface.kind === "unavailable" ? (
             <div className="w-full rounded-xl border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-4 py-3 text-sm text-[var(--app-hint)]">
               Input is unavailable for this session.
             </div>
           ) : props.composerSurface.kind === "claim_control" ? (
-            <div className="flex items-center justify-between gap-3 rounded-xl border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-4 py-3">
-              <div className="min-w-0">
-                <div className="text-sm font-medium text-[var(--app-fg)]">Claim control</div>
-                <div className="text-xs text-[var(--app-hint)]">Claim control to continue here.</div>
-              </div>
-              <div className="flex items-center gap-2">
-                <SessionControlPopover
-                  accessModes={props.claimAccessModes}
-                  selectedAccessModeId={props.selectedClaimAccessModeId}
-                  planModeAvailable={props.claimPlanModeAvailable}
-                  planModeEnabled={props.claimPlanModeEnabled}
-                  modeDisabled={props.claimModePending || props.composerSurface.actionPending}
-                  modelCatalog={props.modelCatalog}
-                  modelCatalogLoading={props.modelCatalogLoading}
-                  selectedModelId={props.selectedClaimModelId}
-                  selectedReasoningId={props.selectedClaimReasoningId}
-                  modelDisabled={props.modelChangePending || props.composerSurface.actionPending}
-                  disabled={claimSessionControlDisabled}
-                  showModel
-                  align="right"
-                  buttonClassName="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[var(--app-border)] bg-[var(--app-bg)] text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] disabled:opacity-40"
-                  onAccessModeChange={props.onClaimAccessModeChange}
-                  onPlanModeToggle={props.onClaimPlanModeToggle}
-                  onModelChange={props.onClaimModelChange}
-                  onReasoningChange={props.onClaimReasoningChange}
-                />
-                <button
-                  type="button"
-                  disabled={props.composerSurface.actionPending}
-                  onClick={props.onClaimControl}
-                  className="shrink-0 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition-colors hover:opacity-90 disabled:opacity-50"
-                >
-                  {props.composerSurface.actionLabel}
-                </button>
-              </div>
-            </div>
+            renderClaimComposer({
+              title: "Claim control",
+              actionLabel: props.composerSurface.actionLabel,
+              actionPending: props.composerSurface.actionPending,
+              onClaim: props.onClaimControl,
+            })
           ) : (
             <div className="relative">
               {/* Compose grid: attach | settings | textarea | [stop] | send */}
@@ -481,8 +558,13 @@ export function WorkbenchSelectedPane(props: {
                 <button
                   type="button"
                   onClick={props.onOpenFileReference}
-                  className={COMPOSER_LAYOUT.attachButtonClassName}
-                  title="Insert file or folder reference"
+                  disabled={props.fileReferenceDisabled}
+                  className={`${COMPOSER_LAYOUT.attachButtonClassName} disabled:cursor-not-allowed disabled:opacity-40`}
+                  title={
+                    props.fileReferenceDisabled
+                      ? "File references are available in single-session view."
+                      : "Insert file or folder reference"
+                  }
                 >
                   <Plus size={18} />
                 </button>
@@ -586,6 +668,6 @@ export function WorkbenchSelectedPane(props: {
         projection={props.selectedProjection}
         onOpenChange={setSessionInfoOpen}
       />
-    </>
+    </div>
   );
 }

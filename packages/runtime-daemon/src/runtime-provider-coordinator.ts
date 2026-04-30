@@ -17,6 +17,7 @@ import { launchSpecForProvider, probeProviderDiagnostic } from "./provider-diagn
 import type { ProviderAdapter } from "./provider-adapter";
 import type { HistorySnapshotStore } from "./history-snapshots";
 import { defaultProviderModeId, providerModeDescriptors } from "./session-mode-utils";
+import { assertExistingWorkingDirectory } from "./provider-working-directory";
 
 type RuntimeProviderCoordinatorDeps = {
   adaptersByProvider: Map<string, ProviderAdapter>;
@@ -100,6 +101,7 @@ export class RuntimeProviderCoordinator {
   }
 
   async startSession(request: StartSessionRequest): Promise<StartSessionResponse> {
+    await assertExistingWorkingDirectory(request.cwd, "Session working directory");
     this.deps.pruneOrphanSessions();
     const adapter = this.requireAdapterForProvider(request.provider);
     const response = await adapter.startSession(request);
@@ -108,6 +110,9 @@ export class RuntimeProviderCoordinator {
   }
 
   async resumeSession(request: ResumeSessionRequest): Promise<ResumeSessionResponse> {
+    if (request.preferStoredReplay !== true && request.cwd) {
+      await assertExistingWorkingDirectory(request.cwd, "Session working directory");
+    }
     this.deps.pruneOrphanSessions();
     const adapter = this.requireAdapterForProvider(request.provider);
     const response = await adapter.resumeSession(request);

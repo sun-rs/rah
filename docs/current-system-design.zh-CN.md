@@ -248,11 +248,30 @@ Stop 按钮语义：
 
 ```bash
 npm install
-npm run build:web
-npm run serve:workbench
+npm link
+rah start
 npm run typecheck
 npm run test:web
 npm run test:runtime
+```
+
+`rah start` 是源码 checkout 的日常入口：构建 Web、后台启动 daemon、打开 `http://127.0.0.1:43111/`，并把 pid/log 写到 `~/.rah/runtime-daemon`。
+
+后台 daemon 管理命令：
+
+```bash
+rah status
+rah logs --follow
+rah stop
+rah restart
+```
+
+如果需要前台进程或分离调试，仍可使用：
+
+```bash
+npm run serve:workbench
+npm run dev:daemon
+npm run dev:web
 ```
 
 Provider smoke 依赖本机 CLI 和账号状态，不是所有机器默认门禁。只在确认对应 provider CLI、登录、权限、额度都可用时运行。
