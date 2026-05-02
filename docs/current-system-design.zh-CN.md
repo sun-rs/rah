@@ -54,6 +54,16 @@ packages/
 - 前端和 daemon 都只能通过这层共享结构。
 - provider-native 字段不应泄漏到主 UI。
 - 新增事件前必须先判断是否能映射到已有 canonical event family。
+- `timeline.item.*` 可以携带可选 `TimelineIdentity`，用于把 live stream 与 history replay 的同一条真实消息映射到同一个 `canonicalItemId`。
+
+Timeline identity 的硬约束：
+
+- `canonicalItemId` 只由 `provider + providerSessionId + turnKey + itemKind + itemKey` 这类身份字段生成。
+- `origin` 只能表示来源是 `live` 还是 `history`，不能进入 canonical key。
+- `contentHash` 只能用于校验或弱 fallback，不能作为主身份。
+- `sourceCursor` 只记录原始证据，例如文件行、byte offset、provider message id、DB row id；它不参与 canonical key。
+- `confidence` 标记身份强度：`native`、`derived`、`provisional`、`heuristic`。
+- daemon 会对高价值 timeline item 缺失 identity、identity 与 item/provider 不一致、同一 `canonicalItemId` 结构冲突做诊断 warning；这些 warning 不进入 UI，只用于发现 adapter 漏洞。
 
 ### 3.2 runtime-daemon
 
@@ -91,6 +101,7 @@ packages/
 前端主原则：
 
 - 使用 canonical feed 渲染，不理解 provider 原生日志格式。
+- 如果 timeline event 有 `canonicalItemId`，projection 必须按该 id upsert；`messageId` 和 text/time 去重只作为旧事件 fallback。
 - 通过 `useSessionStore` 管 session projection、selected session、history paging、event sync。
 - 对长历史使用虚拟窗口和 measured row height，不把所有 DOM 一次性渲染。
 - mode/model/config 的 provider 差异必须由 adapter 通过 `ProviderModelCatalog`、`SessionModeState`、`ManagedSession.model/config/modelProfile` 暴露，前端不能把 mode 翻译成 provider-native 启动参数。
@@ -243,38 +254,66 @@ Stop 按钮语义：
 - 过滤 `<turn_aborted>` 等上下文标签时必须保留原始换行、列表和代码块。
 - 不用 `replace(/\s+/g, " ")` 这类全局压平逻辑处理 assistant text。
 - 不同 provider 的原始结构化输出差异由 adapter 吸收，前端只渲染 canonical text/markdown。
+- live 与 history 的重复消除应优先依赖 `TimelineIdentity.canonicalItemId`，而不是靠文本相同、时间接近来猜。
+- 当前阶段是 Timeline Identity v2 的 MVP：协议、daemon 透传、前端 upsert、五家 adapter 的 native/derived identity 已具备。后续如果继续增强，应在 daemon 侧增加 epoch/seq ledger 做 replay/gap/catch-up，而不是把 text/time window 重新变成主逻辑。
 
 ## 12. 常用开发命令
 
+首次 checkout 或依赖变化时：
+
 ```bash
 npm install
-npm link
-rah start
-npm run typecheck
-npm run test:web
-npm run test:runtime
 ```
 
-`rah start` 是源码 checkout 的日常入口：构建 Web、后台启动 daemon、打开 `http://127.0.0.1:43111/`，并把 pid/log 写到 `~/.rah/runtime-daemon`。
+日常源码启动/更新后重启：
+
+```bash
+node bin/rah.mjs restart --no-open
+```
+
+如果只改后端、不需要重新构建 Web：
+
+```bash
+node bin/rah.mjs restart --no-build --no-open
+```
+
+`restart` 会停止当前 managed daemon，再用当前 checkout 的源码启动新 daemon。它会中断当前由 daemon 管理的 live wrappers/TUIs（例如 `rah codex`、`rah claude`、`rah gemini`、`rah kimi`、`rah opencode`），因为旧 daemon 会被关闭。`start` 只保证 daemon 正在运行；如果旧 daemon 已经 ready，它不会替换成新代码。普通代码更新不需要 `npm install`。
 
 后台 daemon 管理命令：
 
 ```bash
-rah status
-rah logs --follow
-rah stop
-rah restart
+node bin/rah.mjs status
+node bin/rah.mjs logs --follow
+node bin/rah.mjs stop
 ```
 
-如果需要前台进程或分离调试，仍可使用：
+如果希望全局 `rah` 命令指向当前 checkout，可选执行一次：
 
 ```bash
-npm run serve:workbench
-npm run dev:daemon
-npm run dev:web
+npm link
+rah restart --no-open
 ```
 
-Provider smoke 依赖本机 CLI 和账号状态，不是所有机器默认门禁。只在确认对应 provider CLI、登录、权限、额度都可用时运行。
+验证命令：
+
+```bash
+npm run typecheck
+npm run test:web
+npm run test:runtime
+npm run test:smoke:wrapper
+```
+
+`npm run test:smoke:wrapper` 会连接真实 daemon 的 wrapper-control / event stream / input / close 路由，覆盖 Codex、Claude、Gemini、Kimi、OpenCode 五家 adapter 的 wrapper 生命周期、Web 输入注入、canonical timeline identity 透传和清理。它不调用外部 provider CLI 或模型 API，因此适合作为 daemon 层稳定 smoke。
+
+Provider browser smoke 依赖本机 CLI、账号状态和额度，只应在已配置完整的机器上运行：
+
+```bash
+npm run test:smoke:browser-providers
+```
+
+也可以按 provider 单独运行 `test:smoke:codex-browser`、`test:smoke:claude-browser`、`test:smoke:gemini-browser`、`test:smoke:kimi-browser`、`test:smoke:opencode-browser`。
+
+`npm run serve:workbench`、`npm run dev:daemon`、`npm run dev:web` 仅用于前台调试或拆分调试。Provider smoke 不是所有机器默认门禁。
 
 ## 13. 维护检查清单
 

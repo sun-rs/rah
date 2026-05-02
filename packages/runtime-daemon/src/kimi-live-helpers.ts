@@ -8,6 +8,7 @@ import {
 import type { RuntimeServices } from "./provider-adapter";
 import { applyProviderActivity, type ProviderActivity } from "./provider-activity";
 import { buildKimiModeState } from "./session-mode-utils";
+import { createKimiTimelineIdentity } from "./kimi-timeline-identity";
 import {
   SESSION_SOURCE,
   type JsonRpcEvent,
@@ -112,28 +113,67 @@ export function applyActivity(
 
 function mapContentPartToActivity(
   payload: Record<string, unknown>,
-  turnId: string,
+  liveSession: LiveKimiSession,
+  activeTurn: LiveKimiTurn,
 ): ProviderActivity | null {
   const partType = typeof payload.type === "string" ? payload.type : null;
   if (partType === "text") {
     const text = typeof payload.text === "string" ? payload.text : "";
-    return text
-      ? {
-          type: "timeline_item",
-          turnId,
-          item: { kind: "assistant_message", text },
-        }
-      : null;
+    if (!text) {
+      return null;
+    }
+    const existing =
+      activeTurn.streamingTimelineItem?.kind === "assistant_message"
+        ? activeTurn.streamingTimelineItem
+        : null;
+    const itemIndex = existing?.itemIndex ?? activeTurn.nextTimelineItemIndex++;
+    const nextText = existing ? `${existing.text}${text}` : text;
+    activeTurn.streamingTimelineItem = {
+      kind: "assistant_message",
+      itemIndex,
+      text: nextText,
+    };
+    return {
+      type: existing ? "timeline_item_updated" : "timeline_item",
+      turnId: activeTurn.turnId,
+      item: { kind: "assistant_message", text: nextText },
+      identity: createKimiTimelineIdentity({
+        providerSessionId: liveSession.providerSessionId,
+        turnIndex: activeTurn.turnIndex,
+        itemKind: "assistant_message",
+        itemIndex,
+        origin: "live",
+      }),
+    };
   }
   if (partType === "think") {
     const text = typeof payload.think === "string" ? payload.think : "";
-    return text
-      ? {
-          type: "timeline_item",
-          turnId,
-          item: { kind: "reasoning", text },
-        }
-      : null;
+    if (!text) {
+      return null;
+    }
+    const existing =
+      activeTurn.streamingTimelineItem?.kind === "reasoning"
+        ? activeTurn.streamingTimelineItem
+        : null;
+    const itemIndex = existing?.itemIndex ?? activeTurn.nextTimelineItemIndex++;
+    const nextText = existing ? `${existing.text}${text}` : text;
+    activeTurn.streamingTimelineItem = {
+      kind: "reasoning",
+      itemIndex,
+      text: nextText,
+    };
+    return {
+      type: existing ? "timeline_item_updated" : "timeline_item",
+      turnId: activeTurn.turnId,
+      item: { kind: "reasoning", text: nextText },
+      identity: createKimiTimelineIdentity({
+        providerSessionId: liveSession.providerSessionId,
+        turnIndex: activeTurn.turnIndex,
+        itemKind: "reasoning",
+        itemIndex,
+        origin: "live",
+      }),
+    };
   }
   return null;
 }
@@ -374,10 +414,10 @@ export function handleKimiEvent(
       }
       return;
     case "ContentPart": {
-      if (!turnId) {
+      if (!turnId || !activeTurn) {
         return;
       }
-      const activity = mapContentPartToActivity(payload, turnId);
+      const activity = mapContentPartToActivity(payload, liveSession, activeTurn);
       if (activity) {
         applyActivity(services, liveSession.sessionId, activity, event);
       }
@@ -387,6 +427,7 @@ export function handleKimiEvent(
       if (!turnId || !activeTurn) {
         return;
       }
+      activeTurn.streamingTimelineItem = null;
       const functionBody =
         payload.function && typeof payload.function === "object" && !Array.isArray(payload.function)
           ? (payload.function as Record<string, unknown>)
@@ -627,10 +668,13 @@ export function bindKimiClientStderr(
   });
 }
 
-export function createInitialKimiTurn(turnId: string): LiveKimiTurn {
+export function createInitialKimiTurn(turnId: string, turnIndex: number): LiveKimiTurn {
   return {
     promptRequestId: `rah-kimi-prompt-${turnId}`,
     turnId,
+    turnIndex,
+    nextTimelineItemIndex: 0,
+    streamingTimelineItem: null,
     aborted: false,
     completed: false,
     latestToolCallId: null,

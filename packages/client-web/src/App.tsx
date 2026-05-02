@@ -1,5 +1,6 @@
 import { Suspense, lazy, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { History, PanelRight, Plus } from "lucide-react";
+import { useShallow } from "zustand/react/shallow";
 import type { PermissionResponseRequest, SessionConfigValue, StoredSessionRef } from "@rah/runtime-protocol";
 import { SessionSidebar } from "./SessionSidebar";
 import { useSessionStore } from "./useSessionStore";
@@ -87,7 +88,8 @@ type CanvasNewSessionDraft = {
   modelDrafts: Record<ProviderChoice, ModelDraft>;
 };
 
-const MODEL_DRAFT_STORAGE_KEY = "rah.modelDrafts.v1";
+const MODEL_DRAFT_STORAGE_KEY = "rah.modelDrafts.v2";
+const LEGACY_MODEL_DRAFT_STORAGE_KEYS = ["rah.modelDrafts.v1"];
 const PROVIDER_CHOICES: ProviderChoice[] = ["codex", "claude", "kimi", "gemini", "opencode"];
 const CANVAS_PANE_IDS: CanvasPaneId[] = ["canvas-1", "canvas-2", "canvas-3", "canvas-4"];
 const CANVAS_LAYOUT_PANE_COUNT: Record<CanvasLayout, number> = {
@@ -147,15 +149,55 @@ function createEmptyCanvasNewSessionDrafts(): Record<CanvasPaneId, CanvasNewSess
   };
 }
 
+function isSessionConfigValue(value: unknown): value is SessionConfigValue {
+  return (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  );
+}
+
+function sanitizeOptionValues(value: unknown): Record<string, SessionConfigValue> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const entries = Object.entries(value).filter((entry): entry is [string, SessionConfigValue] =>
+    isSessionConfigValue(entry[1]),
+  );
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+function sanitizeModelDraft(value: unknown): ModelDraft {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  const record = value as Partial<ModelDraft>;
+  if (typeof record.modelId !== "string" || !record.modelId) {
+    return {};
+  }
+  const optionValues = sanitizeOptionValues(record.optionValues);
+  return {
+    modelId: record.modelId,
+    ...(typeof record.reasoningId === "string" && record.reasoningId
+      ? { reasoningId: record.reasoningId }
+      : {}),
+    ...(optionValues ? { optionValues } : {}),
+  };
+}
+
 function readRememberedModelDrafts(): Record<ProviderChoice, ModelDraft> {
   if (typeof window === "undefined") return emptyModelDrafts();
   try {
-    const parsed = JSON.parse(window.localStorage.getItem(MODEL_DRAFT_STORAGE_KEY) ?? "{}") as
-      Partial<Record<ProviderChoice, ModelDraft>>;
+    const raw =
+      window.localStorage.getItem(MODEL_DRAFT_STORAGE_KEY) ??
+      LEGACY_MODEL_DRAFT_STORAGE_KEYS.map((key) => window.localStorage.getItem(key)).find(
+        (value): value is string => Boolean(value),
+      ) ??
+      "{}";
+    const parsed = JSON.parse(raw) as Partial<Record<ProviderChoice, unknown>>;
     return PROVIDER_CHOICES.reduce((drafts, provider) => {
-      drafts[provider] = {
-        ...(parsed[provider]?.modelId ? { modelId: parsed[provider]?.modelId } : {}),
-      };
+      drafts[provider] = sanitizeModelDraft(parsed[provider]);
       return drafts;
     }, emptyModelDrafts());
   } catch {
@@ -167,11 +209,7 @@ function rememberModelDraft(provider: ProviderChoice, draft: ModelDraft): void {
   if (typeof window === "undefined") return;
   try {
     const current = readRememberedModelDrafts();
-    current[provider] = draft.modelId
-      ? {
-          modelId: draft.modelId,
-        }
-      : {};
+    current[provider] = sanitizeModelDraft(draft);
     window.localStorage.setItem(MODEL_DRAFT_STORAGE_KEY, JSON.stringify(current));
   } catch {
     // Ignore storage failures; the in-memory draft still applies for this page.
@@ -221,7 +259,51 @@ export function App() {
     sendInput,
     loadOlderHistory,
     respondToPermission,
-  } = useSessionStore();
+  } = useSessionStore(
+    useShallow((state) => ({
+      init: state.init,
+      refreshWorkbenchState: state.refreshWorkbenchState,
+      recoverTransport: state.recoverTransport,
+      projections: state.projections,
+      unreadSessionIds: state.unreadSessionIds,
+      storedSessions: state.storedSessions,
+      recentSessions: state.recentSessions,
+      workspaceDirs: state.workspaceDirs,
+      debugScenarios: state.debugScenarios,
+      modelCatalogs: state.modelCatalogs,
+      selectedSessionId: state.selectedSessionId,
+      workspaceDir: state.workspaceDir,
+      newSessionProvider: state.newSessionProvider,
+      pendingSessionTransition: state.pendingSessionTransition,
+      pendingSessionAction: state.pendingSessionAction,
+      clientId: state.clientId,
+      isInitialLoaded: state.isInitialLoaded,
+      error: state.error,
+      clearError: state.clearError,
+      setWorkspaceDir: state.setWorkspaceDir,
+      addWorkspace: state.addWorkspace,
+      removeWorkspace: state.removeWorkspace,
+      setSelectedSessionId: state.setSelectedSessionId,
+      setNewSessionProvider: state.setNewSessionProvider,
+      loadProviderModels: state.loadProviderModels,
+      startSession: state.startSession,
+      startScenario: state.startScenario,
+      activateHistorySession: state.activateHistorySession,
+      attachSession: state.attachSession,
+      closeSession: state.closeSession,
+      renameSession: state.renameSession,
+      setSessionMode: state.setSessionMode,
+      setSessionModel: state.setSessionModel,
+      claimHistorySession: state.claimHistorySession,
+      removeHistorySession: state.removeHistorySession,
+      removeHistoryWorkspaceSessions: state.removeHistoryWorkspaceSessions,
+      claimControl: state.claimControl,
+      interruptSession: state.interruptSession,
+      sendInput: state.sendInput,
+      loadOlderHistory: state.loadOlderHistory,
+      respondToPermission: state.respondToPermission,
+    })),
+  );
   const [archiveConfirmSessionId, setArchiveConfirmSessionId] = useState<string | null>(null);
   const [archivingSessionId, setArchivingSessionId] = useState<string | null>(null);
   const [deleteConfirmSessionId, setDeleteConfirmSessionId] = useState<string | null>(null);

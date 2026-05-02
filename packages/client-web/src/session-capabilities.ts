@@ -118,3 +118,15 @@ export function isSessionActivelyRunning(summary: SessionSummary): boolean {
     "retrying",
   ].includes(summary.session.runtimeState);
 }
+
+export function isSessionControlLocked(summary: SessionSummary): boolean {
+  if (isReadOnlyReplay(summary)) {
+    return false;
+  }
+  return [
+    "starting",
+    "running",
+    "waiting_input",
+    "waiting_permission",
+  ].includes(summary.session.runtimeState);
+}

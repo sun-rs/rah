@@ -9,6 +9,7 @@ import {
 } from "@rah/runtime-protocol";
 import { WebSocket } from "ws";
 import type { ProviderActivity } from "./provider-activity";
+import { createKimiTimelineIdentity } from "./kimi-timeline-identity";
 import type {
   QueuedTurn,
   TerminalWrapperPromptState,
@@ -28,6 +29,7 @@ import {
   type PendingInteractiveRequest,
 } from "./kimi-live-types";
 import {
+  countKimiHistoryTurns,
   discoverKimiStoredSessions,
   parseKimiWireLine,
   type KimiStoredSessionRecord,
@@ -226,7 +228,9 @@ async function main() {
   let boundRecord: KimiStoredSessionRecord | null = null;
   let processedLineCount = 0;
   let historyCursorPrimed = parsed.resumeProviderSessionId === undefined;
-  let localTurnCounter = 0;
+  let nextTurnIndex = 0;
+  let currentTurnIndex: number | null = null;
+  let currentTimelineItemIndex = 0;
   let currentStepIndex: number | undefined;
   let remoteLatestToolCallId: string | null = null;
   let localLatestToolCallId: string | null = null;
@@ -361,6 +365,7 @@ async function main() {
       return;
     }
     processedLineCount = countWireLines(record.wirePath);
+    nextTurnIndex = Math.max(nextTurnIndex, countKimiHistoryTurns(record.wirePath));
     historyCursorPrimed = true;
   };
 
@@ -370,6 +375,7 @@ async function main() {
       return;
     }
     processedLineCount = countWireLines(record.wirePath);
+    nextTurnIndex = Math.max(nextTurnIndex, countKimiHistoryTurns(record.wirePath));
     historyCursorPrimed = true;
   };
 
@@ -461,6 +467,21 @@ async function main() {
     renderRemoteModePanel();
   };
 
+  const nextTimelineIdentity = (
+    itemKind: "user_message" | "assistant_message" | "reasoning" | "plan",
+  ) => {
+    if (currentTurnIndex === null) {
+      throw new Error("Cannot create Kimi timeline identity without an active turn.");
+    }
+    return createKimiTimelineIdentity({
+      providerSessionId,
+      turnIndex: currentTurnIndex,
+      itemKind,
+      itemIndex: currentTimelineItemIndex++,
+      origin: "live",
+    });
+  };
+
   const emitUserInput = (text: string, turnId: string) => {
     notifyActivity({ type: "turn_started", turnId });
     notifyActivity({
@@ -470,6 +491,7 @@ async function main() {
         kind: "user_message",
         text,
       },
+      identity: nextTimelineIdentity("user_message"),
     });
   };
 
@@ -493,7 +515,9 @@ async function main() {
       if (currentTurnId) {
         return currentTurnId;
       }
-      currentTurnId = `kimi-local:${providerSessionId}:${localTurnCounter++}`;
+      currentTurnIndex = nextTurnIndex++;
+      currentTimelineItemIndex = 0;
+      currentTurnId = `kimi-local:${providerSessionId}:${currentTurnIndex}`;
       currentStepIndex = undefined;
       updatePromptState("agent_busy");
       notifyActivity({ type: "turn_started", turnId: currentTurnId });
@@ -511,6 +535,7 @@ async function main() {
           type: "timeline_item",
           turnId,
           item: { kind: "user_message", text },
+          identity: nextTimelineIdentity("user_message"),
         });
       }
       return;
@@ -522,6 +547,8 @@ async function main() {
       }
       const completedTurnId = currentTurnId;
       currentTurnId = null;
+      currentTurnIndex = null;
+      currentTimelineItemIndex = 0;
       currentStepIndex = undefined;
       notifyActivity({ type: "turn_completed", turnId: completedTurnId });
       updatePromptState("prompt_clean");
@@ -574,6 +601,7 @@ async function main() {
           kind: partType === "think" ? "reasoning" : "assistant_message",
           text,
         },
+        identity: nextTimelineIdentity(partType === "think" ? "reasoning" : "assistant_message"),
       });
       return;
     }
@@ -720,6 +748,7 @@ async function main() {
           type: "timeline_item",
           turnId,
           item: { kind: "plan", text: payload.content },
+          identity: nextTimelineIdentity("plan"),
         });
       }
       return;
@@ -846,6 +875,8 @@ async function main() {
     notifyActivity(activity);
     notifyActivity({ type: "session_state", state: "idle" });
     currentTurnId = null;
+    currentTurnIndex = null;
+    currentTimelineItemIndex = 0;
     remoteTurnInFlight = false;
     remoteTurnCancelRequested = false;
     remoteTurnInterrupted = false;
@@ -871,6 +902,8 @@ async function main() {
     remoteTurnCancelRequested = false;
     remoteTurnFinalized = false;
     remoteTurnInFlight = true;
+    currentTurnIndex = nextTurnIndex++;
+    currentTimelineItemIndex = 0;
     currentTurnId = randomUUID();
     remoteLatestToolCallId = null;
     remoteToolCalls.clear();

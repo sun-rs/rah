@@ -20,7 +20,10 @@ export function normalizeHistorySessionPath(value: string | undefined): string |
   if (!value) return null;
   const trimmed = value.trim();
   if (!trimmed) return null;
-  const withoutTrailing = trimmed.replace(/[\\/]+$/, "");
+  const withoutTrailing =
+    /^[/\\]+$/.test(trimmed) || /^[A-Za-z]:[\\/]?$/.test(trimmed)
+      ? trimmed
+      : trimmed.replace(/[\\/]+$/, "");
   if (withoutTrailing.startsWith("/private/var/")) {
     return withoutTrailing.slice("/private".length);
   }

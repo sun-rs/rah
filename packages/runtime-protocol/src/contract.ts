@@ -15,6 +15,7 @@ import type {
   RahEvent,
   RahEventType,
   RuntimeOperation,
+  TimelineIdentity,
   TimelineItem,
   ToolCall,
   ToolCallArtifact,
@@ -1817,6 +1818,80 @@ function validateTimelineItem(item: TimelineItem, sink: IssueSink, path: string)
   }
 }
 
+function validateTimelineIdentity(identity: TimelineIdentity, sink: IssueSink, path: string) {
+  if (!isRecord(identity)) {
+    addIssue(sink, "error", "timeline.identity.invalid", "timeline identity must be an object", path);
+    return;
+  }
+  if (!isNonEmptyString(identity.canonicalItemId)) {
+    addIssue(sink, "error", "timeline.identity.item_id.invalid", "timeline canonicalItemId must be non-empty", `${path}.canonicalItemId`);
+  }
+  if (!isNonEmptyString(identity.canonicalTurnId)) {
+    addIssue(sink, "error", "timeline.identity.turn_id.invalid", "timeline canonicalTurnId must be non-empty", `${path}.canonicalTurnId`);
+  }
+  if (!PROVIDERS.has(identity.provider)) {
+    addIssue(sink, "error", "timeline.identity.provider.invalid", "timeline identity provider is not canonical", `${path}.provider`);
+  }
+  if (identity.providerSessionId !== undefined && !isNonEmptyString(identity.providerSessionId)) {
+    addIssue(sink, "error", "timeline.identity.provider_session_id.invalid", "timeline providerSessionId must be non-empty", `${path}.providerSessionId`);
+  }
+  if (!isNonEmptyString(identity.turnKey)) {
+    addIssue(sink, "error", "timeline.identity.turn_key.invalid", "timeline turnKey must be non-empty", `${path}.turnKey`);
+  }
+  if (!isNonEmptyString(identity.itemKind)) {
+    addIssue(sink, "error", "timeline.identity.item_kind.invalid", "timeline itemKind must be non-empty", `${path}.itemKind`);
+  }
+  if (!isNonEmptyString(identity.itemKey)) {
+    addIssue(sink, "error", "timeline.identity.item_key.invalid", "timeline itemKey must be non-empty", `${path}.itemKey`);
+  }
+  if (!["live", "history"].includes(identity.origin)) {
+    addIssue(sink, "error", "timeline.identity.origin.invalid", "timeline identity origin is not canonical", `${path}.origin`);
+  }
+  if (!["native", "derived", "provisional", "heuristic"].includes(identity.confidence)) {
+    addIssue(sink, "error", "timeline.identity.confidence.invalid", "timeline identity confidence is not canonical", `${path}.confidence`);
+  }
+  if (identity.contentHash !== undefined && !isNonEmptyString(identity.contentHash)) {
+    addIssue(sink, "error", "timeline.identity.content_hash.invalid", "timeline contentHash must be non-empty", `${path}.contentHash`);
+  }
+  if (identity.sourceCursor !== undefined) {
+    validateTimelineSourceCursor(identity.sourceCursor, sink, `${path}.sourceCursor`);
+  }
+}
+
+function validateTimelineSourceCursor(cursor: TimelineIdentity["sourceCursor"], sink: IssueSink, path: string) {
+  if (!isRecord(cursor)) {
+    addIssue(sink, "error", "timeline.identity.cursor.invalid", "timeline sourceCursor must be an object", path);
+    return;
+  }
+  if (!isOptionalString(cursor.filePath)) {
+    addIssue(sink, "error", "timeline.identity.cursor.file_path.invalid", "timeline cursor filePath must be a string", `${path}.filePath`);
+  }
+  if (!isOptionalInteger(cursor.line)) {
+    addIssue(sink, "error", "timeline.identity.cursor.line.invalid", "timeline cursor line must be an integer", `${path}.line`);
+  }
+  if (!isOptionalInteger(cursor.byteOffset)) {
+    addIssue(sink, "error", "timeline.identity.cursor.byte_offset.invalid", "timeline cursor byteOffset must be an integer", `${path}.byteOffset`);
+  }
+  if (!isOptionalString(cursor.providerMessageId)) {
+    addIssue(sink, "error", "timeline.identity.cursor.provider_message_id.invalid", "timeline cursor providerMessageId must be a string", `${path}.providerMessageId`);
+  }
+  if (!isOptionalString(cursor.providerEventId)) {
+    addIssue(sink, "error", "timeline.identity.cursor.provider_event_id.invalid", "timeline cursor providerEventId must be a string", `${path}.providerEventId`);
+  }
+  if (!isOptionalString(cursor.dbRowId)) {
+    addIssue(sink, "error", "timeline.identity.cursor.db_row_id.invalid", "timeline cursor dbRowId must be a string", `${path}.dbRowId`);
+  }
+  if (!isOptionalInteger(cursor.turnIndex)) {
+    addIssue(sink, "error", "timeline.identity.cursor.turn_index.invalid", "timeline cursor turnIndex must be an integer", `${path}.turnIndex`);
+  }
+  if (!isOptionalInteger(cursor.itemIndex)) {
+    addIssue(sink, "error", "timeline.identity.cursor.item_index.invalid", "timeline cursor itemIndex must be an integer", `${path}.itemIndex`);
+  }
+  if (!isOptionalInteger(cursor.partIndex)) {
+    addIssue(sink, "error", "timeline.identity.cursor.part_index.invalid", "timeline cursor partIndex must be an integer", `${path}.partIndex`);
+  }
+}
+
 function validateMessagePart(part: MessagePartRef, sink: IssueSink, path: string) {
   if (!isRecord(part)) {
     addIssue(sink, "error", "message_part.invalid", "message part must be an object", path);
@@ -2011,6 +2086,9 @@ function validatePayload(event: RahEvent, sink: IssueSink) {
     case "timeline.item.added":
     case "timeline.item.updated":
       validateTimelineItem(payload.item as TimelineItem, sink, "payload.item");
+      if (payload.identity !== undefined) {
+        validateTimelineIdentity(payload.identity as TimelineIdentity, sink, "payload.identity");
+      }
       break;
     case "message.part.added":
     case "message.part.updated":

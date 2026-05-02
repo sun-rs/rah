@@ -142,7 +142,7 @@ export async function startClaudeLiveSession(args: {
     capabilities: {
       livePermissions: true,
       steerInput: true,
-      queuedInput: false,
+      queuedInput: true,
       renameSession: true,
       actions: {
         info: true,
@@ -166,6 +166,9 @@ export async function startClaudeLiveSession(args: {
     ...(effort !== undefined && runtimeCapabilityState.config ? { effort } : {}),
     permissionMode,
     activeTurn: null,
+    turnStartPending: false,
+    pendingInterrupt: false,
+    queuedInputs: [],
     pendingPermissions: new Map(),
     queryFactory: args.queryFactory ?? claudeQuery,
   };
@@ -252,7 +255,7 @@ export async function resumeClaudeLiveSession(args: {
     capabilities: {
       livePermissions: true,
       steerInput: true,
-      queuedInput: false,
+      queuedInput: true,
       renameSession: true,
       actions: {
         info: true,
@@ -277,6 +280,9 @@ export async function resumeClaudeLiveSession(args: {
     ...(effort !== undefined && runtimeCapabilityState.config ? { effort } : {}),
     permissionMode,
     activeTurn: null,
+    turnStartPending: false,
+    pendingInterrupt: false,
+    queuedInputs: [],
     pendingPermissions: new Map(),
     queryFactory: args.queryFactory ?? claudeQuery,
   };
@@ -291,8 +297,9 @@ export async function sendInputToClaudeLiveSession(args: {
   liveSession: LiveClaudeSession;
   request: SessionInputRequest;
 }) {
-  if (args.liveSession.activeTurn) {
-    throw new Error("Claude session already has an active turn.");
+  if (args.liveSession.activeTurn || args.liveSession.turnStartPending) {
+    args.liveSession.queuedInputs.push(args.request);
+    return;
   }
   if (!args.services.sessionStore.hasInputControl(args.liveSession.sessionId, args.request.clientId)) {
     throw new Error(
@@ -324,6 +331,9 @@ export async function sendInputToClaudeLiveSession(args: {
   args.services.sessionStore.setRuntimeState(args.liveSession.sessionId, "running");
 
   const canUseTool: CanUseTool = async (toolName, input, options) => {
+    if (args.liveSession.permissionMode === "bypassPermissions") {
+      return { behavior: "allow" };
+    }
     const requestId = `permission-${randomUUID()}`;
     const suggestions = Array.isArray(options.suggestions)
       ? (options.suggestions as PermissionUpdate[])
@@ -365,6 +375,7 @@ export async function sendInputToClaudeLiveSession(args: {
     };
     const resultPromise = new Promise<PermissionResult>((resolve, reject) => {
       args.liveSession.pendingPermissions.set(requestId, {
+        kind: "tool",
         sessionId: args.liveSession.sessionId,
         requestId,
         allowResult,
@@ -386,24 +397,64 @@ export async function sendInputToClaudeLiveSession(args: {
     return await resultPromise;
   };
 
-  const options = await buildClaudeOptions({
-    liveSession: args.liveSession,
-    canUseTool,
-  });
-  const query = args.liveSession.queryFactory({
-    prompt: args.request.text,
-    options,
-  });
-  args.liveSession.activeTurn = {
-    query,
-    turnId,
-    completed: false,
-  };
+  args.liveSession.turnStartPending = true;
+  let query;
+  try {
+    const options = await buildClaudeOptions({
+      liveSession: args.liveSession,
+      canUseTool,
+    });
+    query = args.liveSession.queryFactory({
+      prompt: args.request.text,
+      options,
+    });
+    args.liveSession.activeTurn = {
+      query,
+      turnId,
+      completed: false,
+      aborted: false,
+    };
+  } finally {
+    args.liveSession.turnStartPending = false;
+  }
+  const activeTurn = args.liveSession.activeTurn;
+  if (activeTurn && args.liveSession.pendingInterrupt) {
+    args.liveSession.pendingInterrupt = false;
+    activeTurn.aborted = true;
+    args.liveSession.queuedInputs.length = 0;
+    applyActivity(args.services, args.liveSession.sessionId, {
+      type: "turn_canceled",
+      turnId: activeTurn.turnId,
+      reason: "Stop requested",
+    });
+    activeTurn.query.close();
+    args.liveSession.activeTurn = null;
+    args.services.sessionStore.setRuntimeState(args.liveSession.sessionId, "idle");
+    return;
+  }
   void consumeClaudeQuery({
     services: args.services,
     liveSession: args.liveSession,
     turnId,
     query,
+    activeTurn,
+  }).finally(() => {
+    const next = args.liveSession.queuedInputs.shift();
+    if (!next) {
+      return;
+    }
+    void sendInputToClaudeLiveSession({
+      services: args.services,
+      liveSession: args.liveSession,
+      request: next,
+    }).catch((error) => {
+      applyActivity(args.services, args.liveSession.sessionId, {
+        type: "runtime_status",
+        status: "error",
+        detail: error instanceof Error ? error.message : String(error),
+      });
+      args.services.sessionStore.setRuntimeState(args.liveSession.sessionId, "failed");
+    });
   });
 }
 
@@ -417,7 +468,19 @@ export function interruptClaudeLiveSession(args: {
       `Client ${args.request.clientId} does not hold input control for ${args.liveSession.sessionId}.`,
     );
   }
-  args.liveSession.activeTurn?.query.close();
+  const activeTurn = args.liveSession.activeTurn;
+  args.liveSession.queuedInputs.length = 0;
+  if (activeTurn) {
+    activeTurn.aborted = true;
+    applyActivity(args.services, args.liveSession.sessionId, {
+      type: "turn_canceled",
+      turnId: activeTurn.turnId,
+      reason: "Stop requested",
+    });
+    activeTurn.query.close();
+  } else if (args.liveSession.turnStartPending) {
+    args.liveSession.pendingInterrupt = true;
+  }
   args.liveSession.activeTurn = null;
   args.services.sessionStore.setRuntimeState(args.liveSession.sessionId, "idle");
   const state = args.services.sessionStore.getSession(args.liveSession.sessionId);
@@ -462,6 +525,45 @@ export async function respondToClaudeLivePermission(args: {
     },
   );
   args.liveSession.pendingPermissions.delete(args.requestId);
+  if (pending.kind === "question") {
+    const answers = Object.fromEntries(
+      pending.questions.map((question) => {
+        const raw = args.response.answers?.[question.id];
+        const values =
+          raw && typeof raw === "object" && !Array.isArray(raw)
+            ? (raw as Record<string, unknown>).answers
+            : undefined;
+        const text = Array.isArray(values)
+          ? values.filter((entry): entry is string => typeof entry === "string").join(", ")
+          : "";
+        return [question.question, text || args.response.message || ""];
+      }),
+    );
+    const toolResult = {
+      status: args.response.behavior === "allow" ? "answered" : "declined",
+      answers,
+    };
+    await pending.query.streamInput((async function* () {
+      yield {
+        type: "user",
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: pending.toolUseId,
+              content: JSON.stringify(toolResult),
+              ...(args.response.behavior === "deny" ? { is_error: true } : {}),
+            },
+          ],
+        },
+        parent_tool_use_id: pending.toolUseId,
+        isSynthetic: true,
+        tool_use_result: toolResult,
+      } as never;
+    })());
+    return;
+  }
   if (args.response.behavior === "allow") {
     const useSessionGrant = isPermissionSessionGrant(args.response);
     pending.resolve(
@@ -481,10 +583,13 @@ export async function closeClaudeLiveSession(
   liveSession: LiveClaudeSession,
   _request?: CloseSessionRequest,
 ): Promise<void> {
+  liveSession.queuedInputs.length = 0;
   liveSession.activeTurn?.query.close();
   liveSession.activeTurn = null;
   for (const pending of liveSession.pendingPermissions.values()) {
-    pending.reject(new Error("Claude session closed"));
+    if (pending.kind === "tool") {
+      pending.reject(new Error("Claude session closed"));
+    }
   }
   liveSession.pendingPermissions.clear();
 }

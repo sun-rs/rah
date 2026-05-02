@@ -15,6 +15,7 @@ export function requestErrorStatus(error: unknown): number {
   if (
     message.includes("Cross-origin requests are not allowed.") ||
     message.includes("Missing required RAH client header.") ||
+    message.includes("Host clipboard fallback is only available to local clients.") ||
     message.includes("Workspace directory is not registered.") ||
     message.includes("Requested workspace scope is outside the session workspace boundary.")
   ) {

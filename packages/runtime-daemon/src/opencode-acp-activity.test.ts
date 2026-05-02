@@ -3,6 +3,11 @@ import assert from "node:assert/strict";
 import { createOpenCodeActivityState, startOpenCodeTurn } from "./opencode-activity";
 import { translateOpenCodeAcpSessionUpdate } from "./opencode-acp-activity";
 
+function withoutIdentity(activity: unknown): unknown {
+  const { identity: _identity, ...rest } = activity as Record<string, unknown>;
+  return rest;
+}
+
 describe("translateOpenCodeAcpSessionUpdate", () => {
   test("streams assistant chunks without exposing thought chunks", () => {
     const state = createOpenCodeActivityState("session-1", {
@@ -31,7 +36,12 @@ describe("translateOpenCodeAcpSessionUpdate", () => {
     });
 
     assert.deepEqual(thought, []);
-    assert.deepEqual(assistant, [
+    assert.equal(assistant[0]?.type, "timeline_item");
+    if (assistant[0]?.type === "timeline_item") {
+      assert.equal(assistant[0].identity?.providerSessionId, "session-1");
+      assert.equal(assistant[0].identity?.itemKey, "message-1");
+    }
+    assert.deepEqual(assistant.map((activity) => withoutIdentity(activity)), [
       {
         type: "timeline_item",
         turnId,

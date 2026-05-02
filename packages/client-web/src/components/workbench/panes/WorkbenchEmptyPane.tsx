@@ -13,6 +13,20 @@ import {
 } from "../../../composer-contract";
 import type { SessionModeChoice } from "../../../session-mode-ui";
 
+function MarqueeText(props: { text: string; enabled: boolean }) {
+  return (
+    <span
+      className="rah-marquee min-w-0 flex-1 text-left"
+      data-marquee={props.enabled ? "true" : "false"}
+    >
+      <span className={props.enabled ? "rah-marquee-track" : "block truncate"}>
+        <span>{props.text}</span>
+        {props.enabled ? <span aria-hidden="true">{props.text}</span> : null}
+      </span>
+    </span>
+  );
+}
+
 export function WorkbenchEmptyPane(props: {
   sidebarOpen: boolean;
   rightSidebarOpen: boolean;
@@ -165,37 +179,30 @@ export function WorkbenchEmptyPane(props: {
                       title={props.availableWorkspaceDir || "Workspace"}
                     >
                       <Folder size={12} />
-                      <span
-                        className="rah-marquee min-w-0 flex-1 text-left"
-                        data-marquee={workspaceShouldMarquee ? "true" : "false"}
-                      >
-                        <span className={workspaceShouldMarquee ? "rah-marquee-track" : "block truncate"}>
-                          <span>{workspaceLabel}</span>
-                          {workspaceShouldMarquee ? <span aria-hidden="true">{workspaceLabel}</span> : null}
-                        </span>
-                      </span>
+                      <MarqueeText text={workspaceLabel} enabled={workspaceShouldMarquee} />
                       <ChevronDown
                         size={11}
                         className={`shrink-0 transition-transform ${props.workspacePickerOpen ? "rotate-180" : ""}`}
                       />
                     </button>
                     {props.workspaceDirs.length > 0 && props.workspacePickerOpen ? (
-                      <div className="rah-popover-panel absolute bottom-full left-0 z-20 mb-1.5 w-56 rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-1.5 shadow-lg">
+                      <div className="rah-popover-panel custom-scrollbar absolute bottom-full left-0 z-20 mb-1.5 max-h-[min(18rem,calc(100dvh-12rem))] w-[min(34rem,calc(100vw-2rem))] overflow-y-auto rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-1.5 shadow-lg">
                         {props.workspaceDirs.map((dir) => (
                           <button
                             key={dir}
                             type="button"
                             onClick={() => props.onSelectWorkspace(dir)}
-                            className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm transition-colors ${
+                            title={dir}
+                            className={`flex w-full min-w-0 items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm transition-colors ${
                               dir === props.availableWorkspaceDir
                                 ? "bg-[var(--app-subtle-bg)] text-[var(--app-fg)]"
                                 : "text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)]"
                             }`}
                           >
                             <Folder size={13} className="shrink-0 text-[var(--app-hint)]" />
-                            <span className="truncate">{dir}</span>
+                            <MarqueeText text={dir} enabled={dir.length > 34} />
                             {dir === props.availableWorkspaceDir ? (
-                              <span className="ml-auto text-[10px] text-[var(--app-hint)]">●</span>
+                              <span className="shrink-0 text-[10px] text-[var(--app-hint)]">●</span>
                             ) : null}
                           </button>
                         ))}

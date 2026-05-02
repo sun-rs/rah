@@ -5,6 +5,12 @@ import { EventBus } from "./event-bus";
 import { PtyHub } from "./pty-hub";
 import { applyProviderActivity } from "./provider-activity";
 import { SessionStore } from "./session-store";
+import { createTimelineIdentity } from "./timeline-identity";
+import {
+  resetTimelineIdentityTelemetryForTests,
+  setTimelineIdentityTelemetryWarnSinkForTests,
+  type TimelineIdentityTelemetryWarning,
+} from "./timeline-identity-telemetry";
 
 function createServices() {
   return {
@@ -25,6 +31,51 @@ function createSession(services: ReturnType<typeof createServices>) {
 }
 
 describe("applyProviderActivity", () => {
+  test("passes timeline identity through without making origin part of the key", () => {
+    const services = createServices();
+    const sessionId = createSession(services);
+    const liveIdentity = createTimelineIdentity({
+      provider: "codex",
+      providerSessionId: "provider-session-1",
+      turnKey: "turn-1",
+      itemKind: "assistant_message",
+      itemKey: "message-1",
+      origin: "live",
+      confidence: "native",
+    });
+    const historyIdentity = createTimelineIdentity({
+      provider: "codex",
+      providerSessionId: "provider-session-1",
+      turnKey: "turn-1",
+      itemKind: "assistant_message",
+      itemKey: "message-1",
+      origin: "history",
+      contentHash: "different-source-content-checksum",
+      confidence: "native",
+    });
+
+    assert.equal(liveIdentity.canonicalItemId, historyIdentity.canonicalItemId);
+    assert.equal(liveIdentity.canonicalTurnId, historyIdentity.canonicalTurnId);
+
+    applyProviderActivity(
+      services,
+      sessionId,
+      { provider: "codex" },
+      {
+        type: "timeline_item",
+        turnId: "turn-1",
+        item: { kind: "assistant_message", text: "hello" },
+        identity: liveIdentity,
+      },
+    );
+
+    const [event] = services.eventBus.list({ sessionIds: [sessionId] });
+    assert.equal(event?.type, "timeline.item.added");
+    if (event?.type === "timeline.item.added") {
+      assert.deepEqual(event.payload.identity, liveIdentity);
+    }
+  });
+
   test("maps timeline and tool calls into canonical events", () => {
     const services = createServices();
     const sessionId = createSession(services);
@@ -43,7 +94,7 @@ describe("applyProviderActivity", () => {
       {
         type: "timeline_item",
         turnId: "turn-1",
-        item: { kind: "assistant_message", text: "hello" },
+        item: { kind: "system", text: "hello" },
       },
     );
     applyProviderActivity(
@@ -53,7 +104,7 @@ describe("applyProviderActivity", () => {
       {
         type: "timeline_item_updated",
         turnId: "turn-1",
-        item: { kind: "assistant_message", text: "hello final" },
+        item: { kind: "system", text: "hello final" },
       },
     );
     applyProviderActivity(
@@ -79,7 +130,7 @@ describe("applyProviderActivity", () => {
       {
         type: "timeline.item.added",
         turnId: "turn-1",
-        payload: { item: { kind: "assistant_message", text: "hello" } },
+        payload: { item: { kind: "system", text: "hello" } },
         raw: { rawType: "message.part.delta" },
       },
     );
@@ -92,7 +143,7 @@ describe("applyProviderActivity", () => {
       {
         type: "timeline.item.updated",
         turnId: "turn-1",
-        payload: { item: { kind: "assistant_message", text: "hello final" } },
+        payload: { item: { kind: "system", text: "hello final" } },
       },
     );
     assert.deepEqual(
@@ -293,5 +344,119 @@ describe("applyProviderActivity", () => {
       "terminal.output",
       "terminal.exited",
     ]);
+  });
+
+  test("warns once when a high-value timeline item is missing identity", () => {
+    resetTimelineIdentityTelemetryForTests();
+    const warnings: TimelineIdentityTelemetryWarning[] = [];
+    setTimelineIdentityTelemetryWarnSinkForTests((warning) => warnings.push(warning));
+    const services = createServices();
+    const sessionId = createSession(services);
+
+    try {
+      applyProviderActivity(
+        services,
+        sessionId,
+        { provider: "codex" },
+        {
+          type: "timeline_item",
+          turnId: "turn-1",
+          item: { kind: "assistant_message", text: "hello" },
+        },
+      );
+      applyProviderActivity(
+        services,
+        sessionId,
+        { provider: "codex" },
+        {
+          type: "timeline_item",
+          turnId: "turn-2",
+          item: { kind: "assistant_message", text: "hello again" },
+        },
+      );
+
+      assert.equal(warnings.length, 1);
+      assert.equal(warnings[0]?.code, "timeline.identity.missing");
+      assert.equal(warnings[0]?.provider, "codex");
+      assert.equal(warnings[0]?.itemKind, "assistant_message");
+    } finally {
+      resetTimelineIdentityTelemetryForTests();
+    }
+  });
+
+  test("does not warn for local live user echoes without provider identity", () => {
+    resetTimelineIdentityTelemetryForTests();
+    const warnings: TimelineIdentityTelemetryWarning[] = [];
+    setTimelineIdentityTelemetryWarnSinkForTests((warning) => warnings.push(warning));
+    const services = createServices();
+    const sessionId = createSession(services);
+
+    try {
+      applyProviderActivity(
+        services,
+        sessionId,
+        { provider: "codex", channel: "structured_live", authority: "derived" },
+        {
+          type: "timeline_item",
+          turnId: "turn-1",
+          item: { kind: "user_message", text: "hello" },
+        },
+      );
+
+      assert.equal(warnings.length, 0);
+    } finally {
+      resetTimelineIdentityTelemetryForTests();
+    }
+  });
+
+  test("warns when the same canonical timeline item id has conflicting identity fields", () => {
+    resetTimelineIdentityTelemetryForTests();
+    const warnings: TimelineIdentityTelemetryWarning[] = [];
+    setTimelineIdentityTelemetryWarnSinkForTests((warning) => warnings.push(warning));
+    const services = createServices();
+    const sessionId = createSession(services);
+    const firstIdentity = createTimelineIdentity({
+      provider: "codex",
+      providerSessionId: "provider-session-1",
+      turnKey: "turn-1",
+      itemKind: "assistant_message",
+      itemKey: "message-1",
+      origin: "live",
+    });
+    const conflictingIdentity = {
+      ...firstIdentity,
+      canonicalTurnId: "different-turn-id",
+    };
+
+    try {
+      applyProviderActivity(
+        services,
+        sessionId,
+        { provider: "codex" },
+        {
+          type: "timeline_item",
+          turnId: "turn-1",
+          item: { kind: "assistant_message", text: "hello" },
+          identity: firstIdentity,
+        },
+      );
+      applyProviderActivity(
+        services,
+        sessionId,
+        { provider: "codex" },
+        {
+          type: "timeline_item",
+          turnId: "turn-1",
+          item: { kind: "assistant_message", text: "hello from history" },
+          identity: conflictingIdentity,
+        },
+      );
+
+      assert.equal(warnings.length, 1);
+      assert.equal(warnings[0]?.code, "timeline.identity.collision");
+      assert.equal(warnings[0]?.canonicalItemId, firstIdentity.canonicalItemId);
+    } finally {
+      resetTimelineIdentityTelemetryForTests();
+    }
   });
 });

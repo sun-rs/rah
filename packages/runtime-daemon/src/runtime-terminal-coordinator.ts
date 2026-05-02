@@ -558,10 +558,24 @@ export class RuntimeTerminalCoordinator {
 
   async shutdown(): Promise<void> {
     this.terminalWrapperSenders.clear();
-    for (const terminal of this.independentTerminals.values()) {
-      await terminal.process.close();
-      this.deps.ptyHub.removeSession(terminal.id);
-    }
+    const terminals = [...this.independentTerminals.values()];
     this.independentTerminals.clear();
+    const results = await Promise.allSettled(
+      terminals.map(async (terminal) => {
+        try {
+          await terminal.process.close();
+        } finally {
+          this.deps.ptyHub.removeSession(terminal.id);
+        }
+      }),
+    );
+    results.forEach((result, index) => {
+      if (result.status === "rejected") {
+        console.error("[rah] failed to close independent terminal during shutdown", {
+          terminalId: terminals[index]?.id,
+          error: result.reason,
+        });
+      }
+    });
   }
 }

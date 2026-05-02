@@ -32,6 +32,39 @@ export interface EventEnvelope<T = unknown> {
   raw?: unknown;
 }
 
+export type TimelineIdentityOrigin = "live" | "history";
+export type TimelineIdentityConfidence =
+  | "native"
+  | "derived"
+  | "provisional"
+  | "heuristic";
+
+export interface TimelineSourceCursor {
+  filePath?: string;
+  line?: number;
+  byteOffset?: number;
+  providerMessageId?: string;
+  providerEventId?: string;
+  dbRowId?: string;
+  turnIndex?: number;
+  itemIndex?: number;
+  partIndex?: number;
+}
+
+export interface TimelineIdentity {
+  canonicalItemId: string;
+  canonicalTurnId: string;
+  provider: ProviderKind;
+  providerSessionId?: string;
+  turnKey: string;
+  itemKind: string;
+  itemKey: string;
+  origin: TimelineIdentityOrigin;
+  sourceCursor?: TimelineSourceCursor;
+  contentHash?: string;
+  confidence: TimelineIdentityConfidence;
+}
+
 export type TimelineItem =
   | { kind: "user_message"; text: string; messageId?: string }
   | { kind: "assistant_message"; text: string; messageId?: string }
@@ -288,8 +321,8 @@ export type RahEventPayloadMap = {
   "turn.step.interrupted": { index?: number; reason?: string };
   "turn.input.appended": { text?: string; parts?: JsonValue[] };
 
-  "timeline.item.added": { item: TimelineItem };
-  "timeline.item.updated": { item: TimelineItem };
+  "timeline.item.added": { item: TimelineItem; identity?: TimelineIdentity };
+  "timeline.item.updated": { item: TimelineItem; identity?: TimelineIdentity };
 
   "message.part.added": { part: MessagePartRef };
   "message.part.updated": { part: MessagePartRef };

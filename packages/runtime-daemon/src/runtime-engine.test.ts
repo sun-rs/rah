@@ -35,7 +35,7 @@ import type {
 } from "./terminal-wrapper-control";
 
 class CountingStoredSessionsAdapter implements ProviderAdapter {
-  readonly id = "counting";
+  readonly id: string = "counting";
   readonly providers: Array<"codex"> = ["codex"];
   storedSessionCalls = 0;
   removedSessionIds: string[] = [];
@@ -230,6 +230,25 @@ class WatchingStoredSessionsAdapter implements ProviderAdapter {
 class FailingRemovalStoredSessionsAdapter extends CountingStoredSessionsAdapter {
   override async removeStoredSession(_session: StoredSessionRef): Promise<void> {
     throw new Error("provider trash move failed");
+  }
+}
+
+class ShutdownTrackingAdapter extends CountingStoredSessionsAdapter {
+  override readonly providers: Array<"codex"> = ["codex"];
+  shutdownCalls = 0;
+
+  constructor(
+    override readonly id: string,
+    private readonly failShutdown = false,
+  ) {
+    super([]);
+  }
+
+  async shutdown(): Promise<void> {
+    this.shutdownCalls += 1;
+    if (this.failShutdown) {
+      throw new Error(`shutdown failed for ${this.id}`);
+    }
   }
 }
 
@@ -642,6 +661,22 @@ describe("RuntimeEngine", () => {
     rmSync(tmpClaudeConfig, { recursive: true, force: true });
     rmSync(tmpRahHome, { recursive: true, force: true });
     rmSync(workDir, { recursive: true, force: true });
+  });
+
+  test("shutdown isolates adapter failures and continues shutting down later adapters", async () => {
+    const failing = new ShutdownTrackingAdapter("failing-shutdown", true);
+    const later = new ShutdownTrackingAdapter("later-shutdown");
+    const engine = new RuntimeEngine([failing, later]);
+    const originalConsoleError = console.error;
+    console.error = () => undefined;
+    try {
+      await engine.shutdown();
+    } finally {
+      console.error = originalConsoleError;
+    }
+
+    assert.equal(failing.shutdownCalls, 1);
+    assert.equal(later.shutdownCalls, 1);
   });
 
   test("routes claude stored replay through ClaudeAdapter instead of DebugAdapter", async () => {

@@ -12,15 +12,19 @@ import type {
   AttachSessionRequest,
   ContextUsage,
   ManagedSession,
+  PermissionRequest,
+  TimelineIdentity,
 } from "@rah/runtime-protocol";
 import type { RuntimeServices } from "./provider-adapter";
 import { resolveConfiguredBinary } from "./provider-binary-utils";
 import { applyProviderActivity, type ProviderActivity } from "./provider-activity";
 import type {
   LiveClaudeSession,
+  LiveClaudeTurn,
   PendingClaudePermission,
 } from "./claude-live-types";
 import { withModelContextWindow } from "./model-context-window";
+import { createClaudeTimelineIdentity } from "./claude-timeline-identity";
 
 const SESSION_SOURCE = {
   provider: "system" as const,
@@ -121,6 +125,10 @@ export function applyActivity(
   );
 }
 
+function timelineIdentityProps(identity: TimelineIdentity | undefined): { identity?: TimelineIdentity } {
+  return identity !== undefined ? { identity } : {};
+}
+
 export function humanizeClaudeToolName(name: string): string {
   switch (name) {
     case "Read":
@@ -158,6 +166,79 @@ function classifyClaudeToolFamily(name: string) {
   if (normalized === "websearch") return "web_search" as const;
   if (normalized === "task") return "subagent" as const;
   return "other" as const;
+}
+
+function normalizeClaudeQuestionOptions(input: unknown): Array<{ label: string; description?: string }> {
+  if (!Array.isArray(input)) {
+    return [];
+  }
+  return input.flatMap((option) => {
+    if (!option || typeof option !== "object" || Array.isArray(option)) {
+      return [];
+    }
+    const record = option as Record<string, unknown>;
+    if (typeof record.label !== "string") {
+      return [];
+    }
+    return [
+      {
+        label: record.label,
+        ...(typeof record.description === "string" ? { description: record.description } : {}),
+      },
+    ];
+  });
+}
+
+function makeClaudeQuestionPermissionRequest(
+  requestId: string,
+  input: Record<string, unknown>,
+): {
+  request: PermissionRequest;
+  questions: Array<{ id: string; question: string }>;
+} {
+  const rawQuestions = Array.isArray(input.questions) ? input.questions : [];
+  const questions = rawQuestions
+    .filter((entry) => entry && typeof entry === "object" && !Array.isArray(entry))
+    .map((entry) => entry as Record<string, unknown>)
+    .flatMap((entry, index) => {
+      const id = typeof entry.id === "string" ? entry.id : `question-${index + 1}`;
+      const question =
+        typeof entry.question === "string" ? entry.question : `Question ${index + 1}`;
+      const header = typeof entry.header === "string" ? entry.header : "Question";
+      return [
+        {
+          id,
+          header,
+          question,
+          options: normalizeClaudeQuestionOptions(entry.options),
+        },
+      ];
+    });
+  const fallbackQuestion =
+    typeof input.question === "string" ? input.question : "Claude is asking for input.";
+  const normalizedQuestions =
+    questions.length > 0
+      ? questions
+      : [{ id: "question-1", header: "Question", question: fallbackQuestion, options: [] }];
+  return {
+    request: {
+      id: requestId,
+      kind: "question",
+      title: "Ask User Question",
+      description: "Claude is waiting for your answer.",
+      actions: [
+        { id: "submit", label: "Submit", behavior: "allow", variant: "primary" },
+        { id: "deny", label: "Decline", behavior: "deny", variant: "danger" },
+      ],
+      input: {
+        questions: normalizedQuestions,
+      },
+    },
+    questions: normalizedQuestions.map((question) => ({
+      id: question.id,
+      question: question.question,
+    })),
+  };
 }
 
 async function resolveClaudeBinary(): Promise<string> {
@@ -237,6 +318,14 @@ function handleAssistantMessage(
     }
     const typedBlock = block as unknown as Record<string, unknown>;
     if (typedBlock.type === "text" && typeof typedBlock.text === "string") {
+      const identity = liveSession.providerSessionId
+        ? createClaudeTimelineIdentity({
+            providerSessionId: liveSession.providerSessionId,
+            recordUuid: String(message.uuid),
+            itemKind: "assistant_message",
+            origin: "live",
+          })
+        : undefined;
       applyActivity(
         services,
         liveSession.sessionId,
@@ -248,6 +337,7 @@ function handleAssistantMessage(
             text: typedBlock.text,
             messageId: String(message.uuid),
           },
+          ...timelineIdentityProps(identity),
         },
         message,
       );
@@ -260,6 +350,32 @@ function handleAssistantMessage(
         typedBlock.input && typeof typedBlock.input === "object" && !Array.isArray(typedBlock.input)
           ? (typedBlock.input as Record<string, unknown>)
           : undefined;
+      if (name === "AskUserQuestion") {
+        const requestId = `question-${toolId}`;
+        const mapped = makeClaudeQuestionPermissionRequest(requestId, input ?? {});
+        const query = liveSession.activeTurn?.query;
+        if (query) {
+          liveSession.pendingPermissions.set(requestId, {
+            kind: "question",
+            sessionId: liveSession.sessionId,
+            requestId,
+            toolUseId: toolId,
+            query,
+            questions: mapped.questions,
+          });
+          applyActivity(
+            services,
+            liveSession.sessionId,
+            {
+              type: "permission_requested",
+              turnId,
+              request: mapped.request,
+            },
+            message,
+          );
+        }
+        continue;
+      }
       applyActivity(
         services,
         liveSession.sessionId,
@@ -322,9 +438,13 @@ export async function consumeClaudeQuery(args: {
   liveSession: LiveClaudeSession;
   turnId: string;
   query: ClaudeQuery;
+  activeTurn: LiveClaudeTurn;
 }) {
   try {
     for await (const message of args.query) {
+      if (args.activeTurn.aborted) {
+        return;
+      }
       if ("session_id" in message && typeof message.session_id === "string" && message.session_id) {
         patchProviderSessionId(args.services, args.liveSession, message.session_id);
       }
@@ -344,8 +464,11 @@ export async function consumeClaudeQuery(args: {
             },
             message,
           );
+          args.activeTurn.completed = true;
           args.services.sessionStore.setRuntimeState(args.liveSession.sessionId, "idle");
-          args.liveSession.activeTurn = null;
+          if (args.liveSession.activeTurn === args.activeTurn) {
+            args.liveSession.activeTurn = null;
+          }
           return;
         }
         default:
@@ -354,6 +477,9 @@ export async function consumeClaudeQuery(args: {
       }
     }
   } catch (error) {
+    if (args.activeTurn.aborted) {
+      return;
+    }
     applyActivity(
       args.services,
       args.liveSession.sessionId,
@@ -365,6 +491,8 @@ export async function consumeClaudeQuery(args: {
       error,
     );
     args.services.sessionStore.setRuntimeState(args.liveSession.sessionId, "failed");
-    args.liveSession.activeTurn = null;
+    if (args.liveSession.activeTurn === args.activeTurn) {
+      args.liveSession.activeTurn = null;
+    }
   }
 }

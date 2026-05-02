@@ -11,6 +11,7 @@ import { COMPOSER_LAYOUT, type ComposerSurface } from "../../../composer-contrac
 import type { InlineWorkbenchNotice } from "../../../workbench-notice-contract";
 import { SessionInfoDialog } from "../dialogs/SessionInfoDialog";
 import { resolveSessionModeControlState, type SessionModeChoice } from "../../../session-mode-ui";
+import { isSessionControlLocked } from "../../../session-capabilities";
 
 function formatContextPercent(value: number): string {
   const clamped = Math.max(0, Math.min(100, value));
@@ -134,10 +135,11 @@ export function WorkbenchSelectedPane(props: {
   const [sessionInfoOpen, setSessionInfoOpen] = useState(false);
   const [paneWidth, setPaneWidth] = useState<number | null>(null);
   const effectivePaneWidth = paneWidth ?? Number.POSITIVE_INFINITY;
+  const sessionMetaMode = props.compactSessionMeta ?? "auto";
   const compactSessionMeta =
-    props.compactSessionMeta === "auto"
-      ? effectivePaneWidth < 560
-      : props.compactSessionMeta === true;
+    sessionMetaMode === "auto"
+      ? effectivePaneWidth < 720
+      : sessionMetaMode === true;
   const compactComposerPrompts =
     props.compactComposerPrompts === "auto"
       ? effectivePaneWidth < 640
@@ -164,8 +166,7 @@ export function WorkbenchSelectedPane(props: {
     props.composerSurface.kind === "claim_control"
       ? props.composerSurface.actionPending
       : false;
-  const sessionControlBusy =
-    !props.selectedIsReadOnlyReplay && props.selectedSummary.session.runtimeState !== "idle";
+  const sessionControlBusy = isSessionControlLocked(props.selectedSummary);
   const claimSessionControlDisabled =
     sessionControlBusy ||
     props.claimModePending ||
@@ -314,30 +315,28 @@ export function WorkbenchSelectedPane(props: {
             </div>
             {compactSessionMeta ? (
               <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] text-[var(--app-hint)]">
-                {props.selectedIsReadOnlyReplay ? (
-                  <span className="inline-flex shrink-0 rounded-full border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--app-hint)]">
-                    History
+                <span
+                  className={`group relative inline-flex min-w-0 shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${
+                    props.selectedIsReadOnlyReplay
+                      ? "border-[var(--app-border)] bg-[var(--app-subtle-bg)] text-[var(--app-hint)]"
+                      : "border-emerald-500/20 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                  }`}
+                  aria-label={contextUsageDisplay?.ariaLabel}
+                  tabIndex={contextUsageDisplay ? 0 : undefined}
+                >
+                  <span className="cursor-default truncate">
+                    {props.selectedIsReadOnlyReplay ? "History" : "Live"}
+                    {contextUsageDisplay ? ` ${contextUsageDisplay.compactLabel}` : ""}
                   </span>
-                ) : (
-                  <span className="inline-flex shrink-0 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
-                    Live
-                  </span>
-                )}
-                {contextUsageDisplay ? (
-                  <span
-                    className="group relative inline-flex min-w-0 items-center"
-                    aria-label={contextUsageDisplay.ariaLabel}
-                    tabIndex={0}
-                  >
-                    <span className="cursor-default truncate">{contextUsageDisplay.compactLabel}</span>
+                  {contextUsageDisplay ? (
                     <span
                       role="tooltip"
                       className="pointer-events-none absolute left-0 top-full z-50 mt-1 hidden max-w-[16rem] whitespace-nowrap rounded-md border border-[var(--app-border)] bg-[var(--app-bg)] px-2 py-1 text-[11px] text-[var(--app-fg)] shadow-lg group-hover:block group-focus:block"
                     >
                       {contextUsageDisplay.tooltip}
                     </span>
-                  </span>
-                ) : null}
+                  ) : null}
+                </span>
               </div>
             ) : (
             <div className="flex items-center gap-2 text-[11px] md:text-xs text-[var(--app-hint)] mt-0.5">

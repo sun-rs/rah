@@ -6,6 +6,11 @@ import {
   translateOpenCodeEvent,
 } from "./opencode-activity";
 
+function withoutIdentity(activity: unknown): unknown {
+  const { identity: _identity, ...rest } = activity as Record<string, unknown>;
+  return rest;
+}
+
 describe("translateOpenCodeEvent", () => {
   test("maps OpenCode busy and idle status into turn lifecycle", () => {
     const state = createOpenCodeActivityState("session-1");
@@ -176,7 +181,7 @@ describe("translateOpenCodeEvent", () => {
       },
     });
 
-    assert.deepEqual(activities[0], {
+    assert.deepEqual(withoutIdentity(activities[0]!), {
       type: "timeline_item",
       turnId: "opencode:message-1",
       item: {
@@ -270,7 +275,7 @@ describe("translateOpenCodeEvent", () => {
     });
 
     assert.deepEqual(unknownDelta, []);
-    assert.deepEqual(reasoning[0], {
+    assert.deepEqual(withoutIdentity(reasoning[0]!), {
       type: "timeline_item",
       turnId: "opencode:assistant-1",
       item: { kind: "reasoning", text: "internal reasoning" },
@@ -358,7 +363,7 @@ describe("translateOpenCodeEvent", () => {
 
     assert.equal(idle[1]?.type, "turn_completed");
     assert.equal(lateAssistantInfo[1]?.type, "turn_completed");
-    assert.deepEqual(lateAssistantPart, [
+    assert.deepEqual(lateAssistantPart.map((activity) => withoutIdentity(activity)), [
       {
         type: "timeline_item",
         turnId,

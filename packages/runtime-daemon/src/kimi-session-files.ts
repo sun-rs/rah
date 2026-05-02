@@ -21,7 +21,7 @@ import { createLineFrozenHistoryPageLoader } from "./line-history-pager";
 import { PtyHub } from "./pty-hub";
 import { SessionStore } from "./session-store";
 import { selectSemanticRecentWindow } from "./semantic-history-window";
-import { readLeadingLines, readTrailingLinesWindow } from "./file-snippets";
+import { readLeadingLines, readTextRange, readTrailingLinesWindow } from "./file-snippets";
 import {
   getCachedStoredSessionRef,
   loadStoredSessionMetadataCache,
@@ -29,6 +29,7 @@ import {
   writeStoredSessionMetadataCache,
 } from "./stored-session-metadata-cache";
 import { withHistoryFileMeta } from "./stored-session-history-meta";
+import { createKimiTimelineIdentity } from "./kimi-timeline-identity";
 
 const REHYDRATED_CAPABILITIES = {
   livePermissions: false,
@@ -222,6 +223,151 @@ export function parseKimiWireLine(line: string):
   } catch {
     return null;
   }
+}
+
+export function countKimiHistoryTurns(wirePath: string, beforeOffset?: number): number {
+  const content =
+    beforeOffset === undefined
+      ? readFileSync(wirePath, "utf8")
+      : readTextRange(wirePath, { startOffset: 0, endOffset: beforeOffset });
+  let count = 0;
+  for (const line of content.split(/\r?\n/)) {
+    const parsed = parseKimiWireLine(line.trim());
+    if (parsed?.type === "TurnBegin") {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+export function kimiHistoryBaseTurnIndexForWindow(args: {
+  wirePath: string;
+  startOffset: number;
+  lines: readonly string[];
+}): number {
+  return kimiHistoryBasePositionForWindow(args).turnIndex;
+}
+
+export function kimiHistoryBasePositionForWindow(args: {
+  wirePath: string;
+  startOffset: number;
+  lines: readonly string[];
+}): { turnIndex: number; itemIndex: number } {
+  const positionBeforeWindow = scanKimiHistoryPositionBeforeOffset(args.wirePath, args.startOffset);
+  const firstType = firstKimiWireEventType(args.lines);
+  if (
+    positionBeforeWindow.turnIndex !== null &&
+    firstType !== null &&
+    firstType !== "TurnBegin" &&
+    firstType !== "SteerInput"
+  ) {
+    return {
+      turnIndex: positionBeforeWindow.turnIndex,
+      itemIndex: positionBeforeWindow.itemIndex,
+    };
+  }
+  return {
+    turnIndex: positionBeforeWindow.nextTurnIndex,
+    itemIndex: 0,
+  };
+}
+
+function scanKimiHistoryPositionBeforeOffset(
+  wirePath: string,
+  beforeOffset: number,
+): { nextTurnIndex: number; turnIndex: number | null; itemIndex: number } {
+  const content = readTextRange(wirePath, { startOffset: 0, endOffset: beforeOffset });
+  let nextTurnIndex = 0;
+  let turnIndex: number | null = null;
+  let itemIndex = 0;
+  const startTurn = () => {
+    turnIndex = nextTurnIndex++;
+    itemIndex = 0;
+  };
+  const ensureTurn = () => {
+    if (turnIndex === null) {
+      startTurn();
+    }
+  };
+  const countTimelineItem = () => {
+    ensureTurn();
+    itemIndex += 1;
+  };
+
+  for (const line of content.split(/\r?\n/)) {
+    const parsed = parseKimiWireLine(line.trim());
+    if (!parsed) {
+      continue;
+    }
+    switch (parsed.type) {
+      case "TurnBegin": {
+        startTurn();
+        if (extractText(parsed.payload.user_input)) {
+          itemIndex += 1;
+        }
+        break;
+      }
+      case "SteerInput": {
+        if (extractText(parsed.payload.user_input)) {
+          countTimelineItem();
+        } else {
+          ensureTurn();
+        }
+        break;
+      }
+      case "TextPart":
+      case "ContentPart": {
+        const partType =
+          parsed.type === "ContentPart" && typeof parsed.payload.type === "string"
+            ? parsed.payload.type
+            : "text";
+        const text = extractText(parsed.payload);
+        if (text && (partType === "think" || partType === "text")) {
+          countTimelineItem();
+        } else {
+          ensureTurn();
+        }
+        break;
+      }
+      case "ThinkPart": {
+        if (extractText(parsed.payload)) {
+          countTimelineItem();
+        } else {
+          ensureTurn();
+        }
+        break;
+      }
+      case "PlanDisplay": {
+        if (typeof parsed.payload.content === "string") {
+          countTimelineItem();
+        } else {
+          ensureTurn();
+        }
+        break;
+      }
+      case "ToolCall":
+      case "ToolResult":
+      case "StepBegin":
+      case "StepInterrupted": {
+        ensureTurn();
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
+  return { nextTurnIndex, turnIndex, itemIndex };
+}
+
+function firstKimiWireEventType(lines: readonly string[]): string | null {
+  for (const line of lines) {
+    const parsed = parseKimiWireLine(line.trim());
+    if (parsed) {
+      return parsed.type;
+    }
+  }
+  return null;
 }
 
 function deriveTitleFromWire(wirePath: string): string {
@@ -485,7 +631,9 @@ function classifyKimiToolFamily(name: string) {
 
 function translateKimiWireLines(
   sessionId: string,
+  providerSessionId: string,
   lines: string[],
+  options?: { baseTurnIndex?: number; baseTimelineItemIndex?: number },
 ): RahEvent[] {
   const services = {
     eventBus: new EventBus(),
@@ -500,9 +648,36 @@ function translateKimiWireLines(
   });
 
   let currentTurnId: string | undefined;
+  let currentTurnIndex: number | undefined;
+  let currentTimelineItemIndex = 0;
   let currentStepIndex: number | undefined;
-  let turnCounter = 0;
+  let nextTurnIndex = options?.baseTurnIndex ?? 0;
+  let initialTimelineItemIndex = options?.baseTimelineItemIndex ?? 0;
   const pendingTools = new Map<string, { name: string; args?: Record<string, unknown> }>();
+  const startTurn = (itemIndex = 0) => {
+    const turnIndex = nextTurnIndex++;
+    currentTurnIndex = turnIndex;
+    currentTimelineItemIndex = itemIndex;
+    currentTurnId = `kimi-history:${temp.session.id}:${turnIndex}`;
+  };
+  const ensureTurn = () => {
+    if (currentTurnId === undefined || currentTurnIndex === undefined) {
+      startTurn(initialTimelineItemIndex);
+      initialTimelineItemIndex = 0;
+    }
+  };
+  const nextTimelineIdentity = (
+    itemKind: "user_message" | "assistant_message" | "reasoning" | "plan",
+  ) => {
+    ensureTurn();
+    return createKimiTimelineIdentity({
+      providerSessionId,
+      turnIndex: currentTurnIndex!,
+      itemKind,
+      itemIndex: currentTimelineItemIndex++,
+      origin: "history",
+    });
+  };
 
   for (const line of lines) {
     const parsed = parseKimiWireLine(line.trim());
@@ -518,28 +693,29 @@ function translateKimiWireLines(
     };
     switch (parsed.type) {
       case "TurnBegin": {
-        currentTurnId = `kimi-history:${temp.session.id}:${turnCounter++}`;
+        startTurn();
+        initialTimelineItemIndex = 0;
         currentStepIndex = undefined;
         const text = extractText(parsed.payload.user_input);
         if (text) {
           applyProviderActivity(services, temp.session.id, meta, {
             type: "timeline_item",
-            turnId: currentTurnId,
+            turnId: currentTurnId!,
             item: { kind: "user_message", text },
+            identity: nextTimelineIdentity("user_message"),
           });
         }
         break;
       }
       case "SteerInput": {
-        if (!currentTurnId) {
-          currentTurnId = `kimi-history:${temp.session.id}:${turnCounter++}`;
-        }
+        ensureTurn();
         const text = extractText(parsed.payload.user_input);
         if (text) {
           applyProviderActivity(services, temp.session.id, meta, {
             type: "timeline_item",
-            turnId: currentTurnId,
+            turnId: currentTurnId!,
             item: { kind: "user_message", text },
+            identity: nextTimelineIdentity("user_message"),
           });
         }
         break;
@@ -550,7 +726,7 @@ function translateKimiWireLines(
         if (currentTurnId) {
           applyProviderActivity(services, temp.session.id, meta, {
             type: "turn_step_started",
-            turnId: currentTurnId,
+            turnId: currentTurnId!,
             ...(currentStepIndex !== undefined ? { index: currentStepIndex } : {}),
           });
         }
@@ -560,7 +736,7 @@ function translateKimiWireLines(
         if (currentTurnId) {
           applyProviderActivity(services, temp.session.id, meta, {
             type: "turn_step_interrupted",
-            turnId: currentTurnId,
+            turnId: currentTurnId!,
             ...(currentStepIndex !== undefined ? { index: currentStepIndex } : {}),
           });
         }
@@ -568,9 +744,7 @@ function translateKimiWireLines(
       }
       case "TextPart":
       case "ContentPart": {
-        if (!currentTurnId) {
-          currentTurnId = `kimi-history:${temp.session.id}:${turnCounter++}`;
-        }
+        ensureTurn();
         const partType =
           parsed.type === "ContentPart" && typeof parsed.payload.type === "string"
             ? parsed.payload.type
@@ -582,38 +756,37 @@ function translateKimiWireLines(
         if (partType === "think") {
           applyProviderActivity(services, temp.session.id, meta, {
             type: "timeline_item",
-            turnId: currentTurnId,
+            turnId: currentTurnId!,
             item: { kind: "reasoning", text },
+            identity: nextTimelineIdentity("reasoning"),
           });
           break;
         }
         if (partType === "text") {
           applyProviderActivity(services, temp.session.id, meta, {
             type: "timeline_item",
-            turnId: currentTurnId,
+            turnId: currentTurnId!,
             item: { kind: "assistant_message", text },
+            identity: nextTimelineIdentity("assistant_message"),
           });
         }
         break;
       }
       case "ThinkPart": {
-        if (!currentTurnId) {
-          currentTurnId = `kimi-history:${temp.session.id}:${turnCounter++}`;
-        }
+        ensureTurn();
         const text = extractText(parsed.payload);
         if (text) {
           applyProviderActivity(services, temp.session.id, meta, {
             type: "timeline_item",
-            turnId: currentTurnId,
+            turnId: currentTurnId!,
             item: { kind: "reasoning", text },
+            identity: nextTimelineIdentity("reasoning"),
           });
         }
         break;
       }
       case "ToolCall": {
-        if (!currentTurnId) {
-          currentTurnId = `kimi-history:${temp.session.id}:${turnCounter++}`;
-        }
+        ensureTurn();
         const functionBody =
           parsed.payload.function && typeof parsed.payload.function === "object"
             ? (parsed.payload.function as Record<string, unknown>)
@@ -637,7 +810,7 @@ function translateKimiWireLines(
         pendingTools.set(id, { name, ...(args ? { args } : {}) });
         applyProviderActivity(services, temp.session.id, meta, {
           type: "tool_call_started",
-          turnId: currentTurnId,
+          turnId: currentTurnId!,
           toolCall: {
             id,
             family: classifyKimiToolFamily(name),
@@ -746,14 +919,13 @@ function translateKimiWireLines(
         break;
       }
       case "PlanDisplay": {
-        if (!currentTurnId) {
-          currentTurnId = `kimi-history:${temp.session.id}:${turnCounter++}`;
-        }
+        ensureTurn();
         if (typeof parsed.payload.content === "string") {
           applyProviderActivity(services, temp.session.id, meta, {
             type: "timeline_item",
-            turnId: currentTurnId,
+            turnId: currentTurnId!,
             item: { kind: "plan", text: parsed.payload.content },
+            identity: nextTimelineIdentity("plan"),
           });
         }
         break;
@@ -898,7 +1070,11 @@ export function getKimiStoredSessionHistoryPage(params: {
   limit?: number;
 }): SessionHistoryPageResponse {
   const lines = readFileSync(params.record.wirePath, "utf8").split(/\r?\n/).filter(Boolean);
-  const all = translateKimiWireLines(params.sessionId, lines)
+  const all = translateKimiWireLines(
+    params.sessionId,
+    params.record.ref.providerSessionId,
+    lines,
+  )
     .filter((event) => (params.beforeTs ? event.ts < params.beforeTs : true))
     .map((event) => ({
       ...event,
@@ -929,7 +1105,22 @@ export function createKimiStoredSessionFrozenHistoryPageLoader(args: {
         const parsed = parseKimiWireLine(line.trim());
         return parsed?.type === "TurnBegin" || parsed?.type === "SteerInput";
       }),
-    translateLines: (lines) => translateKimiWireLines(args.sessionId, [...lines]),
+    translateLines: (lines, context) => {
+      const position = kimiHistoryBasePositionForWindow({
+        wirePath: args.record.wirePath,
+        startOffset: context.startOffset,
+        lines,
+      });
+      return translateKimiWireLines(
+        args.sessionId,
+        args.record.ref.providerSessionId,
+        [...lines],
+        {
+          baseTurnIndex: position.turnIndex,
+          baseTimelineItemIndex: position.itemIndex,
+        },
+      );
+    },
   });
   return createLineFrozenHistoryPageLoader({
     boundary,
@@ -942,7 +1133,7 @@ export function createKimiStoredSessionFrozenHistoryPageLoader(args: {
       });
       return {
         startOffset: window.startOffset,
-        events: translateWindow(window.endOffset, window.lines),
+        events: translateWindow(window.endOffset, window.lines, window.startOffset),
       };
     },
     selectPage: selectSemanticRecentWindow,

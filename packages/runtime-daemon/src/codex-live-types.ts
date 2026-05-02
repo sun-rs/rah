@@ -1,6 +1,6 @@
 import type { CodexAppServerTranslationState } from "./codex-app-server-activity";
 import type { CodexJsonRpcClient } from "./codex-live-rpc";
-import type { ProviderModelCatalog } from "@rah/runtime-protocol";
+import type { ProviderModelCatalog, SessionInputRequest } from "@rah/runtime-protocol";
 
 export type JsonRpcRequest = {
   id: number | string;
@@ -51,6 +51,11 @@ export type LiveCodexSession = {
   client: CodexJsonRpcClient;
   translationState: CodexAppServerTranslationState;
   currentTurnId: string | null;
+  finishedTurnIds: Set<string>;
+  turnStartInFlight: boolean;
+  interruptWhenTurnStarts: boolean;
+  queuedInputs: SessionInputRequest[];
+  drainQueuedInput?: () => void;
   pendingQuestions: Map<string, LiveQuestionRequest>;
   pendingApprovals: Map<string, PendingApproval>;
 };

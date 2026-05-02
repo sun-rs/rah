@@ -1,4 +1,5 @@
 import type { KimiJsonRpcClient } from "./kimi-live-rpc";
+import type { SessionInputRequest } from "@rah/runtime-protocol";
 
 export type JsonRpcEvent = {
   jsonrpc: "2.0";
@@ -52,6 +53,15 @@ export type KimiToolCallState = {
 export type LiveKimiTurn = {
   promptRequestId: string;
   turnId: string;
+  turnIndex: number;
+  nextTimelineItemIndex: number;
+  streamingTimelineItem:
+    | {
+        kind: "assistant_message" | "reasoning";
+        itemIndex: number;
+        text: string;
+      }
+    | null;
   aborted: boolean;
   completed: boolean;
   latestToolCallId: string | null;
@@ -67,8 +77,10 @@ export type LiveKimiSession = {
   approvalMode: string;
   nativeYolo: boolean;
   planMode: boolean;
+  nextTurnIndex: number;
   client: KimiJsonRpcClient;
   activeTurn: LiveKimiTurn | null;
+  queuedInputs: SessionInputRequest[];
   pendingRequests: Map<string, PendingInteractiveRequest>;
 };
 

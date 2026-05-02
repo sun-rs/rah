@@ -8,6 +8,7 @@ import {
   mapCodexQuestionRequestToActivities,
   translateCodexAppServerNotification,
 } from "./codex-app-server-activity";
+import { createCodexTimelineIdentity } from "./codex-timeline-identity";
 
 function hasInvalidStreamObservation(items: ReturnType<typeof translateCodexAppServerNotification>): boolean {
   return items.some(
@@ -581,6 +582,89 @@ describe("translateCodexAppServerNotification", () => {
       assistantCompleted.map((item) => item.activity.type),
       ["message_part_updated", "timeline_item_updated"],
     );
+  });
+
+  test("attaches canonical timeline identity to app-server transcript items", () => {
+    const state = createCodexAppServerTranslationState();
+
+    const user = translateCodexAppServerNotification(
+      {
+        method: "item/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "userMessage",
+            id: "user-1",
+            content: [{ type: "text", text: "你好" }],
+          },
+        },
+      },
+      state,
+    ).find((item) => item.activity.type === "timeline_item")?.activity;
+    const assistant = translateCodexAppServerNotification(
+      {
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "assistant-1",
+          delta: "你好。",
+        },
+      },
+      state,
+    ).find((item) => item.activity.type === "timeline_item")?.activity;
+    const reasoning = translateCodexAppServerNotification(
+      {
+        method: "item/reasoning/summaryTextDelta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "reason-1",
+          delta: "Thinking",
+        },
+      },
+      state,
+    ).find((item) => item.activity.type === "timeline_item")?.activity;
+
+    assert.equal(user?.type, "timeline_item");
+    assert.equal(assistant?.type, "timeline_item");
+    assert.equal(reasoning?.type, "timeline_item");
+    if (user?.type === "timeline_item" && assistant?.type === "timeline_item" && reasoning?.type === "timeline_item") {
+      assert.equal(
+        user.identity?.canonicalItemId,
+        createCodexTimelineIdentity({
+          providerSessionId: "thread-1",
+          turnId: "turn-1",
+          itemKind: "user_message",
+          itemIndex: 0,
+          origin: "history",
+          providerMessageId: "user-1",
+        }).canonicalItemId,
+      );
+      assert.equal(
+        assistant.identity?.canonicalItemId,
+        createCodexTimelineIdentity({
+          providerSessionId: "thread-1",
+          turnId: "turn-1",
+          itemKind: "assistant_message",
+          itemIndex: 1,
+          origin: "history",
+          providerMessageId: "assistant-1",
+        }).canonicalItemId,
+      );
+      assert.equal(
+        reasoning.identity?.canonicalItemId,
+        createCodexTimelineIdentity({
+          providerSessionId: "thread-1",
+          turnId: "turn-1",
+          itemKind: "reasoning",
+          itemIndex: 2,
+          origin: "history",
+          providerEventId: "reason-1",
+        }).canonicalItemId,
+      );
+    }
   });
 
   test("deduplicates repeated app-server deltas and reasoning section breaks", () => {

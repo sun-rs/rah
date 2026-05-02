@@ -14,6 +14,7 @@ import {
   requestErrorStatus,
 } from "./http-server-response";
 import { isLoopbackRemoteAddress } from "./http-server-websocket";
+import { isLocalMachineRemoteAddress } from "./http-server-client-address";
 
 function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -150,6 +151,13 @@ describe("startRahDaemon", () => {
     assert.equal(isLoopbackRemoteAddress("::ffff:127.0.0.1"), true);
     assert.equal(isLoopbackRemoteAddress("192.168.1.20"), false);
     assert.equal(isLoopbackRemoteAddress(undefined), false);
+  });
+
+  test("recognizes same-machine LAN clients for host-only fallbacks", () => {
+    assert.equal(isLocalMachineRemoteAddress("127.0.0.1"), true);
+    assert.equal(isLocalMachineRemoteAddress("::ffff:127.0.0.1"), true);
+    assert.equal(isLocalMachineRemoteAddress("203.0.113.10"), false);
+    assert.equal(isLocalMachineRemoteAddress(undefined), false);
   });
 
   test("rejects unregistered workspace file reads", async () => {

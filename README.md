@@ -26,53 +26,63 @@ The Vite server remains a development-only entry:
 
 ## Quick start
 
-Install dependencies:
+Install dependencies once, or whenever `package-lock.json` changes:
 
 ```bash
 npm install
 ```
 
-If the `rah` binary is not already on your PATH, link it once from this checkout:
+Daily source workflow:
 
 ```bash
-npm link
+node bin/rah.mjs restart --no-open
 ```
 
-Start the source checkout as a local workbench:
-
-```bash
-rah start
-```
-
-`rah start` builds the web client, starts the daemon in the background, opens the local workbench,
-and writes daemon pid/log files under `~/.rah/runtime-daemon`.
-
-Open manually if needed:
+This is the normal command after code changes. It builds the web client, stops the current managed
+daemon, starts a new daemon from this checkout, and leaves the workbench at:
 
 ```text
 http://127.0.0.1:43111/
 ```
+
+If only backend code changed and the web bundle does not need rebuilding:
+
+```bash
+node bin/rah.mjs restart --no-build --no-open
+```
+
+Important behavior:
+
+- `start` does not replace a daemon that is already running.
+- `restart` is the command that shuts down the old daemon and starts the updated code.
+- `restart` interrupts currently managed live wrappers/TUIs (`rah codex`, `rah claude`,
+  `rah gemini`, `rah kimi`, `rah opencode`) because the old daemon is stopped.
+- `npm install` is not needed for normal code changes.
+- daemon pid/log files live under `~/.rah/runtime-daemon`.
+
+Optional: if you want the global `rah` command to point at this checkout, link it once:
+
+```bash
+npm link
+rah restart --no-open
+```
+
+If the global `rah` may point at an older install, prefer `node bin/rah.mjs ...` from this repo.
 
 For LAN access, use the Mac's LAN IP with port `43111`.
 
 Useful daemon commands:
 
 ```bash
-rah status
-rah logs --follow
-rah stop
-rah restart
+node bin/rah.mjs status
+node bin/rah.mjs logs --follow
+node bin/rah.mjs stop
 ```
 
-For a foreground one-shot process, the old npm command still works:
+Advanced development only:
 
 ```bash
 npm run serve:workbench
-```
-
-For local development with split services:
-
-```bash
 npm run dev:daemon
 npm run dev:web
 ```
@@ -83,6 +93,7 @@ npm run dev:web
 npm run build:web
 npm run serve:workbench
 npm run typecheck
+npm run test:provider-contracts
 npm run test:web
 npm run test:runtime
 npm run test:smoke:history-claim
@@ -93,42 +104,65 @@ npm run test:smoke:kimi-flow
 npm run test:smoke:kimi-browser
 npm run test:smoke:claude-flow
 npm run test:smoke:claude-browser
+npm run test:smoke:codex-browser
+npm run test:smoke:opencode-browser
+npm run test:smoke:browser-providers
+npm run test:smoke:provider-flows
+npm run test:smoke:wrapper
 ```
 
 ## Test tiers
 
-RAH now uses three test tiers:
+RAH now uses four test tiers:
 
 - default gate
   - `npm run typecheck`
+  - `npm run test:provider-contracts`
   - `npm run test:web`
   - `npm run test:runtime`
+- provider contracts
+  - `npm run test:provider-contracts`
+  - deterministic mock-provider coverage for Codex, Claude, Gemini, Kimi, and OpenCode
+  - protects queued input, no duplicate live/history merge, Stop state convergence, model/mode/permission propagation, and Markdown/timeline rendering contracts
+- daemon smoke
+  - `npm run test:smoke:wrapper`
+  - exercises the real daemon wrapper-control path for Codex, Claude, Gemini, Kimi, and OpenCode
+    without invoking external provider CLIs or model APIs
 - provider smoke
   - `history-claim`
   - `tool-flow`
+  - `codex-browser`
   - `gemini-flow`
   - `gemini-browser`
   - `kimi-flow`
   - `kimi-browser`
   - `claude-flow`
   - `claude-browser`
+  - `opencode-browser`
+  - `browser-providers`
+  - `provider-flows`
 - release/CI gate
   - provider smoke should run only in an environment where the matching provider CLI and account
     are already configured
   - provider smoke should be selected per provider, not treated as one universal gate for every
     machine
 
+Detailed provider regression coverage is tracked in `docs/provider-regression-testing.zh-CN.md`.
+
 Provider smoke is intentionally **not** treated as a universal local gate. Installed CLI binaries do
 not prove authentication, quota, or account access.
 
-RAH intentionally does **not** define one mandatory "run every provider smoke everywhere" command.
-Different machines may have:
+`npm run test:smoke:browser-providers` is available for a known-good local machine with all five
+provider CLIs authenticated. It is a convenience command, not a default gate. Different machines may
+have:
 
 - only some provider CLIs installed
 - valid binaries but missing login/auth
 - valid auth for one provider but not another
 
-For that reason, provider smoke should be run explicitly per provider in a known-good environment.
+For that reason, provider smoke can still be run explicitly per provider. `npm run test:smoke:wrapper`
+is the deterministic daemon-level smoke for wrapper lifecycle, web input injection, canonical
+timeline identity propagation, and cleanup across all five provider adapters.
 
 ## Package layout
 

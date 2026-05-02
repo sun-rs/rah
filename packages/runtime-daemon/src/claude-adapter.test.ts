@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { validateProviderModelCatalog } from "@rah/runtime-protocol";
 import { ClaudeAdapter } from "./claude-adapter";
+import { createClaudeTimelineIdentity } from "./claude-timeline-identity";
 import { EventBus } from "./event-bus";
 import { PtyHub } from "./pty-hub";
 import { SessionStore } from "./session-store";
@@ -302,6 +303,7 @@ describe("ClaudeAdapter", () => {
     const started = await adapter.startSession({
       provider: "claude",
       cwd: workDir,
+      modeId: "default",
       attach: {
         client: {
           id: "web-1",
@@ -348,14 +350,24 @@ describe("ClaudeAdapter", () => {
     });
 
     const events = services.eventBus.list({ sessionIds: [started.session.session.id] });
-    assert.ok(
-      events.some(
-        (event) =>
-          event.type === "timeline.item.added" &&
-          event.payload.item.kind === "assistant_message" &&
-          event.payload.item.text === "Claude says hi",
-      ),
+    const assistantEvent = events.find(
+      (event) =>
+        event.type === "timeline.item.added" &&
+        event.payload.item.kind === "assistant_message" &&
+        event.payload.item.text === "Claude says hi",
     );
+    assert.ok(assistantEvent);
+    if (assistantEvent.type === "timeline.item.added") {
+      assert.equal(
+        assistantEvent.payload.identity?.canonicalItemId,
+        createClaudeTimelineIdentity({
+          providerSessionId: "claude-live-session-1",
+          recordUuid: "assistant-1",
+          itemKind: "assistant_message",
+          origin: "history",
+        }).canonicalItemId,
+      );
+    }
     assert.ok(
       events.some(
         (event) =>
@@ -558,6 +570,281 @@ describe("ClaudeAdapter", () => {
     assert.deepEqual(observed[0], {
       model: "opus[1m]",
       effort: "max",
+    });
+  });
+
+  test("switches Claude plan mode back to default for subsequent turns", async () => {
+    const services = createServices();
+    const observed: Array<{
+      permissionMode?: string;
+      allowDangerouslySkipPermissions?: boolean;
+    }> = [];
+    const adapter = new ClaudeAdapter(services, {
+      queryFactory: ({ options }) => {
+        observed.push({
+          ...(options?.permissionMode ? { permissionMode: options.permissionMode } : {}),
+          ...(options?.allowDangerouslySkipPermissions !== undefined
+            ? { allowDangerouslySkipPermissions: options.allowDangerouslySkipPermissions }
+            : {}),
+        });
+        const index = observed.length;
+        const iterator = (async function* () {
+          yield {
+            type: "assistant",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: `Claude mode ${index}` }],
+            },
+            parent_tool_use_id: null,
+            uuid: `assistant-mode-${index}`,
+            session_id: "claude-live-mode-session",
+          };
+          yield {
+            type: "result",
+            subtype: "success",
+            duration_ms: 1,
+            duration_api_ms: 1,
+            is_error: false,
+            num_turns: 1,
+            result: "ok",
+            stop_reason: null,
+            total_cost_usd: 0,
+            usage: {
+              input_tokens: 1,
+              cache_creation_input_tokens: 0,
+              cache_read_input_tokens: 0,
+              output_tokens: 1,
+            },
+            modelUsage: {},
+            permission_denials: [],
+            uuid: `result-mode-${index}`,
+            session_id: "claude-live-mode-session",
+          };
+        })();
+        return {
+          next: iterator.next.bind(iterator),
+          return: iterator.return?.bind(iterator),
+          throw: iterator.throw?.bind(iterator),
+          [Symbol.asyncIterator]() {
+            return this;
+          },
+          close() {},
+        } as any;
+      },
+    });
+
+    const started = await adapter.startSession({
+      provider: "claude",
+      cwd: workDir,
+      attach: {
+        client: {
+          id: "web-1",
+          kind: "web",
+          connectionId: "web-1",
+        },
+        mode: "interactive",
+        claimControl: true,
+      },
+    });
+
+    const planned = await adapter.setSessionMode(started.session.session.id, "plan");
+    assert.equal(planned.session.mode?.currentModeId, "plan");
+    adapter.sendInput(started.session.session.id, {
+      clientId: "web-1",
+      text: "plan prompt",
+    });
+    await waitFor(() => {
+      const state = services.sessionStore.getSession(started.session.session.id);
+      return observed.length === 1 && state?.session.runtimeState === "idle";
+    });
+
+    const unplanned = await adapter.setSessionMode(started.session.session.id, "default");
+    assert.equal(unplanned.session.mode?.currentModeId, "default");
+    adapter.sendInput(started.session.session.id, {
+      clientId: "web-1",
+      text: "normal prompt",
+    });
+    await waitFor(() => {
+      const state = services.sessionStore.getSession(started.session.session.id);
+      return observed.length === 2 && state?.session.runtimeState === "idle";
+    });
+
+    assert.deepEqual(observed, [
+      {
+        permissionMode: "plan",
+        allowDangerouslySkipPermissions: false,
+      },
+      {
+        permissionMode: "default",
+        allowDangerouslySkipPermissions: false,
+      },
+    ]);
+  });
+
+  test("queues consecutive Claude inputs while the first query is still running", async () => {
+    const services = createServices();
+    const prompts: string[] = [];
+    const releases: Array<() => void> = [];
+    const adapter = new ClaudeAdapter(services, {
+      queryFactory: ({ prompt }) => {
+        const promptText = String(prompt);
+        prompts.push(promptText);
+        const gate = new Promise<void>((resolve) => {
+          releases.push(resolve);
+        });
+        const iterator = (async function* () {
+          await gate;
+          yield {
+            type: "assistant",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: `Claude answered ${promptText}` }],
+            },
+            parent_tool_use_id: null,
+            uuid: `assistant-${prompts.length}`,
+            session_id: "claude-live-queue-session",
+          };
+          yield {
+            type: "result",
+            subtype: "success",
+            duration_ms: 1,
+            duration_api_ms: 1,
+            is_error: false,
+            num_turns: 1,
+            result: "ok",
+            stop_reason: null,
+            total_cost_usd: 0,
+            usage: {
+              input_tokens: 1,
+              cache_creation_input_tokens: 0,
+              cache_read_input_tokens: 0,
+              output_tokens: 1,
+            },
+            modelUsage: {},
+            permission_denials: [],
+            uuid: `result-${prompts.length}`,
+            session_id: "claude-live-queue-session",
+          };
+        })();
+        return {
+          next: iterator.next.bind(iterator),
+          return: iterator.return?.bind(iterator),
+          throw: iterator.throw?.bind(iterator),
+          [Symbol.asyncIterator]() {
+            return this;
+          },
+          close() {},
+        } as any;
+      },
+    });
+
+    const started = await adapter.startSession({
+      provider: "claude",
+      cwd: workDir,
+      attach: {
+        client: {
+          id: "web-1",
+          kind: "web",
+          connectionId: "web-1",
+        },
+        mode: "interactive",
+        claimControl: true,
+      },
+    });
+
+    adapter.sendInput(started.session.session.id, {
+      clientId: "web-1",
+      text: "first",
+    });
+    adapter.sendInput(started.session.session.id, {
+      clientId: "web-1",
+      text: "second",
+    });
+
+    await waitFor(() => prompts.length === 1);
+    assert.deepEqual(prompts, ["first"]);
+    releases.shift()?.();
+    await waitFor(() => prompts.length === 2);
+    assert.deepEqual(prompts, ["first", "second"]);
+    releases.shift()?.();
+    await waitFor(
+      () => services.sessionStore.getSession(started.session.session.id)?.session.runtimeState === "idle",
+    );
+
+    const events = services.eventBus.list({ sessionIds: [started.session.session.id] });
+    assert.equal(
+      events.filter(
+        (event) =>
+          event.type === "timeline.item.added" &&
+          event.payload.item.kind === "user_message" &&
+          ["first", "second"].includes(event.payload.item.text),
+      ).length,
+      2,
+    );
+    assert.equal(
+      events.filter(
+        (event) =>
+          event.type === "timeline.item.added" &&
+          event.payload.item.kind === "assistant_message" &&
+          event.payload.item.text.startsWith("Claude answered"),
+      ).length,
+      2,
+    );
+  });
+
+  test("honors immediate Claude stop while query startup is pending", async () => {
+    const services = createServices();
+    let closeCalled = false;
+    const adapter = new ClaudeAdapter(services, {
+      queryFactory: () => {
+        const iterator = (async function* () {
+          await new Promise(() => undefined);
+        })();
+        return {
+          next: iterator.next.bind(iterator),
+          return: iterator.return?.bind(iterator),
+          throw: iterator.throw?.bind(iterator),
+          [Symbol.asyncIterator]() {
+            return this;
+          },
+          close() {
+            closeCalled = true;
+          },
+        } as any;
+      },
+    });
+
+    const started = await adapter.startSession({
+      provider: "claude",
+      cwd: workDir,
+      attach: {
+        client: {
+          id: "web-1",
+          kind: "web",
+          connectionId: "web-1",
+        },
+        mode: "interactive",
+        claimControl: true,
+      },
+    });
+
+    adapter.sendInput(started.session.session.id, {
+      clientId: "web-1",
+      text: "stop immediately",
+    });
+    adapter.interruptSession(started.session.session.id, {
+      clientId: "web-1",
+    });
+
+    await waitFor(() => {
+      const state = services.sessionStore.getSession(started.session.session.id);
+      const events = services.eventBus.list({ sessionIds: [started.session.session.id] });
+      return (
+        closeCalled &&
+        state?.session.runtimeState === "idle" &&
+        state.activeTurnId === undefined &&
+        events.some((event) => event.type === "turn.canceled")
+      );
     });
   });
 });

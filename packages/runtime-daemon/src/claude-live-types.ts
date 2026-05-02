@@ -5,9 +5,20 @@ import {
   type PermissionResult,
   type Query as ClaudeQuery,
 } from "@anthropic-ai/claude-agent-sdk";
+import type { SessionInputRequest } from "@rah/runtime-protocol";
 import type { ModelContextWindowResolution } from "./model-context-window";
 
-export type PendingClaudePermission = {
+export type PendingClaudeQuestion = {
+  kind: "question";
+  sessionId: string;
+  requestId: string;
+  toolUseId: string;
+  query: ClaudeQuery;
+  questions: Array<{ id: string; question: string }>;
+};
+
+export type PendingClaudeToolPermission = {
+  kind: "tool";
   sessionId: string;
   requestId: string;
   allowResult: PermissionResult;
@@ -16,10 +27,13 @@ export type PendingClaudePermission = {
   reject: (error: Error) => void;
 };
 
+export type PendingClaudePermission = PendingClaudeToolPermission | PendingClaudeQuestion;
+
 export type LiveClaudeTurn = {
   query: ClaudeQuery;
   turnId: string;
   completed: boolean;
+  aborted: boolean;
 };
 
 export type LiveClaudeSession = {
@@ -31,6 +45,9 @@ export type LiveClaudeSession = {
   permissionMode: PermissionMode;
   providerSessionId?: string;
   activeTurn: LiveClaudeTurn | null;
+  turnStartPending: boolean;
+  pendingInterrupt: boolean;
+  queuedInputs: SessionInputRequest[];
   pendingPermissions: Map<string, PendingClaudePermission>;
   queryFactory: typeof claudeQuery;
 };

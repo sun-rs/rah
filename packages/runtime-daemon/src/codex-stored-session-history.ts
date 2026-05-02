@@ -121,7 +121,9 @@ function translateCodexRolloutWindowToHistoryEvents(args: {
     ...(args.title !== undefined ? { title: args.title } : {}),
     ...(args.preview !== undefined ? { preview: args.preview } : {}),
   });
-  const translationState = createCodexRolloutTranslationState();
+  const translationState = createCodexRolloutTranslationState({
+    providerSessionId: args.providerSessionId,
+  });
   let lastTimestamp: string | undefined;
   for (const line of args.lines) {
     let parsed: unknown;
@@ -215,7 +217,9 @@ export function replayCodexStoredSessionRollout(params: {
     services.ptyHub.appendOutput(sessionId, bannerText);
   }
 
-  const translationState = createCodexRolloutTranslationState();
+  const translationState = createCodexRolloutTranslationState({
+    providerSessionId: record.ref.providerSessionId,
+  });
   const lines = readFileSync(record.rolloutPath, "utf8")
     .split(/\r?\n/)
     .map((line) => line.trim())
@@ -422,7 +426,7 @@ export function createCodexStoredSessionFrozenHistoryPageLoader(args: {
       });
       return {
         startOffset: window.startOffset,
-        events: translateWindow(window.endOffset, window.lines),
+        events: translateWindow(window.endOffset, window.lines, window.startOffset),
       };
     },
     selectPage: selectSemanticRecentWindow,

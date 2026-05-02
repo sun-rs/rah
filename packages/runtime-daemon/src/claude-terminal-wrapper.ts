@@ -15,6 +15,7 @@ import {
 import {
   resolveClaudeBaseHome,
 } from "./claude-wrapper-home";
+import { createClaudeTimelineIdentity } from "./claude-timeline-identity";
 import { NativeTerminalProcess } from "./native-terminal-process";
 import {
   extractAssistantMessageText,
@@ -192,7 +193,16 @@ async function main() {
   const socket = new WebSocket(wrapperControlUrl(parsed.daemonUrl));
 
   const send = (message: unknown) => {
+    if (socket.readyState !== WebSocket.OPEN) {
+      logger.log(
+        `[rah] skipped wrapper message after control channel closed: ${String(
+          (message as { type?: unknown }).type ?? "unknown",
+        )}`,
+      );
+      return false;
+    }
     socket.send(JSON.stringify(message));
+    return true;
   };
 
   const ensureRemotePanelScreen = () => {
@@ -681,6 +691,12 @@ async function main() {
                   text,
                   messageId: record.uuid,
                 } satisfies TimelineItem,
+                identity: createClaudeTimelineIdentity({
+                  providerSessionId: record.sessionId ?? forcedProviderSessionId,
+                  recordUuid: record.uuid,
+                  itemKind: "user_message",
+                  origin: "history",
+                }),
               },
             });
             send({
@@ -713,13 +729,19 @@ async function main() {
             activity: {
               type: "timeline_item",
               turnId: record.uuid,
-              item: {
-                kind: "user_message",
-                text,
-                messageId: record.uuid,
-              } satisfies TimelineItem,
-            },
-          });
+                item: {
+                  kind: "user_message",
+                  text,
+                  messageId: record.uuid,
+                } satisfies TimelineItem,
+                identity: createClaudeTimelineIdentity({
+                  providerSessionId: record.sessionId ?? forcedProviderSessionId,
+                  recordUuid: record.uuid,
+                  itemKind: "user_message",
+                  origin: "history",
+                }),
+              },
+            });
           renderRemoteModePanel();
           continue;
         }
@@ -745,6 +767,12 @@ async function main() {
                   text,
                   ...(typeof record.message.id === "string" ? { messageId: record.message.id } : {}),
                 } satisfies TimelineItem,
+                identity: createClaudeTimelineIdentity({
+                  providerSessionId: record.sessionId ?? forcedProviderSessionId,
+                  recordUuid: record.uuid,
+                  itemKind: "assistant_message",
+                  origin: "history",
+                }),
               },
             });
           }

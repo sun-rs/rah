@@ -266,7 +266,9 @@ async function main() {
     logger.log(`[rah] using shared codex home: ${sharedCodexHome}`);
   }
 
-  let translationState: CodexRolloutTranslationState = createCodexRolloutTranslationState();
+  let translationState: CodexRolloutTranslationState = createCodexRolloutTranslationState({
+    providerSessionId: parsed.resumeProviderSessionId,
+  });
   const controlTranslationState = createCodexAppServerTranslationState();
   let processedLineCount = 0;
   let wrapperSessionId: string | null = null;
@@ -309,7 +311,16 @@ async function main() {
   const socket = new WebSocket(wrapperControlUrl(parsed.daemonUrl));
 
   const send = (message: unknown) => {
+    if (socket.readyState !== WebSocket.OPEN) {
+      logger.log(
+        `[rah] skipped wrapper message after control channel closed: ${String(
+          (message as { type?: unknown }).type ?? "unknown",
+        )}`,
+      );
+      return false;
+    }
     socket.send(JSON.stringify(message));
+    return true;
   };
 
   const ensureRemotePanelScreen = () => {
@@ -640,7 +651,9 @@ async function main() {
     boundRecord = nextRecord;
     bindingDetectionSinceMs = Date.now();
     processedLineCount = 0;
-    translationState = createCodexRolloutTranslationState();
+    translationState = createCodexRolloutTranslationState({
+      providerSessionId: args.providerSessionId,
+    });
     currentTurnId = null;
     if (nextRecord) {
       primeResumeHistoryCursor(nextRecord);
@@ -1191,7 +1204,10 @@ async function main() {
       return;
     }
     logger.log("[rah] wrapper control channel closed");
-    process.exitCode = 1;
+    void cleanupAndExit().finally(() => {
+      shouldExit = true;
+      process.exitCode = 1;
+    });
   });
 
   process.on("SIGINT", () => {

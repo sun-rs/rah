@@ -8,7 +8,7 @@ import {
 } from "react";
 
 const TEXTAREA_TEXT_LAYOUT_CLASS_NAME =
-  "whitespace-pre-wrap break-words [overflow-wrap:anywhere]";
+  "whitespace-pre-wrap break-words";
 
 export const TokenizedTextarea = forwardRef<
   HTMLTextAreaElement,

@@ -187,17 +187,28 @@ describe("session startup model and mode requests", () => {
       }
       throw new Error(`Unexpected request ${request.url}`);
     });
+    const historyLoads: string[] = [];
 
-    await startSessionCommand(startupDeps(), {
-      provider: "codex",
-      cwd: "/tmp/rah",
-      title: "test",
-      modeId: "on-request/read-only",
-      model: "gpt-5.5",
-      reasoningId: "xhigh",
-      optionValues: { model_reasoning_effort: "xhigh" },
-      initialInput: "",
-    });
+    await startSessionCommand(
+      startupDeps(
+        {},
+        {
+          ensureSessionHistoryLoaded: async (sessionId: string) => {
+            historyLoads.push(sessionId);
+          },
+        },
+      ),
+      {
+        provider: "codex",
+        cwd: "/tmp/rah",
+        title: "test",
+        modeId: "on-request/read-only",
+        model: "gpt-5.5",
+        reasoningId: "xhigh",
+        optionValues: { model_reasoning_effort: "xhigh" },
+        initialInput: "",
+      },
+    );
 
     const startRequest = requests.find((request) =>
       request.url.endsWith("/api/sessions/start"),
@@ -220,6 +231,7 @@ describe("session startup model and mode requests", () => {
         claimControl: true,
       },
     });
+    assert.deepEqual(historyLoads, []);
   });
 
   test("new session exposes created session id before initial input finishes", async () => {

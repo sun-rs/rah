@@ -88,7 +88,7 @@ rl.on('line', (line) => {
   }
   if (msg.id === 9001) {
     const selected = msg.result?.answers?.drink?.answers?.[0] ?? 'unknown';
-    send({ method: 'item/agentMessage/delta', params: { itemId: 'assistant-1', delta: 'Selected: ' + selected } });
+    send({ method: 'item/agentMessage/delta', params: { threadId: 'thread-live-1', turnId: pendingTurnId, itemId: 'assistant-1', delta: 'Selected: ' + selected } });
     send({ method: 'turn/completed', params: { turn: { id: pendingTurnId, status: 'completed' } } });
     return;
   }
@@ -136,7 +136,7 @@ rl.on('line', (line) => {
     assert.equal(started.session.session.capabilities.structuredTimeline, true);
     assert.equal(started.session.session.capabilities.resumeByProvider, true);
     assert.equal(started.session.session.capabilities.listProviderSessions, true);
-    assert.equal(started.session.session.capabilities.queuedInput, false);
+    assert.equal(started.session.session.capabilities.queuedInput, true);
     assert.equal(started.session.session.capabilities.modelSwitch, true);
     assert.equal(started.session.session.capabilities.planMode, false);
     assert.equal(started.session.session.capabilities.subagents, false);
@@ -280,6 +280,201 @@ rl.on('line', (line) => {
     await adapter.shutdown?.();
   });
 
+  test("queues consecutive Codex inputs instead of dropping the second turn", async () => {
+    const serverJs = path.join(tmpDir, "mock-codex-queue-server.js");
+    writeFileSync(
+      serverJs,
+      `
+const readline = require('node:readline');
+const rl = readline.createInterface({ input: process.stdin });
+function send(msg) { process.stdout.write(JSON.stringify(msg) + "\\n"); }
+let turnCount = 0;
+rl.on('line', (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method === 'initialize') {
+    send({ id: msg.id, result: {} });
+    return;
+  }
+  if (msg.method === 'thread/start') {
+    send({ id: msg.id, result: { thread: { id: 'thread-live-queue-1' } } });
+    return;
+  }
+  if (msg.method === 'turn/start') {
+    turnCount += 1;
+    const turnId = 'turn-live-queue-' + turnCount;
+    const prompt = msg.params.input[0].text;
+    send({ id: msg.id, result: { turn: { id: turnId } } });
+    setTimeout(() => send({ method: 'turn/started', params: { turn: { id: turnId } } }), 20);
+    setTimeout(() => send({
+      method: 'item/agentMessage/delta',
+      params: { threadId: 'thread-live-queue-1', turnId, itemId: 'assistant-' + turnCount, delta: 'answer:' + prompt },
+    }), 40);
+    setTimeout(() => send({ method: 'turn/completed', params: { turn: { id: turnId, status: 'completed' } } }), 60);
+    return;
+  }
+  send({ id: msg.id, result: {} });
+});
+`,
+    );
+    const wrapper = path.join(tmpDir, "mock-codex-queue");
+    writeFileSync(
+      wrapper,
+      `#!/bin/sh\nexec node "${serverJs}" "$@"\n`,
+    );
+    chmodSync(wrapper, 0o755);
+    process.env.RAH_CODEX_BINARY = wrapper;
+
+    const services = {
+      eventBus: new EventBus(),
+      ptyHub: new PtyHub(),
+      sessionStore: new SessionStore(),
+    };
+    const adapter = new CodexAdapter(services);
+
+    const started = await adapter.startSession({
+      provider: "codex",
+      cwd: tmpDir,
+      title: "live queue test",
+      attach: {
+        client: {
+          id: "test-client",
+          kind: "web",
+          connectionId: "test-client",
+        },
+        mode: "interactive",
+        claimControl: true,
+      },
+    });
+
+    adapter.sendInput(started.session.session.id, {
+      clientId: "web-user",
+      text: "first",
+    });
+    adapter.sendInput(started.session.session.id, {
+      clientId: "web-user",
+      text: "second",
+    });
+
+    await waitFor(() => {
+      const events = services.eventBus.list({ sessionIds: [started.session.session.id] });
+      return (
+        events.filter((event) => event.type === "turn.completed").length === 2 &&
+        events.some(
+          (event) =>
+            event.type === "timeline.item.added" &&
+            event.payload.item.kind === "assistant_message" &&
+            event.payload.item.text.includes("answer:first"),
+        ) &&
+        events.some(
+          (event) =>
+            event.type === "timeline.item.added" &&
+            event.payload.item.kind === "assistant_message" &&
+            event.payload.item.text.includes("answer:second"),
+        )
+      );
+    });
+
+    const events = services.eventBus.list({ sessionIds: [started.session.session.id] });
+    assert.equal(
+      events.filter((event) => event.type === "turn.completed").length,
+      2,
+    );
+    assert.equal(
+      events.some(
+        (event) =>
+          event.type === "runtime.status" &&
+          event.payload.status === "error",
+      ),
+      false,
+    );
+
+    await adapter.shutdown?.();
+  });
+
+  test("honors immediate Codex stop while turn/start is still pending", async () => {
+    const serverJs = path.join(tmpDir, "mock-codex-stop-pending-server.js");
+    writeFileSync(
+      serverJs,
+      `
+const readline = require('node:readline');
+const rl = readline.createInterface({ input: process.stdin });
+function send(msg) { process.stdout.write(JSON.stringify(msg) + "\\n"); }
+const turnId = 'turn-live-stop-pending-1';
+rl.on('line', (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method === 'initialize') {
+    send({ id: msg.id, result: {} });
+    return;
+  }
+  if (msg.method === 'thread/start') {
+    send({ id: msg.id, result: { thread: { id: 'thread-live-stop-pending-1' } } });
+    return;
+  }
+  if (msg.method === 'turn/start') {
+    setTimeout(() => send({ id: msg.id, result: { turn: { id: turnId } } }), 50);
+    setTimeout(() => send({ method: 'turn/started', params: { turn: { id: turnId } } }), 60);
+    return;
+  }
+  if (msg.method === 'turn/interrupt') {
+    send({ id: msg.id, result: {} });
+    send({ method: 'turn/completed', params: { turn: { id: turnId, status: 'interrupted' } } });
+    return;
+  }
+  send({ id: msg.id, result: {} });
+});
+`,
+    );
+    const wrapper = path.join(tmpDir, "mock-codex-stop-pending");
+    writeFileSync(
+      wrapper,
+      `#!/bin/sh\nexec node "${serverJs}" "$@"\n`,
+    );
+    chmodSync(wrapper, 0o755);
+    process.env.RAH_CODEX_BINARY = wrapper;
+
+    const services = {
+      eventBus: new EventBus(),
+      ptyHub: new PtyHub(),
+      sessionStore: new SessionStore(),
+    };
+    const adapter = new CodexAdapter(services);
+
+    const started = await adapter.startSession({
+      provider: "codex",
+      cwd: tmpDir,
+      title: "pending stop test",
+      attach: {
+        client: {
+          id: "test-client",
+          kind: "web",
+          connectionId: "test-client",
+        },
+        mode: "interactive",
+        claimControl: true,
+      },
+    });
+
+    adapter.sendInput(started.session.session.id, {
+      clientId: "web-user",
+      text: "stop me",
+    });
+    adapter.interruptSession(started.session.session.id, {
+      clientId: "web-user",
+    });
+
+    await waitFor(() =>
+      services.eventBus.list({ sessionIds: [started.session.session.id] }).some(
+        (event) => event.type === "turn.canceled",
+      ),
+    );
+
+    const state = services.sessionStore.getSession(started.session.session.id);
+    assert.equal(state?.session.runtimeState, "idle");
+    assert.equal(state?.activeTurnId, undefined);
+
+    await adapter.shutdown?.();
+  });
+
   test("handles MCP elicitation and dynamic client tool server requests", async () => {
     const serverJs = path.join(tmpDir, "mock-codex-server-requests.js");
     writeFileSync(
@@ -339,7 +534,7 @@ rl.on('line', (line) => {
   }
   if (msg.id === 9101) {
     sawDynamicResponse = msg.result?.success === false;
-    send({ method: 'item/agentMessage/delta', params: { itemId: 'assistant-requests-1', delta: 'responses ' + sawMcpResponse + ' ' + sawDynamicResponse } });
+    send({ method: 'item/agentMessage/delta', params: { threadId: 'thread-live-requests-1', turnId: pendingTurnId, itemId: 'assistant-requests-1', delta: 'responses ' + sawMcpResponse + ' ' + sawDynamicResponse } });
     send({ method: 'turn/completed', params: { turn: { id: pendingTurnId, status: 'completed' } } });
     return;
   }

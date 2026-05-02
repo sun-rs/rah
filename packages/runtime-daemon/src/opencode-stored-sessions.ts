@@ -335,6 +335,7 @@ export function getOpenCodeStoredSessionHistoryPage(params: {
   });
   const historyState = createOpenCodeActivityState(
     messages[0]?.info.sessionID ?? params.record.ref.providerSessionId,
+    { origin: "history" },
   );
   let lastMessageTs: string | undefined;
   for (const message of messages) {

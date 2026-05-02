@@ -24,8 +24,27 @@
 前端合并规则：
 
 - older page prepend 到当前 feed 前面。
-- 通过 entry key 和语义去重，避免 live/bootstrap 事件与 history replay 重复显示。
+- 优先通过 `TimelineIdentity.canonicalItemId` upsert，避免 live/bootstrap 事件与 history replay 重复显示。
+- 没有 `canonicalItemId` 的旧事件才退回到 `messageId`、turnId、text/time window 等兼容性去重。
 - prepend 前记录 visible anchor，插入后修正 `scrollTop`，保持阅读位置。
+
+Timeline identity 约束：
+
+- 同一个 provider item 无论来自 live 还是 history，必须生成同一个 `canonicalItemId`。
+- 两个真实不同的 item 即使文本完全一样，也必须有不同 `canonicalItemId`。
+- `origin`、`sourceCursor`、`contentHash` 都是证据或 metadata，不参与主 key。
+- adapter 必须把 provider 原生 message id、文件行/byte offset、SQLite row id、turn ordinal/part index 映射成 `turnKey + itemKey`；无法证明稳定时宁可不生成 identity，也不能用全文 hash 冒充主身份。
+- identity 缺失或同一 canonical id 结构冲突会在 daemon log 中输出诊断 warning，避免前端长期静默回退到 text/time window 猜测。
+
+当前 provider identity 策略：
+
+| Provider | 主身份来源 | 说明 |
+| --- | --- | --- |
+| Codex | `providerSessionId + turnId + per-turn itemIndex` | app-server live 与 rollout history 都可从 turn 上下文派生同序 item index；origin 不进 key。 |
+| Claude | `sessionId + record uuid` | Claude transcript / SDK assistant 消息有稳定 uuid；用户 live 输入无 provider uuid 时不强行猜。 |
+| Gemini | `sessionId + message.id (+ thought partIndex)` | conversation 文件 message id 是主线；headless live 只有派生 id 时标记 derived。 |
+| Kimi | `providerSessionId + turnIndex + itemIndex` | wire history 和 live wire client 都按 turn/item 位置生成 identity，解决 reasoning 重复。 |
+| OpenCode | `sessionId + messageId + partId` | OpenCode SQLite / ACP 都有 message/part 结构，reasoning 与 assistant text 分 part 区分。 |
 
 ## 2. API 契约
 

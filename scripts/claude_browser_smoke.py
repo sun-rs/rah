@@ -68,6 +68,22 @@ def close_session(base_url: str, session_id: str, client_id: str | None = None) 
         pass
 
 
+def resolve_control_client_id(base_url: str, session_id: str, fallback: str) -> str:
+    try:
+        summary = request_json(base_url, f"/api/sessions/{session_id}")["session"]
+        client_id = summary.get("controlLease", {}).get("holderClientId")
+        if isinstance(client_id, str):
+            return client_id
+        attached = summary.get("attachedClients", [])
+        if isinstance(attached, list):
+            for client in attached:
+                if isinstance(client, dict) and isinstance(client.get("id"), str):
+                    return client["id"]
+    except Exception:
+        pass
+    return fallback
+
+
 def wait_for_session_match(base_url: str, predicate, *, timeout_s: int = 90) -> dict[str, Any]:
     started = time.time()
     while time.time() - started < timeout_s:
@@ -249,10 +265,11 @@ def main() -> int:
                 },
             )["session"]
             live_session_id = seeded["session"]["id"]
+            input_client_id = resolve_control_client_id(base_url, live_session_id, client_id)
             request_json(
                 base_url,
                 f"/api/sessions/{live_session_id}/input",
-                {"clientId": client_id, "text": first_prompt},
+                {"clientId": input_client_id, "text": first_prompt},
             )
             first_done, first_permission_ids = wait_for_idle_with_auto_permissions(
                 page,
@@ -264,7 +281,7 @@ def main() -> int:
                 raise AssertionError("Claude browser seed flow did not publish providerSessionId.")
             if beta.read_text(encoding="utf-8").strip() != "BETA-CLAUDE":
                 raise AssertionError("Claude browser seed flow did not create beta.txt correctly.")
-            close_session(base_url, live_session_id, client_id)
+            close_session(base_url, live_session_id, input_client_id)
             live_session_id = None
             page.reload(wait_until="domcontentloaded")
             page.wait_for_timeout(1500)
@@ -283,11 +300,10 @@ def main() -> int:
             if not recent or not stored:
                 raise AssertionError("Claude session did not appear in Recent/Stored after close.")
 
-            page.locator('button[aria-label="Session history"]:visible').first.click()
+            page.locator('button[aria-label="Sessions"]:visible').first.click()
             page.get_by_role("button", name="Recent", exact=True).click()
-            page.get_by_placeholder("Filter recent sessions…").fill(provider_session_id)
             page.locator(
-                f'[role="dialog"] button[data-provider-session-id="{provider_session_id}"]:visible'
+                f'button[data-provider-session-id="{provider_session_id}"]:visible'
             ).first.click()
 
             replay = wait_for_session_match(
@@ -298,13 +314,14 @@ def main() -> int:
                 timeout_s=90,
             )
             replay_session_id = replay["session"]["id"]
-            expect(page.get_by_text("Open history only")).to_be_visible(timeout=60_000)
+            expect(page.get_by_text("History only", exact=True)).to_be_visible(timeout=60_000)
             body_after_replay = page.locator("body").inner_text()
             if count_text(body_after_replay, first_marker) < 1:
                 raise AssertionError("Claude history replay did not show the first turn marker in the UI.")
 
             page.get_by_role("button", name="Claim control").click()
-            expect(page.get_by_placeholder("Message…")).to_be_visible(timeout=90_000)
+            composer = page.locator("textarea:visible").last
+            expect(composer).to_be_visible(timeout=90_000)
 
             resumed = wait_for_session_match(
                 base_url,
@@ -317,7 +334,7 @@ def main() -> int:
 
             old_turn_count_before = count_text(page.locator("body").inner_text(), first_marker)
 
-            page.get_by_placeholder("Message…").fill(second_prompt)
+            composer.fill(second_prompt)
             page.keyboard.press("Enter")
 
             wait_for_idle_with_auto_permissions(page, base_url, resumed_session_id)
@@ -363,7 +380,7 @@ def main() -> int:
             if replay_session_id:
                 close_session(base_url, replay_session_id, client_id)
             if live_session_id:
-                close_session(base_url, live_session_id, client_id)
+                close_session(base_url, live_session_id)
             shutil.rmtree(workspace, ignore_errors=True)
 
 

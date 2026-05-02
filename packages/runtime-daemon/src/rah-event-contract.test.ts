@@ -12,6 +12,7 @@ import {
   translateCodexAppServerNotification,
   type CodexLiveTranslatedActivity,
 } from "./codex-app-server-activity";
+import { createTimelineIdentity } from "./timeline-identity";
 import { EventBus } from "./event-bus";
 import { applyProviderActivity, type ProviderActivity } from "./provider-activity";
 import { PtyHub } from "./pty-hub";
@@ -92,11 +93,27 @@ describe("RAH event contract", () => {
       type: "timeline_item",
       turnId,
       item: { kind: "assistant_message", text: "Working" },
+      identity: createTimelineIdentity({
+        provider: "codex",
+        providerSessionId: "thread-1",
+        turnKey: turnId,
+        itemKind: "assistant_message",
+        itemKey: "assistant-1",
+        origin: "live",
+      }),
     });
     applyActivity(services, sessionId, {
       type: "timeline_item_updated",
       turnId,
       item: { kind: "assistant_message", text: "Working now" },
+      identity: createTimelineIdentity({
+        provider: "codex",
+        providerSessionId: "thread-1",
+        turnKey: turnId,
+        itemKind: "assistant_message",
+        itemKey: "assistant-1",
+        origin: "live",
+      }),
     });
     applyActivity(services, sessionId, {
       type: "message_part_added",
@@ -387,11 +404,11 @@ describe("RAH event contract", () => {
     }
 
     const notifications = [
-      { method: "turn/started", params: { turn: { id: "turn-1" } } },
-      { method: "item/agentMessage/delta", params: { itemId: "msg-1", delta: "Hello" } },
+      { method: "turn/started", params: { threadId: "thread-1", turn: { id: "turn-1" } } },
+      { method: "item/agentMessage/delta", params: { threadId: "thread-1", turnId: "turn-1", itemId: "msg-1", delta: "Hello" } },
       {
         method: "item/reasoning/summaryTextDelta",
-        params: { itemId: "reasoning-1", delta: "Inspecting" },
+        params: { threadId: "thread-1", turnId: "turn-1", itemId: "reasoning-1", delta: "Inspecting" },
       },
       {
         method: "codex/event/exec_command_begin",

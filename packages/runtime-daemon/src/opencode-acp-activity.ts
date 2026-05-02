@@ -1,6 +1,7 @@
-import type { ContextUsage, JsonObject, ToolCall, ToolFamily } from "@rah/runtime-protocol";
+import type { ContextUsage, JsonObject, TimelineIdentity, ToolCall, ToolFamily } from "@rah/runtime-protocol";
 import type { ProviderActivity } from "./provider-activity";
 import type { OpenCodeAcpSessionUpdate } from "./opencode-acp-client";
+import { createOpenCodeTimelineIdentity } from "./opencode-timeline-identity";
 
 export interface OpenCodeAcpActivityState {
   readonly providerSessionId: string;
@@ -60,9 +61,24 @@ function translateAgentMessageChunk(
         text,
         ...(messageId ? { messageId } : {}),
       },
+      ...timelineIdentityProps(
+        messageId
+          ? createOpenCodeTimelineIdentity({
+              providerSessionId: state.providerSessionId,
+              messageId,
+              itemKind: "assistant_message",
+              origin: "live",
+              confidence: "derived",
+            })
+          : undefined,
+      ),
       ...(state.currentTurnId ? { turnId: state.currentTurnId } : {}),
     },
   ];
+}
+
+function timelineIdentityProps(identity: TimelineIdentity | undefined): { identity?: TimelineIdentity } {
+  return identity !== undefined ? { identity } : {};
 }
 
 function translateToolCallUpdate(

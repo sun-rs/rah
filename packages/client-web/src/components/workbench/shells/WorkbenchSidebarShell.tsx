@@ -56,7 +56,7 @@ export function WorkbenchSidebarShell(props: {
             />
           ) : null}
         </div>
-        <div className="flex-1 overflow-y-auto custom-scrollbar p-3">{props.sidebarContent}</div>
+        <div className="flex-1 overflow-y-auto custom-scrollbar py-3 pl-3 pr-1">{props.sidebarContent}</div>
       </aside>
 
       {props.sidebarOpen ? (
@@ -89,7 +89,7 @@ export function WorkbenchSidebarShell(props: {
           />
         }
       >
-        <div className="p-3">{props.sidebarContent}</div>
+        <div className="py-3 pl-3 pr-1">{props.sidebarContent}</div>
       </Sheet>
     </>
   );

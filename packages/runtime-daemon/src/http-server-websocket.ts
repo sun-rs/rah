@@ -7,18 +7,12 @@ import type {
 } from "@rah/runtime-protocol";
 import { RuntimeEngine } from "./runtime-engine";
 import { isAllowedOrigin } from "./http-server-cors";
+import { isLoopbackRemoteAddress } from "./http-server-client-address";
 import type { TerminalWrapperToDaemonMessage } from "./terminal-wrapper-control";
 
 const WEBSOCKET_HEARTBEAT_INTERVAL_MS = 30_000;
 
-export function isLoopbackRemoteAddress(remoteAddress: string | undefined): boolean {
-  return (
-    remoteAddress === "127.0.0.1" ||
-    remoteAddress === "::1" ||
-    remoteAddress === "::ffff:127.0.0.1" ||
-    remoteAddress === "localhost"
-  );
-}
+export { isLoopbackRemoteAddress } from "./http-server-client-address";
 
 function installWebSocketHeartbeat(servers: WebSocketServer[]): () => void {
   const alive = new Map<WebSocket, boolean>();

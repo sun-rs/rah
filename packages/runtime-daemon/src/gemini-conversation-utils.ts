@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import type { RahEvent } from "@rah/runtime-protocol";
+import type { RahEvent, TimelineIdentity } from "@rah/runtime-protocol";
 import { EventBus } from "./event-bus";
 import { PtyHub } from "./pty-hub";
 import { applyProviderActivity, type ProviderActivity } from "./provider-activity";
 import { SessionStore } from "./session-store";
+import { createGeminiTimelineIdentity } from "./gemini-timeline-identity";
 import type {
   GeminiConversationRecord,
   GeminiMessageRecord,
@@ -303,6 +304,10 @@ function toolActivitiesForMessage(message: GeminiMessageRecord, turnId: string):
   });
 }
 
+function timelineIdentityProps(identity: TimelineIdentity | undefined): { identity?: TimelineIdentity } {
+  return identity !== undefined ? { identity } : {};
+}
+
 function conversationToEvents(params: {
   sessionId: string;
   conversation: GeminiConversationRecord;
@@ -334,6 +339,12 @@ function conversationToEvents(params: {
             type: "timeline_item",
             turnId,
             item: { kind: "user_message", text: extractGeminiUserDisplayText(message) },
+            ...timelineIdentityProps(createGeminiTimelineIdentity({
+              providerSessionId: params.conversation.sessionId,
+              messageId: message.id,
+              itemKind: "user_message",
+              origin: "history",
+            })),
           },
         );
         break;
@@ -348,10 +359,16 @@ function conversationToEvents(params: {
               type: "timeline_item",
               turnId,
               item: { kind: "assistant_message", text, messageId: message.id },
+              ...timelineIdentityProps(createGeminiTimelineIdentity({
+                providerSessionId: params.conversation.sessionId,
+                messageId: message.id,
+                itemKind: "assistant_message",
+                origin: "history",
+              })),
             },
           );
         }
-        for (const thought of message.thoughts ?? []) {
+        for (const [thoughtIndex, thought] of (message.thoughts ?? []).entries()) {
           const thoughtText =
             (typeof thought.text === "string" ? thought.text : "") ||
             (typeof thought.subject === "string" ? thought.subject : "");
@@ -366,6 +383,13 @@ function conversationToEvents(params: {
               type: "timeline_item",
               turnId,
               item: { kind: "reasoning", text: thoughtText },
+              ...timelineIdentityProps(createGeminiTimelineIdentity({
+                providerSessionId: params.conversation.sessionId,
+                messageId: message.id,
+                itemKind: "reasoning",
+                origin: "history",
+                partIndex: thoughtIndex + 1,
+              })),
             },
           );
         }
@@ -397,6 +421,12 @@ function conversationToEvents(params: {
               kind: message.type === "error" ? "error" : "system",
               text,
             },
+            ...timelineIdentityProps(createGeminiTimelineIdentity({
+              providerSessionId: params.conversation.sessionId,
+              messageId: message.id,
+              itemKind: message.type === "error" ? "error" : "system",
+              origin: "history",
+            })),
           },
         );
         break;

@@ -256,6 +256,7 @@ export async function startCodexLiveSession(params: {
         rename: "native",
       },
       steerInput: true,
+      queuedInput: true,
     },
   });
   services.ptyHub.ensureSession(state.session.id);
@@ -282,6 +283,10 @@ export async function startCodexLiveSession(params: {
     client,
     translationState: createCodexAppServerTranslationState(),
     currentTurnId: runtimeSession.activeTurnId ?? null,
+    finishedTurnIds: new Set(),
+    turnStartInFlight: false,
+    interruptWhenTurnStarts: false,
+    queuedInputs: [],
     pendingQuestions: new Map(),
     pendingApprovals: new Map(),
   };
@@ -437,6 +442,7 @@ export async function resumeCodexLiveSession(params: {
           rename: "native",
         },
         steerInput: true,
+        queuedInput: true,
       },
     });
     services.ptyHub.ensureSession(state.session.id);
@@ -492,6 +498,10 @@ export async function resumeCodexLiveSession(params: {
       client,
       translationState: createCodexAppServerTranslationState(),
       currentTurnId: resumedState.activeTurnId ?? null,
+      finishedTurnIds: new Set(),
+      turnStartInFlight: false,
+      interruptWhenTurnStarts: false,
+      queuedInputs: [],
       pendingQuestions: new Map(),
       pendingApprovals: new Map(),
     };

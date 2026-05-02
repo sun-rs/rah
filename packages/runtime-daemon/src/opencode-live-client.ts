@@ -58,6 +58,7 @@ export interface LiveOpenCodeSession {
   contextWindow?: ModelContextWindowResolution;
   reasoningId?: string | null;
   modeId: string;
+  queuedInputs: SessionInputRequest[];
 }
 
 const SESSION_SOURCE = {
@@ -314,7 +315,7 @@ export async function startOpenCodeLiveSession(params: {
     capabilities: {
       livePermissions: true,
       steerInput: true,
-      queuedInput: false,
+      queuedInput: true,
       renameSession: false,
       modelSwitch: true,
       actions: {
@@ -337,6 +338,7 @@ export async function startOpenCodeLiveSession(params: {
     }),
     lastAcpActivityAt: Date.now(),
     modeId: initialModeId,
+    queuedInputs: [],
     ...(currentModelId ? { model: currentModelId } : {}),
     ...(contextWindow ? { contextWindow } : {}),
     ...(currentReasoningId !== undefined ? { reasoningId: currentReasoningId } : {}),
@@ -460,7 +462,7 @@ export async function resumeOpenCodeLiveSession(params: {
     capabilities: {
       livePermissions: true,
       steerInput: true,
-      queuedInput: false,
+      queuedInput: true,
       renameSession: false,
       modelSwitch: true,
       actions: {
@@ -483,6 +485,7 @@ export async function resumeOpenCodeLiveSession(params: {
     }),
     lastAcpActivityAt: Date.now(),
     modeId: initialModeId,
+    queuedInputs: [],
     ...(currentModelId ? { model: currentModelId } : {}),
     ...(contextWindow ? { contextWindow } : {}),
     ...(currentReasoningId !== undefined ? { reasoningId: currentReasoningId } : {}),
@@ -511,7 +514,8 @@ export function sendInputToOpenCodeLiveSession(params: {
 }): void {
   const { services, liveSession, request } = params;
   if (liveSession.activityState.currentTurnId) {
-    throw new Error("OpenCode session already has an active turn.");
+    liveSession.queuedInputs.push(request);
+    return;
   }
   if (!services.sessionStore.hasInputControl(liveSession.sessionId, request.clientId)) {
     throw new Error(
@@ -572,6 +576,7 @@ function submitOpenCodePrompt(params: {
     .then(async (response) => {
       await waitForAcpDrain(() => liveSession.lastAcpActivityAt, 250);
       if (liveSession.activityState.currentTurnId !== turnId) {
+        drainQueuedOpenCodeInput(services, liveSession);
         return;
       }
       const usage = contextUsageFromAcpPrompt(
@@ -588,9 +593,11 @@ function submitOpenCodePrompt(params: {
       for (const activity of completeOpenCodeTurn(liveSession.activityState)) {
         applyActivity(services, liveSession.sessionId, activity);
       }
+      drainQueuedOpenCodeInput(services, liveSession);
     })
     .catch((error) => {
       if (liveSession.activityState.currentTurnId !== turnId) {
+        drainQueuedOpenCodeInput(services, liveSession);
         return;
       }
       delete liveSession.activityState.currentTurnId;
@@ -599,7 +606,31 @@ function submitOpenCodePrompt(params: {
         turnId,
         error: error instanceof Error ? error.message : String(error),
       });
+      drainQueuedOpenCodeInput(services, liveSession);
     });
+}
+
+function drainQueuedOpenCodeInput(
+  services: RuntimeServices,
+  liveSession: LiveOpenCodeSession,
+): void {
+  if (liveSession.activityState.currentTurnId) {
+    return;
+  }
+  const next = liveSession.queuedInputs.shift();
+  if (!next) {
+    return;
+  }
+  if (!services.sessionStore.hasInputControl(liveSession.sessionId, next.clientId)) {
+    applyActivity(services, liveSession.sessionId, {
+      type: "runtime_status",
+      status: "error",
+      detail: `Client ${next.clientId} does not hold input control for ${liveSession.sessionId}.`,
+    });
+    services.sessionStore.setRuntimeState(liveSession.sessionId, "failed");
+    return;
+  }
+  submitOpenCodePrompt({ services, liveSession, text: next.text });
 }
 
 async function startAcpForSession(params: {
@@ -647,6 +678,7 @@ export async function closeOpenCodeLiveSession(
   liveSession: LiveOpenCodeSession,
   _request?: CloseSessionRequest,
 ): Promise<void> {
+  liveSession.queuedInputs.length = 0;
   await liveSession.acp.close().catch(() => undefined);
   await stopOpenCodeServer(liveSession.server);
 }
@@ -663,6 +695,7 @@ export function interruptOpenCodeLiveSession(params: {
     );
   }
   const turnId = liveSession.activityState.currentTurnId;
+  liveSession.queuedInputs.length = 0;
   void liveSession.acp.cancel(liveSession.providerSessionId);
   void abortOpenCodeSession({
     handle: liveSession.server,

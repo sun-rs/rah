@@ -16,17 +16,17 @@ export const SIDEBAR_LAYOUT = {
   workspaceListClassName: "space-y-1",
   workspaceBlockClassName: "space-y-1",
   workspaceHeaderClassName:
-    "group/workspace flex min-h-[32px] items-center gap-1.5 rounded-lg px-2 py-1 transition-colors hover:bg-[var(--app-bg)]/30",
+    "group/workspace relative flex min-h-[32px] items-center gap-1.5 rounded-lg py-1 pl-2 pr-0 transition-colors hover:bg-[var(--app-bg)]/30",
   workspaceHeaderSelectedClassName:
     "bg-[var(--app-bg)]/60",
   workspaceToggleButtonClassName:
     "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-bg)]/50 hover:text-[var(--app-fg)]",
   workspaceTitleButtonClassName:
-    "min-w-0 flex-1 truncate rounded-md px-1 py-0.5 text-left text-sm text-[var(--app-fg)] transition-colors hover:bg-[var(--app-bg)]/60",
+    "min-w-0 flex-1 truncate rounded-md py-0.5 pl-1 pr-6 text-left text-sm text-[var(--app-fg)] transition-colors hover:bg-[var(--app-bg)]/60",
   workspaceTitleSelectedClassName:
     "font-semibold",
   workspaceActionSlotClassName:
-    "flex w-9 shrink-0 items-center justify-center",
+    "absolute right-0 top-1/2 flex -translate-y-1/2 items-center justify-center",
   workspaceActionButtonClassName:
     "inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors",
   workspaceActionHiddenClassName:

@@ -324,6 +324,7 @@ rl.on('line', (line) => {
 const readline = require('node:readline');
 const rl = readline.createInterface({ input: process.stdin });
 function send(msg) { process.stdout.write(JSON.stringify(msg) + "\\n"); }
+let turnCount = 0;
 rl.on('line', (line) => {
   const msg = JSON.parse(line);
   if (msg.method === 'initialize') {
@@ -375,12 +376,17 @@ rl.on('line', (line) => {
     return;
   }
   if (msg.method === 'turn/start') {
-    send({ id: msg.id, result: { turn: { id: 'turn-model-1' } } });
-    send({ method: 'turn/started', params: { turn: { id: 'turn-model-1' } } });
+    turnCount += 1;
+    const turnId = 'turn-model-' + turnCount;
+    const itemId = 'assistant-model-' + turnCount;
+    send({ id: msg.id, result: { turn: { id: turnId } } });
+    send({ method: 'turn/started', params: { turn: { id: turnId } } });
     send({
       method: 'item/agentMessage/delta',
       params: {
-        itemId: 'assistant-model-1',
+        threadId: 'thread-model-1',
+        turnId,
+        itemId,
         delta:
           'model=' + msg.params.model +
           ';effort=' + msg.params.effort +
@@ -389,7 +395,7 @@ rl.on('line', (line) => {
             : 'none')
       }
     });
-    send({ method: 'turn/completed', params: { turn: { id: 'turn-model-1', status: 'completed' } } });
+    send({ method: 'turn/completed', params: { turn: { id: turnId, status: 'completed' } } });
     return;
   }
   send({ id: msg.id, result: {} });
@@ -471,6 +477,152 @@ rl.on('line', (line) => {
           event.payload.item.text.includes(
             "model=gpt-beta;effort=low;collab=plan/gpt-beta/low",
           ),
+      ),
+    ).catch((error) => {
+      throw new Error(`plan wait failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
+    await waitFor(() =>
+      services.eventBus.list({ sessionIds: [started.session.session.id] }).some(
+        (event) =>
+          event.type === "turn.completed" && event.turnId === "turn-model-1",
+      ),
+    ).catch((error) => {
+      throw new Error(`first completion wait failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
+
+    const unplanned = await adapter.setSessionMode?.(
+      started.session.session.id,
+      "never/danger-full-access",
+    );
+    assert.equal(unplanned?.session.mode?.currentModeId, "never/danger-full-access");
+
+    adapter.sendInput(started.session.session.id, {
+      clientId: "web-user",
+      text: "exit plan mode",
+    });
+
+    await waitFor(() =>
+      services.eventBus.list({ sessionIds: [started.session.session.id] }).some(
+        (event) =>
+          event.type === "timeline.item.added" &&
+          event.payload.item.kind === "assistant_message" &&
+          event.payload.item.text.includes(
+            "model=gpt-beta;effort=low;collab=default/gpt-beta/low",
+          ),
+      ),
+    ).catch((error) => {
+      throw new Error(`default wait failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
+
+    await adapter.shutdown?.();
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
+  test("sends Codex sandbox policies without deprecated read access fields", async () => {
+    const cwd = mkdtempSync(path.join(os.tmpdir(), "rah-codex-sandbox-policy-cwd-"));
+    writeMockCodexServer(`
+const readline = require('node:readline');
+const rl = readline.createInterface({ input: process.stdin });
+let turnCount = 0;
+function send(msg) { process.stdout.write(JSON.stringify(msg) + "\\n"); }
+rl.on('line', (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method === 'initialize') {
+    send({ id: msg.id, result: {} });
+    return;
+  }
+  if (msg.method === 'thread/start') {
+    send({ id: msg.id, result: { thread: { id: 'thread-sandbox-1' }, model: 'gpt-alpha', reasoningEffort: 'low' } });
+    return;
+  }
+  if (msg.method === 'model/list') {
+    send({ id: msg.id, result: { data: [], nextCursor: null } });
+    return;
+  }
+  if (msg.method === 'collaborationMode/list') {
+    send({ id: msg.id, result: { data: [] } });
+    return;
+  }
+  if (msg.method === 'turn/start') {
+    turnCount += 1;
+    const turnId = 'turn-sandbox-' + turnCount;
+    const sandboxPolicy = msg.params.sandboxPolicy || {};
+    const hasDeprecatedField =
+      Object.prototype.hasOwnProperty.call(sandboxPolicy, 'access') ||
+      Object.prototype.hasOwnProperty.call(sandboxPolicy, 'readOnlyAccess');
+    send({ id: msg.id, result: { turn: { id: turnId } } });
+    send({ method: 'turn/started', params: { turn: { id: turnId } } });
+    send({
+      method: 'item/agentMessage/delta',
+      params: {
+        threadId: 'thread-sandbox-1',
+        turnId,
+        itemId: 'assistant-sandbox-' + turnCount,
+        delta: (hasDeprecatedField ? 'deprecated-sandbox-field' : 'sandbox-ok') + ':' + JSON.stringify(sandboxPolicy)
+      }
+    });
+    send({ method: 'turn/completed', params: { turn: { id: turnId, status: 'completed' } } });
+    return;
+  }
+  send({ id: msg.id, result: {} });
+});
+`);
+
+    const services = {
+      eventBus: new EventBus(),
+      ptyHub: new PtyHub(),
+      sessionStore: new SessionStore(),
+    };
+    const adapter = new CodexAdapter(services);
+    const started = await adapter.startSession({
+      provider: "codex",
+      cwd,
+      title: "sandbox policy test",
+      attach: {
+        client: {
+          id: "web-client",
+          kind: "web",
+          connectionId: "web-client",
+        },
+        mode: "interactive",
+        claimControl: true,
+      },
+    });
+
+    await adapter.setSessionMode?.(started.session.session.id, "on-request/read-only");
+    adapter.sendInput(started.session.session.id, {
+      clientId: "web-client",
+      text: "read only",
+    });
+    await waitFor(() =>
+      services.eventBus.list({ sessionIds: [started.session.session.id] }).some(
+        (event) =>
+          event.type === "timeline.item.added" &&
+          event.payload.item.kind === "assistant_message" &&
+          event.payload.item.text.includes(
+            'sandbox-ok:{"type":"readOnly","networkAccess":false}',
+          ),
+      ),
+    );
+    await waitFor(() =>
+      services.eventBus.list({ sessionIds: [started.session.session.id] }).some(
+        (event) => event.type === "turn.completed" && event.turnId === "turn-sandbox-1",
+      ),
+    );
+
+    await adapter.setSessionMode?.(started.session.session.id, "on-request/workspace-write");
+    adapter.sendInput(started.session.session.id, {
+      clientId: "web-client",
+      text: "workspace write",
+    });
+    await waitFor(() =>
+      services.eventBus.list({ sessionIds: [started.session.session.id] }).some(
+        (event) =>
+          event.type === "timeline.item.added" &&
+          event.payload.item.kind === "assistant_message" &&
+          event.payload.item.text.includes('"type":"workspaceWrite"') &&
+          event.payload.item.text.includes('"networkAccess":false') &&
+          !event.payload.item.text.includes("deprecated-sandbox-field"),
       ),
     );
 
@@ -854,7 +1006,7 @@ rl.on('line', (line) => {
     setTimeout(() => send({ method: 'turn/started', params: { turn: { id: turnId } } }), 5);
     setTimeout(() => send({
       method: 'item/agentMessage/delta',
-      params: { itemId: 'assistant-live-1', delta: 'Live reattach works.' },
+      params: { threadId: '${sessionId}', turnId, itemId: 'assistant-live-1', delta: 'Live reattach works.' },
     }), 10);
     setTimeout(() => send({ method: 'turn/completed', params: { turn: { id: turnId, status: 'completed' } } }), 15);
     return;
@@ -897,7 +1049,7 @@ rl.on('line', (line) => {
     assert.equal(resumed.session.session.capabilities.livePermissions, true);
     assert.equal(resumed.session.session.capabilities.resumeByProvider, true);
     assert.equal(resumed.session.session.capabilities.listProviderSessions, true);
-    assert.equal(resumed.session.session.capabilities.queuedInput, false);
+    assert.equal(resumed.session.session.capabilities.queuedInput, true);
     assert.equal(resumed.session.session.capabilities.actions.archive, true);
     assert.equal(resumed.session.session.capabilities.modelSwitch, true);
     assert.equal(resumed.session.session.capabilities.planMode, false);
@@ -972,7 +1124,7 @@ rl.on('line', (line) => {
     setTimeout(() => send({ method: 'turn/started', params: { turn: { id: turnId } } }), 5);
     setTimeout(() => send({
       method: 'item/agentMessage/delta',
-      params: { itemId: 'assistant-live-skip-1', delta: 'Only new live output.' },
+      params: { threadId: '${sessionId}', turnId, itemId: 'assistant-live-skip-1', delta: 'Only new live output.' },
     }), 10);
     setTimeout(() => send({ method: 'turn/completed', params: { turn: { id: turnId, status: 'completed' } } }), 15);
     return;
@@ -1068,7 +1220,7 @@ rl.on('line', (line) => {
     setTimeout(() => send({ method: 'turn/started', params: { turn: { id: turnId } } }), 5);
     setTimeout(() => send({
       method: 'item/agentMessage/delta',
-      params: { itemId: 'assistant-live-upgrade-1', delta: 'Continue after claim.' },
+      params: { threadId: '${sessionId}', turnId, itemId: 'assistant-live-upgrade-1', delta: 'Continue after claim.' },
     }), 10);
     setTimeout(() => send({ method: 'turn/completed', params: { turn: { id: turnId, status: 'completed' } } }), 15);
     return;

@@ -144,26 +144,26 @@ def main() -> int:
 
         try:
             page.goto(base_url, wait_until="domcontentloaded")
-            page.locator('button[aria-label="Session history"]:visible').first.click()
+            page.locator('button[aria-label="Sessions"]:visible').first.click()
             if recent_codex_provider_session_id:
                 page.get_by_role("button", name="Recent").click()
                 page.locator(
-                    f'[role="dialog"] button[data-provider-session-id="{codex_provider_session_id}"]:visible'
+                    f'button[data-provider-session-id="{codex_provider_session_id}"]:visible'
                 ).first.click()
             else:
                 page.get_by_role("button", name="All").click()
-                page.get_by_placeholder("Filter workspaces or sessions…").fill(codex_provider_session_id)
                 page.locator(
-                    f'[role="dialog"] button[data-provider-session-id="{codex_provider_session_id}"]:visible'
+                    f'button[data-provider-session-id="{codex_provider_session_id}"]:visible'
                 ).first.click()
-            expect(page.get_by_text("Open history only")).to_be_visible()
+            expect(page.get_by_text("History only", exact=True)).to_be_visible()
             if expected_history_snippet:
                 expect(page.get_by_text(expected_history_snippet).first).to_be_visible(timeout=30_000)
 
             page.get_by_role("button", name="Claim control").click()
-            expect(page.get_by_placeholder("Message…")).to_be_visible(timeout=90_000)
+            composer = page.locator("textarea:visible").last
+            expect(composer).to_be_visible(timeout=90_000)
 
-            page.get_by_placeholder("Message…").fill(prompt)
+            composer.fill(prompt)
             page.keyboard.press("Enter")
             page.wait_for_timeout(10_000)
 

@@ -25,13 +25,9 @@ export default defineConfig({
           if (!id.includes("node_modules")) {
             return undefined;
           }
-          if (
-            id.includes("/react/") ||
-            id.includes("/react-dom/") ||
-            id.includes("/scheduler/")
-          ) {
-            return "vendor-react";
-          }
+          // Keep React in the general vendor chunk. Splitting it out can create a
+          // vendor <-> vendor-react cycle through shared Rollup helpers and
+          // React-using packages such as lucide-react, which breaks production.
           if (id.includes("/@xterm/")) {
             return "vendor-xterm";
           }

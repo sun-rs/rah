@@ -84,6 +84,21 @@ test("groups deduped sessions and counts each session only once per workspace", 
   );
 });
 
+test("preserves filesystem root as a real history workspace", () => {
+  const groups = groupAllStoredSessionsByDirectory([
+    storedSession({
+      provider: "codex",
+      providerSessionId: "root-session",
+      rootDir: "/",
+      cwd: "/",
+      updatedAt: "2026-04-20T10:00:00.000Z",
+    }),
+  ]);
+
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0]?.directory, "/");
+});
+
 test("sorts history workspaces by earliest session createdAt while keeping items newest-first", () => {
   const groups = groupAllStoredSessionsByDirectory(
     [

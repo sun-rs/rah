@@ -3,6 +3,7 @@ import { Check, Copy, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { SessionSummary } from "@rah/runtime-protocol";
 import { providerLabel, type SessionProjection } from "../../../types";
+import { writeHostClipboard } from "../../../api";
 
 function formatDateTime(value: string | undefined): string {
   if (!value) {
@@ -32,19 +33,31 @@ function InfoRow(props: { label: string; value: React.ReactNode; mono?: boolean 
   );
 }
 
+type CopyResult = "copied" | "failed";
+
 function copyTextWithSelection(value: string): boolean {
   if (typeof document === "undefined") {
     return false;
   }
   const previousActiveElement =
     document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const previousSelection = window.getSelection();
+  const previousRanges =
+    previousSelection !== null
+      ? Array.from({ length: previousSelection.rangeCount }, (_, index) =>
+          previousSelection.getRangeAt(index).cloneRange(),
+        )
+      : [];
   const textarea = document.createElement("textarea");
   textarea.value = value;
+  textarea.readOnly = true;
+  textarea.setAttribute("aria-hidden", "true");
   textarea.style.position = "fixed";
-  textarea.style.left = "0";
+  textarea.style.left = "-9999px";
   textarea.style.top = "0";
-  textarea.style.opacity = "0";
-  textarea.style.pointerEvents = "none";
+  textarea.style.width = "1px";
+  textarea.style.height = "1px";
+  textarea.style.fontSize = "16px";
   document.body.appendChild(textarea);
   textarea.focus({ preventScroll: true });
   textarea.select();
@@ -55,44 +68,82 @@ function copyTextWithSelection(value: string): boolean {
     return false;
   } finally {
     textarea.remove();
+    if (previousSelection !== null) {
+      previousSelection.removeAllRanges();
+      for (const range of previousRanges) {
+        previousSelection.addRange(range);
+      }
+    }
     previousActiveElement?.focus({ preventScroll: true });
   }
 }
 
-async function copyTextToClipboard(value: string): Promise<boolean> {
-  // iOS Safari requires the legacy selection copy to happen synchronously in
-  // the tap handler. Try it before awaiting Clipboard API fallback.
-  if (copyTextWithSelection(value)) {
-    return true;
-  }
-
+async function copyTextToClipboard(value: string): Promise<CopyResult> {
   try {
-    if (window.isSecureContext && navigator.clipboard?.writeText) {
+    if (
+      typeof navigator !== "undefined" &&
+      navigator.clipboard?.writeText
+    ) {
       await navigator.clipboard.writeText(value);
-      return true;
+      if (!navigator.clipboard.readText) {
+        throw new Error("Clipboard verification is unavailable.");
+      }
+      try {
+        const clipboardValue = await navigator.clipboard.readText();
+        if (clipboardValue !== value) {
+          throw new Error("Clipboard verification failed.");
+        }
+      } catch {
+        throw new Error("Clipboard verification failed.");
+      }
+      return "copied";
     }
   } catch {
-    return false;
+    // Fall through to the selection-based fallback below.
   }
-  return false;
+  try {
+    await writeHostClipboard(value);
+    return "copied";
+  } catch {
+    // Fall through to the selection-based fallback below.
+  }
+  if (!copyTextWithSelection(value)) {
+    return "failed";
+  }
+  try {
+    if (!navigator.clipboard?.readText) {
+      return "failed";
+    }
+    return (await navigator.clipboard.readText()) === value ? "copied" : "failed";
+  } catch {
+    return "failed";
+  }
 }
 
 function CopyValueButton(props: { value: string; label: string }) {
-  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+  const [copyState, setCopyState] = useState<"idle" | CopyResult>("idle");
 
   useEffect(() => {
     if (copyState === "idle") {
       return;
     }
-    const timeout = window.setTimeout(() => setCopyState("idle"), 1200);
+    const timeout = window.setTimeout(
+      () => setCopyState("idle"),
+      copyState === "failed" ? 2200 : 1200,
+    );
     return () => {
       window.clearTimeout(timeout);
     };
   }, [copyState]);
 
   const handleCopy = async () => {
-    setCopyState((await copyTextToClipboard(props.value)) ? "copied" : "failed");
+    setCopyState(await copyTextToClipboard(props.value));
   };
+
+  const buttonStateClassName =
+    copyState === "failed"
+      ? "border-[var(--app-danger)]/50 bg-[var(--app-danger)]/8 text-[var(--app-danger)] hover:bg-[var(--app-danger)]/12 hover:text-[var(--app-danger)]"
+      : "border-[var(--app-border)] text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]";
 
   return (
     <button
@@ -100,10 +151,11 @@ function CopyValueButton(props: { value: string; label: string }) {
       onClick={() => {
         void handleCopy();
       }}
-      className="inline-flex h-7 items-center gap-1 rounded-md border border-[var(--app-border)] px-2 text-[11px] text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
+      className={`inline-flex h-7 items-center gap-1 rounded-md border px-2 text-[11px] transition-colors ${buttonStateClassName}`}
       title={`Copy ${props.label}`}
+      aria-live="polite"
     >
-      {copyState === "copied" ? <Check size={12} /> : <Copy size={12} />}
+      {copyState === "copied" ? <Check size={12} /> : copyState === "failed" ? <X size={12} /> : <Copy size={12} />}
       <span>{copyState === "copied" ? "Copied" : copyState === "failed" ? "Failed" : "Copy"}</span>
     </button>
   );

@@ -71,6 +71,9 @@ export type LiveGeminiSession = {
   approvalMode: string;
   providerSessionId?: string;
   activeTurn?: LiveGeminiTurn;
+  turnStartPending: boolean;
+  pendingInterrupt: boolean;
+  queuedInputs: SessionInputRequest[];
 };
 
 const SESSION_SOURCE = {
@@ -215,7 +218,7 @@ function signalGeminiTurnProcess(
   child: ChildProcessWithoutNullStreams,
   signal: NodeJS.Signals,
 ): void {
-  if (child.exitCode !== null) {
+  if (child.exitCode !== null || child.signalCode !== null) {
     return;
   }
   if (process.platform !== "win32" && child.pid !== undefined) {
@@ -227,25 +230,61 @@ function signalGeminiTurnProcess(
   child.kill(signal);
 }
 
+function geminiTurnProcessExited(child: ChildProcessWithoutNullStreams): boolean {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+async function waitForGeminiTurnProcessExit(
+  child: ChildProcessWithoutNullStreams,
+  timeoutMs: number,
+): Promise<boolean> {
+  if (geminiTurnProcessExited(child)) {
+    return true;
+  }
+  return await new Promise<boolean>((resolve) => {
+    const timeout = setTimeout(() => {
+      child.off("exit", onExit);
+      resolve(false);
+    }, timeoutMs);
+    const onExit = () => {
+      clearTimeout(timeout);
+      resolve(true);
+    };
+    child.once("exit", onExit);
+  });
+}
+
 function stopGeminiTurn(turn: LiveGeminiTurn): void {
   turn.aborted = true;
-  if (turn.child.exitCode !== null) {
+  if (geminiTurnProcessExited(turn.child)) {
     return;
   }
   clearGeminiTurnStopTimers(turn);
   signalGeminiTurnProcess(turn.child, "SIGINT");
   turn.stopTimers.push(
     setTimeout(() => {
-      if (turn.child.exitCode === null) {
+      if (!geminiTurnProcessExited(turn.child)) {
         signalGeminiTurnProcess(turn.child, "SIGTERM");
       }
     }, GEMINI_STOP_TERM_DELAY_MS),
     setTimeout(() => {
-      if (turn.child.exitCode === null) {
+      if (!geminiTurnProcessExited(turn.child)) {
         signalGeminiTurnProcess(turn.child, "SIGKILL");
       }
     }, GEMINI_STOP_KILL_DELAY_MS),
   );
+}
+
+async function closeGeminiTurn(turn: LiveGeminiTurn): Promise<void> {
+  turn.aborted = true;
+  clearGeminiTurnStopTimers(turn);
+  if (!geminiTurnProcessExited(turn.child)) {
+    signalGeminiTurnProcess(turn.child, "SIGTERM");
+  }
+  if (!(await waitForGeminiTurnProcessExit(turn.child, GEMINI_STOP_TERM_DELAY_MS))) {
+    signalGeminiTurnProcess(turn.child, "SIGKILL");
+    await waitForGeminiTurnProcessExit(turn.child, GEMINI_STOP_KILL_DELAY_MS);
+  }
 }
 
 function resolveGeminiCliResumeArg(liveSession: LiveGeminiSession): string | undefined {
@@ -312,7 +351,6 @@ async function runGeminiTurn(params: {
   }
 
   const turnId = randomUUID();
-  const assistantMessageId = `${turnId}:assistant`;
   applyActivity(services, liveSession.sessionId, { type: "turn_started", turnId });
   applyActivity(services, liveSession.sessionId, {
     type: "timeline_item",
@@ -353,6 +391,10 @@ async function runGeminiTurn(params: {
   };
   liveSession.activeTurn = activeTurn;
   services.sessionStore.setActiveTurn(liveSession.sessionId, turnId);
+  if (liveSession.pendingInterrupt) {
+    liveSession.pendingInterrupt = false;
+    stopGeminiTurn(activeTurn);
+  }
 
   const stdout = readline.createInterface({
     input: child.stdout,
@@ -382,6 +424,10 @@ async function runGeminiTurn(params: {
   });
 
   let finalized = false;
+  let resolveTurn: () => void = () => {};
+  const turnDone = new Promise<void>((resolve) => {
+    resolveTurn = resolve;
+  });
   const finalize = (activity: ProviderActivity) => {
     if (finalized) {
       return;
@@ -393,6 +439,7 @@ async function runGeminiTurn(params: {
     applyActivity(services, liveSession.sessionId, { type: "session_state", state: "idle" });
     services.sessionStore.setActiveTurn(liveSession.sessionId, undefined);
     delete liveSession.activeTurn;
+    resolveTurn();
   };
 
   stdout.on("line", (line) => {
@@ -460,7 +507,6 @@ async function runGeminiTurn(params: {
             item: {
               kind: "assistant_message",
               text: event.content,
-              messageId: assistantMessageId,
             },
           },
           parsed,
@@ -613,6 +659,7 @@ async function runGeminiTurn(params: {
       error: signal ? `Gemini CLI exited via ${signal}` : `Gemini CLI exited with ${code ?? 0}`,
     });
   });
+  return await turnDone;
 }
 
 export function startGeminiLiveSession(params: {
@@ -674,6 +721,7 @@ export function startGeminiLiveSession(params: {
         rename: "local",
       },
       steerInput: true,
+      queuedInput: true,
       modelSwitch: true,
     },
   });
@@ -691,6 +739,9 @@ export function startGeminiLiveSession(params: {
     ...(request.model && currentModelId ? { model: currentModelId } : {}),
     ...(contextWindow ? { contextWindow } : {}),
     approvalMode,
+    turnStartPending: false,
+    pendingInterrupt: false,
+    queuedInputs: [],
   };
   return {
     liveSession,
@@ -761,6 +812,7 @@ export function resumeGeminiLiveSession(params: {
         rename: "local",
       },
       steerInput: true,
+      queuedInput: true,
       modelSwitch: true,
     },
   });
@@ -778,6 +830,9 @@ export function resumeGeminiLiveSession(params: {
     ...(contextWindow ? { contextWindow } : {}),
     approvalMode,
     providerSessionId: request.providerSessionId,
+    turnStartPending: false,
+    pendingInterrupt: false,
+    queuedInputs: [],
   };
   return {
     liveSession,
@@ -791,10 +846,34 @@ export async function sendInputToGeminiLiveSession(params: {
   sessionId: string;
   request: SessionInputRequest;
 }) {
-  await runGeminiTurn({
-    services: params.services,
-    liveSession: params.liveSession,
-    request: params.request,
+  const { services, liveSession, request } = params;
+  if (liveSession.activeTurn || liveSession.turnStartPending) {
+    liveSession.queuedInputs.push(request);
+    return;
+  }
+  liveSession.turnStartPending = true;
+  await runGeminiTurn({ services, liveSession, request }).finally(() => {
+    liveSession.turnStartPending = false;
+    if (!liveSession.activeTurn) {
+      liveSession.pendingInterrupt = false;
+    }
+    const next = liveSession.queuedInputs.shift();
+    if (!next) {
+      return;
+    }
+    void sendInputToGeminiLiveSession({
+      services,
+      liveSession,
+      sessionId: params.sessionId,
+      request: next,
+    }).catch((error) => {
+      applyActivity(services, liveSession.sessionId, {
+        type: "runtime_status",
+        status: "error",
+        detail: error instanceof Error ? error.message : String(error),
+      });
+      services.sessionStore.setRuntimeState(liveSession.sessionId, "failed");
+    });
   });
 }
 
@@ -811,7 +890,10 @@ export function interruptGeminiLiveSession(params: {
   }
   if (liveSession.activeTurn) {
     stopGeminiTurn(liveSession.activeTurn);
+  } else if (liveSession.turnStartPending) {
+    liveSession.pendingInterrupt = true;
   }
+  liveSession.queuedInputs.length = 0;
   const state = services.sessionStore.getSession(liveSession.sessionId);
   if (!state) {
     throw new Error(`Unknown session ${liveSession.sessionId}`);
@@ -824,6 +906,6 @@ export async function closeGeminiLiveSession(
   _request?: CloseSessionRequest,
 ) {
   if (liveSession.activeTurn) {
-    stopGeminiTurn(liveSession.activeTurn);
+    await closeGeminiTurn(liveSession.activeTurn);
   }
 }

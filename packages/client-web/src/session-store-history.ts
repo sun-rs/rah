@@ -66,6 +66,9 @@ function feedEntriesShareTimelineIdentity(left: FeedEntry, right: FeedEntry): bo
   if (left.kind !== "timeline" || right.kind !== "timeline") {
     return false;
   }
+  if (left.canonicalItemId !== undefined && right.canonicalItemId !== undefined) {
+    return left.canonicalItemId === right.canonicalItemId;
+  }
   if (left.item.kind !== right.item.kind) {
     return false;
   }
@@ -92,6 +95,9 @@ function feedEntriesShareTimelineIdentity(left: FeedEntry, right: FeedEntry): bo
     case "reasoning": {
       const leftItem = left.item;
       const rightItem = right.item as typeof leftItem;
+      if (entriesLookLikeSameLiveHistoryEcho(left, right)) {
+        return true;
+      }
       return Boolean(
         left.turnId &&
           right.turnId &&
@@ -104,19 +110,40 @@ function feedEntriesShareTimelineIdentity(left: FeedEntry, right: FeedEntry): bo
   }
 }
 
+function isHistoryTurnId(turnId: string | undefined): boolean {
+  return turnId?.startsWith("history:") ?? false;
+}
+
+function readTimelineMessageId(
+  item: Extract<FeedEntry, { kind: "timeline" }>["item"],
+): string | undefined {
+  if (item.kind === "user_message" || item.kind === "assistant_message") {
+    return item.messageId;
+  }
+  return undefined;
+}
+
+function hasTimelineText(
+  item: Extract<FeedEntry, { kind: "timeline" }>["item"],
+): item is Extract<Extract<FeedEntry, { kind: "timeline" }>["item"], { text: string }> {
+  return (
+    item.kind === "user_message" ||
+    item.kind === "assistant_message" ||
+    item.kind === "reasoning"
+  );
+}
+
 function entriesLookLikeSameLiveHistoryEcho(left: FeedEntry, right: FeedEntry): boolean {
   if (left.kind !== "timeline" || right.kind !== "timeline") {
     return false;
   }
-  if (left.item.kind !== "user_message" || right.item.kind !== "user_message") {
+  if (left.item.kind !== right.item.kind) {
+    return false;
+  }
+  if (!hasTimelineText(left.item) || !hasTimelineText(right.item)) {
     return false;
   }
   if (left.item.text !== right.item.text) {
-    return false;
-  }
-  const leftHasMessageId = left.item.messageId !== undefined;
-  const rightHasMessageId = right.item.messageId !== undefined;
-  if (leftHasMessageId === rightHasMessageId) {
     return false;
   }
   const leftTs = Date.parse(left.ts);
@@ -124,7 +151,19 @@ function entriesLookLikeSameLiveHistoryEcho(left: FeedEntry, right: FeedEntry): 
   if (!Number.isFinite(leftTs) || !Number.isFinite(rightTs)) {
     return false;
   }
-  return Math.abs(leftTs - rightTs) <= LIVE_HISTORY_ECHO_WINDOW_MS;
+  if (Math.abs(leftTs - rightTs) > LIVE_HISTORY_ECHO_WINDOW_MS) {
+    return false;
+  }
+
+  const leftHistory = isHistoryTurnId(left.turnId);
+  const rightHistory = isHistoryTurnId(right.turnId);
+  if (leftHistory !== rightHistory) {
+    return true;
+  }
+
+  const leftHasMessageId = readTimelineMessageId(left.item) !== undefined;
+  const rightHasMessageId = readTimelineMessageId(right.item) !== undefined;
+  return left.item.kind === "user_message" && leftHasMessageId !== rightHasMessageId;
 }
 
 export function prependHistoryPage(

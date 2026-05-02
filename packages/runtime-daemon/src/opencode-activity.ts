@@ -4,10 +4,12 @@ import type {
   JsonObject,
   PermissionAction,
   ProviderKind,
+  TimelineIdentity,
   ToolCall,
   ToolFamily,
 } from "@rah/runtime-protocol";
 import type { ProviderActivity } from "./provider-activity";
+import { createOpenCodeTimelineIdentity } from "./opencode-timeline-identity";
 import type {
   OpenCodeEvent,
   OpenCodeMessageInfo,
@@ -25,6 +27,7 @@ interface OpenCodeActivityStateOptions {
    */
   userMessagesStartTurns?: boolean;
   emitUserMessages?: boolean;
+  origin?: "live" | "history";
 }
 
 export interface OpenCodeActivityState {
@@ -32,6 +35,7 @@ export interface OpenCodeActivityState {
   readonly providerSessionId: string;
   readonly userMessagesStartTurns: boolean;
   readonly emitUserMessages: boolean;
+  readonly origin: "live" | "history";
   currentTurnId?: string;
   readonly turnByMessageId: Map<string, string>;
   readonly roleByMessageId: Map<string, OpenCodeMessageRole>;
@@ -50,6 +54,7 @@ export function createOpenCodeActivityState(
     providerSessionId,
     userMessagesStartTurns: options.userMessagesStartTurns ?? true,
     emitUserMessages: options.emitUserMessages ?? true,
+    origin: options.origin ?? "live",
     turnByMessageId: new Map(),
     roleByMessageId: new Map(),
     partTypeByPartId: new Map(),
@@ -77,7 +82,9 @@ export function completeOpenCodeTurn(state: OpenCodeActivityState): ProviderActi
 }
 
 export function translateOpenCodeHistory(messages: readonly OpenCodeMessageWithParts[]): ProviderActivity[] {
-  const state = createOpenCodeActivityState(messages[0]?.info.sessionID ?? "history");
+  const state = createOpenCodeActivityState(messages[0]?.info.sessionID ?? "history", {
+    origin: "history",
+  });
   const activities: ProviderActivity[] = [];
   for (const message of messages) {
     activities.push(...translateOpenCodeMessage(state, message));
@@ -233,6 +240,39 @@ function rememberMessageInfo(
   return [];
 }
 
+function timelineIdentityProps(identity: TimelineIdentity | undefined): { identity?: TimelineIdentity } {
+  return identity !== undefined ? { identity } : {};
+}
+
+function openCodeTimelineIdentity(
+  state: OpenCodeActivityState,
+  part: OpenCodePart,
+  itemKind: "user_message" | "assistant_message" | "reasoning",
+): TimelineIdentity {
+  return createOpenCodeTimelineIdentity({
+    providerSessionId: state.providerSessionId,
+    messageId: part.messageID,
+    partId: part.id,
+    itemKind,
+    origin: state.origin,
+  });
+}
+
+function openCodeDeltaTimelineIdentity(
+  state: OpenCodeActivityState,
+  messageId: string,
+  partId: string,
+  itemKind: "assistant_message" | "reasoning",
+): TimelineIdentity {
+  return createOpenCodeTimelineIdentity({
+    providerSessionId: state.providerSessionId,
+    messageId,
+    partId,
+    itemKind,
+    origin: state.origin,
+  });
+}
+
 export function isTerminalAssistantMessage(info: OpenCodeMessageInfo): boolean {
   return (
     info.role === "assistant" &&
@@ -273,6 +313,7 @@ function translateOpenCodePart(
           {
             type: "timeline_item",
             item: { kind: "user_message", text, messageId: part.messageID },
+            ...timelineIdentityProps(openCodeTimelineIdentity(state, part, "user_message")),
             ...(turnId ? { turnId } : {}),
           },
         ];
@@ -281,6 +322,7 @@ function translateOpenCodePart(
         {
           type: "timeline_item",
           item: { kind: "assistant_message", text, messageId: part.messageID },
+          ...timelineIdentityProps(openCodeTimelineIdentity(state, part, "assistant_message")),
           ...(turnId ? { turnId } : {}),
         },
       ];
@@ -292,6 +334,7 @@ function translateOpenCodePart(
             {
               type: "timeline_item",
               item: { kind: "reasoning", text },
+              ...timelineIdentityProps(openCodeTimelineIdentity(state, part, "reasoning")),
               ...(turnId ? { turnId } : {}),
             },
           ]
@@ -367,6 +410,7 @@ function translatePartDelta(
       {
         type: "timeline_item",
         item: { kind: "reasoning", text: delta },
+        ...timelineIdentityProps(openCodeDeltaTimelineIdentity(state, messageID, partID, "reasoning")),
         ...(turnId ? { turnId } : {}),
       },
     ];
@@ -378,6 +422,7 @@ function translatePartDelta(
     {
       type: "timeline_item",
       item: { kind: "assistant_message", text: delta, messageId: messageID },
+      ...timelineIdentityProps(openCodeDeltaTimelineIdentity(state, messageID, partID, "assistant_message")),
       ...(turnId ? { turnId } : {}),
     },
   ];

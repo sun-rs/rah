@@ -497,9 +497,18 @@ export class OpenCodeAdapter implements ProviderAdapter {
   }
 
   async shutdown(): Promise<void> {
-    await Promise.all(
-      [...this.liveSessions.values()].map((session) => closeOpenCodeLiveSession(session)),
-    );
+    const sessions = [...this.liveSessions.values()];
     this.liveSessions.clear();
+    const results = await Promise.allSettled(
+      sessions.map((session) => closeOpenCodeLiveSession(session)),
+    );
+    results.forEach((result, index) => {
+      if (result.status === "rejected") {
+        console.error("[rah] failed to close OpenCode live session during shutdown", {
+          sessionId: sessions[index]?.sessionId,
+          error: result.reason,
+        });
+      }
+    });
   }
 }

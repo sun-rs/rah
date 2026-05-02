@@ -82,30 +82,51 @@ export class NativeTerminalProcess {
     }
   }
 
+  private childHasExited(): boolean {
+    return this.child.exitCode !== null || this.child.signalCode !== null;
+  }
+
+  private forceKillChildTree(pids: number[], signal: NodeJS.Signals): void {
+    this.killPids(pids, signal);
+    this.killPids(pids, "SIGKILL");
+  }
+
   async close(signal: NodeJS.Signals = "SIGTERM"): Promise<void> {
     if (this.closed) {
       return;
     }
     this.closed = true;
-    if (this.child.exitCode !== null || this.child.killed) {
+    if (this.childHasExited()) {
+      this.forceKillChildTree(await this.childTreePids(), signal);
       return;
     }
+    let childExited = false;
+    const exitPromise = new Promise<void>((resolve) => {
+      const onExit = () => {
+        childExited = true;
+        resolve();
+      };
+      this.child.once("exit", onExit);
+      if (this.childHasExited()) {
+        this.child.off("exit", onExit);
+        onExit();
+      }
+    });
     const childTree = await this.childTreePids();
+    if (childExited) {
+      this.forceKillChildTree(childTree, signal);
+      return;
+    }
+    const timeout = setTimeout(() => {
+      void this.childTreePids().then((lateChildTree) => {
+        this.killPids([...childTree, ...lateChildTree], "SIGKILL");
+      });
+      if (!this.childHasExited()) {
+        this.child.kill("SIGKILL");
+      }
+    }, this.closeTimeoutMs);
     this.killPids(childTree, signal);
     this.child.kill(signal);
-    await new Promise<void>((resolve) => {
-      const timeout = setTimeout(() => {
-        void this.childTreePids().then((lateChildTree) => {
-          this.killPids([...childTree, ...lateChildTree], "SIGKILL");
-        });
-        if (this.child.exitCode === null) {
-          this.child.kill("SIGKILL");
-        }
-      }, this.closeTimeoutMs);
-      this.child.once("exit", () => {
-        clearTimeout(timeout);
-        resolve();
-      });
-    });
+    await exitPromise.finally(() => clearTimeout(timeout));
   }
 }

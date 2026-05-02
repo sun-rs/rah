@@ -570,6 +570,30 @@ export class ClaudeAdapter implements ProviderAdapter {
     return probeProviderDiagnostic("claude", await claudeLaunchSpec(), options);
   }
 
+  async shutdown(): Promise<void> {
+    const sessions = [...this.liveSessions.values()];
+    this.liveSessions.clear();
+    const results = await Promise.allSettled(
+      sessions.map((live) => {
+        if (live.providerSessionId) {
+          this.permissionModeByProviderSessionId.set(
+            live.providerSessionId,
+            live.permissionMode,
+          );
+        }
+        return closeClaudeLiveSession(live);
+      }),
+    );
+    results.forEach((result, index) => {
+      if (result.status === "rejected") {
+        console.error("[rah] failed to close Claude live session during shutdown", {
+          sessionId: sessions[index]?.sessionId,
+          error: result.reason,
+        });
+      }
+    });
+  }
+
   private refreshStoredSessionIndex(): Map<string, ClaudeStoredSessionRecord> {
     this.storedSessionIndex = new Map(
       discoverClaudeStoredSessions().map((record) => [record.ref.providerSessionId, record] as const),

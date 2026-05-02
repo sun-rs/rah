@@ -82,6 +82,14 @@ const SYSTEM_SOURCE = {
 
 const MAX_MATERIALIZED_HISTORY_EVENTS = 5_000;
 
+async function runShutdownStep(label: string, task: () => Promise<unknown> | unknown) {
+  try {
+    await task();
+  } catch (error) {
+    console.error("[rah] shutdown step failed", { step: label, error });
+  }
+}
+
 export class RuntimeEngine {
   readonly eventBus: EventBus;
   readonly ptyHub: PtyHub;
@@ -669,12 +677,14 @@ export class RuntimeEngine {
   }
 
   async shutdown(): Promise<void> {
-    await this.storedSessionMonitor.shutdown();
-    await this.terminals.shutdown();
-    for (const adapter of this.adaptersById.values()) {
-      await adapter.shutdown?.();
-    }
-    await this.workbenchState.flush();
+    await runShutdownStep("stored session monitor", () => this.storedSessionMonitor.shutdown());
+    await runShutdownStep("terminal sessions", () => this.terminals.shutdown());
+    await Promise.all(
+      [...this.adaptersById.values()].map((adapter) =>
+        runShutdownStep(`provider adapter ${adapter.id}`, () => adapter.shutdown?.()),
+      ),
+    );
+    await runShutdownStep("workbench state flush", () => this.workbenchState.flush());
   }
 
   private registerAdapter(adapter: ProviderAdapter): void {

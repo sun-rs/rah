@@ -30,6 +30,8 @@ import {
   listClaudeWrapperHomes,
   resolveClaudeBaseHome,
 } from "./claude-wrapper-home";
+import { createClaudeTimelineIdentity } from "./claude-timeline-identity";
+import type { TimelineIdentity } from "@rah/runtime-protocol";
 
 const REHYDRATED_CAPABILITIES = {
   livePermissions: false,
@@ -299,6 +301,7 @@ export function createClaudeStoredSessionFrozenHistoryPageLoader(args: {
             (record): record is ClaudeRawRecord =>
               record !== null && record.type !== "custom-title",
           ),
+        { providerSessionId: args.record.ref.providerSessionId },
       ),
   });
   return createLineFrozenHistoryPageLoader({
@@ -311,7 +314,7 @@ export function createClaudeStoredSessionFrozenHistoryPageLoader(args: {
       });
       return {
         startOffset: window.startOffset,
-        events: translateWindow(window.endOffset, window.lines),
+        events: translateWindow(window.endOffset, window.lines, window.startOffset),
       };
     },
     selectPage: selectSemanticRecentWindow,
@@ -361,6 +364,24 @@ function recordKey(record: ClaudeRawRecord): string {
     case "system":
       return record.uuid;
   }
+}
+
+function timelineIdentityProps(identity: TimelineIdentity | undefined): { identity?: TimelineIdentity } {
+  return identity !== undefined ? { identity } : {};
+}
+
+function createStoredClaudeIdentity(
+  record: ClaudeRawRecord,
+  itemKind: "user_message" | "assistant_message" | "system",
+  providerSessionId?: string,
+): TimelineIdentity {
+  const recordUuid = record.type === "summary" ? record.leafUuid : record.uuid;
+  return createClaudeTimelineIdentity({
+    providerSessionId: providerSessionId ?? record.sessionId,
+    recordUuid,
+    itemKind,
+    origin: "history",
+  });
 }
 
 function deriveStoredSessionRef(
@@ -440,7 +461,10 @@ export function updateClaudeSessionTitle(
   return { filePath: record.filePath };
 }
 
-function translateClaudeRecords(records: ClaudeRawRecord[]): RahEvent[] {
+function translateClaudeRecords(
+  records: ClaudeRawRecord[],
+  options: { providerSessionId?: string } = {},
+): RahEvent[] {
   const services = {
     eventBus: new EventBus(),
     ptyHub: new PtyHub(),
@@ -479,6 +503,7 @@ function translateClaudeRecords(records: ClaudeRawRecord[]): RahEvent[] {
             kind: "assistant_message",
             text: record.summary,
           },
+          ...timelineIdentityProps(createStoredClaudeIdentity(record, "assistant_message", options.providerSessionId)),
         },
       );
       continue;
@@ -523,6 +548,7 @@ function translateClaudeRecords(records: ClaudeRawRecord[]): RahEvent[] {
             text,
             messageId: record.uuid,
           },
+          ...timelineIdentityProps(createStoredClaudeIdentity(record, "user_message", options.providerSessionId)),
         },
       );
       continue;
@@ -595,6 +621,7 @@ function translateClaudeRecords(records: ClaudeRawRecord[]): RahEvent[] {
             text,
             messageId: record.uuid,
           },
+          ...timelineIdentityProps(createStoredClaudeIdentity(record, "assistant_message", options.providerSessionId)),
         },
       );
       continue;
@@ -866,7 +893,9 @@ export function getClaudeStoredSessionHistoryPage(args: {
     .map((line) => line.trim())
     .filter(Boolean);
   const parsed = lines.map(safeParseClaudeRecord).filter((record): record is ClaudeRawRecord => Boolean(record));
-  const events = translateClaudeRecords(parsed);
+  const events = translateClaudeRecords(parsed, {
+    providerSessionId: args.record.ref.providerSessionId,
+  });
   const ordered = [...events].sort((left, right) => left.ts.localeCompare(right.ts));
   const filtered = args.beforeTs
     ? ordered.filter((event) => event.ts < args.beforeTs!)

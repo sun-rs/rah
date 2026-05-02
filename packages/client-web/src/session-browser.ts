@@ -18,7 +18,10 @@ function normalizePath(value: string | undefined): string | null {
   if (!trimmed) {
     return null;
   }
-  const withoutTrailing = trimmed.replace(/[\\/]+$/, "");
+  const withoutTrailing =
+    /^[/\\]+$/.test(trimmed) || /^[A-Za-z]:[\\/]?$/.test(trimmed)
+      ? trimmed
+      : trimmed.replace(/[\\/]+$/, "");
   if (withoutTrailing.startsWith("/private/var/")) {
     return withoutTrailing.slice("/private".length);
   }
@@ -33,6 +36,12 @@ export function matchesWorkspace(path: string | undefined, workspaceDir: string)
   }
   if (!normalizedPath) {
     return false;
+  }
+  if (normalizedWorkspace === "/" || normalizedWorkspace === "\\") {
+    return normalizedPath.startsWith(normalizedWorkspace);
+  }
+  if (/^[A-Za-z]:[\\/]$/.test(normalizedWorkspace)) {
+    return normalizedPath.toLowerCase().startsWith(normalizedWorkspace.toLowerCase());
   }
   return (
     normalizedPath === normalizedWorkspace ||

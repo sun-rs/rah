@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { EventBus } from "./event-bus";
 import { KimiAdapter } from "./kimi-adapter";
+import { createKimiTimelineIdentity } from "./kimi-timeline-identity";
 import { PtyHub } from "./pty-hub";
 import { SessionStore } from "./session-store";
 
@@ -166,11 +167,16 @@ rl.on("line", (line) => {
         }
       }
     });
-    send({
-      jsonrpc: "2.0",
-      method: "event",
-      params: { type: "ContentPart", payload: { type: "text", text: "done" } }
-    });
+	    send({
+	      jsonrpc: "2.0",
+	      method: "event",
+	      params: { type: "ContentPart", payload: { type: "text", text: "do" } }
+	    });
+	    send({
+	      jsonrpc: "2.0",
+	      method: "event",
+	      params: { type: "ContentPart", payload: { type: "text", text: "ne" } }
+	    });
     send({ jsonrpc: "2.0", method: "event", params: { type: "TurnEnd", payload: {} } });
     send({ jsonrpc: "2.0", id: msg.id, result: { status: "finished" } });
     return;
@@ -241,10 +247,90 @@ rl.on("line", (line) => {
     );
 
     const events = services.eventBus.list({ sessionIds: [started.session.session.id] });
+    const userMessage = events.find(
+      (event) =>
+        event.type === "timeline.item.added" &&
+        event.payload.item.kind === "user_message" &&
+        event.payload.item.text === "hello",
+    );
+    const reasoningMessage = events.find(
+      (event) =>
+        event.type === "timeline.item.added" &&
+        event.payload.item.kind === "reasoning" &&
+        event.payload.item.text === "planning",
+    );
+    const assistantMessage = events.find(
+      (event) =>
+        event.type === "timeline.item.updated" &&
+        event.payload.item.kind === "assistant_message" &&
+        event.payload.item.text === "done",
+    );
+    assert.equal(
+      userMessage?.type === "timeline.item.added"
+        ? userMessage.payload.identity?.canonicalItemId
+        : undefined,
+      createKimiTimelineIdentity({
+        providerSessionId,
+        turnIndex: 0,
+        itemKind: "user_message",
+        itemIndex: 0,
+        origin: "live",
+      }).canonicalItemId,
+    );
+    assert.equal(
+      userMessage?.type === "timeline.item.added"
+        ? userMessage.payload.identity?.origin
+        : undefined,
+      "live",
+    );
+    assert.equal(
+      reasoningMessage?.type === "timeline.item.added"
+        ? reasoningMessage.payload.identity?.canonicalItemId
+        : undefined,
+      createKimiTimelineIdentity({
+        providerSessionId,
+        turnIndex: 0,
+        itemKind: "reasoning",
+        itemIndex: 1,
+        origin: "live",
+      }).canonicalItemId,
+    );
+    assert.equal(
+      reasoningMessage?.type === "timeline.item.added"
+        ? reasoningMessage.payload.identity?.origin
+        : undefined,
+      "live",
+    );
+    assert.equal(
+      assistantMessage?.type === "timeline.item.updated"
+        ? assistantMessage.payload.identity?.canonicalItemId
+        : undefined,
+      createKimiTimelineIdentity({
+        providerSessionId,
+        turnIndex: 0,
+        itemKind: "assistant_message",
+        itemIndex: 2,
+        origin: "live",
+      }).canonicalItemId,
+    );
+    assert.equal(
+      assistantMessage?.type === "timeline.item.updated"
+        ? assistantMessage.payload.identity?.origin
+        : undefined,
+      "live",
+    );
     assert.ok(
       events.some(
         (event) =>
           event.type === "timeline.item.added" &&
+          event.payload.item.kind === "assistant_message" &&
+          event.payload.item.text === "do",
+      ),
+    );
+    assert.ok(
+      events.some(
+        (event) =>
+          event.type === "timeline.item.updated" &&
           event.payload.item.kind === "assistant_message" &&
           event.payload.item.text === "done",
       ),
@@ -302,6 +388,72 @@ rl.on("line", (line) => {
 
     assert.equal(resumed.session.session.capabilities.steerInput, true);
     assert.equal(resumed.session.session.capabilities.actions.archive, true);
+  });
+
+  test("queues consecutive Kimi inputs and emits one answer bubble per turn", async () => {
+    const { logPath } = writeMockKimiBinary("basic");
+    const services = createServices();
+    const adapter = trackAdapter(new KimiAdapter(services), services);
+
+    const started = await adapter.startSession({
+      provider: "kimi",
+      cwd: tmpDir,
+      attach: {
+        client: { id: "web-1", kind: "web", connectionId: "web-1" },
+        mode: "interactive",
+        claimControl: true,
+      },
+    });
+
+    adapter.sendInput(started.session.session.id, {
+      clientId: "web-1",
+      text: "first",
+    });
+    adapter.sendInput(started.session.session.id, {
+      clientId: "web-1",
+      text: "second",
+    });
+
+    await waitFor(() => {
+      const promptRequests = readFileSync(logPath, "utf8")
+        .split(/\r?\n/)
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+        .filter((line) => line.method === "prompt");
+      return (
+        promptRequests.length === 2 &&
+        services.sessionStore.getSession(started.session.session.id)?.session.runtimeState === "idle"
+      );
+    });
+
+    const events = services.eventBus.list({ sessionIds: [started.session.session.id] });
+    assert.equal(
+      events.filter(
+        (event) =>
+          event.type === "timeline.item.added" &&
+          event.payload.item.kind === "user_message" &&
+          ["first", "second"].includes(event.payload.item.text),
+      ).length,
+      2,
+    );
+    assert.equal(
+      events.filter(
+        (event) =>
+          event.type === "timeline.item.added" &&
+          event.payload.item.kind === "assistant_message" &&
+          event.payload.item.text === "do",
+      ).length,
+      2,
+    );
+    assert.equal(
+      events.filter(
+        (event) =>
+          event.type === "timeline.item.updated" &&
+          event.payload.item.kind === "assistant_message" &&
+          event.payload.item.text === "done",
+      ).length,
+      2,
+    );
   });
 
   test("resumes Kimi with the requested model and reasoning before live control", async () => {
@@ -363,6 +515,9 @@ rl.on("line", (line) => {
     assert.equal(updated.session.mode?.currentModeId, "plan");
     assert.equal(updated.session.mode?.mutable, true);
 
+    const unplanned = await adapter.setSessionMode(started.session.session.id, "yolo");
+    assert.equal(unplanned.session.mode?.currentModeId, "yolo");
+
     const requests = readFileSync(logPath, "utf8")
       .trim()
       .split("\n")
@@ -370,6 +525,9 @@ rl.on("line", (line) => {
       .map((line) => JSON.parse(line) as { method?: string; params?: { enabled?: boolean } });
     assert.ok(
       requests.some((entry) => entry.method === "set_plan_mode" && entry.params?.enabled === true),
+    );
+    assert.ok(
+      requests.some((entry) => entry.method === "set_plan_mode" && entry.params?.enabled === false),
     );
   });
 
@@ -451,6 +609,41 @@ rl.on("line", (line) => {
           line.result.response === "approve",
       ),
     );
+  });
+
+  test("honors immediate Kimi stop and clears the active turn", async () => {
+    writeMockKimiBinary("approval");
+    const services = createServices();
+    const adapter = trackAdapter(new KimiAdapter(services), services);
+
+    const started = await adapter.startSession({
+      provider: "kimi",
+      cwd: tmpDir,
+      approvalPolicy: "default",
+      attach: {
+        client: { id: "web-1", kind: "web", connectionId: "web-1" },
+        mode: "interactive",
+        claimControl: true,
+      },
+    });
+
+    adapter.sendInput(started.session.session.id, {
+      clientId: "web-1",
+      text: "stop immediately",
+    });
+    adapter.interruptSession(started.session.session.id, {
+      clientId: "web-1",
+    });
+
+    await waitFor(() => {
+      const state = services.sessionStore.getSession(started.session.session.id);
+      const events = services.eventBus.list({ sessionIds: [started.session.session.id] });
+      return (
+        state?.session.runtimeState === "idle" &&
+        state.activeTurnId === undefined &&
+        events.some((event) => event.type === "turn.canceled")
+      );
+    });
   });
 });
 

@@ -11,6 +11,7 @@ import type {
   PermissionResolution,
   RahEvent,
   RuntimeOperation,
+  TimelineIdentity,
   TimelineItem,
   ToolCall,
   ToolCallDetail,
@@ -18,6 +19,7 @@ import type {
 } from "@rah/runtime-protocol";
 import { normalizeContextUsage } from "./context-usage";
 import type { RuntimeServices } from "./provider-adapter";
+import { recordTimelineIdentityTelemetry } from "./timeline-identity-telemetry";
 
 export interface ProviderActivityMeta {
   provider: ManagedSession["provider"];
@@ -89,11 +91,13 @@ export type ProviderActivity =
       type: "timeline_item";
       item: TimelineItem;
       turnId?: string;
+      identity?: TimelineIdentity;
     }
   | {
       type: "timeline_item_updated";
       item: TimelineItem;
       turnId?: string;
+      identity?: TimelineIdentity;
     }
   | {
       type: "message_part_added";
@@ -598,6 +602,16 @@ export function applyProviderActivity(
       );
       break;
     case "timeline_item":
+      recordTimelineIdentityTelemetry(services, {
+        sessionId,
+        provider: meta.provider,
+        channel: meta.channel,
+        authority: meta.authority,
+        activityType: activity.type,
+        item: activity.item,
+        turnId: activity.turnId,
+        identity: activity.identity,
+      });
       published.push(
         services.eventBus.publish(
           withRaw(
@@ -607,7 +621,10 @@ export function applyProviderActivity(
                   sessionId,
                   type: "timeline.item.added",
                   source,
-                  payload: { item: activity.item },
+                  payload: {
+                    item: activity.item,
+                    ...(activity.identity !== undefined ? { identity: activity.identity } : {}),
+                  },
                 },
                 ts,
               ),
@@ -619,6 +636,16 @@ export function applyProviderActivity(
       );
       break;
     case "timeline_item_updated":
+      recordTimelineIdentityTelemetry(services, {
+        sessionId,
+        provider: meta.provider,
+        channel: meta.channel,
+        authority: meta.authority,
+        activityType: activity.type,
+        item: activity.item,
+        turnId: activity.turnId,
+        identity: activity.identity,
+      });
       published.push(
         services.eventBus.publish(
           withRaw(
@@ -628,7 +655,10 @@ export function applyProviderActivity(
                   sessionId,
                   type: "timeline.item.updated",
                   source,
-                  payload: { item: activity.item },
+                  payload: {
+                    item: activity.item,
+                    ...(activity.identity !== undefined ? { identity: activity.identity } : {}),
+                  },
                 },
                 ts,
               ),

@@ -177,6 +177,12 @@ function applyCodexLiveTranslatedItems(
   items: ReturnType<typeof translateCodexAppServerNotification>,
 ) {
   for (const item of items) {
+    if (
+      item.activity.type === "turn_started" &&
+      liveSession.finishedTurnIds.has(item.activity.turnId)
+    ) {
+      continue;
+    }
     const activity = attachCurrentTurn(item.activity, liveSession.currentTurnId);
     const events = applyProviderActivity(
       services,
@@ -198,7 +204,11 @@ function applyCodexLiveTranslatedItems(
         event.type === "turn.failed" ||
         event.type === "turn.canceled"
       ) {
+        if (event.turnId) {
+          liveSession.finishedTurnIds.add(event.turnId);
+        }
         liveSession.currentTurnId = null;
+        liveSession.drainQueuedInput?.();
       }
     }
   }

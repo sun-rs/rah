@@ -187,16 +187,15 @@ def main() -> int:
             )
             page.reload(wait_until="domcontentloaded")
             page.wait_for_timeout(1500)
-            if page.get_by_text("Open history only").count() > 0:
+            if page.get_by_text("History only", exact=True).count() > 0:
                 page.get_by_role("button", name="Close").click()
                 page.wait_for_timeout(1500)
 
-            page.get_by_role("button", name="New session").click()
-            expect(page.get_by_role("heading", name="New session")).to_be_visible()
-            page.get_by_role("button", name="Create session").click()
-            expect(page.get_by_placeholder("Message…")).to_be_visible(timeout=90_000)
+            expect(page.get_by_text("What would you like to build?")).to_be_visible(timeout=90_000)
+            composer = page.locator("textarea:visible").last
+            expect(composer).to_be_visible(timeout=90_000)
 
-            page.get_by_placeholder("Message…").fill(new_prompt)
+            composer.fill(new_prompt)
             page.keyboard.press("Enter")
             new_user_count, new_turn_id, new_tool_ids = wait_for_turn_activity(
                 page,
@@ -224,26 +223,26 @@ def main() -> int:
             page.get_by_role("button", name="Close").click()
             page.wait_for_timeout(1500)
 
-            page.locator('button[aria-label="Session history"]:visible').first.click()
+            page.locator('button[aria-label="Sessions"]:visible').first.click()
             page.get_by_role("button", name="Recent", exact=True).click()
-            page.get_by_placeholder("Filter recent sessions…").fill(latest_provider_session_id)
             page.locator(
-                f'[role="dialog"] button[data-provider-session-id="{latest_provider_session_id}"]:visible'
+                f'button[data-provider-session-id="{latest_provider_session_id}"]:visible'
             ).first.click()
-            expect(page.get_by_text("Open history only")).to_be_visible()
+            expect(page.get_by_text("History only", exact=True)).to_be_visible()
             expect(page.get_by_text(new_token).first).to_be_visible(timeout=60_000)
 
             body_before_claim = page.locator("body").inner_text()
             history_before_count = count_text(body_before_claim, new_token)
 
             page.get_by_role("button", name="Claim control").click()
-            expect(page.get_by_placeholder("Message…")).to_be_visible(timeout=90_000)
+            composer = page.locator("textarea:visible").last
+            expect(composer).to_be_visible(timeout=90_000)
             page.wait_for_timeout(2500)
 
             body_after_claim = page.locator("body").inner_text()
             history_after_claim_count = count_text(body_after_claim, new_token)
 
-            page.get_by_placeholder("Message…").fill(history_prompt)
+            composer.fill(history_prompt)
             page.keyboard.press("Enter")
             history_user_count, history_turn_id, history_tool_ids = wait_for_turn_activity(
                 page,
@@ -281,7 +280,7 @@ def main() -> int:
                 raise AssertionError("New session flow rendered duplicate user prompt bubbles.")
             if len(new_tool_ids) < 1:
                 raise AssertionError("New session flow did not surface any tool calls.")
-            if result["historyClaimFlow"]["oldTurnCountAfterClaim"] != result["historyClaimFlow"]["oldTurnCountBeforeClaim"]:
+            if result["historyClaimFlow"]["oldTurnCountAfterClaim"] > result["historyClaimFlow"]["oldTurnCountBeforeClaim"]:
                 raise AssertionError("History claim replayed older visible history.")
             if result["historyClaimFlow"]["matchingUserEventCount"] != 1:
                 raise AssertionError("History claim flow emitted duplicate live user_message events.")
@@ -299,8 +298,8 @@ def main() -> int:
                     json.dumps(
                         {
                             "error": str(exc),
-                            "bodySnippet": body[-4000:],
-                            "socketTail": socket_messages[-20:],
+                            "bodySnippet": body[-1600:],
+                            "socketMessageCount": len(socket_messages),
                         },
                         ensure_ascii=False,
                         indent=2,

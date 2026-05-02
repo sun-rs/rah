@@ -14,6 +14,7 @@ import {
   resumeClaudeStoredSession,
   updateClaudeSessionTitle,
 } from "./claude-session-files";
+import { createClaudeTimelineIdentity } from "./claude-timeline-identity";
 
 describe("Claude session files", () => {
   let tmpClaudeConfig: string;
@@ -312,6 +313,15 @@ describe("Claude session files", () => {
     assert.ok(onlyUser);
     if (onlyUser.type === "timeline.item.added" && onlyUser.payload.item.kind === "user_message") {
       assert.equal(onlyUser.payload.item.text, "say lol");
+      assert.equal(
+        onlyUser.payload.identity?.canonicalItemId,
+        createClaudeTimelineIdentity({
+          providerSessionId: "session-2",
+          recordUuid: "user-1",
+          itemKind: "user_message",
+          origin: "live",
+        }).canonicalItemId,
+      );
     }
 
     const assistantMessages = page.events.filter(
@@ -327,6 +337,24 @@ describe("Claude session files", () => {
           event.payload.item.text === "lol",
       ),
     );
+    const firstAssistant = assistantMessages.find(
+      (event) =>
+        event.type === "timeline.item.added" &&
+        event.payload.item.kind === "assistant_message" &&
+        event.payload.item.text === "lol",
+    );
+    assert.ok(firstAssistant);
+    if (firstAssistant.type === "timeline.item.added") {
+      assert.equal(
+        firstAssistant.payload.identity?.canonicalItemId,
+        createClaudeTimelineIdentity({
+          providerSessionId: "session-2",
+          recordUuid: "assistant-1",
+          itemKind: "assistant_message",
+          origin: "live",
+        }).canonicalItemId,
+      );
+    }
     assert.ok(
       assistantMessages.some(
         (event) =>

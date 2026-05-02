@@ -206,6 +206,15 @@ export function parseWorkspaceDirectoryRequest(body: unknown): WorkspaceDirector
   return { dir: requireString(record, "dir") };
 }
 
+export function parseClipboardWriteRequest(body: unknown): { text: string } {
+  const record = requireObjectBody(body);
+  const text = requireString(record, "text");
+  if (text.length > 64 * 1024) {
+    throw new Error("Clipboard text is too large.");
+  }
+  return { text };
+}
+
 export function parseStoredSessionRemoveRequest(body: unknown): StoredSessionRemoveRequest {
   const record = requireObjectBody(body);
   return {

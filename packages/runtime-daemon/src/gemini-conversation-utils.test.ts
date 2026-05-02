@@ -9,6 +9,7 @@ import {
   loadGeminiConversationRecord,
   materializeGeminiConversationEvents,
 } from "./gemini-conversation-utils";
+import { createGeminiTimelineIdentity } from "./gemini-timeline-identity";
 
 describe("Gemini conversation utils", () => {
   test("preserves markdown line breaks and indentation", () => {
@@ -76,6 +77,23 @@ describe("Gemini conversation utils", () => {
       return [];
     });
     assert.deepEqual(userTexts, ["@design/doc.md explain this"]);
+    const userEvent = events.find(
+      (event) =>
+        event.type === "timeline.item.added" &&
+        event.payload.item.kind === "user_message",
+    );
+    assert.ok(userEvent);
+    if (userEvent.type === "timeline.item.added") {
+      assert.equal(
+        userEvent.payload.identity?.canonicalItemId,
+        createGeminiTimelineIdentity({
+          providerSessionId: "gemini-1",
+          messageId: "user-1",
+          itemKind: "user_message",
+          origin: "live",
+        }).canonicalItemId,
+      );
+    }
   });
 
   test("loads jsonl duplicate message ids as in-place updates", () => {

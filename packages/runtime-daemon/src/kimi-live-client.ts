@@ -28,6 +28,7 @@ import {
   PROMPT_TIMEOUT_MS,
   type LiveKimiSession,
 } from "./kimi-live-types";
+import { createKimiTimelineIdentity } from "./kimi-timeline-identity";
 import {
   resolveKimiCliModelArgs,
   resolveKimiRuntimeCapabilityState,
@@ -141,7 +142,22 @@ export async function startKimiLiveSession(params: {
       planMode: true,
     },
   });
-  const liveSession: LiveKimiSession = {
+  let liveSession!: LiveKimiSession;
+  let client;
+  try {
+    client = await createKimiClient({
+      providerSessionId,
+      cwd: request.cwd,
+      yolo: startupMode.nativeYolo,
+      ...requestedCliModel,
+      onEvent: (event) => handleKimiEvent(services, liveSession, event),
+      onRequest: (requestMessage) => handleKimiRequest(services, liveSession, requestMessage),
+    });
+  } catch (error) {
+    services.sessionStore.removeSession(state.session.id);
+    throw error;
+  }
+  liveSession = {
     sessionId: state.session.id,
     providerSessionId,
     cwd: request.cwd,
@@ -150,15 +166,10 @@ export async function startKimiLiveSession(params: {
     approvalMode: startupMode.nativeYolo ? "yolo" : "default",
     nativeYolo: startupMode.nativeYolo,
     planMode: startupMode.planMode,
-    client: await createKimiClient({
-      providerSessionId,
-      cwd: request.cwd,
-      yolo: startupMode.nativeYolo,
-      ...requestedCliModel,
-      onEvent: (event) => handleKimiEvent(services, liveSession, event),
-      onRequest: (requestMessage) => handleKimiRequest(services, liveSession, requestMessage),
-    }),
+    nextTurnIndex: 0,
+    client,
     activeTurn: null,
+    queuedInputs: [],
     pendingRequests: new Map(),
   };
   bindKimiClientStderr(services, liveSession);
@@ -197,6 +208,7 @@ export async function resumeKimiLiveSession(params: {
   modelCatalog?: ProviderModelCatalog | null;
   modeId?: string;
   approvalPolicy?: string;
+  initialTurnIndex?: number;
 }) {
   const { services } = params;
   const startupMode = resolveKimiStartupMode({
@@ -268,7 +280,22 @@ export async function resumeKimiLiveSession(params: {
       planMode: true,
     },
   });
-  const liveSession: LiveKimiSession = {
+  let liveSession!: LiveKimiSession;
+  let client;
+  try {
+    client = await createKimiClient({
+      providerSessionId: params.providerSessionId,
+      cwd: params.cwd,
+      yolo: startupMode.nativeYolo,
+      ...requestedCliModel,
+      onEvent: (event) => handleKimiEvent(services, liveSession, event),
+      onRequest: (requestMessage) => handleKimiRequest(services, liveSession, requestMessage),
+    });
+  } catch (error) {
+    services.sessionStore.removeSession(state.session.id);
+    throw error;
+  }
+  liveSession = {
     sessionId: state.session.id,
     providerSessionId: params.providerSessionId,
     cwd: params.cwd,
@@ -277,15 +304,10 @@ export async function resumeKimiLiveSession(params: {
     approvalMode: startupMode.nativeYolo ? "yolo" : "default",
     nativeYolo: startupMode.nativeYolo,
     planMode: startupMode.planMode,
-    client: await createKimiClient({
-      providerSessionId: params.providerSessionId,
-      cwd: params.cwd,
-      yolo: startupMode.nativeYolo,
-      ...requestedCliModel,
-      onEvent: (event) => handleKimiEvent(services, liveSession, event),
-      onRequest: (requestMessage) => handleKimiRequest(services, liveSession, requestMessage),
-    }),
+    nextTurnIndex: params.initialTurnIndex ?? 0,
+    client,
     activeTurn: null,
+    queuedInputs: [],
     pendingRequests: new Map(),
   };
   bindKimiClientStderr(services, liveSession);
@@ -343,7 +365,8 @@ export async function sendInputToKimiLiveSession(params: {
 }) {
   const { services, liveSession, request } = params;
   if (liveSession.activeTurn) {
-    throw new Error("Kimi session already has an active turn.");
+    liveSession.queuedInputs.push(request);
+    return;
   }
   if (!services.sessionStore.hasInputControl(liveSession.sessionId, request.clientId)) {
     throw new Error(
@@ -351,13 +374,22 @@ export async function sendInputToKimiLiveSession(params: {
     );
   }
   const turnId = randomUUID();
-  liveSession.activeTurn = createInitialKimiTurn(turnId);
+  const turnIndex = liveSession.nextTurnIndex++;
+  liveSession.activeTurn = createInitialKimiTurn(turnId, turnIndex);
   services.sessionStore.setActiveTurn(liveSession.sessionId, turnId);
   applyActivity(services, liveSession.sessionId, { type: "turn_started", turnId });
+  const userItemIndex = liveSession.activeTurn.nextTimelineItemIndex++;
   applyActivity(services, liveSession.sessionId, {
     type: "timeline_item",
     turnId,
     item: { kind: "user_message", text: request.text },
+    identity: createKimiTimelineIdentity({
+      providerSessionId: liveSession.providerSessionId,
+      turnIndex,
+      itemKind: "user_message",
+      itemIndex: userItemIndex,
+      origin: "live",
+    }),
   });
   applyActivity(services, liveSession.sessionId, { type: "session_state", state: "running" });
 
@@ -397,6 +429,18 @@ export async function sendInputToKimiLiveSession(params: {
       turnId,
       error: error instanceof Error ? error.message : String(error),
     });
+  } finally {
+    const next = liveSession.queuedInputs.shift();
+    if (next) {
+      void sendInputToKimiLiveSession({ services, liveSession, request: next }).catch((error) => {
+        applyActivity(services, liveSession.sessionId, {
+          type: "runtime_status",
+          status: "error",
+          detail: error instanceof Error ? error.message : String(error),
+        });
+        services.sessionStore.setRuntimeState(liveSession.sessionId, "failed");
+      });
+    }
   }
 }
 
@@ -455,8 +499,15 @@ export function interruptKimiLiveSession(params: {
       `Client ${request.clientId} does not hold input control for ${liveSession.sessionId}.`,
     );
   }
-  if (liveSession.activeTurn) {
-    liveSession.activeTurn.aborted = true;
+  const activeTurn = liveSession.activeTurn;
+  liveSession.queuedInputs.length = 0;
+  if (activeTurn) {
+    activeTurn.aborted = true;
+    finalizeTurn(services, liveSession, {
+      type: "turn_canceled",
+      turnId: activeTurn.turnId,
+      reason: "Stop requested",
+    });
   }
   void liveSession.client.request("cancel", {}, JSON_RPC_TIMEOUT_MS).catch(() => undefined);
   const state = services.sessionStore.getSession(liveSession.sessionId);

@@ -52,6 +52,9 @@ export class KimiJsonRpcClient {
         new Error(`Kimi wire process exited with code ${code ?? 0}${signal ? ` (${signal})` : ""}`),
       );
     });
+    this.child.once("error", (error) => {
+      this.rejectAll(error);
+    });
   }
 
   onStderrLine(handler: (line: string) => void) {
@@ -144,12 +147,18 @@ export class KimiJsonRpcClient {
         reject(new Error(`Timed out waiting for Kimi JSON-RPC response to ${method}`));
       }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
-      this.write({
-        jsonrpc: "2.0",
-        id,
-        method,
-        params,
-      });
+      try {
+        this.write({
+          jsonrpc: "2.0",
+          id,
+          method,
+          params,
+        });
+      } catch (error) {
+        clearTimeout(timer);
+        this.pending.delete(id);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
     });
   }
 
@@ -202,7 +211,7 @@ export async function resolveKimiCommand(): Promise<{ command: string; args: str
       args: ["run", "--project", process.env.RAH_KIMI_PROJECT, "kimi"],
     };
   }
-  return { command: "kimi", args: [] };
+  return { command: await resolveConfiguredBinary("RAH_KIMI_BINARY", "kimi"), args: [] };
 }
 
 export async function createKimiClient(params: {

@@ -1,11 +1,13 @@
 import type {
   EventAuthority,
   EventChannel,
+  TimelineIdentity,
   ToolCall,
   ToolCallArtifact,
   WorkbenchObservation,
 } from "@rah/runtime-protocol";
 import { classifyCodexCommand } from "./codex-command-classifier";
+import { createCodexTimelineIdentity } from "./codex-timeline-identity";
 import type { ProviderActivity } from "./provider-activity";
 
 export interface CodexTranslatedActivity {
@@ -27,13 +29,23 @@ const CODEX_INTERRUPTED_PENDING_TOOL_ERROR =
 export interface CodexRolloutTranslationState {
   pendingToolCalls: Map<string, PendingToolCall>;
   lastTimelineTextSignature: string | null;
+  providerSessionId?: string | undefined;
+  currentTurnId?: string | undefined;
+  nextTimelineItemIndex: number;
 }
 
-export function createCodexRolloutTranslationState(): CodexRolloutTranslationState {
-  return {
+export function createCodexRolloutTranslationState(
+  options: { providerSessionId?: string | undefined } = {},
+): CodexRolloutTranslationState {
+  const state: CodexRolloutTranslationState = {
     pendingToolCalls: new Map(),
     lastTimelineTextSignature: null,
+    nextTimelineItemIndex: 0,
   };
+  if (options.providerSessionId !== undefined) {
+    state.providerSessionId = options.providerSessionId;
+  }
+  return state;
 }
 
 let invalidRolloutSequence = 0;
@@ -151,6 +163,75 @@ function shouldSkipDuplicateTimelineText(
   }
   state.lastTimelineTextSignature = signature;
   return false;
+}
+
+function timelineIdentityProps(identity: TimelineIdentity | undefined): { identity?: TimelineIdentity } {
+  return identity !== undefined ? { identity } : {};
+}
+
+function payloadRecord(record: Record<string, unknown>): Record<string, unknown> | null {
+  return record.payload && typeof record.payload === "object" && !Array.isArray(record.payload)
+    ? (record.payload as Record<string, unknown>)
+    : null;
+}
+
+function syncRolloutStateFromRecord(
+  state: CodexRolloutTranslationState,
+  record: Record<string, unknown>,
+) {
+  const payload = payloadRecord(record);
+  if (!payload) {
+    return;
+  }
+  if (record.type === "session_meta" && typeof payload.id === "string") {
+    state.providerSessionId = state.providerSessionId ?? payload.id;
+    return;
+  }
+  if (record.type !== "event_msg" && record.type !== "turn_context") {
+    return;
+  }
+  const turnId = typeof payload.turn_id === "string" ? payload.turn_id : undefined;
+  if (!turnId) {
+    return;
+  }
+  if (payload.type === "task_started" || record.type === "turn_context") {
+    if (state.currentTurnId !== turnId) {
+      state.currentTurnId = turnId;
+      state.nextTimelineItemIndex = 0;
+    }
+    return;
+  }
+  if (payload.type === "task_complete" || payload.type === "turn_aborted") {
+    if (state.currentTurnId === turnId) {
+      state.currentTurnId = undefined;
+      state.nextTimelineItemIndex = 0;
+    }
+  }
+}
+
+function createHistoryTimelineIdentity(
+  state: CodexRolloutTranslationState,
+  params: {
+    itemKind: "user_message" | "assistant_message" | "reasoning" | "system";
+    providerEventId?: string;
+    providerMessageId?: string;
+  },
+): TimelineIdentity | undefined {
+  if (!state.currentTurnId) {
+    return undefined;
+  }
+  const itemIndex = state.nextTimelineItemIndex;
+  state.nextTimelineItemIndex += 1;
+  return createCodexTimelineIdentity({
+    providerSessionId: state.providerSessionId,
+    turnId: state.currentTurnId,
+    itemKind: params.itemKind,
+    itemIndex,
+    origin: "history",
+    confidence: "derived",
+    ...(params.providerEventId !== undefined ? { providerEventId: params.providerEventId } : {}),
+    ...(params.providerMessageId !== undefined ? { providerMessageId: params.providerMessageId } : {}),
+  });
 }
 
 function extractPatchFileRefs(patch: string): string[] {
@@ -545,11 +626,9 @@ export function translateCodexRolloutLine(
   }
 
   const record = line as Record<string, unknown>;
+  syncRolloutStateFromRecord(state, record);
   if (record.type === "event_msg") {
-    const payload =
-      record.payload && typeof record.payload === "object" && !Array.isArray(record.payload)
-        ? (record.payload as Record<string, unknown>)
-        : null;
+    const payload = payloadRecord(record);
     if (!payload) {
       return [];
     }
@@ -557,12 +636,16 @@ export function translateCodexRolloutLine(
       if (shouldSkipDuplicateTimelineText(state, record, "reasoning", payload.text)) {
         return [];
       }
+      const identity = createHistoryTimelineIdentity(state, {
+        itemKind: "reasoning",
+      });
       return [
         persistedActivity(
           record,
           {
             type: "timeline_item",
             item: { kind: "reasoning", text: payload.text },
+            ...timelineIdentityProps(identity),
           },
           "authoritative",
         ),
@@ -576,12 +659,16 @@ export function translateCodexRolloutLine(
       if (shouldSkipDuplicateTimelineText(state, record, "assistant_message", text)) {
         return [];
       }
+      const identity = createHistoryTimelineIdentity(state, {
+        itemKind: "assistant_message",
+      });
       return [
         persistedActivity(
           record,
           {
             type: "timeline_item",
             item: { kind: "assistant_message", text },
+            ...timelineIdentityProps(identity),
           },
           "authoritative",
         ),
@@ -604,10 +691,7 @@ export function translateCodexRolloutLine(
     return [];
   }
 
-  const payload =
-    record.payload && typeof record.payload === "object" && !Array.isArray(record.payload)
-      ? (record.payload as Record<string, unknown>)
-      : null;
+  const payload = payloadRecord(record);
   if (!payload || typeof payload.type !== "string") {
     return invalidRolloutActivity(record, "response_item payload type was missing");
   }
@@ -623,6 +707,10 @@ export function translateCodexRolloutLine(
       return invalidRolloutActivity(record, "reasoning item did not contain text");
     }
     const messageId = typeof payload.id === "string" ? payload.id : null;
+    const identity = createHistoryTimelineIdentity(state, {
+      itemKind: "reasoning",
+      ...(messageId !== null ? { providerEventId: messageId } : {}),
+    });
     return [
       ...(messageId
         ? [
@@ -646,6 +734,7 @@ export function translateCodexRolloutLine(
         {
           type: "timeline_item",
           item: { kind: "reasoning", text },
+          ...timelineIdentityProps(identity),
         },
         "authoritative",
       ),
@@ -657,19 +746,25 @@ export function translateCodexRolloutLine(
       return [];
     }
     if (payload.role === "user") {
-      const text = stripCodexContextualFragments(
-        textFromContentItems(payload.content, "input_text") ?? "",
-      );
-      if (!text) {
-        return invalidRolloutActivity(record, "user message did not contain input_text");
+      const rawText = textFromContentItems(payload.content, "input_text");
+      if (rawText === null) {
+        return [];
       }
-      if (isCodexBootstrapUserMessage(text)) {
+      if (isCodexBootstrapUserMessage(rawText)) {
+        return [];
+      }
+      const text = stripCodexContextualFragments(rawText);
+      if (!text) {
         return [];
       }
       if (shouldSkipDuplicateTimelineText(state, record, "user_message", text)) {
         return [];
       }
       const messageId = typeof payload.id === "string" ? payload.id : null;
+      const identity = createHistoryTimelineIdentity(state, {
+        itemKind: "user_message",
+        ...(messageId !== null ? { providerMessageId: messageId } : {}),
+      });
       return [
         ...(messageId
           ? [
@@ -693,6 +788,7 @@ export function translateCodexRolloutLine(
           {
             type: "timeline_item",
             item: { kind: "user_message", text },
+            ...timelineIdentityProps(identity),
           },
           "authoritative",
         ),
@@ -709,6 +805,10 @@ export function translateCodexRolloutLine(
         return [];
       }
       const messageId = typeof payload.id === "string" ? payload.id : null;
+      const identity = createHistoryTimelineIdentity(state, {
+        itemKind: "assistant_message",
+        ...(messageId !== null ? { providerMessageId: messageId } : {}),
+      });
       return [
         ...(messageId
           ? [
@@ -732,6 +832,7 @@ export function translateCodexRolloutLine(
           {
             type: "timeline_item",
             item: { kind: "assistant_message", text },
+            ...timelineIdentityProps(identity),
           },
           "authoritative",
         ),

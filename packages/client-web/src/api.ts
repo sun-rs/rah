@@ -143,6 +143,13 @@ export async function listSessions(): Promise<ListSessionsResponse> {
   return requestJson<ListSessionsResponse>("/api/sessions");
 }
 
+export async function writeHostClipboard(text: string): Promise<{ ok: true }> {
+  return requestJson<{ ok: true }>("/api/host/clipboard", {
+    method: "POST",
+    body: JSON.stringify({ text }),
+  });
+}
+
 export async function addWorkspace(
   request: WorkspaceDirectoryRequest,
 ): Promise<ListSessionsResponse> {

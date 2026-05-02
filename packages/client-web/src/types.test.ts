@@ -193,6 +193,98 @@ describe("client projection", () => {
     }
   });
 
+  test("upserts timeline entries by canonical item id without message ids", () => {
+    let current = projection();
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 1,
+        turnId: "live-turn",
+        type: "timeline.item.added",
+        payload: {
+          item: { kind: "reasoning", text: "thinking" },
+          identity: {
+            canonicalItemId: "canonical-item-1",
+            canonicalTurnId: "canonical-turn-1",
+            provider: "kimi",
+            providerSessionId: "provider-session-1",
+            turnKey: "turn-1",
+            itemKind: "reasoning",
+            itemKey: "reasoning-1",
+            origin: "live",
+            confidence: "derived",
+          },
+        },
+      }),
+    );
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 2,
+        turnId: "history:provider-session-1:turn-1",
+        type: "timeline.item.added",
+        payload: {
+          item: { kind: "reasoning", text: "thinking final" },
+          identity: {
+            canonicalItemId: "canonical-item-1",
+            canonicalTurnId: "canonical-turn-1",
+            provider: "kimi",
+            providerSessionId: "provider-session-1",
+            turnKey: "turn-1",
+            itemKind: "reasoning",
+            itemKey: "reasoning-1",
+            origin: "history",
+            confidence: "derived",
+          },
+        },
+      }),
+    );
+
+    assert.equal(current.feed.length, 1);
+    const only = current.feed[0];
+    assert.equal(only?.kind, "timeline");
+    if (only?.kind === "timeline" && only.item.kind === "reasoning") {
+      assert.equal(only.key, "timeline:canonical-item-1");
+      assert.equal(only.canonicalItemId, "canonical-item-1");
+      assert.equal(only.turnId, "history:provider-session-1:turn-1");
+      assert.equal(only.item.text, "thinking final");
+    }
+  });
+
+  test("keeps repeated text with different canonical item ids", () => {
+    let current = projection();
+    for (const seq of [1, 2]) {
+      current = applyEventToProjection(
+        current,
+        event({
+          seq,
+          turnId: `turn-${seq}`,
+          type: "timeline.item.added",
+          payload: {
+            item: { kind: "user_message", text: "继续" },
+            identity: {
+              canonicalItemId: `canonical-item-${seq}`,
+              canonicalTurnId: `canonical-turn-${seq}`,
+              provider: "codex",
+              providerSessionId: "provider-session-1",
+              turnKey: `turn-${seq}`,
+              itemKind: "user_message",
+              itemKey: `user-${seq}`,
+              origin: "live",
+              confidence: "derived",
+            },
+          },
+        }),
+      );
+    }
+
+    assert.equal(current.feed.length, 2);
+    assert.deepEqual(
+      current.feed.map((entry) => (entry.kind === "timeline" ? entry.canonicalItemId : null)),
+      ["canonical-item-1", "canonical-item-2"],
+    );
+  });
+
   test("does not merge different assistant messages in the same turn", () => {
     let current = projection();
     current = applyEventToProjection(
@@ -721,6 +813,17 @@ describe("client projection", () => {
       workspaces.find((workspace) => workspace.directory === "/repo/app")?.hasBlockingLiveSessions,
       true,
     );
+  });
+
+  test("preserves root workspace matching", () => {
+    const workspaces = deriveWorkspaceInfos(
+      ["/"],
+      [workspaceSummary({ id: "live-root-child", rootDir: "/Users/sun/Code/rah" })],
+      [],
+    );
+
+    assert.equal(workspaces[0]?.directory, "/");
+    assert.equal(workspaces[0]?.hasBlockingLiveSessions, true);
   });
 
   test("does not block workspace removal for read-only replay sessions", () => {

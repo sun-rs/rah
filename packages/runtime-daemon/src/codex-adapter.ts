@@ -74,6 +74,15 @@ const CODEX_EVENT_SOURCE = {
   authority: "derived" as const,
 };
 
+type CodexTurnCollaborationMode = {
+  mode: "default" | "plan";
+  settings: {
+    model: string;
+    reasoning_effort: string | null;
+    developer_instructions: string | null;
+  };
+};
+
 function codexSandboxPolicyForTurn(args: {
   sandboxMode: string;
   cwd: string;
@@ -82,20 +91,12 @@ function codexSandboxPolicyForTurn(args: {
     case "read-only":
       return {
         type: "readOnly" as const,
-        access: {
-          type: "restricted" as const,
-          includePlatformDefaults: true,
-          readableRoots: [args.cwd],
-        },
         networkAccess: false,
       };
     case "workspace-write":
       return {
         type: "workspaceWrite" as const,
         writableRoots: [args.cwd],
-        readOnlyAccess: {
-          type: "fullAccess" as const,
-        },
         networkAccess: false,
         excludeTmpdirEnvVar: false,
         excludeSlashTmp: false,
@@ -108,17 +109,28 @@ function codexSandboxPolicyForTurn(args: {
   }
 }
 
-function codexCollaborationModeForTurn(
-  live: LiveCodexSession,
-): LiveCodexSession["planCollaborationMode"] {
-  if (live.activeModeId !== "plan" || !live.planCollaborationMode) {
+function codexCollaborationModeForTurn(live: LiveCodexSession): CodexTurnCollaborationMode | null {
+  const model = live.modelId ?? live.planCollaborationMode?.settings.model ?? null;
+  if (!model) {
     return null;
   }
+  if (live.activeModeId !== "plan" || !live.planCollaborationMode) {
+    // Codex preserves the previous collaboration mode when this field is omitted.
+    // Send default explicitly so toggling Plan off actually exits plan mode.
+    return {
+      mode: "default",
+      settings: {
+        model,
+        reasoning_effort: live.reasoningId,
+        developer_instructions: null,
+      },
+    };
+  }
   return {
-    ...live.planCollaborationMode,
+    mode: "plan",
     settings: {
       ...live.planCollaborationMode.settings,
-      ...(live.modelId ? { model: live.modelId } : {}),
+      model,
       reasoning_effort:
         live.reasoningId ?? live.planCollaborationMode.settings.reasoning_effort,
     },
@@ -181,6 +193,82 @@ export class CodexAdapter implements ProviderAdapter {
     this.services.sessionStore.setRuntimeState(sessionId, "failed");
   }
 
+  private registerLiveSession(liveSession: LiveCodexSession): void {
+    liveSession.drainQueuedInput = () => this.drainQueuedInput(liveSession);
+    this.liveSessions.set(liveSession.sessionId, liveSession);
+  }
+
+  private drainQueuedInput(live: LiveCodexSession): void {
+    if (live.currentTurnId || live.turnStartInFlight) {
+      return;
+    }
+    const next = live.queuedInputs.shift();
+    if (!next) {
+      return;
+    }
+    this.startLiveTurn(live, next);
+  }
+
+  private startLiveTurn(live: LiveCodexSession, request: SessionInputRequest): void {
+    if (!this.services.sessionStore.hasInputControl(live.sessionId, request.clientId)) {
+      throw new Error(`Client ${request.clientId} does not hold input control for ${live.sessionId}.`);
+    }
+    const collaborationMode = codexCollaborationModeForTurn(live);
+    live.turnStartInFlight = true;
+    void live.client.request(
+      "turn/start",
+      {
+        threadId: live.threadId,
+        input: [{ type: "text", text: request.text }],
+        cwd: live.cwd,
+        approvalPolicy: live.approvalPolicy,
+        sandboxPolicy: codexSandboxPolicyForTurn({
+          sandboxMode: live.sandboxMode,
+          cwd: live.cwd,
+        }),
+        ...(live.modelId ? { model: live.modelId } : {}),
+        ...(live.reasoningId ? { effort: live.reasoningId } : {}),
+        ...(collaborationMode ? { collaborationMode } : {}),
+      },
+      90_000,
+    ).then((result) => {
+      const turn =
+        result && typeof result === "object" && !Array.isArray(result)
+          ? (result as { turn?: { id?: unknown } }).turn
+          : undefined;
+      if (
+        typeof turn?.id === "string" &&
+        !live.currentTurnId &&
+        !live.finishedTurnIds.has(turn.id)
+      ) {
+        live.currentTurnId = turn.id;
+      }
+      if (typeof turn?.id === "string" && live.interruptWhenTurnStarts) {
+        live.interruptWhenTurnStarts = false;
+        void live.client.request("turn/interrupt", {
+          threadId: live.threadId,
+          turnId: turn.id,
+        }).catch((error) => {
+          this.reportAsyncLiveError(
+            live.sessionId,
+            error instanceof Error ? error.message : String(error),
+          );
+        });
+      }
+    }).catch((error) => {
+      this.reportAsyncLiveError(
+        live.sessionId,
+        error instanceof Error ? error.message : String(error),
+      );
+    }).finally(() => {
+      live.turnStartInFlight = false;
+      if (!live.currentTurnId) {
+        live.interruptWhenTurnStarts = false;
+      }
+      this.drainQueuedInput(live);
+    });
+  }
+
   async startSession(request: StartSessionRequest): Promise<StartSessionResponse> {
     const cachedModelCatalog =
       request.model || request.reasoningId !== undefined || request.optionValues !== undefined
@@ -191,7 +279,7 @@ export class CodexAdapter implements ProviderAdapter {
       request,
       ...(cachedModelCatalog ? { initialModelCatalog: cachedModelCatalog } : {}),
       onLiveSessionReady: (liveSession) => {
-        this.liveSessions.set(liveSession.sessionId, liveSession);
+        this.registerLiveSession(liveSession);
       },
     }).then((response) => ({ session: response.summary }));
   }
@@ -261,7 +349,7 @@ export class CodexAdapter implements ProviderAdapter {
         ...(record ? { record } : {}),
         ...(cachedModelCatalog ? { initialModelCatalog: cachedModelCatalog } : {}),
         onLiveSessionReady: (liveSession) => {
-          this.liveSessions.set(liveSession.sessionId, liveSession);
+          this.registerLiveSession(liveSession);
         },
       });
       return { session: response.summary };
@@ -292,32 +380,11 @@ export class CodexAdapter implements ProviderAdapter {
   sendInput(sessionId: string, request: SessionInputRequest): void {
     const live = this.liveSessions.get(sessionId);
     if (live) {
-      if (!this.services.sessionStore.hasInputControl(sessionId, request.clientId)) {
-        throw new Error(`Client ${request.clientId} does not hold input control for ${sessionId}.`);
+      if (live.currentTurnId || live.turnStartInFlight) {
+        live.queuedInputs.push(request);
+        return;
       }
-      const collaborationMode = codexCollaborationModeForTurn(live);
-      void live.client.request(
-        "turn/start",
-        {
-          threadId: live.threadId,
-          input: [{ type: "text", text: request.text }],
-          cwd: live.cwd,
-          approvalPolicy: live.approvalPolicy,
-          sandboxPolicy: codexSandboxPolicyForTurn({
-            sandboxMode: live.sandboxMode,
-            cwd: live.cwd,
-          }),
-          ...(live.modelId ? { model: live.modelId } : {}),
-          ...(live.reasoningId ? { effort: live.reasoningId } : {}),
-          ...(collaborationMode ? { collaborationMode } : {}),
-        },
-        90_000,
-      ).catch((error) => {
-        this.reportAsyncLiveError(
-          sessionId,
-          error instanceof Error ? error.message : String(error),
-        );
-      });
+      this.startLiveTurn(live, request);
       return;
     }
     throw new Error(
@@ -487,6 +554,7 @@ export class CodexAdapter implements ProviderAdapter {
         throw new Error(`Client ${request.clientId} does not hold input control for ${sessionId}.`);
       }
       const turnId = live.currentTurnId;
+      live.queuedInputs.length = 0;
       if (turnId) {
         void live.client.request("turn/interrupt", {
           threadId: live.threadId,
@@ -497,6 +565,8 @@ export class CodexAdapter implements ProviderAdapter {
             error instanceof Error ? error.message : String(error),
           );
         });
+      } else if (live.turnStartInFlight) {
+        live.interruptWhenTurnStarts = true;
       }
       const state = this.services.sessionStore.getSession(sessionId);
       if (!state) {
@@ -827,9 +897,16 @@ export class CodexAdapter implements ProviderAdapter {
   }
 
   async shutdown(): Promise<void> {
-    for (const live of this.liveSessions.values()) {
-      await live.client.dispose();
-    }
+    const sessions = [...this.liveSessions.values()];
     this.liveSessions.clear();
+    const results = await Promise.allSettled(sessions.map((live) => live.client.dispose()));
+    results.forEach((result, index) => {
+      if (result.status === "rejected") {
+        console.error("[rah] failed to dispose Codex live session during shutdown", {
+          sessionId: sessions[index]?.sessionId,
+          error: result.reason,
+        });
+      }
+    });
   }
 }

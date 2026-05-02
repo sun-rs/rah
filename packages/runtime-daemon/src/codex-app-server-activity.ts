@@ -5,12 +5,14 @@ import type {
   PermissionRequest,
   PermissionResolution,
   RuntimeOperation,
+  TimelineIdentity,
   ToolCall,
   ToolCallArtifact,
   WorkbenchObservation,
 } from "@rah/runtime-protocol";
 import { classifyCodexCommand } from "./codex-command-classifier";
 import { normalizeContextUsage } from "./context-usage";
+import { createCodexTimelineIdentity } from "./codex-timeline-identity";
 import type { ProviderActivity } from "./provider-activity";
 
 export interface CodexLiveTranslatedActivity {
@@ -35,6 +37,8 @@ export interface CodexAppServerTranslationState {
   completedAgentMessageItemIds: Set<string>;
   completedReasoningItemIds: Set<string>;
   reasoningSectionBreakKeys: Set<string>;
+  timelineItemIndexByProviderItemKey: Map<string, number>;
+  nextTimelineItemIndexByTurnId: Map<string, number>;
   lastAgentMessageDeltaByItemId: Map<string, string>;
   lastReasoningDeltaByItemId: Map<string, string>;
   lastCommandOutputDeltaByCallId: Map<string, string>;
@@ -56,6 +60,8 @@ export function createCodexAppServerTranslationState(): CodexAppServerTranslatio
     completedAgentMessageItemIds: new Set(),
     completedReasoningItemIds: new Set(),
     reasoningSectionBreakKeys: new Set(),
+    timelineItemIndexByProviderItemKey: new Map(),
+    nextTimelineItemIndexByTurnId: new Map(),
     lastAgentMessageDeltaByItemId: new Map(),
     lastReasoningDeltaByItemId: new Map(),
     lastCommandOutputDeltaByCallId: new Map(),
@@ -258,6 +264,95 @@ function stringArrayField(record: Record<string, unknown>, key: string): string[
 
 function turnIdFromParams(params: Record<string, unknown>): string | undefined {
   return optionalStringField(params, "turnId") ?? optionalStringField(params, "turn_id");
+}
+
+function providerSessionIdFromParams(params: Record<string, unknown> | null | undefined): string | undefined {
+  if (!params) {
+    return undefined;
+  }
+  return (
+    optionalStringField(params, "threadId") ??
+    optionalStringField(params, "thread_id") ??
+    optionalStringField(params, "sessionId") ??
+    optionalStringField(params, "session_id")
+  );
+}
+
+function timelineIdentityProps(identity: TimelineIdentity | undefined): { identity?: TimelineIdentity } {
+  return identity !== undefined ? { identity } : {};
+}
+
+function allocateTimelineItemIndex(
+  state: CodexAppServerTranslationState,
+  params: {
+    turnId: string;
+    providerItemKey: string;
+  },
+): number {
+  const scopedKey = `${params.turnId}:${params.providerItemKey}`;
+  const existing = state.timelineItemIndexByProviderItemKey.get(scopedKey);
+  if (existing !== undefined) {
+    return existing;
+  }
+  const next = state.nextTimelineItemIndexByTurnId.get(params.turnId) ?? 0;
+  state.nextTimelineItemIndexByTurnId.set(params.turnId, next + 1);
+  state.timelineItemIndexByProviderItemKey.set(scopedKey, next);
+  return next;
+}
+
+function createLiveTimelineIdentity(
+  state: CodexAppServerTranslationState,
+  params: {
+    providerSessionId?: string | undefined;
+    turnId: string;
+    itemKind: "user_message" | "assistant_message" | "reasoning" | "plan" | "compaction";
+    providerItemKey: string;
+    providerEventId?: string;
+    providerMessageId?: string;
+  },
+): TimelineIdentity | undefined {
+  if (!params.providerSessionId) {
+    return undefined;
+  }
+  const itemIndex = allocateTimelineItemIndex(state, {
+    turnId: params.turnId,
+    providerItemKey: `${params.itemKind}:${params.providerItemKey}`,
+  });
+  return createCodexTimelineIdentity({
+    providerSessionId: params.providerSessionId,
+    turnId: params.turnId,
+    itemKind: params.itemKind,
+    itemIndex,
+    origin: "live",
+    confidence: "derived",
+    ...(params.providerEventId !== undefined ? { providerEventId: params.providerEventId } : {}),
+    ...(params.providerMessageId !== undefined ? { providerMessageId: params.providerMessageId } : {}),
+  });
+}
+
+function createLiveTimelineIdentityFromNotification(
+  notification: JsonRpcNotification,
+  state: CodexAppServerTranslationState,
+  params: {
+    itemKind: "assistant_message" | "reasoning" | "plan" | "compaction";
+    providerItemKey: string;
+    providerEventId?: string;
+    providerMessageId?: string;
+  },
+): TimelineIdentity | undefined {
+  const record = paramsRecord(notification);
+  const turnId = record ? turnIdFromParams(record) : undefined;
+  if (!turnId) {
+    return undefined;
+  }
+  return createLiveTimelineIdentity(state, {
+    providerSessionId: providerSessionIdFromParams(record),
+    turnId,
+    itemKind: params.itemKind,
+    providerItemKey: params.providerItemKey,
+    ...(params.providerEventId !== undefined ? { providerEventId: params.providerEventId } : {}),
+    ...(params.providerMessageId !== undefined ? { providerMessageId: params.providerMessageId } : {}),
+  });
 }
 
 function isCodexInternalEnvironmentMessage(text: string): boolean {
@@ -967,6 +1062,7 @@ function mapThreadItem(
   phase: "started" | "completed",
   turnId: string,
   state: CodexAppServerTranslationState,
+  providerSessionId?: string | undefined,
 ): ProviderActivity[] {
   const itemType = stringField(item, "type");
   const id = stringField(item, "id") ?? `${itemType ?? "item"}-${Date.now().toString(36)}`;
@@ -987,10 +1083,22 @@ function mapThreadItem(
         state.emittedUserMessageItemIds.add(id);
         return [];
       }
+      const identity = createLiveTimelineIdentity(state, {
+        providerSessionId,
+        turnId,
+        itemKind: "user_message",
+        providerItemKey: id,
+        providerMessageId: id,
+      });
       const activities: ProviderActivity[] = text
         ? [
             { type: "message_part_added", turnId, part: { messageId: id, partId: id, kind: "text", text } },
-            { type: "timeline_item", turnId, item: { kind: "user_message", text, messageId: id } },
+            {
+              type: "timeline_item",
+              turnId,
+              item: { kind: "user_message", text, messageId: id },
+              ...timelineIdentityProps(identity),
+            },
           ]
         : [{ type: "message_part_added", turnId, part: { messageId: id, partId: id, kind: "unknown", metadata: item as never } }];
       state.emittedUserMessageItemIds.add(id);
@@ -1012,22 +1120,57 @@ function mapThreadItem(
       if (!finalText) {
         return [];
       }
+      const identity = createLiveTimelineIdentity(state, {
+        providerSessionId,
+        turnId,
+        itemKind: "assistant_message",
+        providerItemKey: id,
+        providerMessageId: id,
+      });
       if (state.emittedAgentMessageDeltaItemIds.has(id)) {
         return [
           { type: "message_part_updated", turnId, part: { messageId: id, partId: id, kind: "text", text: finalText } },
-          { type: "timeline_item_updated", turnId, item: { kind: "assistant_message", text: finalText, messageId: id } },
+          {
+            type: "timeline_item_updated",
+            turnId,
+            item: { kind: "assistant_message", text: finalText, messageId: id },
+            ...timelineIdentityProps(identity),
+          },
         ];
       }
       return [
         { type: "message_part_added", turnId, part: { messageId: id, partId: id, kind: "text", text: finalText } },
-        { type: "timeline_item", turnId, item: { kind: "assistant_message", text: finalText, messageId: id } },
+        {
+          type: "timeline_item",
+          turnId,
+          item: { kind: "assistant_message", text: finalText, messageId: id },
+          ...timelineIdentityProps(identity),
+        },
       ];
     }
     case "plan": {
       const text = stringField(item, "text") ?? "";
+      const identity = text
+        ? createLiveTimelineIdentity(state, {
+            providerSessionId,
+            turnId,
+            itemKind: "plan",
+            providerItemKey: id,
+            providerEventId: id,
+          })
+        : undefined;
       return [
         { type: "message_part_added", turnId, part: { messageId: id, partId: id, kind: "step", text } },
-        ...(text ? [{ type: "timeline_item" as const, turnId, item: { kind: "plan" as const, text } }] : []),
+        ...(text
+          ? [
+              {
+                type: "timeline_item" as const,
+                turnId,
+                item: { kind: "plan" as const, text },
+                ...timelineIdentityProps(identity),
+              },
+            ]
+          : []),
       ];
     }
     case "reasoning": {
@@ -1047,14 +1190,32 @@ function mapThreadItem(
       if (!text) {
         return [];
       }
+      const identity = createLiveTimelineIdentity(state, {
+        providerSessionId,
+        turnId,
+        itemKind: "reasoning",
+        providerItemKey: id,
+        providerEventId: id,
+      });
       if (state.emittedReasoningDeltaItemIds.has(id)) {
         return [
           { type: "message_part_updated", turnId, part: { messageId: id, partId: id, kind: "reasoning", text } },
+          {
+            type: "timeline_item_updated",
+            turnId,
+            item: { kind: "reasoning", text },
+            ...timelineIdentityProps(identity),
+          },
         ];
       }
       return [
         { type: "message_part_added", turnId, part: { messageId: id, partId: id, kind: "reasoning", text } },
-        { type: "timeline_item", turnId, item: { kind: "reasoning", text } },
+        {
+          type: "timeline_item",
+          turnId,
+          item: { kind: "reasoning", text },
+          ...timelineIdentityProps(identity),
+        },
       ];
     }
     case "commandExecution": {
@@ -1471,7 +1632,13 @@ export function translateCodexAppServerNotification(
         return invalidStreamActivities(notification, `${notification.method} did not include item and turnId`);
       }
       const phase = notification.method === "item/started" ? "started" : "completed";
-      return mapThreadItem(item, phase, turnId, state).map((activity) => translated(notification, activity));
+      return mapThreadItem(
+        item,
+        phase,
+        turnId,
+        state,
+        providerSessionIdFromParams(params),
+      ).map((activity) => translated(notification, activity));
     }
     case "item/autoApprovalReview/started": {
       const params = paramsRecord(notification);
@@ -1504,12 +1671,18 @@ export function translateCodexAppServerNotification(
         return [];
       }
       const fullText = (state.agentMessageByItemId.get(delta.itemId) ?? []).join("");
+      const identity = createLiveTimelineIdentityFromNotification(notification, state, {
+        itemKind: "assistant_message",
+        providerItemKey: delta.itemId,
+        providerMessageId: delta.itemId,
+      });
       const timelineActivity =
         fullText.trim().length > 0
           ? [
               translated(notification, {
                 type: hasEmittedTimeline ? "timeline_item_updated" : "timeline_item",
                 item: { kind: "assistant_message", text: fullText, messageId: delta.itemId },
+                ...timelineIdentityProps(identity),
               }),
             ]
           : [];
@@ -1551,6 +1724,7 @@ export function translateCodexAppServerNotification(
       if (!delta) {
         return invalidStreamActivities(notification, "reasoning delta payload was not recognized");
       }
+      const hasEmittedTimeline = state.emittedReasoningDeltaItemIds.has(delta.itemId);
       if (!appendDeltaIfNew(
         state.reasoningByItemId,
         state.lastReasoningDeltaByItemId,
@@ -1560,6 +1734,12 @@ export function translateCodexAppServerNotification(
         return [];
       }
       state.emittedReasoningDeltaItemIds.add(delta.itemId);
+      const identity = createLiveTimelineIdentityFromNotification(notification, state, {
+        itemKind: "reasoning",
+        providerItemKey: delta.itemId,
+        providerEventId: delta.itemId,
+      });
+      const fullText = (state.reasoningByItemId.get(delta.itemId) ?? []).join("");
       return [
         translated(notification, {
           type: "message_part_delta",
@@ -1571,8 +1751,9 @@ export function translateCodexAppServerNotification(
           },
         }),
         translated(notification, {
-          type: "timeline_item",
-          item: { kind: "reasoning", text: delta.delta },
+          type: hasEmittedTimeline ? "timeline_item_updated" : "timeline_item",
+          item: { kind: "reasoning", text: fullText },
+          ...timelineIdentityProps(identity),
         }),
       ];
     }
@@ -1603,6 +1784,7 @@ export function translateCodexAppServerNotification(
       if (!delta) {
         return invalidStreamActivities(notification, "reasoning text delta payload was not recognized");
       }
+      const hasEmittedTimeline = state.emittedReasoningDeltaItemIds.has(delta.itemId);
       if (!appendDeltaIfNew(
         state.reasoningByItemId,
         state.lastReasoningDeltaByItemId,
@@ -1612,6 +1794,12 @@ export function translateCodexAppServerNotification(
         return [];
       }
       state.emittedReasoningDeltaItemIds.add(delta.itemId);
+      const identity = createLiveTimelineIdentityFromNotification(notification, state, {
+        itemKind: "reasoning",
+        providerItemKey: delta.itemId,
+        providerEventId: delta.itemId,
+      });
+      const fullText = (state.reasoningByItemId.get(delta.itemId) ?? []).join("");
       return [
         translated(notification, {
           type: "message_part_delta",
@@ -1623,8 +1811,9 @@ export function translateCodexAppServerNotification(
           },
         }),
         translated(notification, {
-          type: "timeline_item",
-          item: { kind: "reasoning", text: delta.delta },
+          type: hasEmittedTimeline ? "timeline_item_updated" : "timeline_item",
+          item: { kind: "reasoning", text: fullText },
+          ...timelineIdentityProps(identity),
         }),
       ];
     }
@@ -1633,10 +1822,22 @@ export function translateCodexAppServerNotification(
       if (!text) {
         return invalidStreamActivities(notification, "plan update payload was not recognized");
       }
+      const params = paramsRecord(notification);
+      const turnId = params ? turnIdFromParams(params) : undefined;
+      const identity = turnId
+        ? createLiveTimelineIdentity(state, {
+            providerSessionId: providerSessionIdFromParams(params),
+            turnId,
+            itemKind: "plan",
+            providerItemKey: "turn-plan",
+            providerEventId: "turn-plan",
+          })
+        : undefined;
       return [
         translated(notification, {
           type: "timeline_item",
           item: { kind: "plan", text },
+          ...timelineIdentityProps(identity),
         }),
       ];
     }

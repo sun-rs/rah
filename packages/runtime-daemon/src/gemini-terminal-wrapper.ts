@@ -26,6 +26,7 @@ import {
   extractGeminiUserDisplayText,
   extractTextFromContent,
 } from "./gemini-conversation-utils";
+import { createGeminiTimelineIdentity } from "./gemini-timeline-identity";
 import {
   knownModelContextWindow,
   withModelContextWindow,
@@ -474,7 +475,7 @@ async function main() {
     child: ChildProcessWithoutNullStreams,
     signal: NodeJS.Signals,
   ) => {
-    if (child.exitCode !== null) {
+    if (child.exitCode !== null || child.signalCode !== null) {
       return;
     }
     if (process.platform !== "win32" && child.pid !== undefined) {
@@ -486,24 +487,57 @@ async function main() {
     child.kill(signal);
   };
 
+  const waitForRemoteTurnProcessExit = async (
+    child: ChildProcessWithoutNullStreams,
+    timeoutMs: number,
+  ): Promise<boolean> => {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      return true;
+    }
+    return await new Promise<boolean>((resolve) => {
+      const timeout = setTimeout(() => {
+        child.off("exit", onExit);
+        resolve(false);
+      }, timeoutMs);
+      const onExit = () => {
+        clearTimeout(timeout);
+        resolve(true);
+      };
+      child.once("exit", onExit);
+    });
+  };
+
+  const closeRemoteTurnProcess = async (
+    child: ChildProcessWithoutNullStreams,
+  ): Promise<void> => {
+    clearRemoteStopTimers();
+    if (child.exitCode === null && child.signalCode === null) {
+      signalRemoteTurnProcess(child, "SIGTERM");
+    }
+    if (!(await waitForRemoteTurnProcessExit(child, REMOTE_STOP_TERM_DELAY_MS))) {
+      signalRemoteTurnProcess(child, "SIGKILL");
+      await waitForRemoteTurnProcessExit(child, REMOTE_STOP_KILL_DELAY_MS);
+    }
+  };
+
   const requestRemoteTurnStop = () => {
     remoteTurnInterrupted = true;
     remoteTurnCancelRequested = true;
     renderRemoteModePanel({ force: true });
     const child = remoteTurnProcess;
-    if (!child || child.exitCode !== null) {
+    if (!child || child.exitCode !== null || child.signalCode !== null) {
       return;
     }
     clearRemoteStopTimers();
     signalRemoteTurnProcess(child, "SIGINT");
     remoteStopTimers.push(
       setTimeout(() => {
-        if (child.exitCode === null) {
+        if (child.exitCode === null && child.signalCode === null) {
           signalRemoteTurnProcess(child, "SIGTERM");
         }
       }, REMOTE_STOP_TERM_DELAY_MS),
       setTimeout(() => {
-        if (child.exitCode === null) {
+        if (child.exitCode === null && child.signalCode === null) {
           signalRemoteTurnProcess(child, "SIGKILL");
         }
       }, REMOTE_STOP_KILL_DELAY_MS),
@@ -797,6 +831,11 @@ async function main() {
         switch (event.type) {
           case "init": {
             if (typeof event.session_id === "string") {
+              const record = getResumableRecordById(event.session_id);
+              if (record) {
+                primeResumeHistoryCursor(record);
+              }
+              bindProviderSession(event.session_id, record);
               renderRemoteModePanel();
             }
             break;
@@ -809,7 +848,6 @@ async function main() {
                 item: {
                   kind: "assistant_message",
                   text: event.content,
-                  messageId: `${currentTurnId}:assistant`,
                 },
               });
             }
@@ -970,6 +1008,16 @@ async function main() {
           type: "timeline_item",
           turnId: currentTurnId,
           item: { kind: "user_message", text, messageId: message.id },
+          ...(boundProviderSessionId
+            ? {
+                identity: createGeminiTimelineIdentity({
+                  providerSessionId: boundProviderSessionId,
+                  messageId: message.id,
+                  itemKind: "user_message",
+                  origin: "history",
+                }),
+              }
+            : {}),
         });
       }
       return;
@@ -987,9 +1035,19 @@ async function main() {
           type: "timeline_item",
           turnId,
           item: { kind: "assistant_message", text, messageId: message.id },
+          ...(boundProviderSessionId
+            ? {
+                identity: createGeminiTimelineIdentity({
+                  providerSessionId: boundProviderSessionId,
+                  messageId: message.id,
+                  itemKind: "assistant_message",
+                  origin: "history",
+                }),
+              }
+            : {}),
         });
       }
-      for (const thought of message.thoughts ?? []) {
+      for (const [thoughtIndex, thought] of (message.thoughts ?? []).entries()) {
         const thoughtText =
           (typeof thought.text === "string" ? thought.text : "") ||
           (typeof thought.subject === "string" ? thought.subject : "");
@@ -998,6 +1056,17 @@ async function main() {
             type: "timeline_item",
             turnId,
             item: { kind: "reasoning", text: thoughtText },
+            ...(boundProviderSessionId
+              ? {
+                  identity: createGeminiTimelineIdentity({
+                    providerSessionId: boundProviderSessionId,
+                    messageId: message.id,
+                    itemKind: "reasoning",
+                    origin: "history",
+                    partIndex: thoughtIndex + 1,
+                  }),
+                }
+              : {}),
           });
         }
       }
@@ -1038,6 +1107,16 @@ async function main() {
           kind: "system",
           text,
         },
+        ...(boundProviderSessionId
+          ? {
+              identity: createGeminiTimelineIdentity({
+                providerSessionId: boundProviderSessionId,
+                messageId: message.id,
+                itemKind: "system",
+                origin: "history",
+              }),
+            }
+          : {}),
       });
     }
   };
@@ -1070,8 +1149,9 @@ async function main() {
       localTerminal = null;
     }
     clearRemoteStopTimers();
-    if (remoteTurnProcess && remoteTurnProcess.exitCode === null) {
-      signalRemoteTurnProcess(remoteTurnProcess, "SIGTERM");
+    if (remoteTurnProcess) {
+      await closeRemoteTurnProcess(remoteTurnProcess);
+      remoteTurnProcess = null;
     }
     restoreInheritedTerminalModes();
     if (wrapperSessionId) {

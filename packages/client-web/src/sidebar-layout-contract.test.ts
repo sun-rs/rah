@@ -4,9 +4,11 @@ import { SIDEBAR_LAYOUT } from "./sidebar-layout-contract";
 
 describe("sidebar layout contract", () => {
   test("locks fixed action slots and row heights", () => {
-    assert.match(SIDEBAR_LAYOUT.workspaceActionSlotClassName, /\bw-9\b/);
+    assert.match(SIDEBAR_LAYOUT.workspaceActionSlotClassName, /\babsolute\b/);
+    assert.match(SIDEBAR_LAYOUT.workspaceActionSlotClassName, /\bright-0\b/);
     assert.match(SIDEBAR_LAYOUT.sessionPinSlotClassName, /\bh-7\b/);
     assert.match(SIDEBAR_LAYOUT.sessionPinSlotClassName, /\bw-7\b/);
+    assert.match(SIDEBAR_LAYOUT.workspaceHeaderClassName, /\brelative\b/);
     assert.match(SIDEBAR_LAYOUT.workspaceHeaderClassName, /min-h-\[32px\]/);
     assert.match(SIDEBAR_LAYOUT.sessionRowBaseClassName, /min-h-\[32px\]/);
     assert.match(SIDEBAR_LAYOUT.sessionRowBaseClassName, /\bborder\b/);
@@ -24,6 +26,7 @@ describe("sidebar layout contract", () => {
     assert.equal(SIDEBAR_LAYOUT.sessionIconSlotClassName, "inline-flex h-7 w-7 shrink-0 items-center justify-center");
     assert.equal(SIDEBAR_LAYOUT.sessionIconClassName, "h-4.5 w-4.5");
     assert.equal(SIDEBAR_LAYOUT.sessionTitleClassName, "min-w-0 flex-1 truncate text-[12px]");
+    assert.match(SIDEBAR_LAYOUT.workspaceTitleButtonClassName, /\bpr-6\b/);
     assert.match(SIDEBAR_LAYOUT.workspaceTitleSelectedClassName, /font-semibold/);
   });
 

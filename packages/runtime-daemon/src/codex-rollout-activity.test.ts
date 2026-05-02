@@ -5,6 +5,7 @@ import {
   finalizeCodexRolloutTranslationState,
   translateCodexRolloutLine,
 } from "./codex-rollout-activity";
+import { createCodexTimelineIdentity } from "./codex-timeline-identity";
 
 describe("translateCodexRolloutLine", () => {
   test("maps user messages and agent reasoning into persisted timeline activities", () => {
@@ -75,6 +76,93 @@ describe("translateCodexRolloutLine", () => {
         },
       },
     ]);
+  });
+
+  test("attaches canonical timeline identity to rollout transcript items", () => {
+    const state = createCodexRolloutTranslationState({ providerSessionId: "session-1" });
+
+    translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-14T18:00:00.000Z",
+        type: "event_msg",
+        payload: {
+          type: "task_started",
+          turn_id: "turn-1",
+        },
+      },
+      state,
+    );
+    const user = translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-14T18:00:01.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "你好" }],
+        },
+      },
+      state,
+    ).find((item) => item.activity.type === "timeline_item")?.activity;
+    const reasoning = translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-14T18:00:02.000Z",
+        type: "event_msg",
+        payload: {
+          type: "agent_reasoning",
+          text: "Thinking",
+        },
+      },
+      state,
+    ).find((item) => item.activity.type === "timeline_item")?.activity;
+    const assistant = translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-14T18:00:03.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "你好。" }],
+        },
+      },
+      state,
+    ).find((item) => item.activity.type === "timeline_item")?.activity;
+
+    assert.equal(user?.type, "timeline_item");
+    assert.equal(reasoning?.type, "timeline_item");
+    assert.equal(assistant?.type, "timeline_item");
+    if (user?.type === "timeline_item" && reasoning?.type === "timeline_item" && assistant?.type === "timeline_item") {
+      assert.equal(
+        user.identity?.canonicalItemId,
+        createCodexTimelineIdentity({
+          providerSessionId: "session-1",
+          turnId: "turn-1",
+          itemKind: "user_message",
+          itemIndex: 0,
+          origin: "live",
+        }).canonicalItemId,
+      );
+      assert.equal(
+        reasoning.identity?.canonicalItemId,
+        createCodexTimelineIdentity({
+          providerSessionId: "session-1",
+          turnId: "turn-1",
+          itemKind: "reasoning",
+          itemIndex: 1,
+          origin: "live",
+        }).canonicalItemId,
+      );
+      assert.equal(
+        assistant.identity?.canonicalItemId,
+        createCodexTimelineIdentity({
+          providerSessionId: "session-1",
+          turnId: "turn-1",
+          itemKind: "assistant_message",
+          itemIndex: 2,
+          origin: "live",
+        }).canonicalItemId,
+      );
+    }
   });
 
   test("maps exec_command calls into started and completed shell tool activities", () => {
@@ -569,6 +657,50 @@ describe("translateCodexRolloutLine", () => {
         item: { kind: "user_message", text: "周几?" },
       },
     ]);
+  });
+
+  test("ignores user messages that only contain turn_aborted contextual fragments", () => {
+    const state = createCodexRolloutTranslationState();
+
+    const activities = translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-24T06:10:01.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text:
+                "<turn_aborted>\nThe user interrupted the previous turn on purpose.\n</turn_aborted>",
+            },
+          ],
+        },
+      },
+      state,
+    );
+
+    assert.deepEqual(activities, []);
+  });
+
+  test("ignores non-text user message payloads without surfacing provider noise", () => {
+    const state = createCodexRolloutTranslationState();
+
+    const activities = translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-24T06:10:02.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_image", image_url: "data:image/png;base64,..." }],
+        },
+      },
+      state,
+    );
+
+    assert.deepEqual(activities, []);
   });
 
   test("preserves markdown structure while stripping contextual fragments from assistant messages", () => {

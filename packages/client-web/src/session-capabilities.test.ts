@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type { SessionSummary } from "@rah/runtime-protocol";
-import { canSessionArchive } from "./session-capabilities";
+import { canSessionArchive, isSessionControlLocked } from "./session-capabilities";
 
 function summaryWithArchiveCapability(archive: boolean): SessionSummary {
   return {
@@ -44,4 +44,36 @@ function summaryWithArchiveCapability(archive: boolean): SessionSummary {
 test("canSessionArchive follows the provider action capability", () => {
   assert.equal(canSessionArchive(summaryWithArchiveCapability(true)), true);
   assert.equal(canSessionArchive(summaryWithArchiveCapability(false)), false);
+});
+
+test("session controls are unlocked after failed and stopped states", () => {
+  const summary = summaryWithArchiveCapability(true);
+  assert.equal(
+    isSessionControlLocked({
+      ...summary,
+      session: { ...summary.session, runtimeState: "running" },
+    }),
+    true,
+  );
+  assert.equal(
+    isSessionControlLocked({
+      ...summary,
+      session: { ...summary.session, runtimeState: "waiting_permission" },
+    }),
+    true,
+  );
+  assert.equal(
+    isSessionControlLocked({
+      ...summary,
+      session: { ...summary.session, runtimeState: "failed" },
+    }),
+    false,
+  );
+  assert.equal(
+    isSessionControlLocked({
+      ...summary,
+      session: { ...summary.session, runtimeState: "stopped" },
+    }),
+    false,
+  );
 });

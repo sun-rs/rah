@@ -17,6 +17,7 @@ import {
 import {
   parseAttachSessionRequest,
   parseClaimControlRequest,
+  parseClipboardWriteRequest,
   parseCloseSessionRequest,
   parseDetachSessionRequest,
   parseGitFileActionRequest,
@@ -36,11 +37,24 @@ import {
   parseWorkspaceDirectoryRequest,
 } from "./http-server-request-validation";
 import { serveClientApp } from "./http-server-static";
+import { isLocalMachineRemoteAddress } from "./http-server-client-address";
+import { writeHostClipboard } from "./host-clipboard";
 
 export function createPostRoutes(
   engine: RuntimeEngine,
 ): Array<{ pattern: RegExp; handler: JsonHandler }> {
   return [
+    {
+      pattern: /^\/api\/host\/clipboard$/,
+      handler: async (req, res, _match, body) => {
+        if (!isLocalMachineRemoteAddress(req.socket.remoteAddress)) {
+          throw new Error("Host clipboard fallback is only available to local clients.");
+        }
+        const request = parseClipboardWriteRequest(body);
+        await writeHostClipboard(request.text);
+        writeJson(req, res, 200, { ok: true });
+      },
+    },
     {
       pattern: /^\/api\/terminal\/start$/,
       handler: async (req, res, _match, body) => {

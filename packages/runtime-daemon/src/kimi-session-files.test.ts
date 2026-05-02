@@ -7,10 +7,13 @@ import { createHash } from "node:crypto";
 import { EventBus } from "./event-bus";
 import { PtyHub } from "./pty-hub";
 import { SessionStore } from "./session-store";
+import { createKimiTimelineIdentity } from "./kimi-timeline-identity";
 import {
   createKimiStoredSessionFrozenHistoryPageLoader,
   discoverKimiStoredSessions,
   getKimiStoredSessionHistoryPage,
+  kimiHistoryBasePositionForWindow,
+  kimiHistoryBaseTurnIndexForWindow,
   resumeKimiStoredSession,
   updateKimiSessionTitle,
 } from "./kimi-session-files";
@@ -313,6 +316,78 @@ describe("Kimi session files", () => {
           event.payload.item.text === "Explain the architecture",
       ),
     );
+    const userMessage = page.events.find(
+      (event) =>
+        event.type === "timeline.item.added" &&
+        event.payload.item.kind === "user_message" &&
+        event.payload.item.text === "Explain the architecture",
+    );
+    const reasoningMessage = page.events.find(
+      (event) =>
+        event.type === "timeline.item.added" &&
+        event.payload.item.kind === "reasoning" &&
+        event.payload.item.text === "Inspecting files",
+    );
+    const assistantMessage = page.events.find(
+      (event) =>
+        event.type === "timeline.item.added" &&
+        event.payload.item.kind === "assistant_message" &&
+        event.payload.item.text === "I will inspect the repository.",
+    );
+    assert.equal(
+      userMessage?.type === "timeline.item.added"
+        ? userMessage.payload.identity?.canonicalItemId
+        : undefined,
+      createKimiTimelineIdentity({
+        providerSessionId: "kimi-session-2",
+        turnIndex: 0,
+        itemKind: "user_message",
+        itemIndex: 0,
+        origin: "history",
+      }).canonicalItemId,
+    );
+    assert.equal(
+      userMessage?.type === "timeline.item.added"
+        ? userMessage.payload.identity?.origin
+        : undefined,
+      "history",
+    );
+    assert.equal(
+      reasoningMessage?.type === "timeline.item.added"
+        ? reasoningMessage.payload.identity?.canonicalItemId
+        : undefined,
+      createKimiTimelineIdentity({
+        providerSessionId: "kimi-session-2",
+        turnIndex: 0,
+        itemKind: "reasoning",
+        itemIndex: 1,
+        origin: "history",
+      }).canonicalItemId,
+    );
+    assert.equal(
+      reasoningMessage?.type === "timeline.item.added"
+        ? reasoningMessage.payload.identity?.origin
+        : undefined,
+      "history",
+    );
+    assert.equal(
+      assistantMessage?.type === "timeline.item.added"
+        ? assistantMessage.payload.identity?.canonicalItemId
+        : undefined,
+      createKimiTimelineIdentity({
+        providerSessionId: "kimi-session-2",
+        turnIndex: 0,
+        itemKind: "assistant_message",
+        itemIndex: 2,
+        origin: "history",
+      }).canonicalItemId,
+    );
+    assert.equal(
+      assistantMessage?.type === "timeline.item.added"
+        ? assistantMessage.payload.identity?.origin
+        : undefined,
+      "history",
+    );
     assert.ok(
       page.events.some(
         (event) =>
@@ -509,6 +584,83 @@ describe("Kimi session files", () => {
         return [];
       }),
       ["user 400", "assistant 400"],
+    );
+  });
+
+  test("Kimi frozen history identity keeps the same position when a window starts mid-turn", () => {
+    writeKimiMetadata();
+    const sessionId = "kimi-session-mid-window";
+    const sessionDir = path.join(tmpShare, "sessions", md5(workDir), sessionId);
+    mkdirSync(sessionDir, { recursive: true });
+    const turnBegin = JSON.stringify({
+      timestamp: 1_700_300_000,
+      message: {
+        type: "TurnBegin",
+        payload: { user_input: [{ text: "hello" }] },
+      },
+    });
+    const think = JSON.stringify({
+      timestamp: 1_700_300_001,
+      message: {
+        type: "ThinkPart",
+        payload: { think: "reasoning" },
+      },
+    });
+    const answer = JSON.stringify({
+      timestamp: 1_700_300_002,
+      message: {
+        type: "TextPart",
+        payload: { text: "answer" },
+      },
+    });
+    const wirePath = path.join(sessionDir, "wire.jsonl");
+    writeFileSync(
+      wirePath,
+      `${[
+        JSON.stringify({ type: "metadata", protocol_version: "1.9" }),
+        turnBegin,
+        think,
+        answer,
+      ].join("\n")}\n`,
+    );
+
+    const exactTurnStart = Buffer.byteLength(
+      `${JSON.stringify({ type: "metadata", protocol_version: "1.9" })}\n`,
+    );
+    const midTurnStart = exactTurnStart + Buffer.byteLength(`${turnBegin}\n`);
+    const answerStart = midTurnStart + Buffer.byteLength(`${think}\n`);
+
+    assert.equal(
+      kimiHistoryBaseTurnIndexForWindow({
+        wirePath,
+        startOffset: exactTurnStart,
+        lines: [turnBegin, think, answer],
+      }),
+      0,
+    );
+    assert.equal(
+      kimiHistoryBaseTurnIndexForWindow({
+        wirePath,
+        startOffset: midTurnStart,
+        lines: [think, answer],
+      }),
+      0,
+    );
+    assert.deepEqual(
+      kimiHistoryBasePositionForWindow({
+        wirePath,
+        startOffset: midTurnStart,
+        lines: [think, answer],
+      }),
+      { turnIndex: 0, itemIndex: 1 },
+    );
+    assert.deepEqual(
+      kimiHistoryBasePositionForWindow({
+        wirePath,
+        startOffset: answerStart,
+        lines: [answer],
+      }),
+      { turnIndex: 0, itemIndex: 2 },
     );
   });
 });

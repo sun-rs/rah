@@ -47,6 +47,7 @@ describe("GeminiAdapter", () => {
   let previousGeminiHome: string | undefined;
   let previousRahHome: string | undefined;
   let previousBinary: string | undefined;
+  let previousGeminiResultDelay: string | undefined;
   let cwd: string;
   let workbenchStores: WorkbenchStateStore[];
 
@@ -54,6 +55,7 @@ describe("GeminiAdapter", () => {
     previousGeminiHome = process.env.GEMINI_CLI_HOME;
     previousRahHome = process.env.RAH_HOME;
     previousBinary = process.env.RAH_GEMINI_BINARY;
+    previousGeminiResultDelay = process.env.RAH_GEMINI_RESULT_DELAY_MS;
     tmpHome = mkdtempSync(path.join(os.tmpdir(), "rah-gemini-home-"));
     tmpRahHome = mkdtempSync(path.join(os.tmpdir(), "rah-gemini-rah-home-"));
     cwd = mkdtempSync(path.join(os.tmpdir(), "rah-gemini-cwd-"));
@@ -78,6 +80,11 @@ describe("GeminiAdapter", () => {
       delete process.env.RAH_GEMINI_BINARY;
     } else {
       process.env.RAH_GEMINI_BINARY = previousBinary;
+    }
+    if (previousGeminiResultDelay === undefined) {
+      delete process.env.RAH_GEMINI_RESULT_DELAY_MS;
+    } else {
+      process.env.RAH_GEMINI_RESULT_DELAY_MS = previousGeminiResultDelay;
     }
     rmSync(tmpHome, { recursive: true, force: true });
     rmSync(tmpRahHome, { recursive: true, force: true });
@@ -143,6 +150,7 @@ const resume = resumeIndex >= 0 ? args[resumeIndex + 1] : null;
 const modelIndex = args.indexOf("--model");
 const model = modelIndex >= 0 ? args[modelIndex + 1] : "gemini-2.5-pro";
 const sessionId = resume || "gemini-session-1";
+const resultDelayMs = Number(process.env.RAH_GEMINI_RESULT_DELAY_MS || 0);
 function emit(event) {
   process.stdout.write(JSON.stringify(event) + "\\n");
 }
@@ -150,7 +158,9 @@ emit({ type: "init", timestamp: new Date().toISOString(), session_id: sessionId,
 emit({ type: "message", timestamp: new Date().toISOString(), role: "assistant", content: "Gemini: " + prompt.slice(0, 8), delta: true });
 emit({ type: "tool_use", timestamp: new Date().toISOString(), tool_name: "read_file", tool_id: "tool-1", parameters: { path: "README.md" } });
 emit({ type: "tool_result", timestamp: new Date().toISOString(), tool_id: "tool-1", status: "success", output: "file contents" });
-emit({ type: "result", timestamp: new Date().toISOString(), status: "success", stats: { total_tokens: 42, input_tokens: 30, output_tokens: 12, cached: 5 } });
+setTimeout(() => {
+  emit({ type: "result", timestamp: new Date().toISOString(), status: "success", stats: { total_tokens: 42, input_tokens: 30, output_tokens: 12, cached: 5 } });
+}, resultDelayMs);
 `,
     );
     writeFileSync(wrapper, `#!/bin/sh\nexec node "${serverJs}" "$@"\n`);
@@ -441,6 +451,22 @@ emit({ type: "result", timestamp: new Date().toISOString(), status: "success", s
     await waitFor(
       () => services.sessionStore.getSession(started.session.session.id)?.session.runtimeState === "idle",
     );
+    const firstAssistantEvent = services.eventBus
+      .list({ sessionIds: [started.session.session.id] })
+      .find(
+        (event) =>
+          event.type === "timeline.item.added" &&
+          event.payload.item.kind === "assistant_message" &&
+          event.payload.item.text === "Gemini: first pr",
+      );
+    assert.ok(firstAssistantEvent);
+    if (
+      firstAssistantEvent.type === "timeline.item.added" &&
+      firstAssistantEvent.payload.item.kind === "assistant_message"
+    ) {
+      assert.equal(firstAssistantEvent.payload.item.messageId, undefined);
+      assert.equal(firstAssistantEvent.payload.identity, undefined);
+    }
 
     adapter.sendInput(started.session.session.id, {
       clientId: "web-1",
@@ -511,13 +537,33 @@ emit({ type: "result", timestamp: new Date().toISOString(), status: "success", s
       () => services.sessionStore.getSession(started.session.session.id)?.session.runtimeState === "idle",
     );
 
-    const argsLog = readFileSync(logPath, "utf8")
+    let argsLog = readFileSync(logPath, "utf8")
       .split(/\r?\n/)
       .filter(Boolean)
       .map((line) => JSON.parse(line) as string[]);
     assert.equal(argsLog.length, 1);
     assert.ok(argsLog[0]?.includes("--approval-mode"));
     assert.ok(argsLog[0]?.includes("plan"));
+
+    const unplanned = adapter.setSessionMode(started.session.session.id, "yolo");
+    assert.equal(unplanned.session.mode?.currentModeId, "yolo");
+
+    adapter.sendInput(started.session.session.id, {
+      clientId: "web-1",
+      text: "normal prompt",
+    });
+
+    await waitFor(
+      () => services.sessionStore.getSession(started.session.session.id)?.session.runtimeState === "idle",
+    );
+
+    argsLog = readFileSync(logPath, "utf8")
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as string[]);
+    assert.equal(argsLog.length, 2);
+    assert.equal(argsLog[0]?.[argsLog[0].indexOf("--approval-mode") + 1], "plan");
+    assert.equal(argsLog[1]?.[argsLog[1].indexOf("--approval-mode") + 1], "yolo");
   });
 
   test("switches Gemini model for subsequent turns", async () => {
@@ -563,6 +609,126 @@ emit({ type: "result", timestamp: new Date().toISOString(), status: "success", s
     assert.equal(argsLog.length, 1);
     assert.ok(argsLog[0]?.includes("--model"));
     assert.ok(argsLog[0]?.includes("gemini-2.5-pro"));
+  });
+
+  test("queues consecutive Gemini inputs before the first provider session id binds", async () => {
+    const { logPath } = writeMockGeminiBinary();
+    const services = createServices();
+    const adapter = new GeminiAdapter(services);
+
+    const started = await adapter.startSession({
+      provider: "gemini",
+      cwd,
+      attach: {
+        client: {
+          id: "web-1",
+          kind: "web",
+          connectionId: "web-1",
+        },
+        mode: "interactive",
+        claimControl: true,
+      },
+    });
+
+    adapter.sendInput(started.session.session.id, {
+      clientId: "web-1",
+      text: "first prompt",
+    });
+    adapter.sendInput(started.session.session.id, {
+      clientId: "web-1",
+      text: "second prompt",
+    });
+
+    await waitFor(() => {
+      let argsCount = 0;
+      try {
+        argsCount = readFileSync(logPath, "utf8")
+          .split(/\r?\n/)
+          .filter(Boolean).length;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw error;
+        }
+      }
+      const events = services.eventBus.list({ sessionIds: [started.session.session.id] });
+      return (
+        argsCount === 2 &&
+        events.some(
+          (event) =>
+            event.type === "timeline.item.added" &&
+            event.payload.item.kind === "assistant_message" &&
+            event.payload.item.text === "Gemini: second p",
+        ) &&
+        services.sessionStore.getSession(started.session.session.id)?.session.runtimeState === "idle"
+      );
+    });
+
+    const argsLog = readFileSync(logPath, "utf8")
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as string[]);
+    assert.equal(argsLog.length, 2);
+    assert.ok(!argsLog[0]?.includes("--resume"));
+    assert.ok(argsLog[1]?.includes("--resume"));
+    assert.ok(argsLog[1]?.includes("gemini-session-1"));
+
+    const events = services.eventBus.list({ sessionIds: [started.session.session.id] });
+    assert.equal(
+      events.filter(
+        (event) =>
+          event.type === "timeline.item.added" &&
+          event.payload.item.kind === "user_message" &&
+          ["first prompt", "second prompt"].includes(event.payload.item.text),
+      ).length,
+      2,
+    );
+    assert.equal(
+      events.some(
+        (event) =>
+          event.type === "runtime.status" &&
+          event.payload.status === "error",
+      ),
+      false,
+    );
+  });
+
+  test("honors immediate Gemini stop while the first turn is still starting", async () => {
+    process.env.RAH_GEMINI_RESULT_DELAY_MS = "1000";
+    writeMockGeminiBinary();
+    const services = createServices();
+    const adapter = new GeminiAdapter(services);
+
+    const started = await adapter.startSession({
+      provider: "gemini",
+      cwd,
+      attach: {
+        client: {
+          id: "web-1",
+          kind: "web",
+          connectionId: "web-1",
+        },
+        mode: "interactive",
+        claimControl: true,
+      },
+    });
+
+    adapter.sendInput(started.session.session.id, {
+      clientId: "web-1",
+      text: "stop immediately",
+    });
+    adapter.interruptSession(started.session.session.id, {
+      clientId: "web-1",
+    });
+
+    await waitFor(() => {
+      const state = services.sessionStore.getSession(started.session.session.id);
+      const events = services.eventBus.list({ sessionIds: [started.session.session.id] });
+      return (
+        state?.session.runtimeState === "idle" &&
+        state.activeTurnId === undefined &&
+        events.some((event) => event.type === "turn.canceled")
+      );
+    });
   });
 
   test("discovers stored sessions and rehydrates replay history", async () => {

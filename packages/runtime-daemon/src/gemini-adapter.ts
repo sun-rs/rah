@@ -495,6 +495,22 @@ export class GeminiAdapter implements ProviderAdapter {
     return probeProviderDiagnostic("gemini", await geminiLaunchSpec(), options);
   }
 
+  async shutdown(): Promise<void> {
+    const sessions = [...this.liveSessions.values()];
+    this.liveSessions.clear();
+    const results = await Promise.allSettled(
+      sessions.map((live) => closeGeminiLiveSession(live)),
+    );
+    results.forEach((result, index) => {
+      if (result.status === "rejected") {
+        console.error("[rah] failed to close Gemini live session during shutdown", {
+          sessionId: sessions[index]?.sessionId,
+          error: result.reason,
+        });
+      }
+    });
+  }
+
   private refreshStoredSessionIndex(): Map<string, GeminiStoredSessionRecord> {
     this.storedSessionIndex = new Map(
       discoverGeminiStoredSessions().map((record) => [record.ref.providerSessionId, record] as const),

@@ -184,7 +184,6 @@ export async function startSessionCommand(
     if (initialInput) {
       await deps.sendInput(session.session.id, initialInput);
     }
-    void deps.ensureSessionHistoryLoaded(session.session.id);
     return session.session.id;
   } catch (error) {
     deps.set({ pendingSessionTransition: null, error: readErrorMessage(error) });

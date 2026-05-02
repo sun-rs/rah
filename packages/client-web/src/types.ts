@@ -8,6 +8,7 @@ import type {
   RahEvent,
   RuntimeOperation,
   SessionSummary,
+  TimelineIdentity,
   TimelineItem,
   ToolCallArtifact,
   ToolCall,
@@ -24,6 +25,8 @@ export type FeedEntry =
       item: TimelineItem;
       ts: string;
       turnId?: string;
+      canonicalItemId?: TimelineIdentity["canonicalItemId"];
+      canonicalTurnId?: TimelineIdentity["canonicalTurnId"];
     }
   | {
       key: string;
@@ -122,6 +125,8 @@ type MergeableTimelineItem = Extract<
   | { kind: "assistant_message"; text: string }
   | { kind: "reasoning"; text: string }
 >;
+type TimelineEntry = Extract<FeedEntry, { kind: "timeline" }>;
+type TimelineIdentityFields = Pick<TimelineEntry, "canonicalItemId" | "canonicalTurnId">;
 
 export function createSessionMap(response: SessionsResponse): SessionMap {
   const sessions = new Map<string, SessionProjection>();
@@ -299,35 +304,51 @@ function applyTimelineEvent(
   feed: FeedEntry[],
   event: Extract<RahEvent, { type: "timeline.item.added" | "timeline.item.updated" }>,
 ): FeedEntry[] {
+  const identityFields = readTimelineIdentityFields(event);
+  if (identityFields.canonicalItemId !== undefined) {
+    const canonicalIndex = feed.findIndex(
+      (candidate) =>
+        candidate.kind === "timeline" &&
+        candidate.canonicalItemId === identityFields.canonicalItemId,
+    );
+    if (canonicalIndex >= 0) {
+      const next = [...feed];
+      const current = next[canonicalIndex] as Extract<FeedEntry, { kind: "timeline" }>;
+      const item = mergeOrReplaceTimelineItem(current.item, event.payload.item, event.type);
+      next[canonicalIndex] = createTimelineEntry(
+        {
+          key: current.key,
+          kind: "timeline",
+          item,
+          ts: event.ts,
+          ...mergeTimelineIdentityFields(current, identityFields),
+        },
+        event.turnId ?? current.turnId,
+      );
+      return next;
+    }
+  }
+
   const messageId = readTimelineMessageId(event.payload.item);
   if (messageId) {
     const messageIndex = feed.findIndex(
       (candidate) =>
         candidate.kind === "timeline" &&
         candidate.item.kind === event.payload.item.kind &&
-        readTimelineMessageId(candidate.item) === messageId,
+        readTimelineMessageId(candidate.item) === messageId &&
+        canMergeTimelineCanonicalIdentity(candidate, identityFields),
     );
     if (messageIndex >= 0) {
       const next = [...feed];
       const current = next[messageIndex] as Extract<FeedEntry, { kind: "timeline" }>;
-      const item =
-        event.type === "timeline.item.updated"
-          ? event.payload.item
-          : canMergeTimelineText(current.item, event.payload.item)
-            ? {
-                ...event.payload.item,
-                text: mergeTimelineText(
-                  current.item as MergeableTimelineItem,
-                  event.payload.item as MergeableTimelineItem,
-                ),
-              }
-            : event.payload.item;
+      const item = mergeOrReplaceTimelineItem(current.item, event.payload.item, event.type);
       next[messageIndex] = createTimelineEntry(
         {
           key: current.key,
           kind: "timeline",
           item,
           ts: event.ts,
+          ...mergeTimelineIdentityFields(current, identityFields),
         },
         event.turnId ?? current.turnId,
       );
@@ -343,6 +364,7 @@ function applyTimelineEvent(
         candidate.item.kind === incomingItem.kind &&
         hasTimelineText(candidate.item) &&
         candidate.item.text === incomingItem.text &&
+        canMergeTimelineCanonicalIdentity(candidate, identityFields) &&
         isTimelineMetadataUpgrade(candidate, event),
     );
     if (duplicateIndex >= 0) {
@@ -354,6 +376,7 @@ function applyTimelineEvent(
           kind: "timeline",
           item: event.payload.item,
           ts: event.ts,
+          ...mergeTimelineIdentityFields(duplicate, identityFields),
         },
         event.turnId ?? duplicate.turnId,
       );
@@ -367,6 +390,7 @@ function applyTimelineEvent(
       feed,
       incomingUserItem.text,
       event.turnId,
+      identityFields,
     );
     if (duplicateIndex >= 0) {
       const next = [...feed];
@@ -377,6 +401,7 @@ function applyTimelineEvent(
           kind: "timeline",
           item: event.payload.item,
           ts: event.ts,
+          ...mergeTimelineIdentityFields(duplicate, identityFields),
         },
         event.turnId ?? duplicate.turnId,
       );
@@ -390,6 +415,7 @@ function applyTimelineEvent(
     event.turnId !== undefined &&
     latestEntry?.kind === "timeline" &&
     latestEntry.turnId === event.turnId &&
+    canMergeTimelineCanonicalIdentity(latestEntry, identityFields) &&
     canMergeTimelineText(latestEntry.item, event.payload.item) &&
     canMergeTimelineIdentity(latestEntry.item, event.payload.item)
   ) {
@@ -404,17 +430,22 @@ function applyTimelineEvent(
         ),
       },
       ts: event.ts,
+      ...mergeTimelineIdentityFields(latestEntry, identityFields),
     };
     return next;
   }
 
-  const key = `${event.turnId ?? "session"}:${event.payload.item.kind}:${event.seq}`;
+  const key =
+    identityFields.canonicalItemId !== undefined
+      ? `timeline:${identityFields.canonicalItemId}`
+      : `${event.turnId ?? "session"}:${event.payload.item.kind}:${event.seq}`;
   const entry = createTimelineEntry(
     {
       key,
       kind: "timeline",
       item: event.payload.item,
       ts: event.ts,
+      ...identityFields,
     },
     event.turnId,
   );
@@ -433,6 +464,7 @@ function findDuplicateUserMessageIndex(
   feed: FeedEntry[],
   text: string,
   turnId: string | undefined,
+  incomingIdentity: TimelineIdentityFields,
 ): number {
   for (let index = feed.length - 1; index >= 0; index--) {
     const candidate = feed[index];
@@ -443,9 +475,13 @@ function findDuplicateUserMessageIndex(
     ) {
       continue;
     }
+    if (!canMergeTimelineCanonicalIdentity(candidate, incomingIdentity)) {
+      continue;
+    }
     if (
-      candidate.turnId === undefined ||
-      candidate.turnId === turnId ||
+      (candidate.turnId !== undefined &&
+        turnId !== undefined &&
+        candidate.turnId === turnId) ||
       isTrailingUserMessageEcho(feed, index)
     ) {
       return index;
@@ -466,6 +502,62 @@ function hasTimelineText(
     item.kind === "assistant_message" ||
     item.kind === "reasoning"
   );
+}
+
+function readTimelineIdentityFields(
+  event: Extract<RahEvent, { type: "timeline.item.added" | "timeline.item.updated" }>,
+): TimelineIdentityFields {
+  const identity = event.payload.identity;
+  if (identity === undefined) {
+    return {};
+  }
+  return {
+    canonicalItemId: identity.canonicalItemId,
+    canonicalTurnId: identity.canonicalTurnId,
+  };
+}
+
+function mergeTimelineIdentityFields(
+  current: TimelineEntry,
+  incoming: TimelineIdentityFields,
+): TimelineIdentityFields {
+  return {
+    ...(current.canonicalItemId !== undefined ? { canonicalItemId: current.canonicalItemId } : {}),
+    ...(current.canonicalTurnId !== undefined ? { canonicalTurnId: current.canonicalTurnId } : {}),
+    ...incoming,
+  };
+}
+
+function canMergeTimelineCanonicalIdentity(
+  current: TimelineEntry,
+  incoming: TimelineIdentityFields,
+): boolean {
+  if (
+    current.canonicalItemId !== undefined &&
+    incoming.canonicalItemId !== undefined &&
+    current.canonicalItemId !== incoming.canonicalItemId
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function mergeOrReplaceTimelineItem(
+  current: TimelineItem,
+  incoming: TimelineItem,
+  eventType: "timeline.item.added" | "timeline.item.updated",
+): TimelineItem {
+  if (eventType === "timeline.item.updated") {
+    return incoming;
+  }
+  if (!canMergeTimelineText(current, incoming)) {
+    return incoming;
+  }
+  const mergeableIncoming = incoming as MergeableTimelineItem;
+  return {
+    ...mergeableIncoming,
+    text: mergeTimelineText(current as MergeableTimelineItem, mergeableIncoming),
+  };
 }
 
 function isTimelineMetadataUpgrade(

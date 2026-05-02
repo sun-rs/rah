@@ -255,7 +255,7 @@ def ensure_sidebar_open(page) -> None:
         trigger = page.locator(f'button[aria-label="{label}"]:visible').first
         if trigger.count() > 0:
             trigger.click()
-            expect(page.locator('button[aria-label="Session history"]:visible').first).to_be_visible(
+            expect(page.locator('button[aria-label="Sessions"]:visible').first).to_be_visible(
                 timeout=30_000
             )
             return
@@ -264,18 +264,17 @@ def ensure_sidebar_open(page) -> None:
 
 def open_history_session(page) -> None:
     ensure_sidebar_open(page)
-    page.locator('button[aria-label="Session history"]:visible').first.click()
+    page.locator('button[aria-label="Sessions"]:visible').first.click()
     page.get_by_role("button", name="All").click()
-    page.get_by_placeholder("Filter workspaces or sessions…").fill(PROVIDER_SESSION_ID)
     row = page.locator(f'[data-provider-session-id="{PROVIDER_SESSION_ID}"]').first
     expect(row).to_be_visible(timeout=30_000)
     row.click()
-    expect(page.get_by_text("History only").first).to_be_visible(timeout=30_000)
+    expect(page.get_by_text("History only", exact=True)).to_be_visible(timeout=30_000)
 
 
 def close_history_session(page) -> None:
     page.get_by_role("button", name="Close").click()
-    expect(page.get_by_text("History only")).to_have_count(0, timeout=30_000)
+    expect(page.get_by_text("History only", exact=True)).to_have_count(0, timeout=30_000)
 
 
 def main() -> int:

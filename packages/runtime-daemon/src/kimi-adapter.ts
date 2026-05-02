@@ -42,6 +42,7 @@ import {
 } from "./kimi-live-client";
 import {
   createKimiStoredSessionFrozenHistoryPageLoader,
+  countKimiHistoryTurns,
   discoverKimiStoredSessions,
   getKimiStoredSessionHistoryPage,
   resolveKimiStoredSessionWatchRoots,
@@ -68,6 +69,11 @@ const KIMI_EVENT_SOURCE = {
   channel: "structured_live" as const,
   authority: "derived" as const,
 };
+
+function isKimiGeneratedSessionRejected(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /^Unknown session [0-9a-f-]{36}$/i.test(message.trim());
+}
 
 export class KimiAdapter implements ProviderAdapter {
   readonly id = "kimi";
@@ -104,13 +110,24 @@ export class KimiAdapter implements ProviderAdapter {
         ? await this.modelCatalog.listModels({ cwd: request.cwd })
         : this.modelCatalog.getCached() ?? buildKimiFallbackModelCatalog();
     void this.modelCatalog.listModels({ cwd: request.cwd }).catch(() => undefined);
-    const response = await startKimiLiveSession({
-      services: this.services,
-      request,
-      modelCatalog,
-    });
-    this.liveSessions.set(response.liveSession.sessionId, response.liveSession);
-    return { session: response.summary };
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const response = await startKimiLiveSession({
+          services: this.services,
+          request,
+          modelCatalog,
+        });
+        this.liveSessions.set(response.liveSession.sessionId, response.liveSession);
+        return { session: response.summary };
+      } catch (error) {
+        lastError = error;
+        if (!isKimiGeneratedSessionRejected(error)) {
+          throw error;
+        }
+      }
+    }
+    throw lastError;
   }
 
   async resumeSession(request: ResumeSessionRequest): Promise<ResumeSessionResponse> {
@@ -170,6 +187,7 @@ export class KimiAdapter implements ProviderAdapter {
         ...(request.modeId ? { modeId: request.modeId } : {}),
         ...(request.approvalPolicy ? { approvalPolicy: request.approvalPolicy } : {}),
         ...(cachedModelCatalog ? { modelCatalog: cachedModelCatalog } : {}),
+        ...(record ? { initialTurnIndex: countKimiHistoryTurns(record.wirePath) } : {}),
       });
       this.liveSessions.set(response.liveSession.sessionId, response.liveSession);
       return { session: response.summary };
@@ -473,6 +491,22 @@ export class KimiAdapter implements ProviderAdapter {
 
   async getProviderDiagnostic(options?: { forceRefresh?: boolean }) {
     return probeProviderDiagnostic("kimi", await kimiLaunchSpec(), options);
+  }
+
+  async shutdown(): Promise<void> {
+    const sessions = [...this.liveSessions.values()];
+    this.liveSessions.clear();
+    const results = await Promise.allSettled(
+      sessions.map((live) => closeKimiLiveSession(live)),
+    );
+    results.forEach((result, index) => {
+      if (result.status === "rejected") {
+        console.error("[rah] failed to close Kimi live session during shutdown", {
+          sessionId: sessions[index]?.sessionId,
+          error: result.reason,
+        });
+      }
+    });
   }
 
   private refreshStoredSessionIndex() {

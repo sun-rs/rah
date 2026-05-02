@@ -28,17 +28,24 @@ export async function startRahDaemon(options?: {
   return {
     port,
     async close() {
-      await engine.shutdown();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) {
-            reject(error);
-            return;
-          }
-          resolve();
+      try {
+        await engine.shutdown();
+      } catch (error) {
+        console.error("[rah] engine shutdown failed", error);
+      }
+      try {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => {
+            if (error) {
+              reject(error);
+              return;
+            }
+            resolve();
+          });
         });
-      });
-      websockets.close();
+      } finally {
+        websockets.close();
+      }
     },
   };
 }
