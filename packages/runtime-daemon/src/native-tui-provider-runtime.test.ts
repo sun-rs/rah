@@ -126,6 +126,8 @@ describe("NativeTuiProviderRuntime", () => {
     assert.match(engineSource, /shutdownAdaptersById/);
     assert.doesNotMatch(engineSource, /adaptersByProvider: this\.adaptersByProvider/);
     assert.doesNotMatch(engineSource, /historyMirrorAdapters = resolvedAdapters;/);
+    assert.match(engineSource, /bindStoredHistoryCapability/);
+    assert.doesNotMatch(engineSource, /storedHistoryAdaptersByProvider\.set\(provider, adapter\)/);
     assert.match(engineSource, /historyMirrorAdapters/);
     assert.doesNotMatch(engineSource, /RuntimeProviderCoordinator/);
     assert.doesNotMatch(engineSource, /private readonly providers:/);

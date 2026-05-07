@@ -135,6 +135,31 @@ function hasStoredHistoryCapability(
   );
 }
 
+function bindStoredHistoryCapability(
+  adapter: ProviderAdapter & ProviderStoredHistoryAdapter,
+): ProviderStoredHistoryAdapter {
+  return {
+    ...(adapter.getSessionHistoryPage
+      ? { getSessionHistoryPage: adapter.getSessionHistoryPage.bind(adapter) }
+      : {}),
+    ...(adapter.createFrozenHistoryPageLoader
+      ? { createFrozenHistoryPageLoader: adapter.createFrozenHistoryPageLoader.bind(adapter) }
+      : {}),
+    ...(adapter.listStoredSessions
+      ? { listStoredSessions: adapter.listStoredSessions.bind(adapter) }
+      : {}),
+    ...(adapter.refreshStoredSessionsCatalog
+      ? { refreshStoredSessionsCatalog: adapter.refreshStoredSessionsCatalog.bind(adapter) }
+      : {}),
+    ...(adapter.listStoredSessionWatchRoots
+      ? { listStoredSessionWatchRoots: adapter.listStoredSessionWatchRoots.bind(adapter) }
+      : {}),
+    ...(adapter.removeStoredSession
+      ? { removeStoredSession: adapter.removeStoredSession.bind(adapter) }
+      : {}),
+  };
+}
+
 function hasStructuredLifecycleCapability(
   adapter: ProviderAdapter,
 ): adapter is ProviderAdapter & ProviderStructuredLifecycleAdapter {
@@ -233,7 +258,7 @@ export class RuntimeEngine {
     Pick<ProviderAdapter, "id"> & ProviderShutdownAdapter
   >();
   private readonly structuredSessionOwners = new Map<string, ProviderAdapter>();
-  private readonly historyMirrorAdapters: readonly ProviderStoredHistoryAdapter[];
+  private readonly historyMirrorAdapters: ProviderStoredHistoryAdapter[] = [];
 
   constructor(adapters?: ProviderAdapter[]) {
     this.defaultLiveBackend = adapters === undefined ? "native_tui" : "structured";
@@ -362,7 +387,6 @@ export class RuntimeEngine {
     for (const adapter of resolvedAdapters) {
       this.registerAdapter(adapter);
     }
-    this.historyMirrorAdapters = resolvedAdapters.filter(hasStoredHistoryCapability);
     this.refreshStoredSessionsCache();
     this.storedSessionMonitor = new StoredSessionMonitor({
       roots: this.historyMirrorAdapters.flatMap(
@@ -988,6 +1012,9 @@ export class RuntimeEngine {
 
   private registerAdapter(adapter: ProviderAdapter): void {
     this.adaptersById.set(adapter.id, adapter);
+    const storedHistoryCapability = hasStoredHistoryCapability(adapter)
+      ? bindStoredHistoryCapability(adapter)
+      : undefined;
     if (hasDebugCapability(adapter)) {
       this.debugAdaptersById.set(adapter.id, adapter);
     }
@@ -1011,9 +1038,12 @@ export class RuntimeEngine {
       if (hasDiagnosticCapability(adapter)) {
         this.diagnosticAdaptersByProvider.set(provider, adapter);
       }
-      if (hasStoredHistoryCapability(adapter)) {
-        this.storedHistoryAdaptersByProvider.set(provider, adapter);
+      if (storedHistoryCapability) {
+        this.storedHistoryAdaptersByProvider.set(provider, storedHistoryCapability);
       }
+    }
+    if (storedHistoryCapability) {
+      this.historyMirrorAdapters.push(storedHistoryCapability);
     }
   }
 
