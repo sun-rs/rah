@@ -175,7 +175,6 @@ export interface ProviderAdapter
     ProviderActionCapabilityAdapter,
     ProviderStructuredInputControlAdapter,
     ProviderStructuredPermissionAdapter,
-    ProviderWorkspaceInspectionAdapter,
     ProviderStoredHistoryAdapter,
     ProviderStructuredContextAdapter,
     ProviderDiagnosticAdapter,

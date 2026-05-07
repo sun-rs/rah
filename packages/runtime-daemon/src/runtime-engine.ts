@@ -52,7 +52,11 @@ import { HistorySnapshotStore } from "./history-snapshots";
 import { KimiAdapter } from "./kimi-adapter";
 import { OpenCodeAdapter } from "./opencode-adapter";
 import type { ProviderActivity } from "./provider-activity";
-import type { ProviderAdapter, ProviderStoredHistoryAdapter } from "./provider-adapter";
+import type {
+  ProviderAdapter,
+  ProviderStoredHistoryAdapter,
+  ProviderWorkspaceInspectionAdapter,
+} from "./provider-adapter";
 import { PtyHub } from "./pty-hub";
 import { RuntimeStructuredProviderCoordinator } from "./runtime-structured-provider-coordinator";
 import { SessionStore, toSessionSummary, type StoredSessionState } from "./session-store";
@@ -508,9 +512,12 @@ export class RuntimeEngine {
         sessionId,
         options?.scopeRoot,
       );
-      return this.requireStructuredSessionAdapter(sessionId).getWorkspaceSnapshot(sessionId, {
-        ...(scopeRoot ? { scopeRoot } : {}),
-      });
+      return this.requireStructuredWorkspaceInspectionAdapter(sessionId).getWorkspaceSnapshot(
+        sessionId,
+        {
+          ...(scopeRoot ? { scopeRoot } : {}),
+        },
+      );
     }
     const session = this.requireManagedSession(sessionId).session;
     const scopeRoot = this.workspaceScopeAuthorizer.resolveAuthorizedSessionScopeRoot(
@@ -531,9 +538,12 @@ export class RuntimeEngine {
         sessionId,
         options?.scopeRoot,
       );
-      return await this.requireStructuredSessionAdapter(sessionId).getGitStatus(sessionId, {
-        ...(scopeRoot ? { scopeRoot } : {}),
-      });
+      return await this.requireStructuredWorkspaceInspectionAdapter(sessionId).getGitStatus(
+        sessionId,
+        {
+          ...(scopeRoot ? { scopeRoot } : {}),
+        },
+      );
     }
     const session = this.requireManagedSession(sessionId).session;
     const scopeRoot = this.workspaceScopeAuthorizer.resolveAuthorizedSessionScopeRoot(
@@ -564,13 +574,17 @@ export class RuntimeEngine {
         sessionId,
         options?.scopeRoot,
       );
-      return await this.requireStructuredSessionAdapter(sessionId).getGitDiff(sessionId, path, {
-        ...(options?.staged !== undefined ? { staged: options.staged } : {}),
-        ...(options?.ignoreWhitespace !== undefined
-          ? { ignoreWhitespace: options.ignoreWhitespace }
-          : {}),
-        ...(scopeRoot ? { scopeRoot } : {}),
-      });
+      return await this.requireStructuredWorkspaceInspectionAdapter(sessionId).getGitDiff(
+        sessionId,
+        path,
+        {
+          ...(options?.staged !== undefined ? { staged: options.staged } : {}),
+          ...(options?.ignoreWhitespace !== undefined
+            ? { ignoreWhitespace: options.ignoreWhitespace }
+            : {}),
+          ...(scopeRoot ? { scopeRoot } : {}),
+        },
+      );
     }
     const session = this.requireManagedSession(sessionId).session;
     const scopeRoot = this.workspaceScopeAuthorizer.resolveAuthorizedSessionScopeRoot(
@@ -621,7 +635,7 @@ export class RuntimeEngine {
         sessionId,
       };
     }
-    const adapter = this.requireStructuredSessionAdapter(sessionId);
+    const adapter = this.requireStructuredWorkspaceInspectionAdapter(sessionId);
     if (!adapter.applyGitFileAction) {
       throw new Error(`Provider ${adapter.id} does not support git file actions.`);
     }
@@ -638,7 +652,7 @@ export class RuntimeEngine {
         sessionId,
       };
     }
-    const adapter = this.requireStructuredSessionAdapter(sessionId);
+    const adapter = this.requireStructuredWorkspaceInspectionAdapter(sessionId);
     if (!adapter.applyGitHunkAction) {
       throw new Error(`Provider ${adapter.id} does not support git hunk actions.`);
     }
@@ -651,9 +665,13 @@ export class RuntimeEngine {
         sessionId,
         options?.scopeRoot,
       );
-      return await this.requireStructuredSessionAdapter(sessionId).readSessionFile(sessionId, path, {
-        ...(scopeRoot ? { scopeRoot } : {}),
-      });
+      return await this.requireStructuredWorkspaceInspectionAdapter(sessionId).readSessionFile(
+        sessionId,
+        path,
+        {
+          ...(scopeRoot ? { scopeRoot } : {}),
+        },
+      );
     }
     const session = this.requireManagedSession(sessionId).session;
     const scopeRoot = this.workspaceScopeAuthorizer.resolveAuthorizedSessionScopeRoot(
@@ -969,6 +987,23 @@ export class RuntimeEngine {
 
   private shouldUseStructuredWorkspaceInspection(sessionId: string): boolean {
     return this.sessionStore.getSession(sessionId)?.session.provider === "custom";
+  }
+
+  private requireStructuredWorkspaceInspectionAdapter(
+    sessionId: string,
+  ): ProviderAdapter & ProviderWorkspaceInspectionAdapter {
+    const adapter = this.requireStructuredSessionAdapter(sessionId);
+    if (
+      typeof (adapter as Partial<ProviderWorkspaceInspectionAdapter>).getWorkspaceSnapshot !==
+        "function" ||
+      typeof (adapter as Partial<ProviderWorkspaceInspectionAdapter>).getGitStatus !==
+        "function" ||
+      typeof (adapter as Partial<ProviderWorkspaceInspectionAdapter>).getGitDiff !== "function" ||
+      typeof (adapter as Partial<ProviderWorkspaceInspectionAdapter>).readSessionFile !== "function"
+    ) {
+      throw new Error(`Provider ${adapter.id} does not support workspace inspection.`);
+    }
+    return adapter as ProviderAdapter & ProviderWorkspaceInspectionAdapter;
   }
 
   private requireStructuredSessionAdapter(sessionId: string): ProviderAdapter {

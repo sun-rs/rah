@@ -43,7 +43,7 @@ RAH should converge on one live core:
 | Legacy structured adapter slices named explicitly | `ProviderStructuredLifecycleAdapter`, `ProviderStructuredInputControlAdapter`, `ProviderStructuredPermissionAdapter`, and `ProviderStructuredContextAdapter` mark non-core structured live capability slices | Done |
 | Enhanced adapter slices named explicitly | `ProviderEnhancedModeAdapter` and `ProviderEnhancedModelAdapter` mark model/mode controls as optional enhancements, not PTY-first core requirements | Done |
 | Stored history discovery depends only on history slice | `RuntimeEngine.historyMirrorAdapters` and `runtime-session-list.ts` use `ProviderStoredHistoryAdapter` instead of the full `ProviderAdapter` interface | Done |
-| Built-in workspace inspection bypasses provider adapters | `RuntimeEngine` routes workspace snapshot/file/git read/apply actions through shared workspace utilities for non-`custom` sessions; `custom` debug sessions keep the structured adapter fallback | Done |
+| Built-in workspace inspection bypasses provider adapters | `ProviderAdapter` no longer extends `ProviderWorkspaceInspectionAdapter`; `RuntimeEngine` routes workspace snapshot/file/git read/apply actions through shared workspace utilities for non-`custom` sessions; `custom` debug sessions keep the structured adapter fallback | Done |
 
 ## Verification Run
 
@@ -84,7 +84,7 @@ Workspace inspection boundary verified on 2026-05-07:
 - `npm run test:runtime`: 371 pass
 - `git diff --check`: pass
 
-This guard verifies that built-in provider sessions no longer require provider adapters for generic workspace snapshot, file read, git diff/status, or git apply actions. Provider adapters still retain the legacy/debug `custom` structured workspace fallback until the adapter interface is fully slimmed.
+This guard verifies that built-in provider sessions no longer require provider adapters for generic workspace snapshot, file read, git diff/status, or git apply actions. `ProviderWorkspaceInspectionAdapter` is no longer part of the built-in `ProviderAdapter` requirement and remains only as the legacy/debug `custom` structured fallback until the adapter interface is fully slimmed.
 
 ## Remaining Gaps
 
@@ -92,7 +92,7 @@ These are still not completion-grade:
 
 - WebKit/mobile browser smoke is not rerun in this audit. Chromium native browser smoke is covered by `npm run test:native-tui`, but iPad/Safari real input-method behavior still needs human verification.
 - Real five-provider CLI/account human QA is still required; fake native TUI tests do not prove real login/quota/provider behavior.
-- Legacy structured live clients and adapters still exist. They are no longer default, and generic workspace inspection has moved out of the built-in provider adapter path, but the adapter interface is not fully slimmed down to launch/bind/mirror/minimal control.
+- Legacy structured live clients and adapters still exist. They are no longer default, and generic workspace inspection has moved out of the built-in provider adapter path and required interface, but the adapter interface is not fully slimmed down to launch/bind/mirror/minimal control.
 - Legacy wrapper runtime still exists for `RAH_LEGACY_WRAPPER=1` and synthetic tests. It is isolated as a fallback, not deleted.
 - Workbench shell/canvas still needs deeper audit for every UI path, although stored-history activation now has explicit replay/attach tests and the native browser smoke covers canvas PTY rendering/replay/resize.
 - Enhanced controls are rejected safely at the native TUI runtime boundary and hidden by the central frontend capability helpers. Broader UI copy may still need review so native TUI sessions consistently explain external-locked semantics.
