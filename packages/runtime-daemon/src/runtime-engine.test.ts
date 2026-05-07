@@ -1437,7 +1437,7 @@ describe("RuntimeEngine", () => {
     }
   });
 
-  test("native TUI backend survives clientless session listing", async () => {
+  test("native TUI backend survives web detach and clientless session listing", async () => {
     const engine = new RuntimeEngine([]);
     const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-native-tui-detached-"));
     const fakeCodex = path.join(workspace, "fake-codex.js");
@@ -1465,11 +1465,26 @@ describe("RuntimeEngine", () => {
         provider: "codex",
         cwd: workspace,
         liveBackend: "native_tui",
+        attach: {
+          client: {
+            id: "web-native",
+            kind: "web",
+            connectionId: "web-native",
+          },
+          mode: "interactive",
+          claimControl: true,
+        },
       });
       const sessionId = started.session.session.id;
+      assert.equal(started.session.attachedClients.length, 1);
+      assert.equal(started.session.controlLease.holderClientId, "web-user");
       await waitFor(() => {
         assert.equal(engine.getSessionSummary(sessionId).session.providerSessionId, providerSessionId);
       }, { timeoutMs: 5_000 });
+
+      const detached = engine.detachSession(sessionId, { clientId: "web-native" });
+      assert.equal(detached.attachedClients.length, 0);
+      assert.equal(detached.controlLease.holderClientId, undefined);
 
       const listed = engine.listSessions();
       assert.equal(listed.sessions.some((entry) => entry.session.id === sessionId), true);
