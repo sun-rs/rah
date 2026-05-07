@@ -128,6 +128,7 @@ describe("NativeTuiProviderRuntime", () => {
 
   test("keeps structured provider coordination named as a non-core path", () => {
     const engineSource = readSource("./runtime-engine.ts");
+    const providerCapabilityBindingsSource = readSource("./provider-capability-bindings.ts");
     const providerAdapterSource = readSource("./provider-adapter.ts");
     const providerAdapterInterface = providerAdapterSource.slice(
       providerAdapterSource.indexOf("export interface ProviderAdapter\n"),
@@ -157,6 +158,18 @@ describe("NativeTuiProviderRuntime", () => {
     assert.match(engineSource, /bindDiagnosticCapability/);
     assert.match(engineSource, /bindDebugCapability/);
     assert.match(engineSource, /bindShutdownCapability/);
+    assert.match(providerCapabilityBindingsSource, /export function bindStoredHistoryCapability/);
+    assert.match(providerCapabilityBindingsSource, /export function bindStructuredLifecycleCapability/);
+    assert.match(providerCapabilityBindingsSource, /export function bindEnhancedModelCapability/);
+    assert.match(providerCapabilityBindingsSource, /export function bindShutdownCapability/);
+    assert.doesNotMatch(engineSource, /function hasStoredHistoryCapability/);
+    assert.doesNotMatch(engineSource, /function bindStoredHistoryCapability/);
+    assert.doesNotMatch(engineSource, /function hasStructuredLifecycleCapability/);
+    assert.doesNotMatch(engineSource, /function bindStructuredLifecycleCapability/);
+    assert.doesNotMatch(engineSource, /function hasEnhancedModelCapability/);
+    assert.doesNotMatch(engineSource, /function bindEnhancedModelCapability/);
+    assert.doesNotMatch(engineSource, /function hasShutdownCapability/);
+    assert.doesNotMatch(engineSource, /function bindShutdownCapability/);
     assert.doesNotMatch(engineSource, /adaptersById/);
     assert.doesNotMatch(engineSource, /adaptersByProvider/);
     assert.doesNotMatch(engineSource, /structuredSessionOwners = new Map<string, ProviderAdapter>/);

@@ -230,6 +230,13 @@ Native TUI handler factory boundary verified on 2026-05-07:
 
 This guard verifies that `DefaultNativeTuiProviderRuntime` receives the binding-only handler factory and `DefaultNativeTuiMirrorProvider` receives the mirror-only handler factory. The previous combined provider handler factory has no remaining runtime-facing callers and has been removed.
 
+Provider capability binding boundary verified on 2026-05-07:
+
+- `npm run typecheck`: pass
+- `node --import tsx --test --test-force-exit packages/runtime-daemon/src/native-tui-provider-runtime.test.ts packages/runtime-daemon/src/runtime-engine.test.ts packages/runtime-daemon/src/debug-engine.test.ts`: 53 pass
+
+This guard verifies that provider capability detection and binding live in `provider-capability-bindings.ts` rather than inside `RuntimeEngine`. RuntimeEngine now registers already-bound narrow capability views, while the top-level `ProviderAdapter` remains identity-only.
+
 ## Remaining Gaps
 
 These are still not completion-grade:
