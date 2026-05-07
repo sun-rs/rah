@@ -88,6 +88,10 @@ import {
   createDefaultNativeTuiProviderRuntime,
   type NativeTuiProviderRuntime,
 } from "./native-tui-provider-runtime";
+import {
+  createDefaultNativeTuiMirrorProvider,
+  type NativeTuiMirrorProvider,
+} from "./native-tui-mirror-provider";
 import { WorkbenchStateStore } from "./workbench-state";
 import {
   isReadOnlyReplaySession,
@@ -206,6 +210,7 @@ export class RuntimeEngine {
   private readonly sessionLifecycle: RuntimeSessionLifecycle;
   private readonly structuredProviders: RuntimeStructuredProviderCoordinator;
   private readonly nativeTuiProviders: NativeTuiProviderRuntime;
+  private readonly nativeTuiMirrors: NativeTuiMirrorProvider;
   private readonly defaultLiveBackend: SessionLiveBackend;
 
   private readonly adaptersById = new Map<string, ProviderAdapter>();
@@ -237,6 +242,7 @@ export class RuntimeEngine {
     this.ptyHub = new PtyHub();
     this.historySnapshots = new HistorySnapshotStore();
     this.nativeTuiProviders = createDefaultNativeTuiProviderRuntime();
+    this.nativeTuiMirrors = createDefaultNativeTuiMirrorProvider();
     this.sessionStore = new SessionStore({
       onSnapshot: (states) => {
         this.workbenchState.persistLiveSessions(states);
@@ -261,6 +267,7 @@ export class RuntimeEngine {
       sessionStore: this.sessionStore,
       historySnapshots: this.historySnapshots,
       nativeTuiProviders: this.nativeTuiProviders,
+      nativeTuiMirrors: this.nativeTuiMirrors,
       onRememberSession: (state) => {
         this.workbenchState.rememberSession(state);
         this.refreshRememberedState();

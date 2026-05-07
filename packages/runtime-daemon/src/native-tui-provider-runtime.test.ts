@@ -2,6 +2,7 @@ import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { DefaultNativeTuiProviderRuntime } from "./native-tui-provider-runtime";
+import { DefaultNativeTuiMirrorProvider } from "./native-tui-mirror-provider";
 
 function readSource(relativePath: string): string {
   return readFileSync(new URL(relativePath, import.meta.url), "utf8");
@@ -41,7 +42,7 @@ describe("NativeTuiProviderRuntime", () => {
   });
 
   test("does not try to mirror before the provider session is bound", () => {
-    const runtime = new DefaultNativeTuiProviderRuntime();
+    const runtime = new DefaultNativeTuiMirrorProvider();
     const update = runtime.updateMirror({
       sessionId: "rah-session",
       provider: "codex",
@@ -93,6 +94,16 @@ describe("NativeTuiProviderRuntime", () => {
     for (const source of coreFiles) {
       assertNoImports(source, forbiddenProviderModules);
     }
+    assert.doesNotMatch(
+      readSource("./native-tui-provider-runtime.ts"),
+      /updateMirror/,
+      "native TUI lifecycle runtime should not own mirror updates",
+    );
+    assert.match(
+      readSource("./native-tui-mirror-runtime.ts"),
+      /NativeTuiMirrorProvider/,
+      "mirror runtime should depend on the dedicated mirror provider seam",
+    );
   });
 
   test("keeps structured provider coordination named as a non-core path", () => {

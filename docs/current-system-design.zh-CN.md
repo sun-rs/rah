@@ -90,6 +90,7 @@ Timeline identity 的硬约束：
 - `PtySessionRuntime`
 - `RuntimeTerminalCoordinator`
 - `NativeTuiMirrorRuntime`
+- `NativeTuiMirrorProvider`
 - identity-only `ProviderAdapter` + explicit capability maps（legacy structured/enhancement/stored-history adapter seam）
 - `HistorySnapshotStore`
 

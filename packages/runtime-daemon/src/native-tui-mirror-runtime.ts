@@ -21,7 +21,7 @@ import {
   type NativeTuiSessionState,
 } from "./native-tui-session-state";
 import { nextPromptStateFromActivity } from "./native-tui-prompt-state";
-import type { NativeTuiProviderRuntime } from "./native-tui-provider-runtime";
+import type { NativeTuiMirrorProvider } from "./native-tui-mirror-provider";
 import {
   applyProviderActivity,
   type ProviderActivity,
@@ -35,7 +35,7 @@ type NativeTuiMirrorRuntimeDeps = {
   eventBus: EventBus;
   ptyHub: PtyHub;
   sessionStore: SessionStore;
-  nativeTuiProviders: NativeTuiProviderRuntime;
+  nativeTuiMirrors: NativeTuiMirrorProvider;
   diagnostics: NativeTuiDiagnosticStore;
   getSession: (sessionId: string) => NativeTuiSessionState | undefined;
   updatePromptState: (sessionId: string, promptState: TerminalWrapperPromptState) => void;
@@ -46,7 +46,7 @@ export class NativeTuiMirrorRuntime {
 
   startSessionMirror(sessionId: string): void {
     const native = this.deps.getSession(sessionId);
-    if (!native || !this.deps.nativeTuiProviders.supports(native.provider)) {
+    if (!native || !this.deps.nativeTuiMirrors.supports(native.provider)) {
       return;
     }
     const timer = setInterval(() => {
@@ -62,7 +62,7 @@ export class NativeTuiMirrorRuntime {
     if (!native || !native.providerSessionId) {
       return;
     }
-    const update = this.deps.nativeTuiProviders.updateMirror(
+    const update = this.deps.nativeTuiMirrors.updateMirror(
       nativeTuiProviderRuntimeSession(native),
       native.providerMirror,
     );

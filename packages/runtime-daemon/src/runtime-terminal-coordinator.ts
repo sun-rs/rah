@@ -35,6 +35,7 @@ import {
   recordNativeTuiProcessExitDiagnostic,
   resolveNativeTuiBindingDiagnostic,
 } from "./native-tui-diagnostics";
+import type { NativeTuiMirrorProvider } from "./native-tui-mirror-provider";
 import { buildNativeTuiSessionCapabilities } from "./runtime-terminal-capabilities";
 import { PtySessionRuntime, type PtySessionRuntimeEntry } from "./pty-session-runtime";
 import {
@@ -67,6 +68,7 @@ type RuntimeTerminalCoordinatorDeps = {
   sessionStore: SessionStore;
   historySnapshots: HistorySnapshotStore;
   nativeTuiProviders: NativeTuiProviderRuntime;
+  nativeTuiMirrors: NativeTuiMirrorProvider;
   onRememberSession: (state: StoredSessionState) => void;
   onSessionOwnerRemoved: (sessionId: string) => void;
 };
@@ -86,7 +88,7 @@ export class RuntimeTerminalCoordinator {
       eventBus: deps.eventBus,
       ptyHub: deps.ptyHub,
       sessionStore: deps.sessionStore,
-      nativeTuiProviders: deps.nativeTuiProviders,
+      nativeTuiMirrors: deps.nativeTuiMirrors,
       diagnostics: this.nativeTuiDiagnostics,
       getSession: (sessionId) => this.nativeTuiSessions.get(sessionId),
       updatePromptState: (sessionId, promptState) => {

@@ -11,10 +11,8 @@ import {
 import { createDefaultNativeTuiProviderHandlers } from "./native-tui-provider-handlers";
 import type {
   NativeTuiBindingCandidate,
-  NativeTuiMirrorUpdate,
   NativeTuiOutputObservation,
   NativeTuiProviderHandler,
-  NativeTuiProviderMirror,
   NativeTuiProviderRuntimeSession,
 } from "./native-tui-provider-runtime-types";
 
@@ -36,10 +34,6 @@ export interface NativeTuiProviderRuntime {
   canProbeBinding(provider: ProviderKind): boolean;
   observeOutput(session: NativeTuiProviderRuntimeSession, data: string): NativeTuiOutputObservation;
   probeBinding(session: NativeTuiProviderRuntimeSession): NativeTuiBindingCandidate | null;
-  updateMirror(
-    session: NativeTuiProviderRuntimeSession,
-    mirror: NativeTuiProviderMirror | undefined,
-  ): NativeTuiMirrorUpdate;
 }
 
 const EMPTY_NATIVE_TUI_OUTPUT_OBSERVATION: NativeTuiOutputObservation = {
@@ -87,30 +81,6 @@ export class DefaultNativeTuiProviderRuntime implements NativeTuiProviderRuntime
       return null;
     }
     return this.handlers.get(session.provider)?.probeBinding?.(session) ?? null;
-  }
-
-  updateMirror(
-    session: NativeTuiProviderRuntimeSession,
-    mirror: NativeTuiProviderMirror | undefined,
-  ): NativeTuiMirrorUpdate {
-    if (!session.providerSessionId) {
-      return { status: "unbound", ...(mirror ? { mirror } : {}) };
-    }
-    if (
-      mirror &&
-      (mirror.provider !== session.provider || mirror.providerSessionId !== session.providerSessionId)
-    ) {
-      mirror = undefined;
-    }
-    const handler = this.handlers.get(session.provider);
-    if (!handler) {
-      return { status: "unsupported", ...(mirror ? { mirror } : {}) };
-    }
-    try {
-      return handler.updateMirror(session, mirror);
-    } catch (error) {
-      return { status: "failed", ...(mirror ? { mirror } : {}), phase: "mirror_tick", error };
-    }
   }
 
   private assertSupported(provider: ProviderKind): void {
