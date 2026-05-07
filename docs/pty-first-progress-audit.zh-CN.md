@@ -35,6 +35,7 @@ RAH should converge on one live core:
 | Mirror failure does not affect TUI | native TUI diagnostics tests and runtime mirror failure tests | Covered by tests |
 | Structured source is provider history/DB | native provider handlers and stored-session parsers remain the mirror source | Partially done |
 | Workbench shell only view/attach | Web startup defaults native TUI; history browsing remains replay-only; `activateHistorySessionCommand` tests lock replay/attach instead of implicit claim | Partially audited |
+| Canvas pane view/attach semantics | `canvas-state.ts` centralizes pane target rules; `canvas-state.test.ts` locks live-session uniqueness and allows read-only history replay in multiple panes | Covered by tests |
 | Enhanced controls downgraded | native TUI capabilities expose `structuredControl: false`; docs mark controls optional | Partially done |
 | Legacy structured path no longer default | Web, CLI, and default daemon RuntimeEngine prefer native TUI | Done |
 
@@ -43,7 +44,7 @@ RAH should converge on one live core:
 Latest verified gates in this branch:
 
 - `npm run typecheck`: pass
-- `npm run test:web`: 150 pass
+- `npm run test:web`: 155 pass
 - `npm run test:provider-contracts`: 133 pass
 - `npm run test:runtime`: 370 pass
 - `npm run test:native-tui`: pass on 2026-05-07

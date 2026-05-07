@@ -57,6 +57,16 @@ import {
 } from "./workbench-selectors";
 import { deriveWorkbenchNoticeState } from "./workbench-notice-contract";
 import { buildModelOptionValuesFromReasoning } from "./provider-capabilities";
+import {
+  applyCanvasPaneTarget,
+  CANVAS_LAYOUT_PANE_COUNT,
+  CANVAS_PANE_IDS,
+  createCanvasLayoutRatios,
+  createEmptyCanvasTargets,
+  resolveCanvasTargetProjection as resolveCanvasTargetProjectionFromState,
+  type CanvasPaneId,
+  type CanvasPaneTarget,
+} from "./canvas-state";
 
 const loadSettingsDialog = () => import("./components/workbench/dialogs/SettingsDialog");
 const SettingsDialog = lazy(async () => ({
@@ -77,12 +87,6 @@ type ModelDraft = {
 };
 
 type WorkbenchMode = "single" | "canvas";
-type CanvasPaneId = "canvas-1" | "canvas-2" | "canvas-3" | "canvas-4";
-type CanvasPaneTarget =
-  | { kind: "empty" }
-  | { kind: "new" }
-  | { kind: "session"; sessionId: string }
-  | { kind: "stored"; ref: StoredSessionRef };
 type CanvasNewSessionDraft = {
   provider: ProviderChoice;
   modeDrafts: Record<ProviderChoice, SessionModeDraft>;
@@ -92,26 +96,6 @@ type CanvasNewSessionDraft = {
 const MODEL_DRAFT_STORAGE_KEY = "rah.modelDrafts.v2";
 const LEGACY_MODEL_DRAFT_STORAGE_KEYS = ["rah.modelDrafts.v1"];
 const PROVIDER_CHOICES: ProviderChoice[] = ["codex", "claude", "kimi", "gemini", "opencode"];
-const CANVAS_PANE_IDS: CanvasPaneId[] = ["canvas-1", "canvas-2", "canvas-3", "canvas-4"];
-const CANVAS_LAYOUT_PANE_COUNT: Record<CanvasLayout, number> = {
-  "two-horizontal": 2,
-  "two-vertical": 2,
-  "three-horizontal": 3,
-  "four-grid": 4,
-};
-
-function createEmptyCanvasTargets(): Record<CanvasPaneId, CanvasPaneTarget> {
-  return {
-    "canvas-1": { kind: "empty" },
-    "canvas-2": { kind: "empty" },
-    "canvas-3": { kind: "empty" },
-    "canvas-4": { kind: "empty" },
-  };
-}
-
-function createCanvasLayoutRatios(layout: CanvasLayout): number[] {
-  return Array.from({ length: CANVAS_LAYOUT_PANE_COUNT[layout] }, () => 1);
-}
 
 function emptyModelDrafts(): Record<ProviderChoice, ModelDraft> {
   return {
@@ -426,37 +410,7 @@ export function App() {
     : CANVAS_PANE_IDS.slice(0, CANVAS_LAYOUT_PANE_COUNT[canvasLayout]);
   const resolveCanvasProjection = (paneId: CanvasPaneId) => {
     const target = canvasPaneTargets[paneId];
-    return resolveCanvasTargetProjection(target);
-  };
-  const resolveCanvasTargetProjection = (target: CanvasPaneTarget) => {
-    if (target.kind === "session") {
-      return projections.get(target.sessionId) ?? null;
-    }
-    if (target.kind === "stored") {
-      for (const projection of projections.values()) {
-        if (
-          projection.summary.session.provider === target.ref.provider &&
-          projection.summary.session.providerSessionId === target.ref.providerSessionId
-        ) {
-          return projection;
-        }
-      }
-    }
-    return null;
-  };
-  const resolveCanvasLiveUniquenessKey = (target: CanvasPaneTarget): string | null => {
-    if (target.kind === "session") {
-      const projection = projections.get(target.sessionId);
-      return projection && isReadOnlyReplay(projection.summary) ? null : target.sessionId;
-    }
-    if (target.kind !== "stored") {
-      return null;
-    }
-    const projection = resolveCanvasTargetProjection(target);
-    if (!projection || isReadOnlyReplay(projection.summary)) {
-      return null;
-    }
-    return projection.summary.session.id;
+    return resolveCanvasTargetProjectionFromState(target, projections);
   };
   const activeCanvasProjection = resolveCanvasProjection(activeCanvasPaneId);
   const activeCanvasSummary = activeCanvasProjection?.summary ?? null;
@@ -471,18 +425,9 @@ export function App() {
   };
 
   const setCanvasPaneTarget = (paneId: CanvasPaneId, target: CanvasPaneTarget) => {
-    setCanvasPaneTargets((current) => {
-      const next = { ...current, [paneId]: target };
-      const targetLiveKey = resolveCanvasLiveUniquenessKey(target);
-      if (targetLiveKey) {
-        for (const id of CANVAS_PANE_IDS) {
-          if (id !== paneId && resolveCanvasLiveUniquenessKey(current[id]) === targetLiveKey) {
-            next[id] = { kind: "empty" };
-          }
-        }
-      }
-      return next;
-    });
+    setCanvasPaneTargets((current) =>
+      applyCanvasPaneTarget(current, paneId, target, projections),
+    );
     setActiveCanvasPaneId(paneId);
   };
 
