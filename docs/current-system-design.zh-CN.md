@@ -4,7 +4,7 @@
 
 ## 1. 项目定位
 
-RAH 是一个本地优先的 AI 工作台。它不是网页终端转播器，也不是某一家 CLI 的壳，而是把多家 CLI / SDK / API 的运行过程统一成 daemon-owned session、canonical event feed 和 Web workbench。
+RAH 是一个本地优先、PTY-first 的 AI 工作台。它不是要替五家 CLI 重写完整 Web agent，而是让原生 provider TUI session 由 daemon 持有，并让桌面 Terminal、Web、PWA、iPad/iPhone、Canvas pane 都 attach 到同一个 live PTY session。
 
 当前已接入五家 provider：
 
@@ -14,11 +14,13 @@ RAH 是一个本地优先的 AI 工作台。它不是网页终端转播器，也
 - Kimi
 - OpenCode
 
-核心目标：
+当前核心目标：
 
-- 本机 daemon 统一管理 session、事件、控制权和 provider adapter。
+- 本机 daemon 统一持有真实 PTY/TUI session、事件、控制权和 provider launch/mirror adapter。
+- live truth 是 PTY/TUI 进程状态与 PTY output；客户端 detach/reload/background 不应杀掉 session。
+- 结构化 Chat/Timeline 只来自 provider 原厂 jsonl/db/session history mirror，不从 ANSI/TUI 输出反推。
 - Web UI 只消费 RAH canonical protocol，不直接依赖 provider-native 事件。
-- Terminal handoff 模式保留真实本地 TUI，同时允许 Web/手机接管同一 live session。
+- `rah <provider>`、Web New、Canvas New、Web Claim History 默认都进入 native TUI PTY runtime；旧 structured live adapter 仅作为显式 legacy/enhancement 路径保留。
 - 历史浏览先加载最近 tail，再按上滚分页加载更早内容，不一次性把完整历史塞进前端。
 
 ## 2. 包结构
@@ -73,8 +75,9 @@ Timeline identity 的硬约束：
 - WebSocket event stream
 - static web serving
 - session lifecycle
-- provider adapter registry
-- terminal wrapper control channel
+- provider launch/mirror adapter registry
+- native TUI PTY runtime
+- legacy terminal wrapper control channel
 - stored history catalog
 - history snapshot paging
 
@@ -84,7 +87,10 @@ Timeline identity 的硬约束：
 - `SessionStore`
 - `EventBus`
 - `PtyHub`
-- `ProviderAdapter`
+- `PtySessionRuntime`
+- `RuntimeTerminalCoordinator`
+- `NativeTuiMirrorRuntime`
+- `ProviderAdapter`（legacy structured/enhancement 与 stored-history adapter seam）
 - `HistorySnapshotStore`
 
 ### 3.3 client-web
@@ -108,30 +114,32 @@ Timeline identity 的硬约束：
 
 ## 4. Session 类型
 
-RAH 里需要区分三类 session 视角。
+RAH 里需要区分四类 session 视角。
 
 | 类型 | 含义 | 可输入 | 可 Archive/Close | 历史来源 |
 | --- | --- | --- | --- | --- |
-| Web-owned live | Web 通过 daemon adapter 创建或 resume 的 live session | 可以 | 关闭 daemon-owned provider client | live event + provider history |
-| Terminal handoff live | `rah xxx` / `rah xxx resume <id>` 创建的真实 terminal session | 可以，但 single-writer | 关闭 wrapper / native TUI / remote turn | provider history + wrapper control |
+| Native TUI live | daemon 启动并持有真实 provider TUI PTY；Web New、Canvas New、Web Claim、`rah xxx` 默认都进入这条路径 | 可以，但需要 control lease | 显式 close/archive 才关闭 PTY/TUI | PTY replay + provider history mirror |
 | Read-only replay | 打开 provider 历史形成的只读 projection | 不可以，需 claim | 只关闭 UI projection | provider history |
+| Legacy structured live | 显式 `liveBackend: "structured"` 或旧测试/调试路径 | 可以 | 关闭 provider adapter client | provider SDK/API event + history |
+| Legacy wrapper live | `RAH_LEGACY_WRAPPER=1 rah xxx` 的旧 terminal wrapper handoff | 可以，但 single-writer | 关闭 wrapper session | provider history + wrapper control |
 
 重要边界：
 
-- 只要 provider session 被 daemon 或 wrapper 拉起，就是 live。
+- 只要 provider session 被 daemon-owned native TUI PTY 拉起，就是 live；没有 client attach 时也仍然 live。
 - `ready`、`unread`、`approval`、`thinking` 都属于 live 的 UI 状态，不是是否 live 的边界。
 - 只读打开历史不算 live，也不算写手。
-- Web `claim/resume` 会把 provider history 升级成 daemon-owned live session。
+- Web `claim/resume` 默认把 provider history 升级成 daemon-owned native TUI live session；只读浏览不触发 resume。
+- client detach、浏览器 reload、PWA 切后台只应影响 attach 状态，不能隐式 close/archive/kill session。
 
 ## 5. 五家 Provider 当前实现
 
-| Provider | Web new/resume | `rah xxx` handoff | 历史来源 | 控制能力 |
+| Provider | 默认 live path | Launch/resume spec | Structured mirror source | 增强控制边界 |
 | --- | --- | --- | --- | --- |
-| Codex | app-server thread/start、thread/resume | 真实 terminal + isolated `CODEX_HOME` + app-server remote turn | rollout jsonl | Web approval / interrupt / mode 支持较完整 |
-| Claude | SDK live session | 真实 terminal + `--session-id` / `--resume <id>` + one-shot `--print` remote turn | `~/.claude/projects/**/*.jsonl` | Web-owned 支持 SDK approval；handoff 默认 bypass |
-| Gemini | stream-json live session | 真实 terminal + one-shot prompt remote turn | Gemini conversation file + cache | Web-owned mode 可切；handoff 默认 yolo |
-| Kimi | wire/ACP live client | terminal wrapper / wire client | Kimi wire jsonl | approval 支持；`default/yolo` 切换要求 idle |
-| OpenCode | ACP/API live client | terminal wrapper / OpenCode API | OpenCode SQLite message store | permission ruleset 支持 Ask/Full auto |
+| Codex | daemon-owned native TUI PTY | `codex --cd <cwd>` / `codex resume --cd <cwd> <id>`，必要时 isolated `CODEX_HOME` | rollout jsonl / sessions | model/mode 可作为启动参数增强；运行中以原生 TUI 为准 |
+| Claude | daemon-owned native TUI PTY | `claude --session-id <uuid>` / `claude --resume <id>` | `~/.claude/projects/**/*.jsonl` | permission/model/effort 作为启动参数增强；运行中以原生 TUI 为准 |
+| Gemini | daemon-owned native TUI PTY | `gemini` / `gemini --resume <id>` | Gemini conversation file + cache | approval/model 作为启动参数增强；无 RAH 统一 effort |
+| Kimi | daemon-owned native TUI PTY | `kimi --session <uuid|id>` | Kimi wire jsonl / session files | model/thinking/mode 作为启动参数增强；运行中以原生 TUI 为准 |
+| OpenCode | daemon-owned native TUI PTY | `opencode [--session <id>] <cwd>` | OpenCode SQLite message store | model/permission ruleset 作为启动参数增强；运行中以原生 TUI 为准 |
 
 默认权限策略见 [Session 入口与权限边界](./session-entry-capability-boundary.zh-CN.md)。当前默认统一偏向低摩擦最大权限：
 
@@ -141,7 +149,7 @@ RAH 里需要区分三类 session 视角。
 - Kimi：`yolo`
 - OpenCode：`opencode/full-auto`
 
-这些默认值由 adapter 的 `ProviderModelCatalog.defaultModeId` 提供。前端只传 RAH 标准 `modeId`，不再把 mode 拆成 Codex `approvalPolicy/sandbox`、Claude permission mode、Gemini approval mode 或 OpenCode permission ruleset。具体映射见 [Provider Adapter 协议与能力边界](./provider-adapter-protocol.zh-CN.md)。
+这些默认值由 adapter 的 `ProviderModelCatalog.defaultModeId` 提供。前端只传 RAH 标准 `modeId`，daemon 在 native TUI launch spec 中尽量翻译为 provider 启动参数。启动增强失败或 provider 语义变化不应影响 PTY core 的产品边界；用户始终可以切到原生 TUI 使用官方 `/permission`、`/model`、`/plan`、`/goal` 等能力。具体映射见 [Provider Adapter 协议与能力边界](./provider-adapter-protocol.zh-CN.md)。
 
 `SessionModeDescriptor.role` 是 UI 的稳定语义层：
 
@@ -155,27 +163,30 @@ Provider 原生 mode id 仍可作为 `id` 保留，但前端只用 `role` 做稳
 
 `SessionModeDescriptor.applyTiming` 是 mode 的应用时机语义层，用来区分 `immediate`、`next_turn`、`idle_only`、`restart_required`、`startup_only`。例如 Kimi 的 `default/yolo/plan` 是 `idle_only`，因为切换可能要重启 wire client；Codex/Gemini/OpenCode 多数 mode 是下一 turn 生效；Claude SDK mode 可同步到当前 query control plane。
 
-## 6. Terminal Handoff 原则
+## 6. PTY Attach 原则
 
-Terminal handoff 的目标是：
+PTY attach 的目标是：
 
-- 本地终端保持真实 provider TUI 体验。
-- Web UI 可以立即看到这个 session 出现在 live list。
-- 用户离开 Mac 后，可以用手机 Web UI 继续同一 session。
+- 真实 provider TUI 始终运行在 daemon 持有的 PTY 中。
+- 本地终端、Web terminal、PWA/iPad/iPhone、Canvas pane 都只是 attach client。
+- `rah xxx` 默认不再拥有 provider 进程生命周期；它请求 daemon 创建/resume native TUI session，然后把当前 terminal attach 到该 PTY。
+- 桌面 terminal 断开只 detach，不杀 session；显式 close/archive 才关闭 TUI。
+- Web UI 可以立即看到 live session，并在 reload/focus 后通过 PTY replay 追上。
 
 当前锁定原则：
 
-- single-writer：任意时刻只有 terminal 或 web 一方负责输入。
+- single-writer：任意时刻只有一个 client 拥有 control lease。
 - 不同步 draft：只同步已提交 turn，不同步光标、未提交草稿、选区、slash menu。
 - transcript 主要来自 provider history 文件/数据库，不从屏幕画面解析主内容。
 - terminal 画面是用户体验 surface，不是 canonical data source。
-- Web 接管时 terminal 进入 remote control 面板；`Esc` 在安全状态下 reclaim 本地控制。
+- Chat composer 是 PTY 文本注入桥；如果 TUI prompt dirty，应阻止注入，避免污染用户正在 TUI 里编辑的草稿。
 
 当前不承诺：
 
 - 在原生 TUI 内部 `/new` / `/resume` 后所有 provider 都能自动 rebind。
-- terminal 和 Web 同时双写。
-- handoff session 在 Web 里动态修改全局权限模式。
+- 多客户端同时双写。
+- Web 对 native TUI session 动态修改所有 provider 私有权限/模型/plan 状态。
+- structured mirror 100% 覆盖 provider 新增的私有 UI 功能；mirror missing/failed 只进入 diagnostics，不影响 TUI live。
 
 ## 7. 历史浏览模型
 

@@ -6,12 +6,13 @@ Runtime-owned AI workbench for local-first, cross-device session continuity.
 
 Version: `1.0.0`.
 
-RAH is now centered on five main lines:
+RAH is now being refocused on a PTY-first live-session core:
 
-- canonical protocol and contract validation
-- runtime daemon with provider adapter seam
-- real provider adapters (`codex`, `claude`, `gemini`, `kimi`, `opencode`)
-- same-origin workbench with stored history, replay, claim, and live upgrade
+- the runtime daemon owns the real provider TUI PTY process
+- Web/PWA/desktop terminal/canvas attach to that same PTY session
+- structured Chat is a mirror of provider-native history files/DBs, not ANSI screen scraping
+- provider adapters own launch specs, binding probes, and mirror parsers
+- model/permission/plan/effort controls are optional provider enhancements, not the core contract
 
 The workbench is served through the daemon itself. The stable local entry is:
 
@@ -59,6 +60,9 @@ Important behavior:
   `rah gemini`, `rah kimi`, `rah opencode`) because the old daemon is stopped.
 - `npm install` is not needed for normal code changes.
 - daemon pid/log files live under `~/.rah/runtime-daemon`.
+- `rah <provider>` now defaults to PTY-first: it asks the daemon to create/resume a native TUI
+  session and attaches the current terminal to that daemon-owned PTY. Set `RAH_LEGACY_WRAPPER=1`
+  only when you intentionally need the old wrapper handoff path.
 
 Optional: if you want the global `rah` command to point at this checkout, link it once:
 
@@ -96,6 +100,7 @@ npm run typecheck
 npm run test:provider-contracts
 npm run test:web
 npm run test:runtime
+npm run test:native-tui
 npm run test:smoke:history-claim
 npm run test:smoke:tool-flow
 npm run test:smoke:gemini-flow
@@ -113,7 +118,7 @@ npm run test:smoke:wrapper
 
 ## Test tiers
 
-RAH now uses four test tiers:
+RAH now uses five test tiers:
 
 - default gate
   - `npm run typecheck`
@@ -128,6 +133,10 @@ RAH now uses four test tiers:
   - `npm run test:smoke:wrapper`
   - exercises the real daemon wrapper-control path for Codex, Claude, Gemini, Kimi, and OpenCode
     without invoking external provider CLIs or model APIs
+- native TUI gate
+  - `npm run test:native-tui`
+  - exercises the PTY-first lifecycle, fake native provider TUIs, browser replay/reconnect,
+    mobile input bridge contracts, mirror diagnostics, and native-TUI-specific regression cases
 - provider smoke
   - `history-claim`
   - `tool-flow`

@@ -1,8 +1,16 @@
 # RAH PTY-First Seamless Workbench 重构计划
 
-状态：设计边界文件。
+状态：设计边界与重构追踪文件。
 
 建议目标分支：`refactor/pty-first-core`
+
+当前进展（截至本分支当前实现）：
+
+- `rah <provider>` / `rah <provider> resume <id>` 默认请求 daemon 创建或恢复 `native_tui` session，然后把当前 terminal attach 到 daemon-owned PTY；旧 wrapper handoff 仅通过 `RAH_LEGACY_WRAPPER=1` 保留。
+- Web New、Canvas New、Web Claim History 默认 `native_tui`；daemon 默认 RuntimeEngine 在未显式指定 `liveBackend` 时也会对五家 provider 走 native TUI。
+- `PtySessionRuntime` 已抽出；native TUI 的 mirror polling / provider activity 应用已抽到 `NativeTuiMirrorRuntime`。
+- client detach / terminal detach / clientless listing 不关闭 native TUI session；显式 close/archive 才关闭。
+- `preferStoredReplay` 仍保持只读 history replay，不会因为默认 PTY-first 而隐式 claim/resume。
 
 本文用于重新定义 RAH 的长期主线。它不是继续扩大“统一五家 CLI 的完整 Web 控制台”，而是把 RAH 收敛成一个更稳、更独特的产品：
 
