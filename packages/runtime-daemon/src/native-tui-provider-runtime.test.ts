@@ -132,6 +132,7 @@ describe("NativeTuiProviderRuntime", () => {
     const providerAdapterSource = readSource("./provider-adapter.ts");
     const runtimeSessionLifecycleSource = readSource("./runtime-session-lifecycle.ts");
     const structuredCoordinatorSource = readSource("./legacy-structured/runtime-structured-provider-coordinator.ts");
+    const defaultStructuredAdaptersSource = readSource("./legacy-structured/default-structured-provider-adapters.ts");
     const defaultProviderAdaptersSource = readSource("./default-provider-adapters.ts");
     const codexAdapterSource = readSource("./codex-adapter.ts");
     const codexStoredHistoryAdapterSource = readSource("./codex-stored-history-adapter.ts");
@@ -149,6 +150,14 @@ describe("NativeTuiProviderRuntime", () => {
     const sessionListSource = readSource("./runtime-session-list.ts");
     assert.match(engineSource, /RuntimeStructuredProviderCoordinator/);
     assert.match(engineSource, /createDefaultProviderAdapters/);
+    assert.match(defaultProviderAdaptersSource, /createDefaultLegacyStructuredProviderAdapters/);
+    assert.match(defaultStructuredAdaptersSource, /CodexAdapter/);
+    assert.match(defaultStructuredAdaptersSource, /OpenCodeAdapter/);
+    assert.doesNotMatch(defaultProviderAdaptersSource, /new CodexAdapter/);
+    assert.doesNotMatch(defaultProviderAdaptersSource, /new ClaudeAdapter/);
+    assert.doesNotMatch(defaultProviderAdaptersSource, /new GeminiAdapter/);
+    assert.doesNotMatch(defaultProviderAdaptersSource, /new KimiAdapter/);
+    assert.doesNotMatch(defaultProviderAdaptersSource, /new OpenCodeAdapter/);
     assert.match(defaultProviderAdaptersSource, /CodexStoredHistoryAdapter/);
     assert.match(defaultProviderAdaptersSource, /ClaudeStoredHistoryAdapter/);
     assert.match(defaultProviderAdaptersSource, /GeminiStoredHistoryAdapter/);
