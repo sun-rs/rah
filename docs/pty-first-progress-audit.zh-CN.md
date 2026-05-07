@@ -330,11 +330,17 @@ Mobile terminal input bridge policy verified on 2026-05-07:
 
 This guard verifies the browser-facing policy for mobile terminal input. Direct taps on the terminal surface now use the same real-input browser viewport anchoring path as the visible mobile input bridge; shortcut taps still focus without browser scrolling so the shortcut bar stays stable.
 
+Headless WebKit native browser smoke verified on 2026-05-07:
+
+- `npm run test:smoke:native-browser-webkit`: pass
+
+This guard verifies the same native Codex and multi-provider browser smoke suite under Playwright WebKit. It covers Chat/TUI rendering, PTY output/input, Stop via Ctrl-C, TUI replay after reload, foreground recovery catch-up, Canvas native TUI replay/resize, and the mobile TUI input bridge focus path. It does not replace real iPad/Safari input-method QA.
+
 ## Remaining Gaps
 
 These are still not completion-grade:
 
-- WebKit/mobile browser smoke is not rerun in this audit. Chromium native browser smoke is covered by `npm run test:native-tui`, but iPad/Safari real input-method behavior still needs human verification.
+- Chromium and headless WebKit native browser smoke are covered. iPad/Safari real input-method behavior still needs human verification because headless WebKit cannot prove real keyboard/IME viewport behavior.
 - Real five-provider CLI/account human QA is still required; fake native TUI tests do not prove real login/quota/provider behavior.
 - Legacy structured adapters still exist. The structured live clients, structured adapter implementations, and default structured adapter construction are now path-isolated under `legacy-structured/`; production structured live is default-off behind `RAH_ENABLE_LEGACY_STRUCTURED_LIVE=1`. Codex/Claude/Gemini/Kimi/OpenCode now have separate stored-history adapters. The remaining code gap is deciding whether to keep or delete this explicit legacy/debug escape hatch.
 - Legacy wrapper runtime still exists for `RAH_LEGACY_WRAPPER=1` and synthetic tests. It is isolated as a fallback, not deleted.
