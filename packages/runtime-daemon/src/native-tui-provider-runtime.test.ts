@@ -103,7 +103,11 @@ describe("NativeTuiProviderRuntime", () => {
     assert.doesNotMatch(engineSource, /private readonly providers:/);
     assert.match(providerAdapterSource, /ProviderStructuredLifecycleAdapter/);
     assert.match(providerAdapterSource, /ProviderStructuredInputControlAdapter/);
+    assert.match(providerAdapterSource, /ProviderEnhancedModeAdapter/);
+    assert.match(providerAdapterSource, /ProviderEnhancedModelAdapter/);
     assert.doesNotMatch(providerAdapterSource, /ProviderLifecycleAdapter/);
     assert.doesNotMatch(providerAdapterSource, /ProviderInputControlAdapter/);
+    assert.doesNotMatch(providerAdapterSource, /ProviderModeCapabilityAdapter/);
+    assert.doesNotMatch(providerAdapterSource, /ProviderModelCapabilityAdapter/);
   });
 });

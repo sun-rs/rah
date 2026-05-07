@@ -41,6 +41,7 @@ RAH should converge on one live core:
 | Legacy structured path named as legacy/enhancement | `RuntimeStructuredProviderCoordinator` owns explicit `liveBackend: "structured"` start/resume, diagnostics, debug, and catalog fallbacks | Done |
 | Legacy structured session ownership named explicitly | `RuntimeEngine` tracks adapter-owned sessions as `structuredSessionOwners`; `RuntimeSessionLifecycle` calls `requireStructuredSessionAdapter` only after terminal/native paths are bypassed | Done |
 | Legacy structured adapter slices named explicitly | `ProviderStructuredLifecycleAdapter`, `ProviderStructuredInputControlAdapter`, `ProviderStructuredPermissionAdapter`, and `ProviderStructuredContextAdapter` mark non-core structured live capability slices | Done |
+| Enhanced adapter slices named explicitly | `ProviderEnhancedModeAdapter` and `ProviderEnhancedModelAdapter` mark model/mode controls as optional enhancements, not PTY-first core requirements | Done |
 
 ## Verification Run
 

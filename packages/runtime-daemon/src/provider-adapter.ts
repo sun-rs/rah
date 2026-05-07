@@ -62,14 +62,14 @@ export interface ProviderStructuredLifecycleAdapter {
   destroySession?(sessionId: string): Promise<void> | void;
 }
 
-export interface ProviderModeCapabilityAdapter {
+export interface ProviderEnhancedModeAdapter {
   setSessionMode?(
     sessionId: string,
     modeId: string,
   ): SessionSummary | Promise<SessionSummary>;
 }
 
-export interface ProviderModelCapabilityAdapter {
+export interface ProviderEnhancedModelAdapter {
   /**
    * Returns the provider catalog including adapter-owned mode descriptors. The
    * frontend must treat mode/model/config ids as opaque and submit them back.
@@ -170,8 +170,8 @@ export interface ProviderShutdownAdapter {
 export interface ProviderAdapter
   extends ProviderAdapterIdentity,
     ProviderStructuredLifecycleAdapter,
-    ProviderModeCapabilityAdapter,
-    ProviderModelCapabilityAdapter,
+    ProviderEnhancedModeAdapter,
+    ProviderEnhancedModelAdapter,
     ProviderActionCapabilityAdapter,
     ProviderStructuredInputControlAdapter,
     ProviderStructuredPermissionAdapter,
