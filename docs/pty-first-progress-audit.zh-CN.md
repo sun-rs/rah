@@ -43,6 +43,7 @@ RAH should converge on one live core:
 | Legacy structured adapter slices named explicitly | `ProviderStructuredLifecycleAdapter`, `ProviderStructuredInputControlAdapter`, and `ProviderStructuredPermissionAdapter` mark non-core structured live capability slices | Done |
 | Enhanced adapter slices named explicitly | `ProviderEnhancedModeAdapter` and `ProviderEnhancedModelAdapter` mark model/mode controls as optional enhancements, not PTY-first core requirements | Done |
 | Stored history discovery depends only on history slice | `RuntimeEngine.historyMirrorAdapters` and `runtime-session-list.ts` use `ProviderStoredHistoryAdapter` instead of the full `ProviderAdapter` interface | Done |
+| Stored history is not a top-level provider adapter requirement | `ProviderAdapter` no longer extends `ProviderStoredHistoryAdapter`; RuntimeEngine builds `storedHistoryAdaptersByProvider` and `historyMirrorAdapters` through an explicit capability guard | Done |
 | Built-in workspace inspection bypasses provider adapters | `ProviderAdapter` no longer extends `ProviderWorkspaceInspectionAdapter`; `RuntimeEngine` routes workspace snapshot/file/git read/apply actions through shared workspace utilities for non-`custom` sessions; duplicate workspace/file/git methods were removed from the five built-in provider adapters; `custom` debug sessions keep the structured adapter fallback | Done |
 | Context usage bypasses provider adapters | `RuntimeEngine.getContextUsage()` reads canonical session-store usage directly; duplicated adapter `getContextUsage()` methods and `ProviderStructuredContextAdapter` were removed | Done |
 | Structured input/control/permission is optional legacy surface | `ProviderAdapter` no longer extends `ProviderStructuredInputControlAdapter` or `ProviderStructuredPermissionAdapter`; `RuntimeEngine` requires these slices only after wrapper/native PTY paths fail | Done |
@@ -140,6 +141,13 @@ Structured coordinator capability map isolation verified on 2026-05-07:
 - `node --import tsx --test --test-force-exit packages/runtime-daemon/src/native-tui-provider-runtime.test.ts packages/runtime-daemon/src/runtime-engine.test.ts`: 52 pass
 
 This guard verifies that the legacy structured coordinator no longer receives the full `adaptersByProvider` registry. RuntimeEngine now builds explicit capability maps for structured live lifecycle, model catalogs, diagnostics, and debug scenarios.
+
+Stored history capability boundary verified on 2026-05-07:
+
+- `npm run typecheck`: pass
+- `node --import tsx --test --test-force-exit packages/runtime-daemon/src/native-tui-provider-runtime.test.ts packages/runtime-daemon/src/runtime-engine.test.ts`: 52 pass
+
+This guard verifies that stored history/mirror access no longer rides on the top-level `ProviderAdapter` contract. RuntimeEngine now builds stored-history maps explicitly and still preserves frozen history snapshots that outlive read-only replay sessions.
 
 ## Remaining Gaps
 

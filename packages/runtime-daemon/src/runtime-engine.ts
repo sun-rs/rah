@@ -110,6 +110,23 @@ async function runShutdownStep(label: string, task: () => Promise<unknown> | unk
   }
 }
 
+function hasStoredHistoryCapability(
+  adapter: ProviderAdapter,
+): adapter is ProviderAdapter & ProviderStoredHistoryAdapter {
+  return (
+    typeof (adapter as Partial<ProviderStoredHistoryAdapter>).getSessionHistoryPage ===
+      "function" ||
+    typeof (adapter as Partial<ProviderStoredHistoryAdapter>).createFrozenHistoryPageLoader ===
+      "function" ||
+    typeof (adapter as Partial<ProviderStoredHistoryAdapter>).listStoredSessions === "function" ||
+    typeof (adapter as Partial<ProviderStoredHistoryAdapter>).refreshStoredSessionsCatalog ===
+      "function" ||
+    typeof (adapter as Partial<ProviderStoredHistoryAdapter>).listStoredSessionWatchRoots ===
+      "function" ||
+    typeof (adapter as Partial<ProviderStoredHistoryAdapter>).removeStoredSession === "function"
+  );
+}
+
 export class RuntimeEngine {
   readonly eventBus: EventBus;
   readonly ptyHub: PtyHub;
@@ -142,6 +159,7 @@ export class RuntimeEngine {
   >();
   private readonly diagnosticAdaptersByProvider = new Map<string, ProviderDiagnosticAdapter>();
   private readonly debugAdaptersById = new Map<string, ProviderAdapter & ProviderDebugAdapter>();
+  private readonly storedHistoryAdaptersByProvider = new Map<string, ProviderStoredHistoryAdapter>();
   private readonly structuredSessionOwners = new Map<string, ProviderAdapter>();
   private readonly historyMirrorAdapters: readonly ProviderStoredHistoryAdapter[];
 
@@ -262,7 +280,7 @@ export class RuntimeEngine {
     for (const adapter of resolvedAdapters) {
       this.registerAdapter(adapter);
     }
-    this.historyMirrorAdapters = resolvedAdapters;
+    this.historyMirrorAdapters = resolvedAdapters.filter(hasStoredHistoryCapability);
     this.refreshStoredSessionsCache();
     this.storedSessionMonitor = new StoredSessionMonitor({
       roots: this.historyMirrorAdapters.flatMap(
@@ -337,7 +355,7 @@ export class RuntimeEngine {
       (entry) =>
         entry.provider === provider && entry.providerSessionId === providerSessionId,
     );
-    await this.adaptersByProvider.get(provider)?.removeStoredSession?.(
+    await this.storedHistoryAdaptersByProvider.get(provider)?.removeStoredSession?.(
       session ?? { provider, providerSessionId, source: "provider_history" },
     );
     this.workbenchState.hideSession({ provider, providerSessionId });
@@ -369,7 +387,9 @@ export class RuntimeEngine {
         continue;
       }
       seen.add(key);
-      await this.adaptersByProvider.get(session.provider)?.removeStoredSession?.(session);
+      await this.storedHistoryAdaptersByProvider
+        .get(session.provider)
+        ?.removeStoredSession?.(session);
     }
     this.workbenchState.hideSessionsInWorkspace(directory);
     this.refreshRememberedState();
@@ -743,8 +763,17 @@ export class RuntimeEngine {
     sessionId: string,
     options?: { beforeTs?: string; cursor?: string; limit?: number },
   ): SessionHistoryPageResponse {
-    const adapter = this.requireStructuredSessionAdapter(sessionId);
-    if (!adapter.getSessionHistoryPage) {
+    const owner = this.structuredSessionOwners.get(sessionId);
+    const adapter =
+      owner && hasStoredHistoryCapability(owner)
+        ? owner
+        : (() => {
+            const session = this.sessionStore.getSession(sessionId);
+            return session
+              ? this.storedHistoryAdaptersByProvider.get(session.session.provider)
+              : undefined;
+          })();
+    if (!adapter?.getSessionHistoryPage) {
       return { sessionId, events: [] };
     }
     return this.historySnapshots.getPage({
@@ -894,6 +923,9 @@ export class RuntimeEngine {
       }
       if (adapter.getProviderDiagnostic) {
         this.diagnosticAdaptersByProvider.set(provider, adapter);
+      }
+      if (hasStoredHistoryCapability(adapter)) {
+        this.storedHistoryAdaptersByProvider.set(provider, adapter);
       }
     }
   }

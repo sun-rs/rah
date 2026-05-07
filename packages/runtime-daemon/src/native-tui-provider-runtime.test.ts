@@ -109,7 +109,9 @@ describe("NativeTuiProviderRuntime", () => {
     assert.match(engineSource, /modelAdaptersByProvider/);
     assert.match(engineSource, /diagnosticAdaptersByProvider/);
     assert.match(engineSource, /debugAdaptersById/);
+    assert.match(engineSource, /storedHistoryAdaptersByProvider/);
     assert.doesNotMatch(engineSource, /adaptersByProvider: this\.adaptersByProvider/);
+    assert.doesNotMatch(engineSource, /historyMirrorAdapters = resolvedAdapters;/);
     assert.match(engineSource, /historyMirrorAdapters/);
     assert.doesNotMatch(engineSource, /RuntimeProviderCoordinator/);
     assert.doesNotMatch(engineSource, /private readonly providers:/);
@@ -117,12 +119,14 @@ describe("NativeTuiProviderRuntime", () => {
     assert.match(providerAdapterSource, /ProviderStructuredLifecycleAdapter/);
     assert.match(providerAdapterSource, /ProviderStructuredInputControlAdapter/);
     assert.match(providerAdapterSource, /ProviderStructuredPermissionAdapter/);
+    assert.match(providerAdapterSource, /ProviderStoredHistoryAdapter/);
     assert.match(providerAdapterSource, /ProviderEnhancedModeAdapter/);
     assert.match(providerAdapterSource, /ProviderEnhancedModelAdapter/);
     assert.match(providerAdapterSource, /startSession\?\(/);
     assert.match(providerAdapterSource, /resumeSession\?\(/);
     assert.doesNotMatch(providerAdapterInterface, /ProviderStructuredInputControlAdapter/);
     assert.doesNotMatch(providerAdapterInterface, /ProviderStructuredPermissionAdapter/);
+    assert.doesNotMatch(providerAdapterInterface, /ProviderStoredHistoryAdapter/);
     assert.doesNotMatch(providerAdapterInterface, /ProviderWorkspaceInspectionAdapter/);
     assert.doesNotMatch(providerAdapterSource, /ProviderStructuredContextAdapter/);
     assert.doesNotMatch(providerAdapterSource, /ProviderLifecycleAdapter/);
