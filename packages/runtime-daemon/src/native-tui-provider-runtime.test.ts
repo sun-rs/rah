@@ -97,6 +97,9 @@ describe("NativeTuiProviderRuntime", () => {
   test("keeps structured provider coordination named as a non-core path", () => {
     const engineSource = readSource("./runtime-engine.ts");
     const providerAdapterSource = readSource("./provider-adapter.ts");
+    const providerAdapterInterface = providerAdapterSource.slice(
+      providerAdapterSource.indexOf("export interface ProviderAdapter\n"),
+    );
     const sessionListSource = readSource("./runtime-session-list.ts");
     assert.match(engineSource, /RuntimeStructuredProviderCoordinator/);
     assert.match(engineSource, /structuredProviders/);
@@ -108,6 +111,11 @@ describe("NativeTuiProviderRuntime", () => {
     assert.match(providerAdapterSource, /ProviderStructuredInputControlAdapter/);
     assert.match(providerAdapterSource, /ProviderEnhancedModeAdapter/);
     assert.match(providerAdapterSource, /ProviderEnhancedModelAdapter/);
+    assert.match(providerAdapterSource, /startSession\?\(/);
+    assert.match(providerAdapterSource, /resumeSession\?\(/);
+    assert.doesNotMatch(providerAdapterInterface, /ProviderStructuredInputControlAdapter/);
+    assert.doesNotMatch(providerAdapterInterface, /ProviderWorkspaceInspectionAdapter/);
+    assert.doesNotMatch(providerAdapterSource, /ProviderStructuredContextAdapter/);
     assert.doesNotMatch(providerAdapterSource, /ProviderLifecycleAdapter/);
     assert.doesNotMatch(providerAdapterSource, /ProviderInputControlAdapter/);
     assert.doesNotMatch(providerAdapterSource, /ProviderModeCapabilityAdapter/);
