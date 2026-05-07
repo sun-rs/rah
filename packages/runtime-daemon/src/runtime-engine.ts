@@ -88,6 +88,7 @@ import {
   createDefaultNativeTuiMirrorProvider,
   type NativeTuiMirrorProvider,
 } from "./native-tui-mirror-provider";
+import { legacyStructuredLiveEnabled } from "./native-tui-runtime-config";
 import { WorkbenchStateStore } from "./workbench-state";
 import {
   isReadOnlyReplaySession,
@@ -207,9 +208,12 @@ export class RuntimeEngine {
   >();
   private readonly structuredSessionOwners = new Map<string, StructuredSessionOwnerProvider>();
   private readonly historyMirrorAdapters: ProviderStoredHistoryAdapter[] = [];
+  private readonly legacyStructuredLiveEnabled: boolean;
 
   constructor(adapters?: ProviderAdapter[]) {
     this.defaultLiveBackend = adapters === undefined ? "native_tui" : "structured";
+    this.legacyStructuredLiveEnabled =
+      adapters !== undefined || legacyStructuredLiveEnabled(process.env);
     this.workbenchState = new WorkbenchStateStore();
     this.eventBus = new EventBus();
     this.ptyHub = new PtyHub();
@@ -427,6 +431,7 @@ export class RuntimeEngine {
   }
 
   async startSession(request: StartSessionRequest): Promise<StartSessionResponse> {
+    this.assertStructuredLiveBackendAllowed(request);
     if (this.shouldUseNativeTuiBackend(request)) {
       await assertExistingWorkingDirectory(request.cwd, "Session working directory");
       this.pruneOrphanSessions();
@@ -439,6 +444,7 @@ export class RuntimeEngine {
   }
 
   async resumeSession(request: ResumeSessionRequest): Promise<ResumeSessionResponse> {
+    this.assertStructuredLiveBackendAllowed(request);
     if (this.shouldUseNativeTuiBackend(request)) {
       if (request.cwd) {
         await assertExistingWorkingDirectory(request.cwd, "Session working directory");
@@ -451,6 +457,21 @@ export class RuntimeEngine {
       });
     }
     return this.structuredProviders.resumeSession(request);
+  }
+
+  private assertStructuredLiveBackendAllowed(
+    request: Pick<StartSessionRequest | ResumeSessionRequest, "liveBackend"> &
+      Partial<Pick<ResumeSessionRequest, "preferStoredReplay">>,
+  ): void {
+    if (
+      request.liveBackend === "structured" &&
+      request.preferStoredReplay !== true &&
+      !this.legacyStructuredLiveEnabled
+    ) {
+      throw new Error(
+        "Structured live backend is disabled by default. Use native_tui, or set RAH_ENABLE_LEGACY_STRUCTURED_LIVE=1 for legacy/debug structured live sessions.",
+      );
+    }
   }
 
   private shouldUseNativeTuiBackend(

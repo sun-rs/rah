@@ -5,6 +5,8 @@ import {
   DEFAULT_NATIVE_TUI_BINDING_WARN_AFTER_MS,
   DEFAULT_NATIVE_TUI_MIRROR_INTERVAL_MS,
   DEFAULT_NATIVE_TUI_MIRROR_WARN_AFTER_MS,
+  booleanEnv,
+  legacyStructuredLiveEnabled,
   nativeTuiBindingProbeIntervalMs,
   nativeTuiBindingWarnAfterMs,
   nativeTuiMirrorIntervalMs,
@@ -47,5 +49,20 @@ describe("native TUI runtime config", () => {
   test("preserves parseInt-compatible legacy env behavior", () => {
     assert.equal(positiveIntegerEnv({ X: "25ms" }, "X", 42), 25);
     assert.equal(positiveIntegerEnv({ X: "5.5" }, "X", 42), 5);
+  });
+
+  test("parses boolean runtime flags conservatively", () => {
+    assert.equal(booleanEnv({}, "X"), false);
+    assert.equal(booleanEnv({ X: "1" }, "X"), true);
+    assert.equal(booleanEnv({ X: "true" }, "X"), true);
+    assert.equal(booleanEnv({ X: "yes" }, "X"), true);
+    assert.equal(booleanEnv({ X: "on" }, "X"), true);
+    assert.equal(booleanEnv({ X: "0" }, "X", true), false);
+    assert.equal(booleanEnv({ X: "false" }, "X", true), false);
+    assert.equal(booleanEnv({ X: "no" }, "X", true), false);
+    assert.equal(booleanEnv({ X: "off" }, "X", true), false);
+    assert.equal(booleanEnv({ X: "maybe" }, "X", true), true);
+    assert.equal(legacyStructuredLiveEnabled({}), false);
+    assert.equal(legacyStructuredLiveEnabled({ RAH_ENABLE_LEGACY_STRUCTURED_LIVE: "1" }), true);
   });
 });

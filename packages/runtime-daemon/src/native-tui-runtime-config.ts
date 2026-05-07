@@ -14,6 +14,24 @@ export function positiveIntegerEnv(env: Env, name: string, fallback: number): nu
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+export function booleanEnv(env: Env, name: string, fallback = false): boolean {
+  const raw = env[name]?.trim().toLowerCase();
+  if (!raw) {
+    return fallback;
+  }
+  if (raw === "1" || raw === "true" || raw === "yes" || raw === "on") {
+    return true;
+  }
+  if (raw === "0" || raw === "false" || raw === "no" || raw === "off") {
+    return false;
+  }
+  return fallback;
+}
+
+export function legacyStructuredLiveEnabled(env: Env = process.env): boolean {
+  return booleanEnv(env, "RAH_ENABLE_LEGACY_STRUCTURED_LIVE", false);
+}
+
 export function nativeTuiBindingProbeIntervalMs(env: Env = process.env): number {
   return positiveIntegerEnv(
     env,

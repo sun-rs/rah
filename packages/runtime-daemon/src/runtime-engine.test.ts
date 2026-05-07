@@ -796,6 +796,35 @@ describe("RuntimeEngine", () => {
     await engine.shutdown();
   });
 
+  test("production engine rejects explicit legacy structured live backend by default", async () => {
+    const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-structured-live-disabled-"));
+    const engine = new RuntimeEngine();
+    try {
+      await assert.rejects(
+        () =>
+          engine.startSession({
+            provider: "codex",
+            cwd: workspace,
+            liveBackend: "structured",
+          }),
+        /Structured live backend is disabled by default/,
+      );
+      await assert.rejects(
+        () =>
+          engine.resumeSession({
+            provider: "codex",
+            providerSessionId: "thread-structured-disabled",
+            cwd: workspace,
+            liveBackend: "structured",
+          }),
+        /Structured live backend is disabled by default/,
+      );
+    } finally {
+      await engine.shutdown();
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
   test("blocks mode and model changes while a session is not idle", async () => {
     const adapter = new MutableControlsAdapter();
     const engine = new RuntimeEngine([adapter]);

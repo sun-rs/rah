@@ -121,7 +121,7 @@ RAH 里需要区分四类 session 视角。
 | --- | --- | --- | --- | --- |
 | Native TUI live | daemon 启动并持有真实 provider TUI PTY；Web New、Canvas New、Web Claim、`rah xxx` 默认都进入这条路径 | 可以，但需要 control lease | 显式 close/archive 才关闭 PTY/TUI | PTY replay + provider history mirror |
 | Read-only replay | 打开 provider 历史形成的只读 projection | 不可以，需 claim | 只关闭 UI projection | provider history |
-| Legacy structured live | 显式 `liveBackend: "structured"` 或旧测试/调试路径 | 可以 | 关闭 provider adapter client | provider SDK/API event + history |
+| Legacy structured live | 旧测试/调试路径；生产默认拒绝显式 `liveBackend: "structured"`，除非设置 `RAH_ENABLE_LEGACY_STRUCTURED_LIVE=1` | 可以 | 关闭 provider adapter client | provider SDK/API event + history |
 | Legacy wrapper live | `RAH_LEGACY_WRAPPER=1 rah xxx` 的旧 terminal wrapper handoff | 可以，但 single-writer | 关闭 wrapper session | provider history + wrapper control |
 
 重要边界：
