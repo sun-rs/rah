@@ -247,6 +247,7 @@ Core design and freeze documents:
 - [rah codex handoff 模式设计（中文）](./docs/rah-codex-handoff-mode.zh-CN.md)
 - [rah claude handoff 模式设计（中文）](./docs/rah-claude-handoff-mode.zh-CN.md)
 - [Session 入口与权限边界（中文）](./docs/session-entry-capability-boundary.zh-CN.md)
+- [PTY-first 进度审计（中文）](./docs/pty-first-progress-audit.zh-CN.md)
 - [Terminal Wrapper Live Sessions（中文）](./docs/terminal-wrapper-live-sessions.zh-CN.md)
 - [Terminal Wrapper Protocol Draft（中文）](./docs/terminal-wrapper-protocol.zh-CN.md)
 - [Protocol Freeze Status](./docs/protocol-freeze-status.md)
