@@ -55,6 +55,7 @@ import type { ProviderActivity } from "./provider-activity";
 import type {
   ProviderAdapter,
   ProviderStoredHistoryAdapter,
+  ProviderStructuredInputControlAdapter,
   ProviderWorkspaceInspectionAdapter,
 } from "./provider-adapter";
 import { PtyHub } from "./pty-hub";
@@ -451,7 +452,7 @@ export class RuntimeEngine {
     if (this.terminals.handleNativeTuiInput(sessionId, request.clientId, request.text)) {
       return;
     }
-    this.requireStructuredSessionAdapter(sessionId).sendInput(sessionId, request);
+    this.requireStructuredInputControlAdapter(sessionId).sendInput(sessionId, request);
   }
 
   interruptSession(
@@ -464,7 +465,7 @@ export class RuntimeEngine {
     if (this.terminals.handleNativeTuiInterrupt(sessionId, request.clientId)) {
       return this.getSessionSummary(sessionId);
     }
-    return this.requireStructuredSessionAdapter(sessionId).interruptSession(sessionId, request);
+    return this.requireStructuredInputControlAdapter(sessionId).interruptSession(sessionId, request);
   }
 
   async closeSession(sessionId: string, request: CloseSessionRequest): Promise<void> {
@@ -495,7 +496,7 @@ export class RuntimeEngine {
       void clientId;
       return;
     }
-    this.requireStructuredSessionAdapter(sessionId).onPtyInput(sessionId, clientId, data);
+    this.requireStructuredInputControlAdapter(sessionId).onPtyInput(sessionId, clientId, data);
   }
 
   onPtyResize(sessionId: string, clientId: string, cols: number, rows: number): void {
@@ -503,7 +504,12 @@ export class RuntimeEngine {
       void clientId;
       return;
     }
-    this.requireStructuredSessionAdapter(sessionId).onPtyResize(sessionId, clientId, cols, rows);
+    this.requireStructuredInputControlAdapter(sessionId).onPtyResize(
+      sessionId,
+      clientId,
+      cols,
+      rows,
+    );
   }
 
   getWorkspaceSnapshot(sessionId: string, options?: { scopeRoot?: string }) {
@@ -987,6 +993,25 @@ export class RuntimeEngine {
 
   private shouldUseStructuredWorkspaceInspection(sessionId: string): boolean {
     return this.sessionStore.getSession(sessionId)?.session.provider === "custom";
+  }
+
+  private requireStructuredInputControlAdapter(
+    sessionId: string,
+  ): ProviderAdapter & ProviderStructuredInputControlAdapter {
+    const adapter = this.requireStructuredSessionAdapter(sessionId);
+    if (
+      typeof (adapter as Partial<ProviderStructuredInputControlAdapter>).sendInput !==
+        "function" ||
+      typeof (adapter as Partial<ProviderStructuredInputControlAdapter>).interruptSession !==
+        "function" ||
+      typeof (adapter as Partial<ProviderStructuredInputControlAdapter>).onPtyInput !==
+        "function" ||
+      typeof (adapter as Partial<ProviderStructuredInputControlAdapter>).onPtyResize !==
+        "function"
+    ) {
+      throw new Error(`Provider ${adapter.id} does not support structured input control.`);
+    }
+    return adapter as ProviderAdapter & ProviderStructuredInputControlAdapter;
   }
 
   private requireStructuredWorkspaceInspectionAdapter(

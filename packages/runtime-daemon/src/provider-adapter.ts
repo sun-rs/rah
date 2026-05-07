@@ -168,7 +168,6 @@ export interface ProviderAdapter
     ProviderEnhancedModeAdapter,
     ProviderEnhancedModelAdapter,
     ProviderActionCapabilityAdapter,
-    ProviderStructuredInputControlAdapter,
     ProviderStructuredPermissionAdapter,
     ProviderStoredHistoryAdapter,
     ProviderDiagnosticAdapter,

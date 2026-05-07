@@ -43,7 +43,7 @@ RAH 不把某一家 CLI 的原生概念直接暴露成前端公共逻辑。
 - `ProviderDebugAdapter`
 - `ProviderShutdownAdapter`
 
-除 `ProviderWorkspaceInspectionAdapter` 外，这些 slice 目前仍组合成一个 `ProviderAdapter` 传给 runtime engine；workspace inspection 已经移出 built-in provider 必需接口，只保留给 `custom` debug/structured fallback。context usage 也不再是 adapter 能力，RuntimeEngine 直接读取 session store 中的 canonical usage。协议含义已经分层。带 `Structured` 的 slice 是显式 legacy/enhancement structured live 路径，不是 PTY-first live core；带 `Enhanced` 的 slice 是模型/权限/plan 等增强控制，不应阻塞 PTY session 创建和 attach。新增 provider 时应逐项确认，而不是把所有能力当成“start/sendInput 附属功能”。
+`ProviderWorkspaceInspectionAdapter` 和 `ProviderStructuredInputControlAdapter` 已经移出 built-in `ProviderAdapter` 必需接口。Workspace inspection 只保留给 `custom` debug/structured fallback；structured input/control 只在显式 legacy structured live session 上通过 RuntimeEngine guard 使用。Context usage 也不再是 adapter 能力，RuntimeEngine 直接读取 session store 中的 canonical usage。协议含义已经分层。带 `Structured` 的 slice 是显式 legacy/enhancement structured live 路径，不是 PTY-first live core；带 `Enhanced` 的 slice 是模型/权限/plan 等增强控制，不应阻塞 PTY session 创建和 attach。新增 provider 时应逐项确认，而不是把所有能力当成“start/sendInput 附属功能”。
 
 核心能力：
 
