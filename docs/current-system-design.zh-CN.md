@@ -122,7 +122,7 @@ RAH 里需要区分四类 session 视角。
 | Native TUI live | daemon 启动并持有真实 provider TUI PTY；Web New、Canvas New、Web Claim、`rah xxx` 默认都进入这条路径 | 可以，但需要 control lease | 显式 close/archive 才关闭 PTY/TUI | PTY replay + provider history mirror |
 | Read-only replay | 打开 provider 历史形成的只读 projection | 不可以，需 claim | 只关闭 UI projection | provider history |
 | Legacy structured live | 旧测试/调试路径；生产默认拒绝显式 `liveBackend: "structured"`，除非设置 `RAH_ENABLE_LEGACY_STRUCTURED_LIVE=1` | 可以 | 关闭 provider adapter client | provider SDK/API event + history |
-| Legacy wrapper live | `RAH_LEGACY_WRAPPER=1 rah xxx` 的旧 terminal wrapper handoff | 可以，但 single-writer | 关闭 wrapper session | provider history + wrapper control |
+| Legacy wrapper live | 旧 terminal wrapper handoff；不再从公开 `rah xxx` 入口暴露，仅保留为内部 legacy/synthetic test surface | 可以，但 single-writer | 关闭 wrapper session | provider history + wrapper control |
 
 重要边界：
 
@@ -226,7 +226,7 @@ RAH 判断 session 是否 live 时按写手和 owner 区分：
 
 - 有 RAH 管理绑定：live。
 - 有 daemon-owned native TUI PTY：live，即使当前没有 attached client。
-- 旧 terminal wrapper 仍可算 live，但只是 legacy 路径。
+- 旧 terminal wrapper 仍可算 live，但只是内部 legacy/test 路径，不再是公开 CLI 入口。
 - provider 历史文件有外部活跃写手：external live。
 - 只是 Web 打开历史读取文件：不算 live。
 - 无 RAH 管理写手、无活跃外部写手、文件稳定：closed history。

@@ -25,7 +25,7 @@ RAH should converge on one live core:
 | Phase 0 boundary audit | `docs/pty-first-phase0-audit.zh-CN.md`; `RAH_PTY_FIRST_SEAMLESS_WORKBENCH_PLAN.zh-CN.md` | Done |
 | PTY runtime extraction | `packages/runtime-daemon/src/pty-session-runtime.ts`; `pty-session-runtime.test.ts` | Done |
 | Native TUI core separated from legacy adapter live path | `native-tui-provider-runtime.test.ts` forbids core imports from `provider-adapter` and `legacy-structured/runtime-structured-provider-coordinator` | Covered by tests |
-| `rah <provider>` uses daemon PTY by default | `bin/rah.mjs`; `rah-cli-pty-first.test.ts`; `RAH_LEGACY_WRAPPER=1` is legacy escape hatch | Done |
+| `rah <provider>` uses daemon PTY exclusively | `bin/rah.mjs`; `rah-cli-pty-first.test.ts`; public `RAH_LEGACY_WRAPPER=1` escape hatch removed from the CLI entry | Done |
 | `rah <provider> resume <id>` uses daemon PTY by default | `bin/rah.mjs`; `rah-cli-pty-first.test.ts` posts `/api/sessions/resume` with `liveBackend: "native_tui"` and attaches the terminal client to PTY replay | Done |
 | Terminal detach does not close live PTY | `bin/rah.mjs` best-effort `/detach`; `rah-cli-pty-first.test.ts` | Done |
 | Clientless native TUI survives list/prune | `RuntimeEngine.pruneOrphanSessions()` skips native TUI sessions; `runtime-engine.test.ts` | Done |
@@ -71,11 +71,11 @@ Latest verified gates in this branch:
 - `npm run test:web`: 158 pass
 - `npm run test:provider-contracts`: 133 pass
 - `npm run test:runtime`: 375 pass after the CLI resume PTY-first smoke addition
-- `npm run test:native-tui`: pass on 2026-05-07 at commit `d3d0660`
+- `npm run test:native-tui`: pass on 2026-05-07 after public wrapper CLI escape hatch removal
 
 `test:runtime` now uses `--test-concurrency=1` because runtime tests mutate process-wide provider binary env vars such as `RAH_CODEX_BINARY`; parallel test files can otherwise contaminate each other and create false failures.
 
-`test:native-tui` covered the full PTY-first automatic gate for this checkout: typecheck, web tests, runtime tests, web build, real CLI help/version probe, Codex native smoke, Claude/Gemini/Kimi/OpenCode native provider smoke, Chromium browser native Codex smoke, Chromium browser native provider smoke, wrapper-control smoke, and `git diff --check`. The Chromium Codex browser smoke also covered mobile TUI input bridge shortcut/text/composition input and terminal-canvas focus routing. The CLI probe captured the current local versions: Codex `0.128.0`, Claude Code `2.1.123`, Gemini `0.40.0`, Kimi `1.40.0`, and OpenCode `1.14.40`. The report records the worktree as dirty only because the user-owned `desgin.md` is untracked.
+`test:native-tui` covered the full PTY-first automatic gate for this checkout: typecheck, web tests, runtime tests, web build, real CLI help/version probe, Codex native smoke, Claude/Gemini/Kimi/OpenCode native provider smoke, Chromium browser native Codex smoke, Chromium browser native provider smoke, wrapper-control smoke, and `git diff --check`. The Chromium Codex browser smoke also covered mobile TUI input bridge shortcut/text/composition input and terminal-canvas focus routing. The CLI probe captured the current local versions: Codex `0.128.0`, Claude Code `2.1.123`, Gemini `0.40.0`, Kimi `1.40.0`, and OpenCode `1.14.40`.
 
 Additional Phase 6 guard verified on 2026-05-07:
 
@@ -344,6 +344,17 @@ Real native TUI launch and automatic QA status verified on 2026-05-07:
 
 This guard verifies that all five real provider CLIs can be launched inside the RAH PTY host and closed without sending a model prompt, and that saved CLI/help/version evidence matches the current commit. It still does not prove real model responses, long-running turn behavior, permission/login/quota flows, or iPad/Safari human interaction.
 
+Public legacy wrapper CLI escape hatch removal verified on 2026-05-07:
+
+- `node --import tsx --test --test-force-exit packages/runtime-daemon/src/rah-cli-pty-first.test.ts`: 2 pass
+- `npm run typecheck`: pass
+- `RAH_NATIVE_CLI_PROBE_OUTPUT=test-results/native-cli-probe.json npm run test:smoke:native-cli-probe`: pass
+- `npm run test:runtime`: 375 pass
+- `npm run test:native-tui`: pass
+- `git diff --check`: pass
+
+This guard verifies that `rah <provider>` and `rah <provider> resume <id>` use PTY-first start/resume even when `RAH_LEGACY_WRAPPER=1` is present in the environment. The old wrapper process-spawn branch has been removed from the public CLI entry; remaining terminal-wrapper code is internal legacy/test surface only.
+
 ## Remaining Gaps
 
 These are still not completion-grade:
@@ -351,10 +362,10 @@ These are still not completion-grade:
 - Chromium and headless WebKit native browser smoke are covered. iPad/Safari real input-method behavior still needs human verification because headless WebKit cannot prove real keyboard/IME viewport behavior.
 - Real five-provider CLI/account human QA is still required; fake native TUI tests do not prove real login/quota/provider behavior.
 - Legacy structured adapters still exist. The structured live clients, structured adapter implementations, and default structured adapter construction are now path-isolated under `legacy-structured/`; production structured live is default-off behind `RAH_ENABLE_LEGACY_STRUCTURED_LIVE=1`. Codex/Claude/Gemini/Kimi/OpenCode now have separate stored-history adapters. The remaining code gap is deciding whether to keep or delete this explicit legacy/debug escape hatch.
-- Legacy wrapper runtime still exists for `RAH_LEGACY_WRAPPER=1` and synthetic tests. It is isolated as a fallback, not deleted.
+- Legacy wrapper runtime still exists for synthetic tests and internal legacy reference. The public `rah xxx` CLI no longer exposes an env escape hatch into wrapper handoff, but the daemon-side wrapper registry/tests are not deleted.
 - Workbench shell/canvas code paths are now audited for view/attach semantics. Remaining risk is interaction-level QA: drag/drop, pane replacement, hide/show, and mobile/iPad layout should still be exercised in a real browser.
 - Enhanced controls are rejected safely at the native TUI runtime boundary and hidden by the central frontend capability helpers. Broader UI copy may still need review so native TUI sessions consistently explain external-locked semantics.
 
 ## Current Conclusion
 
-The PTY-first core is materially implemented for the main live entry paths, the required provider adapter surface is substantially slimmed, and the automatic gates now cover runtime/web tests, real CLI help/version drift, real native TUI launch, Chromium browser smoke, and headless WebKit browser smoke. The goal is not complete yet because final acceptance still requires iPad/Safari real input-method QA, real five-provider account/long-turn/permission QA, shell/canvas interaction QA on real devices, and an explicit keep/delete decision for the legacy structured and legacy wrapper escape hatches.
+The PTY-first core is materially implemented for the main live entry paths, the required provider adapter surface is substantially slimmed, and the automatic gates now cover runtime/web tests, real CLI help/version drift, real native TUI launch, Chromium browser smoke, and headless WebKit browser smoke. The public `rah xxx` wrapper handoff escape hatch has been removed, so CLI new/resume is now PTY-first only. The goal is not complete yet because final acceptance still requires iPad/Safari real input-method QA, real five-provider account/long-turn/permission QA, shell/canvas interaction QA on real devices, and an explicit keep/delete decision for the remaining internal legacy structured/wrapper code.

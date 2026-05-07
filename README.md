@@ -61,8 +61,8 @@ Important behavior:
 - `npm install` is not needed for normal code changes.
 - daemon pid/log files live under `~/.rah/runtime-daemon`.
 - `rah <provider>` now defaults to PTY-first: it asks the daemon to create/resume a native TUI
-  session and attaches the current terminal to that daemon-owned PTY. Set `RAH_LEGACY_WRAPPER=1`
-  only when you intentionally need the old wrapper handoff path.
+  session and attaches the current terminal to that daemon-owned PTY. The previous wrapper handoff
+  path is no longer exposed from the public `rah <provider>` CLI entry.
 
 Optional: if you want the global `rah` command to point at this checkout, link it once:
 

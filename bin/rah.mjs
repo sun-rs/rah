@@ -55,17 +55,16 @@ function printUsage() {
       "  --no-open           Do not open the browser for rah start",
       "  --follow, -f        Follow logs for rah logs",
       "  --permission-mode <mode>",
-      "                      Claude handoff mode (default: bypassPermissions)",
+      "                      Claude native TUI launch mode (default: bypassPermissions)",
       "                      Values: default | acceptEdits | auto | bypassPermissions | plan",
       "  --approval-mode <mode>",
-      "                      Gemini/Kimi handoff mode (default: yolo)",
+      "                      Gemini/Kimi native TUI launch mode (default: yolo)",
       "                      Gemini values: default | auto_edit | yolo | plan",
       "                      Kimi values: default | yolo",
       "  --help              Show this help",
       "",
       "Current status:",
       "  codex/claude/gemini/kimi/opencode: daemon-owned PTY-first native TUI",
-      "  set RAH_LEGACY_WRAPPER=1 to use the previous terminal wrapper path",
       "",
       "Claude note:",
       "  `rah claude resume <providerSessionId>` maps to `claude --resume <id>`.",
@@ -750,182 +749,8 @@ async function main() {
     return;
   }
 
-  if (parsed.provider && process.env.RAH_LEGACY_WRAPPER !== "1") {
+  if (parsed.provider) {
     await runPtyFirstProviderCommand(parsed);
-    return;
-  }
-
-  if (parsed.provider === "codex") {
-    await ensureDaemon(parsed.daemonUrl);
-    const childArgs = [
-      "--import",
-      "tsx",
-      "packages/runtime-daemon/src/codex-terminal-wrapper-handoff.ts",
-      "--daemon-url",
-      parsed.daemonUrl,
-      "--cwd",
-      parsed.cwd,
-      ...(parsed.resumeProviderSessionId
-        ? ["--resume-provider-session-id", parsed.resumeProviderSessionId]
-        : []),
-    ];
-    const child = spawn(process.execPath, childArgs, {
-      cwd: ROOT_DIR,
-      env: process.env,
-      stdio: "inherit",
-    });
-    await new Promise((resolve, reject) => {
-      child.on("error", reject);
-      child.on("exit", (code, signal) => {
-        if (signal) {
-          process.kill(process.pid, signal);
-          return;
-        }
-        process.exitCode = code ?? 0;
-        resolve(undefined);
-      });
-    });
-    return;
-  }
-
-  if (parsed.provider === "claude") {
-    await ensureDaemon(parsed.daemonUrl);
-    const childArgs = [
-      "--import",
-      "tsx",
-      "packages/runtime-daemon/src/claude-terminal-wrapper.ts",
-      "--daemon-url",
-      parsed.daemonUrl,
-      "--cwd",
-      parsed.cwd,
-      ...(parsed.resumeProviderSessionId
-        ? ["--resume-provider-session-id", parsed.resumeProviderSessionId]
-        : []),
-      ...(parsed.claudePermissionMode
-        ? ["--permission-mode", parsed.claudePermissionMode]
-        : []),
-    ];
-    const child = spawn(process.execPath, childArgs, {
-      cwd: ROOT_DIR,
-      env: process.env,
-      stdio: "inherit",
-    });
-    await new Promise((resolve, reject) => {
-      child.on("error", reject);
-      child.on("exit", (code, signal) => {
-        if (signal) {
-          process.kill(process.pid, signal);
-          return;
-        }
-        process.exitCode = code ?? 0;
-        resolve(undefined);
-      });
-    });
-    return;
-  }
-
-  if (parsed.provider === "kimi") {
-    await ensureDaemon(parsed.daemonUrl);
-    const childArgs = [
-      "--import",
-      "tsx",
-      "packages/runtime-daemon/src/kimi-terminal-wrapper.ts",
-      "--daemon-url",
-      parsed.daemonUrl,
-      "--cwd",
-      parsed.cwd,
-      ...(parsed.resumeProviderSessionId
-        ? ["--resume-provider-session-id", parsed.resumeProviderSessionId]
-        : []),
-      ...(parsed.kimiApprovalMode
-        ? ["--approval-mode", parsed.kimiApprovalMode]
-        : []),
-    ];
-    const child = spawn(process.execPath, childArgs, {
-      cwd: ROOT_DIR,
-      env: process.env,
-      stdio: "inherit",
-    });
-    await new Promise((resolve, reject) => {
-      child.on("error", reject);
-      child.on("exit", (code, signal) => {
-        if (signal) {
-          process.kill(process.pid, signal);
-          return;
-        }
-        process.exitCode = code ?? 0;
-        resolve(undefined);
-      });
-    });
-    return;
-  }
-
-  if (parsed.provider === "gemini") {
-    await ensureDaemon(parsed.daemonUrl);
-    const childArgs = [
-      "--import",
-      "tsx",
-      "packages/runtime-daemon/src/gemini-terminal-wrapper.ts",
-      "--daemon-url",
-      parsed.daemonUrl,
-      "--cwd",
-      parsed.cwd,
-      ...(parsed.resumeProviderSessionId
-        ? ["--resume-provider-session-id", parsed.resumeProviderSessionId]
-        : []),
-      ...(parsed.geminiApprovalMode
-        ? ["--approval-mode", parsed.geminiApprovalMode]
-        : []),
-    ];
-    const child = spawn(process.execPath, childArgs, {
-      cwd: ROOT_DIR,
-      env: process.env,
-      stdio: "inherit",
-    });
-    await new Promise((resolve, reject) => {
-      child.on("error", reject);
-      child.on("exit", (code, signal) => {
-        if (signal) {
-          process.kill(process.pid, signal);
-          return;
-        }
-        process.exitCode = code ?? 0;
-        resolve(undefined);
-      });
-    });
-    return;
-  }
-
-  if (parsed.provider === "opencode") {
-    await ensureDaemon(parsed.daemonUrl);
-    const childArgs = [
-      "--import",
-      "tsx",
-      "packages/runtime-daemon/src/opencode-terminal-wrapper.ts",
-      "--daemon-url",
-      parsed.daemonUrl,
-      "--cwd",
-      parsed.cwd,
-      ...(parsed.resumeProviderSessionId
-        ? ["--resume-provider-session-id", parsed.resumeProviderSessionId]
-        : []),
-    ];
-    const child = spawn(process.execPath, childArgs, {
-      cwd: ROOT_DIR,
-      env: process.env,
-      stdio: "inherit",
-    });
-    await new Promise((resolve, reject) => {
-      child.on("error", reject);
-      child.on("exit", (code, signal) => {
-        if (signal) {
-          process.kill(process.pid, signal);
-          return;
-        }
-        process.exitCode = code ?? 0;
-        resolve(undefined);
-      });
-    });
     return;
   }
 }

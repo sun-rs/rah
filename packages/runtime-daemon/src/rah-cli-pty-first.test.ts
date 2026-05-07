@@ -132,7 +132,7 @@ test("rah provider command creates a native TUI session and attaches to PTY", as
     ],
     {
       cwd: process.cwd(),
-      env: { ...process.env, RAH_LEGACY_WRAPPER: "" },
+      env: { ...process.env, RAH_LEGACY_WRAPPER: "1" },
     },
   );
   let stdout = "";
@@ -282,7 +282,7 @@ test("rah provider resume command creates a native TUI resume session and attach
     ],
     {
       cwd: process.cwd(),
-      env: { ...process.env, RAH_LEGACY_WRAPPER: "" },
+      env: { ...process.env },
     },
   );
   let stdout = "";
