@@ -30,8 +30,8 @@ type RuntimeSessionLifecycleDeps = {
   rememberSession: (state: StoredSessionState) => void;
   refreshRememberedState: () => void;
   publishStoredSessionDiscovery: () => void;
-  removeSessionOwner: (sessionId: string) => void;
-  requireSessionAdapter: (sessionId: string) => ProviderAdapter;
+  removeStructuredSessionOwner: (sessionId: string) => void;
+  requireStructuredSessionAdapter: (sessionId: string) => ProviderAdapter;
 };
 
 export class RuntimeSessionLifecycle {
@@ -111,7 +111,7 @@ export class RuntimeSessionLifecycle {
     if (state.session.capabilities.actions.rename === "none") {
       throw new Error("This session does not support rename.");
     }
-    const adapter = this.deps.requireSessionAdapter(sessionId);
+    const adapter = this.deps.requireStructuredSessionAdapter(sessionId);
     if (!adapter.renameSession) {
       throw new Error(`Provider ${state.session.provider} does not support rename.`);
     }
@@ -142,7 +142,7 @@ export class RuntimeSessionLifecycle {
       throw new Error("This session mode is controlled outside RAH.");
     }
     this.requireIdleForSessionControl(state, "Session mode");
-    const adapter = this.deps.requireSessionAdapter(sessionId);
+    const adapter = this.deps.requireStructuredSessionAdapter(sessionId);
     if (!adapter.setSessionMode) {
       throw new Error(`Provider ${state.session.provider} does not support mode switching.`);
     }
@@ -168,7 +168,7 @@ export class RuntimeSessionLifecycle {
       throw new Error("This session model is controlled outside RAH.");
     }
     this.requireIdleForSessionControl(state, "Session model");
-    const adapter = this.deps.requireSessionAdapter(sessionId);
+    const adapter = this.deps.requireStructuredSessionAdapter(sessionId);
     if (!adapter.setSessionModel) {
       throw new Error(`Provider ${state.session.provider} does not support model switching.`);
     }
@@ -196,7 +196,7 @@ export class RuntimeSessionLifecycle {
       this.deps.sessionStore.removeSession(sessionId);
       this.deps.ptyHub.removeSession(sessionId);
       this.deps.historySnapshots.clear(sessionId);
-      this.deps.removeSessionOwner(sessionId);
+      this.deps.removeStructuredSessionOwner(sessionId);
       this.deps.eventBus.publish({
         sessionId,
         type: "session.closed",
@@ -207,12 +207,12 @@ export class RuntimeSessionLifecycle {
       });
       return;
     }
-    const adapter = this.deps.requireSessionAdapter(sessionId);
+    const adapter = this.deps.requireStructuredSessionAdapter(sessionId);
     await adapter.closeSession?.(sessionId, request);
     this.deps.sessionStore.removeSession(sessionId);
     this.deps.ptyHub.removeSession(sessionId);
     this.deps.historySnapshots.clear(sessionId);
-    this.deps.removeSessionOwner(sessionId);
+    this.deps.removeStructuredSessionOwner(sessionId);
     this.deps.eventBus.publish({
       sessionId,
       type: "session.closed",

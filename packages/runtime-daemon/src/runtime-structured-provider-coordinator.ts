@@ -22,7 +22,7 @@ import { assertExistingWorkingDirectory } from "./provider-working-directory";
 type RuntimeStructuredProviderCoordinatorDeps = {
   adaptersByProvider: Map<string, ProviderAdapter>;
   adaptersById: Map<string, ProviderAdapter>;
-  rememberSessionOwner: (sessionId: string, adapter: ProviderAdapter) => void;
+  rememberStructuredSessionOwner: (sessionId: string, adapter: ProviderAdapter) => void;
   pruneOrphanSessions: () => void;
   historySnapshots: HistorySnapshotStore;
 };
@@ -113,7 +113,7 @@ export class RuntimeStructuredProviderCoordinator {
     this.deps.pruneOrphanSessions();
     const adapter = this.requireAdapterForProvider(request.provider);
     const response = await adapter.startSession(request);
-    this.deps.rememberSessionOwner(response.session.session.id, adapter);
+    this.deps.rememberStructuredSessionOwner(response.session.session.id, adapter);
     return response;
   }
 
@@ -124,7 +124,7 @@ export class RuntimeStructuredProviderCoordinator {
     this.deps.pruneOrphanSessions();
     const adapter = this.requireAdapterForProvider(request.provider);
     const response = await adapter.resumeSession(request);
-    this.deps.rememberSessionOwner(response.session.session.id, adapter);
+    this.deps.rememberStructuredSessionOwner(response.session.session.id, adapter);
     if (
       request.historySourceSessionId &&
       request.historySourceSessionId !== response.session.session.id
@@ -155,7 +155,7 @@ export class RuntimeStructuredProviderCoordinator {
         ? { scenarioId: args.scenarioId, attach: args.attach }
         : { scenarioId: args.scenarioId },
     );
-    this.deps.rememberSessionOwner(response.session.session.id, adapter);
+    this.deps.rememberStructuredSessionOwner(response.session.session.id, adapter);
     return response;
   }
 

@@ -123,7 +123,7 @@ export class RuntimeEngine {
 
   private readonly adaptersById = new Map<string, ProviderAdapter>();
   private readonly adaptersByProvider = new Map<string, ProviderAdapter>();
-  private readonly sessionOwners = new Map<string, ProviderAdapter>();
+  private readonly structuredSessionOwners = new Map<string, ProviderAdapter>();
 
   constructor(adapters?: ProviderAdapter[]) {
     this.defaultLiveBackend = adapters === undefined ? "native_tui" : "structured";
@@ -161,7 +161,7 @@ export class RuntimeEngine {
         this.refreshRememberedState();
       },
       onSessionOwnerRemoved: (sessionId) => {
-        this.sessionOwners.delete(sessionId);
+        this.structuredSessionOwners.delete(sessionId);
       },
     });
     this.sessionLifecycle = new RuntimeSessionLifecycle({
@@ -179,16 +179,17 @@ export class RuntimeEngine {
       publishStoredSessionDiscovery: () => {
         this.publishStoredSessionDiscovery();
       },
-      removeSessionOwner: (sessionId) => {
-        this.sessionOwners.delete(sessionId);
+      removeStructuredSessionOwner: (sessionId) => {
+        this.structuredSessionOwners.delete(sessionId);
       },
-      requireSessionAdapter: (sessionId) => this.requireSessionAdapter(sessionId),
+      requireStructuredSessionAdapter: (sessionId) =>
+        this.requireStructuredSessionAdapter(sessionId),
     });
     this.structuredProviders = new RuntimeStructuredProviderCoordinator({
       adaptersByProvider: this.adaptersByProvider,
       adaptersById: this.adaptersById,
-      rememberSessionOwner: (sessionId, adapter) => {
-        this.rememberSessionOwner(sessionId, adapter);
+      rememberStructuredSessionOwner: (sessionId, adapter) => {
+        this.rememberStructuredSessionOwner(sessionId, adapter);
       },
       pruneOrphanSessions: () => {
         this.pruneOrphanSessions();
@@ -439,7 +440,7 @@ export class RuntimeEngine {
     if (this.terminals.handleNativeTuiInput(sessionId, request.clientId, request.text)) {
       return;
     }
-    this.requireSessionAdapter(sessionId).sendInput(sessionId, request);
+    this.requireStructuredSessionAdapter(sessionId).sendInput(sessionId, request);
   }
 
   interruptSession(
@@ -452,7 +453,7 @@ export class RuntimeEngine {
     if (this.terminals.handleNativeTuiInterrupt(sessionId, request.clientId)) {
       return this.getSessionSummary(sessionId);
     }
-    return this.requireSessionAdapter(sessionId).interruptSession(sessionId, request);
+    return this.requireStructuredSessionAdapter(sessionId).interruptSession(sessionId, request);
   }
 
   async closeSession(sessionId: string, request: CloseSessionRequest): Promise<void> {
@@ -471,7 +472,7 @@ export class RuntimeEngine {
     if (this.terminals.handlePermissionResponse(sessionId, requestId, response)) {
       return;
     }
-    const adapter = this.requireSessionAdapter(sessionId);
+    const adapter = this.requireStructuredSessionAdapter(sessionId);
     if (!adapter.respondToPermission) {
       throw new Error(`Provider ${adapter.id} does not support permission responses.`);
     }
@@ -483,7 +484,7 @@ export class RuntimeEngine {
       void clientId;
       return;
     }
-    this.requireSessionAdapter(sessionId).onPtyInput(sessionId, clientId, data);
+    this.requireStructuredSessionAdapter(sessionId).onPtyInput(sessionId, clientId, data);
   }
 
   onPtyResize(sessionId: string, clientId: string, cols: number, rows: number): void {
@@ -491,7 +492,7 @@ export class RuntimeEngine {
       void clientId;
       return;
     }
-    this.requireSessionAdapter(sessionId).onPtyResize(sessionId, clientId, cols, rows);
+    this.requireStructuredSessionAdapter(sessionId).onPtyResize(sessionId, clientId, cols, rows);
   }
 
   getWorkspaceSnapshot(sessionId: string, options?: { scopeRoot?: string }) {
@@ -499,7 +500,7 @@ export class RuntimeEngine {
       sessionId,
       options?.scopeRoot,
     );
-    return this.requireSessionAdapter(sessionId).getWorkspaceSnapshot(sessionId, {
+    return this.requireStructuredSessionAdapter(sessionId).getWorkspaceSnapshot(sessionId, {
       ...(scopeRoot ? { scopeRoot } : {}),
     });
   }
@@ -509,7 +510,7 @@ export class RuntimeEngine {
       sessionId,
       options?.scopeRoot,
     );
-    return await this.requireSessionAdapter(sessionId).getGitStatus(sessionId, {
+    return await this.requireStructuredSessionAdapter(sessionId).getGitStatus(sessionId, {
       ...(scopeRoot ? { scopeRoot } : {}),
     });
   }
@@ -523,7 +524,7 @@ export class RuntimeEngine {
       sessionId,
       options?.scopeRoot,
     );
-    return await this.requireSessionAdapter(sessionId).getGitDiff(sessionId, path, {
+    return await this.requireStructuredSessionAdapter(sessionId).getGitDiff(sessionId, path, {
       ...(options?.staged !== undefined ? { staged: options.staged } : {}),
       ...(options?.ignoreWhitespace !== undefined
         ? { ignoreWhitespace: options.ignoreWhitespace }
@@ -554,7 +555,7 @@ export class RuntimeEngine {
   }
 
   async applyGitFileAction(sessionId: string, request: GitFileActionRequest) {
-    const adapter = this.requireSessionAdapter(sessionId);
+    const adapter = this.requireStructuredSessionAdapter(sessionId);
     if (!adapter.applyGitFileAction) {
       throw new Error(`Provider ${adapter.id} does not support git file actions.`);
     }
@@ -562,7 +563,7 @@ export class RuntimeEngine {
   }
 
   async applyGitHunkAction(sessionId: string, request: GitHunkActionRequest) {
-    const adapter = this.requireSessionAdapter(sessionId);
+    const adapter = this.requireStructuredSessionAdapter(sessionId);
     if (!adapter.applyGitHunkAction) {
       throw new Error(`Provider ${adapter.id} does not support git hunk actions.`);
     }
@@ -574,7 +575,7 @@ export class RuntimeEngine {
       sessionId,
       options?.scopeRoot,
     );
-    return await this.requireSessionAdapter(sessionId).readSessionFile(sessionId, path, {
+    return await this.requireStructuredSessionAdapter(sessionId).readSessionFile(sessionId, path, {
       ...(scopeRoot ? { scopeRoot } : {}),
     });
   }
@@ -620,7 +621,7 @@ export class RuntimeEngine {
     sessionId: string,
     options?: { beforeTs?: string; cursor?: string; limit?: number },
   ): SessionHistoryPageResponse {
-    const adapter = this.requireSessionAdapter(sessionId);
+    const adapter = this.requireStructuredSessionAdapter(sessionId);
     if (!adapter.getSessionHistoryPage) {
       return { sessionId, events: [] };
     }
@@ -640,7 +641,7 @@ export class RuntimeEngine {
   }
 
   getContextUsage(sessionId: string) {
-    return this.requireSessionAdapter(sessionId).getContextUsage(sessionId);
+    return this.requireStructuredSessionAdapter(sessionId).getContextUsage(sessionId);
   }
 
   listScenarios(): DebugScenarioDescriptor[] {
@@ -759,8 +760,8 @@ export class RuntimeEngine {
     }
   }
 
-  private rememberSessionOwner(sessionId: string, adapter: ProviderAdapter): void {
-    this.sessionOwners.set(sessionId, adapter);
+  private rememberStructuredSessionOwner(sessionId: string, adapter: ProviderAdapter): void {
+    this.structuredSessionOwners.set(sessionId, adapter);
   }
 
   private currentWorkbenchSessions(): ListSessionsResponse {
@@ -842,7 +843,7 @@ export class RuntimeEngine {
       if (this.terminals.hasNativeTuiSession(state.session.id)) {
         continue;
       }
-      const adapter = this.requireSessionAdapter(state.session.id);
+      const adapter = this.requireStructuredSessionAdapter(state.session.id);
       void Promise.resolve(adapter.destroySession?.(state.session.id)).catch((error: unknown) => {
         console.error(
           `[rah] destroySession failed for ${state.session.id}:`,
@@ -851,7 +852,7 @@ export class RuntimeEngine {
       });
       this.sessionStore.removeSession(state.session.id);
       this.ptyHub.removeSession(state.session.id);
-      this.sessionOwners.delete(state.session.id);
+      this.structuredSessionOwners.delete(state.session.id);
       this.terminals.clearSessionState(state.session.id);
       this.eventBus.publish({
         sessionId: state.session.id,
@@ -870,8 +871,8 @@ export class RuntimeEngine {
     return adapter;
   }
 
-  private requireSessionAdapter(sessionId: string): ProviderAdapter {
-    const owner = this.sessionOwners.get(sessionId);
+  private requireStructuredSessionAdapter(sessionId: string): ProviderAdapter {
+    const owner = this.structuredSessionOwners.get(sessionId);
     if (owner) {
       return owner;
     }
@@ -880,7 +881,7 @@ export class RuntimeEngine {
       throw new Error(`Unknown session ${sessionId}`);
     }
     const adapter = this.requireAdapterForProvider(state.session.provider);
-    this.sessionOwners.set(sessionId, adapter);
+    this.structuredSessionOwners.set(sessionId, adapter);
     return adapter;
   }
 }

@@ -39,6 +39,7 @@ RAH should converge on one live core:
 | Enhanced controls downgraded | native TUI capabilities expose `structuredControl: false`; `runtime-engine.test.ts` rejects mode/model changes for native TUI while preserving idle PTY input; `session-capabilities.test.ts` hides RAH-managed controls when structured control is unavailable | Covered by tests |
 | Legacy structured path no longer default | Web, CLI, and default daemon RuntimeEngine prefer native TUI | Done |
 | Legacy structured path named as legacy/enhancement | `RuntimeStructuredProviderCoordinator` owns explicit `liveBackend: "structured"` start/resume, diagnostics, debug, and catalog fallbacks | Done |
+| Legacy structured session ownership named explicitly | `RuntimeEngine` tracks adapter-owned sessions as `structuredSessionOwners`; `RuntimeSessionLifecycle` calls `requireStructuredSessionAdapter` only after terminal/native paths are bypassed | Done |
 
 ## Verification Run
 
@@ -66,6 +67,12 @@ Frontend external-locked guard verified on 2026-05-07:
 - `node --import tsx --test --test-force-exit packages/client-web/src/session-capabilities.test.ts packages/client-web/src/composer-contract.test.ts`: 13 pass
 
 This guard verifies that native TUI sessions do not expose RAH-managed mode/model controls even if stale mutable mode/model metadata is present.
+
+Structured legacy naming guard verified on 2026-05-07:
+
+- `node --import tsx --test --test-force-exit packages/runtime-daemon/src/native-tui-provider-runtime.test.ts packages/runtime-daemon/src/runtime-engine.test.ts`: 51 pass
+
+This guard verifies that native TUI core does not import the structured coordinator and that `RuntimeEngine` names structured provider coordination as a non-core path.
 
 ## Remaining Gaps
 
