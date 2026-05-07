@@ -41,10 +41,3 @@ export function createDefaultNativeTuiMirrorHandlers(): ReadonlyMap<
     ]),
   );
 }
-
-export function createDefaultNativeTuiProviderHandlers(): ReadonlyMap<
-  ProviderKind,
-  NativeTuiProviderHandler
-> {
-  return new Map(DEFAULT_NATIVE_TUI_PROVIDER_HANDLERS.map((handler) => [handler.provider, handler]));
-}

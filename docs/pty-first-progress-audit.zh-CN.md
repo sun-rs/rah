@@ -228,7 +228,7 @@ Native TUI handler factory boundary verified on 2026-05-07:
 - `node --import tsx --test --test-force-exit packages/runtime-daemon/src/native-tui-provider-runtime.test.ts packages/runtime-daemon/src/runtime-engine.test.ts packages/runtime-daemon/src/debug-engine.test.ts`: 53 pass
 - `npm run test:runtime`: 372 pass
 
-This guard verifies that `DefaultNativeTuiProviderRuntime` receives the binding-only handler factory and `DefaultNativeTuiMirrorProvider` receives the mirror-only handler factory. The combined provider handler factory remains available for compatibility, but it is no longer the default runtime-facing seam.
+This guard verifies that `DefaultNativeTuiProviderRuntime` receives the binding-only handler factory and `DefaultNativeTuiMirrorProvider` receives the mirror-only handler factory. The previous combined provider handler factory has no remaining runtime-facing callers and has been removed.
 
 ## Remaining Gaps
 
