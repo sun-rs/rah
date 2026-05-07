@@ -124,6 +124,13 @@ RAH 里需要区分四类 session 视角。
 | Legacy structured live | 旧测试/调试路径；公开 HTTP API 拒绝 `liveBackend: "structured"`，普通 daemon 不构造 legacy structured adapters，只允许测试注入 adapter 直接调用 engine | 可以 | 关闭 provider adapter client | provider SDK/API event + history |
 | Legacy wrapper live | 旧 terminal wrapper handoff；不再从公开 `rah xxx` 入口暴露，普通 daemon 默认不开放 wrapper-control 且 RuntimeEngine 默认不启用 wrapper runtime，仅保留为内部 legacy/synthetic test surface | 可以，但 single-writer | 关闭 wrapper session | provider history + wrapper control |
 
+Legacy structured/wrapper 的保留决策：
+
+- 保留它们作为内部测试/兼容 harness，而不是生产 live 主链路。
+- 普通 daemon 不构造 legacy structured adapters，不开放 wrapper-control，也不启用 wrapper runtime。
+- 公开 Web/CLI/canvas live 入口只进入 daemon-owned native TUI PTY。
+- 如果这些 legacy harness 未来阻碍 PTY-first core，可以继续删除；在此之前它们的价值是回归测试和协议参考。
+
 重要边界：
 
 - 只要 provider session 被 daemon-owned native TUI PTY 拉起，就是 live；没有 client attach 时也仍然 live。
