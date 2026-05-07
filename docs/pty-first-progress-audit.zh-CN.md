@@ -39,6 +39,7 @@ RAH should converge on one live core:
 | Structured source is provider history/DB | native provider handlers and stored-session parsers remain the mirror source | Partially done |
 | Workbench shell only view/attach | Web startup defaults native TUI; history browsing remains replay-only; global session selection exits canvas and selects/attaches; pane session selection targets only the pane; `activateHistorySessionCommand` tests lock replay/attach instead of implicit claim | Audited with tests |
 | Canvas pane view/attach semantics | `canvas-state.ts` centralizes pane target rules; `canvas-state.test.ts` locks live-session uniqueness and allows read-only history replay in multiple panes | Covered by tests |
+| Mobile terminal input bridge policy | `TerminalPane.tsx` uses `terminal-mobile-bridge.ts` so tapping the terminal surface focuses the real mobile input with browser viewport anchoring, while shortcut buttons avoid viewport movement | Covered by tests |
 | Enhanced controls downgraded | native TUI capabilities expose `structuredControl: false`; `runtime-engine.test.ts` rejects mode/model changes for native TUI while preserving idle PTY input; `session-capabilities.test.ts` hides RAH-managed controls when structured control is unavailable | Covered by tests |
 | Legacy structured path no longer default | Web, CLI, and default daemon RuntimeEngine prefer native TUI | Done |
 | Legacy structured path named as legacy/enhancement | `legacy-structured/RuntimeStructuredProviderCoordinator` owns explicit `liveBackend: "structured"` start/resume, diagnostics, debug, and catalog fallbacks | Done |
@@ -318,6 +319,16 @@ CLI resume PTY-first path verified on 2026-05-07:
 - `git diff --check`: pass
 
 This guard verifies both `rah <provider>` new-session attach and `rah <provider> resume <id>` attach. The resume case posts the provider session id to `/api/sessions/resume`, requests `liveBackend: "native_tui"`, attaches an interactive terminal client with control, receives PTY replay, and detaches without closing the PTY session.
+
+Mobile terminal input bridge policy verified on 2026-05-07:
+
+- `node --import tsx --test --test-force-exit packages/client-web/src/terminal-mobile-bridge.test.ts packages/client-web/src/terminal-viewport.test.ts`: 6 pass
+- `npm run test:web`: 158 pass
+- `npm run typecheck`: pass
+- `npm run build:web`: pass
+- `git diff --check`: pass
+
+This guard verifies the browser-facing policy for mobile terminal input. Direct taps on the terminal surface now use the same real-input browser viewport anchoring path as the visible mobile input bridge; shortcut taps still focus without browser scrolling so the shortcut bar stays stable.
 
 ## Remaining Gaps
 

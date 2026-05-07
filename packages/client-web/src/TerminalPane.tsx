@@ -2,6 +2,10 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { Terminal, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { createPtySocket, sendPtyMessage } from "./api";
+import {
+  mobileBridgeFocusOptionsForSource,
+  type MobileBridgeFocusOptions,
+} from "./terminal-mobile-bridge";
 import { ptySocketCloseNotice } from "./terminal-socket-close";
 import { readTerminalViewportMetrics } from "./terminal-viewport";
 
@@ -16,11 +20,6 @@ type MobileTuiShortcut = {
   data: string;
   clearBridge?: boolean;
   ariaLabel?: string;
-};
-
-type MobileBridgeFocusOptions = {
-  allowBrowserScroll?: boolean;
-  scrollBlock?: ScrollLogicalPosition;
 };
 
 type TerminalCssVar =
@@ -454,7 +453,7 @@ export function TerminalPane(props: TerminalPaneProps) {
       committedBridgeValueRef.current = "";
       setBridgeValue("");
     }
-    focusMobileBridge();
+    focusMobileBridge(mobileBridgeFocusOptionsForSource("shortcut"));
   };
 
   const keyboardActive = showIosInputBridge && keyboardInsetPx > 0;
@@ -489,7 +488,7 @@ export function TerminalPane(props: TerminalPaneProps) {
               ? (event) => {
                   event.preventDefault();
                   event.stopPropagation();
-                  focusMobileBridge({ allowBrowserScroll: false, scrollBlock: "nearest" });
+                  focusMobileBridge(mobileBridgeFocusOptionsForSource("surface"));
                 }
               : undefined
           }
@@ -502,7 +501,7 @@ export function TerminalPane(props: TerminalPaneProps) {
                     target.classList.contains("xterm-helper-textarea")
                   ) {
                     event.stopPropagation();
-                    focusMobileBridge({ allowBrowserScroll: false, scrollBlock: "nearest" });
+                    focusMobileBridge(mobileBridgeFocusOptionsForSource("surface"));
                   }
                 }
               : undefined
