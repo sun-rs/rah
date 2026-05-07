@@ -297,6 +297,8 @@ This guard verifies that `default-provider-adapters.ts` no longer directly const
 Legacy structured adapter implementation path isolation verified on 2026-05-07:
 
 - `npm run typecheck`: pass
+- `npm run test:runtime`: 372 pass
+- `npm run test:web`: 156 pass
 - `node --import tsx --test --test-force-exit packages/runtime-daemon/src/codex-adapter.test.ts packages/runtime-daemon/src/claude-adapter.test.ts packages/runtime-daemon/src/gemini-adapter.test.ts packages/runtime-daemon/src/kimi-adapter.test.ts packages/runtime-daemon/src/opencode-live-client.test.ts packages/runtime-daemon/src/native-tui-provider-runtime.test.ts`: pass
 
 This guard verifies that the five root `*-adapter.ts` files are compatibility re-exports only. The actual legacy structured live/enhancement implementations now live under `packages/runtime-daemon/src/legacy-structured/*-structured-adapter.ts`.
