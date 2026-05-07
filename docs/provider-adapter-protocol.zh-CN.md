@@ -74,7 +74,7 @@ RAH 不把某一家 CLI 的原生概念直接暴露成前端公共逻辑。
 - 是否支持 permission response。
 - 是否支持 stored history paging。
 
-通用文件/Git 能力不再作为新增 built-in provider 的必要 adapter 能力。新增 provider 只要能给出 session cwd/rootDir，RuntimeEngine 会通过 shared workspace utilities 处理 snapshot、file read、git status/diff 和 apply actions。`ProviderWorkspaceInspectionAdapter` 目前保留给 `custom` debug/structured 场景，避免 synthetic scenario 被强行绑定到真实文件系统。
+通用文件/Git 能力不再作为新增 built-in provider 的必要 adapter 能力，五家 built-in adapter 也不再保留这组重复方法。新增 provider 只要能给出 session cwd/rootDir，RuntimeEngine 会通过 shared workspace utilities 处理 snapshot、file read、git status/diff 和 apply actions。`ProviderWorkspaceInspectionAdapter` 目前保留给 `custom` debug/structured 场景，避免 synthetic scenario 被强行绑定到真实文件系统。
 
 ## 3. Mode 协议
 

@@ -1,26 +1,18 @@
 import { statSync } from "node:fs";
 import type {
   CloseSessionRequest,
-  GitDiffResponse,
-  GitFileActionRequest,
-  GitFileActionResponse,
-  GitHunkActionRequest,
-  GitHunkActionResponse,
-  GitStatusResponse,
   InterruptSessionRequest,
   PermissionResponseRequest,
   ProviderModelCatalog,
   ResumeSessionRequest,
   ResumeSessionResponse,
   SetSessionModelRequest,
-  SessionFileResponse,
   SessionHistoryPageResponse,
   SessionInputRequest,
   SessionSummary,
   StartSessionRequest,
   StartSessionResponse,
   StoredSessionRef,
-  WorkspaceSnapshotResponse,
   ContextUsage,
 } from "@rah/runtime-protocol";
 import type { ProviderAdapter, RuntimeServices } from "./provider-adapter";
@@ -59,14 +51,6 @@ import {
 import { movePathToTrash } from "./trash";
 import { buildCodexModeState, parseCodexModeId } from "./session-mode-utils";
 import { optionValueAsString, resolveModelOptionValues } from "./session-model-options";
-import {
-  applyWorkspaceGitFileActionAsync,
-  applyWorkspaceGitHunkActionAsync,
-  getWorkspaceGitDiffAsync,
-  getWorkspaceGitStatusAsync,
-  getWorkspaceSnapshot,
-  readWorkspaceFileFromDirectoryAsync,
-} from "./workspace-utils";
 
 const CODEX_EVENT_SOURCE = {
   provider: "codex" as const,
@@ -615,148 +599,6 @@ export class CodexAdapter implements ProviderAdapter {
     void clientId;
     void cols;
     void rows;
-  }
-
-  getWorkspaceSnapshot(sessionId: string, options?: { scopeRoot?: string }): WorkspaceSnapshotResponse {
-    const session = this.services.sessionStore.getSession(sessionId)?.session;
-    if (!session) {
-      const record = this.rehydratedSessionRecords.get(sessionId);
-      if (!record) {
-        throw new Error(`Unknown session ${sessionId}`);
-      }
-      const snapshot = getWorkspaceSnapshot(options?.scopeRoot ?? record.ref.cwd ?? process.cwd());
-      return {
-        sessionId,
-        cwd: snapshot.cwd,
-        nodes: snapshot.nodes,
-      };
-    }
-    const snapshot = getWorkspaceSnapshot(options?.scopeRoot ?? session.cwd);
-    return {
-      sessionId,
-      cwd: snapshot.cwd,
-      nodes: snapshot.nodes,
-    };
-  }
-
-  async getGitStatus(sessionId: string, options?: { scopeRoot?: string }): Promise<GitStatusResponse> {
-    const session = this.services.sessionStore.getSession(sessionId)?.session;
-    if (!session) {
-      const record = this.rehydratedSessionRecords.get(sessionId);
-      if (!record) {
-        throw new Error(`Unknown session ${sessionId}`);
-      }
-      const status = await getWorkspaceGitStatusAsync(record.ref.cwd ?? process.cwd(), options);
-      return {
-        sessionId,
-        ...(status.branch !== undefined ? { branch: status.branch } : {}),
-        changedFiles: status.changedFiles,
-        ...(status.stagedFiles ? { stagedFiles: status.stagedFiles } : {}),
-        ...(status.unstagedFiles ? { unstagedFiles: status.unstagedFiles } : {}),
-        ...(status.totalStaged !== undefined ? { totalStaged: status.totalStaged } : {}),
-        ...(status.totalUnstaged !== undefined ? { totalUnstaged: status.totalUnstaged } : {}),
-      };
-    }
-    const status = await getWorkspaceGitStatusAsync(session.cwd, options);
-    return {
-      sessionId,
-      ...(status.branch !== undefined ? { branch: status.branch } : {}),
-      changedFiles: status.changedFiles,
-      ...(status.stagedFiles ? { stagedFiles: status.stagedFiles } : {}),
-      ...(status.unstagedFiles ? { unstagedFiles: status.unstagedFiles } : {}),
-      ...(status.totalStaged !== undefined ? { totalStaged: status.totalStaged } : {}),
-      ...(status.totalUnstaged !== undefined ? { totalUnstaged: status.totalUnstaged } : {}),
-    };
-  }
-
-  async getGitDiff(
-    sessionId: string,
-    targetPath: string,
-    options?: { staged?: boolean; ignoreWhitespace?: boolean; scopeRoot?: string },
-  ): Promise<GitDiffResponse> {
-    const session = this.services.sessionStore.getSession(sessionId)?.session;
-    if (!session) {
-      const record = this.rehydratedSessionRecords.get(sessionId);
-      if (!record) {
-        throw new Error(`Unknown session ${sessionId}`);
-      }
-      return {
-        sessionId,
-        path: targetPath,
-        diff: await getWorkspaceGitDiffAsync(record.ref.cwd ?? process.cwd(), targetPath, options),
-      };
-    }
-    return {
-      sessionId,
-      path: targetPath,
-      diff: await getWorkspaceGitDiffAsync(session.cwd, targetPath, options),
-    };
-  }
-
-  async applyGitFileAction(sessionId: string, request: GitFileActionRequest): Promise<GitFileActionResponse> {
-    const session = this.services.sessionStore.getSession(sessionId)?.session;
-    if (!session) {
-      const record = this.rehydratedSessionRecords.get(sessionId);
-      if (!record) {
-        throw new Error(`Unknown session ${sessionId}`);
-      }
-      return {
-        ...(await applyWorkspaceGitFileActionAsync(record.ref.cwd ?? process.cwd(), request, {
-          scopeRoot: record.ref.rootDir ?? record.ref.cwd ?? process.cwd(),
-        })),
-        sessionId,
-      };
-    }
-    return {
-      ...(await applyWorkspaceGitFileActionAsync(session.cwd, request, {
-        scopeRoot: session.rootDir ?? session.cwd,
-      })),
-      sessionId,
-    };
-  }
-
-  async applyGitHunkAction(sessionId: string, request: GitHunkActionRequest): Promise<GitHunkActionResponse> {
-    const session = this.services.sessionStore.getSession(sessionId)?.session;
-    if (!session) {
-      const record = this.rehydratedSessionRecords.get(sessionId);
-      if (!record) {
-        throw new Error(`Unknown session ${sessionId}`);
-      }
-      return {
-        ...(await applyWorkspaceGitHunkActionAsync(record.ref.cwd ?? process.cwd(), request, {
-          scopeRoot: record.ref.rootDir ?? record.ref.cwd ?? process.cwd(),
-        })),
-        sessionId,
-      };
-    }
-    return {
-      ...(await applyWorkspaceGitHunkActionAsync(session.cwd, request, {
-        scopeRoot: session.rootDir ?? session.cwd,
-      })),
-      sessionId,
-    };
-  }
-
-  async readSessionFile(
-    sessionId: string,
-    targetPath: string,
-    options?: { scopeRoot?: string },
-  ): Promise<SessionFileResponse> {
-    const session = this.services.sessionStore.getSession(sessionId)?.session;
-    if (!session) {
-      const record = this.rehydratedSessionRecords.get(sessionId);
-      if (!record) {
-        throw new Error(`Unknown session ${sessionId}`);
-      }
-      return {
-        ...(await readWorkspaceFileFromDirectoryAsync(record.ref.cwd ?? process.cwd(), targetPath, options)),
-        sessionId,
-      };
-    }
-    return {
-      ...(await readWorkspaceFileFromDirectoryAsync(session.cwd, targetPath, options)),
-      sessionId,
-    };
   }
 
   getSessionHistoryPage(

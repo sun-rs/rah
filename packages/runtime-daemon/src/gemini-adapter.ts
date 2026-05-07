@@ -1,25 +1,17 @@
 import type {
   CloseSessionRequest,
   ContextUsage,
-  GitDiffResponse,
-  GitFileActionRequest,
-  GitFileActionResponse,
-  GitHunkActionRequest,
-  GitHunkActionResponse,
-  GitStatusResponse,
   InterruptSessionRequest,
   ProviderModelCatalog,
   ResumeSessionRequest,
   ResumeSessionResponse,
   SetSessionModelRequest,
-  SessionFileResponse,
   SessionHistoryPageResponse,
   SessionInputRequest,
   SessionSummary,
   StartSessionRequest,
   StartSessionResponse,
   StoredSessionRef,
-  WorkspaceSnapshotResponse,
 } from "@rah/runtime-protocol";
 import type { ProviderAdapter, RuntimeServices } from "./provider-adapter";
 import {
@@ -51,14 +43,6 @@ import {
   resolveGeminiRuntimeCapabilityState,
 } from "./gemini-model-catalog";
 import { buildGeminiModeState, isGeminiModeId } from "./session-mode-utils";
-import {
-  applyWorkspaceGitFileActionAsync,
-  applyWorkspaceGitHunkActionAsync,
-  getWorkspaceGitDiffAsync,
-  getWorkspaceGitStatusAsync,
-  getWorkspaceSnapshot,
-  readWorkspaceFileFromDirectoryAsync,
-} from "./workspace-utils";
 import { toSessionSummary } from "./session-store";
 import { movePathToTrash } from "./trash";
 
@@ -328,93 +312,6 @@ export class GeminiAdapter implements ProviderAdapter {
 
   onPtyResize(): void {
     // Gemini sessions do not use PTY-backed rendering.
-  }
-
-  getWorkspaceSnapshot(sessionId: string, options?: { scopeRoot?: string }): WorkspaceSnapshotResponse {
-    const state = this.services.sessionStore.getSession(sessionId);
-    if (!state) {
-      throw new Error(`Unknown session ${sessionId}`);
-    }
-    const snapshot = getWorkspaceSnapshot(options?.scopeRoot ?? state.session.cwd);
-    return {
-      sessionId,
-      cwd: snapshot.cwd,
-      nodes: snapshot.nodes,
-    };
-  }
-
-  async getGitStatus(sessionId: string, options?: { scopeRoot?: string }): Promise<GitStatusResponse> {
-    const state = this.services.sessionStore.getSession(sessionId);
-    if (!state) {
-      throw new Error(`Unknown session ${sessionId}`);
-    }
-    const status = await getWorkspaceGitStatusAsync(state.session.cwd, options);
-    return {
-      sessionId,
-      ...(status.branch ? { branch: status.branch } : {}),
-      changedFiles: status.changedFiles,
-      ...(status.stagedFiles ? { stagedFiles: status.stagedFiles } : {}),
-      ...(status.unstagedFiles ? { unstagedFiles: status.unstagedFiles } : {}),
-      ...(status.totalStaged !== undefined ? { totalStaged: status.totalStaged } : {}),
-      ...(status.totalUnstaged !== undefined ? { totalUnstaged: status.totalUnstaged } : {}),
-    };
-  }
-
-  async getGitDiff(
-    sessionId: string,
-    targetPath: string,
-    options?: { staged?: boolean; ignoreWhitespace?: boolean; scopeRoot?: string },
-  ): Promise<GitDiffResponse> {
-    const state = this.services.sessionStore.getSession(sessionId);
-    if (!state) {
-      throw new Error(`Unknown session ${sessionId}`);
-    }
-    return {
-      sessionId,
-      path: targetPath,
-      diff: await getWorkspaceGitDiffAsync(state.session.cwd, targetPath, options),
-    };
-  }
-
-  async applyGitFileAction(sessionId: string, request: GitFileActionRequest): Promise<GitFileActionResponse> {
-    const state = this.services.sessionStore.getSession(sessionId);
-    if (!state) {
-      throw new Error(`Unknown session ${sessionId}`);
-    }
-    return {
-      ...(await applyWorkspaceGitFileActionAsync(state.session.cwd, request, {
-        scopeRoot: state.session.rootDir ?? state.session.cwd,
-      })),
-      sessionId,
-    };
-  }
-
-  async applyGitHunkAction(sessionId: string, request: GitHunkActionRequest): Promise<GitHunkActionResponse> {
-    const state = this.services.sessionStore.getSession(sessionId);
-    if (!state) {
-      throw new Error(`Unknown session ${sessionId}`);
-    }
-    return {
-      ...(await applyWorkspaceGitHunkActionAsync(state.session.cwd, request, {
-        scopeRoot: state.session.rootDir ?? state.session.cwd,
-      })),
-      sessionId,
-    };
-  }
-
-  async readSessionFile(
-    sessionId: string,
-    targetPath: string,
-    options?: { scopeRoot?: string },
-  ): Promise<SessionFileResponse> {
-    const state = this.services.sessionStore.getSession(sessionId);
-    if (!state) {
-      throw new Error(`Unknown session ${sessionId}`);
-    }
-    return {
-      ...(await readWorkspaceFileFromDirectoryAsync(state.session.cwd, targetPath, options)),
-      sessionId,
-    };
   }
 
   getSessionHistoryPage(
