@@ -13,11 +13,11 @@ import type {
   StartSessionRequest,
   StartSessionResponse,
 } from "@rah/runtime-protocol";
-import { launchSpecForProvider, probeProviderDiagnostic } from "./provider-diagnostics";
-import type { ProviderAdapter, ProviderStructuredLifecycleAdapter } from "./provider-adapter";
-import type { HistorySnapshotStore } from "./history-snapshots";
-import { defaultProviderModeId, providerModeDescriptors } from "./session-mode-utils";
-import { assertExistingWorkingDirectory } from "./provider-working-directory";
+import { launchSpecForProvider, probeProviderDiagnostic } from "../provider-diagnostics";
+import type { ProviderAdapter, ProviderStructuredLifecycleAdapter } from "../provider-adapter";
+import type { HistorySnapshotStore } from "../history-snapshots";
+import { defaultProviderModeId, providerModeDescriptors } from "../session-mode-utils";
+import { assertExistingWorkingDirectory } from "../provider-working-directory";
 
 type RuntimeStructuredProviderCoordinatorDeps = {
   adaptersByProvider: Map<string, ProviderAdapter>;

@@ -73,6 +73,7 @@ describe("NativeTuiProviderRuntime", () => {
     const forbiddenProviderModules = [
       "./provider-adapter",
       "./runtime-structured-provider-coordinator",
+      "./legacy-structured/runtime-structured-provider-coordinator",
       "./claude-session-files",
       "./codex-rollout-activity",
       "./codex-stored-sessions",
@@ -102,6 +103,7 @@ describe("NativeTuiProviderRuntime", () => {
     );
     const sessionListSource = readSource("./runtime-session-list.ts");
     assert.match(engineSource, /RuntimeStructuredProviderCoordinator/);
+    assert.match(engineSource, /legacy-structured\/runtime-structured-provider-coordinator/);
     assert.match(engineSource, /structuredProviders/);
     assert.match(engineSource, /historyMirrorAdapters/);
     assert.doesNotMatch(engineSource, /RuntimeProviderCoordinator/);

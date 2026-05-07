@@ -59,7 +59,7 @@ import type {
   ProviderWorkspaceInspectionAdapter,
 } from "./provider-adapter";
 import { PtyHub } from "./pty-hub";
-import { RuntimeStructuredProviderCoordinator } from "./runtime-structured-provider-coordinator";
+import { RuntimeStructuredProviderCoordinator } from "./legacy-structured/runtime-structured-provider-coordinator";
 import { SessionStore, toSessionSummary, type StoredSessionState } from "./session-store";
 import {
   buildSessionsResponse as buildRuntimeSessionsResponse,
