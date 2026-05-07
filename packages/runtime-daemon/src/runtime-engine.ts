@@ -821,22 +821,6 @@ export class RuntimeEngine {
         continue;
       }
       if (this.terminals.hasNativeTuiSession(state.session.id)) {
-        void this.terminals.closeNativeTuiSession(state.session.id).catch((error: unknown) => {
-          console.error(
-            `[rah] closeNativeTuiSession failed for ${state.session.id}:`,
-            error instanceof Error ? error.message : String(error),
-          );
-        });
-        this.sessionStore.removeSession(state.session.id);
-        this.ptyHub.removeSession(state.session.id);
-        this.sessionOwners.delete(state.session.id);
-        this.terminals.clearSessionState(state.session.id);
-        this.eventBus.publish({
-          sessionId: state.session.id,
-          type: "session.closed",
-          source: SYSTEM_SOURCE,
-          payload: {},
-        });
         continue;
       }
       const adapter = this.requireSessionAdapter(state.session.id);

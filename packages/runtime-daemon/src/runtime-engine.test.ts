@@ -1438,6 +1438,60 @@ describe("RuntimeEngine", () => {
     }
   });
 
+  test("native TUI backend survives clientless session listing", async () => {
+    const engine = new RuntimeEngine([]);
+    const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-native-tui-detached-"));
+    const fakeCodex = path.join(workspace, "fake-codex.js");
+    const providerSessionId = "019de928-7d22-7c63-ba89-dcb25d4a8666";
+    const previousCodexBinary = process.env.RAH_CODEX_BINARY;
+    const previousCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = path.join(workspace, "codex-home");
+    mkdirSync(path.join(process.env.CODEX_HOME, "sessions"), { recursive: true });
+    writeFileSync(
+      fakeCodex,
+      [
+        "#!/usr/bin/env node",
+        "process.stdout.write('MOCK_NATIVE_TUI_DETACHED_READY\\r\\n');",
+        `process.stdout.write('Session: ${providerSessionId}\\r\\n');`,
+        "process.stdin.resume();",
+        "setInterval(() => undefined, 1000);",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(fakeCodex, 0o755);
+    process.env.RAH_CODEX_BINARY = fakeCodex;
+
+    try {
+      const started = await engine.startSession({
+        provider: "codex",
+        cwd: workspace,
+        liveBackend: "native_tui",
+      });
+      const sessionId = started.session.session.id;
+      await waitFor(() => {
+        assert.equal(engine.getSessionSummary(sessionId).session.providerSessionId, providerSessionId);
+      }, { timeoutMs: 5_000 });
+
+      const listed = engine.listSessions();
+      assert.equal(listed.sessions.some((entry) => entry.session.id === sessionId), true);
+      assert.ok(engine.sessionStore.getSession(sessionId));
+      assert.equal(engine.ptyHub.stats(sessionId)?.status, "open");
+    } finally {
+      if (previousCodexBinary === undefined) {
+        delete process.env.RAH_CODEX_BINARY;
+      } else {
+        process.env.RAH_CODEX_BINARY = previousCodexBinary;
+      }
+      if (previousCodexHome === undefined) {
+        delete process.env.CODEX_HOME;
+      } else {
+        process.env.CODEX_HOME = previousCodexHome;
+      }
+      await engine.shutdown();
+      rmSync(workspace, { force: true, recursive: true });
+    }
+  });
+
   test("native TUI backend queues chat input while the native prompt is busy", async () => {
     const engine = new RuntimeEngine([]);
     const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-native-tui-queue-"));
