@@ -512,6 +512,7 @@ describe("WorkbenchStateStore", () => {
       provider: "claude",
       cwd: rootDir,
       title: "Orphan candidate",
+      liveBackend: "structured",
     });
 
     const sessionId = started.session.session.id;
