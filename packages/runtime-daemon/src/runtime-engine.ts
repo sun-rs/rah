@@ -51,7 +51,7 @@ import { OpenCodeAdapter } from "./opencode-adapter";
 import type { ProviderActivity } from "./provider-activity";
 import type { ProviderAdapter } from "./provider-adapter";
 import { PtyHub } from "./pty-hub";
-import { RuntimeProviderCoordinator } from "./runtime-provider-coordinator";
+import { RuntimeStructuredProviderCoordinator } from "./runtime-structured-provider-coordinator";
 import { SessionStore, toSessionSummary, type StoredSessionState } from "./session-store";
 import {
   buildSessionsResponse as buildRuntimeSessionsResponse,
@@ -117,7 +117,7 @@ export class RuntimeEngine {
   private readonly workspaceScopeAuthorizer: WorkspaceScopeAuthorizer;
   private readonly terminals: RuntimeTerminalCoordinator;
   private readonly sessionLifecycle: RuntimeSessionLifecycle;
-  private readonly providers: RuntimeProviderCoordinator;
+  private readonly structuredProviders: RuntimeStructuredProviderCoordinator;
   private readonly nativeTuiProviders: NativeTuiProviderRuntime;
   private readonly defaultLiveBackend: SessionLiveBackend;
 
@@ -184,7 +184,7 @@ export class RuntimeEngine {
       },
       requireSessionAdapter: (sessionId) => this.requireSessionAdapter(sessionId),
     });
-    this.providers = new RuntimeProviderCoordinator({
+    this.structuredProviders = new RuntimeStructuredProviderCoordinator({
       adaptersByProvider: this.adaptersByProvider,
       adaptersById: this.adaptersById,
       rememberSessionOwner: (sessionId, adapter) => {
@@ -256,7 +256,7 @@ export class RuntimeEngine {
   }
 
   async listProviderDiagnostics(options?: { forceRefresh?: boolean }): Promise<ProviderDiagnostic[]> {
-    return this.providers.listProviderDiagnostics(options);
+    return this.structuredProviders.listProviderDiagnostics(options);
   }
 
   listNativeTuiDiagnostics(options?: {
@@ -274,7 +274,7 @@ export class RuntimeEngine {
     provider: ProviderKind,
     options?: { cwd?: string; forceRefresh?: boolean },
   ): Promise<ProviderModelCatalog> {
-    return this.providers.listProviderModels(provider, options);
+    return this.structuredProviders.listProviderModels(provider, options);
   }
 
   addWorkspace(rawDir: string): ListSessionsResponse {
@@ -371,7 +371,7 @@ export class RuntimeEngine {
         ...(request.attach !== undefined ? { attach: request.attach } : {}),
       });
     }
-    return this.providers.startSession(request);
+    return this.structuredProviders.startSession(request);
   }
 
   async resumeSession(request: ResumeSessionRequest): Promise<ResumeSessionResponse> {
@@ -386,7 +386,7 @@ export class RuntimeEngine {
         providerSessionId: request.providerSessionId,
       });
     }
-    return this.providers.resumeSession(request);
+    return this.structuredProviders.resumeSession(request);
   }
 
   private shouldUseNativeTuiBackend(
@@ -644,18 +644,18 @@ export class RuntimeEngine {
   }
 
   listScenarios(): DebugScenarioDescriptor[] {
-    return this.providers.listScenarios();
+    return this.structuredProviders.listScenarios();
   }
 
   startScenario(args: {
     scenarioId: string;
     attach?: AttachSessionRequest;
   }): StartSessionResponse {
-    return this.providers.startScenario(args);
+    return this.structuredProviders.startScenario(args);
   }
 
   buildScenarioReplayScript(scenarioId: string): DebugReplayScript {
-    return this.providers.buildScenarioReplayScript(scenarioId);
+    return this.structuredProviders.buildScenarioReplayScript(scenarioId);
   }
 
   listEvents(filter: EventSubscriptionRequest): RahEvent[] {

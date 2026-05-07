@@ -72,7 +72,7 @@ describe("NativeTuiProviderRuntime", () => {
     ];
     const forbiddenProviderModules = [
       "./provider-adapter",
-      "./runtime-provider-coordinator",
+      "./runtime-structured-provider-coordinator",
       "./claude-session-files",
       "./codex-rollout-activity",
       "./codex-stored-sessions",

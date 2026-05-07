@@ -19,7 +19,7 @@ import type { HistorySnapshotStore } from "./history-snapshots";
 import { defaultProviderModeId, providerModeDescriptors } from "./session-mode-utils";
 import { assertExistingWorkingDirectory } from "./provider-working-directory";
 
-type RuntimeProviderCoordinatorDeps = {
+type RuntimeStructuredProviderCoordinatorDeps = {
   adaptersByProvider: Map<string, ProviderAdapter>;
   adaptersById: Map<string, ProviderAdapter>;
   rememberSessionOwner: (sessionId: string, adapter: ProviderAdapter) => void;
@@ -27,8 +27,16 @@ type RuntimeProviderCoordinatorDeps = {
   historySnapshots: HistorySnapshotStore;
 };
 
-export class RuntimeProviderCoordinator {
-  constructor(private readonly deps: RuntimeProviderCoordinatorDeps) {}
+/**
+ * Explicit legacy/enhancement coordinator for the old structured live path.
+ *
+ * PTY-first live start/resume bypasses this class and goes through
+ * RuntimeTerminalCoordinator + NativeTuiProviderRuntime. This coordinator remains
+ * for stored-history catalogs, diagnostics, debug scenarios, and explicit
+ * liveBackend: "structured" requests.
+ */
+export class RuntimeStructuredProviderCoordinator {
+  constructor(private readonly deps: RuntimeStructuredProviderCoordinatorDeps) {}
 
   private requireAdapterForProvider(provider: string): ProviderAdapter {
     const adapter = this.deps.adaptersByProvider.get(provider);

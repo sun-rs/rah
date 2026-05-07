@@ -108,7 +108,7 @@ Phase 0 不做大规模删除。目标是先把当前代码按新边界分类，
 | 模块 | 当前职责 | 后续定位 |
 |---|---|---|
 | `ProviderAdapter.startSession()` / `resumeSession()` | structured live start/resume 主接口 | 降级为 legacy structured path |
-| `RuntimeProviderCoordinator.startSession()` / `resumeSession()` | 非 native_tui 请求走 adapter structured live | 保留兼容，但不作为默认 provider 主链路 |
+| `RuntimeStructuredProviderCoordinator.startSession()` / `resumeSession()` | 非 native_tui 请求走 adapter structured live | 保留兼容，但不作为默认 provider 主链路 |
 | `codex-live-client.ts` / `codex-live-rpc.ts` | Codex structured JSON-RPC live | legacy/enhancement |
 | `claude-live-client.ts` / helpers | Claude SDK structured live | legacy/enhancement |
 | `gemini-live-client.ts` | Gemini structured CLI/live path | legacy/enhancement |
@@ -119,7 +119,7 @@ Phase 0 不做大规模删除。目标是先把当前代码按新边界分类，
 当前已符合的部分：
 
 - Web 对五家 provider 默认 `liveBackend: "native_tui"`。
-- `RuntimeEngine.startSession()` / `resumeSession()` 已在 `liveBackend === "native_tui"` 时绕过 `RuntimeProviderCoordinator`，直接走 native TUI launch spec + terminal coordinator。
+- `RuntimeEngine.startSession()` / `resumeSession()` 已在 `liveBackend === "native_tui"` 时绕过 `RuntimeStructuredProviderCoordinator`，直接走 native TUI launch spec + terminal coordinator。
 
 当前未完全符合的部分：
 
