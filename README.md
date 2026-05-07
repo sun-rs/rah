@@ -133,6 +133,7 @@ RAH now uses five test tiers:
   - `npm run test:smoke:wrapper`
   - exercises the real daemon wrapper-control path for Codex, Claude, Gemini, Kimi, and OpenCode
     without invoking external provider CLIs or model APIs
+  - starts an isolated temporary daemon automatically unless `RAH_BASE_URL` is provided
 - native TUI gate
   - `npm run test:native-tui`
   - exercises the PTY-first lifecycle, fake native provider TUIs, browser replay/reconnect,
@@ -171,7 +172,9 @@ have:
 
 For that reason, provider smoke can still be run explicitly per provider. `npm run test:smoke:wrapper`
 is the deterministic daemon-level smoke for wrapper lifecycle, web input injection, canonical
-timeline identity propagation, and cleanup across all five provider adapters.
+timeline identity propagation, and cleanup across all five provider adapters. It starts an isolated
+temporary daemon by default; set `RAH_BASE_URL=http://127.0.0.1:43111` only when intentionally testing
+an already-running daemon.
 
 ## Package layout
 

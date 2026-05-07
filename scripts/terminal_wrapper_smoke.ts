@@ -1,9 +1,14 @@
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { WebSocket } from "ws";
 
-const baseUrl = process.env.RAH_BASE_URL ?? "http://127.0.0.1:43111";
+const scriptDir = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(scriptDir, "..");
+let baseUrl = process.env.RAH_BASE_URL ?? "";
 const providers = ["codex", "claude", "gemini", "kimi", "opencode"] as const;
 type Provider = (typeof providers)[number];
 
@@ -31,6 +36,95 @@ function wsUrl(pathName: string): string {
   url.pathname = pathName;
   url.search = "";
   return url.toString();
+}
+
+async function findFreePort(): Promise<number> {
+  return await new Promise<number>((resolve, reject) => {
+    const server = net.createServer();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        server.close(() => reject(new Error("Could not resolve free TCP port.")));
+        return;
+      }
+      const port = address.port;
+      server.close(() => resolve(port));
+    });
+  });
+}
+
+async function startSmokeDaemon(): Promise<{
+  baseUrl: string;
+  close(): Promise<void>;
+  stdout: () => string;
+  stderr: () => string;
+}> {
+  const tmpRoot = mkdtempSync(path.join(os.tmpdir(), "rah-wrapper-smoke-daemon-"));
+  const port = await findFreePort();
+  const child = spawn(
+    process.execPath,
+    ["--import", "tsx", "packages/runtime-daemon/src/main.ts"],
+    {
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        RAH_PORT: String(port),
+        RAH_HOME: path.join(tmpRoot, "rah-home"),
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (chunk) => {
+    stdout += chunk.toString();
+  });
+  child.stderr.on("data", (chunk) => {
+    stderr += chunk.toString();
+  });
+
+  try {
+    const listenUrl = await waitFor(
+      () => {
+        const match = stdout.match(/rah daemon listening on (http:\/\/127\.0\.0\.1:\d+)/);
+        return match?.[1];
+      },
+      "wrapper smoke daemon listen URL",
+      20_000,
+    );
+    return {
+      baseUrl: listenUrl,
+      stdout: () => stdout,
+      stderr: () => stderr,
+      async close() {
+        await stopDaemon(child);
+        rmSync(tmpRoot, { recursive: true, force: true });
+      },
+    };
+  } catch (error) {
+    await stopDaemon(child);
+    rmSync(tmpRoot, { recursive: true, force: true });
+    throw new Error(
+      `Failed to start wrapper smoke daemon: ${
+        error instanceof Error ? error.message : String(error)
+      }\nstdout:\n${stdout.slice(-1600)}\nstderr:\n${stderr.slice(-1600)}`,
+    );
+  }
+}
+
+async function stopDaemon(child: ChildProcessWithoutNullStreams): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return;
+  }
+  child.kill("SIGTERM");
+  await Promise.race([
+    new Promise<void>((resolve) => child.once("exit", () => resolve())),
+    new Promise<void>((resolve) => setTimeout(resolve, 3_000)),
+  ]);
+  if (child.exitCode === null && child.signalCode === null) {
+    child.kill("SIGKILL");
+  }
 }
 
 function waitForSocketOpen(socket: WebSocket): Promise<void> {
@@ -292,6 +386,8 @@ async function runProvider(provider: Provider) {
 }
 
 async function main() {
+  const smokeDaemon = process.env.RAH_BASE_URL ? null : await startSmokeDaemon();
+  baseUrl = process.env.RAH_BASE_URL ?? smokeDaemon?.baseUrl ?? "";
   const requested = process.argv.slice(2);
   const selected =
     requested.length > 0
@@ -303,10 +399,14 @@ async function main() {
         })
       : [...providers];
   const results = [];
-  for (const provider of selected) {
-    results.push(await runProvider(provider));
+  try {
+    for (const provider of selected) {
+      results.push(await runProvider(provider));
+    }
+    console.log(JSON.stringify({ ok: true, baseUrl, results }, null, 2));
+  } finally {
+    await smokeDaemon?.close();
   }
-  console.log(JSON.stringify({ ok: true, baseUrl, results }, null, 2));
 }
 
 void main().catch((error) => {

@@ -45,15 +45,17 @@ Latest verified gates in this branch:
 - `npm run test:web`: 148 pass
 - `npm run test:provider-contracts`: 133 pass
 - `npm run test:runtime`: 370 pass
+- `npm run test:native-tui`: pass on 2026-05-07
 
 `test:runtime` now uses `--test-concurrency=1` because runtime tests mutate process-wide provider binary env vars such as `RAH_CODEX_BINARY`; parallel test files can otherwise contaminate each other and create false failures.
+
+`test:native-tui` covered the full PTY-first automatic gate for this checkout: typecheck, web tests, runtime tests, web build, real CLI help/version probe, Codex native smoke, Claude/Gemini/Kimi/OpenCode native provider smoke, Chromium browser native Codex smoke, Chromium browser native provider smoke, wrapper-control smoke, and `git diff --check`. The CLI probe captured the current local versions: Codex `0.128.0`, Claude Code `2.1.123`, Gemini `0.40.0`, Kimi `1.40.0`, and OpenCode `1.14.39`. The report records the worktree as dirty because this branch has local edits and the user-owned untracked `desgin.md`.
 
 ## Remaining Gaps
 
 These are still not completion-grade:
 
-- `npm run test:native-tui` has not been run for this exact HEAD in this audit cycle.
-- Browser smoke and WebKit/mobile smoke are not rerun in this audit.
+- WebKit/mobile browser smoke is not rerun in this audit. Chromium native browser smoke is covered by `npm run test:native-tui`, but iPad/Safari real input-method behavior still needs human verification.
 - Real five-provider CLI/account human QA is still required; fake native TUI tests do not prove real login/quota/provider behavior.
 - Legacy structured live clients and adapters still exist. They are no longer default, but the adapter interface is not fully slimmed down to launch/bind/mirror/minimal control.
 - Legacy wrapper runtime still exists for `RAH_LEGACY_WRAPPER=1` and synthetic tests. It is isolated as a fallback, not deleted.

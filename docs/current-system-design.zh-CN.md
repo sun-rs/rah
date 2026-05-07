@@ -316,7 +316,7 @@ npm run test:runtime
 npm run test:smoke:wrapper
 ```
 
-`npm run test:smoke:wrapper` 会连接真实 daemon 的 wrapper-control / event stream / input / close 路由，覆盖 Codex、Claude、Gemini、Kimi、OpenCode 五家 adapter 的 wrapper 生命周期、Web 输入注入、canonical timeline identity 透传和清理。它不调用外部 provider CLI 或模型 API，因此适合作为 daemon 层稳定 smoke。
+`npm run test:smoke:wrapper` 默认会启动一个隔离的临时 daemon，并连接其 wrapper-control / event stream / input / close 路由，覆盖 Codex、Claude、Gemini、Kimi、OpenCode 五家 adapter 的 wrapper 生命周期、Web 输入注入、canonical timeline identity 透传和清理。它不调用外部 provider CLI 或模型 API，因此适合作为 daemon 层稳定 smoke。如果要验证已经运行的 daemon，可以显式设置 `RAH_BASE_URL=http://127.0.0.1:43111`。
 
 Provider browser smoke 依赖本机 CLI、账号状态和额度，只应在已配置完整的机器上运行：
 
