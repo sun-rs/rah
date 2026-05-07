@@ -107,6 +107,7 @@ This guard verifies that built-in adapter type requirements no longer include st
 Structured lifecycle boundary verified on 2026-05-07:
 
 - `npm run typecheck`: pass
+- `npm run test:runtime`: 371 pass
 
 This guard verifies that new provider adapters are no longer type-required to implement legacy structured `startSession/resumeSession`. Explicit structured live requests still fail loudly through `RuntimeStructuredProviderCoordinator` if the provider does not implement that optional slice.
 
