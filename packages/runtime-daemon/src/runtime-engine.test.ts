@@ -3945,9 +3945,32 @@ describe("RuntimeEngine", () => {
     }
   });
 
+  test("legacy terminal wrapper runtime is disabled unless explicitly enabled", async () => {
+    const engine = new RuntimeEngine();
+    try {
+      assert.throws(
+        () =>
+          engine.registerTerminalWrapperSession(
+            {
+              type: "wrapper.hello",
+              provider: "codex",
+              cwd: workDirGlobal,
+              rootDir: workDirGlobal,
+              terminalPid: 4242,
+              launchCommand: ["rah", "codex"],
+            } satisfies WrapperHelloMessage,
+            () => undefined,
+          ),
+        /Legacy terminal wrapper runtime is disabled/,
+      );
+    } finally {
+      await engine.shutdown();
+    }
+  });
+
   test("registers terminal wrapper sessions as live and dispatches queued turns when prompt becomes clean", async () => {
     const adapter = new CountingStoredSessionsAdapter([]);
-    const engine = new RuntimeEngine([adapter]);
+    const engine = new RuntimeEngine([adapter], { enableLegacyWrapperRuntime: true });
     const outbound: TerminalWrapperFromDaemonMessage[] = [];
 
     const ready = engine.registerTerminalWrapperSession(
@@ -4023,7 +4046,7 @@ describe("RuntimeEngine", () => {
 
   test("terminal wrapper permission capability matches provider support", async () => {
     const adapter = new CountingStoredSessionsAdapter([]);
-    const engine = new RuntimeEngine([adapter]);
+    const engine = new RuntimeEngine([adapter], { enableLegacyWrapperRuntime: true });
 
     const claude = engine.registerTerminalWrapperSession(
       {
@@ -4065,7 +4088,7 @@ describe("RuntimeEngine", () => {
 
   test("interrupting a terminal wrapper turn before injection cancels the queued web turn", async () => {
     const adapter = new CountingStoredSessionsAdapter([]);
-    const engine = new RuntimeEngine([adapter]);
+    const engine = new RuntimeEngine([adapter], { enableLegacyWrapperRuntime: true });
     const outbound: TerminalWrapperFromDaemonMessage[] = [];
 
     const ready = engine.registerTerminalWrapperSession(
@@ -4094,7 +4117,7 @@ describe("RuntimeEngine", () => {
 
   test("interrupting before wrapper input arrives suppresses the next same-client input", async () => {
     const adapter = new CountingStoredSessionsAdapter([]);
-    const engine = new RuntimeEngine([adapter]);
+    const engine = new RuntimeEngine([adapter], { enableLegacyWrapperRuntime: true });
     const outbound: TerminalWrapperFromDaemonMessage[] = [];
 
     const ready = engine.registerTerminalWrapperSession(
@@ -4121,7 +4144,7 @@ describe("RuntimeEngine", () => {
 
   test("applies terminal wrapper activity and PTY output through canonical channels", async () => {
     const adapter = new CountingStoredSessionsAdapter([]);
-    const engine = new RuntimeEngine([adapter]);
+    const engine = new RuntimeEngine([adapter], { enableLegacyWrapperRuntime: true });
 
     const ready = engine.registerTerminalWrapperSession(
       {
@@ -4167,7 +4190,7 @@ describe("RuntimeEngine", () => {
 
   test("rebinds a terminal wrapper session to a new provider session without mixing feed ownership", async () => {
     const adapter = new CountingStoredSessionsAdapter([]);
-    const engine = new RuntimeEngine([adapter]);
+    const engine = new RuntimeEngine([adapter], { enableLegacyWrapperRuntime: true });
 
     const ready = engine.registerTerminalWrapperSession(
       {
@@ -4216,7 +4239,7 @@ describe("RuntimeEngine", () => {
 
   test("disconnecting a terminal wrapper session removes the live session", async () => {
     const adapter = new CountingStoredSessionsAdapter([]);
-    const engine = new RuntimeEngine([adapter]);
+    const engine = new RuntimeEngine([adapter], { enableLegacyWrapperRuntime: true });
 
     const ready = engine.registerTerminalWrapperSession(
       {
@@ -4239,7 +4262,7 @@ describe("RuntimeEngine", () => {
 
   test("closing a terminal wrapper session requests wrapper shutdown before removing it", async () => {
     const adapter = new CountingStoredSessionsAdapter([]);
-    const engine = new RuntimeEngine([adapter]);
+    const engine = new RuntimeEngine([adapter], { enableLegacyWrapperRuntime: true });
     const outbound: TerminalWrapperFromDaemonMessage[] = [];
 
     const ready = engine.registerTerminalWrapperSession(
@@ -4280,7 +4303,7 @@ describe("RuntimeEngine", () => {
 
   test("ignores stale wrapper messages after a terminal wrapper session is closed", async () => {
     const adapter = new CountingStoredSessionsAdapter([]);
-    const engine = new RuntimeEngine([adapter]);
+    const engine = new RuntimeEngine([adapter], { enableLegacyWrapperRuntime: true });
     const outbound: TerminalWrapperFromDaemonMessage[] = [];
 
     const ready = engine.registerTerminalWrapperSession(

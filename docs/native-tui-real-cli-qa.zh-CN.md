@@ -80,7 +80,7 @@ git diff --check
 
 这些命令覆盖 RAH 自身协议、daemon lifecycle、fake provider native TUI、Web Chat/TUI toggle、xterm 输入、Chat composer 注入 native TUI、TUI 中存在未提交草稿时 `nativeTui.promptState` 会变为 `prompt_dirty` 且 Chat composer 会被阻止不会误注入，并显示切 TUI 提交或清除草稿的 warning、五家 fake native session 页面 reload 后 TUI replay、Codex 浏览器离线期间后台 native TUI 输出在 online/focus 后自动追上、Claude/Gemini/Kimi/OpenCode 浏览器离线期间后台 PTY 输入产生的新 native TUI 输出在 online/focus 后自动追上、Codex canvas 分屏布局切换后的 TUI replay 与 PTY resize 传递、五家 fake native Stop -> Ctrl-C/SIGINT、Stop 后 runtimeState 回 idle、移动端 TUI input bridge 的快捷键、文本输入与 composition 输入，Chat 注入后 stale persisted mirror completion / Kimi `TurnEnd` / Codex rollout lifecycle / Gemini conversation message / OpenCode database completion 不会把 session 错误标回 idle、真实 CLI version / RAH commit 采集和真实 CLI help flag。它们不覆盖真实模型是否回答、真实权限弹窗是否出现、真实账号是否登录、真实额度是否耗尽。
 
-`npm run test:smoke:wrapper` 仍可显式运行，用于 legacy/internal wrapper-control smoke；它会启动专用测试 daemon 启用 wrapper-control，普通 daemon 默认不开放该路由。它不属于 PTY-first native TUI gate。
+`npm run test:smoke:wrapper` 仍可显式运行，用于 legacy/internal wrapper-control smoke；它会启动专用测试 daemon 启用 wrapper-control 和 wrapper runtime，普通 daemon 默认不开放该路由且不启用 wrapper runtime。它不属于 PTY-first native TUI gate。
 
 `test:smoke:native-real-tui-launch` 不在完整 gate 内，原因是它会启动真实 provider TUI，可能受账号登录、官方安全确认、provider 本地状态影响；它适合作为升级 provider CLI 后的额外真实启动检查。它可能让 provider 记录空 session metadata，所以默认只写入稳定的 `test-results` 工作区，不使用会被删除的系统临时目录。2026-05-03 本机已通过五家 provider 启动探针；最新报告显示五家真实 TUI 均能启动并关闭。该报告还观察到 Claude 在新测试工作区显示官方 trust-folder safety prompt，Kimi 显示 `Kimi-k2.6` welcome，OpenCode 显示 TUI 首页；人工 QA 需要在 TUI 中确认这类官方提示和真实 turn 行为。Codex 只有 raw output 或 Gemini 在 3 秒窗口内暂无输出不算失败，因为该探针不发送 prompt，只验证 launch/PTY/close。
 

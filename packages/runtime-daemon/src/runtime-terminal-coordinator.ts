@@ -69,12 +69,13 @@ type RuntimeTerminalCoordinatorDeps = {
   historySnapshots: HistorySnapshotStore;
   nativeTuiProviders: NativeTuiProviderRuntime;
   nativeTuiMirrors: NativeTuiMirrorProvider;
+  enableLegacyWrapperRuntime?: boolean;
   onRememberSession: (state: StoredSessionState) => void;
   onSessionOwnerRemoved: (sessionId: string) => void;
 };
 
 export class RuntimeTerminalCoordinator {
-  private readonly terminalWrappers: TerminalWrapperSessionRuntime;
+  private readonly terminalWrappers: TerminalWrapperSessionRuntime | undefined;
   private readonly ptySessions = new PtySessionRuntime();
   private readonly nativeTuiSessions = new Map<string, NativeTuiSessionState>();
   private readonly nativeTuiSessionIds = new Set<string>();
@@ -83,7 +84,10 @@ export class RuntimeTerminalCoordinator {
   private readonly mirrorRuntime: NativeTuiMirrorRuntime;
 
   constructor(private readonly deps: RuntimeTerminalCoordinatorDeps) {
-    this.terminalWrappers = new TerminalWrapperSessionRuntime(deps);
+    this.terminalWrappers =
+      deps.enableLegacyWrapperRuntime === true
+        ? new TerminalWrapperSessionRuntime(deps)
+        : undefined;
     this.mirrorRuntime = new NativeTuiMirrorRuntime({
       eventBus: deps.eventBus,
       ptyHub: deps.ptyHub,
@@ -97,12 +101,19 @@ export class RuntimeTerminalCoordinator {
     });
   }
 
+  private requireTerminalWrappers(): TerminalWrapperSessionRuntime {
+    if (!this.terminalWrappers) {
+      throw new Error("Legacy terminal wrapper runtime is disabled.");
+    }
+    return this.terminalWrappers;
+  }
+
   hasWrapperSession(sessionId: string): boolean {
-    return this.terminalWrappers.hasSession(sessionId);
+    return this.terminalWrappers?.hasSession(sessionId) ?? false;
   }
 
   isClosingWrapperSession(sessionId: string): boolean {
-    return this.terminalWrappers.isClosingSession(sessionId);
+    return this.terminalWrappers?.isClosingSession(sessionId) ?? false;
   }
 
   hasNativeTuiSession(sessionId: string): boolean {
@@ -114,7 +125,7 @@ export class RuntimeTerminalCoordinator {
   }
 
   clearSessionState(sessionId: string): void {
-    this.terminalWrappers.clearSessionState(sessionId);
+    this.terminalWrappers?.clearSessionState(sessionId);
     this.clearNativeTuiRuntimeState(sessionId);
     this.nativeTuiSessionIds.delete(sessionId);
   }
@@ -288,15 +299,15 @@ export class RuntimeTerminalCoordinator {
   }
 
   handleWrapperInput(sessionId: string, clientId: string, text: string): boolean {
-    return this.terminalWrappers.handleInput(sessionId, clientId, text);
+    return this.terminalWrappers?.handleInput(sessionId, clientId, text) ?? false;
   }
 
   handleWrapperInterrupt(sessionId: string, clientId: string): boolean {
-    return this.terminalWrappers.handleInterrupt(sessionId, clientId);
+    return this.terminalWrappers?.handleInterrupt(sessionId, clientId) ?? false;
   }
 
   requestWrapperClose(sessionId: string, request: CloseSessionRequest): boolean {
-    return this.terminalWrappers.requestClose(sessionId, request);
+    return this.terminalWrappers?.requestClose(sessionId, request) ?? false;
   }
 
   handlePermissionResponse(
@@ -304,7 +315,9 @@ export class RuntimeTerminalCoordinator {
     requestId: string,
     response: PermissionResponseRequest,
   ): boolean {
-    return this.terminalWrappers.handlePermissionResponse(sessionId, requestId, response);
+    return (
+      this.terminalWrappers?.handlePermissionResponse(sessionId, requestId, response) ?? false
+    );
   }
 
   handlePtyInput(sessionId: string, data: string): boolean {
@@ -597,41 +610,41 @@ export class RuntimeTerminalCoordinator {
     request: WrapperHelloMessage,
     sendMessage: (message: TerminalWrapperFromDaemonMessage) => void,
   ): WrapperReadyMessage {
-    return this.terminalWrappers.registerSession(request, sendMessage);
+    return this.requireTerminalWrappers().registerSession(request, sendMessage);
   }
 
   disconnectTerminalWrapperSession(sessionId: string): void {
-    this.terminalWrappers.disconnectSession(sessionId);
+    this.terminalWrappers?.disconnectSession(sessionId);
   }
 
   bindTerminalWrapperProviderSession(message: WrapperProviderBoundMessage): void {
-    this.terminalWrappers.bindProviderSession(message);
+    this.terminalWrappers?.bindProviderSession(message);
   }
 
   updateTerminalWrapperPromptState(
     sessionId: string,
     promptState: TerminalWrapperPromptState,
   ): void {
-    this.terminalWrappers.updatePromptState(sessionId, promptState);
+    this.terminalWrappers?.updatePromptState(sessionId, promptState);
   }
 
   applyTerminalWrapperActivity(sessionId: string, activity: ProviderActivity): RahEvent[] {
-    return this.terminalWrappers.applyActivity(sessionId, activity);
+    return this.terminalWrappers?.applyActivity(sessionId, activity) ?? [];
   }
 
   appendTerminalWrapperPtyOutput(sessionId: string, data: string): RahEvent[] {
-    return this.terminalWrappers.appendPtyOutput(sessionId, data);
+    return this.terminalWrappers?.appendPtyOutput(sessionId, data) ?? [];
   }
 
   markTerminalWrapperExited(
     sessionId: string,
     options?: { exitCode?: number; signal?: string },
   ): RahEvent[] {
-    return this.terminalWrappers.markExited(sessionId, options);
+    return this.terminalWrappers?.markExited(sessionId, options) ?? [];
   }
 
   async shutdown(): Promise<void> {
-    this.terminalWrappers.shutdown();
+    this.terminalWrappers?.shutdown();
     for (const sessionId of this.nativeTuiSessions.keys()) {
       this.clearNativeTuiRuntimeState(sessionId);
     }

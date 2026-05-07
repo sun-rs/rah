@@ -70,7 +70,7 @@ Latest verified gates in this branch:
 - `npm run typecheck`: pass
 - `npm run test:web`: 158 pass
 - `npm run test:provider-contracts`: 133 pass
-- `npm run test:runtime`: 376 pass after closing the default wrapper-control WebSocket route
+- `npm run test:runtime`: 377 pass after closing the default wrapper-control WebSocket route and disabling the wrapper runtime by default
 - `npm run test:native-tui`: pass on 2026-05-07 after removing the production structured-live env escape hatch
 - `npm run test:smoke:wrapper`: pass on 2026-05-07 as an explicit legacy/internal smoke using a dedicated wrapper-control test daemon
 
@@ -78,7 +78,7 @@ Latest verified gates in this branch:
 
 `test:native-tui` covered the full PTY-first automatic gate for this checkout: typecheck, web tests, runtime tests, web build, real CLI help/version probe, Codex native smoke, Claude/Gemini/Kimi/OpenCode native provider smoke, Chromium browser native Codex smoke, Chromium browser native provider smoke, and `git diff --check`. The Chromium Codex browser smoke also covered mobile TUI input bridge shortcut/text/composition input and terminal-canvas focus routing. The CLI probe captured the current local versions: Codex `0.128.0`, Claude Code `2.1.132`, Gemini `0.40.0`, Kimi `1.40.0`, and OpenCode `1.14.40`.
 
-`npm run test:smoke:wrapper` remains available as an explicit legacy/internal smoke for the old wrapper-control path, but it now uses a dedicated test daemon with wrapper-control enabled and is no longer part of the PTY-first native gate. The public `rah <provider>` CLI path now enters the native TUI runtime directly, and the normal daemon keeps `/api/wrapper-control` closed by default.
+`npm run test:smoke:wrapper` remains available as an explicit legacy/internal smoke for the old wrapper-control path, but it now uses a dedicated test daemon with wrapper-control and the wrapper runtime enabled and is no longer part of the PTY-first native gate. The public `rah <provider>` CLI path now enters the native TUI runtime directly, and the normal daemon keeps `/api/wrapper-control` closed and the wrapper runtime disabled by default.
 
 Additional Phase 6 guard verified on 2026-05-07:
 
@@ -109,7 +109,7 @@ This guard verifies that the explicit structured live coordinator has moved unde
 Workspace inspection boundary verified on 2026-05-07:
 
 - `npm run typecheck`: pass
-- `npm run test:runtime`: 376 pass
+- `npm run test:runtime`: 377 pass
 - `git diff --check`: pass
 
 This guard verifies that built-in provider sessions no longer require provider adapters for generic workspace snapshot, file read, git diff/status, or git apply actions. `ProviderWorkspaceInspectionAdapter` is no longer part of the built-in `ProviderAdapter` requirement, the duplicate implementations have been deleted from Codex/Claude/Gemini/Kimi/OpenCode adapters, and the slice remains only as the legacy/debug `custom` structured fallback until the adapter interface is fully slimmed.
@@ -117,7 +117,7 @@ This guard verifies that built-in provider sessions no longer require provider a
 Context usage boundary verified on 2026-05-07:
 
 - `npm run typecheck`: pass
-- `npm run test:runtime`: 376 pass
+- `npm run test:runtime`: 377 pass
 - `git diff --check`: pass
 
 This guard verifies that usage display no longer calls through provider adapters. Provider activities still update canonical usage in `SessionStore`; HTTP/API reads now use `RuntimeEngine.getContextUsage()` directly.
@@ -231,7 +231,7 @@ Native TUI handler factory boundary verified on 2026-05-07:
 
 - `npm run typecheck`: pass
 - `node --import tsx --test --test-force-exit packages/runtime-daemon/src/native-tui-provider-runtime.test.ts packages/runtime-daemon/src/runtime-engine.test.ts packages/runtime-daemon/src/debug-engine.test.ts`: 53 pass
-- `npm run test:runtime`: 376 pass
+- `npm run test:runtime`: 377 pass
 
 This guard verifies that `DefaultNativeTuiProviderRuntime` receives the binding-only handler factory and `DefaultNativeTuiMirrorProvider` receives the mirror-only handler factory. The previous combined provider handler factory has no remaining runtime-facing callers and has been removed.
 
@@ -260,7 +260,7 @@ Claude stored-history adapter split verified on 2026-05-07:
 
 - `npm run typecheck`: pass
 - `node --import tsx --test --test-force-exit packages/runtime-daemon/src/claude-adapter.test.ts packages/runtime-daemon/src/runtime-engine.test.ts packages/runtime-daemon/src/native-tui-provider-runtime.test.ts`: 61 pass
-- `npm run test:runtime`: 376 pass
+- `npm run test:runtime`: 377 pass
 
 This guard verifies the first provider-level split between legacy structured live and provider-native stored history. `ClaudeStoredHistoryAdapter` owns Claude stored-session catalog, history page loading, frozen history paging, watch roots, and removal. `ClaudeAdapter` remains the legacy structured live/enhancement adapter and no longer exposes `listStoredSessions`, `getSessionHistoryPage`, or `removeStoredSession`.
 
@@ -302,7 +302,7 @@ This guard verifies that `default-provider-adapters.ts` no longer directly const
 Legacy structured adapter implementation path isolation verified on 2026-05-07:
 
 - `npm run typecheck`: pass
-- `npm run test:runtime`: 376 pass
+- `npm run test:runtime`: 377 pass
 - `npm run test:web`: 156 pass
 - `node --import tsx --test --test-force-exit packages/runtime-daemon/src/codex-adapter.test.ts packages/runtime-daemon/src/claude-adapter.test.ts packages/runtime-daemon/src/gemini-adapter.test.ts packages/runtime-daemon/src/kimi-adapter.test.ts packages/runtime-daemon/src/opencode-live-client.test.ts packages/runtime-daemon/src/native-tui-provider-runtime.test.ts`: pass
 
@@ -312,7 +312,7 @@ Legacy structured live production escape hatch removal verified on 2026-05-07:
 
 - `npm run typecheck`: pass
 - `node --import tsx --test --test-force-exit packages/runtime-daemon/src/native-tui-runtime-config.test.ts packages/runtime-daemon/src/runtime-engine.test.ts packages/runtime-daemon/src/workbench-state.test.ts packages/runtime-daemon/src/native-tui-provider-runtime.test.ts`: 73 pass
-- `npm run test:runtime`: 376 pass
+- `npm run test:runtime`: 377 pass
 
 This guard verifies that production `RuntimeEngine` rejects explicit `liveBackend: "structured"` live start/resume. The path remains available only for injected test adapters; `preferStoredReplay` read-only history replay is not blocked.
 
@@ -353,7 +353,7 @@ Public legacy wrapper CLI escape hatch removal verified on 2026-05-07:
 - `node --import tsx --test --test-force-exit packages/runtime-daemon/src/rah-cli-pty-first.test.ts`: 2 pass
 - `npm run typecheck`: pass
 - `RAH_NATIVE_CLI_PROBE_OUTPUT=test-results/native-cli-probe.json npm run test:smoke:native-cli-probe`: pass
-- `npm run test:runtime`: 376 pass
+- `npm run test:runtime`: 377 pass
 - `npm run test:native-tui`: pass
 - `git diff --check`: pass
 
@@ -361,12 +361,12 @@ This guard verifies that `rah <provider>` and `rah <provider> resume <id>` use P
 
 Default wrapper-control route closure verified on 2026-05-07:
 
-- `node --import tsx --test --test-force-exit packages/runtime-daemon/src/http-server.test.ts packages/runtime-daemon/src/runtime-engine.test.ts packages/runtime-daemon/src/runtime-terminal-capabilities.test.ts`: 66 pass
+- `node --import tsx --test --test-force-exit packages/runtime-daemon/src/http-server.test.ts packages/runtime-daemon/src/runtime-engine.test.ts packages/runtime-daemon/src/runtime-terminal-capabilities.test.ts packages/runtime-daemon/src/terminal-wrapper-control.test.ts`: 73 pass
 - `npm run test:smoke:wrapper`: pass with dedicated wrapper-control test daemon
 - `npm run test:native-tui`: pass
 - `git diff --check`: pass
 
-This guard verifies that the normal daemon closes `/api/wrapper-control` by default while `test:smoke:wrapper` can still exercise the legacy wrapper-control surface through a dedicated test daemon.
+This guard verifies that the normal daemon closes `/api/wrapper-control` and that the normal RuntimeEngine rejects direct wrapper registration by default, while `test:smoke:wrapper` can still exercise the legacy wrapper-control surface through a dedicated test daemon that enables the wrapper runtime explicitly.
 
 ## Remaining Gaps
 
@@ -375,7 +375,7 @@ These are still not completion-grade:
 - Chromium and headless WebKit native browser smoke are covered. iPad/Safari real input-method behavior still needs human verification because headless WebKit cannot prove real keyboard/IME viewport behavior.
 - Real five-provider CLI/account human QA is still required; fake native TUI tests do not prove real login/quota/provider behavior.
 - Legacy structured adapters still exist. The structured live clients, structured adapter implementations, and default structured adapter construction are now path-isolated under `legacy-structured/`; production structured live cannot be enabled through an environment variable and remains available only through injected test adapters. Codex/Claude/Gemini/Kimi/OpenCode now have separate stored-history adapters. The remaining code gap is deciding whether to keep or delete this internal legacy/test surface.
-- Legacy wrapper runtime still exists for synthetic tests and internal legacy reference. The public `rah xxx` CLI no longer exposes an env escape hatch into wrapper handoff, but the daemon-side wrapper registry/tests are not deleted.
+- Legacy wrapper runtime still exists for synthetic tests and internal legacy reference. The public `rah xxx` CLI no longer exposes an env escape hatch into wrapper handoff, the normal daemon does not expose `/api/wrapper-control`, and RuntimeEngine does not enable the wrapper runtime unless an explicit test daemon opts in. The daemon-side wrapper registry/tests are still not deleted.
 - Workbench shell/canvas code paths are now audited for view/attach semantics. Remaining risk is interaction-level QA: drag/drop, pane replacement, hide/show, and mobile/iPad layout should still be exercised in a real browser.
 - Enhanced controls are rejected safely at the native TUI runtime boundary and hidden by the central frontend capability helpers. Broader UI copy may still need review so native TUI sessions consistently explain external-locked semantics.
 

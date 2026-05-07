@@ -14,7 +14,11 @@ export async function startRahDaemon(options?: {
   enableLegacyWrapperControl?: boolean;
 }): Promise<RahDaemon> {
   const port = options?.port ?? 43111;
-  const engine = options?.engine ?? new RuntimeEngine();
+  const engine =
+    options?.engine ??
+    new RuntimeEngine(undefined, {
+      enableLegacyWrapperRuntime: options?.enableLegacyWrapperControl === true,
+    });
   const postRoutes = createPostRoutes(engine);
 
   const server = createServer(async (req, res) => {

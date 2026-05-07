@@ -122,7 +122,7 @@ RAH 里需要区分四类 session 视角。
 | Native TUI live | daemon 启动并持有真实 provider TUI PTY；Web New、Canvas New、Web Claim、`rah xxx` 默认都进入这条路径 | 可以，但需要 control lease | 显式 close/archive 才关闭 PTY/TUI | PTY replay + provider history mirror |
 | Read-only replay | 打开 provider 历史形成的只读 projection | 不可以，需 claim | 只关闭 UI projection | provider history |
 | Legacy structured live | 旧测试/调试路径；生产拒绝显式 `liveBackend: "structured"`，只允许测试注入 adapter | 可以 | 关闭 provider adapter client | provider SDK/API event + history |
-| Legacy wrapper live | 旧 terminal wrapper handoff；不再从公开 `rah xxx` 入口暴露，普通 daemon 默认不开放 wrapper-control，仅保留为内部 legacy/synthetic test surface | 可以，但 single-writer | 关闭 wrapper session | provider history + wrapper control |
+| Legacy wrapper live | 旧 terminal wrapper handoff；不再从公开 `rah xxx` 入口暴露，普通 daemon 默认不开放 wrapper-control 且 RuntimeEngine 默认不启用 wrapper runtime，仅保留为内部 legacy/synthetic test surface | 可以，但 single-writer | 关闭 wrapper session | provider history + wrapper control |
 
 重要边界：
 
@@ -317,7 +317,7 @@ npm run test:runtime
 npm run test:smoke:wrapper
 ```
 
-`npm run test:smoke:wrapper` 默认会启动一个隔离的临时测试 daemon，并仅在该测试 daemon 中启用 wrapper-control / event stream / input / close 路由，覆盖 Codex、Claude、Gemini、Kimi、OpenCode 五家 adapter 的 wrapper 生命周期、Web 输入注入、canonical timeline identity 透传和清理。它不调用外部 provider CLI 或模型 API；普通 daemon 默认不开放 wrapper-control。
+`npm run test:smoke:wrapper` 默认会启动一个隔离的临时测试 daemon，并仅在该测试 daemon 中启用 wrapper-control / event stream / input / close 路由和 wrapper runtime，覆盖 Codex、Claude、Gemini、Kimi、OpenCode 五家 adapter 的 wrapper 生命周期、Web 输入注入、canonical timeline identity 透传和清理。它不调用外部 provider CLI 或模型 API；普通 daemon 默认不开放 wrapper-control，也不启用 wrapper runtime。
 
 Provider browser smoke 依赖本机 CLI、账号状态和额度，只应在已配置完整的机器上运行：
 

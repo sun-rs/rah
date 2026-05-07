@@ -132,6 +132,10 @@ const MAX_MATERIALIZED_HISTORY_EVENTS = 5_000;
 
 type StructuredSessionOwnerProvider = StoredSessionState["session"]["provider"];
 
+type RuntimeEngineOptions = {
+  enableLegacyWrapperRuntime?: boolean;
+};
+
 async function runShutdownStep(label: string, task: () => Promise<unknown> | unknown) {
   try {
     await task();
@@ -209,7 +213,7 @@ export class RuntimeEngine {
   private readonly historyMirrorAdapters: ProviderStoredHistoryAdapter[] = [];
   private readonly structuredLiveAllowedForInjectedAdapters: boolean;
 
-  constructor(adapters?: ProviderAdapter[]) {
+  constructor(adapters?: ProviderAdapter[], options: RuntimeEngineOptions = {}) {
     this.defaultLiveBackend = adapters === undefined ? "native_tui" : "structured";
     this.structuredLiveAllowedForInjectedAdapters = adapters !== undefined;
     this.workbenchState = new WorkbenchStateStore();
@@ -243,6 +247,7 @@ export class RuntimeEngine {
       historySnapshots: this.historySnapshots,
       nativeTuiProviders: this.nativeTuiProviders,
       nativeTuiMirrors: this.nativeTuiMirrors,
+      enableLegacyWrapperRuntime: options.enableLegacyWrapperRuntime === true,
       onRememberSession: (state) => {
         this.workbenchState.rememberSession(state);
         this.refreshRememberedState();
