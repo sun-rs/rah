@@ -5,6 +5,7 @@ import { DebugAdapter } from "./debug-adapter";
 import { GeminiAdapter } from "./gemini-adapter";
 import { GeminiStoredHistoryAdapter } from "./gemini-stored-history-adapter";
 import { KimiAdapter } from "./kimi-adapter";
+import { KimiStoredHistoryAdapter } from "./kimi-stored-history-adapter";
 import { OpenCodeAdapter } from "./opencode-adapter";
 import type { ProviderAdapter, RuntimeServices } from "./provider-adapter";
 import type { WorkbenchStateStore } from "./workbench-state";
@@ -28,6 +29,7 @@ export function createDefaultProviderAdapters(
     new GeminiAdapter(services),
     new GeminiStoredHistoryAdapter(services),
     new KimiAdapter(services),
+    new KimiStoredHistoryAdapter(services),
     new OpenCodeAdapter(services),
   ];
 }

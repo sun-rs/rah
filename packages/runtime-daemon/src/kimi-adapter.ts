@@ -5,12 +5,10 @@ import type {
   ProviderModelCatalog,
   ResumeSessionRequest,
   ResumeSessionResponse,
-  SessionHistoryPageResponse,
   SessionInputRequest,
   SessionSummary,
   StartSessionRequest,
   StartSessionResponse,
-  StoredSessionRef,
 } from "@rah/runtime-protocol";
 import type { ProviderAdapter, RuntimeServices } from "./provider-adapter";
 import {
@@ -24,11 +22,8 @@ import {
   type LiveKimiSession,
 } from "./legacy-structured/kimi-live-client";
 import {
-  createKimiStoredSessionFrozenHistoryPageLoader,
   countKimiHistoryTurns,
   discoverKimiStoredSessions,
-  getKimiStoredSessionHistoryPage,
-  resolveKimiStoredSessionWatchRoots,
   resumeKimiStoredSession,
   updateKimiSessionTitle,
   type KimiStoredSessionRecord,
@@ -44,8 +39,6 @@ import {
 } from "./kimi-model-catalog";
 import { buildKimiModeState, isKimiModeId } from "./session-mode-utils";
 import { toSessionSummary } from "./session-store";
-import { movePathToTrash } from "./trash";
-import path from "node:path";
 
 const KIMI_EVENT_SOURCE = {
   provider: "kimi" as const,
@@ -66,7 +59,6 @@ export class KimiAdapter implements ProviderAdapter {
   private readonly liveSessions = new Map<string, LiveKimiSession>();
   private readonly rehydratedSessionIds = new Set<string>();
   private readonly modelCatalog = new KimiModelCatalogCache();
-  private storedSessionIndex = new Map<string, KimiStoredSessionRecord>();
 
   constructor(services: RuntimeServices) {
     this.services = services;
@@ -131,9 +123,7 @@ export class KimiAdapter implements ProviderAdapter {
       );
     }
 
-    const record =
-      this.refreshStoredSessionIndex().get(request.providerSessionId) ??
-      this.storedSessionIndex.get(request.providerSessionId);
+    const record = findKimiStoredSessionRecord(request.providerSessionId);
     if (request.preferStoredReplay) {
       if (!record) {
         throw new Error(`Unknown Kimi session ${request.providerSessionId}.`);
@@ -208,13 +198,6 @@ export class KimiAdapter implements ProviderAdapter {
     }
     updateKimiSessionTitle(state.session.providerSessionId, title, state.session.cwd);
     const nextState = this.services.sessionStore.patchManagedSession(sessionId, { title });
-    const record = this.storedSessionIndex.get(state.session.providerSessionId);
-    if (record) {
-      record.ref = {
-        ...record.ref,
-        title,
-      };
-    }
     return toSessionSummary(nextState);
   }
 
@@ -315,72 +298,6 @@ export class KimiAdapter implements ProviderAdapter {
     // Kimi sessions do not use PTY-backed rendering.
   }
 
-  getSessionHistoryPage(
-    sessionId: string,
-    options?: { beforeTs?: string; cursor?: string; limit?: number },
-  ): SessionHistoryPageResponse {
-    const state = this.services.sessionStore.getSession(sessionId);
-    if (!state?.session.providerSessionId) {
-      return { sessionId, events: [] };
-    }
-    const record =
-      this.refreshStoredSessionIndex().get(state.session.providerSessionId) ??
-      this.storedSessionIndex.get(state.session.providerSessionId);
-    if (!record) {
-      return { sessionId, events: [] };
-    }
-    return getKimiStoredSessionHistoryPage({
-      sessionId,
-      record,
-      ...(options?.beforeTs ? { beforeTs: options.beforeTs } : {}),
-      ...(options?.limit ? { limit: options.limit } : {}),
-    });
-  }
-
-  createFrozenHistoryPageLoader(sessionId: string) {
-    const state = this.services.sessionStore.getSession(sessionId);
-    if (!state?.session.providerSessionId) {
-      return undefined;
-    }
-    const record =
-      this.refreshStoredSessionIndex().get(state.session.providerSessionId) ??
-      this.storedSessionIndex.get(state.session.providerSessionId);
-    if (!record) {
-      return undefined;
-    }
-    return createKimiStoredSessionFrozenHistoryPageLoader({
-      sessionId,
-      record,
-    });
-  }
-
-  listStoredSessions(): StoredSessionRef[] {
-    if (this.storedSessionIndex.size === 0) {
-      this.refreshStoredSessionIndex();
-    }
-    return [...this.storedSessionIndex.values()].map((record) => record.ref);
-  }
-
-  refreshStoredSessionsCatalog(): StoredSessionRef[] {
-    this.refreshStoredSessionIndex();
-    return this.listStoredSessions();
-  }
-
-  listStoredSessionWatchRoots(): string[] {
-    return resolveKimiStoredSessionWatchRoots();
-  }
-
-  async removeStoredSession(session: StoredSessionRef): Promise<void> {
-    const record =
-      this.storedSessionIndex.get(session.providerSessionId) ??
-      this.refreshStoredSessionIndex().get(session.providerSessionId);
-    if (!record) {
-      throw new Error(`Could not find a stored Kimi history directory for ${session.providerSessionId}.`);
-    }
-    await movePathToTrash(path.dirname(record.wirePath));
-    this.storedSessionIndex.delete(session.providerSessionId);
-  }
-
   async getProviderDiagnostic(options?: { forceRefresh?: boolean }) {
     return probeProviderDiagnostic("kimi", await kimiLaunchSpec(), options);
   }
@@ -401,10 +318,10 @@ export class KimiAdapter implements ProviderAdapter {
     });
   }
 
-  private refreshStoredSessionIndex() {
-    this.storedSessionIndex = new Map(
-      discoverKimiStoredSessions().map((record) => [record.ref.providerSessionId, record] as const),
-    );
-    return this.storedSessionIndex;
-  }
+}
+
+function findKimiStoredSessionRecord(providerSessionId: string): KimiStoredSessionRecord | undefined {
+  return discoverKimiStoredSessions().find(
+    (record) => record.ref.providerSessionId === providerSessionId,
+  );
 }
