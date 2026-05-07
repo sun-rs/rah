@@ -27,9 +27,10 @@ import { assertExistingWorkingDirectory } from "../provider-working-directory";
 
 type ProviderModelAdapter = Pick<ProviderAdapter, "id"> & ProviderEnhancedModelAdapter;
 type ProviderDebugCapabilityAdapter = ProviderAdapter & ProviderDebugAdapter;
+type ProviderStructuredLiveAdapter = ProviderAdapter & ProviderStructuredLifecycleAdapter;
 
 type RuntimeStructuredProviderCoordinatorDeps = {
-  structuredLiveAdaptersByProvider: Map<string, ProviderAdapter>;
+  structuredLiveAdaptersByProvider: Map<string, ProviderStructuredLiveAdapter>;
   modelAdaptersByProvider: Map<string, ProviderModelAdapter>;
   diagnosticAdaptersByProvider: Map<string, ProviderDiagnosticAdapter>;
   debugAdaptersById: Map<string, ProviderDebugCapabilityAdapter>;
@@ -49,7 +50,7 @@ type RuntimeStructuredProviderCoordinatorDeps = {
 export class RuntimeStructuredProviderCoordinator {
   constructor(private readonly deps: RuntimeStructuredProviderCoordinatorDeps) {}
 
-  private requireStructuredAdapterForProvider(provider: string): ProviderAdapter {
+  private requireStructuredAdapterForProvider(provider: string): ProviderStructuredLiveAdapter {
     const adapter = this.deps.structuredLiveAdaptersByProvider.get(provider);
     if (!adapter) {
       throw new Error(`No structured live adapter registered for provider ${provider}.`);

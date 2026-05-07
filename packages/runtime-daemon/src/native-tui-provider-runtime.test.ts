@@ -127,6 +127,7 @@ describe("NativeTuiProviderRuntime", () => {
     assert.match(providerAdapterSource, /ProviderEnhancedModelAdapter/);
     assert.match(providerAdapterSource, /startSession\?\(/);
     assert.match(providerAdapterSource, /resumeSession\?\(/);
+    assert.doesNotMatch(providerAdapterInterface, /ProviderStructuredLifecycleAdapter/);
     assert.doesNotMatch(providerAdapterInterface, /ProviderStructuredInputControlAdapter/);
     assert.doesNotMatch(providerAdapterInterface, /ProviderStructuredPermissionAdapter/);
     assert.doesNotMatch(providerAdapterInterface, /ProviderStoredHistoryAdapter/);

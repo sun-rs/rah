@@ -62,6 +62,7 @@ import type {
   ProviderShutdownAdapter,
   ProviderStoredHistoryAdapter,
   ProviderStructuredInputControlAdapter,
+  ProviderStructuredLifecycleAdapter,
   ProviderStructuredPermissionAdapter,
   ProviderWorkspaceInspectionAdapter,
 } from "./provider-adapter";
@@ -127,6 +128,17 @@ function hasStoredHistoryCapability(
     typeof (adapter as Partial<ProviderStoredHistoryAdapter>).listStoredSessionWatchRoots ===
       "function" ||
     typeof (adapter as Partial<ProviderStoredHistoryAdapter>).removeStoredSession === "function"
+  );
+}
+
+function hasStructuredLifecycleCapability(
+  adapter: ProviderAdapter,
+): adapter is ProviderAdapter & ProviderStructuredLifecycleAdapter {
+  return (
+    typeof (adapter as Partial<ProviderStructuredLifecycleAdapter>).startSession === "function" ||
+    typeof (adapter as Partial<ProviderStructuredLifecycleAdapter>).resumeSession === "function" ||
+    typeof (adapter as Partial<ProviderStructuredLifecycleAdapter>).closeSession === "function" ||
+    typeof (adapter as Partial<ProviderStructuredLifecycleAdapter>).destroySession === "function"
   );
 }
 
@@ -198,7 +210,10 @@ export class RuntimeEngine {
 
   private readonly adaptersById = new Map<string, ProviderAdapter>();
   private readonly adaptersByProvider = new Map<string, ProviderAdapter>();
-  private readonly structuredLiveAdaptersByProvider = new Map<string, ProviderAdapter>();
+  private readonly structuredLiveAdaptersByProvider = new Map<
+    string,
+    ProviderAdapter & ProviderStructuredLifecycleAdapter
+  >();
   private readonly modeAdaptersByProvider = new Map<string, ProviderEnhancedModeAdapter>();
   private readonly modelAdaptersByProvider = new Map<
     string,
@@ -274,6 +289,8 @@ export class RuntimeEngine {
       },
       requireStructuredSessionAdapter: (sessionId) =>
         this.requireStructuredSessionAdapter(sessionId),
+      requireStructuredLifecycleAdapter: (sessionId) =>
+        this.requireStructuredLifecycleAdapter(sessionId),
       requireActionCapabilityAdapter: (sessionId) =>
         this.requireActionCapabilityAdapter(sessionId),
       requireEnhancedModeAdapter: (sessionId) =>
@@ -972,7 +989,7 @@ export class RuntimeEngine {
     }
     for (const provider of adapter.providers) {
       this.adaptersByProvider.set(provider, adapter);
-      if (adapter.startSession || adapter.resumeSession) {
+      if (hasStructuredLifecycleCapability(adapter)) {
         this.structuredLiveAdaptersByProvider.set(provider, adapter);
       }
       if (hasEnhancedModeCapability(adapter)) {
@@ -1076,7 +1093,7 @@ export class RuntimeEngine {
       if (this.terminals.hasNativeTuiSession(state.session.id)) {
         continue;
       }
-      const adapter = this.requireStructuredSessionAdapter(state.session.id);
+      const adapter = this.requireStructuredLifecycleAdapter(state.session.id);
       void Promise.resolve(adapter.destroySession?.(state.session.id)).catch((error: unknown) => {
         console.error(
           `[rah] destroySession failed for ${state.session.id}:`,
@@ -1150,6 +1167,16 @@ export class RuntimeEngine {
       throw new Error(`Provider ${adapter.id} does not support workspace inspection.`);
     }
     return adapter as ProviderAdapter & ProviderWorkspaceInspectionAdapter;
+  }
+
+  private requireStructuredLifecycleAdapter(
+    sessionId: string,
+  ): ProviderStructuredLifecycleAdapter {
+    const adapter = this.requireStructuredSessionAdapter(sessionId);
+    if (!hasStructuredLifecycleCapability(adapter)) {
+      throw new Error(`Provider ${adapter.id} does not support structured lifecycle.`);
+    }
+    return adapter;
   }
 
   private requireActionCapabilityAdapter(sessionId: string): ProviderActionCapabilityAdapter {

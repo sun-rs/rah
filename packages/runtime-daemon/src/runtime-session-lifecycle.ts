@@ -14,6 +14,7 @@ import type {
   ProviderAdapter,
   ProviderEnhancedModeAdapter,
   ProviderEnhancedModelAdapter,
+  ProviderStructuredLifecycleAdapter,
 } from "./provider-adapter";
 import { PtyHub } from "./pty-hub";
 import { EventBus } from "./event-bus";
@@ -37,6 +38,7 @@ type RuntimeSessionLifecycleDeps = {
   publishStoredSessionDiscovery: () => void;
   removeStructuredSessionOwner: (sessionId: string) => void;
   requireStructuredSessionAdapter: (sessionId: string) => ProviderAdapter;
+  requireStructuredLifecycleAdapter: (sessionId: string) => ProviderStructuredLifecycleAdapter;
   requireActionCapabilityAdapter: (sessionId: string) => ProviderActionCapabilityAdapter;
   requireEnhancedModeAdapter: (sessionId: string) => ProviderEnhancedModeAdapter;
   requireEnhancedModelAdapter: (sessionId: string) => ProviderEnhancedModelAdapter;
@@ -215,7 +217,7 @@ export class RuntimeSessionLifecycle {
       });
       return;
     }
-    const adapter = this.deps.requireStructuredSessionAdapter(sessionId);
+    const adapter = this.deps.requireStructuredLifecycleAdapter(sessionId);
     await adapter.closeSession?.(sessionId, request);
     this.deps.sessionStore.removeSession(sessionId);
     this.deps.ptyHub.removeSession(sessionId);

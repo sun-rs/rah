@@ -162,6 +162,4 @@ export interface ProviderShutdownAdapter {
   shutdown?(): Promise<void> | void;
 }
 
-export interface ProviderAdapter
-  extends ProviderAdapterIdentity,
-    ProviderStructuredLifecycleAdapter {}
+export interface ProviderAdapter extends ProviderAdapterIdentity {}

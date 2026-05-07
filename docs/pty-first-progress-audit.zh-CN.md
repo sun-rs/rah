@@ -47,11 +47,12 @@ RAH should converge on one live core:
 | Built-in workspace inspection bypasses provider adapters | `ProviderAdapter` no longer extends `ProviderWorkspaceInspectionAdapter`; `RuntimeEngine` routes workspace snapshot/file/git read/apply actions through shared workspace utilities for non-`custom` sessions; duplicate workspace/file/git methods were removed from the five built-in provider adapters; `custom` debug sessions keep the structured adapter fallback | Done |
 | Context usage bypasses provider adapters | `RuntimeEngine.getContextUsage()` reads canonical session-store usage directly; duplicated adapter `getContextUsage()` methods and `ProviderStructuredContextAdapter` were removed | Done |
 | Structured input/control/permission is optional legacy surface | `ProviderAdapter` no longer extends `ProviderStructuredInputControlAdapter` or `ProviderStructuredPermissionAdapter`; `RuntimeEngine` requires these slices only after wrapper/native PTY paths fail | Done |
-| Structured lifecycle is optional legacy surface | `ProviderStructuredLifecycleAdapter.startSession/resumeSession` are optional; `RuntimeStructuredProviderCoordinator` requires them only for explicit `liveBackend: "structured"` requests | Done |
+| Structured lifecycle is optional legacy surface | `ProviderAdapter` no longer extends `ProviderStructuredLifecycleAdapter`; `RuntimeStructuredProviderCoordinator` receives only explicit structured lifecycle adapters for `liveBackend: "structured"` requests | Done |
 | Legacy structured live clients isolated by path | Five `*-live-client.ts` implementations now live under `packages/runtime-daemon/src/legacy-structured/`; shared Codex/Gemini app-server/CLI helpers were extracted to root utility modules so terminal wrapper/native paths do not import legacy clients; package root exports no longer expose those legacy clients | Done |
 | Legacy structured coordinator uses explicit capability maps | `RuntimeEngine` now passes `structuredLiveAdaptersByProvider`, `modelAdaptersByProvider`, `diagnosticAdaptersByProvider`, and `debugAdaptersById` into `RuntimeStructuredProviderCoordinator` instead of the full provider adapter registry | Done |
 | Enhanced controls are not top-level provider adapter requirements | `ProviderAdapter` no longer extends `ProviderEnhancedModeAdapter`, `ProviderEnhancedModelAdapter`, or `ProviderActionCapabilityAdapter`; RuntimeEngine builds explicit mode/model/action capability maps for optional RAH-managed controls | Done |
 | Diagnostics/debug/shutdown are explicit capability maps | `ProviderAdapter` no longer extends `ProviderDiagnosticAdapter`, `ProviderDebugAdapter`, or `ProviderShutdownAdapter`; RuntimeEngine builds explicit diagnostic/debug/shutdown maps | Done |
+| Top-level provider adapter is identity-only | `ProviderAdapter` now only extends `ProviderAdapterIdentity`; all behavior is registered through explicit capability slices/maps | Done |
 
 ## Verification Run
 
@@ -119,9 +120,9 @@ This guard verifies that built-in adapter type requirements no longer include st
 Structured lifecycle boundary verified on 2026-05-07:
 
 - `npm run typecheck`: pass
-- `npm run test:runtime`: 372 pass
+- `node --import tsx --test --test-force-exit packages/runtime-daemon/src/native-tui-provider-runtime.test.ts packages/runtime-daemon/src/runtime-engine.test.ts`: 52 pass
 
-This guard verifies that new provider adapters are no longer type-required to implement legacy structured `startSession/resumeSession`. Explicit structured live requests still fail loudly through `RuntimeStructuredProviderCoordinator` if the provider does not implement that optional slice.
+This guard verifies that new provider adapters are no longer type-required to implement legacy structured `startSession/resumeSession/closeSession/destroySession`. Explicit structured live requests still fail loudly through `RuntimeStructuredProviderCoordinator` if the provider does not implement that optional slice.
 
 Workbench shell view/attach boundary verified on 2026-05-07:
 
