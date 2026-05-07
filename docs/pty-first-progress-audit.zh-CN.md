@@ -222,6 +222,14 @@ Enhancement and operational bound-view boundary verified on 2026-05-07:
 
 This guard verifies that mode, model, action, diagnostic, debug, and shutdown maps also store bound narrow views rather than full provider adapter instances.
 
+Native TUI handler factory boundary verified on 2026-05-07:
+
+- `npm run typecheck`: pass
+- `node --import tsx --test --test-force-exit packages/runtime-daemon/src/native-tui-provider-runtime.test.ts packages/runtime-daemon/src/runtime-engine.test.ts packages/runtime-daemon/src/debug-engine.test.ts`: 53 pass
+- `npm run test:runtime`: 372 pass
+
+This guard verifies that `DefaultNativeTuiProviderRuntime` receives the binding-only handler factory and `DefaultNativeTuiMirrorProvider` receives the mirror-only handler factory. The combined provider handler factory remains available for compatibility, but it is no longer the default runtime-facing seam.
+
 ## Remaining Gaps
 
 These are still not completion-grade:

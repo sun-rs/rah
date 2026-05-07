@@ -104,6 +104,26 @@ describe("NativeTuiProviderRuntime", () => {
       /NativeTuiMirrorProvider/,
       "mirror runtime should depend on the dedicated mirror provider seam",
     );
+    assert.match(
+      readSource("./native-tui-provider-runtime.ts"),
+      /createDefaultNativeTuiBindingHandlers/,
+      "native TUI lifecycle runtime should use the binding-only handler factory",
+    );
+    assert.doesNotMatch(
+      readSource("./native-tui-provider-runtime.ts"),
+      /createDefaultNativeTuiProviderHandlers/,
+      "native TUI lifecycle runtime should not receive the combined provider handler factory",
+    );
+    assert.match(
+      readSource("./native-tui-mirror-provider.ts"),
+      /createDefaultNativeTuiMirrorHandlers/,
+      "native TUI mirror provider should use the mirror-only handler factory",
+    );
+    assert.doesNotMatch(
+      readSource("./native-tui-mirror-provider.ts"),
+      /createDefaultNativeTuiProviderHandlers/,
+      "native TUI mirror provider should not receive the combined provider handler factory",
+    );
   });
 
   test("keeps structured provider coordination named as a non-core path", () => {

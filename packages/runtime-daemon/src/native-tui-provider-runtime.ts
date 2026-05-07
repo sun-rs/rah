@@ -8,7 +8,7 @@ import {
   nativeTuiStartLaunchSpec,
   type NativeTuiLaunchSpec,
 } from "./native-tui-launch-spec";
-import { createDefaultNativeTuiProviderHandlers } from "./native-tui-provider-handlers";
+import { createDefaultNativeTuiBindingHandlers } from "./native-tui-provider-handlers";
 import type {
   NativeTuiBindingHandler,
   NativeTuiBindingCandidate,
@@ -45,7 +45,7 @@ export class DefaultNativeTuiProviderRuntime implements NativeTuiProviderRuntime
   private readonly handlers: ReadonlyMap<ProviderKind, NativeTuiBindingHandler>;
   readonly providers: readonly ProviderKind[];
 
-  constructor(handlers: ReadonlyMap<ProviderKind, NativeTuiBindingHandler> = createDefaultNativeTuiProviderHandlers()) {
+  constructor(handlers: ReadonlyMap<ProviderKind, NativeTuiBindingHandler> = createDefaultNativeTuiBindingHandlers()) {
     this.handlers = handlers;
     this.providers = [...handlers.keys()];
   }
