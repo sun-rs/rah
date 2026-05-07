@@ -336,6 +336,14 @@ Headless WebKit native browser smoke verified on 2026-05-07:
 
 This guard verifies the same native Codex and multi-provider browser smoke suite under Playwright WebKit. It covers Chat/TUI rendering, PTY output/input, Stop via Ctrl-C, TUI replay after reload, foreground recovery catch-up, Canvas native TUI replay/resize, and the mobile TUI input bridge focus path. It does not replace real iPad/Safari input-method QA.
 
+Real native TUI launch and automatic QA status verified on 2026-05-07:
+
+- `RAH_NATIVE_REAL_TUI_PROBE_OUTPUT=test-results/native-real-tui-launch.json npm run test:smoke:native-real-tui-launch`: pass
+- `RAH_NATIVE_CLI_PROBE_OUTPUT=test-results/native-cli-probe.json npm run test:smoke:native-cli-probe`: pass
+- `npm run test:smoke:native-qa-status`: pass
+
+This guard verifies that all five real provider CLIs can be launched inside the RAH PTY host and closed without sending a model prompt, and that saved CLI/help/version evidence matches the current commit. It still does not prove real model responses, long-running turn behavior, permission/login/quota flows, or iPad/Safari human interaction.
+
 ## Remaining Gaps
 
 These are still not completion-grade:
