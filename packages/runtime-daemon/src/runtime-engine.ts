@@ -238,8 +238,6 @@ export class RuntimeEngine {
   private readonly nativeTuiMirrors: NativeTuiMirrorProvider;
   private readonly defaultLiveBackend: SessionLiveBackend;
 
-  private readonly adaptersById = new Map<string, ProviderAdapter>();
-  private readonly adaptersByProvider = new Map<string, ProviderAdapter>();
   private readonly structuredLiveAdaptersByProvider = new Map<
     string,
     ProviderAdapter & ProviderStructuredLifecycleAdapter
@@ -1011,7 +1009,6 @@ export class RuntimeEngine {
   }
 
   private registerAdapter(adapter: ProviderAdapter): void {
-    this.adaptersById.set(adapter.id, adapter);
     const storedHistoryCapability = hasStoredHistoryCapability(adapter)
       ? bindStoredHistoryCapability(adapter)
       : undefined;
@@ -1022,7 +1019,6 @@ export class RuntimeEngine {
       this.shutdownAdaptersById.set(adapter.id, adapter);
     }
     for (const provider of adapter.providers) {
-      this.adaptersByProvider.set(provider, adapter);
       if (hasStructuredLifecycleCapability(adapter)) {
         this.structuredLiveAdaptersByProvider.set(provider, adapter);
       }
@@ -1150,14 +1146,6 @@ export class RuntimeEngine {
     }
   }
 
-  private requireAdapterForProvider(provider: string): ProviderAdapter {
-    const adapter = this.adaptersByProvider.get(provider);
-    if (!adapter) {
-      throw new Error(`No adapter registered for provider ${provider}.`);
-    }
-    return adapter;
-  }
-
   private requireManagedSession(sessionId: string): StoredSessionState {
     const state = this.sessionStore.getSession(sessionId);
     if (!state) {
@@ -1265,7 +1253,10 @@ export class RuntimeEngine {
     if (!state) {
       throw new Error(`Unknown session ${sessionId}`);
     }
-    const adapter = this.requireAdapterForProvider(state.session.provider);
+    const adapter = this.structuredLiveAdaptersByProvider.get(state.session.provider);
+    if (!adapter) {
+      throw new Error(`No structured live adapter registered for provider ${state.session.provider}.`);
+    }
     this.structuredSessionOwners.set(sessionId, adapter);
     return adapter;
   }

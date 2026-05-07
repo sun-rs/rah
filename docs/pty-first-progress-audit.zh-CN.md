@@ -56,6 +56,7 @@ RAH should converge on one live core:
 | Enhanced controls are not top-level provider adapter requirements | `ProviderAdapter` no longer extends `ProviderEnhancedModeAdapter`, `ProviderEnhancedModelAdapter`, or `ProviderActionCapabilityAdapter`; RuntimeEngine builds explicit mode/model/action capability maps for optional RAH-managed controls | Done |
 | Diagnostics/debug/shutdown are explicit capability maps | `ProviderAdapter` no longer extends `ProviderDiagnosticAdapter`, `ProviderDebugAdapter`, or `ProviderShutdownAdapter`; RuntimeEngine builds explicit diagnostic/debug/shutdown maps | Done |
 | Top-level provider adapter is identity-only | `ProviderAdapter` now only extends `ProviderAdapterIdentity`; all behavior is registered through explicit capability slices/maps | Done |
+| Full adapter registries removed from RuntimeEngine | RuntimeEngine no longer keeps `adaptersById` / `adaptersByProvider`; structured fallback lookup uses `structuredLiveAdaptersByProvider`, and other behavior uses explicit capability maps | Done |
 
 ## Verification Run
 
@@ -189,6 +190,13 @@ Native TUI binding/mirror handler type split verified on 2026-05-07:
 - `node --import tsx --test --test-force-exit packages/runtime-daemon/src/native-tui-provider-runtime.test.ts packages/runtime-daemon/src/runtime-engine.test.ts`: 52 pass
 
 This guard verifies that lifecycle/binding code consumes `NativeTuiBindingHandler` while mirror code consumes `NativeTuiMirrorHandler`. The five provider implementations can still share one object shape for DRY reasons, but the runtime-facing seams are separate.
+
+Full adapter registry removal verified on 2026-05-07:
+
+- `npm run typecheck`: pass
+- `node --import tsx --test --test-force-exit packages/runtime-daemon/src/native-tui-provider-runtime.test.ts packages/runtime-daemon/src/runtime-engine.test.ts`: 52 pass
+
+This guard verifies that RuntimeEngine no longer stores catch-all `adaptersById` or `adaptersByProvider` registries. Legacy structured fallback is resolved through `structuredLiveAdaptersByProvider`; diagnostics, debug, shutdown, model, mode, actions, and stored history all use explicit maps.
 
 ## Remaining Gaps
 
