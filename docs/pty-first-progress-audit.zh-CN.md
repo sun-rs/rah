@@ -58,6 +58,7 @@ RAH should converge on one live core:
 | Top-level provider adapter is identity-only | `ProviderAdapter` now only extends `ProviderAdapterIdentity`; all behavior is registered through explicit capability slices/maps | Done |
 | Full adapter registries removed from RuntimeEngine | RuntimeEngine no longer keeps `adaptersById` / `adaptersByProvider`; structured fallback lookup uses `structuredLiveAdaptersByProvider`, and other behavior uses explicit capability maps | Done |
 | Structured session owners no longer store adapters | `structuredSessionOwners` stores provider keys only; RuntimeEngine resolves lifecycle/input/permission/workspace fallback through narrow capability maps | Done |
+| Structured capability maps use bound views | structured lifecycle/input/permission/workspace maps store bound capability views, not full provider adapter objects | Done |
 
 ## Verification Run
 
@@ -205,6 +206,13 @@ Structured owner narrow-map boundary verified on 2026-05-07:
 - `node --import tsx --test --test-force-exit packages/runtime-daemon/src/native-tui-provider-runtime.test.ts packages/runtime-daemon/src/runtime-engine.test.ts packages/runtime-daemon/src/debug-engine.test.ts`: 53 pass
 
 This guard verifies that `structuredSessionOwners` stores provider keys rather than provider adapter instances. RuntimeEngine resolves legacy structured lifecycle, input/control, permission response, workspace inspection, and stored history through explicit capability maps.
+
+Structured capability bound-view boundary verified on 2026-05-07:
+
+- `npm run typecheck`: pass
+- `node --import tsx --test --test-force-exit packages/runtime-daemon/src/native-tui-provider-runtime.test.ts packages/runtime-daemon/src/runtime-engine.test.ts packages/runtime-daemon/src/debug-engine.test.ts`: 53 pass
+
+This guard verifies that structured lifecycle, input/control, permission response, and workspace inspection maps store bound narrow views rather than full provider adapter instances.
 
 ## Remaining Gaps
 

@@ -27,7 +27,8 @@ import { assertExistingWorkingDirectory } from "../provider-working-directory";
 
 type ProviderModelAdapter = Pick<ProviderAdapter, "id"> & ProviderEnhancedModelAdapter;
 type ProviderDebugCapabilityAdapter = ProviderAdapter & ProviderDebugAdapter;
-type ProviderStructuredLiveAdapter = ProviderAdapter & ProviderStructuredLifecycleAdapter;
+type ProviderStructuredLiveAdapter = Pick<ProviderAdapter, "id"> &
+  ProviderStructuredLifecycleAdapter;
 type StructuredSessionOwnerProvider = StartSessionResponse["session"]["session"]["provider"];
 
 type RuntimeStructuredProviderCoordinatorDeps = {
@@ -62,12 +63,13 @@ export class RuntimeStructuredProviderCoordinator {
   private requireStructuredLifecycleAdapter(
     provider: string,
     capability: "startSession" | "resumeSession",
-  ): ProviderAdapter & Required<Pick<ProviderStructuredLifecycleAdapter, typeof capability>> {
+  ): Pick<ProviderAdapter, "id"> &
+    Required<Pick<ProviderStructuredLifecycleAdapter, typeof capability>> {
     const adapter = this.requireStructuredAdapterForProvider(provider);
     if (typeof adapter[capability] !== "function") {
       throw new Error(`Provider ${provider} does not support structured ${capability}.`);
     }
-    return adapter as ProviderAdapter &
+    return adapter as Pick<ProviderAdapter, "id"> &
       Required<Pick<ProviderStructuredLifecycleAdapter, typeof capability>>;
   }
 

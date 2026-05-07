@@ -177,12 +177,36 @@ function hasStructuredInputControlCapability(
   adapter: ProviderAdapter,
 ): adapter is ProviderAdapter & ProviderStructuredInputControlAdapter {
   return (
-    typeof (adapter as Partial<ProviderStructuredInputControlAdapter>).sendInput === "function" ||
+    typeof (adapter as Partial<ProviderStructuredInputControlAdapter>).sendInput === "function" &&
     typeof (adapter as Partial<ProviderStructuredInputControlAdapter>).interruptSession ===
-      "function" ||
-    typeof (adapter as Partial<ProviderStructuredInputControlAdapter>).onPtyInput === "function" ||
+      "function" &&
+    typeof (adapter as Partial<ProviderStructuredInputControlAdapter>).onPtyInput === "function" &&
     typeof (adapter as Partial<ProviderStructuredInputControlAdapter>).onPtyResize === "function"
   );
+}
+
+function bindStructuredLifecycleCapability(
+  adapter: ProviderAdapter & ProviderStructuredLifecycleAdapter,
+): Pick<ProviderAdapter, "id"> & ProviderStructuredLifecycleAdapter {
+  return {
+    id: adapter.id,
+    ...(adapter.startSession ? { startSession: adapter.startSession.bind(adapter) } : {}),
+    ...(adapter.resumeSession ? { resumeSession: adapter.resumeSession.bind(adapter) } : {}),
+    ...(adapter.closeSession ? { closeSession: adapter.closeSession.bind(adapter) } : {}),
+    ...(adapter.destroySession ? { destroySession: adapter.destroySession.bind(adapter) } : {}),
+  };
+}
+
+function bindStructuredInputControlCapability(
+  adapter: ProviderAdapter & ProviderStructuredInputControlAdapter,
+): Pick<ProviderAdapter, "id"> & ProviderStructuredInputControlAdapter {
+  return {
+    id: adapter.id,
+    sendInput: adapter.sendInput.bind(adapter),
+    interruptSession: adapter.interruptSession.bind(adapter),
+    onPtyInput: adapter.onPtyInput.bind(adapter),
+    onPtyResize: adapter.onPtyResize.bind(adapter),
+  };
 }
 
 function hasStructuredPermissionCapability(
@@ -192,16 +216,43 @@ function hasStructuredPermissionCapability(
     "function";
 }
 
+function bindStructuredPermissionCapability(
+  adapter: ProviderAdapter & Required<ProviderStructuredPermissionAdapter>,
+): Pick<ProviderAdapter, "id"> & Required<ProviderStructuredPermissionAdapter> {
+  return {
+    id: adapter.id,
+    respondToPermission: adapter.respondToPermission.bind(adapter),
+  };
+}
+
 function hasWorkspaceInspectionCapability(
   adapter: ProviderAdapter,
 ): adapter is ProviderAdapter & ProviderWorkspaceInspectionAdapter {
   return (
     typeof (adapter as Partial<ProviderWorkspaceInspectionAdapter>).getWorkspaceSnapshot ===
-      "function" ||
-    typeof (adapter as Partial<ProviderWorkspaceInspectionAdapter>).getGitStatus === "function" ||
-    typeof (adapter as Partial<ProviderWorkspaceInspectionAdapter>).getGitDiff === "function" ||
+      "function" &&
+    typeof (adapter as Partial<ProviderWorkspaceInspectionAdapter>).getGitStatus === "function" &&
+    typeof (adapter as Partial<ProviderWorkspaceInspectionAdapter>).getGitDiff === "function" &&
     typeof (adapter as Partial<ProviderWorkspaceInspectionAdapter>).readSessionFile === "function"
   );
+}
+
+function bindWorkspaceInspectionCapability(
+  adapter: ProviderAdapter & ProviderWorkspaceInspectionAdapter,
+): Pick<ProviderAdapter, "id"> & ProviderWorkspaceInspectionAdapter {
+  return {
+    id: adapter.id,
+    getWorkspaceSnapshot: adapter.getWorkspaceSnapshot.bind(adapter),
+    getGitStatus: adapter.getGitStatus.bind(adapter),
+    getGitDiff: adapter.getGitDiff.bind(adapter),
+    ...(adapter.applyGitFileAction
+      ? { applyGitFileAction: adapter.applyGitFileAction.bind(adapter) }
+      : {}),
+    ...(adapter.applyGitHunkAction
+      ? { applyGitHunkAction: adapter.applyGitHunkAction.bind(adapter) }
+      : {}),
+    readSessionFile: adapter.readSessionFile.bind(adapter),
+  };
 }
 
 function hasEnhancedModeCapability(
@@ -273,19 +324,19 @@ export class RuntimeEngine {
 
   private readonly structuredLiveAdaptersByProvider = new Map<
     string,
-    ProviderAdapter & ProviderStructuredLifecycleAdapter
+    Pick<ProviderAdapter, "id"> & ProviderStructuredLifecycleAdapter
   >();
   private readonly structuredInputAdaptersByProvider = new Map<
     string,
-    ProviderAdapter & ProviderStructuredInputControlAdapter
+    Pick<ProviderAdapter, "id"> & ProviderStructuredInputControlAdapter
   >();
   private readonly structuredPermissionAdaptersByProvider = new Map<
     string,
-    ProviderAdapter & Required<ProviderStructuredPermissionAdapter>
+    Pick<ProviderAdapter, "id"> & Required<ProviderStructuredPermissionAdapter>
   >();
   private readonly workspaceInspectionAdaptersByProvider = new Map<
     string,
-    ProviderAdapter & ProviderWorkspaceInspectionAdapter
+    Pick<ProviderAdapter, "id"> & ProviderWorkspaceInspectionAdapter
   >();
   private readonly modeAdaptersByProvider = new Map<string, ProviderEnhancedModeAdapter>();
   private readonly modelAdaptersByProvider = new Map<
@@ -1054,6 +1105,18 @@ export class RuntimeEngine {
     const storedHistoryCapability = hasStoredHistoryCapability(adapter)
       ? bindStoredHistoryCapability(adapter)
       : undefined;
+    const structuredLifecycleCapability = hasStructuredLifecycleCapability(adapter)
+      ? bindStructuredLifecycleCapability(adapter)
+      : undefined;
+    const structuredInputCapability = hasStructuredInputControlCapability(adapter)
+      ? bindStructuredInputControlCapability(adapter)
+      : undefined;
+    const structuredPermissionCapability = hasStructuredPermissionCapability(adapter)
+      ? bindStructuredPermissionCapability(adapter)
+      : undefined;
+    const workspaceInspectionCapability = hasWorkspaceInspectionCapability(adapter)
+      ? bindWorkspaceInspectionCapability(adapter)
+      : undefined;
     if (hasDebugCapability(adapter)) {
       this.debugAdaptersById.set(adapter.id, adapter);
     }
@@ -1061,17 +1124,17 @@ export class RuntimeEngine {
       this.shutdownAdaptersById.set(adapter.id, adapter);
     }
     for (const provider of adapter.providers) {
-      if (hasStructuredLifecycleCapability(adapter)) {
-        this.structuredLiveAdaptersByProvider.set(provider, adapter);
+      if (structuredLifecycleCapability) {
+        this.structuredLiveAdaptersByProvider.set(provider, structuredLifecycleCapability);
       }
-      if (hasStructuredInputControlCapability(adapter)) {
-        this.structuredInputAdaptersByProvider.set(provider, adapter);
+      if (structuredInputCapability) {
+        this.structuredInputAdaptersByProvider.set(provider, structuredInputCapability);
       }
-      if (hasStructuredPermissionCapability(adapter)) {
-        this.structuredPermissionAdaptersByProvider.set(provider, adapter);
+      if (structuredPermissionCapability) {
+        this.structuredPermissionAdaptersByProvider.set(provider, structuredPermissionCapability);
       }
-      if (hasWorkspaceInspectionCapability(adapter)) {
-        this.workspaceInspectionAdaptersByProvider.set(provider, adapter);
+      if (workspaceInspectionCapability) {
+        this.workspaceInspectionAdaptersByProvider.set(provider, workspaceInspectionCapability);
       }
       if (hasEnhancedModeCapability(adapter)) {
         this.modeAdaptersByProvider.set(provider, adapter);
@@ -1214,7 +1277,7 @@ export class RuntimeEngine {
 
   private requireStructuredInputControlAdapter(
     sessionId: string,
-  ): ProviderAdapter & ProviderStructuredInputControlAdapter {
+  ): Pick<ProviderAdapter, "id"> & ProviderStructuredInputControlAdapter {
     const provider = this.resolveStructuredSessionOwnerProvider(sessionId);
     const adapter = this.structuredInputAdaptersByProvider.get(provider);
     if (
@@ -1231,7 +1294,7 @@ export class RuntimeEngine {
 
   private requireStructuredWorkspaceInspectionAdapter(
     sessionId: string,
-  ): ProviderAdapter & ProviderWorkspaceInspectionAdapter {
+  ): Pick<ProviderAdapter, "id"> & ProviderWorkspaceInspectionAdapter {
     const provider = this.resolveStructuredSessionOwnerProvider(sessionId);
     const adapter = this.workspaceInspectionAdaptersByProvider.get(provider);
     if (
@@ -1248,7 +1311,7 @@ export class RuntimeEngine {
 
   private requireStructuredLifecycleAdapter(
     sessionId: string,
-  ): ProviderStructuredLifecycleAdapter {
+  ): Pick<ProviderAdapter, "id"> & ProviderStructuredLifecycleAdapter {
     const provider = this.resolveStructuredSessionOwnerProvider(sessionId);
     const adapter = this.structuredLiveAdaptersByProvider.get(provider);
     if (!adapter) {
@@ -1286,7 +1349,7 @@ export class RuntimeEngine {
 
   private requireStructuredPermissionAdapter(
     sessionId: string,
-  ): ProviderAdapter & Required<ProviderStructuredPermissionAdapter> {
+  ): Pick<ProviderAdapter, "id"> & Required<ProviderStructuredPermissionAdapter> {
     const provider = this.resolveStructuredSessionOwnerProvider(sessionId);
     const adapter = this.structuredPermissionAdaptersByProvider.get(provider);
     if (!adapter) {
