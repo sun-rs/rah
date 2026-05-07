@@ -48,7 +48,7 @@ Latest verified gates in this branch:
 - `npm run typecheck`: pass
 - `npm run test:web`: 156 pass
 - `npm run test:provider-contracts`: 133 pass
-- `npm run test:runtime`: 370 pass
+- `npm run test:runtime`: 371 pass
 - `npm run test:native-tui`: pass on 2026-05-07
 
 `test:runtime` now uses `--test-concurrency=1` because runtime tests mutate process-wide provider binary env vars such as `RAH_CODEX_BINARY`; parallel test files can otherwise contaminate each other and create false failures.
