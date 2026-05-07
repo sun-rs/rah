@@ -26,7 +26,9 @@ import { defaultProviderModeId, providerModeDescriptors } from "../session-mode-
 import { assertExistingWorkingDirectory } from "../provider-working-directory";
 
 type ProviderModelAdapter = Pick<ProviderAdapter, "id"> & ProviderEnhancedModelAdapter;
-type ProviderDebugCapabilityAdapter = ProviderAdapter & ProviderDebugAdapter;
+type ProviderDiagnosticCapabilityAdapter = Pick<ProviderAdapter, "id"> &
+  ProviderDiagnosticAdapter;
+type ProviderDebugCapabilityAdapter = Pick<ProviderAdapter, "id"> & ProviderDebugAdapter;
 type ProviderStructuredLiveAdapter = Pick<ProviderAdapter, "id"> &
   ProviderStructuredLifecycleAdapter;
 type StructuredSessionOwnerProvider = StartSessionResponse["session"]["session"]["provider"];
@@ -34,7 +36,7 @@ type StructuredSessionOwnerProvider = StartSessionResponse["session"]["session"]
 type RuntimeStructuredProviderCoordinatorDeps = {
   structuredLiveAdaptersByProvider: Map<string, ProviderStructuredLiveAdapter>;
   modelAdaptersByProvider: Map<string, ProviderModelAdapter>;
-  diagnosticAdaptersByProvider: Map<string, ProviderDiagnosticAdapter>;
+  diagnosticAdaptersByProvider: Map<string, ProviderDiagnosticCapabilityAdapter>;
   debugAdaptersById: Map<string, ProviderDebugCapabilityAdapter>;
   rememberStructuredSessionOwner: (sessionId: string, provider: StructuredSessionOwnerProvider) => void;
   pruneOrphanSessions: () => void;

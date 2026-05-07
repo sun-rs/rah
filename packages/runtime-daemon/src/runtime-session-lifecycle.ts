@@ -38,9 +38,12 @@ type RuntimeSessionLifecycleDeps = {
   publishStoredSessionDiscovery: () => void;
   removeStructuredSessionOwner: (sessionId: string) => void;
   requireStructuredLifecycleAdapter: (sessionId: string) => ProviderStructuredLifecycleAdapter;
-  requireActionCapabilityAdapter: (sessionId: string) => ProviderActionCapabilityAdapter;
-  requireEnhancedModeAdapter: (sessionId: string) => ProviderEnhancedModeAdapter;
-  requireEnhancedModelAdapter: (sessionId: string) => ProviderEnhancedModelAdapter;
+  requireActionCapabilityAdapter: (sessionId: string) =>
+    Pick<ProviderAdapter, "id"> & ProviderActionCapabilityAdapter;
+  requireEnhancedModeAdapter: (sessionId: string) =>
+    Pick<ProviderAdapter, "id"> & ProviderEnhancedModeAdapter;
+  requireEnhancedModelAdapter: (sessionId: string) =>
+    Pick<ProviderAdapter, "id"> & ProviderEnhancedModelAdapter;
 };
 
 export class RuntimeSessionLifecycle {

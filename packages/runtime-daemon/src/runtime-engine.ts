@@ -261,6 +261,15 @@ function hasEnhancedModeCapability(
   return typeof (adapter as Partial<ProviderEnhancedModeAdapter>).setSessionMode === "function";
 }
 
+function bindEnhancedModeCapability(
+  adapter: ProviderAdapter & ProviderEnhancedModeAdapter,
+): Pick<ProviderAdapter, "id"> & ProviderEnhancedModeAdapter {
+  return {
+    id: adapter.id,
+    ...(adapter.setSessionMode ? { setSessionMode: adapter.setSessionMode.bind(adapter) } : {}),
+  };
+}
+
 function hasEnhancedModelCapability(
   adapter: ProviderAdapter,
 ): adapter is ProviderAdapter & ProviderEnhancedModelAdapter {
@@ -270,16 +279,46 @@ function hasEnhancedModelCapability(
   );
 }
 
+function bindEnhancedModelCapability(
+  adapter: ProviderAdapter & ProviderEnhancedModelAdapter,
+): Pick<ProviderAdapter, "id"> & ProviderEnhancedModelAdapter {
+  return {
+    id: adapter.id,
+    ...(adapter.listModels ? { listModels: adapter.listModels.bind(adapter) } : {}),
+    ...(adapter.setSessionModel ? { setSessionModel: adapter.setSessionModel.bind(adapter) } : {}),
+  };
+}
+
 function hasActionCapability(
   adapter: ProviderAdapter,
 ): adapter is ProviderAdapter & ProviderActionCapabilityAdapter {
   return typeof (adapter as Partial<ProviderActionCapabilityAdapter>).renameSession === "function";
 }
 
+function bindActionCapability(
+  adapter: ProviderAdapter & ProviderActionCapabilityAdapter,
+): Pick<ProviderAdapter, "id"> & ProviderActionCapabilityAdapter {
+  return {
+    id: adapter.id,
+    ...(adapter.renameSession ? { renameSession: adapter.renameSession.bind(adapter) } : {}),
+  };
+}
+
 function hasDiagnosticCapability(
   adapter: ProviderAdapter,
 ): adapter is ProviderAdapter & ProviderDiagnosticAdapter {
   return typeof (adapter as Partial<ProviderDiagnosticAdapter>).getProviderDiagnostic === "function";
+}
+
+function bindDiagnosticCapability(
+  adapter: ProviderAdapter & ProviderDiagnosticAdapter,
+): Pick<ProviderAdapter, "id"> & ProviderDiagnosticAdapter {
+  return {
+    id: adapter.id,
+    ...(adapter.getProviderDiagnostic
+      ? { getProviderDiagnostic: adapter.getProviderDiagnostic.bind(adapter) }
+      : {}),
+  };
 }
 
 function hasDebugCapability(
@@ -292,10 +331,36 @@ function hasDebugCapability(
   );
 }
 
+function bindDebugCapability(
+  adapter: ProviderAdapter & ProviderDebugAdapter,
+): Pick<ProviderAdapter, "id"> & ProviderDebugAdapter {
+  return {
+    id: adapter.id,
+    ...(adapter.listDebugScenarios
+      ? { listDebugScenarios: adapter.listDebugScenarios.bind(adapter) }
+      : {}),
+    ...(adapter.startDebugScenario
+      ? { startDebugScenario: adapter.startDebugScenario.bind(adapter) }
+      : {}),
+    ...(adapter.buildDebugScenarioReplayScript
+      ? { buildDebugScenarioReplayScript: adapter.buildDebugScenarioReplayScript.bind(adapter) }
+      : {}),
+  };
+}
+
 function hasShutdownCapability(
   adapter: ProviderAdapter,
 ): adapter is ProviderAdapter & ProviderShutdownAdapter {
   return typeof (adapter as Partial<ProviderShutdownAdapter>).shutdown === "function";
+}
+
+function bindShutdownCapability(
+  adapter: ProviderAdapter & ProviderShutdownAdapter,
+): Pick<ProviderAdapter, "id"> & ProviderShutdownAdapter {
+  return {
+    id: adapter.id,
+    ...(adapter.shutdown ? { shutdown: adapter.shutdown.bind(adapter) } : {}),
+  };
 }
 
 export class RuntimeEngine {
@@ -338,14 +403,26 @@ export class RuntimeEngine {
     string,
     Pick<ProviderAdapter, "id"> & ProviderWorkspaceInspectionAdapter
   >();
-  private readonly modeAdaptersByProvider = new Map<string, ProviderEnhancedModeAdapter>();
+  private readonly modeAdaptersByProvider = new Map<
+    string,
+    Pick<ProviderAdapter, "id"> & ProviderEnhancedModeAdapter
+  >();
   private readonly modelAdaptersByProvider = new Map<
     string,
     Pick<ProviderAdapter, "id"> & ProviderEnhancedModelAdapter
   >();
-  private readonly actionAdaptersByProvider = new Map<string, ProviderActionCapabilityAdapter>();
-  private readonly diagnosticAdaptersByProvider = new Map<string, ProviderDiagnosticAdapter>();
-  private readonly debugAdaptersById = new Map<string, ProviderAdapter & ProviderDebugAdapter>();
+  private readonly actionAdaptersByProvider = new Map<
+    string,
+    Pick<ProviderAdapter, "id"> & ProviderActionCapabilityAdapter
+  >();
+  private readonly diagnosticAdaptersByProvider = new Map<
+    string,
+    Pick<ProviderAdapter, "id"> & ProviderDiagnosticAdapter
+  >();
+  private readonly debugAdaptersById = new Map<
+    string,
+    Pick<ProviderAdapter, "id"> & ProviderDebugAdapter
+  >();
   private readonly storedHistoryAdaptersByProvider = new Map<string, ProviderStoredHistoryAdapter>();
   private readonly shutdownAdaptersById = new Map<
     string,
@@ -1117,11 +1194,29 @@ export class RuntimeEngine {
     const workspaceInspectionCapability = hasWorkspaceInspectionCapability(adapter)
       ? bindWorkspaceInspectionCapability(adapter)
       : undefined;
-    if (hasDebugCapability(adapter)) {
-      this.debugAdaptersById.set(adapter.id, adapter);
+    const enhancedModeCapability = hasEnhancedModeCapability(adapter)
+      ? bindEnhancedModeCapability(adapter)
+      : undefined;
+    const enhancedModelCapability = hasEnhancedModelCapability(adapter)
+      ? bindEnhancedModelCapability(adapter)
+      : undefined;
+    const actionCapability = hasActionCapability(adapter)
+      ? bindActionCapability(adapter)
+      : undefined;
+    const diagnosticCapability = hasDiagnosticCapability(adapter)
+      ? bindDiagnosticCapability(adapter)
+      : undefined;
+    const debugCapability = hasDebugCapability(adapter)
+      ? bindDebugCapability(adapter)
+      : undefined;
+    const shutdownCapability = hasShutdownCapability(adapter)
+      ? bindShutdownCapability(adapter)
+      : undefined;
+    if (debugCapability) {
+      this.debugAdaptersById.set(debugCapability.id, debugCapability);
     }
-    if (hasShutdownCapability(adapter)) {
-      this.shutdownAdaptersById.set(adapter.id, adapter);
+    if (shutdownCapability) {
+      this.shutdownAdaptersById.set(shutdownCapability.id, shutdownCapability);
     }
     for (const provider of adapter.providers) {
       if (structuredLifecycleCapability) {
@@ -1136,17 +1231,17 @@ export class RuntimeEngine {
       if (workspaceInspectionCapability) {
         this.workspaceInspectionAdaptersByProvider.set(provider, workspaceInspectionCapability);
       }
-      if (hasEnhancedModeCapability(adapter)) {
-        this.modeAdaptersByProvider.set(provider, adapter);
+      if (enhancedModeCapability) {
+        this.modeAdaptersByProvider.set(provider, enhancedModeCapability);
       }
-      if (hasEnhancedModelCapability(adapter)) {
-        this.modelAdaptersByProvider.set(provider, adapter);
+      if (enhancedModelCapability) {
+        this.modelAdaptersByProvider.set(provider, enhancedModelCapability);
       }
-      if (hasActionCapability(adapter)) {
-        this.actionAdaptersByProvider.set(provider, adapter);
+      if (actionCapability) {
+        this.actionAdaptersByProvider.set(provider, actionCapability);
       }
-      if (hasDiagnosticCapability(adapter)) {
-        this.diagnosticAdaptersByProvider.set(provider, adapter);
+      if (diagnosticCapability) {
+        this.diagnosticAdaptersByProvider.set(provider, diagnosticCapability);
       }
       if (storedHistoryCapability) {
         this.storedHistoryAdaptersByProvider.set(provider, storedHistoryCapability);
@@ -1320,7 +1415,9 @@ export class RuntimeEngine {
     return adapter;
   }
 
-  private requireActionCapabilityAdapter(sessionId: string): ProviderActionCapabilityAdapter {
+  private requireActionCapabilityAdapter(
+    sessionId: string,
+  ): Pick<ProviderAdapter, "id"> & ProviderActionCapabilityAdapter {
     const state = this.requireManagedSession(sessionId);
     const adapter = this.actionAdaptersByProvider.get(state.session.provider);
     if (!adapter) {
@@ -1329,7 +1426,9 @@ export class RuntimeEngine {
     return adapter;
   }
 
-  private requireEnhancedModeAdapter(sessionId: string): ProviderEnhancedModeAdapter {
+  private requireEnhancedModeAdapter(
+    sessionId: string,
+  ): Pick<ProviderAdapter, "id"> & ProviderEnhancedModeAdapter {
     const state = this.requireManagedSession(sessionId);
     const adapter = this.modeAdaptersByProvider.get(state.session.provider);
     if (!adapter) {
@@ -1338,7 +1437,9 @@ export class RuntimeEngine {
     return adapter;
   }
 
-  private requireEnhancedModelAdapter(sessionId: string): ProviderEnhancedModelAdapter {
+  private requireEnhancedModelAdapter(
+    sessionId: string,
+  ): Pick<ProviderAdapter, "id"> & ProviderEnhancedModelAdapter {
     const state = this.requireManagedSession(sessionId);
     const adapter = this.modelAdaptersByProvider.get(state.session.provider);
     if (!adapter) {

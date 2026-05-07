@@ -131,6 +131,12 @@ describe("NativeTuiProviderRuntime", () => {
     assert.match(engineSource, /bindStructuredInputControlCapability/);
     assert.match(engineSource, /bindStructuredPermissionCapability/);
     assert.match(engineSource, /bindWorkspaceInspectionCapability/);
+    assert.match(engineSource, /bindEnhancedModeCapability/);
+    assert.match(engineSource, /bindEnhancedModelCapability/);
+    assert.match(engineSource, /bindActionCapability/);
+    assert.match(engineSource, /bindDiagnosticCapability/);
+    assert.match(engineSource, /bindDebugCapability/);
+    assert.match(engineSource, /bindShutdownCapability/);
     assert.doesNotMatch(engineSource, /adaptersById/);
     assert.doesNotMatch(engineSource, /adaptersByProvider/);
     assert.doesNotMatch(engineSource, /structuredSessionOwners = new Map<string, ProviderAdapter>/);
@@ -139,6 +145,12 @@ describe("NativeTuiProviderRuntime", () => {
     assert.doesNotMatch(engineSource, /structuredInputAdaptersByProvider\.set\(provider, adapter\)/);
     assert.doesNotMatch(engineSource, /structuredPermissionAdaptersByProvider\.set\(provider, adapter\)/);
     assert.doesNotMatch(engineSource, /workspaceInspectionAdaptersByProvider\.set\(provider, adapter\)/);
+    assert.doesNotMatch(engineSource, /modeAdaptersByProvider\.set\(provider, adapter\)/);
+    assert.doesNotMatch(engineSource, /modelAdaptersByProvider\.set\(provider, adapter\)/);
+    assert.doesNotMatch(engineSource, /actionAdaptersByProvider\.set\(provider, adapter\)/);
+    assert.doesNotMatch(engineSource, /diagnosticAdaptersByProvider\.set\(provider, adapter\)/);
+    assert.doesNotMatch(engineSource, /debugAdaptersById\.set\(adapter\.id, adapter\)/);
+    assert.doesNotMatch(engineSource, /shutdownAdaptersById\.set\(adapter\.id, adapter\)/);
     assert.doesNotMatch(engineSource, /historyMirrorAdapters = resolvedAdapters;/);
     assert.match(engineSource, /bindStoredHistoryCapability/);
     assert.doesNotMatch(engineSource, /storedHistoryAdaptersByProvider\.set\(provider, adapter\)/);
