@@ -18,6 +18,8 @@ export function hasStoredHistoryCapability(
   adapter: ProviderAdapter,
 ): adapter is ProviderAdapter & ProviderStoredHistoryAdapter {
   return (
+    typeof (adapter as Partial<ProviderStoredHistoryAdapter>).resumeStoredSession ===
+      "function" ||
     typeof (adapter as Partial<ProviderStoredHistoryAdapter>).getSessionHistoryPage ===
       "function" ||
     typeof (adapter as Partial<ProviderStoredHistoryAdapter>).createFrozenHistoryPageLoader ===
@@ -35,6 +37,9 @@ export function bindStoredHistoryCapability(
   adapter: ProviderAdapter & ProviderStoredHistoryAdapter,
 ): ProviderStoredHistoryAdapter {
   return {
+    ...(adapter.resumeStoredSession
+      ? { resumeStoredSession: adapter.resumeStoredSession.bind(adapter) }
+      : {}),
     ...(adapter.getSessionHistoryPage
       ? { getSessionHistoryPage: adapter.getSessionHistoryPage.bind(adapter) }
       : {}),

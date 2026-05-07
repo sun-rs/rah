@@ -1,4 +1,6 @@
 import type {
+  ResumeSessionRequest,
+  ResumeSessionResponse,
   SessionHistoryPageResponse,
   StoredSessionRef,
 } from "@rah/runtime-protocol";
@@ -14,7 +16,12 @@ import {
   findGeminiStoredSessionRecord,
   getGeminiStoredSessionHistoryPage,
   resolveGeminiStoredSessionWatchRoots,
+  resumeGeminiStoredSession,
 } from "./gemini-session-files";
+import {
+  finalizeStoredReplayResume,
+  prepareProviderSessionResume,
+} from "./provider-resume";
 import { movePathToTrash } from "./trash";
 
 export class GeminiStoredHistoryAdapter implements ProviderAdapter, ProviderStoredHistoryAdapter {
@@ -22,8 +29,44 @@ export class GeminiStoredHistoryAdapter implements ProviderAdapter, ProviderStor
   readonly providers: Array<"gemini"> = ["gemini"];
 
   private storedSessionIndex = new Map<string, GeminiStoredSessionRecord>();
+  private readonly rehydratedSessionIds = new Set<string>();
 
   constructor(private readonly services: RuntimeServices) {}
+
+  resumeStoredSession(request: ResumeSessionRequest): ResumeSessionResponse {
+    const preparedResume = prepareProviderSessionResume({
+      services: this.services,
+      provider: "gemini",
+      providerSessionId: request.providerSessionId,
+      preferStoredReplay: true,
+      rehydratedSessionIds: this.rehydratedSessionIds,
+    });
+    const record =
+      this.storedSessionIndex.get(request.providerSessionId) ??
+      this.refreshStoredSessionIndex().get(request.providerSessionId) ??
+      findGeminiStoredSessionRecord(request.providerSessionId, request.cwd);
+    if (!record) {
+      throw new Error(`Unknown Gemini session ${request.providerSessionId}.`);
+    }
+    try {
+      return finalizeStoredReplayResume({
+        services: this.services,
+        provider: "gemini",
+        providerSessionId: request.providerSessionId,
+        rehydratedSessionIds: this.rehydratedSessionIds,
+        createSession: () =>
+          resumeGeminiStoredSession({
+            services: this.services,
+            record,
+            ...(request.cwd ? { cwd: request.cwd } : {}),
+            ...(request.attach ? { attach: request.attach } : {}),
+          }),
+      });
+    } catch (error) {
+      preparedResume.rollback();
+      throw error;
+    }
+  }
 
   getSessionHistoryPage(
     sessionId: string,

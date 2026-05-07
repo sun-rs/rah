@@ -1,5 +1,7 @@
 import path from "node:path";
 import type {
+  ResumeSessionRequest,
+  ResumeSessionResponse,
   SessionHistoryPageResponse,
   StoredSessionRef,
 } from "@rah/runtime-protocol";
@@ -13,8 +15,13 @@ import {
   discoverKimiStoredSessions,
   getKimiStoredSessionHistoryPage,
   resolveKimiStoredSessionWatchRoots,
+  resumeKimiStoredSession,
   type KimiStoredSessionRecord,
 } from "./kimi-session-files";
+import {
+  finalizeStoredReplayResume,
+  prepareProviderSessionResume,
+} from "./provider-resume";
 import { movePathToTrash } from "./trash";
 
 export class KimiStoredHistoryAdapter implements ProviderAdapter, ProviderStoredHistoryAdapter {
@@ -22,8 +29,42 @@ export class KimiStoredHistoryAdapter implements ProviderAdapter, ProviderStored
   readonly providers: Array<"kimi"> = ["kimi"];
 
   private storedSessionIndex = new Map<string, KimiStoredSessionRecord>();
+  private readonly rehydratedSessionIds = new Set<string>();
 
   constructor(private readonly services: RuntimeServices) {}
+
+  resumeStoredSession(request: ResumeSessionRequest): ResumeSessionResponse {
+    const preparedResume = prepareProviderSessionResume({
+      services: this.services,
+      provider: "kimi",
+      providerSessionId: request.providerSessionId,
+      preferStoredReplay: true,
+      rehydratedSessionIds: this.rehydratedSessionIds,
+    });
+    const record =
+      this.storedSessionIndex.get(request.providerSessionId) ??
+      this.refreshStoredSessionIndex().get(request.providerSessionId);
+    if (!record) {
+      throw new Error(`Unknown Kimi session ${request.providerSessionId}.`);
+    }
+    try {
+      return finalizeStoredReplayResume({
+        services: this.services,
+        provider: "kimi",
+        providerSessionId: request.providerSessionId,
+        rehydratedSessionIds: this.rehydratedSessionIds,
+        createSession: () =>
+          resumeKimiStoredSession({
+            services: this.services,
+            record,
+            ...(request.attach ? { attach: request.attach } : {}),
+          }),
+      });
+    } catch (error) {
+      preparedResume.rollback();
+      throw error;
+    }
+  }
 
   getSessionHistoryPage(
     sessionId: string,

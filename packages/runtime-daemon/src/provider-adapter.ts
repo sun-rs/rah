@@ -138,6 +138,9 @@ export interface ProviderWorkspaceInspectionAdapter {
 }
 
 export interface ProviderStoredHistoryAdapter {
+  resumeStoredSession?(
+    request: ResumeSessionRequest,
+  ): ResumeSessionResponse | Promise<ResumeSessionResponse>;
   getSessionHistoryPage?(
     sessionId: string,
     options?: { beforeTs?: string; cursor?: string; limit?: number },

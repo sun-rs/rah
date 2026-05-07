@@ -1,4 +1,6 @@
 import type {
+  ResumeSessionRequest,
+  ResumeSessionResponse,
   SessionHistoryPageResponse,
   StoredSessionRef,
 } from "@rah/runtime-protocol";
@@ -14,16 +16,56 @@ import {
   findOpenCodeStoredSessionRecord,
   getOpenCodeStoredSessionHistoryPage,
   resolveOpenCodeStoredSessionWatchRoots,
+  resumeOpenCodeStoredSession,
   type OpenCodeStoredSessionRecord,
 } from "./opencode-stored-sessions";
+import {
+  finalizeStoredReplayResume,
+  prepareProviderSessionResume,
+} from "./provider-resume";
 
 export class OpenCodeStoredHistoryAdapter implements ProviderAdapter, ProviderStoredHistoryAdapter {
   readonly id = "opencode-stored-history";
   readonly providers: Array<"opencode"> = ["opencode"];
 
   private storedSessionIndex = new Map<string, OpenCodeStoredSessionRecord>();
+  private readonly rehydratedSessionIds = new Set<string>();
 
   constructor(private readonly services: RuntimeServices) {}
+
+  resumeStoredSession(request: ResumeSessionRequest): ResumeSessionResponse {
+    const preparedResume = prepareProviderSessionResume({
+      services: this.services,
+      provider: "opencode",
+      providerSessionId: request.providerSessionId,
+      preferStoredReplay: true,
+      rehydratedSessionIds: this.rehydratedSessionIds,
+    });
+    const record =
+      this.storedSessionIndex.get(request.providerSessionId) ??
+      this.refreshStoredSessionIndex().get(request.providerSessionId) ??
+      findOpenCodeStoredSessionRecord(request.providerSessionId);
+    if (!record) {
+      throw new Error(`Unknown OpenCode session ${request.providerSessionId}.`);
+    }
+    try {
+      return finalizeStoredReplayResume({
+        services: this.services,
+        provider: "opencode",
+        providerSessionId: request.providerSessionId,
+        rehydratedSessionIds: this.rehydratedSessionIds,
+        createSession: () =>
+          resumeOpenCodeStoredSession(
+            request.attach !== undefined
+              ? { services: this.services, record, attach: request.attach }
+              : { services: this.services, record },
+          ),
+      });
+    } catch (error) {
+      preparedResume.rollback();
+      throw error;
+    }
+  }
 
   getSessionHistoryPage(
     sessionId: string,

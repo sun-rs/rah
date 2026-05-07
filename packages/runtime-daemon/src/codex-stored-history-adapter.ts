@@ -1,4 +1,6 @@
 import type {
+  ResumeSessionRequest,
+  ResumeSessionResponse,
   SessionHistoryPageResponse,
   StoredSessionRef,
 } from "@rah/runtime-protocol";
@@ -9,6 +11,7 @@ import {
   findCodexStoredSessionRecord,
   getCodexStoredSessionHistoryPage,
   resolveCodexStoredSessionWatchRoots,
+  resumeCodexStoredSession,
   type CodexStoredSessionRecord,
 } from "./codex-stored-sessions";
 import type {
@@ -16,6 +19,10 @@ import type {
   ProviderStoredHistoryAdapter,
   RuntimeServices,
 } from "./provider-adapter";
+import {
+  finalizeStoredReplayResume,
+  prepareProviderSessionResume,
+} from "./provider-resume";
 import { movePathToTrash } from "./trash";
 
 export class CodexStoredHistoryAdapter implements ProviderAdapter, ProviderStoredHistoryAdapter {
@@ -23,8 +30,43 @@ export class CodexStoredHistoryAdapter implements ProviderAdapter, ProviderStore
   readonly providers: Array<"codex"> = ["codex"];
 
   private storedSessionIndex = new Map<string, CodexStoredSessionRecord>();
+  private readonly rehydratedSessionIds = new Set<string>();
 
   constructor(private readonly services: RuntimeServices) {}
+
+  resumeStoredSession(request: ResumeSessionRequest): ResumeSessionResponse {
+    const preparedResume = prepareProviderSessionResume({
+      services: this.services,
+      provider: "codex",
+      providerSessionId: request.providerSessionId,
+      preferStoredReplay: true,
+      rehydratedSessionIds: this.rehydratedSessionIds,
+    });
+    const record =
+      this.storedSessionIndex.get(request.providerSessionId) ??
+      this.refreshStoredSessionIndex().get(request.providerSessionId) ??
+      findCodexStoredSessionRecord(request.providerSessionId);
+    if (!record) {
+      throw new Error(`Unknown Codex session ${request.providerSessionId}.`);
+    }
+    try {
+      return finalizeStoredReplayResume({
+        services: this.services,
+        provider: "codex",
+        providerSessionId: request.providerSessionId,
+        rehydratedSessionIds: this.rehydratedSessionIds,
+        createSession: () =>
+          resumeCodexStoredSession(
+            request.attach !== undefined
+              ? { services: this.services, record, attach: request.attach }
+              : { services: this.services, record },
+          ),
+      });
+    } catch (error) {
+      preparedResume.rollback();
+      throw error;
+    }
+  }
 
   getSessionHistoryPage(
     sessionId: string,

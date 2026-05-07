@@ -1,4 +1,6 @@
 import type {
+  ResumeSessionRequest,
+  ResumeSessionResponse,
   SessionHistoryPageResponse,
   StoredSessionRef,
 } from "@rah/runtime-protocol";
@@ -14,7 +16,13 @@ import {
   findClaudeStoredSessionRecord,
   getClaudeStoredSessionHistoryPage,
   resolveClaudeStoredSessionWatchRoots,
+  resumeClaudeStoredSession,
+  waitForClaudeStoredSessionRecord,
 } from "./claude-session-files";
+import {
+  finalizeStoredReplayResume,
+  prepareProviderSessionResume,
+} from "./provider-resume";
 import { movePathToTrash } from "./trash";
 
 export class ClaudeStoredHistoryAdapter implements ProviderAdapter, ProviderStoredHistoryAdapter {
@@ -22,8 +30,53 @@ export class ClaudeStoredHistoryAdapter implements ProviderAdapter, ProviderStor
   readonly providers: Array<"claude"> = ["claude"];
 
   private storedSessionIndex = new Map<string, ClaudeStoredSessionRecord>();
+  private readonly rehydratedSessionIds = new Set<string>();
 
   constructor(private readonly services: RuntimeServices) {}
+
+  async resumeStoredSession(request: ResumeSessionRequest): Promise<ResumeSessionResponse> {
+    const preparedResume = prepareProviderSessionResume({
+      services: this.services,
+      provider: "claude",
+      providerSessionId: request.providerSessionId,
+      preferStoredReplay: true,
+      rehydratedSessionIds: this.rehydratedSessionIds,
+    });
+    let record = findClaudeStoredSessionRecord(request.providerSessionId, request.cwd);
+    if (!record) {
+      record = await waitForClaudeStoredSessionRecord(
+        request.cwd
+          ? {
+              providerSessionId: request.providerSessionId,
+              cwd: request.cwd,
+            }
+          : {
+              providerSessionId: request.providerSessionId,
+            },
+      );
+    }
+    if (!record) {
+      throw new Error(`Unknown Claude session ${request.providerSessionId}.`);
+    }
+    try {
+      const replayRecord = record;
+      return finalizeStoredReplayResume({
+        services: this.services,
+        provider: "claude",
+        providerSessionId: request.providerSessionId,
+        rehydratedSessionIds: this.rehydratedSessionIds,
+        createSession: () =>
+          resumeClaudeStoredSession({
+            services: this.services,
+            record: replayRecord,
+            ...(request.attach ? { attach: request.attach } : {}),
+          }),
+      });
+    } catch (error) {
+      preparedResume.rollback();
+      throw error;
+    }
+  }
 
   getSessionHistoryPage(
     sessionId: string,

@@ -20,6 +20,7 @@ import { PtyHub } from "./pty-hub";
 import { EventBus } from "./event-bus";
 import { SessionStore, toSessionSummary, type StoredSessionState } from "./session-store";
 import { RuntimeTerminalCoordinator } from "./runtime-terminal-coordinator";
+import { isReadOnlyReplaySession } from "./workbench-directory-utils";
 
 const SYSTEM_SOURCE = {
   provider: "system" as const,
@@ -205,6 +206,21 @@ export class RuntimeSessionLifecycle {
       return;
     }
     if (await this.deps.terminals.closeNativeTuiSession(sessionId)) {
+      this.deps.sessionStore.removeSession(sessionId);
+      this.deps.ptyHub.removeSession(sessionId);
+      this.deps.historySnapshots.clear(sessionId);
+      this.deps.removeStructuredSessionOwner(sessionId);
+      this.deps.eventBus.publish({
+        sessionId,
+        type: "session.closed",
+        source: SYSTEM_SOURCE,
+        payload: {
+          clientId: request.clientId,
+        },
+      });
+      return;
+    }
+    if (isReadOnlyReplaySession(state)) {
       this.deps.sessionStore.removeSession(sessionId);
       this.deps.ptyHub.removeSession(sessionId);
       this.deps.historySnapshots.clear(sessionId);

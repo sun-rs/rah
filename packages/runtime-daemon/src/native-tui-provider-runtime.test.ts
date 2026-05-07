@@ -155,7 +155,7 @@ describe("NativeTuiProviderRuntime", () => {
     const sessionListSource = readSource("./runtime-session-list.ts");
     assert.match(engineSource, /RuntimeStructuredProviderCoordinator/);
     assert.match(engineSource, /createDefaultProviderAdapters/);
-    assert.match(defaultProviderAdaptersSource, /createDefaultLegacyStructuredProviderAdapters/);
+    assert.doesNotMatch(defaultProviderAdaptersSource, /createDefaultLegacyStructuredProviderAdapters/);
     assert.match(defaultStructuredAdaptersSource, /CodexAdapter/);
     assert.match(defaultStructuredAdaptersSource, /OpenCodeAdapter/);
     assert.match(codexAdapterSource, /legacy-structured\/codex-structured-adapter/);

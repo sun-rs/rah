@@ -448,6 +448,9 @@ export class RuntimeEngine {
 
   async resumeSession(request: ResumeSessionRequest): Promise<ResumeSessionResponse> {
     this.assertStructuredLiveBackendAllowed(request);
+    if (request.preferStoredReplay === true) {
+      return await this.resumeStoredReplaySession(request);
+    }
     if (this.shouldUseNativeTuiBackend(request)) {
       if (request.cwd) {
         await assertExistingWorkingDirectory(request.cwd, "Session working directory");
@@ -460,6 +463,30 @@ export class RuntimeEngine {
       });
     }
     return this.structuredProviders.resumeSession(request);
+  }
+
+  private async resumeStoredReplaySession(
+    request: ResumeSessionRequest,
+  ): Promise<ResumeSessionResponse> {
+    this.pruneOrphanSessions();
+    const adapter = this.storedHistoryAdaptersByProvider.get(request.provider);
+    if (!adapter?.resumeStoredSession && this.structuredLiveAllowedForInjectedAdapters) {
+      return await this.structuredProviders.resumeSession(request);
+    }
+    if (!adapter?.resumeStoredSession) {
+      throw new Error(`Provider ${request.provider} does not support stored history replay.`);
+    }
+    const response = await adapter.resumeStoredSession(request);
+    if (
+      request.historySourceSessionId &&
+      request.historySourceSessionId !== response.session.session.id
+    ) {
+      this.historySnapshots.transfer(
+        request.historySourceSessionId,
+        response.session.session.id,
+      );
+    }
+    return response;
   }
 
   private assertStructuredLiveBackendAllowed(
