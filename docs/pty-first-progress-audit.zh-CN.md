@@ -47,7 +47,7 @@ RAH should converge on one live core:
 | Context usage bypasses provider adapters | `RuntimeEngine.getContextUsage()` reads canonical session-store usage directly; duplicated adapter `getContextUsage()` methods and `ProviderStructuredContextAdapter` were removed | Done |
 | Structured input/control is optional legacy surface | `ProviderAdapter` no longer extends `ProviderStructuredInputControlAdapter`; `RuntimeEngine` requires this slice only after wrapper/native PTY input paths fail | Done |
 | Structured lifecycle is optional legacy surface | `ProviderStructuredLifecycleAdapter.startSession/resumeSession` are optional; `RuntimeStructuredProviderCoordinator` requires them only for explicit `liveBackend: "structured"` requests | Done |
-| Legacy structured live clients isolated by path | Five `*-live-client.ts` implementations now live under `packages/runtime-daemon/src/legacy-structured/`; shared Codex/Gemini app-server/CLI helpers were extracted to root utility modules so terminal wrapper/native paths do not import legacy clients | Done |
+| Legacy structured live clients isolated by path | Five `*-live-client.ts` implementations now live under `packages/runtime-daemon/src/legacy-structured/`; shared Codex/Gemini app-server/CLI helpers were extracted to root utility modules so terminal wrapper/native paths do not import legacy clients; package root exports no longer expose those legacy clients | Done |
 
 ## Verification Run
 
