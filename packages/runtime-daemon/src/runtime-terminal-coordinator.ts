@@ -1,6 +1,5 @@
 import type {
   CloseSessionRequest,
-  IndependentTerminalSession,
   IndependentTerminalStartRequest,
   IndependentTerminalStartResponse,
   NativeTuiDiagnostic,
@@ -10,7 +9,6 @@ import type {
   RahEvent,
 } from "@rah/runtime-protocol";
 import type { HistorySnapshotStore } from "./history-snapshots";
-import { IndependentTerminalProcess } from "./independent-terminal";
 import {
   applyProviderActivity,
   type ProviderActivity,
@@ -55,6 +53,7 @@ import {
 import {
   buildNativeTuiSessionCapabilities,
 } from "./runtime-terminal-capabilities";
+import { PtySessionRuntime, type PtySessionRuntimeEntry } from "./pty-session-runtime";
 import {
   nativeTuiBindingProbeIntervalMs,
   nativeTuiBindingWarnAfterMs,
@@ -80,13 +79,6 @@ import {
 } from "./runtime-session-events";
 import { TerminalWrapperSessionRuntime } from "./terminal-wrapper-session-runtime";
 
-type IndependentTerminalState = {
-  id: string;
-  cwd: string;
-  shell: string;
-  process: IndependentTerminalProcess;
-};
-
 type RuntimeTerminalCoordinatorDeps = {
   eventBus: EventBus;
   ptyHub: PtyHub;
@@ -99,7 +91,7 @@ type RuntimeTerminalCoordinatorDeps = {
 
 export class RuntimeTerminalCoordinator {
   private readonly terminalWrappers: TerminalWrapperSessionRuntime;
-  private readonly independentTerminals = new Map<string, IndependentTerminalState>();
+  private readonly ptySessions = new PtySessionRuntime();
   private readonly nativeTuiSessions = new Map<string, NativeTuiSessionState>();
   private readonly nativeTuiSessionIds = new Set<string>();
   private readonly closingNativeTuiSessionIds = new Set<string>();
@@ -320,25 +312,18 @@ export class RuntimeTerminalCoordinator {
   }
 
   handlePtyInput(sessionId: string, data: string): boolean {
-    const terminal = this.independentTerminals.get(sessionId);
-    if (!terminal) {
+    if (!this.ptySessions.has(sessionId)) {
       return false;
     }
     const native = this.nativeTuiSessions.get(sessionId);
     if (native) {
       this.observeNativeTuiPtyInput(native, data);
     }
-    terminal.process.write(data);
-    return true;
+    return this.ptySessions.write(sessionId, data);
   }
 
   handlePtyResize(sessionId: string, cols: number, rows: number): boolean {
-    const terminal = this.independentTerminals.get(sessionId);
-    if (!terminal) {
-      return false;
-    }
-    terminal.process.resize(cols, rows);
-    return true;
+    return this.ptySessions.resize(sessionId, cols, rows);
   }
 
   async startIndependentTerminal(
@@ -356,47 +341,38 @@ export class RuntimeTerminalCoordinator {
     }
     const id = crypto.randomUUID();
     this.deps.ptyHub.ensureSession(id);
-    const process = new IndependentTerminalProcess({
-      cwd,
-      ...(request?.cols !== undefined ? { cols: request.cols } : {}),
-      ...(request?.rows !== undefined ? { rows: request.rows } : {}),
-      onData: (data) => {
-        this.deps.ptyHub.appendOutput(id, data);
-      },
-      onExit: (args) => {
-        this.deps.ptyHub.emitExit(id, args.exitCode, args.signal);
-        this.independentTerminals.delete(id);
-      },
-    });
+    let terminal: PtySessionRuntimeEntry;
     try {
-      await process.waitUntilReady();
+      terminal = await this.ptySessions.start({
+        id,
+        cwd,
+        ...(request?.cols !== undefined ? { cols: request.cols } : {}),
+        ...(request?.rows !== undefined ? { rows: request.rows } : {}),
+        onData: (terminalId, data) => {
+          this.deps.ptyHub.appendOutput(terminalId, data);
+        },
+        onExit: (terminalId, args) => {
+          this.deps.ptyHub.emitExit(terminalId, args.exitCode, args.signal);
+        },
+      });
     } catch (error) {
-      await process.close().catch(() => undefined);
       this.deps.ptyHub.removeSession(id);
       throw error;
     }
-    this.independentTerminals.set(id, {
-      id,
-      cwd,
-      shell: process.shell,
-      process,
-    });
-    const terminal: IndependentTerminalSession = {
-      id,
-      cwd,
-      shell: process.shell,
+    return {
+      terminal: {
+        id,
+        cwd,
+        shell: terminal.shell,
+      },
     };
-    return { terminal };
   }
 
   async closeIndependentTerminal(id: string): Promise<void> {
-    const terminal = this.independentTerminals.get(id);
-    if (!terminal) {
-      return;
+    const closed = await this.ptySessions.close(id);
+    if (closed) {
+      this.deps.ptyHub.removeSession(id);
     }
-    this.independentTerminals.delete(id);
-    await terminal.process.close();
-    this.deps.ptyHub.removeSession(id);
   }
 
   async startNativeTuiSession(args: {
@@ -407,7 +383,7 @@ export class RuntimeTerminalCoordinator {
     const sessionId = crypto.randomUUID();
     const providerSessionId = args.providerSessionId ?? args.launch.providerSessionId;
     const startupTimestampMs = Date.now();
-    const state = this.deps.sessionStore.createManagedSession({
+    this.deps.sessionStore.createManagedSession({
       id: sessionId,
       provider: args.launch.provider,
       ...(providerSessionId ? { providerSessionId } : {}),
@@ -441,40 +417,43 @@ export class RuntimeTerminalCoordinator {
 
     publishSessionCreatedAndStarted(this.deps, sessionId);
 
-    const process = new IndependentTerminalProcess({
-      cwd: args.launch.cwd,
-      command: args.launch.command,
-      args: args.launch.args,
-      ...(args.launch.env ? { env: args.launch.env } : {}),
-      onData: (data) => {
-        this.deps.ptyHub.appendOutput(sessionId, data);
-        this.observeNativeTuiOutput(sessionId, data);
-      },
-      onExit: (exitArgs) => {
-        const native = this.nativeTuiSessions.get(sessionId);
-        const expectedClose = this.closingNativeTuiSessionIds.has(sessionId);
-        this.clearNativeTuiRuntimeState(sessionId);
-        this.closingNativeTuiSessionIds.delete(sessionId);
-        this.independentTerminals.delete(sessionId);
-        this.deps.ptyHub.emitExit(sessionId, exitArgs.exitCode, exitArgs.signal);
-        if (this.deps.sessionStore.getSession(sessionId)) {
-          this.deps.sessionStore.setRuntimeState(sessionId, "stopped");
-          publishSessionStateChanged(this.deps, sessionId, "stopped");
-        }
-        if (native && !expectedClose) {
-          recordNativeTuiProcessExitDiagnostic(this.nativeTuiDiagnostics, native, exitArgs);
-        }
-      },
-    });
-    this.independentTerminals.set(sessionId, {
-      id: sessionId,
-      cwd: args.launch.cwd,
-      shell: process.shell,
-      process,
-    });
+    let terminal: PtySessionRuntimeEntry;
+    try {
+      terminal = this.ptySessions.create({
+        id: sessionId,
+        cwd: args.launch.cwd,
+        command: args.launch.command,
+        args: args.launch.args,
+        ...(args.launch.env ? { env: args.launch.env } : {}),
+        onData: (terminalId, data) => {
+          this.deps.ptyHub.appendOutput(terminalId, data);
+          this.observeNativeTuiOutput(terminalId, data);
+        },
+        onExit: (terminalId, exitArgs) => {
+          const native = this.nativeTuiSessions.get(terminalId);
+          const expectedClose = this.closingNativeTuiSessionIds.has(terminalId);
+          this.clearNativeTuiRuntimeState(terminalId);
+          this.closingNativeTuiSessionIds.delete(terminalId);
+          this.deps.ptyHub.emitExit(terminalId, exitArgs.exitCode, exitArgs.signal);
+          if (this.deps.sessionStore.getSession(terminalId)) {
+            this.deps.sessionStore.setRuntimeState(terminalId, "stopped");
+            publishSessionStateChanged(this.deps, terminalId, "stopped");
+          }
+          if (native && !expectedClose) {
+            recordNativeTuiProcessExitDiagnostic(this.nativeTuiDiagnostics, native, exitArgs);
+          }
+        },
+      });
+    } catch (error) {
+      this.clearNativeTuiRuntimeState(sessionId);
+      this.nativeTuiSessionIds.delete(sessionId);
+      this.deps.ptyHub.removeSession(sessionId);
+      this.deps.sessionStore.removeSession(sessionId);
+      throw error;
+    }
     this.nativeTuiSessions.set(sessionId, {
       sessionId,
-      process,
+      process: terminal.process,
       provider: args.launch.provider,
       cwd: args.launch.cwd,
       startupTimestampMs,
@@ -489,12 +468,11 @@ export class RuntimeTerminalCoordinator {
     this.startNativeTuiMirror(sessionId);
 
     try {
-      await process.waitUntilReady();
+      await terminal.process.waitUntilReady();
     } catch (error) {
-      await process.close().catch(() => undefined);
+      await this.ptySessions.close(sessionId).catch(() => undefined);
       this.clearNativeTuiRuntimeState(sessionId);
       this.nativeTuiSessionIds.delete(sessionId);
-      this.independentTerminals.delete(sessionId);
       this.deps.ptyHub.removeSession(sessionId);
       this.deps.sessionStore.removeSession(sessionId);
       throw error;
@@ -509,14 +487,10 @@ export class RuntimeTerminalCoordinator {
     if (!this.nativeTuiSessionIds.has(sessionId)) {
       return false;
     }
-    const native = this.nativeTuiSessions.get(sessionId);
     this.closingNativeTuiSessionIds.add(sessionId);
     this.clearNativeTuiRuntimeState(sessionId);
     this.nativeTuiSessionIds.delete(sessionId);
-    this.independentTerminals.delete(sessionId);
-    if (native) {
-      await native.process.close();
-    }
+    await this.ptySessions.close(sessionId);
     return true;
   }
 
@@ -780,28 +754,20 @@ export class RuntimeTerminalCoordinator {
 
   async shutdown(): Promise<void> {
     this.terminalWrappers.shutdown();
-    const terminals = [...this.independentTerminals.values()];
-    this.independentTerminals.clear();
     for (const sessionId of this.nativeTuiSessions.keys()) {
       this.clearNativeTuiRuntimeState(sessionId);
     }
     this.nativeTuiSessionIds.clear();
-    const results = await Promise.allSettled(
-      terminals.map(async (terminal) => {
-        try {
-          await terminal.process.close();
-        } finally {
-          this.deps.ptyHub.removeSession(terminal.id);
-        }
-      }),
-    );
-    results.forEach((result, index) => {
+    const results = await this.ptySessions.closeAll();
+    for (const result of results) {
+      this.deps.ptyHub.removeSession(result.id);
       if (result.status === "rejected") {
-        console.error("[rah] failed to close independent terminal during shutdown", {
-          terminalId: terminals[index]?.id,
+        console.error("[rah] failed to close PTY session during shutdown", {
+          terminalId: result.id,
           error: result.reason,
         });
       }
-    });
+    }
   }
+
 }
