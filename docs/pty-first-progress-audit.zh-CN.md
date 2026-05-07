@@ -45,7 +45,7 @@ RAH should converge on one live core:
 | Stored history discovery depends only on history slice | `RuntimeEngine.historyMirrorAdapters` and `runtime-session-list.ts` use `ProviderStoredHistoryAdapter` instead of the full `ProviderAdapter` interface | Done |
 | Built-in workspace inspection bypasses provider adapters | `ProviderAdapter` no longer extends `ProviderWorkspaceInspectionAdapter`; `RuntimeEngine` routes workspace snapshot/file/git read/apply actions through shared workspace utilities for non-`custom` sessions; duplicate workspace/file/git methods were removed from the five built-in provider adapters; `custom` debug sessions keep the structured adapter fallback | Done |
 | Context usage bypasses provider adapters | `RuntimeEngine.getContextUsage()` reads canonical session-store usage directly; duplicated adapter `getContextUsage()` methods and `ProviderStructuredContextAdapter` were removed | Done |
-| Structured input/control is optional legacy surface | `ProviderAdapter` no longer extends `ProviderStructuredInputControlAdapter`; `RuntimeEngine` requires this slice only after wrapper/native PTY input paths fail | Done |
+| Structured input/control/permission is optional legacy surface | `ProviderAdapter` no longer extends `ProviderStructuredInputControlAdapter` or `ProviderStructuredPermissionAdapter`; `RuntimeEngine` requires these slices only after wrapper/native PTY paths fail | Done |
 | Structured lifecycle is optional legacy surface | `ProviderStructuredLifecycleAdapter.startSession/resumeSession` are optional; `RuntimeStructuredProviderCoordinator` requires them only for explicit `liveBackend: "structured"` requests | Done |
 | Legacy structured live clients isolated by path | Five `*-live-client.ts` implementations now live under `packages/runtime-daemon/src/legacy-structured/`; shared Codex/Gemini app-server/CLI helpers were extracted to root utility modules so terminal wrapper/native paths do not import legacy clients; package root exports no longer expose those legacy clients | Done |
 
@@ -110,7 +110,7 @@ Structured input/control boundary verified on 2026-05-07:
 - `npm run typecheck`: pass
 - `node --import tsx --test --test-force-exit packages/runtime-daemon/src/runtime-engine.test.ts packages/runtime-daemon/src/native-tui-provider-runtime.test.ts`: pass
 
-This guard verifies that built-in adapter type requirements no longer include structured input/control. RuntimeEngine still preserves the legacy structured path by checking for `ProviderStructuredInputControlAdapter` only after terminal wrapper and native TUI PTY paths decline the input/interrupt/resize event.
+This guard verifies that built-in adapter type requirements no longer include structured input/control/permission. RuntimeEngine still preserves the legacy structured path by checking for `ProviderStructuredInputControlAdapter` only after terminal wrapper and native TUI PTY paths decline the input/interrupt/resize event, and checking `ProviderStructuredPermissionAdapter` only after terminal/native permission handling declines the response.
 
 Structured lifecycle boundary verified on 2026-05-07:
 

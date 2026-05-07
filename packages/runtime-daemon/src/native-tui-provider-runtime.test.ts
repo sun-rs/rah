@@ -111,11 +111,13 @@ describe("NativeTuiProviderRuntime", () => {
     assert.doesNotMatch(engineSource, /discoverRuntimeStoredSessions\(this\.adaptersById\.values\(\)\)/);
     assert.match(providerAdapterSource, /ProviderStructuredLifecycleAdapter/);
     assert.match(providerAdapterSource, /ProviderStructuredInputControlAdapter/);
+    assert.match(providerAdapterSource, /ProviderStructuredPermissionAdapter/);
     assert.match(providerAdapterSource, /ProviderEnhancedModeAdapter/);
     assert.match(providerAdapterSource, /ProviderEnhancedModelAdapter/);
     assert.match(providerAdapterSource, /startSession\?\(/);
     assert.match(providerAdapterSource, /resumeSession\?\(/);
     assert.doesNotMatch(providerAdapterInterface, /ProviderStructuredInputControlAdapter/);
+    assert.doesNotMatch(providerAdapterInterface, /ProviderStructuredPermissionAdapter/);
     assert.doesNotMatch(providerAdapterInterface, /ProviderWorkspaceInspectionAdapter/);
     assert.doesNotMatch(providerAdapterSource, /ProviderStructuredContextAdapter/);
     assert.doesNotMatch(providerAdapterSource, /ProviderLifecycleAdapter/);

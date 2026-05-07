@@ -56,6 +56,7 @@ import type {
   ProviderAdapter,
   ProviderStoredHistoryAdapter,
   ProviderStructuredInputControlAdapter,
+  ProviderStructuredPermissionAdapter,
   ProviderWorkspaceInspectionAdapter,
 } from "./provider-adapter";
 import { PtyHub } from "./pty-hub";
@@ -484,10 +485,7 @@ export class RuntimeEngine {
     if (this.terminals.handlePermissionResponse(sessionId, requestId, response)) {
       return;
     }
-    const adapter = this.requireStructuredSessionAdapter(sessionId);
-    if (!adapter.respondToPermission) {
-      throw new Error(`Provider ${adapter.id} does not support permission responses.`);
-    }
+    const adapter = this.requireStructuredPermissionAdapter(sessionId);
     await adapter.respondToPermission(sessionId, requestId, response);
   }
 
@@ -1029,6 +1027,19 @@ export class RuntimeEngine {
       throw new Error(`Provider ${adapter.id} does not support workspace inspection.`);
     }
     return adapter as ProviderAdapter & ProviderWorkspaceInspectionAdapter;
+  }
+
+  private requireStructuredPermissionAdapter(
+    sessionId: string,
+  ): ProviderAdapter & Required<ProviderStructuredPermissionAdapter> {
+    const adapter = this.requireStructuredSessionAdapter(sessionId);
+    if (
+      typeof (adapter as Partial<ProviderStructuredPermissionAdapter>).respondToPermission !==
+      "function"
+    ) {
+      throw new Error(`Provider ${adapter.id} does not support structured permission responses.`);
+    }
+    return adapter as ProviderAdapter & Required<ProviderStructuredPermissionAdapter>;
   }
 
   private requireStructuredSessionAdapter(sessionId: string): ProviderAdapter {
