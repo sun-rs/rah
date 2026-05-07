@@ -184,6 +184,43 @@ describe("startRahDaemon", () => {
     });
   });
 
+  test("rejects legacy structured live backend at the public HTTP boundary", async () => {
+    const start = await requestJson({
+      port,
+      path: "/api/sessions/start",
+      method: "POST",
+      headers: {
+        Origin: `http://127.0.0.1:${port}`,
+        "x-rah-client": "web",
+      },
+      body: {
+        provider: "codex",
+        cwd: tempHome,
+        liveBackend: "structured",
+      },
+    });
+    assert.equal(start.status, 400);
+    assert.deepEqual(start.json, { error: "Bad Request: liveBackend is invalid." });
+
+    const resume = await requestJson({
+      port,
+      path: "/api/sessions/resume",
+      method: "POST",
+      headers: {
+        Origin: `http://127.0.0.1:${port}`,
+        "x-rah-client": "web",
+      },
+      body: {
+        provider: "codex",
+        providerSessionId: "thread-legacy-structured",
+        cwd: tempHome,
+        liveBackend: "structured",
+      },
+    });
+    assert.equal(resume.status, 400);
+    assert.deepEqual(resume.json, { error: "Bad Request: liveBackend is invalid." });
+  });
+
   test("rejects oversized JSON request bodies before buffering them", async () => {
     const request = Readable.from([]) as unknown as IncomingMessage;
     Object.defineProperty(request, "headers", {

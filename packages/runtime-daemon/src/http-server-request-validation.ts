@@ -26,7 +26,7 @@ type JsonRecord = Record<string, unknown>;
 const PROVIDERS = new Set<ProviderKind>(["codex", "claude", "kimi", "gemini", "opencode", "custom"]);
 const CLIENT_KINDS = new Set(["terminal", "web", "ios", "ipad", "api"]);
 const APPROVAL_POLICIES = new Set(["default", "on-request", "never", "auto_edit", "yolo"]);
-const LIVE_BACKENDS = new Set(["structured", "native_tui"]);
+const PUBLIC_LIVE_BACKENDS = new Set(["native_tui"]);
 
 export function parseIndependentTerminalStartRequest(body: unknown): IndependentTerminalStartRequest {
   const record = optionalObjectBody(body);
@@ -54,7 +54,7 @@ export function parseStartSessionRequest(body: unknown): StartSessionRequest {
   };
   Object.assign(request, parseOptionalSessionConfig(record));
   const title = optionalString(record, "title");
-  const liveBackend = optionalEnum(record, "liveBackend", [...LIVE_BACKENDS]);
+  const liveBackend = optionalEnum(record, "liveBackend", [...PUBLIC_LIVE_BACKENDS]);
   const command = optionalString(record, "command");
   const args = optionalStringArray(record, "args");
   const initialPrompt = optionalString(record, "initialPrompt");
@@ -87,7 +87,7 @@ export function parseResumeSessionRequest(body: unknown): ResumeSessionRequest {
   };
   Object.assign(request, parseOptionalSessionConfig(record));
   const cwd = optionalString(record, "cwd");
-  const liveBackend = optionalEnum(record, "liveBackend", [...LIVE_BACKENDS]);
+  const liveBackend = optionalEnum(record, "liveBackend", [...PUBLIC_LIVE_BACKENDS]);
   const preferStoredReplay = optionalBoolean(record, "preferStoredReplay");
   const historyReplay = optionalEnum(record, "historyReplay", ["include", "skip"]);
   const historySourceSessionId = optionalString(record, "historySourceSessionId");
