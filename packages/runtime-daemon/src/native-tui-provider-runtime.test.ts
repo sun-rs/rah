@@ -96,9 +96,14 @@ describe("NativeTuiProviderRuntime", () => {
 
   test("keeps structured provider coordination named as a non-core path", () => {
     const engineSource = readSource("./runtime-engine.ts");
+    const providerAdapterSource = readSource("./provider-adapter.ts");
     assert.match(engineSource, /RuntimeStructuredProviderCoordinator/);
     assert.match(engineSource, /structuredProviders/);
     assert.doesNotMatch(engineSource, /RuntimeProviderCoordinator/);
     assert.doesNotMatch(engineSource, /private readonly providers:/);
+    assert.match(providerAdapterSource, /ProviderStructuredLifecycleAdapter/);
+    assert.match(providerAdapterSource, /ProviderStructuredInputControlAdapter/);
+    assert.doesNotMatch(providerAdapterSource, /ProviderLifecycleAdapter/);
+    assert.doesNotMatch(providerAdapterSource, /ProviderInputControlAdapter/);
   });
 });

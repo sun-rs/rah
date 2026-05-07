@@ -40,6 +40,7 @@ RAH should converge on one live core:
 | Legacy structured path no longer default | Web, CLI, and default daemon RuntimeEngine prefer native TUI | Done |
 | Legacy structured path named as legacy/enhancement | `RuntimeStructuredProviderCoordinator` owns explicit `liveBackend: "structured"` start/resume, diagnostics, debug, and catalog fallbacks | Done |
 | Legacy structured session ownership named explicitly | `RuntimeEngine` tracks adapter-owned sessions as `structuredSessionOwners`; `RuntimeSessionLifecycle` calls `requireStructuredSessionAdapter` only after terminal/native paths are bypassed | Done |
+| Legacy structured adapter slices named explicitly | `ProviderStructuredLifecycleAdapter`, `ProviderStructuredInputControlAdapter`, `ProviderStructuredPermissionAdapter`, and `ProviderStructuredContextAdapter` mark non-core structured live capability slices | Done |
 
 ## Verification Run
 
@@ -72,7 +73,7 @@ Structured legacy naming guard verified on 2026-05-07:
 
 - `node --import tsx --test --test-force-exit packages/runtime-daemon/src/native-tui-provider-runtime.test.ts packages/runtime-daemon/src/runtime-engine.test.ts`: 51 pass
 
-This guard verifies that native TUI core does not import the structured coordinator and that `RuntimeEngine` names structured provider coordination as a non-core path.
+This guard verifies that native TUI core does not import the structured coordinator, that `RuntimeEngine` names structured provider coordination as a non-core path, and that provider adapter structured live slices keep explicit `Structured` names.
 
 ## Remaining Gaps
 

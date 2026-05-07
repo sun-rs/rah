@@ -114,7 +114,7 @@ Phase 0 不做大规模删除。目标是先把当前代码按新边界分类，
 | `gemini-live-client.ts` | Gemini structured CLI/live path | legacy/enhancement |
 | `kimi-live-client.ts` / RPC | Kimi structured live path | legacy/enhancement |
 | `opencode-live-client.ts` / ACP | OpenCode structured API/ACP path | legacy/enhancement |
-| `ProviderInputControlAdapter.sendInput()` / `interruptSession()` | structured live input/interrupt | legacy path；native TUI core 走 PTY input/interrupt |
+| `ProviderStructuredInputControlAdapter.sendInput()` / `interruptSession()` | structured live input/interrupt | legacy path；native TUI core 走 PTY input/interrupt |
 
 当前已符合的部分：
 

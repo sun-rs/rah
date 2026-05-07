@@ -50,11 +50,11 @@ export interface ProviderAdapterIdentity {
   readonly providers: ManagedSession["provider"][];
 }
 
-export interface ProviderLifecycleAdapter {
+export interface ProviderStructuredLifecycleAdapter {
   /**
-   * Start/resume requests carry RAH-level mode/model ids plus model-scoped
-   * optionValues. Adapters own all translation into provider-native flags,
-   * config files, SDK parameters, or permission rulesets.
+   * Legacy/enhancement structured live lifecycle. PTY-first live sessions do
+   * not use this path; they use native TUI launch specs plus the terminal
+   * runtime instead.
    */
   startSession(request: StartSessionRequest): StartSessionResponse | Promise<StartSessionResponse>;
   resumeSession(request: ResumeSessionRequest): ResumeSessionResponse | Promise<ResumeSessionResponse>;
@@ -91,14 +91,14 @@ export interface ProviderActionCapabilityAdapter {
   ): SessionSummary | Promise<SessionSummary>;
 }
 
-export interface ProviderInputControlAdapter {
+export interface ProviderStructuredInputControlAdapter {
   sendInput(sessionId: string, request: SessionInputRequest): void;
   interruptSession(sessionId: string, request: InterruptSessionRequest): SessionSummary;
   onPtyInput(sessionId: string, clientId: string, data: string): void;
   onPtyResize(sessionId: string, clientId: string, cols: number, rows: number): void;
 }
 
-export interface ProviderPermissionCapabilityAdapter {
+export interface ProviderStructuredPermissionAdapter {
   respondToPermission?(
     sessionId: string,
     requestId: string,
@@ -106,7 +106,7 @@ export interface ProviderPermissionCapabilityAdapter {
   ): Promise<void> | void;
 }
 
-export interface ProviderWorkspaceCapabilityAdapter {
+export interface ProviderWorkspaceInspectionAdapter {
   getWorkspaceSnapshot(
     sessionId: string,
     options?: { scopeRoot?: string },
@@ -147,7 +147,7 @@ export interface ProviderStoredHistoryAdapter {
   removeStoredSession?(session: StoredSessionRef): Promise<void> | void;
 }
 
-export interface ProviderContextCapabilityAdapter {
+export interface ProviderStructuredContextAdapter {
   getContextUsage(sessionId: string): ContextUsage | undefined;
 }
 
@@ -169,15 +169,15 @@ export interface ProviderShutdownAdapter {
 
 export interface ProviderAdapter
   extends ProviderAdapterIdentity,
-    ProviderLifecycleAdapter,
+    ProviderStructuredLifecycleAdapter,
     ProviderModeCapabilityAdapter,
     ProviderModelCapabilityAdapter,
     ProviderActionCapabilityAdapter,
-    ProviderInputControlAdapter,
-    ProviderPermissionCapabilityAdapter,
-    ProviderWorkspaceCapabilityAdapter,
+    ProviderStructuredInputControlAdapter,
+    ProviderStructuredPermissionAdapter,
+    ProviderWorkspaceInspectionAdapter,
     ProviderStoredHistoryAdapter,
-    ProviderContextCapabilityAdapter,
+    ProviderStructuredContextAdapter,
     ProviderDiagnosticAdapter,
     ProviderDebugAdapter,
     ProviderShutdownAdapter {}

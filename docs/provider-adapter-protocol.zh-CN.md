@@ -31,29 +31,29 @@ RAH 不把某一家 CLI 的原生概念直接暴露成前端公共逻辑。
 
 代码上 `ProviderAdapter` 已拆成类型层面的 capability slices：
 
-- `ProviderLifecycleAdapter`
-- `ProviderInputControlAdapter`
+- `ProviderStructuredLifecycleAdapter`
+- `ProviderStructuredInputControlAdapter`
 - `ProviderModeCapabilityAdapter`
 - `ProviderModelCapabilityAdapter`
 - `ProviderActionCapabilityAdapter`
-- `ProviderPermissionCapabilityAdapter`
-- `ProviderWorkspaceCapabilityAdapter`
+- `ProviderStructuredPermissionAdapter`
+- `ProviderWorkspaceInspectionAdapter`
 - `ProviderStoredHistoryAdapter`
-- `ProviderContextCapabilityAdapter`
+- `ProviderStructuredContextAdapter`
 - `ProviderDiagnosticAdapter`
 - `ProviderDebugAdapter`
 - `ProviderShutdownAdapter`
 
-这些 slice 目前仍组合成一个 `ProviderAdapter` 传给 runtime engine，但协议含义已经分层。新增 provider 时应逐项确认，而不是把所有能力当成“start/sendInput 附属功能”。
+这些 slice 目前仍组合成一个 `ProviderAdapter` 传给 runtime engine，但协议含义已经分层。带 `Structured` 的 slice 是显式 legacy/enhancement structured live 路径，不是 PTY-first live core。新增 provider 时应逐项确认，而不是把所有能力当成“start/sendInput 附属功能”。
 
 核心能力：
 
 | 能力 | Adapter 方法 / 字段 | 说明 |
 | --- | --- | --- |
-| 创建 live session | `startSession(request)` | Web new 入口。接收 RAH 标准 `StartSessionRequest`，adapter 决定 provider-native 启动方式。 |
-| 恢复 live session | `resumeSession(request)` | Web claim/resume 入口。接收 RAH 标准 `ResumeSessionRequest`。 |
-| 输入 | `sendInput(sessionId, request)` | 只对 live controllable session 有效。 |
-| 中断 | `interruptSession(sessionId, request)` | Adapter 自己决定是否能传 provider-native interrupt。 |
+| 创建 structured live session | `startSession(request)` | 仅显式 `liveBackend: "structured"` 路径使用。默认 Web/CLI live 不走 adapter lifecycle。 |
+| 恢复 structured live session | `resumeSession(request)` | 仅显式 structured claim/resume 使用。默认 Web Claim 走 native TUI resume launch spec。 |
+| structured 输入 | `sendInput(sessionId, request)` | 只对 legacy structured controllable session 有效。PTY-first native TUI 输入走 PTY。 |
+| structured 中断 | `interruptSession(sessionId, request)` | 只对 legacy structured session 有效。PTY-first native TUI 中断走 Ctrl-C/PTY。 |
 | 关闭/归档 | `closeSession` / `destroySession` | 关闭 RAH 管理的执行体，不删除 provider 历史。 |
 | 重命名 | `renameSession` | 原生支持则写 provider 存储；不支持则由 RAH 本地 override。 |
 | 模式切换 | `setSessionMode(sessionId, modeId)` | 运行中切权限/plan 等 mode。具体实现 adapter-owned。 |
