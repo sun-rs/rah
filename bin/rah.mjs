@@ -16,6 +16,7 @@ import { dirname, join, resolve } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
+import WebSocket from "ws";
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_DAEMON_URL = "http://127.0.0.1:43111";
@@ -63,11 +64,8 @@ function printUsage() {
       "  --help              Show this help",
       "",
       "Current status:",
-      "  codex: stable live terminal wrapper",
-      "  claude: live terminal wrapper",
-      "  kimi: live terminal wrapper",
-      "  gemini: live terminal wrapper",
-      "  opencode: live terminal wrapper via OpenCode server API",
+      "  codex/claude/gemini/kimi/opencode: daemon-owned PTY-first native TUI",
+      "  set RAH_LEGACY_WRAPPER=1 to use the previous terminal wrapper path",
       "",
       "Claude note:",
       "  `rah claude resume <providerSessionId>` maps to `claude --resume <id>`.",
@@ -515,6 +513,207 @@ function formatCliError(error, daemonUrl) {
   return error instanceof Error ? error.message : String(error);
 }
 
+function apiUrl(daemonUrl, pathname) {
+  return new URL(pathname, daemonUrl).toString();
+}
+
+function ptyWebSocketUrl(daemonUrl, sessionId) {
+  const url = new URL(daemonUrl);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  url.pathname = `/api/pty/${encodeURIComponent(sessionId)}`;
+  url.search = "replay=true";
+  return url.toString();
+}
+
+async function postJson(daemonUrl, pathname, body) {
+  const response = await fetch(apiUrl(daemonUrl, pathname), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-rah-client": "web",
+    },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(`Request failed: ${response.status} ${response.statusText}${text ? `\n${text}` : ""}`);
+  }
+  return await response.json();
+}
+
+function providerModeId(parsed) {
+  if (parsed.provider === "claude") {
+    return parsed.claudePermissionMode;
+  }
+  if (parsed.provider === "gemini") {
+    return parsed.geminiApprovalMode;
+  }
+  if (parsed.provider === "kimi") {
+    return parsed.kimiApprovalMode;
+  }
+  return undefined;
+}
+
+function terminalClientDescriptor() {
+  const clientId = `terminal:${process.pid}:${Date.now()}`;
+  return {
+    clientId,
+    client: {
+      id: clientId,
+      kind: "terminal",
+      connectionId: `pid:${process.pid}`,
+      cols: process.stdout.columns || 100,
+      rows: process.stdout.rows || 32,
+    },
+  };
+}
+
+async function startOrResumePtyFirstSession(parsed, client) {
+  const modeId = providerModeId(parsed);
+  if (parsed.resumeProviderSessionId) {
+    const result = await postJson(parsed.daemonUrl, "/api/sessions/resume", {
+      provider: parsed.provider,
+      providerSessionId: parsed.resumeProviderSessionId,
+      cwd: parsed.cwd,
+      liveBackend: "native_tui",
+      ...(modeId ? { modeId } : {}),
+      attach: {
+        client: client.client,
+        mode: "interactive",
+        claimControl: true,
+      },
+    });
+    return result.session;
+  }
+  const result = await postJson(parsed.daemonUrl, "/api/sessions/start", {
+    provider: parsed.provider,
+    cwd: parsed.cwd,
+    liveBackend: "native_tui",
+    ...(modeId ? { modeId } : {}),
+    attach: {
+      client: client.client,
+      mode: "interactive",
+      claimControl: true,
+    },
+  });
+  return result.session;
+}
+
+function sendPtyResize(socket, sessionId, clientId) {
+  if (socket.readyState !== WebSocket.OPEN) {
+    return;
+  }
+  socket.send(JSON.stringify({
+    type: "pty.resize",
+    sessionId,
+    clientId,
+    cols: process.stdout.columns || 100,
+    rows: process.stdout.rows || 32,
+  }));
+}
+
+async function attachLocalTerminalToPty(daemonUrl, sessionId, clientId) {
+  const socket = new WebSocket(ptyWebSocketUrl(daemonUrl, sessionId));
+  const stdin = process.stdin;
+  const stdout = process.stdout;
+  const canUseRawMode = Boolean(stdin.isTTY && typeof stdin.setRawMode === "function");
+  let cleanedUp = false;
+
+  await new Promise((resolve, reject) => {
+    const cleanup = () => {
+      if (cleanedUp) {
+        return;
+      }
+      cleanedUp = true;
+      stdin.off("data", onInput);
+      stdout.off?.("resize", onResize);
+      if (canUseRawMode) {
+        stdin.setRawMode(false);
+      }
+      stdin.pause();
+    };
+
+    const send = (payload) => {
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify(payload));
+      }
+    };
+
+    const onInput = (chunk) => {
+      send({
+        type: "pty.input",
+        sessionId,
+        clientId,
+        data: chunk.toString("utf8"),
+      });
+    };
+
+    const onResize = () => {
+      sendPtyResize(socket, sessionId, clientId);
+    };
+
+    socket.on("open", () => {
+      if (canUseRawMode) {
+        stdin.setRawMode(true);
+      }
+      stdin.resume();
+      stdin.on("data", onInput);
+      stdout.on?.("resize", onResize);
+      sendPtyResize(socket, sessionId, clientId);
+    });
+
+    socket.on("message", (raw) => {
+      let frame;
+      try {
+        frame = JSON.parse(raw.toString("utf8"));
+      } catch {
+        return;
+      }
+      if (frame.type === "pty.replay") {
+        for (const chunk of frame.chunks ?? []) {
+          stdout.write(chunk);
+        }
+        if (frame.status === "exited") {
+          cleanup();
+          socket.close();
+          resolve(undefined);
+        }
+        return;
+      }
+      if (frame.type === "pty.output") {
+        stdout.write(frame.data);
+        return;
+      }
+      if (frame.type === "pty.exited") {
+        cleanup();
+        socket.close();
+        if (typeof frame.exitCode === "number") {
+          process.exitCode = frame.exitCode;
+        }
+        resolve(undefined);
+      }
+    });
+
+    socket.on("close", () => {
+      cleanup();
+      resolve(undefined);
+    });
+
+    socket.on("error", (error) => {
+      cleanup();
+      reject(error);
+    });
+  });
+}
+
+async function runPtyFirstProviderCommand(parsed) {
+  await ensureDaemon(parsed.daemonUrl);
+  const client = terminalClientDescriptor();
+  const session = await startOrResumePtyFirstSession(parsed, client);
+  const ptyId = session.ptyId || session.id;
+  await attachLocalTerminalToPty(parsed.daemonUrl, ptyId, client.clientId);
+}
+
 async function main() {
   let parsed;
   try {
@@ -533,6 +732,11 @@ async function main() {
 
   if (parsed.command) {
     await handleManagementCommand(parsed);
+    return;
+  }
+
+  if (parsed.provider && process.env.RAH_LEGACY_WRAPPER !== "1") {
+    await runPtyFirstProviderCommand(parsed);
     return;
   }
 

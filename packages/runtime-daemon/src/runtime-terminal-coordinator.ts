@@ -383,11 +383,12 @@ export class RuntimeTerminalCoordinator {
     const sessionId = crypto.randomUUID();
     const providerSessionId = args.providerSessionId ?? args.launch.providerSessionId;
     const startupTimestampMs = Date.now();
+    const launchSource = args.attach?.client.kind === "terminal" ? "terminal" : "web";
     this.deps.sessionStore.createManagedSession({
       id: sessionId,
       provider: args.launch.provider,
       ...(providerSessionId ? { providerSessionId } : {}),
-      launchSource: "web",
+      launchSource,
       liveBackend: "native_tui",
       cwd: args.launch.cwd,
       rootDir: args.launch.cwd,
