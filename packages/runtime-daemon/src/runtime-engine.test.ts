@@ -1404,6 +1404,16 @@ describe("RuntimeEngine", () => {
         assert.equal(engine.getSessionSummary(sessionId).session.providerSessionId, providerSessionId);
       }, { timeoutMs: 5_000 });
 
+      await assert.rejects(
+        () => engine.setSessionMode(sessionId, "plan"),
+        /does not expose mode controls|controlled outside RAH|does not support/,
+      );
+      await assert.rejects(
+        () => engine.setSessionModel(sessionId, { modelId: "gpt-native-rejected" }),
+        /does not support model switching/,
+      );
+      assert.equal(engine.getSessionSummary(sessionId).session.runtimeState, "idle");
+
       engine.sendInput(sessionId, { clientId: "web-native", text: "hello native tui" });
       await waitFor(() => {
         assert.match(transcript, /MOCK_NATIVE_TUI_INPUT:hello native tui/);

@@ -36,7 +36,7 @@ RAH should converge on one live core:
 | Structured source is provider history/DB | native provider handlers and stored-session parsers remain the mirror source | Partially done |
 | Workbench shell only view/attach | Web startup defaults native TUI; history browsing remains replay-only; `activateHistorySessionCommand` tests lock replay/attach instead of implicit claim | Partially audited |
 | Canvas pane view/attach semantics | `canvas-state.ts` centralizes pane target rules; `canvas-state.test.ts` locks live-session uniqueness and allows read-only history replay in multiple panes | Covered by tests |
-| Enhanced controls downgraded | native TUI capabilities expose `structuredControl: false`; docs mark controls optional | Partially done |
+| Enhanced controls downgraded | native TUI capabilities expose `structuredControl: false`; `runtime-engine.test.ts` rejects mode/model changes for native TUI while preserving idle PTY input | Covered by tests |
 | Legacy structured path no longer default | Web, CLI, and default daemon RuntimeEngine prefer native TUI | Done |
 
 ## Verification Run
@@ -53,6 +53,13 @@ Latest verified gates in this branch:
 
 `test:native-tui` covered the full PTY-first automatic gate for this checkout: typecheck, web tests, runtime tests, web build, real CLI help/version probe, Codex native smoke, Claude/Gemini/Kimi/OpenCode native provider smoke, Chromium browser native Codex smoke, Chromium browser native provider smoke, wrapper-control smoke, and `git diff --check`. The CLI probe captured the current local versions: Codex `0.128.0`, Claude Code `2.1.123`, Gemini `0.40.0`, Kimi `1.40.0`, and OpenCode `1.14.39`. The report records the worktree as dirty only because the user-owned `desgin.md` is untracked.
 
+Additional Phase 6 guard verified on 2026-05-07:
+
+- `node --import tsx --test --test-force-exit packages/runtime-daemon/src/runtime-engine.test.ts`: 45 pass
+- `npm run typecheck`: pass
+
+This guard verifies that native TUI sessions reject RAH-managed mode/model hot switching, remain `idle`, and still accept subsequent PTY input.
+
 ## Remaining Gaps
 
 These are still not completion-grade:
@@ -62,7 +69,7 @@ These are still not completion-grade:
 - Legacy structured live clients and adapters still exist. They are no longer default, but the adapter interface is not fully slimmed down to launch/bind/mirror/minimal control.
 - Legacy wrapper runtime still exists for `RAH_LEGACY_WRAPPER=1` and synthetic tests. It is isolated as a fallback, not deleted.
 - Workbench shell/canvas still needs deeper audit for every UI path, although stored-history activation now has explicit replay/attach tests and the native browser smoke covers canvas PTY rendering/replay/resize.
-- Enhanced controls are documented as optional, but some UI affordances may still need pruning so native TUI sessions consistently present external-locked semantics.
+- Enhanced controls are rejected safely at the native TUI runtime boundary, but some UI affordances may still need pruning so native TUI sessions consistently present external-locked semantics before the user clicks them.
 
 ## Current Conclusion
 
