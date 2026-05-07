@@ -3,11 +3,13 @@ import assert from "node:assert/strict";
 import type { SessionSummary } from "@rah/runtime-protocol";
 import {
   canSessionArchive,
+  canSessionSwitchModel,
+  canSessionSwitchModes,
   isSessionControlLocked,
   isSessionGenerationActive,
 } from "./session-capabilities";
 
-function summaryWithArchiveCapability(archive: boolean): SessionSummary {
+function summaryWithSession(args?: Partial<SessionSummary["session"]>): SessionSummary {
   return {
     session: {
       id: "session-1",
@@ -20,6 +22,10 @@ function summaryWithArchiveCapability(archive: boolean): SessionSummary {
       capabilities: {
         liveAttach: true,
         structuredTimeline: true,
+        nativeTui: false,
+        rawPtyInput: false,
+        chatMirror: false,
+        structuredControl: true,
         livePermissions: true,
         contextUsage: true,
         resumeByProvider: true,
@@ -27,7 +33,7 @@ function summaryWithArchiveCapability(archive: boolean): SessionSummary {
         renameSession: false,
         actions: {
           info: true,
-          archive,
+          archive: true,
           delete: false,
           rename: "none",
         },
@@ -39,15 +45,74 @@ function summaryWithArchiveCapability(archive: boolean): SessionSummary {
       },
       createdAt: "2026-04-15T00:00:00.000Z",
       updatedAt: "2026-04-15T00:00:00.000Z",
+      ...args,
     },
     attachedClients: [],
     controlLease: { sessionId: "session-1" },
   };
 }
 
+function summaryWithArchiveCapability(archive: boolean): SessionSummary {
+  return summaryWithSession({
+    capabilities: {
+      ...summaryWithSession().session.capabilities,
+      actions: {
+        ...summaryWithSession().session.capabilities.actions,
+        archive,
+      },
+    },
+  });
+}
+
 test("canSessionArchive follows the provider action capability", () => {
   assert.equal(canSessionArchive(summaryWithArchiveCapability(true)), true);
   assert.equal(canSessionArchive(summaryWithArchiveCapability(false)), false);
+});
+
+test("native TUI sessions do not expose RAH-managed mode or model controls", () => {
+  const summary = summaryWithSession({
+    nativeTui: {
+      terminalId: "session-1",
+      viewAvailable: true,
+      promptState: "prompt_clean",
+    },
+    capabilities: {
+      ...summaryWithSession().session.capabilities,
+      nativeTui: true,
+      rawPtyInput: true,
+      structuredControl: false,
+      modelSwitch: true,
+      planMode: true,
+    },
+    mode: {
+      currentModeId: "plan",
+      availableModes: [
+        {
+          id: "plan",
+          label: "Plan",
+          role: "plan",
+          applyTiming: "immediate",
+          hotSwitch: true,
+        },
+      ],
+      mutable: true,
+      source: "external_locked",
+    },
+    model: {
+      currentModelId: "gpt-test",
+      availableModels: [
+        {
+          id: "gpt-test",
+          label: "gpt-test",
+        },
+      ],
+      mutable: true,
+      source: "native",
+    },
+  });
+
+  assert.equal(canSessionSwitchModes(summary), false);
+  assert.equal(canSessionSwitchModel(summary), false);
 });
 
 test("session controls are unlocked after failed and stopped states", () => {

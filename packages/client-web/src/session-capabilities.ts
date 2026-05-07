@@ -45,11 +45,17 @@ export function sessionModeState(summary: SessionSummary): SessionModeState | nu
 }
 
 export function canSessionSwitchModes(summary: SessionSummary): boolean {
+  if (!summary.session.capabilities.structuredControl) {
+    return false;
+  }
   const mode = sessionModeState(summary);
   return Boolean(mode && mode.mutable && mode.availableModes.length > 0);
 }
 
 export function canSessionSwitchModel(summary: SessionSummary): boolean {
+  if (!summary.session.capabilities.structuredControl) {
+    return false;
+  }
   if (!summary.session.capabilities.modelSwitch) {
     return false;
   }

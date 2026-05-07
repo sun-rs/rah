@@ -36,7 +36,7 @@ RAH should converge on one live core:
 | Structured source is provider history/DB | native provider handlers and stored-session parsers remain the mirror source | Partially done |
 | Workbench shell only view/attach | Web startup defaults native TUI; history browsing remains replay-only; `activateHistorySessionCommand` tests lock replay/attach instead of implicit claim | Partially audited |
 | Canvas pane view/attach semantics | `canvas-state.ts` centralizes pane target rules; `canvas-state.test.ts` locks live-session uniqueness and allows read-only history replay in multiple panes | Covered by tests |
-| Enhanced controls downgraded | native TUI capabilities expose `structuredControl: false`; `runtime-engine.test.ts` rejects mode/model changes for native TUI while preserving idle PTY input | Covered by tests |
+| Enhanced controls downgraded | native TUI capabilities expose `structuredControl: false`; `runtime-engine.test.ts` rejects mode/model changes for native TUI while preserving idle PTY input; `session-capabilities.test.ts` hides RAH-managed controls when structured control is unavailable | Covered by tests |
 | Legacy structured path no longer default | Web, CLI, and default daemon RuntimeEngine prefer native TUI | Done |
 
 ## Verification Run
@@ -44,7 +44,7 @@ RAH should converge on one live core:
 Latest verified gates in this branch:
 
 - `npm run typecheck`: pass
-- `npm run test:web`: 155 pass
+- `npm run test:web`: 156 pass
 - `npm run test:provider-contracts`: 133 pass
 - `npm run test:runtime`: 370 pass
 - `npm run test:native-tui`: pass on 2026-05-07
@@ -60,6 +60,12 @@ Additional Phase 6 guard verified on 2026-05-07:
 
 This guard verifies that native TUI sessions reject RAH-managed mode/model hot switching, remain `idle`, and still accept subsequent PTY input.
 
+Frontend external-locked guard verified on 2026-05-07:
+
+- `node --import tsx --test --test-force-exit packages/client-web/src/session-capabilities.test.ts packages/client-web/src/composer-contract.test.ts`: 13 pass
+
+This guard verifies that native TUI sessions do not expose RAH-managed mode/model controls even if stale mutable mode/model metadata is present.
+
 ## Remaining Gaps
 
 These are still not completion-grade:
@@ -69,7 +75,7 @@ These are still not completion-grade:
 - Legacy structured live clients and adapters still exist. They are no longer default, but the adapter interface is not fully slimmed down to launch/bind/mirror/minimal control.
 - Legacy wrapper runtime still exists for `RAH_LEGACY_WRAPPER=1` and synthetic tests. It is isolated as a fallback, not deleted.
 - Workbench shell/canvas still needs deeper audit for every UI path, although stored-history activation now has explicit replay/attach tests and the native browser smoke covers canvas PTY rendering/replay/resize.
-- Enhanced controls are rejected safely at the native TUI runtime boundary, but some UI affordances may still need pruning so native TUI sessions consistently present external-locked semantics before the user clicks them.
+- Enhanced controls are rejected safely at the native TUI runtime boundary and hidden by the central frontend capability helpers. Broader UI copy may still need review so native TUI sessions consistently explain external-locked semantics.
 
 ## Current Conclusion
 
