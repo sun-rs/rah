@@ -294,13 +294,20 @@ Legacy structured default construction quarantine verified on 2026-05-07:
 
 This guard verifies that `default-provider-adapters.ts` no longer directly constructs the five legacy structured provider adapters. It registers provider-native stored-history adapters directly and pulls the old structured live/enhancement adapters through `legacy-structured/default-structured-provider-adapters.ts`, making that path explicit and easier to disable or remove later.
 
+Legacy structured adapter implementation path isolation verified on 2026-05-07:
+
+- `npm run typecheck`: pass
+- `node --import tsx --test --test-force-exit packages/runtime-daemon/src/codex-adapter.test.ts packages/runtime-daemon/src/claude-adapter.test.ts packages/runtime-daemon/src/gemini-adapter.test.ts packages/runtime-daemon/src/kimi-adapter.test.ts packages/runtime-daemon/src/opencode-live-client.test.ts packages/runtime-daemon/src/native-tui-provider-runtime.test.ts`: pass
+
+This guard verifies that the five root `*-adapter.ts` files are compatibility re-exports only. The actual legacy structured live/enhancement implementations now live under `packages/runtime-daemon/src/legacy-structured/*-structured-adapter.ts`.
+
 ## Remaining Gaps
 
 These are still not completion-grade:
 
 - WebKit/mobile browser smoke is not rerun in this audit. Chromium native browser smoke is covered by `npm run test:native-tui`, but iPad/Safari real input-method behavior still needs human verification.
 - Real five-provider CLI/account human QA is still required; fake native TUI tests do not prove real login/quota/provider behavior.
-- Legacy structured adapters still exist. The structured live clients and default structured adapter construction are now path-isolated under `legacy-structured/`, and they are no longer default live path. Codex/Claude/Gemini/Kimi/OpenCode now have separate stored-history adapters. The remaining code gap is deciding whether to keep, disable by default, or delete the explicit `liveBackend: "structured"` escape hatch.
+- Legacy structured adapters still exist. The structured live clients, structured adapter implementations, and default structured adapter construction are now path-isolated under `legacy-structured/`, and they are no longer default live path. Codex/Claude/Gemini/Kimi/OpenCode now have separate stored-history adapters. The remaining code gap is deciding whether to keep, disable by default, or delete the explicit `liveBackend: "structured"` escape hatch.
 - Legacy wrapper runtime still exists for `RAH_LEGACY_WRAPPER=1` and synthetic tests. It is isolated as a fallback, not deleted.
 - Workbench shell/canvas code paths are now audited for view/attach semantics. Remaining risk is interaction-level QA: drag/drop, pane replacement, hide/show, and mobile/iPad layout should still be exercised in a real browser.
 - Enhanced controls are rejected safely at the native TUI runtime boundary and hidden by the central frontend capability helpers. Broader UI copy may still need review so native TUI sessions consistently explain external-locked semantics.

@@ -135,14 +135,19 @@ describe("NativeTuiProviderRuntime", () => {
     const defaultStructuredAdaptersSource = readSource("./legacy-structured/default-structured-provider-adapters.ts");
     const defaultProviderAdaptersSource = readSource("./default-provider-adapters.ts");
     const codexAdapterSource = readSource("./codex-adapter.ts");
+    const codexStructuredAdapterSource = readSource("./legacy-structured/codex-structured-adapter.ts");
     const codexStoredHistoryAdapterSource = readSource("./codex-stored-history-adapter.ts");
     const claudeAdapterSource = readSource("./claude-adapter.ts");
+    const claudeStructuredAdapterSource = readSource("./legacy-structured/claude-structured-adapter.ts");
     const claudeStoredHistoryAdapterSource = readSource("./claude-stored-history-adapter.ts");
     const geminiAdapterSource = readSource("./gemini-adapter.ts");
+    const geminiStructuredAdapterSource = readSource("./legacy-structured/gemini-structured-adapter.ts");
     const geminiStoredHistoryAdapterSource = readSource("./gemini-stored-history-adapter.ts");
     const kimiAdapterSource = readSource("./kimi-adapter.ts");
+    const kimiStructuredAdapterSource = readSource("./legacy-structured/kimi-structured-adapter.ts");
     const kimiStoredHistoryAdapterSource = readSource("./kimi-stored-history-adapter.ts");
     const openCodeAdapterSource = readSource("./opencode-adapter.ts");
+    const openCodeStructuredAdapterSource = readSource("./legacy-structured/opencode-structured-adapter.ts");
     const openCodeStoredHistoryAdapterSource = readSource("./opencode-stored-history-adapter.ts");
     const providerAdapterInterface = providerAdapterSource.slice(
       providerAdapterSource.indexOf("export interface ProviderAdapter\n"),
@@ -153,6 +158,21 @@ describe("NativeTuiProviderRuntime", () => {
     assert.match(defaultProviderAdaptersSource, /createDefaultLegacyStructuredProviderAdapters/);
     assert.match(defaultStructuredAdaptersSource, /CodexAdapter/);
     assert.match(defaultStructuredAdaptersSource, /OpenCodeAdapter/);
+    assert.match(codexAdapterSource, /legacy-structured\/codex-structured-adapter/);
+    assert.match(claudeAdapterSource, /legacy-structured\/claude-structured-adapter/);
+    assert.match(geminiAdapterSource, /legacy-structured\/gemini-structured-adapter/);
+    assert.match(kimiAdapterSource, /legacy-structured\/kimi-structured-adapter/);
+    assert.match(openCodeAdapterSource, /legacy-structured\/opencode-structured-adapter/);
+    assert.match(codexStructuredAdapterSource, /class CodexAdapter/);
+    assert.match(claudeStructuredAdapterSource, /class ClaudeAdapter/);
+    assert.match(geminiStructuredAdapterSource, /class GeminiAdapter/);
+    assert.match(kimiStructuredAdapterSource, /class KimiAdapter/);
+    assert.match(openCodeStructuredAdapterSource, /class OpenCodeAdapter/);
+    assert.doesNotMatch(codexAdapterSource, /class CodexAdapter/);
+    assert.doesNotMatch(claudeAdapterSource, /class ClaudeAdapter/);
+    assert.doesNotMatch(geminiAdapterSource, /class GeminiAdapter/);
+    assert.doesNotMatch(kimiAdapterSource, /class KimiAdapter/);
+    assert.doesNotMatch(openCodeAdapterSource, /class OpenCodeAdapter/);
     assert.doesNotMatch(defaultProviderAdaptersSource, /new CodexAdapter/);
     assert.doesNotMatch(defaultProviderAdaptersSource, /new ClaudeAdapter/);
     assert.doesNotMatch(defaultProviderAdaptersSource, /new GeminiAdapter/);

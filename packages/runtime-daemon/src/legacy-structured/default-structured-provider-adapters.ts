@@ -1,8 +1,8 @@
-import { ClaudeAdapter } from "../claude-adapter";
-import { CodexAdapter } from "../codex-adapter";
-import { GeminiAdapter } from "../gemini-adapter";
-import { KimiAdapter } from "../kimi-adapter";
-import { OpenCodeAdapter } from "../opencode-adapter";
+import { ClaudeAdapter } from "./claude-structured-adapter";
+import { CodexAdapter } from "./codex-structured-adapter";
+import { GeminiAdapter } from "./gemini-structured-adapter";
+import { KimiAdapter } from "./kimi-structured-adapter";
+import { OpenCodeAdapter } from "./opencode-structured-adapter";
 import type { ProviderAdapter, RuntimeServices } from "../provider-adapter";
 
 export function createDefaultLegacyStructuredProviderAdapters(

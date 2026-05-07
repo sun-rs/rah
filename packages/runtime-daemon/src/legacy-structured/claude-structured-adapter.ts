@@ -1,0 +1,412 @@
+import type {
+  CloseSessionRequest,
+  InterruptSessionRequest,
+  PermissionResponseRequest,
+  ProviderModelCatalog,
+  ResumeSessionRequest,
+  ResumeSessionResponse,
+  SetSessionModelRequest,
+  SessionInputRequest,
+  SessionSummary,
+  StartSessionRequest,
+  StartSessionResponse,
+} from "@rah/runtime-protocol";
+import type { ProviderAdapter, RuntimeServices } from "../provider-adapter";
+import {
+  type ClaudeQueryFactory,
+  closeClaudeLiveSession,
+  interruptClaudeLiveSession,
+  respondToClaudeLivePermission,
+  resumeClaudeLiveSession,
+  sendInputToClaudeLiveSession,
+  startClaudeLiveSession,
+  type LiveClaudeSession,
+} from "./claude-live-client";
+import {
+  findClaudeStoredSessionRecord,
+  resumeClaudeStoredSession,
+  updateClaudeSessionTitle,
+  waitForClaudeStoredSessionRecord,
+} from "../claude-session-files";
+import {
+  finalizeStoredReplayResume,
+  prepareProviderSessionResume,
+} from "../provider-resume";
+import { claudeLaunchSpec, probeProviderDiagnostic } from "../provider-diagnostics";
+import {
+  ClaudeModelCatalogCache,
+  resolveClaudeEffortValue,
+  resolveClaudeRuntimeCapabilityState,
+  resolveClaudeRuntimeModelId,
+} from "../claude-model-catalog";
+import { toSessionSummary } from "../session-store";
+import { buildClaudeModeState, isClaudeModeId } from "../session-mode-utils";
+import { approvalPolicyToPermissionMode } from "../claude-live-helpers";
+import { resolveModelOptionValues } from "../session-model-options";
+
+const CLAUDE_EVENT_SOURCE = {
+  provider: "claude" as const,
+  channel: "structured_live" as const,
+  authority: "derived" as const,
+};
+
+interface ClaudeAdapterOptions {
+  queryFactory?: ClaudeQueryFactory;
+}
+
+export class ClaudeAdapter implements ProviderAdapter {
+  readonly id = "claude";
+  readonly providers: Array<"claude"> = ["claude"];
+
+  private readonly services: RuntimeServices;
+  private readonly liveSessions = new Map<string, LiveClaudeSession>();
+  private readonly rehydratedSessionIds = new Set<string>();
+  private readonly permissionModeByProviderSessionId = new Map<string, LiveClaudeSession["permissionMode"]>();
+  private readonly queryFactory: ClaudeAdapterOptions["queryFactory"];
+  private readonly modelCatalog = new ClaudeModelCatalogCache();
+
+  constructor(services: RuntimeServices, options: ClaudeAdapterOptions = {}) {
+    this.services = services;
+    this.queryFactory = options.queryFactory;
+  }
+
+  private reportAsyncLiveError(sessionId: string, detail: string): void {
+    this.services.eventBus.publish({
+      sessionId,
+      type: "runtime.status",
+      source: CLAUDE_EVENT_SOURCE,
+      payload: {
+        status: "error",
+        detail,
+      },
+    });
+    this.services.sessionStore.setRuntimeState(sessionId, "failed");
+  }
+
+  async startSession(request: StartSessionRequest): Promise<StartSessionResponse> {
+    const response = await startClaudeLiveSession({
+      services: this.services,
+      request,
+      ...(this.queryFactory ? { queryFactory: this.queryFactory } : {}),
+    });
+    this.liveSessions.set(response.liveSession.sessionId, response.liveSession);
+    if (response.liveSession.providerSessionId) {
+      this.permissionModeByProviderSessionId.set(
+        response.liveSession.providerSessionId,
+        response.liveSession.permissionMode,
+      );
+    }
+    return { session: response.summary };
+  }
+
+  async resumeSession(request: ResumeSessionRequest): Promise<ResumeSessionResponse> {
+    const preparedResume = prepareProviderSessionResume({
+      services: this.services,
+      provider: "claude",
+      providerSessionId: request.providerSessionId,
+      preferStoredReplay: request.preferStoredReplay,
+      rehydratedSessionIds: this.rehydratedSessionIds,
+    });
+    const existing = this.services.sessionStore.findManagedByProviderSession(
+      "claude",
+      request.providerSessionId,
+    );
+    if (existing) {
+      throw new Error(
+        `Provider session claude:${request.providerSessionId} is already running; attach instead of resume.`,
+      );
+    }
+
+    let record = findClaudeStoredSessionRecord(request.providerSessionId, request.cwd);
+    if (request.preferStoredReplay ?? true) {
+      if (!record) {
+        record = await waitForClaudeStoredSessionRecord(
+          request.cwd
+            ? {
+                providerSessionId: request.providerSessionId,
+                cwd: request.cwd,
+              }
+            : {
+                providerSessionId: request.providerSessionId,
+              },
+        );
+      }
+      if (!record) {
+        throw new Error(`Unknown Claude session ${request.providerSessionId}.`);
+      }
+      const replayRecord = record;
+      return finalizeStoredReplayResume({
+        services: this.services,
+        provider: "claude",
+        providerSessionId: request.providerSessionId,
+        rehydratedSessionIds: this.rehydratedSessionIds,
+        createSession: () =>
+          resumeClaudeStoredSession({
+            services: this.services,
+            record: replayRecord,
+            ...(request.attach ? { attach: request.attach } : {}),
+          }),
+      });
+    }
+
+    try {
+      const response = await resumeClaudeLiveSession({
+        services: this.services,
+        providerSessionId: request.providerSessionId,
+        cwd: request.cwd ?? record?.ref.cwd ?? process.cwd(),
+        ...(request.model ? { model: request.model } : {}),
+        ...(request.optionValues !== undefined ? { optionValues: request.optionValues } : {}),
+        ...(request.reasoningId !== undefined ? { reasoningId: request.reasoningId } : {}),
+        ...(request.modeId ? { modeId: request.modeId } : {}),
+        permissionMode:
+          request.approvalPolicy !== undefined
+            ? approvalPolicyToPermissionMode(request.approvalPolicy)
+            : this.permissionModeByProviderSessionId.get(request.providerSessionId) ??
+              "bypassPermissions",
+        ...(request.attach ? { attach: request.attach } : {}),
+        ...(this.queryFactory ? { queryFactory: this.queryFactory } : {}),
+      });
+      this.liveSessions.set(response.liveSession.sessionId, response.liveSession);
+      return { session: response.summary };
+    } catch (error) {
+      preparedResume.rollback();
+      throw error;
+    }
+  }
+
+  sendInput(sessionId: string, request: SessionInputRequest): void {
+    const live = this.liveSessions.get(sessionId);
+    if (!live) {
+      throw new Error("Rehydrated Claude sessions are currently read-only.");
+    }
+    void sendInputToClaudeLiveSession({
+      services: this.services,
+      liveSession: live,
+      request,
+    }).catch((error) => {
+      this.reportAsyncLiveError(
+        sessionId,
+        error instanceof Error ? error.message : String(error),
+      );
+    });
+  }
+
+  async listModels(options?: { cwd?: string; forceRefresh?: boolean }): Promise<ProviderModelCatalog> {
+    return await this.modelCatalog.listModels(options);
+  }
+
+  async setSessionModel(
+    sessionId: string,
+    request: SetSessionModelRequest,
+  ): Promise<SessionSummary> {
+    const live = this.liveSessions.get(sessionId);
+    if (!live) {
+      throw new Error("Claude model switching is only available for live sessions.");
+    }
+    const nextModelId = request.modelId.trim();
+    if (!nextModelId) {
+      throw new Error("Session model is required.");
+    }
+    const catalog = await this.modelCatalog.listModels({ cwd: live.cwd });
+    const model = catalog.models.find((entry) => entry.id === nextModelId);
+    if (!model) {
+      throw new Error(`Unsupported Claude model '${nextModelId}'.`);
+    }
+    const optionValues = resolveModelOptionValues({
+      catalog,
+      model,
+      optionValues: request.optionValues,
+      reasoningId: request.reasoningId,
+      useDefaults: true,
+      requireMutable: true,
+    });
+    const effortOptions = model.reasoningOptions ?? [];
+    const requestedEffort = resolveClaudeEffortValue(
+      optionValues.effort ??
+        (request.reasoningId === null
+          ? undefined
+          : request.reasoningId ?? model.defaultReasoningId),
+    );
+
+    const runtimeModelId = resolveClaudeRuntimeModelId(model);
+    if (runtimeModelId) {
+      live.model = runtimeModelId;
+    } else {
+      delete live.model;
+    }
+    if (requestedEffort !== undefined && effortOptions.length > 0) {
+      live.effort = requestedEffort as LiveClaudeSession["effort"];
+    } else {
+      delete live.effort;
+    }
+    if (live.activeTurn?.query?.setModel) {
+      await live.activeTurn.query.setModel(runtimeModelId);
+    }
+
+    const runtimeCapabilityState = resolveClaudeRuntimeCapabilityState({
+      catalog,
+      modelId: nextModelId,
+      effort: live.effort,
+      optionValues,
+    });
+    const nextState = this.services.sessionStore.patchManagedSession(sessionId, {
+      model: {
+        currentModelId: nextModelId,
+        currentReasoningId: live.effort ?? null,
+        availableModels: catalog.models,
+        mutable: true,
+        source: catalog.source,
+      },
+      ...(runtimeCapabilityState.modelProfile
+        ? { modelProfile: runtimeCapabilityState.modelProfile }
+        : {}),
+      config: runtimeCapabilityState.config ?? {
+        values: {},
+        source: "runtime_session",
+      },
+    });
+    return toSessionSummary(nextState);
+  }
+
+  renameSession(sessionId: string, title: string): SessionSummary {
+    const state = this.services.sessionStore.getSession(sessionId);
+    if (!state?.session.providerSessionId) {
+      throw new Error(`Session ${sessionId} does not have a provider session id.`);
+    }
+    updateClaudeSessionTitle(state.session.providerSessionId, title, state.session.cwd);
+    const nextState = this.services.sessionStore.patchManagedSession(sessionId, { title });
+    return toSessionSummary(nextState);
+  }
+
+  async setSessionMode(sessionId: string, modeId: string): Promise<SessionSummary> {
+    if (!isClaudeModeId(modeId)) {
+      throw new Error(`Unsupported Claude mode '${modeId}'.`);
+    }
+    const live = this.liveSessions.get(sessionId);
+    if (!live) {
+      throw new Error("Claude mode switching is only available for live sessions.");
+    }
+    const nextMode = modeId as LiveClaudeSession["permissionMode"];
+    live.permissionMode = nextMode;
+    if (live.activeTurn?.query?.setPermissionMode) {
+      await live.activeTurn.query.setPermissionMode(nextMode);
+    }
+    if (live.providerSessionId) {
+      this.permissionModeByProviderSessionId.set(live.providerSessionId, live.permissionMode);
+    }
+    const nextState = this.services.sessionStore.patchManagedSession(sessionId, {
+      mode: buildClaudeModeState({
+        currentModeId: live.permissionMode,
+        mutable: true,
+      }),
+    });
+    return toSessionSummary(nextState);
+  }
+
+  async closeSession(sessionId: string, request: CloseSessionRequest): Promise<void> {
+    const state = this.services.sessionStore.getSession(sessionId);
+    if (!state) {
+      throw new Error(`Unknown session ${sessionId}`);
+    }
+    if (!this.services.sessionStore.hasAttachedClient(sessionId, request.clientId)) {
+      throw new Error(`Client ${request.clientId} is not attached to ${sessionId}.`);
+    }
+    const live = this.liveSessions.get(sessionId);
+    if (live) {
+      if (live.providerSessionId) {
+        this.permissionModeByProviderSessionId.set(
+          live.providerSessionId,
+          live.permissionMode,
+        );
+      }
+      this.liveSessions.delete(sessionId);
+      await closeClaudeLiveSession(live, request);
+    }
+    this.rehydratedSessionIds.delete(sessionId);
+  }
+
+  async destroySession(sessionId: string): Promise<void> {
+    const live = this.liveSessions.get(sessionId);
+    if (live) {
+      if (live.providerSessionId) {
+        this.permissionModeByProviderSessionId.set(
+          live.providerSessionId,
+          live.permissionMode,
+        );
+      }
+      this.liveSessions.delete(sessionId);
+      await closeClaudeLiveSession(live);
+    }
+    this.rehydratedSessionIds.delete(sessionId);
+  }
+
+  interruptSession(sessionId: string, request: InterruptSessionRequest): SessionSummary {
+    const live = this.liveSessions.get(sessionId);
+    if (live) {
+      return interruptClaudeLiveSession({
+        services: this.services,
+        liveSession: live,
+        request,
+      });
+    }
+    const state = this.services.sessionStore.getSession(sessionId);
+    if (!state) {
+      throw new Error(`Unknown session ${sessionId}`);
+    }
+    return toSessionSummary(state);
+  }
+
+  async respondToPermission(
+    sessionId: string,
+    requestId: string,
+    response: PermissionResponseRequest,
+  ): Promise<void> {
+    const live = this.liveSessions.get(sessionId);
+    if (!live) {
+      throw new Error(`Session ${sessionId} does not support live permission responses.`);
+    }
+    await respondToClaudeLivePermission({
+      liveSession: live,
+      services: this.services,
+      requestId,
+      response,
+    });
+  }
+
+  onPtyInput(): void {
+    throw new Error("Claude sessions do not support PTY input bridging.");
+  }
+
+  onPtyResize(): void {
+    // Claude replay sessions do not use PTY-backed rendering.
+  }
+
+  async getProviderDiagnostic(options?: { forceRefresh?: boolean }) {
+    return probeProviderDiagnostic("claude", await claudeLaunchSpec(), options);
+  }
+
+  async shutdown(): Promise<void> {
+    const sessions = [...this.liveSessions.values()];
+    this.liveSessions.clear();
+    const results = await Promise.allSettled(
+      sessions.map((live) => {
+        if (live.providerSessionId) {
+          this.permissionModeByProviderSessionId.set(
+            live.providerSessionId,
+            live.permissionMode,
+          );
+        }
+        return closeClaudeLiveSession(live);
+      }),
+    );
+    results.forEach((result, index) => {
+      if (result.status === "rejected") {
+        console.error("[rah] failed to close Claude live session during shutdown", {
+          sessionId: sessions[index]?.sessionId,
+          error: result.reason,
+        });
+      }
+    });
+  }
+
+}
