@@ -165,9 +165,6 @@ export interface ProviderShutdownAdapter {
 export interface ProviderAdapter
   extends ProviderAdapterIdentity,
     ProviderStructuredLifecycleAdapter,
-    ProviderEnhancedModeAdapter,
-    ProviderEnhancedModelAdapter,
-    ProviderActionCapabilityAdapter,
     ProviderDiagnosticAdapter,
     ProviderDebugAdapter,
     ProviderShutdownAdapter {}

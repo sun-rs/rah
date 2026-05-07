@@ -106,7 +106,9 @@ describe("NativeTuiProviderRuntime", () => {
     assert.match(engineSource, /legacy-structured\/runtime-structured-provider-coordinator/);
     assert.match(engineSource, /structuredProviders/);
     assert.match(engineSource, /structuredLiveAdaptersByProvider/);
+    assert.match(engineSource, /modeAdaptersByProvider/);
     assert.match(engineSource, /modelAdaptersByProvider/);
+    assert.match(engineSource, /actionAdaptersByProvider/);
     assert.match(engineSource, /diagnosticAdaptersByProvider/);
     assert.match(engineSource, /debugAdaptersById/);
     assert.match(engineSource, /storedHistoryAdaptersByProvider/);
@@ -127,6 +129,9 @@ describe("NativeTuiProviderRuntime", () => {
     assert.doesNotMatch(providerAdapterInterface, /ProviderStructuredInputControlAdapter/);
     assert.doesNotMatch(providerAdapterInterface, /ProviderStructuredPermissionAdapter/);
     assert.doesNotMatch(providerAdapterInterface, /ProviderStoredHistoryAdapter/);
+    assert.doesNotMatch(providerAdapterInterface, /ProviderEnhancedModeAdapter/);
+    assert.doesNotMatch(providerAdapterInterface, /ProviderEnhancedModelAdapter/);
+    assert.doesNotMatch(providerAdapterInterface, /ProviderActionCapabilityAdapter/);
     assert.doesNotMatch(providerAdapterInterface, /ProviderWorkspaceInspectionAdapter/);
     assert.doesNotMatch(providerAdapterSource, /ProviderStructuredContextAdapter/);
     assert.doesNotMatch(providerAdapterSource, /ProviderLifecycleAdapter/);

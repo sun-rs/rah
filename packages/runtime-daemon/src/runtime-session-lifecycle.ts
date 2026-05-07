@@ -9,7 +9,12 @@ import type {
   SessionSummary,
 } from "@rah/runtime-protocol";
 import type { HistorySnapshotStore } from "./history-snapshots";
-import type { ProviderAdapter } from "./provider-adapter";
+import type {
+  ProviderActionCapabilityAdapter,
+  ProviderAdapter,
+  ProviderEnhancedModeAdapter,
+  ProviderEnhancedModelAdapter,
+} from "./provider-adapter";
 import { PtyHub } from "./pty-hub";
 import { EventBus } from "./event-bus";
 import { SessionStore, toSessionSummary, type StoredSessionState } from "./session-store";
@@ -32,6 +37,9 @@ type RuntimeSessionLifecycleDeps = {
   publishStoredSessionDiscovery: () => void;
   removeStructuredSessionOwner: (sessionId: string) => void;
   requireStructuredSessionAdapter: (sessionId: string) => ProviderAdapter;
+  requireActionCapabilityAdapter: (sessionId: string) => ProviderActionCapabilityAdapter;
+  requireEnhancedModeAdapter: (sessionId: string) => ProviderEnhancedModeAdapter;
+  requireEnhancedModelAdapter: (sessionId: string) => ProviderEnhancedModelAdapter;
 };
 
 export class RuntimeSessionLifecycle {
@@ -111,7 +119,7 @@ export class RuntimeSessionLifecycle {
     if (state.session.capabilities.actions.rename === "none") {
       throw new Error("This session does not support rename.");
     }
-    const adapter = this.deps.requireStructuredSessionAdapter(sessionId);
+    const adapter = this.deps.requireActionCapabilityAdapter(sessionId);
     if (!adapter.renameSession) {
       throw new Error(`Provider ${state.session.provider} does not support rename.`);
     }
@@ -142,7 +150,7 @@ export class RuntimeSessionLifecycle {
       throw new Error("This session mode is controlled outside RAH.");
     }
     this.requireIdleForSessionControl(state, "Session mode");
-    const adapter = this.deps.requireStructuredSessionAdapter(sessionId);
+    const adapter = this.deps.requireEnhancedModeAdapter(sessionId);
     if (!adapter.setSessionMode) {
       throw new Error(`Provider ${state.session.provider} does not support mode switching.`);
     }
@@ -168,7 +176,7 @@ export class RuntimeSessionLifecycle {
       throw new Error("This session model is controlled outside RAH.");
     }
     this.requireIdleForSessionControl(state, "Session model");
-    const adapter = this.deps.requireStructuredSessionAdapter(sessionId);
+    const adapter = this.deps.requireEnhancedModelAdapter(sessionId);
     if (!adapter.setSessionModel) {
       throw new Error(`Provider ${state.session.provider} does not support model switching.`);
     }

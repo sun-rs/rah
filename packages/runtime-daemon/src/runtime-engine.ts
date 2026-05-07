@@ -53,9 +53,11 @@ import { KimiAdapter } from "./kimi-adapter";
 import { OpenCodeAdapter } from "./opencode-adapter";
 import type { ProviderActivity } from "./provider-activity";
 import type {
+  ProviderActionCapabilityAdapter,
   ProviderAdapter,
   ProviderDebugAdapter,
   ProviderDiagnosticAdapter,
+  ProviderEnhancedModeAdapter,
   ProviderEnhancedModelAdapter,
   ProviderStoredHistoryAdapter,
   ProviderStructuredInputControlAdapter,
@@ -127,6 +129,27 @@ function hasStoredHistoryCapability(
   );
 }
 
+function hasEnhancedModeCapability(
+  adapter: ProviderAdapter,
+): adapter is ProviderAdapter & ProviderEnhancedModeAdapter {
+  return typeof (adapter as Partial<ProviderEnhancedModeAdapter>).setSessionMode === "function";
+}
+
+function hasEnhancedModelCapability(
+  adapter: ProviderAdapter,
+): adapter is ProviderAdapter & ProviderEnhancedModelAdapter {
+  return (
+    typeof (adapter as Partial<ProviderEnhancedModelAdapter>).listModels === "function" ||
+    typeof (adapter as Partial<ProviderEnhancedModelAdapter>).setSessionModel === "function"
+  );
+}
+
+function hasActionCapability(
+  adapter: ProviderAdapter,
+): adapter is ProviderAdapter & ProviderActionCapabilityAdapter {
+  return typeof (adapter as Partial<ProviderActionCapabilityAdapter>).renameSession === "function";
+}
+
 export class RuntimeEngine {
   readonly eventBus: EventBus;
   readonly ptyHub: PtyHub;
@@ -153,10 +176,12 @@ export class RuntimeEngine {
   private readonly adaptersById = new Map<string, ProviderAdapter>();
   private readonly adaptersByProvider = new Map<string, ProviderAdapter>();
   private readonly structuredLiveAdaptersByProvider = new Map<string, ProviderAdapter>();
+  private readonly modeAdaptersByProvider = new Map<string, ProviderEnhancedModeAdapter>();
   private readonly modelAdaptersByProvider = new Map<
     string,
     Pick<ProviderAdapter, "id"> & ProviderEnhancedModelAdapter
   >();
+  private readonly actionAdaptersByProvider = new Map<string, ProviderActionCapabilityAdapter>();
   private readonly diagnosticAdaptersByProvider = new Map<string, ProviderDiagnosticAdapter>();
   private readonly debugAdaptersById = new Map<string, ProviderAdapter & ProviderDebugAdapter>();
   private readonly storedHistoryAdaptersByProvider = new Map<string, ProviderStoredHistoryAdapter>();
@@ -222,6 +247,12 @@ export class RuntimeEngine {
       },
       requireStructuredSessionAdapter: (sessionId) =>
         this.requireStructuredSessionAdapter(sessionId),
+      requireActionCapabilityAdapter: (sessionId) =>
+        this.requireActionCapabilityAdapter(sessionId),
+      requireEnhancedModeAdapter: (sessionId) =>
+        this.requireEnhancedModeAdapter(sessionId),
+      requireEnhancedModelAdapter: (sessionId) =>
+        this.requireEnhancedModelAdapter(sessionId),
     });
     this.structuredProviders = new RuntimeStructuredProviderCoordinator({
       structuredLiveAdaptersByProvider: this.structuredLiveAdaptersByProvider,
@@ -918,8 +949,14 @@ export class RuntimeEngine {
       if (adapter.startSession || adapter.resumeSession) {
         this.structuredLiveAdaptersByProvider.set(provider, adapter);
       }
-      if (adapter.listModels) {
+      if (hasEnhancedModeCapability(adapter)) {
+        this.modeAdaptersByProvider.set(provider, adapter);
+      }
+      if (hasEnhancedModelCapability(adapter)) {
         this.modelAdaptersByProvider.set(provider, adapter);
+      }
+      if (hasActionCapability(adapter)) {
+        this.actionAdaptersByProvider.set(provider, adapter);
       }
       if (adapter.getProviderDiagnostic) {
         this.diagnosticAdaptersByProvider.set(provider, adapter);
@@ -1087,6 +1124,33 @@ export class RuntimeEngine {
       throw new Error(`Provider ${adapter.id} does not support workspace inspection.`);
     }
     return adapter as ProviderAdapter & ProviderWorkspaceInspectionAdapter;
+  }
+
+  private requireActionCapabilityAdapter(sessionId: string): ProviderActionCapabilityAdapter {
+    const state = this.requireManagedSession(sessionId);
+    const adapter = this.actionAdaptersByProvider.get(state.session.provider);
+    if (!adapter) {
+      throw new Error(`Provider ${state.session.provider} does not support action controls.`);
+    }
+    return adapter;
+  }
+
+  private requireEnhancedModeAdapter(sessionId: string): ProviderEnhancedModeAdapter {
+    const state = this.requireManagedSession(sessionId);
+    const adapter = this.modeAdaptersByProvider.get(state.session.provider);
+    if (!adapter) {
+      throw new Error(`Provider ${state.session.provider} does not support mode controls.`);
+    }
+    return adapter;
+  }
+
+  private requireEnhancedModelAdapter(sessionId: string): ProviderEnhancedModelAdapter {
+    const state = this.requireManagedSession(sessionId);
+    const adapter = this.modelAdaptersByProvider.get(state.session.provider);
+    if (!adapter) {
+      throw new Error(`Provider ${state.session.provider} does not support model controls.`);
+    }
+    return adapter;
   }
 
   private requireStructuredPermissionAdapter(

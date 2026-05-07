@@ -50,6 +50,7 @@ RAH should converge on one live core:
 | Structured lifecycle is optional legacy surface | `ProviderStructuredLifecycleAdapter.startSession/resumeSession` are optional; `RuntimeStructuredProviderCoordinator` requires them only for explicit `liveBackend: "structured"` requests | Done |
 | Legacy structured live clients isolated by path | Five `*-live-client.ts` implementations now live under `packages/runtime-daemon/src/legacy-structured/`; shared Codex/Gemini app-server/CLI helpers were extracted to root utility modules so terminal wrapper/native paths do not import legacy clients; package root exports no longer expose those legacy clients | Done |
 | Legacy structured coordinator uses explicit capability maps | `RuntimeEngine` now passes `structuredLiveAdaptersByProvider`, `modelAdaptersByProvider`, `diagnosticAdaptersByProvider`, and `debugAdaptersById` into `RuntimeStructuredProviderCoordinator` instead of the full provider adapter registry | Done |
+| Enhanced controls are not top-level provider adapter requirements | `ProviderAdapter` no longer extends `ProviderEnhancedModeAdapter`, `ProviderEnhancedModelAdapter`, or `ProviderActionCapabilityAdapter`; RuntimeEngine builds explicit mode/model/action capability maps for optional RAH-managed controls | Done |
 
 ## Verification Run
 
@@ -148,6 +149,13 @@ Stored history capability boundary verified on 2026-05-07:
 - `node --import tsx --test --test-force-exit packages/runtime-daemon/src/native-tui-provider-runtime.test.ts packages/runtime-daemon/src/runtime-engine.test.ts`: 52 pass
 
 This guard verifies that stored history/mirror access no longer rides on the top-level `ProviderAdapter` contract. RuntimeEngine now builds stored-history maps explicitly and still preserves frozen history snapshots that outlive read-only replay sessions.
+
+Enhanced control capability boundary verified on 2026-05-07:
+
+- `npm run typecheck`: pass
+- `node --import tsx --test --test-force-exit packages/runtime-daemon/src/native-tui-provider-runtime.test.ts packages/runtime-daemon/src/runtime-engine.test.ts`: 52 pass
+
+This guard verifies that RAH-managed mode, model, and rename controls are optional enhancement maps, not required provider adapter protocol surface. Native TUI sessions remain externally controlled by capability metadata and runtime guards.
 
 ## Remaining Gaps
 
