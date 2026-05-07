@@ -124,8 +124,13 @@ describe("NativeTuiProviderRuntime", () => {
     assert.match(engineSource, /debugAdaptersById/);
     assert.match(engineSource, /storedHistoryAdaptersByProvider/);
     assert.match(engineSource, /shutdownAdaptersById/);
+    assert.match(engineSource, /structuredInputAdaptersByProvider/);
+    assert.match(engineSource, /structuredPermissionAdaptersByProvider/);
+    assert.match(engineSource, /workspaceInspectionAdaptersByProvider/);
     assert.doesNotMatch(engineSource, /adaptersById/);
     assert.doesNotMatch(engineSource, /adaptersByProvider/);
+    assert.doesNotMatch(engineSource, /structuredSessionOwners = new Map<string, ProviderAdapter>/);
+    assert.doesNotMatch(engineSource, /rememberStructuredSessionOwner\(sessionId, adapter\)/);
     assert.doesNotMatch(engineSource, /historyMirrorAdapters = resolvedAdapters;/);
     assert.match(engineSource, /bindStoredHistoryCapability/);
     assert.doesNotMatch(engineSource, /storedHistoryAdaptersByProvider\.set\(provider, adapter\)/);

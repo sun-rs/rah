@@ -41,7 +41,7 @@ RAH should converge on one live core:
 | Enhanced controls downgraded | native TUI capabilities expose `structuredControl: false`; `runtime-engine.test.ts` rejects mode/model changes for native TUI while preserving idle PTY input; `session-capabilities.test.ts` hides RAH-managed controls when structured control is unavailable | Covered by tests |
 | Legacy structured path no longer default | Web, CLI, and default daemon RuntimeEngine prefer native TUI | Done |
 | Legacy structured path named as legacy/enhancement | `legacy-structured/RuntimeStructuredProviderCoordinator` owns explicit `liveBackend: "structured"` start/resume, diagnostics, debug, and catalog fallbacks | Done |
-| Legacy structured session ownership named explicitly | `RuntimeEngine` tracks adapter-owned sessions as `structuredSessionOwners`; `RuntimeSessionLifecycle` calls `requireStructuredSessionAdapter` only after terminal/native paths are bypassed | Done |
+| Legacy structured session ownership named explicitly | `RuntimeEngine` tracks legacy structured session owner provider keys as `structuredSessionOwners`; structured lifecycle/input/permission/workspace fallback uses explicit capability maps | Done |
 | Legacy structured adapter slices named explicitly | `ProviderStructuredLifecycleAdapter`, `ProviderStructuredInputControlAdapter`, and `ProviderStructuredPermissionAdapter` mark non-core structured live capability slices | Done |
 | Enhanced adapter slices named explicitly | `ProviderEnhancedModeAdapter` and `ProviderEnhancedModelAdapter` mark model/mode controls as optional enhancements, not PTY-first core requirements | Done |
 | Stored history discovery depends only on history slice | `RuntimeEngine.historyMirrorAdapters` and `runtime-session-list.ts` use `ProviderStoredHistoryAdapter` instead of the full `ProviderAdapter` interface | Done |
@@ -57,6 +57,7 @@ RAH should converge on one live core:
 | Diagnostics/debug/shutdown are explicit capability maps | `ProviderAdapter` no longer extends `ProviderDiagnosticAdapter`, `ProviderDebugAdapter`, or `ProviderShutdownAdapter`; RuntimeEngine builds explicit diagnostic/debug/shutdown maps | Done |
 | Top-level provider adapter is identity-only | `ProviderAdapter` now only extends `ProviderAdapterIdentity`; all behavior is registered through explicit capability slices/maps | Done |
 | Full adapter registries removed from RuntimeEngine | RuntimeEngine no longer keeps `adaptersById` / `adaptersByProvider`; structured fallback lookup uses `structuredLiveAdaptersByProvider`, and other behavior uses explicit capability maps | Done |
+| Structured session owners no longer store adapters | `structuredSessionOwners` stores provider keys only; RuntimeEngine resolves lifecycle/input/permission/workspace fallback through narrow capability maps | Done |
 
 ## Verification Run
 
@@ -197,6 +198,13 @@ Full adapter registry removal verified on 2026-05-07:
 - `node --import tsx --test --test-force-exit packages/runtime-daemon/src/native-tui-provider-runtime.test.ts packages/runtime-daemon/src/runtime-engine.test.ts`: 52 pass
 
 This guard verifies that RuntimeEngine no longer stores catch-all `adaptersById` or `adaptersByProvider` registries. Legacy structured fallback is resolved through `structuredLiveAdaptersByProvider`; diagnostics, debug, shutdown, model, mode, actions, and stored history all use explicit maps.
+
+Structured owner narrow-map boundary verified on 2026-05-07:
+
+- `npm run typecheck`: pass
+- `node --import tsx --test --test-force-exit packages/runtime-daemon/src/native-tui-provider-runtime.test.ts packages/runtime-daemon/src/runtime-engine.test.ts packages/runtime-daemon/src/debug-engine.test.ts`: 53 pass
+
+This guard verifies that `structuredSessionOwners` stores provider keys rather than provider adapter instances. RuntimeEngine resolves legacy structured lifecycle, input/control, permission response, workspace inspection, and stored history through explicit capability maps.
 
 ## Remaining Gaps
 

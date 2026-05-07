@@ -28,13 +28,14 @@ import { assertExistingWorkingDirectory } from "../provider-working-directory";
 type ProviderModelAdapter = Pick<ProviderAdapter, "id"> & ProviderEnhancedModelAdapter;
 type ProviderDebugCapabilityAdapter = ProviderAdapter & ProviderDebugAdapter;
 type ProviderStructuredLiveAdapter = ProviderAdapter & ProviderStructuredLifecycleAdapter;
+type StructuredSessionOwnerProvider = StartSessionResponse["session"]["session"]["provider"];
 
 type RuntimeStructuredProviderCoordinatorDeps = {
   structuredLiveAdaptersByProvider: Map<string, ProviderStructuredLiveAdapter>;
   modelAdaptersByProvider: Map<string, ProviderModelAdapter>;
   diagnosticAdaptersByProvider: Map<string, ProviderDiagnosticAdapter>;
   debugAdaptersById: Map<string, ProviderDebugCapabilityAdapter>;
-  rememberStructuredSessionOwner: (sessionId: string, adapter: ProviderAdapter) => void;
+  rememberStructuredSessionOwner: (sessionId: string, provider: StructuredSessionOwnerProvider) => void;
   pruneOrphanSessions: () => void;
   historySnapshots: HistorySnapshotStore;
 };
@@ -137,7 +138,10 @@ export class RuntimeStructuredProviderCoordinator {
     this.deps.pruneOrphanSessions();
     const adapter = this.requireStructuredLifecycleAdapter(request.provider, "startSession");
     const response = await adapter.startSession(request);
-    this.deps.rememberStructuredSessionOwner(response.session.session.id, adapter);
+    this.deps.rememberStructuredSessionOwner(
+      response.session.session.id,
+      response.session.session.provider,
+    );
     return response;
   }
 
@@ -148,7 +152,10 @@ export class RuntimeStructuredProviderCoordinator {
     this.deps.pruneOrphanSessions();
     const adapter = this.requireStructuredLifecycleAdapter(request.provider, "resumeSession");
     const response = await adapter.resumeSession(request);
-    this.deps.rememberStructuredSessionOwner(response.session.session.id, adapter);
+    this.deps.rememberStructuredSessionOwner(
+      response.session.session.id,
+      response.session.session.provider,
+    );
     if (
       request.historySourceSessionId &&
       request.historySourceSessionId !== response.session.session.id
@@ -179,7 +186,10 @@ export class RuntimeStructuredProviderCoordinator {
         ? { scenarioId: args.scenarioId, attach: args.attach }
         : { scenarioId: args.scenarioId },
     );
-    this.deps.rememberStructuredSessionOwner(response.session.session.id, adapter);
+    this.deps.rememberStructuredSessionOwner(
+      response.session.session.id,
+      response.session.session.provider,
+    );
     return response;
   }
 

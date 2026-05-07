@@ -110,6 +110,8 @@ const SYSTEM_SOURCE = {
 
 const MAX_MATERIALIZED_HISTORY_EVENTS = 5_000;
 
+type StructuredSessionOwnerProvider = StoredSessionState["session"]["provider"];
+
 async function runShutdownStep(label: string, task: () => Promise<unknown> | unknown) {
   try {
     await task();
@@ -168,6 +170,37 @@ function hasStructuredLifecycleCapability(
     typeof (adapter as Partial<ProviderStructuredLifecycleAdapter>).resumeSession === "function" ||
     typeof (adapter as Partial<ProviderStructuredLifecycleAdapter>).closeSession === "function" ||
     typeof (adapter as Partial<ProviderStructuredLifecycleAdapter>).destroySession === "function"
+  );
+}
+
+function hasStructuredInputControlCapability(
+  adapter: ProviderAdapter,
+): adapter is ProviderAdapter & ProviderStructuredInputControlAdapter {
+  return (
+    typeof (adapter as Partial<ProviderStructuredInputControlAdapter>).sendInput === "function" ||
+    typeof (adapter as Partial<ProviderStructuredInputControlAdapter>).interruptSession ===
+      "function" ||
+    typeof (adapter as Partial<ProviderStructuredInputControlAdapter>).onPtyInput === "function" ||
+    typeof (adapter as Partial<ProviderStructuredInputControlAdapter>).onPtyResize === "function"
+  );
+}
+
+function hasStructuredPermissionCapability(
+  adapter: ProviderAdapter,
+): adapter is ProviderAdapter & Required<ProviderStructuredPermissionAdapter> {
+  return typeof (adapter as Partial<ProviderStructuredPermissionAdapter>).respondToPermission ===
+    "function";
+}
+
+function hasWorkspaceInspectionCapability(
+  adapter: ProviderAdapter,
+): adapter is ProviderAdapter & ProviderWorkspaceInspectionAdapter {
+  return (
+    typeof (adapter as Partial<ProviderWorkspaceInspectionAdapter>).getWorkspaceSnapshot ===
+      "function" ||
+    typeof (adapter as Partial<ProviderWorkspaceInspectionAdapter>).getGitStatus === "function" ||
+    typeof (adapter as Partial<ProviderWorkspaceInspectionAdapter>).getGitDiff === "function" ||
+    typeof (adapter as Partial<ProviderWorkspaceInspectionAdapter>).readSessionFile === "function"
   );
 }
 
@@ -242,6 +275,18 @@ export class RuntimeEngine {
     string,
     ProviderAdapter & ProviderStructuredLifecycleAdapter
   >();
+  private readonly structuredInputAdaptersByProvider = new Map<
+    string,
+    ProviderAdapter & ProviderStructuredInputControlAdapter
+  >();
+  private readonly structuredPermissionAdaptersByProvider = new Map<
+    string,
+    ProviderAdapter & Required<ProviderStructuredPermissionAdapter>
+  >();
+  private readonly workspaceInspectionAdaptersByProvider = new Map<
+    string,
+    ProviderAdapter & ProviderWorkspaceInspectionAdapter
+  >();
   private readonly modeAdaptersByProvider = new Map<string, ProviderEnhancedModeAdapter>();
   private readonly modelAdaptersByProvider = new Map<
     string,
@@ -255,7 +300,7 @@ export class RuntimeEngine {
     string,
     Pick<ProviderAdapter, "id"> & ProviderShutdownAdapter
   >();
-  private readonly structuredSessionOwners = new Map<string, ProviderAdapter>();
+  private readonly structuredSessionOwners = new Map<string, StructuredSessionOwnerProvider>();
   private readonly historyMirrorAdapters: ProviderStoredHistoryAdapter[] = [];
 
   constructor(adapters?: ProviderAdapter[]) {
@@ -331,8 +376,8 @@ export class RuntimeEngine {
       modelAdaptersByProvider: this.modelAdaptersByProvider,
       diagnosticAdaptersByProvider: this.diagnosticAdaptersByProvider,
       debugAdaptersById: this.debugAdaptersById,
-      rememberStructuredSessionOwner: (sessionId, adapter) => {
-        this.rememberStructuredSessionOwner(sessionId, adapter);
+      rememberStructuredSessionOwner: (sessionId, provider) => {
+        this.rememberStructuredSessionOwner(sessionId, provider);
       },
       pruneOrphanSessions: () => {
         this.pruneOrphanSessions();
@@ -865,16 +910,15 @@ export class RuntimeEngine {
     sessionId: string,
     options?: { beforeTs?: string; cursor?: string; limit?: number },
   ): SessionHistoryPageResponse {
-    const owner = this.structuredSessionOwners.get(sessionId);
-    const adapter =
-      owner && hasStoredHistoryCapability(owner)
-        ? owner
-        : (() => {
-            const session = this.sessionStore.getSession(sessionId);
-            return session
-              ? this.storedHistoryAdaptersByProvider.get(session.session.provider)
-              : undefined;
-          })();
+    const ownerProvider = this.structuredSessionOwners.get(sessionId);
+    const adapter = ownerProvider
+      ? this.storedHistoryAdaptersByProvider.get(ownerProvider)
+      : (() => {
+          const session = this.sessionStore.getSession(sessionId);
+          return session
+            ? this.storedHistoryAdaptersByProvider.get(session.session.provider)
+            : undefined;
+        })();
     if (!adapter?.getSessionHistoryPage) {
       return { sessionId, events: [] };
     }
@@ -1020,6 +1064,15 @@ export class RuntimeEngine {
       if (hasStructuredLifecycleCapability(adapter)) {
         this.structuredLiveAdaptersByProvider.set(provider, adapter);
       }
+      if (hasStructuredInputControlCapability(adapter)) {
+        this.structuredInputAdaptersByProvider.set(provider, adapter);
+      }
+      if (hasStructuredPermissionCapability(adapter)) {
+        this.structuredPermissionAdaptersByProvider.set(provider, adapter);
+      }
+      if (hasWorkspaceInspectionCapability(adapter)) {
+        this.workspaceInspectionAdaptersByProvider.set(provider, adapter);
+      }
       if (hasEnhancedModeCapability(adapter)) {
         this.modeAdaptersByProvider.set(provider, adapter);
       }
@@ -1041,8 +1094,11 @@ export class RuntimeEngine {
     }
   }
 
-  private rememberStructuredSessionOwner(sessionId: string, adapter: ProviderAdapter): void {
-    this.structuredSessionOwners.set(sessionId, adapter);
+  private rememberStructuredSessionOwner(
+    sessionId: string,
+    provider: StructuredSessionOwnerProvider,
+  ): void {
+    this.structuredSessionOwners.set(sessionId, provider);
   }
 
   private currentWorkbenchSessions(): ListSessionsResponse {
@@ -1159,45 +1215,44 @@ export class RuntimeEngine {
   private requireStructuredInputControlAdapter(
     sessionId: string,
   ): ProviderAdapter & ProviderStructuredInputControlAdapter {
-    const adapter = this.requireStructuredSessionAdapter(sessionId);
+    const provider = this.resolveStructuredSessionOwnerProvider(sessionId);
+    const adapter = this.structuredInputAdaptersByProvider.get(provider);
     if (
-      typeof (adapter as Partial<ProviderStructuredInputControlAdapter>).sendInput !==
-        "function" ||
-      typeof (adapter as Partial<ProviderStructuredInputControlAdapter>).interruptSession !==
-        "function" ||
-      typeof (adapter as Partial<ProviderStructuredInputControlAdapter>).onPtyInput !==
-        "function" ||
-      typeof (adapter as Partial<ProviderStructuredInputControlAdapter>).onPtyResize !==
-        "function"
+      !adapter ||
+      typeof adapter.sendInput !== "function" ||
+      typeof adapter.interruptSession !== "function" ||
+      typeof adapter.onPtyInput !== "function" ||
+      typeof adapter.onPtyResize !== "function"
     ) {
-      throw new Error(`Provider ${adapter.id} does not support structured input control.`);
+      throw new Error(`Provider ${provider} does not support structured input control.`);
     }
-    return adapter as ProviderAdapter & ProviderStructuredInputControlAdapter;
+    return adapter;
   }
 
   private requireStructuredWorkspaceInspectionAdapter(
     sessionId: string,
   ): ProviderAdapter & ProviderWorkspaceInspectionAdapter {
-    const adapter = this.requireStructuredSessionAdapter(sessionId);
+    const provider = this.resolveStructuredSessionOwnerProvider(sessionId);
+    const adapter = this.workspaceInspectionAdaptersByProvider.get(provider);
     if (
-      typeof (adapter as Partial<ProviderWorkspaceInspectionAdapter>).getWorkspaceSnapshot !==
-        "function" ||
-      typeof (adapter as Partial<ProviderWorkspaceInspectionAdapter>).getGitStatus !==
-        "function" ||
-      typeof (adapter as Partial<ProviderWorkspaceInspectionAdapter>).getGitDiff !== "function" ||
-      typeof (adapter as Partial<ProviderWorkspaceInspectionAdapter>).readSessionFile !== "function"
+      !adapter ||
+      typeof adapter.getWorkspaceSnapshot !== "function" ||
+      typeof adapter.getGitStatus !== "function" ||
+      typeof adapter.getGitDiff !== "function" ||
+      typeof adapter.readSessionFile !== "function"
     ) {
-      throw new Error(`Provider ${adapter.id} does not support workspace inspection.`);
+      throw new Error(`Provider ${provider} does not support workspace inspection.`);
     }
-    return adapter as ProviderAdapter & ProviderWorkspaceInspectionAdapter;
+    return adapter;
   }
 
   private requireStructuredLifecycleAdapter(
     sessionId: string,
   ): ProviderStructuredLifecycleAdapter {
-    const adapter = this.requireStructuredSessionAdapter(sessionId);
-    if (!hasStructuredLifecycleCapability(adapter)) {
-      throw new Error(`Provider ${adapter.id} does not support structured lifecycle.`);
+    const provider = this.resolveStructuredSessionOwnerProvider(sessionId);
+    const adapter = this.structuredLiveAdaptersByProvider.get(provider);
+    if (!adapter) {
+      throw new Error(`Provider ${provider} does not support structured lifecycle.`);
     }
     return adapter;
   }
@@ -1232,30 +1287,26 @@ export class RuntimeEngine {
   private requireStructuredPermissionAdapter(
     sessionId: string,
   ): ProviderAdapter & Required<ProviderStructuredPermissionAdapter> {
-    const adapter = this.requireStructuredSessionAdapter(sessionId);
-    if (
-      typeof (adapter as Partial<ProviderStructuredPermissionAdapter>).respondToPermission !==
-      "function"
-    ) {
-      throw new Error(`Provider ${adapter.id} does not support structured permission responses.`);
+    const provider = this.resolveStructuredSessionOwnerProvider(sessionId);
+    const adapter = this.structuredPermissionAdaptersByProvider.get(provider);
+    if (!adapter) {
+      throw new Error(`Provider ${provider} does not support structured permission responses.`);
     }
-    return adapter as ProviderAdapter & Required<ProviderStructuredPermissionAdapter>;
+    return adapter;
   }
 
-  private requireStructuredSessionAdapter(sessionId: string): ProviderAdapter {
-    const owner = this.structuredSessionOwners.get(sessionId);
-    if (owner) {
-      return owner;
+  private resolveStructuredSessionOwnerProvider(
+    sessionId: string,
+  ): StructuredSessionOwnerProvider {
+    const ownerProvider = this.structuredSessionOwners.get(sessionId);
+    if (ownerProvider) {
+      return ownerProvider;
     }
     const state = this.sessionStore.getSession(sessionId);
     if (!state) {
       throw new Error(`Unknown session ${sessionId}`);
     }
-    const adapter = this.structuredLiveAdaptersByProvider.get(state.session.provider);
-    if (!adapter) {
-      throw new Error(`No structured live adapter registered for provider ${state.session.provider}.`);
-    }
-    this.structuredSessionOwners.set(sessionId, adapter);
-    return adapter;
+    this.structuredSessionOwners.set(sessionId, state.session.provider);
+    return state.session.provider;
   }
 }
