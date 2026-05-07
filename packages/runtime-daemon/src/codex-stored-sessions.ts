@@ -335,6 +335,39 @@ export function discoverCodexStoredSessions(): CodexStoredSessionRecord[] {
   );
 }
 
+export function findCodexStoredSessionRecord(
+  providerSessionId: string,
+): CodexStoredSessionRecord | undefined {
+  return discoverCodexStoredSessions().find(
+    (record) => record.ref.providerSessionId === providerSessionId,
+  );
+}
+
+export function patchCodexStoredSessionTitle(
+  providerSessionId: string,
+  title: string,
+): CodexStoredSessionRecord | undefined {
+  const record = findCodexStoredSessionRecord(providerSessionId);
+  if (!record) {
+    return undefined;
+  }
+  record.ref = {
+    ...record.ref,
+    title,
+  };
+  const stats = statSync(record.rolloutPath);
+  const cache = loadStoredSessionMetadataCache("codex");
+  setCachedStoredSessionRef({
+    cache,
+    filePath: record.rolloutPath,
+    size: stats.size,
+    mtimeMs: stats.mtimeMs,
+    ref: record.ref,
+  });
+  writeStoredSessionMetadataCache("codex", cache);
+  return record;
+}
+
 export function getCodexWorkspaceSnapshot(cwd: string) {
   return getWorkspaceSnapshot(cwd);
 }

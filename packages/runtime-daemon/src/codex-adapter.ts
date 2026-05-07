@@ -1,4 +1,3 @@
-import { statSync } from "node:fs";
 import type {
   CloseSessionRequest,
   InterruptSessionRequest,
@@ -7,12 +6,10 @@ import type {
   ResumeSessionRequest,
   ResumeSessionResponse,
   SetSessionModelRequest,
-  SessionHistoryPageResponse,
   SessionInputRequest,
   SessionSummary,
   StartSessionRequest,
   StartSessionResponse,
-  StoredSessionRef,
 } from "@rah/runtime-protocol";
 import type { ProviderAdapter, RuntimeServices } from "./provider-adapter";
 import {
@@ -27,14 +24,10 @@ import {
   CodexModelCatalogCache,
   resolveCodexRuntimeCapabilityState,
 } from "./codex-model-catalog";
-import { canFinalizeCodexStoredHistory } from "./codex-history-liveness";
 import {
-  createCodexStoredSessionFrozenHistoryPageLoader,
-  discoverCodexStoredSessions,
-  getCodexStoredSessionHistoryPage,
-  resolveCodexStoredSessionWatchRoots,
+  findCodexStoredSessionRecord,
+  patchCodexStoredSessionTitle,
   resumeCodexStoredSession,
-  type CodexStoredSessionRecord,
 } from "./codex-stored-sessions";
 import {
   finalizeStoredReplayResume,
@@ -42,12 +35,6 @@ import {
 } from "./provider-resume";
 import { codexLaunchSpec, probeProviderDiagnostic } from "./provider-diagnostics";
 import { toSessionSummary } from "./session-store";
-import {
-  loadStoredSessionMetadataCache,
-  setCachedStoredSessionRef,
-  writeStoredSessionMetadataCache,
-} from "./stored-session-metadata-cache";
-import { movePathToTrash } from "./trash";
 import { buildCodexModeState, parseCodexModeId } from "./session-mode-utils";
 import { optionValueAsString, resolveModelOptionValues } from "./session-model-options";
 
@@ -127,40 +114,10 @@ export class CodexAdapter implements ProviderAdapter {
   private readonly services: RuntimeServices;
   private readonly liveSessions = new Map<string, LiveCodexSession>();
   private readonly rehydratedSessionIds = new Set<string>();
-  private readonly rehydratedSessionRecords = new Map<string, CodexStoredSessionRecord>();
-  private storedSessionIndex = new Map<string, CodexStoredSessionRecord>();
   private readonly modelCatalog = new CodexModelCatalogCache();
 
   constructor(services: RuntimeServices) {
     this.services = services;
-  }
-
-  private hasRahManagedCodexWriter(providerSessionId: string): boolean {
-    const managed = this.services.sessionStore.findManagedByProviderSession(
-      "codex",
-      providerSessionId,
-    );
-    if (!managed || this.rehydratedSessionIds.has(managed.session.id)) {
-      return false;
-    }
-    if (this.liveSessions.has(managed.session.id)) {
-      return true;
-    }
-    if (managed.session.launchSource !== "terminal") {
-      return false;
-    }
-    return (
-      managed.session.capabilities.steerInput ||
-      managed.session.capabilities.queuedInput ||
-      managed.session.capabilities.actions.archive
-    );
-  }
-
-  private canFinalizeStoredHistory(record: CodexStoredSessionRecord): boolean {
-    return canFinalizeCodexStoredHistory({
-      rolloutPath: record.rolloutPath,
-      hasRahManagedWriter: this.hasRahManagedCodexWriter(record.ref.providerSessionId),
-    });
   }
 
   private reportAsyncLiveError(sessionId: string, detail: string): void {
@@ -285,9 +242,7 @@ export class CodexAdapter implements ProviderAdapter {
       );
     }
 
-    const record =
-      this.refreshStoredSessionIndex().get(request.providerSessionId) ??
-      this.storedSessionIndex.get(request.providerSessionId);
+    const record = findCodexStoredSessionRecord(request.providerSessionId);
     if (request.preferStoredReplay && !record) {
       throw new Error(`Unknown Codex session ${request.providerSessionId}.`);
     }
@@ -301,15 +256,12 @@ export class CodexAdapter implements ProviderAdapter {
         provider: "codex",
         providerSessionId: request.providerSessionId,
         rehydratedSessionIds: this.rehydratedSessionIds,
-        createSession: () => {
-          const resumed = resumeCodexStoredSession(
+        createSession: () =>
+          resumeCodexStoredSession(
             request.attach !== undefined
               ? { services: this.services, record, attach: request.attach }
               : { services: this.services, record },
-          );
-          this.rehydratedSessionRecords.set(resumed.sessionId, record);
-          return resumed;
-        },
+          ),
       });
     }
 
@@ -348,15 +300,12 @@ export class CodexAdapter implements ProviderAdapter {
       provider: "codex",
       providerSessionId: request.providerSessionId,
       rehydratedSessionIds: this.rehydratedSessionIds,
-      createSession: () => {
-        const resumed = resumeCodexStoredSession(
+      createSession: () =>
+        resumeCodexStoredSession(
           request.attach !== undefined
             ? { services: this.services, record, attach: request.attach }
             : { services: this.services, record },
-        );
-        this.rehydratedSessionRecords.set(resumed.sessionId, record);
-        return resumed;
-      },
+        ),
     });
   }
 
@@ -499,7 +448,7 @@ export class CodexAdapter implements ProviderAdapter {
     }
 
     const nextState = this.services.sessionStore.patchManagedSession(sessionId, { title });
-    this.patchStoredTitle(state.session.providerSessionId, title);
+    patchCodexStoredSessionTitle(state.session.providerSessionId, title);
     return toSessionSummary(nextState);
   }
 
@@ -517,7 +466,6 @@ export class CodexAdapter implements ProviderAdapter {
       await live.client.dispose();
     }
     this.rehydratedSessionIds.delete(sessionId);
-    this.rehydratedSessionRecords.delete(sessionId);
   }
 
   async destroySession(sessionId: string): Promise<void> {
@@ -527,7 +475,6 @@ export class CodexAdapter implements ProviderAdapter {
       await live.client.dispose();
     }
     this.rehydratedSessionIds.delete(sessionId);
-    this.rehydratedSessionRecords.delete(sessionId);
   }
 
   interruptSession(sessionId: string, request: InterruptSessionRequest): SessionSummary {
@@ -600,137 +547,8 @@ export class CodexAdapter implements ProviderAdapter {
     void rows;
   }
 
-  getSessionHistoryPage(
-    sessionId: string,
-    options: { beforeTs?: string; cursor?: string; limit?: number } = {},
-  ): SessionHistoryPageResponse {
-    const session = this.services.sessionStore.getSession(sessionId)?.session;
-    if (!session) {
-      const record = this.rehydratedSessionRecords.get(sessionId);
-      if (!record) {
-        throw new Error(`Unknown session ${sessionId}`);
-      }
-      return getCodexStoredSessionHistoryPage({
-        sessionId,
-        record,
-        finalizeUnterminatedTools: this.canFinalizeStoredHistory(record),
-        ...options,
-      });
-    }
-    const providerSessionId = session.providerSessionId;
-    if (!providerSessionId) {
-      return { sessionId, events: [] };
-    }
-    const record =
-      this.refreshStoredSessionIndex().get(providerSessionId) ??
-      this.storedSessionIndex.get(providerSessionId);
-    if (!record) {
-      return { sessionId, events: [] };
-    }
-    return getCodexStoredSessionHistoryPage({
-      sessionId,
-      record,
-      finalizeUnterminatedTools: this.canFinalizeStoredHistory(record),
-      ...options,
-    });
-  }
-
-  createFrozenHistoryPageLoader(sessionId: string) {
-    const session = this.services.sessionStore.getSession(sessionId)?.session;
-    if (!session) {
-      const record = this.rehydratedSessionRecords.get(sessionId);
-      if (!record) {
-        return undefined;
-      }
-      return createCodexStoredSessionFrozenHistoryPageLoader({
-        sessionId,
-        record,
-        finalizeUnterminatedTools: this.canFinalizeStoredHistory(record),
-      });
-    }
-    const providerSessionId = session.providerSessionId;
-    if (!providerSessionId) {
-      return undefined;
-    }
-    const record =
-      this.rehydratedSessionRecords.get(sessionId) ??
-      this.storedSessionIndex.get(providerSessionId) ??
-      this.refreshStoredSessionIndex().get(providerSessionId);
-    if (!record) {
-      return undefined;
-    }
-    return createCodexStoredSessionFrozenHistoryPageLoader({
-      sessionId,
-      record,
-      finalizeUnterminatedTools: this.canFinalizeStoredHistory(record),
-    });
-  }
-
-  listStoredSessions(): StoredSessionRef[] {
-    if (this.storedSessionIndex.size === 0) {
-      this.refreshStoredSessionIndex();
-    }
-    return [...this.storedSessionIndex.values()].map((record) => record.ref);
-  }
-
-  refreshStoredSessionsCatalog(): StoredSessionRef[] {
-    this.refreshStoredSessionIndex();
-    return this.listStoredSessions();
-  }
-
-  listStoredSessionWatchRoots(): string[] {
-    return resolveCodexStoredSessionWatchRoots();
-  }
-
-  async removeStoredSession(session: StoredSessionRef): Promise<void> {
-    const record =
-      this.storedSessionIndex.get(session.providerSessionId) ??
-      this.refreshStoredSessionIndex().get(session.providerSessionId);
-    if (!record) {
-      throw new Error(`Could not find a stored Codex history file for ${session.providerSessionId}.`);
-    }
-    await movePathToTrash(record.rolloutPath);
-    this.storedSessionIndex.delete(session.providerSessionId);
-  }
-
   async getProviderDiagnostic(options?: { forceRefresh?: boolean }) {
     return probeProviderDiagnostic("codex", await codexLaunchSpec(), options);
-  }
-
-  private refreshStoredSessionIndex(): Map<string, CodexStoredSessionRecord> {
-    this.storedSessionIndex = new Map(
-      discoverCodexStoredSessions().map((record) => [record.ref.providerSessionId, record]),
-    );
-    return this.storedSessionIndex;
-  }
-
-  private patchStoredTitle(providerSessionId: string, title: string): void {
-    const patchRecord = (record: CodexStoredSessionRecord | undefined) => {
-      if (!record) {
-        return;
-      }
-      record.ref = {
-        ...record.ref,
-        title,
-      };
-      const stats = statSync(record.rolloutPath);
-      const cache = loadStoredSessionMetadataCache("codex");
-      setCachedStoredSessionRef({
-        cache,
-        filePath: record.rolloutPath,
-        size: stats.size,
-        mtimeMs: stats.mtimeMs,
-        ref: record.ref,
-      });
-      writeStoredSessionMetadataCache("codex", cache);
-    };
-
-    patchRecord(this.storedSessionIndex.get(providerSessionId));
-    for (const record of this.rehydratedSessionRecords.values()) {
-      if (record.ref.providerSessionId === providerSessionId) {
-        patchRecord(record);
-      }
-    }
   }
 
   async shutdown(): Promise<void> {

@@ -133,6 +133,8 @@ describe("NativeTuiProviderRuntime", () => {
     const runtimeSessionLifecycleSource = readSource("./runtime-session-lifecycle.ts");
     const structuredCoordinatorSource = readSource("./legacy-structured/runtime-structured-provider-coordinator.ts");
     const defaultProviderAdaptersSource = readSource("./default-provider-adapters.ts");
+    const codexAdapterSource = readSource("./codex-adapter.ts");
+    const codexStoredHistoryAdapterSource = readSource("./codex-stored-history-adapter.ts");
     const claudeAdapterSource = readSource("./claude-adapter.ts");
     const claudeStoredHistoryAdapterSource = readSource("./claude-stored-history-adapter.ts");
     const geminiAdapterSource = readSource("./gemini-adapter.ts");
@@ -147,6 +149,7 @@ describe("NativeTuiProviderRuntime", () => {
     const sessionListSource = readSource("./runtime-session-list.ts");
     assert.match(engineSource, /RuntimeStructuredProviderCoordinator/);
     assert.match(engineSource, /createDefaultProviderAdapters/);
+    assert.match(defaultProviderAdaptersSource, /CodexStoredHistoryAdapter/);
     assert.match(defaultProviderAdaptersSource, /ClaudeStoredHistoryAdapter/);
     assert.match(defaultProviderAdaptersSource, /GeminiStoredHistoryAdapter/);
     assert.match(defaultProviderAdaptersSource, /KimiStoredHistoryAdapter/);
@@ -220,6 +223,12 @@ describe("NativeTuiProviderRuntime", () => {
     assert.match(providerAdapterSource, /ProviderStructuredInputControlAdapter/);
     assert.match(providerAdapterSource, /ProviderStructuredPermissionAdapter/);
     assert.match(providerAdapterSource, /ProviderStoredHistoryAdapter/);
+    assert.match(codexStoredHistoryAdapterSource, /ProviderStoredHistoryAdapter/);
+    assert.match(codexStoredHistoryAdapterSource, /listStoredSessions/);
+    assert.match(codexStoredHistoryAdapterSource, /getSessionHistoryPage/);
+    assert.doesNotMatch(codexAdapterSource, /listStoredSessions/);
+    assert.doesNotMatch(codexAdapterSource, /getSessionHistoryPage/);
+    assert.doesNotMatch(codexAdapterSource, /removeStoredSession/);
     assert.match(claudeStoredHistoryAdapterSource, /ProviderStoredHistoryAdapter/);
     assert.match(claudeStoredHistoryAdapterSource, /listStoredSessions/);
     assert.match(claudeStoredHistoryAdapterSource, /getSessionHistoryPage/);

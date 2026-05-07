@@ -1,6 +1,7 @@
 import { ClaudeAdapter } from "./claude-adapter";
 import { ClaudeStoredHistoryAdapter } from "./claude-stored-history-adapter";
 import { CodexAdapter } from "./codex-adapter";
+import { CodexStoredHistoryAdapter } from "./codex-stored-history-adapter";
 import { DebugAdapter } from "./debug-adapter";
 import { GeminiAdapter } from "./gemini-adapter";
 import { GeminiStoredHistoryAdapter } from "./gemini-stored-history-adapter";
@@ -25,6 +26,7 @@ export function createDefaultProviderAdapters(
       sessionStore: services.sessionStore,
     }),
     new CodexAdapter(services),
+    new CodexStoredHistoryAdapter(services),
     new ClaudeAdapter(services),
     new ClaudeStoredHistoryAdapter(services),
     new GeminiAdapter(services),

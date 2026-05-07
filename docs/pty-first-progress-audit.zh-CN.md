@@ -280,13 +280,20 @@ OpenCode stored-history adapter split verified on 2026-05-07:
 
 This guard verifies the same split for OpenCode. `OpenCodeStoredHistoryAdapter` owns OpenCode stored-session catalog, DB-backed history page loading, frozen history paging, watch roots, and archive/removal. `OpenCodeAdapter` remains the legacy structured live/enhancement adapter and no longer exposes `listStoredSessions`, `getSessionHistoryPage`, or `removeStoredSession`.
 
+Codex stored-history adapter split verified on 2026-05-07:
+
+- `npm run typecheck`: pass
+- `node --import tsx --test --test-force-exit packages/runtime-daemon/src/codex-adapter.test.ts packages/runtime-daemon/src/codex-stored-sessions.test.ts packages/runtime-daemon/src/codex-live-client.test.ts packages/runtime-daemon/src/runtime-engine.test.ts packages/runtime-daemon/src/native-tui-provider-runtime.test.ts`: 87 pass
+
+This guard verifies the same split for Codex. `CodexStoredHistoryAdapter` owns Codex stored-session catalog, rollout-backed history page loading, frozen history paging, watch roots, and archive/removal. `CodexAdapter` remains the legacy structured live/enhancement adapter and no longer exposes `listStoredSessions`, `getSessionHistoryPage`, or `removeStoredSession`.
+
 ## Remaining Gaps
 
 These are still not completion-grade:
 
 - WebKit/mobile browser smoke is not rerun in this audit. Chromium native browser smoke is covered by `npm run test:native-tui`, but iPad/Safari real input-method behavior still needs human verification.
 - Real five-provider CLI/account human QA is still required; fake native TUI tests do not prove real login/quota/provider behavior.
-- Legacy structured adapters still exist. The structured live clients are now path-isolated under `legacy-structured/`, and they are no longer default. Claude/Gemini/Kimi/OpenCode now have separate stored-history adapters, but the Codex provider adapter still contains both stored-history/mirror logic and explicit structured fallback plumbing. The remaining code gap is applying the same split to Codex.
+- Legacy structured adapters still exist. The structured live clients are now path-isolated under `legacy-structured/`, and they are no longer default. Codex/Claude/Gemini/Kimi/OpenCode now have separate stored-history adapters. The remaining code gap is deciding whether to keep, further quarantine, or delete the legacy structured live/enhancement adapters.
 - Legacy wrapper runtime still exists for `RAH_LEGACY_WRAPPER=1` and synthetic tests. It is isolated as a fallback, not deleted.
 - Workbench shell/canvas code paths are now audited for view/attach semantics. Remaining risk is interaction-level QA: drag/drop, pane replacement, hide/show, and mobile/iPad layout should still be exercised in a real browser.
 - Enhanced controls are rejected safely at the native TUI runtime boundary and hidden by the central frontend capability helpers. Broader UI copy may still need review so native TUI sessions consistently explain external-locked semantics.

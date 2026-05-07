@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { validateProviderModelCatalog } from "@rah/runtime-protocol";
 import { CodexAdapter } from "./codex-adapter";
+import { CodexStoredHistoryAdapter } from "./codex-stored-history-adapter";
 import { DebugAdapter } from "./debug-adapter";
 import { EventBus } from "./event-bus";
 import { PtyHub } from "./pty-hub";
@@ -156,8 +157,9 @@ rl.on('line', (line) => {
     const debugAdapter = new DebugAdapter(services);
     void debugAdapter;
     const adapter = new CodexAdapter(services);
+    const storedHistory = new CodexStoredHistoryAdapter(services);
 
-    const stored = adapter.listStoredSessions();
+    const stored = storedHistory.listStoredSessions();
     assert.equal(stored.length, 1);
     assert.equal(stored[0]?.providerSessionId, sessionId);
     assert.equal(stored[0]?.cwd, cwd);
@@ -185,7 +187,7 @@ rl.on('line', (line) => {
         .filter((event) => event.type === "timeline.item.added").length,
       0,
     );
-    const page = adapter.getSessionHistoryPage(resumed.session.session.id, { limit: 20 });
+    const page = storedHistory.getSessionHistoryPage(resumed.session.session.id, { limit: 20 });
     assert.ok(page.events.some((event) => event.type === "timeline.item.added"));
     assert.ok(page.events.some((event) => event.type === "tool.call.started"));
     assert.ok(page.events.some((event) => event.type === "tool.call.completed"));
@@ -246,7 +248,7 @@ rl.on('line', (line) => {
       ptyHub: new PtyHub(),
       sessionStore: new SessionStore(),
     };
-    const adapter = new CodexAdapter(services);
+    const storedHistory = new CodexStoredHistoryAdapter(services);
     const managed = services.sessionStore.createManagedSession({
       provider: "codex",
       providerSessionId: sessionId,
@@ -259,7 +261,7 @@ rl.on('line', (line) => {
       },
     });
 
-    const page = adapter.getSessionHistoryPage(managed.session.id, { limit: 20 });
+    const page = storedHistory.getSessionHistoryPage(managed.session.id, { limit: 20 });
     assert.ok(page.events.some((event) => event.type === "tool.call.started"));
     assert.equal(page.events.some((event) => event.type === "tool.call.failed"), false);
 
@@ -294,6 +296,7 @@ rl.on('line', (line) => {
       sessionStore: new SessionStore(),
     };
     const adapter = new CodexAdapter(services);
+    const storedHistory = new CodexStoredHistoryAdapter(services);
     const resumed = await adapter.resumeSession({
       provider: "codex",
       providerSessionId: sessionId,
@@ -305,15 +308,15 @@ rl.on('line', (line) => {
       "Renamed Codex Session",
     );
     assert.equal(renamed.session.title, "Renamed Codex Session");
-    assert.equal(adapter.listStoredSessions()[0]?.title, "Renamed Codex Session");
+    assert.equal(storedHistory.listStoredSessions()[0]?.title, "Renamed Codex Session");
 
     const freshServices = {
       eventBus: new EventBus(),
       ptyHub: new PtyHub(),
       sessionStore: new SessionStore(),
     };
-    const freshAdapter = new CodexAdapter(freshServices);
-    assert.equal(freshAdapter.listStoredSessions()[0]?.title, "Renamed Codex Session");
+    const freshStoredHistory = new CodexStoredHistoryAdapter(freshServices);
+    assert.equal(freshStoredHistory.listStoredSessions()[0]?.title, "Renamed Codex Session");
 
     rmSync(cwd, { recursive: true, force: true });
   });
@@ -713,20 +716,21 @@ rl.on('line', (line) => {
     const debugAdapter = new DebugAdapter(services);
     void debugAdapter;
     const adapter = new CodexAdapter(services);
+    const storedHistory = new CodexStoredHistoryAdapter(services);
 
     const resumed = await adapter.resumeSession({
       provider: "codex",
       providerSessionId: sessionId,
     });
 
-    const firstPage = adapter.getSessionHistoryPage(resumed.session.session.id, { limit: 3 });
+    const firstPage = storedHistory.getSessionHistoryPage(resumed.session.session.id, { limit: 3 });
     assert.equal(firstPage.sessionId, resumed.session.session.id);
     assert.equal(firstPage.events.length, 3);
     assert.ok(firstPage.nextBeforeTs);
     assert.ok(firstPage.events[0]!.ts <= firstPage.events[1]!.ts);
     assert.ok(firstPage.events[1]!.ts <= firstPage.events[2]!.ts);
 
-    const secondPage = adapter.getSessionHistoryPage(resumed.session.session.id, {
+    const secondPage = storedHistory.getSessionHistoryPage(resumed.session.session.id, {
       beforeTs: firstPage.nextBeforeTs,
       limit: 3,
     });
@@ -822,12 +826,13 @@ rl.on('line', (line) => {
       sessionStore: new SessionStore(),
     };
     const adapter = new CodexAdapter(services);
+    const storedHistory = new CodexStoredHistoryAdapter(services);
     const resumed = await adapter.resumeSession({
       provider: "codex",
       providerSessionId: sessionId,
     });
 
-    const page = adapter.getSessionHistoryPage(resumed.session.session.id, { limit: 10 });
+    const page = storedHistory.getSessionHistoryPage(resumed.session.session.id, { limit: 10 });
     assert.deepEqual(
       page.events.map((event) => ({
         type: event.type,
@@ -902,8 +907,8 @@ rl.on('line', (line) => {
       ptyHub: new PtyHub(),
       sessionStore: new SessionStore(),
     };
-    const adapter = new CodexAdapter(services);
-    const stored = adapter.listStoredSessions();
+    const storedHistory = new CodexStoredHistoryAdapter(services);
+    const stored = storedHistory.listStoredSessions();
     const match = stored.find((item) => item.providerSessionId === sessionId);
     assert.equal(match?.preview, "真正的问题");
     assert.equal(match?.title, "真正的问题");
@@ -960,8 +965,8 @@ rl.on('line', (line) => {
       ptyHub: new PtyHub(),
       sessionStore: new SessionStore(),
     };
-    const adapter = new CodexAdapter(services);
-    const stored = adapter.listStoredSessions();
+    const storedHistory = new CodexStoredHistoryAdapter(services);
+    const stored = storedHistory.listStoredSessions();
     const match = stored.find((item) => item.providerSessionId === sessionId);
     assert.equal(match?.preview, "你好");
     assert.equal(match?.title, "你好");
