@@ -4,7 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, test } from "node:test";
 import { discoverCodexStoredSessions } from "./codex-stored-sessions";
-import { createIsolatedCodexWrapperHome } from "./codex-wrapper-home";
+import {
+  codexHomeForRolloutPath,
+  createIsolatedCodexWrapperHome,
+} from "./codex-wrapper-home";
 
 function writeRolloutFile(filePath: string, sessionId: string, cwd: string) {
   mkdirSync(path.dirname(filePath), { recursive: true });
@@ -84,5 +87,29 @@ describe("codex wrapper home", () => {
 
     assert.equal(discovered.includes("global-session"), true);
     assert.equal(discovered.includes("wrapper-session"), true);
+  });
+
+  test("resolves the owning codex home for global and wrapper rollout files", () => {
+    const globalRollout = path.join(
+      baseHome,
+      "sessions",
+      "2026",
+      "04",
+      "23",
+      "rollout-global.jsonl",
+    );
+    const wrapperHome = createIsolatedCodexWrapperHome(baseHome);
+    const wrapperRollout = path.join(
+      wrapperHome,
+      "sessions",
+      "2026",
+      "04",
+      "23",
+      "rollout-wrapper.jsonl",
+    );
+
+    assert.equal(codexHomeForRolloutPath(globalRollout, baseHome), baseHome);
+    assert.equal(codexHomeForRolloutPath(wrapperRollout, baseHome), wrapperHome);
+    assert.equal(codexHomeForRolloutPath(path.join(baseHome, "unrelated.jsonl"), baseHome), null);
   });
 });

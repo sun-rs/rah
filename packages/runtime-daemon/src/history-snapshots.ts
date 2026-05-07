@@ -73,7 +73,27 @@ function decodeOffsetCursor(cursor: string): number {
 }
 
 function normalizeSnapshotEvents(events: readonly RahEvent[]): RahEvent[] {
-  return [...events].sort((left, right) => left.ts.localeCompare(right.ts) || left.seq - right.seq);
+  return dedupeCanonicalTimelineItems(
+    [...events].sort((left, right) => left.ts.localeCompare(right.ts) || left.seq - right.seq),
+  );
+}
+
+function dedupeCanonicalTimelineItems(events: readonly RahEvent[]): RahEvent[] {
+  const seenCanonicalItemIds = new Set<string>();
+  const next: RahEvent[] = [];
+  for (const event of events) {
+    if (
+      event.type === "timeline.item.added" &&
+      typeof event.payload.identity?.canonicalItemId === "string"
+    ) {
+      if (seenCanonicalItemIds.has(event.payload.identity.canonicalItemId)) {
+        continue;
+      }
+      seenCanonicalItemIds.add(event.payload.identity.canonicalItemId);
+    }
+    next.push(event);
+  }
+  return next;
 }
 
 export class HistorySnapshotStore {
@@ -150,6 +170,7 @@ export class HistorySnapshotStore {
     }
     const limit = Math.max(1, limitValue ?? 1000);
     const initial = frozenLoader.loadInitialPage(limit);
+    const initialEvents = dedupeCanonicalTimelineItems(initial.events);
     return {
       mode: "frozen_paged",
       boundary: initial.boundary,
@@ -161,9 +182,9 @@ export class HistorySnapshotStore {
             requestCursor: null,
             response: {
               sessionId,
-              events: initial.events,
+              events: initialEvents,
               ...(initial.nextCursor ? { nextCursor: initial.nextCursor } : {}),
-              ...(initial.nextBeforeTs ? { nextBeforeTs: initial.nextBeforeTs } : {}),
+              ...(initialEvents[0] ? { nextBeforeTs: initialEvents[0].ts } : {}),
             },
           },
         ],
@@ -210,11 +231,12 @@ export class HistorySnapshotStore {
     if (older.boundary.sourceRevision !== snapshot.boundary.sourceRevision) {
       throw new Error("Frozen history source revision changed while paging older history.");
     }
+    const events = dedupeCanonicalTimelineItems(older.events);
     const response: SessionHistoryPageResponse = {
       sessionId,
-      events: older.events,
+      events,
       ...(older.nextCursor ? { nextCursor: older.nextCursor } : {}),
-      ...(older.nextBeforeTs ? { nextBeforeTs: older.nextBeforeTs } : {}),
+      ...(events[0] ? { nextBeforeTs: events[0].ts } : {}),
     };
     snapshot.pagesByRequestCursor.set(cursor, {
       requestCursor: cursor,

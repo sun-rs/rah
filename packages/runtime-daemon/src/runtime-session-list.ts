@@ -10,6 +10,8 @@ import {
 import { workspaceDirsFromState } from "./workbench-directory-utils";
 
 const RECENT_SESSION_LIMIT = 15;
+const INTERNAL_NATIVE_TUI_PROBE_WORKSPACE_SEGMENT =
+  "/test-results/native-real-tui-workspaces/";
 
 export type RememberedWorkbenchSessionState = {
   rememberedSessions: readonly StoredSessionRef[];
@@ -65,6 +67,26 @@ export function sameStoredSessionRefs(
 
 function sessionProviderKey(session: Pick<StoredSessionRef, "provider" | "providerSessionId">): string {
   return `${session.provider}:${session.providerSessionId}`;
+}
+
+function normalizedPathForInternalCheck(value: string | undefined): string {
+  return value ? value.replace(/\\/g, "/").replace(/\/+$/, "") : "";
+}
+
+function isInternalNativeTuiProbeSession(session: Pick<StoredSessionRef, "cwd" | "rootDir">): boolean {
+  const paths = [
+    normalizedPathForInternalCheck(session.cwd),
+    normalizedPathForInternalCheck(session.rootDir),
+  ];
+  return paths.some(
+    (path) =>
+      path.includes(INTERNAL_NATIVE_TUI_PROBE_WORKSPACE_SEGMENT) ||
+      path.endsWith("/test-results/native-real-tui-workspaces"),
+  );
+}
+
+function isInternalNativeTuiProbeWorkspace(directory: string): boolean {
+  return isInternalNativeTuiProbeSession({ cwd: directory, rootDir: directory });
 }
 
 function sessionRecentTimestamp(session: StoredSessionRef): string {
@@ -180,13 +202,36 @@ export function buildSessionsResponse(args: {
     };
   };
 
-  const visibleLiveStates = args.liveStates.filter(
+  const userFacingLiveStates = args.liveStates.filter(
+    (state) => !isInternalNativeTuiProbeSession(state.session),
+  );
+  const visibleLiveStates = userFacingLiveStates.filter(
     (state) => !args.isClosingSession(state.session.id),
   );
+  const rememberedSessions = args.remembered.rememberedSessions.filter(
+    (session) => !isInternalNativeTuiProbeSession(session),
+  );
+  const rememberedRecentSessions = args.remembered.rememberedRecentSessions.filter(
+    (session) => !isInternalNativeTuiProbeSession(session),
+  );
+  const discoveredStoredSessions = args.discoveredStoredSessions.filter(
+    (session) => !isInternalNativeTuiProbeSession(session),
+  );
+  const rememberedWorkspaceDirs = args.remembered.rememberedWorkspaceDirs.filter(
+    (workspace) => !isInternalNativeTuiProbeWorkspace(workspace),
+  );
+  const rememberedHiddenWorkspaces = args.remembered.rememberedHiddenWorkspaces.filter(
+    (workspace) => !isInternalNativeTuiProbeWorkspace(workspace),
+  );
+  const rememberedActiveWorkspaceDir =
+    args.remembered.rememberedActiveWorkspaceDir &&
+    !isInternalNativeTuiProbeWorkspace(args.remembered.rememberedActiveWorkspaceDir)
+      ? args.remembered.rememberedActiveWorkspaceDir
+      : undefined;
   const hiddenSessionKeys = new Set(args.remembered.rememberedHiddenSessionKeys);
   const availableProviderSessionKeys = new Set<string>();
   const discoveredByKey = new Map<string, StoredSessionRef>();
-  for (const stored of args.discoveredStoredSessions) {
+  for (const stored of discoveredStoredSessions) {
     const key = sessionProviderKey(stored);
     availableProviderSessionKeys.add(key);
     discoveredByKey.set(key, stored);
@@ -203,7 +248,7 @@ export function buildSessionsResponse(args: {
     );
   }
   const storedSessions = new Map<string, StoredSessionRef>();
-  for (const remembered of args.remembered.rememberedSessions) {
+  for (const remembered of rememberedSessions) {
     const key = sessionProviderKey(remembered);
     if (hiddenSessionKeys.has(key)) {
       continue;
@@ -216,7 +261,7 @@ export function buildSessionsResponse(args: {
     }
     storedSessions.set(key, remembered);
   }
-  for (const stored of args.discoveredStoredSessions) {
+  for (const stored of discoveredStoredSessions) {
     if (hiddenSessionKeys.has(sessionProviderKey(stored))) {
       continue;
     }
@@ -279,19 +324,19 @@ export function buildSessionsResponse(args: {
     storedSessions: [...storedSessions.values()].map(applyTitleOverride),
     recentSessions: buildGlobalRecentSessions({
       storedSessions: storedSessions.values(),
-      rememberedRecentSessions: args.remembered.rememberedRecentSessions,
+      rememberedRecentSessions,
       visibleLiveStates,
       hiddenSessionKeys,
       availableProviderSessionKeys,
       applyTitleOverride,
     }),
     workspaceDirs: workspaceDirsFromState(
-      args.remembered.rememberedWorkspaceDirs,
-      args.liveStates,
+      rememberedWorkspaceDirs,
+      userFacingLiveStates,
     ),
-    hiddenWorkspaces: [...args.remembered.rememberedHiddenWorkspaces],
-    ...(args.remembered.rememberedActiveWorkspaceDir
-      ? { activeWorkspaceDir: args.remembered.rememberedActiveWorkspaceDir }
+    hiddenWorkspaces: rememberedHiddenWorkspaces,
+    ...(rememberedActiveWorkspaceDir
+      ? { activeWorkspaceDir: rememberedActiveWorkspaceDir }
       : {}),
   };
 }

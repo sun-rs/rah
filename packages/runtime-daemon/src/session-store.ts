@@ -16,6 +16,10 @@ import { normalizeContextUsage } from "./context-usage";
 const DEFAULT_CAPABILITIES: SessionCapabilities = {
   liveAttach: true,
   structuredTimeline: true,
+  nativeTui: false,
+  rawPtyInput: false,
+  chatMirror: false,
+  structuredControl: true,
   livePermissions: true,
   contextUsage: true,
   resumeByProvider: true,
@@ -141,11 +145,15 @@ export function toSessionSummary(state: StoredSessionState): SessionSummary {
 }
 
 export interface CreateManagedSessionArgs {
+  id?: string;
   provider: ManagedSession["provider"];
   providerSessionId?: string;
   launchSource: ManagedSession["launchSource"];
+  liveBackend?: ManagedSession["liveBackend"];
   cwd: string;
   rootDir: string;
+  nativeTui?: ManagedSession["nativeTui"];
+  ptyId?: string;
   title?: string;
   preview?: string;
   mode?: ManagedSession["mode"];
@@ -170,6 +178,7 @@ export interface PatchManagedSessionArgs {
   preview?: string;
   cwd?: string;
   rootDir?: string;
+  nativeTui?: ManagedSession["nativeTui"];
   mode?: ManagedSession["mode"];
   model?: ManagedSession["model"];
   config?: SessionResolvedConfig;
@@ -220,14 +229,17 @@ export class SessionStore {
 
   createManagedSession(args: CreateManagedSessionArgs): StoredSessionState {
     const now = new Date().toISOString();
+    const id = args.id ?? crypto.randomUUID();
     const session: ManagedSession = {
-      id: crypto.randomUUID(),
+      id,
       provider: args.provider,
       launchSource: args.launchSource,
+      ...(args.liveBackend !== undefined ? { liveBackend: args.liveBackend } : {}),
       cwd: args.cwd,
       rootDir: args.rootDir,
       runtimeState: "starting",
-      ptyId: crypto.randomUUID(),
+      ptyId: args.ptyId ?? crypto.randomUUID(),
+      ...(args.nativeTui !== undefined ? { nativeTui: args.nativeTui } : {}),
       capabilities: {
         ...DEFAULT_CAPABILITIES,
         ...args.capabilities,
@@ -470,6 +482,9 @@ export class SessionStore {
     }
     if (patch.rootDir !== undefined) {
       state.session.rootDir = patch.rootDir;
+    }
+    if (patch.nativeTui !== undefined) {
+      state.session.nativeTui = patch.nativeTui;
     }
     if (patch.mode !== undefined) {
       state.session.mode = patch.mode;

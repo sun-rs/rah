@@ -3,11 +3,12 @@ import type { ContextUsage, PermissionResponseRequest, ProviderModelCatalog, Ses
 import { Archive, ArrowUp, Ellipsis, EyeOff, Info, Menu, PanelRight, PencilLine, Plus, Trash2, X } from "lucide-react";
 import { providerLabel } from "../../../types";
 import type { SessionProjection } from "../../../types";
+import { TerminalPane } from "../../../TerminalPane";
 import { ChatThread } from "../../chat/ChatThread";
 import { ProviderLogo } from "../../ProviderLogo";
 import { SessionControlPopover } from "../../SessionControlPopover";
 import { TokenizedTextarea } from "../../TokenizedTextarea";
-import { COMPOSER_LAYOUT, type ComposerSurface } from "../../../composer-contract";
+import { canSubmitComposerInput, COMPOSER_LAYOUT, type ComposerSurface } from "../../../composer-contract";
 import type { InlineWorkbenchNotice } from "../../../workbench-notice-contract";
 import { SessionInfoDialog } from "../dialogs/SessionInfoDialog";
 import { resolveSessionModeControlState, type SessionModeChoice } from "../../../session-mode-ui";
@@ -63,8 +64,29 @@ function resolveContextUsageDisplay(
   };
 }
 
+type SessionViewMode = "chat" | "tui";
+
+const rememberedSessionViewModes = new Map<string, SessionViewMode>();
+
+function resolveRememberedSessionViewMode(args: {
+  sessionId: string;
+  nativeTuiAvailable: boolean;
+  nativeChatMirrorAvailable: boolean;
+  preferred: SessionViewMode;
+}): SessionViewMode {
+  const remembered = rememberedSessionViewModes.get(args.sessionId);
+  if (remembered === "tui" && args.nativeTuiAvailable) {
+    return "tui";
+  }
+  if (remembered === "chat" && (!args.nativeTuiAvailable || args.nativeChatMirrorAvailable)) {
+    return "chat";
+  }
+  return args.preferred;
+}
+
 export function WorkbenchSelectedPane(props: {
   selectedSummary: SessionSummary;
+  clientId: string;
   selectedProjection: SessionProjection | null;
   selectedIsReadOnlyReplay: boolean;
   sidebarOpen: boolean;
@@ -131,9 +153,33 @@ export function WorkbenchSelectedPane(props: {
   const composerContainerRef = useRef<HTMLDivElement | null>(null);
   const sessionMenuRef = useRef<HTMLDivElement | null>(null);
   const lastFloatingAnchorOffsetRef = useRef<number | null>(null);
+  const nativeTui = props.selectedSummary.session.nativeTui;
+  const nativeTuiAvailable = Boolean(nativeTui?.viewAvailable);
+  const nativeChatMirrorAvailable =
+    nativeTuiAvailable && props.selectedSummary.session.capabilities.chatMirror === true;
+  const preferredSessionViewMode: SessionViewMode =
+    nativeTuiAvailable && !nativeChatMirrorAvailable ? "tui" : "chat";
+  const sessionViewResetKey = [
+    props.selectedSummary.session.id,
+    nativeTuiAvailable ? "native" : "chat",
+    nativeChatMirrorAvailable ? "mirror" : "no-mirror",
+  ].join(":");
+  const sessionViewResetKeyRef = useRef(sessionViewResetKey);
   const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
   const [sessionInfoOpen, setSessionInfoOpen] = useState(false);
   const [paneWidth, setPaneWidth] = useState<number | null>(null);
+  const [sessionViewMode, setSessionViewModeState] = useState<SessionViewMode>(
+    () => resolveRememberedSessionViewMode({
+      sessionId: props.selectedSummary.session.id,
+      nativeTuiAvailable,
+      nativeChatMirrorAvailable,
+      preferred: preferredSessionViewMode,
+    }),
+  );
+  const setSessionViewMode = (mode: SessionViewMode) => {
+    rememberedSessionViewModes.set(props.selectedSummary.session.id, mode);
+    setSessionViewModeState(mode);
+  };
   const effectivePaneWidth = paneWidth ?? Number.POSITIVE_INFINITY;
   const sessionMetaMode = props.compactSessionMeta ?? "auto";
   const compactSessionMeta =
@@ -152,6 +198,16 @@ export function WorkbenchSelectedPane(props: {
     catalog: props.modelCatalog,
   });
   const contextUsageDisplay = resolveContextUsageDisplay(props.selectedSummary.usage);
+  const effectiveSessionViewMode =
+    nativeTuiAvailable
+      ? nativeChatMirrorAvailable
+        ? sessionViewMode
+        : "tui"
+      : "chat";
+  const showComposer =
+    effectiveSessionViewMode === "chat" || props.composerSurface.kind !== "compose";
+  const terminalHasControl =
+    props.isAttached && props.selectedSummary.controlLease.holderClientId === props.clientId;
   const showLiveAccessModeControl = Boolean(
     props.canSwitchSessionModes &&
       props.selectedSummary.session.mode &&
@@ -167,6 +223,8 @@ export function WorkbenchSelectedPane(props: {
       ? props.composerSurface.actionPending
       : false;
   const sessionControlBusy = isSessionControlLocked(props.selectedSummary);
+  const nativeTuiPromptDirty =
+    props.composerSurface.kind === "compose" && nativeTui?.promptState === "prompt_dirty";
   const claimSessionControlDisabled =
     sessionControlBusy ||
     props.claimModePending ||
@@ -174,6 +232,12 @@ export function WorkbenchSelectedPane(props: {
     composerActionPending;
   const stopDisabled =
     props.composerSurface.kind === "compose" && props.composerSurface.stopDisabled === true;
+  const sendDisabled = !canSubmitComposerInput({
+    composerSurface: props.composerSurface,
+    draft: props.draft,
+    sendPending: props.sendPending,
+    nativeTuiPromptState: nativeTui?.promptState,
+  });
   const showInspectorToggle = props.showInspectorToggle !== false;
   const claimComposerButtonClassName =
     "inline-flex h-8 shrink-0 items-center justify-center rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground transition-colors hover:opacity-90 disabled:opacity-50";
@@ -226,6 +290,34 @@ export function WorkbenchSelectedPane(props: {
       </div>
     </div>
   );
+
+  useEffect(() => {
+    if (sessionViewResetKeyRef.current === sessionViewResetKey) {
+      return;
+    }
+    sessionViewResetKeyRef.current = sessionViewResetKey;
+    setSessionViewModeState(
+      resolveRememberedSessionViewMode({
+        sessionId: props.selectedSummary.session.id,
+        nativeTuiAvailable,
+        nativeChatMirrorAvailable,
+        preferred: preferredSessionViewMode,
+      }),
+    );
+  }, [
+    nativeChatMirrorAvailable,
+    nativeTuiAvailable,
+    preferredSessionViewMode,
+    props.selectedSummary.session.id,
+    sessionViewResetKey,
+  ]);
+
+  useEffect(() => {
+    if (showComposer) {
+      return;
+    }
+    props.onFloatingAnchorOffsetChange(12);
+  }, [props.onFloatingAnchorOffsetChange, showComposer]);
 
   useEffect(() => {
     const node = rootRef.current;
@@ -381,6 +473,26 @@ export function WorkbenchSelectedPane(props: {
             </div>
           </div>
         <div className="flex items-center gap-1 shrink-0">
+          {nativeChatMirrorAvailable ? (
+            <div className="inline-flex h-8 items-center rounded-md border border-[var(--app-border)] bg-[var(--app-subtle-bg)] p-0.5">
+              {(["chat", "tui"] as const).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  className={`icon-click-feedback inline-flex h-6 min-w-9 items-center justify-center rounded px-2 text-[11px] font-semibold transition-colors ${
+                    effectiveSessionViewMode === mode
+                      ? "bg-[var(--app-bg)] text-[var(--app-fg)] shadow-sm"
+                      : "text-[var(--app-hint)] hover:text-[var(--app-fg)]"
+                  }`}
+                  onClick={() => setSessionViewMode(mode)}
+                  aria-pressed={effectiveSessionViewMode === mode}
+                  title={mode === "chat" ? "Show structured chat mirror" : "Show native TUI"}
+                >
+                  {mode === "chat" ? "Chat" : "TUI"}
+                </button>
+              ))}
+            </div>
+          ) : null}
           <div ref={sessionMenuRef} className="relative">
             <button
               type="button"
@@ -508,23 +620,35 @@ export function WorkbenchSelectedPane(props: {
         </div>
       ) : null}
 
-      <ChatThread
-        key={props.selectedSummary.session.id}
-        sessionId={props.selectedSummary.session.id}
-        feed={props.selectedProjection?.feed ?? []}
-        hideToolCalls={props.hideToolCallsInChat}
-        canLoadOlderHistory={props.canLoadOlderHistory}
-        historyLoading={props.historyLoading}
-        onLoadOlderHistory={props.onLoadOlderHistory}
-        canRespondToPermission={props.canRespondToPermission}
-        onPermissionRespond={props.onPermissionRespond}
-      />
+      {effectiveSessionViewMode === "tui" && nativeTui ? (
+        <div className="min-h-0 flex-1 bg-[var(--app-bg)] p-2 md:p-3">
+          <TerminalPane
+            key={nativeTui.terminalId}
+            terminalId={nativeTui.terminalId}
+            clientId={props.clientId}
+            hasControl={terminalHasControl}
+          />
+        </div>
+      ) : (
+        <ChatThread
+          key={props.selectedSummary.session.id}
+          sessionId={props.selectedSummary.session.id}
+          feed={props.selectedProjection?.feed ?? []}
+          hideToolCalls={props.hideToolCallsInChat}
+          canLoadOlderHistory={props.canLoadOlderHistory}
+          historyLoading={props.historyLoading}
+          onLoadOlderHistory={props.onLoadOlderHistory}
+          canRespondToPermission={props.canRespondToPermission}
+          onPermissionRespond={props.onPermissionRespond}
+        />
+      )}
 
-      <div
-        ref={composerContainerRef}
-        className="shrink-0 bg-[var(--app-bg)]"
-        style={COMPOSER_LAYOUT.bottomPaddingStyle}
-      >
+      {showComposer ? (
+        <div
+          ref={composerContainerRef}
+          className="shrink-0 bg-[var(--app-bg)]"
+          style={COMPOSER_LAYOUT.bottomPaddingStyle}
+        >
         <div className="mx-auto max-w-3xl px-3 pt-2 md:px-4 md:pt-3">
           {props.composerSurface.kind === "history_claim" ? (
             renderClaimComposer({
@@ -609,6 +733,7 @@ export function WorkbenchSelectedPane(props: {
                     textareaClassName={COMPOSER_LAYOUT.textareaClassName}
                     contentClassName={COMPOSER_LAYOUT.textareaContentClassName}
                     value={props.draft}
+                    ariaLabel="Message composer"
                     onChange={props.onDraftChange}
                     placeholder=""
                     rows={1}
@@ -621,7 +746,7 @@ export function WorkbenchSelectedPane(props: {
                         nativeEvent.keyCode !== 229
                       ) {
                         e.preventDefault();
-                        if (!props.sendPending) {
+                        if (!sendDisabled) {
                           props.onSend();
                         }
                       }
@@ -650,8 +775,14 @@ export function WorkbenchSelectedPane(props: {
 
                 <button
                   type="button"
-                  disabled={props.sendPending || !props.draft.trim()}
+                  disabled={sendDisabled}
                   onClick={props.onSend}
+                  aria-label="Send message"
+                  title={
+                    nativeTuiPromptDirty
+                      ? "Clear the current TUI prompt before sending from Chat."
+                      : undefined
+                  }
                   className={COMPOSER_LAYOUT.sendButtonClassName}
                 >
                   <ArrowUp size={18} />
@@ -661,6 +792,7 @@ export function WorkbenchSelectedPane(props: {
           )}
         </div>
       </div>
+      ) : null}
       <SessionInfoDialog
         open={sessionInfoOpen}
         summary={props.selectedSummary}

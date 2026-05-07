@@ -482,9 +482,20 @@ describe("translateCodexRolloutLine", () => {
 
   test("deduplicates persisted agent_message and assistant response_item with matching text", () => {
     const state = createCodexRolloutTranslationState();
-    const eventMsg = translateCodexRolloutLine(
+    translateCodexRolloutLine(
       {
         timestamp: "2026-04-18T00:00:00.000Z",
+        type: "event_msg",
+        payload: {
+          type: "task_started",
+          turn_id: "turn-duplicate",
+        },
+      },
+      state,
+    );
+    const eventMsg = translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-18T00:00:01.000Z",
         type: "event_msg",
         payload: {
           type: "agent_message",
@@ -495,7 +506,7 @@ describe("translateCodexRolloutLine", () => {
     );
     const responseItem = translateCodexRolloutLine(
       {
-        timestamp: "2026-04-18T00:00:00.000Z",
+        timestamp: "2026-04-18T00:00:01.001Z",
         type: "response_item",
         payload: {
           type: "message",
@@ -508,6 +519,140 @@ describe("translateCodexRolloutLine", () => {
 
     assert.equal(eventMsg.length, 1);
     assert.equal(responseItem.length, 0);
+  });
+
+  test("deduplicates persisted assistant text when a frozen history window omits task_started", () => {
+    const state = createCodexRolloutTranslationState();
+    const eventMsg = translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-18T00:00:01.000Z",
+        type: "event_msg",
+        payload: {
+          type: "agent_message",
+          message: "Windowed answer",
+        },
+      },
+      state,
+    );
+    const responseItem = translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-18T00:00:01.001Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Windowed answer" }],
+        },
+      },
+      state,
+    );
+
+    assert.equal(eventMsg.length, 1);
+    assert.equal(responseItem.length, 0);
+  });
+
+  test("keeps repeated unscoped assistant text when a user message separates turns", () => {
+    const state = createCodexRolloutTranslationState();
+    const first = translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-18T00:00:01.000Z",
+        type: "event_msg",
+        payload: {
+          type: "agent_message",
+          message: "Same unscoped answer",
+        },
+      },
+      state,
+    );
+    const user = translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-18T00:00:02.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "continue" }],
+        },
+      },
+      state,
+    );
+    const second = translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-18T00:00:03.000Z",
+        type: "event_msg",
+        payload: {
+          type: "agent_message",
+          message: "Same unscoped answer",
+        },
+      },
+      state,
+    );
+
+    assert.equal(first.length, 1);
+    assert.equal(user.length, 1);
+    assert.equal(second.length, 1);
+  });
+
+  test("keeps matching assistant text from separate Codex turns", () => {
+    const state = createCodexRolloutTranslationState();
+    translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-18T00:01:00.000Z",
+        type: "event_msg",
+        payload: {
+          type: "task_started",
+          turn_id: "turn-one",
+        },
+      },
+      state,
+    );
+    const first = translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-18T00:01:01.000Z",
+        type: "event_msg",
+        payload: {
+          type: "agent_message",
+          message: "Same answer",
+        },
+      },
+      state,
+    );
+    translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-18T00:01:02.000Z",
+        type: "event_msg",
+        payload: {
+          type: "task_complete",
+          turn_id: "turn-one",
+        },
+      },
+      state,
+    );
+    translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-18T00:02:00.000Z",
+        type: "event_msg",
+        payload: {
+          type: "task_started",
+          turn_id: "turn-two",
+        },
+      },
+      state,
+    );
+    const second = translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-18T00:02:01.000Z",
+        type: "event_msg",
+        payload: {
+          type: "agent_message",
+          message: "Same answer",
+        },
+      },
+      state,
+    );
+
+    assert.equal(first.length, 1);
+    assert.equal(second.length, 1);
   });
 
   test("ignores persisted noise events that should not surface in history feed", () => {

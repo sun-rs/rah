@@ -14,11 +14,13 @@ import type {
   IndependentTerminalStartRequest,
   IndependentTerminalStartResponse,
   InterruptSessionRequest,
+  NativeTuiDiagnostic,
   ListSessionsResponse,
   ProviderDiagnostic,
   ProviderKind,
   ProviderModelCatalog,
   PermissionResponseRequest,
+  PtySessionStats,
   RahEvent,
   ReleaseControlRequest,
   ResumeSessionRequest,
@@ -65,6 +67,10 @@ import {
 } from "./terminal-wrapper-control";
 import { RuntimeTerminalCoordinator } from "./runtime-terminal-coordinator";
 import { RuntimeSessionLifecycle } from "./runtime-session-lifecycle";
+import {
+  createDefaultNativeTuiProviderRuntime,
+  type NativeTuiProviderRuntime,
+} from "./native-tui-provider-runtime";
 import { WorkbenchStateStore } from "./workbench-state";
 import {
   isReadOnlyReplaySession,
@@ -73,6 +79,7 @@ import {
   sessionBelongsToWorkspace,
 } from "./workbench-directory-utils";
 import { WorkspaceScopeAuthorizer } from "./workspace-scope-authorizer";
+import { assertExistingWorkingDirectory } from "./provider-working-directory";
 
 const SYSTEM_SOURCE = {
   provider: "system" as const,
@@ -110,6 +117,7 @@ export class RuntimeEngine {
   private readonly terminals: RuntimeTerminalCoordinator;
   private readonly sessionLifecycle: RuntimeSessionLifecycle;
   private readonly providers: RuntimeProviderCoordinator;
+  private readonly nativeTuiProviders: NativeTuiProviderRuntime;
 
   private readonly adaptersById = new Map<string, ProviderAdapter>();
   private readonly adaptersByProvider = new Map<string, ProviderAdapter>();
@@ -120,6 +128,7 @@ export class RuntimeEngine {
     this.eventBus = new EventBus();
     this.ptyHub = new PtyHub();
     this.historySnapshots = new HistorySnapshotStore();
+    this.nativeTuiProviders = createDefaultNativeTuiProviderRuntime();
     this.sessionStore = new SessionStore({
       onSnapshot: (states) => {
         this.workbenchState.persistLiveSessions(states);
@@ -143,6 +152,7 @@ export class RuntimeEngine {
       ptyHub: this.ptyHub,
       sessionStore: this.sessionStore,
       historySnapshots: this.historySnapshots,
+      nativeTuiProviders: this.nativeTuiProviders,
       onRememberSession: (state) => {
         this.workbenchState.rememberSession(state);
         this.refreshRememberedState();
@@ -246,6 +256,17 @@ export class RuntimeEngine {
     return this.providers.listProviderDiagnostics(options);
   }
 
+  listNativeTuiDiagnostics(options?: {
+    sessionId?: string;
+    includeResolved?: boolean;
+  }): NativeTuiDiagnostic[] {
+    return this.terminals.listNativeTuiDiagnostics(options);
+  }
+
+  listPtyStats(): PtySessionStats[] {
+    return this.ptyHub.listStats();
+  }
+
   async listProviderModels(
     provider: ProviderKind,
     options?: { cwd?: string; forceRefresh?: boolean },
@@ -339,10 +360,29 @@ export class RuntimeEngine {
   }
 
   async startSession(request: StartSessionRequest): Promise<StartSessionResponse> {
+    if (request.liveBackend === "native_tui") {
+      await assertExistingWorkingDirectory(request.cwd, "Session working directory");
+      this.pruneOrphanSessions();
+      return await this.terminals.startNativeTuiSession({
+        launch: await this.nativeTuiProviders.startLaunchSpec(request),
+        ...(request.attach !== undefined ? { attach: request.attach } : {}),
+      });
+    }
     return this.providers.startSession(request);
   }
 
   async resumeSession(request: ResumeSessionRequest): Promise<ResumeSessionResponse> {
+    if (request.liveBackend === "native_tui") {
+      if (request.cwd) {
+        await assertExistingWorkingDirectory(request.cwd, "Session working directory");
+      }
+      this.pruneOrphanSessions();
+      return await this.terminals.startNativeTuiSession({
+        launch: await this.nativeTuiProviders.resumeLaunchSpec(request),
+        ...(request.attach !== undefined ? { attach: request.attach } : {}),
+        providerSessionId: request.providerSessionId,
+      });
+    }
     return this.providers.resumeSession(request);
   }
 
@@ -377,6 +417,9 @@ export class RuntimeEngine {
     if (this.terminals.handleWrapperInput(sessionId, request.clientId, request.text)) {
       return;
     }
+    if (this.terminals.handleNativeTuiInput(sessionId, request.clientId, request.text)) {
+      return;
+    }
     this.requireSessionAdapter(sessionId).sendInput(sessionId, request);
   }
 
@@ -385,6 +428,9 @@ export class RuntimeEngine {
     request: InterruptSessionRequest,
   ): SessionSummary {
     if (this.terminals.handleWrapperInterrupt(sessionId, request.clientId)) {
+      return this.getSessionSummary(sessionId);
+    }
+    if (this.terminals.handleNativeTuiInterrupt(sessionId, request.clientId)) {
       return this.getSessionSummary(sessionId);
     }
     return this.requireSessionAdapter(sessionId).interruptSession(sessionId, request);
@@ -772,6 +818,25 @@ export class RuntimeEngine {
   private pruneOrphanSessions(): void {
     for (const state of [...this.sessionStore.listSessions()]) {
       if (state.clients.length > 0) {
+        continue;
+      }
+      if (this.terminals.hasNativeTuiSession(state.session.id)) {
+        void this.terminals.closeNativeTuiSession(state.session.id).catch((error: unknown) => {
+          console.error(
+            `[rah] closeNativeTuiSession failed for ${state.session.id}:`,
+            error instanceof Error ? error.message : String(error),
+          );
+        });
+        this.sessionStore.removeSession(state.session.id);
+        this.ptyHub.removeSession(state.session.id);
+        this.sessionOwners.delete(state.session.id);
+        this.terminals.clearSessionState(state.session.id);
+        this.eventBus.publish({
+          sessionId: state.session.id,
+          type: "session.closed",
+          source: SYSTEM_SOURCE,
+          payload: {},
+        });
         continue;
       }
       const adapter = this.requireSessionAdapter(state.session.id);

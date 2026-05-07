@@ -101,6 +101,7 @@ export function translateOpenCodeMessage(
 ): ProviderActivity[] {
   const activities: ProviderActivity[] = [];
   activities.push(...rememberMessageInfo(state, message.info));
+  activities.push(...usageActivitiesForMessageInfo(state, message.info));
   for (const part of message.parts) {
     activities.push(...translateOpenCodePart(state, part));
   }
@@ -208,6 +209,7 @@ function translateMessageUpdated(
     return [];
   }
   const activities = rememberMessageInfo(state, info);
+  activities.push(...usageActivitiesForMessageInfo(state, info));
   if (isTerminalAssistantMessage(info)) {
     activities.push(...completeOpenCodeTurn(state));
   }
@@ -271,6 +273,24 @@ function openCodeDeltaTimelineIdentity(
     itemKind,
     origin: state.origin,
   });
+}
+
+function usageActivitiesForMessageInfo(
+  state: OpenCodeActivityState,
+  info: OpenCodeMessageInfo,
+): ProviderActivity[] {
+  const usage = openCodeUsageFromMessage(info);
+  if (!usage) {
+    return [];
+  }
+  const turnId = state.turnByMessageId.get(info.id) ?? state.currentTurnId;
+  return [
+    {
+      type: "usage",
+      usage,
+      ...(turnId ? { turnId } : {}),
+    },
+  ];
 }
 
 export function isTerminalAssistantMessage(info: OpenCodeMessageInfo): boolean {
@@ -359,22 +379,26 @@ function translateOpenCodePart(
           ...(turnId ? { turnId } : {}),
         },
       ];
-    case "step-start":
+    case "step-start": {
+      const title = readStringProperty(part, "title");
       return [
         {
           type: "turn_step_started",
           turnId: turnId ?? state.currentTurnId ?? randomUUID(),
+          ...(title ? { title } : {}),
         },
       ];
+    }
     case "step-finish": {
       const stepTurnId = turnId ?? state.currentTurnId ?? randomUUID();
+      const reason = readStringProperty(part, "reason");
       const activities: ProviderActivity[] = [
         {
           type: "turn_step_completed",
           turnId: stepTurnId,
+          ...(reason ? { reason } : {}),
         },
       ];
-      const reason = readStringProperty(part, "reason");
       if (role !== "user" && reason !== "tool-calls") {
         activities.push(...completeOpenCodeTurn(state));
       }
@@ -651,6 +675,7 @@ export function openCodeUsageFromMessage(info: OpenCodeMessageInfo): ContextUsag
         (tokens.cache?.write ?? 0)
       : undefined;
   return {
+    source: "opencode.message.usage",
     ...(tokenTotal !== undefined && tokenTotal > 0 ? { usedTokens: tokenTotal } : {}),
     ...(tokens?.input !== undefined ? { inputTokens: tokens.input } : {}),
     ...(tokens?.output !== undefined ? { outputTokens: tokens.output } : {}),

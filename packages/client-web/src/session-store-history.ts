@@ -66,6 +66,9 @@ function feedEntriesShareTimelineIdentity(left: FeedEntry, right: FeedEntry): bo
   if (left.kind !== "timeline" || right.kind !== "timeline") {
     return false;
   }
+  if (entriesLookLikeSameOptimisticHistoryEcho(left, right)) {
+    return true;
+  }
   if (left.canonicalItemId !== undefined && right.canonicalItemId !== undefined) {
     return left.canonicalItemId === right.canonicalItemId;
   }
@@ -164,6 +167,30 @@ function entriesLookLikeSameLiveHistoryEcho(left: FeedEntry, right: FeedEntry): 
   const leftHasMessageId = readTimelineMessageId(left.item) !== undefined;
   const rightHasMessageId = readTimelineMessageId(right.item) !== undefined;
   return left.item.kind === "user_message" && leftHasMessageId !== rightHasMessageId;
+}
+
+function entriesLookLikeSameOptimisticHistoryEcho(left: FeedEntry, right: FeedEntry): boolean {
+  if (left.kind !== "timeline" || right.kind !== "timeline") {
+    return false;
+  }
+  if (left.item.kind !== "user_message" || right.item.kind !== "user_message") {
+    return false;
+  }
+  if (left.item.text !== right.item.text) {
+    return false;
+  }
+  const leftOptimistic = left.key.startsWith("optimistic:user:");
+  const rightOptimistic = right.key.startsWith("optimistic:user:");
+  if (leftOptimistic === rightOptimistic) {
+    return false;
+  }
+  const leftTs = Date.parse(left.ts);
+  const rightTs = Date.parse(right.ts);
+  return (
+    Number.isFinite(leftTs) &&
+    Number.isFinite(rightTs) &&
+    Math.abs(leftTs - rightTs) <= LIVE_HISTORY_ECHO_WINDOW_MS
+  );
 }
 
 export function prependHistoryPage(

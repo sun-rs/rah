@@ -185,11 +185,26 @@ export class KimiJsonRpcClient {
     this.rejectAll(new Error("Kimi JSON-RPC client disposed"));
     this.stdout.close();
     this.stderr.close();
-    this.child.kill("SIGTERM");
-    await new Promise<void>((resolve) => {
+    const exited = new Promise<void>((resolve) => {
+      if (this.child.exitCode !== null || this.child.signalCode !== null) {
+        resolve();
+        return;
+      }
       this.child.once("exit", () => resolve());
-      setTimeout(resolve, 2_000);
     });
+    this.child.kill("SIGTERM");
+    const didExit = await Promise.race([
+      exited.then(() => true),
+      new Promise<false>((resolve) => setTimeout(() => resolve(false), 500)),
+    ]);
+    if (didExit) {
+      return;
+    }
+    this.child.kill("SIGKILL");
+    await Promise.race([
+      exited,
+      new Promise<void>((resolve) => setTimeout(resolve, 1_500)),
+    ]);
   }
 
   private rejectAll(error: Error) {

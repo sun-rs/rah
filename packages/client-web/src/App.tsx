@@ -22,6 +22,7 @@ import { WorkbenchSelectedPane } from "./components/workbench/panes/WorkbenchSel
 import { WorkbenchInspectorShell } from "./components/workbench/shells/WorkbenchInspectorShell";
 import { WorkbenchSidebarShell } from "./components/workbench/shells/WorkbenchSidebarShell";
 import { useChatPreferences } from "./hooks/useChatPreferences";
+import { useNativeTuiDiagnostics } from "./hooks/useNativeTuiDiagnostics";
 import { useWorkbenchComposerState } from "./hooks/useWorkbenchComposerState";
 import { useWorkbenchSelectionState } from "./hooks/useWorkbenchSelectionState";
 import { initializeTheme } from "./hooks/useTheme";
@@ -39,7 +40,7 @@ import {
   canSessionRespondToPermissions,
   canSessionSwitchModes,
   canSessionShowInfo,
-  isSessionActivelyRunning,
+  isSessionGenerationActive,
   isReadOnlyReplay,
 } from "./session-capabilities";
 import {
@@ -526,6 +527,9 @@ export function App() {
 
   const selectedProjection = selectedSessionId ? projections.get(selectedSessionId) ?? null : null;
   const selectedSummary = selectedProjection?.summary ?? null;
+  const selectedNativeTuiDiagnostics = useNativeTuiDiagnostics(
+    selectedSummary?.session.nativeTui ? selectedSummary.session.id : null,
+  );
   const isAttached = selectedSummary ? isSessionAttachedToClient(selectedSummary, clientId) : false;
   const hasControl = selectedSummary?.controlLease.holderClientId === clientId;
   const canRespondToPermission = selectedSummary
@@ -535,12 +539,15 @@ export function App() {
   const noticeState = deriveWorkbenchNoticeState({
     selectedSummary,
     selectedProjection,
+    nativeTuiDiagnostics: selectedNativeTuiDiagnostics,
     error,
   });
   const interactionNotice = noticeState.interactionNotice;
   const historyNotice = noticeState.historyNotice;
   const errorDescriptor = noticeState.errorDescriptor;
-  const isGenerating = selectedSummary ? isSessionActivelyRunning(selectedSummary) : false;
+  const isGenerating = selectedSummary
+    ? isSessionGenerationActive(selectedSummary, selectedProjection?.currentRuntimeStatus)
+    : false;
   const composerSurface = deriveComposerSurface({
     selectedSummary,
     hasControl: Boolean(hasControl),
@@ -857,6 +864,7 @@ export function App() {
   );
 
   const rootStyle = {
+    "--workbench-keyboard-inset": `${visualViewportBottomInsetPx}px`,
     "--workbench-floating-anchor": `calc(env(safe-area-inset-bottom, 0px) + ${floatingAnchorOffsetPx + visualViewportBottomInsetPx}px)`,
     "--workbench-callout-anchor": `calc(var(--workbench-floating-anchor) + 3.5rem)`,
   } as CSSProperties;
@@ -1426,6 +1434,7 @@ export function App() {
           ) : primaryPaneState.kind === "active" && selectedSummary ? (
             <WorkbenchSelectedPane
               selectedSummary={selectedSummary}
+              clientId={clientId}
               selectedProjection={selectedProjection}
               selectedIsReadOnlyReplay={selectedIsReadOnlyReplay}
               sidebarOpen={sidebarOpen}

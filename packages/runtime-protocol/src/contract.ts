@@ -25,8 +25,10 @@ import type {
 } from "./events";
 import type {
   ClientKind,
+  NativeTuiPromptState,
   ProviderKind,
   SessionLaunchSource,
+  SessionLiveBackend,
   SessionRuntimeState,
 } from "./session";
 
@@ -62,6 +64,7 @@ export const RAH_EVENT_TYPE_FAMILY = {
   "session.detached": "session",
   "session.closed": "session",
   "session.state.changed": "session",
+  "session.native_tui.prompt_state.changed": "session",
   "session.exited": "session",
   "session.failed": "session",
   "control.claimed": "control",
@@ -170,6 +173,12 @@ const SESSION_RUNTIME_STATES = new Set<SessionRuntimeState>([
 ]);
 
 const SESSION_LAUNCH_SOURCES = new Set<SessionLaunchSource>(["web", "terminal"]);
+const SESSION_LIVE_BACKENDS = new Set<SessionLiveBackend>(["structured", "native_tui"]);
+const NATIVE_TUI_PROMPT_STATES = new Set<NativeTuiPromptState>([
+  "prompt_clean",
+  "prompt_dirty",
+  "agent_busy",
+]);
 
 const TOOL_FAMILIES = new Set<ToolFamily>([
   "shell",
@@ -551,6 +560,10 @@ function validateSessionCapabilities(capabilities: unknown, sink: IssueSink, pat
   const capabilityFields = [
     "liveAttach",
     "structuredTimeline",
+    "nativeTui",
+    "rawPtyInput",
+    "chatMirror",
+    "structuredControl",
     "livePermissions",
     "contextUsage",
     "resumeByProvider",
@@ -1679,6 +1692,18 @@ function validateManagedSession(session: unknown, sink: IssueSink, path: string)
       `${path}.launchSource`,
     );
   }
+  if (
+    session.liveBackend !== undefined &&
+    !SESSION_LIVE_BACKENDS.has(session.liveBackend as SessionLiveBackend)
+  ) {
+    addIssue(
+      sink,
+      "error",
+      "session.live_backend.invalid",
+      "session liveBackend is not canonical",
+      `${path}.liveBackend`,
+    );
+  }
   if (!isNonEmptyString(session.cwd) || !isNonEmptyString(session.rootDir)) {
     addIssue(
       sink,
@@ -1705,6 +1730,48 @@ function validateManagedSession(session: unknown, sink: IssueSink, path: string)
       "session ptyId must be non-empty",
       `${path}.ptyId`,
     );
+  }
+  if (session.nativeTui !== undefined) {
+    if (!isRecord(session.nativeTui)) {
+      addIssue(
+        sink,
+        "error",
+        "session.native_tui.invalid",
+        "session nativeTui must be an object",
+        `${path}.nativeTui`,
+      );
+    } else {
+      if (!isNonEmptyString(session.nativeTui.terminalId)) {
+        addIssue(
+          sink,
+          "error",
+          "session.native_tui.terminal_id.invalid",
+          "session nativeTui.terminalId must be non-empty",
+          `${path}.nativeTui.terminalId`,
+        );
+      }
+      if (typeof session.nativeTui.viewAvailable !== "boolean") {
+        addIssue(
+          sink,
+          "error",
+          "session.native_tui.view_available.invalid",
+          "session nativeTui.viewAvailable must be boolean",
+          `${path}.nativeTui.viewAvailable`,
+        );
+      }
+      if (
+        session.nativeTui.promptState !== undefined &&
+        !NATIVE_TUI_PROMPT_STATES.has(session.nativeTui.promptState as NativeTuiPromptState)
+      ) {
+        addIssue(
+          sink,
+          "error",
+          "session.native_tui.prompt_state.invalid",
+          "session nativeTui.promptState is not canonical",
+          `${path}.nativeTui.promptState`,
+        );
+      }
+    }
   }
   if (session.mode !== undefined) {
     validateSessionMode(session.mode, sink, `${path}.mode`);
@@ -2241,6 +2308,17 @@ function validatePayload(event: RahEvent, sink: IssueSink) {
     case "session.state.changed":
       if (!SESSION_RUNTIME_STATES.has(payload.state as SessionRuntimeState)) {
         addIssue(sink, "error", "session.state.invalid", "session state is not canonical", "payload.state");
+      }
+      break;
+    case "session.native_tui.prompt_state.changed":
+      if (!NATIVE_TUI_PROMPT_STATES.has(payload.promptState as NativeTuiPromptState)) {
+        addIssue(
+          sink,
+          "error",
+          "session.native_tui.prompt_state.invalid",
+          "native TUI prompt state is not canonical",
+          "payload.promptState",
+        );
       }
       break;
     case "session.exited":

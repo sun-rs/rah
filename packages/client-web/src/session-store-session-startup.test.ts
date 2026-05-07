@@ -75,6 +75,10 @@ function summary(args: {
       capabilities: {
         liveAttach: true,
         structuredTimeline: true,
+        nativeTui: false,
+        rawPtyInput: false,
+        chatMirror: false,
+        structuredControl: true,
         livePermissions: true,
         contextUsage: false,
         resumeByProvider: true,
@@ -216,6 +220,7 @@ describe("session startup model and mode requests", () => {
     assert.deepEqual(startRequest?.body, {
       provider: "codex",
       cwd: "/tmp/rah",
+      liveBackend: "native_tui",
       title: "test",
       model: "gpt-5.5",
       optionValues: { model_reasoning_effort: "xhigh" },
@@ -278,6 +283,57 @@ describe("session startup model and mode requests", () => {
     );
 
     assert.deepEqual(calls, ["created:started", "send"]);
+  });
+
+  test("new session defaults native TUI for provider CLIs with stable native launch", async () => {
+    const requests = installWebApiMocks((request) => {
+      if (request.url.includes("/api/fs/list")) {
+        return { path: "/tmp/rah", entries: [] };
+      }
+      if (request.url.endsWith("/api/sessions/start")) {
+        const body = request.body as {
+          provider: "codex" | "claude" | "kimi" | "gemini" | "opencode";
+          cwd: string;
+        };
+        return {
+          session: summary({
+            id: `started-${body.provider}`,
+            provider: body.provider,
+            cwd: body.cwd,
+          }),
+        };
+      }
+      throw new Error(`Unexpected request ${request.url}`);
+    });
+
+    for (const provider of ["codex", "claude", "kimi", "gemini", "opencode"] as const) {
+      await startSessionCommand(
+        startupDeps({ newSessionProvider: provider }),
+        {
+          provider,
+          cwd: "/tmp/rah",
+          title: `${provider} test`,
+          initialInput: "",
+        },
+      );
+    }
+
+    const startRequests = requests.filter((request) =>
+      request.url.endsWith("/api/sessions/start"),
+    );
+    assert.deepEqual(
+      startRequests.map((request) => {
+        const body = request.body as { provider: string; liveBackend?: string };
+        return [body.provider, body.liveBackend ?? null];
+      }),
+      [
+        ["codex", "native_tui"],
+        ["claude", "native_tui"],
+        ["kimi", "native_tui"],
+        ["gemini", "native_tui"],
+        ["opencode", "native_tui"],
+      ],
+    );
   });
 
   test("claim history sends selected mode, model, and optionValues to resume", async () => {
@@ -362,6 +418,7 @@ describe("session startup model and mode requests", () => {
     assert.deepEqual(resumeRequest?.body, {
       provider: "codex",
       providerSessionId: "thread-1",
+      liveBackend: "native_tui",
       model: "gpt-5.5",
       optionValues: { model_reasoning_effort: "xhigh" },
       reasoningId: "xhigh",
@@ -389,6 +446,73 @@ describe("session startup model and mode requests", () => {
       optionValues: { model_reasoning_effort: "xhigh" },
       reasoningId: "xhigh",
     });
+  });
+
+  test("claim history defaults native TUI for provider CLIs with stable native launch", async () => {
+    const requests = installWebApiMocks((request) => {
+      if (request.url.includes("/api/fs/list")) {
+        return { path: "/tmp/rah", entries: [] };
+      }
+      if (request.url.endsWith("/api/sessions/resume")) {
+        const body = request.body as {
+          provider: "codex" | "claude" | "kimi" | "gemini" | "opencode";
+          providerSessionId: string;
+          cwd?: string;
+        };
+        return {
+          session: summary({
+            id: `claimed-${body.provider}`,
+            provider: body.provider,
+            providerSessionId: body.providerSessionId,
+            cwd: body.cwd,
+          }),
+        };
+      }
+      throw new Error(`Unexpected request ${request.url}`);
+    });
+
+    for (const provider of ["codex", "claude", "kimi", "gemini", "opencode"] as const) {
+      const history = summary({
+        id: `history-${provider}`,
+        provider,
+        providerSessionId: `provider-${provider}`,
+        cwd: "/tmp/rah",
+      });
+      const projections = new Map([[history.session.id, createEmptySessionProjection(history)]]);
+      await claimHistorySessionCommand(
+        startupDeps({
+          projections,
+          storedSessions: [
+            {
+              provider,
+              providerSessionId: `provider-${provider}`,
+              cwd: "/tmp/rah",
+              rootDir: "/tmp/rah",
+              createdAt: "2026-04-29T00:00:00.000Z",
+            },
+          ],
+          recentSessions: [],
+        }),
+        history.session.id,
+      );
+    }
+
+    const resumeRequests = requests.filter((request) =>
+      request.url.endsWith("/api/sessions/resume"),
+    );
+    assert.deepEqual(
+      resumeRequests.map((request) => {
+        const body = request.body as { provider: string; liveBackend?: string };
+        return [body.provider, body.liveBackend ?? null];
+      }),
+      [
+        ["codex", "native_tui"],
+        ["claude", "native_tui"],
+        ["kimi", "native_tui"],
+        ["gemini", "native_tui"],
+        ["opencode", "native_tui"],
+      ],
+    );
   });
 
   test("claim history asks to create a missing stored workspace before launching", async () => {

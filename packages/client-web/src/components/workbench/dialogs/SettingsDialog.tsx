@@ -1,21 +1,38 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { X } from "lucide-react";
+import { useEffect } from "react";
 import { SettingsPane } from "../../SettingsPane";
 
 export function SettingsDialog(props: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
+  useEffect(() => {
+    if (props.open || typeof document === "undefined") {
+      return;
+    }
+    const releasePointerEvents = () => {
+      if (document.body.style.pointerEvents === "none") {
+        document.body.style.pointerEvents = "";
+      }
+      if (document.documentElement.style.pointerEvents === "none") {
+        document.documentElement.style.pointerEvents = "";
+      }
+    };
+    const timers = [0, 50, 250].map((delay) => window.setTimeout(releasePointerEvents, delay));
+    return () => {
+      for (const timer of timers) {
+        window.clearTimeout(timer);
+      }
+    };
+  }, [props.open]);
+
   return (
     <Dialog.Root open={props.open} onOpenChange={props.onOpenChange}>
-      <Dialog.Portal forceMount>
-        <Dialog.Overlay
-          forceMount
-          className="fixed inset-0 z-40 bg-black/40 data-[state=closed]:hidden"
-        />
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-40 bg-black/40" />
         <Dialog.Content
-          forceMount
-          className="fixed left-1/2 top-1/2 z-50 flex h-[min(88dvh,720px)] w-[min(960px,96vw)] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-2xl border border-[var(--app-border)] bg-[var(--app-bg)] p-0 shadow-2xl focus:outline-none data-[state=closed]:hidden max-md:inset-0 max-md:h-[100dvh] max-md:w-screen max-md:translate-x-0 max-md:translate-y-0 max-md:rounded-none max-md:border-0 max-md:pt-[env(safe-area-inset-top)] max-md:pb-[env(safe-area-inset-bottom)]"
+          className="fixed left-1/2 top-1/2 z-50 flex h-[min(88dvh,720px)] w-[min(960px,96vw)] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-2xl border border-[var(--app-border)] bg-[var(--app-bg)] p-0 shadow-2xl focus:outline-none max-md:inset-0 max-md:h-[100dvh] max-md:w-screen max-md:translate-x-0 max-md:translate-y-0 max-md:rounded-none max-md:border-0 max-md:pt-[env(safe-area-inset-top)] max-md:pb-[env(safe-area-inset-bottom)]"
         >
           <div className="flex items-center justify-between border-b border-[var(--app-border)] px-4 py-3 shrink-0 md:px-5">
             <div className="min-w-0">

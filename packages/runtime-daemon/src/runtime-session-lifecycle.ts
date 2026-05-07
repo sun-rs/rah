@@ -192,6 +192,21 @@ export class RuntimeSessionLifecycle {
     if (this.deps.terminals.requestWrapperClose(sessionId, request)) {
       return;
     }
+    if (await this.deps.terminals.closeNativeTuiSession(sessionId)) {
+      this.deps.sessionStore.removeSession(sessionId);
+      this.deps.ptyHub.removeSession(sessionId);
+      this.deps.historySnapshots.clear(sessionId);
+      this.deps.removeSessionOwner(sessionId);
+      this.deps.eventBus.publish({
+        sessionId,
+        type: "session.closed",
+        source: SYSTEM_SOURCE,
+        payload: {
+          clientId: request.clientId,
+        },
+      });
+      return;
+    }
     const adapter = this.deps.requireSessionAdapter(sessionId);
     await adapter.closeSession?.(sessionId, request);
     this.deps.sessionStore.removeSession(sessionId);

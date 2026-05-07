@@ -127,6 +127,37 @@ describe("client projection", () => {
     assert.equal(current.feed[0]?.turnId, "turn-1");
   });
 
+  test("upgrades optimistic native TUI user echo with canonical history identity", () => {
+    let current = appendOptimisticUserMessage(projection(), "你是谁");
+
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 1,
+        type: "timeline.item.added",
+        payload: {
+          item: { kind: "user_message", text: "你是谁" },
+          identity: {
+            canonicalItemId: "codex-history-user-1",
+            canonicalTurnId: "codex-history-turn-1",
+            provider: "codex",
+            providerSessionId: "provider-session-1",
+            turnKey: "turn:provider-turn-1",
+            itemKind: "user_message",
+            itemKey: "item:0",
+            origin: "history",
+            confidence: "derived",
+          },
+        },
+      }),
+    );
+
+    assert.equal(current.feed.length, 1);
+    const [entry] = current.feed;
+    assert.equal(entry?.kind, "timeline");
+    assert.equal(entry?.kind === "timeline" ? entry.canonicalItemId : null, "codex-history-user-1");
+  });
+
   test("keeps non-transcript message parts as structured cards", () => {
     const current = applyEventToProjection(
       projection(),
@@ -283,6 +314,27 @@ describe("client projection", () => {
       current.feed.map((entry) => (entry.kind === "timeline" ? entry.canonicalItemId : null)),
       ["canonical-item-1", "canonical-item-2"],
     );
+  });
+
+  test("updates native TUI prompt state without replacing the session summary", () => {
+    let current = projection();
+    current.summary.session.nativeTui = {
+      terminalId: "session-1",
+      viewAvailable: true,
+      promptState: "prompt_clean",
+    };
+
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 1,
+        type: "session.native_tui.prompt_state.changed",
+        payload: { promptState: "prompt_dirty" },
+      }),
+    );
+
+    assert.equal(current.summary.session.nativeTui?.promptState, "prompt_dirty");
+    assert.equal(current.summary.session.nativeTui?.terminalId, "session-1");
   });
 
   test("does not merge different assistant messages in the same turn", () => {
@@ -794,6 +846,46 @@ describe("client projection", () => {
     assert.equal(tools[0]?.kind, "tool_call");
     if (tools[0]?.kind === "tool_call") {
       assert.equal(tools[0].status, "completed");
+    }
+  });
+
+  test("projects turn step events into a single visible timeline step", () => {
+    let current = projection();
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 1,
+        turnId: "turn-1",
+        type: "turn.step.started",
+        payload: {
+          index: 0,
+          title: "OpenCode tool step",
+        },
+      }),
+    );
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 2,
+        turnId: "turn-1",
+        type: "turn.step.completed",
+        payload: {
+          index: 0,
+          reason: "stop",
+        },
+      }),
+    );
+
+    assert.equal(current.feed.length, 1);
+    const step = current.feed[0];
+    assert.equal(step?.kind, "timeline");
+    if (step?.kind === "timeline") {
+      assert.deepEqual(step.item, {
+        kind: "step",
+        title: "OpenCode tool step",
+        status: "completed",
+        text: "stop",
+      });
     }
   });
 

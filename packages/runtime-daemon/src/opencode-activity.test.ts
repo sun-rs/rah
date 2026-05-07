@@ -4,6 +4,7 @@ import {
   createOpenCodeActivityState,
   startOpenCodeTurn,
   translateOpenCodeEvent,
+  translateOpenCodeHistory,
 } from "./opencode-activity";
 
 function withoutIdentity(activity: unknown): unknown {
@@ -83,6 +84,52 @@ describe("translateOpenCodeEvent", () => {
         turnId: busy[0]?.type === "turn_started" ? busy[0].turnId : undefined,
       },
     ]);
+  });
+
+  test("emits usage from OpenCode assistant message token accounting", () => {
+    const state = createOpenCodeActivityState("session-1");
+    const busy = translateOpenCodeEvent(state, {
+      type: "session.status",
+      properties: {
+        sessionID: "session-1",
+        status: { type: "busy" },
+      },
+    });
+
+    const activities = translateOpenCodeEvent(state, {
+      type: "message.updated",
+      properties: {
+        info: {
+          id: "assistant-1",
+          sessionID: "session-1",
+          role: "assistant",
+          finish: "stop",
+          time: { completed: Date.now() },
+          tokens: {
+            input: 100,
+            output: 20,
+            reasoning: 5,
+            cache: { read: 7, write: 3 },
+          },
+          cost: 0.0123,
+        },
+      },
+    });
+
+    assert.deepEqual(activities[0], {
+      type: "usage",
+      turnId: busy[0]?.type === "turn_started" ? busy[0].turnId : undefined,
+      usage: {
+        source: "opencode.message.usage",
+        usedTokens: 135,
+        inputTokens: 100,
+        outputTokens: 20,
+        reasoningOutputTokens: 5,
+        cachedInputTokens: 7,
+        totalCostUsd: 0.0123,
+      },
+    });
+    assert.equal(activities.at(-1)?.type, "turn_completed");
   });
 
   test("keeps turn active when assistant message update finishes for tool calls", () => {
@@ -479,6 +526,7 @@ describe("translateOpenCodeEvent", () => {
       {
         type: "turn_step_completed",
         turnId: "opencode:assistant-1",
+        reason: "stop",
       },
       {
         type: "runtime_status",
@@ -522,6 +570,7 @@ describe("translateOpenCodeEvent", () => {
       {
         type: "turn_step_completed",
         turnId: "opencode:assistant-1",
+        reason: "tool-calls",
       },
     ]);
     assert.equal(state.currentTurnId, "opencode:assistant-1");
@@ -548,6 +597,7 @@ describe("translateOpenCodeEvent", () => {
       {
         type: "turn_step_completed",
         turnId: "turn-1",
+        reason: "stop",
       },
       {
         type: "runtime_status",
@@ -559,5 +609,126 @@ describe("translateOpenCodeEvent", () => {
         turnId: "turn-1",
       },
     ]);
+  });
+
+  test("maps stored DB messages with reasoning, tool, step, and usage", () => {
+    const activities = translateOpenCodeHistory([
+      {
+        info: {
+          id: "msg-user",
+          sessionID: "session-1",
+          role: "user",
+          time: { created: 1 },
+        },
+        parts: [
+          {
+            id: "part-user",
+            sessionID: "session-1",
+            messageID: "msg-user",
+            type: "text",
+            text: "OpenCode question",
+          },
+        ],
+      },
+      {
+        info: {
+          id: "msg-assistant",
+          sessionID: "session-1",
+          role: "assistant",
+          parentID: "msg-user",
+          finish: "stop",
+          time: { created: 2, completed: 3 },
+          tokens: {
+            input: 10,
+            output: 4,
+            reasoning: 2,
+            cache: { read: 1, write: 1 },
+          },
+          cost: 0.001,
+        },
+        parts: [
+          {
+            id: "part-reasoning",
+            sessionID: "session-1",
+            messageID: "msg-assistant",
+            type: "reasoning",
+            text: "OpenCode reasoning",
+          },
+          {
+            id: "part-step-start",
+            sessionID: "session-1",
+            messageID: "msg-assistant",
+            type: "step-start",
+          },
+          {
+            id: "part-tool",
+            sessionID: "session-1",
+            messageID: "msg-assistant",
+            type: "tool",
+            callID: "call-1",
+            tool: "bash",
+            state: {
+              status: "completed",
+              input: { command: "ls" },
+              output: "file-a\n",
+              title: "List files",
+            },
+          },
+          {
+            id: "part-text",
+            sessionID: "session-1",
+            messageID: "msg-assistant",
+            type: "text",
+            text: "OpenCode answer",
+          },
+          {
+            id: "part-step-finish",
+            sessionID: "session-1",
+            messageID: "msg-assistant",
+            type: "step-finish",
+            reason: "stop",
+          },
+        ],
+      },
+    ]);
+
+    assert.equal(
+      activities.some(
+        (activity) =>
+          activity.type === "timeline_item" &&
+          activity.item.kind === "reasoning" &&
+          activity.item.text === "OpenCode reasoning",
+      ),
+      true,
+    );
+    assert.equal(
+      activities.some(
+        (activity) =>
+          activity.type === "tool_call_completed" &&
+          activity.toolCall.providerToolName === "bash" &&
+          activity.toolCall.title === "List files",
+      ),
+      true,
+    );
+    assert.equal(
+      activities.some((activity) => activity.type === "turn_step_started"),
+      true,
+    );
+    assert.equal(
+      activities.some(
+        (activity) =>
+          activity.type === "turn_step_completed" && activity.reason === "stop",
+      ),
+      true,
+    );
+    assert.equal(
+      activities.some(
+        (activity) =>
+          activity.type === "usage" &&
+          activity.usage.source === "opencode.message.usage" &&
+          activity.usage.usedTokens === 18,
+      ),
+      true,
+    );
   });
 });

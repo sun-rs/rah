@@ -1,8 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ProviderDiagnostic } from "@rah/runtime-protocol";
-import { Info, LoaderCircle, MessageSquareText, Palette, RefreshCw, Waypoints } from "lucide-react";
-import { listProviders } from "../api";
+import type { NativeTuiDiagnostic, ProviderDiagnostic, PtySessionStats } from "@rah/runtime-protocol";
+import { AlertTriangle, CheckCircle2, Info, LoaderCircle, MessageSquareText, Palette, RefreshCw, TerminalSquare, Waypoints } from "lucide-react";
+import { listNativeTuiDiagnostics, listProviders, listPtyStats } from "../api";
 import { providerLabel } from "../types";
+import { nativeTuiDiagnosticLabel } from "../native-tui-diagnostics-ui";
+import {
+  comparePtyRuntimeHealth,
+  formatPtyBytes,
+  formatSignedCount,
+  formatSignedPtyBytes,
+  sortPtyStatsForDisplay,
+  summarizePtyRuntimeHealth,
+} from "../settings-runtime-health";
 import { ProviderLogo } from "./ProviderLogo";
 import { ThemeToggle } from "./ThemeToggle";
 import { useChatPreferences } from "../hooks/useChatPreferences";
@@ -16,6 +25,20 @@ const TABS: { id: SettingsTab; label: string; icon: typeof Palette }[] = [
   { id: "about", label: "About", icon: Info },
 ];
 
+function formatDiagnosticElapsed(elapsedMs: number | undefined): string | null {
+  if (elapsedMs === undefined) {
+    return null;
+  }
+  if (elapsedMs < 1000) {
+    return `${elapsedMs}ms`;
+  }
+  return `${Math.round(elapsedMs / 1000)}s`;
+}
+
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
+}
+
 export function SettingsPane() {
   const [activeTab, setActiveTab] = useState<SettingsTab>("appearance");
   const { hideToolCallsInChat, setHideToolCallsInChat } = useChatPreferences();
@@ -23,12 +46,28 @@ export function SettingsPane() {
   const [providerDiagnosticsError, setProviderDiagnosticsError] = useState<string | null>(null);
   const [providerDiagnosticsLoading, setProviderDiagnosticsLoading] = useState(false);
   const [providerDiagnosticsLoaded, setProviderDiagnosticsLoaded] = useState(false);
+  const [nativeTuiDiagnostics, setNativeTuiDiagnostics] = useState<NativeTuiDiagnostic[]>([]);
+  const [ptyStats, setPtyStats] = useState<PtySessionStats[]>([]);
+  const ptyStatsRef = useRef<PtySessionStats[] | null>(null);
+  const [previousPtyStats, setPreviousPtyStats] = useState<PtySessionStats[] | null>(null);
   const versionAutoRequestedRef = useRef(false);
 
   const sortedProviderDiagnostics = useMemo(
     () => [...providerDiagnostics].sort((left, right) => left.provider.localeCompare(right.provider)),
     [providerDiagnostics],
   );
+  const sortedNativeTuiDiagnostics = useMemo(
+    () => [...nativeTuiDiagnostics].sort((left, right) =>
+      right.updatedAt.localeCompare(left.updatedAt) || left.id.localeCompare(right.id),
+    ),
+    [nativeTuiDiagnostics],
+  );
+  const ptyRuntimeHealth = useMemo(() => summarizePtyRuntimeHealth(ptyStats), [ptyStats]);
+  const ptyRuntimeTrend = useMemo(
+    () => comparePtyRuntimeHealth(previousPtyStats, ptyStats),
+    [previousPtyStats, ptyStats],
+  );
+  const sortedPtyStats = useMemo(() => sortPtyStatsForDisplay(ptyStats), [ptyStats]);
 
   useEffect(() => {
     if (activeTab !== "version" || versionAutoRequestedRef.current || providerDiagnosticsLoading) {
@@ -42,13 +81,69 @@ export function SettingsPane() {
     setProviderDiagnosticsLoading(true);
     setProviderDiagnosticsError(null);
     try {
-      setProviderDiagnostics(
-        await listProviders({
+      const [providersResult, nativeDiagnosticsResult, terminalStatsResult] = await Promise.allSettled([
+        listProviders({
           forceRefresh,
           ...(signal ? { signal } : {}),
         }),
-      );
-      setProviderDiagnosticsLoaded(true);
+        listNativeTuiDiagnostics({
+          ...(signal ? { signal } : {}),
+        }),
+        listPtyStats({
+          ...(signal ? { signal } : {}),
+        }),
+      ]);
+
+      if (
+        providersResult.status === "rejected" &&
+        providersResult.reason instanceof DOMException &&
+        providersResult.reason.name === "AbortError"
+      ) {
+        return;
+      }
+      if (
+        nativeDiagnosticsResult.status === "rejected" &&
+        nativeDiagnosticsResult.reason instanceof DOMException &&
+        nativeDiagnosticsResult.reason.name === "AbortError"
+      ) {
+        return;
+      }
+      if (
+        terminalStatsResult.status === "rejected" &&
+        terminalStatsResult.reason instanceof DOMException &&
+        terminalStatsResult.reason.name === "AbortError"
+      ) {
+        return;
+      }
+
+      const errors: string[] = [];
+      if (providersResult.status === "fulfilled") {
+        setProviderDiagnostics(providersResult.value);
+      } else {
+        errors.push(errorMessage(providersResult.reason, "Failed to load provider versions."));
+      }
+      if (nativeDiagnosticsResult.status === "fulfilled") {
+        setNativeTuiDiagnostics(nativeDiagnosticsResult.value);
+      } else {
+        errors.push(errorMessage(nativeDiagnosticsResult.reason, "Failed to load native TUI diagnostics."));
+      }
+      if (terminalStatsResult.status === "fulfilled") {
+        setPreviousPtyStats(ptyStatsRef.current);
+        setPtyStats(terminalStatsResult.value);
+        ptyStatsRef.current = terminalStatsResult.value;
+      } else {
+        errors.push(errorMessage(terminalStatsResult.reason, "Failed to load PTY stats."));
+      }
+      if (errors.length > 0) {
+        setProviderDiagnosticsError(errors.join(" "));
+      }
+      if (
+        providersResult.status === "fulfilled" ||
+        nativeDiagnosticsResult.status === "fulfilled" ||
+        terminalStatsResult.status === "fulfilled"
+      ) {
+        setProviderDiagnosticsLoaded(true);
+      }
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
         return;
@@ -136,7 +231,7 @@ export function SettingsPane() {
               <div>
                 <div className="text-base font-semibold text-[var(--app-fg)]">Version</div>
                 <div className="mt-1 text-sm text-[var(--app-hint)]">
-                  Compare installed CLI versions with each provider&apos;s official latest release.
+                  Compare CLI versions and inspect active native TUI runtime issues.
                 </div>
               </div>
               <button
@@ -238,6 +333,194 @@ export function SettingsPane() {
                     ) : null}
                   </div>
                 ))}
+                <div className="rounded-2xl border border-[var(--app-border)] bg-[var(--app-bg)] p-4 md:p-5">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-semibold text-[var(--app-fg)]">Native TUI diagnostics</div>
+                      <div className="mt-1 text-xs text-[var(--app-hint)]">
+                        Active binding and chat mirror issues for daemon-owned native TUI sessions.
+                      </div>
+                    </div>
+                    {sortedNativeTuiDiagnostics.length === 0 ? (
+                      <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-400">
+                        <CheckCircle2 size={12} />
+                        Clear
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 rounded-full border border-[var(--app-warning)]/20 bg-[var(--app-warning-bg)] px-2 py-0.5 text-[11px] font-medium text-[var(--app-warning)]">
+                        <AlertTriangle size={12} />
+                        {sortedNativeTuiDiagnostics.length} active
+                      </span>
+                    )}
+                  </div>
+                  {sortedNativeTuiDiagnostics.length === 0 ? (
+                    <div className="mt-4 rounded-xl border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-3 py-2 text-xs text-[var(--app-hint)]">
+                      No active native TUI binding or chat mirror issues.
+                    </div>
+                  ) : (
+                    <div className="mt-4 space-y-2">
+                      {sortedNativeTuiDiagnostics.map((diagnostic) => {
+                        const elapsed = formatDiagnosticElapsed(diagnostic.elapsedMs);
+                        return (
+                          <div
+                            key={diagnostic.id}
+                            className="rounded-xl border border-[var(--app-warning)]/20 bg-[var(--app-warning-bg)] px-3 py-2"
+                          >
+                            <div className="flex flex-wrap items-center gap-2">
+                              <ProviderLogo provider={diagnostic.provider} className="h-4 w-4 shrink-0" />
+                              <span className="text-xs font-semibold text-[var(--app-fg)]">
+                                {providerLabel(diagnostic.provider)}
+                              </span>
+                              <span className="rounded-full border border-[var(--app-border)] bg-[var(--app-bg)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--app-hint)]">
+                                {nativeTuiDiagnosticLabel(diagnostic.kind)}
+                              </span>
+                              {elapsed ? (
+                                <span className="text-[10px] text-[var(--app-hint)]">after {elapsed}</span>
+                              ) : null}
+                            </div>
+                            <div className="mt-1 text-xs text-[var(--app-warning)]">
+                              {diagnostic.message}
+                            </div>
+                            <div className="mt-1 break-words font-mono text-[10px] text-[var(--app-hint)] [overflow-wrap:anywhere]">
+                              {diagnostic.providerSessionId ?? diagnostic.sessionId}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+                <div className="rounded-2xl border border-[var(--app-border)] bg-[var(--app-bg)] p-4 md:p-5">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-semibold text-[var(--app-fg)]">Terminal replay health</div>
+                      <div className="mt-1 text-xs text-[var(--app-hint)]">
+                        PTY replay memory, trim boundaries, and active native TUI subscribers.
+                      </div>
+                    </div>
+                    {ptyRuntimeHealth.status === "idle" ? (
+                      <span className="inline-flex items-center gap-1 rounded-full border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-2 py-0.5 text-[11px] font-medium text-[var(--app-hint)]">
+                        <TerminalSquare size={12} />
+                        Idle
+                      </span>
+                    ) : ptyRuntimeHealth.status === "trimmed" ? (
+                      <span className="inline-flex items-center gap-1 rounded-full border border-[var(--app-warning)]/20 bg-[var(--app-warning-bg)] px-2 py-0.5 text-[11px] font-medium text-[var(--app-warning)]">
+                        <AlertTriangle size={12} />
+                        Trimmed
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-400">
+                        <CheckCircle2 size={12} />
+                        Healthy
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="mt-4 grid gap-2 sm:grid-cols-4">
+                    <div className="rounded-xl border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-3 py-2">
+                      <div className="text-[10px] font-medium uppercase tracking-wide text-[var(--app-hint)]">
+                        Sessions
+                      </div>
+                      <div className="mt-1 text-sm font-semibold text-[var(--app-fg)]">
+                        {ptyRuntimeHealth.openSessions} open / {ptyRuntimeHealth.totalSessions} total
+                      </div>
+                      {ptyRuntimeTrend ? (
+                        <div className="mt-1 text-[10px] text-[var(--app-hint)]">
+                          {formatSignedCount(ptyRuntimeTrend.openSessionsDelta)} open since refresh
+                        </div>
+                      ) : null}
+                    </div>
+                    <div className="rounded-xl border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-3 py-2">
+                      <div className="text-[10px] font-medium uppercase tracking-wide text-[var(--app-hint)]">
+                        Replay
+                      </div>
+                      <div className="mt-1 text-sm font-semibold text-[var(--app-fg)]">
+                        {formatPtyBytes(ptyRuntimeHealth.replayBytes)}
+                      </div>
+                      {ptyRuntimeTrend ? (
+                        <div className="mt-1 text-[10px] text-[var(--app-hint)]">
+                          {formatSignedPtyBytes(ptyRuntimeTrend.replayBytesDelta)} since refresh
+                        </div>
+                      ) : null}
+                    </div>
+                    <div className="rounded-xl border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-3 py-2">
+                      <div className="text-[10px] font-medium uppercase tracking-wide text-[var(--app-hint)]">
+                        Subscribers
+                      </div>
+                      <div className="mt-1 text-sm font-semibold text-[var(--app-fg)]">
+                        {ptyRuntimeHealth.subscriberCount}
+                      </div>
+                      {ptyRuntimeTrend ? (
+                        <div className="mt-1 text-[10px] text-[var(--app-hint)]">
+                          {formatSignedCount(ptyRuntimeTrend.subscriberCountDelta)} since refresh
+                        </div>
+                      ) : null}
+                    </div>
+                    <div className="rounded-xl border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-3 py-2">
+                      <div className="text-[10px] font-medium uppercase tracking-wide text-[var(--app-hint)]">
+                        Trimmed
+                      </div>
+                      <div className="mt-1 text-sm font-semibold text-[var(--app-fg)]">
+                        {ptyRuntimeHealth.trimmedSessions}
+                      </div>
+                      {ptyRuntimeTrend ? (
+                        <div className="mt-1 text-[10px] text-[var(--app-hint)]">
+                          {formatSignedCount(ptyRuntimeTrend.trimmedSessionsDelta)} since refresh
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                  {ptyRuntimeTrend ? (
+                    <div className="mt-2 text-[11px] text-[var(--app-hint)]">
+                      Replay chunks {formatSignedCount(ptyRuntimeTrend.replayChunksDelta)} since last refresh.
+                    </div>
+                  ) : null}
+
+                  {sortedPtyStats.length === 0 ? (
+                    <div className="mt-4 rounded-xl border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-3 py-2 text-xs text-[var(--app-hint)]">
+                      No active or replayable PTY sessions.
+                    </div>
+                  ) : (
+                    <div className="mt-4 space-y-2">
+                      {sortedPtyStats.slice(0, 6).map((stat) => (
+                        <div
+                          key={stat.sessionId}
+                          className="rounded-xl border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-3 py-2"
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="min-w-0 flex items-center gap-2">
+                              <span
+                                className={`h-2 w-2 shrink-0 rounded-full ${
+                                  stat.status === "open" ? "bg-emerald-500" : "bg-[var(--app-hint)]"
+                                }`}
+                              />
+                              <span className="truncate font-mono text-[11px] text-[var(--app-fg)]">
+                                {stat.sessionId}
+                              </span>
+                            </div>
+                            <span className="shrink-0 text-[11px] font-medium text-[var(--app-hint)]">
+                              {formatPtyBytes(stat.replayBytes)} / {stat.replayChunks} chunks
+                            </span>
+                          </div>
+                          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-[var(--app-hint)]">
+                            <span>{stat.subscriberCount} subscribers</span>
+                            <span>next seq {stat.nextSeq}</span>
+                            {stat.droppedBeforeSeq !== undefined ? (
+                              <span className="text-[var(--app-warning)]">
+                                dropped before {stat.droppedBeforeSeq}
+                              </span>
+                            ) : null}
+                          </div>
+                        </div>
+                      ))}
+                      {sortedPtyStats.length > 6 ? (
+                        <div className="text-[11px] text-[var(--app-hint)]">
+                          Showing 6 largest/open PTY sessions out of {sortedPtyStats.length}.
+                        </div>
+                      ) : null}
+                    </div>
+                  )}
+                </div>
               </div>
             )}
           </div>

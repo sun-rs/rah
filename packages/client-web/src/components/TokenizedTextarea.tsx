@@ -19,6 +19,7 @@ export const TokenizedTextarea = forwardRef<
     disabled?: boolean;
     rows?: number;
     placeholder?: string;
+    ariaLabel?: string;
     textareaClassName: string;
     contentClassName: string;
 } & Pick<TextareaHTMLAttributes<HTMLTextAreaElement>, "spellCheck">
@@ -64,6 +65,7 @@ export const TokenizedTextarea = forwardRef<
         ref={textareaRef}
         className={`${props.textareaClassName} ${TEXTAREA_TEXT_LAYOUT_CLASS_NAME} text-[var(--app-fg)] caret-[var(--app-fg)] selection:bg-primary/20`}
         value={props.value}
+        aria-label={props.ariaLabel}
         placeholder={props.placeholder}
         onChange={(event) => {
           props.onChange(event.currentTarget.value);

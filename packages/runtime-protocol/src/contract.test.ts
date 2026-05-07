@@ -58,6 +58,10 @@ test("session capability contract warns when legacy rename flag drifts from acti
         capabilities: {
           liveAttach: true,
           structuredTimeline: true,
+          nativeTui: false,
+          rawPtyInput: false,
+          chatMirror: false,
+          structuredControl: true,
           livePermissions: false,
           contextUsage: true,
           resumeByProvider: true,
@@ -83,6 +87,33 @@ test("session capability contract warns when legacy rename flag drifts from acti
   assert.equal(issues.some((issue) => issue.severity === "error"), false);
   assert.equal(
     issues.some((issue) => issue.code === "session.capabilities.rename_legacy_mismatch"),
+    true,
+  );
+});
+
+test("native TUI prompt state events use canonical values", () => {
+  const valid = validateRahEvent({
+    id: "evt-native-prompt-1",
+    seq: 1,
+    ts: "2026-04-29T00:00:00.000Z",
+    sessionId: "session-1",
+    type: "session.native_tui.prompt_state.changed",
+    source: { provider: "system", channel: "system", authority: "authoritative" },
+    payload: { promptState: "prompt_dirty" },
+  });
+  assert.equal(valid.some((issue) => issue.severity === "error"), false);
+
+  const invalid = validateRahEvent({
+    id: "evt-native-prompt-2",
+    seq: 2,
+    ts: "2026-04-29T00:00:01.000Z",
+    sessionId: "session-1",
+    type: "session.native_tui.prompt_state.changed",
+    source: { provider: "system", channel: "system", authority: "authoritative" },
+    payload: { promptState: "clean" },
+  } as never);
+  assert.equal(
+    invalid.some((issue) => issue.code === "session.native_tui.prompt_state.invalid"),
     true,
   );
 });

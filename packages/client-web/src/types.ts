@@ -170,6 +170,7 @@ function shouldApplySummaryMutation(current: SessionProjection, event: RahEvent)
     case "session.started":
       return isIsoTsAtLeast(event.payload.session.updatedAt, current.summary.session.updatedAt);
     case "session.state.changed":
+    case "session.native_tui.prompt_state.changed":
     case "permission.requested":
     case "permission.resolved":
     case "control.claimed":
@@ -390,6 +391,7 @@ function applyTimelineEvent(
       feed,
       incomingUserItem.text,
       event.turnId,
+      event.ts,
       identityFields,
     );
     if (duplicateIndex >= 0) {
@@ -464,6 +466,7 @@ function findDuplicateUserMessageIndex(
   feed: FeedEntry[],
   text: string,
   turnId: string | undefined,
+  incomingTs: string,
   incomingIdentity: TimelineIdentityFields,
 ): number {
   for (let index = feed.length - 1; index >= 0; index--) {
@@ -479,6 +482,12 @@ function findDuplicateUserMessageIndex(
       continue;
     }
     if (
+      isOptimisticUserMessageEntry(candidate) &&
+      entriesAreWithinLiveHistoryEchoWindow(candidate.ts, incomingTs)
+    ) {
+      return index;
+    }
+    if (
       (candidate.turnId !== undefined &&
         turnId !== undefined &&
         candidate.turnId === turnId) ||
@@ -488,6 +497,26 @@ function findDuplicateUserMessageIndex(
     }
   }
   return -1;
+}
+
+function isOptimisticUserMessageEntry(
+  entry: FeedEntry,
+): entry is Extract<FeedEntry, { kind: "timeline" }> {
+  return (
+    entry.kind === "timeline" &&
+    entry.key.startsWith("optimistic:user:") &&
+    entry.item.kind === "user_message"
+  );
+}
+
+function entriesAreWithinLiveHistoryEchoWindow(leftTsText: string, rightTsText: string): boolean {
+  const leftTs = Date.parse(leftTsText);
+  const rightTs = Date.parse(rightTsText);
+  return (
+    Number.isFinite(leftTs) &&
+    Number.isFinite(rightTs) &&
+    Math.abs(leftTs - rightTs) <= 60_000
+  );
 }
 
 function isTrailingUserMessageEcho(feed: FeedEntry[], index: number): boolean {
@@ -1199,6 +1228,57 @@ function applyRuntimeStatusEvent(
   return next;
 }
 
+function applyTurnStepEvent(
+  feed: FeedEntry[],
+  event: Extract<
+    RahEvent,
+    { type: "turn.step.started" | "turn.step.completed" | "turn.step.interrupted" }
+  >,
+): FeedEntry[] {
+  const index = event.payload.index ?? 0;
+  const key = `${event.turnId}:step:${index}`;
+  const existingIndex = feed.findIndex(
+    (candidate) => candidate.kind === "timeline" && candidate.key === key,
+  );
+  const existing = existingIndex >= 0 ? feed[existingIndex] : undefined;
+  const existingStep =
+    existing?.kind === "timeline" && existing.item.kind === "step" ? existing.item : undefined;
+  const title =
+    event.type === "turn.step.started"
+      ? event.payload.title ?? existingStep?.title ?? `Step ${index + 1}`
+      : existingStep?.title ?? `Step ${index + 1}`;
+  const status =
+    event.type === "turn.step.started"
+      ? "started"
+      : event.type === "turn.step.completed"
+        ? "completed"
+        : "interrupted";
+  const text =
+    event.type === "turn.step.completed" || event.type === "turn.step.interrupted"
+      ? event.payload.reason
+      : undefined;
+  const entry = createTimelineEntry(
+    {
+      key,
+      kind: "timeline",
+      item: {
+        kind: "step",
+        title,
+        status,
+        ...(text ? { text } : {}),
+      },
+      ts: event.ts,
+    },
+    event.turnId,
+  );
+  if (existingIndex < 0) {
+    return [...feed, entry];
+  }
+  const next = [...feed];
+  next[existingIndex] = entry;
+  return next;
+}
+
 function applyNotificationEvent(
   feed: FeedEntry[],
   event: Extract<RahEvent, { type: "notification.emitted" }>,
@@ -1269,6 +1349,22 @@ export function applyEventToProjection(
               ...current.summary.session,
               runtimeState: event.payload.state,
               updatedAt: event.ts,
+            },
+          }
+      : event.type === "session.native_tui.prompt_state.changed"
+        ? {
+            ...current.summary,
+            session: {
+              ...current.summary.session,
+              updatedAt: event.ts,
+              ...(current.summary.session.nativeTui
+                ? {
+                    nativeTui: {
+                      ...current.summary.session.nativeTui,
+                      promptState: event.payload.promptState,
+                    },
+                  }
+                : {}),
             },
           }
         : event.type === "permission.requested"
@@ -1354,6 +1450,11 @@ export function applyEventToProjection(
       break;
     case "runtime.status":
       nextFeed = applyRuntimeStatusEvent(nextFeed, event);
+      break;
+    case "turn.step.started":
+    case "turn.step.completed":
+    case "turn.step.interrupted":
+      nextFeed = applyTurnStepEvent(nextFeed, event);
       break;
     case "notification.emitted":
       nextFeed = applyNotificationEvent(nextFeed, event);

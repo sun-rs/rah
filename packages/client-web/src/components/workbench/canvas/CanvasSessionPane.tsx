@@ -1,5 +1,6 @@
 import type { PermissionResponseRequest, ProviderModelCatalog, SessionConfigValue, SessionSummary } from "@rah/runtime-protocol";
 import { useWorkbenchComposerState } from "../../../hooks/useWorkbenchComposerState";
+import { useNativeTuiDiagnostics } from "../../../hooks/useNativeTuiDiagnostics";
 import { buildModelOptionValuesFromReasoning } from "../../../provider-capabilities";
 import {
   canSessionArchive,
@@ -10,7 +11,7 @@ import {
   canSessionSwitchModel,
   canSessionSwitchModes,
   isReadOnlyReplay,
-  isSessionActivelyRunning,
+  isSessionGenerationActive,
 } from "../../../session-capabilities";
 import {
   createDefaultModeDraft,
@@ -86,16 +87,23 @@ export function CanvasSessionPane(props: {
   const isAttached = isSessionAttachedToClient(props.summary, props.clientId);
   const hasControl = props.summary.controlLease.holderClientId === props.clientId;
   const canRespondToPermission = canSessionRespondToPermissions(props.summary);
-  const isGenerating = isSessionActivelyRunning(props.summary);
+  const isGenerating = isSessionGenerationActive(
+    props.summary,
+    props.projection?.currentRuntimeStatus,
+  );
   const composerSurface = deriveComposerSurface({
     selectedSummary: props.summary,
     hasControl,
     isGenerating,
     pendingSessionAction: props.pendingSessionAction,
   });
+  const nativeTuiDiagnostics = useNativeTuiDiagnostics(
+    props.summary.session.nativeTui ? props.summary.session.id : null,
+  );
   const noticeState = deriveWorkbenchNoticeState({
     selectedSummary: props.summary,
     selectedProjection: props.projection,
+    nativeTuiDiagnostics,
     error: null,
   });
   const modeControl = resolveSessionModeControlState({
@@ -147,6 +155,7 @@ export function CanvasSessionPane(props: {
     <div className="flex h-full min-h-0 flex-col">
     <WorkbenchSelectedPane
       selectedSummary={props.summary}
+      clientId={props.clientId}
       selectedProjection={props.projection}
       selectedIsReadOnlyReplay={selectedIsReadOnlyReplay}
       compactComposerPrompts="auto"

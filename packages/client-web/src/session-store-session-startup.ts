@@ -3,6 +3,7 @@ import type {
   ResumeSessionRequest,
   SessionConfigValue,
   SessionSummary,
+  StartSessionRequest,
   StoredSessionRef,
 } from "@rah/runtime-protocol";
 import * as api from "./api";
@@ -40,6 +41,7 @@ type StartSessionOptions = {
   optionValues?: Record<string, SessionConfigValue>;
   reasoningId?: string;
   modeId?: string;
+  liveBackend?: StartSessionRequest["liveBackend"];
   initialInput?: string;
   confirmCreateMissingWorkspace?: (dir: string) => Promise<boolean>;
   onSessionCreated?: (sessionId: string) => void;
@@ -122,6 +124,18 @@ type SessionStartupDeps = {
   confirmCreateMissingWorkspace: (dir: string) => Promise<boolean>;
 };
 
+function defaultLiveBackendForProvider(
+  provider: string,
+): NonNullable<StartSessionRequest["liveBackend"]> | undefined {
+  return provider === "codex" ||
+    provider === "claude" ||
+    provider === "gemini" ||
+    provider === "kimi" ||
+    provider === "opencode"
+    ? "native_tui"
+    : undefined;
+}
+
 export async function startSessionCommand(
   deps: SessionStartupDeps,
   options?: StartSessionOptions,
@@ -146,9 +160,11 @@ export async function startSessionCommand(
       error: null,
     });
     const initialInput = options?.initialInput?.trim();
+    const liveBackend = options?.liveBackend ?? defaultLiveBackendForProvider(provider);
     const response = await api.startSession({
       provider,
       cwd,
+      ...(liveBackend ? { liveBackend } : {}),
       title: options?.title ?? `${providerLabel(provider)} session`,
       ...(options?.model ? { model: options.model } : {}),
       ...(options?.optionValues !== undefined ? { optionValues: options.optionValues } : {}),
@@ -296,6 +312,12 @@ export async function resumeStoredSessionCommand(
     const request: ResumeSessionRequest = {
       provider: ref.provider,
       providerSessionId: ref.providerSessionId,
+      ...(!preferStoredReplay
+        ? (() => {
+            const liveBackend = defaultLiveBackendForProvider(ref.provider);
+            return liveBackend ? { liveBackend } : {};
+          })()
+        : {}),
       preferStoredReplay,
       attach: createObserveAttachRequest(deps.get().clientId, deps.get().connectionId),
     };
@@ -414,6 +436,10 @@ export async function claimHistorySessionCommand(
     const request: ResumeSessionRequest = {
       provider: ref.provider,
       providerSessionId: ref.providerSessionId,
+      ...(() => {
+        const liveBackend = defaultLiveBackendForProvider(ref.provider);
+        return liveBackend ? { liveBackend } : {};
+      })(),
       ...(options?.modelId ? { model: options.modelId } : {}),
       ...(options?.optionValues !== undefined ? { optionValues: options.optionValues } : {}),
       ...(options?.modelId && options.reasoningId !== undefined

@@ -1,4 +1,4 @@
-import type { ClientKind, ManagedSession, ProviderKind } from "./session";
+import type { ClientKind, ManagedSession, NativeTuiPromptState, ProviderKind } from "./session";
 
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
@@ -306,6 +306,7 @@ export type RahEventPayloadMap = {
   "session.detached": { clientId: string };
   "session.closed": { clientId?: string };
   "session.state.changed": { state: ManagedSession["runtimeState"] };
+  "session.native_tui.prompt_state.changed": { promptState: NativeTuiPromptState };
   "session.exited": { exitCode?: number; signal?: string };
   "session.failed": { error: string };
 

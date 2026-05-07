@@ -87,7 +87,17 @@ function sameTimelineText(
 
 function collapseDuplicateTimelineEvents(events: RahEvent[]): RahEvent[] {
   const next: RahEvent[] = [];
+  const seenCanonicalItemIds = new Set<string>();
   for (const event of events) {
+    if (
+      event.type === "timeline.item.added" &&
+      typeof event.payload.identity?.canonicalItemId === "string"
+    ) {
+      if (seenCanonicalItemIds.has(event.payload.identity.canonicalItemId)) {
+        continue;
+      }
+      seenCanonicalItemIds.add(event.payload.identity.canonicalItemId);
+    }
     const previous = next.at(-1);
     if (sameTimelineText(previous, event)) {
       continue;

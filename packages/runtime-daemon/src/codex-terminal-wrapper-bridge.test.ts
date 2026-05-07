@@ -1,10 +1,9 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  applyLocalTerminalInput,
   extractCodexTerminalSessionId,
   hasCodexTerminalPrompt,
-  nextPromptStateFromActivity,
+  readPersistedTaskLifecycle,
   selectCodexStoredSessionCandidate,
   sliceUnprocessedRolloutLines,
 } from "./codex-terminal-wrapper-bridge";
@@ -148,23 +147,6 @@ describe("codex terminal wrapper bridge helpers", () => {
     assert.equal(record?.ref.providerSessionId, "thread-private");
   });
 
-  test("advances prompt state from provider activities", () => {
-    assert.equal(
-      nextPromptStateFromActivity("prompt_clean", {
-        type: "turn_started",
-        turnId: "turn-1",
-      }),
-      "agent_busy",
-    );
-    assert.equal(
-      nextPromptStateFromActivity("agent_busy", {
-        type: "turn_completed",
-        turnId: "turn-1",
-      }),
-      "prompt_clean",
-    );
-  });
-
   test("slices unprocessed rollout lines by processed line count", () => {
     const first = sliceUnprocessedRolloutLines("a\nb\n", 0);
     assert.deepEqual(first, {
@@ -179,72 +161,30 @@ describe("codex terminal wrapper bridge helpers", () => {
     });
   });
 
-  test("tracks local terminal draft input and submission", () => {
-    const tracker = { draftText: "" };
-
-    assert.equal(
-      applyLocalTerminalInput({
-        tracker,
-        promptState: "prompt_clean",
-        data: "hello",
+  test("reads persisted task lifecycle from rollout event messages", () => {
+    assert.deepEqual(
+      readPersistedTaskLifecycle({
+        timestamp: "2026-05-03T00:00:01.000Z",
+        type: "event_msg",
+        payload: { type: "task_started", turn_id: "turn-1" },
       }),
-      "prompt_dirty",
+      { kind: "started", turnId: "turn-1", ts: "2026-05-03T00:00:01.000Z" },
     );
-    assert.equal(tracker.draftText, "hello");
-
-    assert.equal(
-      applyLocalTerminalInput({
-        tracker,
-        promptState: "prompt_dirty",
-        data: "\u007f",
+    assert.deepEqual(
+      readPersistedTaskLifecycle({
+        type: "event_msg",
+        payload: { type: "task_complete", turn_id: "turn-1" },
       }),
-      "prompt_dirty",
+      { kind: "completed", turnId: "turn-1" },
     );
-    assert.equal(tracker.draftText, "hell");
-
-    assert.equal(
-      applyLocalTerminalInput({
-        tracker,
-        promptState: "prompt_dirty",
-        data: "\r",
+    assert.deepEqual(
+      readPersistedTaskLifecycle({
+        type: "event_msg",
+        payload: { type: "turn_aborted", turn_id: "turn-1" },
       }),
-      "agent_busy",
+      { kind: "canceled", turnId: "turn-1" },
     );
-    assert.equal(tracker.draftText, "");
-  });
-
-  test("clears local terminal draft with control keys", () => {
-    const tracker = { draftText: "" };
-
-    applyLocalTerminalInput({
-      tracker,
-      promptState: "prompt_clean",
-      data: "abc",
-    });
-
-    assert.equal(
-      applyLocalTerminalInput({
-        tracker,
-        promptState: "prompt_dirty",
-        data: "\u0015",
-      }),
-      "prompt_clean",
-    );
-    assert.equal(tracker.draftText, "");
-  });
-
-  test("ignores escape-sequence navigation input", () => {
-    const tracker = { draftText: "" };
-
-    assert.equal(
-      applyLocalTerminalInput({
-        tracker,
-        promptState: "prompt_clean",
-        data: "\u001b[A",
-      }),
-      "prompt_clean",
-    );
-    assert.equal(tracker.draftText, "");
+    assert.equal(readPersistedTaskLifecycle({ type: "event_msg", payload: {} }), null);
   });
 
   test("extracts codex session id from tui status output with ansi escapes", () => {

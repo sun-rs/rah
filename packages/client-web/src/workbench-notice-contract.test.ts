@@ -1,6 +1,6 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import type { SessionSummary } from "@rah/runtime-protocol";
+import type { NativeTuiDiagnostic, SessionSummary } from "@rah/runtime-protocol";
 import { initialHistorySyncState, type SessionProjection } from "./types";
 import { deriveWorkbenchNoticeState } from "./workbench-notice-contract";
 
@@ -46,6 +46,24 @@ function projection(summaryValue: SessionSummary): SessionProjection {
   };
 }
 
+function nativeDiagnostic(
+  args?: Partial<NativeTuiDiagnostic>,
+): NativeTuiDiagnostic {
+  return {
+    id: "native-tui:session-1:process_exited",
+    sessionId: "session-1",
+    provider: "codex",
+    kind: "process_exited",
+    severity: "warning",
+    status: "active",
+    message: "Native TUI process exited before the session was closed.",
+    cwd: "/workspace/rah",
+    createdAt: "2026-05-03T00:00:00.000Z",
+    updatedAt: "2026-05-03T00:00:00.000Z",
+    ...args,
+  };
+}
+
 describe("workbench notice contract", () => {
   test("derives interaction notice for read-only replay sessions", () => {
     const state = deriveWorkbenchNoticeState({
@@ -88,6 +106,74 @@ describe("workbench notice contract", () => {
     assert.deepEqual(state.interactionNotice, {
       tone: "info",
       message: "Terminal is handling this turn. Web can observe it, but can't interrupt it.",
+    });
+  });
+
+  test("derives warning notice for stopped native TUI sessions", () => {
+    const state = deriveWorkbenchNoticeState({
+      selectedSummary: summary({
+        liveBackend: "native_tui",
+        runtimeState: "stopped",
+        nativeTui: {
+          terminalId: "session-1",
+          viewAvailable: true,
+        },
+      }),
+      selectedProjection: projection(summary()),
+      error: null,
+    });
+
+    assert.deepEqual(state.interactionNotice, {
+      tone: "warning",
+      message:
+        "Native TUI process is stopped. Archive this session or resume it from history to continue.",
+    });
+  });
+
+  test("derives warning notice when native TUI has an unsent local draft", () => {
+    const state = deriveWorkbenchNoticeState({
+      selectedSummary: summary({
+        liveBackend: "native_tui",
+        nativeTui: {
+          terminalId: "session-1",
+          viewAvailable: true,
+          promptState: "prompt_dirty",
+        },
+      }),
+      selectedProjection: projection(summary()),
+      error: null,
+    });
+
+    assert.deepEqual(state.interactionNotice, {
+      tone: "warning",
+      message:
+        "Native TUI has an unsent local draft. Switch to TUI and submit or clear it before sending from Chat.",
+    });
+  });
+
+  test("prioritizes active native TUI diagnostics on the selected session", () => {
+    const state = deriveWorkbenchNoticeState({
+      selectedSummary: summary({
+        liveBackend: "native_tui",
+        runtimeState: "stopped",
+        nativeTui: {
+          terminalId: "session-1",
+          viewAvailable: true,
+        },
+      }),
+      selectedProjection: projection(summary()),
+      nativeTuiDiagnostics: [
+        nativeDiagnostic({
+          kind: "mirror_source_missing",
+          message: "Chat mirror source is not available yet.",
+        }),
+      ],
+      error: null,
+    });
+
+    assert.deepEqual(state.interactionNotice, {
+      tone: "warning",
+      message: "Chat mirror: Chat mirror source is not available yet.",
     });
   });
 

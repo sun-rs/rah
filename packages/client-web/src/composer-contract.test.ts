@@ -5,6 +5,7 @@ import {
   COMPOSER_LAYOUT,
   EMPTY_STATE_COMPOSER_LAYOUT,
   EMPTY_STATE_EXPANDED_CONTROLS_MIN_WIDTH_PX,
+  canSubmitComposerInput,
   deriveComposerSurface,
   shouldCompactEmptyStateSessionControls,
 } from "./composer-contract";
@@ -229,6 +230,50 @@ describe("composer contract", () => {
     );
     assert.equal(
       shouldCompactEmptyStateSessionControls(EMPTY_STATE_EXPANDED_CONTROLS_MIN_WIDTH_PX),
+      false,
+    );
+  });
+
+  test("blocks native TUI Chat composer submission while the provider prompt is dirty", () => {
+    const composerSurface = {
+      kind: "compose",
+      showStopButton: false,
+    } as const;
+
+    assert.equal(
+      canSubmitComposerInput({
+        composerSurface,
+        draft: "send this",
+        sendPending: false,
+        nativeTuiPromptState: "prompt_clean",
+      }),
+      true,
+    );
+    assert.equal(
+      canSubmitComposerInput({
+        composerSurface,
+        draft: "send this",
+        sendPending: false,
+        nativeTuiPromptState: "prompt_dirty",
+      }),
+      false,
+    );
+    assert.equal(
+      canSubmitComposerInput({
+        composerSurface,
+        draft: "   ",
+        sendPending: false,
+        nativeTuiPromptState: "prompt_clean",
+      }),
+      false,
+    );
+    assert.equal(
+      canSubmitComposerInput({
+        composerSurface,
+        draft: "send this",
+        sendPending: true,
+        nativeTuiPromptState: "prompt_clean",
+      }),
       false,
     );
   });

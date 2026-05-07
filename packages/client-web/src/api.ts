@@ -17,13 +17,17 @@ import type {
   GitStatusResponse,
   SessionFileSearchResponse,
   ListDebugScenariosResponse,
+  ListNativeTuiDiagnosticsResponse,
+  ListPtyStatsResponse,
   ListProviderModelsResponse,
   ListProvidersResponse,
+  NativeTuiDiagnostic,
   ListSessionsResponse,
   ProviderDiagnostic,
   ProviderKind,
   ProviderModelCatalog,
   PtyClientMessage,
+  PtySessionStats,
   PtyServerMessage,
   PermissionResponseRequest,
   RenameSessionRequest,
@@ -250,6 +254,35 @@ export async function listProviders(options?: {
     ...(options?.signal ? { signal: options.signal } : {}),
   });
   return response.providers;
+}
+
+export async function listNativeTuiDiagnostics(options?: {
+  sessionId?: string;
+  includeResolved?: boolean;
+  signal?: AbortSignal;
+}): Promise<NativeTuiDiagnostic[]> {
+  const query = new URLSearchParams();
+  if (options?.sessionId) {
+    query.set("sessionId", options.sessionId);
+  }
+  if (options?.includeResolved) {
+    query.set("includeResolved", "1");
+  }
+  const suffix = query.size ? `?${query.toString()}` : "";
+  const response = await requestJson<ListNativeTuiDiagnosticsResponse>(
+    `/api/native-tui/diagnostics${suffix}`,
+    {
+      ...(options?.signal ? { signal: options.signal } : {}),
+    },
+  );
+  return response.diagnostics;
+}
+
+export async function listPtyStats(options?: { signal?: AbortSignal }): Promise<PtySessionStats[]> {
+  const response = await requestJson<ListPtyStatsResponse>("/api/pty/stats", {
+    ...(options?.signal ? { signal: options.signal } : {}),
+  });
+  return response.sessions;
 }
 
 export async function listProviderModels(
@@ -649,9 +682,13 @@ export function createPtySocket(
   sessionId: string,
   onMessage: (message: PtyServerMessage) => void,
   onError?: (error: Error) => void,
+  options?: { fromSeq?: number },
 ): WebSocket {
   const url = new URL(`/api/pty/${sessionId}`, getBaseUrl().replace(/^http/, "ws"));
   url.searchParams.set("replay", "true");
+  if (options?.fromSeq !== undefined) {
+    url.searchParams.set("fromSeq", String(options.fromSeq));
+  }
   const socket = new WebSocket(url);
   socket.addEventListener("message", (event) => {
     try {
@@ -667,5 +704,8 @@ export function createPtySocket(
 }
 
 export function sendPtyMessage(socket: WebSocket, message: PtyClientMessage): void {
+  if (socket.readyState !== WebSocket.OPEN) {
+    return;
+  }
   socket.send(JSON.stringify(message));
 }

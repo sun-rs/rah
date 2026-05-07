@@ -319,24 +319,24 @@ describe("applyProviderActivity", () => {
     unsubscribe();
 
     assert.ok(
-      frames.some((frame) =>
-        JSON.stringify(frame) ===
-        JSON.stringify({
-          type: "pty.output",
-          sessionId,
-          data: "line one\r\n",
-        }),
-      ),
+      frames.some((frame) => {
+        const output = frame as { type?: string; sessionId?: string; data?: string };
+        return (
+          output.type === "pty.output" &&
+          output.sessionId === sessionId &&
+          output.data === "line one\r\n"
+        );
+      }),
     );
     assert.ok(
-      frames.some((frame) =>
-        JSON.stringify(frame) ===
-        JSON.stringify({
-          type: "pty.exited",
-          sessionId,
-          exitCode: 0,
-        }),
-      ),
+      frames.some((frame) => {
+        const exited = frame as { type?: string; sessionId?: string; exitCode?: number };
+        return (
+          exited.type === "pty.exited" &&
+          exited.sessionId === sessionId &&
+          exited.exitCode === 0
+        );
+      }),
     );
 
     const events = services.eventBus.list({ sessionIds: [sessionId] });

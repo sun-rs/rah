@@ -58,6 +58,26 @@ export function listCodexWrapperHomes(baseHome = resolveCodexBaseHome()): string
   }
 }
 
+function isWithinDirectory(filePath: string, directory: string): boolean {
+  const relative = path.relative(path.resolve(directory), path.resolve(filePath));
+  return Boolean(relative) && !relative.startsWith("..") && !path.isAbsolute(relative);
+}
+
+export function codexHomeForRolloutPath(
+  rolloutPath: string,
+  baseHome = resolveCodexBaseHome(),
+): string | null {
+  for (const home of [baseHome, ...listCodexWrapperHomes(baseHome)]) {
+    if (
+      isWithinDirectory(rolloutPath, path.join(home, "sessions")) ||
+      isWithinDirectory(rolloutPath, path.join(home, "archived_sessions"))
+    ) {
+      return home;
+    }
+  }
+  return null;
+}
+
 export function createIsolatedCodexWrapperHome(baseHome = resolveCodexBaseHome()): string {
   const wrapperHomesRoot = resolveCodexWrapperHomesRoot(baseHome);
   mkdirSync(wrapperHomesRoot, { recursive: true });

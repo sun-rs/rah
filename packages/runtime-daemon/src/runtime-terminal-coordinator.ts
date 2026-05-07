@@ -3,17 +3,22 @@ import type {
   IndependentTerminalSession,
   IndependentTerminalStartRequest,
   IndependentTerminalStartResponse,
+  NativeTuiDiagnostic,
   PermissionResponseRequest,
-  SessionCapabilities,
+  StartSessionRequest,
+  StartSessionResponse,
   RahEvent,
 } from "@rah/runtime-protocol";
 import type { HistorySnapshotStore } from "./history-snapshots";
 import { IndependentTerminalProcess } from "./independent-terminal";
-import { applyProviderActivity, type ProviderActivity } from "./provider-activity";
-import { PtyHub } from "./pty-hub";
-import { SessionStore, type StoredSessionState } from "./session-store";
 import {
-  TerminalWrapperRegistry,
+  applyProviderActivity,
+  type ProviderActivity,
+  type ProviderActivityMeta,
+} from "./provider-activity";
+import { PtyHub } from "./pty-hub";
+import { SessionStore, toSessionSummary, type StoredSessionState } from "./session-store";
+import {
   type TerminalWrapperFromDaemonMessage,
   type TerminalWrapperPromptState,
   type WrapperHelloMessage,
@@ -21,16 +26,59 @@ import {
   type WrapperReadyMessage,
 } from "./terminal-wrapper-control";
 import { EventBus } from "./event-bus";
+import {
+  applyLocalTerminalInput,
+  nextPromptStateFromActivity,
+} from "./native-tui-prompt-state";
+import {
+  shouldIgnoreStaleMirrorPromptClean,
+  shouldIgnoreStaleMirrorStateActivity,
+} from "./native-tui-mirror-guard";
 import { buildExternalLockedModeState } from "./session-mode-utils";
 import { resolveUserPath } from "./workbench-directory-utils";
-
-const SYSTEM_SOURCE = {
-  provider: "system" as const,
-  channel: "system" as const,
-  authority: "authoritative" as const,
-};
-
-const PREEMPTIVE_WRAPPER_INTERRUPT_TTL_MS = 1_500;
+import type { NativeTuiLaunchSpec } from "./native-tui-launch-spec";
+import type {
+  NativeTuiBindingRecord,
+  NativeTuiProviderRuntime,
+} from "./native-tui-provider-runtime";
+import {
+  NativeTuiDiagnosticStore,
+  type ListNativeTuiDiagnosticsOptions,
+  maybeRecordNativeTuiBindingMissingDiagnostic,
+  maybeRecordNativeTuiMirrorSourceMissingDiagnostic,
+  recordNativeTuiMirrorFailureDiagnostic,
+  recordNativeTuiProcessExitDiagnostic,
+  resolveNativeTuiBindingDiagnostic,
+  resolveNativeTuiMirrorFailureDiagnostic,
+  resolveNativeTuiMirrorSourceDiagnostic,
+} from "./native-tui-diagnostics";
+import {
+  buildNativeTuiSessionCapabilities,
+} from "./runtime-terminal-capabilities";
+import {
+  nativeTuiBindingProbeIntervalMs,
+  nativeTuiBindingWarnAfterMs,
+  nativeTuiMirrorIntervalMs,
+  nativeTuiMirrorWarnAfterMs,
+} from "./native-tui-runtime-config";
+import {
+  cancelNativeTuiQueuedInputsForClient,
+  clearNativeTuiSessionTimers,
+  dequeueNativeTuiQueuedInput,
+  enqueueNativeTuiQueuedInput,
+  nativeTuiProviderRuntimeSession,
+  type NativeTuiSessionState,
+} from "./native-tui-session-state";
+import {
+  attachClientAndMaybeClaimControl,
+  claimClientControlAndPublish,
+  ensureClientAttachedAndPublish,
+  publishSessionCreatedAndStarted,
+  publishSessionStarted,
+  publishSessionStateChanged,
+  SYSTEM_SOURCE,
+} from "./runtime-session-events";
+import { TerminalWrapperSessionRuntime } from "./terminal-wrapper-session-runtime";
 
 type IndependentTerminalState = {
   id: string;
@@ -44,172 +92,223 @@ type RuntimeTerminalCoordinatorDeps = {
   ptyHub: PtyHub;
   sessionStore: SessionStore;
   historySnapshots: HistorySnapshotStore;
+  nativeTuiProviders: NativeTuiProviderRuntime;
   onRememberSession: (state: StoredSessionState) => void;
   onSessionOwnerRemoved: (sessionId: string) => void;
 };
 
-function buildTerminalWrapperCapabilities(
-  provider: WrapperHelloMessage["provider"],
-): Partial<SessionCapabilities> {
-  return {
-    livePermissions: provider !== "claude" && provider !== "gemini",
-    renameSession: false,
-    actions: {
-      info: true,
-      archive: true,
-      delete: false,
-      rename: "none",
-    },
-    steerInput: true,
-    queuedInput: true,
-  };
-}
-
 export class RuntimeTerminalCoordinator {
-  private readonly terminalWrappers = new TerminalWrapperRegistry();
-  private readonly terminalWrapperSenders = new Map<
-    string,
-    (message: TerminalWrapperFromDaemonMessage) => void
-  >();
-  private readonly preemptiveWrapperInterrupts = new Map<string, Map<string, number>>();
-  private readonly closingTerminalWrapperSessionIds = new Set<string>();
+  private readonly terminalWrappers: TerminalWrapperSessionRuntime;
   private readonly independentTerminals = new Map<string, IndependentTerminalState>();
+  private readonly nativeTuiSessions = new Map<string, NativeTuiSessionState>();
+  private readonly nativeTuiSessionIds = new Set<string>();
+  private readonly closingNativeTuiSessionIds = new Set<string>();
+  private readonly nativeTuiDiagnostics = new NativeTuiDiagnosticStore();
 
-  constructor(private readonly deps: RuntimeTerminalCoordinatorDeps) {}
+  constructor(private readonly deps: RuntimeTerminalCoordinatorDeps) {
+    this.terminalWrappers = new TerminalWrapperSessionRuntime(deps);
+  }
 
   hasWrapperSession(sessionId: string): boolean {
-    return this.terminalWrappers.get(sessionId) !== undefined;
+    return this.terminalWrappers.hasSession(sessionId);
   }
 
   isClosingWrapperSession(sessionId: string): boolean {
-    return this.closingTerminalWrapperSessionIds.has(sessionId);
+    return this.terminalWrappers.isClosingSession(sessionId);
+  }
+
+  hasNativeTuiSession(sessionId: string): boolean {
+    return this.nativeTuiSessionIds.has(sessionId);
+  }
+
+  listNativeTuiDiagnostics(options?: ListNativeTuiDiagnosticsOptions): NativeTuiDiagnostic[] {
+    return this.nativeTuiDiagnostics.list(options);
   }
 
   clearSessionState(sessionId: string): void {
-    this.terminalWrappers.remove(sessionId);
-    this.terminalWrapperSenders.delete(sessionId);
-    this.preemptiveWrapperInterrupts.delete(sessionId);
-    this.closingTerminalWrapperSessionIds.delete(sessionId);
+    this.terminalWrappers.clearSessionState(sessionId);
+    this.clearNativeTuiRuntimeState(sessionId);
+    this.nativeTuiSessionIds.delete(sessionId);
   }
 
-  handleWrapperInput(sessionId: string, clientId: string, text: string): boolean {
-    const wrapper = this.terminalWrappers.get(sessionId);
-    if (!wrapper) {
+  private clearNativeTuiRuntimeState(sessionId: string): void {
+    const native = this.nativeTuiSessions.get(sessionId);
+    clearNativeTuiSessionTimers(native);
+    this.nativeTuiDiagnostics.clearSession(sessionId);
+    this.nativeTuiSessions.delete(sessionId);
+  }
+
+  handleNativeTuiInput(sessionId: string, clientId: string, text: string): boolean {
+    const native = this.nativeTuiSessions.get(sessionId);
+    if (!native) {
+      if (this.nativeTuiSessionIds.has(sessionId)) {
+        throw new Error("Native TUI process is not running.");
+      }
       return false;
     }
-    this.claimWrapperWebControl(sessionId, clientId);
-    if (this.consumePreemptiveWrapperInterrupt(sessionId, clientId)) {
+    this.claimWebControl(sessionId, clientId);
+    if (native.promptState === "prompt_dirty") {
+      throw new Error(
+        "Native TUI prompt is not clean. Switch to TUI or clear the current prompt before sending from chat.",
+      );
+    }
+    if (native.promptState === "agent_busy") {
+      const queued = enqueueNativeTuiQueuedInput(
+        native,
+        {
+          clientId,
+          text,
+          queuedAt: new Date().toISOString(),
+        },
+        20,
+      );
+      if (!queued) {
+        throw new Error("Native TUI input queue is full.");
+      }
       return true;
     }
-    const queuedTurn = this.terminalWrappers.enqueueRemoteTurn(sessionId, clientId, text);
-    const sender = this.terminalWrapperSenders.get(sessionId);
-    if (sender) {
-      if (wrapper.promptState === "prompt_clean") {
-        const injectable = this.terminalWrappers.dequeueInjectableTurn(sessionId);
-        if (injectable) {
-          sender({ type: "turn.inject", sessionId, queuedTurn: injectable });
-        }
-      } else {
-        sender({ type: "turn.enqueue", sessionId, queuedTurn });
+    this.injectNativeTuiChatInput(native, clientId, text);
+    return true;
+  }
+
+  private injectNativeTuiChatInput(
+    native: NativeTuiSessionState,
+    clientId: string,
+    text: string,
+  ): void {
+    this.claimWebControl(native.sessionId, clientId);
+    // Drain already persisted mirror events before injecting a new chat turn.
+    // Otherwise delayed history polling can replay old completions after the
+    // new input and incorrectly mark the native TUI session idle.
+    this.mirrorNativeTuiSession(native.sessionId);
+    native.promptTracker.draftText = "";
+    native.lastInjectedInputAtMs = Date.now();
+    native.process.write(`${text}\r`);
+    this.updateNativeTuiPromptState(native.sessionId, "agent_busy");
+  }
+
+  handleNativeTuiInterrupt(sessionId: string, clientId: string): boolean {
+    const native = this.nativeTuiSessions.get(sessionId);
+    if (!native) {
+      if (this.nativeTuiSessionIds.has(sessionId)) {
+        throw new Error("Native TUI process is not running.");
       }
-    }
-    return true;
-  }
-
-  handleWrapperInterrupt(sessionId: string, clientId: string): boolean {
-    if (!this.terminalWrappers.get(sessionId)) {
       return false;
     }
-    this.terminalWrappers.cancelQueuedTurns(sessionId, clientId);
-    this.armPreemptiveWrapperInterrupt(sessionId, clientId);
-    this.terminalWrapperSenders.get(sessionId)?.({
-      type: "turn.interrupt",
-      sessionId,
-      sourceSurfaceId: clientId,
-    });
-    return true;
-  }
-
-  private armPreemptiveWrapperInterrupt(sessionId: string, clientId: string): void {
-    const byClient = this.preemptiveWrapperInterrupts.get(sessionId) ?? new Map<string, number>();
-    byClient.set(clientId, Date.now() + PREEMPTIVE_WRAPPER_INTERRUPT_TTL_MS);
-    this.preemptiveWrapperInterrupts.set(sessionId, byClient);
-  }
-
-  private consumePreemptiveWrapperInterrupt(sessionId: string, clientId: string): boolean {
-    const byClient = this.preemptiveWrapperInterrupts.get(sessionId);
-    if (!byClient) {
-      return false;
-    }
-    const expiresAt = byClient.get(clientId);
-    if (expiresAt === undefined) {
-      return false;
-    }
-    byClient.delete(clientId);
-    if (byClient.size === 0) {
-      this.preemptiveWrapperInterrupts.delete(sessionId);
-    }
-    return expiresAt >= Date.now();
-  }
-
-  private claimWrapperWebControl(sessionId: string, clientId: string): void {
-    const state = this.deps.sessionStore.getSession(sessionId);
-    if (!state) {
-      return;
-    }
-    if (!this.deps.sessionStore.hasAttachedClient(sessionId, clientId)) {
-      this.deps.sessionStore.attachClient({
-        sessionId,
-        clientId,
-        kind: "web",
-        connectionId: clientId,
-        attachMode: "interactive",
-        focus: true,
-      });
+    this.claimWebControl(sessionId, clientId);
+    cancelNativeTuiQueuedInputsForClient(native, clientId);
+    native.process.write("\u0003");
+    native.promptTracker.draftText = "";
+    delete native.lastInjectedInputAtMs;
+    this.updateNativeTuiPromptState(sessionId, "prompt_dirty");
+    const activeTurnId = this.deps.sessionStore.getSession(sessionId)?.activeTurnId;
+    this.deps.sessionStore.setActiveTurn(sessionId, undefined);
+    this.deps.sessionStore.setRuntimeState(sessionId, "idle");
+    if (activeTurnId) {
       this.deps.eventBus.publish({
         sessionId,
-        type: "session.attached",
+        type: "turn.canceled",
         source: SYSTEM_SOURCE,
-        payload: {
-          clientId,
-          clientKind: "web",
-        },
+        payload: { reason: "interrupted" },
+        turnId: activeTurnId,
       });
+    }
+    publishSessionStateChanged(this.deps, sessionId, "idle");
+    return true;
+  }
+
+  private claimWebControl(sessionId: string, clientId: string): void {
+    const state = ensureClientAttachedAndPublish(this.deps, {
+      sessionId,
+      client: {
+        id: clientId,
+        kind: "web",
+        connectionId: clientId,
+      },
+      mode: "interactive",
+    });
+    if (!state) {
+      return;
     }
     if (this.deps.sessionStore.hasInputControl(sessionId, clientId)) {
       return;
     }
-    this.deps.sessionStore.claimControl(sessionId, clientId, "web");
-    this.deps.eventBus.publish({
+    claimClientControlAndPublish(this.deps, {
       sessionId,
-      type: "control.claimed",
-      source: SYSTEM_SOURCE,
-      payload: {
-        clientId,
-        clientKind: "web",
-      },
+      clientId,
+      clientKind: "web",
     });
   }
 
-  requestWrapperClose(sessionId: string, request: CloseSessionRequest): boolean {
-    if (!this.terminalWrappers.get(sessionId)) {
-      return false;
+  private observeNativeTuiPtyInput(native: NativeTuiSessionState, data: string): void {
+    const nextPromptState = applyLocalTerminalInput({
+      tracker: native.promptTracker,
+      promptState: native.promptState,
+      data,
+    });
+    if (
+      data.includes("\u001b") &&
+      !data.includes("\u0003") &&
+      nextPromptState === native.promptState &&
+      native.promptTracker.draftText.length === 0
+    ) {
+      this.updateNativeTuiPromptState(native.sessionId, "prompt_dirty");
+      return;
     }
-    this.closingTerminalWrapperSessionIds.add(sessionId);
-    this.deps.sessionStore.setRuntimeState(sessionId, "stopped");
-    this.terminalWrapperSenders.get(sessionId)?.({
-      type: "wrapper.close",
-      sessionId,
+    this.updateNativeTuiPromptState(native.sessionId, nextPromptState);
+  }
+
+  private updateNativeTuiPromptState(
+    sessionId: string,
+    promptState: TerminalWrapperPromptState,
+  ): void {
+    const native = this.nativeTuiSessions.get(sessionId);
+    const existingState = this.deps.sessionStore.getSession(sessionId);
+    if (!native || !existingState) {
+      return;
+    }
+    native.promptState = promptState;
+    this.deps.sessionStore.patchManagedSession(sessionId, {
+      nativeTui: {
+        terminalId: sessionId,
+        viewAvailable: true,
+        promptState,
+      },
     });
     this.deps.eventBus.publish({
       sessionId,
-      type: "session.closed",
+      type: "session.native_tui.prompt_state.changed",
       source: SYSTEM_SOURCE,
-      payload: {
-        clientId: request.clientId,
-      },
+      payload: { promptState },
     });
-    return true;
+    if (promptState === "prompt_clean") {
+      delete native.lastInjectedInputAtMs;
+    }
+    const nextRuntimeState = promptState === "agent_busy" ? "running" : "idle";
+    if (existingState.session.runtimeState !== nextRuntimeState) {
+      this.deps.sessionStore.setRuntimeState(sessionId, nextRuntimeState);
+      publishSessionStateChanged(this.deps, sessionId, nextRuntimeState);
+    }
+    if (promptState !== "prompt_clean" || native.queuedInputs.length === 0) {
+      return;
+    }
+    const queued = dequeueNativeTuiQueuedInput(native);
+    if (!queued) {
+      return;
+    }
+    this.injectNativeTuiChatInput(native, queued.clientId, queued.text);
+  }
+
+  handleWrapperInput(sessionId: string, clientId: string, text: string): boolean {
+    return this.terminalWrappers.handleInput(sessionId, clientId, text);
+  }
+
+  handleWrapperInterrupt(sessionId: string, clientId: string): boolean {
+    return this.terminalWrappers.handleInterrupt(sessionId, clientId);
+  }
+
+  requestWrapperClose(sessionId: string, request: CloseSessionRequest): boolean {
+    return this.terminalWrappers.requestClose(sessionId, request);
   }
 
   handlePermissionResponse(
@@ -217,22 +316,17 @@ export class RuntimeTerminalCoordinator {
     requestId: string,
     response: PermissionResponseRequest,
   ): boolean {
-    if (!this.terminalWrappers.get(sessionId)) {
-      return false;
-    }
-    this.terminalWrapperSenders.get(sessionId)?.({
-      type: "permission.resolve",
-      sessionId,
-      requestId,
-      response,
-    });
-    return true;
+    return this.terminalWrappers.handlePermissionResponse(sessionId, requestId, response);
   }
 
   handlePtyInput(sessionId: string, data: string): boolean {
     const terminal = this.independentTerminals.get(sessionId);
     if (!terminal) {
       return false;
+    }
+    const native = this.nativeTuiSessions.get(sessionId);
+    if (native) {
+      this.observeNativeTuiPtyInput(native, data);
     }
     terminal.process.write(data);
     return true;
@@ -305,261 +399,393 @@ export class RuntimeTerminalCoordinator {
     this.deps.ptyHub.removeSession(id);
   }
 
+  async startNativeTuiSession(args: {
+    launch: NativeTuiLaunchSpec;
+    attach?: StartSessionRequest["attach"];
+    providerSessionId?: string;
+  }): Promise<StartSessionResponse> {
+    const sessionId = crypto.randomUUID();
+    const providerSessionId = args.providerSessionId ?? args.launch.providerSessionId;
+    const startupTimestampMs = Date.now();
+    const state = this.deps.sessionStore.createManagedSession({
+      id: sessionId,
+      provider: args.launch.provider,
+      ...(providerSessionId ? { providerSessionId } : {}),
+      launchSource: "web",
+      liveBackend: "native_tui",
+      cwd: args.launch.cwd,
+      rootDir: args.launch.cwd,
+      title: args.launch.title,
+      preview: args.launch.preview,
+      nativeTui: {
+        terminalId: sessionId,
+        viewAvailable: true,
+        promptState: "prompt_clean",
+      },
+      ptyId: sessionId,
+      mode: buildExternalLockedModeState(),
+      capabilities: buildNativeTuiSessionCapabilities(args.launch.provider),
+    });
+    this.deps.ptyHub.ensureSession(sessionId);
+
+    if (args.attach) {
+      attachClientAndMaybeClaimControl(this.deps, {
+        sessionId,
+        client: args.attach.client,
+        mode: args.attach.mode,
+        ...(args.attach.claimControl !== undefined
+          ? { claimControl: args.attach.claimControl }
+          : {}),
+      });
+    }
+
+    publishSessionCreatedAndStarted(this.deps, sessionId);
+
+    const process = new IndependentTerminalProcess({
+      cwd: args.launch.cwd,
+      command: args.launch.command,
+      args: args.launch.args,
+      ...(args.launch.env ? { env: args.launch.env } : {}),
+      onData: (data) => {
+        this.deps.ptyHub.appendOutput(sessionId, data);
+        this.observeNativeTuiOutput(sessionId, data);
+      },
+      onExit: (exitArgs) => {
+        const native = this.nativeTuiSessions.get(sessionId);
+        const expectedClose = this.closingNativeTuiSessionIds.has(sessionId);
+        this.clearNativeTuiRuntimeState(sessionId);
+        this.closingNativeTuiSessionIds.delete(sessionId);
+        this.independentTerminals.delete(sessionId);
+        this.deps.ptyHub.emitExit(sessionId, exitArgs.exitCode, exitArgs.signal);
+        if (this.deps.sessionStore.getSession(sessionId)) {
+          this.deps.sessionStore.setRuntimeState(sessionId, "stopped");
+          publishSessionStateChanged(this.deps, sessionId, "stopped");
+        }
+        if (native && !expectedClose) {
+          recordNativeTuiProcessExitDiagnostic(this.nativeTuiDiagnostics, native, exitArgs);
+        }
+      },
+    });
+    this.independentTerminals.set(sessionId, {
+      id: sessionId,
+      cwd: args.launch.cwd,
+      shell: process.shell,
+      process,
+    });
+    this.nativeTuiSessions.set(sessionId, {
+      sessionId,
+      process,
+      provider: args.launch.provider,
+      cwd: args.launch.cwd,
+      startupTimestampMs,
+      ...(args.launch.env ? { launchEnv: args.launch.env } : {}),
+      promptState: "prompt_clean",
+      promptTracker: { draftText: "" },
+      queuedInputs: [],
+      ...(providerSessionId ? { providerSessionId } : {}),
+    });
+    this.nativeTuiSessionIds.add(sessionId);
+    this.startNativeTuiBindingProbe(sessionId);
+    this.startNativeTuiMirror(sessionId);
+
+    try {
+      await process.waitUntilReady();
+    } catch (error) {
+      await process.close().catch(() => undefined);
+      this.clearNativeTuiRuntimeState(sessionId);
+      this.nativeTuiSessionIds.delete(sessionId);
+      this.independentTerminals.delete(sessionId);
+      this.deps.ptyHub.removeSession(sessionId);
+      this.deps.sessionStore.removeSession(sessionId);
+      throw error;
+    }
+
+    const readyState = this.deps.sessionStore.setRuntimeState(sessionId, "idle");
+    publishSessionStateChanged(this.deps, sessionId, "idle");
+    return { session: toSessionSummary(readyState) };
+  }
+
+  async closeNativeTuiSession(sessionId: string): Promise<boolean> {
+    if (!this.nativeTuiSessionIds.has(sessionId)) {
+      return false;
+    }
+    const native = this.nativeTuiSessions.get(sessionId);
+    this.closingNativeTuiSessionIds.add(sessionId);
+    this.clearNativeTuiRuntimeState(sessionId);
+    this.nativeTuiSessionIds.delete(sessionId);
+    this.independentTerminals.delete(sessionId);
+    if (native) {
+      await native.process.close();
+    }
+    return true;
+  }
+
+  private startNativeTuiBindingProbe(sessionId: string): void {
+    const native = this.nativeTuiSessions.get(sessionId);
+    if (
+      !native ||
+      native.providerSessionId ||
+      !this.deps.nativeTuiProviders.canProbeBinding(native.provider)
+    ) {
+      return;
+    }
+    const timer = setInterval(() => {
+      this.probeNativeTuiBinding(sessionId);
+      this.warnIfNativeTuiBindingIsStillMissing(sessionId);
+    }, nativeTuiBindingProbeIntervalMs());
+    timer.unref?.();
+    native.bindingTimer = timer;
+  }
+
+  private warnIfNativeTuiBindingIsStillMissing(sessionId: string): void {
+    const native = this.nativeTuiSessions.get(sessionId);
+    if (!native || native.providerSessionId || native.bindingWarningEmitted) {
+      return;
+    }
+    native.bindingWarningEmitted = maybeRecordNativeTuiBindingMissingDiagnostic(
+      this.nativeTuiDiagnostics,
+      native,
+      nativeTuiBindingWarnAfterMs(),
+    );
+  }
+
+  private observeNativeTuiOutput(sessionId: string, data: string): void {
+    const native = this.nativeTuiSessions.get(sessionId);
+    if (!native) {
+      return;
+    }
+    const observation = this.deps.nativeTuiProviders.observeOutput(
+      nativeTuiProviderRuntimeSession(native),
+      data,
+    );
+    if (observation.promptClean) {
+      native.promptTracker.draftText = "";
+      this.updateNativeTuiPromptState(sessionId, "prompt_clean");
+    }
+    if (observation.binding) {
+      this.bindNativeTuiProviderSession(
+        sessionId,
+        observation.binding.providerSessionId,
+        observation.binding.record,
+      );
+    }
+  }
+
+  private probeNativeTuiBinding(sessionId: string): void {
+    const native = this.nativeTuiSessions.get(sessionId);
+    if (!native || native.providerSessionId) {
+      return;
+    }
+    const candidate = this.deps.nativeTuiProviders.probeBinding(
+      nativeTuiProviderRuntimeSession(native),
+    );
+    if (!candidate) {
+      return;
+    }
+    this.bindNativeTuiProviderSession(
+      sessionId,
+      candidate.providerSessionId,
+      candidate.record,
+    );
+  }
+
+  private bindNativeTuiProviderSession(
+    sessionId: string,
+    providerSessionId: string,
+    record: NativeTuiBindingRecord | null,
+  ): void {
+    const native = this.nativeTuiSessions.get(sessionId);
+    if (!native) {
+      return;
+    }
+    if (native.providerSessionId && native.providerSessionId !== providerSessionId) {
+      return;
+    }
+    native.providerSessionId = providerSessionId;
+    resolveNativeTuiBindingDiagnostic(this.nativeTuiDiagnostics, sessionId, providerSessionId);
+    if (native.bindingTimer) {
+      clearInterval(native.bindingTimer);
+      delete native.bindingTimer;
+    }
+    if (native.providerMirror?.providerSessionId !== providerSessionId) {
+      delete native.providerMirror;
+    }
+    const currentState = this.deps.sessionStore.getSession(sessionId);
+    const nextTitle = record?.ref.title ?? currentState?.session.title ?? providerSessionId;
+    const nextPreview = record?.ref.preview ?? currentState?.session.preview ?? providerSessionId;
+    this.deps.sessionStore.patchManagedSession(sessionId, {
+      providerSessionId,
+      title: nextTitle,
+      preview: nextPreview,
+    });
+    publishSessionStarted(this.deps, sessionId);
+    this.mirrorNativeTuiSession(sessionId);
+  }
+
+  private startNativeTuiMirror(sessionId: string): void {
+    const native = this.nativeTuiSessions.get(sessionId);
+    if (!native || !this.deps.nativeTuiProviders.supports(native.provider)) {
+      return;
+    }
+    const timer = setInterval(() => {
+      this.mirrorNativeTuiSession(sessionId);
+    }, nativeTuiMirrorIntervalMs());
+    timer.unref?.();
+    native.mirrorTimer = timer;
+    this.mirrorNativeTuiSession(sessionId);
+  }
+
+  private mirrorNativeTuiSession(sessionId: string): void {
+    const native = this.nativeTuiSessions.get(sessionId);
+    if (!native || !native.providerSessionId) {
+      return;
+    }
+    const update = this.deps.nativeTuiProviders.updateMirror(
+      nativeTuiProviderRuntimeSession(native),
+      native.providerMirror,
+    );
+    if (update.mirror) {
+      native.providerMirror = update.mirror;
+    }
+    switch (update.status) {
+      case "unbound":
+      case "unsupported":
+        return;
+      case "missing":
+        this.warnIfNativeTuiMirrorSourceIsMissing(native);
+        return;
+      case "failed":
+        this.warnIfNativeTuiMirrorFailed(native, update.error, update.phase);
+        return;
+      case "ok":
+        this.resolveNativeTuiMirrorDiagnostic(native);
+        for (const item of update.items) {
+          this.applyNativeTuiProviderActivity(native, item.meta, item.activity);
+        }
+        this.resolveNativeTuiMirrorFailureDiagnostic(native);
+    }
+  }
+
+  private applyNativeTuiProviderActivity(
+    native: NativeTuiSessionState,
+    meta: ProviderActivityMeta,
+    activity: ProviderActivity,
+  ): RahEvent[] {
+    const nextPromptState = nextPromptStateFromActivity(native.promptState, activity);
+    if (shouldIgnoreStaleMirrorStateActivity(native, meta, activity, nextPromptState)) {
+      return [];
+    }
+    const events = applyProviderActivity(
+      {
+        eventBus: this.deps.eventBus,
+        ptyHub: this.deps.ptyHub,
+        sessionStore: this.deps.sessionStore,
+      },
+      native.sessionId,
+      meta,
+      activity,
+    );
+    if (nextPromptState !== native.promptState) {
+      this.updateNativeTuiPromptState(native.sessionId, nextPromptState);
+    } else if (
+      native.promptState !== "prompt_dirty" &&
+      native.promptTracker.draftText.length === 0 &&
+      activity.type === "timeline_item" &&
+      activity.item.kind === "assistant_message" &&
+      (native.provider === "claude" || native.provider === "gemini")
+    ) {
+      if (shouldIgnoreStaleMirrorPromptClean(native, meta)) {
+        return events;
+      }
+      native.promptTracker.draftText = "";
+      this.updateNativeTuiPromptState(native.sessionId, "prompt_clean");
+    }
+    return events;
+  }
+
+  private resolveNativeTuiMirrorDiagnostic(native: NativeTuiSessionState): void {
+    resolveNativeTuiMirrorSourceDiagnostic(this.nativeTuiDiagnostics, native);
+  }
+
+  private resolveNativeTuiMirrorFailureDiagnostic(native: NativeTuiSessionState): void {
+    const resolved = resolveNativeTuiMirrorFailureDiagnostic(this.nativeTuiDiagnostics, native);
+    if (resolved) {
+      native.mirrorFailureWarningEmitted = false;
+    }
+  }
+
+  private warnIfNativeTuiMirrorSourceIsMissing(native: NativeTuiSessionState): void {
+    if (native.mirrorWarningEmitted) {
+      return;
+    }
+    native.mirrorWarningEmitted = maybeRecordNativeTuiMirrorSourceMissingDiagnostic(
+      this.nativeTuiDiagnostics,
+      native,
+      nativeTuiMirrorWarnAfterMs(),
+    );
+  }
+
+  private warnIfNativeTuiMirrorFailed(
+    native: NativeTuiSessionState,
+    error: unknown,
+    phase: string,
+  ): void {
+    const alreadyLogged = native.mirrorFailureWarningEmitted === true;
+    const logged = recordNativeTuiMirrorFailureDiagnostic(
+      this.nativeTuiDiagnostics,
+      native,
+      error,
+      phase,
+      { alreadyLogged },
+    );
+    native.mirrorFailureWarningEmitted = alreadyLogged || logged;
+  }
+
   registerTerminalWrapperSession(
     request: WrapperHelloMessage,
     sendMessage: (message: TerminalWrapperFromDaemonMessage) => void,
   ): WrapperReadyMessage {
-    const state = this.deps.sessionStore.createManagedSession({
-      provider: request.provider,
-      ...(request.resumeProviderSessionId
-        ? { providerSessionId: request.resumeProviderSessionId }
-        : {}),
-      launchSource: "terminal",
-      cwd: request.cwd,
-      rootDir: request.rootDir,
-      title: `${request.provider} terminal session`,
-      preview: request.launchCommand.join(" "),
-      mode: buildExternalLockedModeState(),
-      capabilities: buildTerminalWrapperCapabilities(request.provider),
-    });
-    this.deps.ptyHub.ensureSession(state.session.id);
-    this.deps.sessionStore.setRuntimeState(state.session.id, "running");
-    this.deps.eventBus.publish({
-      sessionId: state.session.id,
-      type: "session.created",
-      source: SYSTEM_SOURCE,
-      payload: { session: state.session },
-    });
-    this.deps.eventBus.publish({
-      sessionId: state.session.id,
-      type: "session.started",
-      source: SYSTEM_SOURCE,
-      payload: { session: state.session },
-    });
-
-    const surfaceId = `terminal:${request.terminalPid}:${crypto.randomUUID()}`;
-    const operatorGroupId = `terminal-group:${state.session.id}`;
-    this.terminalWrappers.register({
-      sessionId: state.session.id,
-      provider: request.provider,
-      cwd: request.cwd,
-      rootDir: request.rootDir,
-      terminalPid: request.terminalPid,
-      launchCommand: request.launchCommand,
-      surfaceId,
-      operatorGroupId,
-      promptState: "agent_busy",
-      ...(request.resumeProviderSessionId
-        ? { resumeProviderSessionId: request.resumeProviderSessionId }
-        : {}),
-    });
-    this.terminalWrapperSenders.set(state.session.id, sendMessage);
-    this.deps.sessionStore.attachClient({
-      sessionId: state.session.id,
-      clientId: surfaceId,
-      kind: "terminal",
-      connectionId: surfaceId,
-      attachMode: "interactive",
-      focus: true,
-    });
-    this.deps.sessionStore.claimControl(state.session.id, surfaceId, "terminal");
-    this.deps.eventBus.publish({
-      sessionId: state.session.id,
-      type: "session.attached",
-      source: SYSTEM_SOURCE,
-      payload: {
-        clientId: surfaceId,
-        clientKind: "terminal",
-      },
-    });
-    this.deps.eventBus.publish({
-      sessionId: state.session.id,
-      type: "control.claimed",
-      source: SYSTEM_SOURCE,
-      payload: {
-        clientId: surfaceId,
-        clientKind: "terminal",
-      },
-    });
-    return {
-      type: "wrapper.ready",
-      sessionId: state.session.id,
-      surfaceId,
-      operatorGroupId,
-    };
+    return this.terminalWrappers.registerSession(request, sendMessage);
   }
 
   disconnectTerminalWrapperSession(sessionId: string): void {
-    if (!this.terminalWrappers.get(sessionId)) {
-      this.terminalWrapperSenders.delete(sessionId);
-      return;
-    }
-    void this.markTerminalWrapperExited(sessionId);
+    this.terminalWrappers.disconnectSession(sessionId);
   }
 
   bindTerminalWrapperProviderSession(message: WrapperProviderBoundMessage): void {
-    if (
-      this.closingTerminalWrapperSessionIds.has(message.sessionId) ||
-      !this.terminalWrappers.get(message.sessionId) ||
-      !this.deps.sessionStore.getSession(message.sessionId)
-    ) {
-      return;
-    }
-    const update = this.terminalWrappers.bindProviderSession({
-      sessionId: message.sessionId,
-      providerSessionId: message.providerSessionId,
-      ...(message.providerTitle !== undefined ? { providerTitle: message.providerTitle } : {}),
-      ...(message.providerPreview !== undefined ? { providerPreview: message.providerPreview } : {}),
-      ...(message.reason !== undefined ? { reason: message.reason } : {}),
-    });
-    if (!update.changed) {
-      return;
-    }
-    const isRebind =
-      update.previousProviderSessionId !== undefined &&
-      update.previousProviderSessionId !== message.providerSessionId;
-    this.deps.sessionStore.patchManagedSession(message.sessionId, {
-      providerSessionId: message.providerSessionId,
-      ...(message.providerTitle !== undefined ? { title: message.providerTitle } : {}),
-      ...(message.providerPreview !== undefined ? { preview: message.providerPreview } : {}),
-    });
-    if (isRebind) {
-      this.deps.sessionStore.setActiveTurn(message.sessionId);
-      this.deps.sessionStore.updateUsage(message.sessionId, undefined);
-      this.deps.sessionStore.setRuntimeState(message.sessionId, "idle");
-      this.deps.historySnapshots.clear(message.sessionId);
-    }
-    const state = this.deps.sessionStore.getSession(message.sessionId);
-    if (state) {
-      this.deps.eventBus.publish({
-        sessionId: message.sessionId,
-        type: "session.started",
-        source: SYSTEM_SOURCE,
-        payload: { session: state.session },
-      });
-    }
-    if (
-      !isRebind &&
-      update.binding.resumeProviderSessionId &&
-      update.binding.resumeProviderSessionId !== message.providerSessionId
-    ) {
-      throw new Error(
-        `Wrapper bound provider session ${message.providerSessionId} but expected ${update.binding.resumeProviderSessionId}.`,
-      );
-    }
+    this.terminalWrappers.bindProviderSession(message);
   }
 
   updateTerminalWrapperPromptState(
     sessionId: string,
     promptState: TerminalWrapperPromptState,
   ): void {
-    const existingState = this.deps.sessionStore.getSession(sessionId);
-    if (
-      this.closingTerminalWrapperSessionIds.has(sessionId) ||
-      !this.terminalWrappers.get(sessionId) ||
-      !existingState
-    ) {
-      return;
-    }
     this.terminalWrappers.updatePromptState(sessionId, promptState);
-    const nextRuntimeState = promptState === "agent_busy" ? "running" : "idle";
-    if (existingState.session.runtimeState !== nextRuntimeState) {
-      this.deps.sessionStore.setRuntimeState(sessionId, nextRuntimeState);
-      this.deps.eventBus.publish({
-        sessionId,
-        type: "session.state.changed",
-        source: SYSTEM_SOURCE,
-        payload: {
-          state: nextRuntimeState,
-        },
-      });
-    }
-    if (promptState !== "prompt_clean") {
-      return;
-    }
-    const injectable = this.terminalWrappers.dequeueInjectableTurn(sessionId);
-    if (injectable) {
-      this.terminalWrapperSenders.get(sessionId)?.({
-        type: "turn.inject",
-        sessionId,
-        queuedTurn: injectable,
-      });
-    }
   }
 
   applyTerminalWrapperActivity(sessionId: string, activity: ProviderActivity): RahEvent[] {
-    if (this.closingTerminalWrapperSessionIds.has(sessionId)) {
-      return [];
-    }
-    const session = this.deps.sessionStore.getSession(sessionId)?.session;
-    if (!session) {
-      return [];
-    }
-    return applyProviderActivity(
-      {
-        eventBus: this.deps.eventBus,
-        ptyHub: this.deps.ptyHub,
-        sessionStore: this.deps.sessionStore,
-      },
-      sessionId,
-      {
-        provider: session.provider,
-        authority: "authoritative",
-      },
-      activity,
-    );
+    return this.terminalWrappers.applyActivity(sessionId, activity);
   }
 
   appendTerminalWrapperPtyOutput(sessionId: string, data: string): RahEvent[] {
-    if (
-      this.closingTerminalWrapperSessionIds.has(sessionId) ||
-      !this.deps.sessionStore.getSession(sessionId)
-    ) {
-      return [];
-    }
-    return this.applyTerminalWrapperActivity(sessionId, {
-      type: "terminal_output",
-      data,
-    });
+    return this.terminalWrappers.appendPtyOutput(sessionId, data);
   }
 
   markTerminalWrapperExited(
     sessionId: string,
     options?: { exitCode?: number; signal?: string },
   ): RahEvent[] {
-    const state = this.deps.sessionStore.getSession(sessionId);
-    if (!state) {
-      this.terminalWrapperSenders.delete(sessionId);
-      this.terminalWrappers.remove(sessionId);
-      this.closingTerminalWrapperSessionIds.delete(sessionId);
-      return [];
-    }
-    const published = this.applyTerminalWrapperActivity(sessionId, {
-      type: "terminal_exited",
-      ...(options?.exitCode !== undefined ? { exitCode: options.exitCode } : {}),
-      ...(options?.signal !== undefined ? { signal: options.signal } : {}),
-    });
-    this.deps.onRememberSession(state);
-    this.terminalWrapperSenders.delete(sessionId);
-    this.terminalWrappers.remove(sessionId);
-    this.closingTerminalWrapperSessionIds.delete(sessionId);
-    this.deps.sessionStore.removeSession(sessionId);
-    this.deps.ptyHub.removeSession(sessionId);
-    this.deps.historySnapshots.clear(sessionId);
-    this.deps.onSessionOwnerRemoved(sessionId);
-    this.deps.eventBus.publish({
-      sessionId,
-      type: "session.closed",
-      source: SYSTEM_SOURCE,
-      payload: {},
-    });
-    return published;
+    return this.terminalWrappers.markExited(sessionId, options);
   }
 
   async shutdown(): Promise<void> {
-    this.terminalWrapperSenders.clear();
+    this.terminalWrappers.shutdown();
     const terminals = [...this.independentTerminals.values()];
     this.independentTerminals.clear();
+    for (const sessionId of this.nativeTuiSessions.keys()) {
+      this.clearNativeTuiRuntimeState(sessionId);
+    }
+    this.nativeTuiSessionIds.clear();
     const results = await Promise.allSettled(
       terminals.map(async (terminal) => {
         try {

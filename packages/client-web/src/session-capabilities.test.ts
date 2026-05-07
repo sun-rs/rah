@@ -1,7 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type { SessionSummary } from "@rah/runtime-protocol";
-import { canSessionArchive, isSessionControlLocked } from "./session-capabilities";
+import {
+  canSessionArchive,
+  isSessionControlLocked,
+  isSessionGenerationActive,
+} from "./session-capabilities";
 
 function summaryWithArchiveCapability(archive: boolean): SessionSummary {
   return {
@@ -75,5 +79,23 @@ test("session controls are unlocked after failed and stopped states", () => {
       session: { ...summary.session, runtimeState: "stopped" },
     }),
     false,
+  );
+});
+
+test("generation state also respects live runtime status when summary sync lags", () => {
+  const summary = summaryWithArchiveCapability(true);
+  assert.equal(isSessionGenerationActive(summary, undefined), false);
+  assert.equal(isSessionGenerationActive(summary, "thinking"), true);
+  assert.equal(isSessionGenerationActive(summary, "streaming"), true);
+  assert.equal(isSessionGenerationActive(summary, "retrying"), true);
+  assert.equal(
+    isSessionGenerationActive(
+      {
+        ...summary,
+        session: { ...summary.session, runtimeState: "running" },
+      },
+      undefined,
+    ),
+    true,
   );
 });

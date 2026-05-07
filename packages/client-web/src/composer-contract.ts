@@ -1,4 +1,4 @@
-import type { SessionSummary } from "@rah/runtime-protocol";
+import type { NativeTuiPromptState, SessionSummary } from "@rah/runtime-protocol";
 import { canSessionSendInput, isReadOnlyReplay } from "./session-capabilities";
 
 export type ComposerSurface =
@@ -92,6 +92,21 @@ export const EMPTY_STATE_EXPANDED_CONTROLS_MIN_WIDTH_PX = 620;
 
 export function shouldCompactEmptyStateSessionControls(widthPx: number | null): boolean {
   return widthPx === null || widthPx < EMPTY_STATE_EXPANDED_CONTROLS_MIN_WIDTH_PX;
+}
+
+export function canSubmitComposerInput(args: {
+  composerSurface: ComposerSurface;
+  draft: string;
+  sendPending: boolean;
+  nativeTuiPromptState?: NativeTuiPromptState | undefined;
+}): boolean {
+  if (args.composerSurface.kind !== "compose") {
+    return false;
+  }
+  if (args.sendPending || !args.draft.trim()) {
+    return false;
+  }
+  return args.nativeTuiPromptState !== "prompt_dirty";
 }
 
 export function deriveComposerSurface(args: {

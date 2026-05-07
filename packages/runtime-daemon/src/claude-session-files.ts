@@ -9,7 +9,11 @@ import type {
 import type { RuntimeServices } from "./provider-adapter";
 import { EventBus } from "./event-bus";
 import { PtyHub } from "./pty-hub";
-import { applyProviderActivity, type ProviderActivity } from "./provider-activity";
+import {
+  applyProviderActivity,
+  type ProviderActivity,
+  type ProviderActivityMeta,
+} from "./provider-activity";
 import { SessionStore } from "./session-store";
 import { selectSemanticRecentWindow } from "./semantic-history-window";
 import { readLeadingLines, readTrailingLinesWindow } from "./file-snippets";
@@ -125,6 +129,22 @@ export type ClaudeStoredSessionRecord = {
   ref: StoredSessionRef;
   filePath: string;
 };
+
+export type ClaudeStoredActivityState = {
+  processedRecordKeys: Set<string>;
+};
+
+export type ClaudeStoredActivityBatchItem = {
+  recordKey: string;
+  meta: ProviderActivityMeta;
+  activity: ProviderActivity;
+};
+
+export function createClaudeStoredActivityState(): ClaudeStoredActivityState {
+  return {
+    processedRecordKeys: new Set(),
+  };
+}
 
 export function resolveClaudeStoredSessionWatchRoots(): string[] {
   const baseHome = resolveClaudeBaseHome();
@@ -461,43 +481,39 @@ export function updateClaudeSessionTitle(
   return { filePath: record.filePath };
 }
 
-function translateClaudeRecords(
+function translateClaudeRecordsToActivities(
   records: ClaudeRawRecord[],
-  options: { providerSessionId?: string } = {},
-): RahEvent[] {
-  const services = {
-    eventBus: new EventBus(),
-    ptyHub: new PtyHub(),
-    sessionStore: new SessionStore(),
-  };
-  const temp = services.sessionStore.createManagedSession({
-    provider: "claude",
-    launchSource: "web",
-    cwd: process.cwd(),
-    rootDir: process.cwd(),
-  });
-
-  const processedKeys = new Set<string>();
+  options: {
+    providerSessionId?: string;
+    state?: ClaudeStoredActivityState;
+  } = {},
+): ClaudeStoredActivityBatchItem[] {
+  const activities: ClaudeStoredActivityBatchItem[] = [];
+  const processedKeys = options.state?.processedRecordKeys ?? new Set<string>();
+  const seenKeys = new Set<string>();
   let turnCounter = 0;
   for (const record of records) {
     const key = recordKey(record);
-    if (processedKeys.has(key)) {
+    if (seenKeys.has(key)) {
       continue;
     }
-    processedKeys.add(key);
+    seenKeys.add(key);
+    const alreadyProcessed = processedKeys.has(key);
     const timestamp = record.timestamp ?? new Date().toISOString();
 
     if (record.type === "summary") {
-      applyProviderActivity(
-        services,
-        temp.session.id,
-        {
+      if (alreadyProcessed) {
+        continue;
+      }
+      activities.push({
+        recordKey: key,
+        meta: {
           provider: "claude",
           channel: "structured_persisted",
           authority: "derived",
           raw: record,
         },
-        {
+        activity: {
           type: "timeline_item",
           item: {
             kind: "assistant_message",
@@ -505,7 +521,7 @@ function translateClaudeRecords(
           },
           ...timelineIdentityProps(createStoredClaudeIdentity(record, "assistant_message", options.providerSessionId)),
         },
-      );
+      });
       continue;
     }
 
@@ -515,32 +531,33 @@ function translateClaudeRecords(
         continue;
       }
       const turnId = `turn-${++turnCounter}`;
-      applyProviderActivity(
-        services,
-        temp.session.id,
-        {
+      if (alreadyProcessed) {
+        continue;
+      }
+      activities.push({
+        recordKey: key,
+        meta: {
           provider: "claude",
           channel: "structured_persisted",
           authority: "derived",
           raw: record,
           ts: timestamp,
         },
-        {
+        activity: {
           type: "turn_started",
           turnId,
         },
-      );
-      applyProviderActivity(
-        services,
-        temp.session.id,
-        {
+      });
+      activities.push({
+        recordKey: key,
+        meta: {
           provider: "claude",
           channel: "structured_persisted",
           authority: "derived",
           raw: record,
           ts: timestamp,
         },
-        {
+        activity: {
           type: "timeline_item",
           turnId,
           item: {
@@ -550,7 +567,11 @@ function translateClaudeRecords(
           },
           ...timelineIdentityProps(createStoredClaudeIdentity(record, "user_message", options.providerSessionId)),
         },
-      );
+      });
+      continue;
+    }
+
+    if (alreadyProcessed) {
       continue;
     }
 
@@ -583,10 +604,9 @@ function translateClaudeRecords(
             ...(input ? { input } : {}),
           },
         };
-        applyProviderActivity(
-          services,
-          temp.session.id,
-          {
+        activities.push({
+          recordKey: key,
+          meta: {
             provider: "claude",
             channel: "structured_persisted",
             authority: "derived",
@@ -594,7 +614,7 @@ function translateClaudeRecords(
             ts: timestamp,
           },
           activity,
-        );
+        });
       }
 
       if (isClaudeTranscriptNoiseContent(record.message.content)) {
@@ -604,17 +624,16 @@ function translateClaudeRecords(
       if (!text) {
         continue;
       }
-      applyProviderActivity(
-        services,
-        temp.session.id,
-        {
+      activities.push({
+        recordKey: key,
+        meta: {
           provider: "claude",
           channel: "structured_persisted",
           authority: "derived",
           raw: record,
           ts: timestamp,
         },
-        {
+        activity: {
           type: "timeline_item",
           item: {
             kind: "assistant_message",
@@ -623,23 +642,22 @@ function translateClaudeRecords(
           },
           ...timelineIdentityProps(createStoredClaudeIdentity(record, "assistant_message", options.providerSessionId)),
         },
-      );
+      });
       continue;
     }
 
     if (record.type === "system") {
       if (record.subtype === "api_error") {
-        applyProviderActivity(
-          services,
-          temp.session.id,
-          {
+        activities.push({
+          recordKey: key,
+          meta: {
             provider: "claude",
             channel: "structured_persisted",
             authority: "derived",
             raw: record,
             ts: timestamp,
           },
-          {
+          activity: {
             type: "notification",
             level: "critical",
             title: "Claude API error",
@@ -650,12 +668,59 @@ function translateClaudeRecords(
                   ? JSON.stringify(record.error)
                   : "Unknown Claude error",
           },
-        );
+        });
       }
     }
   }
 
+  if (options.state) {
+    for (const item of activities) {
+      options.state.processedRecordKeys.add(item.recordKey);
+    }
+  }
+  return activities;
+}
+
+function translateClaudeRecords(
+  records: ClaudeRawRecord[],
+  options: { providerSessionId?: string } = {},
+): RahEvent[] {
+  const services = {
+    eventBus: new EventBus(),
+    ptyHub: new PtyHub(),
+    sessionStore: new SessionStore(),
+  };
+  const temp = services.sessionStore.createManagedSession({
+    provider: "claude",
+    launchSource: "web",
+    cwd: process.cwd(),
+    rootDir: process.cwd(),
+  });
+
+  for (const item of translateClaudeRecordsToActivities(records, options)) {
+    applyProviderActivity(services, temp.session.id, item.meta, item.activity);
+  }
   return services.eventBus.list({ sessionIds: [temp.session.id] });
+}
+
+export function readClaudeStoredSessionActivityBatch(args: {
+  record: ClaudeStoredSessionRecord;
+  state: ClaudeStoredActivityState;
+}): ClaudeStoredActivityBatchItem[] {
+  const lines = readFileSync(args.record.filePath, "utf8")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const parsed = lines
+    .map(safeParseClaudeRecord)
+    .filter(
+      (record): record is ClaudeRawRecord =>
+        Boolean(record) && record?.type !== "custom-title",
+    );
+  return translateClaudeRecordsToActivities(parsed, {
+    providerSessionId: args.record.ref.providerSessionId,
+    state: args.state,
+  });
 }
 
 export function discoverClaudeStoredSessions(cwd?: string): ClaudeStoredSessionRecord[] {
@@ -743,7 +808,7 @@ export function discoverClaudeStoredSessions(cwd?: string): ClaudeStoredSessionR
     });
     const parsed = lines
       .map(safeParseClaudeRecord)
-      .filter((record): record is ClaudeRawRecord => Boolean(record));
+      .filter((record): record is ClaudeRawRecord | ClaudeCustomTitleRecord => Boolean(record));
     const ref = deriveStoredSessionRef(filePath, parsed);
     if (!ref) {
       continue;
@@ -892,7 +957,12 @@ export function getClaudeStoredSessionHistoryPage(args: {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);
-  const parsed = lines.map(safeParseClaudeRecord).filter((record): record is ClaudeRawRecord => Boolean(record));
+  const parsed = lines
+    .map(safeParseClaudeRecord)
+    .filter(
+      (record): record is ClaudeRawRecord =>
+        Boolean(record) && record?.type !== "custom-title",
+    );
   const events = translateClaudeRecords(parsed, {
     providerSessionId: args.record.ref.providerSessionId,
   });

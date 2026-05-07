@@ -7,6 +7,8 @@ export type ProviderKind =
   | "custom";
 
 export type SessionLaunchSource = "web" | "terminal";
+export type SessionLiveBackend = "structured" | "native_tui";
+export type NativeTuiPromptState = "prompt_clean" | "prompt_dirty" | "agent_busy";
 
 export type SessionRuntimeState =
   | "starting"
@@ -170,6 +172,10 @@ export interface SessionActionCapabilities {
 export interface SessionCapabilities {
   liveAttach: boolean;
   structuredTimeline: boolean;
+  nativeTui: boolean;
+  rawPtyInput: boolean;
+  chatMirror: boolean;
+  structuredControl: boolean;
   livePermissions: boolean;
   contextUsage: boolean;
   resumeByProvider: boolean;
@@ -195,10 +201,16 @@ export interface ManagedSession {
   provider: ProviderKind;
   providerSessionId?: string;
   launchSource: SessionLaunchSource;
+  liveBackend?: SessionLiveBackend;
   cwd: string;
   rootDir: string;
   runtimeState: SessionRuntimeState;
   ptyId: string;
+  nativeTui?: {
+    terminalId: string;
+    viewAvailable: boolean;
+    promptState?: NativeTuiPromptState;
+  };
   pid?: number;
   title?: string;
   preview?: string;

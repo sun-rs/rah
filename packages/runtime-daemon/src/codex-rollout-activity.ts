@@ -156,8 +156,8 @@ function shouldSkipDuplicateTimelineText(
   kind: "user_message" | "assistant_message" | "reasoning",
   text: string,
 ): boolean {
-  const timestamp = typeof record.timestamp === "string" ? record.timestamp : "";
-  const signature = `${kind}:${timestamp}:${text}`;
+  const turnKey = state.currentTurnId ?? "unscoped";
+  const signature = `${turnKey}:${kind}:${text}`;
   if (state.lastTimelineTextSignature === signature) {
     return true;
   }

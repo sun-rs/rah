@@ -263,6 +263,7 @@ export function WorkbenchEmptyPane(props: {
                 type="button"
                 disabled={!props.emptyStateDraft.trim() || !props.availableWorkspaceDir}
                 onClick={props.onEmptyStateSend}
+                aria-label="Start session"
                 className={EMPTY_STATE_COMPOSER_LAYOUT.sendButtonClassName}
               >
                 <ArrowUp size={18} />

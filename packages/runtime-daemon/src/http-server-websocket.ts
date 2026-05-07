@@ -11,8 +11,36 @@ import { isLoopbackRemoteAddress } from "./http-server-client-address";
 import type { TerminalWrapperToDaemonMessage } from "./terminal-wrapper-control";
 
 const WEBSOCKET_HEARTBEAT_INTERVAL_MS = 30_000;
+const DEFAULT_MAX_WEBSOCKET_BUFFERED_BYTES = 8 * 1024 * 1024;
 
 export { isLoopbackRemoteAddress } from "./http-server-client-address";
+
+type BackpressureSocket = {
+  readyState: number;
+  bufferedAmount: number;
+  send(data: string): void;
+  close(code?: number, reason?: string): void;
+};
+
+export function sendJsonWithBackpressure(
+  socket: BackpressureSocket,
+  message: unknown,
+  options: { maxBufferedBytes?: number; closeReason?: string } = {},
+): boolean {
+  if (socket.readyState !== WebSocket.OPEN) {
+    return false;
+  }
+  const maxBufferedBytes = Math.max(
+    1,
+    options.maxBufferedBytes ?? DEFAULT_MAX_WEBSOCKET_BUFFERED_BYTES,
+  );
+  if (socket.bufferedAmount > maxBufferedBytes) {
+    socket.close(1013, options.closeReason ?? "client is too slow");
+    return false;
+  }
+  socket.send(JSON.stringify(message));
+  return true;
+}
 
 function installWebSocketHeartbeat(servers: WebSocketServer[]): () => void {
   const alive = new Map<WebSocket, boolean>();
@@ -94,6 +122,17 @@ function sameEventSubscription(
   );
 }
 
+function parsePtyReplaySeq(raw: string | null): number | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) {
+    return undefined;
+  }
+  return Math.max(0, Math.floor(parsed));
+}
+
 export function attachWebSocketHandlers(server: Server, engine: RuntimeEngine): {
   close(): void;
 } {
@@ -166,9 +205,23 @@ export function attachWebSocketHandlers(server: Server, engine: RuntimeEngine): 
     }
     const sessionId = match[1]!;
     const replay = url.searchParams.get("replay") !== "false";
-    const unsubscribe = engine.ptyHub.subscribe(sessionId, (frame) => {
-      socket.send(JSON.stringify(frame));
-    }, replay);
+    const fromSeq = parsePtyReplaySeq(
+      url.searchParams.get("fromSeq") ?? url.searchParams.get("cursor"),
+    );
+    let unsubscribe: () => void = () => undefined;
+    let closeAfterSubscribe = false;
+    unsubscribe = engine.ptyHub.subscribe(sessionId, (frame) => {
+      const sent = sendJsonWithBackpressure(socket, frame, {
+        closeReason: "PTY client is too slow",
+      });
+      if (!sent) {
+        closeAfterSubscribe = true;
+        unsubscribe();
+      }
+    }, { replay, ...(fromSeq !== undefined ? { fromSeq } : {}) });
+    if (closeAfterSubscribe) {
+      unsubscribe();
+    }
 
     socket.on("message", (raw) => {
       try {
@@ -179,7 +232,7 @@ export function attachWebSocketHandlers(server: Server, engine: RuntimeEngine): 
           engine.onPtyResize(parsed.sessionId, parsed.clientId, parsed.cols, parsed.rows);
         }
       } catch {
-        socket.send(JSON.stringify({ error: "Invalid PTY client payload" }));
+        sendJsonWithBackpressure(socket, { error: "Invalid PTY client payload" });
       }
     });
 

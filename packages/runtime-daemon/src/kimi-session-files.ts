@@ -15,7 +15,11 @@ import type {
 } from "./history-snapshots";
 import type { RuntimeServices } from "./provider-adapter";
 import { EventBus } from "./event-bus";
-import { applyProviderActivity } from "./provider-activity";
+import {
+  applyProviderActivity,
+  type ProviderActivity,
+  type ProviderActivityMeta,
+} from "./provider-activity";
 import { createLineHistoryWindowTranslator } from "./line-history-checkpoint";
 import { createLineFrozenHistoryPageLoader } from "./line-history-pager";
 import { PtyHub } from "./pty-hub";
@@ -62,6 +66,41 @@ export type KimiStoredSessionRecord = {
   ref: StoredSessionRef;
   wirePath: string;
 };
+
+type KimiPendingTool = {
+  name: string;
+  args?: Record<string, unknown>;
+};
+
+export type KimiWireActivityState = {
+  turnIdPrefix: string;
+  currentTurnId?: string;
+  currentTurnIndex?: number;
+  currentTimelineItemIndex: number;
+  currentStepIndex?: number;
+  nextTurnIndex: number;
+  initialTimelineItemIndex: number;
+  pendingTools: Map<string, KimiPendingTool>;
+};
+
+export type KimiWireActivityBatchItem = {
+  meta: ProviderActivityMeta;
+  activity: ProviderActivity;
+};
+
+export function createKimiWireActivityState(args: {
+  turnIdPrefix: string;
+  baseTurnIndex?: number;
+  baseTimelineItemIndex?: number;
+}): KimiWireActivityState {
+  return {
+    turnIdPrefix: args.turnIdPrefix,
+    currentTimelineItemIndex: 0,
+    nextTurnIndex: args.baseTurnIndex ?? 0,
+    initialTimelineItemIndex: args.baseTimelineItemIndex ?? 0,
+    pendingTools: new Map(),
+  };
+}
 
 function resolveKimiHome(): string {
   return process.env.KIMI_SHARE_DIR ?? path.join(os.homedir(), ".kimi");
@@ -629,36 +668,27 @@ function classifyKimiToolFamily(name: string) {
   return "other" as const;
 }
 
-function translateKimiWireLines(
-  sessionId: string,
+export function translateKimiWireLinesToActivities(
   providerSessionId: string,
   lines: string[],
-  options?: { baseTurnIndex?: number; baseTimelineItemIndex?: number },
-): RahEvent[] {
-  const services = {
-    eventBus: new EventBus(),
-    ptyHub: new PtyHub(),
-    sessionStore: new SessionStore(),
+  state: KimiWireActivityState,
+): KimiWireActivityBatchItem[] {
+  const activities: KimiWireActivityBatchItem[] = [];
+  let currentTurnId = state.currentTurnId;
+  let currentTurnIndex = state.currentTurnIndex;
+  let currentTimelineItemIndex = state.currentTimelineItemIndex;
+  let currentStepIndex = state.currentStepIndex;
+  let nextTurnIndex = state.nextTurnIndex;
+  let initialTimelineItemIndex = state.initialTimelineItemIndex;
+  const pendingTools = state.pendingTools;
+  const emit = (meta: ProviderActivityMeta, activity: ProviderActivity) => {
+    activities.push({ meta, activity });
   };
-  const temp = services.sessionStore.createManagedSession({
-    provider: "kimi",
-    launchSource: "web",
-    cwd: process.cwd(),
-    rootDir: process.cwd(),
-  });
-
-  let currentTurnId: string | undefined;
-  let currentTurnIndex: number | undefined;
-  let currentTimelineItemIndex = 0;
-  let currentStepIndex: number | undefined;
-  let nextTurnIndex = options?.baseTurnIndex ?? 0;
-  let initialTimelineItemIndex = options?.baseTimelineItemIndex ?? 0;
-  const pendingTools = new Map<string, { name: string; args?: Record<string, unknown> }>();
   const startTurn = (itemIndex = 0) => {
     const turnIndex = nextTurnIndex++;
     currentTurnIndex = turnIndex;
     currentTimelineItemIndex = itemIndex;
-    currentTurnId = `kimi-history:${temp.session.id}:${turnIndex}`;
+    currentTurnId = `${state.turnIdPrefix}:${turnIndex}`;
   };
   const ensureTurn = () => {
     if (currentTurnId === undefined || currentTurnIndex === undefined) {
@@ -698,7 +728,7 @@ function translateKimiWireLines(
         currentStepIndex = undefined;
         const text = extractText(parsed.payload.user_input);
         if (text) {
-          applyProviderActivity(services, temp.session.id, meta, {
+          emit(meta, {
             type: "timeline_item",
             turnId: currentTurnId!,
             item: { kind: "user_message", text },
@@ -711,7 +741,7 @@ function translateKimiWireLines(
         ensureTurn();
         const text = extractText(parsed.payload.user_input);
         if (text) {
-          applyProviderActivity(services, temp.session.id, meta, {
+          emit(meta, {
             type: "timeline_item",
             turnId: currentTurnId!,
             item: { kind: "user_message", text },
@@ -724,7 +754,7 @@ function translateKimiWireLines(
         currentStepIndex =
           typeof parsed.payload.n === "number" ? parsed.payload.n : currentStepIndex;
         if (currentTurnId) {
-          applyProviderActivity(services, temp.session.id, meta, {
+          emit(meta, {
             type: "turn_step_started",
             turnId: currentTurnId!,
             ...(currentStepIndex !== undefined ? { index: currentStepIndex } : {}),
@@ -734,7 +764,7 @@ function translateKimiWireLines(
       }
       case "StepInterrupted": {
         if (currentTurnId) {
-          applyProviderActivity(services, temp.session.id, meta, {
+          emit(meta, {
             type: "turn_step_interrupted",
             turnId: currentTurnId!,
             ...(currentStepIndex !== undefined ? { index: currentStepIndex } : {}),
@@ -754,7 +784,7 @@ function translateKimiWireLines(
           break;
         }
         if (partType === "think") {
-          applyProviderActivity(services, temp.session.id, meta, {
+          emit(meta, {
             type: "timeline_item",
             turnId: currentTurnId!,
             item: { kind: "reasoning", text },
@@ -763,7 +793,7 @@ function translateKimiWireLines(
           break;
         }
         if (partType === "text") {
-          applyProviderActivity(services, temp.session.id, meta, {
+          emit(meta, {
             type: "timeline_item",
             turnId: currentTurnId!,
             item: { kind: "assistant_message", text },
@@ -776,7 +806,7 @@ function translateKimiWireLines(
         ensureTurn();
         const text = extractText(parsed.payload);
         if (text) {
-          applyProviderActivity(services, temp.session.id, meta, {
+          emit(meta, {
             type: "timeline_item",
             turnId: currentTurnId!,
             item: { kind: "reasoning", text },
@@ -808,7 +838,7 @@ function translateKimiWireLines(
         }
         const id = typeof parsed.payload.id === "string" ? parsed.payload.id : crypto.randomUUID();
         pendingTools.set(id, { name, ...(args ? { args } : {}) });
-        applyProviderActivity(services, temp.session.id, meta, {
+        emit(meta, {
           type: "tool_call_started",
           turnId: currentTurnId!,
           toolCall: {
@@ -837,7 +867,7 @@ function translateKimiWireLines(
         const text = extractText(returnValue);
         const isError = Boolean(returnValue.is_error);
         if (isError) {
-          applyProviderActivity(services, temp.session.id, meta, {
+          emit(meta, {
             type: "tool_call_failed",
             ...(currentTurnId ? { turnId: currentTurnId } : {}),
             toolCallId,
@@ -852,7 +882,7 @@ function translateKimiWireLines(
           });
           break;
         }
-        applyProviderActivity(services, temp.session.id, meta, {
+        emit(meta, {
           type: "tool_call_completed",
           ...(currentTurnId ? { turnId: currentTurnId } : {}),
           toolCall: {
@@ -873,7 +903,7 @@ function translateKimiWireLines(
         break;
       }
       case "ApprovalRequest": {
-        applyProviderActivity(services, temp.session.id, meta, {
+        emit(meta, {
           type: "permission_requested",
           ...(currentTurnId ? { turnId: currentTurnId } : {}),
           request: {
@@ -891,7 +921,7 @@ function translateKimiWireLines(
         break;
       }
       case "ApprovalResponse": {
-        applyProviderActivity(services, temp.session.id, meta, {
+        emit(meta, {
           type: "permission_resolved",
           ...(currentTurnId ? { turnId: currentTurnId } : {}),
           resolution: {
@@ -906,7 +936,7 @@ function translateKimiWireLines(
         break;
       }
       case "QuestionRequest": {
-        applyProviderActivity(services, temp.session.id, meta, {
+        emit(meta, {
           type: "permission_requested",
           ...(currentTurnId ? { turnId: currentTurnId } : {}),
           request: {
@@ -921,7 +951,7 @@ function translateKimiWireLines(
       case "PlanDisplay": {
         ensureTurn();
         if (typeof parsed.payload.content === "string") {
-          applyProviderActivity(services, temp.session.id, meta, {
+          emit(meta, {
             type: "timeline_item",
             turnId: currentTurnId!,
             item: { kind: "plan", text: parsed.payload.content },
@@ -931,7 +961,7 @@ function translateKimiWireLines(
         break;
       }
       case "Notification": {
-        applyProviderActivity(services, temp.session.id, meta, {
+        emit(meta, {
           type: "notification",
           level:
             parsed.payload.severity === "error"
@@ -956,7 +986,7 @@ function translateKimiWireLines(
         if (!tokenUsage) {
           break;
         }
-        applyProviderActivity(services, temp.session.id, meta, {
+        emit(meta, {
           type: "usage",
           ...(currentTurnId ? { turnId: currentTurnId } : {}),
           usage: {
@@ -980,9 +1010,71 @@ function translateKimiWireLines(
         });
         break;
       }
+      case "TurnEnd": {
+        if (currentTurnId) {
+          emit(meta, {
+            type: "turn_completed",
+            turnId: currentTurnId,
+          });
+        }
+        currentTurnId = undefined;
+        currentTurnIndex = undefined;
+        currentTimelineItemIndex = 0;
+        currentStepIndex = undefined;
+        initialTimelineItemIndex = 0;
+        break;
+      }
     }
   }
 
+  if (currentTurnId !== undefined) {
+    state.currentTurnId = currentTurnId;
+  } else {
+    delete state.currentTurnId;
+  }
+  if (currentTurnIndex !== undefined) {
+    state.currentTurnIndex = currentTurnIndex;
+  } else {
+    delete state.currentTurnIndex;
+  }
+  state.currentTimelineItemIndex = currentTimelineItemIndex;
+  if (currentStepIndex !== undefined) {
+    state.currentStepIndex = currentStepIndex;
+  } else {
+    delete state.currentStepIndex;
+  }
+  state.nextTurnIndex = nextTurnIndex;
+  state.initialTimelineItemIndex = initialTimelineItemIndex;
+  return activities;
+}
+
+function translateKimiWireLines(
+  sessionId: string,
+  providerSessionId: string,
+  lines: string[],
+  options?: { baseTurnIndex?: number; baseTimelineItemIndex?: number },
+): RahEvent[] {
+  const services = {
+    eventBus: new EventBus(),
+    ptyHub: new PtyHub(),
+    sessionStore: new SessionStore(),
+  };
+  const temp = services.sessionStore.createManagedSession({
+    provider: "kimi",
+    launchSource: "web",
+    cwd: process.cwd(),
+    rootDir: process.cwd(),
+  });
+  const state = createKimiWireActivityState({
+    turnIdPrefix: `kimi-history:${temp.session.id}`,
+    ...(options?.baseTurnIndex !== undefined ? { baseTurnIndex: options.baseTurnIndex } : {}),
+    ...(options?.baseTimelineItemIndex !== undefined
+      ? { baseTimelineItemIndex: options.baseTimelineItemIndex }
+      : {}),
+  });
+  for (const item of translateKimiWireLinesToActivities(providerSessionId, lines, state)) {
+    applyProviderActivity(services, temp.session.id, item.meta, item.activity);
+  }
   return services.eventBus
     .list({ sessionIds: [temp.session.id] })
     .map((event) => ({ ...event, sessionId }));

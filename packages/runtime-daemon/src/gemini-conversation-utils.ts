@@ -3,7 +3,11 @@ import { readFileSync } from "node:fs";
 import type { RahEvent, TimelineIdentity } from "@rah/runtime-protocol";
 import { EventBus } from "./event-bus";
 import { PtyHub } from "./pty-hub";
-import { applyProviderActivity, type ProviderActivity } from "./provider-activity";
+import {
+  applyProviderActivity,
+  type ProviderActivity,
+  type ProviderActivityMeta,
+} from "./provider-activity";
 import { SessionStore } from "./session-store";
 import { createGeminiTimelineIdentity } from "./gemini-timeline-identity";
 import type {
@@ -308,6 +312,133 @@ function timelineIdentityProps(identity: TimelineIdentity | undefined): { identi
   return identity !== undefined ? { identity } : {};
 }
 
+export type GeminiConversationActivityItem = {
+  messageId: string;
+  revision: string;
+  meta: ProviderActivityMeta;
+  activity: ProviderActivity;
+};
+
+export function geminiMessageRevision(message: GeminiMessageRecord): string {
+  return JSON.stringify({
+    id: message.id,
+    timestamp: message.timestamp,
+    type: message.type,
+    content: message.content,
+    displayContent: message.displayContent,
+    toolCalls: message.toolCalls,
+    thoughts: message.thoughts,
+    tokens: message.tokens,
+    model: message.model,
+  });
+}
+
+export function translateGeminiConversationToActivities(
+  conversation: GeminiConversationRecord,
+): GeminiConversationActivityItem[] {
+  const items: GeminiConversationActivityItem[] = [];
+  const push = (
+    message: GeminiMessageRecord,
+    activity: ProviderActivity,
+  ) => {
+    items.push({
+      messageId: message.id,
+      revision: geminiMessageRevision(message),
+      meta: {
+        provider: "gemini",
+        channel: "structured_persisted",
+        authority: "authoritative",
+        ts: message.timestamp,
+      },
+      activity,
+    });
+  };
+
+  for (const message of conversation.messages) {
+    const turnId = `gemini-history:${message.id}`;
+    switch (message.type) {
+      case "user":
+        push(message, {
+          type: "timeline_item",
+          turnId,
+          item: { kind: "user_message", text: extractGeminiUserDisplayText(message) },
+          ...timelineIdentityProps(createGeminiTimelineIdentity({
+            providerSessionId: conversation.sessionId,
+            messageId: message.id,
+            itemKind: "user_message",
+            origin: "history",
+          })),
+        });
+        break;
+      case "gemini": {
+        const text = extractTextFromContent(message.content);
+        if (text) {
+          push(message, {
+            type: "timeline_item",
+            turnId,
+            item: { kind: "assistant_message", text, messageId: message.id },
+            ...timelineIdentityProps(createGeminiTimelineIdentity({
+              providerSessionId: conversation.sessionId,
+              messageId: message.id,
+              itemKind: "assistant_message",
+              origin: "history",
+            })),
+          });
+        }
+        for (const [thoughtIndex, thought] of (message.thoughts ?? []).entries()) {
+          const thoughtText =
+            (typeof thought.text === "string" ? thought.text : "") ||
+            (typeof thought.subject === "string" ? thought.subject : "");
+          if (!thoughtText) {
+            continue;
+          }
+          push(message, {
+            type: "timeline_item",
+            turnId,
+            item: { kind: "reasoning", text: thoughtText },
+            ...timelineIdentityProps(createGeminiTimelineIdentity({
+              providerSessionId: conversation.sessionId,
+              messageId: message.id,
+              itemKind: "reasoning",
+              origin: "history",
+              partIndex: thoughtIndex + 1,
+            })),
+          });
+        }
+        for (const activity of toolActivitiesForMessage(message, turnId)) {
+          push(message, activity);
+        }
+        break;
+      }
+      case "error":
+      case "warning":
+      case "info": {
+        const text = extractTextFromContent(message.content);
+        if (!text) {
+          break;
+        }
+        push(message, {
+          type: "timeline_item",
+          turnId,
+          item: {
+            kind: message.type === "error" ? "error" : "system",
+            text,
+          },
+          ...timelineIdentityProps(createGeminiTimelineIdentity({
+            providerSessionId: conversation.sessionId,
+            messageId: message.id,
+            itemKind: message.type === "error" ? "error" : "system",
+            origin: "history",
+          })),
+        });
+        break;
+      }
+    }
+  }
+
+  return items;
+}
+
 function conversationToEvents(params: {
   sessionId: string;
   conversation: GeminiConversationRecord;
@@ -327,111 +458,8 @@ function conversationToEvents(params: {
     preview: truncateText(params.conversation.summary ?? "Gemini session"),
   });
 
-  for (const message of params.conversation.messages) {
-    const turnId = `gemini-history:${message.id}`;
-    switch (message.type) {
-      case "user":
-        applyProviderActivity(
-          services,
-          temp.session.id,
-          { provider: "gemini", channel: "structured_persisted", authority: "authoritative" },
-          {
-            type: "timeline_item",
-            turnId,
-            item: { kind: "user_message", text: extractGeminiUserDisplayText(message) },
-            ...timelineIdentityProps(createGeminiTimelineIdentity({
-              providerSessionId: params.conversation.sessionId,
-              messageId: message.id,
-              itemKind: "user_message",
-              origin: "history",
-            })),
-          },
-        );
-        break;
-      case "gemini": {
-        const text = extractTextFromContent(message.content);
-        if (text) {
-          applyProviderActivity(
-            services,
-            temp.session.id,
-            { provider: "gemini", channel: "structured_persisted", authority: "authoritative" },
-            {
-              type: "timeline_item",
-              turnId,
-              item: { kind: "assistant_message", text, messageId: message.id },
-              ...timelineIdentityProps(createGeminiTimelineIdentity({
-                providerSessionId: params.conversation.sessionId,
-                messageId: message.id,
-                itemKind: "assistant_message",
-                origin: "history",
-              })),
-            },
-          );
-        }
-        for (const [thoughtIndex, thought] of (message.thoughts ?? []).entries()) {
-          const thoughtText =
-            (typeof thought.text === "string" ? thought.text : "") ||
-            (typeof thought.subject === "string" ? thought.subject : "");
-          if (!thoughtText) {
-            continue;
-          }
-          applyProviderActivity(
-            services,
-            temp.session.id,
-            { provider: "gemini", channel: "structured_persisted", authority: "authoritative" },
-            {
-              type: "timeline_item",
-              turnId,
-              item: { kind: "reasoning", text: thoughtText },
-              ...timelineIdentityProps(createGeminiTimelineIdentity({
-                providerSessionId: params.conversation.sessionId,
-                messageId: message.id,
-                itemKind: "reasoning",
-                origin: "history",
-                partIndex: thoughtIndex + 1,
-              })),
-            },
-          );
-        }
-        for (const activity of toolActivitiesForMessage(message, turnId)) {
-          applyProviderActivity(
-            services,
-            temp.session.id,
-            { provider: "gemini", channel: "structured_persisted", authority: "authoritative" },
-            activity,
-          );
-        }
-        break;
-      }
-      case "error":
-      case "warning":
-      case "info": {
-        const text = extractTextFromContent(message.content);
-        if (!text) {
-          break;
-        }
-        applyProviderActivity(
-          services,
-          temp.session.id,
-          { provider: "gemini", channel: "structured_persisted", authority: "authoritative" },
-          {
-            type: "timeline_item",
-            turnId,
-            item: {
-              kind: message.type === "error" ? "error" : "system",
-              text,
-            },
-            ...timelineIdentityProps(createGeminiTimelineIdentity({
-              providerSessionId: params.conversation.sessionId,
-              messageId: message.id,
-              itemKind: message.type === "error" ? "error" : "system",
-              origin: "history",
-            })),
-          },
-        );
-        break;
-      }
-    }
+  for (const item of translateGeminiConversationToActivities(params.conversation)) {
+    applyProviderActivity(services, temp.session.id, item.meta, item.activity);
   }
 
   return services.eventBus

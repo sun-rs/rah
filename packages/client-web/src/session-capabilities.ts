@@ -119,6 +119,17 @@ export function isSessionActivelyRunning(summary: SessionSummary): boolean {
   ].includes(summary.session.runtimeState);
 }
 
+export function isRuntimeStatusActivelyRunning(status: string | undefined): boolean {
+  return ["thinking", "streaming", "retrying"].includes(status ?? "");
+}
+
+export function isSessionGenerationActive(
+  summary: SessionSummary,
+  runtimeStatus: string | undefined,
+): boolean {
+  return isSessionActivelyRunning(summary) || isRuntimeStatusActivelyRunning(runtimeStatus);
+}
+
 export function isSessionControlLocked(summary: SessionSummary): boolean {
   if (isReadOnlyReplay(summary)) {
     return false;

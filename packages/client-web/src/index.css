@@ -86,6 +86,12 @@
     --app-danger: #dc2626;
     --app-warning-bg: #fff4db;
     --app-danger-bg: #fee7e7;
+    --terminal-font-family: "SF Mono", Menlo, Monaco, "PingFang SC", "Hiragino Sans GB", "Noto Sans Mono CJK SC", "Microsoft YaHei UI", ui-monospace, monospace;
+    --terminal-bg: #ffffff;
+    --terminal-fg: #18181b;
+    --terminal-muted: #71717a;
+    --terminal-cursor: #18181b;
+    --terminal-selection: rgba(24, 24, 27, 0.16);
 
     /* User bubble */
     --user-bubble-bg: #f4f4f5;
@@ -147,6 +153,11 @@
     --app-danger: #ef4444;
     --app-warning-bg: #3a2b0f;
     --app-danger-bg: #3b1717;
+    --terminal-bg: #0a0a0a;
+    --terminal-fg: #fafafa;
+    --terminal-muted: #a1a1aa;
+    --terminal-cursor: #fafafa;
+    --terminal-selection: rgba(250, 250, 250, 0.18);
 
     /* User bubble */
     --user-bubble-bg: #27272a;

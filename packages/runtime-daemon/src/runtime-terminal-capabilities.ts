@@ -1,0 +1,53 @@
+import type { ProviderKind, SessionCapabilities } from "@rah/runtime-protocol";
+
+export function buildTerminalWrapperSessionCapabilities(
+  provider: ProviderKind,
+): Partial<SessionCapabilities> {
+  return {
+    livePermissions: provider !== "claude" && provider !== "gemini",
+    renameSession: false,
+    actions: {
+      info: true,
+      archive: true,
+      delete: false,
+      rename: "none",
+    },
+    steerInput: true,
+    queuedInput: true,
+  };
+}
+
+export function buildNativeTuiSessionCapabilities(
+  provider: ProviderKind,
+): Partial<SessionCapabilities> {
+  const hasStructuredMirror =
+    provider === "codex" ||
+    provider === "claude" ||
+    provider === "gemini" ||
+    provider === "kimi" ||
+    provider === "opencode";
+  return {
+    liveAttach: true,
+    structuredTimeline: hasStructuredMirror,
+    nativeTui: true,
+    rawPtyInput: true,
+    chatMirror: hasStructuredMirror,
+    structuredControl: false,
+    livePermissions: false,
+    contextUsage: false,
+    resumeByProvider: true,
+    listProviderSessions: true,
+    renameSession: false,
+    actions: {
+      info: true,
+      archive: true,
+      delete: false,
+      rename: "none",
+    },
+    steerInput: true,
+    queuedInput: true,
+    modelSwitch: false,
+    planMode: false,
+    subagents: false,
+  };
+}

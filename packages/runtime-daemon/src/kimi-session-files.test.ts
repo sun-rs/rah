@@ -178,6 +178,13 @@ describe("Kimi session files", () => {
             },
           },
         }),
+        JSON.stringify({
+          timestamp: 1_700_000_011,
+          message: {
+            type: "TurnEnd",
+            payload: {},
+          },
+        }),
       ].join("\n") + "\n",
     );
   }
@@ -334,6 +341,7 @@ describe("Kimi session files", () => {
         event.payload.item.kind === "assistant_message" &&
         event.payload.item.text === "I will inspect the repository.",
     );
+    const completedTurn = page.events.find((event) => event.type === "turn.completed");
     assert.equal(
       userMessage?.type === "timeline.item.added"
         ? userMessage.payload.identity?.canonicalItemId
@@ -455,6 +463,12 @@ describe("Kimi session files", () => {
           event.payload.usage.outputTokens === 7,
       ),
     );
+    assert.ok(
+      page.events.some(
+        (event) => event.type === "turn.completed" && event.turnId === completedTurn?.turnId,
+      ),
+    );
+    assert.equal(completedTurn?.turnId, userMessage?.turnId);
   });
 
   test("frozen Kimi history loader keeps browsing anchored after newer wire lines append", () => {

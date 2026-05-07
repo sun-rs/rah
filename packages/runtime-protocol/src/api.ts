@@ -8,6 +8,7 @@ import type {
   ManagedSession,
   ModelCapabilityProfile,
   ProviderKind,
+  SessionLiveBackend,
   SessionConfigOption,
   SessionConfigValue,
   SessionModelDescriptor,
@@ -124,6 +125,7 @@ export function isPermissionAbort(args: {
 export interface StartSessionRequest {
   provider: ProviderKind;
   cwd: string;
+  liveBackend?: SessionLiveBackend;
   title?: string;
   model?: string;
   /**
@@ -169,6 +171,7 @@ export interface StartSessionRequest {
 export interface ResumeSessionRequest {
   provider: ProviderKind;
   providerSessionId: string;
+  liveBackend?: SessionLiveBackend;
   cwd?: string;
   model?: string;
   /**
@@ -467,6 +470,35 @@ export interface ListProvidersResponse {
   providers: ProviderDiagnostic[];
 }
 
+export type NativeTuiDiagnosticKind =
+  | "binding_missing"
+  | "mirror_source_missing"
+  | "mirror_failed"
+  | "process_exited";
+export type NativeTuiDiagnosticStatus = "active" | "resolved";
+export type NativeTuiDiagnosticSeverity = "info" | "warning" | "error";
+
+export interface NativeTuiDiagnostic {
+  id: string;
+  sessionId: string;
+  provider: ProviderKind;
+  providerSessionId?: string;
+  kind: NativeTuiDiagnosticKind;
+  severity: NativeTuiDiagnosticSeverity;
+  status: NativeTuiDiagnosticStatus;
+  message: string;
+  cwd: string;
+  createdAt: string;
+  updatedAt: string;
+  resolvedAt?: string;
+  elapsedMs?: number;
+  details?: Record<string, string | number | boolean | null>;
+}
+
+export interface ListNativeTuiDiagnosticsResponse {
+  diagnostics: NativeTuiDiagnostic[];
+}
+
 export interface ProviderModelCatalog {
   provider: ProviderKind;
   currentModelId?: string;
@@ -524,20 +556,45 @@ export interface PtyAttachRequest {
   rows?: number;
 }
 
+export interface PtySessionStats {
+  sessionId: string;
+  replayChunks: number;
+  replayBytes: number;
+  maxReplayChunks: number;
+  maxReplayBytes: number;
+  nextSeq: number;
+  firstReplaySeq?: number;
+  droppedBeforeSeq?: number;
+  subscriberCount: number;
+  status: "open" | "exited";
+}
+
+export interface ListPtyStatsResponse {
+  sessions: PtySessionStats[];
+}
+
 export type PtyServerMessage =
   | {
       type: "pty.replay";
       sessionId: string;
       chunks: string[];
+      baseSeq?: number;
+      nextSeq?: number;
+      droppedBeforeSeq?: number;
+      status?: "open" | "exited";
+      exitCode?: number;
+      signal?: string;
     }
   | {
       type: "pty.output";
       sessionId: string;
       data: string;
+      seq?: number;
     }
   | {
       type: "pty.exited";
       sessionId: string;
+      seq?: number;
       exitCode?: number;
       signal?: string;
     };

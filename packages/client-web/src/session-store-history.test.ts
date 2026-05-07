@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { RahEvent, SessionSummary } from "@rah/runtime-protocol";
 import { prependHistoryPage, replayEventsIntoProjection } from "./session-store-history";
+import { appendOptimisticUserMessage } from "./types";
 
 function summary(): SessionSummary {
   return {
@@ -35,20 +36,21 @@ function summary(): SessionSummary {
 
 function timelineEvent(args: {
   seq: number;
-  turnId: string;
+  turnId?: string;
   text: string;
   kind?: "user_message" | "assistant_message" | "reasoning";
   messageId?: string;
   canonicalItemId?: string;
   canonicalTurnId?: string;
+  ts?: string;
 }): RahEvent {
   const kind = args.kind ?? "user_message";
   return {
     id: `event-${args.seq}`,
     seq: args.seq,
-    ts: `2026-04-15T00:00:${String(args.seq).padStart(2, "0")}.000Z`,
+    ts: args.ts ?? `2026-04-15T00:00:${String(args.seq).padStart(2, "0")}.000Z`,
     sessionId: "session-1",
-    turnId: args.turnId,
+    ...(args.turnId !== undefined ? { turnId: args.turnId } : {}),
     source: {
       provider: "codex",
       channel: "structured_persisted",
@@ -68,10 +70,10 @@ function timelineEvent(args: {
               canonicalTurnId: args.canonicalTurnId ?? `canonical:${args.turnId}`,
               provider: "codex",
               providerSessionId: "provider-session-1",
-              turnKey: args.turnId,
+              turnKey: args.turnId ?? `turn:${args.seq}`,
               itemKind: kind,
               itemKey: args.canonicalItemId,
-              origin: args.turnId.startsWith("history:") ? "history" : "live",
+              origin: args.turnId?.startsWith("history:") ? "history" : "live",
               confidence: "derived",
             },
           }
@@ -190,6 +192,29 @@ test("prependHistoryPage treats provider history ids as metadata for recent live
       : null,
     "message-1",
   );
+});
+
+test("prependHistoryPage upgrades optimistic native TUI user echo with canonical history identity", () => {
+  const current = appendOptimisticUserMessage(
+    replayEventsIntoProjection(summary(), []),
+    "你是谁",
+  );
+
+  const next = prependHistoryPage(current, [
+    timelineEvent({
+      seq: 1,
+      text: "你是谁",
+      canonicalItemId: "codex-history-user-1",
+      canonicalTurnId: "codex-history-turn-1",
+      ts: current.feed[0]?.ts,
+    }),
+  ]);
+
+  assert.equal(next.feed.length, 1);
+  const [entry] = next.feed;
+  assert.equal(entry?.kind, "timeline");
+  assert.equal(entry?.kind === "timeline" ? entry.canonicalItemId : null, "codex-history-user-1");
+  assert.equal(entry?.kind === "timeline" ? entry.key : null, "timeline:codex-history-user-1");
 });
 
 test("prependHistoryPage dedupes Kimi live/history echoes without message ids", () => {

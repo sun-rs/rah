@@ -18,6 +18,10 @@ function storedSessionState(providerSessionId: string): StoredSessionState {
       capabilities: {
         liveAttach: true,
         structuredTimeline: true,
+        nativeTui: false,
+        rawPtyInput: false,
+        chatMirror: false,
+        structuredControl: true,
         livePermissions: false,
         contextUsage: false,
         resumeByProvider: true,
@@ -147,5 +151,55 @@ describe("buildSessionsResponse", () => {
     );
     assert.equal(response.recentSessions[1]?.title, "Provider title");
     assert.equal(response.recentSessions[1]?.lastUsedAt, "2026-04-29T09:00:00.000Z");
+  });
+
+  test("filters internal native TUI launch probe sessions from user-facing lists", () => {
+    const probeWorkspace = "/repo/rah/test-results/native-real-tui-workspaces/codex";
+    const normalWorkspace = "/workspace/demo";
+    const probeSession: StoredSessionRef = {
+      ...storedRef("probe-session"),
+      cwd: probeWorkspace,
+      rootDir: probeWorkspace,
+      title: "Internal probe",
+      updatedAt: "2026-05-03T10:00:00.000Z",
+    };
+    const normalSession: StoredSessionRef = {
+      ...storedRef("normal-session"),
+      cwd: normalWorkspace,
+      rootDir: normalWorkspace,
+      title: "Normal session",
+      updatedAt: "2026-05-03T09:00:00.000Z",
+    };
+    const probeLiveState = storedSessionState("probe-live");
+    probeLiveState.session.cwd = probeWorkspace;
+    probeLiveState.session.rootDir = probeWorkspace;
+
+    const response = buildSessionsResponse({
+      liveStates: [probeLiveState],
+      discoveredStoredSessions: [probeSession, normalSession],
+      remembered: {
+        rememberedSessions: [probeSession],
+        rememberedRecentSessions: [probeSession],
+        rememberedWorkspaceDirs: [probeWorkspace, normalWorkspace],
+        rememberedHiddenWorkspaces: [probeWorkspace],
+        rememberedActiveWorkspaceDir: probeWorkspace,
+        rememberedHiddenSessionKeys: [],
+        rememberedSessionTitleOverrides: {},
+      },
+      isClosingSession: () => false,
+    });
+
+    assert.deepEqual(
+      response.storedSessions.map((session) => session.providerSessionId),
+      ["normal-session"],
+    );
+    assert.deepEqual(
+      response.recentSessions.map((session) => session.providerSessionId),
+      ["normal-session"],
+    );
+    assert.deepEqual(response.workspaceDirs, [normalWorkspace]);
+    assert.deepEqual(response.hiddenWorkspaces, []);
+    assert.equal(response.activeWorkspaceDir, undefined);
+    assert.deepEqual(response.sessions, []);
   });
 });

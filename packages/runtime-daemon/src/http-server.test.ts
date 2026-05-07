@@ -13,7 +13,7 @@ import {
   readJsonBody,
   requestErrorStatus,
 } from "./http-server-response";
-import { isLoopbackRemoteAddress } from "./http-server-websocket";
+import { isLoopbackRemoteAddress, sendJsonWithBackpressure } from "./http-server-websocket";
 import { isLocalMachineRemoteAddress } from "./http-server-client-address";
 
 function freePort(): Promise<number> {
@@ -62,6 +62,7 @@ describe("startRahDaemon", () => {
   let tempHome: string;
   let previousRahHome: string | undefined;
   let daemon: RahDaemon | null = null;
+  let engine: RuntimeEngine;
   let port: number;
 
   beforeEach(async () => {
@@ -69,9 +70,10 @@ describe("startRahDaemon", () => {
     tempHome = mkdtempSync(path.join(os.tmpdir(), "rah-http-server-"));
     process.env.RAH_HOME = tempHome;
     port = await freePort();
+    engine = new RuntimeEngine();
     daemon = await startRahDaemon({
       port,
-      engine: new RuntimeEngine(),
+      engine,
     });
   });
 
@@ -123,6 +125,41 @@ describe("startRahDaemon", () => {
     assert.equal(typeof response.json, "object");
   });
 
+  test("serves native TUI diagnostics", async () => {
+    const response = await requestJson({
+      port,
+      path: "/api/native-tui/diagnostics",
+      headers: { Origin: `http://127.0.0.1:${port}` },
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(response.json, { diagnostics: [] });
+  });
+
+  test("serves PTY replay stats", async () => {
+    engine.ptyHub.appendOutput("terminal-1", "ready");
+    const response = await requestJson({
+      port,
+      path: "/api/pty/stats",
+      headers: { Origin: `http://127.0.0.1:${port}` },
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(response.json, {
+      sessions: [
+        {
+          sessionId: "terminal-1",
+          replayChunks: 1,
+          replayBytes: 5,
+          maxReplayChunks: 2000,
+          maxReplayBytes: 8388608,
+          nextSeq: 1,
+          firstReplaySeq: 0,
+          subscriberCount: 0,
+          status: "open",
+        },
+      ],
+    });
+  });
+
   test("rejects oversized JSON request bodies before buffering them", async () => {
     const request = Readable.from([]) as unknown as IncomingMessage;
     Object.defineProperty(request, "headers", {
@@ -158,6 +195,52 @@ describe("startRahDaemon", () => {
     assert.equal(isLocalMachineRemoteAddress("::ffff:127.0.0.1"), true);
     assert.equal(isLocalMachineRemoteAddress("203.0.113.10"), false);
     assert.equal(isLocalMachineRemoteAddress(undefined), false);
+  });
+
+  test("sends websocket JSON while under the backpressure threshold", () => {
+    const sent: string[] = [];
+    const socket = {
+      readyState: 1,
+      bufferedAmount: 3,
+      send: (data: string) => {
+        sent.push(data);
+      },
+      close: () => {
+        throw new Error("close should not be called");
+      },
+    };
+
+    assert.equal(
+      sendJsonWithBackpressure(socket, { ok: true }, { maxBufferedBytes: 4 }),
+      true,
+    );
+    assert.deepEqual(sent, ['{"ok":true}']);
+  });
+
+  test("closes slow websocket clients before adding more buffered data", () => {
+    const closeCalls: Array<{ code?: number; reason?: string }> = [];
+    const socket = {
+      readyState: 1,
+      bufferedAmount: 5,
+      send: () => {
+        throw new Error("send should not be called");
+      },
+      close: (code?: number, reason?: string) => {
+        closeCalls.push({
+          ...(code !== undefined ? { code } : {}),
+          ...(reason !== undefined ? { reason } : {}),
+        });
+      },
+    };
+
+    assert.equal(
+      sendJsonWithBackpressure(socket, { ok: true }, {
+        maxBufferedBytes: 4,
+        closeReason: "test slow client",
+      }),
+      false,
+    );
+    assert.deepEqual(closeCalls, [{ code: 1013, reason: "test slow client" }]);
   });
 
   test("rejects unregistered workspace file reads", async () => {

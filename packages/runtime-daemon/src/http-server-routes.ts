@@ -2,6 +2,8 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type {
   DebugReplayScript,
   ListDebugScenariosResponse,
+  ListNativeTuiDiagnosticsResponse,
+  ListPtyStatsResponse,
   ListProvidersResponse,
   ProviderKind,
 } from "@rah/runtime-protocol";
@@ -321,6 +323,27 @@ export async function handleHttpRequest(args: {
       const forceRefresh = url.searchParams.get("refresh") === "1";
       const response: ListProvidersResponse = {
         providers: await engine.listProviderDiagnostics({ forceRefresh }),
+      };
+      writeJson(req, res, 200, response);
+      return;
+    }
+
+    if (req.method === "GET" && pathname === "/api/native-tui/diagnostics") {
+      const sessionId = url.searchParams.get("sessionId") ?? undefined;
+      const includeResolved = url.searchParams.get("includeResolved") === "1";
+      const response: ListNativeTuiDiagnosticsResponse = {
+        diagnostics: engine.listNativeTuiDiagnostics({
+          ...(sessionId ? { sessionId } : {}),
+          includeResolved,
+        }),
+      };
+      writeJson(req, res, 200, response);
+      return;
+    }
+
+    if (req.method === "GET" && pathname === "/api/pty/stats") {
+      const response: ListPtyStatsResponse = {
+        sessions: engine.listPtyStats(),
       };
       writeJson(req, res, 200, response);
       return;

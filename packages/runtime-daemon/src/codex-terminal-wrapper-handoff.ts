@@ -34,10 +34,11 @@ import {
   type CodexStoredSessionRecord,
 } from "./codex-stored-sessions";
 import {
-  nextPromptStateFromActivity,
+  readPersistedTaskLifecycle,
   selectCodexStoredSessionCandidate,
   sliceUnprocessedRolloutLines,
 } from "./codex-terminal-wrapper-bridge";
+import { nextPromptStateFromActivity } from "./native-tui-prompt-state";
 import {
   createIsolatedCodexWrapperHome,
   resolveCodexBaseHome,
@@ -217,37 +218,6 @@ function readTurnStartResponse(response: unknown): { turnId?: string } {
       ? (record.turn as Record<string, unknown>)
       : null;
   return turn && typeof turn.id === "string" ? { turnId: turn.id } : {};
-}
-
-function readPersistedTaskLifecycle(line: unknown):
-  | { kind: "started"; turnId: string }
-  | { kind: "completed"; turnId: string }
-  | { kind: "canceled"; turnId: string }
-  | null {
-  if (!line || typeof line !== "object" || Array.isArray(line)) {
-    return null;
-  }
-  const record = line as Record<string, unknown>;
-  if (record.type !== "event_msg") {
-    return null;
-  }
-  const payload =
-    record.payload && typeof record.payload === "object" && !Array.isArray(record.payload)
-      ? (record.payload as Record<string, unknown>)
-      : null;
-  if (!payload || typeof payload.turn_id !== "string") {
-    return null;
-  }
-  if (payload.type === "task_started") {
-    return { kind: "started", turnId: payload.turn_id };
-  }
-  if (payload.type === "task_complete") {
-    return { kind: "completed", turnId: payload.turn_id };
-  }
-  if (payload.type === "turn_aborted") {
-    return { kind: "canceled", turnId: payload.turn_id };
-  }
-  return null;
 }
 
 async function main() {
