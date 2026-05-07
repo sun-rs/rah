@@ -237,6 +237,13 @@ Provider capability binding boundary verified on 2026-05-07:
 
 This guard verifies that provider capability detection and binding live in `provider-capability-bindings.ts` rather than inside `RuntimeEngine`. RuntimeEngine now registers already-bound narrow capability views, while the top-level `ProviderAdapter` remains identity-only.
 
+Default adapter construction boundary verified on 2026-05-07:
+
+- `npm run typecheck`: pass
+- `node --import tsx --test --test-force-exit packages/runtime-daemon/src/native-tui-provider-runtime.test.ts packages/runtime-daemon/src/runtime-engine.test.ts packages/runtime-daemon/src/debug-engine.test.ts`: 53 pass
+
+This guard verifies that `RuntimeEngine` no longer imports the five provider adapter classes or `DebugAdapter` directly. Default legacy/enhancement adapter construction is isolated behind `createDefaultProviderAdapters()`, keeping the core engine focused on capability registration and PTY-first session orchestration.
+
 ## Remaining Gaps
 
 These are still not completion-grade:

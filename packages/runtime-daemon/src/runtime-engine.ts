@@ -34,8 +34,7 @@ import type {
   StartSessionResponse,
   StoredSessionRef,
 } from "@rah/runtime-protocol";
-import { ClaudeAdapter } from "./claude-adapter";
-import { CodexAdapter } from "./codex-adapter";
+import { createDefaultProviderAdapters } from "./default-provider-adapters";
 import {
   applyWorkspaceGitFileActionAsync,
   applyWorkspaceGitHunkActionAsync,
@@ -45,12 +44,8 @@ import {
   readWorkspaceFileFromDirectoryAsync,
   searchWorkspaceFilesInDirectoryAsync,
 } from "./workspace-utils";
-import { DebugAdapter } from "./debug-adapter";
 import { EventBus } from "./event-bus";
-import { GeminiAdapter } from "./gemini-adapter";
 import { HistorySnapshotStore } from "./history-snapshots";
-import { KimiAdapter } from "./kimi-adapter";
-import { OpenCodeAdapter } from "./opencode-adapter";
 import type { ProviderActivity } from "./provider-activity";
 import type {
   ProviderActionCapabilityAdapter,
@@ -294,46 +289,12 @@ export class RuntimeEngine {
       historySnapshots: this.historySnapshots,
     });
 
-    const resolvedAdapters: ProviderAdapter[] = adapters ?? (() => {
-      const debugAdapter = new DebugAdapter({
-        eventBus: this.eventBus,
-        ptyHub: this.ptyHub,
-        sessionStore: this.sessionStore,
-      });
-      return [
-        debugAdapter,
-        new CodexAdapter({
-          eventBus: this.eventBus,
-          ptyHub: this.ptyHub,
-          sessionStore: this.sessionStore,
-          workbenchState: this.workbenchState,
-        }),
-        new ClaudeAdapter({
-          eventBus: this.eventBus,
-          ptyHub: this.ptyHub,
-          sessionStore: this.sessionStore,
-          workbenchState: this.workbenchState,
-        }),
-        new GeminiAdapter({
-          eventBus: this.eventBus,
-          ptyHub: this.ptyHub,
-          sessionStore: this.sessionStore,
-          workbenchState: this.workbenchState,
-        }),
-        new KimiAdapter({
-          eventBus: this.eventBus,
-          ptyHub: this.ptyHub,
-          sessionStore: this.sessionStore,
-          workbenchState: this.workbenchState,
-        }),
-        new OpenCodeAdapter({
-          eventBus: this.eventBus,
-          ptyHub: this.ptyHub,
-          sessionStore: this.sessionStore,
-          workbenchState: this.workbenchState,
-        }),
-      ];
-    })();
+    const resolvedAdapters: ProviderAdapter[] = adapters ?? createDefaultProviderAdapters({
+      eventBus: this.eventBus,
+      ptyHub: this.ptyHub,
+      sessionStore: this.sessionStore,
+      workbenchState: this.workbenchState,
+    });
     for (const adapter of resolvedAdapters) {
       this.registerAdapter(adapter);
     }

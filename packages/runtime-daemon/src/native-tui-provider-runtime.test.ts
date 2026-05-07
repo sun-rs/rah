@@ -135,6 +135,7 @@ describe("NativeTuiProviderRuntime", () => {
     );
     const sessionListSource = readSource("./runtime-session-list.ts");
     assert.match(engineSource, /RuntimeStructuredProviderCoordinator/);
+    assert.match(engineSource, /createDefaultProviderAdapters/);
     assert.match(engineSource, /legacy-structured\/runtime-structured-provider-coordinator/);
     assert.match(engineSource, /structuredProviders/);
     assert.match(engineSource, /structuredLiveAdaptersByProvider/);
@@ -170,6 +171,14 @@ describe("NativeTuiProviderRuntime", () => {
     assert.doesNotMatch(engineSource, /function bindEnhancedModelCapability/);
     assert.doesNotMatch(engineSource, /function hasShutdownCapability/);
     assert.doesNotMatch(engineSource, /function bindShutdownCapability/);
+    assertNoImports(engineSource, [
+      "./claude-adapter",
+      "./codex-adapter",
+      "./debug-adapter",
+      "./gemini-adapter",
+      "./kimi-adapter",
+      "./opencode-adapter",
+    ]);
     assert.doesNotMatch(engineSource, /adaptersById/);
     assert.doesNotMatch(engineSource, /adaptersByProvider/);
     assert.doesNotMatch(engineSource, /structuredSessionOwners = new Map<string, ProviderAdapter>/);
