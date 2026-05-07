@@ -11,7 +11,7 @@ RAH 不把某一家 CLI 的原生概念直接暴露成前端公共逻辑。
 正确边界是：
 
 - `runtime-protocol` 定义跨 provider 的能力字段和请求/响应。
-- `runtime-daemon` 的 `ProviderAdapter` 负责把 RAH 请求翻译成 provider-native 行为。
+- `runtime-daemon` 的 `ProviderAdapter` 负责把 provider-native 行为翻译成 RAH 能力；通用 workspace/file/git 操作不应伪装成 provider 能力。
 - `client-web` 只消费 `SessionSummary`、`ProviderModelCatalog`、`RahEvent` 和通用 API。
 - provider 原生 id 可以作为 `modeId` / `modelId` 的值存在，但它们的解释权属于 adapter。
 
@@ -61,7 +61,7 @@ RAH 不把某一家 CLI 的原生概念直接暴露成前端公共逻辑。
 | 模型/模式目录 | `listModels(options)` | 返回 `ProviderModelCatalog`，里面包含模型、mode、config、profile。 |
 | 权限响应 | `respondToPermission` | 把 RAH 的通用 approval response 翻译成 provider-native 回复。 |
 | 历史分页 | `listStoredSessions` / `getHistoryPage` | provider 原始历史解析为 canonical timeline。 |
-| 文件/Git | `getWorkspaceSnapshot` / `getGitStatus` / `getGitDiff` / apply actions | 使用 workspace scope，不能让请求方自带任意 root 绕过边界。 |
+| 文件/Git | shared workspace utilities; legacy `custom` may still use `ProviderWorkspaceInspectionAdapter` | 这是 RAH workspace 能力，不是 built-in provider 能力；使用 workspace scope，不能让请求方自带任意 root 绕过边界。 |
 
 新增 provider 时，不能只实现 `startSession/sendInput`。至少要明确声明：
 
@@ -73,6 +73,8 @@ RAH 不把某一家 CLI 的原生概念直接暴露成前端公共逻辑。
 - 是否支持 runtime model switch。
 - 是否支持 permission response。
 - 是否支持 stored history paging。
+
+通用文件/Git 能力不再作为新增 built-in provider 的必要 adapter 能力。新增 provider 只要能给出 session cwd/rootDir，RuntimeEngine 会通过 shared workspace utilities 处理 snapshot、file read、git status/diff 和 apply actions。`ProviderWorkspaceInspectionAdapter` 目前保留给 `custom` debug/structured 场景，避免 synthetic scenario 被强行绑定到真实文件系统。
 
 ## 3. Mode 协议
 
