@@ -1,6 +1,7 @@
 import type {
   ProviderActionCapabilityAdapter,
   ProviderAdapter,
+  ProviderCapabilityView,
   ProviderDebugAdapter,
   ProviderDiagnosticAdapter,
   ProviderEnhancedModeAdapter,
@@ -68,7 +69,7 @@ export function hasStructuredLifecycleCapability(
 
 export function bindStructuredLifecycleCapability(
   adapter: ProviderAdapter & ProviderStructuredLifecycleAdapter,
-): Pick<ProviderAdapter, "id"> & ProviderStructuredLifecycleAdapter {
+): ProviderCapabilityView<ProviderStructuredLifecycleAdapter> {
   return {
     id: adapter.id,
     ...(adapter.startSession ? { startSession: adapter.startSession.bind(adapter) } : {}),
@@ -92,7 +93,7 @@ export function hasStructuredInputControlCapability(
 
 export function bindStructuredInputControlCapability(
   adapter: ProviderAdapter & ProviderStructuredInputControlAdapter,
-): Pick<ProviderAdapter, "id"> & ProviderStructuredInputControlAdapter {
+): ProviderCapabilityView<ProviderStructuredInputControlAdapter> {
   return {
     id: adapter.id,
     sendInput: adapter.sendInput.bind(adapter),
@@ -111,7 +112,7 @@ export function hasStructuredPermissionCapability(
 
 export function bindStructuredPermissionCapability(
   adapter: ProviderAdapter & Required<ProviderStructuredPermissionAdapter>,
-): Pick<ProviderAdapter, "id"> & Required<ProviderStructuredPermissionAdapter> {
+): ProviderCapabilityView<Required<ProviderStructuredPermissionAdapter>> {
   return {
     id: adapter.id,
     respondToPermission: adapter.respondToPermission.bind(adapter),
@@ -132,7 +133,7 @@ export function hasWorkspaceInspectionCapability(
 
 export function bindWorkspaceInspectionCapability(
   adapter: ProviderAdapter & ProviderWorkspaceInspectionAdapter,
-): Pick<ProviderAdapter, "id"> & ProviderWorkspaceInspectionAdapter {
+): ProviderCapabilityView<ProviderWorkspaceInspectionAdapter> {
   return {
     id: adapter.id,
     getWorkspaceSnapshot: adapter.getWorkspaceSnapshot.bind(adapter),
@@ -156,7 +157,7 @@ export function hasEnhancedModeCapability(
 
 export function bindEnhancedModeCapability(
   adapter: ProviderAdapter & ProviderEnhancedModeAdapter,
-): Pick<ProviderAdapter, "id"> & ProviderEnhancedModeAdapter {
+): ProviderCapabilityView<ProviderEnhancedModeAdapter> {
   return {
     id: adapter.id,
     ...(adapter.setSessionMode ? { setSessionMode: adapter.setSessionMode.bind(adapter) } : {}),
@@ -174,7 +175,7 @@ export function hasEnhancedModelCapability(
 
 export function bindEnhancedModelCapability(
   adapter: ProviderAdapter & ProviderEnhancedModelAdapter,
-): Pick<ProviderAdapter, "id"> & ProviderEnhancedModelAdapter {
+): ProviderCapabilityView<ProviderEnhancedModelAdapter> {
   return {
     id: adapter.id,
     ...(adapter.listModels ? { listModels: adapter.listModels.bind(adapter) } : {}),
@@ -190,7 +191,7 @@ export function hasActionCapability(
 
 export function bindActionCapability(
   adapter: ProviderAdapter & ProviderActionCapabilityAdapter,
-): Pick<ProviderAdapter, "id"> & ProviderActionCapabilityAdapter {
+): ProviderCapabilityView<ProviderActionCapabilityAdapter> {
   return {
     id: adapter.id,
     ...(adapter.renameSession ? { renameSession: adapter.renameSession.bind(adapter) } : {}),
@@ -205,7 +206,7 @@ export function hasDiagnosticCapability(
 
 export function bindDiagnosticCapability(
   adapter: ProviderAdapter & ProviderDiagnosticAdapter,
-): Pick<ProviderAdapter, "id"> & ProviderDiagnosticAdapter {
+): ProviderCapabilityView<ProviderDiagnosticAdapter> {
   return {
     id: adapter.id,
     ...(adapter.getProviderDiagnostic
@@ -226,7 +227,7 @@ export function hasDebugCapability(
 
 export function bindDebugCapability(
   adapter: ProviderAdapter & ProviderDebugAdapter,
-): Pick<ProviderAdapter, "id"> & ProviderDebugAdapter {
+): ProviderCapabilityView<ProviderDebugAdapter> {
   return {
     id: adapter.id,
     ...(adapter.listDebugScenarios
@@ -249,7 +250,7 @@ export function hasShutdownCapability(
 
 export function bindShutdownCapability(
   adapter: ProviderAdapter & ProviderShutdownAdapter,
-): Pick<ProviderAdapter, "id"> & ProviderShutdownAdapter {
+): ProviderCapabilityView<ProviderShutdownAdapter> {
   return {
     id: adapter.id,
     ...(adapter.shutdown ? { shutdown: adapter.shutdown.bind(adapter) } : {}),

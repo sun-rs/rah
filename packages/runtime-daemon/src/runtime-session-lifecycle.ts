@@ -11,7 +11,7 @@ import type {
 import type { HistorySnapshotStore } from "./history-snapshots";
 import type {
   ProviderActionCapabilityAdapter,
-  ProviderAdapter,
+  ProviderCapabilityView,
   ProviderEnhancedModeAdapter,
   ProviderEnhancedModelAdapter,
   ProviderStructuredLifecycleAdapter,
@@ -39,11 +39,11 @@ type RuntimeSessionLifecycleDeps = {
   removeStructuredSessionOwner: (sessionId: string) => void;
   requireStructuredLifecycleAdapter: (sessionId: string) => ProviderStructuredLifecycleAdapter;
   requireActionCapabilityAdapter: (sessionId: string) =>
-    Pick<ProviderAdapter, "id"> & ProviderActionCapabilityAdapter;
+    ProviderCapabilityView<ProviderActionCapabilityAdapter>;
   requireEnhancedModeAdapter: (sessionId: string) =>
-    Pick<ProviderAdapter, "id"> & ProviderEnhancedModeAdapter;
+    ProviderCapabilityView<ProviderEnhancedModeAdapter>;
   requireEnhancedModelAdapter: (sessionId: string) =>
-    Pick<ProviderAdapter, "id"> & ProviderEnhancedModelAdapter;
+    ProviderCapabilityView<ProviderEnhancedModelAdapter>;
 };
 
 export class RuntimeSessionLifecycle {

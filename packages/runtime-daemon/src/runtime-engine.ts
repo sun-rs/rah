@@ -50,6 +50,7 @@ import type { ProviderActivity } from "./provider-activity";
 import type {
   ProviderActionCapabilityAdapter,
   ProviderAdapter,
+  ProviderCapabilityView,
   ProviderDebugAdapter,
   ProviderDiagnosticAdapter,
   ProviderEnhancedModeAdapter,
@@ -165,44 +166,44 @@ export class RuntimeEngine {
 
   private readonly structuredLiveAdaptersByProvider = new Map<
     string,
-    Pick<ProviderAdapter, "id"> & ProviderStructuredLifecycleAdapter
+    ProviderCapabilityView<ProviderStructuredLifecycleAdapter>
   >();
   private readonly structuredInputAdaptersByProvider = new Map<
     string,
-    Pick<ProviderAdapter, "id"> & ProviderStructuredInputControlAdapter
+    ProviderCapabilityView<ProviderStructuredInputControlAdapter>
   >();
   private readonly structuredPermissionAdaptersByProvider = new Map<
     string,
-    Pick<ProviderAdapter, "id"> & Required<ProviderStructuredPermissionAdapter>
+    ProviderCapabilityView<Required<ProviderStructuredPermissionAdapter>>
   >();
   private readonly workspaceInspectionAdaptersByProvider = new Map<
     string,
-    Pick<ProviderAdapter, "id"> & ProviderWorkspaceInspectionAdapter
+    ProviderCapabilityView<ProviderWorkspaceInspectionAdapter>
   >();
   private readonly modeAdaptersByProvider = new Map<
     string,
-    Pick<ProviderAdapter, "id"> & ProviderEnhancedModeAdapter
+    ProviderCapabilityView<ProviderEnhancedModeAdapter>
   >();
   private readonly modelAdaptersByProvider = new Map<
     string,
-    Pick<ProviderAdapter, "id"> & ProviderEnhancedModelAdapter
+    ProviderCapabilityView<ProviderEnhancedModelAdapter>
   >();
   private readonly actionAdaptersByProvider = new Map<
     string,
-    Pick<ProviderAdapter, "id"> & ProviderActionCapabilityAdapter
+    ProviderCapabilityView<ProviderActionCapabilityAdapter>
   >();
   private readonly diagnosticAdaptersByProvider = new Map<
     string,
-    Pick<ProviderAdapter, "id"> & ProviderDiagnosticAdapter
+    ProviderCapabilityView<ProviderDiagnosticAdapter>
   >();
   private readonly debugAdaptersById = new Map<
     string,
-    Pick<ProviderAdapter, "id"> & ProviderDebugAdapter
+    ProviderCapabilityView<ProviderDebugAdapter>
   >();
   private readonly storedHistoryAdaptersByProvider = new Map<string, ProviderStoredHistoryAdapter>();
   private readonly shutdownAdaptersById = new Map<
     string,
-    Pick<ProviderAdapter, "id"> & ProviderShutdownAdapter
+    ProviderCapabilityView<ProviderShutdownAdapter>
   >();
   private readonly structuredSessionOwners = new Map<string, StructuredSessionOwnerProvider>();
   private readonly historyMirrorAdapters: ProviderStoredHistoryAdapter[] = [];
@@ -1114,7 +1115,7 @@ export class RuntimeEngine {
 
   private requireStructuredInputControlAdapter(
     sessionId: string,
-  ): Pick<ProviderAdapter, "id"> & ProviderStructuredInputControlAdapter {
+  ): ProviderCapabilityView<ProviderStructuredInputControlAdapter> {
     const provider = this.resolveStructuredSessionOwnerProvider(sessionId);
     const adapter = this.structuredInputAdaptersByProvider.get(provider);
     if (
@@ -1131,7 +1132,7 @@ export class RuntimeEngine {
 
   private requireStructuredWorkspaceInspectionAdapter(
     sessionId: string,
-  ): Pick<ProviderAdapter, "id"> & ProviderWorkspaceInspectionAdapter {
+  ): ProviderCapabilityView<ProviderWorkspaceInspectionAdapter> {
     const provider = this.resolveStructuredSessionOwnerProvider(sessionId);
     const adapter = this.workspaceInspectionAdaptersByProvider.get(provider);
     if (
@@ -1148,7 +1149,7 @@ export class RuntimeEngine {
 
   private requireStructuredLifecycleAdapter(
     sessionId: string,
-  ): Pick<ProviderAdapter, "id"> & ProviderStructuredLifecycleAdapter {
+  ): ProviderCapabilityView<ProviderStructuredLifecycleAdapter> {
     const provider = this.resolveStructuredSessionOwnerProvider(sessionId);
     const adapter = this.structuredLiveAdaptersByProvider.get(provider);
     if (!adapter) {
@@ -1159,7 +1160,7 @@ export class RuntimeEngine {
 
   private requireActionCapabilityAdapter(
     sessionId: string,
-  ): Pick<ProviderAdapter, "id"> & ProviderActionCapabilityAdapter {
+  ): ProviderCapabilityView<ProviderActionCapabilityAdapter> {
     const state = this.requireManagedSession(sessionId);
     const adapter = this.actionAdaptersByProvider.get(state.session.provider);
     if (!adapter) {
@@ -1170,7 +1171,7 @@ export class RuntimeEngine {
 
   private requireEnhancedModeAdapter(
     sessionId: string,
-  ): Pick<ProviderAdapter, "id"> & ProviderEnhancedModeAdapter {
+  ): ProviderCapabilityView<ProviderEnhancedModeAdapter> {
     const state = this.requireManagedSession(sessionId);
     const adapter = this.modeAdaptersByProvider.get(state.session.provider);
     if (!adapter) {
@@ -1181,7 +1182,7 @@ export class RuntimeEngine {
 
   private requireEnhancedModelAdapter(
     sessionId: string,
-  ): Pick<ProviderAdapter, "id"> & ProviderEnhancedModelAdapter {
+  ): ProviderCapabilityView<ProviderEnhancedModelAdapter> {
     const state = this.requireManagedSession(sessionId);
     const adapter = this.modelAdaptersByProvider.get(state.session.provider);
     if (!adapter) {
@@ -1192,7 +1193,7 @@ export class RuntimeEngine {
 
   private requireStructuredPermissionAdapter(
     sessionId: string,
-  ): Pick<ProviderAdapter, "id"> & Required<ProviderStructuredPermissionAdapter> {
+  ): ProviderCapabilityView<Required<ProviderStructuredPermissionAdapter>> {
     const provider = this.resolveStructuredSessionOwnerProvider(sessionId);
     const adapter = this.structuredPermissionAdaptersByProvider.get(provider);
     if (!adapter) {

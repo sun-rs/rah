@@ -130,6 +130,8 @@ describe("NativeTuiProviderRuntime", () => {
     const engineSource = readSource("./runtime-engine.ts");
     const providerCapabilityBindingsSource = readSource("./provider-capability-bindings.ts");
     const providerAdapterSource = readSource("./provider-adapter.ts");
+    const runtimeSessionLifecycleSource = readSource("./runtime-session-lifecycle.ts");
+    const structuredCoordinatorSource = readSource("./legacy-structured/runtime-structured-provider-coordinator.ts");
     const providerAdapterInterface = providerAdapterSource.slice(
       providerAdapterSource.indexOf("export interface ProviderAdapter\n"),
     );
@@ -201,6 +203,7 @@ describe("NativeTuiProviderRuntime", () => {
     assert.doesNotMatch(engineSource, /private readonly providers:/);
     assert.doesNotMatch(engineSource, /discoverRuntimeStoredSessions\(this\.adaptersById\.values\(\)\)/);
     assert.match(providerAdapterSource, /ProviderStructuredLifecycleAdapter/);
+    assert.match(providerAdapterSource, /ProviderCapabilityView/);
     assert.match(providerAdapterSource, /ProviderStructuredInputControlAdapter/);
     assert.match(providerAdapterSource, /ProviderStructuredPermissionAdapter/);
     assert.match(providerAdapterSource, /ProviderStoredHistoryAdapter/);
@@ -224,6 +227,14 @@ describe("NativeTuiProviderRuntime", () => {
     assert.doesNotMatch(providerAdapterSource, /ProviderInputControlAdapter/);
     assert.doesNotMatch(providerAdapterSource, /ProviderModeCapabilityAdapter/);
     assert.doesNotMatch(providerAdapterSource, /ProviderModelCapabilityAdapter/);
+    for (const source of [
+      engineSource,
+      providerCapabilityBindingsSource,
+      runtimeSessionLifecycleSource,
+      structuredCoordinatorSource,
+    ]) {
+      assert.doesNotMatch(source, /Pick<ProviderAdapter,\s*"id">/);
+    }
     assert.match(sessionListSource, /ProviderStoredHistoryAdapter/);
     assert.doesNotMatch(sessionListSource, /ProviderAdapter/);
   });

@@ -49,6 +49,9 @@ export interface ProviderAdapterIdentity {
   readonly providers: ManagedSession["provider"][];
 }
 
+export type ProviderCapabilityView<TCapability> = Pick<ProviderAdapterIdentity, "id"> &
+  TCapability;
+
 export interface ProviderStructuredLifecycleAdapter {
   /**
    * Legacy/enhancement structured live lifecycle. PTY-first live sessions do

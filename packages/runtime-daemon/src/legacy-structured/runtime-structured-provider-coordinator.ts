@@ -15,7 +15,7 @@ import type {
 } from "@rah/runtime-protocol";
 import { launchSpecForProvider, probeProviderDiagnostic } from "../provider-diagnostics";
 import type {
-  ProviderAdapter,
+  ProviderCapabilityView,
   ProviderDebugAdapter,
   ProviderDiagnosticAdapter,
   ProviderEnhancedModelAdapter,
@@ -25,12 +25,10 @@ import type { HistorySnapshotStore } from "../history-snapshots";
 import { defaultProviderModeId, providerModeDescriptors } from "../session-mode-utils";
 import { assertExistingWorkingDirectory } from "../provider-working-directory";
 
-type ProviderModelAdapter = Pick<ProviderAdapter, "id"> & ProviderEnhancedModelAdapter;
-type ProviderDiagnosticCapabilityAdapter = Pick<ProviderAdapter, "id"> &
-  ProviderDiagnosticAdapter;
-type ProviderDebugCapabilityAdapter = Pick<ProviderAdapter, "id"> & ProviderDebugAdapter;
-type ProviderStructuredLiveAdapter = Pick<ProviderAdapter, "id"> &
-  ProviderStructuredLifecycleAdapter;
+type ProviderModelAdapter = ProviderCapabilityView<ProviderEnhancedModelAdapter>;
+type ProviderDiagnosticCapabilityAdapter = ProviderCapabilityView<ProviderDiagnosticAdapter>;
+type ProviderDebugCapabilityAdapter = ProviderCapabilityView<ProviderDebugAdapter>;
+type ProviderStructuredLiveAdapter = ProviderCapabilityView<ProviderStructuredLifecycleAdapter>;
 type StructuredSessionOwnerProvider = StartSessionResponse["session"]["session"]["provider"];
 
 type RuntimeStructuredProviderCoordinatorDeps = {
@@ -65,14 +63,14 @@ export class RuntimeStructuredProviderCoordinator {
   private requireStructuredLifecycleAdapter(
     provider: string,
     capability: "startSession" | "resumeSession",
-  ): Pick<ProviderAdapter, "id"> &
-    Required<Pick<ProviderStructuredLifecycleAdapter, typeof capability>> {
+  ): ProviderCapabilityView<Required<Pick<ProviderStructuredLifecycleAdapter, typeof capability>>> {
     const adapter = this.requireStructuredAdapterForProvider(provider);
     if (typeof adapter[capability] !== "function") {
       throw new Error(`Provider ${provider} does not support structured ${capability}.`);
     }
-    return adapter as Pick<ProviderAdapter, "id"> &
-      Required<Pick<ProviderStructuredLifecycleAdapter, typeof capability>>;
+    return adapter as ProviderCapabilityView<
+      Required<Pick<ProviderStructuredLifecycleAdapter, typeof capability>>
+    >;
   }
 
   async listProviderDiagnostics(options?: { forceRefresh?: boolean }): Promise<ProviderDiagnostic[]> {
