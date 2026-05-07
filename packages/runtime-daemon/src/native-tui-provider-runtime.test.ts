@@ -71,6 +71,8 @@ describe("NativeTuiProviderRuntime", () => {
       readSource("./native-tui-provider-runtime.ts"),
     ];
     const forbiddenProviderModules = [
+      "./provider-adapter",
+      "./runtime-provider-coordinator",
       "./claude-session-files",
       "./codex-rollout-activity",
       "./codex-stored-sessions",
