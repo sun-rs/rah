@@ -37,7 +37,6 @@ type RuntimeSessionLifecycleDeps = {
   refreshRememberedState: () => void;
   publishStoredSessionDiscovery: () => void;
   removeStructuredSessionOwner: (sessionId: string) => void;
-  requireStructuredSessionAdapter: (sessionId: string) => ProviderAdapter;
   requireStructuredLifecycleAdapter: (sessionId: string) => ProviderStructuredLifecycleAdapter;
   requireActionCapabilityAdapter: (sessionId: string) => ProviderActionCapabilityAdapter;
   requireEnhancedModeAdapter: (sessionId: string) => ProviderEnhancedModeAdapter;

@@ -317,8 +317,6 @@ export class RuntimeEngine {
       removeStructuredSessionOwner: (sessionId) => {
         this.structuredSessionOwners.delete(sessionId);
       },
-      requireStructuredSessionAdapter: (sessionId) =>
-        this.requireStructuredSessionAdapter(sessionId),
       requireStructuredLifecycleAdapter: (sessionId) =>
         this.requireStructuredLifecycleAdapter(sessionId),
       requireActionCapabilityAdapter: (sessionId) =>
