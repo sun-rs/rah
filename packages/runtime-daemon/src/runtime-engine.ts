@@ -59,6 +59,7 @@ import type {
   ProviderDiagnosticAdapter,
   ProviderEnhancedModeAdapter,
   ProviderEnhancedModelAdapter,
+  ProviderShutdownAdapter,
   ProviderStoredHistoryAdapter,
   ProviderStructuredInputControlAdapter,
   ProviderStructuredPermissionAdapter,
@@ -150,6 +151,28 @@ function hasActionCapability(
   return typeof (adapter as Partial<ProviderActionCapabilityAdapter>).renameSession === "function";
 }
 
+function hasDiagnosticCapability(
+  adapter: ProviderAdapter,
+): adapter is ProviderAdapter & ProviderDiagnosticAdapter {
+  return typeof (adapter as Partial<ProviderDiagnosticAdapter>).getProviderDiagnostic === "function";
+}
+
+function hasDebugCapability(
+  adapter: ProviderAdapter,
+): adapter is ProviderAdapter & ProviderDebugAdapter {
+  return (
+    typeof (adapter as Partial<ProviderDebugAdapter>).listDebugScenarios === "function" ||
+    typeof (adapter as Partial<ProviderDebugAdapter>).startDebugScenario === "function" ||
+    typeof (adapter as Partial<ProviderDebugAdapter>).buildDebugScenarioReplayScript === "function"
+  );
+}
+
+function hasShutdownCapability(
+  adapter: ProviderAdapter,
+): adapter is ProviderAdapter & ProviderShutdownAdapter {
+  return typeof (adapter as Partial<ProviderShutdownAdapter>).shutdown === "function";
+}
+
 export class RuntimeEngine {
   readonly eventBus: EventBus;
   readonly ptyHub: PtyHub;
@@ -185,6 +208,10 @@ export class RuntimeEngine {
   private readonly diagnosticAdaptersByProvider = new Map<string, ProviderDiagnosticAdapter>();
   private readonly debugAdaptersById = new Map<string, ProviderAdapter & ProviderDebugAdapter>();
   private readonly storedHistoryAdaptersByProvider = new Map<string, ProviderStoredHistoryAdapter>();
+  private readonly shutdownAdaptersById = new Map<
+    string,
+    Pick<ProviderAdapter, "id"> & ProviderShutdownAdapter
+  >();
   private readonly structuredSessionOwners = new Map<string, ProviderAdapter>();
   private readonly historyMirrorAdapters: readonly ProviderStoredHistoryAdapter[];
 
@@ -928,7 +955,7 @@ export class RuntimeEngine {
     await runShutdownStep("stored session monitor", () => this.storedSessionMonitor.shutdown());
     await runShutdownStep("terminal sessions", () => this.terminals.shutdown());
     await Promise.all(
-      [...this.adaptersById.values()].map((adapter) =>
+      [...this.shutdownAdaptersById.values()].map((adapter) =>
         runShutdownStep(`provider adapter ${adapter.id}`, () => adapter.shutdown?.()),
       ),
     );
@@ -937,12 +964,11 @@ export class RuntimeEngine {
 
   private registerAdapter(adapter: ProviderAdapter): void {
     this.adaptersById.set(adapter.id, adapter);
-    if (
-      adapter.listDebugScenarios ||
-      adapter.startDebugScenario ||
-      adapter.buildDebugScenarioReplayScript
-    ) {
+    if (hasDebugCapability(adapter)) {
       this.debugAdaptersById.set(adapter.id, adapter);
+    }
+    if (hasShutdownCapability(adapter)) {
+      this.shutdownAdaptersById.set(adapter.id, adapter);
     }
     for (const provider of adapter.providers) {
       this.adaptersByProvider.set(provider, adapter);
@@ -958,7 +984,7 @@ export class RuntimeEngine {
       if (hasActionCapability(adapter)) {
         this.actionAdaptersByProvider.set(provider, adapter);
       }
-      if (adapter.getProviderDiagnostic) {
+      if (hasDiagnosticCapability(adapter)) {
         this.diagnosticAdaptersByProvider.set(provider, adapter);
       }
       if (hasStoredHistoryCapability(adapter)) {
