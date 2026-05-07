@@ -34,7 +34,7 @@ RAH should converge on one live core:
 | Mirror layer separated from coordinator | `native-tui-mirror-runtime.ts`; `RuntimeTerminalCoordinator` delegates mirror polling/application | Done |
 | Mirror failure does not affect TUI | native TUI diagnostics tests and runtime mirror failure tests | Covered by tests |
 | Structured source is provider history/DB | native provider handlers and stored-session parsers remain the mirror source | Partially done |
-| Workbench shell only view/attach | Web startup defaults native TUI; history browsing remains replay-only; `activateHistorySessionCommand` tests lock replay/attach instead of implicit claim | Partially audited |
+| Workbench shell only view/attach | Web startup defaults native TUI; history browsing remains replay-only; global session selection exits canvas and selects/attaches; pane session selection targets only the pane; `activateHistorySessionCommand` tests lock replay/attach instead of implicit claim | Audited with tests |
 | Canvas pane view/attach semantics | `canvas-state.ts` centralizes pane target rules; `canvas-state.test.ts` locks live-session uniqueness and allows read-only history replay in multiple panes | Covered by tests |
 | Enhanced controls downgraded | native TUI capabilities expose `structuredControl: false`; `runtime-engine.test.ts` rejects mode/model changes for native TUI while preserving idle PTY input; `session-capabilities.test.ts` hides RAH-managed controls when structured control is unavailable | Covered by tests |
 | Legacy structured path no longer default | Web, CLI, and default daemon RuntimeEngine prefer native TUI | Done |
@@ -111,6 +111,12 @@ Structured lifecycle boundary verified on 2026-05-07:
 
 This guard verifies that new provider adapters are no longer type-required to implement legacy structured `startSession/resumeSession`. Explicit structured live requests still fail loudly through `RuntimeStructuredProviderCoordinator` if the provider does not implement that optional slice.
 
+Workbench shell view/attach boundary verified on 2026-05-07:
+
+- `node --import tsx --test --test-force-exit packages/client-web/src/session-store-session-startup.test.ts`: 10 pass
+
+This guard verifies that ordinary history activation stays read-only (`preferStoredReplay: true`), uses observe attach, does not send `liveBackend`, and does not require creating a missing workspace. Claiming history remains the explicit path that checks the workspace and launches native TUI. Code audit also confirms that global sidebar/session activation exits canvas before selecting a session, while pane-local `SessionHistoryDialog` activation writes only the target pane through `setCanvasPaneStoredRef` / `setCanvasPaneSession`.
+
 ## Remaining Gaps
 
 These are still not completion-grade:
@@ -119,9 +125,9 @@ These are still not completion-grade:
 - Real five-provider CLI/account human QA is still required; fake native TUI tests do not prove real login/quota/provider behavior.
 - Legacy structured live clients and adapters still exist. They are no longer default, and the built-in provider adapter required interface has been slimmed so workspace inspection, context usage, structured input/control, and structured lifecycle are no longer hard requirements. The remaining gap is deleting or fully isolating the old structured live implementations themselves, not the required adapter surface.
 - Legacy wrapper runtime still exists for `RAH_LEGACY_WRAPPER=1` and synthetic tests. It is isolated as a fallback, not deleted.
-- Workbench shell/canvas still needs deeper audit for every UI path, although stored-history activation now has explicit replay/attach tests and the native browser smoke covers canvas PTY rendering/replay/resize.
+- Workbench shell/canvas code paths are now audited for view/attach semantics. Remaining risk is interaction-level QA: drag/drop, pane replacement, hide/show, and mobile/iPad layout should still be exercised in a real browser.
 - Enhanced controls are rejected safely at the native TUI runtime boundary and hidden by the central frontend capability helpers. Broader UI copy may still need review so native TUI sessions consistently explain external-locked semantics.
 
 ## Current Conclusion
 
-The PTY-first core is materially implemented for the main live entry paths, the required provider adapter surface is now substantially slimmed, and default tests are green. The goal is not complete yet because real native TUI browser/mobile smoke, human provider QA, remaining shell/canvas audit, and legacy structured live implementation isolation/deletion are still incomplete.
+The PTY-first core is materially implemented for the main live entry paths, the required provider adapter surface is now substantially slimmed, and default tests are green. The goal is not complete yet because real native TUI browser/mobile smoke, human provider QA, shell/canvas interaction QA, and legacy structured live implementation isolation/deletion are still incomplete.

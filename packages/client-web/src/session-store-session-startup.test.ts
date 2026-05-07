@@ -727,6 +727,11 @@ describe("session startup model and mode requests", () => {
           provider: "codex";
           providerSessionId: string;
           cwd?: string;
+          liveBackend?: string;
+          preferStoredReplay?: boolean;
+          attach?: {
+            mode?: string;
+          };
         };
         return {
           session: summary({
@@ -756,5 +761,20 @@ describe("session startup model and mode requests", () => {
       requests.map((request) => request.url.replace(/^http:\/\/127\.0\.0\.1:43111/, "")),
       ["/api/sessions/resume"],
     );
+    assert.deepEqual(requests[0]?.body, {
+      provider: "codex",
+      providerSessionId: "thread-1",
+      preferStoredReplay: true,
+      attach: {
+        client: {
+          id: "web-client",
+          kind: "web",
+          connectionId: "web-connection",
+        },
+        mode: "observe",
+      },
+      cwd: "/tmp/missing",
+    });
+    assert.equal((requests[0]?.body as { liveBackend?: string }).liveBackend, undefined);
   });
 });
