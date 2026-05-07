@@ -357,4 +357,4 @@ These are still not completion-grade:
 
 ## Current Conclusion
 
-The PTY-first core is materially implemented for the main live entry paths, the required provider adapter surface is now substantially slimmed, and default tests are green. The goal is not complete yet because real native TUI browser/mobile smoke, human provider QA, shell/canvas interaction QA, and legacy structured live implementation isolation/deletion are still incomplete.
+The PTY-first core is materially implemented for the main live entry paths, the required provider adapter surface is substantially slimmed, and the automatic gates now cover runtime/web tests, real CLI help/version drift, real native TUI launch, Chromium browser smoke, and headless WebKit browser smoke. The goal is not complete yet because final acceptance still requires iPad/Safari real input-method QA, real five-provider account/long-turn/permission QA, shell/canvas interaction QA on real devices, and an explicit keep/delete decision for the legacy structured and legacy wrapper escape hatches.
