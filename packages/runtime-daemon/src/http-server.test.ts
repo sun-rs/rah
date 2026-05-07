@@ -6,6 +6,7 @@ import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
+import { WebSocket } from "ws";
 import { RuntimeEngine } from "./runtime-engine";
 import { startRahDaemon, type RahDaemon } from "./http-server";
 import {
@@ -56,6 +57,29 @@ async function requestJson(args: {
     status: response.status,
     json: await response.json(),
   };
+}
+
+async function waitForWebSocketOpenOrClose(url: string): Promise<"open" | "closed"> {
+  const socket = new WebSocket(url);
+  return await new Promise<"open" | "closed">((resolve) => {
+    const timer = setTimeout(() => {
+      socket.close();
+      resolve("closed");
+    }, 1_000);
+    socket.once("open", () => {
+      clearTimeout(timer);
+      socket.close();
+      resolve("open");
+    });
+    socket.once("error", () => {
+      clearTimeout(timer);
+      resolve("closed");
+    });
+    socket.once("close", () => {
+      clearTimeout(timer);
+      resolve("closed");
+    });
+  });
 }
 
 describe("startRahDaemon", () => {
@@ -188,6 +212,13 @@ describe("startRahDaemon", () => {
     assert.equal(isLoopbackRemoteAddress("::ffff:127.0.0.1"), true);
     assert.equal(isLoopbackRemoteAddress("192.168.1.20"), false);
     assert.equal(isLoopbackRemoteAddress(undefined), false);
+  });
+
+  test("keeps wrapper-control websocket disabled by default", async () => {
+    const result = await waitForWebSocketOpenOrClose(
+      `ws://127.0.0.1:${port}/api/wrapper-control`,
+    );
+    assert.equal(result, "closed");
   });
 
   test("recognizes same-machine LAN clients for host-only fallbacks", () => {

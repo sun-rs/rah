@@ -64,7 +64,7 @@ async function startSmokeDaemon(): Promise<{
   const port = await findFreePort();
   const child = spawn(
     process.execPath,
-    ["--import", "tsx", "packages/runtime-daemon/src/main.ts"],
+    ["--import", "tsx", "scripts/terminal_wrapper_smoke_daemon.ts"],
     {
       cwd: repoRoot,
       env: {

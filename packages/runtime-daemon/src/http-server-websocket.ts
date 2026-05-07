@@ -133,13 +133,23 @@ function parsePtyReplaySeq(raw: string | null): number | undefined {
   return Math.max(0, Math.floor(parsed));
 }
 
-export function attachWebSocketHandlers(server: Server, engine: RuntimeEngine): {
+export function attachWebSocketHandlers(
+  server: Server,
+  engine: RuntimeEngine,
+  options: { enableLegacyWrapperControl?: boolean } = {},
+): {
   close(): void;
 } {
   const wssEvents = new WebSocketServer({ noServer: true });
   const wssPty = new WebSocketServer({ noServer: true });
-  const wssWrapper = new WebSocketServer({ noServer: true });
-  const stopHeartbeat = installWebSocketHeartbeat([wssEvents, wssPty, wssWrapper]);
+  const wssWrapper = options.enableLegacyWrapperControl
+    ? new WebSocketServer({ noServer: true })
+    : undefined;
+  const stopHeartbeat = installWebSocketHeartbeat(
+    [wssEvents, wssPty, wssWrapper].filter(
+      (server): server is WebSocketServer => server !== undefined,
+    ),
+  );
 
   wssEvents.on("connection", (socket, req) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -241,7 +251,7 @@ export function attachWebSocketHandlers(server: Server, engine: RuntimeEngine): 
     });
   });
 
-  wssWrapper.on("connection", (socket) => {
+  wssWrapper?.on("connection", (socket) => {
     let wrapperSessionId: string | null = null;
     const send = (message: unknown) => {
       socket.send(JSON.stringify(message));
@@ -311,6 +321,10 @@ export function attachWebSocketHandlers(server: Server, engine: RuntimeEngine): 
       return;
     }
     if (url.pathname === "/api/wrapper-control") {
+      if (!wssWrapper) {
+        socket.destroy();
+        return;
+      }
       if (!isLoopbackRemoteAddress(req.socket.remoteAddress)) {
         socket.destroy();
         return;
@@ -328,7 +342,7 @@ export function attachWebSocketHandlers(server: Server, engine: RuntimeEngine): 
       stopHeartbeat();
       wssEvents.close();
       wssPty.close();
-      wssWrapper.close();
+      wssWrapper?.close();
     },
   };
 }

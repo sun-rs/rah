@@ -56,8 +56,8 @@ npm run test:smoke:wrapper
 | 3 | 用户问题与回答不重复 | canonicalItemId upsert、history/live echo 合并、Kimi reasoning/text 回归 | browser smoke 统计 user event/bubble 数量 |
 | 4 | 连续追问不丢 | Codex/Claude/Gemini/Kimi/OpenCode queued input 回归测试 | provider-flows 连续发送第一问/第二问并验证文件/marker |
 | 5 | web session 发送后立即 Stop | adapter interrupt 单测覆盖 active/pending turn 状态；真实 provider 仍需 smoke 验证 | browser/manual smoke 应在新 session 首问后立即 stop |
-| 6 | `rah xxx` 新 session 立即 Stop | wrapper-control smoke 覆盖 daemon wrapper path；真实 TUI 需要手测 | `test:smoke:wrapper` + 手动 TUI |
-| 7 | `rah xxx resume` thinking 中 web Stop 传回 TUI | wrapper-control 协议覆盖 close/inject/canonical event；真实 interrupt 需要手测 | terminal-browser / wrapper smoke |
+| 6 | `rah xxx` 新 session 立即 Stop | native TUI browser smoke 覆盖当前公共 PTY path；legacy wrapper-control smoke 只覆盖专用测试 daemon 的旧路径；真实 TUI 需要手测 | `test:native-tui` + 手动 TUI |
+| 7 | `rah xxx resume` thinking 中 web Stop 传回 TUI | native TUI browser smoke 覆盖当前公共 PTY path；legacy wrapper-control 协议只作为旧路径回归；真实 interrupt 需要手测 | terminal-browser / `test:native-tui` |
 | 8 | 启动前/启动后修改模型、参数、权限有效 | Codex/Claude/Gemini/Kimi/OpenCode 断言 native argv/RPC/SDK options | provider-flows 可用模型自述或 provider UI/log 验证 |
 | 9 | 各权限行为符合预期 | OpenCode permission payload、Claude bypass/default、Kimi yolo/approval、Codex sandbox/approval 参数、Gemini approval-mode | 真实 CLI 版本可能变化，必须用 smoke/手测确认 |
 | 10 | Markdown/流式输出是一条递增气泡 | web Markdown block 测试；Kimi ContentPart 合并为 `timeline.item.updated`；canonical upsert 测试 | browser smoke 观察最终 UI |

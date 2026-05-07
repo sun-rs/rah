@@ -11,6 +11,7 @@ export interface RahDaemon {
 export async function startRahDaemon(options?: {
   port?: number;
   engine?: RuntimeEngine;
+  enableLegacyWrapperControl?: boolean;
 }): Promise<RahDaemon> {
   const port = options?.port ?? 43111;
   const engine = options?.engine ?? new RuntimeEngine();
@@ -19,7 +20,9 @@ export async function startRahDaemon(options?: {
   const server = createServer(async (req, res) => {
     await handleHttpRequest({ engine, postRoutes, req, res });
   });
-  const websockets = attachWebSocketHandlers(server, engine);
+  const websockets = attachWebSocketHandlers(server, engine, {
+    enableLegacyWrapperControl: options?.enableLegacyWrapperControl === true,
+  });
 
   await new Promise<void>((resolve) => {
     server.listen(port, "0.0.0.0", () => resolve());
