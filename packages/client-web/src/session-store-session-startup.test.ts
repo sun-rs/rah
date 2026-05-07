@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, test } from "node:test";
 import type { SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
 import {
+  activateHistorySessionCommand,
   claimHistorySessionCommand,
   resumeStoredSessionCommand,
   startSessionCommand,
@@ -513,6 +514,97 @@ describe("session startup model and mode requests", () => {
         ["opencode", "native_tui"],
       ],
     );
+  });
+
+  test("activating stored history opens read-only replay instead of claiming native live", async () => {
+    type ResumeStoredOptions = {
+      preferStoredReplay?: boolean;
+      historyReplay?: "include" | "skip";
+      confirmCreateMissingWorkspace?: (dir: string) => Promise<boolean>;
+    };
+    const ref: StoredSessionRef = {
+      provider: "codex",
+      providerSessionId: "thread-1",
+      cwd: "/tmp/missing-history-workspace",
+      rootDir: "/tmp/missing-history-workspace",
+      createdAt: "2026-04-29T00:00:00.000Z",
+    };
+    const confirmCreateMissingWorkspace = async () => {
+      throw new Error("history browsing must not ask to create missing workspaces");
+    };
+    let resumed: {
+      ref: StoredSessionRef;
+      options?: ResumeStoredOptions;
+    } | null = null;
+    let attached = false;
+
+    await activateHistorySessionCommand(
+      startupDeps(
+        {
+          storedSessions: [ref],
+          recentSessions: [],
+        },
+        {
+          attachSession: async () => {
+            attached = true;
+          },
+          resumeStoredSession: async (nextRef: StoredSessionRef, options: ResumeStoredOptions) => {
+            resumed = { ref: nextRef, options };
+          },
+        },
+      ),
+      ref,
+      { confirmCreateMissingWorkspace },
+    );
+
+    assert.equal(attached, false);
+    assert.equal(resumed?.ref, ref);
+    assert.equal(resumed?.options?.preferStoredReplay, true);
+    assert.equal(
+      resumed?.options?.confirmCreateMissingWorkspace,
+      confirmCreateMissingWorkspace,
+    );
+  });
+
+  test("activating stored history attaches an existing live session instead of resuming", async () => {
+    const live = summary({
+      id: "live-existing",
+      provider: "kimi",
+      providerSessionId: "provider-existing",
+      cwd: "/tmp/rah",
+    });
+    const projections = new Map([["live-existing", createEmptySessionProjection(live)]]);
+    const ref: StoredSessionRef = {
+      provider: "kimi",
+      providerSessionId: "provider-existing",
+      cwd: "/tmp/rah",
+      rootDir: "/tmp/rah",
+      createdAt: "2026-04-29T00:00:00.000Z",
+    };
+    let attachedSessionId: string | null = null;
+    let resumed = false;
+
+    await activateHistorySessionCommand(
+      startupDeps(
+        {
+          projections,
+          storedSessions: [ref],
+          recentSessions: [],
+        },
+        {
+          attachSession: async (summary: SessionSummary) => {
+            attachedSessionId = summary.session.id;
+          },
+          resumeStoredSession: async () => {
+            resumed = true;
+          },
+        },
+      ),
+      ref,
+    );
+
+    assert.equal(attachedSessionId, "live-existing");
+    assert.equal(resumed, false);
   });
 
   test("claim history asks to create a missing stored workspace before launching", async () => {

@@ -33,7 +33,7 @@ RAH should converge on one live core:
 | Mirror layer separated from coordinator | `native-tui-mirror-runtime.ts`; `RuntimeTerminalCoordinator` delegates mirror polling/application | Done |
 | Mirror failure does not affect TUI | native TUI diagnostics tests and runtime mirror failure tests | Covered by tests |
 | Structured source is provider history/DB | native provider handlers and stored-session parsers remain the mirror source | Partially done |
-| Workbench shell only view/attach | Web startup defaults native TUI; history browsing remains replay-only | Partially audited |
+| Workbench shell only view/attach | Web startup defaults native TUI; history browsing remains replay-only; `activateHistorySessionCommand` tests lock replay/attach instead of implicit claim | Partially audited |
 | Enhanced controls downgraded | native TUI capabilities expose `structuredControl: false`; docs mark controls optional | Partially done |
 | Legacy structured path no longer default | Web, CLI, and default daemon RuntimeEngine prefer native TUI | Done |
 
@@ -42,7 +42,7 @@ RAH should converge on one live core:
 Latest verified gates in this branch:
 
 - `npm run typecheck`: pass
-- `npm run test:web`: 148 pass
+- `npm run test:web`: 150 pass
 - `npm run test:provider-contracts`: 133 pass
 - `npm run test:runtime`: 370 pass
 - `npm run test:native-tui`: pass on 2026-05-07
@@ -59,7 +59,7 @@ These are still not completion-grade:
 - Real five-provider CLI/account human QA is still required; fake native TUI tests do not prove real login/quota/provider behavior.
 - Legacy structured live clients and adapters still exist. They are no longer default, but the adapter interface is not fully slimmed down to launch/bind/mirror/minimal control.
 - Legacy wrapper runtime still exists for `RAH_LEGACY_WRAPPER=1` and synthetic tests. It is isolated as a fallback, not deleted.
-- Workbench shell/canvas still needs deeper audit to prove every session selection path is attach/view-only and never accidentally closes or resumes a live session.
+- Workbench shell/canvas still needs deeper audit for every UI path, although stored-history activation now has explicit replay/attach tests and the native browser smoke covers canvas PTY rendering/replay/resize.
 - Enhanced controls are documented as optional, but some UI affordances may still need pruning so native TUI sessions consistently present external-locked semantics.
 
 ## Current Conclusion
