@@ -42,6 +42,7 @@ RAH should converge on one live core:
 | Legacy structured session ownership named explicitly | `RuntimeEngine` tracks adapter-owned sessions as `structuredSessionOwners`; `RuntimeSessionLifecycle` calls `requireStructuredSessionAdapter` only after terminal/native paths are bypassed | Done |
 | Legacy structured adapter slices named explicitly | `ProviderStructuredLifecycleAdapter`, `ProviderStructuredInputControlAdapter`, `ProviderStructuredPermissionAdapter`, and `ProviderStructuredContextAdapter` mark non-core structured live capability slices | Done |
 | Enhanced adapter slices named explicitly | `ProviderEnhancedModeAdapter` and `ProviderEnhancedModelAdapter` mark model/mode controls as optional enhancements, not PTY-first core requirements | Done |
+| Stored history discovery depends only on history slice | `RuntimeEngine.historyMirrorAdapters` and `runtime-session-list.ts` use `ProviderStoredHistoryAdapter` instead of the full `ProviderAdapter` interface | Done |
 
 ## Verification Run
 

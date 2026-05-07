@@ -49,7 +49,7 @@ import { HistorySnapshotStore } from "./history-snapshots";
 import { KimiAdapter } from "./kimi-adapter";
 import { OpenCodeAdapter } from "./opencode-adapter";
 import type { ProviderActivity } from "./provider-activity";
-import type { ProviderAdapter } from "./provider-adapter";
+import type { ProviderAdapter, ProviderStoredHistoryAdapter } from "./provider-adapter";
 import { PtyHub } from "./pty-hub";
 import { RuntimeStructuredProviderCoordinator } from "./runtime-structured-provider-coordinator";
 import { SessionStore, toSessionSummary, type StoredSessionState } from "./session-store";
@@ -124,6 +124,7 @@ export class RuntimeEngine {
   private readonly adaptersById = new Map<string, ProviderAdapter>();
   private readonly adaptersByProvider = new Map<string, ProviderAdapter>();
   private readonly structuredSessionOwners = new Map<string, ProviderAdapter>();
+  private readonly historyMirrorAdapters: readonly ProviderStoredHistoryAdapter[];
 
   constructor(adapters?: ProviderAdapter[]) {
     this.defaultLiveBackend = adapters === undefined ? "native_tui" : "structured";
@@ -240,9 +241,12 @@ export class RuntimeEngine {
     for (const adapter of resolvedAdapters) {
       this.registerAdapter(adapter);
     }
+    this.historyMirrorAdapters = resolvedAdapters;
     this.refreshStoredSessionsCache();
     this.storedSessionMonitor = new StoredSessionMonitor({
-      roots: resolvedAdapters.flatMap((adapter) => adapter.listStoredSessionWatchRoots?.() ?? []),
+      roots: this.historyMirrorAdapters.flatMap(
+        (adapter) => adapter.listStoredSessionWatchRoots?.() ?? [],
+      ),
       refresh: () => {
         this.refreshStoredSessionsCache({ publish: true });
       },
@@ -770,7 +774,7 @@ export class RuntimeEngine {
   }
 
   private discoverStoredSessions(): StoredSessionRef[] {
-    return discoverRuntimeStoredSessions(this.adaptersById.values());
+    return discoverRuntimeStoredSessions(this.historyMirrorAdapters);
   }
 
   private refreshStoredSessionsCache(options?: { publish?: boolean }): void {

@@ -2,7 +2,7 @@ import type {
   ListSessionsResponse,
   StoredSessionRef,
 } from "@rah/runtime-protocol";
-import type { ProviderAdapter } from "./provider-adapter";
+import type { ProviderStoredHistoryAdapter } from "./provider-adapter";
 import {
   toSessionSummary,
   type StoredSessionState,
@@ -23,7 +23,9 @@ export type RememberedWorkbenchSessionState = {
   rememberedSessionTitleOverrides: Readonly<Record<string, string>>;
 };
 
-export function discoverStoredSessions(adapters: Iterable<ProviderAdapter>): StoredSessionRef[] {
+export function discoverStoredSessions(
+  adapters: Iterable<ProviderStoredHistoryAdapter>,
+): StoredSessionRef[] {
   const discovered = new Map<string, StoredSessionRef>();
   for (const adapter of adapters) {
     const storedSessions =
