@@ -246,7 +246,6 @@ Core design and freeze documents:
 - [Provider Capability Matrix](./docs/provider-capability-matrix.md)
 - [Provider Capability Protocol Draft](./docs/provider-capability-protocol-draft.md)
 - [Architecture Benchmark (中文)](./docs/architecture-benchmark.zh-CN.md)
-- [rah codex 标准交付文档（中文）](./docs/rah-codex-wrapper.zh-CN.md)
 - [rah codex handoff 模式设计（中文）](./docs/rah-codex-handoff-mode.zh-CN.md)
 - [rah claude handoff 模式设计（中文）](./docs/rah-claude-handoff-mode.zh-CN.md)
 - [Session 入口与权限边界（中文）](./docs/session-entry-capability-boundary.zh-CN.md)

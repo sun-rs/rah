@@ -368,6 +368,13 @@ Default wrapper-control route closure verified on 2026-05-07:
 
 This guard verifies that the normal daemon closes `/api/wrapper-control` and that the normal RuntimeEngine rejects direct wrapper registration by default, while `test:smoke:wrapper` can still exercise the legacy wrapper-control surface through a dedicated test daemon that enables the wrapper runtime explicitly.
 
+Obsolete provider wrapper entrypoints removed on 2026-05-07:
+
+- Deleted the old provider terminal wrapper programs: `codex-terminal-wrapper-handoff.ts`, `claude-terminal-wrapper.ts`, `gemini-terminal-wrapper.ts`, `kimi-terminal-wrapper.ts`, and `opencode-terminal-wrapper.ts`.
+- Deleted the obsolete `rah-codex-wrapper.zh-CN.md` document and removed it from docs indexes.
+- Kept the small wrapper protocol/runtime test surface (`terminal-wrapper-control`, `terminal-wrapper-session-runtime`, wrapper smoke daemon) for synthetic legacy regression only.
+- Verification: `npm run typecheck` pass, `npm run test:runtime` 378 pass, `npm run test:smoke:wrapper` pass, and `git diff --check` pass.
+
 ## Remaining Gaps
 
 These are still not completion-grade:
@@ -375,10 +382,10 @@ These are still not completion-grade:
 - Chromium and headless WebKit native browser smoke are covered. iPad/Safari real input-method behavior still needs human verification because headless WebKit cannot prove real keyboard/IME viewport behavior.
 - Real five-provider CLI/account human QA is still required; fake native TUI tests do not prove real login/quota/provider behavior.
 - Legacy structured adapters still exist. The structured live clients, structured adapter implementations, and default structured adapter construction are now path-isolated under `legacy-structured/`; production structured live cannot be enabled through an environment variable and remains available only through injected test adapters. Codex/Claude/Gemini/Kimi/OpenCode now have separate stored-history adapters. The remaining code gap is deciding whether to keep or delete this internal legacy/test surface.
-- Legacy wrapper runtime still exists for synthetic tests and internal legacy reference. The public `rah xxx` CLI no longer exposes an env escape hatch into wrapper handoff, the normal daemon does not expose `/api/wrapper-control`, and RuntimeEngine does not enable the wrapper runtime unless an explicit test daemon opts in. The daemon-side wrapper registry/tests are still not deleted.
+- Legacy wrapper protocol/runtime still exists for synthetic tests and internal legacy reference. The five old provider-specific wrapper programs are deleted; the public `rah xxx` CLI no longer exposes an env escape hatch into wrapper handoff, the normal daemon does not expose `/api/wrapper-control`, and RuntimeEngine does not enable the wrapper runtime unless an explicit test daemon opts in. The remaining keep/delete decision is only for the small wrapper registry/protocol test surface.
 - Workbench shell/canvas code paths are now audited for view/attach semantics. Remaining risk is interaction-level QA: drag/drop, pane replacement, hide/show, and mobile/iPad layout should still be exercised in a real browser.
 - Enhanced controls are rejected safely at the native TUI runtime boundary and hidden by the central frontend capability helpers. Broader UI copy may still need review so native TUI sessions consistently explain external-locked semantics.
 
 ## Current Conclusion
 
-The PTY-first core is materially implemented for the main live entry paths, the required provider adapter surface is substantially slimmed, and the automatic gates now cover runtime/web tests, real CLI help/version drift, real native TUI launch, Chromium browser smoke, and headless WebKit browser smoke. The public `rah xxx` wrapper handoff escape hatch has been removed, and production structured live can no longer be re-enabled through an environment variable, so CLI/Web live new/resume is now PTY-first only. The goal is not complete yet because final acceptance still requires iPad/Safari real input-method QA, real five-provider account/long-turn/permission QA, shell/canvas interaction QA on real devices, and an explicit keep/delete decision for the remaining internal legacy structured/wrapper test surface.
+The PTY-first core is materially implemented for the main live entry paths, the required provider adapter surface is substantially slimmed, and the automatic gates now cover runtime/web tests, real CLI help/version drift, real native TUI launch, Chromium browser smoke, and headless WebKit browser smoke. The public `rah xxx` wrapper handoff escape hatch has been removed, obsolete provider wrapper programs have been deleted, and production structured live can no longer be re-enabled through an environment variable or public HTTP request, so CLI/Web live new/resume is now PTY-first only. The goal is not complete yet because final acceptance still requires iPad/Safari real input-method QA, real five-provider account/long-turn/permission QA, shell/canvas interaction QA on real devices, and an explicit keep/delete decision for the remaining internal legacy structured/synthetic wrapper test surface.

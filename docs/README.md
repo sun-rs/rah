@@ -14,7 +14,6 @@
 - [Terminal Wrapper Live Session 设计](./terminal-wrapper-live-sessions.zh-CN.md)
 - [`rah codex` handoff 模式](./rah-codex-handoff-mode.zh-CN.md)
 - [`rah claude` handoff 模式](./rah-claude-handoff-mode.zh-CN.md)
-- [`rah codex` 标准交付文档](./rah-codex-wrapper.zh-CN.md)
 - [Terminal Wrapper Protocol Draft](./terminal-wrapper-protocol.zh-CN.md)
 
 ## 3. Provider 与能力边界
