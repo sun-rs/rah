@@ -10,9 +10,9 @@ import {
 } from "./native-tui-launch-spec";
 import { createDefaultNativeTuiProviderHandlers } from "./native-tui-provider-handlers";
 import type {
+  NativeTuiBindingHandler,
   NativeTuiBindingCandidate,
   NativeTuiOutputObservation,
-  NativeTuiProviderHandler,
   NativeTuiProviderRuntimeSession,
 } from "./native-tui-provider-runtime-types";
 
@@ -42,10 +42,10 @@ const EMPTY_NATIVE_TUI_OUTPUT_OBSERVATION: NativeTuiOutputObservation = {
 };
 
 export class DefaultNativeTuiProviderRuntime implements NativeTuiProviderRuntime {
-  private readonly handlers: ReadonlyMap<ProviderKind, NativeTuiProviderHandler>;
+  private readonly handlers: ReadonlyMap<ProviderKind, NativeTuiBindingHandler>;
   readonly providers: readonly ProviderKind[];
 
-  constructor(handlers = createDefaultNativeTuiProviderHandlers()) {
+  constructor(handlers: ReadonlyMap<ProviderKind, NativeTuiBindingHandler> = createDefaultNativeTuiProviderHandlers()) {
     this.handlers = handlers;
     this.providers = [...handlers.keys()];
   }

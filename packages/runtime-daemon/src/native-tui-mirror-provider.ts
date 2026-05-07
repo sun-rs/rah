@@ -1,8 +1,8 @@
 import type { ProviderKind } from "@rah/runtime-protocol";
 import { createDefaultNativeTuiProviderHandlers } from "./native-tui-provider-handlers";
 import type {
+  NativeTuiMirrorHandler,
   NativeTuiMirrorUpdate,
-  NativeTuiProviderHandler,
   NativeTuiProviderMirror,
   NativeTuiProviderRuntimeSession,
 } from "./native-tui-provider-runtime-types";
@@ -17,10 +17,10 @@ export interface NativeTuiMirrorProvider {
 }
 
 export class DefaultNativeTuiMirrorProvider implements NativeTuiMirrorProvider {
-  private readonly handlers: ReadonlyMap<ProviderKind, NativeTuiProviderHandler>;
+  private readonly handlers: ReadonlyMap<ProviderKind, NativeTuiMirrorHandler>;
   readonly providers: readonly ProviderKind[];
 
-  constructor(handlers = createDefaultNativeTuiProviderHandlers()) {
+  constructor(handlers: ReadonlyMap<ProviderKind, NativeTuiMirrorHandler> = createDefaultNativeTuiProviderHandlers()) {
     this.handlers = handlers;
     this.providers = [...handlers.keys()];
   }

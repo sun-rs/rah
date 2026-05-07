@@ -94,7 +94,7 @@ export type NativeTuiMirrorUpdate =
       items: NativeTuiProviderActivityEnvelope[];
     };
 
-export type NativeTuiProviderHandler = {
+export type NativeTuiBindingHandler = {
   provider: ProviderKind;
   canProbeBinding?: boolean;
   observeOutput?(
@@ -102,8 +102,14 @@ export type NativeTuiProviderHandler = {
     data: string,
   ): NativeTuiOutputObservation;
   probeBinding?(session: NativeTuiProviderRuntimeSession): NativeTuiBindingCandidate | null;
+};
+
+export type NativeTuiMirrorHandler = {
+  provider: ProviderKind;
   updateMirror(
     session: NativeTuiProviderRuntimeSession,
     mirror: NativeTuiProviderMirror | undefined,
   ): NativeTuiMirrorUpdate;
 };
+
+export type NativeTuiProviderHandler = NativeTuiBindingHandler & NativeTuiMirrorHandler;

@@ -33,6 +33,7 @@ RAH should converge on one live core:
 | Read-only history stays read-only | `preferStoredReplay` bypasses native TUI default; `session-store-session-startup.test.ts`; `workbench-state.test.ts` | Done |
 | Mirror layer separated from coordinator | `native-tui-mirror-runtime.ts`; `RuntimeTerminalCoordinator` delegates mirror polling/application | Done |
 | Mirror provider separated from lifecycle runtime | `NativeTuiProviderRuntime` owns launch/resume/binding/output observation only; `NativeTuiMirrorProvider` owns `updateMirror()` and is injected into `NativeTuiMirrorRuntime` | Done |
+| Native TUI handler capability split | `NativeTuiBindingHandler` and `NativeTuiMirrorHandler` separate compile-time lifecycle/binding from mirror parsing; combined handlers remain only as DRY provider implementations | Done |
 | Mirror failure does not affect TUI | native TUI diagnostics tests and runtime mirror failure tests | Covered by tests |
 | Structured source is provider history/DB | native provider handlers and stored-session parsers remain the mirror source | Partially done |
 | Workbench shell only view/attach | Web startup defaults native TUI; history browsing remains replay-only; global session selection exits canvas and selects/attaches; pane session selection targets only the pane; `activateHistorySessionCommand` tests lock replay/attach instead of implicit claim | Audited with tests |
@@ -173,6 +174,13 @@ Native TUI mirror provider boundary verified on 2026-05-07:
 - `node --import tsx --test --test-force-exit packages/runtime-daemon/src/native-tui-provider-runtime.test.ts packages/runtime-daemon/src/runtime-engine.test.ts`: 52 pass
 
 This guard verifies that `NativeTuiProviderRuntime` no longer exposes `updateMirror()`. Native lifecycle launch/resume/binding remains separate from `NativeTuiMirrorProvider`, and `NativeTuiMirrorRuntime` depends only on the dedicated mirror seam for provider history/DB updates.
+
+Native TUI binding/mirror handler type split verified on 2026-05-07:
+
+- `npm run typecheck`: pass
+- `node --import tsx --test --test-force-exit packages/runtime-daemon/src/native-tui-provider-runtime.test.ts packages/runtime-daemon/src/runtime-engine.test.ts`: 52 pass
+
+This guard verifies that lifecycle/binding code consumes `NativeTuiBindingHandler` while mirror code consumes `NativeTuiMirrorHandler`. The five provider implementations can still share one object shape for DRY reasons, but the runtime-facing seams are separate.
 
 ## Remaining Gaps
 
