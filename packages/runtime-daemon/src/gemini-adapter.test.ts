@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import { validateProviderModelCatalog } from "@rah/runtime-protocol";
 import { EventBus } from "./event-bus";
 import { GeminiAdapter } from "./gemini-adapter";
+import { GeminiStoredHistoryAdapter } from "./gemini-stored-history-adapter";
 import { loadCachedGeminiHistoryManifest } from "./gemini-history-cache";
 import { isNoisyGeminiCliStderr } from "./gemini-cli-utils";
 import {
@@ -735,8 +736,9 @@ setTimeout(() => {
     writeGeminiSessionFile("gemini-session-2");
     const services = createServices();
     const adapter = new GeminiAdapter(services);
+    const historyAdapter = new GeminiStoredHistoryAdapter(services);
 
-    const stored = adapter.listStoredSessions();
+    const stored = historyAdapter.listStoredSessions();
     assert.equal(stored.length, 1);
     assert.equal(stored[0]?.providerSessionId, "gemini-session-2");
     assert.equal(stored[0]?.cwd, cwd);
@@ -767,7 +769,7 @@ setTimeout(() => {
       0,
     );
 
-    const page = adapter.getSessionHistoryPage(resumed.session.session.id, { limit: 20 });
+    const page = historyAdapter.getSessionHistoryPage(resumed.session.session.id, { limit: 20 });
     assert.ok(
       page.events.some(
         (event) =>
@@ -813,6 +815,7 @@ setTimeout(() => {
     writeGeminiSessionFile("gemini-session-rename-1");
     const services = createServices();
     const adapter = new GeminiAdapter(services);
+    const historyAdapter = new GeminiStoredHistoryAdapter(services);
 
     const resumed = await adapter.resumeSession({
       provider: "gemini",
@@ -829,7 +832,7 @@ setTimeout(() => {
 
     const response = buildSessionsResponse({
       liveStates: services.sessionStore.listSessions(),
-      discoveredStoredSessions: adapter.listStoredSessions(),
+      discoveredStoredSessions: historyAdapter.listStoredSessions(),
       remembered: {
         rememberedSessions: services.workbenchState.snapshot().sessions,
         rememberedRecentSessions: services.workbenchState.snapshot().recentSessions,
@@ -910,8 +913,8 @@ setTimeout(() => {
       messageText: `Read ${path.join(inferredRoot, "src", "main.ts")} and summarize it.`,
     });
 
-    const adapter = new GeminiAdapter(createServices());
-    const stored = adapter.listStoredSessions();
+    const historyAdapter = new GeminiStoredHistoryAdapter(createServices());
+    const stored = historyAdapter.listStoredSessions();
     const target = stored.find(
       (session) => session.providerSessionId === "gemini-session-legacy-path",
     );
@@ -929,8 +932,8 @@ setTimeout(() => {
       logsMessage: `Review ${path.join(missingRoot, "lib", "index.ts")} and report the result.`,
     });
 
-    const adapter = new GeminiAdapter(createServices());
-    const stored = adapter.listStoredSessions();
+    const historyAdapter = new GeminiStoredHistoryAdapter(createServices());
+    const stored = historyAdapter.listStoredSessions();
     const target = stored.find(
       (session) => session.providerSessionId === "gemini-session-legacy-missing",
     );
@@ -949,8 +952,8 @@ setTimeout(() => {
       messageText: "No path hints here.",
     });
 
-    const adapter = new GeminiAdapter(createServices());
-    const stored = adapter.listStoredSessions();
+    const historyAdapter = new GeminiStoredHistoryAdapter(createServices());
+    const stored = historyAdapter.listStoredSessions();
     const target = stored.find(
       (session) => session.providerSessionId === "gemini-session-legacy-workbench",
     );

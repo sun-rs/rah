@@ -5,21 +5,14 @@ import type {
   ResumeSessionRequest,
   ResumeSessionResponse,
   SetSessionModelRequest,
-  SessionHistoryPageResponse,
   SessionInputRequest,
   SessionSummary,
   StartSessionRequest,
   StartSessionResponse,
-  StoredSessionRef,
 } from "@rah/runtime-protocol";
 import type { ProviderAdapter, RuntimeServices } from "./provider-adapter";
 import {
-  createGeminiStoredSessionFrozenHistoryPageLoader,
-  type GeminiStoredSessionRecord,
-  discoverGeminiStoredSessions,
   findGeminiStoredSessionRecord,
-  getGeminiStoredSessionHistoryPage,
-  resolveGeminiStoredSessionWatchRoots,
   resumeGeminiStoredSession,
 } from "./gemini-session-files";
 import {
@@ -43,7 +36,6 @@ import {
 } from "./gemini-model-catalog";
 import { buildGeminiModeState, isGeminiModeId } from "./session-mode-utils";
 import { toSessionSummary } from "./session-store";
-import { movePathToTrash } from "./trash";
 
 const GEMINI_EVENT_SOURCE = {
   provider: "gemini" as const,
@@ -58,7 +50,6 @@ export class GeminiAdapter implements ProviderAdapter {
   private readonly services: RuntimeServices;
   private readonly liveSessions = new Map<string, LiveGeminiSession>();
   private readonly rehydratedSessionIds = new Set<string>();
-  private storedSessionIndex = new Map<string, GeminiStoredSessionRecord>();
   private readonly modelCatalog = new GeminiModelCatalogCache();
 
   constructor(services: RuntimeServices) {
@@ -313,76 +304,6 @@ export class GeminiAdapter implements ProviderAdapter {
     // Gemini sessions do not use PTY-backed rendering.
   }
 
-  getSessionHistoryPage(
-    sessionId: string,
-    options?: { beforeTs?: string; cursor?: string; limit?: number },
-  ): SessionHistoryPageResponse {
-    const state = this.services.sessionStore.getSession(sessionId);
-    if (!state?.session.providerSessionId) {
-      return { sessionId, events: [] };
-    }
-    const record = findGeminiStoredSessionRecord(
-      state.session.providerSessionId,
-      state.session.cwd,
-    );
-    if (!record) {
-      return { sessionId, events: [] };
-    }
-    return getGeminiStoredSessionHistoryPage({
-      sessionId,
-      record,
-      ...(options?.beforeTs ? { beforeTs: options.beforeTs } : {}),
-      ...(options?.limit ? { limit: options.limit } : {}),
-    });
-  }
-
-  createFrozenHistoryPageLoader(sessionId: string) {
-    const state = this.services.sessionStore.getSession(sessionId);
-    if (!state?.session.providerSessionId) {
-      return undefined;
-    }
-    const record =
-      this.storedSessionIndex.get(state.session.providerSessionId) ??
-      findGeminiStoredSessionRecord(
-        state.session.providerSessionId,
-        state.session.cwd,
-      );
-    if (!record) {
-      return undefined;
-    }
-    return createGeminiStoredSessionFrozenHistoryPageLoader({
-      sessionId,
-      record,
-    });
-  }
-
-  listStoredSessions(): StoredSessionRef[] {
-    if (this.storedSessionIndex.size === 0) {
-      this.refreshStoredSessionIndex();
-    }
-    return [...this.storedSessionIndex.values()].map((record) => record.ref);
-  }
-
-  refreshStoredSessionsCatalog(): StoredSessionRef[] {
-    this.refreshStoredSessionIndex();
-    return this.listStoredSessions();
-  }
-
-  listStoredSessionWatchRoots(): string[] {
-    return resolveGeminiStoredSessionWatchRoots();
-  }
-
-  async removeStoredSession(session: StoredSessionRef): Promise<void> {
-    const record =
-      this.storedSessionIndex.get(session.providerSessionId) ??
-      this.refreshStoredSessionIndex().get(session.providerSessionId);
-    if (!record) {
-      throw new Error(`Could not find a stored Gemini history file for ${session.providerSessionId}.`);
-    }
-    await movePathToTrash(record.filePath);
-    this.storedSessionIndex.delete(session.providerSessionId);
-  }
-
   async getProviderDiagnostic(options?: { forceRefresh?: boolean }) {
     return probeProviderDiagnostic("gemini", await geminiLaunchSpec(), options);
   }
@@ -403,10 +324,4 @@ export class GeminiAdapter implements ProviderAdapter {
     });
   }
 
-  private refreshStoredSessionIndex(): Map<string, GeminiStoredSessionRecord> {
-    this.storedSessionIndex = new Map(
-      discoverGeminiStoredSessions().map((record) => [record.ref.providerSessionId, record] as const),
-    );
-    return this.storedSessionIndex;
-  }
 }

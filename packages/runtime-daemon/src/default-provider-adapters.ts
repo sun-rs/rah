@@ -3,6 +3,7 @@ import { ClaudeStoredHistoryAdapter } from "./claude-stored-history-adapter";
 import { CodexAdapter } from "./codex-adapter";
 import { DebugAdapter } from "./debug-adapter";
 import { GeminiAdapter } from "./gemini-adapter";
+import { GeminiStoredHistoryAdapter } from "./gemini-stored-history-adapter";
 import { KimiAdapter } from "./kimi-adapter";
 import { OpenCodeAdapter } from "./opencode-adapter";
 import type { ProviderAdapter, RuntimeServices } from "./provider-adapter";
@@ -25,6 +26,7 @@ export function createDefaultProviderAdapters(
     new ClaudeAdapter(services),
     new ClaudeStoredHistoryAdapter(services),
     new GeminiAdapter(services),
+    new GeminiStoredHistoryAdapter(services),
     new KimiAdapter(services),
     new OpenCodeAdapter(services),
   ];
