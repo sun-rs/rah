@@ -93,4 +93,12 @@ describe("NativeTuiProviderRuntime", () => {
       assertNoImports(source, forbiddenProviderModules);
     }
   });
+
+  test("keeps structured provider coordination named as a non-core path", () => {
+    const engineSource = readSource("./runtime-engine.ts");
+    assert.match(engineSource, /RuntimeStructuredProviderCoordinator/);
+    assert.match(engineSource, /structuredProviders/);
+    assert.doesNotMatch(engineSource, /RuntimeProviderCoordinator/);
+    assert.doesNotMatch(engineSource, /private readonly providers:/);
+  });
 });
