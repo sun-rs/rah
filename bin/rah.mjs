@@ -599,6 +599,17 @@ async function startOrResumePtyFirstSession(parsed, client) {
   return result.session;
 }
 
+async function detachPtyFirstClient(daemonUrl, sessionId, clientId) {
+  try {
+    await postJson(daemonUrl, `/api/sessions/${encodeURIComponent(sessionId)}/detach`, {
+      clientId,
+    });
+  } catch {
+    // Detach is best-effort cleanup for a local terminal client. Failure must
+    // not close or otherwise disturb the daemon-owned TUI session.
+  }
+}
+
 function sendPtyResize(socket, sessionId, clientId) {
   if (socket.readyState !== WebSocket.OPEN) {
     return;
@@ -711,7 +722,11 @@ async function runPtyFirstProviderCommand(parsed) {
   const client = terminalClientDescriptor();
   const session = await startOrResumePtyFirstSession(parsed, client);
   const ptyId = session.ptyId || session.id;
-  await attachLocalTerminalToPty(parsed.daemonUrl, ptyId, client.clientId);
+  try {
+    await attachLocalTerminalToPty(parsed.daemonUrl, ptyId, client.clientId);
+  } finally {
+    await detachPtyFirstClient(parsed.daemonUrl, session.id, client.clientId);
+  }
 }
 
 async function main() {

@@ -40,6 +40,7 @@ async function closeServer(server: ReturnType<typeof createServer>, wss: WebSock
 
 test("rah provider command creates a native TUI session and attaches to PTY", async () => {
   const startRequests: unknown[] = [];
+  const detachRequests: unknown[] = [];
   const ptyMessages: unknown[] = [];
   const wss = new WebSocketServer({ noServer: true });
   const server = createServer(async (req, res) => {
@@ -59,6 +60,25 @@ test("rah provider command creates a native TUI session and attaches to PTY", as
           cwd: "/tmp",
           rootDir: "/tmp",
           runtimeState: "idle",
+          ptyId: "session-1",
+          capabilities: {},
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      });
+      return;
+    }
+    if (req.method === "POST" && req.url === "/api/sessions/session-1/detach") {
+      detachRequests.push(await readJsonBody(req));
+      writeJson(res, 200, {
+        session: {
+          id: "session-1",
+          provider: "codex",
+          launchSource: "terminal",
+          liveBackend: "native_tui",
+          cwd: "/tmp",
+          rootDir: "/tmp",
+          runtimeState: "stopped",
           ptyId: "session-1",
           capabilities: {},
           createdAt: new Date().toISOString(),
@@ -158,6 +178,7 @@ test("rah provider command creates a native TUI session and attaches to PTY", as
   assert.equal(startRequest.attach.client.rows, 32);
   assert.equal(startRequest.attach.mode, "interactive");
   assert.equal(startRequest.attach.claimControl, true);
+  assert.deepEqual(detachRequests, [{ clientId: startRequest.attach.client.id }]);
   assert.deepEqual(ptyMessages[0], {
     type: "pty.resize",
     sessionId: "session-1",
