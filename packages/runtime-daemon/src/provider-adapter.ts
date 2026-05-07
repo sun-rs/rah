@@ -1,7 +1,6 @@
 import type {
   AttachSessionRequest,
   CloseSessionRequest,
-  ContextUsage,
   DebugScenarioDescriptor,
   DebugReplayScript,
   GitDiffResponse,
@@ -147,10 +146,6 @@ export interface ProviderStoredHistoryAdapter {
   removeStoredSession?(session: StoredSessionRef): Promise<void> | void;
 }
 
-export interface ProviderStructuredContextAdapter {
-  getContextUsage(sessionId: string): ContextUsage | undefined;
-}
-
 export interface ProviderDiagnosticAdapter {
   getProviderDiagnostic?(options?: {
     forceRefresh?: boolean;
@@ -176,7 +171,6 @@ export interface ProviderAdapter
     ProviderStructuredInputControlAdapter,
     ProviderStructuredPermissionAdapter,
     ProviderStoredHistoryAdapter,
-    ProviderStructuredContextAdapter,
     ProviderDiagnosticAdapter,
     ProviderDebugAdapter,
     ProviderShutdownAdapter {}

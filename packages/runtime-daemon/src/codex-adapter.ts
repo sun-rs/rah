@@ -13,7 +13,6 @@ import type {
   StartSessionRequest,
   StartSessionResponse,
   StoredSessionRef,
-  ContextUsage,
 } from "@rah/runtime-protocol";
 import type { ProviderAdapter, RuntimeServices } from "./provider-adapter";
 import {
@@ -665,10 +664,6 @@ export class CodexAdapter implements ProviderAdapter {
       record,
       finalizeUnterminatedTools: this.canFinalizeStoredHistory(record),
     });
-  }
-
-  getContextUsage(sessionId: string): ContextUsage | undefined {
-    return this.services.sessionStore.getSession(sessionId)?.usage;
   }
 
   listStoredSessions(): StoredSessionRef[] {

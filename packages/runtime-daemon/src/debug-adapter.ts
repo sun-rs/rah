@@ -12,7 +12,6 @@ import type {
   WorkspaceSnapshotResponse,
   GitStatusResponse,
   GitDiffResponse,
-  ContextUsage,
   DebugReplayScript,
   InterruptSessionRequest,
   SessionFileResponse,
@@ -112,10 +111,6 @@ export class DebugAdapter implements ProviderAdapter {
     options?: { scopeRoot?: string },
   ): Promise<SessionFileResponse> {
     return await this.engine.readSessionFile(sessionId, path, options);
-  }
-
-  getContextUsage(sessionId: string): ContextUsage | undefined {
-    return this.engine.getContextUsage(sessionId);
   }
 
   listStoredSessions(): StoredSessionRef[] {

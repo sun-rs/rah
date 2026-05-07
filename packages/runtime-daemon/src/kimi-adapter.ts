@@ -1,6 +1,5 @@
 import type {
   CloseSessionRequest,
-  ContextUsage,
   InterruptSessionRequest,
   PermissionResponseRequest,
   ProviderModelCatalog,
@@ -353,10 +352,6 @@ export class KimiAdapter implements ProviderAdapter {
       sessionId,
       record,
     });
-  }
-
-  getContextUsage(sessionId: string): ContextUsage | undefined {
-    return this.services.sessionStore.getSession(sessionId)?.usage;
   }
 
   listStoredSessions(): StoredSessionRef[] {

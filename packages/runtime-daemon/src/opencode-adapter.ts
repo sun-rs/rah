@@ -1,6 +1,5 @@
 import type {
   CloseSessionRequest,
-  ContextUsage,
   InterruptSessionRequest,
   PermissionResponseRequest,
   ProviderModelCatalog,
@@ -292,10 +291,6 @@ export class OpenCodeAdapter implements ProviderAdapter {
 
   onPtyResize(): void {
     // OpenCode live sessions are structured API sessions, not PTY-backed sessions.
-  }
-
-  getContextUsage(sessionId: string): ContextUsage | undefined {
-    return this.services.sessionStore.getSession(sessionId)?.usage;
   }
 
   getSessionHistoryPage(

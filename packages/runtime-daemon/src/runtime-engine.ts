@@ -747,7 +747,7 @@ export class RuntimeEngine {
   }
 
   getContextUsage(sessionId: string) {
-    return this.requireStructuredSessionAdapter(sessionId).getContextUsage(sessionId);
+    return this.requireManagedSession(sessionId).usage;
   }
 
   listScenarios(): DebugScenarioDescriptor[] {

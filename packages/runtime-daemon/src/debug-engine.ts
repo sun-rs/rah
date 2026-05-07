@@ -727,10 +727,6 @@ export class DebugEngine {
     return await readWorkspaceFileFromDirectoryAsync(session.cwd, path);
   }
 
-  getContextUsage(sessionId: string): ContextUsage | undefined {
-    return this.sessionStore.getSession(sessionId)?.usage;
-  }
-
   listEvents(filter: EventSubscriptionRequest): RahEvent[] {
     return this.eventBus.list(filter);
   }

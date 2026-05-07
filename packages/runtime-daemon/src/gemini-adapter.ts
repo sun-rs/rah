@@ -1,6 +1,5 @@
 import type {
   CloseSessionRequest,
-  ContextUsage,
   InterruptSessionRequest,
   ProviderModelCatalog,
   ResumeSessionRequest,
@@ -355,10 +354,6 @@ export class GeminiAdapter implements ProviderAdapter {
       sessionId,
       record,
     });
-  }
-
-  getContextUsage(sessionId: string): ContextUsage | undefined {
-    return this.services.sessionStore.getSession(sessionId)?.usage;
   }
 
   listStoredSessions(): StoredSessionRef[] {
