@@ -117,11 +117,11 @@ These are still not completion-grade:
 
 - WebKit/mobile browser smoke is not rerun in this audit. Chromium native browser smoke is covered by `npm run test:native-tui`, but iPad/Safari real input-method behavior still needs human verification.
 - Real five-provider CLI/account human QA is still required; fake native TUI tests do not prove real login/quota/provider behavior.
-- Legacy structured live clients and adapters still exist. They are no longer default, and generic workspace inspection has moved out of the built-in provider adapter path and required interface, but the adapter interface is not fully slimmed down to launch/bind/mirror/minimal control.
+- Legacy structured live clients and adapters still exist. They are no longer default, and the built-in provider adapter required interface has been slimmed so workspace inspection, context usage, structured input/control, and structured lifecycle are no longer hard requirements. The remaining gap is deleting or fully isolating the old structured live implementations themselves, not the required adapter surface.
 - Legacy wrapper runtime still exists for `RAH_LEGACY_WRAPPER=1` and synthetic tests. It is isolated as a fallback, not deleted.
 - Workbench shell/canvas still needs deeper audit for every UI path, although stored-history activation now has explicit replay/attach tests and the native browser smoke covers canvas PTY rendering/replay/resize.
 - Enhanced controls are rejected safely at the native TUI runtime boundary and hidden by the central frontend capability helpers. Broader UI copy may still need review so native TUI sessions consistently explain external-locked semantics.
 
 ## Current Conclusion
 
-The PTY-first core is materially implemented for the main live entry paths, and default tests are green. The goal is not complete yet because real native TUI browser/mobile smoke, human provider QA, remaining shell/canvas audit, and adapter-interface slimming are still incomplete.
+The PTY-first core is materially implemented for the main live entry paths, the required provider adapter surface is now substantially slimmed, and default tests are green. The goal is not complete yet because real native TUI browser/mobile smoke, human provider QA, remaining shell/canvas audit, and legacy structured live implementation isolation/deletion are still incomplete.
