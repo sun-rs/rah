@@ -1,4 +1,5 @@
 import { ClaudeAdapter } from "./claude-adapter";
+import { ClaudeStoredHistoryAdapter } from "./claude-stored-history-adapter";
 import { CodexAdapter } from "./codex-adapter";
 import { DebugAdapter } from "./debug-adapter";
 import { GeminiAdapter } from "./gemini-adapter";
@@ -22,6 +23,7 @@ export function createDefaultProviderAdapters(
     }),
     new CodexAdapter(services),
     new ClaudeAdapter(services),
+    new ClaudeStoredHistoryAdapter(services),
     new GeminiAdapter(services),
     new KimiAdapter(services),
     new OpenCodeAdapter(services),

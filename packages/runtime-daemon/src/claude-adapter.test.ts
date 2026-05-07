@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { validateProviderModelCatalog } from "@rah/runtime-protocol";
 import { ClaudeAdapter } from "./claude-adapter";
+import { ClaudeStoredHistoryAdapter } from "./claude-stored-history-adapter";
 import { createClaudeTimelineIdentity } from "./claude-timeline-identity";
 import { EventBus } from "./event-bus";
 import { PtyHub } from "./pty-hub";
@@ -102,8 +103,9 @@ describe("ClaudeAdapter", () => {
     writeClaudeSession();
     const services = createServices();
     const adapter = new ClaudeAdapter(services);
+    const historyAdapter = new ClaudeStoredHistoryAdapter(services);
 
-    const stored = adapter.listStoredSessions();
+    const stored = historyAdapter.listStoredSessions();
     assert.equal(stored.length, 1);
     assert.equal(stored[0]?.providerSessionId, "session-1");
 
@@ -132,7 +134,7 @@ describe("ClaudeAdapter", () => {
       0,
     );
 
-    const page = adapter.getSessionHistoryPage(resumed.session.session.id, { limit: 20 });
+    const page = historyAdapter.getSessionHistoryPage(resumed.session.session.id, { limit: 20 });
     assert.ok(
       page.events.some(
         (event) =>

@@ -6,12 +6,10 @@ import type {
   ResumeSessionRequest,
   ResumeSessionResponse,
   SetSessionModelRequest,
-  SessionHistoryPageResponse,
   SessionInputRequest,
   SessionSummary,
   StartSessionRequest,
   StartSessionResponse,
-  StoredSessionRef,
 } from "@rah/runtime-protocol";
 import type { ProviderAdapter, RuntimeServices } from "./provider-adapter";
 import {
@@ -25,12 +23,7 @@ import {
   type LiveClaudeSession,
 } from "./legacy-structured/claude-live-client";
 import {
-  createClaudeStoredSessionFrozenHistoryPageLoader,
-  type ClaudeStoredSessionRecord,
-  discoverClaudeStoredSessions,
   findClaudeStoredSessionRecord,
-  getClaudeStoredSessionHistoryPage,
-  resolveClaudeStoredSessionWatchRoots,
   resumeClaudeStoredSession,
   updateClaudeSessionTitle,
   waitForClaudeStoredSessionRecord,
@@ -49,7 +42,6 @@ import {
 import { toSessionSummary } from "./session-store";
 import { buildClaudeModeState, isClaudeModeId } from "./session-mode-utils";
 import { approvalPolicyToPermissionMode } from "./claude-live-helpers";
-import { movePathToTrash } from "./trash";
 import { resolveModelOptionValues } from "./session-model-options";
 
 const CLAUDE_EVENT_SOURCE = {
@@ -70,7 +62,6 @@ export class ClaudeAdapter implements ProviderAdapter {
   private readonly liveSessions = new Map<string, LiveClaudeSession>();
   private readonly rehydratedSessionIds = new Set<string>();
   private readonly permissionModeByProviderSessionId = new Map<string, LiveClaudeSession["permissionMode"]>();
-  private storedSessionIndex = new Map<string, ClaudeStoredSessionRecord>();
   private readonly queryFactory: ClaudeAdapterOptions["queryFactory"];
   private readonly modelCatalog = new ClaudeModelCatalogCache();
 
@@ -390,74 +381,6 @@ export class ClaudeAdapter implements ProviderAdapter {
     // Claude replay sessions do not use PTY-backed rendering.
   }
 
-  getSessionHistoryPage(
-    sessionId: string,
-    options?: { beforeTs?: string; cursor?: string; limit?: number },
-  ): SessionHistoryPageResponse {
-    const state = this.services.sessionStore.getSession(sessionId);
-    if (!state?.session.providerSessionId) {
-      return { sessionId, events: [] };
-    }
-    const record = findClaudeStoredSessionRecord(
-      state.session.providerSessionId,
-      state.session.cwd,
-    );
-    if (!record) {
-      return { sessionId, events: [] };
-    }
-    return getClaudeStoredSessionHistoryPage({
-      sessionId,
-      record,
-      ...(options?.beforeTs ? { beforeTs: options.beforeTs } : {}),
-      ...(options?.limit ? { limit: options.limit } : {}),
-    });
-  }
-
-  createFrozenHistoryPageLoader(sessionId: string) {
-    const state = this.services.sessionStore.getSession(sessionId);
-    if (!state?.session.providerSessionId) {
-      return undefined;
-    }
-    const record = findClaudeStoredSessionRecord(
-      state.session.providerSessionId,
-      state.session.cwd,
-    );
-    if (!record) {
-      return undefined;
-    }
-    return createClaudeStoredSessionFrozenHistoryPageLoader({
-      sessionId,
-      record,
-    });
-  }
-
-  listStoredSessions(): StoredSessionRef[] {
-    if (this.storedSessionIndex.size === 0) {
-      this.refreshStoredSessionIndex();
-    }
-    return [...this.storedSessionIndex.values()].map((record) => record.ref);
-  }
-
-  refreshStoredSessionsCatalog(): StoredSessionRef[] {
-    this.refreshStoredSessionIndex();
-    return this.listStoredSessions();
-  }
-
-  listStoredSessionWatchRoots(): string[] {
-    return resolveClaudeStoredSessionWatchRoots();
-  }
-
-  async removeStoredSession(session: StoredSessionRef): Promise<void> {
-    const record =
-      this.storedSessionIndex.get(session.providerSessionId) ??
-      this.refreshStoredSessionIndex().get(session.providerSessionId);
-    if (!record) {
-      throw new Error(`Could not find a stored Claude history file for ${session.providerSessionId}.`);
-    }
-    await movePathToTrash(record.filePath);
-    this.storedSessionIndex.delete(session.providerSessionId);
-  }
-
   async getProviderDiagnostic(options?: { forceRefresh?: boolean }) {
     return probeProviderDiagnostic("claude", await claudeLaunchSpec(), options);
   }
@@ -486,10 +409,4 @@ export class ClaudeAdapter implements ProviderAdapter {
     });
   }
 
-  private refreshStoredSessionIndex(): Map<string, ClaudeStoredSessionRecord> {
-    this.storedSessionIndex = new Map(
-      discoverClaudeStoredSessions().map((record) => [record.ref.providerSessionId, record] as const),
-    );
-    return this.storedSessionIndex;
-  }
 }
