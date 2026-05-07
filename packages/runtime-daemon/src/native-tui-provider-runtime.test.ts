@@ -139,6 +139,8 @@ describe("NativeTuiProviderRuntime", () => {
     const geminiStoredHistoryAdapterSource = readSource("./gemini-stored-history-adapter.ts");
     const kimiAdapterSource = readSource("./kimi-adapter.ts");
     const kimiStoredHistoryAdapterSource = readSource("./kimi-stored-history-adapter.ts");
+    const openCodeAdapterSource = readSource("./opencode-adapter.ts");
+    const openCodeStoredHistoryAdapterSource = readSource("./opencode-stored-history-adapter.ts");
     const providerAdapterInterface = providerAdapterSource.slice(
       providerAdapterSource.indexOf("export interface ProviderAdapter\n"),
     );
@@ -148,6 +150,7 @@ describe("NativeTuiProviderRuntime", () => {
     assert.match(defaultProviderAdaptersSource, /ClaudeStoredHistoryAdapter/);
     assert.match(defaultProviderAdaptersSource, /GeminiStoredHistoryAdapter/);
     assert.match(defaultProviderAdaptersSource, /KimiStoredHistoryAdapter/);
+    assert.match(defaultProviderAdaptersSource, /OpenCodeStoredHistoryAdapter/);
     assert.match(engineSource, /legacy-structured\/runtime-structured-provider-coordinator/);
     assert.match(engineSource, /structuredProviders/);
     assert.match(engineSource, /structuredLiveAdaptersByProvider/);
@@ -235,6 +238,12 @@ describe("NativeTuiProviderRuntime", () => {
     assert.doesNotMatch(kimiAdapterSource, /listStoredSessions/);
     assert.doesNotMatch(kimiAdapterSource, /getSessionHistoryPage/);
     assert.doesNotMatch(kimiAdapterSource, /removeStoredSession/);
+    assert.match(openCodeStoredHistoryAdapterSource, /ProviderStoredHistoryAdapter/);
+    assert.match(openCodeStoredHistoryAdapterSource, /listStoredSessions/);
+    assert.match(openCodeStoredHistoryAdapterSource, /getSessionHistoryPage/);
+    assert.doesNotMatch(openCodeAdapterSource, /listStoredSessions/);
+    assert.doesNotMatch(openCodeAdapterSource, /getSessionHistoryPage/);
+    assert.doesNotMatch(openCodeAdapterSource, /removeStoredSession/);
     assert.match(providerAdapterSource, /ProviderEnhancedModeAdapter/);
     assert.match(providerAdapterSource, /ProviderEnhancedModelAdapter/);
     assert.match(providerAdapterSource, /startSession\?\(/);

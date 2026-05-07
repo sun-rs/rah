@@ -6,12 +6,10 @@ import type {
   ResumeSessionRequest,
   ResumeSessionResponse,
   SetSessionModelRequest,
-  SessionHistoryPageResponse,
   SessionInputRequest,
   SessionSummary,
   StartSessionRequest,
   StartSessionResponse,
-  StoredSessionRef,
 } from "@rah/runtime-protocol";
 import type { ProviderAdapter, RuntimeServices } from "./provider-adapter";
 import {
@@ -25,14 +23,8 @@ import {
   type LiveOpenCodeSession,
 } from "./legacy-structured/opencode-live-client";
 import {
-  archiveOpenCodeStoredSession,
-  createOpenCodeStoredSessionFrozenHistoryPageLoader,
-  discoverOpenCodeStoredSessions,
   findOpenCodeStoredSessionRecord,
-  getOpenCodeStoredSessionHistoryPage,
-  resolveOpenCodeStoredSessionWatchRoots,
   resumeOpenCodeStoredSession,
-  type OpenCodeStoredSessionRecord,
 } from "./opencode-stored-sessions";
 import { opencodeLaunchSpec, probeProviderDiagnostic } from "./provider-diagnostics";
 import {
@@ -55,9 +47,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
   private readonly services: RuntimeServices;
   private readonly liveSessions = new Map<string, LiveOpenCodeSession>();
   private readonly rehydratedSessionIds = new Set<string>();
-  private readonly rehydratedSessionRecords = new Map<string, OpenCodeStoredSessionRecord>();
   private readonly modelCatalog = new OpenCodeModelCatalogCache();
-  private storedSessionIndex = new Map<string, OpenCodeStoredSessionRecord>();
 
   constructor(services: RuntimeServices) {
     this.services = services;
@@ -95,10 +85,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
         `Provider session opencode:${request.providerSessionId} is already running; attach instead of resume.`,
       );
     }
-    const record =
-      this.storedSessionIndex.get(request.providerSessionId) ??
-      this.refreshStoredSessionIndex().get(request.providerSessionId) ??
-      findOpenCodeStoredSessionRecord(request.providerSessionId);
+    const record = findOpenCodeStoredSessionRecord(request.providerSessionId);
     if (request.preferStoredReplay) {
       if (!record) {
         throw new Error(`Unknown OpenCode session ${request.providerSessionId}.`);
@@ -108,15 +95,12 @@ export class OpenCodeAdapter implements ProviderAdapter {
         provider: "opencode",
         providerSessionId: request.providerSessionId,
         rehydratedSessionIds: this.rehydratedSessionIds,
-        createSession: () => {
-          const resumed = resumeOpenCodeStoredSession(
+        createSession: () =>
+          resumeOpenCodeStoredSession(
             request.attach !== undefined
               ? { services: this.services, record, attach: request.attach }
               : { services: this.services, record },
-          );
-          this.rehydratedSessionRecords.set(resumed.sessionId, record);
-          return resumed;
-        },
+          ),
       });
     }
     try {
@@ -244,7 +228,6 @@ export class OpenCodeAdapter implements ProviderAdapter {
       await closeOpenCodeLiveSession(live, request);
     }
     this.rehydratedSessionIds.delete(sessionId);
-    this.rehydratedSessionRecords.delete(sessionId);
   }
 
   async destroySession(sessionId: string): Promise<void> {
@@ -254,7 +237,6 @@ export class OpenCodeAdapter implements ProviderAdapter {
       await closeOpenCodeLiveSession(live);
     }
     this.rehydratedSessionIds.delete(sessionId);
-    this.rehydratedSessionRecords.delete(sessionId);
   }
 
   interruptSession(sessionId: string, request: InterruptSessionRequest): SessionSummary {
@@ -293,93 +275,8 @@ export class OpenCodeAdapter implements ProviderAdapter {
     // OpenCode live sessions are structured API sessions, not PTY-backed sessions.
   }
 
-  getSessionHistoryPage(
-    sessionId: string,
-    options?: { beforeTs?: string; cursor?: string; limit?: number },
-  ): SessionHistoryPageResponse {
-    void options?.cursor;
-    const state = this.services.sessionStore.getSession(sessionId);
-    const providerSessionId =
-      state?.session.providerSessionId ??
-      this.rehydratedSessionRecords.get(sessionId)?.ref.providerSessionId;
-    if (!providerSessionId) {
-      return { sessionId, events: [] };
-    }
-    const record =
-      this.rehydratedSessionRecords.get(sessionId) ??
-      this.storedSessionIndex.get(providerSessionId) ??
-      this.refreshStoredSessionIndex().get(providerSessionId) ??
-      findOpenCodeStoredSessionRecord(providerSessionId);
-    if (!record) {
-      return { sessionId, events: [] };
-    }
-    return getOpenCodeStoredSessionHistoryPage({
-      sessionId,
-      record,
-      ...(options?.beforeTs ? { beforeTs: options.beforeTs } : {}),
-      ...(options?.limit ? { limit: options.limit } : {}),
-    });
-  }
-
-  createFrozenHistoryPageLoader(sessionId: string) {
-    const state = this.services.sessionStore.getSession(sessionId);
-    const providerSessionId =
-      state?.session.providerSessionId ??
-      this.rehydratedSessionRecords.get(sessionId)?.ref.providerSessionId;
-    if (!providerSessionId) {
-      return undefined;
-    }
-    const record =
-      this.rehydratedSessionRecords.get(sessionId) ??
-      this.storedSessionIndex.get(providerSessionId) ??
-      this.refreshStoredSessionIndex().get(providerSessionId) ??
-      findOpenCodeStoredSessionRecord(providerSessionId);
-    if (!record) {
-      return undefined;
-    }
-    return createOpenCodeStoredSessionFrozenHistoryPageLoader({
-      sessionId,
-      record,
-    });
-  }
-
-  listStoredSessions(): StoredSessionRef[] {
-    if (this.storedSessionIndex.size === 0) {
-      this.refreshStoredSessionIndex();
-    }
-    return [...this.storedSessionIndex.values()].map((record) => record.ref);
-  }
-
-  refreshStoredSessionsCatalog(): StoredSessionRef[] {
-    this.refreshStoredSessionIndex();
-    return this.listStoredSessions();
-  }
-
-  listStoredSessionWatchRoots(): string[] {
-    return resolveOpenCodeStoredSessionWatchRoots();
-  }
-
-  removeStoredSession(session: StoredSessionRef): void {
-    const record =
-      this.storedSessionIndex.get(session.providerSessionId) ??
-      this.refreshStoredSessionIndex().get(session.providerSessionId) ??
-      findOpenCodeStoredSessionRecord(session.providerSessionId);
-    if (!record) {
-      throw new Error(`Could not find a stored OpenCode session for ${session.providerSessionId}.`);
-    }
-    archiveOpenCodeStoredSession(record);
-    this.storedSessionIndex.delete(session.providerSessionId);
-  }
-
   async getProviderDiagnostic(options?: { forceRefresh?: boolean }) {
     return await probeProviderDiagnostic("opencode", await opencodeLaunchSpec(), options);
-  }
-
-  private refreshStoredSessionIndex(): Map<string, OpenCodeStoredSessionRecord> {
-    this.storedSessionIndex = new Map(
-      discoverOpenCodeStoredSessions().map((record) => [record.ref.providerSessionId, record]),
-    );
-    return this.storedSessionIndex;
   }
 
   async shutdown(): Promise<void> {
