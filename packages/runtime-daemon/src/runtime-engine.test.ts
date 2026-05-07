@@ -1320,8 +1320,8 @@ describe("RuntimeEngine", () => {
     rmSync(workspace, { force: true, recursive: true });
   });
 
-  test("native TUI backend starts a provider command and routes chat input through PTY", async () => {
-    const engine = new RuntimeEngine([]);
+  test("default live start uses native TUI and routes chat input through PTY", async () => {
+    const engine = new RuntimeEngine();
     const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-native-tui-"));
     const fakeCodex = path.join(workspace, "fake-codex.js");
     const providerSessionId = "019de928-7d22-7c63-ba89-dcb25d4a8155";
@@ -1366,7 +1366,6 @@ describe("RuntimeEngine", () => {
       const started = await engine.startSession({
         provider: "codex",
         cwd: workspace,
-        liveBackend: "native_tui",
         model: "gpt-native-test",
         modeId: "never/danger-full-access",
         attach: {

@@ -28,6 +28,7 @@ import type {
   SetSessionModelRequest,
   SessionFileSearchResponse,
   SessionHistoryPageResponse,
+  SessionLiveBackend,
   SessionSummary,
   StartSessionRequest,
   StartSessionResponse,
@@ -118,12 +119,14 @@ export class RuntimeEngine {
   private readonly sessionLifecycle: RuntimeSessionLifecycle;
   private readonly providers: RuntimeProviderCoordinator;
   private readonly nativeTuiProviders: NativeTuiProviderRuntime;
+  private readonly defaultLiveBackend: SessionLiveBackend;
 
   private readonly adaptersById = new Map<string, ProviderAdapter>();
   private readonly adaptersByProvider = new Map<string, ProviderAdapter>();
   private readonly sessionOwners = new Map<string, ProviderAdapter>();
 
   constructor(adapters?: ProviderAdapter[]) {
+    this.defaultLiveBackend = adapters === undefined ? "native_tui" : "structured";
     this.workbenchState = new WorkbenchStateStore();
     this.eventBus = new EventBus();
     this.ptyHub = new PtyHub();
@@ -360,7 +363,7 @@ export class RuntimeEngine {
   }
 
   async startSession(request: StartSessionRequest): Promise<StartSessionResponse> {
-    if (request.liveBackend === "native_tui") {
+    if (this.shouldUseNativeTuiBackend(request)) {
       await assertExistingWorkingDirectory(request.cwd, "Session working directory");
       this.pruneOrphanSessions();
       return await this.terminals.startNativeTuiSession({
@@ -372,7 +375,7 @@ export class RuntimeEngine {
   }
 
   async resumeSession(request: ResumeSessionRequest): Promise<ResumeSessionResponse> {
-    if (request.liveBackend === "native_tui") {
+    if (this.shouldUseNativeTuiBackend(request)) {
       if (request.cwd) {
         await assertExistingWorkingDirectory(request.cwd, "Session working directory");
       }
@@ -384,6 +387,22 @@ export class RuntimeEngine {
       });
     }
     return this.providers.resumeSession(request);
+  }
+
+  private shouldUseNativeTuiBackend(
+    request: Pick<StartSessionRequest | ResumeSessionRequest, "provider" | "liveBackend"> &
+      Partial<Pick<ResumeSessionRequest, "preferStoredReplay">>,
+  ): boolean {
+    if (request.liveBackend !== undefined) {
+      return request.liveBackend === "native_tui";
+    }
+    if (request.preferStoredReplay === true) {
+      return false;
+    }
+    return (
+      this.defaultLiveBackend === "native_tui" &&
+      this.nativeTuiProviders.supports(request.provider)
+    );
   }
 
   attachSession(sessionId: string, request: AttachSessionRequest): AttachSessionResponse {
