@@ -23,7 +23,7 @@ import {
   sendInputToClaudeLiveSession,
   startClaudeLiveSession,
   type LiveClaudeSession,
-} from "./claude-live-client";
+} from "./legacy-structured/claude-live-client";
 import {
   createClaudeStoredSessionFrozenHistoryPageLoader,
   type ClaudeStoredSessionRecord,

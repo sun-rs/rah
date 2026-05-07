@@ -16,13 +16,13 @@ import type {
 } from "@rah/runtime-protocol";
 import type { ProviderAdapter, RuntimeServices } from "./provider-adapter";
 import {
-  createCodexAppServerClient,
   loadCodexPlanCollaborationMode,
   respondToCodexLivePermission,
   resumeCodexLiveSession,
   startCodexLiveSession,
   type LiveCodexSession,
-} from "./codex-live-client";
+} from "./legacy-structured/codex-live-client";
+import { createCodexAppServerClient } from "./codex-app-server-client";
 import {
   CodexModelCatalogCache,
   resolveCodexRuntimeCapabilityState,

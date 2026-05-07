@@ -17,7 +17,7 @@ import type {
 import {
   createCodexAppServerClient,
   type CodexJsonRpcClient,
-} from "./codex-live-client";
+} from "./codex-app-server-client";
 import {
   createCodexAppServerTranslationState,
   mapCodexPermissionResolution,

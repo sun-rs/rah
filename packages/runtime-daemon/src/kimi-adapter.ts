@@ -22,7 +22,7 @@ import {
   sendInputToKimiLiveSession,
   startKimiLiveSession,
   type LiveKimiSession,
-} from "./kimi-live-client";
+} from "./legacy-structured/kimi-live-client";
 import {
   createKimiStoredSessionFrozenHistoryPageLoader,
   countKimiHistoryTurns,

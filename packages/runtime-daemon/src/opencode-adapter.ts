@@ -23,7 +23,7 @@ import {
   setOpenCodeLiveSessionMode,
   startOpenCodeLiveSession,
   type LiveOpenCodeSession,
-} from "./opencode-live-client";
+} from "./legacy-structured/opencode-live-client";
 import {
   archiveOpenCodeStoredSession,
   createOpenCodeStoredSessionFrozenHistoryPageLoader,

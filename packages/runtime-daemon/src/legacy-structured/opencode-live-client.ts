@@ -11,9 +11,9 @@ import {
   type SessionInputRequest,
   type StartSessionRequest,
 } from "@rah/runtime-protocol";
-import type { RuntimeServices } from "./provider-adapter";
-import { applyProviderActivity, type ProviderActivity } from "./provider-activity";
-import { toSessionSummary } from "./session-store";
+import type { RuntimeServices } from "../provider-adapter";
+import { applyProviderActivity, type ProviderActivity } from "../provider-activity";
+import { toSessionSummary } from "../session-store";
 import {
   abortOpenCodeSession,
   createOpenCodeSession,
@@ -25,26 +25,26 @@ import {
   type OpenCodePermissionRule,
   type OpenCodeServerHandle,
   type OpenCodeSessionInfo,
-} from "./opencode-api";
-import { OpenCodeAcpClient, waitForAcpDrain, type OpenCodeAcpPromptUsage } from "./opencode-acp-client";
-import { translateOpenCodeAcpSessionUpdate } from "./opencode-acp-activity";
+} from "../opencode-api";
+import { OpenCodeAcpClient, waitForAcpDrain, type OpenCodeAcpPromptUsage } from "../opencode-acp-client";
+import { translateOpenCodeAcpSessionUpdate } from "../opencode-acp-activity";
 import {
   createOpenCodeActivityState,
   completeOpenCodeTurn,
   startOpenCodeTurn,
   type OpenCodeActivityState,
-} from "./opencode-activity";
+} from "../opencode-activity";
 import {
   buildOpenCodeProviderModelId,
   resolveOpenCodeRuntimeCapabilityState,
-} from "./opencode-model-catalog";
+} from "../opencode-model-catalog";
 import {
   resolveModelContextWindow,
   type ModelContextWindowResolution,
   withModelContextWindow,
-} from "./model-context-window";
-import { buildOpenCodeModeState, isOpenCodeModeId } from "./session-mode-utils";
-import { optionValueAsString, resolveModelOptionValues } from "./session-model-options";
+} from "../model-context-window";
+import { buildOpenCodeModeState, isOpenCodeModeId } from "../session-mode-utils";
+import { optionValueAsString, resolveModelOptionValues } from "../session-model-options";
 
 export interface LiveOpenCodeSession {
   sessionId: string;

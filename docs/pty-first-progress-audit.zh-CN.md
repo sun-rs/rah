@@ -47,6 +47,7 @@ RAH should converge on one live core:
 | Context usage bypasses provider adapters | `RuntimeEngine.getContextUsage()` reads canonical session-store usage directly; duplicated adapter `getContextUsage()` methods and `ProviderStructuredContextAdapter` were removed | Done |
 | Structured input/control is optional legacy surface | `ProviderAdapter` no longer extends `ProviderStructuredInputControlAdapter`; `RuntimeEngine` requires this slice only after wrapper/native PTY input paths fail | Done |
 | Structured lifecycle is optional legacy surface | `ProviderStructuredLifecycleAdapter.startSession/resumeSession` are optional; `RuntimeStructuredProviderCoordinator` requires them only for explicit `liveBackend: "structured"` requests | Done |
+| Legacy structured live clients isolated by path | Five `*-live-client.ts` implementations now live under `packages/runtime-daemon/src/legacy-structured/`; shared Codex/Gemini app-server/CLI helpers were extracted to root utility modules so terminal wrapper/native paths do not import legacy clients | Done |
 
 ## Verification Run
 
@@ -55,7 +56,7 @@ Latest verified gates in this branch:
 - `npm run typecheck`: pass
 - `npm run test:web`: 156 pass
 - `npm run test:provider-contracts`: 133 pass
-- `npm run test:runtime`: 371 pass
+- `npm run test:runtime`: 372 pass
 - `npm run test:native-tui`: pass on 2026-05-07
 
 `test:runtime` now uses `--test-concurrency=1` because runtime tests mutate process-wide provider binary env vars such as `RAH_CODEX_BINARY`; parallel test files can otherwise contaminate each other and create false failures.
@@ -91,7 +92,7 @@ This guard verifies that the explicit structured live coordinator has moved unde
 Workspace inspection boundary verified on 2026-05-07:
 
 - `npm run typecheck`: pass
-- `npm run test:runtime`: 371 pass
+- `npm run test:runtime`: 372 pass
 - `git diff --check`: pass
 
 This guard verifies that built-in provider sessions no longer require provider adapters for generic workspace snapshot, file read, git diff/status, or git apply actions. `ProviderWorkspaceInspectionAdapter` is no longer part of the built-in `ProviderAdapter` requirement, the duplicate implementations have been deleted from Codex/Claude/Gemini/Kimi/OpenCode adapters, and the slice remains only as the legacy/debug `custom` structured fallback until the adapter interface is fully slimmed.
@@ -99,7 +100,7 @@ This guard verifies that built-in provider sessions no longer require provider a
 Context usage boundary verified on 2026-05-07:
 
 - `npm run typecheck`: pass
-- `npm run test:runtime`: 371 pass
+- `npm run test:runtime`: 372 pass
 - `git diff --check`: pass
 
 This guard verifies that usage display no longer calls through provider adapters. Provider activities still update canonical usage in `SessionStore`; HTTP/API reads now use `RuntimeEngine.getContextUsage()` directly.
@@ -114,7 +115,7 @@ This guard verifies that built-in adapter type requirements no longer include st
 Structured lifecycle boundary verified on 2026-05-07:
 
 - `npm run typecheck`: pass
-- `npm run test:runtime`: 371 pass
+- `npm run test:runtime`: 372 pass
 
 This guard verifies that new provider adapters are no longer type-required to implement legacy structured `startSession/resumeSession`. Explicit structured live requests still fail loudly through `RuntimeStructuredProviderCoordinator` if the provider does not implement that optional slice.
 
@@ -124,13 +125,21 @@ Workbench shell view/attach boundary verified on 2026-05-07:
 
 This guard verifies that ordinary history activation stays read-only (`preferStoredReplay: true`), uses observe attach, does not send `liveBackend`, and does not require creating a missing workspace. Claiming history remains the explicit path that checks the workspace and launches native TUI. Code audit also confirms that global sidebar/session activation exits canvas before selecting a session, while pane-local `SessionHistoryDialog` activation writes only the target pane through `setCanvasPaneStoredRef` / `setCanvasPaneSession`.
 
+Legacy structured live client path isolation verified on 2026-05-07:
+
+- `npm run typecheck`: pass
+- `node --import tsx --test --test-force-exit packages/runtime-daemon/src/native-tui-provider-runtime.test.ts`: 7 pass
+- `node --import tsx --test --test-force-exit packages/runtime-daemon/src/gemini-adapter.test.ts packages/runtime-daemon/src/runtime-engine.test.ts`: 62 pass
+
+This guard verifies that no root-level provider `*-live-client.ts` remains, that all five structured live clients are explicit legacy files, and that shared Codex/Gemini helpers used by terminal wrapper/native-adjacent code have been extracted outside the legacy client modules.
+
 ## Remaining Gaps
 
 These are still not completion-grade:
 
 - WebKit/mobile browser smoke is not rerun in this audit. Chromium native browser smoke is covered by `npm run test:native-tui`, but iPad/Safari real input-method behavior still needs human verification.
 - Real five-provider CLI/account human QA is still required; fake native TUI tests do not prove real login/quota/provider behavior.
-- Legacy structured live clients and adapters still exist. They are no longer default, and the built-in provider adapter required interface has been slimmed so workspace inspection, context usage, structured input/control, and structured lifecycle are no longer hard requirements. The remaining gap is deleting or fully isolating the old structured live implementations themselves, not the required adapter surface.
+- Legacy structured adapters still exist. The structured live clients are now path-isolated under `legacy-structured/`, and they are no longer default, but the provider adapter classes still contain both stored-history/mirror logic and explicit structured fallback plumbing. The remaining code gap is further separating provider history/mirror adapters from structured fallback adapters.
 - Legacy wrapper runtime still exists for `RAH_LEGACY_WRAPPER=1` and synthetic tests. It is isolated as a fallback, not deleted.
 - Workbench shell/canvas code paths are now audited for view/attach semantics. Remaining risk is interaction-level QA: drag/drop, pane replacement, hide/show, and mobile/iPad layout should still be exercised in a real browser.
 - Enhanced controls are rejected safely at the native TUI runtime boundary and hidden by the central frontend capability helpers. Broader UI copy may still need review so native TUI sessions consistently explain external-locked semantics.

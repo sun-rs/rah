@@ -9,9 +9,9 @@ import {
   type SessionInputRequest,
   type StartSessionRequest,
 } from "@rah/runtime-protocol";
-import type { RuntimeServices } from "./provider-adapter";
-import { buildKimiModeState, isKimiModeId } from "./session-mode-utils";
-import { toSessionSummary } from "./session-store";
+import type { RuntimeServices } from "../provider-adapter";
+import { buildKimiModeState, isKimiModeId } from "../session-mode-utils";
+import { toSessionSummary } from "../session-store";
 import {
   applyActivity,
   attachRequestedClient,
@@ -21,21 +21,21 @@ import {
   handleKimiEvent,
   handleKimiRequest,
   publishSessionBootstrap,
-} from "./kimi-live-helpers";
-import { createKimiClient } from "./kimi-live-rpc";
+} from "../kimi-live-helpers";
+import { createKimiClient } from "../kimi-live-rpc";
 import {
   JSON_RPC_TIMEOUT_MS,
   PROMPT_TIMEOUT_MS,
   type LiveKimiSession,
-} from "./kimi-live-types";
-import { createKimiTimelineIdentity } from "./kimi-timeline-identity";
+} from "../kimi-live-types";
+import { createKimiTimelineIdentity } from "../kimi-timeline-identity";
 import {
   resolveKimiCliModelArgs,
   resolveKimiRuntimeCapabilityState,
-} from "./kimi-model-catalog";
-import { optionValueAsString, resolveModelOptionValues } from "./session-model-options";
+} from "../kimi-model-catalog";
+import { optionValueAsString, resolveModelOptionValues } from "../session-model-options";
 
-export type { LiveKimiSession, LiveKimiTurn } from "./kimi-live-types";
+export type { LiveKimiSession, LiveKimiTurn } from "../kimi-live-types";
 
 function resolveKimiStartupMode(args: {
   modeId?: string | undefined;

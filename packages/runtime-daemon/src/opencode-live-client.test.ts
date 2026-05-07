@@ -12,7 +12,7 @@ import {
   sendInputToOpenCodeLiveSession,
   setOpenCodeLiveSessionMode,
   type LiveOpenCodeSession,
-} from "./opencode-live-client";
+} from "./legacy-structured/opencode-live-client";
 import { createOpenCodeActivityState } from "./opencode-activity";
 import { PtyHub } from "./pty-hub";
 import { SessionStore } from "./session-store";

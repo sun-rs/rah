@@ -1,29 +1,27 @@
-import { spawn } from "node:child_process";
 import {
   type ProviderModelCatalog,
   type PermissionResponseRequest,
   type ResumeSessionRequest,
   type StartSessionRequest,
 } from "@rah/runtime-protocol";
-import type { RuntimeServices } from "./provider-adapter";
-import { applyProviderActivity } from "./provider-activity";
+import type { RuntimeServices } from "../provider-adapter";
+import { applyProviderActivity } from "../provider-activity";
 import {
   mapCodexPermissionResolution,
   createCodexAppServerTranslationState,
-} from "./codex-app-server-activity";
+} from "../codex-app-server-activity";
 import {
   replayCodexStoredSessionRollout,
   type CodexStoredSessionRecord,
-} from "./codex-stored-sessions";
-import { resolveCodexRuntimeCapabilityState } from "./codex-model-catalog";
-import { toSessionSummary } from "./session-store";
-import { resolveConfiguredBinary } from "./provider-binary-utils";
+} from "../codex-stored-sessions";
+import { resolveCodexRuntimeCapabilityState } from "../codex-model-catalog";
+import { toSessionSummary } from "../session-store";
 import {
   buildCodexModeState,
   codexModeId,
   isCodexModeId,
   parseCodexModeId,
-} from "./session-mode-utils";
+} from "../session-mode-utils";
 import {
   attachCurrentTurn,
   attachRequestedClient,
@@ -32,33 +30,18 @@ import {
   publishSessionBootstrap,
   resolveCodexApprovalDecision,
   runtimeStateFromThreadStatus,
-} from "./codex-live-helpers";
-import { CodexJsonRpcClient } from "./codex-live-rpc";
+} from "../codex-live-helpers";
+import {
+  createCodexAppServerClient,
+  type CodexJsonRpcClient,
+} from "../codex-app-server-client";
 import {
   TURN_START_TIMEOUT_MS,
   type LiveCodexSession,
-} from "./codex-live-types";
-import { optionValueAsString, resolveModelOptionValues } from "./session-model-options";
+} from "../codex-live-types";
+import { optionValueAsString, resolveModelOptionValues } from "../session-model-options";
 
-export { CodexJsonRpcClient } from "./codex-live-rpc";
-export type { LiveCodexSession } from "./codex-live-types";
-
-function createInitializeParams() {
-  return {
-    clientInfo: {
-      name: "rah",
-      title: "rah",
-      version: "0.0.0",
-    },
-    capabilities: {
-      experimentalApi: true,
-    },
-  };
-}
-
-async function resolveCodexBinary(): Promise<string> {
-  return await resolveConfiguredBinary("RAH_CODEX_BINARY", "codex");
-}
+export type { LiveCodexSession } from "../codex-live-types";
 
 function resolveCodexStartupMode(args: {
   modeId?: string | undefined;
@@ -134,23 +117,6 @@ export async function loadCodexPlanCollaborationMode(client: CodexJsonRpcClient)
       developer_instructions: null,
     },
   };
-}
-
-export async function createCodexAppServerClient(): Promise<CodexJsonRpcClient> {
-  const binary = await resolveCodexBinary();
-  const child = spawn(binary, ["app-server"], {
-    stdio: ["pipe", "pipe", "pipe"],
-    env: process.env,
-  });
-  const client = new CodexJsonRpcClient(child);
-  try {
-    await client.request("initialize", createInitializeParams());
-    client.notify("initialized", {});
-    return client;
-  } catch (error) {
-    await client.dispose();
-    throw error;
-  }
 }
 
 export async function startCodexLiveSession(params: {

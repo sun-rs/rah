@@ -11,25 +11,30 @@ import type {
   SessionInputRequest,
   StartSessionRequest,
 } from "@rah/runtime-protocol";
-import type { RuntimeServices } from "./provider-adapter";
-import { applyProviderActivity, type ProviderActivity } from "./provider-activity";
+import type { RuntimeServices } from "../provider-adapter";
+import { applyProviderActivity, type ProviderActivity } from "../provider-activity";
 import {
   findGeminiStoredSessionRecord,
   isGeminiStoredSessionRecordResumable,
-} from "./gemini-session-files";
+} from "../gemini-session-files";
 import {
   buildGeminiModelCatalog,
   normalizeGeminiModelId,
   resolveGeminiRuntimeCapabilityState,
-} from "./gemini-model-catalog";
+} from "../gemini-model-catalog";
 import {
   resolveModelContextWindow,
   type ModelContextWindowResolution,
   withModelContextWindow,
-} from "./model-context-window";
-import { resolveConfiguredBinary } from "./provider-binary-utils";
-import { buildGeminiModeState, isGeminiModeId } from "./session-mode-utils";
-import { toSessionSummary } from "./session-store";
+} from "../model-context-window";
+import {
+  buildGeminiArgs,
+  geminiHeadlessEnv,
+  isNoisyGeminiCliStderr,
+  resolveGeminiBinary,
+} from "../gemini-cli-utils";
+import { buildGeminiModeState, isGeminiModeId } from "../session-mode-utils";
+import { toSessionSummary } from "../session-store";
 
 export type LiveGeminiTurn = {
   child: ChildProcessWithoutNullStreams;
@@ -160,51 +165,6 @@ function attachRequestedClient(
       },
     });
   }
-}
-
-export async function resolveGeminiBinary(): Promise<string> {
-  return await resolveConfiguredBinary("RAH_GEMINI_BINARY", "gemini");
-}
-
-export function buildGeminiArgs(params: {
-  prompt: string;
-  providerSessionId?: string;
-  model?: string;
-  approvalMode: string;
-}) {
-  const args = ["--output-format", "stream-json", "--approval-mode", params.approvalMode];
-  if (params.model) {
-    args.push("--model", params.model);
-  }
-  if (params.providerSessionId) {
-    args.push("--resume", params.providerSessionId);
-  }
-  args.push("--prompt", params.prompt);
-  return args;
-}
-
-export function geminiHeadlessEnv(): NodeJS.ProcessEnv {
-  return {
-    ...process.env,
-    GEMINI_CLI_TRUST_WORKSPACE: process.env.GEMINI_CLI_TRUST_WORKSPACE ?? "true",
-  };
-}
-
-export function isNoisyGeminiCliStderr(line: string): boolean {
-  const trimmed = line.trim();
-  return (
-    trimmed.startsWith("YOLO mode is enabled.") ||
-    trimmed.includes("[IDEClient] Failed to connect to IDE companion extension.") ||
-    trimmed === "Ripgrep is not available. Falling back to GrepTool." ||
-    trimmed.startsWith("Warning: Basic terminal detected ") ||
-    trimmed.startsWith("Warning: 256-color support not detected.") ||
-    trimmed === "headers: {" ||
-    trimmed === "}" ||
-    trimmed === "}," ||
-    /^'[-a-z0-9]+': /i.test(trimmed) ||
-    /^status: \d{3},?$/.test(trimmed) ||
-    /^statusText: '[^']+',?$/.test(trimmed)
-  );
 }
 
 function clearGeminiTurnStopTimers(turn: LiveGeminiTurn): void {

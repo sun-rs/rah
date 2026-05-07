@@ -1,6 +1,6 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { DefaultNativeTuiProviderRuntime } from "./native-tui-provider-runtime";
 
 function readSource(relativePath: string): string {
@@ -124,5 +124,20 @@ describe("NativeTuiProviderRuntime", () => {
     assert.doesNotMatch(providerAdapterSource, /ProviderModelCapabilityAdapter/);
     assert.match(sessionListSource, /ProviderStoredHistoryAdapter/);
     assert.doesNotMatch(sessionListSource, /ProviderAdapter/);
+  });
+
+  test("keeps legacy structured live clients out of the runtime root", () => {
+    for (const provider of ["codex", "claude", "gemini", "kimi", "opencode"]) {
+      assert.equal(
+        existsSync(new URL(`./${provider}-live-client.ts`, import.meta.url)),
+        false,
+        `${provider} structured live client should live under legacy-structured/`,
+      );
+      assert.equal(
+        existsSync(new URL(`./legacy-structured/${provider}-live-client.ts`, import.meta.url)),
+        true,
+        `${provider} structured live client should remain available as explicit legacy code`,
+      );
+    }
   });
 });

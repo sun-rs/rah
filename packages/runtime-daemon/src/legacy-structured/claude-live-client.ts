@@ -15,18 +15,18 @@ import {
   type SessionInputRequest,
   type StartSessionRequest,
 } from "@rah/runtime-protocol";
-import type { RuntimeServices } from "./provider-adapter";
+import type { RuntimeServices } from "../provider-adapter";
 import {
   buildClaudeModelCatalog,
   resolveClaudeCatalogModelId,
   resolveClaudeEffortValue,
   resolveClaudeRuntimeModelId,
   resolveClaudeRuntimeCapabilityState,
-} from "./claude-model-catalog";
-import { toSessionSummary } from "./session-store";
-import { buildClaudeModeState, isClaudeModeId } from "./session-mode-utils";
-import { resolveModelContextWindow } from "./model-context-window";
-import { resolveModelOptionValues } from "./session-model-options";
+} from "../claude-model-catalog";
+import { toSessionSummary } from "../session-store";
+import { buildClaudeModeState, isClaudeModeId } from "../session-mode-utils";
+import { resolveModelContextWindow } from "../model-context-window";
+import { resolveModelOptionValues } from "../session-model-options";
 import {
   approvalPolicyToPermissionMode,
   applyActivity,
@@ -36,17 +36,17 @@ import {
   humanizeClaudeToolName,
   publishSessionBootstrap,
   waitForPendingClaudePermission,
-} from "./claude-live-helpers";
+} from "../claude-live-helpers";
 import type {
   LiveClaudeSession,
-} from "./claude-live-types";
+} from "../claude-live-types";
 
 export type {
   ClaudeQueryFactory,
   LiveClaudeSession,
   LiveClaudeTurn,
   PendingClaudePermission,
-} from "./claude-live-types";
+} from "../claude-live-types";
 
 function resolveClaudeStartupMode(args: {
   modeId?: string | undefined;

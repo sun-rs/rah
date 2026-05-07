@@ -9,7 +9,7 @@ import type {
   SessionReasoningOption,
 } from "@rah/runtime-protocol";
 import type { CodexJsonRpcClient } from "./codex-live-rpc";
-import { createCodexAppServerClient } from "./codex-live-client";
+import { createCodexAppServerClient } from "./codex-app-server-client";
 import { defaultProviderModeId, providerModeDescriptors } from "./session-mode-utils";
 
 const CODEX_MODEL_CACHE_TTL_MS = 5 * 60 * 1000;

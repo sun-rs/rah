@@ -15,7 +15,7 @@ import {
   geminiHeadlessEnv,
   isNoisyGeminiCliStderr,
   resolveGeminiBinary,
-} from "./gemini-live-client";
+} from "./gemini-cli-utils";
 import {
   discoverGeminiStoredSessions,
   findGeminiStoredSessionRecord,

@@ -8,7 +8,7 @@ import { validateProviderModelCatalog } from "@rah/runtime-protocol";
 import { EventBus } from "./event-bus";
 import { GeminiAdapter } from "./gemini-adapter";
 import { loadCachedGeminiHistoryManifest } from "./gemini-history-cache";
-import { isNoisyGeminiCliStderr } from "./gemini-live-client";
+import { isNoisyGeminiCliStderr } from "./gemini-cli-utils";
 import {
   createGeminiStoredSessionFrozenHistoryPageLoader,
   findGeminiStoredSessionRecord,

@@ -29,7 +29,7 @@ import {
   sendInputToGeminiLiveSession,
   startGeminiLiveSession,
   type LiveGeminiSession,
-} from "./gemini-live-client";
+} from "./legacy-structured/gemini-live-client";
 import {
   finalizeStoredReplayResume,
   prepareProviderSessionResume,
