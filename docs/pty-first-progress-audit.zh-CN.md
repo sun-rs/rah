@@ -46,6 +46,7 @@ RAH should converge on one live core:
 | Built-in workspace inspection bypasses provider adapters | `ProviderAdapter` no longer extends `ProviderWorkspaceInspectionAdapter`; `RuntimeEngine` routes workspace snapshot/file/git read/apply actions through shared workspace utilities for non-`custom` sessions; duplicate workspace/file/git methods were removed from the five built-in provider adapters; `custom` debug sessions keep the structured adapter fallback | Done |
 | Context usage bypasses provider adapters | `RuntimeEngine.getContextUsage()` reads canonical session-store usage directly; duplicated adapter `getContextUsage()` methods and `ProviderStructuredContextAdapter` were removed | Done |
 | Structured input/control is optional legacy surface | `ProviderAdapter` no longer extends `ProviderStructuredInputControlAdapter`; `RuntimeEngine` requires this slice only after wrapper/native PTY input paths fail | Done |
+| Structured lifecycle is optional legacy surface | `ProviderStructuredLifecycleAdapter.startSession/resumeSession` are optional; `RuntimeStructuredProviderCoordinator` requires them only for explicit `liveBackend: "structured"` requests | Done |
 
 ## Verification Run
 
@@ -102,6 +103,12 @@ Structured input/control boundary verified on 2026-05-07:
 - `node --import tsx --test --test-force-exit packages/runtime-daemon/src/runtime-engine.test.ts packages/runtime-daemon/src/native-tui-provider-runtime.test.ts`: pass
 
 This guard verifies that built-in adapter type requirements no longer include structured input/control. RuntimeEngine still preserves the legacy structured path by checking for `ProviderStructuredInputControlAdapter` only after terminal wrapper and native TUI PTY paths decline the input/interrupt/resize event.
+
+Structured lifecycle boundary verified on 2026-05-07:
+
+- `npm run typecheck`: pass
+
+This guard verifies that new provider adapters are no longer type-required to implement legacy structured `startSession/resumeSession`. Explicit structured live requests still fail loudly through `RuntimeStructuredProviderCoordinator` if the provider does not implement that optional slice.
 
 ## Remaining Gaps
 

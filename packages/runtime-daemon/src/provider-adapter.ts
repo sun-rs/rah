@@ -55,8 +55,8 @@ export interface ProviderStructuredLifecycleAdapter {
    * not use this path; they use native TUI launch specs plus the terminal
    * runtime instead.
    */
-  startSession(request: StartSessionRequest): StartSessionResponse | Promise<StartSessionResponse>;
-  resumeSession(request: ResumeSessionRequest): ResumeSessionResponse | Promise<ResumeSessionResponse>;
+  startSession?(request: StartSessionRequest): StartSessionResponse | Promise<StartSessionResponse>;
+  resumeSession?(request: ResumeSessionRequest): ResumeSessionResponse | Promise<ResumeSessionResponse>;
   closeSession?(sessionId: string, request: CloseSessionRequest): Promise<void> | void;
   destroySession?(sessionId: string): Promise<void> | void;
 }

@@ -14,7 +14,7 @@ import type {
   StartSessionResponse,
 } from "@rah/runtime-protocol";
 import { launchSpecForProvider, probeProviderDiagnostic } from "./provider-diagnostics";
-import type { ProviderAdapter } from "./provider-adapter";
+import type { ProviderAdapter, ProviderStructuredLifecycleAdapter } from "./provider-adapter";
 import type { HistorySnapshotStore } from "./history-snapshots";
 import { defaultProviderModeId, providerModeDescriptors } from "./session-mode-utils";
 import { assertExistingWorkingDirectory } from "./provider-working-directory";
@@ -44,6 +44,18 @@ export class RuntimeStructuredProviderCoordinator {
       throw new Error(`No adapter registered for provider ${provider}.`);
     }
     return adapter;
+  }
+
+  private requireStructuredLifecycleAdapter(
+    provider: string,
+    capability: "startSession" | "resumeSession",
+  ): ProviderAdapter & Required<Pick<ProviderStructuredLifecycleAdapter, typeof capability>> {
+    const adapter = this.requireAdapterForProvider(provider);
+    if (typeof adapter[capability] !== "function") {
+      throw new Error(`Provider ${provider} does not support structured ${capability}.`);
+    }
+    return adapter as ProviderAdapter &
+      Required<Pick<ProviderStructuredLifecycleAdapter, typeof capability>>;
   }
 
   async listProviderDiagnostics(options?: { forceRefresh?: boolean }): Promise<ProviderDiagnostic[]> {
@@ -111,7 +123,7 @@ export class RuntimeStructuredProviderCoordinator {
   async startSession(request: StartSessionRequest): Promise<StartSessionResponse> {
     await assertExistingWorkingDirectory(request.cwd, "Session working directory");
     this.deps.pruneOrphanSessions();
-    const adapter = this.requireAdapterForProvider(request.provider);
+    const adapter = this.requireStructuredLifecycleAdapter(request.provider, "startSession");
     const response = await adapter.startSession(request);
     this.deps.rememberStructuredSessionOwner(response.session.session.id, adapter);
     return response;
@@ -122,7 +134,7 @@ export class RuntimeStructuredProviderCoordinator {
       await assertExistingWorkingDirectory(request.cwd, "Session working directory");
     }
     this.deps.pruneOrphanSessions();
-    const adapter = this.requireAdapterForProvider(request.provider);
+    const adapter = this.requireStructuredLifecycleAdapter(request.provider, "resumeSession");
     const response = await adapter.resumeSession(request);
     this.deps.rememberStructuredSessionOwner(response.session.session.id, adapter);
     if (
