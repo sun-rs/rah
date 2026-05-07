@@ -9,11 +9,7 @@ import type {
   RahEvent,
 } from "@rah/runtime-protocol";
 import type { HistorySnapshotStore } from "./history-snapshots";
-import {
-  applyProviderActivity,
-  type ProviderActivity,
-  type ProviderActivityMeta,
-} from "./provider-activity";
+import { type ProviderActivity } from "./provider-activity";
 import { PtyHub } from "./pty-hub";
 import { SessionStore, toSessionSummary, type StoredSessionState } from "./session-store";
 import {
@@ -24,14 +20,7 @@ import {
   type WrapperReadyMessage,
 } from "./terminal-wrapper-control";
 import { EventBus } from "./event-bus";
-import {
-  applyLocalTerminalInput,
-  nextPromptStateFromActivity,
-} from "./native-tui-prompt-state";
-import {
-  shouldIgnoreStaleMirrorPromptClean,
-  shouldIgnoreStaleMirrorStateActivity,
-} from "./native-tui-mirror-guard";
+import { applyLocalTerminalInput } from "./native-tui-prompt-state";
 import { buildExternalLockedModeState } from "./session-mode-utils";
 import { resolveUserPath } from "./workbench-directory-utils";
 import type { NativeTuiLaunchSpec } from "./native-tui-launch-spec";
@@ -43,22 +32,14 @@ import {
   NativeTuiDiagnosticStore,
   type ListNativeTuiDiagnosticsOptions,
   maybeRecordNativeTuiBindingMissingDiagnostic,
-  maybeRecordNativeTuiMirrorSourceMissingDiagnostic,
-  recordNativeTuiMirrorFailureDiagnostic,
   recordNativeTuiProcessExitDiagnostic,
   resolveNativeTuiBindingDiagnostic,
-  resolveNativeTuiMirrorFailureDiagnostic,
-  resolveNativeTuiMirrorSourceDiagnostic,
 } from "./native-tui-diagnostics";
-import {
-  buildNativeTuiSessionCapabilities,
-} from "./runtime-terminal-capabilities";
+import { buildNativeTuiSessionCapabilities } from "./runtime-terminal-capabilities";
 import { PtySessionRuntime, type PtySessionRuntimeEntry } from "./pty-session-runtime";
 import {
   nativeTuiBindingProbeIntervalMs,
   nativeTuiBindingWarnAfterMs,
-  nativeTuiMirrorIntervalMs,
-  nativeTuiMirrorWarnAfterMs,
 } from "./native-tui-runtime-config";
 import {
   cancelNativeTuiQueuedInputsForClient,
@@ -77,6 +58,7 @@ import {
   publishSessionStateChanged,
   SYSTEM_SOURCE,
 } from "./runtime-session-events";
+import { NativeTuiMirrorRuntime } from "./native-tui-mirror-runtime";
 import { TerminalWrapperSessionRuntime } from "./terminal-wrapper-session-runtime";
 
 type RuntimeTerminalCoordinatorDeps = {
@@ -96,9 +78,21 @@ export class RuntimeTerminalCoordinator {
   private readonly nativeTuiSessionIds = new Set<string>();
   private readonly closingNativeTuiSessionIds = new Set<string>();
   private readonly nativeTuiDiagnostics = new NativeTuiDiagnosticStore();
+  private readonly mirrorRuntime: NativeTuiMirrorRuntime;
 
   constructor(private readonly deps: RuntimeTerminalCoordinatorDeps) {
     this.terminalWrappers = new TerminalWrapperSessionRuntime(deps);
+    this.mirrorRuntime = new NativeTuiMirrorRuntime({
+      eventBus: deps.eventBus,
+      ptyHub: deps.ptyHub,
+      sessionStore: deps.sessionStore,
+      nativeTuiProviders: deps.nativeTuiProviders,
+      diagnostics: this.nativeTuiDiagnostics,
+      getSession: (sessionId) => this.nativeTuiSessions.get(sessionId),
+      updatePromptState: (sessionId, promptState) => {
+        this.updateNativeTuiPromptState(sessionId, promptState);
+      },
+    });
   }
 
   hasWrapperSession(sessionId: string): boolean {
@@ -172,7 +166,7 @@ export class RuntimeTerminalCoordinator {
     // Drain already persisted mirror events before injecting a new chat turn.
     // Otherwise delayed history polling can replay old completions after the
     // new input and incorrectly mark the native TUI session idle.
-    this.mirrorNativeTuiSession(native.sessionId);
+    this.mirrorRuntime.mirrorSession(native.sessionId);
     native.promptTracker.draftText = "";
     native.lastInjectedInputAtMs = Date.now();
     native.process.write(`${text}\r`);
@@ -466,7 +460,7 @@ export class RuntimeTerminalCoordinator {
     });
     this.nativeTuiSessionIds.add(sessionId);
     this.startNativeTuiBindingProbe(sessionId);
-    this.startNativeTuiMirror(sessionId);
+    this.mirrorRuntime.startSessionMirror(sessionId);
 
     try {
       await terminal.process.waitUntilReady();
@@ -594,126 +588,7 @@ export class RuntimeTerminalCoordinator {
       preview: nextPreview,
     });
     publishSessionStarted(this.deps, sessionId);
-    this.mirrorNativeTuiSession(sessionId);
-  }
-
-  private startNativeTuiMirror(sessionId: string): void {
-    const native = this.nativeTuiSessions.get(sessionId);
-    if (!native || !this.deps.nativeTuiProviders.supports(native.provider)) {
-      return;
-    }
-    const timer = setInterval(() => {
-      this.mirrorNativeTuiSession(sessionId);
-    }, nativeTuiMirrorIntervalMs());
-    timer.unref?.();
-    native.mirrorTimer = timer;
-    this.mirrorNativeTuiSession(sessionId);
-  }
-
-  private mirrorNativeTuiSession(sessionId: string): void {
-    const native = this.nativeTuiSessions.get(sessionId);
-    if (!native || !native.providerSessionId) {
-      return;
-    }
-    const update = this.deps.nativeTuiProviders.updateMirror(
-      nativeTuiProviderRuntimeSession(native),
-      native.providerMirror,
-    );
-    if (update.mirror) {
-      native.providerMirror = update.mirror;
-    }
-    switch (update.status) {
-      case "unbound":
-      case "unsupported":
-        return;
-      case "missing":
-        this.warnIfNativeTuiMirrorSourceIsMissing(native);
-        return;
-      case "failed":
-        this.warnIfNativeTuiMirrorFailed(native, update.error, update.phase);
-        return;
-      case "ok":
-        this.resolveNativeTuiMirrorDiagnostic(native);
-        for (const item of update.items) {
-          this.applyNativeTuiProviderActivity(native, item.meta, item.activity);
-        }
-        this.resolveNativeTuiMirrorFailureDiagnostic(native);
-    }
-  }
-
-  private applyNativeTuiProviderActivity(
-    native: NativeTuiSessionState,
-    meta: ProviderActivityMeta,
-    activity: ProviderActivity,
-  ): RahEvent[] {
-    const nextPromptState = nextPromptStateFromActivity(native.promptState, activity);
-    if (shouldIgnoreStaleMirrorStateActivity(native, meta, activity, nextPromptState)) {
-      return [];
-    }
-    const events = applyProviderActivity(
-      {
-        eventBus: this.deps.eventBus,
-        ptyHub: this.deps.ptyHub,
-        sessionStore: this.deps.sessionStore,
-      },
-      native.sessionId,
-      meta,
-      activity,
-    );
-    if (nextPromptState !== native.promptState) {
-      this.updateNativeTuiPromptState(native.sessionId, nextPromptState);
-    } else if (
-      native.promptState !== "prompt_dirty" &&
-      native.promptTracker.draftText.length === 0 &&
-      activity.type === "timeline_item" &&
-      activity.item.kind === "assistant_message" &&
-      (native.provider === "claude" || native.provider === "gemini")
-    ) {
-      if (shouldIgnoreStaleMirrorPromptClean(native, meta)) {
-        return events;
-      }
-      native.promptTracker.draftText = "";
-      this.updateNativeTuiPromptState(native.sessionId, "prompt_clean");
-    }
-    return events;
-  }
-
-  private resolveNativeTuiMirrorDiagnostic(native: NativeTuiSessionState): void {
-    resolveNativeTuiMirrorSourceDiagnostic(this.nativeTuiDiagnostics, native);
-  }
-
-  private resolveNativeTuiMirrorFailureDiagnostic(native: NativeTuiSessionState): void {
-    const resolved = resolveNativeTuiMirrorFailureDiagnostic(this.nativeTuiDiagnostics, native);
-    if (resolved) {
-      native.mirrorFailureWarningEmitted = false;
-    }
-  }
-
-  private warnIfNativeTuiMirrorSourceIsMissing(native: NativeTuiSessionState): void {
-    if (native.mirrorWarningEmitted) {
-      return;
-    }
-    native.mirrorWarningEmitted = maybeRecordNativeTuiMirrorSourceMissingDiagnostic(
-      this.nativeTuiDiagnostics,
-      native,
-      nativeTuiMirrorWarnAfterMs(),
-    );
-  }
-
-  private warnIfNativeTuiMirrorFailed(
-    native: NativeTuiSessionState,
-    error: unknown,
-    phase: string,
-  ): void {
-    const alreadyLogged = native.mirrorFailureWarningEmitted === true;
-    const logged = recordNativeTuiMirrorFailureDiagnostic(
-      this.nativeTuiDiagnostics,
-      native,
-      error,
-      phase,
-      { alreadyLogged },
-    );
-    native.mirrorFailureWarningEmitted = alreadyLogged || logged;
+    this.mirrorRuntime.mirrorSession(sessionId);
   }
 
   registerTerminalWrapperSession(
