@@ -26,6 +26,7 @@ RAH should converge on one live core:
 | PTY runtime extraction | `packages/runtime-daemon/src/pty-session-runtime.ts`; `pty-session-runtime.test.ts` | Done |
 | Native TUI core separated from legacy adapter live path | `native-tui-provider-runtime.test.ts` forbids core imports from `provider-adapter` and `legacy-structured/runtime-structured-provider-coordinator` | Covered by tests |
 | `rah <provider>` uses daemon PTY by default | `bin/rah.mjs`; `rah-cli-pty-first.test.ts`; `RAH_LEGACY_WRAPPER=1` is legacy escape hatch | Done |
+| `rah <provider> resume <id>` uses daemon PTY by default | `bin/rah.mjs`; `rah-cli-pty-first.test.ts` posts `/api/sessions/resume` with `liveBackend: "native_tui"` and attaches the terminal client to PTY replay | Done |
 | Terminal detach does not close live PTY | `bin/rah.mjs` best-effort `/detach`; `rah-cli-pty-first.test.ts` | Done |
 | Clientless native TUI survives list/prune | `RuntimeEngine.pruneOrphanSessions()` skips native TUI sessions; `runtime-engine.test.ts` | Done |
 | Web detach does not close native TUI | `native TUI backend survives web detach and clientless session listing` test | Done |
@@ -68,7 +69,7 @@ Latest verified gates in this branch:
 - `npm run typecheck`: pass
 - `npm run test:web`: 156 pass
 - `npm run test:provider-contracts`: 133 pass
-- `npm run test:runtime`: 372 pass after the runtime seam slimming commits through `430980f`
+- `npm run test:runtime`: 375 pass after the CLI resume PTY-first smoke addition
 - `npm run test:native-tui`: pass on 2026-05-07
 
 `test:runtime` now uses `--test-concurrency=1` because runtime tests mutate process-wide provider binary env vars such as `RAH_CODEX_BINARY`; parallel test files can otherwise contaminate each other and create false failures.
@@ -104,7 +105,7 @@ This guard verifies that the explicit structured live coordinator has moved unde
 Workspace inspection boundary verified on 2026-05-07:
 
 - `npm run typecheck`: pass
-- `npm run test:runtime`: 372 pass
+- `npm run test:runtime`: 375 pass
 - `git diff --check`: pass
 
 This guard verifies that built-in provider sessions no longer require provider adapters for generic workspace snapshot, file read, git diff/status, or git apply actions. `ProviderWorkspaceInspectionAdapter` is no longer part of the built-in `ProviderAdapter` requirement, the duplicate implementations have been deleted from Codex/Claude/Gemini/Kimi/OpenCode adapters, and the slice remains only as the legacy/debug `custom` structured fallback until the adapter interface is fully slimmed.
@@ -112,7 +113,7 @@ This guard verifies that built-in provider sessions no longer require provider a
 Context usage boundary verified on 2026-05-07:
 
 - `npm run typecheck`: pass
-- `npm run test:runtime`: 372 pass
+- `npm run test:runtime`: 375 pass
 - `git diff --check`: pass
 
 This guard verifies that usage display no longer calls through provider adapters. Provider activities still update canonical usage in `SessionStore`; HTTP/API reads now use `RuntimeEngine.getContextUsage()` directly.
@@ -226,7 +227,7 @@ Native TUI handler factory boundary verified on 2026-05-07:
 
 - `npm run typecheck`: pass
 - `node --import tsx --test --test-force-exit packages/runtime-daemon/src/native-tui-provider-runtime.test.ts packages/runtime-daemon/src/runtime-engine.test.ts packages/runtime-daemon/src/debug-engine.test.ts`: 53 pass
-- `npm run test:runtime`: 372 pass
+- `npm run test:runtime`: 375 pass
 
 This guard verifies that `DefaultNativeTuiProviderRuntime` receives the binding-only handler factory and `DefaultNativeTuiMirrorProvider` receives the mirror-only handler factory. The previous combined provider handler factory has no remaining runtime-facing callers and has been removed.
 
@@ -255,7 +256,7 @@ Claude stored-history adapter split verified on 2026-05-07:
 
 - `npm run typecheck`: pass
 - `node --import tsx --test --test-force-exit packages/runtime-daemon/src/claude-adapter.test.ts packages/runtime-daemon/src/runtime-engine.test.ts packages/runtime-daemon/src/native-tui-provider-runtime.test.ts`: 61 pass
-- `npm run test:runtime`: 372 pass
+- `npm run test:runtime`: 375 pass
 
 This guard verifies the first provider-level split between legacy structured live and provider-native stored history. `ClaudeStoredHistoryAdapter` owns Claude stored-session catalog, history page loading, frozen history paging, watch roots, and removal. `ClaudeAdapter` remains the legacy structured live/enhancement adapter and no longer exposes `listStoredSessions`, `getSessionHistoryPage`, or `removeStoredSession`.
 
@@ -297,7 +298,7 @@ This guard verifies that `default-provider-adapters.ts` no longer directly const
 Legacy structured adapter implementation path isolation verified on 2026-05-07:
 
 - `npm run typecheck`: pass
-- `npm run test:runtime`: 372 pass
+- `npm run test:runtime`: 375 pass
 - `npm run test:web`: 156 pass
 - `node --import tsx --test --test-force-exit packages/runtime-daemon/src/codex-adapter.test.ts packages/runtime-daemon/src/claude-adapter.test.ts packages/runtime-daemon/src/gemini-adapter.test.ts packages/runtime-daemon/src/kimi-adapter.test.ts packages/runtime-daemon/src/opencode-live-client.test.ts packages/runtime-daemon/src/native-tui-provider-runtime.test.ts`: pass
 
@@ -309,6 +310,14 @@ Legacy structured live escape hatch default-off verified on 2026-05-07:
 - `node --import tsx --test --test-force-exit packages/runtime-daemon/src/native-tui-runtime-config.test.ts packages/runtime-daemon/src/runtime-engine.test.ts packages/runtime-daemon/src/native-tui-provider-runtime.test.ts`: 58 pass
 
 This guard verifies that production `RuntimeEngine` rejects explicit `liveBackend: "structured"` live start/resume by default. The path remains available only for injected test adapters or when `RAH_ENABLE_LEGACY_STRUCTURED_LIVE=1` is set; `preferStoredReplay` read-only history replay is not blocked.
+
+CLI resume PTY-first path verified on 2026-05-07:
+
+- `node --import tsx --test --test-force-exit packages/runtime-daemon/src/rah-cli-pty-first.test.ts`: 2 pass
+- `npm run typecheck`: pass
+- `git diff --check`: pass
+
+This guard verifies both `rah <provider>` new-session attach and `rah <provider> resume <id>` attach. The resume case posts the provider session id to `/api/sessions/resume`, requests `liveBackend: "native_tui"`, attaches an interactive terminal client with control, receives PTY replay, and detaches without closing the PTY session.
 
 ## Remaining Gaps
 

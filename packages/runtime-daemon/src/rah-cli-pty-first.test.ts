@@ -187,3 +187,144 @@ test("rah provider command creates a native TUI session and attaches to PTY", as
     rows: 32,
   });
 });
+
+test("rah provider resume command creates a native TUI resume session and attaches to PTY", async () => {
+  const resumeRequests: unknown[] = [];
+  const detachRequests: unknown[] = [];
+  const wss = new WebSocketServer({ noServer: true });
+  const server = createServer(async (req, res) => {
+    if (req.method === "GET" && req.url === "/readyz") {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end("ok");
+      return;
+    }
+    if (req.method === "POST" && req.url === "/api/sessions/resume") {
+      resumeRequests.push(await readJsonBody(req));
+      writeJson(res, 200, {
+        session: {
+          id: "session-resume-1",
+          provider: "codex",
+          providerSessionId: "provider-session-1",
+          launchSource: "terminal",
+          liveBackend: "native_tui",
+          cwd: "/tmp",
+          rootDir: "/tmp",
+          runtimeState: "idle",
+          ptyId: "session-resume-1",
+          capabilities: {},
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      });
+      return;
+    }
+    if (req.method === "POST" && req.url === "/api/sessions/session-resume-1/detach") {
+      detachRequests.push(await readJsonBody(req));
+      writeJson(res, 200, {
+        session: {
+          id: "session-resume-1",
+          provider: "codex",
+          providerSessionId: "provider-session-1",
+          launchSource: "terminal",
+          liveBackend: "native_tui",
+          cwd: "/tmp",
+          rootDir: "/tmp",
+          runtimeState: "stopped",
+          ptyId: "session-resume-1",
+          capabilities: {},
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      });
+      return;
+    }
+    res.writeHead(404);
+    res.end("not found");
+  });
+  server.on("upgrade", (req, socket, head) => {
+    if (req.url?.startsWith("/api/pty/session-resume-1")) {
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        wss.emit("connection", ws, req);
+      });
+      return;
+    }
+    socket.destroy();
+  });
+  wss.on("connection", (ws) => {
+    ws.send(JSON.stringify({
+      type: "pty.replay",
+      sessionId: "session-resume-1",
+      chunks: ["rah cli resume pty attached\n"],
+      status: "open",
+    }));
+    setTimeout(() => {
+      ws.send(JSON.stringify({
+        type: "pty.exited",
+        sessionId: "session-resume-1",
+        exitCode: 0,
+      }));
+    }, 20);
+  });
+
+  const port = await listen(server);
+  const tmpDir = mkdtempSync(path.join(os.tmpdir(), "rah-cli-pty-resume-"));
+  const child = spawn(
+    process.execPath,
+    [
+      "bin/rah.mjs",
+      "codex",
+      "resume",
+      "provider-session-1",
+      "--daemon-url",
+      `http://127.0.0.1:${port}`,
+      "--cwd",
+      tmpDir,
+    ],
+    {
+      cwd: process.cwd(),
+      env: { ...process.env, RAH_LEGACY_WRAPPER: "" },
+    },
+  );
+  let stdout = "";
+  let stderr = "";
+  child.stdout?.on("data", (chunk) => {
+    stdout += chunk.toString("utf8");
+  });
+  child.stderr?.on("data", (chunk) => {
+    stderr += chunk.toString("utf8");
+  });
+  const exitCode = await new Promise<number | null>((resolve, reject) => {
+    child.on("error", reject);
+    child.on("exit", (code) => resolve(code));
+  });
+  await closeServer(server, wss);
+
+  assert.equal(exitCode, 0, stderr);
+  assert.match(stdout, /rah cli resume pty attached/);
+  assert.equal(resumeRequests.length, 1);
+  const resumeRequest = resumeRequests[0] as {
+    provider: string;
+    providerSessionId: string;
+    cwd: string;
+    liveBackend: string;
+    attach: {
+      client: {
+        id: string;
+        kind: string;
+        connectionId: string;
+      };
+      mode: string;
+      claimControl: boolean;
+    };
+  };
+  assert.equal(resumeRequest.provider, "codex");
+  assert.equal(resumeRequest.providerSessionId, "provider-session-1");
+  assert.equal(resumeRequest.cwd, tmpDir);
+  assert.equal(resumeRequest.liveBackend, "native_tui");
+  assert.match(resumeRequest.attach.client.id, /^terminal:/);
+  assert.equal(resumeRequest.attach.client.kind, "terminal");
+  assert.equal(resumeRequest.attach.client.connectionId, `pid:${child.pid}`);
+  assert.equal(resumeRequest.attach.mode, "interactive");
+  assert.equal(resumeRequest.attach.claimControl, true);
+  assert.deepEqual(detachRequests, [{ clientId: resumeRequest.attach.client.id }]);
+});
