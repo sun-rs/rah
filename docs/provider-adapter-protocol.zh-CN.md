@@ -25,11 +25,16 @@ RAH 不把某一家 CLI 的原生概念直接暴露成前端公共逻辑。
 
 这些都属于 adapter。
 
-## 2. ProviderAdapter 标准能力
+## 2. ProviderAdapter 与 Capability Slices
 
 当前 adapter seam 位于 `packages/runtime-daemon/src/provider-adapter.ts`。
 
-代码上 `ProviderAdapter` 已拆成类型层面的 capability slices：
+当前 `ProviderAdapter` 本身是 identity-only：
+
+- `id`
+- `providers`
+
+所有行为能力都不再是顶层 `ProviderAdapter` 的继承要求，而是通过显式 capability slices / maps 注册：
 
 - `ProviderStructuredLifecycleAdapter`
 - `ProviderStructuredInputControlAdapter`
@@ -43,23 +48,44 @@ RAH 不把某一家 CLI 的原生概念直接暴露成前端公共逻辑。
 - `ProviderDebugAdapter`
 - `ProviderShutdownAdapter`
 
-`ProviderWorkspaceInspectionAdapter` 和 `ProviderStructuredInputControlAdapter` 已经移出 built-in `ProviderAdapter` 必需接口。Workspace inspection 只保留给 `custom` debug/structured fallback；structured input/control 只在显式 legacy structured live session 上通过 RuntimeEngine guard 使用。`ProviderStructuredLifecycleAdapter.startSession/resumeSession` 也已经是 optional，只在显式 `liveBackend: "structured"` 时由 `RuntimeStructuredProviderCoordinator` 检查。Context usage 也不再是 adapter 能力，RuntimeEngine 直接读取 session store 中的 canonical usage。协议含义已经分层。带 `Structured` 的 slice 是显式 legacy/enhancement structured live 路径，不是 PTY-first live core；带 `Enhanced` 的 slice 是模型/权限/plan 等增强控制，不应阻塞 PTY session 创建和 attach。新增 provider 时应逐项确认，而不是把所有能力当成“start/sendInput 附属功能”。
+RuntimeEngine 会在注册 adapter 时用 capability guard 构建这些显式 map：
 
-核心能力：
+- `structuredLiveAdaptersByProvider`
+- `modeAdaptersByProvider`
+- `modelAdaptersByProvider`
+- `actionAdaptersByProvider`
+- `storedHistoryAdaptersByProvider`
+- `diagnosticAdaptersByProvider`
+- `debugAdaptersById`
+- `shutdownAdaptersById`
 
-| 能力 | Adapter 方法 / 字段 | 说明 |
+Workspace inspection 对五家 built-in provider 已经完全绕过 provider adapter，走 shared workspace utilities；`ProviderWorkspaceInspectionAdapter` 只保留给 `custom` debug/structured fallback。Context usage 也不再是 adapter 能力，RuntimeEngine 直接读取 session store 中的 canonical usage。
+
+协议含义已经分层：
+
+- 带 `Structured` 的 slice 是显式 legacy/enhancement structured live 路径，不是 PTY-first live core。
+- 带 `Enhanced` 的 slice 是模型、权限、plan 等增强控制，不应阻塞 PTY session 创建和 attach。
+- Stored history / mirror 只负责读 provider 原厂历史文件或数据库。
+- Diagnostics/debug/shutdown 是 daemon 运维能力，不是 provider live core。
+
+新增 provider 时应逐项确认 capability slice，而不是把所有能力当成 `ProviderAdapter` 的“默认方法”。
+
+当前能力边界：
+
+| 能力 | Capability slice / 方法 | 说明 |
 | --- | --- | --- |
-| 创建 structured live session | `startSession(request)` | 仅显式 `liveBackend: "structured"` 路径使用。默认 Web/CLI live 不走 adapter lifecycle。 |
-| 恢复 structured live session | `resumeSession(request)` | 仅显式 structured claim/resume 使用。默认 Web Claim 走 native TUI resume launch spec。 |
-| structured 输入 | `sendInput(sessionId, request)` | 只对 legacy structured controllable session 有效。PTY-first native TUI 输入走 PTY。 |
-| structured 中断 | `interruptSession(sessionId, request)` | 只对 legacy structured session 有效。PTY-first native TUI 中断走 Ctrl-C/PTY。 |
-| 关闭/归档 | `closeSession` / `destroySession` | 关闭 RAH 管理的执行体，不删除 provider 历史。 |
-| 重命名 | `renameSession` | 原生支持则写 provider 存储；不支持则由 RAH 本地 override。 |
-| 模式切换 | `setSessionMode(sessionId, modeId)` | 运行中切权限/plan 等 mode。具体实现 adapter-owned。 |
-| 模型切换 | `setSessionModel(sessionId, request)` | 运行中原子切换模型和该模型声明的 optionValues。具体实现 adapter-owned。 |
-| 模型/模式目录 | `listModels(options)` | 返回 `ProviderModelCatalog`，里面包含模型、mode、config、profile。 |
-| 权限响应 | `respondToPermission` | 把 RAH 的通用 approval response 翻译成 provider-native 回复。 |
-| 历史分页 | `listStoredSessions` / `getHistoryPage` | provider 原始历史解析为 canonical timeline。 |
+| 创建/恢复 structured live session | `ProviderStructuredLifecycleAdapter.startSession/resumeSession` | 仅显式 `liveBackend: "structured"` 路径使用。默认 Web/CLI live 不走 adapter lifecycle。 |
+| structured 输入/中断/PTY 事件 | `ProviderStructuredInputControlAdapter` | 只对 legacy structured controllable session 有效。PTY-first native TUI 输入走 PTY runtime。 |
+| structured 权限响应 | `ProviderStructuredPermissionAdapter.respondToPermission` | 只在 terminal/native permission handling 不接收时作为 legacy fallback。 |
+| structured 关闭/销毁 | `ProviderStructuredLifecycleAdapter.closeSession/destroySession` | 关闭 legacy structured 执行体，不删除 provider 历史。 |
+| 重命名 | `ProviderActionCapabilityAdapter.renameSession` | 原生支持则写 provider 存储；不支持则由 RAH 本地 override 或不声明能力。 |
+| 模式切换 | `ProviderEnhancedModeAdapter.setSessionMode` | 可选增强能力。PTY-first native TUI 运行中默认以原生 TUI 控制为准。 |
+| 模型切换 | `ProviderEnhancedModelAdapter.setSessionModel` | 可选增强能力。运行中是否生效由 provider slice 声明和 runtime guard 决定。 |
+| 模型/模式目录 | `ProviderEnhancedModelAdapter.listModels` | 返回 `ProviderModelCatalog`，里面包含模型、mode、config、profile。 |
+| 历史发现/分页/mirror | `ProviderStoredHistoryAdapter` | provider 原始历史解析为 canonical timeline；Chat mirror 的唯一语义来源。 |
+| diagnostics | `ProviderDiagnosticAdapter.getProviderDiagnostic` | CLI/version/auth/launch health。 |
+| debug scenarios | `ProviderDebugAdapter` | 只用于 synthetic/debug 场景。 |
+| shutdown cleanup | `ProviderShutdownAdapter.shutdown` | daemon shutdown 时 best-effort 清理 provider-owned legacy resources。 |
 | 文件/Git | shared workspace utilities; legacy `custom` may still use `ProviderWorkspaceInspectionAdapter` | 这是 RAH workspace 能力，不是 built-in provider 能力；使用 workspace scope，不能让请求方自带任意 root 绕过边界。 |
 
 新增 provider 时，不能只实现 `startSession/sendInput`。至少要明确声明：

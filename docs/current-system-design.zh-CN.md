@@ -28,7 +28,7 @@ RAH 是一个本地优先、PTY-first 的 AI 工作台。它不是要替五家 C
 ```text
 packages/
   runtime-protocol/   协议、事件类型、API 类型、contract validation
-  runtime-daemon/     HTTP/WS server、RuntimeEngine、SessionStore、EventBus、ProviderAdapter
+  runtime-daemon/     HTTP/WS server、RuntimeEngine、SessionStore、EventBus、identity-only ProviderAdapter + capability maps
   client-web/         React workbench、Zustand store、session/history/control UI
 ```
 
@@ -90,7 +90,7 @@ Timeline identity 的硬约束：
 - `PtySessionRuntime`
 - `RuntimeTerminalCoordinator`
 - `NativeTuiMirrorRuntime`
-- `ProviderAdapter`（legacy structured/enhancement 与 stored-history adapter seam）
+- identity-only `ProviderAdapter` + explicit capability maps（legacy structured/enhancement/stored-history adapter seam）
 - `HistorySnapshotStore`
 
 ### 3.3 client-web

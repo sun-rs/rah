@@ -228,7 +228,7 @@ packages/
 - `SessionStore`
 - `EventBus`
 - `PtyHub`
-- `ProviderAdapter` seam
+- identity-only `ProviderAdapter` seam + explicit capability slices/maps
 - `CodexAdapter`
 - `ClaudeAdapter`
 - `GeminiAdapter`
@@ -238,7 +238,7 @@ packages/
 
 这一层的职责是把 provider-native 行为翻译成 canonical runtime surface。
 
-Provider 的 rename/delete/archive/info、权限 mode、plan mode、model list、model option/config 参数、permission response、历史解析和 workspace metadata recovery 都应通过 adapter 暴露。前端只提交 `modeId/model/optionValues` 等 RAH 标准字段，不解释 provider-native 参数；旧 `reasoningId` 只是兼容别名。
+Provider 的 rename/delete/archive/info、权限 mode、plan mode、model list、model option/config 参数、permission response、历史解析和 workspace metadata recovery 都应通过显式 capability slice 暴露，而不是塞回一个大号 `ProviderAdapter`。前端只提交 `modeId/model/optionValues` 等 RAH 标准字段，不解释 provider-native 参数；旧 `reasoningId` 只是兼容别名。
 
 ### client-web
 
