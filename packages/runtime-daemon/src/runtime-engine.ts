@@ -88,7 +88,6 @@ import {
   createDefaultNativeTuiMirrorProvider,
   type NativeTuiMirrorProvider,
 } from "./native-tui-mirror-provider";
-import { legacyStructuredLiveEnabled } from "./native-tui-runtime-config";
 import { WorkbenchStateStore } from "./workbench-state";
 import {
   isReadOnlyReplaySession,
@@ -208,12 +207,11 @@ export class RuntimeEngine {
   >();
   private readonly structuredSessionOwners = new Map<string, StructuredSessionOwnerProvider>();
   private readonly historyMirrorAdapters: ProviderStoredHistoryAdapter[] = [];
-  private readonly legacyStructuredLiveEnabled: boolean;
+  private readonly structuredLiveAllowedForInjectedAdapters: boolean;
 
   constructor(adapters?: ProviderAdapter[]) {
     this.defaultLiveBackend = adapters === undefined ? "native_tui" : "structured";
-    this.legacyStructuredLiveEnabled =
-      adapters !== undefined || legacyStructuredLiveEnabled(process.env);
+    this.structuredLiveAllowedForInjectedAdapters = adapters !== undefined;
     this.workbenchState = new WorkbenchStateStore();
     this.eventBus = new EventBus();
     this.ptyHub = new PtyHub();
@@ -466,10 +464,10 @@ export class RuntimeEngine {
     if (
       request.liveBackend === "structured" &&
       request.preferStoredReplay !== true &&
-      !this.legacyStructuredLiveEnabled
+      !this.structuredLiveAllowedForInjectedAdapters
     ) {
       throw new Error(
-        "Structured live backend is disabled by default. Use native_tui, or set RAH_ENABLE_LEGACY_STRUCTURED_LIVE=1 for legacy/debug structured live sessions.",
+        "Structured live backend is disabled outside injected test adapters. Use native_tui for live sessions.",
       );
     }
   }

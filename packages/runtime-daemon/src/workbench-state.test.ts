@@ -506,31 +506,23 @@ describe("WorkbenchStateStore", () => {
 
   test("listing sessions prunes orphan live sessions with no attached clients", async () => {
     const rootDir = mkdtempSync(path.join(tmpRoot, "workspace-orphan-"));
-    const previousLegacyStructured = process.env.RAH_ENABLE_LEGACY_STRUCTURED_LIVE;
-    process.env.RAH_ENABLE_LEGACY_STRUCTURED_LIVE = "1";
     const engine = new RuntimeEngine();
     try {
-      const started = await engine.startSession({
+      const state = engine.sessionStore.createManagedSession({
         provider: "claude",
+        providerSessionId: "orphan-candidate-1",
+        launchSource: "web",
         cwd: rootDir,
+        rootDir,
         title: "Orphan candidate",
-        liveBackend: "structured",
       });
 
-      const sessionId = started.session.session.id;
-      const state = engine.sessionStore.getSession(sessionId);
-      assert.ok(state);
-      assert.equal(state?.clients.length, 0);
+      assert.equal(state.clients.length, 0);
 
       const listed = engine.listSessions();
       assert.equal(listed.sessions.length, 0);
-      assert.equal(engine.sessionStore.getSession(sessionId), undefined);
+      assert.equal(engine.sessionStore.getSession(state.session.id), undefined);
     } finally {
-      if (previousLegacyStructured === undefined) {
-        delete process.env.RAH_ENABLE_LEGACY_STRUCTURED_LIVE;
-      } else {
-        process.env.RAH_ENABLE_LEGACY_STRUCTURED_LIVE = previousLegacyStructured;
-      }
       await engine.shutdown();
     }
   });

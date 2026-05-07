@@ -74,7 +74,7 @@ Workspace inspection 对五家 built-in provider 已经完全绕过 provider ada
 
 | 能力 | Capability slice / 方法 | 说明 |
 | --- | --- | --- |
-| 创建/恢复 structured live session | `ProviderStructuredLifecycleAdapter.startSession/resumeSession` | Legacy/debug escape hatch。生产默认拒绝显式 `liveBackend: "structured"`，除非设置 `RAH_ENABLE_LEGACY_STRUCTURED_LIVE=1`；默认 Web/CLI live 不走 adapter lifecycle。 |
+| 创建/恢复 structured live session | `ProviderStructuredLifecycleAdapter.startSession/resumeSession` | Legacy/debug test surface。生产拒绝显式 `liveBackend: "structured"`；默认 Web/CLI live 不走 adapter lifecycle。 |
 | structured 输入/中断/PTY 事件 | `ProviderStructuredInputControlAdapter` | 只对 legacy structured controllable session 有效。PTY-first native TUI 输入走 PTY runtime。 |
 | structured 权限响应 | `ProviderStructuredPermissionAdapter.respondToPermission` | 只在 terminal/native permission handling 不接收时作为 legacy fallback。 |
 | structured 关闭/销毁 | `ProviderStructuredLifecycleAdapter.closeSession/destroySession` | 关闭 legacy structured 执行体，不删除 provider 历史。 |

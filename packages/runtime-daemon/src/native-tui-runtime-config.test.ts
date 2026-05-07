@@ -6,7 +6,6 @@ import {
   DEFAULT_NATIVE_TUI_MIRROR_INTERVAL_MS,
   DEFAULT_NATIVE_TUI_MIRROR_WARN_AFTER_MS,
   booleanEnv,
-  legacyStructuredLiveEnabled,
   nativeTuiBindingProbeIntervalMs,
   nativeTuiBindingWarnAfterMs,
   nativeTuiMirrorIntervalMs,
@@ -62,7 +61,5 @@ describe("native TUI runtime config", () => {
     assert.equal(booleanEnv({ X: "no" }, "X", true), false);
     assert.equal(booleanEnv({ X: "off" }, "X", true), false);
     assert.equal(booleanEnv({ X: "maybe" }, "X", true), true);
-    assert.equal(legacyStructuredLiveEnabled({}), false);
-    assert.equal(legacyStructuredLiveEnabled({ RAH_ENABLE_LEGACY_STRUCTURED_LIVE: "1" }), true);
   });
 });

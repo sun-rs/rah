@@ -796,7 +796,7 @@ describe("RuntimeEngine", () => {
     await engine.shutdown();
   });
 
-  test("production engine rejects explicit legacy structured live backend by default", async () => {
+  test("production engine rejects explicit legacy structured live backend outside injected adapters", async () => {
     const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-structured-live-disabled-"));
     const engine = new RuntimeEngine();
     try {
@@ -807,7 +807,7 @@ describe("RuntimeEngine", () => {
             cwd: workspace,
             liveBackend: "structured",
           }),
-        /Structured live backend is disabled by default/,
+        /Structured live backend is disabled outside injected test adapters/,
       );
       await assert.rejects(
         () =>
@@ -817,7 +817,7 @@ describe("RuntimeEngine", () => {
             cwd: workspace,
             liveBackend: "structured",
           }),
-        /Structured live backend is disabled by default/,
+        /Structured live backend is disabled outside injected test adapters/,
       );
     } finally {
       await engine.shutdown();

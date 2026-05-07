@@ -28,10 +28,6 @@ export function booleanEnv(env: Env, name: string, fallback = false): boolean {
   return fallback;
 }
 
-export function legacyStructuredLiveEnabled(env: Env = process.env): boolean {
-  return booleanEnv(env, "RAH_ENABLE_LEGACY_STRUCTURED_LIVE", false);
-}
-
 export function nativeTuiBindingProbeIntervalMs(env: Env = process.env): number {
   return positiveIntegerEnv(
     env,

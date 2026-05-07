@@ -1,18 +1,18 @@
 # Native TUI 真实 CLI QA 清单
 
-日期：2026-05-03
+日期：2026-05-07
 
-目的：验证 `refactor/native-tui-backed-sessions` 分支的真实 CLI 路线。自动 smoke 只能证明 RAH 的 PTY、WebSocket、binding、mirror 和假 provider 行为正确；真实 CLI QA 用来覆盖账号、额度、官方 TUI 菜单、权限弹窗、长任务和移动端输入这些无法稳定 mock 的部分。
+目的：验证 `refactor/pty-first-core` 分支的真实 CLI 路线。自动 smoke 只能证明 RAH 的 PTY、WebSocket、binding、mirror 和假 provider 行为正确；真实 CLI QA 用来覆盖账号、额度、官方 TUI 菜单、权限弹窗、长任务和移动端输入这些无法稳定 mock 的部分。
 
 ## 当前本机 CLI 版本
 
 | Provider | 命令 | 当前输出 |
 |---|---|---|
 | Codex | `codex --version` | `codex-cli 0.128.0` |
-| Claude | `claude --version` | `2.1.123 (Claude Code)` |
+| Claude | `claude --version` | `2.1.132 (Claude Code)` |
 | Gemini | `gemini --version` | `0.40.0` |
 | Kimi | `kimi --version` | `kimi, version 1.40.0` |
-| OpenCode | `opencode --version` | `1.14.30` |
+| OpenCode | `opencode --version` | `1.14.40` |
 
 版本记录不是“兼容承诺”。`npm run test:smoke:native-cli-probe` 会在自动门槛中重新采集本机真实 CLI 的 `--version` 输出，并记录当前 RAH branch / commit / dirty worktree 状态；同时要求真实 CLI `--help` 探测既包含 native launch 依赖的 flag，也必须以 exit code 0 正常退出。每次升级任意 provider CLI 后，至少重跑本文的自动门槛和对应 provider 的真实 QA。
 
