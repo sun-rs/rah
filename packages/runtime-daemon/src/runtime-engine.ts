@@ -54,6 +54,9 @@ import { OpenCodeAdapter } from "./opencode-adapter";
 import type { ProviderActivity } from "./provider-activity";
 import type {
   ProviderAdapter,
+  ProviderDebugAdapter,
+  ProviderDiagnosticAdapter,
+  ProviderEnhancedModelAdapter,
   ProviderStoredHistoryAdapter,
   ProviderStructuredInputControlAdapter,
   ProviderStructuredPermissionAdapter,
@@ -132,6 +135,13 @@ export class RuntimeEngine {
 
   private readonly adaptersById = new Map<string, ProviderAdapter>();
   private readonly adaptersByProvider = new Map<string, ProviderAdapter>();
+  private readonly structuredLiveAdaptersByProvider = new Map<string, ProviderAdapter>();
+  private readonly modelAdaptersByProvider = new Map<
+    string,
+    Pick<ProviderAdapter, "id"> & ProviderEnhancedModelAdapter
+  >();
+  private readonly diagnosticAdaptersByProvider = new Map<string, ProviderDiagnosticAdapter>();
+  private readonly debugAdaptersById = new Map<string, ProviderAdapter & ProviderDebugAdapter>();
   private readonly structuredSessionOwners = new Map<string, ProviderAdapter>();
   private readonly historyMirrorAdapters: readonly ProviderStoredHistoryAdapter[];
 
@@ -196,8 +206,10 @@ export class RuntimeEngine {
         this.requireStructuredSessionAdapter(sessionId),
     });
     this.structuredProviders = new RuntimeStructuredProviderCoordinator({
-      adaptersByProvider: this.adaptersByProvider,
-      adaptersById: this.adaptersById,
+      structuredLiveAdaptersByProvider: this.structuredLiveAdaptersByProvider,
+      modelAdaptersByProvider: this.modelAdaptersByProvider,
+      diagnosticAdaptersByProvider: this.diagnosticAdaptersByProvider,
+      debugAdaptersById: this.debugAdaptersById,
       rememberStructuredSessionOwner: (sessionId, adapter) => {
         this.rememberStructuredSessionOwner(sessionId, adapter);
       },
@@ -865,8 +877,24 @@ export class RuntimeEngine {
 
   private registerAdapter(adapter: ProviderAdapter): void {
     this.adaptersById.set(adapter.id, adapter);
+    if (
+      adapter.listDebugScenarios ||
+      adapter.startDebugScenario ||
+      adapter.buildDebugScenarioReplayScript
+    ) {
+      this.debugAdaptersById.set(adapter.id, adapter);
+    }
     for (const provider of adapter.providers) {
       this.adaptersByProvider.set(provider, adapter);
+      if (adapter.startSession || adapter.resumeSession) {
+        this.structuredLiveAdaptersByProvider.set(provider, adapter);
+      }
+      if (adapter.listModels) {
+        this.modelAdaptersByProvider.set(provider, adapter);
+      }
+      if (adapter.getProviderDiagnostic) {
+        this.diagnosticAdaptersByProvider.set(provider, adapter);
+      }
     }
   }
 

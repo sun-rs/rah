@@ -48,6 +48,7 @@ RAH should converge on one live core:
 | Structured input/control/permission is optional legacy surface | `ProviderAdapter` no longer extends `ProviderStructuredInputControlAdapter` or `ProviderStructuredPermissionAdapter`; `RuntimeEngine` requires these slices only after wrapper/native PTY paths fail | Done |
 | Structured lifecycle is optional legacy surface | `ProviderStructuredLifecycleAdapter.startSession/resumeSession` are optional; `RuntimeStructuredProviderCoordinator` requires them only for explicit `liveBackend: "structured"` requests | Done |
 | Legacy structured live clients isolated by path | Five `*-live-client.ts` implementations now live under `packages/runtime-daemon/src/legacy-structured/`; shared Codex/Gemini app-server/CLI helpers were extracted to root utility modules so terminal wrapper/native paths do not import legacy clients; package root exports no longer expose those legacy clients | Done |
+| Legacy structured coordinator uses explicit capability maps | `RuntimeEngine` now passes `structuredLiveAdaptersByProvider`, `modelAdaptersByProvider`, `diagnosticAdaptersByProvider`, and `debugAdaptersById` into `RuntimeStructuredProviderCoordinator` instead of the full provider adapter registry | Done |
 
 ## Verification Run
 
@@ -132,6 +133,13 @@ Legacy structured live client path isolation verified on 2026-05-07:
 - `node --import tsx --test --test-force-exit packages/runtime-daemon/src/gemini-adapter.test.ts packages/runtime-daemon/src/runtime-engine.test.ts`: 62 pass
 
 This guard verifies that no root-level provider `*-live-client.ts` remains, that all five structured live clients are explicit legacy files, and that shared Codex/Gemini helpers used by terminal wrapper/native-adjacent code have been extracted outside the legacy client modules.
+
+Structured coordinator capability map isolation verified on 2026-05-07:
+
+- `npm run typecheck`: pass
+- `node --import tsx --test --test-force-exit packages/runtime-daemon/src/native-tui-provider-runtime.test.ts packages/runtime-daemon/src/runtime-engine.test.ts`: 52 pass
+
+This guard verifies that the legacy structured coordinator no longer receives the full `adaptersByProvider` registry. RuntimeEngine now builds explicit capability maps for structured live lifecycle, model catalogs, diagnostics, and debug scenarios.
 
 ## Remaining Gaps
 

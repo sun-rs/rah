@@ -14,14 +14,25 @@ import type {
   StartSessionResponse,
 } from "@rah/runtime-protocol";
 import { launchSpecForProvider, probeProviderDiagnostic } from "../provider-diagnostics";
-import type { ProviderAdapter, ProviderStructuredLifecycleAdapter } from "../provider-adapter";
+import type {
+  ProviderAdapter,
+  ProviderDebugAdapter,
+  ProviderDiagnosticAdapter,
+  ProviderEnhancedModelAdapter,
+  ProviderStructuredLifecycleAdapter,
+} from "../provider-adapter";
 import type { HistorySnapshotStore } from "../history-snapshots";
 import { defaultProviderModeId, providerModeDescriptors } from "../session-mode-utils";
 import { assertExistingWorkingDirectory } from "../provider-working-directory";
 
+type ProviderModelAdapter = Pick<ProviderAdapter, "id"> & ProviderEnhancedModelAdapter;
+type ProviderDebugCapabilityAdapter = ProviderAdapter & ProviderDebugAdapter;
+
 type RuntimeStructuredProviderCoordinatorDeps = {
-  adaptersByProvider: Map<string, ProviderAdapter>;
-  adaptersById: Map<string, ProviderAdapter>;
+  structuredLiveAdaptersByProvider: Map<string, ProviderAdapter>;
+  modelAdaptersByProvider: Map<string, ProviderModelAdapter>;
+  diagnosticAdaptersByProvider: Map<string, ProviderDiagnosticAdapter>;
+  debugAdaptersById: Map<string, ProviderDebugCapabilityAdapter>;
   rememberStructuredSessionOwner: (sessionId: string, adapter: ProviderAdapter) => void;
   pruneOrphanSessions: () => void;
   historySnapshots: HistorySnapshotStore;
@@ -38,10 +49,10 @@ type RuntimeStructuredProviderCoordinatorDeps = {
 export class RuntimeStructuredProviderCoordinator {
   constructor(private readonly deps: RuntimeStructuredProviderCoordinatorDeps) {}
 
-  private requireAdapterForProvider(provider: string): ProviderAdapter {
-    const adapter = this.deps.adaptersByProvider.get(provider);
+  private requireStructuredAdapterForProvider(provider: string): ProviderAdapter {
+    const adapter = this.deps.structuredLiveAdaptersByProvider.get(provider);
     if (!adapter) {
-      throw new Error(`No adapter registered for provider ${provider}.`);
+      throw new Error(`No structured live adapter registered for provider ${provider}.`);
     }
     return adapter;
   }
@@ -50,7 +61,7 @@ export class RuntimeStructuredProviderCoordinator {
     provider: string,
     capability: "startSession" | "resumeSession",
   ): ProviderAdapter & Required<Pick<ProviderStructuredLifecycleAdapter, typeof capability>> {
-    const adapter = this.requireAdapterForProvider(provider);
+    const adapter = this.requireStructuredAdapterForProvider(provider);
     if (typeof adapter[capability] !== "function") {
       throw new Error(`Provider ${provider} does not support structured ${capability}.`);
     }
@@ -62,7 +73,7 @@ export class RuntimeStructuredProviderCoordinator {
     const providers: ProviderKind[] = ["codex", "claude", "kimi", "gemini", "opencode"];
     return Promise.all(
       providers.map(async (provider) => {
-        const adapter = this.deps.adaptersByProvider.get(provider);
+        const adapter = this.deps.diagnosticAdaptersByProvider.get(provider);
         if (adapter?.getProviderDiagnostic) {
           return await adapter.getProviderDiagnostic(options);
         }
@@ -86,7 +97,7 @@ export class RuntimeStructuredProviderCoordinator {
     provider: ProviderKind,
     options?: { cwd?: string; forceRefresh?: boolean },
   ): Promise<ProviderModelCatalog> {
-    const adapter = this.deps.adaptersByProvider.get(provider);
+    const adapter = this.deps.modelAdaptersByProvider.get(provider);
     if (adapter?.listModels) {
       const catalog = await adapter.listModels(options);
       const report = validateProviderModelCatalog(catalog);
@@ -150,7 +161,7 @@ export class RuntimeStructuredProviderCoordinator {
   }
 
   listScenarios(): DebugScenarioDescriptor[] {
-    const adapter = this.deps.adaptersById.get("debug");
+    const adapter = this.deps.debugAdaptersById.get("debug");
     return adapter?.listDebugScenarios?.() ?? [];
   }
 
@@ -158,7 +169,7 @@ export class RuntimeStructuredProviderCoordinator {
     scenarioId: string;
     attach?: StartSessionRequest["attach"];
   }): StartSessionResponse {
-    const adapter = this.deps.adaptersById.get("debug");
+    const adapter = this.deps.debugAdaptersById.get("debug");
     if (!adapter?.startDebugScenario) {
       throw new Error("No debug adapter registered.");
     }
@@ -172,7 +183,7 @@ export class RuntimeStructuredProviderCoordinator {
   }
 
   buildScenarioReplayScript(scenarioId: string): DebugReplayScript {
-    const adapter = this.deps.adaptersById.get("debug");
+    const adapter = this.deps.debugAdaptersById.get("debug");
     if (!adapter?.buildDebugScenarioReplayScript) {
       throw new Error("No debug adapter registered.");
     }
