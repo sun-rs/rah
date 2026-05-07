@@ -18,5 +18,4 @@ run npm run test:smoke:native-codex
 run npm run test:smoke:native-providers
 run npm run test:smoke:native-codex-browser
 run npm run test:smoke:native-provider-browser
-run npm run test:smoke:wrapper
 run git diff --check

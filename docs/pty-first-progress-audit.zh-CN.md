@@ -71,11 +71,14 @@ Latest verified gates in this branch:
 - `npm run test:web`: 158 pass
 - `npm run test:provider-contracts`: 133 pass
 - `npm run test:runtime`: 375 pass after the CLI resume PTY-first smoke addition
-- `npm run test:native-tui`: pass on 2026-05-07 after public wrapper CLI escape hatch removal
+- `npm run test:native-tui`: pass on 2026-05-07 after removing wrapper-control smoke from the PTY-first native gate
+- `npm run test:smoke:wrapper`: pass on 2026-05-07 as an explicit legacy/internal daemon smoke
 
 `test:runtime` now uses `--test-concurrency=1` because runtime tests mutate process-wide provider binary env vars such as `RAH_CODEX_BINARY`; parallel test files can otherwise contaminate each other and create false failures.
 
-`test:native-tui` covered the full PTY-first automatic gate for this checkout: typecheck, web tests, runtime tests, web build, real CLI help/version probe, Codex native smoke, Claude/Gemini/Kimi/OpenCode native provider smoke, Chromium browser native Codex smoke, Chromium browser native provider smoke, wrapper-control smoke, and `git diff --check`. The Chromium Codex browser smoke also covered mobile TUI input bridge shortcut/text/composition input and terminal-canvas focus routing. The CLI probe captured the current local versions: Codex `0.128.0`, Claude Code `2.1.123`, Gemini `0.40.0`, Kimi `1.40.0`, and OpenCode `1.14.40`.
+`test:native-tui` covered the full PTY-first automatic gate for this checkout: typecheck, web tests, runtime tests, web build, real CLI help/version probe, Codex native smoke, Claude/Gemini/Kimi/OpenCode native provider smoke, Chromium browser native Codex smoke, Chromium browser native provider smoke, and `git diff --check`. The Chromium Codex browser smoke also covered mobile TUI input bridge shortcut/text/composition input and terminal-canvas focus routing. The CLI probe captured the current local versions: Codex `0.128.0`, Claude Code `2.1.123`, Gemini `0.40.0`, Kimi `1.40.0`, and OpenCode `1.14.40`.
+
+`npm run test:smoke:wrapper` remains available as an explicit legacy/internal daemon smoke for the old wrapper-control path, but it is no longer part of the PTY-first native gate. The public `rah <provider>` CLI path now enters the native TUI runtime directly.
 
 Additional Phase 6 guard verified on 2026-05-07:
 
