@@ -13,10 +13,12 @@ import type {
   MuxPaneSubscription,
   MuxPaneUpdate,
   MuxRuntime,
+  MuxSessionState,
   SubscribeMuxPaneOptions,
 } from "./mux-runtime";
 
 const DEFAULT_ZELLIJ_SOCKET_DIR = "/tmp/rah-zellij-sock";
+const ZELLIJ_SOCKET_DIR_ENV = "RAH_ZELLIJ_SOCKET_DIR";
 const DEFAULT_COMMAND_TIMEOUT_MS = 10_000;
 
 type ExecResult = {
@@ -117,6 +119,14 @@ function optionalString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+function stripAnsi(value: string): string {
+  return value.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "");
+}
+
+function outputMentionsMissingSession(value: string): boolean {
+  return /Session '[^']+' not found|There is no active session/i.test(stripAnsi(value));
+}
+
 function normalizePane(raw: RawZellijPane): MuxPaneState {
   const command = optionalString(raw.pane_command);
   const cwd = optionalString(raw.pane_cwd);
@@ -168,8 +178,12 @@ export class ZellijMuxBackend implements MuxRuntime {
 
   constructor(options: ZellijMuxBackendOptions = {}) {
     this.binary = options.binary ?? "zellij";
-    this.socketDir = options.socketDir ?? DEFAULT_ZELLIJ_SOCKET_DIR;
     this.baseEnv = options.env ?? process.env;
+    const envSocketDir = this.baseEnv[ZELLIJ_SOCKET_DIR_ENV]?.trim();
+    this.socketDir =
+      options.socketDir ?? (envSocketDir && envSocketDir.length > 0
+        ? envSocketDir
+        : DEFAULT_ZELLIJ_SOCKET_DIR);
     this.commandTimeoutMs = options.commandTimeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS;
   }
 
@@ -185,6 +199,15 @@ export class ZellijMuxBackend implements MuxRuntime {
     return await this.createProviderPane(request);
   }
 
+  async listSessions(): Promise<MuxSessionState[]> {
+    const result = await this.exec(["list-sessions", "--short", "--no-formatting"]);
+    return result.stdout
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+      .map((sessionName) => ({ sessionName }));
+  }
+
   async createProviderPane(request: CreateMuxPaneRequest): Promise<CreateMuxPaneResult> {
     await this.ensureSession(request.sessionName);
     await this.closeStartupFloatingPanes(request.sessionName);
@@ -196,7 +219,7 @@ export class ZellijMuxBackend implements MuxRuntime {
   }
 
   async listPanes(sessionName: string): Promise<MuxPaneState[]> {
-    const result = await this.exec([
+    const args = [
       "--session",
       sessionName,
       "action",
@@ -207,7 +230,16 @@ export class ZellijMuxBackend implements MuxRuntime {
       "--geometry",
       "--state",
       "--tab",
-    ]);
+    ];
+    const result = await this.exec(args);
+    if (outputMentionsMissingSession(result.stdout) || outputMentionsMissingSession(result.stderr)) {
+      throw new ZellijCommandError({
+        command: this.binary,
+        args,
+        stdout: result.stdout,
+        stderr: result.stderr,
+      });
+    }
     const parsed = JSON.parse(result.stdout) as unknown;
     if (!Array.isArray(parsed)) {
       throw new Error("zellij list-panes returned a non-array payload.");

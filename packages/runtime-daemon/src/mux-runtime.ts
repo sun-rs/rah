@@ -19,6 +19,10 @@ export type MuxPaneState = {
   tabName?: string;
 };
 
+export type MuxSessionState = {
+  sessionName: string;
+};
+
 export type MuxPaneUpdate = {
   paneId: MuxPaneId;
   initial: boolean;
@@ -56,6 +60,7 @@ export type SubscribeMuxPaneOptions = {
 
 export interface MuxRuntime {
   ensureAvailable(): Promise<void>;
+  listSessions(): Promise<MuxSessionState[]>;
   createSession(request: CreateMuxPaneRequest): Promise<CreateMuxPaneResult>;
   createProviderPane(request: CreateMuxPaneRequest): Promise<CreateMuxPaneResult>;
   listPanes(sessionName: string): Promise<MuxPaneState[]>;

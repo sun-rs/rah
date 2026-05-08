@@ -9,6 +9,7 @@ import type {
   StartSessionRequest,
   StartSessionResponse,
   RahEvent,
+  ZellijMuxSessionDiagnostic,
 } from "@rah/runtime-protocol";
 import type { HistorySnapshotStore } from "./history-snapshots";
 import { type ProviderActivity } from "./provider-activity";
@@ -69,6 +70,7 @@ import { NativeTuiMirrorRuntime } from "./native-tui-mirror-runtime";
 import { TerminalWrapperSessionRuntime } from "./terminal-wrapper-session-runtime";
 import {
   createZellijSessionNameForRahSession,
+  ZellijCommandError,
   ZellijMuxBackend,
 } from "./zellij-mux-backend";
 import type { MuxPaneSubscription } from "./mux-runtime";
@@ -126,6 +128,14 @@ function nativeTuiInterruptKeysForProvider(provider: ProviderKind): string[] {
 
 function renderZellijViewport(lines: string[]): string {
   return `\u001b[2J\u001b[H${lines.join("\r\n")}`;
+}
+
+function isZellijSessionMissingError(error: unknown): boolean {
+  if (!(error instanceof ZellijCommandError)) {
+    return false;
+  }
+  const detail = `${error.stdout}\n${error.stderr}\n${error.message}`;
+  return /No session named|There is no active session/i.test(detail);
 }
 
 function appendCodexZellijArgs(launch: NativeTuiLaunchSpec): NativeTuiLaunchSpec {
@@ -273,6 +283,74 @@ export class RuntimeTerminalCoordinator {
 
   listNativeTuiDiagnostics(options?: ListNativeTuiDiagnosticsOptions): NativeTuiDiagnostic[] {
     return this.nativeTuiDiagnostics.list(options);
+  }
+
+  async listZellijMuxDiagnostics(): Promise<ZellijMuxSessionDiagnostic[]> {
+    const bySessionName = new Map<string, ZellijMuxSessionDiagnostic>();
+    const remember = (sessionName: string): ZellijMuxSessionDiagnostic => {
+      const existing = bySessionName.get(sessionName);
+      if (existing) {
+        return existing;
+      }
+      const created: ZellijMuxSessionDiagnostic = {
+        sessionName,
+        socketDir: this.zellijMux.getSocketDir(),
+        panes: [],
+      };
+      bySessionName.set(sessionName, created);
+      return created;
+    };
+
+    for (const zellij of this.zellijTuiSessions.values()) {
+      const managed = this.deps.sessionStore.getSession(zellij.sessionId)?.session;
+      const entry = remember(zellij.zellijSessionName);
+      entry.managedSessionId = zellij.sessionId;
+      entry.paneId = zellij.paneId;
+      if (managed) {
+        entry.provider = managed.provider;
+        entry.runtimeState = managed.runtimeState;
+      }
+    }
+
+    try {
+      for (const session of await this.zellijMux.listSessions()) {
+        if (session.sessionName.startsWith("rah-")) {
+          remember(session.sessionName);
+        }
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      for (const entry of bySessionName.values()) {
+        entry.error = message;
+      }
+    }
+
+    await Promise.all(
+      [...bySessionName.values()].map(async (entry) => {
+        try {
+          const panes = await this.zellijMux.listPanes(entry.sessionName);
+          entry.panes = panes.map((pane) => ({
+            paneId: pane.paneId,
+            title: pane.title,
+            exited: pane.exited,
+            held: pane.held,
+            exitStatus: pane.exitStatus,
+            rows: pane.rows,
+            columns: pane.columns,
+            ...(pane.command ? { command: pane.command } : {}),
+            ...(pane.cwd ? { cwd: pane.cwd } : {}),
+            ...(pane.tabId !== undefined ? { tabId: pane.tabId } : {}),
+            ...(pane.tabName ? { tabName: pane.tabName } : {}),
+          }));
+        } catch (error) {
+          entry.error = error instanceof Error ? error.message : String(error);
+        }
+      }),
+    );
+
+    return [...bySessionName.values()].sort((left, right) =>
+      left.sessionName.localeCompare(right.sessionName),
+    );
   }
 
   clearSessionState(sessionId: string): void {
@@ -864,7 +942,7 @@ export class RuntimeTerminalCoordinator {
       this.clearZellijTuiRuntimeState(sessionId);
       this.clearNativeTuiRuntimeState(sessionId);
       this.nativeTuiSessionIds.delete(sessionId);
-      await this.zellijMux.killSession(zellij.zellijSessionName).catch(() => undefined);
+      await this.closeZellijTuiSession(zellij);
       return true;
     }
     if (!this.nativeTuiSessionIds.has(sessionId)) {
@@ -912,7 +990,7 @@ export class RuntimeTerminalCoordinator {
       },
       resize: () => undefined,
       close: async () => {
-        await this.zellijMux.killSession(zellij.zellijSessionName);
+        await this.closeZellijTuiSession(zellij);
       },
       waitUntilReady: async () => undefined,
     } as unknown as NativeTuiSessionState["process"];
@@ -990,9 +1068,23 @@ export class RuntimeTerminalCoordinator {
     if (!zellij) {
       return;
     }
-    const panes = await this.zellijMux.listPanes(zellij.zellijSessionName).catch(() => []);
-    const pane = panes.find((candidate) => candidate.paneId === zellij.paneId);
-    if (!pane?.exited) {
+    const panes = await this.zellijMux.listPanes(zellij.zellijSessionName).catch((error) => {
+      if (isZellijSessionMissingError(error)) {
+        return null;
+      }
+      console.warn("[rah] failed to poll zellij pane state", {
+        sessionId,
+        zellijSessionName: zellij.zellijSessionName,
+        paneId: zellij.paneId,
+        error,
+      });
+      return undefined;
+    });
+    if (panes === undefined) {
+      return;
+    }
+    const pane = panes?.find((candidate) => candidate.paneId === zellij.paneId);
+    if (panes && pane && !pane.exited) {
       return;
     }
     const native = this.nativeTuiSessions.get(sessionId);
@@ -1001,27 +1093,63 @@ export class RuntimeTerminalCoordinator {
     this.clearNativeTuiRuntimeState(sessionId);
     this.nativeTuiSessionIds.delete(sessionId);
     this.closingNativeTuiSessionIds.delete(sessionId);
-    this.deps.ptyHub.emitExit(sessionId, pane.exitStatus ?? undefined, undefined);
+    this.deps.ptyHub.emitExit(sessionId, pane?.exitStatus ?? undefined, undefined);
     const currentState = this.deps.sessionStore.getSession(sessionId);
     if (currentState) {
-      this.deps.sessionStore.patchManagedSession(sessionId, {
-        capabilities: buildStoppedNativeTuiSessionCapabilities(currentState.session.provider),
-        nativeTui: {
-          terminalId: sessionId,
-          viewAvailable: true,
-          promptState: "prompt_clean",
-          queuedInputCount: 0,
-        },
-      });
+      this.deps.onRememberSession(currentState);
       this.deps.sessionStore.setActiveTurn(sessionId, undefined);
-      this.deps.sessionStore.setRuntimeState(sessionId, "stopped");
-      publishSessionStateChanged(this.deps, sessionId, "stopped");
+      this.deps.sessionStore.removeSession(sessionId);
+      this.deps.ptyHub.removeSession(sessionId);
+      this.deps.historySnapshots.clear(sessionId);
+      this.deps.onSessionOwnerRemoved(sessionId);
+      this.deps.eventBus.publish({
+        sessionId,
+        type: "session.closed",
+        source: SYSTEM_SOURCE,
+        payload: {},
+      });
     }
     if (native && !expectedClose) {
       recordNativeTuiProcessExitDiagnostic(this.nativeTuiDiagnostics, native, {
-        ...(pane.exitStatus !== null ? { exitCode: pane.exitStatus } : {}),
+        ...(pane?.exitStatus !== null && pane?.exitStatus !== undefined
+          ? { exitCode: pane.exitStatus }
+          : {}),
       });
     }
+    await this.zellijMux.killSession(zellij.zellijSessionName).catch(() => undefined);
+  }
+
+  private async closeZellijTuiSession(zellij: ZellijTuiSessionState): Promise<void> {
+    await this.zellijMux.closePane(zellij.zellijSessionName, zellij.paneId).catch((error) => {
+      if (isZellijSessionMissingError(error)) {
+        return;
+      }
+      console.warn("[rah] failed to close zellij pane, falling back to kill-session", {
+        sessionId: zellij.sessionId,
+        zellijSessionName: zellij.zellijSessionName,
+        paneId: zellij.paneId,
+        error,
+      });
+    });
+    const deadline = Date.now() + 1_500;
+    while (Date.now() < deadline) {
+      const panes = await this.zellijMux.listPanes(zellij.zellijSessionName).catch(() => []);
+      const pane = panes.find((candidate) => candidate.paneId === zellij.paneId);
+      if (!pane || pane.exited) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    await this.zellijMux.killSession(zellij.zellijSessionName).catch((error) => {
+      if (isZellijSessionMissingError(error)) {
+        return;
+      }
+      console.warn("[rah] failed to kill zellij session", {
+        sessionId: zellij.sessionId,
+        zellijSessionName: zellij.zellijSessionName,
+        error,
+      });
+    });
   }
 
   private startNativeTuiBindingProbe(sessionId: string): void {
@@ -1168,7 +1296,7 @@ export class RuntimeTerminalCoordinator {
     const zellijSessions = Array.from(this.zellijTuiSessions.values());
     for (const zellij of zellijSessions) {
       this.clearZellijTuiRuntimeState(zellij.sessionId);
-      await this.zellijMux.killSession(zellij.zellijSessionName).catch((error) => {
+      await this.closeZellijTuiSession(zellij).catch((error) => {
         console.error("[rah] failed to kill zellij session during shutdown", {
           sessionId: zellij.sessionId,
           zellijSessionName: zellij.zellijSessionName,

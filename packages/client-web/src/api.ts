@@ -21,6 +21,7 @@ import type {
   ListPtyStatsResponse,
   ListProviderModelsResponse,
   ListProvidersResponse,
+  ListZellijMuxDiagnosticsResponse,
   NativeTuiDiagnostic,
   ListSessionsResponse,
   ProviderDiagnostic,
@@ -28,6 +29,7 @@ import type {
   ProviderModelCatalog,
   PtyClientMessage,
   PtySessionStats,
+  ZellijMuxSessionDiagnostic,
   PtyServerMessage,
   PermissionResponseRequest,
   RenameSessionRequest,
@@ -282,6 +284,18 @@ export async function listPtyStats(options?: { signal?: AbortSignal }): Promise<
   const response = await requestJson<ListPtyStatsResponse>("/api/pty/stats", {
     ...(options?.signal ? { signal: options.signal } : {}),
   });
+  return response.sessions;
+}
+
+export async function listZellijMuxDiagnostics(options?: {
+  signal?: AbortSignal;
+}): Promise<ZellijMuxSessionDiagnostic[]> {
+  const response = await requestJson<ListZellijMuxDiagnosticsResponse>(
+    "/api/zellij/diagnostics",
+    {
+      ...(options?.signal ? { signal: options.signal } : {}),
+    },
+  );
   return response.sessions;
 }
 

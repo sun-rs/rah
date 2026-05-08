@@ -92,6 +92,10 @@ test("zellij mux backend controls a fake shell pane and observes exit state", as
     assert.equal(created.sessionName, sessionName);
     assert.match(created.paneId, /^terminal_\d+$/);
 
+    assert.ok(
+      (await backend.listSessions()).some((session) => session.sessionName === sessionName),
+    );
+
     await waitFor(async () =>
       (await backend.dumpScreen(sessionName, created.paneId, { full: true })).includes(
         "RAH_ZELLIJ_READY",

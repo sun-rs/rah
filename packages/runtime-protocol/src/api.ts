@@ -578,6 +578,35 @@ export interface ListPtyStatsResponse {
   sessions: PtySessionStats[];
 }
 
+export interface ZellijMuxPaneDiagnostic {
+  paneId: string;
+  title: string;
+  exited: boolean;
+  held: boolean;
+  exitStatus: number | null;
+  rows: number;
+  columns: number;
+  command?: string;
+  cwd?: string;
+  tabId?: number;
+  tabName?: string;
+}
+
+export interface ZellijMuxSessionDiagnostic {
+  sessionName: string;
+  socketDir: string;
+  managedSessionId?: string;
+  provider?: ProviderKind;
+  runtimeState?: ManagedSession["runtimeState"];
+  paneId?: string;
+  panes: ZellijMuxPaneDiagnostic[];
+  error?: string;
+}
+
+export interface ListZellijMuxDiagnosticsResponse {
+  sessions: ZellijMuxSessionDiagnostic[];
+}
+
 export type PtyServerMessage =
   | {
       type: "pty.replay";

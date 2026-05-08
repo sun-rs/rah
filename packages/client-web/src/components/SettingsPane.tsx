@@ -1,7 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { NativeTuiDiagnostic, ProviderDiagnostic, PtySessionStats } from "@rah/runtime-protocol";
+import type {
+  NativeTuiDiagnostic,
+  ProviderDiagnostic,
+  PtySessionStats,
+  ZellijMuxSessionDiagnostic,
+} from "@rah/runtime-protocol";
 import { AlertTriangle, CheckCircle2, Info, LoaderCircle, MessageSquareText, Palette, RefreshCw, TerminalSquare, Waypoints } from "lucide-react";
-import { listNativeTuiDiagnostics, listProviders, listPtyStats } from "../api";
+import { listNativeTuiDiagnostics, listProviders, listPtyStats, listZellijMuxDiagnostics } from "../api";
 import { providerLabel } from "../types";
 import { nativeTuiDiagnosticLabel } from "../native-tui-diagnostics-ui";
 import {
@@ -48,6 +53,7 @@ export function SettingsPane() {
   const [providerDiagnosticsLoaded, setProviderDiagnosticsLoaded] = useState(false);
   const [nativeTuiDiagnostics, setNativeTuiDiagnostics] = useState<NativeTuiDiagnostic[]>([]);
   const [ptyStats, setPtyStats] = useState<PtySessionStats[]>([]);
+  const [zellijMuxDiagnostics, setZellijMuxDiagnostics] = useState<ZellijMuxSessionDiagnostic[]>([]);
   const ptyStatsRef = useRef<PtySessionStats[] | null>(null);
   const [previousPtyStats, setPreviousPtyStats] = useState<PtySessionStats[] | null>(null);
   const versionAutoRequestedRef = useRef(false);
@@ -68,6 +74,10 @@ export function SettingsPane() {
     [previousPtyStats, ptyStats],
   );
   const sortedPtyStats = useMemo(() => sortPtyStatsForDisplay(ptyStats), [ptyStats]);
+  const sortedZellijMuxDiagnostics = useMemo(
+    () => [...zellijMuxDiagnostics].sort((left, right) => left.sessionName.localeCompare(right.sessionName)),
+    [zellijMuxDiagnostics],
+  );
 
   useEffect(() => {
     if (activeTab !== "version" || versionAutoRequestedRef.current || providerDiagnosticsLoading) {
@@ -81,7 +91,12 @@ export function SettingsPane() {
     setProviderDiagnosticsLoading(true);
     setProviderDiagnosticsError(null);
     try {
-      const [providersResult, nativeDiagnosticsResult, terminalStatsResult] = await Promise.allSettled([
+      const [
+        providersResult,
+        nativeDiagnosticsResult,
+        terminalStatsResult,
+        zellijMuxDiagnosticsResult,
+      ] = await Promise.allSettled([
         listProviders({
           forceRefresh,
           ...(signal ? { signal } : {}),
@@ -90,6 +105,9 @@ export function SettingsPane() {
           ...(signal ? { signal } : {}),
         }),
         listPtyStats({
+          ...(signal ? { signal } : {}),
+        }),
+        listZellijMuxDiagnostics({
           ...(signal ? { signal } : {}),
         }),
       ]);
@@ -115,6 +133,13 @@ export function SettingsPane() {
       ) {
         return;
       }
+      if (
+        zellijMuxDiagnosticsResult.status === "rejected" &&
+        zellijMuxDiagnosticsResult.reason instanceof DOMException &&
+        zellijMuxDiagnosticsResult.reason.name === "AbortError"
+      ) {
+        return;
+      }
 
       const errors: string[] = [];
       if (providersResult.status === "fulfilled") {
@@ -134,13 +159,19 @@ export function SettingsPane() {
       } else {
         errors.push(errorMessage(terminalStatsResult.reason, "Failed to load PTY stats."));
       }
+      if (zellijMuxDiagnosticsResult.status === "fulfilled") {
+        setZellijMuxDiagnostics(zellijMuxDiagnosticsResult.value);
+      } else {
+        errors.push(errorMessage(zellijMuxDiagnosticsResult.reason, "Failed to load zellij diagnostics."));
+      }
       if (errors.length > 0) {
         setProviderDiagnosticsError(errors.join(" "));
       }
       if (
         providersResult.status === "fulfilled" ||
         nativeDiagnosticsResult.status === "fulfilled" ||
-        terminalStatsResult.status === "fulfilled"
+        terminalStatsResult.status === "fulfilled" ||
+        zellijMuxDiagnosticsResult.status === "fulfilled"
       ) {
         setProviderDiagnosticsLoaded(true);
       }
@@ -534,6 +565,73 @@ export function SettingsPane() {
                       ) : null}
                     </div>
                   )}
+
+                  <div className="mt-5 border-t border-[var(--app-border)] pt-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="text-xs font-semibold text-[var(--app-fg)]">Zellij mux sessions</div>
+                        <div className="mt-1 text-[11px] text-[var(--app-hint)]">
+                          Real zellij rah-* sessions and panes visible through the mux socket.
+                        </div>
+                      </div>
+                      <span className="shrink-0 rounded-full border border-[var(--app-border)] px-2 py-0.5 text-[10px] font-medium text-[var(--app-hint)]">
+                        {sortedZellijMuxDiagnostics.length}
+                      </span>
+                    </div>
+                    {sortedZellijMuxDiagnostics.length === 0 ? (
+                      <div className="mt-3 rounded-xl border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-3 py-2 text-xs text-[var(--app-hint)]">
+                        No rah-* zellij sessions are visible.
+                      </div>
+                    ) : (
+                      <div className="mt-3 space-y-2">
+                        {sortedZellijMuxDiagnostics.slice(0, 6).map((session) => {
+                          const activePane = session.panes.find((pane) => pane.paneId === session.paneId) ?? session.panes[0];
+                          return (
+                            <div
+                              key={session.sessionName}
+                              className="rounded-xl border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-3 py-2"
+                            >
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <div className="min-w-0 font-mono text-[11px] text-[var(--app-fg)]">
+                                  {session.sessionName}
+                                </div>
+                                <span className="shrink-0 text-[11px] text-[var(--app-hint)]">
+                                  {session.panes.length} panes
+                                </span>
+                              </div>
+                              <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-[var(--app-hint)]">
+                                {session.provider ? <span>{providerLabel(session.provider)}</span> : null}
+                                {session.runtimeState ? <span>{session.runtimeState}</span> : null}
+                                {session.managedSessionId ? (
+                                  <span className="font-mono">{session.managedSessionId}</span>
+                                ) : (
+                                  <span className="text-[var(--app-warning)]">unmanaged</span>
+                                )}
+                                {activePane ? (
+                                  <span className="font-mono">
+                                    {activePane.paneId} {activePane.columns}x{activePane.rows}
+                                  </span>
+                                ) : null}
+                                {activePane?.exited ? (
+                                  <span className="text-[var(--app-warning)]">exited {activePane.exitStatus ?? ""}</span>
+                                ) : null}
+                              </div>
+                              {session.error ? (
+                                <div className="mt-1 break-words text-[10px] text-[var(--app-warning)] [overflow-wrap:anywhere]">
+                                  {session.error}
+                                </div>
+                              ) : null}
+                            </div>
+                          );
+                        })}
+                        {sortedZellijMuxDiagnostics.length > 6 ? (
+                          <div className="text-[11px] text-[var(--app-hint)]">
+                            Showing 6 zellij sessions out of {sortedZellijMuxDiagnostics.length}.
+                          </div>
+                        ) : null}
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             )}

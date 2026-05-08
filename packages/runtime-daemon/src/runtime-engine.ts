@@ -34,6 +34,7 @@ import type {
   StartSessionRequest,
   StartSessionResponse,
   StoredSessionRef,
+  ZellijMuxSessionDiagnostic,
 } from "@rah/runtime-protocol";
 import { createDefaultProviderAdapters } from "./default-provider-adapters";
 import {
@@ -375,6 +376,10 @@ export class RuntimeEngine {
         ...(session.mux ? { mux: session.mux } : {}),
       };
     });
+  }
+
+  async listZellijMuxDiagnostics(): Promise<ZellijMuxSessionDiagnostic[]> {
+    return await this.terminals.listZellijMuxDiagnostics();
   }
 
   async listProviderModels(

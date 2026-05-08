@@ -4,6 +4,7 @@ import type {
   ListDebugScenariosResponse,
   ListNativeTuiDiagnosticsResponse,
   ListPtyStatsResponse,
+  ListZellijMuxDiagnosticsResponse,
   ListProvidersResponse,
   ProviderKind,
 } from "@rah/runtime-protocol";
@@ -344,6 +345,14 @@ export async function handleHttpRequest(args: {
     if (req.method === "GET" && pathname === "/api/pty/stats") {
       const response: ListPtyStatsResponse = {
         sessions: engine.listPtyStats(),
+      };
+      writeJson(req, res, 200, response);
+      return;
+    }
+
+    if (req.method === "GET" && pathname === "/api/zellij/diagnostics") {
+      const response: ListZellijMuxDiagnosticsResponse = {
+        sessions: await engine.listZellijMuxDiagnostics(),
       };
       writeJson(req, res, 200, response);
       return;
