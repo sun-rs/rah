@@ -221,7 +221,6 @@ describe("session startup model and mode requests", () => {
     assert.deepEqual(startRequest?.body, {
       provider: "codex",
       cwd: "/tmp/rah",
-      liveBackend: "native_tui",
       title: "test",
       model: "gpt-5.5",
       optionValues: { model_reasoning_effort: "xhigh" },
@@ -286,7 +285,7 @@ describe("session startup model and mode requests", () => {
     assert.deepEqual(calls, ["created:started", "send"]);
   });
 
-  test("new session defaults native TUI for core live provider CLIs", async () => {
+  test("new session lets the daemon choose the default live backend for core provider CLIs", async () => {
     const requests = installWebApiMocks((request) => {
       if (request.url.includes("/api/fs/list")) {
         return { path: "/tmp/rah", entries: [] };
@@ -328,9 +327,9 @@ describe("session startup model and mode requests", () => {
         return [body.provider, body.liveBackend ?? null];
       }),
       [
-        ["codex", "native_tui"],
-        ["claude", "native_tui"],
-        ["opencode", "native_tui"],
+        ["codex", null],
+        ["claude", null],
+        ["opencode", null],
       ],
     );
   });
@@ -417,7 +416,6 @@ describe("session startup model and mode requests", () => {
     assert.deepEqual(resumeRequest?.body, {
       provider: "codex",
       providerSessionId: "thread-1",
-      liveBackend: "native_tui",
       model: "gpt-5.5",
       optionValues: { model_reasoning_effort: "xhigh" },
       reasoningId: "xhigh",
@@ -447,7 +445,7 @@ describe("session startup model and mode requests", () => {
     });
   });
 
-  test("claim history defaults native TUI for core live provider CLIs", async () => {
+  test("claim history lets the daemon choose the default live backend for core provider CLIs", async () => {
     const requests = installWebApiMocks((request) => {
       if (request.url.includes("/api/fs/list")) {
         return { path: "/tmp/rah", entries: [] };
@@ -505,9 +503,9 @@ describe("session startup model and mode requests", () => {
         return [body.provider, body.liveBackend ?? null];
       }),
       [
-        ["codex", "native_tui"],
-        ["claude", "native_tui"],
-        ["opencode", "native_tui"],
+        ["codex", null],
+        ["claude", null],
+        ["opencode", null],
       ],
     );
   });

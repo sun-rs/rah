@@ -302,6 +302,51 @@ test("zellij_tui backend starts OpenCode, routes input, interrupts, and observes
   });
 });
 
+test("RAH_MUX_BACKEND=zellij makes daemon-created live sessions use zellij_tui by default", async (t) => {
+  if (await skipIfZellijUnavailable(t)) {
+    return;
+  }
+
+  const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-zellij-default-"));
+  const fakeOpenCode = path.join(workspace, "fake-opencode.js");
+  writeFakeTuiBinary(fakeOpenCode, "opencode");
+  const socketDir = makeTestZellijSocketDir("default");
+  const restoreRahHome = setEnv("RAH_HOME", path.join(workspace, "rah-home"));
+  const restoreSocketDir = setEnv("RAH_ZELLIJ_SOCKET_DIR", socketDir);
+  const restoreMuxBackend = setEnv("RAH_MUX_BACKEND", "zellij");
+  const restoreBinary = setEnv("RAH_OPENCODE_BINARY", fakeOpenCode);
+  const engine = new RuntimeEngine();
+
+  try {
+    const started = await engine.startSession({
+      provider: "opencode",
+      cwd: workspace,
+      attach: {
+        client: {
+          id: "web-zellij-default",
+          kind: "web",
+          connectionId: "web-zellij-default",
+        },
+        mode: "interactive",
+        claimControl: true,
+      },
+    });
+    const sessionId = started.session.session.id;
+    assert.equal(started.session.session.liveBackend, "zellij_tui");
+    assert.equal(started.session.session.mux?.backend, "zellij");
+
+    await engine.closeSession(sessionId, { clientId: "web-zellij-default" });
+  } finally {
+    await engine.shutdown();
+    restoreBinary();
+    restoreMuxBackend();
+    restoreSocketDir();
+    restoreRahHome();
+    rmSync(socketDir, { force: true, recursive: true });
+    rmSync(workspace, { force: true, recursive: true });
+  }
+});
+
 test("zellij_tui chat input queues while the TUI prompt has a local draft", async (t) => {
   if (await skipIfZellijUnavailable(t)) {
     return;

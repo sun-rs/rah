@@ -216,7 +216,12 @@ export class RuntimeEngine {
   private readonly structuredLiveAllowedForInjectedAdapters: boolean;
 
   constructor(adapters?: ProviderAdapter[], options: RuntimeEngineOptions = {}) {
-    this.defaultLiveBackend = adapters === undefined ? "native_tui" : "structured";
+    this.defaultLiveBackend =
+      adapters === undefined
+        ? process.env.RAH_MUX_BACKEND === "zellij"
+          ? "zellij_tui"
+          : "native_tui"
+        : "structured";
     this.structuredLiveAllowedForInjectedAdapters = adapters !== undefined;
     this.workbenchState = new WorkbenchStateStore();
     this.eventBus = new EventBus();
@@ -605,9 +610,19 @@ export class RuntimeEngine {
   }
 
   private shouldUseZellijTuiBackend(
-    request: Pick<StartSessionRequest | ResumeSessionRequest, "liveBackend">,
+    request: Pick<StartSessionRequest | ResumeSessionRequest, "provider" | "liveBackend"> &
+      Partial<Pick<ResumeSessionRequest, "preferStoredReplay">>,
   ): boolean {
-    return request.liveBackend === "zellij_tui";
+    if (request.liveBackend !== undefined) {
+      return request.liveBackend === "zellij_tui";
+    }
+    if (request.preferStoredReplay === true) {
+      return false;
+    }
+    return (
+      this.defaultLiveBackend === "zellij_tui" &&
+      this.nativeTuiProviders.supports(request.provider)
+    );
   }
 
   attachSession(sessionId: string, request: AttachSessionRequest): AttachSessionResponse {

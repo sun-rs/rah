@@ -126,11 +126,12 @@ type SessionStartupDeps = {
 };
 
 function defaultLiveBackendForProvider(
-  provider: string,
+  _provider: string,
 ): NonNullable<StartSessionRequest["liveBackend"]> | undefined {
-  return provider === "codex" || provider === "claude" || provider === "opencode"
-    ? "native_tui"
-    : undefined;
+  // Let the daemon choose its configured live backend. This keeps Web New,
+  // Claim, and Resume aligned with source-started daemon flags such as
+  // RAH_MUX_BACKEND=zellij instead of baking a stale client-side default.
+  return undefined;
 }
 
 function isCoreLiveProvider(provider: string): provider is ProviderChoice {
