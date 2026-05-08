@@ -89,6 +89,14 @@ function setEnv(name: string, value: string): () => void {
   };
 }
 
+async function flushWorkbenchState(engine: RuntimeEngine): Promise<void> {
+  await (
+    engine as unknown as {
+      workbenchState: { flush: () => Promise<void> };
+    }
+  ).workbenchState.flush();
+}
+
 async function startZellijProviderSession(params: {
   provider: ProviderKind;
   envName: string;
@@ -338,6 +346,92 @@ test("zellij_tui backend isolates multiple simultaneous provider sessions", asyn
   } finally {
     await engine.shutdown();
     restoreBinary();
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test("zellij_tui backend recovers a persisted mux pane after daemon restart", async (t) => {
+  if (await skipIfZellijUnavailable(t)) {
+    return;
+  }
+
+  const root = mkdtempSync(path.join(os.tmpdir(), "rah-zellij-recover-"));
+  const rahHome = path.join(root, "rah-home");
+  const workspace = path.join(root, "workspace");
+  mkdirSync(workspace, { recursive: true });
+  const fakeOpenCode = path.join(root, "fake-opencode.js");
+  writeFakeTuiBinary(fakeOpenCode, "opencode");
+  const restoreRahHome = setEnv("RAH_HOME", rahHome);
+  const restoreBinary = setEnv("RAH_OPENCODE_BINARY", fakeOpenCode);
+  const engine1 = new RuntimeEngine();
+  let engine2: RuntimeEngine | undefined;
+
+  try {
+    const started = await engine1.startSession({
+      provider: "opencode",
+      cwd: workspace,
+      liveBackend: "zellij_tui",
+      attach: {
+        client: {
+          id: "web-zellij-recover-1",
+          kind: "web",
+          connectionId: "web-zellij-recover-1",
+        },
+        mode: "interactive",
+        claimControl: true,
+      },
+    });
+    const sessionId = started.session.session.id;
+    let transcript1 = "";
+    const unsubscribe1 = engine1.ptyHub.subscribe(sessionId, (frame) => {
+      if (frame.type === "pty.replay") {
+        transcript1 += frame.chunks.join("");
+      } else if (frame.type === "pty.output") {
+        transcript1 += frame.data;
+      }
+    });
+    await waitFor(() => {
+      assert.match(transcript1, /ZELLIJ_OPENCODE_READY/);
+    });
+    await flushWorkbenchState(engine1);
+
+    engine2 = new RuntimeEngine();
+    await waitFor(() => {
+      assert.equal(engine2?.getSessionSummary(sessionId).session.liveBackend, "zellij_tui");
+      assert.equal(engine2?.getSessionSummary(sessionId).session.mux?.sessionName, started.session.session.mux?.sessionName);
+    });
+
+    let transcript2 = "";
+    const unsubscribe2 = engine2.ptyHub.subscribe(sessionId, (frame) => {
+      if (frame.type === "pty.replay") {
+        transcript2 += frame.chunks.join("");
+      } else if (frame.type === "pty.output") {
+        transcript2 += frame.data;
+      }
+    });
+    await waitFor(() => {
+      assert.match(transcript2, /ZELLIJ_OPENCODE_READY/);
+    });
+
+    engine2.sendInput(sessionId, {
+      clientId: "web-zellij-recover-2",
+      text: "after-recover",
+    });
+    await waitFor(() => {
+      assert.match(transcript2, /ZELLIJ_OPENCODE_INPUT:after-recover/);
+    });
+
+    engine2.sendInput(sessionId, { clientId: "web-zellij-recover-2", text: "exit" });
+    await waitFor(() => {
+      assert.equal(engine2?.getSessionSummary(sessionId).session.runtimeState, "stopped");
+    });
+    unsubscribe1();
+    unsubscribe2();
+  } finally {
+    await engine2?.shutdown();
+    await engine1.shutdown();
+    restoreBinary();
+    restoreRahHome();
     rmSync(root, { force: true, recursive: true });
   }
 });

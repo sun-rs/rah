@@ -14,6 +14,7 @@ import type {
   IndependentTerminalStartRequest,
   IndependentTerminalStartResponse,
   InterruptSessionRequest,
+  ManagedSession,
   NativeTuiDiagnostic,
   ListSessionsResponse,
   ProviderDiagnostic,
@@ -316,6 +317,27 @@ export class RuntimeEngine {
       },
     });
     this.storedSessionMonitor.start();
+    void this.restoreZellijLiveSessions(restored.zellijLiveSessions);
+  }
+
+  private async restoreZellijLiveSessions(
+    sessions: readonly ManagedSession[],
+  ): Promise<void> {
+    if (sessions.length === 0) {
+      return;
+    }
+    for (const session of sessions) {
+      await this.terminals.restoreZellijTuiSession(session).catch((error) => {
+        console.warn("[rah] failed to recover zellij live session", {
+          sessionId: session.id,
+          zellijSessionName: session.mux?.sessionName,
+          error,
+        });
+        return false;
+      });
+    }
+    this.workbenchState.persistLiveSessions(this.sessionStore.listSessions());
+    this.refreshRememberedState();
   }
 
   listSessions(): ListSessionsResponse {

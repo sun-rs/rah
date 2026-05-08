@@ -2,7 +2,7 @@ import { mkdir, rename, writeFile } from "node:fs/promises";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { StoredSessionRef } from "@rah/runtime-protocol";
+import type { ManagedSession, StoredSessionRef } from "@rah/runtime-protocol";
 import type { StoredSessionState } from "./session-store";
 import { isReadOnlyReplaySession } from "./workbench-directory-utils";
 
@@ -21,7 +21,20 @@ interface WorkbenchStateFile {
   pendingSessionTitleOverrides?: Record<string, string>;
   sessions: StoredSessionRef[];
   recentSessions: StoredSessionRef[];
+  zellijLiveSessions?: ManagedSession[];
 }
+
+export type WorkbenchStateSnapshot = {
+  activeWorkspaceDir?: string;
+  workspaces: string[];
+  hiddenWorkspaces: string[];
+  hiddenSessionKeys: string[];
+  sessionTitleOverrides: Record<string, string>;
+  pendingSessionTitleOverrides: Record<string, string>;
+  sessions: StoredSessionRef[];
+  recentSessions: StoredSessionRef[];
+  zellijLiveSessions: ManagedSession[];
+};
 
 function normalizeDirectory(value: string | undefined): string | null {
   if (!value) {
@@ -101,6 +114,45 @@ function isRememberableLiveSession(state: StoredSessionState): boolean {
 
 function isRecentEligibleLiveSession(state: StoredSessionState): boolean {
   return isRememberableLiveSession(state) && state.controlLease.holderClientId !== undefined;
+}
+
+function isRecoverableZellijLiveSession(state: StoredSessionState): boolean {
+  return (
+    isRememberableLiveSession(state) &&
+    state.session.liveBackend === "zellij_tui" &&
+    state.session.mux?.backend === "zellij" &&
+    state.session.runtimeState !== "stopped" &&
+    state.session.runtimeState !== "failed"
+  );
+}
+
+function isPersistedZellijLiveSession(value: unknown): value is ManagedSession {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const session = value as Partial<ManagedSession>;
+  const mux = session.mux;
+  return (
+    typeof session.id === "string" &&
+    typeof session.provider === "string" &&
+    session.liveBackend === "zellij_tui" &&
+    typeof session.cwd === "string" &&
+    typeof session.rootDir === "string" &&
+    typeof session.ptyId === "string" &&
+    typeof session.createdAt === "string" &&
+    typeof session.updatedAt === "string" &&
+    Boolean(session.capabilities && typeof session.capabilities === "object") &&
+    Boolean(
+      mux &&
+        mux.backend === "zellij" &&
+        typeof mux.sessionName === "string" &&
+        mux.sessionName.trim().length > 0 &&
+        typeof mux.paneId === "string" &&
+        mux.paneId.trim().length > 0 &&
+        typeof mux.socketDir === "string" &&
+        mux.socketDir.trim().length > 0,
+    )
+  );
 }
 
 function isInternalBootstrapText(value: string | undefined): boolean {
@@ -218,6 +270,7 @@ export class WorkbenchStateStore {
     pendingSessionTitleOverrides: Record<string, string>;
     sessions: StoredSessionRef[];
     recentSessions: StoredSessionRef[];
+    zellijLiveSessions: ManagedSession[];
   } = {
     workspaces: [],
     hiddenWorkspaces: [],
@@ -226,6 +279,7 @@ export class WorkbenchStateStore {
     pendingSessionTitleOverrides: {},
     sessions: [],
     recentSessions: [],
+    zellijLiveSessions: [],
   };
 
   constructor(rootDir = path.join(resolveRahHome(), "runtime-daemon")) {
@@ -234,16 +288,7 @@ export class WorkbenchStateStore {
     mkdirSync(this.rootDir, { recursive: true });
   }
 
-  load(): {
-    activeWorkspaceDir?: string;
-    workspaces: string[];
-    hiddenWorkspaces: string[];
-    hiddenSessionKeys: string[];
-    sessionTitleOverrides: Record<string, string>;
-    pendingSessionTitleOverrides: Record<string, string>;
-    sessions: StoredSessionRef[];
-    recentSessions: StoredSessionRef[];
-  } {
+  load(): WorkbenchStateSnapshot {
     if (!existsSync(this.snapshotPath)) {
       this.state = {
         workspaces: [],
@@ -253,6 +298,7 @@ export class WorkbenchStateStore {
         pendingSessionTitleOverrides: {},
         sessions: [],
         recentSessions: [],
+        zellijLiveSessions: [],
       };
       return this.state;
     }
@@ -267,6 +313,7 @@ export class WorkbenchStateStore {
           pendingSessionTitleOverrides: {},
           sessions: [],
           recentSessions: [],
+          zellijLiveSessions: [],
         };
         return this.state;
       }
@@ -293,6 +340,9 @@ export class WorkbenchStateStore {
             .filter(isRecentStoredSessionRef)
         : [];
       const sanitizedSessions = sessions.map(sanitizeStoredSessionRef);
+      const zellijLiveSessions = Array.isArray(raw.zellijLiveSessions)
+        ? raw.zellijLiveSessions.filter(isPersistedZellijLiveSession)
+        : [];
       const hiddenWorkspaces = Array.isArray(raw.hiddenWorkspaces)
         ? uniqueDirectoriesInOrder(raw.hiddenWorkspaces)
         : [];
@@ -323,6 +373,10 @@ export class WorkbenchStateStore {
           const directory = normalizeDirectory(session.rootDir || session.cwd);
           return directory ? [directory] : [];
         }),
+        ...zellijLiveSessions.flatMap((session) => {
+          const directory = normalizeDirectory(session.rootDir || session.cwd);
+          return directory ? [directory] : [];
+        }),
       ], hiddenWorkspaces);
       const activeWorkspaceDir = normalizeDirectory(raw.activeWorkspaceDir);
       this.state = {
@@ -342,6 +396,7 @@ export class WorkbenchStateStore {
           recentSessions.filter((session) => !hiddenSessionKeys.includes(sessionKey(session))),
           sessionTitleOverrides,
         ),
+        zellijLiveSessions,
       };
       return this.state;
     } catch {
@@ -353,6 +408,7 @@ export class WorkbenchStateStore {
         pendingSessionTitleOverrides: {},
         sessions: [],
         recentSessions: [],
+        zellijLiveSessions: [],
       };
       return this.state;
     }
@@ -368,6 +424,9 @@ export class WorkbenchStateStore {
     const recentSessions = recentEligibleStates
       .map(workbenchSessionRef)
       .filter((value): value is StoredSessionRef => value !== null);
+    const zellijLiveSessions = rememberableStates
+      .filter(isRecoverableZellijLiveSession)
+      .map((state) => state.session);
     const liveWorkspaceDirs = rememberableStates.flatMap((state) => {
       const directory = normalizeDirectory(state.session.rootDir || state.session.cwd);
       return directory ? [directory] : [];
@@ -395,6 +454,7 @@ export class WorkbenchStateStore {
       pendingSessionTitleOverrides: this.state.pendingSessionTitleOverrides,
       sessions: mergeRememberedSessions(this.state.sessions, sessions),
       recentSessions: mergeRecentSessions(this.state.recentSessions, recentSessions),
+      zellijLiveSessions,
     };
     this.persistState();
   }
@@ -432,20 +492,12 @@ export class WorkbenchStateStore {
       recentSessions: isRecentEligibleLiveSession(state)
         ? mergeRecentSessions(this.state.recentSessions, [session])
         : this.state.recentSessions,
+      zellijLiveSessions: this.state.zellijLiveSessions,
     };
     this.persistState();
   }
 
-  snapshot(): {
-    activeWorkspaceDir?: string;
-    workspaces: string[];
-    hiddenWorkspaces: string[];
-    hiddenSessionKeys: string[];
-    sessionTitleOverrides: Record<string, string>;
-    pendingSessionTitleOverrides: Record<string, string>;
-    sessions: StoredSessionRef[];
-    recentSessions: StoredSessionRef[];
-  } {
+  snapshot(): WorkbenchStateSnapshot {
     return {
       ...(this.state.activeWorkspaceDir ? { activeWorkspaceDir: this.state.activeWorkspaceDir } : {}),
       workspaces: [...this.state.workspaces],
@@ -455,6 +507,7 @@ export class WorkbenchStateStore {
       pendingSessionTitleOverrides: { ...this.state.pendingSessionTitleOverrides },
       sessions: [...this.state.sessions],
       recentSessions: [...this.state.recentSessions],
+      zellijLiveSessions: [...this.state.zellijLiveSessions],
     };
   }
 
@@ -474,6 +527,7 @@ export class WorkbenchStateStore {
       pendingSessionTitleOverrides: this.state.pendingSessionTitleOverrides,
       sessions: this.state.sessions,
       recentSessions: this.state.recentSessions,
+      zellijLiveSessions: this.state.zellijLiveSessions,
     };
     this.persistState();
   }
@@ -498,6 +552,7 @@ export class WorkbenchStateStore {
       pendingSessionTitleOverrides: this.state.pendingSessionTitleOverrides,
       sessions: this.state.sessions,
       recentSessions: this.state.recentSessions,
+      zellijLiveSessions: this.state.zellijLiveSessions,
     };
     this.persistState();
   }
@@ -512,6 +567,7 @@ export class WorkbenchStateStore {
       sessionTitleOverrides: nextOverrides,
       sessions: this.state.sessions.filter((entry) => sessionKey(entry) !== key),
       recentSessions: this.state.recentSessions.filter((entry) => sessionKey(entry) !== key),
+      zellijLiveSessions: this.state.zellijLiveSessions,
     };
     this.persistState();
   }
@@ -554,6 +610,7 @@ export class WorkbenchStateStore {
       sessionTitleOverrides: nextOverrides,
       sessions: this.state.sessions.filter((entry) => !hiddenSessionKeys.has(sessionKey(entry))),
       recentSessions: this.state.recentSessions.filter((entry) => !hiddenSessionKeys.has(sessionKey(entry))),
+      zellijLiveSessions: this.state.zellijLiveSessions,
     };
     this.persistState();
   }
@@ -579,6 +636,7 @@ export class WorkbenchStateStore {
       recentSessions: this.state.recentSessions.map((entry) =>
         sessionKey(entry) === key ? { ...entry, title: nextTitle } : entry,
       ),
+      zellijLiveSessions: this.state.zellijLiveSessions,
     };
     this.persistState();
   }
@@ -594,6 +652,7 @@ export class WorkbenchStateStore {
         ...this.state.pendingSessionTitleOverrides,
         [sessionId]: nextTitle,
       },
+      zellijLiveSessions: this.state.zellijLiveSessions,
     };
     this.persistState();
   }
@@ -622,6 +681,7 @@ export class WorkbenchStateStore {
       recentSessions: this.state.recentSessions.map((entry) =>
         sessionKey(entry) === key ? { ...entry, title } : entry,
       ),
+      zellijLiveSessions: this.state.zellijLiveSessions,
     };
     this.persistState();
     return title;
@@ -639,6 +699,7 @@ export class WorkbenchStateStore {
       pendingSessionTitleOverrides: this.state.pendingSessionTitleOverrides,
       sessions: this.state.sessions,
       recentSessions: this.state.recentSessions,
+      zellijLiveSessions: this.state.zellijLiveSessions,
     };
     this.enqueue(async () => {
       await mkdir(this.rootDir, { recursive: true });
