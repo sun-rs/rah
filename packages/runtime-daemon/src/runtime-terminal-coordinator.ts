@@ -93,6 +93,8 @@ type ZellijTuiSessionState = {
   paneId: string;
   socketDir: string;
   subscription?: MuxPaneSubscription;
+  subscriptionRestartAttempts?: number;
+  subscriptionRestartTimer?: ReturnType<typeof setTimeout>;
   exitPollTimer?: ReturnType<typeof setInterval>;
 };
 
@@ -385,6 +387,9 @@ export class RuntimeTerminalCoordinator {
       return;
     }
     zellij.subscription?.close();
+    if (zellij.subscriptionRestartTimer) {
+      clearTimeout(zellij.subscriptionRestartTimer);
+    }
     if (zellij.exitPollTimer) {
       clearInterval(zellij.exitPollTimer);
     }
@@ -1061,19 +1066,7 @@ export class RuntimeTerminalCoordinator {
       ...(args.providerSessionId ? { providerSessionId: args.providerSessionId } : {}),
     });
     this.nativeTuiSessionIds.add(args.sessionId);
-    zellij.subscription = this.zellijMux.subscribePane(
-      args.zellijSessionName,
-      args.paneId,
-      (update) => {
-        const text = renderZellijViewport([
-          ...(update.scrollback ?? []),
-          ...update.viewport,
-        ]);
-        this.deps.ptyHub.appendOutput(args.sessionId, text);
-        this.observeNativeTuiOutput(args.sessionId, text);
-      },
-      { scrollback: 200, ansi: true },
-    );
+    this.startZellijTuiSubscription(zellij);
     zellij.exitPollTimer = setInterval(() => {
       void this.pollZellijTuiExit(args.sessionId);
     }, 500);
@@ -1081,6 +1074,91 @@ export class RuntimeTerminalCoordinator {
     this.startNativeTuiBindingProbe(args.sessionId);
     this.mirrorRuntime.startSessionMirror(args.sessionId);
     return zellij;
+  }
+
+  private startZellijTuiSubscription(zellij: ZellijTuiSessionState): void {
+    zellij.subscription?.close();
+    zellij.subscription = this.zellijMux.subscribePane(
+      zellij.zellijSessionName,
+      zellij.paneId,
+      (update) => {
+        zellij.subscriptionRestartAttempts = 0;
+        const text = renderZellijViewport([
+          ...(update.scrollback ?? []),
+          ...update.viewport,
+        ]);
+        this.deps.ptyHub.appendOutput(zellij.sessionId, text);
+        this.observeNativeTuiOutput(zellij.sessionId, text);
+      },
+      {
+        scrollback: 200,
+        ansi: true,
+        onExit: (exit) => {
+          this.handleZellijTuiSubscriptionExit(zellij.sessionId, exit);
+        },
+      },
+    );
+  }
+
+  private handleZellijTuiSubscriptionExit(
+    sessionId: string,
+    exit: { code?: number | null; signal?: NodeJS.Signals | null; error?: Error },
+  ): void {
+    const zellij = this.zellijTuiSessions.get(sessionId);
+    if (!zellij) {
+      return;
+    }
+    void this.pollZellijTuiExit(sessionId).then(() => {
+      const current = this.zellijTuiSessions.get(sessionId);
+      if (!current || current.subscriptionRestartTimer) {
+        return;
+      }
+      const attempts = (current.subscriptionRestartAttempts ?? 0) + 1;
+      current.subscriptionRestartAttempts = attempts;
+      if (attempts > 5) {
+        this.deps.eventBus.publish({
+          sessionId,
+          type: "runtime.status",
+          source: SYSTEM_SOURCE,
+          payload: {
+            status: "error",
+            detail: "zellij subscription stopped repeatedly.",
+          },
+        });
+        return;
+      }
+      current.subscriptionRestartTimer = setTimeout(() => {
+        const latest = this.zellijTuiSessions.get(sessionId);
+        if (!latest) {
+          return;
+        }
+        delete latest.subscriptionRestartTimer;
+        this.startZellijTuiSubscription(latest);
+        void this.zellijMux
+          .dumpScreen(latest.zellijSessionName, latest.paneId, { full: true, ansi: true })
+          .then((dumped) => {
+            if (!dumped || !this.zellijTuiSessions.has(sessionId)) {
+              return;
+            }
+            const text = `\u001b[2J\u001b[H${dumped}`;
+            this.deps.ptyHub.appendOutput(sessionId, text);
+            this.observeNativeTuiOutput(sessionId, text);
+          })
+          .catch((error) => {
+            this.handleZellijTuiInputFailure(latest, error);
+          });
+      }, 500);
+      current.subscriptionRestartTimer.unref?.();
+      console.warn("[rah] zellij TUI subscription exited; scheduling reconnect", {
+        sessionId,
+        zellijSessionName: current.zellijSessionName,
+        paneId: current.paneId,
+        attempts,
+        ...(exit.code !== undefined ? { code: exit.code } : {}),
+        ...(exit.signal !== undefined ? { signal: exit.signal } : {}),
+        ...(exit.error ? { error: exit.error.message } : {}),
+      });
+    });
   }
 
   private async writeZellijTuiInput(

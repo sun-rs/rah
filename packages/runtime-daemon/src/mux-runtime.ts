@@ -34,6 +34,12 @@ export type MuxPaneSubscription = {
   close: () => void;
 };
 
+export type MuxPaneSubscriptionExit = {
+  code?: number | null;
+  signal?: NodeJS.Signals | null;
+  error?: Error;
+};
+
 export type CreateMuxPaneRequest = {
   sessionName: string;
   cwd: string;
@@ -56,6 +62,7 @@ export type DumpMuxScreenOptions = {
 export type SubscribeMuxPaneOptions = {
   scrollback?: number | "all";
   ansi?: boolean;
+  onExit?: (exit: MuxPaneSubscriptionExit) => void;
 };
 
 export interface MuxRuntime {

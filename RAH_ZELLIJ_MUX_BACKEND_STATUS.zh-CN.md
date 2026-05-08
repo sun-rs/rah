@@ -49,6 +49,7 @@ The final product decision is still blocked by real provider and device QA:
 | `/exit` / pane exit syncs to RAH archive semantics | `pollZellijTuiExit()` removes live session and emits `session.closed` | Tested |
 | Web archive closes zellij pane/session | `closeZellijTuiSession()` closes pane then kills session fallback | Tested |
 | Recover persisted zellij live session after daemon restart | `restoreZellijTuiSession()` | Tested |
+| zellij subscribe failure is not silent | `subscribePane()` reports unexpected exits; runtime schedules subscription reconnect | Tested at mux layer |
 | Multi-session isolation | one zellij session per RAH session; test covers two simultaneous sessions | Tested |
 | Diagnostics | `/api/zellij/diagnostics`; Settings displays managed/unmanaged sessions | Done |
 | Unmanaged stale zellij sessions are closable | `/api/zellij/sessions/:name/close`; Settings close actions | Tested |
@@ -62,7 +63,7 @@ These commands passed after the latest zellij lifecycle and diagnostics changes:
 
 ```bash
 npm run typecheck
-npm run test:runtime   # 368 pass
+npm run test:runtime   # 369 pass
 npm run test:web       # 160 pass
 npm run build:web
 git diff --check
@@ -83,6 +84,7 @@ This targeted suite covers:
 - Codex / Claude / OpenCode fake zellij runtime,
 - dirty-prompt queueing before Web Chat injection,
 - terminal-to-web handoff into the same zellij-backed session without resume,
+- unexpected zellij subscribe process exit reporting,
 - archive closes zellij pane/session,
 - unmanaged RAH zellij session close,
 - persisted zellij recovery,
@@ -95,7 +97,7 @@ node --import tsx --test --test-concurrency=1 --test-force-exit \
   packages/runtime-daemon/src/zellij-mux-backend.test.ts \
   packages/runtime-daemon/src/zellij-tui-runtime.test.ts
 
-# 14 pass
+# 15 pass
 ```
 
 Optional real-provider launch probe:
@@ -127,7 +129,8 @@ Code-covered edges:
 8. `/exit`, provider pane exit, missing zellij session, and archive all clear RAH live state and remove the PTY hub state.
 9. Archive attempts close-pane first and then kill-session fallback, preventing common orphan zellij sessions.
 10. Daemon restart can recover persisted zellij live sessions only when socket dir and pane still match.
-11. Workbench state atomic writes use a UUID temp path to avoid concurrent daemon/test write collisions.
+11. zellij subscribe child exit/error is reported instead of silently leaving Web TUI stale; runtime schedules a bounded reconnect.
+12. Workbench state atomic writes use a UUID temp path to avoid concurrent daemon/test write collisions.
 
 Still not code-proven:
 

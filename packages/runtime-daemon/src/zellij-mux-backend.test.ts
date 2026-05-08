@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test, type TestContext } from "node:test";
@@ -206,5 +206,43 @@ test("zellij mux backend writes raw terminal bytes without interpreting escape s
   } finally {
     await backend.killSession(sessionName).catch(() => undefined);
     rmSync(socketDir, { force: true, recursive: true });
+  }
+});
+
+test("zellij mux backend reports unexpected subscription exit", async () => {
+  const tmpDir = mkdtempSync(path.join(os.tmpdir(), "rah-zellij-sub-exit-"));
+  const fakeZellij = path.join(tmpDir, "zellij");
+  writeFileSync(
+    fakeZellij,
+    [
+      "#!/usr/bin/env node",
+      "if (process.argv.includes('subscribe')) {",
+      "  console.log(JSON.stringify({ event: 'pane_update', pane_id: 'terminal_1', is_initial: true, viewport: ['SUB_READY'] }));",
+      "  process.exit(7);",
+      "}",
+      "process.exit(0);",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(fakeZellij, 0o755);
+  const backend = new ZellijMuxBackend({ binary: fakeZellij, socketDir: path.join(tmpDir, "sock") });
+  const updates: string[] = [];
+  const exits: Array<{ code?: number | null; error?: Error }> = [];
+
+  try {
+    const subscription = backend.subscribePane(
+      "rah-sub-exit",
+      "terminal_1",
+      (update) => updates.push(update.viewport.join("\n")),
+      {
+        onExit: (exit) => exits.push(exit),
+      },
+    );
+    await waitFor(() => updates.some((update) => update.includes("SUB_READY")));
+    await waitFor(() => exits.length > 0);
+    subscription.close();
+    assert.equal(exits[0]?.code, 7);
+  } finally {
+    rmSync(tmpDir, { force: true, recursive: true });
   }
 });

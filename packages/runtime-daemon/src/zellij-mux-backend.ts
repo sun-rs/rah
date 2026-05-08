@@ -281,6 +281,7 @@ export class ZellijMuxBackend implements MuxRuntime {
     }
     const child = this.spawn(args);
     const lines = createInterface({ input: child.stdout });
+    let closedByCaller = false;
     lines.on("line", (line) => {
       if (!line.trim()) {
         return;
@@ -295,8 +296,19 @@ export class ZellijMuxBackend implements MuxRuntime {
         // bring the terminal snapshot back in sync.
       }
     });
+    child.on("error", (error) => {
+      if (!closedByCaller) {
+        options.onExit?.({ error });
+      }
+    });
+    child.on("exit", (code, signal) => {
+      if (!closedByCaller) {
+        options.onExit?.({ code, signal });
+      }
+    });
     return {
       close: () => {
+        closedByCaller = true;
         lines.close();
         child.kill("SIGTERM");
       },
