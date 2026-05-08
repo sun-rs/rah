@@ -6,6 +6,7 @@ Rollback baseline: `e59ca6f Finalize PTY-first native TUI core`
 
 Completion audit: `RAH_ZELLIJ_MUX_BACKEND_COMPLETION_AUDIT.zh-CN.md`
 Manual QA checklist: `RAH_ZELLIJ_MUX_BACKEND_MANUAL_QA.zh-CN.md`
+Manual QA verifier: `npm run test:smoke:zellij-manual-qa-status`
 
 ## Current Judgment
 

@@ -35,6 +35,8 @@
     "test:smoke:native-real-tui-launch": "tsx scripts/native_real_tui_launch_probe.ts",
     "test:smoke:zellij-real-tui-launch": "tsx scripts/zellij_real_tui_launch_probe.ts",
     "test:smoke:zellij-real-tui-exit": "bash scripts/zellij-real-tui-exit-smoke.sh",
+    "test:smoke:zellij-manual-qa-status": "tsx scripts/zellij_manual_qa_status.ts",
+    "test:zellij-manual-qa-status": "node --import tsx --test --test-force-exit scripts/zellij_manual_qa_status.test.ts",
     "test:smoke:native-qa-status": "tsx scripts/native_qa_status.ts",
     "test:smoke:native-manual-qa-status": "tsx scripts/native_manual_qa_status.ts",
     "test:manual-qa-status": "node --import tsx --test --test-force-exit scripts/native_manual_qa_status.test.ts",

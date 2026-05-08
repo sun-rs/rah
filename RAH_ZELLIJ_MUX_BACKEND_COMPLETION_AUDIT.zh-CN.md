@@ -107,5 +107,6 @@ Current decision: keep the goal active.
 The next valid milestone is human QA against the `experiment/zellij-mux-backend` branch, using the checklist in `RAH_ZELLIJ_MUX_BACKEND_STATUS.zh-CN.md`.
 
 Concrete human QA steps are documented in `RAH_ZELLIJ_MUX_BACKEND_MANUAL_QA.zh-CN.md`.
+Machine validation for recorded manual QA is available through `npm run test:smoke:zellij-manual-qa-status`.
 
 Only after those manual results are recorded and show acceptable behavior should `update_goal(status: "complete")` be considered.

@@ -46,6 +46,21 @@ npm run test:smoke:zellij-real-tui-exit
 
 The exit smoke proves only that real Codex / Claude / OpenCode can exit and be cleaned up through zellij. It does not prove model response, real Stop, Web/PWA UX, or Chat mirror correctness.
 
+5. Generate a fillable zellij manual QA report:
+
+```bash
+RAH_ZELLIJ_MANUAL_QA_TEMPLATE_OUTPUT=test-results/zellij-manual-qa.json \
+  npm run test:smoke:zellij-manual-qa-status -- --print-template
+```
+
+After filling all results, verify it:
+
+```bash
+npm run test:smoke:zellij-manual-qa-status
+```
+
+The verifier rejects missing cases, non-`pass` cases, mismatched commits, and `pass` rows without concrete session, zellij, browser, device, tester, timestamp, and evidence fields.
+
 ## Evidence To Record
 
 For every provider test, record:
