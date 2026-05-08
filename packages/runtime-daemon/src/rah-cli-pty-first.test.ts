@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { mkdtempSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -462,6 +462,143 @@ test("rah provider command honors RAH_MUX_BACKEND=zellij", async () => {
   assert.equal(startRequests.length, 1);
   const startRequest = startRequests[0] as { liveBackend: string };
   assert.equal(startRequest.liveBackend, "zellij_tui");
+});
+
+test("rah provider command attaches local terminal through zellij when mux metadata is present", async () => {
+  const startRequests: unknown[] = [];
+  const detachRequests: unknown[] = [];
+  let ptyConnected = false;
+  const wss = new WebSocketServer({ noServer: true });
+  const server = createServer(async (req, res) => {
+    if (req.method === "GET" && req.url === "/readyz") {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end("ok");
+      return;
+    }
+    if (req.method === "POST" && req.url === "/api/sessions/start") {
+      startRequests.push(await readJsonBody(req));
+      writeJson(res, 200, {
+        session: sessionSummary({
+          id: "session-zellij-attach",
+          provider: "codex",
+          launchSource: "terminal",
+          liveBackend: "zellij_tui",
+          cwd: "/tmp",
+          rootDir: "/tmp",
+          runtimeState: "idle",
+          ptyId: "session-zellij-attach",
+          nativeTui: {
+            terminalId: "session-zellij-attach",
+            viewAvailable: true,
+            promptState: "prompt_clean",
+          },
+          mux: {
+            backend: "zellij",
+            sessionName: "rah-attachtest",
+            paneId: "terminal_1",
+            socketDir: "/tmp/rah-zellij-attach-test",
+          },
+          capabilities: {},
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }),
+      });
+      return;
+    }
+    if (req.method === "POST" && req.url === "/api/sessions/session-zellij-attach/detach") {
+      detachRequests.push(await readJsonBody(req));
+      writeJson(res, 200, {
+        session: sessionSummary({
+          id: "session-zellij-attach",
+          provider: "codex",
+          launchSource: "terminal",
+          liveBackend: "zellij_tui",
+          cwd: "/tmp",
+          rootDir: "/tmp",
+          runtimeState: "stopped",
+          ptyId: "session-zellij-attach",
+          capabilities: {},
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }),
+      });
+      return;
+    }
+    res.writeHead(404);
+    res.end("not found");
+  });
+  server.on("upgrade", (req, socket, head) => {
+    if (req.url?.startsWith("/api/pty/session-zellij-attach")) {
+      ptyConnected = true;
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        wss.emit("connection", ws, req);
+      });
+      return;
+    }
+    socket.destroy();
+  });
+
+  const port = await listen(server);
+  const tmpDir = mkdtempSync(path.join(os.tmpdir(), "rah-cli-zellij-attach-"));
+  const fakeBin = path.join(tmpDir, "bin");
+  const logPath = path.join(tmpDir, "zellij-attach.log");
+  const fakeZellij = path.join(fakeBin, "zellij");
+  mkdirSync(fakeBin, { recursive: true });
+  writeFileSync(
+    fakeZellij,
+    [
+      "#!/bin/sh",
+      "printf 'cwd=%s\\n' \"$PWD\" > \"$RAH_ZELLIJ_ATTACH_LOG\"",
+      "printf 'socket=%s\\n' \"$ZELLIJ_SOCKET_DIR\" >> \"$RAH_ZELLIJ_ATTACH_LOG\"",
+      "printf 'args=%s\\n' \"$*\" >> \"$RAH_ZELLIJ_ATTACH_LOG\"",
+    ].join("\n"),
+  );
+  chmodSync(fakeZellij, 0o755);
+  const child = spawn(
+    process.execPath,
+    [
+      "bin/rah.mjs",
+      "codex",
+      "--mux",
+      "zellij",
+      "--daemon-url",
+      `http://127.0.0.1:${port}`,
+      "--cwd",
+      tmpDir,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? ""}`,
+        RAH_ZELLIJ_ATTACH_LOG: logPath,
+      },
+    },
+  );
+  let stderr = "";
+  child.stderr?.on("data", (chunk) => {
+    stderr += chunk.toString("utf8");
+  });
+  const exitCode = await new Promise<number | null>((resolve, reject) => {
+    child.on("error", reject);
+    child.on("exit", (code) => resolve(code));
+  });
+  await closeServer(server, wss);
+
+  try {
+    assert.equal(exitCode, 0, stderr);
+    assert.equal(startRequests.length, 1);
+    const startRequest = startRequests[0] as { liveBackend: string; attach: { client: { id: string } } };
+    assert.equal(startRequest.liveBackend, "zellij_tui");
+    assert.equal(ptyConnected, false);
+    assert.deepEqual(detachRequests, [{ clientId: startRequest.attach.client.id }]);
+    const attachLog = readFileSync(logPath, "utf8");
+    assert.match(attachLog, /^cwd=\/(?:private\/)?tmp$/m);
+    assert.match(attachLog, /socket=\/tmp\/rah-zellij-attach-test/);
+    assert.match(attachLog, /args=attach rah-attachtest/);
+  } finally {
+    rmSync(tmpDir, { force: true, recursive: true });
+  }
 });
 
 test("rah provider command preserves UTF-8 input split across stdin chunks", async () => {
