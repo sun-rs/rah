@@ -63,3 +63,14 @@ export function buildStoppedNativeTuiSessionCapabilities(
     queuedInput: false,
   };
 }
+
+export function buildZellijTuiSessionCapabilities(
+  provider: ProviderKind,
+): Partial<SessionCapabilities> {
+  return {
+    ...buildNativeTuiSessionCapabilities(provider),
+    // The browser still talks through RAH's PTY websocket contract, but the
+    // actual terminal is held by zellij rather than the in-process PTY runtime.
+    rawPtyInput: false,
+  };
+}

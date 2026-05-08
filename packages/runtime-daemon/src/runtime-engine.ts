@@ -436,6 +436,14 @@ export class RuntimeEngine {
   async startSession(request: StartSessionRequest): Promise<StartSessionResponse> {
     this.assertLiveSessionProviderAllowed(request);
     this.assertStructuredLiveBackendAllowed(request);
+    if (this.shouldUseZellijTuiBackend(request)) {
+      await assertExistingWorkingDirectory(request.cwd, "Session working directory");
+      this.pruneOrphanSessions();
+      return await this.terminals.startZellijTuiSession({
+        launch: await this.nativeTuiProviders.startLaunchSpec(request),
+        ...(request.attach !== undefined ? { attach: request.attach } : {}),
+      });
+    }
     if (this.shouldUseNativeTuiBackend(request)) {
       await assertExistingWorkingDirectory(request.cwd, "Session working directory");
       this.pruneOrphanSessions();
@@ -452,6 +460,17 @@ export class RuntimeEngine {
     this.assertStructuredLiveBackendAllowed(request);
     if (request.preferStoredReplay === true) {
       return await this.resumeStoredReplaySession(request);
+    }
+    if (this.shouldUseZellijTuiBackend(request)) {
+      if (request.cwd) {
+        await assertExistingWorkingDirectory(request.cwd, "Session working directory");
+      }
+      this.pruneOrphanSessions();
+      return await this.terminals.startZellijTuiSession({
+        launch: await this.nativeTuiProviders.resumeLaunchSpec(request),
+        ...(request.attach !== undefined ? { attach: request.attach } : {}),
+        providerSessionId: request.providerSessionId,
+      });
     }
     if (this.shouldUseNativeTuiBackend(request)) {
       if (request.cwd) {
@@ -536,6 +555,12 @@ export class RuntimeEngine {
       this.defaultLiveBackend === "native_tui" &&
       this.nativeTuiProviders.supports(request.provider)
     );
+  }
+
+  private shouldUseZellijTuiBackend(
+    request: Pick<StartSessionRequest | ResumeSessionRequest, "liveBackend">,
+  ): boolean {
+    return request.liveBackend === "zellij_tui";
   }
 
   attachSession(sessionId: string, request: AttachSessionRequest): AttachSessionResponse {

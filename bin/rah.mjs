@@ -73,6 +73,7 @@ function printUsage() {
       "Options:",
       "  --cwd <dir>         Override working directory",
       "  --daemon-url <url>  Override daemon base URL",
+      "  --mux <backend>     Experimental TUI mux backend (native | zellij)",
       "  --no-build          Skip web build for rah start",
       "  --no-open           Do not open the browser for rah start",
       "  --follow, -f        Follow logs for rah logs",
@@ -154,6 +155,7 @@ function parseArgs(argv) {
   let cwd = process.cwd();
   let daemonUrl = DEFAULT_DAEMON_URL;
   let claudePermissionMode;
+  let muxBackend = process.env.RAH_MUX_BACKEND === "zellij" ? "zellij" : "native";
 
   const rest = [...argv.slice(1)];
   if (rest[0] === "resume") {
@@ -172,6 +174,14 @@ function parseArgs(argv) {
     }
     if (option === "--daemon-url") {
       daemonUrl = rest.shift() ?? daemonUrl;
+      continue;
+    }
+    if (option === "--mux") {
+      const value = rest.shift();
+      if (value !== "native" && value !== "zellij") {
+        throw new Error("Unsupported mux backend. Use `native` or `zellij`.");
+      }
+      muxBackend = value;
       continue;
     }
     if (option === "--permission-mode") {
@@ -196,6 +206,7 @@ function parseArgs(argv) {
     provider,
     cwd: resolve(cwd),
     daemonUrl,
+    muxBackend,
     ...(resumeProviderSessionId ? { resumeProviderSessionId } : {}),
     ...(claudePermissionMode ? { claudePermissionMode } : {}),
   };
@@ -547,12 +558,13 @@ function terminalClientDescriptor() {
 
 async function startOrResumePtyFirstSession(parsed, client) {
   const modeId = providerModeId(parsed);
+  const liveBackend = parsed.muxBackend === "zellij" ? "zellij_tui" : "native_tui";
   if (parsed.resumeProviderSessionId) {
     const result = await postJson(parsed.daemonUrl, "/api/sessions/resume", {
       provider: parsed.provider,
       providerSessionId: parsed.resumeProviderSessionId,
       cwd: parsed.cwd,
-      liveBackend: "native_tui",
+      liveBackend,
       ...(modeId ? { modeId } : {}),
       attach: {
         client: client.client,
@@ -565,7 +577,7 @@ async function startOrResumePtyFirstSession(parsed, client) {
   const result = await postJson(parsed.daemonUrl, "/api/sessions/start", {
     provider: parsed.provider,
     cwd: parsed.cwd,
-    liveBackend: "native_tui",
+    liveBackend,
     ...(modeId ? { modeId } : {}),
     attach: {
       client: client.client,
@@ -717,6 +729,19 @@ async function attachLocalTerminalToPty(daemonUrl, sessionId, clientId) {
   });
 }
 
+async function attachLocalTerminalToZellij(session) {
+  if (!session?.mux || session.mux.backend !== "zellij") {
+    throw new Error("Session does not expose zellij mux metadata.");
+  }
+  await runCommand("zellij", ["attach", session.mux.sessionName], {
+    cwd: session.cwd || ROOT_DIR,
+    env: {
+      ...process.env,
+      ZELLIJ_SOCKET_DIR: session.mux.socketDir,
+    },
+  });
+}
+
 async function runPtyFirstProviderCommand(parsed) {
   await ensureDaemon(parsed.daemonUrl);
   const client = terminalClientDescriptor();
@@ -724,7 +749,11 @@ async function runPtyFirstProviderCommand(parsed) {
   const session = managedSessionFromSummary(summary);
   const ptyId = ptyIdFromSessionSummary(summary);
   try {
-    await attachLocalTerminalToPty(parsed.daemonUrl, ptyId, client.clientId);
+    if (parsed.muxBackend === "zellij" && session.mux?.backend === "zellij") {
+      await attachLocalTerminalToZellij(session);
+    } else {
+      await attachLocalTerminalToPty(parsed.daemonUrl, ptyId, client.clientId);
+    }
   } finally {
     await detachPtyFirstClient(parsed.daemonUrl, session.id, client.clientId);
   }

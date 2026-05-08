@@ -153,6 +153,7 @@ export interface CreateManagedSessionArgs {
   cwd: string;
   rootDir: string;
   nativeTui?: ManagedSession["nativeTui"];
+  mux?: ManagedSession["mux"];
   ptyId?: string;
   title?: string;
   preview?: string;
@@ -179,6 +180,7 @@ export interface PatchManagedSessionArgs {
   cwd?: string;
   rootDir?: string;
   nativeTui?: ManagedSession["nativeTui"];
+  mux?: ManagedSession["mux"];
   capabilities?: Partial<SessionCapabilities>;
   mode?: ManagedSession["mode"];
   model?: ManagedSession["model"];
@@ -241,6 +243,7 @@ export class SessionStore {
       runtimeState: "starting",
       ptyId: args.ptyId ?? crypto.randomUUID(),
       ...(args.nativeTui !== undefined ? { nativeTui: args.nativeTui } : {}),
+      ...(args.mux !== undefined ? { mux: args.mux } : {}),
       capabilities: {
         ...DEFAULT_CAPABILITIES,
         ...args.capabilities,
@@ -486,6 +489,9 @@ export class SessionStore {
     }
     if (patch.nativeTui !== undefined) {
       state.session.nativeTui = patch.nativeTui;
+    }
+    if (patch.mux !== undefined) {
+      state.session.mux = patch.mux;
     }
     if (patch.capabilities !== undefined) {
       state.session.capabilities = {

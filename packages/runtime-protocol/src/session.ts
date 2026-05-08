@@ -5,7 +5,7 @@ export type ProviderKind =
   | "custom";
 
 export type SessionLaunchSource = "web" | "terminal";
-export type SessionLiveBackend = "structured" | "native_tui";
+export type SessionLiveBackend = "structured" | "native_tui" | "zellij_tui";
 export type NativeTuiPromptState = "prompt_clean" | "prompt_dirty" | "agent_busy";
 
 export type SessionRuntimeState =
@@ -209,6 +209,12 @@ export interface ManagedSession {
     viewAvailable: boolean;
     promptState?: NativeTuiPromptState;
     queuedInputCount?: number;
+  };
+  mux?: {
+    backend: "zellij";
+    sessionName: string;
+    paneId: string;
+    socketDir: string;
   };
   pid?: number;
   title?: string;

@@ -171,7 +171,11 @@ const SESSION_RUNTIME_STATES = new Set<SessionRuntimeState>([
 ]);
 
 const SESSION_LAUNCH_SOURCES = new Set<SessionLaunchSource>(["web", "terminal"]);
-const SESSION_LIVE_BACKENDS = new Set<SessionLiveBackend>(["structured", "native_tui"]);
+const SESSION_LIVE_BACKENDS = new Set<SessionLiveBackend>([
+  "structured",
+  "native_tui",
+  "zellij_tui",
+]);
 const NATIVE_TUI_PROMPT_STATES = new Set<NativeTuiPromptState>([
   "prompt_clean",
   "prompt_dirty",
@@ -1781,6 +1785,54 @@ function validateManagedSession(session: unknown, sink: IssueSink, path: string)
           "session.native_tui.queued_input_count.invalid",
           "session nativeTui.queuedInputCount must be a non-negative integer",
           `${path}.nativeTui.queuedInputCount`,
+        );
+      }
+    }
+  }
+  if (session.mux !== undefined) {
+    if (!isRecord(session.mux)) {
+      addIssue(
+        sink,
+        "error",
+        "session.mux.invalid",
+        "session mux must be an object",
+        `${path}.mux`,
+      );
+    } else {
+      if (session.mux.backend !== "zellij") {
+        addIssue(
+          sink,
+          "error",
+          "session.mux.backend.invalid",
+          "session mux.backend must be zellij",
+          `${path}.mux.backend`,
+        );
+      }
+      if (!isNonEmptyString(session.mux.sessionName)) {
+        addIssue(
+          sink,
+          "error",
+          "session.mux.session_name.invalid",
+          "session mux.sessionName must be non-empty",
+          `${path}.mux.sessionName`,
+        );
+      }
+      if (!isNonEmptyString(session.mux.paneId)) {
+        addIssue(
+          sink,
+          "error",
+          "session.mux.pane_id.invalid",
+          "session mux.paneId must be non-empty",
+          `${path}.mux.paneId`,
+        );
+      }
+      if (!isNonEmptyString(session.mux.socketDir)) {
+        addIssue(
+          sink,
+          "error",
+          "session.mux.socket_dir.invalid",
+          "session mux.socketDir must be non-empty",
+          `${path}.mux.socketDir`,
         );
       }
     }
