@@ -94,15 +94,13 @@ export function createZellijSessionNameForRahSession(
   rahSessionId: string,
   prefix = "rah",
 ): string {
-  const normalized = rahSessionId
+  const visiblePrefix = rahSessionId
     .trim()
-    .replace(/[^0-9a-z]+/gi, "-")
-    .replace(/^-+|-+$/g, "")
-    .replace(/-{2,}/g, "-")
+    .replace(/[^0-9a-z]/gi, "")
     .toLowerCase()
-    .slice(0, 48);
-  const digest = createHash("sha256").update(rahSessionId).digest("hex").slice(0, 12);
-  return `${prefix}-${normalized ? `${normalized}-${digest}` : digest}`;
+    .slice(0, 8);
+  const digest = createHash("sha256").update(rahSessionId).digest("hex").slice(0, 24);
+  return `${prefix}-${visiblePrefix ? `${visiblePrefix}-` : ""}${digest}`;
 }
 
 function paneIdFor(raw: RawZellijPane): MuxPaneId {
