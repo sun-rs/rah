@@ -110,7 +110,7 @@ Latest observed probe result:
 
 - Codex launched through zellij with `--no-alt-screen` and produced visible TUI output.
 - Claude launched through zellij and stopped at the official workspace trust prompt in a new test directory. This is expected provider UI, but it means Web Chat input must not be treated as proven until a human confirms the trust prompt flow.
-- OpenCode launched through zellij and exposed a managed pane that could be diagnosed and closed; in the short non-prompt probe it did not produce visible text before close.
+- OpenCode launched through zellij and exposed a managed pane that could be diagnosed and closed. A short 1.5s probe can miss its first paint, but a 6s OpenCode-only probe produced visible `dump-screen` and PTY output.
 - All three probe sessions were closed through RAH and were gone from the probe socket after close.
 
 ## Edge Case Audit
@@ -136,7 +136,7 @@ Still not code-proven:
 3. zellij multi-client resize behavior, because zellij 0.44.2 does not expose an absolute cols/rows resize API for a target pane.
 4. iPad/Safari keyboard and IME viewport stability.
 5. Long-running sessions with high-frequency TUI redraws and large scrollback.
-6. Whether real OpenCode produces readable subscribe/dump output fast enough for Web TUI in all startup states.
+6. Whether real OpenCode produces readable subscribe/dump output fast enough for every startup state; a 6s probe is good, but the short probe can still miss first paint.
 
 ## Remaining Human QA
 
