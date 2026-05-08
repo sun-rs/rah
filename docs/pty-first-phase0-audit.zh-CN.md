@@ -15,7 +15,7 @@
 依据：
 
 - 根目录 `RAH_PTY_FIRST_SEAMLESS_WORKBENCH_PLAN.zh-CN.md`
-- 根目录 `desgin.md`
+- 早期用户 goal 记录（原文件名 `desgin.md`，当前主线已由 `RAH_PTY_FIRST_SEAMLESS_WORKBENCH_PLAN.zh-CN.md` 和 zellij RC 文档接管）
 - 当前代码状态。注：本文件记录的是 Phase 0 初始盘点；后续主线已经按 `RAH_PTY_FIRST_SEAMLESS_WORKBENCH_PLAN.zh-CN.md` 收敛为 Codex、Claude、OpenCode 三家 core live，Gemini/Kimi CLI 一等支持已移除。
 
 ## 1. Phase 0 目标拆解
@@ -26,7 +26,7 @@ Phase 0 不做大规模删除。目标是先把当前代码按新边界分类，
 |---|---|---|
 | 确认当前分支 | `git rev-parse --abbrev-ref HEAD` 输出 `refactor/pty-first-core` | 已确认 |
 | 读取最高边界文件 | `RAH_PTY_FIRST_SEAMLESS_WORKBENCH_PLAN.zh-CN.md` | 已确认 |
-| 读取用户 goal 文件 | `desgin.md` | 已确认 |
+| 读取用户 goal 文件 | 早期 goal 记录 | 已确认 |
 | 盘点 core / mirror / enhancement / legacy structured | 本文第 2-5 节 | 已完成 Phase 0 初版 |
 | 找出 Web new / Web claim / rah xxx / rah xxx resume 重复生命周期 | 本文第 6 节 | 已完成 Phase 0 初版 |
 | 不把测试通过当作完成信号 | 本次只改文档，不声明实现完成 | 已遵守 |

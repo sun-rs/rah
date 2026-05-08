@@ -45,6 +45,7 @@ export type CreateMuxPaneRequest = {
   cwd: string;
   command: string;
   args?: string[];
+  env?: Record<string, string>;
   title?: string;
   replaceDefaultPane?: boolean;
 };

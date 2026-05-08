@@ -6,6 +6,11 @@
 
 本文是当前实现审计，不是完成声明。最终完成仍需要真实 CLI / 真机 QA。
 
+> 维护说明：本文记录 `refactor/pty-first-core` 阶段的历史审计。当前 `1.0.0-rc.1`
+> 以 `experiment/zellij-mux-backend` 为准，最新状态见
+> [`RAH 1.0 RC 说明`](./1.0-rc-notes.zh-CN.md) 和
+> [`RAH_ZELLIJ_MUX_BACKEND_STATUS.zh-CN.md`](../RAH_ZELLIJ_MUX_BACKEND_STATUS.zh-CN.md)。
+
 ## Objective Restatement
 
 RAH 收敛到一个 live core：
@@ -78,4 +83,4 @@ Latest verified gates after Gemini/Kimi CLI removal and the 2026-05-08 PTY-first
 
 ## Current Conclusion
 
-The PTY-first core implementation is materially in place for Codex、Claude、OpenCode and the automatic gates are green. The goal is not complete until the remaining real provider and real device QA is performed and recorded.
+The PTY-first core implementation was materially in place for Codex、Claude、OpenCode at this historical checkpoint. Current completion status is superseded by the zellij `1.0.0-rc.1` documents linked at the top of this file.

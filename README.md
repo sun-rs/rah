@@ -4,15 +4,21 @@ Runtime-owned AI workbench for local-first, cross-device session continuity.
 
 ## Current status
 
-Version: `1.0.0`.
+Version: `1.0.0-rc.1`.
 
-RAH is now being refocused on a PTY-first live-session core:
+RAH `1.0.0-rc.1` is the zellij-backed PTY-first release candidate. The product
+boundary is now intentionally narrow:
 
-- the runtime daemon owns the real provider TUI PTY process
-- Web/PWA/desktop terminal/canvas attach to that same PTY session
-- structured Chat is a mirror of provider-native history files/DBs, not ANSI screen scraping
-- provider adapters own launch specs, binding probes, and mirror parsers
-- model/permission/plan/effort controls are optional provider enhancements, not the core contract
+- Codex, Claude, and OpenCode are the only first-class live provider CLIs.
+- `rah <provider>` defaults to zellij-backed native TUI sessions.
+- Web New/Claim/Resume follows the daemon live backend; use `RAH_MUX_BACKEND=zellij`
+  when starting the daemon to make Web-created sessions use the zellij path.
+- structured Chat is a mirror of provider-native history files/DBs, not ANSI screen scraping.
+- zellij screen output is only the native TUI view/control surface.
+- Chat input is injected into the provider TUI without stealing the active TUI display surface.
+- The Web/PWA `TUI` tab is the explicit handoff point that may detach/cover the current terminal surface.
+- provider adapters own launch specs, binding probes, mirror parsers, and optional capability catalogs.
+- model/permission/plan/effort controls are optional provider enhancements, not the core contract.
 
 The workbench is served through the daemon itself. The stable local entry is:
 
@@ -52,6 +58,12 @@ If only backend code changed and the web bundle does not need rebuilding:
 node bin/rah.mjs restart --no-build --no-open
 ```
 
+Run the daemon with zellij as the default Web live backend:
+
+```bash
+RAH_MUX_BACKEND=zellij node bin/rah.mjs restart --no-open
+```
+
 Important behavior:
 
 - `start` does not replace a daemon that is already running.
@@ -60,9 +72,9 @@ Important behavior:
   `rah opencode`) because the old daemon is stopped.
 - `npm install` is not needed for normal code changes.
 - daemon pid/log files live under `~/.rah/runtime-daemon`.
-- `rah <provider>` now defaults to PTY-first: it asks the daemon to create/resume a native TUI
-  session and attaches the current terminal to that daemon-owned PTY. The previous wrapper handoff
-  path is no longer exposed from the public `rah <provider>` CLI entry.
+- `rah <provider>` now defaults to zellij-backed PTY-first native TUI sessions. It asks the daemon
+  to create/resume a provider TUI inside a zellij mux session and attaches the current terminal to
+  that mux session. Use `--mux native` only as a fallback diagnostic.
 - Core live providers are `codex`, `claude`, and `opencode`. Gemini/Kimi CLI first-class support
   has been removed; use OpenCode + API providers for Gemini/Kimi/Grok/DeepSeek-style work. See
   [`docs/provider-scope-codex-claude-opencode.zh-CN.md`](docs/provider-scope-codex-claude-opencode.zh-CN.md).
@@ -198,6 +210,10 @@ packages/
 ## Runtime layering
 
 - `RuntimeEngine` owns the shared session store, event bus, and PTY hub.
+- `MuxRuntime` / `ZellijMuxBackend` owns zellij session/pane create, attach, dump, subscribe,
+  raw input, interrupt, close, kill, diagnostics, and recovery.
+- `RuntimeTerminalCoordinator` is the single live TUI lifecycle coordinator for native and zellij
+  backed sessions.
 - `ProviderAdapter` is the seam where concrete providers plug into the runtime.
 - `ProviderActivity` is the adapter-facing normalization layer.
 - Codex, Claude, and OpenCode are the core live native TUI providers.
@@ -237,9 +253,33 @@ Current statuses are:
 
 RAH stays close to the proven hapi/paseo product boundary:
 
-- transcript, tool calls, permissions, usage, attention, and session state are core workbench data
-- PTY output is secondary infrastructure
-- provider-specific maintenance signals should remain adapter-owned or inspector-only
+- transcript, tool calls, permissions, usage, attention, and session state are core workbench data.
+- provider-native history files/DBs are the semantic source of structured Chat.
+- zellij/PTY output is a TUI control and viewing surface, not the semantic transcript source.
+- Chat input/Stop can be injected without claiming the Web TUI display surface.
+- only explicit Web/PWA `TUI` view claims the zellij display surface and may detach/cover another attached terminal.
+- provider-specific maintenance signals should remain adapter-owned or inspector-only.
+
+## 1.0 RC Scope
+
+`1.0.0-rc.1` is considered feature-complete enough for the current branch goal:
+
+- zellij-backed mux runtime exists and is the default `rah <provider>` CLI path.
+- one RAH live session maps to one zellij session/pane.
+- terminal, Web, PWA, and reconnect flows attach to the same live provider TUI rather than creating
+  a resume session.
+- Chat mirror remains provider-history-backed and uses canonical timeline identity/reconciliation to
+  avoid live/history duplicates.
+- Chat input no longer steals the active TUI display surface; TUI display ownership is explicit.
+- Archive closes the provider pane and zellij session instead of leaving an orphan mux.
+- zellij diagnostics expose managed/unmanaged `rah-*` sessions.
+
+Known RC boundaries:
+
+- zellij remains the release-candidate backend, not a claim that every provider TUI/version/device is final-stable.
+- real provider auth, quota, trust-folder prompts, and slash-command behavior remain owned by the provider TUI.
+- iOS/PWA terminal keyboard behavior is still a product QA area, not a protocol guarantee.
+- Gemini/Kimi CLI will not return as first-class providers; use OpenCode/API-provider configuration instead.
 
 ## Docs
 

@@ -105,7 +105,7 @@ describe("workbench notice contract", () => {
 
     assert.deepEqual(state.interactionNotice, {
       tone: "info",
-      message: "Terminal is handling this turn. Web can observe it, but can't interrupt it.",
+      message: "Terminal started this turn. Web can observe it and request interrupt.",
     });
   });
 

@@ -66,11 +66,19 @@ function feedEntriesShareTimelineIdentity(left: FeedEntry, right: FeedEntry): bo
   if (left.kind !== "timeline" || right.kind !== "timeline") {
     return false;
   }
+  const leftCanonicalItemId = left.canonicalItemId;
+  const rightCanonicalItemId = right.canonicalItemId;
+  if (leftCanonicalItemId !== undefined || rightCanonicalItemId !== undefined) {
+    if (leftCanonicalItemId !== undefined && rightCanonicalItemId !== undefined) {
+      return leftCanonicalItemId === rightCanonicalItemId;
+    }
+    return (
+      entriesLookLikeSameOptimisticHistoryEcho(left, right) ||
+      entriesLookLikeSameLiveHistoryEcho(left, right)
+    );
+  }
   if (entriesLookLikeSameOptimisticHistoryEcho(left, right)) {
     return true;
-  }
-  if (left.canonicalItemId !== undefined && right.canonicalItemId !== undefined) {
-    return left.canonicalItemId === right.canonicalItemId;
   }
   if (left.item.kind !== right.item.kind) {
     return false;

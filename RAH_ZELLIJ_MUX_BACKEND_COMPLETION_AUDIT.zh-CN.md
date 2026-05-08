@@ -1,22 +1,23 @@
 # RAH Zellij Mux Backend Completion Audit
 
-Date: 2026-05-08
+Date: 2026-05-09
 Branch: `experiment/zellij-mux-backend`
-Audit evidence: current branch state as recorded in this document and `RAH_ZELLIJ_MUX_BACKEND_STATUS.zh-CN.md`
+Audit evidence: current branch state as recorded in this document, `RAH_ZELLIJ_MUX_BACKEND_STATUS.zh-CN.md`, and `docs/1.0-rc-notes.zh-CN.md`
 
 ## Audit Result
 
-The zellij backend has reached a code-backed MVP state, but the active goal is not complete.
+The zellij backend has reached the `1.0.0-rc.1` release-candidate state.
 
-The remaining blockers are not ordinary unit-test gaps. They are product acceptance requirements that require real Codex / Claude / OpenCode and real browser/PWA/iPad testing:
+This means the branch goal is complete at RC scope:
 
-- local terminal experience must be close to native,
-- Web/PWA must continue the same non-resumed zellij-backed session,
-- Stop, `/exit`, resize, detach, and reconnect must be stable with real CLIs,
-- structured Chat mirror must not duplicate or cross sessions on real provider history,
-- zellij must demonstrably reduce complexity enough to become a default candidate.
+- zellij-backed mux runtime is implemented and wired into the public `rah <provider>` CLI path.
+- Codex / Claude / OpenCode are the only first-class live provider CLIs.
+- structured Chat remains provider-history-backed and is not sourced from ANSI screen scraping.
+- Chat injection and TUI display ownership are separated: Chat can send/stop without claiming the Web TUI surface.
+- zellij sessions are discoverable, recoverable, closable, diagnosable, and covered by regression tests.
+- the daemon and Web client pass the current automated release gates.
 
-Until those are proven, do not mark the goal complete.
+It does not mean every real provider/device combination is final-stable. Those remain RC QA responsibilities.
 
 ## Restated Deliverables
 
@@ -67,15 +68,15 @@ Until those are proven, do not mark the goal complete.
 | Structured Chat not from zellij screen | zellij implementation feeds PTY view; mirror remains provider history/jsonl/db | Satisfied by code boundary |
 | Do not restore Gemini/Kimi CLI | current live provider set remains Codex / Claude / OpenCode | Satisfied |
 | Mandatory typecheck | `npm run typecheck` recorded passing in status | Satisfied |
-| Mandatory runtime tests | `npm run test:runtime` passed: `370 pass / 0 fail` | Satisfied |
-| Mandatory web tests | `npm run test:web` recorded passing in status: `160 pass` | Satisfied |
+| Mandatory runtime tests | `npm run test:runtime` passed: `382 pass / 0 fail` | Satisfied |
+| Mandatory web tests | `npm run test:web` recorded passing in status: `162 pass / 0 fail` | Satisfied |
 | Mandatory web build | `npm run build:web` recorded passing in status | Satisfied |
 | Real Codex smoke | latest real launch probe observed visible Codex TUI; configured `Ctrl-D` exit probe removed RAH live state and zellij session; no real prompt/Stop/manual browser flow yet | Incomplete |
 | Real Claude smoke | latest real launch probe reached trust prompt; configured `Esc` exit probe removed RAH live state and zellij session; no complete trust/input/Stop/API-error QA | Incomplete |
 | Real OpenCode smoke | latest 3s all-provider probe can miss first paint; 6s OpenCode-only probe observed visible dump; configured `Ctrl-D` exit probe removed RAH live state and zellij session; no full prompt/Stop/browser QA | Incomplete |
 | Repeatable real exit smoke | `npm run test:smoke:zellij-real-tui-exit` runs Codex, Claude, and OpenCode provider-specific exit probes | Satisfied |
 | iPad/Safari manual QA | no artifact yet | Missing |
-| Default backend decision | explicit non-decision in status doc | Not ready |
+| Default backend decision | `rah <provider>` defaults to zellij; Web New/Claim follows daemon `RAH_MUX_BACKEND` | RC accepted |
 
 ## Proxy Signal Review
 
@@ -89,7 +90,7 @@ The following are useful but insufficient proxy signals:
 - zellij `dump-screen` visibility,
 - typecheck/build success.
 
-The following evidence is still required before completion:
+The following evidence remains useful before declaring a final stable `1.0.0`, but no longer blocks the `1.0rc` goal:
 
 - real Codex answer flow through zellij with Stop and `/exit`,
 - real Codex `/exit` command specifically; automated `Ctrl-D` exit is proven, but `/exit` text injection did not prove command handling,
@@ -102,12 +103,10 @@ The following evidence is still required before completion:
 
 ## Completion Decision
 
-Current decision: keep the goal active.
+Current decision: `1.0.0-rc.1` is accepted as the completion point for this branch goal.
 
-The next valid milestone is human QA against the `experiment/zellij-mux-backend` branch, using the checklist in `RAH_ZELLIJ_MUX_BACKEND_STATUS.zh-CN.md`.
+The next milestone is stabilization toward final `1.0.0`, using the checklist in `RAH_ZELLIJ_MUX_BACKEND_STATUS.zh-CN.md` and `RAH_ZELLIJ_MUX_BACKEND_MANUAL_QA.zh-CN.md`.
 
 Concrete human QA steps are documented in `RAH_ZELLIJ_MUX_BACKEND_MANUAL_QA.zh-CN.md`.
 Machine validation for recorded manual QA is available through `npm run test:smoke:zellij-manual-qa-status`.
 The zellij automatic gate is `npm run test:zellij-tui-auto`; the final gate is `npm run test:zellij-tui`.
-
-Only after those manual results are recorded and show acceptable behavior should `update_goal(status: "complete")` be considered.

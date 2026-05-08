@@ -35,6 +35,10 @@ export interface PtyHubOptions {
   maxReplayBytes?: number;
 }
 
+export interface PtyAppendOutputOptions {
+  replaceReplay?: boolean;
+}
+
 const DEFAULT_MAX_REPLAY_CHUNKS = 2_000;
 const DEFAULT_MAX_REPLAY_BYTES = 8 * 1024 * 1024;
 
@@ -65,12 +69,17 @@ export class PtyHub {
     });
   }
 
-  appendOutput(sessionId: string, data: string): void {
+  appendOutput(sessionId: string, data: string, options?: PtyAppendOutputOptions): void {
     const session = this.getOrCreate(sessionId);
     const seq = session.nextSeq++;
     const bytes = replayByteLength(data);
-    session.replayEntries.push({ seq, data, bytes });
-    session.replayBytes += bytes;
+    if (options?.replaceReplay === true) {
+      session.replayEntries = [{ seq, data, bytes }];
+      session.replayBytes = bytes;
+    } else {
+      session.replayEntries.push({ seq, data, bytes });
+      session.replayBytes += bytes;
+    }
     this.trimReplay(session);
 
     const frame: PtyServerFrame = {

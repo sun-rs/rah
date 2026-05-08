@@ -11,6 +11,7 @@ import {
   setTimelineIdentityTelemetryWarnSinkForTests,
   type TimelineIdentityTelemetryWarning,
 } from "./timeline-identity-telemetry";
+import { resetTimelineReconcilerForTests } from "./timeline-reconciler";
 
 function createServices() {
   return {
@@ -73,6 +74,80 @@ describe("applyProviderActivity", () => {
     assert.equal(event?.type, "timeline.item.added");
     if (event?.type === "timeline.item.added") {
       assert.deepEqual(event.payload.identity, liveIdentity);
+    }
+  });
+
+  test("reconciles repeated canonical timeline items before they reach the UI", () => {
+    resetTimelineReconcilerForTests();
+    const services = createServices();
+    const sessionId = createSession(services);
+    const liveIdentity = createTimelineIdentity({
+      provider: "codex",
+      providerSessionId: "provider-session-1",
+      turnKey: "turn-1",
+      itemKind: "assistant_message",
+      itemKey: "message-1",
+      origin: "live",
+      confidence: "native",
+    });
+    const historyIdentity = createTimelineIdentity({
+      provider: "codex",
+      providerSessionId: "provider-session-1",
+      turnKey: "turn-1",
+      itemKind: "assistant_message",
+      itemKey: "message-1",
+      origin: "history",
+      confidence: "native",
+    });
+
+    const first = applyProviderActivity(
+      services,
+      sessionId,
+      { provider: "codex", channel: "structured_live" },
+      {
+        type: "timeline_item",
+        turnId: "turn-1",
+        item: { kind: "assistant_message", text: "partial" },
+        identity: liveIdentity,
+      },
+    );
+    const duplicate = applyProviderActivity(
+      services,
+      sessionId,
+      { provider: "codex", channel: "structured_persisted" },
+      {
+        type: "timeline_item",
+        turnId: "turn-1",
+        item: { kind: "assistant_message", text: "partial" },
+        identity: historyIdentity,
+      },
+    );
+    const replacement = applyProviderActivity(
+      services,
+      sessionId,
+      { provider: "codex", channel: "structured_persisted" },
+      {
+        type: "timeline_item",
+        turnId: "turn-1",
+        item: { kind: "assistant_message", text: "final" },
+        identity: historyIdentity,
+      },
+    );
+
+    assert.deepEqual(first.map((event) => event.type), ["timeline.item.added"]);
+    assert.deepEqual(duplicate.map((event) => event.type), []);
+    assert.deepEqual(replacement.map((event) => event.type), ["timeline.item.updated"]);
+
+    const events = services.eventBus.list({ sessionIds: [sessionId] });
+    assert.deepEqual(events.map((event) => event.type), [
+      "timeline.item.added",
+      "timeline.item.updated",
+    ]);
+    const updated = events[1];
+    assert.equal(updated?.type, "timeline.item.updated");
+    if (updated?.type === "timeline.item.updated") {
+      assert.deepEqual(updated.payload.item, { kind: "assistant_message", text: "final" });
+      assert.equal(updated.payload.identity?.origin, "history");
     }
   });
 

@@ -459,6 +459,66 @@ describe("client projection", () => {
     }
   });
 
+  test("does not duplicate turn canceled notices for the same turn", () => {
+    let current = projection();
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 1,
+        turnId: "turn-1",
+        type: "turn.canceled",
+        payload: { reason: "interrupted" },
+      }),
+    );
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 2,
+        turnId: "turn-1",
+        type: "turn.canceled",
+        payload: { reason: "interrupted" },
+      }),
+    );
+
+    assert.equal(current.feed.length, 1);
+    assert.equal(current.feed[0]?.kind, "notification");
+  });
+
+  test("inserts late persisted timeline items by timestamp instead of append order", () => {
+    let current = projection();
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 1,
+        type: "timeline.item.added",
+        payload: {
+          item: { kind: "user_message", text: "newer question" },
+        },
+      }),
+    );
+    current = applyEventToProjection(current, {
+      ...event({
+        seq: 2,
+        type: "timeline.item.added",
+        payload: {
+          item: { kind: "assistant_message", text: "older answer" },
+        },
+      }),
+      ts: "2026-04-14T23:59:00.000Z",
+      source: { provider: "codex", channel: "structured_persisted", authority: "authoritative" },
+    } as RahEvent);
+
+    assert.deepEqual(
+      current.feed.map((entry) =>
+        entry.kind === "timeline" &&
+        (entry.item.kind === "user_message" || entry.item.kind === "assistant_message")
+          ? entry.item.text
+          : null,
+      ),
+      ["older answer", "newer question"],
+    );
+  });
+
   test("does not merge identity-less assistant messages without a live turn", () => {
     let current = projection();
     current = applyEventToProjection(

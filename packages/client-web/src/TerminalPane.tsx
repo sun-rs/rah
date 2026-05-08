@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { Terminal, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
-import { createPtySocket, sendPtyMessage } from "./api";
+import { createPtySocket, getNativeTuiSurface, sendPtyMessage } from "./api";
 import {
   mobileBridgeFocusOptionsForSource,
   type MobileBridgeFocusOptions,
@@ -141,6 +141,7 @@ export function TerminalPane(props: TerminalPaneProps) {
   const sendDataRef = useRef<(data: string, options?: { focusTerminal?: boolean }) => void>(() => undefined);
   const scheduleTerminalFitRef = useRef<(options?: { force?: boolean }) => void>(() => undefined);
   const hasControlRef = useRef(props.hasControl);
+  const surfaceActiveRef = useRef(false);
   const clientIdRef = useRef(props.clientId);
   const nextReplaySeqRef = useRef(0);
   const [showIosInputBridge, setShowIosInputBridge] = useState(false);
@@ -150,6 +151,7 @@ export function TerminalPane(props: TerminalPaneProps) {
   const [terminalFixedTopPx, setTerminalFixedTopPx] = useState(0);
   const [terminalFixedLeftPx, setTerminalFixedLeftPx] = useState(0);
   const [terminalFixedWidthPx, setTerminalFixedWidthPx] = useState(0);
+  const [surfaceOwnerKind, setSurfaceOwnerKind] = useState<string | null>(null);
   const committedBridgeValueRef = useRef("");
   const bridgeInputRef = useRef<HTMLInputElement | null>(null);
   const isComposingRef = useRef(false);
@@ -178,6 +180,25 @@ export function TerminalPane(props: TerminalPaneProps) {
   useEffect(() => {
     clientIdRef.current = props.clientId;
   }, [props.clientId]);
+
+  const claimCurrentSurface = () => {
+    const socket = socketRef.current;
+    const terminal = terminalRef.current;
+    if (!socket || !terminal) {
+      return;
+    }
+    sendPtyMessage(socket, {
+      type: "pty.surface.attach",
+      sessionId: props.terminalId,
+      clientId: clientIdRef.current,
+      clientKind: "web",
+      cols: terminal.cols,
+      rows: terminal.rows,
+    });
+    surfaceActiveRef.current = true;
+    setSurfaceOwnerKind(null);
+    scheduleTerminalFitRef.current({ force: true });
+  };
 
   useEffect(() => {
     if (!showIosInputBridge || typeof window === "undefined") {
@@ -227,6 +248,7 @@ export function TerminalPane(props: TerminalPaneProps) {
     let disposed = false;
     let exited = false;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let surfacePollTimer: ReturnType<typeof setInterval> | null = null;
     let fitFrame: number | null = null;
     let forceNextResize = false;
     let writeFrame: number | null = null;
@@ -268,7 +290,7 @@ export function TerminalPane(props: TerminalPaneProps) {
       ) {
         return;
       }
-      if (!hasControlRef.current || !socketRef.current) {
+      if (!socketRef.current) {
         return;
       }
       sendPtyMessage(socketRef.current, {
@@ -374,9 +396,11 @@ export function TerminalPane(props: TerminalPaneProps) {
         fromSeq !== undefined ? { fromSeq } : undefined,
       );
       socketRef.current = socket;
-      if (hasControlRef.current) {
-        scheduleFitAndResize({ force: true });
-      }
+      socket.addEventListener("open", () => {
+        fitAddon.fit();
+        claimCurrentSurface();
+      });
+      scheduleFitAndResize({ force: true });
       socket.addEventListener("close", (event) => {
         const isCurrentSocket = socketRef.current === socket;
         if (!isCurrentSocket) {
@@ -397,9 +421,30 @@ export function TerminalPane(props: TerminalPaneProps) {
     };
 
     connect();
+    surfacePollTimer = setInterval(() => {
+      void getNativeTuiSurface(props.terminalId)
+        .then((response) => {
+          if (disposed) {
+            return;
+          }
+          const surface = response.surface;
+          if (!surface) {
+            claimCurrentSurface();
+            return;
+          }
+          if (surface.clientId === clientIdRef.current) {
+            surfaceActiveRef.current = true;
+            setSurfaceOwnerKind(null);
+            return;
+          }
+          surfaceActiveRef.current = false;
+          setSurfaceOwnerKind(surface.clientKind);
+        })
+        .catch(() => undefined);
+    }, 1_000);
 
     sendDataRef.current = (data: string, options?: { focusTerminal?: boolean }) => {
-      if (!hasControlRef.current || !socketRef.current) {
+      if (!hasControlRef.current || !surfaceActiveRef.current || !socketRef.current) {
         return;
       }
       sendPtyMessage(socketRef.current, {
@@ -425,6 +470,7 @@ export function TerminalPane(props: TerminalPaneProps) {
 
     return () => {
       disposed = true;
+      surfaceActiveRef.current = false;
       if (fitFrame !== null) {
         window.cancelAnimationFrame(fitFrame);
       }
@@ -434,10 +480,20 @@ export function TerminalPane(props: TerminalPaneProps) {
       if (reconnectTimer) {
         clearTimeout(reconnectTimer);
       }
+      if (surfacePollTimer) {
+        clearInterval(surfacePollTimer);
+      }
       themeObserver.disconnect();
       resizeObserver.disconnect();
       disposable.dispose();
-      socketRef.current?.close();
+      if (socketRef.current) {
+        sendPtyMessage(socketRef.current, {
+          type: "pty.surface.detach",
+          sessionId: props.terminalId,
+          clientId: clientIdRef.current,
+        });
+        socketRef.current.close();
+      }
       terminal.dispose();
       socketRef.current = null;
       terminalRef.current = null;
@@ -559,6 +615,19 @@ export function TerminalPane(props: TerminalPaneProps) {
               : undefined
           }
         />
+        {surfaceOwnerKind ? (
+          <div className="terminal-surface-overlay" data-testid="terminal-surface-overlay">
+            <div className="terminal-surface-overlay-card">
+              <div className="terminal-surface-overlay-title">TUI active on {surfaceOwnerKind}</div>
+              <div className="terminal-surface-overlay-copy">
+                Reclaiming here will detach the other zellij viewer.
+              </div>
+              <button type="button" className="terminal-surface-overlay-button" onClick={claimCurrentSurface}>
+                Reattach here
+              </button>
+            </div>
+          </div>
+        ) : null}
         {showIosInputBridge ? (
           <div className="terminal-ios-input-bridge" data-testid="terminal-ios-input-bridge">
             <div className="terminal-ios-shortcut-row" aria-label="TUI shortcut keys">

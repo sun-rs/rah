@@ -23,7 +23,7 @@ const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_DAEMON_URL = "http://127.0.0.1:43111";
 const CORE_LIVE_PROVIDERS = new Set(["codex", "claude", "opencode"]);
 const SUPPORTED_PROVIDERS = CORE_LIVE_PROVIDERS;
-const MANAGEMENT_COMMANDS = new Set(["start", "status", "stop", "restart", "logs"]);
+const MANAGEMENT_COMMANDS = new Set(["start", "status", "stop", "restart", "logs", "attach"]);
 const CLIENT_INDEX_PATH = join(ROOT_DIR, "packages", "client-web", "dist", "index.html");
 const TERMINAL_MODE_RESET_SEQUENCE = [
   "\u001b[<1u",
@@ -64,6 +64,7 @@ function printUsage() {
       "  rah stop",
       "  rah restart",
       "  rah logs [--follow]",
+      "  rah attach <rahSessionId>",
       "  rah <provider>",
       "  rah <provider> resume <providerSessionId>",
       "",
@@ -102,7 +103,14 @@ function parseManagementArgs(command, argv) {
   let build = command === "start";
   let open = command === "start";
   let follow = false;
+  let sessionId;
   const rest = [...argv];
+  if (command === "attach") {
+    sessionId = rest.shift();
+    if (!sessionId) {
+      throw new Error("Missing RAH session id after `attach`.");
+    }
+  }
   while (rest.length > 0) {
     const option = rest.shift();
     if (option === "--daemon-url") {
@@ -131,7 +139,7 @@ function parseManagementArgs(command, argv) {
     }
     throw new Error(`Unknown argument: ${option}`);
   }
-  return { command, daemonUrl, build, open, follow };
+  return { command, daemonUrl, build, open, follow, ...(sessionId ? { sessionId } : {}) };
 }
 
 function parseArgs(argv) {
@@ -155,7 +163,7 @@ function parseArgs(argv) {
   let cwd = process.cwd();
   let daemonUrl = DEFAULT_DAEMON_URL;
   let claudePermissionMode;
-  let muxBackend = process.env.RAH_MUX_BACKEND === "zellij" ? "zellij" : "native";
+  let muxBackend = process.env.RAH_MUX_BACKEND === "native" ? "native" : "zellij";
 
   const rest = [...argv.slice(1)];
   if (rest[0] === "resume") {
@@ -488,6 +496,10 @@ async function handleManagementCommand(parsed) {
   }
   if (parsed.command === "logs") {
     await showLogs(parsed.daemonUrl, parsed.follow);
+    return;
+  }
+  if (parsed.command === "attach") {
+    await attachExistingRahSession(parsed);
   }
 }
 
@@ -533,6 +545,32 @@ async function postJson(daemonUrl, pathname, body) {
     throw new Error(`Request failed: ${response.status} ${response.statusText}${text ? `\n${text}` : ""}`);
   }
   return await response.json();
+}
+
+async function getJson(daemonUrl, pathname) {
+  const response = await fetch(apiUrl(daemonUrl, pathname), {
+    headers: {
+      "x-rah-client": "web",
+    },
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(`Request failed: ${response.status} ${response.statusText}${text ? `\n${text}` : ""}`);
+  }
+  return await response.json();
+}
+
+async function findLiveSessionSummary(daemonUrl, sessionId) {
+  const response = await getJson(daemonUrl, "/api/sessions");
+  return (response.sessions ?? []).find((summary) => summary?.session?.id === sessionId) ?? null;
+}
+
+async function liveSessionExists(daemonUrl, sessionId) {
+  try {
+    return (await findLiveSessionSummary(daemonUrl, sessionId)) !== null;
+  } catch {
+    return true;
+  }
 }
 
 function providerModeId(parsed) {
@@ -729,17 +767,208 @@ async function attachLocalTerminalToPty(daemonUrl, sessionId, clientId) {
   });
 }
 
-async function attachLocalTerminalToZellij(session) {
+function terminalSurfaceSize() {
+  return {
+    cols: process.stdout.columns || 100,
+    rows: process.stdout.rows || 32,
+  };
+}
+
+async function claimLocalTuiSurface(daemonUrl, sessionId, client) {
+  const size = terminalSurfaceSize();
+  await postJson(
+    daemonUrl,
+    `/api/sessions/${encodeURIComponent(sessionId)}/tui-surface/claim`,
+    {
+      clientId: client.clientId,
+      clientKind: "terminal",
+      cols: size.cols,
+      rows: size.rows,
+    },
+  );
+}
+
+async function releaseLocalTuiSurface(daemonUrl, sessionId, clientId) {
+  try {
+    await postJson(
+      daemonUrl,
+      `/api/sessions/${encodeURIComponent(sessionId)}/tui-surface/release`,
+      { clientId },
+    );
+  } catch {
+    // Surface release is best-effort; the session itself remains daemon-owned.
+  }
+}
+
+async function getTuiSurface(daemonUrl, sessionId) {
+  try {
+    return await getJson(daemonUrl, `/api/sessions/${encodeURIComponent(sessionId)}/tui-surface`);
+  } catch {
+    return {};
+  }
+}
+
+async function waitForLocalZellijReattachKey(daemonUrl, sessionId) {
+  const stdin = process.stdin;
+  const stdout = process.stdout;
+  if (!stdin.isTTY || typeof stdin.setRawMode !== "function") {
+    stdout.write(`\r\n[rah] TUI is active in Web. Run \`rah attach ${sessionId}\` to reattach here.\r\n`);
+    return false;
+  }
+  restoreTerminalApplicationModes(stdout);
+  stdout.write("\r\n[rah] TUI is active in Web. Press Esc or Enter to reattach here, Ctrl-C to leave.\r\n");
+  return await new Promise((resolve) => {
+    const cleanup = () => {
+      clearInterval(sessionPollTimer);
+      stdin.off("data", onInput);
+      stdin.setRawMode(false);
+      stdin.pause();
+    };
+    const sessionPollTimer = setInterval(() => {
+      void liveSessionExists(daemonUrl, sessionId).then((exists) => {
+        if (exists) {
+          return;
+        }
+        cleanup();
+        stdout.write("\r\n[rah] Session was archived from another client.\r\n");
+        resolve(false);
+      });
+    }, 750);
+    sessionPollTimer.unref?.();
+    const onInput = (chunk) => {
+      const data = chunk.toString("utf8");
+      if (data.includes("\u0003")) {
+        cleanup();
+        resolve(false);
+        return;
+      }
+      if (data.includes("\u001b") || data.includes("\r") || data.includes("\n")) {
+        cleanup();
+        resolve(true);
+      }
+    };
+    stdin.setRawMode(true);
+    stdin.resume();
+    stdin.on("data", onInput);
+  });
+}
+
+async function runZellijAttachUntilExitOrRevoked(daemonUrl, session, client) {
+  const child = spawn(
+    "zellij",
+    [
+      "attach",
+      session.mux.sessionName,
+      "options",
+      "--mirror-session",
+      "true",
+      "--pane-frames",
+      "false",
+      "--show-startup-tips",
+      "false",
+    ],
+    {
+      cwd: session.cwd || ROOT_DIR,
+      env: {
+        ...process.env,
+        ZELLIJ_SOCKET_DIR: session.mux.socketDir,
+      },
+      stdio: "inherit",
+    },
+  );
+  let revoked = false;
+  let sessionGone = false;
+  let completed = false;
+  const pollTimer = setInterval(() => {
+    void (async () => {
+      if (!(await liveSessionExists(daemonUrl, session.id))) {
+        sessionGone = true;
+        child.kill("SIGHUP");
+        setTimeout(() => {
+          if (!completed) {
+            child.kill("SIGTERM");
+          }
+        }, 500).unref?.();
+        return;
+      }
+      const { surface } = await getTuiSurface(daemonUrl, session.id);
+      if (!surface || surface.clientId === client.clientId) {
+        return;
+      }
+      revoked = true;
+      child.kill("SIGHUP");
+      setTimeout(() => {
+        if (!completed) {
+          child.kill("SIGTERM");
+        }
+      }, 500).unref?.();
+    })();
+  }, 250);
+  pollTimer.unref?.();
+
+  return await new Promise((resolve, reject) => {
+    child.on("error", reject);
+    child.on("exit", (code, signal) => {
+      completed = true;
+      clearInterval(pollTimer);
+      restoreTerminalApplicationModes(process.stdout);
+      if (revoked) {
+        resolve({ revoked: true });
+        return;
+      }
+      if (sessionGone) {
+        resolve({ revoked: false, sessionGone: true });
+        return;
+      }
+      if (signal) {
+        resolve({ revoked: false, signal });
+        return;
+      }
+      if (code && code !== 0) {
+        reject(new Error(`zellij attach exited with code ${code}`));
+        return;
+      }
+      resolve({ revoked: false });
+    });
+  });
+}
+
+async function attachLocalTerminalToZellij(daemonUrl, session, client) {
   if (!session?.mux || session.mux.backend !== "zellij") {
     throw new Error("Session does not expose zellij mux metadata.");
   }
-  await runCommand("zellij", ["attach", session.mux.sessionName], {
-    cwd: session.cwd || ROOT_DIR,
-    env: {
-      ...process.env,
-      ZELLIJ_SOCKET_DIR: session.mux.socketDir,
-    },
-  });
+  while (true) {
+    await claimLocalTuiSurface(daemonUrl, session.id, client);
+    const result = await runZellijAttachUntilExitOrRevoked(daemonUrl, session, client);
+    if (!result.revoked) {
+      await releaseLocalTuiSurface(daemonUrl, session.id, client.clientId);
+      return;
+    }
+    const shouldReattach = await waitForLocalZellijReattachKey(daemonUrl, session.id);
+    if (!shouldReattach) {
+      await releaseLocalTuiSurface(daemonUrl, session.id, client.clientId);
+      return;
+    }
+  }
+}
+
+async function attachExistingRahSession(parsed) {
+  await ensureDaemon(parsed.daemonUrl);
+  const summary = await findLiveSessionSummary(parsed.daemonUrl, parsed.sessionId);
+  if (!summary) {
+    throw new Error(`No live RAH session found for ${parsed.sessionId}.`);
+  }
+  const session = managedSessionFromSummary(summary);
+  const client = terminalClientDescriptor();
+  try {
+    if (session.mux?.backend === "zellij") {
+      await attachLocalTerminalToZellij(parsed.daemonUrl, session, client);
+    } else {
+      await attachLocalTerminalToPty(parsed.daemonUrl, ptyIdFromSessionSummary(summary), client.clientId);
+    }
+  } finally {
+    await detachPtyFirstClient(parsed.daemonUrl, session.id, client.clientId);
+  }
 }
 
 async function runPtyFirstProviderCommand(parsed) {
@@ -750,7 +979,7 @@ async function runPtyFirstProviderCommand(parsed) {
   const ptyId = ptyIdFromSessionSummary(summary);
   try {
     if (parsed.muxBackend === "zellij" && session.mux?.backend === "zellij") {
-      await attachLocalTerminalToZellij(session);
+      await attachLocalTerminalToZellij(parsed.daemonUrl, session, client);
     } else {
       await attachLocalTerminalToPty(parsed.daemonUrl, ptyId, client.clientId);
     }

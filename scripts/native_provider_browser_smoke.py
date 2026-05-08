@@ -208,25 +208,51 @@ def write_fake_provider(path: pathlib.Path, config: ProviderConfig) -> None:
         "\n".join(
             [
                 "#!/usr/bin/env node",
+                f"const provider = {json.dumps(config.provider)};",
                 f"process.stdout.write(`{config.ready_marker} args=${{process.argv.slice(2).join('|')}}\\r\\n`);",
                 *claude_history_setup,
                 *opencode_history_setup,
                 "process.stdin.setEncoding('utf8');",
+                "if (process.stdin.isTTY && process.stdin.setRawMode) process.stdin.setRawMode(true);",
                 "process.stdin.resume();",
                 "let buffer = '';",
-                f"function handleInterrupt() {{ process.stdout.write(`{config.interrupt_marker}\\r\\n`); }}",
+                "let interruptEscCount = 0;",
+                "function writePrompt() {",
+                "  if (provider === 'opencode') process.stdout.write('Ask anything\\r\\n');",
+                "  if (provider === 'claude') process.stdout.write('> \\r\\n');",
+                "}",
+                f"function handleInterrupt() {{ buffer = ''; process.stdout.write(`{config.interrupt_marker}\\r\\n`); writePrompt(); }}",
+                "function handleEscapeInterrupt(count) {",
+                "  if (provider !== 'opencode') {",
+                "    handleInterrupt();",
+                "    return;",
+                "  }",
+                "  interruptEscCount += count;",
+                "  if (interruptEscCount >= 2) {",
+                "    interruptEscCount = 0;",
+                "    handleInterrupt();",
+                "  }",
+                "}",
                 "process.on('SIGINT', handleInterrupt);",
                 "process.stdin.on('data', (chunk) => {",
                 "  if (chunk.includes('\\u0003')) {",
                 "    chunk = chunk.split('\\u0003').join('');",
                 "    handleInterrupt();",
                 "  }",
+                "  if (chunk.includes('\\u001b')) {",
+                "    const escapeCount = (chunk.match(/\\u001b/g) || []).length;",
+                "    chunk = chunk.split('\\u001b').join('');",
+                "    handleEscapeInterrupt(escapeCount);",
+                "  }",
                 "  buffer += chunk;",
                 "  const parts = buffer.split(/\\r|\\n/);",
                 "  buffer = parts.pop() ?? '';",
                 "  for (const raw of parts) {",
                 "    const text = raw.trim();",
-                "    if (text) process.stdout.write(`" + config.input_marker + ":${text}\\r\\n`);",
+                "    if (text) {",
+                "      process.stdout.write(`" + config.input_marker + ":${text}\\r\\n`);",
+                "      if (text.startsWith('blocked while dirty ')) writePrompt();",
+                "    }",
                 "  }",
                 "});",
                 "setInterval(() => undefined, 1000);",
@@ -544,7 +570,8 @@ def exercise_provider(page, base_url: str, workspace: pathlib.Path, config: Prov
         assert_terminal_text_absent(panel, blocked_chat_prompt)
         send_pty_input(base_url, terminal_id, "web-user", "\u0003")
         wait_for_terminal_text(panel, config.interrupt_marker)
-        assert_terminal_text_absent(panel, blocked_chat_prompt)
+        wait_for_terminal_text(panel, f"{config.input_marker}:{blocked_chat_prompt}")
+        wait_for_session_idle(base_url, session_id, config.provider)
         page.get_by_role("button", name="Chat", exact=True).click()
         chat_prompt = f"chat composer {config.provider} browser native"
         fill_and_submit_chat_composer(page, chat_prompt)
@@ -563,7 +590,7 @@ def exercise_provider(page, base_url: str, workspace: pathlib.Path, config: Prov
             ) from exc
         page.get_by_role("button", name="TUI", exact=True).click()
         wait_for_terminal_text(panel, config.interrupt_marker)
-        assert_session_idle(base_url, session_id, config.provider)
+        wait_for_session_idle(base_url, session_id, config.provider)
         if config.provider == "opencode":
             page.get_by_role("button", name="Chat", exact=True).click()
             assert_opencode_mirror_details(page)
@@ -676,7 +703,7 @@ def main() -> int:
                         "Chat composer input reaches daemon-owned provider TUI",
                         "Chat composer is blocked while provider native TUI prompt has an unsubmitted draft",
                         "Chat view warns when provider native TUI prompt has an unsubmitted draft",
-                        "Stop button sends Ctrl-C to daemon-owned provider TUI",
+                        "Stop button sends provider-native interrupt keys to daemon-owned provider TUI",
                         "Stop returns daemon-owned provider TUI sessions to idle",
                         "TUI input reaches daemon-owned provider process",
                         "TUI replay survives page reload for provider sessions",

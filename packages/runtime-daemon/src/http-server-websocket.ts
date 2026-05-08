@@ -233,6 +233,7 @@ export function attachWebSocketHandlers(
       unsubscribe();
     }
 
+    let surfaceClientId: string | null = null;
     socket.on("message", (raw) => {
       try {
         const parsed = JSON.parse(raw.toString("utf8")) as PtyClientMessage;
@@ -240,14 +241,42 @@ export function attachWebSocketHandlers(
           engine.onPtyInput(sessionId, parsed.clientId, parsed.data);
         } else if (parsed.type === "pty.resize") {
           engine.onPtyResize(sessionId, parsed.clientId, parsed.cols, parsed.rows);
+        } else if (parsed.type === "pty.surface.attach") {
+          surfaceClientId = parsed.clientId;
+          void engine
+            .claimNativeTuiSurface(sessionId, {
+              clientId: parsed.clientId,
+              clientKind: parsed.clientKind,
+              cols: parsed.cols,
+              rows: parsed.rows,
+            })
+            .catch((error) => {
+              sendJsonWithBackpressure(socket, {
+                error: error instanceof Error ? error.message : String(error),
+              });
+            });
+        } else if (parsed.type === "pty.surface.detach") {
+          if (surfaceClientId === parsed.clientId) {
+            surfaceClientId = null;
+          }
+          void engine
+            .releaseNativeTuiSurface(sessionId, { clientId: parsed.clientId })
+            .catch(() => undefined);
         }
-      } catch {
-        sendJsonWithBackpressure(socket, { error: "Invalid PTY client payload" });
+      } catch (error) {
+        sendJsonWithBackpressure(socket, {
+          error: error instanceof Error ? error.message : "Invalid PTY client payload",
+        });
       }
     });
 
     socket.on("close", () => {
       unsubscribe();
+      if (surfaceClientId) {
+        void engine
+          .releaseNativeTuiSurface(sessionId, { clientId: surfaceClientId })
+          .catch(() => undefined);
+      }
     });
   });
 

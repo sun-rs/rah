@@ -147,8 +147,7 @@ export function deriveComposerSurface(args: {
       return {
         kind: "compose",
         showStopButton: isGenerating,
-        stopDisabled: isGenerating,
-        stopTitle: "Terminal is handling this turn. Web can observe it, but can't interrupt it.",
+        stopTitle: "Interrupt the native TUI turn from Web.",
       };
     }
     return {

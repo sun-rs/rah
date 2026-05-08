@@ -86,6 +86,42 @@ describe("translateOpenCodeEvent", () => {
     ]);
   });
 
+  test("maps OpenCode aborted assistant messages into canceled turns", () => {
+    const state = createOpenCodeActivityState("session-1");
+    const busy = translateOpenCodeEvent(state, {
+      type: "session.status",
+      properties: {
+        sessionID: "session-1",
+        status: { type: "busy" },
+      },
+    });
+    const turnId = busy[0]?.type === "turn_started" ? busy[0].turnId : undefined;
+
+    const activities = translateOpenCodeEvent(state, {
+      type: "message.updated",
+      properties: {
+        info: {
+          id: "assistant-aborted",
+          sessionID: "session-1",
+          role: "assistant",
+          time: { completed: Date.now() },
+          error: {
+            name: "MessageAbortedError",
+            data: { message: "Aborted" },
+          },
+        },
+      },
+    });
+
+    assert.deepEqual(activities, [
+      {
+        type: "turn_canceled",
+        turnId,
+        reason: "interrupted",
+      },
+    ]);
+  });
+
   test("emits usage from OpenCode assistant message token accounting", () => {
     const state = createOpenCodeActivityState("session-1");
     const busy = translateOpenCodeEvent(state, {
@@ -729,6 +765,76 @@ describe("translateOpenCodeEvent", () => {
           activity.usage.usedTokens === 18,
       ),
       true,
+    );
+    const timelineItems = activities.filter(
+      (activity) => activity.type === "timeline_item",
+    );
+    assert.equal(timelineItems.length, 3);
+    for (const activity of timelineItems) {
+      assert.ok(activity.identity?.canonicalItemId);
+      assert.equal(activity.identity.provider, "opencode");
+      assert.equal(activity.identity.providerSessionId, "session-1");
+      assert.equal(activity.identity.origin, "history");
+    }
+  });
+
+  test("maps stored OpenCode MessageAbortedError into a visible canceled turn", () => {
+    const activities = translateOpenCodeHistory([
+      {
+        info: {
+          id: "msg-user",
+          sessionID: "session-1",
+          role: "user",
+          time: { created: 1 },
+        },
+        parts: [
+          {
+            id: "part-user",
+            sessionID: "session-1",
+            messageID: "msg-user",
+            type: "text",
+            text: "sleep 5",
+          },
+        ],
+      },
+      {
+        info: {
+          id: "msg-assistant-aborted",
+          sessionID: "session-1",
+          role: "assistant",
+          parentID: "msg-user",
+          time: { created: 2, completed: 3 },
+          error: {
+            name: "MessageAbortedError",
+            data: { message: "Aborted" },
+          },
+        },
+        parts: [
+          {
+            id: "part-reasoning",
+            sessionID: "session-1",
+            messageID: "msg-assistant-aborted",
+            type: "reasoning",
+            text: "OpenCode partial reasoning",
+          },
+        ],
+      },
+    ]);
+
+    assert.equal(
+      activities.some(
+        (activity) =>
+          activity.type === "timeline_item" &&
+          activity.item.kind === "reasoning" &&
+          activity.item.text === "OpenCode partial reasoning",
+      ),
+      true,
+    );
+    assert.deepEqual(
+      activities
+        .filter((activity) => activity.type === "turn_canceled" || activity.type === "turn_completed")
+        .map((activity) => activity.type),
+      ["turn_canceled"],
     );
   });
 });

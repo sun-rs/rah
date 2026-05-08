@@ -1,4 +1,13 @@
 import { randomUUID } from "node:crypto";
+import {
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
+import { homedir } from "node:os";
+import path from "node:path";
 import type {
   ProviderKind,
   ResumeSessionRequest,
@@ -37,6 +46,73 @@ type ModelRequest = {
   reasoningId?: string | null;
   optionValues?: Record<string, SessionConfigValue>;
 };
+
+function claudeConfigPath(): string {
+  return process.env.CLAUDE_CONFIG_DIR
+    ? path.join(process.env.CLAUDE_CONFIG_DIR, ".claude.json")
+    : path.join(homedir(), ".claude.json");
+}
+
+function normalizeClaudeProjectPath(cwd: string): string {
+  try {
+    return realpathSync(cwd);
+  } catch {
+    return path.resolve(cwd);
+  }
+}
+
+function readJsonObject(filePath: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(readFileSync(filePath, "utf8")) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? { ...(parsed as Record<string, unknown>) }
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function objectValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? { ...(value as Record<string, unknown>) }
+    : {};
+}
+
+function trustClaudeWorkspace(cwd: string): void {
+  const configPath = claudeConfigPath();
+  const configDir = path.dirname(configPath);
+  const projectPath = normalizeClaudeProjectPath(cwd);
+  const config = readJsonObject(configPath);
+  const projects = objectValue(config.projects);
+  const existingProject = objectValue(projects[projectPath]);
+  if (existingProject.hasTrustDialogAccepted === true) {
+    return;
+  }
+
+  projects[projectPath] = {
+    allowedTools: [],
+    mcpContextUris: [],
+    mcpServers: {},
+    enabledMcpjsonServers: [],
+    disabledMcpjsonServers: [],
+    ...existingProject,
+    hasTrustDialogAccepted: true,
+    projectOnboardingSeenCount:
+      typeof existingProject.projectOnboardingSeenCount === "number"
+        ? existingProject.projectOnboardingSeenCount
+        : 1,
+    hasCompletedProjectOnboarding:
+      typeof existingProject.hasCompletedProjectOnboarding === "boolean"
+        ? existingProject.hasCompletedProjectOnboarding
+        : true,
+  };
+  config.projects = projects;
+
+  mkdirSync(configDir, { recursive: true });
+  const tmpPath = `${configPath}.${process.pid}.${Date.now()}.tmp`;
+  writeFileSync(tmpPath, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+  renameSync(tmpPath, configPath);
+}
 
 function splitLaunchArgv(launch: { argv: string[] }, provider: ProviderKind): {
   command: string;
@@ -149,6 +225,7 @@ export async function nativeTuiStartLaunchSpec(
   if (request.provider === "claude") {
     const providerSessionId = randomUUID();
     const { command, args } = splitLaunchArgv(await claudeLaunchSpec(), "claude");
+    trustClaudeWorkspace(request.cwd);
     appendClaudeArgs(args, request, providerSessionId, "start");
     return {
       provider: "claude",
@@ -205,6 +282,7 @@ export async function nativeTuiResumeLaunchSpec(
   }
   if (request.provider === "claude") {
     const { command, args } = splitLaunchArgv(await claudeLaunchSpec(), "claude");
+    trustClaudeWorkspace(request.cwd);
     appendClaudeArgs(args, request, request.providerSessionId, "resume");
     return {
       provider: "claude",

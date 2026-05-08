@@ -71,14 +71,13 @@ const rememberedSessionViewModes = new Map<string, SessionViewMode>();
 function resolveRememberedSessionViewMode(args: {
   sessionId: string;
   nativeTuiAvailable: boolean;
-  nativeChatMirrorAvailable: boolean;
   preferred: SessionViewMode;
 }): SessionViewMode {
   const remembered = rememberedSessionViewModes.get(args.sessionId);
   if (remembered === "tui" && args.nativeTuiAvailable) {
     return "tui";
   }
-  if (remembered === "chat" && (!args.nativeTuiAvailable || args.nativeChatMirrorAvailable)) {
+  if (remembered === "chat") {
     return "chat";
   }
   return args.preferred;
@@ -157,8 +156,7 @@ export function WorkbenchSelectedPane(props: {
   const nativeTuiAvailable = Boolean(nativeTui?.viewAvailable);
   const nativeChatMirrorAvailable =
     nativeTuiAvailable && props.selectedSummary.session.capabilities.chatMirror === true;
-  const preferredSessionViewMode: SessionViewMode =
-    nativeTuiAvailable && !nativeChatMirrorAvailable ? "tui" : "chat";
+  const preferredSessionViewMode: SessionViewMode = "chat";
   const sessionViewResetKey = [
     props.selectedSummary.session.id,
     nativeTuiAvailable ? "native" : "chat",
@@ -172,7 +170,6 @@ export function WorkbenchSelectedPane(props: {
     () => resolveRememberedSessionViewMode({
       sessionId: props.selectedSummary.session.id,
       nativeTuiAvailable,
-      nativeChatMirrorAvailable,
       preferred: preferredSessionViewMode,
     }),
   );
@@ -199,11 +196,7 @@ export function WorkbenchSelectedPane(props: {
   });
   const contextUsageDisplay = resolveContextUsageDisplay(props.selectedSummary.usage);
   const effectiveSessionViewMode =
-    nativeTuiAvailable
-      ? nativeChatMirrorAvailable
-        ? sessionViewMode
-        : "tui"
-      : "chat";
+    nativeTuiAvailable && sessionViewMode === "tui" ? "tui" : "chat";
   const showComposer =
     effectiveSessionViewMode === "chat" || props.composerSurface.kind !== "compose";
   const terminalHasControl =
@@ -300,7 +293,6 @@ export function WorkbenchSelectedPane(props: {
       resolveRememberedSessionViewMode({
         sessionId: props.selectedSummary.session.id,
         nativeTuiAvailable,
-        nativeChatMirrorAvailable,
         preferred: preferredSessionViewMode,
       }),
     );
@@ -473,7 +465,7 @@ export function WorkbenchSelectedPane(props: {
             </div>
           </div>
         <div className="flex items-center gap-1 shrink-0">
-          {nativeChatMirrorAvailable ? (
+          {nativeTuiAvailable ? (
             <div className="inline-flex h-8 items-center rounded-md border border-[var(--app-border)] bg-[var(--app-subtle-bg)] p-0.5">
               {(["chat", "tui"] as const).map((mode) => (
                 <button

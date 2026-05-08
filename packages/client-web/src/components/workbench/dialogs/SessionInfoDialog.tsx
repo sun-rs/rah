@@ -174,6 +174,14 @@ export function SessionInfoDialog(props: {
     session?.providerSessionId && session.provider !== "custom"
       ? `rah ${session.provider} resume ${session.providerSessionId}`
       : null;
+  const attachCommand =
+    session?.liveBackend === "zellij_tui" || session?.liveBackend === "native_tui"
+      ? `rah attach ${session.id}`
+      : null;
+  const zellijCommand =
+    session?.mux?.backend === "zellij"
+      ? `ZELLIJ_SOCKET_DIR=${session.mux.socketDir} zellij attach ${session.mux.sessionName} options --mirror-session true --pane-frames false --show-startup-tips false`
+      : null;
   const runtimeStatus = props.projection?.currentRuntimeStatus ?? null;
 
   return (
@@ -228,6 +236,32 @@ export function SessionInfoDialog(props: {
                 )
               }
             />
+            <InfoRow
+              label="Attach"
+              mono
+              value={
+                attachCommand ? (
+                  <div className="flex flex-wrap items-start gap-2">
+                    <span className="min-w-0 flex-1">{attachCommand}</span>
+                    <CopyValueButton value={attachCommand} label="attach command" />
+                  </div>
+                ) : (
+                  "Unavailable"
+                )
+              }
+            />
+            {zellijCommand ? (
+              <InfoRow
+                label="Zellij"
+                mono
+                value={
+                  <div className="flex flex-wrap items-start gap-2">
+                    <span className="min-w-0 flex-1">{zellijCommand}</span>
+                    <CopyValueButton value={zellijCommand} label="zellij attach command" />
+                  </div>
+                }
+              />
+            ) : null}
             <InfoRow label="Launch" value={session?.launchSource ?? "Unavailable"} />
             <InfoRow label="State" value={session?.runtimeState ?? "Unavailable"} />
             <InfoRow label="Runtime" value={runtimeStatus ?? "Unavailable"} />

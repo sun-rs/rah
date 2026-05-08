@@ -105,6 +105,10 @@ export function translateOpenCodeMessage(
   for (const part of message.parts) {
     activities.push(...translateOpenCodePart(state, part));
   }
+  if (isOpenCodeMessageAborted(message.info)) {
+    activities.push(...cancelOpenCodeTurn(state, message.info));
+    return activities;
+  }
   if (isTerminalAssistantMessage(message.info)) {
     activities.push(...completeOpenCodeTurn(state));
   }
@@ -210,6 +214,10 @@ function translateMessageUpdated(
   }
   const activities = rememberMessageInfo(state, info);
   activities.push(...usageActivitiesForMessageInfo(state, info));
+  if (isOpenCodeMessageAborted(info)) {
+    activities.push(...cancelOpenCodeTurn(state, info));
+    return activities;
+  }
   if (isTerminalAssistantMessage(info)) {
     activities.push(...completeOpenCodeTurn(state));
   }
@@ -296,9 +304,31 @@ function usageActivitiesForMessageInfo(
 export function isTerminalAssistantMessage(info: OpenCodeMessageInfo): boolean {
   return (
     info.role === "assistant" &&
+    !isOpenCodeMessageAborted(info) &&
     info.finish !== "tool-calls" &&
     (info.time?.completed !== undefined || info.finish !== undefined)
   );
+}
+
+function isOpenCodeMessageAborted(info: OpenCodeMessageInfo): boolean {
+  const error = readRecord(info.error);
+  return (
+    info.role === "assistant" &&
+    (error?.name === "MessageAbortedError" ||
+      readStringProperty(readRecord(error?.data) ?? {}, "message") === "Aborted")
+  );
+}
+
+function cancelOpenCodeTurn(
+  state: OpenCodeActivityState,
+  info: OpenCodeMessageInfo,
+): ProviderActivity[] {
+  const turnId =
+    state.turnByMessageId.get(info.id) ??
+    state.currentTurnId ??
+    `opencode:${info.id}`;
+  delete state.currentTurnId;
+  return [{ type: "turn_canceled", turnId, reason: "interrupted" }];
 }
 
 function translatePartUpdated(

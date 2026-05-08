@@ -326,25 +326,25 @@ describe("Claude session files", () => {
 
     const assistantMessages = page.events.filter(
       (event) =>
-        event.type === "timeline.item.added" &&
+        (event.type === "timeline.item.added" || event.type === "timeline.item.updated") &&
         event.payload.item.kind === "assistant_message",
     );
     assert.ok(
       assistantMessages.some(
         (event) =>
-          event.type === "timeline.item.added" &&
+          (event.type === "timeline.item.added" || event.type === "timeline.item.updated") &&
           event.payload.item.kind === "assistant_message" &&
           event.payload.item.text === "lol",
       ),
     );
     const firstAssistant = assistantMessages.find(
       (event) =>
-        event.type === "timeline.item.added" &&
+        (event.type === "timeline.item.added" || event.type === "timeline.item.updated") &&
         event.payload.item.kind === "assistant_message" &&
         event.payload.item.text === "lol",
     );
     assert.ok(firstAssistant);
-    if (firstAssistant.type === "timeline.item.added") {
+    if (firstAssistant.type === "timeline.item.added" || firstAssistant.type === "timeline.item.updated") {
       assert.equal(
         firstAssistant.payload.identity?.canonicalItemId,
         createClaudeTimelineIdentity({
@@ -358,7 +358,7 @@ describe("Claude session files", () => {
     assert.ok(
       assistantMessages.some(
         (event) =>
-          event.type === "timeline.item.added" &&
+          (event.type === "timeline.item.added" || event.type === "timeline.item.updated") &&
           event.payload.item.kind === "assistant_message" &&
           event.payload.item.text.includes("readme.md"),
       ),
@@ -379,7 +379,7 @@ describe("Claude session files", () => {
     assert.equal(
       assistantMessages.some(
         (event) =>
-          event.type === "timeline.item.added" &&
+          (event.type === "timeline.item.added" || event.type === "timeline.item.updated") &&
           event.payload.item.kind === "assistant_message" &&
           event.payload.item.text.includes("local-command-stdout"),
       ),
@@ -388,7 +388,7 @@ describe("Claude session files", () => {
     assert.equal(
       assistantMessages.some(
         (event) =>
-          event.type === "timeline.item.added" &&
+          (event.type === "timeline.item.added" || event.type === "timeline.item.updated") &&
           event.payload.item.kind === "assistant_message" &&
           event.payload.item.text === "No response requested.",
       ),
@@ -461,6 +461,124 @@ describe("Claude session files", () => {
       );
       assert.doesNotMatch(notification.payload.body, /cloudflare|headers|x-request-id/);
     }
+  });
+
+  test("maps Claude interrupt placeholders to turn canceled events", () => {
+    writeClaudeSession("session-interrupted.jsonl", [
+      {
+        type: "user",
+        uuid: "user-interrupted",
+        cwd: workDir,
+        sessionId: "session-interrupted",
+        timestamp: "2025-07-19T22:33:00.000Z",
+        message: {
+          content: "请执行一个长任务",
+        },
+      },
+      {
+        type: "assistant",
+        uuid: "assistant-interrupted",
+        cwd: workDir,
+        sessionId: "session-interrupted",
+        timestamp: "2025-07-19T22:33:01.000Z",
+        message: {
+          content: [{ type: "text", text: "[Request interrupted by user]" }],
+        },
+      },
+    ]);
+
+    const record = discoverClaudeStoredSessions(workDir)[0];
+    assert.ok(record);
+    const page = getClaudeStoredSessionHistoryPage({
+      sessionId: "rah-session",
+      record,
+      limit: 100,
+    });
+
+    assert.ok(
+      page.events.some(
+        (event) =>
+          event.type === "turn.canceled" &&
+          event.turnId === "turn-1" &&
+          event.payload.reason === "interrupted",
+      ),
+    );
+    assert.equal(
+      page.events.some(
+        (event) =>
+          (event.type === "timeline.item.added" || event.type === "timeline.item.updated") &&
+          event.payload.item.kind === "assistant_message" &&
+          event.payload.item.text.includes("Request interrupted"),
+      ),
+      false,
+    );
+  });
+
+  test("maps Claude no-response placeholders to turn canceled only before assistant output", () => {
+    writeClaudeSession("session-no-response.jsonl", [
+      {
+        type: "user",
+        uuid: "user-no-response",
+        cwd: workDir,
+        sessionId: "session-no-response",
+        timestamp: "2025-07-19T22:34:00.000Z",
+        message: {
+          content: "启动后马上按 Esc",
+        },
+      },
+      {
+        type: "assistant",
+        uuid: "assistant-no-response",
+        cwd: workDir,
+        sessionId: "session-no-response",
+        timestamp: "2025-07-19T22:34:01.000Z",
+        message: {
+          content: [{ type: "text", text: "No response requested." }],
+        },
+      },
+      {
+        type: "user",
+        uuid: "user-answered",
+        cwd: workDir,
+        sessionId: "session-no-response",
+        timestamp: "2025-07-19T22:34:02.000Z",
+        message: {
+          content: "正常回答",
+        },
+      },
+      {
+        type: "assistant",
+        uuid: "assistant-answered",
+        cwd: workDir,
+        sessionId: "session-no-response",
+        timestamp: "2025-07-19T22:34:03.000Z",
+        message: {
+          content: [{ type: "text", text: "已回答" }],
+        },
+      },
+      {
+        type: "assistant",
+        uuid: "assistant-no-response-after-answer",
+        cwd: workDir,
+        sessionId: "session-no-response",
+        timestamp: "2025-07-19T22:34:04.000Z",
+        message: {
+          content: [{ type: "text", text: "No response requested." }],
+        },
+      },
+    ]);
+
+    const record = discoverClaudeStoredSessions(workDir)[0];
+    assert.ok(record);
+    const page = getClaudeStoredSessionHistoryPage({
+      sessionId: "rah-session",
+      record,
+      limit: 100,
+    });
+    const canceled = page.events.filter((event) => event.type === "turn.canceled");
+
+    assert.equal(canceled.length, 1);
+    assert.equal(canceled[0]?.turnId, "turn-1");
   });
 
   test("frozen Claude history loader keeps browsing anchored after newer lines append", () => {

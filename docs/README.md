@@ -4,8 +4,10 @@
 
 ## 1. 当前稳定设计
 
+- [RAH 1.0 RC 说明](./1.0-rc-notes.zh-CN.md)
+- [Zellij Mux Backend 状态](../RAH_ZELLIJ_MUX_BACKEND_STATUS.zh-CN.md)
+- [Zellij Mux Backend 完成审计](../RAH_ZELLIJ_MUX_BACKEND_COMPLETION_AUDIT.zh-CN.md)
 - [PTY-first 无缝工作台计划](../RAH_PTY_FIRST_SEAMLESS_WORKBENCH_PLAN.zh-CN.md)
-- [PTY-first 当前执行摘要](../desgin.md)
 - [PTY-first 进度与验收审计](./pty-first-progress-audit.zh-CN.md)
 - [PTY-first 完成审计](../NATIVE_TUI_COMPLETION_AUDIT.zh-CN.md)
 - [PTY-first 人类 QA 交付说明](../NATIVE_TUI_HUMAN_QA_HANDOFF.zh-CN.md)

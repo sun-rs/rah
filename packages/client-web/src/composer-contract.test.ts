@@ -110,8 +110,7 @@ describe("composer contract", () => {
     assert.deepEqual(surface, {
       kind: "compose",
       showStopButton: true,
-      stopDisabled: true,
-      stopTitle: "Terminal is handling this turn. Web can observe it, but can't interrupt it.",
+      stopTitle: "Interrupt the native TUI turn from Web.",
     });
   });
 

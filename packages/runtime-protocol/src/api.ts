@@ -650,7 +650,44 @@ export type PtyClientMessage =
       clientId: string;
       cols: number;
       rows: number;
+    }
+  | {
+      type: "pty.surface.attach";
+      sessionId: string;
+      clientId: string;
+      clientKind: ClientKind;
+      cols: number;
+      rows: number;
+    }
+  | {
+      type: "pty.surface.detach";
+      sessionId: string;
+      clientId: string;
     };
+
+export interface NativeTuiSurfaceState {
+  sessionId: string;
+  clientId: string;
+  clientKind: ClientKind;
+  cols?: number;
+  rows?: number;
+  attachedAt: string;
+}
+
+export interface NativeTuiSurfaceClaimRequest {
+  clientId: string;
+  clientKind: ClientKind;
+  cols?: number;
+  rows?: number;
+}
+
+export interface NativeTuiSurfaceReleaseRequest {
+  clientId: string;
+}
+
+export interface NativeTuiSurfaceResponse {
+  surface?: NativeTuiSurfaceState;
+}
 
 /**
  * Debug mode feeds synthetic canonical events into the same protocol that real

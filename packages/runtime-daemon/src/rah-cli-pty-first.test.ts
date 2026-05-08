@@ -208,7 +208,7 @@ test("rah provider command creates a native TUI session and attaches to PTY", as
   };
   assert.equal(startRequest.provider, "codex");
   assert.equal(startRequest.cwd, tmpDir);
-  assert.equal(startRequest.liveBackend, "native_tui");
+  assert.equal(startRequest.liveBackend, "zellij_tui");
   assert.match(startRequest.attach.client.id, /^terminal:/);
   assert.equal(startRequest.attach.client.kind, "terminal");
   assert.equal(startRequest.attach.client.connectionId, `pid:${child.pid}`);
@@ -467,6 +467,9 @@ test("rah provider command honors RAH_MUX_BACKEND=zellij", async () => {
 test("rah provider command attaches local terminal through zellij when mux metadata is present", async () => {
   const startRequests: unknown[] = [];
   const detachRequests: unknown[] = [];
+  const surfaceClaims: unknown[] = [];
+  const surfaceReleases: unknown[] = [];
+  let activeSurface: unknown;
   let ptyConnected = false;
   const wss = new WebSocketServer({ noServer: true });
   const server = createServer(async (req, res) => {
@@ -503,6 +506,28 @@ test("rah provider command attaches local terminal through zellij when mux metad
           updatedAt: new Date().toISOString(),
         }),
       });
+      return;
+    }
+    if (req.method === "POST" && req.url === "/api/sessions/session-zellij-attach/tui-surface/claim") {
+      const body = await readJsonBody(req);
+      surfaceClaims.push(body);
+      activeSurface = {
+        sessionId: "session-zellij-attach",
+        clientId: (body as { clientId: string }).clientId,
+        clientKind: (body as { clientKind: string }).clientKind,
+        attachedAt: new Date().toISOString(),
+      };
+      writeJson(res, 200, { surface: activeSurface });
+      return;
+    }
+    if (req.method === "POST" && req.url === "/api/sessions/session-zellij-attach/tui-surface/release") {
+      surfaceReleases.push(await readJsonBody(req));
+      activeSurface = undefined;
+      writeJson(res, 200, {});
+      return;
+    }
+    if (req.method === "GET" && req.url === "/api/sessions/session-zellij-attach/tui-surface") {
+      writeJson(res, 200, activeSurface ? { surface: activeSurface } : {});
       return;
     }
     if (req.method === "POST" && req.url === "/api/sessions/session-zellij-attach/detach") {
@@ -591,11 +616,18 @@ test("rah provider command attaches local terminal through zellij when mux metad
     const startRequest = startRequests[0] as { liveBackend: string; attach: { client: { id: string } } };
     assert.equal(startRequest.liveBackend, "zellij_tui");
     assert.equal(ptyConnected, false);
+    assert.deepEqual(surfaceClaims, [{
+      clientId: startRequest.attach.client.id,
+      clientKind: "terminal",
+      cols: 100,
+      rows: 32,
+    }]);
+    assert.deepEqual(surfaceReleases, [{ clientId: startRequest.attach.client.id }]);
     assert.deepEqual(detachRequests, [{ clientId: startRequest.attach.client.id }]);
     const attachLog = readFileSync(logPath, "utf8");
     assert.match(attachLog, /^cwd=\/(?:private\/)?tmp$/m);
     assert.match(attachLog, /socket=\/tmp\/rah-zellij-attach-test/);
-    assert.match(attachLog, /args=attach rah-attachtest/);
+    assert.match(attachLog, /args=attach rah-attachtest options --mirror-session true --pane-frames false --show-startup-tips false/);
   } finally {
     rmSync(tmpDir, { force: true, recursive: true });
   }
@@ -858,7 +890,7 @@ test("rah provider resume command creates a native TUI resume session and attach
   assert.equal(resumeRequest.provider, "codex");
   assert.equal(resumeRequest.providerSessionId, "provider-session-1");
   assert.equal(resumeRequest.cwd, tmpDir);
-  assert.equal(resumeRequest.liveBackend, "native_tui");
+  assert.equal(resumeRequest.liveBackend, "zellij_tui");
   assert.match(resumeRequest.attach.client.id, /^terminal:/);
   assert.equal(resumeRequest.attach.client.kind, "terminal");
   assert.equal(resumeRequest.attach.client.connectionId, `pid:${child.pid}`);

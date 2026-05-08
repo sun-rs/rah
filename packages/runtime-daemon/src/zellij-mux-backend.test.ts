@@ -209,6 +209,41 @@ test("zellij mux backend writes raw terminal bytes without interpreting escape s
   }
 });
 
+test("zellij mux backend passes provider pane environment overrides", async (t) => {
+  const socketDir = path.join(os.tmpdir(), `rah-zellij-env-${process.pid}`);
+  const backend = new ZellijMuxBackend({ socketDir });
+  if (await skipIfZellijUnavailable(t, backend)) {
+    return;
+  }
+
+  const sessionName = createShortZellijSessionName("rz");
+  try {
+    const created = await backend.createSession({
+      sessionName,
+      cwd: process.cwd(),
+      title: "rah-zellij-env",
+      command: process.execPath,
+      args: [
+        "-e",
+        "process.stdout.write(`ENV_VALUE:${process.env.RAH_ZELLIJ_TEST_ENV ?? ''}\\n`); setInterval(() => undefined, 1000)",
+      ],
+      env: {
+        RAH_ZELLIJ_TEST_ENV: "env-through-zellij-pane",
+      },
+      replaceDefaultPane: true,
+    });
+
+    await waitFor(async () =>
+      (await backend.dumpScreen(sessionName, created.paneId, { full: true })).includes(
+        "ENV_VALUE:env-through-zellij-pane",
+      ),
+    );
+  } finally {
+    await backend.killSession(sessionName).catch(() => undefined);
+    rmSync(socketDir, { force: true, recursive: true });
+  }
+});
+
 test("zellij mux backend reports unexpected subscription exit", async () => {
   const tmpDir = mkdtempSync(path.join(os.tmpdir(), "rah-zellij-sub-exit-"));
   const fakeZellij = path.join(tmpDir, "zellij");

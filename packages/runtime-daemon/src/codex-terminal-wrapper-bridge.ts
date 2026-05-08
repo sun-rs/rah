@@ -128,6 +128,19 @@ export function hasCodexTerminalPrompt(output: string): boolean {
   while (lines.length > 0 && !lines.at(-1)?.trim()) {
     lines.pop();
   }
-  const tail = lines.at(-1) ?? "";
-  return /^[ \t]*›\s*$/u.test(tail);
+  const tail = lines.slice(-12).map((line) => line.trim());
+  if (tail.some((line) => /Booting MCP server|esc to interrupt/i.test(line))) {
+    return false;
+  }
+  return tail.some((line, index) => {
+    if (/^›\s*$/u.test(line)) {
+      return true;
+    }
+    if (!/^›\s+\S/u.test(line)) {
+      return false;
+    }
+    return tail
+      .slice(index + 1, index + 5)
+      .some((candidate) => candidate.includes("·") && /Context|[~/]/i.test(candidate));
+  });
 }

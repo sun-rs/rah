@@ -216,5 +216,13 @@ describe("codex terminal wrapper bridge helpers", () => {
       hasCodexTerminalPrompt("› 描述一下李白这个人"),
       false,
     );
+    assert.equal(
+      hasCodexTerminalPrompt("› Run /review on my current changes\n  gpt-5.5 xhigh · ~/Code/repos/rah · Context 10%"),
+      true,
+    );
+    assert.equal(
+      hasCodexTerminalPrompt("› Run /review on my current changes\n◦ Booting MCP server: codex_apps (2s • esc to interrupt)"),
+      false,
+    );
   });
 });

@@ -8,6 +8,8 @@ import type {
   GitHunkActionRequest,
   IndependentTerminalStartRequest,
   InterruptSessionRequest,
+  NativeTuiSurfaceClaimRequest,
+  NativeTuiSurfaceReleaseRequest,
   PermissionResponseRequest,
   ProviderKind,
   ReleaseControlRequest,
@@ -135,6 +137,32 @@ export function parseSessionInputRequest(body: unknown): SessionInputRequest {
 }
 
 export function parseInterruptSessionRequest(body: unknown): InterruptSessionRequest {
+  const record = requireObjectBody(body);
+  return { clientId: requireString(record, "clientId") };
+}
+
+export function parseNativeTuiSurfaceClaimRequest(
+  body: unknown,
+): NativeTuiSurfaceClaimRequest {
+  const record = requireObjectBody(body);
+  const request: NativeTuiSurfaceClaimRequest = {
+    clientId: requireString(record, "clientId"),
+    clientKind: requireEnum(record, "clientKind", [...CLIENT_KINDS]) as NativeTuiSurfaceClaimRequest["clientKind"],
+  };
+  const cols = optionalNumber(record, "cols");
+  const rows = optionalNumber(record, "rows");
+  if (cols !== undefined) {
+    request.cols = cols;
+  }
+  if (rows !== undefined) {
+    request.rows = rows;
+  }
+  return request;
+}
+
+export function parseNativeTuiSurfaceReleaseRequest(
+  body: unknown,
+): NativeTuiSurfaceReleaseRequest {
   const record = requireObjectBody(body);
   return { clientId: requireString(record, "clientId") };
 }

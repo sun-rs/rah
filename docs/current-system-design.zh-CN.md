@@ -4,7 +4,14 @@
 
 ## 1. 项目定位
 
-RAH 是一个本地优先、PTY-first 的 AI 工作台。它不是要替所有 CLI 重写完整 Web agent，而是让核心 provider TUI session 由 daemon 持有，并让桌面 Terminal、Web、PWA、iPad/iPhone、Canvas pane 都 attach 到同一个 live PTY session。
+RAH 是一个本地优先、PTY-first 的 AI 工作台。它不是要替所有 CLI 重写完整 Web agent，而是让核心 provider TUI session 由 daemon 持有，并让桌面 Terminal、Web、PWA、iPad/iPhone、Canvas pane 都 attach 到同一个 live session。
+
+当前 `1.0.0-rc.1` 分支把 live TUI 主线推进到 zellij-backed mux runtime：
+
+- `rah <provider>` 默认走 zellij-backed native TUI session。
+- Web/PWA 只有显式打开 `TUI` 视图才 claim zellij display surface。
+- Chat composer 可以向 TUI 注入已提交输入，但不会抢占当前 terminal display surface。
+- structured Chat 仍然来自 provider 原厂历史文件/数据库，不从 zellij screen dump 解析语义。
 
 当前 live 主线收敛为三家 provider：
 
@@ -28,7 +35,7 @@ Gemini/Kimi CLI 一等 provider 代码已移除，不再作为 live、history-on
 ```text
 packages/
   runtime-protocol/   协议、事件类型、API 类型、contract validation
-  runtime-daemon/     HTTP/WS server、RuntimeEngine、SessionStore、EventBus、identity-only ProviderAdapter + capability maps
+  runtime-daemon/     HTTP/WS server、RuntimeEngine、SessionStore、EventBus、MuxRuntime、identity-only ProviderAdapter + capability maps
   client-web/         React workbench、Zustand store、session/history/control UI
 ```
 
@@ -88,6 +95,8 @@ Timeline identity 的硬约束：
 - `EventBus`
 - `PtyHub`
 - `PtySessionRuntime`
+- `MuxRuntime`
+- `ZellijMuxBackend`
 - `RuntimeTerminalCoordinator`
 - `NativeTuiMirrorRuntime`
 - `NativeTuiMirrorProvider`
@@ -119,7 +128,7 @@ RAH 里需要区分四类 session 视角。
 
 | 类型 | 含义 | 可输入 | 可 Archive/Close | 历史来源 |
 | --- | --- | --- | --- | --- |
-| Native TUI live | daemon 启动并持有真实 provider TUI PTY；Web New、Canvas New、Web Claim、`rah xxx` 默认都进入这条路径 | 可以，但需要 control lease | 显式 close/archive 才关闭 PTY/TUI | PTY replay + provider history mirror |
+| Native TUI live | daemon 启动并持有真实 provider TUI；`rah xxx` 默认走 zellij mux，Web New/Claim 按 daemon backend 配置进入 zellij 或 native fallback | 可以，但需要 control lease | 显式 close/archive 才关闭 TUI/zellij pane | PTY/zellij replay + provider history mirror |
 | Read-only replay | 打开 provider 历史形成的只读 projection | 不可以，需 claim | 只关闭 UI projection | provider history |
 | Legacy structured live | 旧测试/调试路径；公开 HTTP API 拒绝 `liveBackend: "structured"`，普通 daemon 不构造 legacy structured adapters，只允许测试注入 adapter 直接调用 engine | 可以 | 关闭 provider adapter client | provider SDK/API event + history |
 | Legacy wrapper live | 旧 terminal wrapper handoff；不再从公开 `rah xxx` 入口暴露，普通 daemon 默认不开放 wrapper-control 且 RuntimeEngine 默认不启用 wrapper runtime，仅保留为内部 legacy/synthetic test surface | 可以，但 single-writer | 关闭 wrapper session | provider history + wrapper control |
@@ -128,12 +137,12 @@ Legacy structured/wrapper 的保留决策：
 
 - 保留它们作为内部测试/兼容 harness，而不是生产 live 主链路。
 - 普通 daemon 不构造 legacy structured adapters，不开放 wrapper-control，也不启用 wrapper runtime。
-- 公开 Web/CLI/canvas live 入口只进入 daemon-owned native TUI PTY。
+- 公开 Web/CLI/canvas live 入口只进入 daemon-owned native TUI runtime；当前 RC 的 `rah xxx` 默认是 zellij mux，Web 入口按 daemon backend 配置选择 zellij 或 native fallback。
 - 如果这些 legacy harness 未来阻碍 PTY-first core，可以继续删除；在此之前它们的价值是回归测试和协议参考。
 
 重要边界：
 
-- 只要 provider session 被 daemon-owned native TUI PTY 拉起，就是 live；没有 client attach 时也仍然 live。
+- 只要 provider session 被 daemon-owned native TUI runtime 拉起，就是 live；没有 client attach 时也仍然 live。
 - `ready`、`unread`、`approval`、`thinking` 都属于 live 的 UI 状态，不是是否 live 的边界。
 - 只读打开历史不算 live，也不算写手。
 - Web `claim/resume` 默认把 provider history 升级成 daemon-owned native TUI live session；只读浏览不触发 resume。
@@ -167,23 +176,25 @@ Provider 原生 mode id 仍可作为 `id` 保留，但前端只用 `role` 做稳
 
 `SessionModeDescriptor.applyTiming` 是 mode 的应用时机语义层，用来区分 `immediate`、`next_turn`、`idle_only`、`restart_required`、`startup_only`。在当前 PTY-first core live 范围内，Codex/OpenCode 的 mode 多数是下一 turn 或原生 TUI/ACP 边界生效；Claude 以官方 TUI/CLI 当前能力为准。
 
-## 6. PTY Attach 原则
+## 6. PTY / Zellij Attach 原则
 
-PTY attach 的目标是：
+PTY / zellij attach 的目标是：
 
-- 真实 provider TUI 始终运行在 daemon 持有的 PTY 中。
+- 真实 provider TUI 始终运行在 daemon 管理的 live runtime 中；当前 RC 主线是 zellij session/pane。
 - 本地终端、Web terminal、PWA/iPad/iPhone、Canvas pane 都只是 attach client。
-- `rah xxx` 默认不再拥有 provider 进程生命周期；它请求 daemon 创建/resume native TUI session，然后把当前 terminal attach 到该 PTY。
+- `rah xxx` 默认不再拥有 provider 进程生命周期；它请求 daemon 创建/resume native TUI session，然后把当前 terminal attach 到 zellij mux。
 - 桌面 terminal 断开只 detach，不杀 session；显式 close/archive 才关闭 TUI。
-- Web UI 可以立即看到 live session，并在 reload/focus 后通过 PTY replay 追上。
+- Web UI 可以立即看到 live session，并在 reload/focus 后通过 PTY/zellij replay 追上。
 
 当前锁定原则：
 
 - single-writer：任意时刻只有一个 client 拥有 control lease。
+- single-display-surface：zellij TUI display surface 需要显式 claim。Web/PWA 只有进入 `TUI` 视图才 claim；Chat 发问和 Stop 不 claim display surface。
 - 不同步 draft：只同步已提交 turn，不同步光标、未提交草稿、选区、slash menu。
 - transcript 主要来自 provider history 文件/数据库，不从屏幕画面解析主内容。
 - terminal 画面是用户体验 surface，不是 canonical data source。
-- Chat composer 是 PTY 文本注入桥；如果 TUI prompt dirty，应阻止注入，避免污染用户正在 TUI 里编辑的草稿。
+- Chat composer 是 PTY/zellij 文本注入桥；如果 TUI prompt dirty，应排队或阻止注入，避免污染用户正在 TUI 里编辑的草稿。
+- Archive/Close 必须关闭 provider pane 和对应 `rah-*` zellij session，避免孤儿 mux。
 
 当前不承诺：
 

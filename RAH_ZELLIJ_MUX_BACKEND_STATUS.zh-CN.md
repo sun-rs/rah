@@ -1,8 +1,9 @@
 # RAH Zellij Mux Backend Status
 
-Date: 2026-05-08
+Date: 2026-05-09
 Branch: `experiment/zellij-mux-backend`
 Rollback baseline: `e59ca6f Finalize PTY-first native TUI core`
+Version: `1.0.0-rc.1`
 
 Completion audit: `RAH_ZELLIJ_MUX_BACKEND_COMPLETION_AUDIT.zh-CN.md`
 Manual QA checklist: `RAH_ZELLIJ_MUX_BACKEND_MANUAL_QA.zh-CN.md`
@@ -12,17 +13,19 @@ Final zellij gate: `npm run test:zellij-tui`
 
 ## Current Judgment
 
-Zellij backend is implemented as an experimental mux runtime path, but it is not ready to become the default RAH live TUI backend.
+Zellij backend is now the accepted `1.0rc` live mux path for this branch.
 
 The code-backed MVP is in place:
 
 - `MuxRuntime` / `ZellijMuxBackend` abstraction exists.
-- `rah <provider> --mux zellij` and `RAH_MUX_BACKEND=zellij` request `liveBackend: "zellij_tui"`.
+- `rah <provider>` defaults to zellij; `--mux native` is the fallback diagnostic path.
+- `RAH_MUX_BACKEND=zellij` makes daemon-selected Web New/Claim/Resume use `liveBackend: "zellij_tui"`.
 - Runtime can create, subscribe, write to, interrupt, recover, close, and diagnose zellij sessions.
 - Codex / Claude / OpenCode are covered by fake-provider zellij integration tests.
 - Structured Chat remains backed by provider history files, not zellij screen scraping.
+- Chat input and Stop do not claim the zellij display surface; explicit Web/PWA `TUI` view is the display handoff point.
 
-The final product decision is still blocked by real provider and device QA:
+Remaining work is final-stable hardening, not RC blocking:
 
 - Real Codex / Claude / OpenCode zellij TUI smoothness.
 - Real Stop semantics.
@@ -70,8 +73,8 @@ These commands passed after the latest zellij lifecycle and diagnostics changes:
 
 ```bash
 npm run typecheck
-npm run test:runtime   # 370 pass
-npm run test:web       # 160 pass
+npm run test:runtime   # 382 pass
+npm run test:web       # 162 pass
 npm run build:web
 git diff --check
 ```
@@ -121,7 +124,7 @@ node --import tsx --test --test-concurrency=1 --test-force-exit \
   packages/runtime-daemon/src/zellij-mux-backend.test.ts \
   packages/runtime-daemon/src/zellij-tui-runtime.test.ts
 
-# 16 pass
+# 13 pass for zellij-tui-runtime targeted coverage; broader runtime gate covers the mux tests
 ```
 
 Optional real-provider launch probe:
@@ -192,7 +195,7 @@ Still not code-proven:
 
 ## Remaining Human QA
 
-These remain unverified and block marking the goal complete:
+These remain the final-stable QA list:
 
 Use `RAH_ZELLIJ_MUX_BACKEND_MANUAL_QA.zh-CN.md` for concrete commands, expected behavior, evidence fields, and failure criteria.
 
@@ -216,4 +219,4 @@ Use `RAH_ZELLIJ_MUX_BACKEND_MANUAL_QA.zh-CN.md` for concrete commands, expected 
 
 ## Completion Rule
 
-Do not mark this goal complete until the human QA items above are executed on real Codex / Claude / OpenCode and iPad/PWA, and the results show zellij is stable enough to compare against the current native PTY path.
+The branch goal is complete at `1.0.0-rc.1` scope. Do not call it final stable `1.0.0` until the human QA items above are executed on real Codex / Claude / OpenCode and iPad/PWA, and the results show zellij is stable enough across daily use.

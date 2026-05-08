@@ -28,6 +28,8 @@ import {
   parseGitHunkActionRequest,
   parseIndependentTerminalStartRequest,
   parseInterruptSessionRequest,
+  parseNativeTuiSurfaceClaimRequest,
+  parseNativeTuiSurfaceReleaseRequest,
   parsePermissionResponseRequest,
   parseReleaseControlRequest,
   parseRenameSessionRequest,
@@ -149,6 +151,34 @@ export function createPostRoutes(
             parseInterruptSessionRequest(body),
         );
         writeJson(req, res, 200, { session: result });
+      },
+    },
+    {
+      pattern: /^\/api\/sessions\/([^/]+)\/tui-surface\/claim$/,
+      handler: async (req, res, match, body) => {
+        writeJson(
+          req,
+          res,
+          200,
+          await engine.claimNativeTuiSurface(
+            match[1]!,
+            parseNativeTuiSurfaceClaimRequest(body),
+          ),
+        );
+      },
+    },
+    {
+      pattern: /^\/api\/sessions\/([^/]+)\/tui-surface\/release$/,
+      handler: async (req, res, match, body) => {
+        writeJson(
+          req,
+          res,
+          200,
+          await engine.releaseNativeTuiSurface(
+            match[1]!,
+            parseNativeTuiSurfaceReleaseRequest(body),
+          ),
+        );
       },
     },
     {
@@ -394,6 +424,12 @@ export async function handleHttpRequest(args: {
     const sessionMatch = /^\/api\/sessions\/([^/]+)$/.exec(pathname);
     if (req.method === "GET" && sessionMatch) {
       writeJson(req, res, 200, { session: engine.getSessionSummary(sessionMatch[1]!) });
+      return;
+    }
+
+    const surfaceMatch = /^\/api\/sessions\/([^/]+)\/tui-surface$/.exec(pathname);
+    if (req.method === "GET" && surfaceMatch) {
+      writeJson(req, res, 200, engine.getNativeTuiSurface(surfaceMatch[1]!));
       return;
     }
 

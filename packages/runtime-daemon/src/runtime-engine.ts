@@ -15,6 +15,9 @@ import type {
   IndependentTerminalStartResponse,
   InterruptSessionRequest,
   ManagedSession,
+  NativeTuiSurfaceClaimRequest,
+  NativeTuiSurfaceReleaseRequest,
+  NativeTuiSurfaceResponse,
   NativeTuiDiagnostic,
   ListSessionsResponse,
   ProviderDiagnostic,
@@ -683,6 +686,24 @@ export class RuntimeEngine {
     return this.sessionLifecycle.detachSession(sessionId, request);
   }
 
+  getNativeTuiSurface(sessionId: string): NativeTuiSurfaceResponse {
+    return this.terminals.getNativeTuiSurface(sessionId);
+  }
+
+  async claimNativeTuiSurface(
+    sessionId: string,
+    request: NativeTuiSurfaceClaimRequest,
+  ): Promise<NativeTuiSurfaceResponse> {
+    return await this.terminals.claimNativeTuiSurface(sessionId, request);
+  }
+
+  async releaseNativeTuiSurface(
+    sessionId: string,
+    request: NativeTuiSurfaceReleaseRequest,
+  ): Promise<NativeTuiSurfaceResponse> {
+    return await this.terminals.releaseNativeTuiSurface(sessionId, request);
+  }
+
   async respondToPermission(
     sessionId: string,
     requestId: string,
@@ -697,7 +718,7 @@ export class RuntimeEngine {
 
   onPtyInput(sessionId: string, clientId: string, data: string): void {
     this.assertPtyInputControl(sessionId, clientId);
-    if (this.terminals.handlePtyInput(sessionId, data)) {
+    if (this.terminals.handlePtyInput(sessionId, clientId, data)) {
       return;
     }
     this.requireStructuredInputControlAdapter(sessionId).onPtyInput(sessionId, clientId, data);
@@ -705,7 +726,7 @@ export class RuntimeEngine {
 
   onPtyResize(sessionId: string, clientId: string, cols: number, rows: number): void {
     this.assertPtyInputControl(sessionId, clientId);
-    if (this.terminals.handlePtyResize(sessionId, cols, rows)) {
+    if (this.terminals.handlePtyResize(sessionId, clientId, cols, rows)) {
       return;
     }
     this.requireStructuredInputControlAdapter(sessionId).onPtyResize(

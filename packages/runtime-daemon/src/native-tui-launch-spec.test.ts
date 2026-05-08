@@ -1,6 +1,13 @@
 import { afterEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -13,6 +20,7 @@ const originalEnv = {
   RAH_CODEX_BINARY: process.env.RAH_CODEX_BINARY,
   RAH_CLAUDE_BINARY: process.env.RAH_CLAUDE_BINARY,
   RAH_OPENCODE_BINARY: process.env.RAH_OPENCODE_BINARY,
+  CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
 };
 
 afterEach(() => {
@@ -20,6 +28,7 @@ afterEach(() => {
   restoreEnv("RAH_CODEX_BINARY", originalEnv.RAH_CODEX_BINARY);
   restoreEnv("RAH_CLAUDE_BINARY", originalEnv.RAH_CLAUDE_BINARY);
   restoreEnv("RAH_OPENCODE_BINARY", originalEnv.RAH_OPENCODE_BINARY);
+  restoreEnv("CLAUDE_CONFIG_DIR", originalEnv.CLAUDE_CONFIG_DIR);
 });
 
 function restoreEnv(key: keyof typeof originalEnv, value: string | undefined): void {
@@ -102,11 +111,14 @@ describe("native TUI launch specs", () => {
 
   test("builds Claude start and resume args with native session ids", async () => {
     const fake = fakeBinary("claude");
+    const configDir = mkdtempSync(path.join(os.tmpdir(), "rah-native-spec-claude-config-"));
+    const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-native-spec-claude-workspace-"));
     process.env.RAH_CLAUDE_BINARY = fake.path;
+    process.env.CLAUDE_CONFIG_DIR = configDir;
     try {
       const start = await nativeTuiStartLaunchSpec({
         provider: "claude",
-        cwd: "/workspace/demo",
+        cwd: workspace,
         liveBackend: "native_tui",
         model: "opus",
         optionValues: { effort: "max" },
@@ -131,7 +143,7 @@ describe("native TUI launch specs", () => {
       const resume = await nativeTuiResumeLaunchSpec({
         provider: "claude",
         providerSessionId: "1fc664f1-6b72-46ed-936f-62b2e099ac45",
-        cwd: "/workspace/demo",
+        cwd: workspace,
         liveBackend: "native_tui",
         modeId: "default",
       });
@@ -142,8 +154,20 @@ describe("native TUI launch specs", () => {
         "1fc664f1-6b72-46ed-936f-62b2e099ac45",
       ]);
       assert.equal(resume.providerSessionId, "1fc664f1-6b72-46ed-936f-62b2e099ac45");
+
+      const claudeConfig = JSON.parse(
+        readFileSync(path.join(configDir, ".claude.json"), "utf8"),
+      ) as { projects?: Record<string, { hasTrustDialogAccepted?: boolean }> };
+      assert.equal(
+        Object.values(claudeConfig.projects ?? {}).some(
+          (project) => project.hasTrustDialogAccepted === true,
+        ),
+        true,
+      );
     } finally {
       rmSync(fake.dir, { force: true, recursive: true });
+      rmSync(configDir, { force: true, recursive: true });
+      rmSync(workspace, { force: true, recursive: true });
     }
   });
 

@@ -298,6 +298,16 @@ function isClaudeTranscriptNoiseContent(content: unknown): boolean {
   return parts.length > 0 && parts.every((part) => isClaudeTranscriptNoiseText(part));
 }
 
+function isClaudeInterruptPlaceholderContent(content: unknown): boolean {
+  const parts = collectClaudeTextContentParts(content);
+  return parts.length > 0 && parts.every((part) => isClaudeInterruptPlaceholderText(part));
+}
+
+function isClaudeNoResponsePlaceholderContent(content: unknown): boolean {
+  const parts = collectClaudeTextContentParts(content);
+  return parts.length > 0 && parts.every((part) => isClaudeNoResponsePlaceholderText(part));
+}
+
 function extractUserMessageText(content: unknown): string | null {
   if (typeof content === "string") {
     const text = trimClaudeTranscriptBlankLines(content);
@@ -534,6 +544,8 @@ function translateClaudeRecordsToActivities(
   const processedKeys = options.state?.processedRecordKeys ?? new Set<string>();
   const seenKeys = new Set<string>();
   let turnCounter = 0;
+  let latestTurnId: string | undefined;
+  let latestTurnHasAssistantOutput = false;
   for (const record of records) {
     const key = recordKey(record);
     if (seenKeys.has(key)) {
@@ -573,6 +585,8 @@ function translateClaudeRecordsToActivities(
         continue;
       }
       const turnId = `turn-${++turnCounter}`;
+      latestTurnId = turnId;
+      latestTurnHasAssistantOutput = false;
       if (alreadyProcessed) {
         continue;
       }
@@ -627,6 +641,9 @@ function translateClaudeRecordsToActivities(
               (block as Record<string, unknown>).type === "tool_use",
           )
         : [];
+      if (toolBlocks.length > 0) {
+        latestTurnHasAssistantOutput = true;
+      }
       for (const block of toolBlocks) {
         const tool = block as Record<string, unknown>;
         const toolId =
@@ -659,6 +676,50 @@ function translateClaudeRecordsToActivities(
         });
       }
 
+      if (isClaudeInterruptPlaceholderContent(record.message.content)) {
+        if (latestTurnId !== undefined) {
+          activities.push({
+            recordKey: key,
+            meta: {
+              provider: "claude",
+              channel: "structured_persisted",
+              authority: "derived",
+              raw: record,
+              ts: timestamp,
+            },
+            activity: {
+              type: "turn_canceled",
+              turnId: latestTurnId,
+              reason: "interrupted",
+            },
+          });
+        }
+        continue;
+      }
+
+      if (
+        isClaudeNoResponsePlaceholderContent(record.message.content) &&
+        latestTurnId !== undefined &&
+        !latestTurnHasAssistantOutput
+      ) {
+        activities.push({
+          recordKey: key,
+          meta: {
+            provider: "claude",
+            channel: "structured_persisted",
+            authority: "derived",
+            raw: record,
+            ts: timestamp,
+          },
+          activity: {
+            type: "turn_canceled",
+            turnId: latestTurnId,
+            reason: "interrupted",
+          },
+        });
+        continue;
+      }
+
       if (isClaudeTranscriptNoiseContent(record.message.content)) {
         continue;
       }
@@ -666,6 +727,7 @@ function translateClaudeRecordsToActivities(
       if (!text) {
         continue;
       }
+      latestTurnHasAssistantOutput = true;
       activities.push({
         recordKey: key,
         meta: {

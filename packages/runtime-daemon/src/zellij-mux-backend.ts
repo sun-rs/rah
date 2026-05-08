@@ -21,6 +21,7 @@ const DEFAULT_ZELLIJ_SOCKET_DIR = "/tmp/rah-zellij-sock";
 const ZELLIJ_SOCKET_DIR_ENV = "RAH_ZELLIJ_SOCKET_DIR";
 const DEFAULT_COMMAND_TIMEOUT_MS = 10_000;
 const WRITE_BYTES_CHUNK_SIZE = 512;
+const ENV_COMMAND = "/usr/bin/env";
 
 type ExecResult = {
   stdout: string;
@@ -375,7 +376,15 @@ export class ZellijMuxBackend implements MuxRuntime {
   }
 
   private async ensureSession(sessionName: string): Promise<void> {
-    await this.exec(["attach", "-b", sessionName]);
+    await this.exec(["attach", "-b", sessionName]).catch((error) => {
+      if (
+        error instanceof ZellijCommandError &&
+        /Session already exists/i.test(`${error.stdout}\n${error.stderr}\n${error.message}`)
+      ) {
+        return;
+      }
+      throw error;
+    });
   }
 
   private async closeStartupFloatingPanes(sessionName: string): Promise<void> {
@@ -392,7 +401,21 @@ export class ZellijMuxBackend implements MuxRuntime {
     if (request.title) {
       args.push("--name", request.title);
     }
-    args.push("--cwd", request.cwd, "--", request.command, ...(request.args ?? []));
+    const commandEnv = Object.entries(request.env ?? {}).filter(
+      ([name]) => name.trim().length > 0 && !name.includes("="),
+    );
+    const command =
+      commandEnv.length > 0
+        ? {
+            command: ENV_COMMAND,
+            args: [
+              ...commandEnv.map(([name, value]) => `${name}=${value}`),
+              request.command,
+              ...(request.args ?? []),
+            ],
+          }
+        : { command: request.command, args: request.args ?? [] };
+    args.push("--cwd", request.cwd, "--", command.command, ...command.args);
     const result = await this.exec(args);
     const paneId = result.stdout.trim();
     if (!paneId) {

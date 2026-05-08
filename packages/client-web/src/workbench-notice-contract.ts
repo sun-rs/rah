@@ -46,7 +46,7 @@ export function deriveWorkbenchNoticeState(args: {
     ? selectedSummary.session.launchSource === "terminal" &&
       selectedSummary.controlLease.holderKind === "terminal" &&
       selectedSummary.session.runtimeState === "running"
-      ? "Terminal is handling this turn. Web can observe it, but can't interrupt it."
+      ? "Terminal started this turn. Web can observe it and request interrupt."
       : sessionInteractionNotice(selectedSummary)
     : null;
   const interactionNotice = nativeTuiDiagnosticMessage

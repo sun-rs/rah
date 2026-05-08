@@ -34,7 +34,7 @@ describe("NativeTuiProviderRuntime", () => {
     const runtime = new DefaultNativeTuiProviderRuntime();
     assert.equal(runtime.canProbeBinding("codex"), true);
     assert.equal(runtime.canProbeBinding("opencode"), true);
-    assert.equal(runtime.canProbeBinding("claude"), false);
+    assert.equal(runtime.canProbeBinding("claude"), true);
   });
 
   test("does not try to mirror before the provider session is bound", () => {
@@ -60,6 +60,28 @@ describe("NativeTuiProviderRuntime", () => {
       promptClean: false,
       binding: null,
     });
+  });
+
+  test("detects Claude prompt markers from zellij viewport snapshots", () => {
+    const runtime = new DefaultNativeTuiProviderRuntime();
+    const observation = runtime.observeOutput({
+      sessionId: "rah-session",
+      provider: "claude",
+      cwd: "/tmp/rah-native",
+      startupTimestampMs: Date.now(),
+    }, "Welcome back!\n> \n  bypass permissions on");
+    assert.equal(observation.promptClean, true);
+  });
+
+  test("does not treat a Claude prompt with an unsubmitted draft as clean", () => {
+    const runtime = new DefaultNativeTuiProviderRuntime();
+    const observation = runtime.observeOutput({
+      sessionId: "rah-session",
+      provider: "claude",
+      cwd: "/tmp/rah-native",
+      startupTimestampMs: Date.now(),
+    }, "Welcome back!\n> partial local draft");
+    assert.equal(observation.promptClean, false);
   });
 
   test("detects the OpenCode input prompt before draining queued Web input", () => {

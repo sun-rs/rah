@@ -24,6 +24,7 @@ import type {
   ListProvidersResponse,
   ListZellijMuxDiagnosticsResponse,
   NativeTuiDiagnostic,
+  NativeTuiSurfaceResponse,
   ListSessionsResponse,
   ProviderDiagnostic,
   ProviderKind,
@@ -148,6 +149,14 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
 
 export async function listSessions(): Promise<ListSessionsResponse> {
   return requestJson<ListSessionsResponse>("/api/sessions");
+}
+
+export async function getNativeTuiSurface(
+  sessionId: string,
+): Promise<NativeTuiSurfaceResponse> {
+  return requestJson<NativeTuiSurfaceResponse>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/tui-surface`,
+  );
 }
 
 export async function writeHostClipboard(text: string): Promise<{ ok: true }> {

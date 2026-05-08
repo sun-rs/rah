@@ -18,5 +18,5 @@ run_exit_probe() {
 }
 
 run_exit_probe codex 6000 $'\004'
-run_exit_probe claude 3000 $'\033'
+run_exit_probe claude 8000 $'/exit\r'
 run_exit_probe opencode 6000 $'\004'

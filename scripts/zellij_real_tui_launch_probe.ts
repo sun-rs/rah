@@ -50,7 +50,7 @@ type RahProbeMetadata = {
 const SELECTABLE_PROVIDERS: ProbeProvider[] = ["codex", "claude", "opencode"];
 const DEFAULT_PROVIDERS: ProbeProvider[] = ["codex", "claude", "opencode"];
 
-const SETTLE_MS = Number(process.env.RAH_ZELLIJ_REAL_TUI_PROBE_SETTLE_MS ?? 3_000);
+const SETTLE_MS = Number(process.env.RAH_ZELLIJ_REAL_TUI_PROBE_SETTLE_MS ?? 8_000);
 const CLOSE_TIMEOUT_MS = Number(process.env.RAH_ZELLIJ_REAL_TUI_PROBE_CLOSE_TIMEOUT_MS ?? 5_000);
 const EXIT_WAIT_MS = Number(process.env.RAH_ZELLIJ_REAL_TUI_PROBE_EXIT_WAIT_MS ?? 6_000);
 const EXIT_PROBE = process.env.RAH_ZELLIJ_REAL_TUI_PROBE_EXIT === "1";
@@ -333,6 +333,12 @@ async function probeProvider(provider: ProbeProvider): Promise<ProviderProbeResu
     let paneExitedAfterExit: boolean | undefined;
     if (EXIT_PROBE && sessionId && zellijSessionName) {
       engine.getSessionSummary(sessionId);
+      await engine.claimNativeTuiSurface(sessionId, {
+        clientId,
+        clientKind: "web",
+        cols: 120,
+        rows: 36,
+      });
       engine.onPtyInput(sessionId, clientId, EXIT_INPUT);
       exitInputSent = true;
       rahSessionGoneAfterExit = await waitForRahSessionGone(engine, sessionId, EXIT_WAIT_MS);

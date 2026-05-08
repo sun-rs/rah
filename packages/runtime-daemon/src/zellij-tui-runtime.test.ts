@@ -49,18 +49,26 @@ function writeFakeTuiBinary(filePath: string, provider: ProviderKind, options: {
       "#!/usr/bin/env node",
       `const provider = ${JSON.stringify(provider)};`,
       "process.stdout.write(`ZELLIJ_${provider.toUpperCase()}_READY args=${process.argv.slice(2).join('|')}\\r\\n`);",
+      "if (process.env.CODEX_HOME) process.stdout.write(`CODEX_HOME=${process.env.CODEX_HOME}\\r\\n`);",
       "if (provider === 'opencode') process.stdout.write('Ask anything\\r\\n');",
       ...(options.providerSessionId
         ? [`process.stdout.write(${JSON.stringify(`Session: ${options.providerSessionId}\r\n`)});`]
         : []),
+      "if (provider === 'codex' || provider === 'claude') process.stdout.write('›\\r\\n');",
       "process.stdin.setEncoding('utf8');",
       "if (process.stdin.isTTY && process.stdin.setRawMode) process.stdin.setRawMode(true);",
       "process.stdin.resume();",
       "let buffer = '';",
+      "let escapeCount = 0;",
       "process.stdin.on('data', (chunk) => {",
       "  if (chunk.includes('\\u001b')) {",
-      "    process.stdout.write(`ZELLIJ_${provider.toUpperCase()}_INTERRUPTED\\r\\n›\\r\\n`);",
+      "    const matches = chunk.match(/\\u001b/g) ?? [];",
       "    chunk = chunk.replace(/\\u001b/g, '');",
+      "    escapeCount += matches.length;",
+      "    if (provider !== 'opencode' || escapeCount >= 2) {",
+      "      process.stdout.write(`ZELLIJ_${provider.toUpperCase()}_INTERRUPTED\\r\\n›\\r\\n`);",
+      "      escapeCount = 0;",
+      "    }",
       "  }",
       "  buffer += chunk;",
       "  const parts = buffer.split(/\\r|\\n/);",
@@ -69,6 +77,7 @@ function writeFakeTuiBinary(filePath: string, provider: ProviderKind, options: {
       "    if (!part.trim()) continue;",
       "    process.stdout.write(`ZELLIJ_${provider.toUpperCase()}_INPUT:${part.trim()}\\r\\n`);",
       "    if (provider === 'codex') process.stdout.write('›\\r\\n');",
+      "    if (provider === 'opencode') process.stdout.write('Ask anything\\r\\n');",
       "    if (part.trim() === 'exit') process.exit(0);",
       "  }",
       "});",
@@ -197,6 +206,18 @@ async function startZellijProviderSession(params: {
         muxDiagnostic.panes.some((pane) => pane.paneId === started.session.session.mux?.paneId),
       );
     });
+    engine.onPtyResize(sessionId, "web-zellij-observer", 96, 28);
+    await waitFor(async () => {
+      const muxDiagnostics = await engine.listZellijMuxDiagnostics();
+      const muxDiagnostic = muxDiagnostics.find(
+        (diagnostic) => diagnostic.managedSessionId === sessionId,
+      );
+      const pane = muxDiagnostic?.panes.find(
+        (candidate) => candidate.paneId === started.session.session.mux?.paneId,
+      );
+      assert.ok(pane);
+      assert.ok(pane.columns >= 90, `expected resized zellij pane, got ${pane.columns} cols`);
+    });
 
     let transcript = "";
     const unsubscribe = engine.ptyHub.subscribe(sessionId, (frame) => {
@@ -267,6 +288,7 @@ test("zellij_tui backend starts Codex, routes input, interrupts, and observes ex
     fakeProviderSessionId: providerSessionId,
     assertReady: ({ transcript, sessionId, engine }) => {
       assert.match(transcript, /--no-alt-screen/);
+      assert.match(transcript, /CODEX_HOME=/);
       assert.equal(engine.getSessionSummary(sessionId).session.providerSessionId, providerSessionId);
     },
   });
@@ -388,6 +410,12 @@ test("zellij_tui chat input queues while the TUI prompt has a local draft", asyn
     await waitFor(() => {
       assert.match(transcript, /ZELLIJ_OPENCODE_READY/);
     });
+    await engine.claimNativeTuiSurface(sessionId, {
+      clientId: "web-zellij-queue",
+      clientKind: "web",
+      cols: 100,
+      rows: 30,
+    });
 
     engine.onPtyInput(sessionId, "web-zellij-queue", "local draft");
     await waitFor(() => {
@@ -406,6 +434,98 @@ test("zellij_tui chat input queues while the TUI prompt has a local draft", asyn
 
     unsubscribe();
     await engine.closeSession(sessionId, { clientId: "web-zellij-queue" });
+  } finally {
+    await engine.shutdown();
+    restoreBinary();
+    restoreSocketDir();
+    restoreRahHome();
+    rmSync(socketDir, { force: true, recursive: true });
+    rmSync(workspace, { force: true, recursive: true });
+  }
+});
+
+test("zellij_tui chat input queues during provider startup until prompt is clean", async (t) => {
+  if (await skipIfZellijUnavailable(t)) {
+    return;
+  }
+
+  const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-zellij-startup-"));
+  const fakeOpenCode = path.join(workspace, "fake-opencode-delayed.js");
+  writeFileSync(
+    fakeOpenCode,
+    [
+      "#!/usr/bin/env node",
+      "process.stdout.write('ZELLIJ_OPENCODE_BOOTING\\r\\n');",
+      "process.stdin.setEncoding('utf8');",
+      "if (process.stdin.isTTY && process.stdin.setRawMode) process.stdin.setRawMode(true);",
+      "process.stdin.resume();",
+      "let buffer = '';",
+      "process.stdin.on('data', (chunk) => {",
+      "  buffer += chunk;",
+      "  const parts = buffer.split(/\\r|\\n/);",
+      "  buffer = parts.pop() ?? '';",
+      "  for (const part of parts) {",
+      "    if (!part.trim()) continue;",
+      "    process.stdout.write(`ZELLIJ_OPENCODE_INPUT:${part.trim()}\\r\\n`);",
+      "  }",
+      "});",
+      "setTimeout(() => process.stdout.write('Ask anything\\r\\n'), 1500);",
+      "setInterval(() => undefined, 1000);",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(fakeOpenCode, 0o755);
+  const socketDir = makeTestZellijSocketDir("startup");
+  const restoreRahHome = setEnv("RAH_HOME", path.join(workspace, "rah-home"));
+  const restoreSocketDir = setEnv("RAH_ZELLIJ_SOCKET_DIR", socketDir);
+  const restoreBinary = setEnv("RAH_OPENCODE_BINARY", fakeOpenCode);
+  const engine = new RuntimeEngine();
+
+  try {
+    const started = await engine.startSession({
+      provider: "opencode",
+      cwd: workspace,
+      liveBackend: "zellij_tui",
+      attach: {
+        client: {
+          id: "web-zellij-startup",
+          kind: "web",
+          connectionId: "web-zellij-startup",
+        },
+        mode: "interactive",
+        claimControl: true,
+      },
+    });
+    const sessionId = started.session.session.id;
+    let transcript = "";
+    const unsubscribe = engine.ptyHub.subscribe(sessionId, (frame) => {
+      if (frame.type === "pty.replay") {
+        transcript += frame.chunks.join("");
+      } else if (frame.type === "pty.output") {
+        transcript += frame.data;
+      }
+    });
+    await waitFor(() => {
+      assert.match(transcript, /ZELLIJ_OPENCODE_BOOTING/);
+      assert.equal(engine.getSessionSummary(sessionId).session.nativeTui?.promptState, "agent_busy");
+    });
+
+    engine.sendInput(sessionId, {
+      clientId: "web-zellij-startup",
+      text: "queued during startup",
+    });
+    await waitFor(() => {
+      assert.equal(engine.getSessionSummary(sessionId).session.nativeTui?.queuedInputCount, 1);
+    });
+    assert.doesNotMatch(transcript, /queued during startup/);
+
+    await waitFor(() => {
+      assert.match(transcript, /Ask anything/);
+      assert.match(transcript, /ZELLIJ_OPENCODE_INPUT:queued during startup/);
+    });
+
+    unsubscribe();
+    await engine.closeSession(sessionId, { clientId: "web-zellij-startup" });
   } finally {
     await engine.shutdown();
     restoreBinary();
@@ -460,6 +580,9 @@ test("zellij_tui session can hand off from terminal client to web client without
     await waitFor(() => {
       assert.match(transcript, /ZELLIJ_CODEX_READY/);
     });
+    await waitFor(() => {
+      assert.equal(engine.getSessionSummary(sessionId).session.nativeTui?.promptState, "prompt_clean");
+    });
 
     const attached = engine.attachSession(sessionId, {
       client: {
@@ -500,6 +623,92 @@ test("zellij_tui session can hand off from terminal client to web client without
 
     unsubscribe();
     await engine.closeSession(sessionId, { clientId: "web-zellij-handoff" });
+  } finally {
+    await engine.shutdown();
+    restoreBinary();
+    restoreSocketDir();
+    restoreRahHome();
+    rmSync(socketDir, { force: true, recursive: true });
+    rmSync(workspace, { force: true, recursive: true });
+  }
+});
+
+test("zellij_tui surface lease rejects stale terminal input from inactive clients", async (t) => {
+  if (await skipIfZellijUnavailable(t)) {
+    return;
+  }
+
+  const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-zellij-surface-"));
+  const fakeOpenCode = path.join(workspace, "fake-opencode.js");
+  writeFakeTuiBinary(fakeOpenCode, "opencode");
+  const socketDir = makeTestZellijSocketDir("surface");
+  const restoreRahHome = setEnv("RAH_HOME", path.join(workspace, "rah-home"));
+  const restoreSocketDir = setEnv("RAH_ZELLIJ_SOCKET_DIR", socketDir);
+  const restoreBinary = setEnv("RAH_OPENCODE_BINARY", fakeOpenCode);
+  const engine = new RuntimeEngine();
+
+  try {
+    const started = await engine.startSession({
+      provider: "opencode",
+      cwd: workspace,
+      liveBackend: "zellij_tui",
+      attach: {
+        client: {
+          id: "web-zellij-surface",
+          kind: "web",
+          connectionId: "web-zellij-surface",
+        },
+        mode: "interactive",
+        claimControl: true,
+      },
+    });
+    const sessionId = started.session.session.id;
+    let transcript = "";
+    const unsubscribe = engine.ptyHub.subscribe(sessionId, (frame) => {
+      if (frame.type === "pty.replay") {
+        transcript += frame.chunks.join("");
+      } else if (frame.type === "pty.output") {
+        transcript += frame.data;
+      }
+    });
+    await waitFor(() => {
+      assert.match(transcript, /ZELLIJ_OPENCODE_READY/);
+    });
+
+    await engine.claimNativeTuiSurface(sessionId, {
+      clientId: "web-zellij-surface",
+      clientKind: "web",
+      cols: 100,
+      rows: 30,
+    });
+    assert.equal(engine.getNativeTuiSurface(sessionId).surface?.clientId, "web-zellij-surface");
+
+    await engine.claimNativeTuiSurface(sessionId, {
+      clientId: "terminal-zellij-surface",
+      clientKind: "terminal",
+      cols: 120,
+      rows: 40,
+    });
+    assert.equal(engine.getNativeTuiSurface(sessionId).surface?.clientId, "terminal-zellij-surface");
+    assert.throws(
+      () => engine.onPtyInput(sessionId, "web-zellij-surface", "stale input"),
+      /controlled by terminal/,
+    );
+    engine.sendInput(sessionId, {
+      clientId: "web-zellij-surface",
+      text: "chat does not reclaim surface",
+    });
+    await waitFor(() => {
+      assert.equal(engine.getNativeTuiSurface(sessionId).surface?.clientId, "terminal-zellij-surface");
+      assert.match(transcript, /ZELLIJ_OPENCODE_INPUT:chat does not reclaim surface/);
+    });
+    assert.throws(
+      () => engine.onPtyInput(sessionId, "web-zellij-surface", "stale web terminal input"),
+      /controlled by terminal/,
+    );
+
+    unsubscribe();
+    await engine.closeSession(sessionId, { clientId: "web-zellij-surface" });
   } finally {
     await engine.shutdown();
     restoreBinary();
@@ -555,6 +764,9 @@ test("zellij_tui keeps capturing pane output while web PTY is disconnected", asy
     });
     await waitFor(() => {
       assert.match(firstTranscript, /ZELLIJ_CODEX_READY/);
+    });
+    await waitFor(() => {
+      assert.equal(engine.getSessionSummary(sessionId).session.nativeTui?.promptState, "prompt_clean");
     });
     unsubscribeFirst();
     assert.equal(engine.ptyHub.stats(sessionId)?.subscriberCount, 0);
@@ -864,6 +1076,9 @@ test("zellij_tui backend recovers a persisted mux pane after daemon restart", as
     await waitFor(() => {
       assert.match(transcript2, /ZELLIJ_OPENCODE_READY/);
     });
+    await waitFor(() => {
+      assert.equal(engine2?.getSessionSummary(sessionId).session.nativeTui?.promptState, "prompt_clean");
+    });
 
     engine2.sendInput(sessionId, {
       clientId: "web-zellij-recover-2",
@@ -871,6 +1086,9 @@ test("zellij_tui backend recovers a persisted mux pane after daemon restart", as
     });
     await waitFor(() => {
       assert.match(transcript2, /ZELLIJ_OPENCODE_INPUT:after-recover/);
+    });
+    await waitFor(() => {
+      assert.equal(engine2?.getSessionSummary(sessionId).session.nativeTui?.promptState, "prompt_clean");
     });
 
     engine2.sendInput(sessionId, { clientId: "web-zellij-recover-2", text: "exit" });

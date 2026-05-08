@@ -20,6 +20,7 @@ import type {
 import { normalizeContextUsage } from "./context-usage";
 import type { RuntimeServices } from "./provider-adapter";
 import { recordTimelineIdentityTelemetry } from "./timeline-identity-telemetry";
+import { reconcileTimelineActivity } from "./timeline-reconciler";
 
 export interface ProviderActivityMeta {
   provider: ManagedSession["provider"];
@@ -612,28 +613,37 @@ export function applyProviderActivity(
         turnId: activity.turnId,
         identity: activity.identity,
       });
-      published.push(
-        services.eventBus.publish(
-          withRaw(
-            withTurnId(
-              withTs(
-                {
-                  sessionId,
-                  type: "timeline.item.added",
-                  source,
-                  payload: {
-                    item: activity.item,
-                    ...(activity.identity !== undefined ? { identity: activity.identity } : {}),
+      {
+        const reconciled = reconcileTimelineActivity(services, sessionId, activity);
+        if (reconciled === null) {
+          break;
+        }
+        published.push(
+          services.eventBus.publish(
+            withRaw(
+              withTurnId(
+                withTs(
+                  {
+                    sessionId,
+                    type:
+                      reconciled.type === "timeline_item_updated"
+                        ? "timeline.item.updated"
+                        : "timeline.item.added",
+                    source,
+                    payload: {
+                      item: reconciled.item,
+                      ...(reconciled.identity !== undefined ? { identity: reconciled.identity } : {}),
+                    },
                   },
-                },
-                ts,
+                  ts,
+                ),
+                reconciled.turnId,
               ),
-              activity.turnId,
+              meta,
             ),
-            meta,
           ),
-        ),
-      );
+        );
+      }
       break;
     case "timeline_item_updated":
       recordTimelineIdentityTelemetry(services, {
@@ -646,28 +656,37 @@ export function applyProviderActivity(
         turnId: activity.turnId,
         identity: activity.identity,
       });
-      published.push(
-        services.eventBus.publish(
-          withRaw(
-            withTurnId(
-              withTs(
-                {
-                  sessionId,
-                  type: "timeline.item.updated",
-                  source,
-                  payload: {
-                    item: activity.item,
-                    ...(activity.identity !== undefined ? { identity: activity.identity } : {}),
+      {
+        const reconciled = reconcileTimelineActivity(services, sessionId, activity);
+        if (reconciled === null) {
+          break;
+        }
+        published.push(
+          services.eventBus.publish(
+            withRaw(
+              withTurnId(
+                withTs(
+                  {
+                    sessionId,
+                    type:
+                      reconciled.type === "timeline_item_updated"
+                        ? "timeline.item.updated"
+                        : "timeline.item.added",
+                    source,
+                    payload: {
+                      item: reconciled.item,
+                      ...(reconciled.identity !== undefined ? { identity: reconciled.identity } : {}),
+                    },
                   },
-                },
-                ts,
+                  ts,
+                ),
+                reconciled.turnId,
               ),
-              activity.turnId,
+              meta,
             ),
-            meta,
           ),
-        ),
-      );
+        );
+      }
       break;
     case "message_part_added":
       published.push(
