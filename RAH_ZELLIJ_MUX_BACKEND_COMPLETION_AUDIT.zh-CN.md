@@ -73,6 +73,7 @@ Until those are proven, do not mark the goal complete.
 | Real Codex smoke | latest real launch probe observed visible Codex TUI; configured `Ctrl-D` exit probe removed RAH live state and zellij session; no real prompt/Stop/manual browser flow yet | Incomplete |
 | Real Claude smoke | latest real launch probe reached trust prompt; configured `Esc` exit probe removed RAH live state and zellij session; no complete trust/input/Stop/API-error QA | Incomplete |
 | Real OpenCode smoke | latest 3s all-provider probe can miss first paint; 6s OpenCode-only probe observed visible dump; configured `Ctrl-D` exit probe removed RAH live state and zellij session; no full prompt/Stop/browser QA | Incomplete |
+| Repeatable real exit smoke | `npm run test:smoke:zellij-real-tui-exit` runs Codex, Claude, and OpenCode provider-specific exit probes | Satisfied |
 | iPad/Safari manual QA | no artifact yet | Missing |
 | Default backend decision | explicit non-decision in status doc | Not ready |
 

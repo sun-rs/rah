@@ -136,6 +136,11 @@ Additional real exit sync probes:
 
 - Claude trust prompt + `Esc`: passed. RAH removed live state and the zellij session disappeared.
 - OpenCode prompt + `Ctrl-D`: passed. RAH removed live state and the zellij session disappeared.
+- These provider-specific exit probes are now packaged as:
+
+```bash
+npm run test:smoke:zellij-real-tui-exit
+```
 
 ## Edge Case Audit
 
