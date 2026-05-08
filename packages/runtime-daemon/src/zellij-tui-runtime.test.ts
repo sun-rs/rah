@@ -231,3 +231,96 @@ test("zellij_tui backend starts OpenCode, routes input, interrupts, and observes
     binaryName: "fake-opencode.js",
   });
 });
+
+test("zellij_tui backend isolates multiple simultaneous provider sessions", async (t) => {
+  if (await skipIfZellijUnavailable(t)) {
+    return;
+  }
+
+  const engine = new RuntimeEngine();
+  const root = mkdtempSync(path.join(os.tmpdir(), "rah-zellij-multi-"));
+  const workspaceA = path.join(root, "a");
+  const workspaceB = path.join(root, "b");
+  mkdirSync(workspaceA, { recursive: true });
+  mkdirSync(workspaceB, { recursive: true });
+  const fakeOpenCode = path.join(root, "fake-opencode.js");
+  writeFakeTuiBinary(fakeOpenCode, "opencode");
+  const restoreBinary = setEnv("RAH_OPENCODE_BINARY", fakeOpenCode);
+
+  try {
+    const start = async (workspace: string, clientId: string) =>
+      await engine.startSession({
+        provider: "opencode",
+        cwd: workspace,
+        liveBackend: "zellij_tui",
+        attach: {
+          client: {
+            id: clientId,
+            kind: "web",
+            connectionId: clientId,
+          },
+          mode: "interactive",
+          claimControl: true,
+        },
+      });
+    const [startedA, startedB] = await Promise.all([
+      start(workspaceA, "web-zellij-a"),
+      start(workspaceB, "web-zellij-b"),
+    ]);
+    const sessionA = startedA.session.session.id;
+    const sessionB = startedB.session.session.id;
+    assert.notEqual(sessionA, sessionB);
+    assert.notEqual(
+      startedA.session.session.mux?.sessionName,
+      startedB.session.session.mux?.sessionName,
+    );
+    assert.equal(startedA.session.session.mux?.sessionName, `rah-${sessionA.slice(0, 8)}`);
+    assert.equal(startedB.session.session.mux?.sessionName, `rah-${sessionB.slice(0, 8)}`);
+
+    const transcript: Record<string, string> = {
+      [sessionA]: "",
+      [sessionB]: "",
+    };
+    const unsubscribeA = engine.ptyHub.subscribe(sessionA, (frame) => {
+      if (frame.type === "pty.replay") {
+        transcript[sessionA] += frame.chunks.join("");
+      } else if (frame.type === "pty.output") {
+        transcript[sessionA] += frame.data;
+      }
+    });
+    const unsubscribeB = engine.ptyHub.subscribe(sessionB, (frame) => {
+      if (frame.type === "pty.replay") {
+        transcript[sessionB] += frame.chunks.join("");
+      } else if (frame.type === "pty.output") {
+        transcript[sessionB] += frame.data;
+      }
+    });
+
+    await waitFor(() => {
+      assert.match(transcript[sessionA] ?? "", /ZELLIJ_OPENCODE_READY/);
+      assert.match(transcript[sessionB] ?? "", /ZELLIJ_OPENCODE_READY/);
+    });
+
+    engine.sendInput(sessionA, { clientId: "web-zellij-a", text: "alpha-one" });
+    engine.sendInput(sessionB, { clientId: "web-zellij-b", text: "beta-two" });
+    await waitFor(() => {
+      assert.match(transcript[sessionA] ?? "", /ZELLIJ_OPENCODE_INPUT:alpha-one/);
+      assert.match(transcript[sessionB] ?? "", /ZELLIJ_OPENCODE_INPUT:beta-two/);
+    });
+    assert.doesNotMatch(transcript[sessionA] ?? "", /beta-two/);
+    assert.doesNotMatch(transcript[sessionB] ?? "", /alpha-one/);
+
+    engine.sendInput(sessionA, { clientId: "web-zellij-a", text: "exit" });
+    engine.sendInput(sessionB, { clientId: "web-zellij-b", text: "exit" });
+    await waitFor(() => {
+      assert.equal(engine.getSessionSummary(sessionA).session.runtimeState, "stopped");
+      assert.equal(engine.getSessionSummary(sessionB).session.runtimeState, "stopped");
+    });
+    unsubscribeA();
+    unsubscribeB();
+  } finally {
+    await engine.shutdown();
+    restoreBinary();
+    rmSync(root, { force: true, recursive: true });
+  }
+});

@@ -90,6 +90,14 @@ export function createShortZellijSessionName(prefix = "rah"): string {
   return `${prefix}-${randomBytes(4).toString("hex")}`;
 }
 
+export function createZellijSessionNameForRahSession(
+  rahSessionId: string,
+  prefix = "rah",
+): string {
+  const suffix = rahSessionId.replace(/[^0-9a-z]/gi, "").toLowerCase().slice(0, 8);
+  return `${prefix}-${suffix || randomBytes(4).toString("hex")}`;
+}
+
 function paneIdFor(raw: RawZellijPane): MuxPaneId {
   const id = typeof raw.id === "number" ? raw.id : Number(raw.id);
   const prefix = raw.is_plugin === true ? "plugin" : "terminal";

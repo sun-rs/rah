@@ -7,6 +7,7 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import {
   createShortZellijSessionName,
+  createZellijSessionNameForRahSession,
   ZellijCommandError,
   ZellijMuxBackend,
 } from "./zellij-mux-backend";
@@ -42,6 +43,14 @@ async function skipIfZellijUnavailable(
 test("creates short zellij session names for socket-safe mux sessions", () => {
   const name = createShortZellijSessionName("rah");
   assert.match(name, /^rah-[0-9a-f]{8}$/);
+  assert.equal(name.length <= 16, true);
+});
+
+test("derives stable zellij session names from RAH session ids", () => {
+  const name = createZellijSessionNameForRahSession(
+    "019e0aaa-1111-7222-8333-abcdef123456",
+  );
+  assert.equal(name, "rah-019e0aaa");
   assert.equal(name.length <= 16, true);
 });
 

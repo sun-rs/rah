@@ -67,7 +67,7 @@ import {
 import { NativeTuiMirrorRuntime } from "./native-tui-mirror-runtime";
 import { TerminalWrapperSessionRuntime } from "./terminal-wrapper-session-runtime";
 import {
-  createShortZellijSessionName,
+  createZellijSessionNameForRahSession,
   ZellijMuxBackend,
 } from "./zellij-mux-backend";
 import type { MuxPaneSubscription } from "./mux-runtime";
@@ -684,7 +684,7 @@ export class RuntimeTerminalCoordinator {
     const startupTimestampMs = Date.now();
     const launchSource = args.attach?.client.kind === "terminal" ? "terminal" : "web";
     const initialPromptState = initialNativeTuiPromptState(launch.provider);
-    const zellijSessionName = createShortZellijSessionName("rah");
+    const zellijSessionName = createZellijSessionNameForRahSession(sessionId);
     this.deps.sessionStore.createManagedSession({
       id: sessionId,
       provider: launch.provider,

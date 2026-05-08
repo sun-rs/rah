@@ -226,6 +226,244 @@ test("rah provider command creates a native TUI session and attaches to PTY", as
   });
 });
 
+test("rah provider command accepts --mux zellij and requests the zellij live backend", async () => {
+  const startRequests: unknown[] = [];
+  const wss = new WebSocketServer({ noServer: true });
+  const server = createServer(async (req, res) => {
+    if (req.method === "GET" && req.url === "/readyz") {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end("ok");
+      return;
+    }
+    if (req.method === "POST" && req.url === "/api/sessions/start") {
+      startRequests.push(await readJsonBody(req));
+      writeJson(res, 200, {
+        session: sessionSummary({
+          id: "session-zellij-flag",
+          provider: "codex",
+          launchSource: "terminal",
+          liveBackend: "zellij_tui",
+          cwd: "/tmp",
+          rootDir: "/tmp",
+          runtimeState: "idle",
+          ptyId: "session-zellij-flag",
+          nativeTui: {
+            terminalId: "session-zellij-flag",
+            viewAvailable: true,
+            promptState: "prompt_clean",
+          },
+          capabilities: {},
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }),
+      });
+      return;
+    }
+    if (req.method === "POST" && req.url === "/api/sessions/session-zellij-flag/detach") {
+      await readJsonBody(req);
+      writeJson(res, 200, {
+        session: sessionSummary({
+          id: "session-zellij-flag",
+          provider: "codex",
+          launchSource: "terminal",
+          liveBackend: "zellij_tui",
+          cwd: "/tmp",
+          rootDir: "/tmp",
+          runtimeState: "stopped",
+          ptyId: "session-zellij-flag",
+          capabilities: {},
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }),
+      });
+      return;
+    }
+    res.writeHead(404);
+    res.end("not found");
+  });
+  server.on("upgrade", (req, socket, head) => {
+    if (req.url?.startsWith("/api/pty/session-zellij-flag")) {
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        wss.emit("connection", ws, req);
+      });
+      return;
+    }
+    socket.destroy();
+  });
+  wss.on("connection", (ws) => {
+    ws.send(JSON.stringify({
+      type: "pty.replay",
+      sessionId: "session-zellij-flag",
+      chunks: ["rah cli zellij flag attached\n"],
+      status: "open",
+    }));
+    setTimeout(() => {
+      ws.send(JSON.stringify({
+        type: "pty.exited",
+        sessionId: "session-zellij-flag",
+        exitCode: 0,
+      }));
+    }, 20);
+  });
+
+  const port = await listen(server);
+  const tmpDir = mkdtempSync(path.join(os.tmpdir(), "rah-cli-zellij-flag-"));
+  const child = spawn(
+    process.execPath,
+    [
+      "bin/rah.mjs",
+      "codex",
+      "--mux",
+      "zellij",
+      "--daemon-url",
+      `http://127.0.0.1:${port}`,
+      "--cwd",
+      tmpDir,
+    ],
+    {
+      cwd: process.cwd(),
+      env: { ...process.env },
+    },
+  );
+  let stdout = "";
+  let stderr = "";
+  child.stdout?.on("data", (chunk) => {
+    stdout += chunk.toString("utf8");
+  });
+  child.stderr?.on("data", (chunk) => {
+    stderr += chunk.toString("utf8");
+  });
+  const exitCode = await new Promise<number | null>((resolve, reject) => {
+    child.on("error", reject);
+    child.on("exit", (code) => resolve(code));
+  });
+  await closeServer(server, wss);
+
+  assert.equal(exitCode, 0, stderr);
+  assert.match(stdout, /rah cli zellij flag attached/);
+  assert.equal(startRequests.length, 1);
+  const startRequest = startRequests[0] as { liveBackend: string };
+  assert.equal(startRequest.liveBackend, "zellij_tui");
+});
+
+test("rah provider command honors RAH_MUX_BACKEND=zellij", async () => {
+  const startRequests: unknown[] = [];
+  const wss = new WebSocketServer({ noServer: true });
+  const server = createServer(async (req, res) => {
+    if (req.method === "GET" && req.url === "/readyz") {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end("ok");
+      return;
+    }
+    if (req.method === "POST" && req.url === "/api/sessions/start") {
+      startRequests.push(await readJsonBody(req));
+      writeJson(res, 200, {
+        session: sessionSummary({
+          id: "session-zellij-env",
+          provider: "claude",
+          launchSource: "terminal",
+          liveBackend: "zellij_tui",
+          cwd: "/tmp",
+          rootDir: "/tmp",
+          runtimeState: "idle",
+          ptyId: "session-zellij-env",
+          nativeTui: {
+            terminalId: "session-zellij-env",
+            viewAvailable: true,
+            promptState: "prompt_clean",
+          },
+          capabilities: {},
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }),
+      });
+      return;
+    }
+    if (req.method === "POST" && req.url === "/api/sessions/session-zellij-env/detach") {
+      await readJsonBody(req);
+      writeJson(res, 200, {
+        session: sessionSummary({
+          id: "session-zellij-env",
+          provider: "claude",
+          launchSource: "terminal",
+          liveBackend: "zellij_tui",
+          cwd: "/tmp",
+          rootDir: "/tmp",
+          runtimeState: "stopped",
+          ptyId: "session-zellij-env",
+          capabilities: {},
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }),
+      });
+      return;
+    }
+    res.writeHead(404);
+    res.end("not found");
+  });
+  server.on("upgrade", (req, socket, head) => {
+    if (req.url?.startsWith("/api/pty/session-zellij-env")) {
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        wss.emit("connection", ws, req);
+      });
+      return;
+    }
+    socket.destroy();
+  });
+  wss.on("connection", (ws) => {
+    ws.send(JSON.stringify({
+      type: "pty.replay",
+      sessionId: "session-zellij-env",
+      chunks: ["rah cli zellij env attached\n"],
+      status: "open",
+    }));
+    setTimeout(() => {
+      ws.send(JSON.stringify({
+        type: "pty.exited",
+        sessionId: "session-zellij-env",
+        exitCode: 0,
+      }));
+    }, 20);
+  });
+
+  const port = await listen(server);
+  const tmpDir = mkdtempSync(path.join(os.tmpdir(), "rah-cli-zellij-env-"));
+  const child = spawn(
+    process.execPath,
+    [
+      "bin/rah.mjs",
+      "claude",
+      "--daemon-url",
+      `http://127.0.0.1:${port}`,
+      "--cwd",
+      tmpDir,
+    ],
+    {
+      cwd: process.cwd(),
+      env: { ...process.env, RAH_MUX_BACKEND: "zellij" },
+    },
+  );
+  let stdout = "";
+  let stderr = "";
+  child.stdout?.on("data", (chunk) => {
+    stdout += chunk.toString("utf8");
+  });
+  child.stderr?.on("data", (chunk) => {
+    stderr += chunk.toString("utf8");
+  });
+  const exitCode = await new Promise<number | null>((resolve, reject) => {
+    child.on("error", reject);
+    child.on("exit", (code) => resolve(code));
+  });
+  await closeServer(server, wss);
+
+  assert.equal(exitCode, 0, stderr);
+  assert.match(stdout, /rah cli zellij env attached/);
+  assert.equal(startRequests.length, 1);
+  const startRequest = startRequests[0] as { liveBackend: string };
+  assert.equal(startRequest.liveBackend, "zellij_tui");
+});
+
 test("rah provider command preserves UTF-8 input split across stdin chunks", async () => {
   const startRequests: unknown[] = [];
   const ptyInputs: string[] = [];
