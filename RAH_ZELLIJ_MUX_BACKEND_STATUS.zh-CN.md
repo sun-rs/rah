@@ -132,6 +132,11 @@ npm run test:smoke:zellij-real-tui-launch
 
 Result: passed. RAH observed the real Codex process exit, removed live state, and the zellij session disappeared. The probe also hardens the case where `zellij action list-panes --json` returns an empty payload while a session is exiting; RAH now treats that as a missing/exited session rather than logging a JSON parse warning.
 
+Additional real exit sync probes:
+
+- Claude trust prompt + `Esc`: passed. RAH removed live state and the zellij session disappeared.
+- OpenCode prompt + `Ctrl-D`: passed. RAH removed live state and the zellij session disappeared.
+
 ## Edge Case Audit
 
 Code-covered edges:

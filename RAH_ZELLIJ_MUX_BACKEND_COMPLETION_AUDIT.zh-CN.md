@@ -71,8 +71,8 @@ Until those are proven, do not mark the goal complete.
 | Mandatory web tests | `npm run test:web` recorded passing in status: `160 pass` | Satisfied |
 | Mandatory web build | `npm run build:web` recorded passing in status | Satisfied |
 | Real Codex smoke | latest real launch probe observed visible Codex TUI; configured `Ctrl-D` exit probe removed RAH live state and zellij session; no real prompt/Stop/manual browser flow yet | Incomplete |
-| Real Claude smoke | latest real launch probe on `c3f5d7c` reached trust prompt; no complete trust/input/Stop/API-error QA | Incomplete |
-| Real OpenCode smoke | latest 3s all-provider probe can miss first paint; 6s OpenCode-only probe observed visible dump; no full prompt/Stop/browser QA | Incomplete |
+| Real Claude smoke | latest real launch probe reached trust prompt; configured `Esc` exit probe removed RAH live state and zellij session; no complete trust/input/Stop/API-error QA | Incomplete |
+| Real OpenCode smoke | latest 3s all-provider probe can miss first paint; 6s OpenCode-only probe observed visible dump; configured `Ctrl-D` exit probe removed RAH live state and zellij session; no full prompt/Stop/browser QA | Incomplete |
 | iPad/Safari manual QA | no artifact yet | Missing |
 | Default backend decision | explicit non-decision in status doc | Not ready |
 
