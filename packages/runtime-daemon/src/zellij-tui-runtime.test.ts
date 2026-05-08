@@ -68,6 +68,7 @@ function writeFakeTuiBinary(filePath: string, provider: ProviderKind, options: {
       "  for (const part of parts) {",
       "    if (!part.trim()) continue;",
       "    process.stdout.write(`ZELLIJ_${provider.toUpperCase()}_INPUT:${part.trim()}\\r\\n`);",
+      "    if (provider === 'codex') process.stdout.write('›\\r\\n');",
       "    if (part.trim() === 'exit') process.exit(0);",
       "  }",
       "});",
@@ -360,6 +361,100 @@ test("zellij_tui chat input queues while the TUI prompt has a local draft", asyn
 
     unsubscribe();
     await engine.closeSession(sessionId, { clientId: "web-zellij-queue" });
+  } finally {
+    await engine.shutdown();
+    restoreBinary();
+    restoreSocketDir();
+    restoreRahHome();
+    rmSync(socketDir, { force: true, recursive: true });
+    rmSync(workspace, { force: true, recursive: true });
+  }
+});
+
+test("zellij_tui session can hand off from terminal client to web client without resume", async (t) => {
+  if (await skipIfZellijUnavailable(t)) {
+    return;
+  }
+
+  const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-zellij-handoff-"));
+  const fakeCodex = path.join(workspace, "fake-codex.js");
+  writeFakeTuiBinary(fakeCodex, "codex");
+  const socketDir = makeTestZellijSocketDir("handoff");
+  const restoreRahHome = setEnv("RAH_HOME", path.join(workspace, "rah-home"));
+  const restoreSocketDir = setEnv("RAH_ZELLIJ_SOCKET_DIR", socketDir);
+  const restoreBinary = setEnv("RAH_CODEX_BINARY", fakeCodex);
+  const engine = new RuntimeEngine();
+
+  try {
+    const started = await engine.startSession({
+      provider: "codex",
+      cwd: workspace,
+      liveBackend: "zellij_tui",
+      attach: {
+        client: {
+          id: "terminal-zellij-handoff",
+          kind: "terminal",
+          connectionId: "pid:handoff",
+        },
+        mode: "interactive",
+        claimControl: true,
+      },
+    });
+    const sessionId = started.session.session.id;
+    assert.equal(started.session.attachedClients.length, 1);
+    assert.equal(started.session.controlLease.holderClientId, "terminal-zellij-handoff");
+
+    let transcript = "";
+    const unsubscribe = engine.ptyHub.subscribe(sessionId, (frame) => {
+      if (frame.type === "pty.replay") {
+        transcript += frame.chunks.join("");
+      } else if (frame.type === "pty.output") {
+        transcript += frame.data;
+      }
+    });
+    await waitFor(() => {
+      assert.match(transcript, /ZELLIJ_CODEX_READY/);
+    });
+
+    const attached = engine.attachSession(sessionId, {
+      client: {
+        id: "web-zellij-handoff",
+        kind: "web",
+        connectionId: "web-zellij-handoff",
+      },
+      mode: "interactive",
+      claimControl: true,
+    });
+    assert.equal(attached.session.session.id, sessionId);
+    assert.equal(attached.session.attachedClients.some((client) => client.kind === "terminal"), true);
+    assert.equal(attached.session.attachedClients.some((client) => client.kind === "web"), true);
+    assert.equal(attached.session.controlLease.holderClientId, "web-user");
+
+    engine.sendInput(sessionId, {
+      clientId: "web-zellij-handoff",
+      text: "handoff from web",
+    });
+    await waitFor(() => {
+      assert.match(transcript, /ZELLIJ_CODEX_INPUT:handoff from web/);
+    });
+
+    const afterTerminalDetach = engine.detachSession(sessionId, {
+      clientId: "terminal-zellij-handoff",
+    });
+    assert.equal(afterTerminalDetach.attachedClients.some((client) => client.kind === "terminal"), false);
+    assert.equal(afterTerminalDetach.attachedClients.some((client) => client.kind === "web"), true);
+    assert.equal(afterTerminalDetach.controlLease.holderClientId, "web-user");
+
+    engine.sendInput(sessionId, {
+      clientId: "web-zellij-handoff",
+      text: "still same pane",
+    });
+    await waitFor(() => {
+      assert.match(transcript, /ZELLIJ_CODEX_INPUT:still same pane/);
+    });
+
+    unsubscribe();
+    await engine.closeSession(sessionId, { clientId: "web-zellij-handoff" });
   } finally {
     await engine.shutdown();
     restoreBinary();
