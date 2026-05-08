@@ -336,7 +336,23 @@ export class RuntimeEngine {
   }
 
   listPtyStats(): PtySessionStats[] {
-    return this.ptyHub.listStats();
+    return this.ptyHub.listStats().map((stat) => {
+      const state = this.sessionStore.getSession(stat.sessionId);
+      if (!state) {
+        return stat;
+      }
+      const { session } = state;
+      return {
+        ...stat,
+        provider: session.provider,
+        runtimeState: session.runtimeState,
+        ...(session.liveBackend ? { liveBackend: session.liveBackend } : {}),
+        ...(session.nativeTui?.promptState
+          ? { nativeTuiPromptState: session.nativeTui.promptState }
+          : {}),
+        ...(session.mux ? { mux: session.mux } : {}),
+      };
+    });
   }
 
   async listProviderModels(

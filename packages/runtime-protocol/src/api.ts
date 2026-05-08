@@ -558,6 +558,11 @@ export interface PtyAttachRequest {
 
 export interface PtySessionStats {
   sessionId: string;
+  provider?: ProviderKind;
+  liveBackend?: SessionLiveBackend;
+  runtimeState?: ManagedSession["runtimeState"];
+  nativeTuiPromptState?: NonNullable<ManagedSession["nativeTui"]>["promptState"];
+  mux?: ManagedSession["mux"];
   replayChunks: number;
   replayBytes: number;
   maxReplayChunks: number;

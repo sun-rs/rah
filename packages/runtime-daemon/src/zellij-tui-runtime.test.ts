@@ -135,6 +135,11 @@ async function startZellijProviderSession(params: {
     assert.equal(started.session.session.mux?.backend, "zellij");
     assert.match(started.session.session.mux?.sessionName ?? "", /^rah-[0-9a-f]{8}$/);
     assert.match(started.session.session.mux?.paneId ?? "", /^terminal_\d+$/);
+    const stats = engine.listPtyStats().find((stat) => stat.sessionId === sessionId);
+    assert.equal(stats?.provider, params.provider);
+    assert.equal(stats?.liveBackend, "zellij_tui");
+    assert.equal(stats?.mux?.backend, "zellij");
+    assert.equal(stats?.mux?.sessionName, started.session.session.mux?.sessionName);
 
     let transcript = "";
     const unsubscribe = engine.ptyHub.subscribe(sessionId, (frame) => {

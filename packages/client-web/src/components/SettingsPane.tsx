@@ -503,6 +503,20 @@ export function SettingsPane() {
                             </span>
                           </div>
                           <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-[var(--app-hint)]">
+                            {stat.provider ? (
+                              <span>{providerLabel(stat.provider)}</span>
+                            ) : null}
+                            {stat.liveBackend ? (
+                              <span>{stat.liveBackend}</span>
+                            ) : null}
+                            {stat.runtimeState ? (
+                              <span>{stat.runtimeState}</span>
+                            ) : null}
+                            {stat.mux?.backend === "zellij" ? (
+                              <span className="font-mono">
+                                {stat.mux.sessionName}/{stat.mux.paneId}
+                              </span>
+                            ) : null}
                             <span>{stat.subscriberCount} subscribers</span>
                             <span>next seq {stat.nextSeq}</span>
                             {stat.droppedBeforeSeq !== undefined ? (
