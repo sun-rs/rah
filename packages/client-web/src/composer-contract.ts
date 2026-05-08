@@ -106,7 +106,7 @@ export function canSubmitComposerInput(args: {
   if (args.sendPending || !args.draft.trim()) {
     return false;
   }
-  return args.nativeTuiPromptState !== "prompt_dirty";
+  return true;
 }
 
 export function deriveComposerSurface(args: {

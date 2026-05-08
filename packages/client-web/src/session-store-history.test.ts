@@ -217,7 +217,7 @@ test("prependHistoryPage upgrades optimistic native TUI user echo with canonical
   assert.equal(entry?.kind === "timeline" ? entry.key : null, "timeline:codex-history-user-1");
 });
 
-test("prependHistoryPage dedupes Kimi live/history echoes without message ids", () => {
+test("prependHistoryPage dedupes live/history echoes without message ids", () => {
   const current = replayEventsIntoProjection(summary(), [
     timelineEvent({ seq: 3, turnId: "live-turn", text: "你是谁" }),
     timelineEvent({
@@ -230,7 +230,7 @@ test("prependHistoryPage dedupes Kimi live/history echoes without message ids", 
       seq: 5,
       turnId: "live-turn",
       kind: "assistant_message",
-      text: "我是 Kimi Code CLI。",
+      text: "我是 OpenCode CLI。",
     }),
   ]);
 
@@ -246,7 +246,7 @@ test("prependHistoryPage dedupes Kimi live/history echoes without message ids", 
       seq: 3,
       turnId: "history:session-1:turn-1",
       kind: "assistant_message",
-      text: "我是 Kimi Code CLI。",
+      text: "我是 OpenCode CLI。",
     }),
   ]);
 

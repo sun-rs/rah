@@ -404,6 +404,65 @@ describe("Claude session files", () => {
     );
   });
 
+  test("condenses structured Claude api error payloads before displaying history notifications", () => {
+    writeClaudeSession("session-503.jsonl", [
+      {
+        type: "user",
+        uuid: "user-503",
+        cwd: workDir,
+        sessionId: "session-503",
+        timestamp: "2025-07-19T22:32:50.000Z",
+        message: {
+          content: "你是谁",
+        },
+      },
+      {
+        type: "system",
+        uuid: "system-error-503",
+        subtype: "api_error",
+        cwd: workDir,
+        sessionId: "session-503",
+        timestamp: "2025-07-19T22:32:51.000Z",
+        error: {
+          status: 503,
+          headers: {
+            server: "cloudflare",
+            "x-request-id": "f589e5e5-1066-4763-abe4-14122f11c486",
+          },
+          error: {
+            error: {
+              message: "No available accounts: no available accounts",
+              type: "api_error",
+            },
+            type: "error",
+          },
+          type: "api_error",
+        },
+      },
+    ]);
+
+    const record = discoverClaudeStoredSessions(workDir)[0];
+    assert.ok(record);
+    const page = getClaudeStoredSessionHistoryPage({
+      sessionId: "rah-session",
+      record,
+      limit: 100,
+    });
+    const notification = page.events.find(
+      (event) =>
+        event.type === "notification.emitted" &&
+        event.payload.title === "Claude API error",
+    );
+    assert.ok(notification);
+    if (notification.type === "notification.emitted") {
+      assert.equal(
+        notification.payload.body,
+        "API Error: 503 No available accounts: no available accounts. This is a server-side issue, usually temporary.",
+      );
+      assert.doesNotMatch(notification.payload.body, /cloudflare|headers|x-request-id/);
+    }
+  });
+
   test("frozen Claude history loader keeps browsing anchored after newer lines append", () => {
     const lines = Array.from({ length: 400 }, (_, index) => {
       const n = index + 1;

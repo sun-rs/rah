@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { validateProviderModelCatalog } from "@rah/runtime-protocol";
-import { ClaudeAdapter } from "./claude-adapter";
+import { ClaudeAdapter } from "./legacy-structured/claude-structured-adapter";
 import { ClaudeStoredHistoryAdapter } from "./claude-stored-history-adapter";
 import { createClaudeTimelineIdentity } from "./claude-timeline-identity";
 import { EventBus } from "./event-bus";

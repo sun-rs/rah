@@ -54,15 +54,6 @@ describe("normalizeContextUsage", () => {
 describe("knownModelContextWindow", () => {
   test("uses AionUi context windows as the estimation baseline", () => {
     assert.deepEqual(knownModelContextWindow({
-      provider: "gemini",
-      modelId: "gemini-2.5-flash-image",
-    }), {
-      contextWindow: 32_768,
-      precision: "estimated",
-      source: "gemini.aionui_model_context_window",
-    });
-
-    assert.deepEqual(knownModelContextWindow({
       provider: "claude",
       modelId: "claude-sonnet-4.5",
     }), {

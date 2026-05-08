@@ -140,8 +140,6 @@ export function isCoreWorkbenchEvent(event: RahEvent): boolean {
 const PROVIDERS = new Set<ProviderKind | "system">([
   "codex",
   "claude",
-  "kimi",
-  "gemini",
   "opencode",
   "custom",
   "system",
@@ -278,6 +276,7 @@ const RUNTIME_STATUSES = new Set([
   "session_active",
   "thinking",
   "streaming",
+  "stopping",
   "retrying",
   "finished",
   "error",
@@ -1771,6 +1770,19 @@ function validateManagedSession(session: unknown, sink: IssueSink, path: string)
           `${path}.nativeTui.promptState`,
         );
       }
+      if (
+        !isOptionalInteger(session.nativeTui.queuedInputCount) ||
+        (typeof session.nativeTui.queuedInputCount === "number" &&
+          session.nativeTui.queuedInputCount < 0)
+      ) {
+        addIssue(
+          sink,
+          "error",
+          "session.native_tui.queued_input_count.invalid",
+          "session nativeTui.queuedInputCount must be a non-negative integer",
+          `${path}.nativeTui.queuedInputCount`,
+        );
+      }
     }
   }
   if (session.mode !== undefined) {
@@ -2318,6 +2330,18 @@ function validatePayload(event: RahEvent, sink: IssueSink) {
           "session.native_tui.prompt_state.invalid",
           "native TUI prompt state is not canonical",
           "payload.promptState",
+        );
+      }
+      if (
+        !isOptionalInteger(payload.queuedInputCount) ||
+        (typeof payload.queuedInputCount === "number" && payload.queuedInputCount < 0)
+      ) {
+        addIssue(
+          sink,
+          "error",
+          "session.native_tui.queued_input_count.invalid",
+          "native TUI queuedInputCount must be a non-negative integer",
+          "payload.queuedInputCount",
         );
       }
       break;

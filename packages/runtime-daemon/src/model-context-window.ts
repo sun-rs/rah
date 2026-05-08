@@ -44,26 +44,6 @@ function catalogPrecision(args: {
     : "estimated";
 }
 
-// Base values mirror AionUi's modelContextLimits table. RAH keeps a few
-// provider CLI aliases on top so terminal sessions can resolve the same window.
-const GEMINI_CONTEXT_WINDOWS: Record<string, number> = {
-  "auto-gemini-3": 1_048_576,
-  "auto-gemini-2.5": 1_048_576,
-  "gemini-3.1-pro-preview": 1_048_576,
-  "gemini-3-pro-preview": 1_048_576,
-  "gemini-3-flash-preview": 1_048_576,
-  "gemini-3-pro-image-preview": 65_536,
-  "gemini-3.1-flash-lite-preview": 1_048_576,
-  "gemini-2.5-pro": 1_048_576,
-  "gemini-2.5-flash": 1_048_576,
-  "gemini-2.5-flash-lite": 1_048_576,
-  "gemini-2.5-flash-image": 32_768,
-  "gemini-2.0-flash": 1_048_576,
-  "gemini-2.0-flash-lite": 1_048_576,
-  "gemini-1.5-pro": 2_097_152,
-  "gemini-1.5-flash": 1_048_576,
-};
-
 const CLAUDE_CONTEXT_WINDOWS: Record<string, number> = {
   "sonnet[1m]": 1_000_000,
   "opus[1m]": 1_000_000,
@@ -104,15 +84,6 @@ export function knownModelContextWindow(args: {
   modelId?: string | null;
 }): ModelContextWindowResolution | undefined {
   const modelId = normalizeModelId(args.modelId);
-  if (args.provider === "gemini") {
-    return {
-      contextWindow:
-        longestKnownMatch(modelId, GEMINI_CONTEXT_WINDOWS) ?? 1_048_576,
-      precision: "estimated",
-      source: "gemini.aionui_model_context_window",
-    };
-  }
-
   const table =
     args.provider === "claude"
       ? CLAUDE_CONTEXT_WINDOWS

@@ -1,9 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import assert from "node:assert/strict";
 import test from "node:test";
+import type { RuntimeServices } from "./provider-adapter";
+import { OpenCodeStoredHistoryAdapter } from "./opencode-stored-history-adapter";
 import {
   archiveOpenCodeStoredSession,
   createOpenCodeStoredSessionFrozenHistoryPageLoader,
@@ -158,8 +160,39 @@ test("archives OpenCode stored sessions so discovery no longer returns them", { 
   }
 });
 
-function createOpenCodeFixture(options: { assistantText?: string } = {}): string {
-  const dataDir = mkdtempSync(path.join(os.tmpdir(), "rah-opencode-history-"));
+test("OpenCode stored history adapter keeps last-good cache when sqlite refresh fails", { skip: !hasSqlite }, () => {
+  const xdgDataHome = mkdtempSync(path.join(os.tmpdir(), "rah-opencode-cache-"));
+  const dataDir = path.join(xdgDataHome, "opencode");
+  const previousXdgDataHome = process.env.XDG_DATA_HOME;
+  const previousConsoleWarn = console.warn;
+  const warnings: string[] = [];
+  process.env.XDG_DATA_HOME = xdgDataHome;
+  console.warn = (message?: unknown) => {
+    warnings.push(String(message));
+  };
+  createOpenCodeFixture({ dataDir });
+  try {
+    const adapter = new OpenCodeStoredHistoryAdapter({} as RuntimeServices);
+    const first = adapter.listStoredSessions();
+    assert.equal(first.length, 1);
+
+    writeFileSync(path.join(dataDir, "opencode.db"), "not a sqlite database", "utf8");
+    assert.deepEqual(adapter.refreshStoredSessionsCatalog(), first);
+    assert.ok(warnings.some((message) => message.includes("OpenCode history refresh failed")));
+  } finally {
+    console.warn = previousConsoleWarn;
+    if (previousXdgDataHome === undefined) {
+      delete process.env.XDG_DATA_HOME;
+    } else {
+      process.env.XDG_DATA_HOME = previousXdgDataHome;
+    }
+    rmSync(xdgDataHome, { recursive: true, force: true });
+  }
+});
+
+function createOpenCodeFixture(options: { assistantText?: string; dataDir?: string } = {}): string {
+  const dataDir = options.dataDir ?? mkdtempSync(path.join(os.tmpdir(), "rah-opencode-history-"));
+  mkdirSync(dataDir, { recursive: true });
   const dbPath = path.join(dataDir, "opencode.db");
   const created = Date.parse("2026-04-26T16:00:00.000Z");
   const updated = Date.parse("2026-04-26T16:00:05.000Z");

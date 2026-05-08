@@ -23,7 +23,7 @@ import type {
 
 type JsonRecord = Record<string, unknown>;
 
-const PROVIDERS = new Set<ProviderKind>(["codex", "claude", "kimi", "gemini", "opencode", "custom"]);
+const PROVIDERS = new Set<ProviderKind>(["codex", "claude", "opencode", "custom"]);
 const CLIENT_KINDS = new Set(["terminal", "web", "ios", "ipad", "api"]);
 const APPROVAL_POLICIES = new Set(["default", "on-request", "never", "auto_edit", "yolo"]);
 const PUBLIC_LIVE_BACKENDS = new Set(["native_tui"]);

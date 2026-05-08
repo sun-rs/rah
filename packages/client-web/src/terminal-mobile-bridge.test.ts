@@ -3,10 +3,10 @@ import { describe, test } from "node:test";
 import { mobileBridgeFocusOptionsForSource } from "./terminal-mobile-bridge";
 
 describe("terminal mobile input bridge", () => {
-  test("lets terminal surface taps use browser viewport anchoring", () => {
+  test("keeps terminal surface taps from moving the viewport", () => {
     assert.deepEqual(mobileBridgeFocusOptionsForSource("surface"), {
-      allowBrowserScroll: true,
-      scrollBlock: "center",
+      allowBrowserScroll: false,
+      scrollBlock: "nearest",
     });
   });
 

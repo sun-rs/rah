@@ -4,11 +4,19 @@
 
 分支：`refactor/pty-first-core`
 
+本文件是 Phase 0 初始盘点的历史快照。当前实现已经继续收敛：core live provider 只保留 Codex、Claude、OpenCode；Gemini/Kimi CLI 一等支持已移除，不再作为 mirror core、history-only、diagnostics 或 QA gate。
+
+因此，下文中关于 Gemini/Kimi “继续保留”的描述只代表 2026-05-07 初始盘点时的迁移判断，不代表当前系统边界。当前权威边界见：
+
+- `RAH_PTY_FIRST_SEAMLESS_WORKBENCH_PLAN.zh-CN.md`
+- `NATIVE_TUI_COMPLETION_AUDIT.zh-CN.md`
+- `docs/provider-scope-codex-claude-opencode.zh-CN.md`
+
 依据：
 
 - 根目录 `RAH_PTY_FIRST_SEAMLESS_WORKBENCH_PLAN.zh-CN.md`
 - 根目录 `desgin.md`
-- 当前代码状态
+- 当前代码状态。注：本文件记录的是 Phase 0 初始盘点；后续主线已经按 `RAH_PTY_FIRST_SEAMLESS_WORKBENCH_PLAN.zh-CN.md` 收敛为 Codex、Claude、OpenCode 三家 core live，Gemini/Kimi CLI 一等支持已移除。
 
 ## 1. Phase 0 目标拆解
 
@@ -61,15 +69,13 @@ Phase 0 不做大规模删除。目标是先把当前代码按新边界分类，
 | `native-tui-*-provider-handler.ts` | 各 provider 的 binding/mirror handler | 保留 provider-specific 能力，但把 mirror parser 与 PTY runtime 解耦 |
 | `codex-rollout-activity.ts` | Codex rollout JSONL -> provider activity | mirror core，继续保留 |
 | `claude-session-files.ts` | Claude JSONL -> stored activity/history | mirror core，继续保留 |
-| `gemini-session-files.ts` / `gemini-conversation-utils.ts` | Gemini conversation JSON/JSONL -> history/mirror | mirror core，继续保留 |
-| `kimi-session-files.ts` | Kimi wire/session files -> activity/history | mirror core，继续保留 |
 | `opencode-activity.ts` / `opencode-stored-sessions.ts` | OpenCode DB/API-backed records -> activity/history | mirror core，继续保留 |
 | `history-snapshots.ts` | materialized/frozen history 去重和 paging snapshot | mirror/workbench core，继续保留 |
 | `*-timeline-identity.ts` | canonical identity | mirror core，继续保留 |
 
 当前已符合的部分：
 
-- Codex/Claude/Gemini/Kimi/OpenCode 的 Chat mirror 都来自原厂文件/DB/records，而不是 ANSI screen scrape。
+- Codex/Claude/OpenCode 的 core live Chat mirror 来自原厂文件/DB/records，而不是 ANSI screen scrape。
 - `NativeTuiMirrorUpdate` 已显式支持 `missing` / `failed` / `unsupported`，并由 diagnostics 记录。
 - `RuntimeTerminalCoordinator.mirrorNativeTuiSession()` 对 mirror failure 做 warning/diagnostics，不直接杀 TUI process。
 
@@ -111,14 +117,12 @@ Phase 0 不做大规模删除。目标是先把当前代码按新边界分类，
 | `RuntimeStructuredProviderCoordinator.startSession()` / `resumeSession()` | 非 native_tui 请求走 adapter structured live | 保留兼容，但不作为默认 provider 主链路 |
 | `codex-live-client.ts` / `codex-live-rpc.ts` | Codex structured JSON-RPC live | legacy/enhancement |
 | `claude-live-client.ts` / helpers | Claude SDK structured live | legacy/enhancement |
-| `gemini-live-client.ts` | Gemini structured CLI/live path | legacy/enhancement |
-| `kimi-live-client.ts` / RPC | Kimi structured live path | legacy/enhancement |
 | `opencode-live-client.ts` / ACP | OpenCode structured API/ACP path | legacy/enhancement |
 | `ProviderStructuredInputControlAdapter.sendInput()` / `interruptSession()` | structured live input/interrupt | legacy path；native TUI core 走 PTY input/interrupt |
 
 当前已符合的部分：
 
-- Web 对五家 provider 默认 `liveBackend: "native_tui"`。
+- Web 对 core live providers（Codex、Claude、OpenCode）默认 `liveBackend: "native_tui"`；Gemini/Kimi CLI 一等支持已移除。
 - `RuntimeEngine.startSession()` / `resumeSession()` 已在 `liveBackend === "native_tui"` 时绕过 `RuntimeStructuredProviderCoordinator`，直接走 native TUI launch spec + terminal coordinator。
 
 当前未完全符合的部分：

@@ -13,7 +13,6 @@ import {
   startOpenCodeServer,
   stopOpenCodeServer,
 } from "./opencode-api";
-import { defaultProviderModeId, providerModeDescriptors } from "./session-mode-utils";
 
 const OPENCODE_MODEL_CACHE_TTL_MS = 5 * 60 * 1000;
 
@@ -312,8 +311,10 @@ function buildOpenCodeCatalog(args: {
     ),
     modelsExact: true,
     optionsExact: true,
-    defaultModeId: defaultProviderModeId("opencode")!,
-    modes: providerModeDescriptors("opencode"),
+    // OpenCode TUI currently exposes stable model launch args, but not stable
+    // TUI launch flags for RAH-managed plan/access modes. Do not show fake
+    // mode controls in the PTY-first composer.
+    modes: [],
     modelProfiles: buildOpenCodeModelProfiles({ models, providerModels }),
   };
 }
@@ -328,8 +329,7 @@ export function buildOpenCodeFallbackModelCatalog(): ProviderModelCatalog {
     freshness: "stale",
     modelsExact: false,
     optionsExact: false,
-    defaultModeId: defaultProviderModeId("opencode")!,
-    modes: providerModeDescriptors("opencode"),
+    modes: [],
     modelProfiles: [],
   };
 }

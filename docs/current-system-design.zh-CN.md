@@ -4,15 +4,15 @@
 
 ## 1. 项目定位
 
-RAH 是一个本地优先、PTY-first 的 AI 工作台。它不是要替五家 CLI 重写完整 Web agent，而是让原生 provider TUI session 由 daemon 持有，并让桌面 Terminal、Web、PWA、iPad/iPhone、Canvas pane 都 attach 到同一个 live PTY session。
+RAH 是一个本地优先、PTY-first 的 AI 工作台。它不是要替所有 CLI 重写完整 Web agent，而是让核心 provider TUI session 由 daemon 持有，并让桌面 Terminal、Web、PWA、iPad/iPhone、Canvas pane 都 attach 到同一个 live PTY session。
 
-当前已接入五家 provider：
+当前 live 主线收敛为三家 provider：
 
 - Codex
 - Claude
-- Gemini
-- Kimi
 - OpenCode
+
+Gemini/Kimi CLI 一等 provider 代码已移除，不再作为 live、history-only、diagnostics 或默认 QA 对象。Kimi、GLM、MiniMax、Gemini、Grok、DeepSeek 等低频 API-key 模型优先通过 OpenCode + API provider / 中转站承载。
 
 当前核心目标：
 
@@ -20,7 +20,7 @@ RAH 是一个本地优先、PTY-first 的 AI 工作台。它不是要替五家 C
 - live truth 是 PTY/TUI 进程状态与 PTY output；客户端 detach/reload/background 不应杀掉 session。
 - 结构化 Chat/Timeline 只来自 provider 原厂 jsonl/db/session history mirror，不从 ANSI/TUI 输出反推。
 - Web UI 只消费 RAH canonical protocol，不直接依赖 provider-native 事件。
-- `rah <provider>`、Web New、Canvas New、Web Claim History 默认都进入 native TUI PTY runtime；旧 structured live adapter 仅作为显式 legacy/enhancement 路径保留。
+- `rah codex/claude/opencode`、Web New、Canvas New、Web Claim History 对 core live provider 默认都进入 native TUI PTY runtime；旧 structured live adapter 仅作为显式 legacy/enhancement 路径保留。
 - 历史浏览先加载最近 tail，再按上滚分页加载更早内容，不一次性把完整历史塞进前端。
 
 ## 2. 包结构
@@ -139,22 +139,18 @@ Legacy structured/wrapper 的保留决策：
 - Web `claim/resume` 默认把 provider history 升级成 daemon-owned native TUI live session；只读浏览不触发 resume。
 - client detach、浏览器 reload、PWA 切后台只应影响 attach 状态，不能隐式 close/archive/kill session。
 
-## 5. 五家 Provider 当前实现
+## 5. Provider 当前实现
 
 | Provider | 默认 live path | Launch/resume spec | Structured mirror source | 增强控制边界 |
 | --- | --- | --- | --- | --- |
 | Codex | daemon-owned native TUI PTY | `codex --cd <cwd>` / `codex resume --cd <cwd> <id>`，必要时 isolated `CODEX_HOME` | rollout jsonl / sessions | model/mode 可作为启动参数增强；运行中以原生 TUI 为准 |
 | Claude | daemon-owned native TUI PTY | `claude --session-id <uuid>` / `claude --resume <id>` | `~/.claude/projects/**/*.jsonl` | permission/model/effort 作为启动参数增强；运行中以原生 TUI 为准 |
-| Gemini | daemon-owned native TUI PTY | `gemini` / `gemini --resume <id>` | Gemini conversation file + cache | approval/model 作为启动参数增强；无 RAH 统一 effort |
-| Kimi | daemon-owned native TUI PTY | `kimi --session <uuid|id>` | Kimi wire jsonl / session files | model/thinking/mode 作为启动参数增强；运行中以原生 TUI 为准 |
-| OpenCode | daemon-owned native TUI PTY | `opencode [--session <id>] <cwd>` | OpenCode SQLite message store | model/permission ruleset 作为启动参数增强；运行中以原生 TUI 为准 |
+| OpenCode | daemon-owned native TUI PTY | `opencode [--session <id>] <cwd>` | OpenCode SQLite message store | model/permission ruleset 作为启动参数增强；TUI `--model` 只传基础 `provider/model` |
 
 默认权限策略见 [Session 入口与权限边界](./session-entry-capability-boundary.zh-CN.md)。当前默认统一偏向低摩擦最大权限：
 
 - Codex：`never/danger-full-access`
 - Claude：`bypassPermissions`
-- Gemini：`yolo`
-- Kimi：`yolo`
 - OpenCode：`opencode/full-auto`
 
 这些默认值由 adapter 的 `ProviderModelCatalog.defaultModeId` 提供。前端只传 RAH 标准 `modeId`，daemon 在 native TUI launch spec 中尽量翻译为 provider 启动参数。启动增强失败或 provider 语义变化不应影响 PTY core 的产品边界；用户始终可以切到原生 TUI 使用官方 `/permission`、`/model`、`/plan`、`/goal` 等能力。具体映射见 [Provider Adapter 协议与能力边界](./provider-adapter-protocol.zh-CN.md)。
@@ -169,7 +165,7 @@ Legacy structured/wrapper 的保留决策：
 
 Provider 原生 mode id 仍可作为 `id` 保留，但前端只用 `role` 做稳定展示。比如 Codex `on-request/read-only` 的 role 是 `ask`，不应在 UI 上被解释成绝对“只读”。
 
-`SessionModeDescriptor.applyTiming` 是 mode 的应用时机语义层，用来区分 `immediate`、`next_turn`、`idle_only`、`restart_required`、`startup_only`。例如 Kimi 的 `default/yolo/plan` 是 `idle_only`，因为切换可能要重启 wire client；Codex/Gemini/OpenCode 多数 mode 是下一 turn 生效；Claude SDK mode 可同步到当前 query control plane。
+`SessionModeDescriptor.applyTiming` 是 mode 的应用时机语义层，用来区分 `immediate`、`next_turn`、`idle_only`、`restart_required`、`startup_only`。在当前 PTY-first core live 范围内，Codex/OpenCode 的 mode 多数是下一 turn 或原生 TUI/ACP 边界生效；Claude 以官方 TUI/CLI 当前能力为准。
 
 ## 6. PTY Attach 原则
 
@@ -276,7 +272,7 @@ Stop 按钮语义：
 - 不用 `replace(/\s+/g, " ")` 这类全局压平逻辑处理 assistant text。
 - 不同 provider 的原始结构化输出差异由 adapter 吸收，前端只渲染 canonical text/markdown。
 - live 与 history 的重复消除应优先依赖 `TimelineIdentity.canonicalItemId`，而不是靠文本相同、时间接近来猜。
-- 当前阶段是 Timeline Identity v2 的 MVP：协议、daemon 透传、前端 upsert、五家 adapter 的 native/derived identity 已具备。后续如果继续增强，应在 daemon 侧增加 epoch/seq ledger 做 replay/gap/catch-up，而不是把 text/time window 重新变成主逻辑。
+- 当前阶段是 Timeline Identity v2 的 MVP：协议、daemon 透传、前端 upsert、core provider 的 native/derived identity 已具备。后续如果继续增强，应在 daemon 侧增加 epoch/seq ledger 做 replay/gap/catch-up，而不是把 text/time window 重新变成主逻辑。
 
 ## 12. 常用开发命令
 
@@ -298,7 +294,7 @@ node bin/rah.mjs restart --no-open
 node bin/rah.mjs restart --no-build --no-open
 ```
 
-`restart` 会停止当前 managed daemon，再用当前 checkout 的源码启动新 daemon。它会中断当前由 daemon 管理的 live wrappers/TUIs（例如 `rah codex`、`rah claude`、`rah gemini`、`rah kimi`、`rah opencode`），因为旧 daemon 会被关闭。`start` 只保证 daemon 正在运行；如果旧 daemon 已经 ready，它不会替换成新代码。普通代码更新不需要 `npm install`。
+`restart` 会停止当前 managed daemon，再用当前 checkout 的源码启动新 daemon。它会中断当前由 daemon 管理的 core live TUIs（例如 `rah codex`、`rah claude`、`rah opencode`），因为旧 daemon 会被关闭。`start` 只保证 daemon 正在运行；如果旧 daemon 已经 ready，它不会替换成新代码。普通代码更新不需要 `npm install`。
 
 后台 daemon 管理命令：
 
@@ -320,19 +316,26 @@ rah restart --no-open
 ```bash
 npm run typecheck
 npm run test:web
+npm run test:provider-contracts
 npm run test:runtime
-npm run test:smoke:wrapper
+npm run build:web
+npm run test:smoke:native-codex-browser
+npm run test:smoke:native-provider-browser
+npm run test:smoke:native-browser-webkit
+git diff --check
 ```
 
-`npm run test:smoke:wrapper` 默认会启动一个隔离的临时测试 daemon，并仅在该测试 daemon 中启用 wrapper-control / event stream / input / close 路由和 wrapper runtime，覆盖 Codex、Claude、Gemini、Kimi、OpenCode 五家 adapter 的 wrapper 生命周期、Web 输入注入、canonical timeline identity 透传和清理。它不调用外部 provider CLI 或模型 API；普通 daemon 默认不开放 wrapper-control，也不启用 wrapper runtime。
+`npm run test:smoke:wrapper` 默认会启动一个隔离的临时测试 daemon，并仅在该测试 daemon 中启用 wrapper-control / event stream / input / close 路由和 wrapper runtime，覆盖 legacy wrapper/control harness 的生命周期、Web 输入注入、canonical timeline identity 透传和清理。它不调用外部 provider CLI 或模型 API；普通 daemon 默认不开放 wrapper-control，也不启用 wrapper runtime。它不是 PTY-first 主链路的 release gate，只是 legacy harness 回归。
 
-Provider browser smoke 依赖本机 CLI、账号状态和额度，只应在已配置完整的机器上运行：
+Provider browser smoke 依赖本机 CLI、账号状态和额度，只应在已配置完整的机器上运行。当前 PTY-first 主链路优先使用：
 
 ```bash
-npm run test:smoke:browser-providers
+npm run test:smoke:native-codex-browser
+npm run test:smoke:native-provider-browser
+npm run test:smoke:native-browser-webkit
 ```
 
-也可以按 provider 单独运行 `test:smoke:codex-browser`、`test:smoke:claude-browser`、`test:smoke:gemini-browser`、`test:smoke:kimi-browser`、`test:smoke:opencode-browser`。
+旧的 `test:smoke:codex-browser`、`test:smoke:claude-browser`、`test:smoke:opencode-browser` 仍可作为 provider-specific smoke 辅助，但不替代 native PTY browser smoke。Gemini/Kimi CLI smoke 已删除，不属于默认 gate。
 
 `npm run serve:workbench`、`npm run dev:daemon`、`npm run dev:web` 仅用于前台调试或拆分调试。Provider smoke 不是所有机器默认门禁。
 
@@ -340,14 +343,16 @@ npm run test:smoke:browser-providers
 
 改 session/control/history/provider 行为时，至少检查：
 
-- Web new 是否仍按默认最大权限启动。
-- Web resume/claim 是否在首条输入前完成 mode/model 对齐。
+- Web new / Web claim / Canvas new 是否仍创建 daemon-owned native TUI PTY session。
+- Chat 输入是否只在 native TUI prompt clean 时注入，prompt dirty / agent busy 时必须阻止误注入。
 - `rah xxx` 是否能出现在左侧 live session。
 - Web 接管是否能 single-writer 发送、结束、恢复 idle。
 - Archive 是否能关闭对应 live 执行体。
+- Detach / reload / hide canvas 是否不会关闭真实 TUI。
 - 历史打开是否先显示 tail，并能上滚到第一条用户消息。
-- Markdown 换行、列表、代码块是否保留。
+- Chat mirror 是否来自 provider 原厂 history/db 文件，Markdown 换行、列表、代码块是否保留且不重复。
 - interrupted/aborted turn 是否不会留下永久 Running tool。
+- Enhanced controls 是否保持 optional；native TUI 不应暴露假的 RAH-managed plan/access/model 控制。
 - iOS / iPad / desktop 的 composer、safe-area、sidebar 状态是否正常。
 
 ## 14. 非目标

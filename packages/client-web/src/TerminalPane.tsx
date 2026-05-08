@@ -44,6 +44,8 @@ const MOBILE_TUI_SHORTCUTS: readonly MobileTuiShortcut[] = [
   { label: "Enter", data: "\r", clearBridge: true },
 ];
 
+const MAX_TERMINAL_WRITE_BATCH_CHARS = 256 * 1024;
+
 function shouldShowMobileInputBridge(): boolean {
   if (typeof navigator === "undefined" || typeof window === "undefined") {
     return false;
@@ -117,7 +119,7 @@ function readRahTerminalTheme(): ITheme {
     blue: "#3b82f6",
     magenta: "#d946ef",
     cyan: "#06b6d4",
-    white: dark ? "#e4e4e7" : "#52525b",
+    white: dark ? "#e4e4e7" : "#e4e4e7",
     brightBlack: muted,
     brightRed: "#f87171",
     brightGreen: "#4ade80",
@@ -137,7 +139,7 @@ export function TerminalPane(props: TerminalPaneProps) {
   const fitAddonRef = useRef<FitAddon | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const sendDataRef = useRef<(data: string, options?: { focusTerminal?: boolean }) => void>(() => undefined);
-  const scheduleTerminalFitRef = useRef<() => void>(() => undefined);
+  const scheduleTerminalFitRef = useRef<(options?: { force?: boolean }) => void>(() => undefined);
   const hasControlRef = useRef(props.hasControl);
   const clientIdRef = useRef(props.clientId);
   const nextReplaySeqRef = useRef(0);
@@ -168,6 +170,9 @@ export function TerminalPane(props: TerminalPaneProps) {
 
   useEffect(() => {
     hasControlRef.current = props.hasControl;
+    if (props.hasControl) {
+      scheduleTerminalFitRef.current({ force: true });
+    }
   }, [props.hasControl]);
 
   useEffect(() => {
@@ -223,14 +228,17 @@ export function TerminalPane(props: TerminalPaneProps) {
     let exited = false;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let fitFrame: number | null = null;
+    let forceNextResize = false;
+    let writeFrame: number | null = null;
+    let pendingWrite = "";
     nextReplaySeqRef.current = 0;
 
     const terminal = new Terminal({
-      convertEol: true,
+      convertEol: false,
       disableStdin: showIosInputBridge,
       fontFamily: readRahTerminalFontFamily(),
       fontSize: showIosInputBridge ? 12 : 13,
-      letterSpacing: showIosInputBridge ? -0.5 : -0.25,
+      letterSpacing: 0,
       lineHeight: showIosInputBridge ? 1.12 : 1.1,
       theme: readRahTerminalTheme(),
     });
@@ -245,6 +253,8 @@ export function TerminalPane(props: TerminalPaneProps) {
 
     const fitAndNotifyResize = () => {
       fitFrame = null;
+      const forceResize = forceNextResize;
+      forceNextResize = false;
       const previousCols = terminal.cols;
       const previousRows = terminal.rows;
       fitAddon.fit();
@@ -253,7 +263,8 @@ export function TerminalPane(props: TerminalPaneProps) {
       }
       if (
         previousCols === terminal.cols &&
-        previousRows === terminal.rows
+        previousRows === terminal.rows &&
+        !forceResize
       ) {
         return;
       }
@@ -269,7 +280,10 @@ export function TerminalPane(props: TerminalPaneProps) {
       });
     };
 
-    const scheduleFitAndResize = () => {
+    const scheduleFitAndResize = (options?: { force?: boolean }) => {
+      if (options?.force) {
+        forceNextResize = true;
+      }
       if (fitFrame !== null) {
         window.cancelAnimationFrame(fitFrame);
       }
@@ -289,23 +303,56 @@ export function TerminalPane(props: TerminalPaneProps) {
     });
 
     const connect = (fromSeq?: number) => {
+      const scheduleTerminalWrite = () => {
+        if (writeFrame !== null) {
+          return;
+        }
+        writeFrame = window.requestAnimationFrame(() => {
+          writeFrame = null;
+          if (disposed || pendingWrite.length === 0) {
+            return;
+          }
+          const chunk = pendingWrite.slice(0, MAX_TERMINAL_WRITE_BATCH_CHARS);
+          pendingWrite = pendingWrite.slice(chunk.length);
+          terminal.write(chunk);
+          if (pendingWrite.length > 0) {
+            scheduleTerminalWrite();
+          }
+        });
+      };
+
+      const enqueueTerminalWrite = (data: string) => {
+        if (!data) {
+          return;
+        }
+        pendingWrite += data;
+        scheduleTerminalWrite();
+      };
+
+      const clearPendingTerminalWrite = () => {
+        pendingWrite = "";
+        if (writeFrame !== null) {
+          window.cancelAnimationFrame(writeFrame);
+          writeFrame = null;
+        }
+      };
+
       const socket = createPtySocket(
         props.terminalId,
         (message) => {
         if (message.type === "pty.replay") {
           if (fromSeq === undefined || message.droppedBeforeSeq !== undefined) {
+            clearPendingTerminalWrite();
             terminal.reset();
           }
-          for (const chunk of message.chunks) {
-            terminal.write(chunk);
-          }
+          enqueueTerminalWrite(message.chunks.join(""));
           if (message.nextSeq !== undefined) {
             nextReplaySeqRef.current = message.nextSeq;
           }
           return;
         }
         if (message.type === "pty.output") {
-          terminal.write(message.data);
+          enqueueTerminalWrite(message.data);
           if (message.seq !== undefined) {
             nextReplaySeqRef.current = Math.max(nextReplaySeqRef.current, message.seq + 1);
           }
@@ -316,18 +363,20 @@ export function TerminalPane(props: TerminalPaneProps) {
           if (message.seq !== undefined) {
             nextReplaySeqRef.current = Math.max(nextReplaySeqRef.current, message.seq + 1);
           }
-          terminal.writeln("");
-          terminal.writeln(
-            `[session exited${message.exitCode !== undefined ? ` code=${message.exitCode}` : ""}]`,
+          enqueueTerminalWrite(
+            `\r\n[session exited${message.exitCode !== undefined ? ` code=${message.exitCode}` : ""}]\r\n`,
           );
         }
       },
       (error) => {
-        terminal.writeln(`\r\n[pty error] ${error.message}`);
+        enqueueTerminalWrite(`\r\n[pty error] ${error.message}\r\n`);
       },
         fromSeq !== undefined ? { fromSeq } : undefined,
       );
       socketRef.current = socket;
+      if (hasControlRef.current) {
+        scheduleFitAndResize({ force: true });
+      }
       socket.addEventListener("close", (event) => {
         const isCurrentSocket = socketRef.current === socket;
         if (!isCurrentSocket) {
@@ -339,7 +388,7 @@ export function TerminalPane(props: TerminalPaneProps) {
         }
         const closeNotice = ptySocketCloseNotice(event.code, event.reason);
         if (closeNotice) {
-          terminal.writeln(`\r\n${closeNotice}`);
+          enqueueTerminalWrite(`\r\n${closeNotice}\r\n`);
         }
         reconnectTimer = setTimeout(() => {
           connect(nextReplaySeqRef.current);
@@ -371,13 +420,16 @@ export function TerminalPane(props: TerminalPaneProps) {
       sendDataRef.current(data);
     });
 
-    const resizeObserver = new ResizeObserver(scheduleFitAndResize);
+    const resizeObserver = new ResizeObserver(() => scheduleFitAndResize());
     resizeObserver.observe(container);
 
     return () => {
       disposed = true;
       if (fitFrame !== null) {
         window.cancelAnimationFrame(fitFrame);
+      }
+      if (writeFrame !== null) {
+        window.cancelAnimationFrame(writeFrame);
       }
       if (reconnectTimer) {
         clearTimeout(reconnectTimer);

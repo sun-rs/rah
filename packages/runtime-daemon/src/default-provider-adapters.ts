@@ -1,8 +1,6 @@
 import { ClaudeStoredHistoryAdapter } from "./claude-stored-history-adapter";
 import { CodexStoredHistoryAdapter } from "./codex-stored-history-adapter";
 import { DebugAdapter } from "./debug-adapter";
-import { GeminiStoredHistoryAdapter } from "./gemini-stored-history-adapter";
-import { KimiStoredHistoryAdapter } from "./kimi-stored-history-adapter";
 import { OpenCodeStoredHistoryAdapter } from "./opencode-stored-history-adapter";
 import type { ProviderAdapter, RuntimeServices } from "./provider-adapter";
 import type { WorkbenchStateStore } from "./workbench-state";
@@ -22,8 +20,6 @@ export function createDefaultProviderAdapters(
     }),
     new CodexStoredHistoryAdapter(services),
     new ClaudeStoredHistoryAdapter(services),
-    new GeminiStoredHistoryAdapter(services),
-    new KimiStoredHistoryAdapter(services),
     new OpenCodeStoredHistoryAdapter(services),
   ];
 }

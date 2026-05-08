@@ -31,6 +31,10 @@ function readVisualViewportBottomInset(): number {
   );
 }
 
+function readViewportWidth(): number {
+  return typeof window === "undefined" ? 1024 : window.innerWidth;
+}
+
 export function useWorkbenchChromeState() {
   const [leftOpen, setLeftOpen] = useState(false);
   const [rightOpen, setRightOpen] = useState(false);
@@ -49,6 +53,7 @@ export function useWorkbenchChromeState() {
   const [visualViewportBottomInsetPx, setVisualViewportBottomInsetPx] = useState(() =>
     typeof window === "undefined" ? 0 : readVisualViewportBottomInset(),
   );
+  const [viewportWidthPx, setViewportWidthPx] = useState(() => readViewportWidth());
   const [isResizing, setIsResizing] = useState(false);
   const sidebarWidthRef = useRef(sidebarWidth);
   const activePointerIdRef = useRef<number | null>(null);
@@ -114,6 +119,8 @@ export function useWorkbenchChromeState() {
       setVisualViewportBottomInsetPx((currentInset) =>
         currentInset === nextInset ? currentInset : nextInset,
       );
+      const nextWidth = readViewportWidth();
+      setViewportWidthPx((currentWidth) => (currentWidth === nextWidth ? currentWidth : nextWidth));
     };
     const scheduleVisualViewportInsetUpdate = () => {
       if (viewportFrame !== null) {
@@ -157,6 +164,7 @@ export function useWorkbenchChromeState() {
     sidebarWidth,
     terminalOpen,
     visualViewportBottomInsetPx,
+    viewportWidthPx,
     setFileReferenceOpen,
     setLeftOpen,
     setRightOpen,

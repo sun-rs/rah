@@ -11,7 +11,7 @@ type ProbeCommand = {
 };
 
 type ProviderProbeConfig = {
-  provider: Extract<ProviderKind, "codex" | "claude" | "gemini" | "kimi" | "opencode">;
+  provider: Extract<ProviderKind, "codex" | "claude" | "opencode">;
   versionArgs: string[];
   probes: ProbeCommand[];
 };
@@ -73,35 +73,6 @@ const PROVIDERS: ProviderProbeConfig[] = [
           "--permission-mode",
           "--model",
           "--effort",
-        ],
-      },
-    ],
-  },
-  {
-    provider: "gemini",
-    versionArgs: ["--version"],
-    probes: [
-      {
-        label: "root help",
-        args: ["--help"],
-        requiredFragments: ["--approval-mode", "--model", "--resume"],
-      },
-    ],
-  },
-  {
-    provider: "kimi",
-    versionArgs: ["--version"],
-    probes: [
-      {
-        label: "root help",
-        args: ["--help"],
-        requiredFragments: [
-          "--session",
-          "--model",
-          "--thinking",
-          "--no-thinking",
-          "--yolo",
-          "--plan",
         ],
       },
     ],

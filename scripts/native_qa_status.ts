@@ -2,7 +2,8 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
-type Provider = "codex" | "claude" | "gemini" | "kimi" | "opencode";
+type Provider = "codex" | "claude" | "opencode";
+type CoreLiveProvider = Extract<Provider, "codex" | "claude" | "opencode">;
 
 type RahMetadata = {
   branch: string | null;
@@ -17,7 +18,7 @@ type CheckResult = {
   details: Record<string, unknown>;
 };
 
-const PROVIDERS: Provider[] = ["codex", "claude", "gemini", "kimi", "opencode"];
+const CORE_LIVE_PROVIDERS: CoreLiveProvider[] = ["codex", "claude", "opencode"];
 const CLI_PROBE_PATH = resolve(
   process.env.RAH_NATIVE_CLI_PROBE_OUTPUT?.trim() || "test-results/native-cli-probe.json",
 );
@@ -30,13 +31,12 @@ const OUTPUT_PATH = process.env.RAH_NATIVE_QA_STATUS_OUTPUT?.trim()
   : null;
 
 const MANUAL_QA_REQUIRED = [
-  "Real model response and long-running turn behavior for all providers.",
+  "Real model response and long-running turn behavior for Codex, Claude, and OpenCode.",
   "Real permission / trust-folder / login / quota / 429 flows.",
   "Codex /goal behavior inside the official TUI.",
   "Claude permission prompt and trust-folder confirmation.",
-  "Gemini Google login and quota/error surfaces.",
-  "Kimi long-running turn behavior.",
   "OpenCode real resume/model/interrupt behavior.",
+  "OpenCode model selection boundary: TUI launch uses provider/model, while variant/reasoning remains native or enhancement-only.",
   "iPad/Safari real keyboard composition and terminal resize behavior.",
   "iPad/Safari terminal canvas tap and input bridge tap keyboard anchoring behavior.",
   "iPad/Safari terminal typography, Chinese spacing, line height, and light/dark theme behavior.",
@@ -133,7 +133,7 @@ function checkCliProbe(path: string, current: RahMetadata): CheckResult {
   checkReportMetadata("native CLI probe", report, current, blockers);
 
   const byProvider = providerResultMap(report);
-  const providers = PROVIDERS.map((provider) => {
+  const providers = CORE_LIVE_PROVIDERS.map((provider) => {
     const result = byProvider.get(provider);
     const commands = Array.isArray(result?.commands) ? result.commands : [];
     const version =
@@ -191,7 +191,7 @@ function checkRealTuiProbe(path: string, current: RahMetadata): CheckResult {
   checkReportMetadata("real TUI launch probe", report, current, blockers);
 
   const byProvider = providerResultMap(report);
-  const providers = PROVIDERS.map((provider) => {
+  const providers = CORE_LIVE_PROVIDERS.map((provider) => {
     const result = byProvider.get(provider);
     if (!result) {
       blockers.push(`real TUI launch probe is missing ${provider}.`);

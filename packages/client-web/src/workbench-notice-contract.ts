@@ -30,9 +30,17 @@ export function deriveWorkbenchNoticeState(args: {
     selectedSummary?.session.nativeTui && selectedSummary.session.runtimeState === "stopped"
       ? "Native TUI process is stopped. Archive this session or resume it from history to continue."
       : null;
+  const nativeTuiQueuedInputCount =
+    selectedSummary?.session.nativeTui?.queuedInputCount ?? 0;
+  const nativeTuiQueuedInputMessage =
+    nativeTuiQueuedInputCount > 0
+      ? `${nativeTuiQueuedInputCount} Chat message${
+          nativeTuiQueuedInputCount === 1 ? "" : "s"
+        } queued. It will send after the TUI prompt is clear.`
+      : null;
   const nativeTuiPromptDirtyMessage =
     selectedSummary?.session.nativeTui?.promptState === "prompt_dirty"
-      ? "Native TUI has an unsent local draft. Switch to TUI and submit or clear it before sending from Chat."
+      ? "Native TUI has an unsent local draft. Chat input will queue until the TUI prompt is clear."
       : null;
   const interactionMessage = selectedSummary
     ? selectedSummary.session.launchSource === "terminal" &&
@@ -50,6 +58,11 @@ export function deriveWorkbenchNoticeState(args: {
     ? {
         tone: "warning" as const,
         message: nativeTuiStoppedMessage,
+      }
+    : nativeTuiQueuedInputMessage
+    ? {
+        tone: "info" as const,
+        message: nativeTuiQueuedInputMessage,
       }
     : nativeTuiPromptDirtyMessage
     ? {

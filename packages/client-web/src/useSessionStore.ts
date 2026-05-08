@@ -96,7 +96,7 @@ export {
   sameWorkspaceDirectory,
 } from "./session-store-workspace";
 
-type ProviderChoice = "codex" | "claude" | "kimi" | "gemini" | "opencode";
+type ProviderChoice = "codex" | "claude" | "opencode";
 
 interface StartSessionOptions {
   provider?: ProviderChoice;
@@ -211,8 +211,6 @@ const HISTORY_PAGE_LIMIT = 250;
 const PRELOAD_MODEL_PROVIDERS = new Set<ProviderChoice>([
   "codex",
   "claude",
-  "gemini",
-  "kimi",
   "opencode",
 ]);
 

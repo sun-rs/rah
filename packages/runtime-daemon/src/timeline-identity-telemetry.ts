@@ -152,17 +152,6 @@ function shouldWarnForMissingIdentity(params: {
     return false;
   }
 
-  // Gemini live streams do not expose stable provider-native item ids for all
-  // message parts. Keep those items identity-less instead of manufacturing ids
-  // that cannot reconcile with Gemini's stored history message ids later.
-  if (
-    params.provider === "gemini" &&
-    params.channel === "structured_live" &&
-    readTimelineMessageId(params.item) === undefined
-  ) {
-    return false;
-  }
-
   return true;
 }
 

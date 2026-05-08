@@ -14,15 +14,31 @@ import {
 import { homedir, networkInterfaces } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import process from "node:process";
+import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import WebSocket from "ws";
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_DAEMON_URL = "http://127.0.0.1:43111";
-const SUPPORTED_PROVIDERS = new Set(["codex", "claude", "gemini", "kimi", "opencode"]);
+const CORE_LIVE_PROVIDERS = new Set(["codex", "claude", "opencode"]);
+const SUPPORTED_PROVIDERS = CORE_LIVE_PROVIDERS;
 const MANAGEMENT_COMMANDS = new Set(["start", "status", "stop", "restart", "logs"]);
 const CLIENT_INDEX_PATH = join(ROOT_DIR, "packages", "client-web", "dist", "index.html");
+const TERMINAL_MODE_RESET_SEQUENCE = [
+  "\u001b[<1u",
+  "\u001b[?1000l",
+  "\u001b[?1002l",
+  "\u001b[?1003l",
+  "\u001b[?1005l",
+  "\u001b[?1006l",
+  "\u001b[?1015l",
+  "\u001b[?1004l",
+  "\u001b[?2004l",
+  "\u001b[?2026l",
+  "\u001b[?25h",
+  "\u001b[0m",
+].join("");
 const CLAUDE_PERMISSION_MODES = new Set([
   "acceptEdits",
   "auto",
@@ -30,8 +46,14 @@ const CLAUDE_PERMISSION_MODES = new Set([
   "default",
   "plan",
 ]);
-const GEMINI_APPROVAL_MODES = new Set(["default", "auto_edit", "yolo", "plan"]);
-const KIMI_APPROVAL_MODES = new Set(["default", "yolo"]);
+
+function restoreTerminalApplicationModes(stdout) {
+  if (!stdout.isTTY) {
+    return;
+  }
+  stdout.write(TERMINAL_MODE_RESET_SEQUENCE);
+  stdout.write("\r");
+}
 
 function printUsage() {
   process.stdout.write(
@@ -46,7 +68,7 @@ function printUsage() {
       "  rah <provider> resume <providerSessionId>",
       "",
       "Providers:",
-      "  codex | claude | gemini | kimi | opencode",
+      "  codex | claude | opencode",
       "",
       "Options:",
       "  --cwd <dir>         Override working directory",
@@ -57,14 +79,10 @@ function printUsage() {
       "  --permission-mode <mode>",
       "                      Claude native TUI launch mode (default: bypassPermissions)",
       "                      Values: default | acceptEdits | auto | bypassPermissions | plan",
-      "  --approval-mode <mode>",
-      "                      Gemini/Kimi native TUI launch mode (default: yolo)",
-      "                      Gemini values: default | auto_edit | yolo | plan",
-      "                      Kimi values: default | yolo",
       "  --help              Show this help",
       "",
       "Current status:",
-      "  codex/claude/gemini/kimi/opencode: daemon-owned PTY-first native TUI",
+      "  codex/claude/opencode: daemon-owned PTY-first native TUI",
       "",
       "Claude note:",
       "  `rah claude resume <providerSessionId>` maps to `claude --resume <id>`.",
@@ -136,8 +154,6 @@ function parseArgs(argv) {
   let cwd = process.cwd();
   let daemonUrl = DEFAULT_DAEMON_URL;
   let claudePermissionMode;
-  let geminiApprovalMode;
-  let kimiApprovalMode;
 
   const rest = [...argv.slice(1)];
   if (rest[0] === "resume") {
@@ -172,36 +188,6 @@ function parseArgs(argv) {
       claudePermissionMode = value;
       continue;
     }
-    if (option === "--approval-mode") {
-      if (provider !== "gemini" && provider !== "kimi") {
-        throw new Error("`--approval-mode` is only supported for `rah gemini` and `rah kimi`.");
-      }
-      const value = rest.shift();
-      const supported = provider === "gemini" ? GEMINI_APPROVAL_MODES : KIMI_APPROVAL_MODES;
-      if (!value || !supported.has(value)) {
-        throw new Error(
-          `Unsupported ${provider} approval mode: ${value ?? "<missing>"}. ` +
-            (provider === "gemini" ? "Use default, auto_edit, yolo, or plan." : "Use default or yolo."),
-        );
-      }
-      if (provider === "gemini") {
-        geminiApprovalMode = value;
-      } else {
-        kimiApprovalMode = value;
-      }
-      continue;
-    }
-    if (option === "--yolo") {
-      if (provider !== "gemini" && provider !== "kimi") {
-        throw new Error("`--yolo` is only supported for `rah gemini` and `rah kimi`.");
-      }
-      if (provider === "gemini") {
-        geminiApprovalMode = "yolo";
-      } else {
-        kimiApprovalMode = "yolo";
-      }
-      continue;
-    }
     throw new Error(`Unknown argument: ${option}`);
   }
 
@@ -212,8 +198,6 @@ function parseArgs(argv) {
     daemonUrl,
     ...(resumeProviderSessionId ? { resumeProviderSessionId } : {}),
     ...(claudePermissionMode ? { claudePermissionMode } : {}),
-    ...(geminiApprovalMode ? { geminiApprovalMode } : {}),
-    ...(kimiApprovalMode ? { kimiApprovalMode } : {}),
   };
 }
 
@@ -544,12 +528,6 @@ function providerModeId(parsed) {
   if (parsed.provider === "claude") {
     return parsed.claudePermissionMode;
   }
-  if (parsed.provider === "gemini") {
-    return parsed.geminiApprovalMode;
-  }
-  if (parsed.provider === "kimi") {
-    return parsed.kimiApprovalMode;
-  }
   return undefined;
 }
 
@@ -598,6 +576,23 @@ async function startOrResumePtyFirstSession(parsed, client) {
   return result.session;
 }
 
+function managedSessionFromSummary(summary) {
+  if (summary?.session?.id) {
+    return summary.session;
+  }
+  // Compatibility for older synthetic tests or callers that returned the
+  // ManagedSession directly instead of the canonical SessionSummary envelope.
+  if (summary?.id) {
+    return summary;
+  }
+  throw new Error("Daemon returned an invalid session summary.");
+}
+
+function ptyIdFromSessionSummary(summary) {
+  const session = managedSessionFromSummary(summary);
+  return session.nativeTui?.terminalId || session.ptyId || session.id;
+}
+
 async function detachPtyFirstClient(daemonUrl, sessionId, clientId) {
   try {
     await postJson(daemonUrl, `/api/sessions/${encodeURIComponent(sessionId)}/detach`, {
@@ -627,6 +622,7 @@ async function attachLocalTerminalToPty(daemonUrl, sessionId, clientId) {
   const stdin = process.stdin;
   const stdout = process.stdout;
   const canUseRawMode = Boolean(stdin.isTTY && typeof stdin.setRawMode === "function");
+  const inputDecoder = new StringDecoder("utf8");
   let cleanedUp = false;
 
   await new Promise((resolve, reject) => {
@@ -640,6 +636,7 @@ async function attachLocalTerminalToPty(daemonUrl, sessionId, clientId) {
       if (canUseRawMode) {
         stdin.setRawMode(false);
       }
+      restoreTerminalApplicationModes(stdout);
       stdin.pause();
     };
 
@@ -650,11 +647,15 @@ async function attachLocalTerminalToPty(daemonUrl, sessionId, clientId) {
     };
 
     const onInput = (chunk) => {
+      const data = inputDecoder.write(chunk);
+      if (!data) {
+        return;
+      }
       send({
         type: "pty.input",
         sessionId,
         clientId,
-        data: chunk.toString("utf8"),
+        data,
       });
     };
 
@@ -719,8 +720,9 @@ async function attachLocalTerminalToPty(daemonUrl, sessionId, clientId) {
 async function runPtyFirstProviderCommand(parsed) {
   await ensureDaemon(parsed.daemonUrl);
   const client = terminalClientDescriptor();
-  const session = await startOrResumePtyFirstSession(parsed, client);
-  const ptyId = session.ptyId || session.id;
+  const summary = await startOrResumePtyFirstSession(parsed, client);
+  const session = managedSessionFromSummary(summary);
+  const ptyId = ptyIdFromSessionSummary(summary);
   try {
     await attachLocalTerminalToPty(parsed.daemonUrl, ptyId, client.clientId);
   } finally {

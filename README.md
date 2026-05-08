@@ -56,13 +56,16 @@ Important behavior:
 
 - `start` does not replace a daemon that is already running.
 - `restart` is the command that shuts down the old daemon and starts the updated code.
-- `restart` interrupts currently managed live wrappers/TUIs (`rah codex`, `rah claude`,
-  `rah gemini`, `rah kimi`, `rah opencode`) because the old daemon is stopped.
+- `restart` interrupts currently managed core live TUIs (`rah codex`, `rah claude`,
+  `rah opencode`) because the old daemon is stopped.
 - `npm install` is not needed for normal code changes.
 - daemon pid/log files live under `~/.rah/runtime-daemon`.
 - `rah <provider>` now defaults to PTY-first: it asks the daemon to create/resume a native TUI
   session and attaches the current terminal to that daemon-owned PTY. The previous wrapper handoff
   path is no longer exposed from the public `rah <provider>` CLI entry.
+- Core live providers are `codex`, `claude`, and `opencode`. Gemini/Kimi CLI first-class support
+  has been removed; use OpenCode + API providers for Gemini/Kimi/Grok/DeepSeek-style work. See
+  [`docs/provider-scope-codex-claude-opencode.zh-CN.md`](docs/provider-scope-codex-claude-opencode.zh-CN.md).
 
 Optional: if you want the global `rah` command to point at this checkout, link it once:
 
@@ -101,12 +104,12 @@ npm run test:provider-contracts
 npm run test:web
 npm run test:runtime
 npm run test:native-tui
+npm run test:manual-qa-status
+npm run test:smoke:native-codex-browser
+npm run test:smoke:native-provider-browser
+npm run test:smoke:native-browser-webkit
 npm run test:smoke:history-claim
 npm run test:smoke:tool-flow
-npm run test:smoke:gemini-flow
-npm run test:smoke:gemini-browser
-npm run test:smoke:kimi-flow
-npm run test:smoke:kimi-browser
 npm run test:smoke:claude-flow
 npm run test:smoke:claude-browser
 npm run test:smoke:codex-browser
@@ -127,25 +130,26 @@ RAH now uses five test tiers:
   - `npm run test:runtime`
 - provider contracts
   - `npm run test:provider-contracts`
-  - deterministic mock-provider coverage for Codex, Claude, Gemini, Kimi, and OpenCode
-  - protects queued input, no duplicate live/history merge, Stop state convergence, model/mode/permission propagation, and Markdown/timeline rendering contracts
+  - deterministic contract coverage for Codex, Claude, and OpenCode live paths
+  - protects queued input, no duplicate live/history merge, Stop state convergence, model/mode/permission propagation, and Markdown/timeline rendering contracts on the core live path
 - daemon smoke
   - `npm run test:smoke:wrapper`
-  - exercises the legacy wrapper-control path in a dedicated test daemon for Codex, Claude, Gemini, Kimi, and OpenCode
+  - exercises the legacy wrapper-control path in a dedicated test daemon
     without invoking external provider CLIs or model APIs
   - starts an isolated temporary daemon automatically; the normal daemon keeps wrapper-control and the wrapper runtime disabled
 - native TUI gate
   - `npm run test:native-tui`
   - exercises the PTY-first lifecycle, fake native provider TUIs, browser replay/reconnect,
-    mobile input bridge contracts, mirror diagnostics, and native-TUI-specific regression cases
+    WebKit browser smoke, mobile input bridge contracts, mirror diagnostics, and native-TUI-specific regression cases
+  - includes `test:manual-qa-status` so the human QA evidence verifier cannot silently weaken
+  - core live provider expectations are Codex, Claude, and OpenCode
 - provider smoke
+  - `native-codex-browser`
+  - `native-provider-browser`
+  - `native-browser-webkit`
   - `history-claim`
   - `tool-flow`
   - `codex-browser`
-  - `gemini-flow`
-  - `gemini-browser`
-  - `kimi-flow`
-  - `kimi-browser`
   - `claude-flow`
   - `claude-browser`
   - `opencode-browser`
@@ -159,11 +163,15 @@ RAH now uses five test tiers:
 
 Detailed provider regression coverage is tracked in `docs/provider-regression-testing.zh-CN.md`.
 
+For the current PTY-first branch, the preferred browser smoke commands are `native-codex-browser`,
+`native-provider-browser`, and `native-browser-webkit`. The older provider-specific browser smoke
+commands are still useful as local diagnostics, but they do not replace the native PTY browser smoke.
+
 Provider smoke is intentionally **not** treated as a universal local gate. Installed CLI binaries do
 not prove authentication, quota, or account access.
 
-`npm run test:smoke:browser-providers` is available for a known-good local machine with all five
-provider CLIs authenticated. It is a convenience command, not a default gate. Different machines may
+`npm run test:smoke:browser-providers` is a legacy convenience command for a known-good local
+machine with the matching core provider CLIs authenticated. It is not a default gate. Different machines may
 have:
 
 - only some provider CLIs installed
@@ -172,7 +180,7 @@ have:
 
 For that reason, provider smoke can still be run explicitly per provider. `npm run test:smoke:wrapper`
 is the deterministic legacy/internal smoke for wrapper lifecycle, web input injection, canonical
-timeline identity propagation, and cleanup across all five provider adapters. It starts an isolated
+timeline identity propagation, and cleanup across the core live provider registrations. It starts an isolated
 temporary daemon with wrapper-control and the wrapper runtime enabled; the normal daemon keeps both
 disabled.
 
@@ -190,9 +198,9 @@ packages/
 - `RuntimeEngine` owns the shared session store, event bus, and PTY hub.
 - `ProviderAdapter` is the seam where concrete providers plug into the runtime.
 - `ProviderActivity` is the adapter-facing normalization layer.
-- `CodexAdapter` remains the reference-standard adapter.
-- `ClaudeAdapter`, `GeminiAdapter`, `KimiAdapter`, and `OpenCodeAdapter` are now real adapters,
-  not placeholders.
+- Codex, Claude, and OpenCode are the core live native TUI providers.
+- Gemini/Kimi CLI provider code has been removed. New Gemini/Kimi-family live work should go
+  through OpenCode/API-provider configuration.
 - `DebugAdapter` remains useful for structured scenario replay and non-provider UI exercise.
 - `client-web` consumes the canonical API/events boundary and should not depend on provider-native
   event names.
@@ -210,6 +218,9 @@ Diagnostics intentionally report only:
 - launch command
 - version probe
 - basic runtime status
+
+Provider diagnostics are scoped to the core live providers: Codex, Claude, and OpenCode. Gemini/Kimi
+CLI binaries are no longer probed in Settings.
 
 They intentionally do **not** claim that provider authentication is valid. Auth remains managed by
 the provider CLI itself.

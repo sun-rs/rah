@@ -1,20 +1,22 @@
 # Native TUI 真实 CLI QA 清单
 
-日期：2026-05-07
+日期：2026-05-08
 
 目的：验证 `refactor/pty-first-core` 分支的真实 CLI 路线。自动 smoke 只能证明 RAH 的 PTY、WebSocket、binding、mirror 和假 provider 行为正确；真实 CLI QA 用来覆盖账号、额度、官方 TUI 菜单、权限弹窗、长任务和移动端输入这些无法稳定 mock 的部分。
 
+维护边界：Core live QA 只覆盖 Codex、Claude、OpenCode。Gemini/Kimi CLI 一等支持已移除，不再作为 live、history-only、diagnostics 或默认 QA 对象。低频 Gemini/Kimi/Grok/DeepSeek 等 API-key 模型优先通过 OpenCode + API provider / 中转站验证。
+
 ## 当前本机 CLI 版本
+
+Core live CLI 版本：
 
 | Provider | 命令 | 当前输出 |
 |---|---|---|
-| Codex | `codex --version` | `codex-cli 0.128.0` |
-| Claude | `claude --version` | `2.1.132 (Claude Code)` |
-| Gemini | `gemini --version` | `0.40.0` |
-| Kimi | `kimi --version` | `kimi, version 1.40.0` |
-| OpenCode | `opencode --version` | `1.14.40` |
+| Codex | `codex --version` | `codex-cli 0.129.0` |
+| Claude | `claude --version` | `2.1.133 (Claude Code)` |
+| OpenCode | `opencode --version` | `1.14.41` |
 
-版本记录不是“兼容承诺”。`npm run test:smoke:native-cli-probe` 会在自动门槛中重新采集本机真实 CLI 的 `--version` 输出，并记录当前 RAH branch / commit / dirty worktree 状态；同时要求真实 CLI `--help` 探测既包含 native launch 依赖的 flag，也必须以 exit code 0 正常退出。每次升级任意 provider CLI 后，至少重跑本文的自动门槛和对应 provider 的真实 QA。
+版本记录不是“兼容承诺”。`npm run test:smoke:native-cli-probe` 会在自动门槛中重新采集 core live CLI 的 `--version` 输出，并记录当前 RAH branch / commit / dirty worktree 状态；同时要求真实 CLI `--help` 探测既包含 native launch 依赖的 flag，也必须以 exit code 0 正常退出。每次升级 Codex、Claude、OpenCode 这类 core live provider CLI 后，至少重跑本文的自动门槛和对应 provider 的真实 QA。
 
 需要为真实 QA 固定保存一份本机证据时，可以写入 ignored 的 `test-results`：
 
@@ -30,7 +32,7 @@ RAH_NATIVE_CLI_PROBE_OUTPUT=test-results/native-cli-probe.json npm run test:smok
 RAH_NATIVE_REAL_TUI_PROBE_OUTPUT=test-results/native-real-tui-launch.json npm run test:smoke:native-real-tui-launch
 ```
 
-该命令会真实启动 Codex / Claude / Gemini / Kimi / OpenCode TUI，等待默认 3 秒，确认进程没有在启动窗口内退出，然后通过 RAH PTY host 关闭。它默认使用稳定工作区 `test-results/native-real-tui-workspaces/<provider>`，避免制造已删除的系统临时目录 session。RAH 的 session list 聚合层会过滤这些内部探针工作区，避免它们出现在用户 Live / History / Recent / Workspaces。报告会记录 RAH branch / commit / dirty 状态，并区分 `rawOutputObserved` 与 `visibleOutputObserved`：有些 TUI 启动时只写 terminal escape 或短暂无可见文字，这不等于启动失败。它不发送 prompt，因此不证明模型响应、权限弹窗、额度、登录态或 long-running turn。
+该命令可用于真实启动 core live provider TUI，等待默认 3 秒，确认进程没有在启动窗口内退出，然后通过 RAH PTY host 关闭。它默认使用稳定工作区 `test-results/native-real-tui-workspaces/<provider>`，避免制造已删除的系统临时目录 session。RAH 的 session list 聚合层会过滤这些内部探针工作区，避免它们出现在用户 Live / History / Recent / Workspaces。报告会记录 RAH branch / commit / dirty 状态，并区分 `rawOutputObserved` 与 `visibleOutputObserved`：有些 TUI 启动时只写 terminal escape 或短暂无可见文字，这不等于启动失败。它不发送 prompt，因此不证明模型响应、权限弹窗、额度、登录态或 long-running turn。
 
 准备封板或开始人工 QA 前，可以先检查当前自动证据是否齐全：
 
@@ -38,7 +40,7 @@ RAH_NATIVE_REAL_TUI_PROBE_OUTPUT=test-results/native-real-tui-launch.json npm ru
 npm run test:smoke:native-qa-status
 ```
 
-该命令读取 `test-results/native-cli-probe.json` 和 `test-results/native-real-tui-launch.json`，确认五家 provider 的 CLI help/version probe 和真实 TUI launch probe 都通过且报告 commit 与当前 commit 一致。它也会输出仍需人工验证的项目；它不会替代 `npm run test:native-tui` 或真实 iPad/CLI QA。
+该命令读取 `test-results/native-cli-probe.json` 和 `test-results/native-real-tui-launch.json`，确认 core live provider 的 CLI help/version probe 和真实 TUI launch probe 都通过且报告 commit 与当前 commit 一致。它也会输出仍需人工验证的项目；它不会替代 `npm run test:native-tui` 或真实 iPad/CLI QA。
 
 需要固定保存 QA status 报告时：
 
@@ -53,7 +55,7 @@ RAH_NATIVE_MANUAL_QA_TEMPLATE_OUTPUT=test-results/native-manual-qa.json npm run 
 RAH_NATIVE_MANUAL_QA_STATUS_OUTPUT=test-results/native-manual-qa-status.json npm run test:smoke:native-manual-qa-status
 ```
 
-`native-manual-qa-status` 会要求每个必测项都是 `pass`，并且有 tester、testedAt、evidence；provider 项还必须填写 cliVersion。它不替代人类测试，只防止最终封板时漏掉 provider 或 iPad/Safari 项。
+`native-manual-qa-status` 会要求每个必测项都是 `pass`，并且有 tester、testedAt、evidence。Provider 项还必须填写 cliVersion、workspace、sessionId；除 `*.web-new-native-tui` 外，还必须填写 providerSessionId。iPad/Safari 项必须填写 device、browser、url。它不替代人类测试，只防止最终封板时漏掉 provider 或 iPad/Safari 项。
 
 ## 自动门槛
 
@@ -67,6 +69,7 @@ npm run test:native-tui
 
 ```bash
 npm run typecheck
+npm run test:provider-contracts
 npm run test:web
 npm run test:runtime
 npm run build:web
@@ -75,44 +78,46 @@ npm run test:smoke:native-codex
 npm run test:smoke:native-providers
 npm run test:smoke:native-codex-browser
 npm run test:smoke:native-provider-browser
+npm run test:smoke:native-browser-webkit
+npm run test:manual-qa-status
 git diff --check
 ```
 
-这些命令覆盖 RAH 自身协议、daemon lifecycle、fake provider native TUI、Web Chat/TUI toggle、xterm 输入、Chat composer 注入 native TUI、TUI 中存在未提交草稿时 `nativeTui.promptState` 会变为 `prompt_dirty` 且 Chat composer 会被阻止不会误注入，并显示切 TUI 提交或清除草稿的 warning、五家 fake native session 页面 reload 后 TUI replay、Codex 浏览器离线期间后台 native TUI 输出在 online/focus 后自动追上、Claude/Gemini/Kimi/OpenCode 浏览器离线期间后台 PTY 输入产生的新 native TUI 输出在 online/focus 后自动追上、Codex canvas 分屏布局切换后的 TUI replay 与 PTY resize 传递、五家 fake native Stop -> Ctrl-C/SIGINT、Stop 后 runtimeState 回 idle、移动端 TUI input bridge 的快捷键、文本输入与 composition 输入，Chat 注入后 stale persisted mirror completion / Kimi `TurnEnd` / Codex rollout lifecycle / Gemini conversation message / OpenCode database completion 不会把 session 错误标回 idle、真实 CLI version / RAH commit 采集和真实 CLI help flag。它们不覆盖真实模型是否回答、真实权限弹窗是否出现、真实账号是否登录、真实额度是否耗尽。
+这些命令覆盖 RAH 自身协议、daemon lifecycle、fake provider native TUI、Web Chat/TUI toggle、xterm 输入、Chat composer 注入 native TUI、TUI 中存在未提交草稿时 `nativeTui.promptState` 会变为 `prompt_dirty` 且 Chat composer 会被阻止不会误注入，并显示切 TUI 提交或清除草稿的 warning、core live fake native session 页面 reload 后 TUI replay、Codex 浏览器离线期间后台 native TUI 输出在 online/focus 后自动追上、Claude/OpenCode 浏览器离线期间后台 PTY 输入产生的新 native TUI 输出在 online/focus 后自动追上、Codex canvas 分屏布局切换后的 TUI replay 与 PTY resize 传递、core live fake native Stop -> Ctrl-C/SIGINT、Stop 后 runtimeState 回 idle、移动端 TUI input bridge 的快捷键、文本输入与 composition 输入，Chat 注入后 stale persisted mirror completion / Codex rollout lifecycle / OpenCode database completion 不会把 session 错误标回 idle、真实 CLI version / RAH commit 采集和真实 CLI help flag。它们不覆盖真实模型是否回答、真实权限弹窗是否出现、真实账号是否登录、真实额度是否耗尽。
 
 `npm run test:smoke:wrapper` 仍可显式运行，用于 legacy/internal wrapper-control smoke；它会启动专用测试 daemon 启用 wrapper-control 和 wrapper runtime，普通 daemon 默认不开放该路由且不启用 wrapper runtime。它不属于 PTY-first native TUI gate。
 
-`test:smoke:native-real-tui-launch` 不在完整 gate 内，原因是它会启动真实 provider TUI，可能受账号登录、官方安全确认、provider 本地状态影响；它适合作为升级 provider CLI 后的额外真实启动检查。它可能让 provider 记录空 session metadata，所以默认只写入稳定的 `test-results` 工作区，不使用会被删除的系统临时目录。2026-05-03 本机已通过五家 provider 启动探针；最新报告显示五家真实 TUI 均能启动并关闭。该报告还观察到 Claude 在新测试工作区显示官方 trust-folder safety prompt，Kimi 显示 `Kimi-k2.6` welcome，OpenCode 显示 TUI 首页；人工 QA 需要在 TUI 中确认这类官方提示和真实 turn 行为。Codex 只有 raw output 或 Gemini 在 3 秒窗口内暂无输出不算失败，因为该探针不发送 prompt，只验证 launch/PTY/close。
+`test:smoke:native-real-tui-launch` 不在完整 gate 内，原因是它会启动真实 provider TUI，可能受账号登录、官方安全确认、provider 本地状态影响；它适合作为升级 core live provider CLI 后的额外真实启动检查。它可能让 provider 记录空 session metadata，所以默认只写入稳定的 `test-results` 工作区，不使用会被删除的系统临时目录。旧的五家 provider 报告只能作为历史参考；新主线只要求 Codex、Claude、OpenCode 的真实 TUI 启动探针。人工 QA 需要在 TUI 中确认官方提示和真实 turn 行为。
 
 `test:smoke:native-codex-browser` 还会模拟浏览器离线，后台通过 daemon 向同一个 native TUI 写入新输入，然后恢复 online/focus，验证当前页面不用重新选择 session 就能追上 TUI 输出和 Chat mirror；它也会验证 Settings Version 页能从 daemon 读取并展示 PTY terminal replay health，并在手动 Refresh 后显示 refresh-to-refresh delta；它也会验证 Codex native TUI 在 canvas 内可渲染，并在上下二分、三分、四分、左右二分布局切换后仍可恢复 TUI replay，同时断言布局变化会向 native TUI 进程发送 PTY resize；它还会验证 TUI 中存在未提交草稿时 Chat composer 会被阻止且不会把文本误注入 native TUI，并显示切 TUI 提交或清除草稿的 warning；它还会用 mobile/touch browser context 验证 TUI input bridge 和 Ctrl-C、Esc、Tab、方向键、Enter 快捷键按钮会渲染，并验证 Ctrl-C 快捷键、文本输入与 composition 输入都能写入 PTY。它仍不能替代 iPad/Safari 真机输入法、真实拖拽 resize 和旋转测试。
 
-`test:smoke:native-provider-browser` 会对 Claude/Gemini/Kimi/OpenCode 做同类浏览器恢复验证：页面离线期间通过 daemon PTY WebSocket 向同一个 native TUI 写入输入，恢复 online/focus 后，当前页面必须不用重新选择 session 就追上 TUI replay；同时验证 TUI 中存在未提交草稿时 `nativeTui.promptState` 会变为 `prompt_dirty`、Chat composer 会被阻止且不会误注入，并显示切 TUI 提交或清除草稿的 warning；OpenCode 还会断言 DB mirror 的 text、reasoning、tool、step 在 Chat UI 可见，且 token/cost usage 会进入 session summary。
+`test:smoke:native-provider-browser` 会对 core live provider 做同类浏览器恢复验证：页面离线期间通过 daemon PTY WebSocket 向同一个 native TUI 写入输入，恢复 online/focus 后，当前页面必须不用重新选择 session 就追上 TUI replay；同时验证 TUI 中存在未提交草稿时 `nativeTui.promptState` 会变为 `prompt_dirty`、Chat composer 会被阻止且不会误注入，并显示切 TUI 提交或清除草稿的 warning；OpenCode 还会断言 DB mirror 的 text、reasoning、tool、step 在 Chat UI 可见，且 token/cost usage 会进入 session summary。
 
-浏览器 smoke 默认使用 Chromium，避免完整 gate 依赖额外浏览器运行时。需要更接近 Safari/iPad 时，可以单独运行：
+`test:native-tui` 当前会运行 Chromium 与 WebKit browser smoke。WebKit 是主 gate 的一部分，用来尽早发现 Safari-like 的焦点、replay、canvas 和 mobile input bridge 回归；它仍不能替代 iPad / Safari 真机输入法和 PWA 后台恢复测试。需要局部复测 WebKit 时，可以单独运行：
 
 ```bash
 npm run test:smoke:native-browser-webkit
 ```
 
-Firefox 近似验证也有独立入口：
+Firefox 近似验证不属于主 gate，有独立入口：
 
 ```bash
 npm run test:smoke:native-browser-firefox
 ```
 
-`RAH_NATIVE_BROWSER` 支持 `chromium`、`firefox`、`webkit`。对应 Playwright browser runtime 必须已安装；如果 WebKit 或 Firefox 缺失，需要先用当前 Python Playwright 环境安装，例如 `python -m playwright install webkit` 或 `python -m playwright install firefox`。browser smoke 会先预检所选 runtime，缺失时不会启动 daemon 或 native fake session，并在 JSON 输出中标记 `phase: "browser_preflight"`。WebKit smoke 仍不能替代 iPad / Safari 真机输入法和 PWA 后台恢复测试。
+`RAH_NATIVE_BROWSER` 支持 `chromium`、`firefox`、`webkit`。对应 Playwright browser runtime 必须已安装；如果 WebKit 或 Firefox 缺失，需要先用当前 Python Playwright 环境安装，例如 `python -m playwright install webkit` 或 `python -m playwright install firefox`。browser smoke 会先预检所选 runtime，缺失时不会启动 daemon 或 native fake session，并在 JSON 输出中标记 `phase: "browser_preflight"`。
 
-2026-05-03 本机已安装 Python Playwright WebKit runtime，并额外通过：
+2026-05-08 当前主 gate 已包含：
 
 ```bash
 npm run test:smoke:native-browser-webkit
 ```
 
-这轮 WebKit smoke 暴露并修复了一个真实 race：Claude/Gemini 类 final-state Chat mirror 不能把 native TUI 中未提交的本地草稿从 `prompt_dirty` 覆盖回 `prompt_clean`。对应后端回归测试为 `native TUI mirror does not clean an unsubmitted Claude prompt draft` 和 `native TUI mirror does not clean an unsubmitted Gemini prompt draft`。
+这轮 WebKit smoke 曾暴露并修复了一个真实 race：final-state Chat mirror 不能把 native TUI 中未提交的本地草稿从 `prompt_dirty` 覆盖回 `prompt_clean`。当前 core live 回归以 Claude/Codex/OpenCode 路径为准。
 
 ## 通用真实 QA
 
-每家 provider 都按同一组用例跑，只有 provider 原生能力不同。
+Core live provider 都按同一组用例跑，只有 provider 原生能力不同。
 
 1. Web new session：从 RAH Web 创建新 session，默认应启动真实官方 TUI。
 2. Chat 输入：在 Chat view 发一句短问题，TUI 应收到输入；如果 TUI 忙，第二句应排队而不是丢失。
@@ -142,25 +147,18 @@ npm run test:smoke:native-browser-webkit
 - JSONL mirror 是 final-state mirror，不承诺中间态流式；回答落盘后 Chat view 应显示完整消息。
 - 真实模型/effort 参数只在启动参数稳定时使用，复杂官方菜单优先走 TUI。
 
-### Gemini
+### Gemini / Kimi
 
-- 登录态异常、Google account prompt、429/额度错误必须在 TUI view 可见，不应拖垮 daemon。
-- `--resume` 恢复应绑定指定 provider session。
-- conversation JSON/JSONL mirror 应使用 `displayContent`，不能把 `@file` 展开全文污染用户原始问题。
-- Gemini 当前不提供 RAH 可控 effort；不要在 Web 假装有该能力。
-
-### Kimi
-
-- `--session` 新建和恢复应预绑定 provider session。
-- `--thinking/--no-thinking` 与 `--yolo` 启动参数必须在 TUI 中真实生效。
-- `TurnEnd` 应转换为 `turn.completed`，用于释放 Chat 队列。
-- wire JSONL mirror 应保持一个 assistant 回答一个气泡，不能按几个字碎片化成多个气泡。
+- Gemini/Kimi CLI 一等支持已移除，不再作为 live 或 history QA 项。
+- 新 Gemini/Kimi/Grok/DeepSeek 类低频模型优先通过 OpenCode + API provider / 中转站使用。
+- 移除原因见 `docs/provider-scope-codex-claude-opencode.zh-CN.md`。
 
 ### OpenCode
 
 - `opencode [project]` 的项目目录优先级必须真实验证。
 - `opencode --session <id>` 恢复行为必须真实验证。
-- `--model provider/model[/variant]` 是否严格生效必须真实验证。
+- `--model provider/model` 是否严格生效必须真实验证。
+- 不要把 variant 拼进 TUI `--model`。已验证 `opencode run --variant` 和 ACP `provider/model/variant` 可用，但 TUI 主路径没有稳定 `--variant` 启动参数；variant/effort 应作为 OpenCode 原生 TUI 内部选择或后续 enhancement。
 - Ctrl-C 中断真实 OpenCode turn 的稳定性必须真实验证。
 - DB mirror 当前会增量展示已进入 DB 的 text/reasoning/tool/step parts 和 message token/cost usage，但不承诺完整复刻官方 UI 的所有中间态；实时交互以 TUI 为真相。
 
@@ -184,8 +182,8 @@ npm run test:smoke:native-browser-webkit
 
 - 自动门槛全绿。
 - `npm run test:smoke:native-manual-qa-status` 基于人类填写的 `test-results/native-manual-qa.json` 通过。
-- 五家 provider 至少完成 Web new、Chat/TUI 输入、Stop、Archive、历史恢复。
-- Codex `/goal`、Claude permission prompt、Gemini 登录/额度异常、Kimi long-running turn、OpenCode resume/model/interrupt 至少各手测一次。
+- Core live providers（Codex、Claude、OpenCode）至少完成 Web new、Chat/TUI 输入、Stop、Archive、历史恢复。
+- Codex `/goal`、Claude permission prompt、OpenCode resume/model/interrupt 至少各手测一次。
 - 任意失败必须记录 provider、CLI 版本、RAH commit、workspace、session id、复现步骤。
 
 ## 失败记录模板

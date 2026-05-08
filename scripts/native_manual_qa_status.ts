@@ -2,7 +2,8 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
-type Provider = "codex" | "claude" | "gemini" | "kimi" | "opencode";
+type Provider = "codex" | "claude" | "opencode";
+type CoreLiveProvider = Extract<Provider, "codex" | "claude" | "opencode">;
 type ManualQaStatus = "pass" | "fail" | "blocked" | "skipped" | "pending";
 
 type RahMetadata = {
@@ -25,6 +26,9 @@ type ManualQaResult = {
   tester?: string;
   testedAt?: string;
   provider?: Provider;
+  device?: string;
+  browser?: string;
+  url?: string;
   workspace?: string;
   sessionId?: string;
   providerSessionId?: string;
@@ -33,7 +37,7 @@ type ManualQaResult = {
   evidence?: string;
 };
 
-const PROVIDERS: Provider[] = ["codex", "claude", "gemini", "kimi", "opencode"];
+const CORE_LIVE_PROVIDERS: CoreLiveProvider[] = ["codex", "claude", "opencode"];
 const COMMON_CASES = [
   ["web-new-native-tui", "Web new starts the official native TUI."],
   ["chat-input-and-mirror", "Chat input reaches TUI and mirror eventually displays the turn."],
@@ -44,7 +48,7 @@ const COMMON_CASES = [
 ] as const;
 
 const REQUIRED_CASES: ManualQaCase[] = [
-  ...PROVIDERS.flatMap((provider) =>
+  ...CORE_LIVE_PROVIDERS.flatMap((provider) =>
     COMMON_CASES.map(([suffix, title]) => ({
       id: `${provider}.${suffix}`,
       provider,
@@ -62,19 +66,15 @@ const REQUIRED_CASES: ManualQaCase[] = [
     title: "Claude trust-folder and permission prompts are operable in TUI.",
   },
   {
-    id: "gemini.login-quota",
-    provider: "gemini",
-    title: "Gemini login, quota, and 429/error states remain visible and do not crash RAH.",
-  },
-  {
-    id: "kimi.long-running-thinking-yolo",
-    provider: "kimi",
-    title: "Kimi long-running turn plus thinking/yolo behavior is stable.",
-  },
-  {
     id: "opencode.resume-model-interrupt",
     provider: "opencode",
     title: "OpenCode project, session resume, model argument, and Ctrl-C are stable.",
+  },
+  {
+    id: "opencode.model-variant",
+    provider: "opencode",
+    title:
+      "OpenCode model selection respects the current boundary: TUI launch uses provider/model, while variant/reasoning remains native or enhancement-only.",
   },
   {
     id: "ipad-safari.keyboard-resize",
@@ -150,6 +150,9 @@ function templateReport(current: RahMetadata): unknown {
       title: item.title,
       tester: "",
       testedAt: "",
+      device: "",
+      browser: "",
+      url: "",
       workspace: "",
       sessionId: "",
       providerSessionId: "",
@@ -195,6 +198,49 @@ function hasEvidence(result: ManualQaResult): boolean {
       result.testedAt?.trim() &&
       result.evidence?.trim(),
   );
+}
+
+function providerSessionIdRequired(id: string): boolean {
+  return !id.endsWith(".web-new-native-tui");
+}
+
+function assertPassDetails(
+  result: ManualQaResult,
+  item: ManualQaCase,
+  blockers: string[],
+): void {
+  if (result.status !== "pass") {
+    return;
+  }
+  if (!hasEvidence(result)) {
+    blockers.push(`Manual QA result ${item.id} is pass but missing tester/testedAt/evidence.`);
+  }
+  if (item.provider) {
+    if (!result.cliVersion?.trim()) {
+      blockers.push(`Manual QA result ${item.id} is pass but missing cliVersion.`);
+    }
+    if (!result.workspace?.trim()) {
+      blockers.push(`Manual QA result ${item.id} is pass but missing workspace.`);
+    }
+    if (!result.sessionId?.trim()) {
+      blockers.push(`Manual QA result ${item.id} is pass but missing sessionId.`);
+    }
+    if (providerSessionIdRequired(item.id) && !result.providerSessionId?.trim()) {
+      blockers.push(`Manual QA result ${item.id} is pass but missing providerSessionId.`);
+    }
+    return;
+  }
+  if (item.id.startsWith("ipad-safari.")) {
+    if (!result.device?.trim()) {
+      blockers.push(`Manual QA result ${item.id} is pass but missing device.`);
+    }
+    if (!result.browser?.trim()) {
+      blockers.push(`Manual QA result ${item.id} is pass but missing browser.`);
+    }
+    if (!result.url?.trim()) {
+      blockers.push(`Manual QA result ${item.id} is pass but missing url.`);
+    }
+  }
 }
 
 function main(): void {
@@ -258,19 +304,19 @@ function main(): void {
     if (result.status !== "pass") {
       blockers.push(`Manual QA result ${item.id} is ${String(result.status)}.`);
     }
-    if (result.status === "pass" && !hasEvidence(result)) {
-      blockers.push(`Manual QA result ${item.id} is pass but missing tester/testedAt/evidence.`);
-    }
-    if (result.status === "pass" && item.provider && !result.cliVersion?.trim()) {
-      blockers.push(`Manual QA result ${item.id} is pass but missing cliVersion.`);
-    }
+    assertPassDetails(result, item, blockers);
     return {
       ...item,
       status: result.status,
       tester: result.tester ?? "",
       testedAt: result.testedAt ?? "",
+      device: result.device ?? "",
+      browser: result.browser ?? "",
+      url: result.url ?? "",
+      workspace: result.workspace ?? "",
       cliVersion: result.cliVersion ?? "",
       sessionId: result.sessionId ?? "",
+      providerSessionId: result.providerSessionId ?? "",
     };
   });
 

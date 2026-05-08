@@ -8,16 +8,18 @@ import {
   loadOpenCodeStoredMessages,
 } from "./opencode-stored-sessions";
 import {
-  EMPTY_NATIVE_TUI_OUTPUT_OBSERVATION,
   sameNativeTuiDirectory,
 } from "./native-tui-provider-handler-utils";
 import type {
   NativeTuiMirrorUpdate,
+  NativeTuiOutputObservation,
   NativeTuiProviderActivityEnvelope,
   NativeTuiProviderHandler,
   NativeTuiProviderMirror,
   NativeTuiProviderRuntimeSession,
 } from "./native-tui-provider-runtime-types";
+
+const ANSI_ESCAPE_PATTERN = /\u001b\[[0-?]*[ -/]*[@-~]/g;
 
 function isOpenCodeMessageReadyForNativeMirror(message: OpenCodeMessageWithParts): boolean {
   if (message.info.role === "user") {
@@ -63,6 +65,17 @@ function probeOpenCodeBinding(session: NativeTuiProviderRuntimeSession) {
   return {
     providerSessionId: candidate.ref.providerSessionId,
     record: candidate,
+  };
+}
+
+function observeOpenCodeOutput(
+  _session: NativeTuiProviderRuntimeSession,
+  data: string,
+): NativeTuiOutputObservation {
+  const stripped = data.replace(ANSI_ESCAPE_PATTERN, "");
+  return {
+    promptClean: /\bAsk anything\b/i.test(stripped),
+    binding: null,
   };
 }
 
@@ -121,7 +134,7 @@ function updateOpenCodeMirror(
 export const opencodeNativeTuiProviderHandler: NativeTuiProviderHandler = {
   provider: "opencode",
   canProbeBinding: true,
-  observeOutput: () => EMPTY_NATIVE_TUI_OUTPUT_OBSERVATION,
+  observeOutput: observeOpenCodeOutput,
   probeBinding: probeOpenCodeBinding,
   updateMirror: updateOpenCodeMirror,
 };

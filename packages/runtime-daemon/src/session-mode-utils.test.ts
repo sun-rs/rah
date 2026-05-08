@@ -3,8 +3,6 @@ import test from "node:test";
 import {
   buildClaudeModeState,
   buildCodexModeState,
-  buildGeminiModeState,
-  buildKimiModeState,
   buildOpenCodeModeState,
   providerModeDescriptors,
 } from "./session-mode-utils";
@@ -27,21 +25,6 @@ test("provider mode descriptors use canonical access labels", () => {
     default: "Ask",
     acceptEdits: "Auto edit",
     bypassPermissions: "Full auto",
-  });
-  assert.deepEqual(accessLabels(buildGeminiModeState({
-    currentModeId: "yolo",
-    mutable: true,
-  })), {
-    default: "Ask",
-    auto_edit: "Auto edit",
-    yolo: "Full auto",
-  });
-  assert.deepEqual(accessLabels(buildKimiModeState({
-    currentModeId: "yolo",
-    mutable: true,
-  })), {
-    default: "Ask",
-    yolo: "Full auto",
   });
   assert.deepEqual(accessLabels(buildOpenCodeModeState({
     currentModeId: "opencode/full-auto",
@@ -86,17 +69,6 @@ test("provider mode descriptors expose adapter-owned apply timing", () => {
     acceptEdits: "immediate",
     plan: "immediate",
     bypassPermissions: "immediate",
-  });
-  assert.deepEqual(applyTimings("gemini"), {
-    default: "next_turn",
-    auto_edit: "next_turn",
-    plan: "next_turn",
-    yolo: "next_turn",
-  });
-  assert.deepEqual(applyTimings("kimi"), {
-    default: "idle_only",
-    plan: "idle_only",
-    yolo: "idle_only",
   });
   assert.deepEqual(applyTimings("opencode"), {
     build: "next_turn",

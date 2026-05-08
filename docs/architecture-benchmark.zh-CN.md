@@ -14,8 +14,9 @@ RAH 现在已经完成了：
 
 - canonical event contract
 - runtime-owned workbench
-- `Codex / Claude / Gemini / Kimi / OpenCode` 五条真实 provider 主线
-- history replay / claim / live upgrade / tool flow / browser smoke
+- PTY-first core live 主线：Codex / Claude / OpenCode
+- history replay / claim / live attach / tool-flow mirror / browser smoke
+- Gemini/Kimi CLI 一等支持已移除；低频相关模型通过 OpenCode/API provider 承载
 
 因此，RAH 当前已经不是“架构是否成立”的阶段，而是“如何继续强化”的阶段。
 
@@ -45,13 +46,13 @@ RAH 不应该推翻重来，而应该继续吸收这些成熟经验。
 hapi 的价值不在 UI，而在两件事：
 
 - **scanner / hook 体系**
-  - 很适合 `Claude / Gemini / Kimi` 这类强依赖 transcript / session files 的 provider
+  - 很适合 `Claude` 这类强依赖 transcript / session files 的 provider
   - 对“resume 后 session id 变化”“文件晚一点落盘”这类现实问题处理成熟
 - **normalize-first**
   - 不该进主聊天区的内容，尽量在 translator / normalize 层就裁掉
   - 避免“前端最后兜底过滤”
 
-RAH 已经在 Claude/Kimi/Gemini 上吸收了一部分，但还可以继续体系化。
+RAH 已经在 Claude 上吸收了一部分，但还可以继续体系化。
 
 ### 3.2 paseo
 
@@ -115,7 +116,7 @@ AionUi ACP 2.0 的价值不在“它能替代一切”，而在：
 
 ### 5.1 不该把所有 provider 都统一迁到 ACP-first
 
-现在 `Codex / Claude / Gemini / Kimi / OpenCode` 已经有 provider-native adapter，而且真实链路已验证。
+现在 RAH 的 core live provider-native 路线已经收敛到 `Codex / Claude / OpenCode`。Gemini/Kimi CLI 一等支持已移除，相关模型通过 OpenCode/API provider 承载。
 
 因此不应该为了“架构统一感”就把它们全部塞进 ACP runtime。
 

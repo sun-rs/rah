@@ -4,12 +4,19 @@
 
 ## 1. 当前稳定设计
 
+- [PTY-first 无缝工作台计划](../RAH_PTY_FIRST_SEAMLESS_WORKBENCH_PLAN.zh-CN.md)
+- [PTY-first 当前执行摘要](../desgin.md)
+- [PTY-first 进度与验收审计](./pty-first-progress-audit.zh-CN.md)
+- [PTY-first 完成审计](../NATIVE_TUI_COMPLETION_AUDIT.zh-CN.md)
+- [PTY-first 人类 QA 交付说明](../NATIVE_TUI_HUMAN_QA_HANDOFF.zh-CN.md)
 - [当前系统设计总览](./current-system-design.zh-CN.md)
 - [项目总览](./project-overview.zh-CN.md)
 - [Session 入口与权限边界](./session-entry-capability-boundary.zh-CN.md)
 - [历史浏览与分页边界](./history-browsing.zh-CN.md)
 
-## 2. Terminal Handoff
+## 2. Legacy Terminal Wrapper / Handoff
+
+这些文档记录旧 wrapper/handoff 方案，只作为 internal legacy/test harness 参考。当前 public `rah codex/claude/opencode` 入口走 daemon-owned PTY Session Runtime。
 
 - [Terminal Wrapper Live Session 设计](./terminal-wrapper-live-sessions.zh-CN.md)
 - [`rah codex` handoff 模式](./rah-codex-handoff-mode.zh-CN.md)

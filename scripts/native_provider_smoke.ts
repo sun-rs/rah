@@ -1,12 +1,12 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-type Provider = "claude" | "gemini" | "kimi" | "opencode";
+type Provider = "claude" | "opencode";
 
 type SessionEntry = {
   session: {
@@ -75,43 +75,6 @@ const PROVIDERS: ProviderConfig[] = [
     expectsChatMirror: true,
   },
   {
-    provider: "gemini",
-    envName: "RAH_GEMINI_BINARY",
-    readyMarker: "RAH_NATIVE_GEMINI_READY",
-    inputMarker: "RAH_NATIVE_GEMINI_INPUT",
-    request: {
-      model: "gemini-native-smoke",
-      modeId: "yolo",
-    },
-    expectedArgFragments: [
-      "--approval-mode|yolo",
-      "--model|gemini-native-smoke",
-    ],
-    expectsPreboundProviderSessionId: false,
-    expectsProviderSessionIdAfterBinding: true,
-    expectsChatMirror: true,
-  },
-  {
-    provider: "kimi",
-    envName: "RAH_KIMI_BINARY",
-    readyMarker: "RAH_NATIVE_KIMI_READY",
-    inputMarker: "RAH_NATIVE_KIMI_INPUT",
-    request: {
-      model: "kimi-k2.6,thinking",
-      optionValues: { model_thinking: "thinking" },
-      modeId: "yolo",
-    },
-    expectedArgFragments: [
-      "--model|kimi-k2.6",
-      "--thinking",
-      "--yolo",
-      "--session|",
-    ],
-    expectsPreboundProviderSessionId: true,
-    expectsProviderSessionIdAfterBinding: true,
-    expectsChatMirror: true,
-  },
-  {
     provider: "opencode",
     envName: "RAH_OPENCODE_BINARY",
     readyMarker: "RAH_NATIVE_OPENCODE_READY",
@@ -122,7 +85,7 @@ const PROVIDERS: ProviderConfig[] = [
       modeId: "opencode/full-auto",
     },
     expectedArgFragments: [
-      "--model|deepseek/deepseek-v4-pro/high",
+      "--model|deepseek/deepseek-v4-pro",
     ],
     expectsPreboundProviderSessionId: false,
     expectsProviderSessionIdAfterBinding: true,
@@ -233,57 +196,6 @@ async function writeFakeProviderBinary(args: {
           "}, 100);",
         ]
       : [];
-  const geminiHistorySetup =
-    args.provider === "gemini"
-      ? [
-          "setTimeout(() => {",
-          "  const chatsDir = process.env.MOCK_GEMINI_CHATS_DIR;",
-          "  const sessionId = process.env.MOCK_GEMINI_SESSION_ID;",
-          "  const projectHash = process.env.MOCK_GEMINI_PROJECT_HASH;",
-          "  if (!chatsDir || !sessionId || !projectHash) return;",
-          "  const fs = require('node:fs');",
-          "  const path = require('node:path');",
-          "  const now = new Date().toISOString();",
-          "  fs.mkdirSync(chatsDir, { recursive: true });",
-          "  fs.writeFileSync(path.join(chatsDir, `session-${sessionId}.json`), JSON.stringify({",
-          "    sessionId,",
-          "    projectHash,",
-          "    startTime: now,",
-          "    lastUpdated: now,",
-          "    messages: [",
-          "      { id: 'user-1', timestamp: now, type: 'user', content: [{ text: 'Gemini native smoke question' }] },",
-          "      { id: 'assistant-1', timestamp: now, type: 'gemini', content: [{ text: 'Gemini native smoke answer' }] },",
-          "    ],",
-          "  }));",
-          "}, 100);",
-        ]
-      : [];
-  const kimiHistorySetup =
-    args.provider === "kimi"
-      ? [
-          "setTimeout(() => {",
-          "  const kimiHome = process.env.KIMI_SHARE_DIR;",
-          "  const sessionArgIndex = process.argv.indexOf('--session');",
-          "  const sessionId = sessionArgIndex >= 0 ? process.argv[sessionArgIndex + 1] : undefined;",
-          "  if (!kimiHome || !sessionId) return;",
-          "  const fs = require('node:fs');",
-          "  const path = require('node:path');",
-          "  const { createHash } = require('node:crypto');",
-          "  const workDir = process.cwd();",
-          "  const workDirHash = createHash('md5').update(workDir).digest('hex');",
-          "  const sessionDir = path.join(kimiHome, 'sessions', workDirHash, sessionId);",
-          "  const now = Date.now() / 1000;",
-          "  fs.mkdirSync(sessionDir, { recursive: true });",
-          "  fs.writeFileSync(path.join(kimiHome, 'kimi.json'), JSON.stringify({ work_dirs: [{ path: workDir }] }));",
-          "  const line = (timestamp, type, payload) => JSON.stringify({ timestamp, message: { type, payload } });",
-          "  fs.writeFileSync(path.join(sessionDir, 'wire.jsonl'), [",
-          "    line(now, 'TurnBegin', { user_input: 'Kimi native smoke question' }),",
-          "    line(now + 0.1, 'ContentPart', { type: 'text', text: 'Kimi native smoke answer' }),",
-          "    line(now + 0.2, 'TurnEnd', {}),",
-          "  ].join('\\n') + '\\n');",
-          "}, 100);",
-        ]
-      : [];
   const opencodeHistorySetup =
     args.provider === "opencode"
       ? [
@@ -336,8 +248,6 @@ async function writeFakeProviderBinary(args: {
       "#!/usr/bin/env node",
       `process.stdout.write(\`${args.readyMarker} args=\${process.argv.slice(2).join('|')}\\r\\n\`);`,
       ...claudeHistorySetup,
-      ...geminiHistorySetup,
-      ...kimiHistorySetup,
       ...opencodeHistorySetup,
       "process.stdin.setEncoding('utf8');",
       "process.stdin.resume();",
@@ -531,30 +441,14 @@ async function main(): Promise<void> {
   const workspace = path.join(tmpRoot, "workspace");
   const rahHome = path.join(tmpRoot, "rah-home");
   const claudeConfigDir = path.join(tmpRoot, "claude-config");
-  const geminiHome = path.join(tmpRoot, "gemini-home");
-  const kimiHome = path.join(tmpRoot, "kimi-home");
-  const geminiProviderSessionId = randomUUID();
   const opencodeProviderSessionId = `ses_${randomUUID().replace(/-/g, "")}`;
-  const geminiProjectHash = createHash("sha256").update(workspace).digest("hex");
-  const geminiChatsDir = path.join(geminiHome, "tmp", geminiProjectHash, "chats");
   const xdgDataHome = path.join(tmpRoot, "xdg-data");
   await mkdir(workspace, { recursive: true });
-  await mkdir(geminiChatsDir, { recursive: true });
-  await writeFile(
-    path.join(geminiHome, "projects.json"),
-    JSON.stringify({ projects: { [workspace]: "native-gemini-smoke" } }),
-    "utf8",
-  );
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     RAH_PORT: String(await findFreePort()),
     RAH_HOME: rahHome,
     CLAUDE_CONFIG_DIR: claudeConfigDir,
-    GEMINI_CLI_HOME: geminiHome,
-    KIMI_SHARE_DIR: kimiHome,
-    MOCK_GEMINI_CHATS_DIR: geminiChatsDir,
-    MOCK_GEMINI_SESSION_ID: geminiProviderSessionId,
-    MOCK_GEMINI_PROJECT_HASH: geminiProjectHash,
     XDG_DATA_HOME: xdgDataHome,
     MOCK_OPENCODE_SESSION_ID: opencodeProviderSessionId,
   };
@@ -587,14 +481,9 @@ async function main(): Promise<void> {
           baseUrl: daemon.baseUrl,
           asserted: [
             "Claude native TUI launch/input/close",
-            "Gemini native TUI launch/input/close",
-            "Kimi native TUI launch/input/close",
             "OpenCode native TUI launch/input/close",
-            "Claude and Kimi providerSessionId pre-bind",
+            "Claude providerSessionId pre-bind",
             "Claude native sessions expose Chat/TUI from stored JSONL mirror",
-            "Gemini providerSessionId discovered from native history",
-            "Gemini native sessions expose Chat/TUI from conversation JSON mirror",
-            "Kimi native sessions expose Chat/TUI from wire JSONL mirror",
             "OpenCode providerSessionId discovered from opencode.db",
           ],
           results,

@@ -6,9 +6,7 @@ Copied now:
 - `brand/droid.svg`
 - `brand/hermes.svg`
 - `ai-major/claude.svg`
-- `ai-major/gemini.svg`
 - `ai-major/mistral.svg`
-- `ai-china/kimi.svg`
 - `ai-china/qwen.svg`
 - `tools/github.svg`
 - `tools/goose.svg`

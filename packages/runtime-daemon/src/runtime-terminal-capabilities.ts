@@ -4,7 +4,7 @@ export function buildTerminalWrapperSessionCapabilities(
   provider: ProviderKind,
 ): Partial<SessionCapabilities> {
   return {
-    livePermissions: provider !== "claude" && provider !== "gemini",
+    livePermissions: provider !== "claude",
     renameSession: false,
     actions: {
       info: true,
@@ -23,8 +23,6 @@ export function buildNativeTuiSessionCapabilities(
   const hasStructuredMirror =
     provider === "codex" ||
     provider === "claude" ||
-    provider === "gemini" ||
-    provider === "kimi" ||
     provider === "opencode";
   return {
     liveAttach: true,
@@ -49,5 +47,19 @@ export function buildNativeTuiSessionCapabilities(
     modelSwitch: false,
     planMode: false,
     subagents: false,
+  };
+}
+
+export function buildStoppedNativeTuiSessionCapabilities(
+  provider: ProviderKind,
+): Partial<SessionCapabilities> {
+  const capabilities = buildNativeTuiSessionCapabilities(provider);
+  return {
+    ...capabilities,
+    liveAttach: false,
+    rawPtyInput: false,
+    chatMirror: false,
+    steerInput: false,
+    queuedInput: false,
   };
 }

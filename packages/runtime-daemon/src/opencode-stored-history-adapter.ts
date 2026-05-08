@@ -15,6 +15,7 @@ import {
   discoverOpenCodeStoredSessions,
   findOpenCodeStoredSessionRecord,
   getOpenCodeStoredSessionHistoryPage,
+  OpenCodeSqliteReadError,
   resolveOpenCodeStoredSessionWatchRoots,
   resumeOpenCodeStoredSession,
   type OpenCodeStoredSessionRecord,
@@ -137,9 +138,22 @@ export class OpenCodeStoredHistoryAdapter implements ProviderAdapter, ProviderSt
   }
 
   private refreshStoredSessionIndex(): Map<string, OpenCodeStoredSessionRecord> {
-    this.storedSessionIndex = new Map(
-      discoverOpenCodeStoredSessions().map((record) => [record.ref.providerSessionId, record]),
-    );
+    try {
+      this.storedSessionIndex = new Map(
+        discoverOpenCodeStoredSessions({ throwOnReadError: true }).map((record) => [
+          record.ref.providerSessionId,
+          record,
+        ]),
+      );
+    } catch (error) {
+      if (error instanceof OpenCodeSqliteReadError) {
+        console.warn(
+          `[rah] OpenCode history refresh failed; keeping ${this.storedSessionIndex.size} cached session(s). ${error.message}`,
+        );
+        return this.storedSessionIndex;
+      }
+      throw error;
+    }
     return this.storedSessionIndex;
   }
 }

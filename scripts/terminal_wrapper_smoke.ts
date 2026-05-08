@@ -9,7 +9,7 @@ import { WebSocket } from "ws";
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "..");
 let baseUrl = process.env.RAH_BASE_URL ?? "";
-const providers = ["codex", "claude", "gemini", "kimi", "opencode"] as const;
+const providers = ["codex", "claude", "opencode"] as const;
 type Provider = (typeof providers)[number];
 
 type JsonObject = Record<string, unknown>;

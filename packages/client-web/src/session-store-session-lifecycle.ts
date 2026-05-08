@@ -16,7 +16,7 @@ type LifecycleState = {
   workspaceVisibilityVersion: number;
   workspaceDir: string;
   selectedSessionId: string | null;
-  newSessionProvider: "codex" | "claude" | "kimi" | "gemini" | "opencode";
+  newSessionProvider: "codex" | "claude" | "opencode";
   error: string | null;
   pendingSessionTransition: PendingSessionTransition | null;
   pendingSessionAction:

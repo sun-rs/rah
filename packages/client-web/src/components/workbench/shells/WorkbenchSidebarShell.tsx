@@ -19,6 +19,7 @@ export function WorkbenchSidebarShell(props: {
   workspaceSortMode: WorkspaceSortMode;
   onWorkspaceSortModeChange: (value: WorkspaceSortMode) => void;
   canvasActive: boolean;
+  mobileCanvasEnabled: boolean;
   onDesktopHome: () => void;
   onDesktopToggleCanvas: () => void;
   onMobileToggleCanvas: () => void;
@@ -79,6 +80,7 @@ export function WorkbenchSidebarShell(props: {
             workspaceSortMode={props.workspaceSortMode}
             onWorkspaceSortModeChange={props.onWorkspaceSortModeChange}
             canvasActive={props.canvasActive}
+            canvasEnabled={props.mobileCanvasEnabled}
             onHome={props.onMobileHome}
             onToggleCanvas={props.onMobileToggleCanvas}
             onActivateHistory={props.onActivateHistory}

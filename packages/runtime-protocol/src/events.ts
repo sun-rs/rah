@@ -306,7 +306,10 @@ export type RahEventPayloadMap = {
   "session.detached": { clientId: string };
   "session.closed": { clientId?: string };
   "session.state.changed": { state: ManagedSession["runtimeState"] };
-  "session.native_tui.prompt_state.changed": { promptState: NativeTuiPromptState };
+  "session.native_tui.prompt_state.changed": {
+    promptState: NativeTuiPromptState;
+    queuedInputCount?: number;
+  };
   "session.exited": { exitCode?: number; signal?: string };
   "session.failed": { error: string };
 
@@ -358,6 +361,7 @@ export type RahEventPayloadMap = {
       | "session_active"
       | "thinking"
       | "streaming"
+      | "stopping"
       | "retrying"
       | "finished"
       | "error";

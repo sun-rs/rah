@@ -5,11 +5,6 @@ import type {
 } from "./claude-session-files";
 import type { CodexRolloutTranslationState } from "./codex-rollout-activity";
 import type { CodexStoredSessionRecord } from "./codex-stored-sessions";
-import type { GeminiStoredSessionRecord } from "./gemini-session-files";
-import type {
-  KimiStoredSessionRecord,
-  KimiWireActivityState,
-} from "./kimi-session-files";
 import type { OpenCodeActivityState } from "./opencode-activity";
 import type { OpenCodeStoredSessionRecord } from "./opencode-stored-sessions";
 import type { ProviderActivity, ProviderActivityMeta } from "./provider-activity";
@@ -62,19 +57,6 @@ export type NativeTuiProviderMirror =
       providerSessionId: string;
       record: ClaudeStoredSessionRecord;
       activityState: ClaudeStoredActivityState;
-    }
-  | {
-      provider: "gemini";
-      providerSessionId: string;
-      record: GeminiStoredSessionRecord;
-      processedMessageRevisions: Map<string, string>;
-    }
-  | {
-      provider: "kimi";
-      providerSessionId: string;
-      record: KimiStoredSessionRecord;
-      processedLineCount: number;
-      activityState: KimiWireActivityState;
     }
   | {
       provider: "opencode";

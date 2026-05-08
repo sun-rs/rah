@@ -1,5 +1,7 @@
 # Terminal Wrapper Live Session 设计
 
+> Legacy note: 本文记录旧 terminal wrapper / handoff 方案。当前 public `rah codex/claude/opencode` 入口已经走 daemon-owned PTY Session Runtime；wrapper-control 只保留为 internal legacy/test harness。
+
 ## 1. 目标
 
 RAH 需要支持这种使用方式：

@@ -12,7 +12,7 @@ function session(args: {
   return {
     session: {
       id: args.id,
-      provider: "kimi",
+      provider: "opencode",
       providerSessionId: `${args.id}-provider`,
       launchSource: "web",
       cwd: "/workspace/rah",

@@ -237,9 +237,9 @@ export function attachWebSocketHandlers(
       try {
         const parsed = JSON.parse(raw.toString("utf8")) as PtyClientMessage;
         if (parsed.type === "pty.input") {
-          engine.onPtyInput(parsed.sessionId, parsed.clientId, parsed.data);
+          engine.onPtyInput(sessionId, parsed.clientId, parsed.data);
         } else if (parsed.type === "pty.resize") {
-          engine.onPtyResize(parsed.sessionId, parsed.clientId, parsed.cols, parsed.rows);
+          engine.onPtyResize(sessionId, parsed.clientId, parsed.cols, parsed.rows);
         }
       } catch {
         sendJsonWithBackpressure(socket, { error: "Invalid PTY client payload" });

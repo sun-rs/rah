@@ -12,8 +12,6 @@ const originalEnv = {
   CODEX_HOME: process.env.CODEX_HOME,
   RAH_CODEX_BINARY: process.env.RAH_CODEX_BINARY,
   RAH_CLAUDE_BINARY: process.env.RAH_CLAUDE_BINARY,
-  RAH_GEMINI_BINARY: process.env.RAH_GEMINI_BINARY,
-  RAH_KIMI_BINARY: process.env.RAH_KIMI_BINARY,
   RAH_OPENCODE_BINARY: process.env.RAH_OPENCODE_BINARY,
 };
 
@@ -21,8 +19,6 @@ afterEach(() => {
   restoreEnv("CODEX_HOME", originalEnv.CODEX_HOME);
   restoreEnv("RAH_CODEX_BINARY", originalEnv.RAH_CODEX_BINARY);
   restoreEnv("RAH_CLAUDE_BINARY", originalEnv.RAH_CLAUDE_BINARY);
-  restoreEnv("RAH_GEMINI_BINARY", originalEnv.RAH_GEMINI_BINARY);
-  restoreEnv("RAH_KIMI_BINARY", originalEnv.RAH_KIMI_BINARY);
   restoreEnv("RAH_OPENCODE_BINARY", originalEnv.RAH_OPENCODE_BINARY);
 });
 
@@ -123,6 +119,7 @@ describe("native TUI launch specs", () => {
       assert.deepEqual(start.args, [
         "--permission-mode",
         "bypassPermissions",
+        "--dangerously-skip-permissions",
         "--model",
         "opus",
         "--effort",
@@ -150,89 +147,7 @@ describe("native TUI launch specs", () => {
     }
   });
 
-  test("builds Gemini native args without inventing a new session id", async () => {
-    const fake = fakeBinary("gemini");
-    process.env.RAH_GEMINI_BINARY = fake.path;
-    try {
-      const start = await nativeTuiStartLaunchSpec({
-        provider: "gemini",
-        cwd: "/workspace/demo",
-        liveBackend: "native_tui",
-        model: "gemini-2.5-pro",
-        modeId: "yolo",
-      });
-      assert.equal(start.providerSessionId, undefined);
-      assert.deepEqual(start.args, [
-        "--approval-mode",
-        "yolo",
-        "--model",
-        "gemini-2.5-pro",
-      ]);
-
-      const resume = await nativeTuiResumeLaunchSpec({
-        provider: "gemini",
-        providerSessionId: "645e0831-25cf-4e73-87d2-0cb9064eb399",
-        cwd: "/workspace/demo",
-        liveBackend: "native_tui",
-        modeId: "plan",
-      });
-      assert.deepEqual(resume.args, [
-        "--approval-mode",
-        "plan",
-        "--resume",
-        "645e0831-25cf-4e73-87d2-0cb9064eb399",
-      ]);
-    } finally {
-      rmSync(fake.dir, { force: true, recursive: true });
-    }
-  });
-
-  test("builds Kimi native args with model thinking and permission flags", async () => {
-    const fake = fakeBinary("kimi");
-    process.env.RAH_KIMI_BINARY = fake.path;
-    try {
-      const start = await nativeTuiStartLaunchSpec({
-        provider: "kimi",
-        cwd: "/workspace/demo",
-        liveBackend: "native_tui",
-        model: "kimi-k2.6",
-        optionValues: { model_thinking: "thinking" },
-        modeId: "yolo",
-      });
-      assert.equal(start.command, fake.path);
-      assert.match(start.providerSessionId ?? "", /^[0-9a-f-]{36}$/);
-      assert.deepEqual(start.args, [
-        "--model",
-        "kimi-k2.6",
-        "--thinking",
-        "--yolo",
-        "--session",
-        start.providerSessionId,
-      ]);
-
-      const resume = await nativeTuiResumeLaunchSpec({
-        provider: "kimi",
-        providerSessionId: "4223a9be-4a4b-46bd-b536-cf2dffc4d77c",
-        cwd: "/workspace/demo",
-        liveBackend: "native_tui",
-        model: "kimi-k2.6",
-        reasoningId: "default",
-        modeId: "plan",
-      });
-      assert.deepEqual(resume.args, [
-        "--model",
-        "kimi-k2.6",
-        "--no-thinking",
-        "--plan",
-        "--session",
-        "4223a9be-4a4b-46bd-b536-cf2dffc4d77c",
-      ]);
-    } finally {
-      rmSync(fake.dir, { force: true, recursive: true });
-    }
-  });
-
-  test("builds OpenCode native args with project, model variant, and session resume", async () => {
+  test("builds OpenCode native args with project, base model, and session resume", async () => {
     const fake = fakeBinary("opencode");
     process.env.RAH_OPENCODE_BINARY = fake.path;
     try {
@@ -248,7 +163,7 @@ describe("native TUI launch specs", () => {
       assert.equal(start.providerSessionId, undefined);
       assert.deepEqual(start.args, [
         "--model",
-        "deepseek/deepseek-v4-pro/high",
+        "deepseek/deepseek-v4-pro",
         "/workspace/demo",
       ]);
 

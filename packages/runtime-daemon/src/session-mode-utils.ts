@@ -39,68 +39,6 @@ const CLAUDE_MODE_DESCRIPTORS: SessionModeDescriptor[] = [
   },
 ];
 
-const GEMINI_MODE_DESCRIPTORS: SessionModeDescriptor[] = [
-  {
-    id: "default",
-    role: "ask",
-    label: "Ask",
-    description: "Ask before actions that need approval.",
-    applyTiming: "next_turn",
-    hotSwitch: true,
-  },
-  {
-    id: "auto_edit",
-    role: "auto_edit",
-    label: "Auto edit",
-    description: "Auto-approve edit tools while keeping stricter approval for other actions.",
-    applyTiming: "next_turn",
-    hotSwitch: true,
-  },
-  {
-    id: "plan",
-    role: "plan",
-    label: "Plan",
-    description: "Read-only planning mode.",
-    applyTiming: "next_turn",
-    hotSwitch: true,
-  },
-  {
-    id: "yolo",
-    role: "full_auto",
-    label: "Full auto",
-    description: "Auto-approve all actions.",
-    applyTiming: "next_turn",
-    hotSwitch: true,
-  },
-];
-
-const KIMI_MODE_DESCRIPTORS: SessionModeDescriptor[] = [
-  {
-    id: "default",
-    role: "ask",
-    label: "Ask",
-    description: "Ask before actions that need approval.",
-    applyTiming: "idle_only",
-    hotSwitch: true,
-  },
-  {
-    id: "plan",
-    role: "plan",
-    label: "Plan",
-    description: "Read-only planning mode.",
-    applyTiming: "idle_only",
-    hotSwitch: true,
-  },
-  {
-    id: "yolo",
-    role: "full_auto",
-    label: "Full auto",
-    description: "Auto-approve all actions.",
-    applyTiming: "idle_only",
-    hotSwitch: true,
-  },
-];
-
 const OPENCODE_MODE_DESCRIPTORS: SessionModeDescriptor[] = [
   {
     id: "build",
@@ -224,40 +162,6 @@ export function isClaudeModeId(modeId: string): boolean {
   return CLAUDE_MODE_DESCRIPTORS.some((mode) => mode.id === modeId);
 }
 
-export function buildGeminiModeState(args: {
-  currentModeId: string;
-  mutable: boolean;
-  source?: SessionModeState["source"];
-}): SessionModeState {
-  return buildModeState({
-    currentModeId: args.currentModeId,
-    availableModes: GEMINI_MODE_DESCRIPTORS,
-    mutable: args.mutable,
-    source: args.source ?? "native",
-  });
-}
-
-export function isGeminiModeId(modeId: string): boolean {
-  return GEMINI_MODE_DESCRIPTORS.some((mode) => mode.id === modeId);
-}
-
-export function buildKimiModeState(args: {
-  currentModeId: string;
-  mutable: boolean;
-  source?: SessionModeState["source"];
-}): SessionModeState {
-  return buildModeState({
-    currentModeId: args.currentModeId,
-    availableModes: KIMI_MODE_DESCRIPTORS,
-    mutable: args.mutable,
-    source: args.source ?? "native",
-  });
-}
-
-export function isKimiModeId(modeId: string): boolean {
-  return KIMI_MODE_DESCRIPTORS.some((mode) => mode.id === modeId);
-}
-
 export function buildOpenCodeModeState(args: {
   currentModeId: string;
   mutable: boolean;
@@ -281,10 +185,6 @@ export function defaultProviderModeId(provider: ProviderKind): string | null {
       return "never/danger-full-access";
     case "claude":
       return "bypassPermissions";
-    case "gemini":
-      return "yolo";
-    case "kimi":
-      return "yolo";
     case "opencode":
       return "opencode/full-auto";
     case "custom":
@@ -306,10 +206,6 @@ export function providerModeDescriptors(
       }).availableModes;
     case "claude":
       return cloneDescriptors(CLAUDE_MODE_DESCRIPTORS);
-    case "gemini":
-      return cloneDescriptors(GEMINI_MODE_DESCRIPTORS);
-    case "kimi":
-      return cloneDescriptors(KIMI_MODE_DESCRIPTORS);
     case "opencode":
       return cloneDescriptors(OPENCODE_MODE_DESCRIPTORS);
     case "custom":

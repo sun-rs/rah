@@ -2,9 +2,17 @@
 
 本文锁定 RAH 历史浏览的加载模型，避免后续把“历史回放”“live session”“provider 原始存储”混在一起。
 
+当前 core provider：
+
+- Codex
+- Claude
+- OpenCode
+
+Gemini/Kimi CLI 一等支持已移除；相关模型通过 OpenCode/API provider 承载。
+
 ## 1. 前端加载模型
 
-当前五家 CLI 历史浏览都采用：
+历史浏览采用：
 
 ```text
 打开 session -> 加载 tail -> 上滚接近顶部 -> 加载更老一页 -> prepend -> 保持滚动锚点
@@ -28,13 +36,15 @@
 - 没有 `canonicalItemId` 的旧事件才退回到 `messageId`、turnId、text/time window 等兼容性去重。
 - prepend 前记录 visible anchor，插入后修正 `scrollTop`，保持阅读位置。
 
-Timeline identity 约束：
+## 2. Timeline Identity
+
+硬约束：
 
 - 同一个 provider item 无论来自 live 还是 history，必须生成同一个 `canonicalItemId`。
 - 两个真实不同的 item 即使文本完全一样，也必须有不同 `canonicalItemId`。
 - `origin`、`sourceCursor`、`contentHash` 都是证据或 metadata，不参与主 key。
-- adapter 必须把 provider 原生 message id、文件行/byte offset、SQLite row id、turn ordinal/part index 映射成 `turnKey + itemKey`；无法证明稳定时宁可不生成 identity，也不能用全文 hash 冒充主身份。
-- identity 缺失或同一 canonical id 结构冲突会在 daemon log 中输出诊断 warning，避免前端长期静默回退到 text/time window 猜测。
+- adapter 必须把 provider 原生 message id、文件行/byte offset、SQLite row id、turn ordinal/part index 映射成 `turnKey + itemKey`。
+- 无法证明稳定时宁可不生成 identity，也不能用全文 hash 冒充主身份。
 
 当前 provider identity 策略：
 
@@ -42,11 +52,9 @@ Timeline identity 约束：
 | --- | --- | --- |
 | Codex | `providerSessionId + turnId + per-turn itemIndex` | app-server live 与 rollout history 都可从 turn 上下文派生同序 item index；origin 不进 key。 |
 | Claude | `sessionId + record uuid` | Claude transcript / SDK assistant 消息有稳定 uuid；用户 live 输入无 provider uuid 时不强行猜。 |
-| Gemini | `sessionId + message.id (+ thought partIndex)` | conversation 文件 message id 是主线；headless live 只有派生 id 时标记 derived。 |
-| Kimi | `providerSessionId + turnIndex + itemIndex` | wire history 和 live wire client 都按 turn/item 位置生成 identity，解决 reasoning 重复。 |
 | OpenCode | `sessionId + messageId + partId` | OpenCode SQLite / ACP 都有 message/part 结构，reasoning 与 assistant text 分 part 区分。 |
 
-## 2. API 契约
+## 3. API 契约
 
 前端通过：
 
@@ -69,7 +77,7 @@ GET /api/sessions/:sessionId/history?beforeTs=...&limit=250
 - 只有 `nextBeforeTs`：provider 使用 timestamp 边界加载更老内容。
 - 没有 `nextCursor` 且没有 `nextBeforeTs`：已经到达最早历史。
 
-## 3. 后端 snapshot 模型
+## 4. 后端 Snapshot 模型
 
 `RuntimeEngine.getSessionHistoryPage` 不直接把 provider 原始历史暴露给前端，而是通过 `HistorySnapshotStore`：
 
@@ -84,17 +92,15 @@ frozen snapshot 的目标：
 - 上滚翻页不漂。
 - claim/resume 后 live 新内容不污染当前历史浏览。
 
-## 4. 五家 provider 的历史来源
+## 5. Provider 历史来源
 
-| Provider | 历史存储 | 首屏 tail | older page | 备注 |
-| --- | --- | --- | --- | --- |
-| Codex | `~/.codex/sessions/**/rollout-*.jsonl` 或 wrapper isolated `CODEX_HOME` | 从 rollout 尾部窗口读取并翻译 | line cursor + safe boundary + semantic recent window | 可根据 liveness 收口 EOF pending tool |
-| Claude | `~/.claude/projects/**/*.jsonl` | 从 transcript 尾部窗口读取并翻译 | line cursor + user boundary + semantic recent window | `rah claude` 复用原生 `~/.claude` |
-| Gemini | Gemini conversation 文件 + RAH sidecar cache | 按 cached canonical event offset 取最近窗口 | offset cursor | cache revision 由 file size / mtime 约束 |
-| Kimi | Kimi wire jsonl | 从 wire 文件尾部窗口读取并翻译 | line cursor + TurnBegin/SteerInput boundary | `default/yolo` 影响 live client，不影响历史读取 |
-| OpenCode | OpenCode SQLite message store | 按 message time 读取最近窗口并翻译 | `beforeTs` cursor | 每页会重新翻译 message window 成 canonical events |
+| Provider | 历史存储 | 首屏 tail | older page |
+| --- | --- | --- | --- |
+| Codex | `~/.codex/sessions/**/rollout-*.jsonl` 或 wrapper isolated `CODEX_HOME` | 从 rollout 尾部窗口读取并翻译 | line cursor + safe boundary + semantic recent window |
+| Claude | `~/.claude/projects/**/*.jsonl` | 从 transcript 尾部窗口读取并翻译 | line cursor + user boundary + semantic recent window |
+| OpenCode | OpenCode SQLite message store | 按 message time 读取最近窗口并翻译 | `beforeTs` cursor |
 
-## 5. Tail first 的原因
+## 6. Tail First 的原因
 
 历史 session 通常很长。直接全量加载会造成：
 
@@ -109,7 +115,7 @@ Tail first 更符合真实使用：
 - 需要追溯时再向上翻。
 - Provider 原始文件增长时也能通过 frozen snapshot 稳定翻页。
 
-## 6. Read-only replay 与 claim
+## 7. Read-only Replay 与 Claim
 
 打开历史 session 默认是 read-only replay：
 
@@ -120,79 +126,18 @@ Tail first 更符合真实使用：
 
 点击 claim/resume 后：
 
-- daemon 使用对应 provider adapter 拉起 live session。
+- daemon 使用对应 provider launch/resume spec 拉起 live native TUI session。
 - 当前 provider history 可以作为 live session 初始上下文或 replay 来源。
 - 如果已有 frozen snapshot，runtime 可以 transfer，避免 claim 前后历史抖动。
 
-## 7. History Recent 列表
+## 8. 回归检查
 
-History 弹窗的 `Recent` 不是“RAH 曾经 claim 过”的列表，而是全局最近使用列表：
-
-- 候选来自当前可见的 provider history、RAH 记住的 previous live、以及当前 live session。
-- 按 `lastUsedAt ?? updatedAt ?? createdAt` 全局倒序排序，取前 15 个。
-- 同一个 provider session 去重；如果同时有 provider history 和 previous live，优先使用 provider history 的标题、预览、工作区等元数据，同时保留更近的使用时间。
-- hidden session / hidden workspace 仍然不显示。
-- 纯 read-only replay 不会被当作写手或 live，但它对应的 provider history 仍可因为真实最近使用时间进入 `Recent`。
-
-这个边界保证：野生 TUI、原生 CLI 或其他非 RAH 拉起的 session，只要 provider 历史里显示最近被使用，也会进入 `Recent`。
-
-## 8. Live / external live / closed history
-
-历史读取必须避免两类误判：
-
-- 已经结束的旧历史，pending tool 永久显示 Running。
-- 仍有野生 TUI 或 RAH wrapper 在写，Web 把它误判为 closed。
-
-边界：
-
-- RAH 管理绑定：live。
-- RAH terminal wrapper：live。
-- provider 文件有外部活跃写手：external live。
-- Web 只读打开历史：不算 live。
-- 无 RAH 写手、无活跃外部写手、文件稳定：closed history。
-
-Codex 的详细规则见 [Codex 历史 liveness 与 pending tool 收口边界](./codex-history-liveness.zh-CN.md)。
-
-## 9. UI 失败模式与排查
-
-如果打开长历史只看到最近一段，无法继续到第一条消息，优先检查：
-
-- `selectedProjection.history.nextCursor` / `nextBeforeTs` 是否还存在。
-- `selectedProjection.history.phase` 是否卡在 `loading`。
-- `ChatThread` 的 `loadingOlderRef` 是否释放。
-- 滚动区域是否触发 `onLoadOlderHistory`。
-- 后端 `/history?cursor=...` 是否能连续返回直到没有 cursor。
-
-如果后端连续分页能到第一条用户消息，而 UI 到不了，问题在前端滚动触发/锁释放/虚拟化锚点。
-
-如果后端也到不了，问题在 provider frozen loader、cursor 或原始历史 catalog。
-
-## 10. Markdown 与结构化输出
-
-历史翻译时必须保留 provider 原始 assistant text 的结构：
-
-- 换行
-- 列表
-- 缩进
-- fenced code block
-- markdown paragraph
-
-过滤 provider control fragment 时，只能删除明确的标签块或内部事件，不能压平空白。尤其不能对最终 assistant text 做全局：
-
-```ts
-text.replace(/\s+/g, " ")
-```
-
-否则会导致列表和代码块全部挤成一行。
-
-## 11. 回归检查
-
-每次修改 history loader / markdown filter / feed virtualization 后，至少手动检查：
+每次修改 history loader / markdown filter / feed virtualization 后，至少检查：
 
 - Codex 长历史能从 tail 上滚到第一条用户消息。
-- Claude / Gemini / Kimi / OpenCode 历史首屏不是 assistant-only 截断。
+- Claude / OpenCode 历史首屏不是 assistant-only 截断。
 - 上滚加载 older page 后当前阅读位置不跳。
 - iOS Safari / PWA 上能继续触发 older page。
 - 被中断的 tool 不永久显示 Running。
 - `<turn_aborted>` 等内部上下文不会作为 assistant 正文显示。
-- Markdown 列表、代码块、分段在五家 provider 中都保持结构。
+- Markdown 列表、代码块、分段在 core provider 中都保持结构。

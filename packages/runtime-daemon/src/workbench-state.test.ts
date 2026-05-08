@@ -286,43 +286,82 @@ describe("WorkbenchStateStore", () => {
   });
 
   test("closing a resumable session keeps it visible in recent and stored history", async () => {
+    const previousClaudeConfig = process.env.CLAUDE_CONFIG_DIR;
+    const tmpClaudeConfig = mkdtempSync(path.join(os.tmpdir(), "rah-workbench-claude-resumable-"));
+    const workDir = mkdtempSync(path.join(os.tmpdir(), "rah-workbench-resumable-"));
+    const projectId = path.resolve(workDir).replace(/[^a-zA-Z0-9]/g, "-");
+    const projectDir = path.join(tmpClaudeConfig, "projects", projectId);
+    const providerSessionId = "debug-claude-session-1";
+    mkdirSync(projectDir, { recursive: true });
+    writeFileSync(
+      path.join(projectDir, `${providerSessionId}.jsonl`),
+      [
+        JSON.stringify({
+          type: "user",
+          uuid: "user-1",
+          cwd: workDir,
+          sessionId: providerSessionId,
+          timestamp: "2025-07-19T22:21:00.000Z",
+          message: { content: "say hi" },
+        }),
+        JSON.stringify({
+          type: "assistant",
+          uuid: "assistant-1",
+          cwd: workDir,
+          sessionId: providerSessionId,
+          timestamp: "2025-07-19T22:21:04.000Z",
+          message: { content: [{ type: "text", text: "hello" }] },
+        }),
+      ].join("\n") + "\n",
+    );
+    process.env.CLAUDE_CONFIG_DIR = tmpClaudeConfig;
     const engine = new RuntimeEngine();
 
-    const resumed = await engine.resumeSession({
-      provider: "custom",
-      providerSessionId: "debug-claude-session-1",
-      attach: {
-        client: {
-          id: "web-client",
-          kind: "web",
-          connectionId: "web-client",
+    try {
+      const resumed = await engine.resumeSession({
+        provider: "claude",
+        providerSessionId,
+        preferStoredReplay: true,
+        attach: {
+          client: {
+            id: "web-client",
+            kind: "web",
+            connectionId: "web-client",
+          },
+          mode: "interactive",
+          claimControl: true,
         },
-        mode: "interactive",
-        claimControl: true,
-      },
-    });
+      });
 
-    await engine.closeSession(resumed.session.session.id, {
-      clientId: "web-client",
-    });
+      await engine.closeSession(resumed.session.session.id, {
+        clientId: "web-client",
+      });
 
-    const listed = engine.listSessions();
-    assert.ok(
-      listed.recentSessions.some(
-        (entry) =>
-          entry.provider === "custom" &&
-          entry.providerSessionId === "debug-claude-session-1",
-      ),
-    );
-    assert.ok(
-      listed.storedSessions.some(
-        (entry) =>
-          entry.provider === "custom" &&
-          entry.providerSessionId === "debug-claude-session-1",
-      ),
-    );
-
-    await engine.shutdown();
+      const listed = engine.listSessions();
+      assert.ok(
+        listed.recentSessions.some(
+          (entry) =>
+            entry.provider === "claude" &&
+            entry.providerSessionId === providerSessionId,
+        ),
+      );
+      assert.ok(
+        listed.storedSessions.some(
+          (entry) =>
+            entry.provider === "claude" &&
+            entry.providerSessionId === providerSessionId,
+        ),
+      );
+    } finally {
+      if (previousClaudeConfig === undefined) {
+        delete process.env.CLAUDE_CONFIG_DIR;
+      } else {
+        process.env.CLAUDE_CONFIG_DIR = previousClaudeConfig;
+      }
+      await engine.shutdown();
+      rmSync(tmpClaudeConfig, { recursive: true, force: true });
+      rmSync(workDir, { recursive: true, force: true });
+    }
   });
 
   test("can remove a workspace when only read-only replay sessions remain open", async () => {

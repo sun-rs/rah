@@ -13,7 +13,7 @@ import { createEmptySessionProjection } from "./session-store-session-lifecycle"
 
 function summary(args: {
   id: string;
-  provider?: "codex" | "kimi";
+  provider?: "codex" | "opencode";
   providerSessionId?: string;
   readOnlyReplay?: boolean;
 }): SessionSummary {
@@ -55,7 +55,7 @@ function summary(args: {
   };
 }
 
-function ref(provider: "codex" | "kimi", providerSessionId: string): StoredSessionRef {
+function ref(provider: "codex" | "opencode", providerSessionId: string): StoredSessionRef {
   return {
     provider,
     providerSessionId,
@@ -99,10 +99,10 @@ test("canvas panes keep a live session unique across panes", () => {
 });
 
 test("canvas stored live target also evicts an existing live pane", () => {
-  const live = summary({ id: "live-1", provider: "kimi", providerSessionId: "provider-1" });
+  const live = summary({ id: "live-1", provider: "opencode", providerSessionId: "provider-1" });
   const storedTarget: CanvasPaneTarget = {
     kind: "stored",
-    ref: ref("kimi", "provider-1"),
+    ref: ref("opencode", "provider-1"),
   };
   const current = createEmptyCanvasTargets();
   current["canvas-1"] = { kind: "session", sessionId: "live-1" };
@@ -143,9 +143,9 @@ test("canvas read-only history replay can appear in multiple panes", () => {
 });
 
 test("canvas stored refs resolve to existing projections by provider identity", () => {
-  const live = summary({ id: "live-1", provider: "kimi", providerSessionId: "provider-1" });
+  const live = summary({ id: "live-1", provider: "opencode", providerSessionId: "provider-1" });
   const resolved = resolveCanvasTargetProjection(
-    { kind: "stored", ref: ref("kimi", "provider-1") },
+    { kind: "stored", ref: ref("opencode", "provider-1") },
     projections(live),
   );
 

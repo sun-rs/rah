@@ -6,11 +6,12 @@
 
 当前进展（截至本分支当前实现）：
 
-- `rah <provider>` / `rah <provider> resume <id>` 默认请求 daemon 创建或恢复 `native_tui` session，然后把当前 terminal attach 到 daemon-owned PTY；旧 wrapper handoff 仅通过 `RAH_LEGACY_WRAPPER=1` 保留。
-- Web New、Canvas New、Web Claim History 默认 `native_tui`；daemon 默认 RuntimeEngine 在未显式指定 `liveBackend` 时也会对五家 provider 走 native TUI。
+- `rah <provider>` / `rah <provider> resume <id>` 默认请求 daemon 创建或恢复 `native_tui` session，然后把当前 terminal attach 到 daemon-owned PTY；旧 wrapper handoff 不再作为 public CLI 入口暴露，只保留内部测试 harness。
+- Web New、Canvas New、Web Claim History 默认 `native_tui`；长期核心 live provider 收敛为 Codex、Claude、OpenCode 三家，Gemini/Kimi CLI 一等支持已移除。
 - `PtySessionRuntime` 已抽出；native TUI 的 mirror polling / provider activity 应用已抽到 `NativeTuiMirrorRuntime`。
 - client detach / terminal detach / clientless listing 不关闭 native TUI session；显式 close/archive 才关闭。
 - `preferStoredReplay` 仍保持只读 history replay，不会因为默认 PTY-first 而隐式 claim/resume。
+- 2026-05-07 的 OpenCode + AIHubMix 验证显示：Grok/Kimi/GLM/MiniMax/Gemini/DeepSeek 等少量使用模型可以通过 OpenCode + API 中转承载；OpenCode TUI `--model` 只可靠支持基础 `provider/model`，reasoning variant 属于 optional enhancement，不能拼进 TUI `--model` 主路径。
 
 本文用于重新定义 RAH 的长期主线。它不是继续扩大“统一五家 CLI 的完整 Web 控制台”，而是把 RAH 收敛成一个更稳、更独特的产品：
 
@@ -27,11 +28,23 @@ RAH 只把两件事作为核心正确性目标。
 真实 provider CLI 运行在 RAH 后端持有的 PTY 中。
 
 ```text
-codex / claude / gemini / kimi / opencode TUI
+codex / claude / opencode TUI
     <-> PTY
     <-> RAH PTY host
     <-> desktop terminal / web terminal / PWA / iPad
 ```
+
+长期维护边界应收敛为：
+
+```text
+Codex TUI      -> GPT/OpenAI 订阅账号与原生能力
+Claude Code    -> Claude/Anthropic 原生能力
+OpenCode TUI   -> API-key / 中转站模型容器：Kimi、GLM、MiniMax、Gemini、Grok、DeepSeek 等
+
+Gemini CLI / Kimi CLI -> 已移除一等 provider 代码；相关模型通过 OpenCode/API provider 承载
+```
+
+这不是否定 Gemini/Kimi 模型价值，而是把 live session 主链路的维护面降到真正高频、稳定、值得长期测试的三家。
 
 这意味着：
 
@@ -51,8 +64,6 @@ codex / claude / gemini / kimi / opencode TUI
 |---|---|
 | Codex | rollout JSONL / sessions |
 | Claude | `.claude/projects/*.jsonl` |
-| Gemini | conversation JSON / JSONL |
-| Kimi | `wire.jsonl` / session files |
 | OpenCode | `opencode.db` / official API-backed records |
 
 这意味着：
@@ -75,6 +86,21 @@ codex / claude / gemini / kimi / opencode TUI
 | 完整复刻 provider live RPC | 非目标；这是维护黑洞 |
 | 从 ANSI 输出反编译 chat bubbles | 非目标；只允许作为临时 debug/diagnostic |
 | RAH 自己创建 session DB 取代原厂历史 | 非目标；RAH 尊重原厂 session 文件和目录结构 |
+
+### 2.1 Provider 维护分层
+
+| 层级 | Provider | 目标 |
+|---|---|---|
+| Core live | Codex / Claude / OpenCode | 必须走 PTY Session Runtime；必须进入真实浏览器/人工 QA 主矩阵 |
+| Multi-model container | OpenCode | 承载 API-key / 中转站模型；模型列表、variant、permission 只做 provider-specific enhancement |
+| Removed CLI providers | Gemini / Kimi | 不保留 runtime/client/scripts 代码；移除原因见 `docs/provider-scope-codex-claude-opencode.zh-CN.md` |
+
+边界原则：
+
+- `ProviderKind` 不再包含 Gemini/Kimi。
+- 新建 live provider 列表、history filter、diagnostics、CLI help 不应展示 Gemini/Kimi。
+- Gemini/Kimi 旧 history 解析代码已删除；需要这些模型时通过 OpenCode/API provider 新建工作。
+- OpenCode 的 model variant 在 TUI 主路径里不能假装统一支持；已验证 `opencode run --variant` 和 ACP `provider/model/variant` 可用，但 OpenCode TUI help 只暴露 `--model provider/model`。
 
 ## 3. 系统边界
 
@@ -100,7 +126,7 @@ codex / claude / gemini / kimi / opencode TUI
 
 客户端包括：
 
-- `rah codex` / `rah claude` 等桌面 terminal wrapper。
+- `rah codex` / `rah claude` / `rah opencode` 等桌面 terminal wrapper。
 - Web terminal。
 - PWA/iOS/iPad terminal。
 - Canvas pane terminal。
@@ -286,7 +312,8 @@ Structured view unavailable. TUI session is still live.
 
 验收：
 
-- 五家 provider fake/native smoke 可启动 TUI。
+- Core live provider fake/native smoke 可启动 TUI：Codex、Claude、OpenCode。
+- Gemini/Kimi CLI 不再进入自动 smoke 或人工 QA 主矩阵。
 - Web reload 后可 replay。
 - `rah xxx` terminal detach 不杀 session。
 - Web/PWA attach 同一个 session 不触发 resume。
@@ -302,7 +329,8 @@ Structured view unavailable. TUI session is still live.
 
 验收：
 
-- Codex/Claude/Gemini/Kimi/OpenCode 的 history parser 独立测试。
+- Codex/Claude/OpenCode 的 live history mirror parser 独立测试。
+- Gemini/Kimi CLI parser 代码已删除，不再作为 provider contract gate。
 - 同一条 user/assistant/tool 不因 live/history 双通道重复。
 - mirror 文件缺失时 TUI 不受影响。
 
@@ -352,15 +380,17 @@ Structured view unavailable. TUI session is still live.
 
 RAH 进入新主线封板时，应满足：
 
-1. 五家 provider 都能由 RAH PTY host 启动真实 TUI。
-2. 桌面 terminal、Web、PWA 都能 attach/detach 同一个 session。
-3. 客户端断开不会杀 session。
-4. Web/PWA reload 后可通过 replay 追上当前 TUI。
-5. Chat mirror 来自原厂 history/jsonl/db，而不是 ANSI screen scrape。
-6. Mirror 失败不影响 TUI。
-7. 连续输入、Stop、resize、control lease 不丢、不串、不重复。
-8. iPad/Safari 有人工 QA 通过记录。
-9. 文档明确 enhanced controls 是 optional，不是 core。
+1. Codex、Claude、OpenCode 三家 core live provider 都能由 RAH PTY host 启动真实 TUI。
+2. Gemini/Kimi CLI 代码不应在 runtime/client/scripts 中继续残留；移除原因只保留在文档中。
+3. 桌面 terminal、Web、PWA 都能 attach/detach 同一个 core live session。
+4. 客户端断开不会杀 session。
+5. Web/PWA reload 后可通过 replay 追上当前 TUI。
+6. Chat mirror 来自原厂 history/jsonl/db，而不是 ANSI screen scrape。
+7. Mirror 失败不影响 TUI。
+8. 连续输入、Stop、resize、control lease 不丢、不串、不重复。
+9. iPad/Safari 有人工 QA 通过记录。
+10. 文档明确 enhanced controls 是 optional，不是 core。
+11. OpenCode TUI 的 model preset 只传基础 `provider/model`；variant/effort 不能作为 PTY core 成功条件，除非 OpenCode 原生 TUI 正式暴露稳定启动参数。
 
 ## 9. 与 OpenChamber 的关系
 
@@ -374,7 +404,7 @@ OpenChamber 值得借鉴：
 
 但 RAH 不应直接把 OpenChamber 的 OpenCode server 模型照搬为唯一后端，因为 RAH 的核心差异化是：
 
-- 支持多家官方 CLI。
+- 支持高频核心官方 CLI，并通过 OpenCode 承载低频 API-key 模型。
 - 支持订阅账号驱动的官方 TUI。
 - 尊重各 provider 原生 session 文件。
 - 让 provider 新功能直接通过 TUI 可用，而不是等待 RAH 适配。
@@ -383,11 +413,11 @@ OpenChamber 值得借鉴：
 
 ```text
 学习 OpenChamber 的 PWA/terminal/sync 工程规律
-保留 RAH 的多官方 CLI PTY-first 定位
+保留 RAH 的官方 CLI PTY-first 定位，但把 live QA 面收敛到 Codex、Claude、OpenCode
 ```
 
 ## 10. 一句话边界
 
-> RAH 的核心不是替五家 CLI 重写一个 Web agent。
+> RAH 的核心不是替所有 CLI 重写一个 Web agent。
 >
-> RAH 的核心是让五家官方 CLI 的真实 TUI session 变成可跨设备 attach、可长期保持、可友好阅读、可多窗口管理的连续工作台。
+> RAH 的核心是让核心官方 TUI session 变成可跨设备 attach、可长期保持、可友好阅读、可多窗口管理的连续工作台；低频模型优先交给 OpenCode/API 容器承载，Gemini/Kimi CLI 一等支持已移除。

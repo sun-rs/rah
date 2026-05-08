@@ -71,7 +71,7 @@ describe("NativeTuiDiagnosticStore", () => {
     const store = new NativeTuiDiagnosticStore();
     store.upsert({
       sessionId: "session-a",
-      provider: "gemini",
+      provider: "opencode",
       kind: "binding_missing",
       severity: "warning",
       message: "binding missing",
@@ -138,7 +138,7 @@ describe("NativeTuiDiagnosticStore", () => {
       store,
       {
         sessionId: "session-a",
-        provider: "gemini",
+        provider: "opencode",
         providerSessionId: "provider-a",
         cwd: "/tmp/project",
         startupTimestampMs: 1_000,
@@ -159,7 +159,7 @@ describe("NativeTuiDiagnosticStore", () => {
     const warnings: unknown[] = [];
     const session = {
       sessionId: "session-a",
-      provider: "kimi" as const,
+      provider: "opencode" as const,
       providerSessionId: "provider-a",
       cwd: "/tmp/project",
       startupTimestampMs: 1_000,

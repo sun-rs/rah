@@ -27,7 +27,7 @@ type SessionCommandState = {
   workspaceVisibilityVersion: number;
   workspaceDir: string;
   selectedSessionId: string | null;
-  newSessionProvider: "codex" | "claude" | "kimi" | "gemini" | "opencode";
+  newSessionProvider: "codex" | "claude" | "opencode";
   pendingSessionTransition: {
     kind: "new" | "history" | "claim_history";
     provider: StoredSessionRef["provider"];
@@ -246,14 +246,31 @@ export async function sendInputCommand(args: {
       const next = new Map(state.projections);
       const optimistic = appendOptimisticUserMessage(projection, args.text);
       const now = new Date().toISOString();
+      const nativeTui = optimistic.summary.session.nativeTui;
+      const willQueueInNativeTui =
+        nativeTui !== undefined && nativeTui.promptState !== "prompt_clean";
+      const nextNativeTui =
+        nativeTui && willQueueInNativeTui
+          ? {
+              ...nativeTui,
+              queuedInputCount: (nativeTui.queuedInputCount ?? 0) + 1,
+            }
+          : nativeTui;
       next.set(args.sessionId, {
         ...optimistic,
-        currentRuntimeStatus: "thinking",
+        ...(willQueueInNativeTui
+          ? optimistic.currentRuntimeStatus !== undefined
+            ? { currentRuntimeStatus: optimistic.currentRuntimeStatus }
+            : {}
+          : { currentRuntimeStatus: "thinking" as const }),
         summary: {
           ...optimistic.summary,
           session: {
             ...optimistic.summary.session,
-            runtimeState: "running",
+            runtimeState: willQueueInNativeTui
+              ? optimistic.summary.session.runtimeState
+              : "running",
+            ...(nextNativeTui ? { nativeTui: nextNativeTui } : {}),
             updatedAt: now,
           },
           controlLease: {

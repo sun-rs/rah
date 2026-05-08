@@ -825,6 +825,33 @@ describe("RuntimeEngine", () => {
     }
   });
 
+  test("production engine rejects unsupported live providers before structured fallback", async () => {
+    const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-unsupported-live-provider-"));
+    const engine = new RuntimeEngine();
+    try {
+      await assert.rejects(
+        () =>
+          engine.startSession({
+            provider: "custom",
+            cwd: workspace,
+          }),
+        /Provider custom is not a supported live provider/,
+      );
+      await assert.rejects(
+        () =>
+          engine.resumeSession({
+            provider: "custom",
+            providerSessionId: "custom-session",
+            cwd: workspace,
+          }),
+        /Provider custom is not a supported live provider/,
+      );
+    } finally {
+      await engine.shutdown();
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
   test("blocks mode and model changes while a session is not idle", async () => {
     const adapter = new MutableControlsAdapter();
     const engine = new RuntimeEngine([adapter]);
@@ -1365,16 +1392,19 @@ describe("RuntimeEngine", () => {
         "process.stdout.write(`MOCK_NATIVE_TUI_READY args=${process.argv.slice(2).join('|')}\\r\\n`);",
         `process.stdout.write('Session: ${providerSessionId}\\r\\n');`,
         "process.on('SIGINT', () => {",
-        "  process.stdout.write('MOCK_NATIVE_TUI_INTERRUPTED\\r\\n');",
+        "  process.stdout.write('MOCK_NATIVE_TUI_INTERRUPTED\\r\\n›\\r\\n');",
         "});",
         "process.stdin.setEncoding('utf8');",
+        "if (process.stdin.isTTY && process.stdin.setRawMode) {",
+        "  process.stdin.setRawMode(true);",
+        "}",
         "process.stdin.resume();",
         "let buffer = '';",
         "process.stdin.on('data', (chunk) => {",
         "  buffer += chunk;",
-        "  if (buffer.includes('\\u0003')) {",
-        "    process.stdout.write('MOCK_NATIVE_TUI_INTERRUPTED\\r\\n');",
-        "    buffer = buffer.replace(/\\u0003/g, '');",
+        "  if (buffer.includes('\\u0003') || buffer.includes('\\u001b')) {",
+        "    process.stdout.write('MOCK_NATIVE_TUI_INTERRUPTED\\r\\n›\\r\\n');",
+        "    buffer = buffer.replace(/[\\u0003\\u001b]/g, '');",
         "  }",
         "  const parts = buffer.split(/\\r|\\n/);",
         "  buffer = parts.pop() ?? '';",
@@ -1642,7 +1672,7 @@ describe("RuntimeEngine", () => {
     }
   });
 
-  test("native TUI backend rejects chat input while the TUI prompt is dirty", async () => {
+  test("native TUI backend queues chat input while the TUI prompt is dirty", async () => {
     const engine = new RuntimeEngine([]);
     const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-native-tui-dirty-"));
     const fakeCodex = path.join(workspace, "fake-codex.js");
@@ -1695,17 +1725,130 @@ describe("RuntimeEngine", () => {
         assert.equal(engine.getSessionSummary(sessionId).session.providerSessionId, providerSessionId);
       });
       assert.equal(engine.getSessionSummary(sessionId).session.nativeTui?.promptState, "prompt_clean");
-      engine.onPtyInput(sessionId, "browser", "partial local draft");
+      assert.throws(
+        () => engine.onPtyInput(sessionId, "other-client", "blocked"),
+        /does not hold input control/,
+      );
+      assert.throws(
+        () => engine.onPtyResize(sessionId, "other-client", 100, 30),
+        /does not hold input control/,
+      );
+      engine.onPtyInput(sessionId, "web-native", "partial local draft");
       await waitFor(() => {
         assert.equal(engine.getSessionSummary(sessionId).session.nativeTui?.promptState, "prompt_dirty");
       });
-      assert.throws(
-        () => engine.sendInput(sessionId, { clientId: "web-native", text: "must not be injected" }),
-        /prompt is not clean/,
-      );
+      engine.sendInput(sessionId, { clientId: "web-native", text: "send after dirty prompt" });
+      await waitFor(() => {
+        assert.equal(engine.getSessionSummary(sessionId).session.nativeTui?.queuedInputCount, 1);
+      });
 
       await new Promise((resolve) => setTimeout(resolve, 100));
-      assert.doesNotMatch(transcript, /must not be injected/);
+      assert.doesNotMatch(transcript, /send after dirty prompt/);
+
+      engine.onPtyInput(sessionId, "web-native", "\u001b");
+      await waitFor(() => {
+        assert.equal(engine.getSessionSummary(sessionId).session.nativeTui?.promptState, "agent_busy");
+        assert.match(transcript, /MOCK_NATIVE_TUI_RAW:.*send after dirty prompt/);
+      });
+
+      unsubscribe();
+      await engine.closeSession(sessionId, { clientId: "web-native" });
+    } finally {
+      if (previousCodexBinary === undefined) {
+        delete process.env.RAH_CODEX_BINARY;
+      } else {
+        process.env.RAH_CODEX_BINARY = previousCodexBinary;
+      }
+      if (previousCodexHome === undefined) {
+        delete process.env.CODEX_HOME;
+      } else {
+        process.env.CODEX_HOME = previousCodexHome;
+      }
+      await engine.shutdown();
+      rmSync(workspace, { force: true, recursive: true });
+    }
+  });
+
+  test("native TUI backend keeps chat send enabled after terminal escape navigation", async () => {
+    const engine = new RuntimeEngine([]);
+    const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-native-tui-escape-clean-"));
+    const fakeCodex = path.join(workspace, "fake-codex.js");
+    const providerSessionId = "019de928-7d22-7c63-ba89-dcb25d4a8777";
+    const previousCodexBinary = process.env.RAH_CODEX_BINARY;
+    const previousCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = path.join(workspace, "codex-home");
+    mkdirSync(path.join(process.env.CODEX_HOME, "sessions"), { recursive: true });
+    writeFileSync(
+      fakeCodex,
+      [
+        "#!/usr/bin/env node",
+        `process.stdout.write('Session: ${providerSessionId}\\r\\n');`,
+        "process.stdin.setEncoding('utf8');",
+        "process.stdin.resume();",
+        "process.stdin.on('data', (chunk) => process.stdout.write(`MOCK_NATIVE_TUI_ESCAPE:${JSON.stringify(chunk)}\\r\\n`));",
+        "setInterval(() => undefined, 1000);",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(fakeCodex, 0o755);
+    process.env.RAH_CODEX_BINARY = fakeCodex;
+
+    try {
+      const started = await engine.startSession({
+        provider: "codex",
+        cwd: workspace,
+        liveBackend: "native_tui",
+        attach: {
+          client: {
+            id: "web-native",
+            kind: "web",
+            connectionId: "web-native",
+          },
+          mode: "interactive",
+          claimControl: true,
+        },
+      });
+      const sessionId = started.session.session.id;
+      let transcript = "";
+      const unsubscribe = engine.ptyHub.subscribe(sessionId, (frame) => {
+        if (frame.type === "pty.replay") {
+          transcript += frame.chunks.join("");
+        } else if (frame.type === "pty.output") {
+          transcript += frame.data;
+        }
+      });
+
+      await waitFor(() => {
+        assert.equal(engine.getSessionSummary(sessionId).session.providerSessionId, providerSessionId);
+      });
+      assert.equal(engine.getSessionSummary(sessionId).session.nativeTui?.promptState, "prompt_clean");
+
+      engine.onPtyInput(sessionId, "web-native", "\u001b[I");
+      engine.onPtyInput(sessionId, "web-native", "\u001b[O");
+      engine.onPtyInput(sessionId, "web-native", "\u001b[A");
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      assert.equal(engine.getSessionSummary(sessionId).session.nativeTui?.promptState, "prompt_clean");
+      engine.sendInput(sessionId, { clientId: "web-native", text: "chat still works" });
+
+      await waitFor(() => {
+        assert.match(transcript, /MOCK_NATIVE_TUI_ESCAPE:.*chat still works/);
+      });
+      await waitFor(() => {
+        assert.equal(engine.getSessionSummary(sessionId).session.nativeTui?.promptState, "agent_busy");
+      });
+
+      engine.onPtyInput(sessionId, "web-native", "\u001b[I");
+      await waitFor(() => {
+        assert.equal(engine.getSessionSummary(sessionId).session.nativeTui?.promptState, "prompt_clean");
+      });
+      engine.sendInput(sessionId, {
+        clientId: "web-native",
+        text: "chat still works after busy escape",
+      });
+      await waitFor(() => {
+        assert.match(transcript, /MOCK_NATIVE_TUI_ESCAPE:.*chat still works after busy escape/);
+      });
 
       unsubscribe();
       await engine.closeSession(sessionId, { clientId: "web-native" });
@@ -2013,7 +2156,10 @@ describe("RuntimeEngine", () => {
       const sessionId = started.session.session.id;
 
       await waitFor(() => {
-        assert.equal(engine.getSessionSummary(sessionId).session.runtimeState, "stopped");
+        const summary = engine.getSessionSummary(sessionId);
+        assert.equal(summary.session.runtimeState, "stopped");
+        assert.equal(summary.session.capabilities.steerInput, false);
+        assert.equal(summary.session.capabilities.rawPtyInput, false);
         const active = engine.listNativeTuiDiagnostics({ sessionId });
         assert.equal(active.length, 1);
         assert.equal(active[0]?.kind, "process_exited");
@@ -2593,7 +2739,7 @@ describe("RuntimeEngine", () => {
         assert.match(transcript, /MOCK_CLAUDE_DIRTY_READY/);
       });
 
-      engine.onPtyInput(sessionId, "browser", "partial local draft");
+      engine.onPtyInput(sessionId, "web-native", "partial local draft");
       await waitFor(() => {
         assert.equal(engine.getSessionSummary(sessionId).session.nativeTui?.promptState, "prompt_dirty");
       });
@@ -2639,12 +2785,9 @@ describe("RuntimeEngine", () => {
         );
       });
       assert.equal(engine.getSessionSummary(sessionId).session.nativeTui?.promptState, "prompt_dirty");
-      assert.throws(
-        () => engine.sendInput(sessionId, { clientId: "web-native", text: "must remain blocked" }),
-        /prompt is not clean/,
-      );
+      engine.sendInput(sessionId, { clientId: "web-native", text: "must remain queued" });
       await new Promise((resolve) => setTimeout(resolve, 100));
-      assert.doesNotMatch(transcript, /must remain blocked/);
+      assert.doesNotMatch(transcript, /must remain queued/);
 
       unsubscribe();
       await engine.closeSession(sessionId, { clientId: "web-native" });
@@ -2658,139 +2801,6 @@ describe("RuntimeEngine", () => {
         delete process.env.CLAUDE_CONFIG_DIR;
       } else {
         process.env.CLAUDE_CONFIG_DIR = previousClaudeConfigDir;
-      }
-      if (previousMirrorInterval === undefined) {
-        delete process.env.RAH_NATIVE_TUI_MIRROR_INTERVAL_MS;
-      } else {
-        process.env.RAH_NATIVE_TUI_MIRROR_INTERVAL_MS = previousMirrorInterval;
-      }
-      await engine.shutdown();
-      rmSync(workspace, { force: true, recursive: true });
-    }
-  });
-
-  test("native TUI mirror does not mark newer web input idle with stale Kimi TurnEnd", async () => {
-    const engine = new RuntimeEngine([]);
-    const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-native-tui-kimi-stale-"));
-    const fakeKimi = path.join(workspace, "fake-kimi-stale.js");
-    const previousKimiBinary = process.env.RAH_KIMI_BINARY;
-    const previousKimiHome = process.env.KIMI_SHARE_DIR;
-    const previousMirrorInterval = process.env.RAH_NATIVE_TUI_MIRROR_INTERVAL_MS;
-    process.env.KIMI_SHARE_DIR = path.join(workspace, "kimi-home");
-    process.env.RAH_NATIVE_TUI_MIRROR_INTERVAL_MS = "25";
-    writeFileSync(
-      fakeKimi,
-      [
-        "#!/usr/bin/env node",
-        "const fs = require('node:fs');",
-        "const path = require('node:path');",
-        "const { createHash } = require('node:crypto');",
-        "const sessionArgIndex = process.argv.indexOf('--session');",
-        "const sessionId = sessionArgIndex >= 0 ? process.argv[sessionArgIndex + 1] : undefined;",
-        "const staleTimestamp = Date.now() / 1000 - 60;",
-        "let historyWritten = false;",
-        "function writeStaleWire() {",
-        "  if (historyWritten || !process.env.KIMI_SHARE_DIR || !sessionId) return;",
-        "  historyWritten = true;",
-        "  const workDir = process.cwd();",
-        "  const digest = createHash('md5').update(workDir).digest('hex');",
-        "  const sessionDir = path.join(process.env.KIMI_SHARE_DIR, 'sessions', digest, sessionId);",
-        "  fs.mkdirSync(sessionDir, { recursive: true });",
-        "  fs.writeFileSync(path.join(process.env.KIMI_SHARE_DIR, 'kimi.json'), JSON.stringify({ work_dirs: [{ path: workDir }] }));",
-        "  const line = (offset, type, payload) => JSON.stringify({ timestamp: staleTimestamp + offset, message: { type, payload } });",
-        "  fs.writeFileSync(path.join(sessionDir, 'wire.jsonl'), [",
-        "    line(0, 'TurnBegin', { user_input: 'stale Kimi question' }),",
-        "    line(0.1, 'ContentPart', { type: 'text', text: 'stale Kimi answer' }),",
-        "    line(0.2, 'TurnEnd', {}),",
-        "  ].join('\\n') + '\\n');",
-        "}",
-        "process.stdout.write(`MOCK_KIMI_STALE_READY args=${process.argv.slice(2).join('|')}\\r\\n`);",
-        "process.stdin.setEncoding('utf8');",
-        "process.stdin.resume();",
-        "let buffer = '';",
-        "process.stdin.on('data', (chunk) => {",
-        "  buffer += chunk;",
-        "  const parts = buffer.split(/\\r|\\n/);",
-        "  buffer = parts.pop() ?? '';",
-        "  for (const part of parts) {",
-        "    const text = part.trim();",
-        "    if (text) {",
-        "      process.stdout.write(`MOCK_KIMI_STALE_INPUT:${text}\\r\\n`);",
-        "      setTimeout(writeStaleWire, 50);",
-        "    }",
-        "  }",
-        "});",
-        "setInterval(() => undefined, 1000);",
-        "",
-      ].join("\n"),
-    );
-    chmodSync(fakeKimi, 0o755);
-    process.env.RAH_KIMI_BINARY = fakeKimi;
-
-    try {
-      const started = await engine.startSession({
-        provider: "kimi",
-        cwd: workspace,
-        liveBackend: "native_tui",
-        model: "kimi-k2.6,thinking",
-        optionValues: { model_thinking: "thinking" },
-        modeId: "yolo",
-        attach: {
-          client: {
-            id: "web-native",
-            kind: "web",
-            connectionId: "web-native",
-          },
-          mode: "interactive",
-          claimControl: true,
-        },
-      });
-      const sessionId = started.session.session.id;
-      assert.match(started.session.session.providerSessionId ?? "", /^[0-9a-f-]{36}$/);
-
-      let transcript = "";
-      const unsubscribe = engine.ptyHub.subscribe(sessionId, (frame) => {
-        if (frame.type === "pty.replay") {
-          transcript += frame.chunks.join("");
-        } else if (frame.type === "pty.output") {
-          transcript += frame.data;
-        }
-      });
-      await waitFor(() => {
-        assert.match(transcript, /MOCK_KIMI_STALE_READY/);
-      });
-
-      engine.sendInput(sessionId, { clientId: "web-native", text: "current kimi web input" });
-      await waitFor(() => {
-        assert.match(transcript, /MOCK_KIMI_STALE_INPUT:current kimi web input/);
-      });
-      await waitFor(() => {
-        assert.ok(
-          engine.eventBus
-            .list({ sessionIds: [sessionId] })
-            .some(
-              (event) =>
-                event.type === "timeline.item.added" &&
-                event.payload.item.kind === "assistant_message" &&
-                event.payload.item.text === "stale Kimi answer",
-            ),
-        );
-      });
-      assert.equal(engine.getSessionSummary(sessionId).session.runtimeState, "running");
-
-      engine.interruptSession(sessionId, { clientId: "web-native" });
-      unsubscribe();
-      await engine.closeSession(sessionId, { clientId: "web-native" });
-    } finally {
-      if (previousKimiBinary === undefined) {
-        delete process.env.RAH_KIMI_BINARY;
-      } else {
-        process.env.RAH_KIMI_BINARY = previousKimiBinary;
-      }
-      if (previousKimiHome === undefined) {
-        delete process.env.KIMI_SHARE_DIR;
-      } else {
-        process.env.KIMI_SHARE_DIR = previousKimiHome;
       }
       if (previousMirrorInterval === undefined) {
         delete process.env.RAH_NATIVE_TUI_MIRROR_INTERVAL_MS;
@@ -2935,299 +2945,6 @@ describe("RuntimeEngine", () => {
     }
   });
 
-  test("native TUI mirror does not mark newer web input idle with stale Gemini conversation", async () => {
-    const engine = new RuntimeEngine([]);
-    const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-native-tui-gemini-stale-"));
-    const fakeGemini = path.join(workspace, "fake-gemini-stale.js");
-    const providerSessionId = "745e0831-25cf-4e73-87d2-0cb9064eb399";
-    const previousGeminiBinary = process.env.RAH_GEMINI_BINARY;
-    const previousGeminiHome = process.env.GEMINI_CLI_HOME;
-    const previousMirrorInterval = process.env.RAH_NATIVE_TUI_MIRROR_INTERVAL_MS;
-    process.env.GEMINI_CLI_HOME = path.join(workspace, "gemini-home");
-    process.env.RAH_NATIVE_TUI_MIRROR_INTERVAL_MS = "25";
-    mkdirSync(process.env.GEMINI_CLI_HOME, { recursive: true });
-    writeFileSync(
-      path.join(process.env.GEMINI_CLI_HOME, "projects.json"),
-      JSON.stringify({ projects: { [workspace]: "native-gemini-stale-test" } }),
-    );
-    writeFileSync(
-      fakeGemini,
-      [
-        "#!/usr/bin/env node",
-        "const fs = require('node:fs');",
-        "const path = require('node:path');",
-        "const { createHash } = require('node:crypto');",
-        "const providerSessionId = process.env.MOCK_GEMINI_STALE_SESSION_ID;",
-        "const staleTimestamp = new Date(Date.now() - 60000).toISOString();",
-        "const currentTimestamp = new Date().toISOString();",
-        "let historyWritten = false;",
-        "function writeStaleConversation() {",
-        "  if (historyWritten || !process.env.GEMINI_CLI_HOME || !providerSessionId) return;",
-        "  historyWritten = true;",
-        "  const projectHash = createHash('sha256').update(process.cwd()).digest('hex');",
-        "  const chatsDir = path.join(process.env.GEMINI_CLI_HOME, 'tmp', projectHash, 'chats');",
-        "  fs.mkdirSync(chatsDir, { recursive: true });",
-        "  fs.writeFileSync(path.join(chatsDir, `session-${providerSessionId}.json`), JSON.stringify({",
-        "    sessionId: providerSessionId,",
-        "    projectHash,",
-        "    startTime: staleTimestamp,",
-        "    lastUpdated: currentTimestamp,",
-        "    messages: [",
-        "      { id: 'user-stale', timestamp: staleTimestamp, type: 'user', content: [{ text: 'stale Gemini question' }] },",
-        "      { id: 'assistant-stale', timestamp: staleTimestamp, type: 'gemini', content: [{ text: 'stale Gemini answer' }] },",
-        "    ],",
-        "  }));",
-        "}",
-        "process.stdout.write(`MOCK_GEMINI_STALE_READY args=${process.argv.slice(2).join('|')}\\r\\n`);",
-        "process.stdin.setEncoding('utf8');",
-        "process.stdin.resume();",
-        "let buffer = '';",
-        "process.stdin.on('data', (chunk) => {",
-        "  buffer += chunk;",
-        "  const parts = buffer.split(/\\r|\\n/);",
-        "  buffer = parts.pop() ?? '';",
-        "  for (const part of parts) {",
-        "    const text = part.trim();",
-        "    if (text) {",
-        "      process.stdout.write(`MOCK_GEMINI_STALE_INPUT:${text}\\r\\n`);",
-        "      setTimeout(writeStaleConversation, 50);",
-        "    }",
-        "  }",
-        "});",
-        "setInterval(() => undefined, 1000);",
-        "",
-      ].join("\n"),
-    );
-    chmodSync(fakeGemini, 0o755);
-    process.env.RAH_GEMINI_BINARY = fakeGemini;
-    process.env.MOCK_GEMINI_STALE_SESSION_ID = providerSessionId;
-
-    try {
-      const started = await engine.startSession({
-        provider: "gemini",
-        cwd: workspace,
-        liveBackend: "native_tui",
-        attach: {
-          client: {
-            id: "web-native",
-            kind: "web",
-            connectionId: "web-native",
-          },
-          mode: "interactive",
-          claimControl: true,
-        },
-      });
-      const sessionId = started.session.session.id;
-
-      let transcript = "";
-      const unsubscribe = engine.ptyHub.subscribe(sessionId, (frame) => {
-        if (frame.type === "pty.replay") {
-          transcript += frame.chunks.join("");
-        } else if (frame.type === "pty.output") {
-          transcript += frame.data;
-        }
-      });
-      await waitFor(() => {
-        assert.match(transcript, /MOCK_GEMINI_STALE_READY/);
-      });
-
-      engine.sendInput(sessionId, { clientId: "web-native", text: "current gemini web input" });
-      await waitFor(() => {
-        assert.match(transcript, /MOCK_GEMINI_STALE_INPUT:current gemini web input/);
-      });
-      await waitFor(() => {
-        assert.equal(engine.getSessionSummary(sessionId).session.providerSessionId, providerSessionId);
-        assert.ok(
-          engine.eventBus
-            .list({ sessionIds: [sessionId] })
-            .some(
-              (event) =>
-                event.type === "timeline.item.added" &&
-                event.payload.item.kind === "assistant_message" &&
-                event.payload.item.text === "stale Gemini answer",
-            ),
-        );
-      });
-      assert.equal(engine.getSessionSummary(sessionId).session.runtimeState, "running");
-
-      engine.interruptSession(sessionId, { clientId: "web-native" });
-      unsubscribe();
-      await engine.closeSession(sessionId, { clientId: "web-native" });
-    } finally {
-      if (previousGeminiBinary === undefined) {
-        delete process.env.RAH_GEMINI_BINARY;
-      } else {
-        process.env.RAH_GEMINI_BINARY = previousGeminiBinary;
-      }
-      if (previousGeminiHome === undefined) {
-        delete process.env.GEMINI_CLI_HOME;
-      } else {
-        process.env.GEMINI_CLI_HOME = previousGeminiHome;
-      }
-      if (previousMirrorInterval === undefined) {
-        delete process.env.RAH_NATIVE_TUI_MIRROR_INTERVAL_MS;
-      } else {
-        process.env.RAH_NATIVE_TUI_MIRROR_INTERVAL_MS = previousMirrorInterval;
-      }
-      delete process.env.MOCK_GEMINI_STALE_SESSION_ID;
-      await engine.shutdown();
-      rmSync(workspace, { force: true, recursive: true });
-    }
-  });
-
-  test("native TUI mirror does not clean an unsubmitted Gemini prompt draft", async () => {
-    const engine = new RuntimeEngine([]);
-    const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-native-tui-gemini-dirty-mirror-"));
-    const fakeGemini = path.join(workspace, "fake-gemini-dirty-mirror.js");
-    const providerSessionId = "645e0831-25cf-4e73-87d2-0cb9064eb399";
-    const previousGeminiBinary = process.env.RAH_GEMINI_BINARY;
-    const previousGeminiHome = process.env.GEMINI_CLI_HOME;
-    const previousMirrorInterval = process.env.RAH_NATIVE_TUI_MIRROR_INTERVAL_MS;
-    const previousBindingInterval = process.env.RAH_NATIVE_TUI_BINDING_PROBE_INTERVAL_MS;
-    process.env.GEMINI_CLI_HOME = path.join(workspace, "gemini-home");
-    process.env.RAH_NATIVE_TUI_MIRROR_INTERVAL_MS = "25";
-    process.env.RAH_NATIVE_TUI_BINDING_PROBE_INTERVAL_MS = "25";
-    mkdirSync(process.env.GEMINI_CLI_HOME, { recursive: true });
-    writeFileSync(
-      path.join(process.env.GEMINI_CLI_HOME, "projects.json"),
-      JSON.stringify({ projects: { [workspace]: "native-gemini-dirty-mirror-test" } }),
-    );
-    writeFileSync(
-      fakeGemini,
-      [
-        "#!/usr/bin/env node",
-        "process.stdout.write(`MOCK_GEMINI_DIRTY_READY args=${process.argv.slice(2).join('|')}\\r\\n`);",
-        "process.stdin.setEncoding('utf8');",
-        "process.stdin.resume();",
-        "let buffer = '';",
-        "process.stdin.on('data', (chunk) => {",
-        "  buffer += chunk;",
-        "  const parts = buffer.split(/\\r|\\n/);",
-        "  buffer = parts.pop() ?? '';",
-        "  for (const part of parts) {",
-        "    const text = part.trim();",
-        "    if (text) process.stdout.write(`MOCK_GEMINI_DIRTY_INPUT:${text}\\r\\n`);",
-        "  }",
-        "});",
-        "setInterval(() => undefined, 1000);",
-        "",
-      ].join("\n"),
-    );
-    chmodSync(fakeGemini, 0o755);
-    process.env.RAH_GEMINI_BINARY = fakeGemini;
-
-    try {
-      const started = await engine.startSession({
-        provider: "gemini",
-        cwd: workspace,
-        liveBackend: "native_tui",
-        attach: {
-          client: {
-            id: "web-native",
-            kind: "web",
-            connectionId: "web-native",
-          },
-          mode: "interactive",
-          claimControl: true,
-        },
-      });
-      const sessionId = started.session.session.id;
-      let transcript = "";
-      const unsubscribe = engine.ptyHub.subscribe(sessionId, (frame) => {
-        if (frame.type === "pty.replay") {
-          transcript += frame.chunks.join("");
-        } else if (frame.type === "pty.output") {
-          transcript += frame.data;
-        }
-      });
-      await waitFor(() => {
-        assert.match(transcript, /MOCK_GEMINI_DIRTY_READY/);
-      });
-
-      engine.onPtyInput(sessionId, "browser", "partial gemini local draft");
-      await waitFor(() => {
-        assert.equal(engine.getSessionSummary(sessionId).session.nativeTui?.promptState, "prompt_dirty");
-      });
-
-      const geminiHome = process.env.GEMINI_CLI_HOME;
-      assert.ok(geminiHome);
-      const projectHash = createHash("sha256").update(workspace).digest("hex");
-      const chatsDir = path.join(geminiHome, "tmp", projectHash, "chats");
-      const now = new Date().toISOString();
-      mkdirSync(chatsDir, { recursive: true });
-      writeFileSync(
-        path.join(chatsDir, `session-${providerSessionId}.json`),
-        JSON.stringify({
-          sessionId: providerSessionId,
-          projectHash,
-          startTime: now,
-          lastUpdated: now,
-          messages: [
-            {
-              id: "user-dirty-mirror",
-              timestamp: now,
-              type: "user",
-              content: [{ text: "delayed Gemini question" }],
-            },
-            {
-              id: "assistant-dirty-mirror",
-              timestamp: now,
-              type: "gemini",
-              content: [{ text: "delayed Gemini answer" }],
-            },
-          ],
-        }),
-      );
-
-      await waitFor(() => {
-        assert.equal(engine.getSessionSummary(sessionId).session.providerSessionId, providerSessionId);
-        assert.ok(
-          engine.eventBus
-            .list({ sessionIds: [sessionId] })
-            .some(
-              (event) =>
-                event.type === "timeline.item.added" &&
-                event.payload.item.kind === "assistant_message" &&
-                event.payload.item.text === "delayed Gemini answer",
-            ),
-        );
-      });
-      assert.equal(engine.getSessionSummary(sessionId).session.nativeTui?.promptState, "prompt_dirty");
-      assert.throws(
-        () => engine.sendInput(sessionId, { clientId: "web-native", text: "must remain blocked" }),
-        /prompt is not clean/,
-      );
-      await new Promise((resolve) => setTimeout(resolve, 100));
-      assert.doesNotMatch(transcript, /must remain blocked/);
-
-      unsubscribe();
-      await engine.closeSession(sessionId, { clientId: "web-native" });
-    } finally {
-      if (previousGeminiBinary === undefined) {
-        delete process.env.RAH_GEMINI_BINARY;
-      } else {
-        process.env.RAH_GEMINI_BINARY = previousGeminiBinary;
-      }
-      if (previousGeminiHome === undefined) {
-        delete process.env.GEMINI_CLI_HOME;
-      } else {
-        process.env.GEMINI_CLI_HOME = previousGeminiHome;
-      }
-      if (previousMirrorInterval === undefined) {
-        delete process.env.RAH_NATIVE_TUI_MIRROR_INTERVAL_MS;
-      } else {
-        process.env.RAH_NATIVE_TUI_MIRROR_INTERVAL_MS = previousMirrorInterval;
-      }
-      if (previousBindingInterval === undefined) {
-        delete process.env.RAH_NATIVE_TUI_BINDING_PROBE_INTERVAL_MS;
-      } else {
-        process.env.RAH_NATIVE_TUI_BINDING_PROBE_INTERVAL_MS = previousBindingInterval;
-      }
-      await engine.shutdown();
-      rmSync(workspace, { force: true, recursive: true });
-    }
-  });
-
   test("native TUI mirror does not mark newer web input idle with stale OpenCode database rows", { skip: !hasSqlite }, async () => {
     const engine = new RuntimeEngine([]);
     const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-native-tui-opencode-stale-"));
@@ -3275,7 +2992,7 @@ describe("RuntimeEngine", () => {
         "      values ('part_assistant_stale', 'msg_assistant_stale', ${sql(sessionId)}, ${staleBase + 21}, ${staleBase + 50}, ${sql(JSON.stringify({ type: 'text', text: 'stale OpenCode answer' }))});",
         "  `]);",
         "}",
-        "process.stdout.write(`MOCK_OPENCODE_STALE_READY args=${process.argv.slice(2).join('|')}\\r\\n`);",
+        "process.stdout.write(`MOCK_OPENCODE_STALE_READY args=${process.argv.slice(2).join('|')}\\r\\nAsk anything...\\r\\n`);",
         "process.stdin.setEncoding('utf8');",
         "process.stdin.resume();",
         "let buffer = '';",
@@ -3576,128 +3293,6 @@ describe("RuntimeEngine", () => {
     }
   });
 
-  test("native TUI backend binds Gemini provider session from discovered history", async () => {
-    const engine = new RuntimeEngine([]);
-    const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-native-tui-gemini-"));
-    const fakeGemini = path.join(workspace, "fake-gemini.js");
-    const providerSessionId = "645e0831-25cf-4e73-87d2-0cb9064eb399";
-    const previousGeminiBinary = process.env.RAH_GEMINI_BINARY;
-    const previousGeminiHome = process.env.GEMINI_CLI_HOME;
-    process.env.GEMINI_CLI_HOME = path.join(workspace, "gemini-home");
-    const projectHash = createHash("sha256").update(workspace).digest("hex");
-    const chatsDir = path.join(process.env.GEMINI_CLI_HOME, "tmp", projectHash, "chats");
-    mkdirSync(chatsDir, { recursive: true });
-    writeFileSync(
-      path.join(process.env.GEMINI_CLI_HOME, "projects.json"),
-      JSON.stringify({ projects: { [workspace]: "native-gemini-test" } }),
-    );
-    writeFileSync(
-      fakeGemini,
-      [
-        "#!/usr/bin/env node",
-        "const fs = require('node:fs');",
-        "const path = require('node:path');",
-        "process.stdout.write(`MOCK_GEMINI_TUI_READY args=${process.argv.slice(2).join('|')}\\r\\n`);",
-        "setTimeout(() => {",
-        "  const chatsDir = process.env.MOCK_GEMINI_CHATS_DIR;",
-        "  const sessionId = process.env.MOCK_GEMINI_SESSION_ID;",
-        "  const projectHash = process.env.MOCK_GEMINI_PROJECT_HASH;",
-        "  const now = new Date().toISOString();",
-        "  fs.mkdirSync(chatsDir, { recursive: true });",
-        "  fs.writeFileSync(path.join(chatsDir, `session-${sessionId}.json`), JSON.stringify({",
-        "    sessionId,",
-        "    projectHash,",
-        "    startTime: now,",
-        "    lastUpdated: now,",
-        "    messages: [{ id: 'user-1', timestamp: now, type: 'user', content: [{ text: 'Gemini native question' }] }],",
-        "  }));",
-        "}, 100);",
-        "process.stdin.setEncoding('utf8');",
-        "process.stdin.resume();",
-        "let buffer = '';",
-        "process.stdin.on('data', (chunk) => {",
-        "  buffer += chunk;",
-        "  const parts = buffer.split(/\\r|\\n/);",
-        "  buffer = parts.pop() ?? '';",
-        "  for (const part of parts) {",
-        "    if (part.trim()) {",
-        "      process.stdout.write(`MOCK_GEMINI_INPUT:${part.trim()}\\r\\n`);",
-        "    }",
-        "  }",
-        "});",
-        "setInterval(() => undefined, 1000);",
-        "",
-      ].join("\n"),
-    );
-    chmodSync(fakeGemini, 0o755);
-    process.env.RAH_GEMINI_BINARY = fakeGemini;
-    process.env.MOCK_GEMINI_CHATS_DIR = chatsDir;
-    process.env.MOCK_GEMINI_SESSION_ID = providerSessionId;
-    process.env.MOCK_GEMINI_PROJECT_HASH = projectHash;
-
-    try {
-      const started = await engine.startSession({
-        provider: "gemini",
-        cwd: workspace,
-        liveBackend: "native_tui",
-        model: "gemini-native-test",
-        modeId: "yolo",
-        attach: {
-          client: {
-            id: "web-native",
-            kind: "web",
-            connectionId: "web-native",
-          },
-          mode: "interactive",
-          claimControl: true,
-        },
-      });
-      const sessionId = started.session.session.id;
-      assert.equal(started.session.session.liveBackend, "native_tui");
-      assert.equal(started.session.session.providerSessionId, undefined);
-
-      let transcript = "";
-      const unsubscribe = engine.ptyHub.subscribe(sessionId, (frame) => {
-        if (frame.type === "pty.replay") {
-          transcript += frame.chunks.join("");
-        } else if (frame.type === "pty.output") {
-          transcript += frame.data;
-        }
-      });
-
-      await waitFor(() => {
-        assert.match(transcript, /MOCK_GEMINI_TUI_READY/);
-        assert.match(transcript, /--approval-mode\|yolo/);
-        assert.match(transcript, /--model\|gemini-native-test/);
-        assert.equal(engine.getSessionSummary(sessionId).session.providerSessionId, providerSessionId);
-      }, { timeoutMs: 4_000 });
-
-      engine.sendInput(sessionId, { clientId: "web-native", text: "hello gemini native" });
-      await waitFor(() => {
-        assert.match(transcript, /MOCK_GEMINI_INPUT:hello gemini native/);
-      });
-
-      unsubscribe();
-      await engine.closeSession(sessionId, { clientId: "web-native" });
-    } finally {
-      if (previousGeminiBinary === undefined) {
-        delete process.env.RAH_GEMINI_BINARY;
-      } else {
-        process.env.RAH_GEMINI_BINARY = previousGeminiBinary;
-      }
-      if (previousGeminiHome === undefined) {
-        delete process.env.GEMINI_CLI_HOME;
-      } else {
-        process.env.GEMINI_CLI_HOME = previousGeminiHome;
-      }
-      delete process.env.MOCK_GEMINI_CHATS_DIR;
-      delete process.env.MOCK_GEMINI_SESSION_ID;
-      delete process.env.MOCK_GEMINI_PROJECT_HASH;
-      await engine.shutdown();
-      rmSync(workspace, { force: true, recursive: true });
-    }
-  });
-
   test("native TUI backend binds OpenCode provider session from discovered database", { skip: !hasSqlite }, async () => {
     const engine = new RuntimeEngine([]);
     const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-native-tui-opencode-"));
@@ -3714,7 +3309,7 @@ describe("RuntimeEngine", () => {
         "const path = require('node:path');",
         "const { execFileSync } = require('node:child_process');",
         "function sql(value) { return `'${String(value).replace(/'/g, `''`)}'`; }",
-        "process.stdout.write(`MOCK_OPENCODE_TUI_READY args=${process.argv.slice(2).join('|')}\\r\\n`);",
+        "process.stdout.write(`MOCK_OPENCODE_TUI_READY args=${process.argv.slice(2).join('|')}\\r\\nAsk anything...\\r\\n`);",
         "setTimeout(() => {",
         "  const dataHome = process.env.XDG_DATA_HOME;",
         "  const sessionId = process.env.MOCK_OPENCODE_SESSION_ID;",
@@ -3834,7 +3429,7 @@ describe("RuntimeEngine", () => {
 
       await waitFor(() => {
         assert.match(transcript, /MOCK_OPENCODE_TUI_READY/);
-        assert.match(transcript, /--model\|deepseek\/deepseek-v4-pro\/high/);
+        assert.match(transcript, /--model\|deepseek\/deepseek-v4-pro/);
         assert.match(transcript, new RegExp(workspace.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
         assert.equal(engine.getSessionSummary(sessionId).session.providerSessionId, providerSessionId);
         const events = engine.listEvents({ sessionIds: [sessionId] });

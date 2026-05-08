@@ -55,7 +55,7 @@ function restoreWebApiMocks(): void {
 
 function summary(args: {
   id: string;
-  provider?: "codex" | "claude" | "kimi" | "gemini" | "opencode";
+  provider?: "codex" | "claude" | "opencode";
   providerSessionId?: string;
   cwd?: string;
   modeId?: string;
@@ -286,14 +286,14 @@ describe("session startup model and mode requests", () => {
     assert.deepEqual(calls, ["created:started", "send"]);
   });
 
-  test("new session defaults native TUI for provider CLIs with stable native launch", async () => {
+  test("new session defaults native TUI for core live provider CLIs", async () => {
     const requests = installWebApiMocks((request) => {
       if (request.url.includes("/api/fs/list")) {
         return { path: "/tmp/rah", entries: [] };
       }
       if (request.url.endsWith("/api/sessions/start")) {
         const body = request.body as {
-          provider: "codex" | "claude" | "kimi" | "gemini" | "opencode";
+          provider: "codex" | "claude" | "opencode";
           cwd: string;
         };
         return {
@@ -307,7 +307,7 @@ describe("session startup model and mode requests", () => {
       throw new Error(`Unexpected request ${request.url}`);
     });
 
-    for (const provider of ["codex", "claude", "kimi", "gemini", "opencode"] as const) {
+    for (const provider of ["codex", "claude", "opencode"] as const) {
       await startSessionCommand(
         startupDeps({ newSessionProvider: provider }),
         {
@@ -330,8 +330,6 @@ describe("session startup model and mode requests", () => {
       [
         ["codex", "native_tui"],
         ["claude", "native_tui"],
-        ["kimi", "native_tui"],
-        ["gemini", "native_tui"],
         ["opencode", "native_tui"],
       ],
     );
@@ -449,14 +447,14 @@ describe("session startup model and mode requests", () => {
     });
   });
 
-  test("claim history defaults native TUI for provider CLIs with stable native launch", async () => {
+  test("claim history defaults native TUI for core live provider CLIs", async () => {
     const requests = installWebApiMocks((request) => {
       if (request.url.includes("/api/fs/list")) {
         return { path: "/tmp/rah", entries: [] };
       }
       if (request.url.endsWith("/api/sessions/resume")) {
         const body = request.body as {
-          provider: "codex" | "claude" | "kimi" | "gemini" | "opencode";
+          provider: "codex" | "claude" | "opencode";
           providerSessionId: string;
           cwd?: string;
         };
@@ -472,7 +470,7 @@ describe("session startup model and mode requests", () => {
       throw new Error(`Unexpected request ${request.url}`);
     });
 
-    for (const provider of ["codex", "claude", "kimi", "gemini", "opencode"] as const) {
+    for (const provider of ["codex", "claude", "opencode"] as const) {
       const history = summary({
         id: `history-${provider}`,
         provider,
@@ -509,8 +507,6 @@ describe("session startup model and mode requests", () => {
       [
         ["codex", "native_tui"],
         ["claude", "native_tui"],
-        ["kimi", "native_tui"],
-        ["gemini", "native_tui"],
         ["opencode", "native_tui"],
       ],
     );
@@ -569,13 +565,13 @@ describe("session startup model and mode requests", () => {
   test("activating stored history attaches an existing live session instead of resuming", async () => {
     const live = summary({
       id: "live-existing",
-      provider: "kimi",
+      provider: "opencode",
       providerSessionId: "provider-existing",
       cwd: "/tmp/rah",
     });
     const projections = new Map([["live-existing", createEmptySessionProjection(live)]]);
     const ref: StoredSessionRef = {
-      provider: "kimi",
+      provider: "opencode",
       providerSessionId: "provider-existing",
       cwd: "/tmp/rah",
       rootDir: "/tmp/rah",

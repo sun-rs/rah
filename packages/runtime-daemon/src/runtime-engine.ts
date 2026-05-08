@@ -434,6 +434,7 @@ export class RuntimeEngine {
   }
 
   async startSession(request: StartSessionRequest): Promise<StartSessionResponse> {
+    this.assertLiveSessionProviderAllowed(request);
     this.assertStructuredLiveBackendAllowed(request);
     if (this.shouldUseNativeTuiBackend(request)) {
       await assertExistingWorkingDirectory(request.cwd, "Session working directory");
@@ -447,6 +448,7 @@ export class RuntimeEngine {
   }
 
   async resumeSession(request: ResumeSessionRequest): Promise<ResumeSessionResponse> {
+    this.assertLiveSessionProviderAllowed(request);
     this.assertStructuredLiveBackendAllowed(request);
     if (request.preferStoredReplay === true) {
       return await this.resumeStoredReplaySession(request);
@@ -502,6 +504,22 @@ export class RuntimeEngine {
         "Structured live backend is disabled outside injected test adapters. Use native_tui for live sessions.",
       );
     }
+  }
+
+  private assertLiveSessionProviderAllowed(
+    request: Pick<StartSessionRequest | ResumeSessionRequest, "provider"> &
+      Partial<Pick<ResumeSessionRequest, "preferStoredReplay">>,
+  ): void {
+    if (
+      request.preferStoredReplay === true ||
+      this.structuredLiveAllowedForInjectedAdapters ||
+      this.nativeTuiProviders.supports(request.provider)
+    ) {
+      return;
+    }
+    throw new Error(
+      `Provider ${request.provider} is not a supported live provider. Use Codex, Claude, or OpenCode.`,
+    );
   }
 
   private shouldUseNativeTuiBackend(
@@ -591,16 +609,16 @@ export class RuntimeEngine {
   }
 
   onPtyInput(sessionId: string, clientId: string, data: string): void {
+    this.assertPtyInputControl(sessionId, clientId);
     if (this.terminals.handlePtyInput(sessionId, data)) {
-      void clientId;
       return;
     }
     this.requireStructuredInputControlAdapter(sessionId).onPtyInput(sessionId, clientId, data);
   }
 
   onPtyResize(sessionId: string, clientId: string, cols: number, rows: number): void {
+    this.assertPtyInputControl(sessionId, clientId);
     if (this.terminals.handlePtyResize(sessionId, cols, rows)) {
-      void clientId;
       return;
     }
     this.requireStructuredInputControlAdapter(sessionId).onPtyResize(
@@ -609,6 +627,15 @@ export class RuntimeEngine {
       cols,
       rows,
     );
+  }
+
+  private assertPtyInputControl(sessionId: string, clientId: string): void {
+    if (!this.sessionStore.getSession(sessionId)) {
+      return;
+    }
+    if (!this.sessionStore.hasInputControl(sessionId, clientId)) {
+      throw new Error(`Client ${clientId} does not hold input control for ${sessionId}.`);
+    }
   }
 
   getWorkspaceSnapshot(sessionId: string, options?: { scopeRoot?: string }) {

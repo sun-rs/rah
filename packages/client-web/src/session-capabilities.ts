@@ -126,7 +126,7 @@ export function isSessionActivelyRunning(summary: SessionSummary): boolean {
 }
 
 export function isRuntimeStatusActivelyRunning(status: string | undefined): boolean {
-  return ["thinking", "streaming", "retrying"].includes(status ?? "");
+  return ["thinking", "streaming", "stopping", "retrying"].includes(status ?? "");
 }
 
 export function isSessionGenerationActive(

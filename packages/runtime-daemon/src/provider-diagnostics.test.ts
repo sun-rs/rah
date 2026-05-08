@@ -7,6 +7,7 @@ import {
   compareVersions,
   codexLaunchSpec,
   extractVersionString,
+  launchSpecForProvider,
   probeProviderDiagnostic,
   resetProviderDiagnosticsCacheForTests,
 } from "./provider-diagnostics";
@@ -128,6 +129,36 @@ describe("provider diagnostics version helpers", () => {
         delete process.env.RAH_TEST_BINARY;
       } else {
         process.env.RAH_TEST_BINARY = previousBinary;
+      }
+    }
+  });
+
+  test("only core live providers expose launch specs for diagnostics", async () => {
+    const previousCodexBinary = process.env.RAH_CODEX_BINARY;
+    const previousClaudeBinary = process.env.RAH_CLAUDE_BINARY;
+    const previousOpenCodeBinary = process.env.RAH_OPENCODE_BINARY;
+    try {
+      process.env.RAH_CODEX_BINARY = process.execPath;
+      process.env.RAH_CLAUDE_BINARY = process.execPath;
+      process.env.RAH_OPENCODE_BINARY = process.execPath;
+      assert.deepEqual(await launchSpecForProvider("codex"), { argv: [process.execPath] });
+      assert.deepEqual(await launchSpecForProvider("claude"), { argv: [process.execPath] });
+      assert.deepEqual(await launchSpecForProvider("opencode"), { argv: [process.execPath] });
+    } finally {
+      if (previousCodexBinary === undefined) {
+        delete process.env.RAH_CODEX_BINARY;
+      } else {
+        process.env.RAH_CODEX_BINARY = previousCodexBinary;
+      }
+      if (previousClaudeBinary === undefined) {
+        delete process.env.RAH_CLAUDE_BINARY;
+      } else {
+        process.env.RAH_CLAUDE_BINARY = previousClaudeBinary;
+      }
+      if (previousOpenCodeBinary === undefined) {
+        delete process.env.RAH_OPENCODE_BINARY;
+      } else {
+        process.env.RAH_OPENCODE_BINARY = previousOpenCodeBinary;
       }
     }
   });

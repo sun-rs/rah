@@ -1,8 +1,6 @@
 export type ProviderKind =
   | "codex"
   | "claude"
-  | "kimi"
-  | "gemini"
   | "opencode"
   | "custom";
 
@@ -210,6 +208,7 @@ export interface ManagedSession {
     terminalId: string;
     viewAvailable: boolean;
     promptState?: NativeTuiPromptState;
+    queuedInputCount?: number;
   };
   pid?: number;
   title?: string;

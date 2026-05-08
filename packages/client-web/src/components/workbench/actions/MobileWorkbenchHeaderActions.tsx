@@ -13,6 +13,7 @@ export function MobileWorkbenchHeaderActions(props: {
   workspaceSortMode: WorkspaceSortMode;
   onWorkspaceSortModeChange: (value: WorkspaceSortMode) => void;
   canvasActive: boolean;
+  canvasEnabled: boolean;
   onHome: () => void;
   onToggleCanvas: () => void;
   onActivateHistory: (ref: StoredSessionRef) => void;
@@ -29,10 +30,11 @@ export function MobileWorkbenchHeaderActions(props: {
           props.canvasActive
             ? "bg-[var(--app-bg)] text-[var(--app-fg)]"
             : "text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)]"
-        }`}
-        onClick={props.onToggleCanvas}
+        } ${props.canvasEnabled ? "" : "cursor-not-allowed opacity-35 hover:bg-transparent hover:text-[var(--app-hint)]"}`}
+        onClick={props.canvasEnabled ? props.onToggleCanvas : undefined}
+        disabled={!props.canvasEnabled}
         aria-label={props.canvasActive ? "Exit canvas" : "Open canvas"}
-        title={props.canvasActive ? "Exit canvas" : "Canvas"}
+        title={props.canvasEnabled ? (props.canvasActive ? "Exit canvas" : "Canvas") : "Canvas needs a wider screen"}
       >
         <Columns3 size={16} />
       </button>

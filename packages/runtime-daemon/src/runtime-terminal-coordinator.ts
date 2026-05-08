@@ -4,6 +4,7 @@ import type {
   IndependentTerminalStartResponse,
   NativeTuiDiagnostic,
   PermissionResponseRequest,
+  ProviderKind,
   StartSessionRequest,
   StartSessionResponse,
   RahEvent,
@@ -36,7 +37,10 @@ import {
   resolveNativeTuiBindingDiagnostic,
 } from "./native-tui-diagnostics";
 import type { NativeTuiMirrorProvider } from "./native-tui-mirror-provider";
-import { buildNativeTuiSessionCapabilities } from "./runtime-terminal-capabilities";
+import {
+  buildNativeTuiSessionCapabilities,
+  buildStoppedNativeTuiSessionCapabilities,
+} from "./runtime-terminal-capabilities";
 import { PtySessionRuntime, type PtySessionRuntimeEntry } from "./pty-session-runtime";
 import {
   nativeTuiBindingProbeIntervalMs,
@@ -73,6 +77,32 @@ type RuntimeTerminalCoordinatorDeps = {
   onRememberSession: (state: StoredSessionState) => void;
   onSessionOwnerRemoved: (sessionId: string) => void;
 };
+
+function initialNativeTuiPromptState(provider: ProviderKind): TerminalWrapperPromptState {
+  // OpenCode paints its input prompt after a full-screen redraw. Keep Web
+  // composer input queued until the provider handler sees the prompt marker.
+  return provider === "opencode" ? "agent_busy" : "prompt_clean";
+}
+
+function isPromptResetControlInput(data: string): boolean {
+  if (!data.includes("\u001b") && !data.includes("\u0003")) {
+    return false;
+  }
+  const withoutAnsiSequences = data
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/\u001b/g, "")
+    .replace(/\u0003/g, "");
+  return withoutAnsiSequences.length === 0;
+}
+
+const NATIVE_TUI_INTERRUPT_CONFIRM_TIMEOUT_MS = 5_000;
+
+export function nativeTuiInterruptDataForProvider(provider: ProviderKind): string {
+  // Native TUIs treat Ctrl-C inconsistently; for Codex/Claude it can end the
+  // process instead of canceling the active turn. Escape is their interactive
+  // cancel key. OpenCode requires a second Escape to confirm active-turn stop.
+  return provider === "opencode" ? "\u001b\u001b" : "\u001b";
+}
 
 export class RuntimeTerminalCoordinator {
   private readonly terminalWrappers: TerminalWrapperSessionRuntime | undefined;
@@ -146,12 +176,7 @@ export class RuntimeTerminalCoordinator {
       return false;
     }
     this.claimWebControl(sessionId, clientId);
-    if (native.promptState === "prompt_dirty") {
-      throw new Error(
-        "Native TUI prompt is not clean. Switch to TUI or clear the current prompt before sending from chat.",
-      );
-    }
-    if (native.promptState === "agent_busy") {
+    if (native.promptState !== "prompt_clean") {
       const queued = enqueueNativeTuiQueuedInput(
         native,
         {
@@ -164,6 +189,7 @@ export class RuntimeTerminalCoordinator {
       if (!queued) {
         throw new Error("Native TUI input queue is full.");
       }
+      this.updateNativeTuiPromptState(sessionId, native.promptState);
       return true;
     }
     this.injectNativeTuiChatInput(native, clientId, text);
@@ -195,25 +221,74 @@ export class RuntimeTerminalCoordinator {
       return false;
     }
     this.claimWebControl(sessionId, clientId);
+    const queuedInputCount = native.queuedInputs.length;
     cancelNativeTuiQueuedInputsForClient(native, clientId);
-    native.process.write("\u0003");
+    native.process.write(nativeTuiInterruptDataForProvider(native.provider));
     native.promptTracker.draftText = "";
     delete native.lastInjectedInputAtMs;
-    this.updateNativeTuiPromptState(sessionId, "prompt_dirty");
     const activeTurnId = this.deps.sessionStore.getSession(sessionId)?.activeTurnId;
-    this.deps.sessionStore.setActiveTurn(sessionId, undefined);
-    this.deps.sessionStore.setRuntimeState(sessionId, "idle");
+    native.stopPending = true;
     if (activeTurnId) {
+      native.stopTurnId = activeTurnId;
+    } else {
+      delete native.stopTurnId;
+    }
+    this.scheduleNativeTuiInterruptConfirmation(native);
+    if (queuedInputCount !== native.queuedInputs.length) {
+      this.updateNativeTuiPromptState(sessionId, native.promptState);
+    }
+    this.deps.eventBus.publish({
+      sessionId,
+      type: "runtime.status",
+      source: SYSTEM_SOURCE,
+      payload: { status: "stopping", detail: "Interrupt requested" },
+      ...(activeTurnId ? { turnId: activeTurnId } : {}),
+    });
+    return true;
+  }
+
+  private scheduleNativeTuiInterruptConfirmation(native: NativeTuiSessionState): void {
+    if (native.stopTimer) {
+      clearTimeout(native.stopTimer);
+    }
+    native.stopTimer = setTimeout(() => {
+      const current = this.nativeTuiSessions.get(native.sessionId);
+      if (!current?.stopPending) {
+        return;
+      }
+      current.promptTracker.draftText = "";
+      delete current.lastInjectedInputAtMs;
+      this.completeNativeTuiInterrupt(current);
+      this.updateNativeTuiPromptState(current.sessionId, "prompt_clean");
+    }, NATIVE_TUI_INTERRUPT_CONFIRM_TIMEOUT_MS);
+    native.stopTimer.unref?.();
+  }
+
+  private completeNativeTuiInterrupt(native: NativeTuiSessionState): void {
+    if (!native.stopPending) {
+      return;
+    }
+    const sessionId = native.sessionId;
+    const activeTurnId = this.deps.sessionStore.getSession(sessionId)?.activeTurnId;
+    const turnId = native.stopTurnId ?? activeTurnId;
+    if (native.stopTimer) {
+      clearTimeout(native.stopTimer);
+      delete native.stopTimer;
+    }
+    delete native.stopPending;
+    delete native.stopTurnId;
+    if (activeTurnId) {
+      this.deps.sessionStore.setActiveTurn(sessionId, undefined);
+    }
+    if (turnId && activeTurnId) {
       this.deps.eventBus.publish({
         sessionId,
         type: "turn.canceled",
         source: SYSTEM_SOURCE,
         payload: { reason: "interrupted" },
-        turnId: activeTurnId,
+        turnId,
       });
     }
-    publishSessionStateChanged(this.deps, sessionId, "idle");
-    return true;
   }
 
   private claimWebControl(sessionId: string, clientId: string): void {
@@ -240,20 +315,17 @@ export class RuntimeTerminalCoordinator {
   }
 
   private observeNativeTuiPtyInput(native: NativeTuiSessionState, data: string): void {
+    if (isPromptResetControlInput(data)) {
+      native.promptTracker.draftText = "";
+      delete native.lastInjectedInputAtMs;
+      this.updateNativeTuiPromptState(native.sessionId, "prompt_clean");
+      return;
+    }
     const nextPromptState = applyLocalTerminalInput({
       tracker: native.promptTracker,
       promptState: native.promptState,
       data,
     });
-    if (
-      data.includes("\u001b") &&
-      !data.includes("\u0003") &&
-      nextPromptState === native.promptState &&
-      native.promptTracker.draftText.length === 0
-    ) {
-      this.updateNativeTuiPromptState(native.sessionId, "prompt_dirty");
-      return;
-    }
     this.updateNativeTuiPromptState(native.sessionId, nextPromptState);
   }
 
@@ -267,23 +339,29 @@ export class RuntimeTerminalCoordinator {
       return;
     }
     native.promptState = promptState;
+    if (promptState === "prompt_clean") {
+      delete native.lastInjectedInputAtMs;
+      this.completeNativeTuiInterrupt(native);
+    }
     this.deps.sessionStore.patchManagedSession(sessionId, {
       nativeTui: {
         terminalId: sessionId,
         viewAvailable: true,
         promptState,
+        queuedInputCount: native.queuedInputs.length,
       },
     });
     this.deps.eventBus.publish({
       sessionId,
       type: "session.native_tui.prompt_state.changed",
       source: SYSTEM_SOURCE,
-      payload: { promptState },
+      payload: { promptState, queuedInputCount: native.queuedInputs.length },
     });
-    if (promptState === "prompt_clean") {
-      delete native.lastInjectedInputAtMs;
-    }
-    const nextRuntimeState = promptState === "agent_busy" ? "running" : "idle";
+    const nextRuntimeState = native.stopPending
+      ? "running"
+      : promptState === "agent_busy"
+        ? "running"
+        : "idle";
     if (existingState.session.runtimeState !== nextRuntimeState) {
       this.deps.sessionStore.setRuntimeState(sessionId, nextRuntimeState);
       publishSessionStateChanged(this.deps, sessionId, nextRuntimeState);
@@ -393,6 +471,7 @@ export class RuntimeTerminalCoordinator {
     const providerSessionId = args.providerSessionId ?? args.launch.providerSessionId;
     const startupTimestampMs = Date.now();
     const launchSource = args.attach?.client.kind === "terminal" ? "terminal" : "web";
+    const initialPromptState = initialNativeTuiPromptState(args.launch.provider);
     this.deps.sessionStore.createManagedSession({
       id: sessionId,
       provider: args.launch.provider,
@@ -406,7 +485,8 @@ export class RuntimeTerminalCoordinator {
       nativeTui: {
         terminalId: sessionId,
         viewAvailable: true,
-        promptState: "prompt_clean",
+        promptState: initialPromptState,
+        queuedInputCount: 0,
       },
       ptyId: sessionId,
       mode: buildExternalLockedModeState(),
@@ -432,6 +512,8 @@ export class RuntimeTerminalCoordinator {
       terminal = this.ptySessions.create({
         id: sessionId,
         cwd: args.launch.cwd,
+        ...(args.attach?.client.cols !== undefined ? { cols: args.attach.client.cols } : {}),
+        ...(args.attach?.client.rows !== undefined ? { rows: args.attach.client.rows } : {}),
         command: args.launch.command,
         args: args.launch.args,
         ...(args.launch.env ? { env: args.launch.env } : {}),
@@ -445,7 +527,18 @@ export class RuntimeTerminalCoordinator {
           this.clearNativeTuiRuntimeState(terminalId);
           this.closingNativeTuiSessionIds.delete(terminalId);
           this.deps.ptyHub.emitExit(terminalId, exitArgs.exitCode, exitArgs.signal);
-          if (this.deps.sessionStore.getSession(terminalId)) {
+          const currentState = this.deps.sessionStore.getSession(terminalId);
+          if (currentState) {
+            this.deps.sessionStore.patchManagedSession(terminalId, {
+              capabilities: buildStoppedNativeTuiSessionCapabilities(currentState.session.provider),
+              nativeTui: {
+                terminalId,
+                viewAvailable: true,
+                promptState: "prompt_clean",
+                queuedInputCount: 0,
+              },
+            });
+            this.deps.sessionStore.setActiveTurn(terminalId, undefined);
             this.deps.sessionStore.setRuntimeState(terminalId, "stopped");
             publishSessionStateChanged(this.deps, terminalId, "stopped");
           }
@@ -468,7 +561,7 @@ export class RuntimeTerminalCoordinator {
       cwd: args.launch.cwd,
       startupTimestampMs,
       ...(args.launch.env ? { launchEnv: args.launch.env } : {}),
-      promptState: "prompt_clean",
+      promptState: initialPromptState,
       promptTracker: { draftText: "" },
       queuedInputs: [],
       ...(providerSessionId ? { providerSessionId } : {}),
@@ -488,8 +581,10 @@ export class RuntimeTerminalCoordinator {
       throw error;
     }
 
-    const readyState = this.deps.sessionStore.setRuntimeState(sessionId, "idle");
-    publishSessionStateChanged(this.deps, sessionId, "idle");
+    const native = this.nativeTuiSessions.get(sessionId);
+    const runtimeState = native?.promptState === "agent_busy" ? "running" : "idle";
+    const readyState = this.deps.sessionStore.setRuntimeState(sessionId, runtimeState);
+    publishSessionStateChanged(this.deps, sessionId, runtimeState);
     return { session: toSessionSummary(readyState) };
   }
 

@@ -79,33 +79,14 @@ Run when release touches:
 - Claude live permission bridge
 - shared replay/live-upgrade logic
 
-### 2.4 Gemini
+### 2.4 OpenCode
+
+OpenCode is the API-key aggregation entry for lower-frequency Gemini/Kimi/Grok/DeepSeek/GLM-style
+models.
 
 ```bash
-npm run test:smoke:gemini-flow
-npm run test:smoke:gemini-browser
+npm run test:smoke:opencode-browser
 ```
-
-Run when release touches:
-
-- Gemini adapter
-- Gemini replay/history logic
-- Gemini browser workbench behavior
-
-### 2.5 Kimi
-
-```bash
-npm run test:smoke:kimi-flow
-npm run test:smoke:kimi-browser
-```
-
-Run when release touches:
-
-- Kimi adapter
-- Kimi approval flow
-- Kimi replay/history logic
-
-### 2.6 OpenCode
 
 Current practical validation:
 
@@ -116,10 +97,17 @@ Current practical validation:
 
 Run when release touches:
 
-- OpenCode ACP/server adapter logic
-- OpenCode replay/history discovery
+- OpenCode PTY launch/resume behavior
+- OpenCode stored history discovery
+- OpenCode model launch argument mapping
 - shared runtime status or Stop-button semantics
 - shared Markdown/projection merge logic
+
+### 2.5 Gemini / Kimi Models
+
+Gemini CLI and Kimi CLI first-class provider code has been removed. New Gemini/Kimi-family work
+should be validated through OpenCode/API-provider configuration rather than provider-specific RAH
+CLI adapters.
 
 ## 3. Recommended Release Order
 
@@ -203,6 +191,7 @@ This checklist does **not** imply:
 
 - all providers are available on all machines
 - provider authentication can be reliably preflighted by RAH
-- PTY host takeover parity is part of the current `1.0` promise
+- Gemini CLI / Kimi CLI are first-class live launch targets
 
-It is specifically for the current structured multi-provider workbench boundary.
+It is specifically for the current PTY-first workbench boundary: Codex, Claude, and OpenCode are
+core live providers; Gemini/Kimi models are handled through OpenCode/API-provider configuration.

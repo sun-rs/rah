@@ -3,12 +3,14 @@ import assert from "node:assert/strict";
 import type { ProviderKind } from "@rah/runtime-protocol";
 import {
   buildNativeTuiSessionCapabilities,
+  buildStoppedNativeTuiSessionCapabilities,
   buildTerminalWrapperSessionCapabilities,
 } from "./runtime-terminal-capabilities";
+import { nativeTuiInterruptDataForProvider } from "./runtime-terminal-coordinator";
 
 describe("runtime terminal capabilities", () => {
-  test("native TUI sessions expose terminal-first capabilities for built-in providers", () => {
-    const providers: ProviderKind[] = ["codex", "claude", "gemini", "kimi", "opencode"];
+  test("native TUI sessions expose terminal-first capabilities for core live providers", () => {
+    const providers: ProviderKind[] = ["codex", "claude", "opencode"];
 
     for (const provider of providers) {
       const capabilities = buildNativeTuiSessionCapabilities(provider);
@@ -34,12 +36,22 @@ describe("runtime terminal capabilities", () => {
     assert.equal(capabilities.structuredControl, false);
   });
 
+  test("stopped native TUI sessions keep history actions but lose live input surfaces", () => {
+    const capabilities = buildStoppedNativeTuiSessionCapabilities("codex");
+    assert.equal(capabilities.nativeTui, true);
+    assert.equal(capabilities.liveAttach, false);
+    assert.equal(capabilities.rawPtyInput, false);
+    assert.equal(capabilities.chatMirror, false);
+    assert.equal(capabilities.steerInput, false);
+    assert.equal(capabilities.queuedInput, false);
+    assert.equal(capabilities.actions?.archive, true);
+    assert.equal(capabilities.actions?.info, true);
+  });
+
   test("terminal wrapper permissions match provider support boundaries", () => {
     assert.equal(buildTerminalWrapperSessionCapabilities("codex").livePermissions, true);
-    assert.equal(buildTerminalWrapperSessionCapabilities("kimi").livePermissions, true);
     assert.equal(buildTerminalWrapperSessionCapabilities("opencode").livePermissions, true);
     assert.equal(buildTerminalWrapperSessionCapabilities("claude").livePermissions, false);
-    assert.equal(buildTerminalWrapperSessionCapabilities("gemini").livePermissions, false);
   });
 
   test("terminal wrapper sessions remain external-control surfaces", () => {
@@ -49,5 +61,11 @@ describe("runtime terminal capabilities", () => {
     assert.equal(capabilities.renameSession, false);
     assert.equal(capabilities.actions?.archive, true);
     assert.equal(capabilities.actions?.delete, false);
+  });
+
+  test("native TUI interrupt keys follow provider-native stop semantics", () => {
+    assert.equal(nativeTuiInterruptDataForProvider("codex"), "\u001b");
+    assert.equal(nativeTuiInterruptDataForProvider("claude"), "\u001b");
+    assert.equal(nativeTuiInterruptDataForProvider("opencode"), "\u001b\u001b");
   });
 });

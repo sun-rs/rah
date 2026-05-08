@@ -64,3 +64,93 @@ test("starts, controls, and closes a daemon-owned PTY session", async () => {
   assert.equal(runtime.write("pty-test", "after close"), false);
   assert.equal(runtime.resize("pty-test", 80, 24), false);
 });
+
+test("preserves UTF-8 output split across PTY chunks", async () => {
+  const tmpDir = mkdtempSync(path.join(os.tmpdir(), "rah-pty-utf8-"));
+  const scriptPath = path.join(tmpDir, "split-utf8.js");
+  writeFileSync(
+    scriptPath,
+    [
+      "const bytes = Buffer.from('你');",
+      "process.stdout.write(bytes.subarray(0, 1));",
+      "setTimeout(() => process.stdout.write(bytes.subarray(1)), 25);",
+      "setTimeout(() => process.stdout.write('\\nrah-utf8-done\\n'), 50);",
+      "process.stdin.resume();",
+    ].join("\n"),
+  );
+
+  const runtime = new PtySessionRuntime();
+  const output: string[] = [];
+  const terminal = await runtime.start({
+    id: "pty-utf8-test",
+    cwd: tmpDir,
+    command: process.execPath,
+    args: [scriptPath],
+    cols: 80,
+    rows: 20,
+    onData: (_id, data) => output.push(data),
+    onExit: () => undefined,
+  });
+
+  assert.equal(terminal.id, "pty-utf8-test");
+  await waitFor(() => output.join("").includes("rah-utf8-done"));
+  assert.match(output.join(""), /你/);
+  assert.doesNotMatch(output.join(""), /\uFFFD/);
+
+  await runtime.close("pty-utf8-test");
+});
+
+test("normalizes daemon-owned PTY terminal environment", async () => {
+  const tmpDir = mkdtempSync(path.join(os.tmpdir(), "rah-pty-env-"));
+  const scriptPath = path.join(tmpDir, "env.js");
+  writeFileSync(
+    scriptPath,
+    [
+      "process.stdout.write('RAH_ENV:' + JSON.stringify({",
+      "  TERM: process.env.TERM,",
+      "  COLORTERM: process.env.COLORTERM,",
+      "  CLICOLOR: process.env.CLICOLOR,",
+      "  FORCE_COLOR: process.env.FORCE_COLOR,",
+      "  NO_COLOR: process.env.NO_COLOR ?? null,",
+      "  TERM_PROGRAM: process.env.TERM_PROGRAM ?? null,",
+      "  ITERM_SESSION_ID: process.env.ITERM_SESSION_ID ?? null,",
+      "}) + '\\n');",
+      "process.stdin.resume();",
+    ].join("\n"),
+  );
+
+  const runtime = new PtySessionRuntime();
+  const output: string[] = [];
+  await runtime.start({
+    id: "pty-env-test",
+    cwd: tmpDir,
+    command: process.execPath,
+    args: [scriptPath],
+    cols: 88,
+    rows: 24,
+    env: {
+      ITERM_SESSION_ID: "fake-iterm-session",
+      NO_COLOR: "1",
+      TERM: "dumb",
+      TERM_PROGRAM: "iTerm.app",
+    },
+    onData: (_id, data) => output.push(data),
+    onExit: () => undefined,
+  });
+
+  await waitFor(() => output.join("").includes("RAH_ENV:"));
+  const match = /RAH_ENV:(\{.*\})/.exec(output.join(""));
+  assert.ok(match);
+  const parsed = JSON.parse(match[1]!);
+  assert.deepEqual(parsed, {
+    TERM: "xterm-256color",
+    COLORTERM: "truecolor",
+    CLICOLOR: "1",
+    FORCE_COLOR: "1",
+    NO_COLOR: null,
+    TERM_PROGRAM: null,
+    ITERM_SESSION_ID: null,
+  });
+
+  await runtime.close("pty-env-test");
+});

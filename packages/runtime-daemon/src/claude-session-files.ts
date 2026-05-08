@@ -140,6 +140,48 @@ export type ClaudeStoredActivityBatchItem = {
   activity: ProviderActivity;
 };
 
+function objectProperty(value: unknown, key: string): unknown {
+  if (typeof value !== "object" || value === null) {
+    return undefined;
+  }
+  return (value as Record<string, unknown>)[key];
+}
+
+function firstString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return undefined;
+}
+
+function formatClaudeApiError(error: unknown): string {
+  if (typeof error === "string" && error.trim()) {
+    return error.trim();
+  }
+  if (typeof error !== "object" || error === null) {
+    return "Unknown Claude error";
+  }
+  const nestedError = objectProperty(error, "error");
+  const nestedNestedError = objectProperty(nestedError, "error");
+  const status = objectProperty(error, "status");
+  const statusText = firstString(objectProperty(error, "statusText"));
+  const message = firstString(
+    objectProperty(error, "message"),
+    objectProperty(nestedError, "message"),
+    objectProperty(nestedNestedError, "message"),
+    statusText,
+  );
+  const statusPrefix =
+    typeof status === "number" || typeof status === "string" ? `API Error: ${status}` : "API Error";
+  const base = message ? `${statusPrefix} ${message}` : statusText ? `${statusPrefix} ${statusText}` : statusPrefix;
+  if (status === 503 || status === "503") {
+    return `${base}. This is a server-side issue, usually temporary.`;
+  }
+  return base;
+}
+
 export function createClaudeStoredActivityState(): ClaudeStoredActivityState {
   return {
     processedRecordKeys: new Set(),
@@ -661,12 +703,7 @@ function translateClaudeRecordsToActivities(
             type: "notification",
             level: "critical",
             title: "Claude API error",
-            body:
-              typeof record.error === "string"
-                ? record.error
-                : typeof record.error === "object" && record.error !== null
-                  ? JSON.stringify(record.error)
-                  : "Unknown Claude error",
+            body: formatClaudeApiError(record.error),
           },
         });
       }

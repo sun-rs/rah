@@ -10,8 +10,8 @@ export function mobileBridgeFocusOptionsForSource(
 ): MobileBridgeFocusOptions {
   if (source === "surface") {
     return {
-      allowBrowserScroll: true,
-      scrollBlock: "center",
+      allowBrowserScroll: false,
+      scrollBlock: "nearest",
     };
   }
   return {

@@ -30,7 +30,7 @@ describe("native TUI mirror guard", () => {
       shouldIgnoreStaleMirrorStateActivity(
         { promptState: "agent_busy", lastInjectedInputAtMs: injectedAt },
         {
-          provider: "gemini",
+          provider: "opencode",
           channel: "structured_persisted",
           authority: "authoritative",
           ts: "2026-05-03T09:59:59.000Z",
@@ -53,7 +53,7 @@ describe("native TUI mirror guard", () => {
       shouldIgnoreStaleMirrorStateActivity(
         { promptState: "agent_busy", lastInjectedInputAtMs: injectedAt },
         {
-          provider: "kimi",
+          provider: "opencode",
           channel: "structured_persisted",
           authority: "authoritative",
           ts: "2026-05-03T10:00:01.000Z",
@@ -82,7 +82,7 @@ describe("native TUI mirror guard", () => {
     );
   });
 
-  test("protects Claude and Gemini assistant final-state prompt clean from stale mirror", () => {
+  test("protects Claude assistant final-state prompt clean from stale mirror", () => {
     assert.equal(
       shouldIgnoreStaleMirrorPromptClean(
         { promptState: "agent_busy", lastInjectedInputAtMs: injectedAt },

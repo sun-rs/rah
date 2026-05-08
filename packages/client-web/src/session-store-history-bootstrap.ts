@@ -57,6 +57,7 @@ export function shouldDeferEventForHistoryBootstrap(
     event.type === "operation.resolved" ||
     event.type === "operation.requested" ||
     event.type === "runtime.status" ||
+    event.type === "turn.canceled" ||
     event.type === "notification.emitted" ||
     event.type === "attention.required" ||
     event.type === "attention.cleared"

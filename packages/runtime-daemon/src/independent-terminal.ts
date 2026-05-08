@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import readline from "node:readline";
+import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 
 type TerminalHostMessage =
@@ -10,7 +11,8 @@ type TerminalHostMessage =
     }
   | {
       type: "output";
-      data: string;
+      data?: string;
+      dataBase64?: string;
     }
   | {
       type: "error";
@@ -36,7 +38,10 @@ function cleanEnv(args: {
       env[key] = value;
     }
   }
-  env.TERM = env.TERM || "xterm-256color";
+  for (const [key, value] of Object.entries(args.extraEnv ?? {})) {
+    env[key] = value;
+  }
+  normalizeTerminalEnvironment(env);
   env.RAH_TERMINAL_SHELL = args.shell;
   if (args.cols !== undefined) {
     env.COLUMNS = String(args.cols);
@@ -51,10 +56,34 @@ function cleanEnv(args: {
     delete env.RAH_TERMINAL_COMMAND;
     delete env.RAH_TERMINAL_ARGS_JSON;
   }
-  for (const [key, value] of Object.entries(args.extraEnv ?? {})) {
-    env[key] = value;
-  }
   return env;
+}
+
+function normalizeTerminalEnvironment(env: Record<string, string>): void {
+  const misleadingParentTerminalKeys = [
+    "ALACRITTY_SOCKET",
+    "GNOME_TERMINAL_SCREEN",
+    "ITERM_PROFILE",
+    "ITERM_PROFILE_NAME",
+    "ITERM_SESSION_ID",
+    "KITTY_WINDOW_ID",
+    "KONSOLE_VERSION",
+    "NO_COLOR",
+    "TERM_PROGRAM",
+    "TERM_PROGRAM_VERSION",
+    "TERM_SESSION_ID",
+    "TMUX",
+    "VTE_VERSION",
+    "WEZTERM_VERSION",
+    "WT_SESSION",
+  ];
+  for (const key of misleadingParentTerminalKeys) {
+    delete env[key];
+  }
+  env.TERM = "xterm-256color";
+  env.COLORTERM = "truecolor";
+  env.CLICOLOR = "1";
+  env.FORCE_COLOR = "1";
 }
 
 function resolveShellBinary(): string {
@@ -100,6 +129,7 @@ export class IndependentTerminalProcess {
   private readonly stdoutReader: readline.Interface;
   private readonly onData: (data: string) => void;
   private readonly onExit: (args: { exitCode?: number; signal?: string }) => void;
+  private readonly outputDecoder = new StringDecoder("utf8");
   private readonly readyPromise: Promise<void>;
   private readySettled = false;
   private exitHandled = false;
@@ -169,7 +199,7 @@ export class IndependentTerminalProcess {
         }
 
         if (message.type === "output") {
-          this.onData(message.data);
+          this.emitTerminalOutput(message);
           return;
         }
 
@@ -276,12 +306,29 @@ export class IndependentTerminalProcess {
     this.child.stdin.write(`${JSON.stringify(payload)}\n`);
   }
 
+  private emitTerminalOutput(message: Extract<TerminalHostMessage, { type: "output" }>): void {
+    if (typeof message.dataBase64 === "string") {
+      const decoded = this.outputDecoder.write(Buffer.from(message.dataBase64, "base64"));
+      if (decoded) {
+        this.onData(decoded);
+      }
+      return;
+    }
+    if (typeof message.data === "string") {
+      this.onData(message.data);
+    }
+  }
+
   private handleExit(message: { exitCode?: number; signal?: string }): void {
     if (this.exitHandled) {
       return;
     }
     this.exitHandled = true;
     this.closed = true;
+    const trailingOutput = this.outputDecoder.end();
+    if (trailingOutput) {
+      this.onData(trailingOutput);
+    }
     this.stdoutReader.close();
     this.onExit({
       ...(message.exitCode !== undefined ? { exitCode: message.exitCode } : {}),

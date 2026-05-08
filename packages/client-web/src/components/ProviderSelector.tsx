@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import type { ProviderDiagnostic } from "@rah/runtime-protocol";
 import { ProviderLogo } from "./ProviderLogo";
 
-export type ProviderChoice = "codex" | "claude" | "kimi" | "gemini" | "opencode";
+export type ProviderChoice = "codex" | "claude" | "opencode";
 
 export interface ProviderOption {
   value: ProviderChoice;
@@ -10,13 +10,13 @@ export interface ProviderOption {
   accentColor: string;
 }
 
-export const PROVIDER_OPTIONS: ProviderOption[] = [
+export const KNOWN_PROVIDER_OPTIONS: ProviderOption[] = [
   { value: "codex", label: "Codex", accentColor: "#6b7280" },
   { value: "claude", label: "Claude", accentColor: "#f59e0b" },
-  { value: "kimi", label: "Kimi", accentColor: "#9ca3af" },
-  { value: "gemini", label: "Gemini", accentColor: "#3b82f6" },
   { value: "opencode", label: "OpenCode", accentColor: "#6b7280" },
 ];
+
+export const PROVIDER_OPTIONS: ProviderOption[] = KNOWN_PROVIDER_OPTIONS;
 
 function StatusDot({ status }: { status: ProviderDiagnostic["status"] }) {
   if (status === "ready") {
@@ -34,7 +34,7 @@ function StatusDot({ status }: { status: ProviderDiagnostic["status"] }) {
  * ProviderSelector - Flat, horizontal pill design.
  *
  * Modes:
- * - "grid": For empty states. 5-column grid, spacious.
+ * - "grid": For empty states. 3-column grid for core live providers.
  * - "rail": Compact inline pill rail with expand animation.
  * - "icons": Dense icon-only row for constrained panes.
  * - "dialog": Dense 3-column grid for modals.
@@ -95,7 +95,7 @@ export function ProviderSelector(props: {
   if (mode === "icons") {
     return (
       <div
-        className="grid grid-cols-5 gap-1.5"
+        className="grid grid-cols-3 gap-1.5"
         role="radiogroup"
         aria-label="Provider selection"
       >
@@ -136,7 +136,7 @@ export function ProviderSelector(props: {
     /* Empty state selector: one compact mobile row, fuller cards on larger screens */
     return (
       <div
-        className="grid grid-cols-5 gap-1.5 sm:gap-3"
+        className="grid grid-cols-3 gap-1.5 sm:gap-3"
         role="radiogroup"
         aria-label="Provider selection"
       >

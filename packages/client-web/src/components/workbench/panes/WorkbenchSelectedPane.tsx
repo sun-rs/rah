@@ -564,13 +564,13 @@ export function WorkbenchSelectedPane(props: {
           >
             {props.selectedIsReadOnlyReplay ? (
               <>
-                <X size={14} className="mr-1" />
-                <span>Close</span>
+                <X size={14} className="sm:mr-1" />
+                <span className="hidden sm:inline">Close</span>
               </>
             ) : (
               <>
-                <Archive size={14} className="mr-1" />
-                <span>Archive</span>
+                <Archive size={14} className="sm:mr-1" />
+                <span className="hidden sm:inline">Archive</span>
               </>
             )}
           </button>
@@ -581,8 +581,8 @@ export function WorkbenchSelectedPane(props: {
               onClick={props.onHideSession}
               title="Hide this session without closing it"
             >
-              <EyeOff size={14} className="mr-1" />
-              <span>Hide</span>
+              <EyeOff size={14} className="sm:mr-1" />
+              <span className="hidden sm:inline">Hide</span>
             </button>
           ) : null}
           {showInspectorToggle ? (

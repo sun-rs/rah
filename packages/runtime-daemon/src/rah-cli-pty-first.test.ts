@@ -20,6 +20,15 @@ function writeJson(res: ServerResponse, statusCode: number, body: unknown): void
   res.end(JSON.stringify(body));
 }
 
+function sessionSummary(session: Record<string, unknown>): Record<string, unknown> {
+  return {
+    session,
+    attachedClients: [],
+    controlLease: {},
+    feed: [],
+  };
+}
+
 async function listen(server: ReturnType<typeof createServer>): Promise<number> {
   await new Promise<void>((resolve) => {
     server.listen(0, "127.0.0.1", resolve);
@@ -38,6 +47,30 @@ async function closeServer(server: ReturnType<typeof createServer>, wss: WebSock
   });
 }
 
+test("rah help documents core live providers", async () => {
+  const child = spawn(process.execPath, ["bin/rah.mjs", "--help"], {
+    cwd: process.cwd(),
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout?.on("data", (chunk) => {
+    stdout += chunk.toString("utf8");
+  });
+  child.stderr?.on("data", (chunk) => {
+    stderr += chunk.toString("utf8");
+  });
+  const exitCode = await new Promise<number | null>((resolve, reject) => {
+    child.on("error", reject);
+    child.on("exit", (code) => resolve(code));
+  });
+
+  assert.equal(exitCode, 0, stderr);
+  assert.match(stdout, /codex \| claude \| opencode/);
+  assert.doesNotMatch(stdout, /unknown-provider/);
+  assert.doesNotMatch(stdout, /approval-mode/);
+  assert.doesNotMatch(stdout, /RAH_ENABLE_ARCHIVED_PROVIDER_LIVE/);
+});
+
 test("rah provider command creates a native TUI session and attaches to PTY", async () => {
   const startRequests: unknown[] = [];
   const detachRequests: unknown[] = [];
@@ -52,7 +85,7 @@ test("rah provider command creates a native TUI session and attaches to PTY", as
     if (req.method === "POST" && req.url === "/api/sessions/start") {
       startRequests.push(await readJsonBody(req));
       writeJson(res, 200, {
-        session: {
+        session: sessionSummary({
           id: "session-1",
           provider: "codex",
           launchSource: "terminal",
@@ -61,17 +94,22 @@ test("rah provider command creates a native TUI session and attaches to PTY", as
           rootDir: "/tmp",
           runtimeState: "idle",
           ptyId: "session-1",
+          nativeTui: {
+            terminalId: "session-1",
+            viewAvailable: true,
+            promptState: "prompt_clean",
+          },
           capabilities: {},
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
-        },
+        }),
       });
       return;
     }
     if (req.method === "POST" && req.url === "/api/sessions/session-1/detach") {
       detachRequests.push(await readJsonBody(req));
       writeJson(res, 200, {
-        session: {
+        session: sessionSummary({
           id: "session-1",
           provider: "codex",
           launchSource: "terminal",
@@ -83,7 +121,7 @@ test("rah provider command creates a native TUI session and attaches to PTY", as
           capabilities: {},
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
-        },
+        }),
       });
       return;
     }
@@ -188,6 +226,126 @@ test("rah provider command creates a native TUI session and attaches to PTY", as
   });
 });
 
+test("rah provider command preserves UTF-8 input split across stdin chunks", async () => {
+  const startRequests: unknown[] = [];
+  const ptyInputs: string[] = [];
+  const wss = new WebSocketServer({ noServer: true });
+  const server = createServer(async (req, res) => {
+    if (req.method === "GET" && req.url === "/readyz") {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end("ok");
+      return;
+    }
+    if (req.method === "POST" && req.url === "/api/sessions/start") {
+      startRequests.push(await readJsonBody(req));
+      writeJson(res, 200, {
+        session: sessionSummary({
+          id: "session-utf8",
+          provider: "codex",
+          launchSource: "terminal",
+          liveBackend: "native_tui",
+          cwd: "/tmp",
+          rootDir: "/tmp",
+          runtimeState: "idle",
+          ptyId: "session-utf8",
+          nativeTui: {
+            terminalId: "session-utf8",
+            viewAvailable: true,
+            promptState: "prompt_clean",
+          },
+          capabilities: {},
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }),
+      });
+      return;
+    }
+    if (req.method === "POST" && req.url === "/api/sessions/session-utf8/detach") {
+      await readJsonBody(req);
+      writeJson(res, 200, {
+        session: sessionSummary({
+          id: "session-utf8",
+          provider: "codex",
+          launchSource: "terminal",
+          liveBackend: "native_tui",
+          cwd: "/tmp",
+          rootDir: "/tmp",
+          runtimeState: "stopped",
+          ptyId: "session-utf8",
+          capabilities: {},
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }),
+      });
+      return;
+    }
+    res.writeHead(404);
+    res.end("not found");
+  });
+  server.on("upgrade", (req, socket, head) => {
+    if (req.url?.startsWith("/api/pty/session-utf8")) {
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        wss.emit("connection", ws, req);
+      });
+      return;
+    }
+    socket.destroy();
+  });
+  wss.on("connection", (ws) => {
+    ws.on("message", (raw) => {
+      const parsed = JSON.parse(raw.toString("utf8"));
+      if (parsed.type === "pty.input") {
+        ptyInputs.push(parsed.data);
+        ws.send(JSON.stringify({
+          type: "pty.exited",
+          sessionId: "session-utf8",
+          exitCode: 0,
+        }));
+      }
+    });
+    ws.send(JSON.stringify({
+      type: "pty.replay",
+      sessionId: "session-utf8",
+      chunks: ["ready\n"],
+      status: "open",
+    }));
+  });
+
+  const port = await listen(server);
+  const tmpDir = mkdtempSync(path.join(os.tmpdir(), "rah-cli-pty-utf8-"));
+  const child = spawn(
+    process.execPath,
+    [
+      "bin/rah.mjs",
+      "codex",
+      "--daemon-url",
+      `http://127.0.0.1:${port}`,
+      "--cwd",
+      tmpDir,
+    ],
+    {
+      cwd: process.cwd(),
+      env: { ...process.env },
+    },
+  );
+  let stderr = "";
+  child.stderr?.on("data", (chunk) => {
+    stderr += chunk.toString("utf8");
+  });
+  const bytes = Buffer.from("你");
+  setTimeout(() => child.stdin?.write(bytes.subarray(0, 1)), 50);
+  setTimeout(() => child.stdin?.write(bytes.subarray(1)), 80);
+  const exitCode = await new Promise<number | null>((resolve, reject) => {
+    child.on("error", reject);
+    child.on("exit", (code) => resolve(code));
+  });
+  await closeServer(server, wss);
+
+  assert.equal(exitCode, 0, stderr);
+  assert.equal(startRequests.length, 1);
+  assert.deepEqual(ptyInputs, ["你"]);
+});
+
 test("rah provider resume command creates a native TUI resume session and attaches to PTY", async () => {
   const resumeRequests: unknown[] = [];
   const detachRequests: unknown[] = [];
@@ -201,7 +359,7 @@ test("rah provider resume command creates a native TUI resume session and attach
     if (req.method === "POST" && req.url === "/api/sessions/resume") {
       resumeRequests.push(await readJsonBody(req));
       writeJson(res, 200, {
-        session: {
+        session: sessionSummary({
           id: "session-resume-1",
           provider: "codex",
           providerSessionId: "provider-session-1",
@@ -211,17 +369,22 @@ test("rah provider resume command creates a native TUI resume session and attach
           rootDir: "/tmp",
           runtimeState: "idle",
           ptyId: "session-resume-1",
+          nativeTui: {
+            terminalId: "session-resume-1",
+            viewAvailable: true,
+            promptState: "prompt_clean",
+          },
           capabilities: {},
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
-        },
+        }),
       });
       return;
     }
     if (req.method === "POST" && req.url === "/api/sessions/session-resume-1/detach") {
       detachRequests.push(await readJsonBody(req));
       writeJson(res, 200, {
-        session: {
+        session: sessionSummary({
           id: "session-resume-1",
           provider: "codex",
           providerSessionId: "provider-session-1",
@@ -234,7 +397,7 @@ test("rah provider resume command creates a native TUI resume session and attach
           capabilities: {},
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
-        },
+        }),
       });
       return;
     }
@@ -327,4 +490,31 @@ test("rah provider resume command creates a native TUI resume session and attach
   assert.equal(resumeRequest.attach.mode, "interactive");
   assert.equal(resumeRequest.attach.claimControl, true);
   assert.deepEqual(detachRequests, [{ clientId: resumeRequest.attach.client.id }]);
+});
+
+test("rah unknown providers fail as unsupported commands", async () => {
+  const child = spawn(
+    process.execPath,
+    [
+      "bin/rah.mjs",
+      "unknown-provider",
+      "--daemon-url",
+      "http://127.0.0.1:9",
+    ],
+    {
+      cwd: process.cwd(),
+      env: { ...process.env },
+    },
+  );
+  let stderr = "";
+  child.stderr?.on("data", (chunk) => {
+    stderr += chunk.toString("utf8");
+  });
+  const exitCode = await new Promise<number | null>((resolve, reject) => {
+    child.on("error", reject);
+    child.on("exit", (code) => resolve(code));
+  });
+
+  assert.equal(exitCode, 1);
+  assert.match(stderr, /Unsupported provider: unknown-provider/);
 });

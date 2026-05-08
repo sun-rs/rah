@@ -1,5 +1,7 @@
 # `rah claude` Handoff 模式设计
 
+> Legacy note: 本文记录旧 Claude handoff 方案。当前 public `rah claude` 已经走 daemon-owned PTY Session Runtime；旧 wrapper handoff 只保留为 internal legacy/test harness。Gemini/Kimi CLI 一等支持已移除，旧的“推广到 Gemini/Kimi”构想已废弃；相关模型通过 OpenCode/API provider 承载。
+
 ## 1. 背景
 
 当前 `rah codex` 的稳定实现依赖：
@@ -248,11 +250,10 @@ remote 模式下不覆盖屏幕，只提示：
 
 ## 9. 后续推广
 
-如果这套 handoff 模型在 `Claude` 上验证成功，可以评估是否推广到：
+如果这套 handoff 模型在 `Claude` 上验证成功，可以评估是否推广到当前仍保留的一等 provider：
 
 - `Codex`
-- `Kimi`
-- `Gemini`
+- `OpenCode`
 
 推广标准不是“代码统一”，而是：
 

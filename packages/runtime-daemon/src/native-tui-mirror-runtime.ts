@@ -41,6 +41,17 @@ type NativeTuiMirrorRuntimeDeps = {
   updatePromptState: (sessionId: string, promptState: TerminalWrapperPromptState) => void;
 };
 
+function isTurnEndingActivity(activity: ProviderActivity): activity is Extract<
+  ProviderActivity,
+  { type: "turn_completed" | "turn_failed" | "turn_canceled" }
+> {
+  return (
+    activity.type === "turn_completed" ||
+    activity.type === "turn_failed" ||
+    activity.type === "turn_canceled"
+  );
+}
+
 export class NativeTuiMirrorRuntime {
   constructor(private readonly deps: NativeTuiMirrorRuntimeDeps) {}
 
@@ -93,10 +104,16 @@ export class NativeTuiMirrorRuntime {
     meta: ProviderActivityMeta,
     activity: ProviderActivity,
   ): RahEvent[] {
+    const activeTurnId = this.deps.sessionStore.getSession(native.sessionId)?.activeTurnId;
     const nextPromptState = nextPromptStateFromActivity(native.promptState, activity);
     if (shouldIgnoreStaleMirrorStateActivity(native, meta, activity, nextPromptState)) {
       return [];
     }
+    const shouldClearDirtyPromptForCurrentTurn =
+      native.promptState === "prompt_dirty" &&
+      isTurnEndingActivity(activity) &&
+      (activity.type === "turn_canceled" ||
+        (activeTurnId !== undefined && activity.turnId === activeTurnId));
     const events = applyProviderActivity(
       {
         eventBus: this.deps.eventBus,
@@ -107,14 +124,17 @@ export class NativeTuiMirrorRuntime {
       meta,
       activity,
     );
-    if (nextPromptState !== native.promptState) {
+    if (shouldClearDirtyPromptForCurrentTurn) {
+      native.promptTracker.draftText = "";
+      this.deps.updatePromptState(native.sessionId, "prompt_clean");
+    } else if (nextPromptState !== native.promptState) {
       this.deps.updatePromptState(native.sessionId, nextPromptState);
     } else if (
       native.promptState !== "prompt_dirty" &&
       native.promptTracker.draftText.length === 0 &&
       activity.type === "timeline_item" &&
       activity.item.kind === "assistant_message" &&
-      (native.provider === "claude" || native.provider === "gemini")
+      native.provider === "claude"
     ) {
       if (shouldIgnoreStaleMirrorPromptClean(native, meta)) {
         return events;

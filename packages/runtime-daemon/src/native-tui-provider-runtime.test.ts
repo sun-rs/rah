@@ -24,8 +24,6 @@ describe("NativeTuiProviderRuntime", () => {
     assert.deepEqual([...runtime.providers], [
       "codex",
       "claude",
-      "gemini",
-      "kimi",
       "opencode",
     ]);
     assert.equal(runtime.supports("codex"), true);
@@ -35,10 +33,8 @@ describe("NativeTuiProviderRuntime", () => {
   test("keeps provider-specific binding capability behind the native runtime boundary", () => {
     const runtime = new DefaultNativeTuiProviderRuntime();
     assert.equal(runtime.canProbeBinding("codex"), true);
-    assert.equal(runtime.canProbeBinding("gemini"), true);
     assert.equal(runtime.canProbeBinding("opencode"), true);
     assert.equal(runtime.canProbeBinding("claude"), false);
-    assert.equal(runtime.canProbeBinding("kimi"), false);
   });
 
   test("does not try to mirror before the provider session is bound", () => {
@@ -66,6 +62,20 @@ describe("NativeTuiProviderRuntime", () => {
     });
   });
 
+  test("detects the OpenCode input prompt before draining queued Web input", () => {
+    const runtime = new DefaultNativeTuiProviderRuntime();
+    const observation = runtime.observeOutput({
+      sessionId: "rah-session",
+      provider: "opencode",
+      cwd: "/tmp/rah-native",
+      startupTimestampMs: Date.now(),
+    }, "\u001b[33mAsk anything...\u001b[39m \"Fix broken tests\"");
+    assert.deepEqual(observation, {
+      promptClean: true,
+      binding: null,
+    });
+  });
+
   test("keeps provider-specific discovery and mirror code out of core native TUI runtime", () => {
     const coreFiles = [
       readSource("./runtime-terminal-coordinator.ts"),
@@ -79,16 +89,11 @@ describe("NativeTuiProviderRuntime", () => {
       "./codex-rollout-activity",
       "./codex-stored-sessions",
       "./codex-terminal-wrapper-bridge",
-      "./gemini-conversation-utils",
-      "./gemini-session-files",
-      "./kimi-session-files",
       "./opencode-activity",
       "./opencode-api",
       "./opencode-stored-sessions",
       "./native-tui-claude-provider-handler",
       "./native-tui-codex-provider-handler",
-      "./native-tui-gemini-provider-handler",
-      "./native-tui-kimi-provider-handler",
       "./native-tui-opencode-provider-handler",
     ];
     for (const source of coreFiles) {
@@ -134,19 +139,10 @@ describe("NativeTuiProviderRuntime", () => {
     const structuredCoordinatorSource = readSource("./legacy-structured/runtime-structured-provider-coordinator.ts");
     const defaultStructuredAdaptersSource = readSource("./legacy-structured/default-structured-provider-adapters.ts");
     const defaultProviderAdaptersSource = readSource("./default-provider-adapters.ts");
-    const codexAdapterSource = readSource("./codex-adapter.ts");
     const codexStructuredAdapterSource = readSource("./legacy-structured/codex-structured-adapter.ts");
     const codexStoredHistoryAdapterSource = readSource("./codex-stored-history-adapter.ts");
-    const claudeAdapterSource = readSource("./claude-adapter.ts");
     const claudeStructuredAdapterSource = readSource("./legacy-structured/claude-structured-adapter.ts");
     const claudeStoredHistoryAdapterSource = readSource("./claude-stored-history-adapter.ts");
-    const geminiAdapterSource = readSource("./gemini-adapter.ts");
-    const geminiStructuredAdapterSource = readSource("./legacy-structured/gemini-structured-adapter.ts");
-    const geminiStoredHistoryAdapterSource = readSource("./gemini-stored-history-adapter.ts");
-    const kimiAdapterSource = readSource("./kimi-adapter.ts");
-    const kimiStructuredAdapterSource = readSource("./legacy-structured/kimi-structured-adapter.ts");
-    const kimiStoredHistoryAdapterSource = readSource("./kimi-stored-history-adapter.ts");
-    const openCodeAdapterSource = readSource("./opencode-adapter.ts");
     const openCodeStructuredAdapterSource = readSource("./legacy-structured/opencode-structured-adapter.ts");
     const openCodeStoredHistoryAdapterSource = readSource("./opencode-stored-history-adapter.ts");
     const providerAdapterInterface = providerAdapterSource.slice(
@@ -158,30 +154,25 @@ describe("NativeTuiProviderRuntime", () => {
     assert.doesNotMatch(defaultProviderAdaptersSource, /createDefaultLegacyStructuredProviderAdapters/);
     assert.match(defaultStructuredAdaptersSource, /CodexAdapter/);
     assert.match(defaultStructuredAdaptersSource, /OpenCodeAdapter/);
-    assert.match(codexAdapterSource, /legacy-structured\/codex-structured-adapter/);
-    assert.match(claudeAdapterSource, /legacy-structured\/claude-structured-adapter/);
-    assert.match(geminiAdapterSource, /legacy-structured\/gemini-structured-adapter/);
-    assert.match(kimiAdapterSource, /legacy-structured\/kimi-structured-adapter/);
-    assert.match(openCodeAdapterSource, /legacy-structured\/opencode-structured-adapter/);
+    for (const removedRootAdapter of [
+      "./codex-adapter.ts",
+      "./claude-adapter.ts",
+      "./opencode-adapter.ts",
+    ]) {
+      assert.equal(
+        existsSync(new URL(removedRootAdapter, import.meta.url)),
+        false,
+        `${removedRootAdapter} should not re-export legacy structured adapters from the runtime root`,
+      );
+    }
     assert.match(codexStructuredAdapterSource, /class CodexAdapter/);
     assert.match(claudeStructuredAdapterSource, /class ClaudeAdapter/);
-    assert.match(geminiStructuredAdapterSource, /class GeminiAdapter/);
-    assert.match(kimiStructuredAdapterSource, /class KimiAdapter/);
     assert.match(openCodeStructuredAdapterSource, /class OpenCodeAdapter/);
-    assert.doesNotMatch(codexAdapterSource, /class CodexAdapter/);
-    assert.doesNotMatch(claudeAdapterSource, /class ClaudeAdapter/);
-    assert.doesNotMatch(geminiAdapterSource, /class GeminiAdapter/);
-    assert.doesNotMatch(kimiAdapterSource, /class KimiAdapter/);
-    assert.doesNotMatch(openCodeAdapterSource, /class OpenCodeAdapter/);
     assert.doesNotMatch(defaultProviderAdaptersSource, /new CodexAdapter/);
     assert.doesNotMatch(defaultProviderAdaptersSource, /new ClaudeAdapter/);
-    assert.doesNotMatch(defaultProviderAdaptersSource, /new GeminiAdapter/);
-    assert.doesNotMatch(defaultProviderAdaptersSource, /new KimiAdapter/);
     assert.doesNotMatch(defaultProviderAdaptersSource, /new OpenCodeAdapter/);
     assert.match(defaultProviderAdaptersSource, /CodexStoredHistoryAdapter/);
     assert.match(defaultProviderAdaptersSource, /ClaudeStoredHistoryAdapter/);
-    assert.match(defaultProviderAdaptersSource, /GeminiStoredHistoryAdapter/);
-    assert.match(defaultProviderAdaptersSource, /KimiStoredHistoryAdapter/);
     assert.match(defaultProviderAdaptersSource, /OpenCodeStoredHistoryAdapter/);
     assert.match(engineSource, /legacy-structured\/runtime-structured-provider-coordinator/);
     assert.match(engineSource, /structuredProviders/);
@@ -222,8 +213,6 @@ describe("NativeTuiProviderRuntime", () => {
       "./claude-adapter",
       "./codex-adapter",
       "./debug-adapter",
-      "./gemini-adapter",
-      "./kimi-adapter",
       "./opencode-adapter",
     ]);
     assert.doesNotMatch(engineSource, /adaptersById/);
@@ -255,33 +244,21 @@ describe("NativeTuiProviderRuntime", () => {
     assert.match(codexStoredHistoryAdapterSource, /ProviderStoredHistoryAdapter/);
     assert.match(codexStoredHistoryAdapterSource, /listStoredSessions/);
     assert.match(codexStoredHistoryAdapterSource, /getSessionHistoryPage/);
-    assert.doesNotMatch(codexAdapterSource, /listStoredSessions/);
-    assert.doesNotMatch(codexAdapterSource, /getSessionHistoryPage/);
-    assert.doesNotMatch(codexAdapterSource, /removeStoredSession/);
+    assert.doesNotMatch(codexStructuredAdapterSource, /listStoredSessions/);
+    assert.doesNotMatch(codexStructuredAdapterSource, /getSessionHistoryPage/);
+    assert.doesNotMatch(codexStructuredAdapterSource, /removeStoredSession/);
     assert.match(claudeStoredHistoryAdapterSource, /ProviderStoredHistoryAdapter/);
     assert.match(claudeStoredHistoryAdapterSource, /listStoredSessions/);
     assert.match(claudeStoredHistoryAdapterSource, /getSessionHistoryPage/);
-    assert.doesNotMatch(claudeAdapterSource, /listStoredSessions/);
-    assert.doesNotMatch(claudeAdapterSource, /getSessionHistoryPage/);
-    assert.doesNotMatch(claudeAdapterSource, /removeStoredSession/);
-    assert.match(geminiStoredHistoryAdapterSource, /ProviderStoredHistoryAdapter/);
-    assert.match(geminiStoredHistoryAdapterSource, /listStoredSessions/);
-    assert.match(geminiStoredHistoryAdapterSource, /getSessionHistoryPage/);
-    assert.doesNotMatch(geminiAdapterSource, /listStoredSessions/);
-    assert.doesNotMatch(geminiAdapterSource, /getSessionHistoryPage/);
-    assert.doesNotMatch(geminiAdapterSource, /removeStoredSession/);
-    assert.match(kimiStoredHistoryAdapterSource, /ProviderStoredHistoryAdapter/);
-    assert.match(kimiStoredHistoryAdapterSource, /listStoredSessions/);
-    assert.match(kimiStoredHistoryAdapterSource, /getSessionHistoryPage/);
-    assert.doesNotMatch(kimiAdapterSource, /listStoredSessions/);
-    assert.doesNotMatch(kimiAdapterSource, /getSessionHistoryPage/);
-    assert.doesNotMatch(kimiAdapterSource, /removeStoredSession/);
+    assert.doesNotMatch(claudeStructuredAdapterSource, /listStoredSessions/);
+    assert.doesNotMatch(claudeStructuredAdapterSource, /getSessionHistoryPage/);
+    assert.doesNotMatch(claudeStructuredAdapterSource, /removeStoredSession/);
     assert.match(openCodeStoredHistoryAdapterSource, /ProviderStoredHistoryAdapter/);
     assert.match(openCodeStoredHistoryAdapterSource, /listStoredSessions/);
     assert.match(openCodeStoredHistoryAdapterSource, /getSessionHistoryPage/);
-    assert.doesNotMatch(openCodeAdapterSource, /listStoredSessions/);
-    assert.doesNotMatch(openCodeAdapterSource, /getSessionHistoryPage/);
-    assert.doesNotMatch(openCodeAdapterSource, /removeStoredSession/);
+    assert.doesNotMatch(openCodeStructuredAdapterSource, /listStoredSessions/);
+    assert.doesNotMatch(openCodeStructuredAdapterSource, /getSessionHistoryPage/);
+    assert.doesNotMatch(openCodeStructuredAdapterSource, /removeStoredSession/);
     assert.match(providerAdapterSource, /ProviderEnhancedModeAdapter/);
     assert.match(providerAdapterSource, /ProviderEnhancedModelAdapter/);
     assert.match(providerAdapterSource, /startSession\?\(/);
@@ -315,7 +292,7 @@ describe("NativeTuiProviderRuntime", () => {
   });
 
   test("keeps legacy structured live clients out of the runtime root", () => {
-    for (const provider of ["codex", "claude", "gemini", "kimi", "opencode"]) {
+    for (const provider of ["codex", "claude", "opencode"]) {
       assert.equal(
         existsSync(new URL(`./${provider}-live-client.ts`, import.meta.url)),
         false,

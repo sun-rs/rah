@@ -255,6 +255,7 @@ describe("translateCodexRolloutLine", () => {
         type: "event_msg",
         payload: {
           type: "turn_aborted",
+          turn_id: "turn-interrupted",
           reason: "interrupted",
         },
       },
@@ -262,15 +263,59 @@ describe("translateCodexRolloutLine", () => {
     );
 
     assert.deepEqual(interrupted.map((item) => item.activity.type), [
+      "turn_canceled",
       "observation_failed",
       "tool_call_failed",
       "timeline_item",
     ]);
+    const canceledTurn = interrupted.find((item) => item.activity.type === "turn_canceled");
+    assert.ok(canceledTurn);
+    if (canceledTurn.activity.type === "turn_canceled") {
+      assert.equal(canceledTurn.activity.turnId, "turn-interrupted");
+      assert.equal(canceledTurn.activity.reason, "interrupted");
+    }
     const failedTool = interrupted.find((item) => item.activity.type === "tool_call_failed");
     assert.ok(failedTool);
     if (failedTool.activity.type === "tool_call_failed") {
       assert.equal(failedTool.activity.toolCallId, "call-interrupted");
       assert.match(failedTool.activity.error, /interrupted/i);
+    }
+  });
+
+  test("emits a visible canceled turn activity when Codex aborts a plain chat turn", () => {
+    const state = createCodexRolloutTranslationState();
+
+    translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-14T18:00:01.000Z",
+        type: "event_msg",
+        payload: {
+          type: "task_started",
+          turn_id: "turn-plain",
+        },
+      },
+      state,
+    );
+
+    const interrupted = translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-14T18:00:03.000Z",
+        type: "event_msg",
+        payload: {
+          type: "turn_aborted",
+          turn_id: "turn-plain",
+          reason: "interrupted",
+        },
+      },
+      state,
+    );
+
+    assert.deepEqual(interrupted.map((item) => item.activity.type), ["turn_canceled"]);
+    const canceledTurn = interrupted[0];
+    assert.ok(canceledTurn);
+    if (canceledTurn.activity.type === "turn_canceled") {
+      assert.equal(canceledTurn.activity.turnId, "turn-plain");
+      assert.equal(canceledTurn.activity.reason, "interrupted");
     }
   });
 
@@ -743,11 +788,46 @@ describe("translateCodexRolloutLine", () => {
 
     assert.deepEqual(taskStarted, []);
     assert.deepEqual(tokenCount, []);
-    assert.deepEqual(turnAborted, []);
+    assert.deepEqual(turnAborted.map((item) => item.activity.type), ["turn_canceled"]);
     assert.deepEqual(execCommandEnd, []);
     assert.deepEqual(patchApplyEnd, []);
     assert.deepEqual(developerMessage, []);
     assert.deepEqual(encryptedReasoning, []);
+  });
+
+  test("shows Codex goal commands as concise timeline notifications", () => {
+    const state = createCodexRolloutTranslationState();
+    const activities = translateCodexRolloutLine(
+      {
+        timestamp: "2026-05-08T01:39:40.111Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "developer",
+          content: [
+            {
+              type: "input_text",
+              text: [
+                "Continue working toward the active thread goal.",
+                "",
+                "<untrusted_objective>",
+                "让我们做一个简单测试,你执行sleep 5秒即可",
+                "</untrusted_objective>",
+              ].join("\n"),
+            },
+          ],
+        },
+      },
+      state,
+    );
+    assert.deepEqual(activities.map((item) => item.activity), [
+      {
+        type: "notification",
+        level: "info",
+        title: "Goal active",
+        body: "Objective: 让我们做一个简单测试,你执行sleep 5秒即可",
+      },
+    ]);
   });
 
   test("ignores bootstrap user prompts that carry internal instructions and environment context", () => {

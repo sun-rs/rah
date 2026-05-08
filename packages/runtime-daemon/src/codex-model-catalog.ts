@@ -287,7 +287,10 @@ export async function fetchCodexModelCatalogWithClient(
     modelsExact: true,
     optionsExact: true,
     defaultModeId: defaultProviderModeId("codex")!,
-    modes: providerModeDescriptors("codex", { planAvailable: true }),
+    // PTY-first Codex launches the native TUI. Access flags are stable CLI
+    // args, but plan mode is an interactive TUI toggle rather than a reliable
+    // launch arg, so the launch composer must not advertise it as pre-settable.
+    modes: providerModeDescriptors("codex", { planAvailable: false }),
     modelProfiles,
   };
 }

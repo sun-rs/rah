@@ -179,6 +179,7 @@ export interface PatchManagedSessionArgs {
   cwd?: string;
   rootDir?: string;
   nativeTui?: ManagedSession["nativeTui"];
+  capabilities?: Partial<SessionCapabilities>;
   mode?: ManagedSession["mode"];
   model?: ManagedSession["model"];
   config?: SessionResolvedConfig;
@@ -485,6 +486,12 @@ export class SessionStore {
     }
     if (patch.nativeTui !== undefined) {
       state.session.nativeTui = patch.nativeTui;
+    }
+    if (patch.capabilities !== undefined) {
+      state.session.capabilities = {
+        ...state.session.capabilities,
+        ...patch.capabilities,
+      };
     }
     if (patch.mode !== undefined) {
       state.session.mode = patch.mode;

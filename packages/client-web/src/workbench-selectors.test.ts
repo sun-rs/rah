@@ -13,7 +13,7 @@ function baseSummary(): SessionSummary {
   return {
     session: {
       id: "session-1",
-      provider: "kimi",
+      provider: "opencode",
       providerSessionId: "provider-1",
       launchSource: "web",
       cwd: "/workspace/rah",
@@ -197,10 +197,50 @@ describe("workbench selectors", () => {
     );
   });
 
+  test("excludes exited native TUI sessions from live collections", () => {
+    const clientId = "web-current";
+    const stopped = controlledSummary({
+      id: "stopped-native",
+      clientId,
+      rootDir: "/workspace/one",
+    });
+    stopped.session.liveBackend = "native_tui";
+    stopped.session.runtimeState = "stopped";
+    stopped.session.capabilities = {
+      ...stopped.session.capabilities,
+      steerInput: false,
+      rawPtyInput: false,
+      liveAttach: false,
+    };
+    const active = controlledSummary({
+      id: "active-native",
+      clientId,
+      rootDir: "/workspace/one",
+    });
+    active.session.liveBackend = "native_tui";
+
+    const collections = deriveWorkbenchSessionCollections({
+      projections: new Map([
+        [stopped.session.id, projection(stopped)],
+        [active.session.id, projection(active)],
+      ]),
+      clientId,
+      workspaceDirs: ["/workspace/one"],
+      storedSessions: [],
+      workspaceDir: "/workspace/one",
+      workspaceSortMode: "created",
+    });
+
+    assert.deepEqual(
+      collections.liveSessionEntries.map((entry) => entry.summary.session.id),
+      ["active-native"],
+    );
+  });
+
   test("prefers active surface over opening and falls back to opening then empty", () => {
     const pendingTransition: PendingSessionTransition = {
       kind: "history",
-      provider: "kimi",
+      provider: "opencode",
       title: "Restoring",
       cwd: "/workspace/rah",
     };

@@ -13,7 +13,11 @@ import type {
   StartSessionRequest,
   StartSessionResponse,
 } from "@rah/runtime-protocol";
-import { launchSpecForProvider, probeProviderDiagnostic } from "../provider-diagnostics";
+import {
+  launchSpecForProvider,
+  probeProviderDiagnostic,
+  type CoreLiveDiagnosticProvider,
+} from "../provider-diagnostics";
 import type {
   ProviderCapabilityView,
   ProviderDebugAdapter,
@@ -74,7 +78,7 @@ export class RuntimeStructuredProviderCoordinator {
   }
 
   async listProviderDiagnostics(options?: { forceRefresh?: boolean }): Promise<ProviderDiagnostic[]> {
-    const providers: ProviderKind[] = ["codex", "claude", "kimi", "gemini", "opencode"];
+    const providers: CoreLiveDiagnosticProvider[] = ["codex", "claude", "opencode"];
     return Promise.all(
       providers.map(async (provider) => {
         const adapter = this.deps.diagnosticAdaptersByProvider.get(provider);

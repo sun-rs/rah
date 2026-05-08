@@ -147,7 +147,28 @@ describe("workbench notice contract", () => {
     assert.deepEqual(state.interactionNotice, {
       tone: "warning",
       message:
-        "Native TUI has an unsent local draft. Switch to TUI and submit or clear it before sending from Chat.",
+        "Native TUI has an unsent local draft. Chat input will queue until the TUI prompt is clear.",
+    });
+  });
+
+  test("derives queued input notice before the generic dirty-prompt notice", () => {
+    const state = deriveWorkbenchNoticeState({
+      selectedSummary: summary({
+        liveBackend: "native_tui",
+        nativeTui: {
+          terminalId: "session-1",
+          viewAvailable: true,
+          promptState: "prompt_dirty",
+          queuedInputCount: 2,
+        },
+      }),
+      selectedProjection: projection(summary()),
+      error: null,
+    });
+
+    assert.deepEqual(state.interactionNotice, {
+      tone: "info",
+      message: "2 Chat messages queued. It will send after the TUI prompt is clear.",
     });
   });
 

@@ -49,6 +49,13 @@ function isControlledByClient(summary: SessionSummary, clientId: string): boolea
   );
 }
 
+function isEndedNativeTuiSession(summary: SessionSummary): boolean {
+  return (
+    summary.session.liveBackend === "native_tui" &&
+    (summary.session.runtimeState === "stopped" || summary.session.runtimeState === "failed")
+  );
+}
+
 export function derivePrimaryPaneState(args: {
   selectedSummary: SessionSummary | null;
   pendingSessionTransition: PendingSessionTransition | null;
@@ -78,7 +85,9 @@ export function deriveWorkbenchSessionCollections(args: {
   workspaceSortMode: WorkspaceSortMode;
 }): WorkbenchSessionCollections {
   const sessionEntries = sortSessionEntries(args.projections);
-  const liveSessionEntries = sessionEntries.filter((entry) => !isReadOnlyReplay(entry.summary));
+  const liveSessionEntries = sessionEntries.filter(
+    (entry) => !isReadOnlyReplay(entry.summary) && !isEndedNativeTuiSession(entry.summary),
+  );
   const controlledLiveSessionEntries = liveSessionEntries.filter((entry) =>
     isControlledByClient(entry.summary, args.clientId),
   );

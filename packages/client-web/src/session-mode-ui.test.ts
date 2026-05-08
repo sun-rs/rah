@@ -9,24 +9,24 @@ import type { ProviderKind, ProviderModelCatalog, SessionSummary } from "@rah/ru
 
 describe("session mode UI defaults", () => {
   test("uses mode roles from provider catalogs for canonical labels", () => {
-    const catalog = modeCatalog("gemini", "yolo");
+    const catalog = modeCatalog("opencode", "opencode/full-auto");
     const state = resolveSessionModeControlState({
-      provider: "gemini",
+      provider: "opencode",
       catalog,
     });
 
     assert.deepEqual(
       state.accessModes.map((mode) => mode.label),
-      ["Ask", "Auto edit", "Full auto"],
+      ["Ask", "Full auto"],
     );
-    assert.equal(state.selectedAccessModeId, "yolo");
+    assert.equal(state.selectedAccessModeId, "opencode/full-auto");
   });
 
   test("uses one canonical label set for new-session and live-session controls", () => {
-    const catalog = modeCatalog("gemini", "yolo");
-    const preset = resolveSessionModeControlState({ provider: "gemini", catalog });
+    const catalog = modeCatalog("opencode", "opencode/full-auto");
+    const preset = resolveSessionModeControlState({ provider: "opencode", catalog });
     const live = resolveSessionModeControlState({
-      provider: "gemini",
+      provider: "opencode",
       summary: {
         session: {
           mode: {
@@ -55,15 +55,11 @@ describe("session mode UI defaults", () => {
       {
         codex: selectedAccessModeId("codex", "never/danger-full-access"),
         claude: selectedAccessModeId("claude", "bypassPermissions"),
-        gemini: selectedAccessModeId("gemini", "yolo"),
-        kimi: selectedAccessModeId("kimi", "yolo"),
         opencode: selectedAccessModeId("opencode", "opencode/full-auto"),
       },
       {
         codex: "never/danger-full-access",
         claude: "bypassPermissions",
-        gemini: "yolo",
-        kimi: "yolo",
         opencode: "opencode/full-auto",
       },
     );
@@ -71,7 +67,7 @@ describe("session mode UI defaults", () => {
 
   test("default drafts are provider-agnostic until the catalog arrives", () => {
     assert.equal(createDefaultModeDraft("codex").accessModeId, null);
-    assert.equal(createDefaultModeDraft("gemini").accessModeId, null);
+    assert.equal(createDefaultModeDraft("opencode").accessModeId, null);
   });
 
   test("keeps full-auto access modes as the final visible option", () => {
@@ -79,15 +75,11 @@ describe("session mode UI defaults", () => {
       {
         codex: lastAccessModeId("codex", "never/danger-full-access"),
         claude: lastAccessModeId("claude", "bypassPermissions"),
-        gemini: lastAccessModeId("gemini", "yolo"),
-        kimi: lastAccessModeId("kimi", "yolo"),
         opencode: lastAccessModeId("opencode", "opencode/full-auto"),
       },
       {
         codex: "never/danger-full-access",
         claude: "bypassPermissions",
-        gemini: "yolo",
-        kimi: "yolo",
         opencode: "opencode/full-auto",
       },
     );
@@ -97,14 +89,10 @@ describe("session mode UI defaults", () => {
     assert.deepEqual(
       {
         claude: firstAccessModeLabel("claude", "bypassPermissions"),
-        gemini: firstAccessModeLabel("gemini", "yolo"),
-        kimi: firstAccessModeLabel("kimi", "yolo"),
         opencode: firstAccessModeLabel("opencode", "opencode/full-auto"),
       },
       {
         claude: "Ask",
-        gemini: "Ask",
-        kimi: "Ask",
         opencode: "Ask",
       },
     );
@@ -187,18 +175,17 @@ describe("session mode UI defaults", () => {
     assert.equal(state.planModeAvailable, true);
   });
 
-  test("normalizes provider yolo labels to the standard Full auto wording", () => {
+  test("normalizes provider full-auto labels to the standard wording", () => {
     const state = resolveSessionModeControlState({
-      provider: "gemini",
+      provider: "opencode",
       summary: {
         session: {
           mode: {
-            currentModeId: "yolo",
+            currentModeId: "opencode/full-auto",
             availableModes: [
-              { id: "default", label: "Ask", hotSwitch: true },
-              { id: "auto_edit", label: "Auto edit", hotSwitch: true },
+              { id: "build", label: "Ask", hotSwitch: true },
               { id: "plan", role: "plan", label: "Plan", hotSwitch: true },
-              { id: "yolo", role: "full_auto", label: "YOLO", hotSwitch: true },
+              { id: "opencode/full-auto", role: "full_auto", label: "YOLO", hotSwitch: true },
             ],
             mutable: true,
             source: "native",
@@ -209,14 +196,14 @@ describe("session mode UI defaults", () => {
 
     assert.deepEqual(
       state.accessModes.map((mode) => mode.label),
-      ["Ask", "Auto edit", "Full auto"],
+      ["Ask", "Full auto"],
     );
-    assert.equal(state.selectedAccessModeId, "yolo");
+    assert.equal(state.selectedAccessModeId, "opencode/full-auto");
   });
 
   test("prefers provider catalog modes over frontend fallback presets", () => {
     const catalog: ProviderModelCatalog = {
-      provider: "gemini",
+      provider: "opencode",
       models: [],
       fetchedAt: new Date().toISOString(),
       source: "native",
@@ -229,7 +216,7 @@ describe("session mode UI defaults", () => {
     };
 
     const state = resolveSessionModeControlState({
-      provider: "gemini",
+      provider: "opencode",
       catalog,
     });
 
@@ -290,7 +277,7 @@ describe("session model UI defaults", () => {
 });
 
 function lastAccessModeId(
-  provider: "codex" | "claude" | "gemini" | "kimi" | "opencode",
+  provider: "codex" | "claude" | "opencode",
   defaultModeId: string,
 ): string | null {
   const state = resolveSessionModeControlState({
@@ -301,7 +288,7 @@ function lastAccessModeId(
 }
 
 function firstAccessModeLabel(
-  provider: "codex" | "claude" | "gemini" | "kimi" | "opencode",
+  provider: "codex" | "claude" | "opencode",
   defaultModeId: string,
 ): string | null {
   const state = resolveSessionModeControlState({
@@ -332,17 +319,6 @@ function modeCatalog(provider: ProviderKind, defaultModeId: string): ProviderMod
       { id: "acceptEdits", role: "auto_edit", label: "Auto edit", hotSwitch: true },
       { id: "plan", role: "plan", label: "Plan", hotSwitch: true },
       { id: "bypassPermissions", role: "full_auto", label: "Full auto", hotSwitch: true },
-    ],
-    gemini: [
-      { id: "default", role: "ask", label: "Ask", hotSwitch: true },
-      { id: "auto_edit", role: "auto_edit", label: "Auto edit", hotSwitch: true },
-      { id: "plan", role: "plan", label: "Plan", hotSwitch: true },
-      { id: "yolo", role: "full_auto", label: "Full auto", hotSwitch: true },
-    ],
-    kimi: [
-      { id: "default", role: "ask", label: "Ask", hotSwitch: true },
-      { id: "plan", role: "plan", label: "Plan", hotSwitch: true },
-      { id: "yolo", role: "full_auto", label: "Full auto", hotSwitch: true },
     ],
     opencode: [
       { id: "build", role: "ask", label: "Ask", hotSwitch: true },

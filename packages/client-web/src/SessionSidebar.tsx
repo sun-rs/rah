@@ -319,7 +319,10 @@ export function SessionSidebar(props: {
   selectedWorkspaceDir: string;
   selectedSessionId: string | null;
   unreadSessionIds: ReadonlySet<string>;
-  runtimeStatusBySessionId: ReadonlyMap<string, "thinking" | "streaming" | "retrying" | undefined>;
+  runtimeStatusBySessionId: ReadonlyMap<
+    string,
+    "thinking" | "streaming" | "stopping" | "retrying" | undefined
+  >;
   onSelectSession: (workspaceDir: string, sessionId: string) => void;
   onSelectWorkspace: (workspaceDir: string) => void;
   enableSessionDrag?: boolean;

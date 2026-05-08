@@ -1300,6 +1300,33 @@ function applyNotificationEvent(
   ];
 }
 
+function applyTurnCanceledEvent(
+  feed: FeedEntry[],
+  event: Extract<RahEvent, { type: "turn.canceled" }>,
+): FeedEntry[] {
+  const key = `${event.turnId}:turn:canceled`;
+  const entry = createNotificationEntry(
+    {
+      key,
+      kind: "notification",
+      level: "info",
+      title: "Conversation interrupted",
+      body: "The previous turn was interrupted.",
+      ts: event.ts,
+    },
+    event.turnId,
+  );
+  const existingIndex = feed.findIndex(
+    (candidate) => candidate.kind === "notification" && candidate.key === key,
+  );
+  if (existingIndex < 0) {
+    return [...feed, entry];
+  }
+  const next = [...feed];
+  next[existingIndex] = entry;
+  return next;
+}
+
 export function applyEventToProjection(
   current: SessionProjection,
   event: RahEvent,
@@ -1362,6 +1389,9 @@ export function applyEventToProjection(
                     nativeTui: {
                       ...current.summary.session.nativeTui,
                       promptState: event.payload.promptState,
+                      ...(event.payload.queuedInputCount !== undefined
+                        ? { queuedInputCount: event.payload.queuedInputCount }
+                        : {}),
                     },
                   }
                 : {}),
@@ -1456,6 +1486,9 @@ export function applyEventToProjection(
     case "turn.step.interrupted":
       nextFeed = applyTurnStepEvent(nextFeed, event);
       break;
+    case "turn.canceled":
+      nextFeed = applyTurnCanceledEvent(nextFeed, event);
+      break;
     case "notification.emitted":
       nextFeed = applyNotificationEvent(nextFeed, event);
       break;
@@ -1545,10 +1578,6 @@ export function providerLabel(provider: ManagedSession["provider"]): string {
       return "Codex";
     case "claude":
       return "Claude";
-    case "kimi":
-      return "Kimi";
-    case "gemini":
-      return "Gemini";
     case "opencode":
       return "OpenCode";
     case "custom":

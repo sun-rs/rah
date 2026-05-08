@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import type { ProviderModelCatalog } from "@rah/runtime-protocol";
 import { EventBus } from "./event-bus";
-import { OpenCodeAdapter } from "./opencode-adapter";
+import { OpenCodeAdapter } from "./legacy-structured/opencode-structured-adapter";
 import { startOpenCodeServer } from "./opencode-api";
 import {
   interruptOpenCodeLiveSession,
@@ -484,7 +484,7 @@ test("setOpenCodeLiveSessionMode maps build to ask permissions", async () => {
   }
 });
 
-test("OpenCodeAdapter setSessionModel applies provider model and reasoning through ACP", async () => {
+test("OpenCodeAdapter setSessionModel applies provider model and variant through ACP", async () => {
   const services = {
     eventBus: new EventBus(),
     ptyHub: new PtyHub(),

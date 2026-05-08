@@ -28,8 +28,6 @@ import type {
 
 const DEBUG_PROVIDERS: ManagedSession["provider"][] = [
   "claude",
-  "kimi",
-  "gemini",
   "opencode",
   "custom",
 ];

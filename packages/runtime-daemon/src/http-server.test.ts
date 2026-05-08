@@ -82,6 +82,42 @@ async function waitForWebSocketOpenOrClose(url: string): Promise<"open" | "close
   });
 }
 
+async function openWebSocket(url: string): Promise<WebSocket> {
+  const socket = new WebSocket(url);
+  return await new Promise<WebSocket>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      socket.close();
+      reject(new Error(`Timed out opening websocket ${url}`));
+    }, 1_000);
+    socket.once("open", () => {
+      clearTimeout(timer);
+      resolve(socket);
+    });
+    socket.once("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+  });
+}
+
+async function waitFor(predicate: () => void, timeoutMs = 3_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let lastError: unknown;
+  while (Date.now() < deadline) {
+    try {
+      predicate();
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+  if (lastError) {
+    throw lastError;
+  }
+  throw new Error("Timed out waiting for condition.");
+}
+
 describe("startRahDaemon", () => {
   let tempHome: string;
   let previousRahHome: string | undefined;
@@ -184,6 +220,49 @@ describe("startRahDaemon", () => {
     });
   });
 
+  test("PTY websocket input is bound to the URL session rather than payload sessionId", async () => {
+    const first = await engine.startIndependentTerminal({ cwd: tempHome, cols: 80, rows: 24 });
+    const second = await engine.startIndependentTerminal({ cwd: tempHome, cols: 80, rows: 24 });
+    let firstTranscript = "";
+    let secondTranscript = "";
+    const unsubscribeFirst = engine.ptyHub.subscribe(first.terminal.id, (frame) => {
+      if (frame.type === "pty.output") {
+        firstTranscript += frame.data;
+      } else if (frame.type === "pty.replay") {
+        firstTranscript += frame.chunks.join("");
+      }
+    });
+    const unsubscribeSecond = engine.ptyHub.subscribe(second.terminal.id, (frame) => {
+      if (frame.type === "pty.output") {
+        secondTranscript += frame.data;
+      } else if (frame.type === "pty.replay") {
+        secondTranscript += frame.chunks.join("");
+      }
+    });
+    const socket = await openWebSocket(`ws://127.0.0.1:${port}/api/pty/${first.terminal.id}`);
+    try {
+      socket.send(
+        JSON.stringify({
+          type: "pty.input",
+          sessionId: second.terminal.id,
+          clientId: "web-user",
+          data: "printf 'RAH_URL_BOUND\\n'\r",
+        }),
+      );
+      await waitFor(() => {
+        assert.match(firstTranscript, /RAH_URL_BOUND/);
+      });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      assert.doesNotMatch(secondTranscript, /RAH_URL_BOUND/);
+    } finally {
+      socket.close();
+      unsubscribeFirst();
+      unsubscribeSecond();
+      await engine.closeIndependentTerminal(first.terminal.id);
+      await engine.closeIndependentTerminal(second.terminal.id);
+    }
+  });
+
   test("rejects legacy structured live backend at the public HTTP boundary", async () => {
     const start = await requestJson({
       port,
@@ -221,6 +300,45 @@ describe("startRahDaemon", () => {
     assert.deepEqual(resume.json, { error: "Bad Request: liveBackend is invalid." });
   });
 
+  test("rejects unsupported live providers at the public HTTP boundary", async () => {
+    const start = await requestJson({
+      port,
+      path: "/api/sessions/start",
+      method: "POST",
+      headers: {
+        Origin: `http://127.0.0.1:${port}`,
+        "x-rah-client": "web",
+      },
+      body: {
+        provider: "custom",
+        cwd: tempHome,
+      },
+    });
+    assert.equal(start.status, 400);
+    assert.deepEqual(start.json, {
+      error: "Provider custom is not a supported live provider. Use Codex, Claude, or OpenCode.",
+    });
+
+    const resume = await requestJson({
+      port,
+      path: "/api/sessions/resume",
+      method: "POST",
+      headers: {
+        Origin: `http://127.0.0.1:${port}`,
+        "x-rah-client": "web",
+      },
+      body: {
+        provider: "custom",
+        providerSessionId: "custom-session",
+        cwd: tempHome,
+      },
+    });
+    assert.equal(resume.status, 400);
+    assert.deepEqual(resume.json, {
+      error: "Provider custom is not a supported live provider. Use Codex, Claude, or OpenCode.",
+    });
+  });
+
   test("rejects oversized JSON request bodies before buffering them", async () => {
     const request = Readable.from([]) as unknown as IncomingMessage;
     Object.defineProperty(request, "headers", {
@@ -239,6 +357,10 @@ describe("startRahDaemon", () => {
     );
     assert.equal(
       requestErrorStatus(new Error("Cannot remove a workspace with active live sessions.")),
+      400,
+    );
+    assert.equal(
+      requestErrorStatus(new Error("Provider custom is not a supported live provider.")),
       400,
     );
   });

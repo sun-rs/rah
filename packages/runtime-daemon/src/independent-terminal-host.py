@@ -1,3 +1,4 @@
+import base64
 import errno
 import fcntl
 import json
@@ -43,6 +44,34 @@ def set_winsize(fd: int, rows: int, cols: int) -> None:
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
 
 
+def normalize_terminal_env(env: Dict[str, str], rows: int, cols: int) -> Dict[str, str]:
+    for key in (
+        "ALACRITTY_SOCKET",
+        "GNOME_TERMINAL_SCREEN",
+        "ITERM_PROFILE",
+        "ITERM_PROFILE_NAME",
+        "ITERM_SESSION_ID",
+        "KITTY_WINDOW_ID",
+        "KONSOLE_VERSION",
+        "NO_COLOR",
+        "TERM_PROGRAM",
+        "TERM_PROGRAM_VERSION",
+        "TERM_SESSION_ID",
+        "TMUX",
+        "VTE_VERSION",
+        "WEZTERM_VERSION",
+        "WT_SESSION",
+    ):
+        env.pop(key, None)
+    env["TERM"] = "xterm-256color"
+    env["COLORTERM"] = "truecolor"
+    env["CLICOLOR"] = "1"
+    env["FORCE_COLOR"] = "1"
+    env["COLUMNS"] = str(cols)
+    env["LINES"] = str(rows)
+    return env
+
+
 def parse_wait_status(status: int) -> Dict[str, Any]:
     if os.WIFEXITED(status):
         return {"exitCode": os.WEXITSTATUS(status)}
@@ -70,10 +99,7 @@ def main() -> int:
             print(f"failed to chdir to {cwd}: {error}", file=sys.stderr)
             os._exit(1)
 
-        env = os.environ.copy()
-        env.setdefault("TERM", "xterm-256color")
-        env["COLUMNS"] = str(cols)
-        env["LINES"] = str(rows)
+        env = normalize_terminal_env(os.environ.copy(), rows, cols)
         command = resolve_command()
         if command:
             args = resolve_command_args()
@@ -112,7 +138,7 @@ def main() -> int:
                         send(
                             {
                                 "type": "output",
-                                "data": data.decode("utf-8", errors="replace"),
+                                "dataBase64": base64.b64encode(data).decode("ascii"),
                             },
                         )
                     else:

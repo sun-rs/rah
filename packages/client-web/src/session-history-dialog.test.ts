@@ -24,14 +24,14 @@ function storedSession(overrides: Partial<StoredSessionRef> & Pick<StoredSession
 test("dedupes identical sessions by provider and providerSessionId", () => {
   const sessions: StoredSessionRef[] = [
     storedSession({
-      provider: "gemini",
+      provider: "opencode",
       providerSessionId: "session-1",
       source: "previous_live",
       title: "stale title",
       updatedAt: "2026-04-20T10:00:00.000Z",
     }),
     storedSession({
-      provider: "gemini",
+      provider: "opencode",
       providerSessionId: "session-1",
       source: "provider_history",
       rootDir: "/Users/sun/Code/solars",
@@ -50,14 +50,14 @@ test("dedupes identical sessions by provider and providerSessionId", () => {
 test("groups deduped sessions and counts each session only once per workspace", () => {
   const groups = groupAllStoredSessionsByDirectory([
     storedSession({
-      provider: "gemini",
+      provider: "opencode",
       providerSessionId: "session-1",
       source: "previous_live",
       title: "duplicate stale",
       updatedAt: "2026-04-20T10:00:00.000Z",
     }),
     storedSession({
-      provider: "gemini",
+      provider: "opencode",
       providerSessionId: "session-1",
       source: "provider_history",
       rootDir: "/Users/sun/Code/solars",

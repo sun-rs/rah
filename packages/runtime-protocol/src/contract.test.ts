@@ -48,8 +48,8 @@ test("session capability contract warns when legacy rename flag drifts from acti
     payload: {
       session: {
         id: "session-1",
-        provider: "gemini",
-        providerSessionId: "gemini-1",
+        provider: "opencode",
+        providerSessionId: "opencode-1",
         launchSource: "web",
         cwd: "/tmp/rah",
         rootDir: "/tmp/rah",
@@ -99,7 +99,7 @@ test("native TUI prompt state events use canonical values", () => {
     sessionId: "session-1",
     type: "session.native_tui.prompt_state.changed",
     source: { provider: "system", channel: "system", authority: "authoritative" },
-    payload: { promptState: "prompt_dirty" },
+    payload: { promptState: "prompt_dirty", queuedInputCount: 1 },
   });
   assert.equal(valid.some((issue) => issue.severity === "error"), false);
 

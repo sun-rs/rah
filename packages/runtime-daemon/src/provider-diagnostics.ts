@@ -2,6 +2,11 @@ import { spawn } from "node:child_process";
 import type { ProviderDiagnostic, ProviderKind } from "@rah/runtime-protocol";
 import { resolveConfiguredBinary } from "./provider-binary-utils";
 
+export type CoreLiveDiagnosticProvider = Extract<
+  ProviderKind,
+  "codex" | "claude" | "opencode"
+>;
+
 type LaunchSpec = {
   argv: string[];
 };
@@ -34,42 +39,20 @@ export async function claudeLaunchSpec(): Promise<LaunchSpec> {
   };
 }
 
-export async function geminiLaunchSpec(): Promise<LaunchSpec> {
-  return {
-    argv: [await resolveConfiguredBinary("RAH_GEMINI_BINARY", "gemini")],
-  };
-}
-
-export async function kimiLaunchSpec(): Promise<LaunchSpec> {
-  if (process.env.RAH_KIMI_BINARY) {
-    return { argv: [await resolveConfiguredBinary("RAH_KIMI_BINARY", "kimi")] };
-  }
-  if (process.env.RAH_KIMI_PROJECT) {
-    return {
-      argv: ["uv", "run", "--project", process.env.RAH_KIMI_PROJECT, "kimi"],
-    };
-  }
-  return {
-    argv: ["kimi"],
-  };
-}
-
 export async function opencodeLaunchSpec(): Promise<LaunchSpec> {
   return {
     argv: [await resolveConfiguredBinary("RAH_OPENCODE_BINARY", "opencode")],
   };
 }
 
-export async function launchSpecForProvider(provider: ProviderKind): Promise<LaunchSpec | null> {
+export async function launchSpecForProvider(
+  provider: ProviderKind,
+): Promise<LaunchSpec | null> {
   switch (provider) {
     case "codex":
       return await codexLaunchSpec();
     case "claude":
       return await claudeLaunchSpec();
-    case "gemini":
-      return await geminiLaunchSpec();
-    case "kimi":
-      return await kimiLaunchSpec();
     case "opencode":
       return await opencodeLaunchSpec();
     default:
@@ -235,20 +218,6 @@ async function fetchJson<T>(url: string): Promise<T> {
   return (await response.json()) as T;
 }
 
-async function fetchText(url: string): Promise<string> {
-  const response = await fetch(url, {
-    headers: {
-      Accept: "text/plain",
-      "User-Agent": "rah-workbench/1.0",
-    },
-    signal: AbortSignal.timeout(5_000),
-  });
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status} from ${url}`);
-  }
-  return (await response.text()).trim();
-}
-
 async function fetchLatestVersion(
   provider: ProviderKind,
 ): Promise<LatestVersionResult> {
@@ -271,24 +240,6 @@ async function fetchLatestVersion(
       return {
         ...(latestVersion ? { latestVersion } : {}),
         latestVersionSource: "github",
-      };
-    }
-    case "gemini": {
-      const payload = await fetchJson<{ version?: string }>(
-        "https://registry.npmjs.org/@google/gemini-cli/latest",
-      );
-      const latestVersion = payload.version ? normalizeVersion(payload.version) : undefined;
-      return {
-        ...(latestVersion ? { latestVersion } : {}),
-        latestVersionSource: "npm",
-      };
-    }
-    case "kimi": {
-      const payload = await fetchText("https://cdn.kimi.com/binaries/kimi-cli/latest");
-      const latestVersion = extractVersionString(payload);
-      return {
-        ...(latestVersion ? { latestVersion } : {}),
-        latestVersionSource: "cdn",
       };
     }
     case "opencode": {

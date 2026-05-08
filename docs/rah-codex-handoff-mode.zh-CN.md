@@ -1,5 +1,7 @@
 # `rah codex` 真实终端 handoff 模式设计
 
+> Legacy note: 本文记录旧 Codex handoff 方案。当前 public `rah codex` 已经走 daemon-owned PTY Session Runtime；旧 wrapper handoff 只保留为 internal legacy/test harness。
+
 ## 1. 目标
 
 `rah codex` 现在开始从“自研 PTY relay 驱动原生 Codex TUI”迁到更接近 `rah claude` 的 handoff 模式：

@@ -8,7 +8,7 @@ import { nativeTuiStartLaunchSpec } from "../packages/runtime-daemon/src/native-
 
 type ProbeProvider = Extract<
   ProviderKind,
-  "codex" | "claude" | "gemini" | "kimi" | "opencode"
+  "codex" | "claude" | "opencode"
 >;
 
 type ProviderProbeResult = {
@@ -36,13 +36,12 @@ type RahProbeMetadata = {
   changedFiles: number | null;
 };
 
-const ALL_PROVIDERS: ProbeProvider[] = [
+const SELECTABLE_PROVIDERS: ProbeProvider[] = [
   "codex",
   "claude",
-  "gemini",
-  "kimi",
   "opencode",
 ];
+const DEFAULT_PROVIDERS: ProbeProvider[] = ["codex", "claude", "opencode"];
 
 const SETTLE_MS = Number(process.env.RAH_NATIVE_REAL_TUI_PROBE_SETTLE_MS ?? 3_000);
 const CLOSE_TIMEOUT_MS = Number(process.env.RAH_NATIVE_REAL_TUI_PROBE_CLOSE_TIMEOUT_MS ?? 4_000);
@@ -59,14 +58,14 @@ function sleep(ms: number): Promise<void> {
 function selectedProviders(): ProbeProvider[] {
   const raw = process.env.RAH_NATIVE_REAL_TUI_PROBE_PROVIDERS?.trim();
   if (!raw) {
-    return ALL_PROVIDERS;
+    return DEFAULT_PROVIDERS;
   }
   const selected = raw
     .split(",")
     .map((part) => part.trim())
     .filter(Boolean);
   const unknown = selected.filter(
-    (provider): provider is string => !ALL_PROVIDERS.includes(provider as ProbeProvider),
+    (provider): provider is string => !SELECTABLE_PROVIDERS.includes(provider as ProbeProvider),
   );
   if (unknown.length > 0) {
     throw new Error(`Unknown provider(s): ${unknown.join(", ")}`);

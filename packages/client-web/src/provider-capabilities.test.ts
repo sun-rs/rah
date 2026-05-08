@@ -83,93 +83,6 @@ function catalog(): ProviderModelCatalog {
   };
 }
 
-function geminiCatalog(): ProviderModelCatalog {
-  return {
-    provider: "gemini",
-    currentModelId: "auto",
-    fetchedAt: "2026-04-27T00:00:00.000Z",
-    source: "static",
-    sourceDetail: "static_builtin",
-    freshness: "provisional",
-    modelsExact: false,
-    optionsExact: false,
-    models: [
-      { id: "auto", label: "Auto (Gemini 3)" },
-      { id: "auto-gemini-2.5", label: "Auto (Gemini 2.5)" },
-      { id: "gemini-3.1-pro-preview", label: "gemini-3.1-pro-preview" },
-      { id: "gemini-2.5-pro", label: "gemini-2.5-pro" },
-    ],
-    modelProfiles: [
-      {
-        modelId: "auto",
-        source: "static_builtin",
-        freshness: "provisional",
-        configOptions: [
-          {
-            id: "thinking_level",
-            label: "Thinking level",
-            kind: "select",
-            scope: "model",
-            source: "static_builtin",
-            mutable: true,
-            applyTiming: "next_turn",
-            options: [{ id: "HIGH", label: "HIGH" }],
-          },
-        ],
-      },
-      {
-        modelId: "auto-gemini-2.5",
-        source: "static_builtin",
-        freshness: "provisional",
-        configOptions: [
-          {
-            id: "thinking_budget",
-            label: "Thinking budget",
-            kind: "number",
-            scope: "model",
-            source: "static_builtin",
-            mutable: true,
-            applyTiming: "next_turn",
-          },
-        ],
-      },
-      {
-        modelId: "gemini-3.1-pro-preview",
-        source: "static_builtin",
-        freshness: "provisional",
-        configOptions: [
-          {
-            id: "thinking_level",
-            label: "Thinking level",
-            kind: "select",
-            scope: "model",
-            source: "static_builtin",
-            mutable: true,
-            applyTiming: "next_turn",
-            options: [{ id: "HIGH", label: "HIGH" }],
-          },
-        ],
-      },
-      {
-        modelId: "gemini-2.5-pro",
-        source: "static_builtin",
-        freshness: "provisional",
-        configOptions: [
-          {
-            id: "thinking_budget",
-            label: "Thinking budget",
-            kind: "number",
-            scope: "model",
-            source: "static_builtin",
-            mutable: true,
-            applyTiming: "next_turn",
-          },
-        ],
-      },
-    ],
-  };
-}
-
 describe("provider capability helpers", () => {
   test("prefers sourceDetail over coarse source", () => {
     assert.equal(resolveCapabilitySourceLabel(catalog()), "native_online");
@@ -209,13 +122,13 @@ describe("provider capability helpers", () => {
       resolveEffectiveModelId({
         summary: {
           session: {
-            id: "session-g",
-            provider: "gemini",
+            id: "session-opencode",
+            provider: "opencode",
             launchSource: "web",
             cwd: "/workspace",
             rootDir: "/workspace",
             runtimeState: "idle",
-            ptyId: "pty-g",
+            ptyId: "pty-opencode",
             capabilities: {
               liveAttach: true,
               structuredTimeline: true,
@@ -237,7 +150,7 @@ describe("provider capability helpers", () => {
               subagents: false,
             },
             model: {
-              currentModelId: "gemini-2.5-pro",
+              currentModelId: "deepseek/deepseek-v4-pro",
               availableModels: [],
               mutable: false,
               source: "fallback" as const,
@@ -246,13 +159,13 @@ describe("provider capability helpers", () => {
             updatedAt: "2026-04-27T00:00:00.000Z",
           },
           attachedClients: [],
-          controlLease: { sessionId: "session-g" },
+          controlLease: { sessionId: "session-opencode" },
         },
-        catalog: geminiCatalog(),
+        catalog: catalog(),
       }),
-      "gemini-2.5-pro",
+      "deepseek/deepseek-v4-pro",
     );
-    assert.equal(resolveEffectiveModelId({ catalog: geminiCatalog() }), "auto");
+    assert.equal(resolveEffectiveModelId({ catalog: catalog() }), "gpt-5.5");
   });
 
   test("prefers model profile config options over top-level catalog options", () => {
@@ -614,65 +527,6 @@ describe("provider capability helpers", () => {
         selectedModelId: "default",
       }),
       "Current model is confirmed by the live session. Advanced options are inferred from the provider catalog.",
-    );
-  });
-
-  test("uses session current model to select Gemini provider-specific option profile", () => {
-    const summary = {
-      session: {
-        id: "session-gemini",
-        provider: "gemini",
-        launchSource: "web",
-        cwd: "/workspace",
-        rootDir: "/workspace",
-        runtimeState: "idle",
-        ptyId: "pty-gemini",
-        capabilities: {
-          liveAttach: true,
-          structuredTimeline: true,
-          livePermissions: false,
-          contextUsage: true,
-          resumeByProvider: true,
-          listProviderSessions: false,
-          renameSession: false,
-          actions: {
-            info: true,
-            archive: true,
-            delete: true,
-            rename: "local" as const,
-          },
-          steerInput: true,
-          queuedInput: false,
-          modelSwitch: false,
-          planMode: false,
-          subagents: false,
-        },
-        model: {
-          currentModelId: "gemini-2.5-pro",
-          availableModels: [],
-          mutable: false,
-          source: "fallback" as const,
-        },
-        createdAt: "2026-04-27T00:00:00.000Z",
-        updatedAt: "2026-04-27T00:00:00.000Z",
-      },
-      attachedClients: [],
-      controlLease: { sessionId: "session-gemini" },
-    };
-
-    assert.deepEqual(
-      resolveVisibleConfigOptionLabels({
-        catalog: geminiCatalog(),
-        summary,
-      }),
-      ["Thinking budget"],
-    );
-    assert.equal(
-      resolveConfigPreviewOrigin({
-        summary,
-        catalog: geminiCatalog(),
-      }),
-      "catalog-profile",
     );
   });
 });

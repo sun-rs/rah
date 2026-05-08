@@ -31,7 +31,8 @@ import {
 } from "./session-store-workspace";
 import { providerLabel, type SessionProjection } from "./types";
 
-type ProviderChoice = "codex" | "claude" | "kimi" | "gemini" | "opencode";
+type ProviderChoice = "codex" | "claude" | "opencode";
+const CORE_LIVE_PROVIDERS = new Set<ProviderChoice>(["codex", "claude", "opencode"]);
 
 type StartSessionOptions = {
   provider?: ProviderChoice;
@@ -127,13 +128,18 @@ type SessionStartupDeps = {
 function defaultLiveBackendForProvider(
   provider: string,
 ): NonNullable<StartSessionRequest["liveBackend"]> | undefined {
-  return provider === "codex" ||
-    provider === "claude" ||
-    provider === "gemini" ||
-    provider === "kimi" ||
-    provider === "opencode"
+  return provider === "codex" || provider === "claude" || provider === "opencode"
     ? "native_tui"
     : undefined;
+}
+
+function isCoreLiveProvider(provider: string): provider is ProviderChoice {
+  return CORE_LIVE_PROVIDERS.has(provider as ProviderChoice);
+}
+
+function historyOnlyLiveMessage(provider: string): string {
+  const label = isCoreLiveProvider(provider) ? providerLabel(provider) : provider;
+  return `${label} is not a supported live provider. Use Codex, Claude, or OpenCode.`;
 }
 
 export async function startSessionCommand(
@@ -148,6 +154,11 @@ export async function startSessionCommand(
       return null;
     }
     const provider = options?.provider ?? state.newSessionProvider;
+    if (!isCoreLiveProvider(provider)) {
+      const error = historyOnlyLiveMessage(provider);
+      deps.set({ pendingSessionTransition: null, error });
+      throw new Error(error);
+    }
     if (!(await ensureLaunchWorkspaceAvailable(deps, cwd))) {
       return null;
     }
@@ -411,6 +422,11 @@ export async function claimHistorySessionCommand(
   if (!ref) {
     const error = "Only persisted provider sessions can be claimed from history.";
     deps.set({ error });
+    throw new Error(error);
+  }
+  if (!isCoreLiveProvider(ref.provider)) {
+    const error = historyOnlyLiveMessage(ref.provider);
+    deps.set({ pendingSessionAction: null, pendingSessionTransition: null, error });
     throw new Error(error);
   }
 

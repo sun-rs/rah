@@ -100,16 +100,27 @@ describe("native TUI session state", () => {
     ]);
   });
 
-  test("clears binding and mirror timers", () => {
+  test("clears binding, mirror, and stop timers", () => {
     const bindingTimer = setInterval(() => undefined, 60_000);
     const mirrorTimer = setInterval(() => undefined, 60_000);
+    const stopTimer = setTimeout(() => undefined, 60_000);
     bindingTimer.unref();
     mirrorTimer.unref();
-    const native = nativeSession({ bindingTimer, mirrorTimer });
+    stopTimer.unref();
+    const native = nativeSession({
+      bindingTimer,
+      mirrorTimer,
+      stopTimer,
+      stopPending: true,
+      stopTurnId: "turn-1",
+    });
 
     clearNativeTuiSessionTimers(native);
 
     assert.equal(native.bindingTimer, undefined);
     assert.equal(native.mirrorTimer, undefined);
+    assert.equal(native.stopTimer, undefined);
+    assert.equal(native.stopPending, undefined);
+    assert.equal(native.stopTurnId, undefined);
   });
 });

@@ -95,14 +95,12 @@ type CanvasNewSessionDraft = {
 
 const MODEL_DRAFT_STORAGE_KEY = "rah.modelDrafts.v2";
 const LEGACY_MODEL_DRAFT_STORAGE_KEYS = ["rah.modelDrafts.v1"];
-const PROVIDER_CHOICES: ProviderChoice[] = ["codex", "claude", "kimi", "gemini", "opencode"];
+const PROVIDER_CHOICES: ProviderChoice[] = ["codex", "claude", "opencode"];
 
 function emptyModelDrafts(): Record<ProviderChoice, ModelDraft> {
   return {
     codex: {},
     claude: {},
-    kimi: {},
-    gemini: {},
     opencode: {},
   };
 }
@@ -111,8 +109,6 @@ function createDefaultModeDrafts(): Record<ProviderChoice, SessionModeDraft> {
   return {
     codex: createDefaultModeDraft("codex"),
     claude: createDefaultModeDraft("claude"),
-    kimi: createDefaultModeDraft("kimi"),
-    gemini: createDefaultModeDraft("gemini"),
     opencode: createDefaultModeDraft("opencode"),
   };
 }
@@ -338,6 +334,7 @@ export function App() {
     startSidebarResize,
     terminalOpen,
     visualViewportBottomInsetPx,
+    viewportWidthPx,
     setFileReferenceOpen,
     setLeftOpen,
     setRightOpen,
@@ -397,6 +394,7 @@ export function App() {
           sessionId,
           projection.currentRuntimeStatus === "thinking" ||
           projection.currentRuntimeStatus === "streaming" ||
+          projection.currentRuntimeStatus === "stopping" ||
           projection.currentRuntimeStatus === "retrying"
             ? projection.currentRuntimeStatus
             : undefined,
@@ -813,6 +811,7 @@ export function App() {
     "--workbench-floating-anchor": `calc(env(safe-area-inset-bottom, 0px) + ${floatingAnchorOffsetPx + visualViewportBottomInsetPx}px)`,
     "--workbench-callout-anchor": `calc(var(--workbench-floating-anchor) + 3.5rem)`,
   } as CSSProperties;
+  const mobileCanvasEnabled = viewportWidthPx >= 700;
 
   return (
     <div
@@ -850,6 +849,9 @@ export function App() {
           }
         }}
         onMobileToggleCanvas={() => {
+          if (!mobileCanvasEnabled) {
+            return;
+          }
           if (workbenchMode === "canvas") {
             exitCanvasMode();
           } else {
@@ -857,6 +859,7 @@ export function App() {
           }
           setLeftOpen(false);
         }}
+        mobileCanvasEnabled={mobileCanvasEnabled}
         onMobileHome={() => {
           setWorkbenchMode("single");
           setSelectedWorkspaceOnlyDir(null);

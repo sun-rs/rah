@@ -25,7 +25,7 @@ export interface SidebarWorkspaceViewModel {
 
 function deriveSidebarSessionStatus(args: {
   summary: SessionSummary;
-  runtimeStatus: "thinking" | "streaming" | "retrying" | undefined;
+  runtimeStatus: "thinking" | "streaming" | "stopping" | "retrying" | undefined;
   unread: boolean;
 }): SidebarSessionStatus {
   if (args.summary.session.runtimeState === "waiting_permission") {
@@ -58,7 +58,10 @@ export function deriveSidebarWorkspaceViewModels(args: {
   selectedWorkspaceDir: string;
   selectedSessionId: string | null;
   unreadSessionIds: ReadonlySet<string>;
-  runtimeStatusBySessionId: ReadonlyMap<string, "thinking" | "streaming" | "retrying" | undefined>;
+  runtimeStatusBySessionId: ReadonlyMap<
+    string,
+    "thinking" | "streaming" | "stopping" | "retrying" | undefined
+  >;
   pinnedSessionIdByWorkspace: Readonly<Record<string, string>>;
 }): SidebarWorkspaceViewModel[] {
   return args.workspaceSections.map((section) => {

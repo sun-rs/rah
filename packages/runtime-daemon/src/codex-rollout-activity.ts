@@ -127,6 +127,15 @@ function extractAgentMessageText(message: unknown): string | null {
   return trimmed || null;
 }
 
+function extractCodexGoalObjective(text: string): string | null {
+  if (!text.includes("Continue working toward the active thread goal.")) {
+    return null;
+  }
+  const match = /<untrusted_objective>\s*([\s\S]*?)\s*<\/untrusted_objective>/i.exec(text);
+  const objective = match?.[1]?.trim();
+  return objective || null;
+}
+
 function isCodexBootstrapUserMessage(text: string): boolean {
   return (
     text.includes("<environment_context>") ||
@@ -626,6 +635,7 @@ export function translateCodexRolloutLine(
   }
 
   const record = line as Record<string, unknown>;
+  const turnIdBeforeSync = state.currentTurnId;
   syncRolloutStateFromRecord(state, record);
   if (record.type === "event_msg") {
     const payload = payloadRecord(record);
@@ -675,11 +685,29 @@ export function translateCodexRolloutLine(
       ];
     }
     if (payload.type === "turn_aborted") {
-      return interruptedPendingToolActivities(
-        state,
-        record,
-        { includeTimelineStatus: true },
-      );
+      const turnId =
+        typeof payload.turn_id === "string" ? payload.turn_id : turnIdBeforeSync;
+      const reason = typeof payload.reason === "string" ? payload.reason : "interrupted";
+      return [
+        ...(turnId !== undefined
+          ? [
+              persistedActivity(
+                record,
+                {
+                  type: "turn_canceled" as const,
+                  turnId,
+                  reason,
+                },
+                "authoritative" as const,
+              ),
+            ]
+          : []),
+        ...interruptedPendingToolActivities(
+          state,
+          record,
+          { includeTimelineStatus: true },
+        ),
+      ];
     }
     if (typeof payload.type === "string" && IGNORED_PERSISTED_EVENT_MSG_TYPES.has(payload.type)) {
       return [];
@@ -743,6 +771,22 @@ export function translateCodexRolloutLine(
 
   if (payload.type === "message" && typeof payload.role === "string") {
     if (payload.role === "developer") {
+      const rawText = textFromContentItems(payload.content, "input_text");
+      const goalObjective = rawText ? extractCodexGoalObjective(rawText) : null;
+      if (goalObjective) {
+        return [
+          persistedActivity(
+            record,
+            {
+              type: "notification",
+              level: "info",
+              title: "Goal active",
+              body: `Objective: ${goalObjective}`,
+            },
+            "authoritative",
+          ),
+        ];
+      }
       return [];
     }
     if (payload.role === "user") {

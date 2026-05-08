@@ -10,6 +10,7 @@ run() {
 }
 
 run npm run typecheck
+run npm run test:provider-contracts
 run npm run test:web
 run npm run test:runtime
 run npm run build:web
@@ -18,4 +19,6 @@ run npm run test:smoke:native-codex
 run npm run test:smoke:native-providers
 run npm run test:smoke:native-codex-browser
 run npm run test:smoke:native-provider-browser
+run npm run test:smoke:native-browser-webkit
+run npm run test:manual-qa-status
 run git diff --check

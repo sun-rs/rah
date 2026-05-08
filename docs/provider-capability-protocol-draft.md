@@ -4,6 +4,10 @@ Status: implemented incrementally
 
 Date: 2026-04-29
 
+Scope update: as of the PTY-first refactor, core live capability work is scoped to Codex, Claude,
+and OpenCode. Gemini CLI and Kimi CLI first-class provider support has been removed; Gemini/Kimi
+family models should be reached through OpenCode/API provider configuration when needed.
+
 This document defines the first incremental protocol shape for provider capability handling in
 RAH. It is intentionally migration-oriented:
 
@@ -95,12 +99,6 @@ Examples:
   - `task_budget`
 - Codex
   - `model_reasoning_effort`
-- Gemini
-  - `thinking_budget`
-  - `thinking_level`
-  - `include_thoughts`
-- Kimi
-  - `thinking`
 - OpenCode
   - `variant`
 
@@ -276,7 +274,6 @@ The UI should:
 
 The UI should not hardcode provider logic such as:
 
-- "Gemini 2.5 always shows budget"
 - "Claude always shows effort"
 - "Codex full auto means this exact approval/sandbox tuple"
 - "OpenCode full auto means this exact permission ruleset"

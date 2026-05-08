@@ -13,7 +13,7 @@ import {
 
 const DEFAULT_GROUP_ITEM_LIMIT = 10;
 const GROUP_ITEM_INCREMENT = 20;
-const HISTORY_PROVIDER_OPTIONS = ["codex", "claude", "kimi", "gemini", "opencode"] as const;
+const HISTORY_PROVIDER_OPTIONS = ["codex", "claude", "opencode"] as const;
 
 type HistoryTab = "live" | "recent" | "all";
 type HistoryProviderFilter = (typeof HISTORY_PROVIDER_OPTIONS)[number];

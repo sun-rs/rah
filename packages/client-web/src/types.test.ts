@@ -237,7 +237,7 @@ describe("client projection", () => {
           identity: {
             canonicalItemId: "canonical-item-1",
             canonicalTurnId: "canonical-turn-1",
-            provider: "kimi",
+            provider: "opencode",
             providerSessionId: "provider-session-1",
             turnKey: "turn-1",
             itemKind: "reasoning",
@@ -259,7 +259,7 @@ describe("client projection", () => {
           identity: {
             canonicalItemId: "canonical-item-1",
             canonicalTurnId: "canonical-turn-1",
-            provider: "kimi",
+            provider: "opencode",
             providerSessionId: "provider-session-1",
             turnKey: "turn-1",
             itemKind: "reasoning",
@@ -329,11 +329,12 @@ describe("client projection", () => {
       event({
         seq: 1,
         type: "session.native_tui.prompt_state.changed",
-        payload: { promptState: "prompt_dirty" },
+        payload: { promptState: "prompt_dirty", queuedInputCount: 1 },
       }),
     );
 
     assert.equal(current.summary.session.nativeTui?.promptState, "prompt_dirty");
+    assert.equal(current.summary.session.nativeTui?.queuedInputCount, 1);
     assert.equal(current.summary.session.nativeTui?.terminalId, "session-1");
   });
 
@@ -379,7 +380,7 @@ describe("client projection", () => {
         payload: {
           item: {
             kind: "assistant_message",
-            text: "核心内容包括：- 项目定位：Gemini CLI",
+            text: "核心内容包括：- 项目定位：Provider CLI",
             messageId: "assistant-1",
           },
         },
@@ -394,7 +395,7 @@ describe("client projection", () => {
         payload: {
           item: {
             kind: "assistant_message",
-            text: "核心内容包括：\n\n- **项目定位**：Gemini CLI",
+            text: "核心内容包括：\n\n- **项目定位**：Provider CLI",
             messageId: "assistant-1",
           },
         },
@@ -405,7 +406,7 @@ describe("client projection", () => {
     const only = current.feed[0];
     assert.equal(only?.kind, "timeline");
     if (only?.kind === "timeline" && only.item.kind === "assistant_message") {
-      assert.equal(only.item.text, "核心内容包括：\n\n- **项目定位**：Gemini CLI");
+      assert.equal(only.item.text, "核心内容包括：\n\n- **项目定位**：Provider CLI");
     }
   });
 
@@ -434,6 +435,28 @@ describe("client projection", () => {
       false,
     );
     assert.equal(restored.lastSeq, 1);
+  });
+
+  test("shows a lightweight system notice when a turn is canceled", () => {
+    const current = applyEventToProjection(
+      projection(),
+      event({
+        seq: 1,
+        turnId: "turn-1",
+        type: "turn.canceled",
+        payload: { reason: "interrupted" },
+      }),
+    );
+
+    assert.equal(current.summary.session.runtimeState, "idle");
+    assert.equal(current.feed.length, 1);
+    const notice = current.feed[0];
+    assert.equal(notice?.kind, "notification");
+    if (notice?.kind === "notification") {
+      assert.equal(notice.title, "Conversation interrupted");
+      assert.equal(notice.body, "The previous turn was interrupted.");
+      assert.equal(notice.turnId, "turn-1");
+    }
   });
 
   test("does not merge identity-less assistant messages without a live turn", () => {

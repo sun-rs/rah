@@ -8,8 +8,6 @@ import type {
 import {
   claudeLaunchSpec,
   codexLaunchSpec,
-  geminiLaunchSpec,
-  kimiLaunchSpec,
   opencodeLaunchSpec,
 } from "./provider-diagnostics";
 import { discoverCodexStoredSessions } from "./codex-stored-sessions";
@@ -17,13 +15,9 @@ import {
   codexHomeForRolloutPath,
   createIsolatedCodexWrapperHome,
 } from "./codex-wrapper-home";
-import { resolveKimiCliModelArgs } from "./kimi-model-catalog";
-import { buildOpenCodeProviderModelId } from "./opencode-model-catalog";
 import { optionValueAsString } from "./session-model-options";
 import {
   isClaudeModeId,
-  isGeminiModeId,
-  isKimiModeId,
   parseCodexModeId,
 } from "./session-mode-utils";
 
@@ -104,6 +98,9 @@ function appendClaudeArgs(
     request.modeId && isClaudeModeId(request.modeId) ? request.modeId : undefined;
   if (permissionMode) {
     args.push("--permission-mode", permissionMode);
+    if (permissionMode === "bypassPermissions") {
+      args.push("--dangerously-skip-permissions");
+    }
   }
   if (request.model) {
     args.push("--model", request.model);
@@ -117,66 +114,13 @@ function appendClaudeArgs(
   args.push(mode === "resume" ? "--resume" : "--session-id", providerSessionId);
 }
 
-function appendGeminiArgs(
-  args: string[],
-  request: Pick<StartSessionRequest, "modeId" | "model">,
-): void {
-  const approvalMode =
-    request.modeId && isGeminiModeId(request.modeId) ? request.modeId : undefined;
-  if (approvalMode) {
-    args.push("--approval-mode", approvalMode);
-  }
-  if (request.model) {
-    args.push("--model", request.model);
-  }
-}
-
-function appendKimiArgs(
-  args: string[],
-  request: Pick<StartSessionRequest, "modeId"> & ModelRequest,
-  providerSessionId: string,
-): void {
-  const reasoningId =
-    optionString(request.optionValues, "model_thinking") ??
-    (request.reasoningId === null ? null : request.reasoningId);
-  const model = resolveKimiCliModelArgs({
-    modelId: request.model,
-    reasoningId,
-  });
-  if (model.model) {
-    args.push("--model", model.model);
-    if (model.thinking === true) {
-      args.push("--thinking");
-    } else if (model.thinking === false) {
-      args.push("--no-thinking");
-    }
-  }
-  if (request.modeId && isKimiModeId(request.modeId)) {
-    if (request.modeId === "yolo") {
-      args.push("--yolo");
-    } else if (request.modeId === "plan") {
-      args.push("--plan");
-    }
-  }
-  args.push("--session", providerSessionId);
-}
-
 function appendOpenCodeArgs(
   args: string[],
   request: { cwd: string } & ModelRequest,
   providerSessionId?: string,
 ): void {
-  const reasoningId =
-    optionString(request.optionValues, "model_reasoning_variant") ??
-    (request.reasoningId === null ? null : request.reasoningId);
   if (request.model) {
-    args.push(
-      "--model",
-      buildOpenCodeProviderModelId({
-        modelId: request.model,
-        reasoningId,
-      }),
-    );
+    args.push("--model", request.model);
   }
   if (providerSessionId) {
     args.push("--session", providerSessionId);
@@ -212,32 +156,6 @@ export async function nativeTuiStartLaunchSpec(
       args,
       cwd: request.cwd,
       title: request.title ?? "Claude native TUI session",
-      preview: previewCommand(command, args),
-      providerSessionId,
-    };
-  }
-  if (request.provider === "gemini") {
-    const { command, args } = splitLaunchArgv(await geminiLaunchSpec(), "gemini");
-    appendGeminiArgs(args, request);
-    return {
-      provider: "gemini",
-      command,
-      args,
-      cwd: request.cwd,
-      title: request.title ?? "Gemini native TUI session",
-      preview: previewCommand(command, args),
-    };
-  }
-  if (request.provider === "kimi") {
-    const providerSessionId = randomUUID();
-    const { command, args } = splitLaunchArgv(await kimiLaunchSpec(), "kimi");
-    appendKimiArgs(args, request, providerSessionId);
-    return {
-      provider: "kimi",
-      command,
-      args,
-      cwd: request.cwd,
-      title: request.title ?? "Kimi native TUI session",
       preview: previewCommand(command, args),
       providerSessionId,
     };
@@ -294,33 +212,6 @@ export async function nativeTuiResumeLaunchSpec(
       args,
       cwd: request.cwd,
       title: "Claude native TUI session",
-      preview: previewCommand(command, args),
-      providerSessionId: request.providerSessionId,
-    };
-  }
-  if (request.provider === "gemini") {
-    const { command, args } = splitLaunchArgv(await geminiLaunchSpec(), "gemini");
-    appendGeminiArgs(args, request);
-    args.push("--resume", request.providerSessionId);
-    return {
-      provider: "gemini",
-      command,
-      args,
-      cwd: request.cwd,
-      title: "Gemini native TUI session",
-      preview: previewCommand(command, args),
-      providerSessionId: request.providerSessionId,
-    };
-  }
-  if (request.provider === "kimi") {
-    const { command, args } = splitLaunchArgv(await kimiLaunchSpec(), "kimi");
-    appendKimiArgs(args, request, request.providerSessionId);
-    return {
-      provider: "kimi",
-      command,
-      args,
-      cwd: request.cwd,
-      title: "Kimi native TUI session",
       preview: previewCommand(command, args),
       providerSessionId: request.providerSessionId,
     };

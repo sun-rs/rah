@@ -234,7 +234,7 @@ describe("composer contract", () => {
     );
   });
 
-  test("blocks native TUI Chat composer submission while the provider prompt is dirty", () => {
+  test("allows native TUI Chat composer submission while the provider prompt is dirty", () => {
     const composerSurface = {
       kind: "compose",
       showStopButton: false,
@@ -256,7 +256,7 @@ describe("composer contract", () => {
         sendPending: false,
         nativeTuiPromptState: "prompt_dirty",
       }),
-      false,
+      true,
     );
     assert.equal(
       canSubmitComposerInput({

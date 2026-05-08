@@ -36,6 +36,17 @@ export interface OpenCodeStoredSessionRecord {
   databasePath: string;
 }
 
+export class OpenCodeSqliteReadError extends Error {
+  constructor(
+    readonly databasePath: string,
+    readonly cause: unknown,
+  ) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    super(`Failed to read OpenCode database ${databasePath}: ${detail}`);
+    this.name = "OpenCodeSqliteReadError";
+  }
+}
+
 const REHYDRATED_CAPABILITIES = {
   livePermissions: false,
   steerInput: false,
@@ -142,6 +153,7 @@ export function resolveOpenCodeStoredSessionWatchRoots(): string[] {
 export function discoverOpenCodeStoredSessions(options: {
   dataDir?: string;
   limit?: number;
+  throwOnReadError?: boolean;
 } = {}): OpenCodeStoredSessionRecord[] {
   const databasePath = resolveOpenCodeDatabasePath(options.dataDir);
   const limit = Math.max(1, options.limit ?? 1000);
@@ -190,6 +202,7 @@ export function discoverOpenCodeStoredSessions(options: {
       order by s.time_updated desc, s.id desc
       limit ${limit}
     `,
+    { throwOnReadError: options.throwOnReadError === true },
   );
   return rows.flatMap((row) => buildStoredSessionRecord(row, databasePath));
 }
@@ -570,7 +583,11 @@ function buildPart(row: OpenCodePartRow): OpenCodePart | null {
   } as OpenCodePart;
 }
 
-function sqliteJson<T>(databasePath: string, sql: string): T[] {
+function sqliteJson<T>(
+  databasePath: string,
+  sql: string,
+  options: { throwOnReadError?: boolean } = {},
+): T[] {
   if (!existsSync(databasePath)) {
     return [];
   }
@@ -578,13 +595,17 @@ function sqliteJson<T>(databasePath: string, sql: string): T[] {
     const output = execFileSync("sqlite3", ["-json", databasePath, sql], {
       encoding: "utf8",
       maxBuffer: 64 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "pipe"],
     }).trim();
     if (!output) {
       return [];
     }
     const parsed = JSON.parse(output) as unknown;
     return Array.isArray(parsed) ? (parsed as T[]) : [];
-  } catch {
+  } catch (error) {
+    if (options.throwOnReadError === true) {
+      throw new OpenCodeSqliteReadError(databasePath, error);
+    }
     return [];
   }
 }

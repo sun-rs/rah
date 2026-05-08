@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import hashlib
 import os
 import pathlib
 import shutil
@@ -81,35 +80,6 @@ CONFIGS = (
         expected_mirror_text="Claude native browser answer",
     ),
     ProviderConfig(
-        provider="gemini",
-        env_name="RAH_GEMINI_BINARY",
-        ready_marker="RAH_NATIVE_GEMINI_BROWSER_READY",
-        input_marker="RAH_NATIVE_GEMINI_BROWSER_INPUT",
-        interrupt_marker="RAH_NATIVE_GEMINI_BROWSER_INTERRUPTED",
-        request={
-            "model": "gemini-native-browser",
-            "modeId": "yolo",
-        },
-        expected_arg_fragments=("--approval-mode|yolo", "--model|gemini-native-browser"),
-        expects_chat_mirror=True,
-        expected_mirror_text="Gemini native browser answer",
-    ),
-    ProviderConfig(
-        provider="kimi",
-        env_name="RAH_KIMI_BINARY",
-        ready_marker="RAH_NATIVE_KIMI_BROWSER_READY",
-        input_marker="RAH_NATIVE_KIMI_BROWSER_INPUT",
-        interrupt_marker="RAH_NATIVE_KIMI_BROWSER_INTERRUPTED",
-        request={
-            "model": "kimi-k2.6,thinking",
-            "optionValues": {"model_thinking": "thinking"},
-            "modeId": "yolo",
-        },
-        expected_arg_fragments=("--session|", "--model|kimi-k2.6", "--thinking", "--yolo"),
-        expects_chat_mirror=True,
-        expected_mirror_text="Kimi native browser answer",
-    ),
-    ProviderConfig(
         provider="opencode",
         env_name="RAH_OPENCODE_BINARY",
         ready_marker="RAH_NATIVE_OPENCODE_BROWSER_READY",
@@ -120,7 +90,7 @@ CONFIGS = (
             "optionValues": {"model_reasoning_variant": "high"},
             "modeId": "opencode/full-auto",
         },
-        expected_arg_fragments=("--model|deepseek/deepseek-v4-pro/high",),
+        expected_arg_fragments=("--model|deepseek/deepseek-v4-pro",),
         expects_chat_mirror=True,
         expected_mirror_text="OpenCode native browser answer",
     ),
@@ -181,56 +151,7 @@ def write_fake_provider(path: pathlib.Path, config: ProviderConfig) -> None:
             "  ].join('\\n') + '\\n');",
             "}, 100);",
         ]
-    gemini_history_setup = []
-    if config.provider == "gemini":
-        gemini_history_setup = [
-            "setTimeout(() => {",
-            "  const chatsDir = process.env.MOCK_GEMINI_CHATS_DIR;",
-            "  const sessionId = process.env.MOCK_GEMINI_SESSION_ID;",
-            "  const projectHash = process.env.MOCK_GEMINI_PROJECT_HASH;",
-            "  if (!chatsDir || !sessionId || !projectHash) return;",
-            "  const fs = require('node:fs');",
-            "  const path = require('node:path');",
-            "  const now = new Date().toISOString();",
-            "  fs.mkdirSync(chatsDir, { recursive: true });",
-            "  fs.writeFileSync(path.join(chatsDir, `session-${sessionId}.json`), JSON.stringify({",
-            "    sessionId,",
-            "    projectHash,",
-            "    startTime: now,",
-            "    lastUpdated: now,",
-            "    messages: [",
-            "      { id: 'user-1', timestamp: now, type: 'user', content: [{ text: 'Gemini native browser question' }] },",
-            "      { id: 'assistant-1', timestamp: now, type: 'gemini', content: [{ text: 'Gemini native browser answer' }] },",
-            "    ],",
-            "  }));",
-            "}, 100);",
-        ]
     opencode_history_setup = []
-    kimi_history_setup = []
-    if config.provider == "kimi":
-        kimi_history_setup = [
-            "setTimeout(() => {",
-            "  const kimiHome = process.env.KIMI_SHARE_DIR;",
-            "  const sessionArgIndex = process.argv.indexOf('--session');",
-            "  const sessionId = sessionArgIndex >= 0 ? process.argv[sessionArgIndex + 1] : undefined;",
-            "  if (!kimiHome || !sessionId) return;",
-            "  const fs = require('node:fs');",
-            "  const path = require('node:path');",
-            "  const { createHash } = require('node:crypto');",
-            "  const workDir = process.cwd();",
-            "  const workDirHash = createHash('md5').update(workDir).digest('hex');",
-            "  const sessionDir = path.join(kimiHome, 'sessions', workDirHash, sessionId);",
-            "  const now = Date.now() / 1000;",
-            "  fs.mkdirSync(sessionDir, { recursive: true });",
-            "  fs.writeFileSync(path.join(kimiHome, 'kimi.json'), JSON.stringify({ work_dirs: [{ path: workDir }] }));",
-            "  const line = (timestamp, type, payload) => JSON.stringify({ timestamp, message: { type, payload } });",
-            "  fs.writeFileSync(path.join(sessionDir, 'wire.jsonl'), [",
-            "    line(now, 'TurnBegin', { user_input: 'Kimi native browser question' }),",
-            "    line(now + 0.1, 'ContentPart', { type: 'text', text: 'Kimi native browser answer' }),",
-            "    line(now + 0.2, 'TurnEnd', {}),",
-            "  ].join('\\n') + '\\n');",
-            "}, 100);",
-        ]
     if config.provider == "opencode":
         opencode_history_setup = [
             "setTimeout(() => {",
@@ -289,8 +210,6 @@ def write_fake_provider(path: pathlib.Path, config: ProviderConfig) -> None:
                 "#!/usr/bin/env node",
                 f"process.stdout.write(`{config.ready_marker} args=${{process.argv.slice(2).join('|')}}\\r\\n`);",
                 *claude_history_setup,
-                *gemini_history_setup,
-                *kimi_history_setup,
                 *opencode_history_setup,
                 "process.stdin.setEncoding('utf8');",
                 "process.stdin.resume();",
@@ -717,28 +636,13 @@ def main() -> int:
     workspace = tmp_root / "workspace"
     rah_home = tmp_root / "rah-home"
     claude_config_dir = tmp_root / "claude-config"
-    gemini_home = tmp_root / "gemini-home"
-    kimi_home = tmp_root / "kimi-home"
     xdg_data_home = tmp_root / "xdg-data"
     workspace.mkdir(parents=True)
     port = free_port()
     base_url = f"http://127.0.0.1:{port}"
-    gemini_provider_session_id = "native-gemini-browser"
-    gemini_project_hash = hashlib.sha256(str(workspace).encode()).hexdigest()
-    gemini_chats_dir = gemini_home / "tmp" / gemini_project_hash / "chats"
-    gemini_chats_dir.mkdir(parents=True)
-    (gemini_home / "projects.json").write_text(
-        json.dumps({"projects": {str(workspace): "native-gemini-browser"}}),
-        encoding="utf-8",
-    )
     env = {
         "RAH_HOME": str(rah_home),
         "CLAUDE_CONFIG_DIR": str(claude_config_dir),
-        "GEMINI_CLI_HOME": str(gemini_home),
-        "MOCK_GEMINI_CHATS_DIR": str(gemini_chats_dir),
-        "MOCK_GEMINI_SESSION_ID": gemini_provider_session_id,
-        "MOCK_GEMINI_PROJECT_HASH": gemini_project_hash,
-        "KIMI_SHARE_DIR": str(kimi_home),
         "XDG_DATA_HOME": str(xdg_data_home),
         "MOCK_OPENCODE_SESSION_ID": "ses_native_opencode_browser",
     }
@@ -767,8 +671,6 @@ def main() -> int:
                     "headless": browser_headless(),
                     "asserted": [
                         "Claude native sessions expose Chat/TUI when JSONL mirror is available",
-                        "Gemini native sessions expose Chat/TUI when conversation JSON mirror is available",
-                        "Kimi native sessions expose Chat/TUI when wire JSONL mirror is available",
                         "OpenCode native sessions expose Chat/TUI plus DB mirror text, reasoning, tool, step, and usage",
                         "xterm receives native TUI output",
                         "Chat composer input reaches daemon-owned provider TUI",

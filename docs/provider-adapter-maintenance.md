@@ -60,102 +60,23 @@ Prefer assertions such as:
 
 over hard-coding one exact reply unless that exact reply is the actual feature contract.
 
-## 3. Gemini Coverage
+## 3. Removed Gemini/Kimi CLI Coverage
 
-Primary implementation files:
+Gemini CLI and Kimi CLI first-class provider code has been removed from runtime, client, scripts,
+diagnostics, and default tests. New Gemini/Kimi-family live work should go through OpenCode/API
+provider configuration.
 
-- `packages/runtime-daemon/src/gemini-session-files.ts`
-- `packages/runtime-daemon/src/gemini-live-client.ts`
-- `packages/runtime-daemon/src/gemini-adapter.ts`
+The rationale and OpenCode variant boundary are recorded in
+[`provider-scope-codex-claude-opencode.zh-CN.md`](./provider-scope-codex-claude-opencode.zh-CN.md).
 
-### Stored history
-
-Gemini stored history currently covers:
-
-- user messages
-- assistant text
-- thought/reasoning style content
-- tool request / tool result
-- stable replay via `preferStoredReplay`
-
-### Live
-
-Gemini live currently covers:
-
-- start
-- send input
-- close
-- replay -> live upgrade
-- read/write file tool flow
-- usage updates
-- notification fallback for non-core runtime signals
-- local rename override when Gemini has no native rename surface
-- mode catalog roles for `default` / `auto_edit` / `yolo` / `plan`
-
-Important display rule:
-
-- Gemini stored user messages should prefer `displayContent` over expanded `content`. Gemini may
-  persist `@file` expansions inside `content`; RAH must not show that expanded file body as the
-  original user prompt.
-
-### Verification
-
-- `gemini-adapter.test.ts`
-- `test:smoke:gemini-flow`
-- `test:smoke:gemini-browser`
-
-## 4. Kimi Coverage
-
-Primary implementation files:
-
-- `packages/runtime-daemon/src/kimi-session-files.ts`
-- `packages/runtime-daemon/src/kimi-live-client.ts`
-- `packages/runtime-daemon/src/kimi-adapter.ts`
-
-### Stored history
-
-Kimi stored history currently covers wire events including:
-
-- `TurnBegin`
-- `SteerInput`
-- `TextPart`
-- `ThinkPart`
-- `ToolCall`
-- `ToolResult`
-- `ApprovalRequest`
-- `ApprovalResponse`
-- `QuestionRequest`
-- `PlanDisplay`
-- `Notification`
-- `StatusUpdate`
-
-### Live
-
-Kimi live currently covers:
-
-- start
-- send input
-- interrupt/cancel
-- approval round-trip
-- replay -> live upgrade
-- read/write file flow
-- startup `modeId` handling, including direct startup into `plan`
-- idle-only switching between `default` and `yolo` because this affects the wire client process
-
-### Verification
-
-- `kimi-session-files.test.ts`
-- `kimi-adapter.test.ts`
-- `test:smoke:kimi-flow`
-- `test:smoke:kimi-browser`
-
-## 5. Claude Coverage
+## 4. Claude Coverage
 
 Primary implementation files:
 
 - `packages/runtime-daemon/src/claude-session-files.ts`
-- `packages/runtime-daemon/src/claude-live-client.ts`
-- `packages/runtime-daemon/src/claude-adapter.ts`
+- `packages/runtime-daemon/src/claude-stored-history-adapter.ts`
+- `packages/runtime-daemon/src/legacy-structured/claude-live-client.ts`
+- `packages/runtime-daemon/src/legacy-structured/claude-structured-adapter.ts`
 
 ### Stored history
 
@@ -188,8 +109,8 @@ Claude live follows the paseo-style SDK route instead of raw CLI text parsing:
 
 ### Known operational lessons
 
-- Claude project/session discovery is more fragile than Gemini/Kimi and must tolerate project path
-  aliasing such as `/var/...` vs `/private/var/...`.
+- Claude project/session discovery must tolerate project path aliasing such as `/var/...` vs
+  `/private/var/...`.
 - Claude permission handling should be treated as a first-class bridge concern, not an afterthought.
 
 ### Verification
@@ -220,4 +141,5 @@ Add a provider-specific coverage document when all of the following are true:
 - it has both stored history and live semantics
 - it has at least one provider-specific smoke or a non-trivial translator
 
-Until then, this document is the shared maintenance surface for Gemini/Kimi/Claude.
+Until then, this document is the shared maintenance surface for core provider history and live
+behavior.
