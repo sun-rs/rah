@@ -2,7 +2,7 @@
 
 Date: 2026-05-08
 Branch: `experiment/zellij-mux-backend`
-Latest audited commit: `c3f5d7c Document zellij completion audit`
+Audit evidence: current branch state as recorded in this document and `RAH_ZELLIJ_MUX_BACKEND_STATUS.zh-CN.md`
 
 ## Audit Result
 
@@ -70,7 +70,7 @@ Until those are proven, do not mark the goal complete.
 | Mandatory runtime tests | `npm run test:runtime` passed: `370 pass / 0 fail` | Satisfied |
 | Mandatory web tests | `npm run test:web` recorded passing in status: `160 pass` | Satisfied |
 | Mandatory web build | `npm run build:web` recorded passing in status | Satisfied |
-| Real Codex smoke | latest real launch probe on `c3f5d7c` observed visible Codex TUI, but no real prompt/Stop/manual browser flow | Incomplete |
+| Real Codex smoke | latest real launch probe observed visible Codex TUI; configured `Ctrl-D` exit probe removed RAH live state and zellij session; no real prompt/Stop/manual browser flow yet | Incomplete |
 | Real Claude smoke | latest real launch probe on `c3f5d7c` reached trust prompt; no complete trust/input/Stop/API-error QA | Incomplete |
 | Real OpenCode smoke | latest 3s all-provider probe can miss first paint; 6s OpenCode-only probe observed visible dump; no full prompt/Stop/browser QA | Incomplete |
 | iPad/Safari manual QA | no artifact yet | Missing |
@@ -91,6 +91,7 @@ The following are useful but insufficient proxy signals:
 The following evidence is still required before completion:
 
 - real Codex answer flow through zellij with Stop and `/exit`,
+- real Codex `/exit` command specifically; automated `Ctrl-D` exit is proven, but `/exit` text injection did not prove command handling,
 - real Claude answer flow through zellij, including trust prompt and transient status rendering,
 - real OpenCode answer flow through zellij,
 - Web/PWA attach to the same live session without resume,

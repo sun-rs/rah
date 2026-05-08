@@ -112,12 +112,25 @@ RAH_ZELLIJ_REAL_TUI_PROBE_ALLOW_FAILURES=1 npm run test:smoke:zellij-real-tui-la
 
 This probe launches real Codex / Claude / OpenCode CLIs through the `zellij_tui` backend, observes zellij diagnostics and `dump-screen`, then closes the RAH session. It does not send a model prompt and does not replace human Stop, `/exit`, browser, or iPad/PWA QA.
 
-Latest observed probe result on `c3f5d7c`:
+Latest observed probe result on this branch:
 
 - Codex launched through zellij with `--no-alt-screen` and produced visible TUI output.
+- Codex real exit sync was additionally checked with configured exit input `Ctrl-D`: RAH removed the live session and the zellij session disappeared. A plain `/exit` text injection did not prove exit in the automated probe and still needs human confirmation inside the real TUI.
 - Claude launched through zellij and stopped at the official workspace trust prompt in a new test directory. This is expected provider UI, but it means Web Chat input must not be treated as proven until a human confirms the trust prompt flow.
 - OpenCode launched through zellij and exposed a managed pane that could be diagnosed and closed. A 3s all-provider probe can still miss its first paint, but a 6s OpenCode-only probe produced visible `dump-screen` and PTY output.
 - All three probe sessions were closed through RAH and were gone from the probe socket after close.
+
+Additional Codex real exit probe:
+
+```bash
+RAH_ZELLIJ_REAL_TUI_PROBE_PROVIDERS=codex \
+RAH_ZELLIJ_REAL_TUI_PROBE_SETTLE_MS=6000 \
+RAH_ZELLIJ_REAL_TUI_PROBE_EXIT=1 \
+RAH_ZELLIJ_REAL_TUI_PROBE_EXIT_INPUT=$'\004' \
+npm run test:smoke:zellij-real-tui-launch
+```
+
+Result: passed. RAH observed the real Codex process exit, removed live state, and the zellij session disappeared. The probe also hardens the case where `zellij action list-panes --json` returns an empty payload while a session is exiting; RAH now treats that as a missing/exited session rather than logging a JSON parse warning.
 
 ## Edge Case Audit
 
@@ -136,6 +149,7 @@ Code-covered edges:
 11. zellij subscribe child exit/error is reported instead of silently leaving Web TUI stale; runtime schedules a bounded reconnect.
 12. Web PTY clients can disconnect while daemon continues capturing zellij pane output; reconnect can replay missed chunks from a cursor.
 13. Workbench state atomic writes use a UUID temp path to avoid concurrent daemon/test write collisions.
+14. Empty `list-panes` output during zellij session teardown is treated as an exited/missing session.
 
 Still not code-proven:
 

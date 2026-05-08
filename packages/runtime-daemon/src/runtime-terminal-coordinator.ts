@@ -137,7 +137,7 @@ function isZellijSessionMissingError(error: unknown): boolean {
     return false;
   }
   const detail = `${error.stdout}\n${error.stderr}\n${error.message}`;
-  return /No session named|There is no active session/i.test(detail);
+  return /No session named|There is no active session|session may have exited/i.test(detail);
 }
 
 function appendCodexZellijArgs(launch: NativeTuiLaunchSpec): NativeTuiLaunchSpec {

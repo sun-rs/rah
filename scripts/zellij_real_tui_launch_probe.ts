@@ -27,6 +27,12 @@ type ProviderProbeResult = {
   dumpBytes: number;
   ptyOutputBytes: number;
   paneExitedBeforeClose?: boolean;
+  exitProbeEnabled?: boolean;
+  exitInputSent?: boolean;
+  exitInputBytes?: number;
+  rahSessionGoneAfterExit?: boolean;
+  zellijSessionGoneAfterExit?: boolean;
+  paneExitedAfterExit?: boolean;
   closeError?: string;
   zellijSessionGoneAfterClose: boolean;
   zellijSessionGoneAfterFallback: boolean;
@@ -46,6 +52,9 @@ const DEFAULT_PROVIDERS: ProbeProvider[] = ["codex", "claude", "opencode"];
 
 const SETTLE_MS = Number(process.env.RAH_ZELLIJ_REAL_TUI_PROBE_SETTLE_MS ?? 3_000);
 const CLOSE_TIMEOUT_MS = Number(process.env.RAH_ZELLIJ_REAL_TUI_PROBE_CLOSE_TIMEOUT_MS ?? 5_000);
+const EXIT_WAIT_MS = Number(process.env.RAH_ZELLIJ_REAL_TUI_PROBE_EXIT_WAIT_MS ?? 6_000);
+const EXIT_PROBE = process.env.RAH_ZELLIJ_REAL_TUI_PROBE_EXIT === "1";
+const EXIT_INPUT = process.env.RAH_ZELLIJ_REAL_TUI_PROBE_EXIT_INPUT ?? "/exit\r";
 const ALLOW_FAILURES = process.env.RAH_ZELLIJ_REAL_TUI_PROBE_ALLOW_FAILURES === "1";
 const OUTPUT_PATH = process.env.RAH_ZELLIJ_REAL_TUI_PROBE_OUTPUT?.trim() || null;
 const WORKSPACE_ROOT =
@@ -190,6 +199,31 @@ async function waitForZellijSessionGone(
   return !sessions.some((session) => session.sessionName === sessionName);
 }
 
+async function waitForRahSessionGone(
+  engine: RuntimeEngine,
+  sessionId: string | undefined,
+  timeoutMs: number,
+): Promise<boolean> {
+  if (!sessionId) {
+    return true;
+  }
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      engine.getSessionSummary(sessionId);
+    } catch {
+      return true;
+    }
+    await sleep(50);
+  }
+  try {
+    engine.getSessionSummary(sessionId);
+    return false;
+  } catch {
+    return true;
+  }
+}
+
 async function probeProvider(provider: ProbeProvider): Promise<ProviderProbeResult> {
   const probeId = randomUUID();
   const cwd = join(WORKSPACE_ROOT, provider);
@@ -251,16 +285,42 @@ async function probeProvider(provider: ProbeProvider): Promise<ProviderProbeResu
             .catch(() => "")
         : "";
 
+    let exitInputSent = false;
+    let rahSessionGoneAfterExit = false;
+    let zellijSessionGoneAfterExit = false;
+    let paneExitedAfterExit: boolean | undefined;
+    if (EXIT_PROBE && sessionId && zellijSessionName) {
+      engine.onPtyInput(sessionId, clientId, EXIT_INPUT);
+      exitInputSent = true;
+      rahSessionGoneAfterExit = await waitForRahSessionGone(engine, sessionId, EXIT_WAIT_MS);
+      const panesAfterExit = await zellij.listPanes(zellijSessionName).catch(() => null);
+      if (panesAfterExit === null) {
+        paneExitedAfterExit = true;
+      } else if (zellijPaneId) {
+        const paneAfterExit = panesAfterExit.find(
+          (candidate) => candidate.paneId === zellijPaneId,
+        );
+        paneExitedAfterExit = !paneAfterExit || paneAfterExit.exited;
+      }
+      zellijSessionGoneAfterExit = await waitForZellijSessionGone(
+        zellij,
+        zellijSessionName,
+        CLOSE_TIMEOUT_MS,
+      );
+    }
+
     unsubscribe();
     let closeError: string | undefined;
-    if (sessionId) {
+    if (sessionId && !rahSessionGoneAfterExit) {
       closeError = await closeEngineSession(engine, sessionId, clientId);
     }
-    const zellijSessionGoneAfterClose = await waitForZellijSessionGone(
-      zellij,
-      zellijSessionName,
-      CLOSE_TIMEOUT_MS,
-    );
+    const zellijSessionGoneAfterClose = rahSessionGoneAfterExit
+      ? zellijSessionGoneAfterExit
+      : await waitForZellijSessionGone(
+          zellij,
+          zellijSessionName,
+          CLOSE_TIMEOUT_MS,
+        );
     if (!zellijSessionGoneAfterClose && zellijSessionName) {
       await zellij.killSession(zellijSessionName).catch(() => undefined);
     }
@@ -272,7 +332,7 @@ async function probeProvider(provider: ProbeProvider): Promise<ProviderProbeResu
 
     const ptyVisible = normalizeOutput(ptyOutput);
     const dumpVisible = normalizeOutput(dumped);
-    const ok = Boolean(
+    const launchOk = Boolean(
       zellijSessionName &&
         zellijPaneId &&
         diagnostic &&
@@ -281,6 +341,10 @@ async function probeProvider(provider: ProbeProvider): Promise<ProviderProbeResu
         !closeError &&
         zellijSessionGoneAfterClose,
     );
+    const exitOk =
+      !EXIT_PROBE ||
+      Boolean(exitInputSent && rahSessionGoneAfterExit && zellijSessionGoneAfterExit);
+    const ok = launchOk && exitOk;
 
     return {
       provider,
@@ -301,11 +365,27 @@ async function probeProvider(provider: ProbeProvider): Promise<ProviderProbeResu
       dumpBytes: Buffer.byteLength(dumped, "utf8"),
       ptyOutputBytes: Buffer.byteLength(ptyOutput, "utf8"),
       ...(pane ? { paneExitedBeforeClose: pane.exited } : {}),
+      ...(EXIT_PROBE
+        ? {
+            exitProbeEnabled: true,
+            exitInputSent,
+            exitInputBytes: Buffer.byteLength(EXIT_INPUT, "utf8"),
+            rahSessionGoneAfterExit,
+            zellijSessionGoneAfterExit,
+            ...(paneExitedAfterExit !== undefined ? { paneExitedAfterExit } : {}),
+          }
+        : {}),
       ...(closeError ? { closeError } : {}),
       zellijSessionGoneAfterClose,
       zellijSessionGoneAfterFallback,
       outputPreview: previewOutput(dumped, ptyOutput),
-      ...(!ok ? { error: "Zellij TUI launch probe did not observe a healthy managed pane." } : {}),
+      ...(!ok
+        ? {
+            error: EXIT_PROBE
+              ? "Zellij TUI exit probe did not observe RAH session and zellij session cleanup."
+              : "Zellij TUI launch probe did not observe a healthy managed pane.",
+          }
+        : {}),
     };
   } catch (error) {
     if (sessionId) {
@@ -330,6 +410,7 @@ async function probeProvider(provider: ProbeProvider): Promise<ProviderProbeResu
       ptyVisibleObserved: normalizeOutput(ptyOutput).length > 0,
       dumpBytes: 0,
       ptyOutputBytes: Buffer.byteLength(ptyOutput, "utf8"),
+      ...(EXIT_PROBE ? { exitProbeEnabled: true } : {}),
       zellijSessionGoneAfterClose: false,
       zellijSessionGoneAfterFallback: await waitForZellijSessionGone(
         zellij,
@@ -362,10 +443,16 @@ async function main(): Promise<void> {
       "zellij diagnostics can observe the managed provider pane",
       "zellij dump-screen can read the provider pane without using it as structured chat truth",
       "RAH archive/close removes the zellij session after the probe",
+      ...(EXIT_PROBE
+        ? [
+            "RAH observes configured provider exit input and removes the live session plus zellij session",
+          ]
+        : []),
     ],
     results,
     notes: [
       "This probe launches real provider CLIs in zellij but does not send a model prompt.",
+      "Set RAH_ZELLIJ_REAL_TUI_PROBE_EXIT=1 and optionally RAH_ZELLIJ_REAL_TUI_PROBE_EXIT_INPUT to test a provider-native exit key/command.",
       "It does not prove model response, Stop during a real turn, permissions, quota, login, long-running turn behavior, or iPad/Safari behavior.",
       "Providers may still create empty local metadata during startup.",
     ],

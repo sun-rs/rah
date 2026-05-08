@@ -241,6 +241,14 @@ export class ZellijMuxBackend implements MuxRuntime {
         stderr: result.stderr,
       });
     }
+    if (result.stdout.trim().length === 0) {
+      throw new ZellijCommandError({
+        command: this.binary,
+        args,
+        stdout: result.stdout,
+        stderr: "zellij list-panes returned empty payload; session may have exited",
+      });
+    }
     const parsed = JSON.parse(result.stdout) as unknown;
     if (!Array.isArray(parsed)) {
       throw new Error("zellij list-panes returned a non-array payload.");
