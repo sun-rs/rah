@@ -5,6 +5,7 @@ Branch: `experiment/zellij-mux-backend`
 Rollback baseline: `e59ca6f Finalize PTY-first native TUI core`
 
 Completion audit: `RAH_ZELLIJ_MUX_BACKEND_COMPLETION_AUDIT.zh-CN.md`
+Manual QA checklist: `RAH_ZELLIJ_MUX_BACKEND_MANUAL_QA.zh-CN.md`
 
 ## Current Judgment
 
@@ -173,6 +174,8 @@ Still not code-proven:
 ## Remaining Human QA
 
 These remain unverified and block marking the goal complete:
+
+Use `RAH_ZELLIJ_MUX_BACKEND_MANUAL_QA.zh-CN.md` for concrete commands, expected behavior, evidence fields, and failure criteria.
 
 1. `rah codex --mux zellij` with real Codex TUI: terminal smoothness, colors, scrollback, `--no-alt-screen`, Stop, `/exit`.
 2. `rah claude --mux zellij` with real Claude Code: colors, transient status lines such as thinking/levitating, Stop, `/exit`, API error rendering.
