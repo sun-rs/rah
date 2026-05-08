@@ -50,8 +50,15 @@ test("derives stable zellij session names from RAH session ids", () => {
   const name = createZellijSessionNameForRahSession(
     "019e0aaa-1111-7222-8333-abcdef123456",
   );
-  assert.equal(name, "rah-019e0aaa");
-  assert.equal(name.length <= 16, true);
+  assert.match(
+    name,
+    /^rah-019e0aaa-1111-7222-8333-abcdef123456-[0-9a-f]{12}$/,
+  );
+  assert.equal(
+    createZellijSessionNameForRahSession("019e0aaa-1111-7222-8333-abcdef123457") ===
+      name,
+    false,
+  );
 });
 
 test("zellij mux backend controls a fake shell pane and observes exit state", async (t) => {

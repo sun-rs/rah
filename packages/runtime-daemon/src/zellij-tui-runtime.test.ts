@@ -7,7 +7,10 @@ import { setTimeout as delay } from "node:timers/promises";
 import type { ProviderKind } from "@rah/runtime-protocol";
 
 import { RuntimeEngine } from "./runtime-engine";
-import { ZellijMuxBackend } from "./zellij-mux-backend";
+import {
+  createZellijSessionNameForRahSession,
+  ZellijMuxBackend,
+} from "./zellij-mux-backend";
 
 async function waitFor(predicate: () => void | Promise<void>, timeoutMs = 5_000): Promise<void> {
   const started = Date.now();
@@ -133,7 +136,10 @@ async function startZellijProviderSession(params: {
     const sessionId = started.session.session.id;
     assert.equal(started.session.session.liveBackend, "zellij_tui");
     assert.equal(started.session.session.mux?.backend, "zellij");
-    assert.match(started.session.session.mux?.sessionName ?? "", /^rah-[0-9a-f]{8}$/);
+    assert.equal(
+      started.session.session.mux?.sessionName,
+      createZellijSessionNameForRahSession(sessionId),
+    );
     assert.match(started.session.session.mux?.paneId ?? "", /^terminal_\d+$/);
     const stats = engine.listPtyStats().find((stat) => stat.sessionId === sessionId);
     assert.equal(stats?.provider, params.provider);
@@ -279,8 +285,14 @@ test("zellij_tui backend isolates multiple simultaneous provider sessions", asyn
       startedA.session.session.mux?.sessionName,
       startedB.session.session.mux?.sessionName,
     );
-    assert.equal(startedA.session.session.mux?.sessionName, `rah-${sessionA.slice(0, 8)}`);
-    assert.equal(startedB.session.session.mux?.sessionName, `rah-${sessionB.slice(0, 8)}`);
+    assert.equal(
+      startedA.session.session.mux?.sessionName,
+      createZellijSessionNameForRahSession(sessionA),
+    );
+    assert.equal(
+      startedB.session.session.mux?.sessionName,
+      createZellijSessionNameForRahSession(sessionB),
+    );
 
     const transcript: Record<string, string> = {
       [sessionA]: "",

@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdirSync } from "node:fs";
@@ -94,8 +94,15 @@ export function createZellijSessionNameForRahSession(
   rahSessionId: string,
   prefix = "rah",
 ): string {
-  const suffix = rahSessionId.replace(/[^0-9a-z]/gi, "").toLowerCase().slice(0, 8);
-  return `${prefix}-${suffix || randomBytes(4).toString("hex")}`;
+  const normalized = rahSessionId
+    .trim()
+    .replace(/[^0-9a-z]+/gi, "-")
+    .replace(/^-+|-+$/g, "")
+    .replace(/-{2,}/g, "-")
+    .toLowerCase()
+    .slice(0, 48);
+  const digest = createHash("sha256").update(rahSessionId).digest("hex").slice(0, 12);
+  return `${prefix}-${normalized ? `${normalized}-${digest}` : digest}`;
 }
 
 function paneIdFor(raw: RawZellijPane): MuxPaneId {
