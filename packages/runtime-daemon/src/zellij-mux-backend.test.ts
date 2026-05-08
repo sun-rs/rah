@@ -59,6 +59,16 @@ test("derives stable zellij session names from RAH session ids", () => {
   );
 });
 
+test("uses a short zellij socket dir from RAH_ZELLIJ_SOCKET_DIR when configured", () => {
+  const backend = new ZellijMuxBackend({
+    env: {
+      ...process.env,
+      RAH_ZELLIJ_SOCKET_DIR: "/tmp/rah-zellij-custom",
+    },
+  });
+  assert.equal(backend.getSocketDir(), "/tmp/rah-zellij-custom");
+});
+
 test("zellij mux backend controls a fake shell pane and observes exit state", async (t) => {
   const socketDir = path.join(os.tmpdir(), `rah-zellij-test-${process.pid}`);
   const backend = new ZellijMuxBackend({ socketDir });

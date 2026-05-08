@@ -30,7 +30,9 @@ export function requestErrorStatus(error: unknown): number {
     message.includes("Path is not a file.") ||
     message.includes("Workspace directory is required.") ||
     message.includes("is not a supported live provider.") ||
-    message.includes("Cannot remove a workspace with active live sessions.")
+    message.includes("Cannot remove a workspace with active live sessions.") ||
+    message.includes("Only RAH-owned zellij sessions can be closed from diagnostics.") ||
+    message.includes("This zellij session is managed by a live RAH session.")
   ) {
     return 400;
   }

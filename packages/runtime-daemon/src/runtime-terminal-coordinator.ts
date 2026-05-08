@@ -353,6 +353,25 @@ export class RuntimeTerminalCoordinator {
     );
   }
 
+  async closeUnmanagedZellijMuxSession(sessionName: string): Promise<void> {
+    const trimmedSessionName = sessionName.trim();
+    if (!/^rah-[0-9a-z][0-9a-z-]*$/i.test(trimmedSessionName)) {
+      throw new Error("Only RAH-owned zellij sessions can be closed from diagnostics.");
+    }
+    const managed = [...this.zellijTuiSessions.values()].find(
+      (zellij) => zellij.zellijSessionName === trimmedSessionName,
+    );
+    if (managed) {
+      throw new Error("This zellij session is managed by a live RAH session. Archive the live session instead.");
+    }
+    await this.zellijMux.killSession(trimmedSessionName).catch((error) => {
+      if (isZellijSessionMissingError(error)) {
+        return;
+      }
+      throw error;
+    });
+  }
+
   clearSessionState(sessionId: string): void {
     this.terminalWrappers?.clearSessionState(sessionId);
     this.clearZellijTuiRuntimeState(sessionId);

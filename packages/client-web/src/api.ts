@@ -1,6 +1,7 @@
 import type {
   AttachSessionRequest,
   AttachSessionResponse,
+  CloseZellijMuxSessionResponse,
   CloseSessionRequest,
   DebugScenarioDescriptor,
   DetachSessionRequest,
@@ -297,6 +298,16 @@ export async function listZellijMuxDiagnostics(options?: {
     },
   );
   return response.sessions;
+}
+
+export async function closeZellijMuxSession(sessionName: string): Promise<void> {
+  await requestJson<CloseZellijMuxSessionResponse>(
+    `/api/zellij/sessions/${encodeURIComponent(sessionName)}/close`,
+    {
+      method: "POST",
+      body: JSON.stringify({}),
+    },
+  );
 }
 
 export async function listProviderModels(

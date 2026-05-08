@@ -6,7 +6,13 @@ import type {
   ZellijMuxSessionDiagnostic,
 } from "@rah/runtime-protocol";
 import { AlertTriangle, CheckCircle2, Info, LoaderCircle, MessageSquareText, Palette, RefreshCw, TerminalSquare, Waypoints } from "lucide-react";
-import { listNativeTuiDiagnostics, listProviders, listPtyStats, listZellijMuxDiagnostics } from "../api";
+import {
+  closeZellijMuxSession,
+  listNativeTuiDiagnostics,
+  listProviders,
+  listPtyStats,
+  listZellijMuxDiagnostics,
+} from "../api";
 import { providerLabel } from "../types";
 import { nativeTuiDiagnosticLabel } from "../native-tui-diagnostics-ui";
 import {
@@ -54,6 +60,7 @@ export function SettingsPane() {
   const [nativeTuiDiagnostics, setNativeTuiDiagnostics] = useState<NativeTuiDiagnostic[]>([]);
   const [ptyStats, setPtyStats] = useState<PtySessionStats[]>([]);
   const [zellijMuxDiagnostics, setZellijMuxDiagnostics] = useState<ZellijMuxSessionDiagnostic[]>([]);
+  const [closingZellijSessionNames, setClosingZellijSessionNames] = useState<Set<string>>(() => new Set());
   const ptyStatsRef = useRef<PtySessionStats[] | null>(null);
   const [previousPtyStats, setPreviousPtyStats] = useState<PtySessionStats[] | null>(null);
   const versionAutoRequestedRef = useRef(false);
@@ -77,6 +84,13 @@ export function SettingsPane() {
   const sortedZellijMuxDiagnostics = useMemo(
     () => [...zellijMuxDiagnostics].sort((left, right) => left.sessionName.localeCompare(right.sessionName)),
     [zellijMuxDiagnostics],
+  );
+  const unmanagedZellijMuxDiagnostics = useMemo(
+    () =>
+      sortedZellijMuxDiagnostics.filter(
+        (session) => !session.managedSessionId && session.sessionName.startsWith("rah-"),
+      ),
+    [sortedZellijMuxDiagnostics],
   );
 
   useEffect(() => {
@@ -182,6 +196,50 @@ export function SettingsPane() {
       setProviderDiagnosticsError(error instanceof Error ? error.message : "Failed to load provider versions.");
     } finally {
       setProviderDiagnosticsLoading(false);
+    }
+  }
+
+  async function closeZellijSessionFromDiagnostics(sessionName: string): Promise<void> {
+    setClosingZellijSessionNames((current) => new Set(current).add(sessionName));
+    setProviderDiagnosticsError(null);
+    try {
+      await closeZellijMuxSession(sessionName);
+      await loadProviderDiagnostics(false);
+    } catch (error) {
+      setProviderDiagnosticsError(errorMessage(error, `Failed to close zellij session ${sessionName}.`));
+    } finally {
+      setClosingZellijSessionNames((current) => {
+        const next = new Set(current);
+        next.delete(sessionName);
+        return next;
+      });
+    }
+  }
+
+  async function closeAllUnmanagedZellijSessions(): Promise<void> {
+    if (unmanagedZellijMuxDiagnostics.length === 0) {
+      return;
+    }
+    const names = unmanagedZellijMuxDiagnostics.map((session) => session.sessionName);
+    setClosingZellijSessionNames((current) => new Set([...current, ...names]));
+    setProviderDiagnosticsError(null);
+    try {
+      const results = await Promise.allSettled(names.map((name) => closeZellijMuxSession(name)));
+      const failed = results.filter((result) => result.status === "rejected");
+      if (failed.length > 0) {
+        throw new Error(`Failed to close ${failed.length} unmanaged zellij session${failed.length === 1 ? "" : "s"}.`);
+      }
+      await loadProviderDiagnostics(false);
+    } catch (error) {
+      setProviderDiagnosticsError(errorMessage(error, "Failed to close unmanaged zellij sessions."));
+    } finally {
+      setClosingZellijSessionNames((current) => {
+        const next = new Set(current);
+        for (const name of names) {
+          next.delete(name);
+        }
+        return next;
+      });
     }
   }
 
@@ -574,9 +632,23 @@ export function SettingsPane() {
                           Real zellij rah-* sessions and panes visible through the mux socket.
                         </div>
                       </div>
-                      <span className="shrink-0 rounded-full border border-[var(--app-border)] px-2 py-0.5 text-[10px] font-medium text-[var(--app-hint)]">
-                        {sortedZellijMuxDiagnostics.length}
-                      </span>
+                      <div className="flex shrink-0 items-center gap-2">
+                        {unmanagedZellijMuxDiagnostics.length > 0 ? (
+                          <button
+                            type="button"
+                            onClick={() => void closeAllUnmanagedZellijSessions()}
+                            disabled={unmanagedZellijMuxDiagnostics.some((session) =>
+                              closingZellijSessionNames.has(session.sessionName),
+                            )}
+                            className="rounded-full border border-[var(--app-border)] px-2 py-0.5 text-[10px] font-medium text-[var(--app-warning)] transition-colors hover:border-[var(--app-warning)] disabled:cursor-default disabled:opacity-60"
+                          >
+                            Close unmanaged
+                          </button>
+                        ) : null}
+                        <span className="rounded-full border border-[var(--app-border)] px-2 py-0.5 text-[10px] font-medium text-[var(--app-hint)]">
+                          {sortedZellijMuxDiagnostics.length}
+                        </span>
+                      </div>
                     </div>
                     {sortedZellijMuxDiagnostics.length === 0 ? (
                       <div className="mt-3 rounded-xl border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-3 py-2 text-xs text-[var(--app-hint)]">
@@ -595,9 +667,21 @@ export function SettingsPane() {
                                 <div className="min-w-0 font-mono text-[11px] text-[var(--app-fg)]">
                                   {session.sessionName}
                                 </div>
-                                <span className="shrink-0 text-[11px] text-[var(--app-hint)]">
-                                  {session.panes.length} panes
-                                </span>
+                                <div className="flex shrink-0 items-center gap-2">
+                                  <span className="text-[11px] text-[var(--app-hint)]">
+                                    {session.panes.length} panes
+                                  </span>
+                                  {!session.managedSessionId && session.sessionName.startsWith("rah-") ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => void closeZellijSessionFromDiagnostics(session.sessionName)}
+                                      disabled={closingZellijSessionNames.has(session.sessionName)}
+                                      className="rounded-full border border-[var(--app-border)] px-2 py-0.5 text-[10px] font-medium text-[var(--app-warning)] transition-colors hover:border-[var(--app-warning)] disabled:cursor-default disabled:opacity-60"
+                                    >
+                                      {closingZellijSessionNames.has(session.sessionName) ? "Closing" : "Close"}
+                                    </button>
+                                  ) : null}
+                                </div>
                               </div>
                               <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-[var(--app-hint)]">
                                 {session.provider ? <span>{providerLabel(session.provider)}</span> : null}

@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type {
+  CloseZellijMuxSessionResponse,
   DebugReplayScript,
   ListDebugScenariosResponse,
   ListNativeTuiDiagnosticsResponse,
@@ -200,6 +201,14 @@ export function createPostRoutes(
           parsePermissionResponseRequest(body),
         );
         writeJson(req, res, 200, { ok: true });
+      },
+    },
+    {
+      pattern: /^\/api\/zellij\/sessions\/([^/]+)\/close$/,
+      handler: async (req, res, match) => {
+        await engine.closeZellijMuxSession(decodeURIComponent(match[1]!));
+        const response: CloseZellijMuxSessionResponse = { ok: true };
+        writeJson(req, res, 200, response);
       },
     },
     {

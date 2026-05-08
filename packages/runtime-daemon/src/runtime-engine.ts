@@ -382,6 +382,10 @@ export class RuntimeEngine {
     return await this.terminals.listZellijMuxDiagnostics();
   }
 
+  async closeZellijMuxSession(sessionName: string): Promise<void> {
+    await this.terminals.closeUnmanagedZellijMuxSession(sessionName);
+  }
+
   async listProviderModels(
     provider: ProviderKind,
     options?: { cwd?: string; forceRefresh?: boolean },

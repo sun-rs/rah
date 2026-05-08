@@ -607,6 +607,10 @@ export interface ListZellijMuxDiagnosticsResponse {
   sessions: ZellijMuxSessionDiagnostic[];
 }
 
+export interface CloseZellijMuxSessionResponse {
+  ok: true;
+}
+
 export type PtyServerMessage =
   | {
       type: "pty.replay";

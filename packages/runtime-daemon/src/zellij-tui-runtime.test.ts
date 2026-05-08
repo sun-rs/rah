@@ -344,6 +344,55 @@ test("zellij_tui archive closes the zellij pane and session", async (t) => {
   }
 });
 
+test("zellij diagnostics can close an unmanaged RAH mux session", async (t) => {
+  const socketDir = makeTestZellijSocketDir("unmanaged");
+  const restoreSocketDir = setEnv("RAH_ZELLIJ_SOCKET_DIR", socketDir);
+  const backend = new ZellijMuxBackend({ socketDir });
+  if (await skipIfZellijUnavailable(t)) {
+    restoreSocketDir();
+    rmSync(socketDir, { force: true, recursive: true });
+    return;
+  }
+
+  const root = mkdtempSync(path.join(os.tmpdir(), "rah-zellij-unmanaged-"));
+  const sessionName = createZellijSessionNameForRahSession(`unmanaged-${crypto.randomUUID()}`);
+  const restoreRahHome = setEnv("RAH_HOME", path.join(root, "rah-home"));
+  const engine = new RuntimeEngine();
+
+  try {
+    await backend.createSession({
+      sessionName,
+      cwd: root,
+      title: "rah-zellij-unmanaged",
+      command: "/bin/zsh",
+      args: ["-lc", "printf 'RAH_UNMANAGED_READY\\n'; sleep 60"],
+      replaceDefaultPane: true,
+    });
+    await waitFor(async () => {
+      const diagnostics = await engine.listZellijMuxDiagnostics();
+      const diagnostic = diagnostics.find((candidate) => candidate.sessionName === sessionName);
+      assert.ok(diagnostic);
+      assert.equal(diagnostic.managedSessionId, undefined);
+    });
+
+    await engine.closeZellijMuxSession(sessionName);
+    await waitFor(async () => {
+      await assertZellijSessionGone(sessionName);
+    });
+    await assert.rejects(
+      async () => await engine.closeZellijMuxSession("not-rah-user-session"),
+      /Only RAH-owned zellij sessions/,
+    );
+  } finally {
+    await engine.shutdown();
+    await backend.killSession(sessionName).catch(() => undefined);
+    restoreSocketDir();
+    restoreRahHome();
+    rmSync(socketDir, { force: true, recursive: true });
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
 test("zellij_tui backend isolates multiple simultaneous provider sessions", async (t) => {
   if (await skipIfZellijUnavailable(t)) {
     return;

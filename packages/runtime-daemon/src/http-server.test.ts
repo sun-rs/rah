@@ -220,6 +220,23 @@ describe("startRahDaemon", () => {
     });
   });
 
+  test("rejects closing non-RAH zellij mux sessions", async () => {
+    const response = await requestJson({
+      port,
+      path: "/api/zellij/sessions/user-session/close",
+      method: "POST",
+      headers: {
+        Origin: `http://127.0.0.1:${port}`,
+        "x-rah-client": "web",
+      },
+      body: {},
+    });
+    assert.equal(response.status, 400);
+    assert.deepEqual(response.json, {
+      error: "Only RAH-owned zellij sessions can be closed from diagnostics.",
+    });
+  });
+
   test("PTY websocket input is bound to the URL session rather than payload sessionId", async () => {
     const first = await engine.startIndependentTerminal({ cwd: tempHome, cols: 80, rows: 24 });
     const second = await engine.startIndependentTerminal({ cwd: tempHome, cols: 80, rows: 24 });
