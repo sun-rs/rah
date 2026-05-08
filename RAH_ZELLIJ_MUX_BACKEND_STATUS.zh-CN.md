@@ -7,6 +7,8 @@ Rollback baseline: `e59ca6f Finalize PTY-first native TUI core`
 Completion audit: `RAH_ZELLIJ_MUX_BACKEND_COMPLETION_AUDIT.zh-CN.md`
 Manual QA checklist: `RAH_ZELLIJ_MUX_BACKEND_MANUAL_QA.zh-CN.md`
 Manual QA verifier: `npm run test:smoke:zellij-manual-qa-status`
+Automatic zellij gate: `npm run test:zellij-tui-auto`
+Final zellij gate: `npm run test:zellij-tui`
 
 ## Current Judgment
 
@@ -73,6 +75,22 @@ npm run test:web       # 160 pass
 npm run build:web
 git diff --check
 ```
+
+The zellij-specific automatic gate is:
+
+```bash
+npm run test:zellij-tui-auto
+```
+
+Latest result: passed on this branch. It ran typecheck, zellij fake-provider tests, zellij manual QA verifier tests, real launch probes, real exit probes, and `git diff --check`.
+
+The final zellij gate is:
+
+```bash
+npm run test:zellij-tui
+```
+
+It intentionally fails until `test-results/zellij-manual-qa.json` exists, targets the current commit, and all manual QA rows are `pass` with concrete evidence.
 
 Additional targeted evidence:
 

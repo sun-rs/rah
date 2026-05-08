@@ -37,14 +37,10 @@ For iPad/PWA, use the Mac LAN IP with port `43111`.
 4. Optional automatic preflight:
 
 ```bash
-npm run typecheck
-npm run test:runtime
-npm run test:web
-npm run build:web
-npm run test:smoke:zellij-real-tui-exit
+npm run test:zellij-tui-auto
 ```
 
-The exit smoke proves only that real Codex / Claude / OpenCode can exit and be cleaned up through zellij. It does not prove model response, real Stop, Web/PWA UX, or Chat mirror correctness.
+The automatic gate includes typecheck, zellij fake-provider tests, real launch/exit probes, and syntax checks. It does not prove model response, real Stop, Web/PWA UX, or Chat mirror correctness.
 
 5. Generate a fillable zellij manual QA report:
 
@@ -56,10 +52,10 @@ RAH_ZELLIJ_MANUAL_QA_TEMPLATE_OUTPUT=test-results/zellij-manual-qa.json \
 After filling all results, verify it:
 
 ```bash
-npm run test:smoke:zellij-manual-qa-status
+npm run test:zellij-tui
 ```
 
-The verifier rejects missing cases, non-`pass` cases, mismatched commits, and `pass` rows without concrete session, zellij, browser, device, tester, timestamp, and evidence fields.
+The final gate runs the automatic gate plus the manual QA verifier. It rejects missing cases, non-`pass` cases, mismatched commits, and `pass` rows without concrete session, zellij, browser, device, tester, timestamp, and evidence fields.
 
 ## Evidence To Record
 

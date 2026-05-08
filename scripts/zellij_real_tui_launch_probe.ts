@@ -224,6 +224,43 @@ async function waitForRahSessionGone(
   }
 }
 
+async function waitForManagedPane(
+  engine: RuntimeEngine,
+  sessionId: string | undefined,
+  paneId: string | undefined,
+  timeoutMs: number,
+): Promise<{
+  diagnostic?: Awaited<ReturnType<RuntimeEngine["listZellijMuxDiagnostics"]>>[number];
+  pane?: Awaited<ReturnType<RuntimeEngine["listZellijMuxDiagnostics"]>>[number]["panes"][number];
+}> {
+  if (!sessionId || !paneId) {
+    return {};
+  }
+  const deadline = Date.now() + timeoutMs;
+  let last:
+    | {
+        diagnostic?: Awaited<ReturnType<RuntimeEngine["listZellijMuxDiagnostics"]>>[number];
+        pane?: Awaited<ReturnType<RuntimeEngine["listZellijMuxDiagnostics"]>>[number]["panes"][number];
+      }
+    | undefined;
+  while (Date.now() < deadline) {
+    try {
+      engine.getSessionSummary(sessionId);
+    } catch {
+      return last ?? {};
+    }
+    const diagnostics = await engine.listZellijMuxDiagnostics();
+    const diagnostic = diagnostics.find((candidate) => candidate.managedSessionId === sessionId);
+    const pane = diagnostic?.panes.find((candidate) => candidate.paneId === paneId);
+    last = { ...(diagnostic ? { diagnostic } : {}), ...(pane ? { pane } : {}) };
+    if (diagnostic && pane && !pane.exited) {
+      return { diagnostic, pane };
+    }
+    await sleep(100);
+  }
+  return last ?? {};
+}
+
 async function probeProvider(provider: ProbeProvider): Promise<ProviderProbeResult> {
   const probeId = randomUUID();
   const cwd = join(WORKSPACE_ROOT, provider);
@@ -275,9 +312,14 @@ async function probeProvider(provider: ProbeProvider): Promise<ProviderProbeResu
 
     await sleep(SETTLE_MS);
 
-    const diagnostics = await engine.listZellijMuxDiagnostics();
-    const diagnostic = diagnostics.find((candidate) => candidate.managedSessionId === sessionId);
-    const pane = diagnostic?.panes.find((candidate) => candidate.paneId === zellijPaneId);
+    const observed = await waitForManagedPane(
+      engine,
+      sessionId,
+      zellijPaneId,
+      Math.max(SETTLE_MS, 1_000),
+    );
+    const diagnostic = observed.diagnostic;
+    const pane = observed.pane;
     const dumped =
       zellijSessionName && zellijPaneId
         ? await zellij
@@ -290,6 +332,7 @@ async function probeProvider(provider: ProbeProvider): Promise<ProviderProbeResu
     let zellijSessionGoneAfterExit = false;
     let paneExitedAfterExit: boolean | undefined;
     if (EXIT_PROBE && sessionId && zellijSessionName) {
+      engine.getSessionSummary(sessionId);
       engine.onPtyInput(sessionId, clientId, EXIT_INPUT);
       exitInputSent = true;
       rahSessionGoneAfterExit = await waitForRahSessionGone(engine, sessionId, EXIT_WAIT_MS);

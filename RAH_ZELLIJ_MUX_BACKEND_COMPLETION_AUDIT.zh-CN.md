@@ -108,5 +108,6 @@ The next valid milestone is human QA against the `experiment/zellij-mux-backend`
 
 Concrete human QA steps are documented in `RAH_ZELLIJ_MUX_BACKEND_MANUAL_QA.zh-CN.md`.
 Machine validation for recorded manual QA is available through `npm run test:smoke:zellij-manual-qa-status`.
+The zellij automatic gate is `npm run test:zellij-tui-auto`; the final gate is `npm run test:zellij-tui`.
 
 Only after those manual results are recorded and show acceptable behavior should `update_goal(status: "complete")` be considered.

@@ -104,6 +104,8 @@ npm run test:provider-contracts
 npm run test:web
 npm run test:runtime
 npm run test:native-tui
+npm run test:zellij-tui-auto
+npm run test:zellij-tui
 npm run test:manual-qa-status
 npm run test:smoke:native-codex-browser
 npm run test:smoke:native-provider-browser
