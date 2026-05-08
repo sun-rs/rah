@@ -112,11 +112,11 @@ RAH_ZELLIJ_REAL_TUI_PROBE_ALLOW_FAILURES=1 npm run test:smoke:zellij-real-tui-la
 
 This probe launches real Codex / Claude / OpenCode CLIs through the `zellij_tui` backend, observes zellij diagnostics and `dump-screen`, then closes the RAH session. It does not send a model prompt and does not replace human Stop, `/exit`, browser, or iPad/PWA QA.
 
-Latest observed probe result:
+Latest observed probe result on `c3f5d7c`:
 
 - Codex launched through zellij with `--no-alt-screen` and produced visible TUI output.
 - Claude launched through zellij and stopped at the official workspace trust prompt in a new test directory. This is expected provider UI, but it means Web Chat input must not be treated as proven until a human confirms the trust prompt flow.
-- OpenCode launched through zellij and exposed a managed pane that could be diagnosed and closed. A short 1.5s probe can miss its first paint, but a 6s OpenCode-only probe produced visible `dump-screen` and PTY output.
+- OpenCode launched through zellij and exposed a managed pane that could be diagnosed and closed. A 3s all-provider probe can still miss its first paint, but a 6s OpenCode-only probe produced visible `dump-screen` and PTY output.
 - All three probe sessions were closed through RAH and were gone from the probe socket after close.
 
 ## Edge Case Audit

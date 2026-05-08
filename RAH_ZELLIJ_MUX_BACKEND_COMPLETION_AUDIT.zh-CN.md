@@ -2,7 +2,7 @@
 
 Date: 2026-05-08
 Branch: `experiment/zellij-mux-backend`
-Latest audited commit: `b1ff8c8 Test zellij PTY reconnect replay`
+Latest audited commit: `c3f5d7c Document zellij completion audit`
 
 ## Audit Result
 
@@ -70,9 +70,9 @@ Until those are proven, do not mark the goal complete.
 | Mandatory runtime tests | `npm run test:runtime` passed: `370 pass / 0 fail` | Satisfied |
 | Mandatory web tests | `npm run test:web` recorded passing in status: `160 pass` | Satisfied |
 | Mandatory web build | `npm run build:web` recorded passing in status | Satisfied |
-| Real Codex smoke | real launch probe observed visible Codex TUI, but no real prompt/Stop/manual browser flow | Incomplete |
-| Real Claude smoke | real launch probe reached trust prompt; no complete trust/input/Stop/API-error QA | Incomplete |
-| Real OpenCode smoke | 6s probe observed visible dump; no full prompt/Stop/browser QA | Incomplete |
+| Real Codex smoke | latest real launch probe on `c3f5d7c` observed visible Codex TUI, but no real prompt/Stop/manual browser flow | Incomplete |
+| Real Claude smoke | latest real launch probe on `c3f5d7c` reached trust prompt; no complete trust/input/Stop/API-error QA | Incomplete |
+| Real OpenCode smoke | latest 3s all-provider probe can miss first paint; 6s OpenCode-only probe observed visible dump; no full prompt/Stop/browser QA | Incomplete |
 | iPad/Safari manual QA | no artifact yet | Missing |
 | Default backend decision | explicit non-decision in status doc | Not ready |
 
