@@ -4,6 +4,8 @@ Date: 2026-05-08
 Branch: `experiment/zellij-mux-backend`
 Rollback baseline: `e59ca6f Finalize PTY-first native TUI core`
 
+Completion audit: `RAH_ZELLIJ_MUX_BACKEND_COMPLETION_AUDIT.zh-CN.md`
+
 ## Current Judgment
 
 Zellij backend is implemented as an experimental mux runtime path, but it is not ready to become the default RAH live TUI backend.
