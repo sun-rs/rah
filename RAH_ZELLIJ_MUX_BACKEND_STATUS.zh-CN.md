@@ -50,6 +50,7 @@ The final product decision is still blocked by real provider and device QA:
 | Web archive closes zellij pane/session | `closeZellijTuiSession()` closes pane then kills session fallback | Tested |
 | Recover persisted zellij live session after daemon restart | `restoreZellijTuiSession()` | Tested |
 | zellij subscribe failure is not silent | `subscribePane()` reports unexpected exits; runtime schedules subscription reconnect | Tested at mux layer |
+| Browser/WebSocket reconnect replay | daemon keeps capturing zellij pane output with no PTY subscribers and replays from cursor on reconnect | Tested with fake provider |
 | Multi-session isolation | one zellij session per RAH session; test covers two simultaneous sessions | Tested |
 | Diagnostics | `/api/zellij/diagnostics`; Settings displays managed/unmanaged sessions | Done |
 | Unmanaged stale zellij sessions are closable | `/api/zellij/sessions/:name/close`; Settings close actions | Tested |
@@ -63,7 +64,7 @@ These commands passed after the latest zellij lifecycle and diagnostics changes:
 
 ```bash
 npm run typecheck
-npm run test:runtime   # 369 pass
+npm run test:runtime   # 370 pass
 npm run test:web       # 160 pass
 npm run build:web
 git diff --check
@@ -85,6 +86,7 @@ This targeted suite covers:
 - dirty-prompt queueing before Web Chat injection,
 - terminal-to-web handoff into the same zellij-backed session without resume,
 - unexpected zellij subscribe process exit reporting,
+- PTY subscriber disconnect/reconnect replay while zellij pane keeps running,
 - archive closes zellij pane/session,
 - unmanaged RAH zellij session close,
 - persisted zellij recovery,
@@ -97,7 +99,7 @@ node --import tsx --test --test-concurrency=1 --test-force-exit \
   packages/runtime-daemon/src/zellij-mux-backend.test.ts \
   packages/runtime-daemon/src/zellij-tui-runtime.test.ts
 
-# 15 pass
+# 16 pass
 ```
 
 Optional real-provider launch probe:
@@ -130,7 +132,8 @@ Code-covered edges:
 9. Archive attempts close-pane first and then kill-session fallback, preventing common orphan zellij sessions.
 10. Daemon restart can recover persisted zellij live sessions only when socket dir and pane still match.
 11. zellij subscribe child exit/error is reported instead of silently leaving Web TUI stale; runtime schedules a bounded reconnect.
-12. Workbench state atomic writes use a UUID temp path to avoid concurrent daemon/test write collisions.
+12. Web PTY clients can disconnect while daemon continues capturing zellij pane output; reconnect can replay missed chunks from a cursor.
+13. Workbench state atomic writes use a UUID temp path to avoid concurrent daemon/test write collisions.
 
 Still not code-proven:
 

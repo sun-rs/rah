@@ -465,6 +465,94 @@ test("zellij_tui session can hand off from terminal client to web client without
   }
 });
 
+test("zellij_tui keeps capturing pane output while web PTY is disconnected", async (t) => {
+  if (await skipIfZellijUnavailable(t)) {
+    return;
+  }
+
+  const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-zellij-reconnect-"));
+  const fakeCodex = path.join(workspace, "fake-codex.js");
+  writeFakeTuiBinary(fakeCodex, "codex");
+  const socketDir = makeTestZellijSocketDir("reconnect");
+  const restoreRahHome = setEnv("RAH_HOME", path.join(workspace, "rah-home"));
+  const restoreSocketDir = setEnv("RAH_ZELLIJ_SOCKET_DIR", socketDir);
+  const restoreBinary = setEnv("RAH_CODEX_BINARY", fakeCodex);
+  const engine = new RuntimeEngine();
+
+  try {
+    const started = await engine.startSession({
+      provider: "codex",
+      cwd: workspace,
+      liveBackend: "zellij_tui",
+      attach: {
+        client: {
+          id: "web-zellij-reconnect",
+          kind: "web",
+          connectionId: "web-zellij-reconnect",
+        },
+        mode: "interactive",
+        claimControl: true,
+      },
+    });
+    const sessionId = started.session.session.id;
+    let firstTranscript = "";
+    let nextReplaySeq = 0;
+    const unsubscribeFirst = engine.ptyHub.subscribe(sessionId, (frame) => {
+      if (frame.type === "pty.replay") {
+        firstTranscript += frame.chunks.join("");
+        nextReplaySeq = Math.max(nextReplaySeq, frame.nextSeq ?? 0);
+      } else if (frame.type === "pty.output") {
+        firstTranscript += frame.data;
+        if (frame.seq !== undefined) {
+          nextReplaySeq = Math.max(nextReplaySeq, frame.seq + 1);
+        }
+      }
+    });
+    await waitFor(() => {
+      assert.match(firstTranscript, /ZELLIJ_CODEX_READY/);
+    });
+    unsubscribeFirst();
+    assert.equal(engine.ptyHub.stats(sessionId)?.subscriberCount, 0);
+
+    engine.sendInput(sessionId, {
+      clientId: "web-zellij-reconnect",
+      text: "captured while disconnected",
+    });
+    await waitFor(() => {
+      const stats = engine.ptyHub.stats(sessionId);
+      assert.ok(stats);
+      assert.equal(stats.subscriberCount, 0);
+      assert.ok(stats.nextSeq > nextReplaySeq);
+    });
+
+    let replayedAfterReconnect = "";
+    const unsubscribeSecond = engine.ptyHub.subscribe(
+      sessionId,
+      (frame) => {
+        if (frame.type === "pty.replay") {
+          replayedAfterReconnect += frame.chunks.join("");
+        } else if (frame.type === "pty.output") {
+          replayedAfterReconnect += frame.data;
+        }
+      },
+      { fromSeq: nextReplaySeq },
+    );
+    await waitFor(() => {
+      assert.match(replayedAfterReconnect, /ZELLIJ_CODEX_INPUT:captured while disconnected/);
+    });
+
+    unsubscribeSecond();
+    await engine.closeSession(sessionId, { clientId: "web-zellij-reconnect" });
+  } finally {
+    await engine.shutdown();
+    restoreBinary();
+    restoreSocketDir();
+    restoreRahHome();
+    rmSync(socketDir, { force: true, recursive: true });
+    rmSync(workspace, { force: true, recursive: true });
+  }
+});
+
 test("zellij_tui archive closes the zellij pane and session", async (t) => {
   if (await skipIfZellijUnavailable(t)) {
     return;
