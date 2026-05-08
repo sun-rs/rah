@@ -20,6 +20,7 @@ import type {
 const DEFAULT_ZELLIJ_SOCKET_DIR = "/tmp/rah-zellij-sock";
 const ZELLIJ_SOCKET_DIR_ENV = "RAH_ZELLIJ_SOCKET_DIR";
 const DEFAULT_COMMAND_TIMEOUT_MS = 10_000;
+const WRITE_BYTES_CHUNK_SIZE = 512;
 
 type ExecResult = {
   stdout: string;
@@ -312,6 +313,22 @@ export class ZellijMuxBackend implements MuxRuntime {
       paneId,
       text,
     ]);
+  }
+
+  async writeBytes(sessionName: string, paneId: MuxPaneId, data: string): Promise<void> {
+    const bytes = Buffer.from(data, "utf8");
+    for (let offset = 0; offset < bytes.length; offset += WRITE_BYTES_CHUNK_SIZE) {
+      const chunk = bytes.subarray(offset, offset + WRITE_BYTES_CHUNK_SIZE);
+      await this.exec([
+        "--session",
+        sessionName,
+        "action",
+        "write",
+        "--pane-id",
+        paneId,
+        ...[...chunk].map((byte) => String(byte)),
+      ]);
+    }
   }
 
   async sendKeys(sessionName: string, paneId: MuxPaneId, keys: string[]): Promise<void> {

@@ -401,9 +401,28 @@ export class RuntimeTerminalCoordinator {
   handleNativeTuiInput(sessionId: string, clientId: string, text: string): boolean {
     const zellij = this.zellijTuiSessions.get(sessionId);
     if (zellij) {
+      const native = this.nativeTuiSessions.get(sessionId);
+      if (!native) {
+        throw new Error("Native TUI process is not running.");
+      }
       this.claimWebControl(sessionId, clientId);
-      void this.injectZellijTuiChatInput(zellij, text);
-      this.updateNativeTuiPromptState(sessionId, "agent_busy");
+      if (native.promptState !== "prompt_clean") {
+        const queued = enqueueNativeTuiQueuedInput(
+          native,
+          {
+            clientId,
+            text,
+            queuedAt: new Date().toISOString(),
+          },
+          20,
+        );
+        if (!queued) {
+          throw new Error("Native TUI input queue is full.");
+        }
+        this.updateNativeTuiPromptState(sessionId, native.promptState);
+        return true;
+      }
+      this.injectNativeTuiChatInput(native, clientId, text);
       return true;
     }
     const native = this.nativeTuiSessions.get(sessionId);
@@ -455,15 +474,35 @@ export class RuntimeTerminalCoordinator {
     if (zellij) {
       const native = this.nativeTuiSessions.get(sessionId);
       this.claimWebControl(sessionId, clientId);
+      const activeTurnId = this.deps.sessionStore.getSession(sessionId)?.activeTurnId;
+      if (native) {
+        cancelNativeTuiQueuedInputsForClient(native, clientId);
+        native.promptTracker.draftText = "";
+        delete native.lastInjectedInputAtMs;
+        native.stopPending = true;
+        if (activeTurnId) {
+          native.stopTurnId = activeTurnId;
+        } else {
+          delete native.stopTurnId;
+        }
+        this.scheduleNativeTuiInterruptConfirmation(native);
+        const currentState = this.deps.sessionStore.getSession(sessionId);
+        if (currentState?.session.runtimeState !== "running") {
+          this.deps.sessionStore.setRuntimeState(sessionId, "running");
+          publishSessionStateChanged(this.deps, sessionId, "running");
+        }
+      }
       void this.zellijMux.sendKeys(zellij.zellijSessionName, zellij.paneId, [
         ...nativeTuiInterruptKeysForProvider(native?.provider ?? "codex"),
-      ]);
-      this.updateNativeTuiPromptState(sessionId, "prompt_clean");
+      ]).catch((error) => {
+        this.handleZellijTuiInputFailure(zellij, error);
+      });
       this.deps.eventBus.publish({
         sessionId,
         type: "runtime.status",
         source: SYSTEM_SOURCE,
         payload: { status: "stopping", detail: "Interrupt requested" },
+        ...(activeTurnId ? { turnId: activeTurnId } : {}),
       });
       return true;
     }
@@ -659,7 +698,9 @@ export class RuntimeTerminalCoordinator {
       if (native) {
         this.observeNativeTuiPtyInput(native, data);
       }
-      void this.writeZellijTuiInput(zellij, data);
+      void this.writeZellijTuiInput(zellij, data).catch((error) => {
+        this.handleZellijTuiInputFailure(zellij, error);
+      });
       return true;
     }
     if (!this.ptySessions.has(sessionId)) {
@@ -974,14 +1015,6 @@ export class RuntimeTerminalCoordinator {
     return true;
   }
 
-  private async injectZellijTuiChatInput(
-    zellij: ZellijTuiSessionState,
-    text: string,
-  ): Promise<void> {
-    await this.zellijMux.writeChars(zellij.zellijSessionName, zellij.paneId, text);
-    await this.zellijMux.sendKeys(zellij.zellijSessionName, zellij.paneId, ["Enter"]);
-  }
-
   private registerZellijTuiRuntime(args: {
     sessionId: string;
     provider: ProviderKind;
@@ -1005,7 +1038,9 @@ export class RuntimeTerminalCoordinator {
       shell: "zellij",
       cwd: args.cwd,
       write: (data: string) => {
-        void this.writeZellijTuiInput(zellij, data);
+        void this.writeZellijTuiInput(zellij, data).catch((error) => {
+          this.handleZellijTuiInputFailure(zellij, error);
+        });
       },
       resize: () => undefined,
       close: async () => {
@@ -1052,34 +1087,29 @@ export class RuntimeTerminalCoordinator {
     zellij: ZellijTuiSessionState,
     data: string,
   ): Promise<void> {
-    let textBuffer = "";
-    const flushText = async () => {
-      if (!textBuffer) {
-        return;
-      }
-      const text = textBuffer;
-      textBuffer = "";
-      await this.zellijMux.writeChars(zellij.zellijSessionName, zellij.paneId, text);
-    };
-    for (const char of data) {
-      if (char === "\r" || char === "\n") {
-        await flushText();
-        await this.zellijMux.sendKeys(zellij.zellijSessionName, zellij.paneId, ["Enter"]);
-        continue;
-      }
-      if (char === "\u001b") {
-        await flushText();
-        await this.zellijMux.sendKeys(zellij.zellijSessionName, zellij.paneId, ["Esc"]);
-        continue;
-      }
-      if (char === "\u0003") {
-        await flushText();
-        await this.zellijMux.sendKeys(zellij.zellijSessionName, zellij.paneId, ["Ctrl c"]);
-        continue;
-      }
-      textBuffer += char;
+    await this.zellijMux.writeBytes(zellij.zellijSessionName, zellij.paneId, data);
+  }
+
+  private handleZellijTuiInputFailure(zellij: ZellijTuiSessionState, error: unknown): void {
+    if (isZellijSessionMissingError(error)) {
+      void this.pollZellijTuiExit(zellij.sessionId);
+      return;
     }
-    await flushText();
+    console.warn("[rah] failed to write zellij TUI input", {
+      sessionId: zellij.sessionId,
+      zellijSessionName: zellij.zellijSessionName,
+      paneId: zellij.paneId,
+      error,
+    });
+    this.deps.eventBus.publish({
+      sessionId: zellij.sessionId,
+      type: "runtime.status",
+      source: SYSTEM_SOURCE,
+      payload: {
+        status: "error",
+        detail: "Failed to write input to zellij TUI.",
+      },
+    });
   }
 
   private async pollZellijTuiExit(sessionId: string): Promise<void> {

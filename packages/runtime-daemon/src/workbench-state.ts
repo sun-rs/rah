@@ -1,5 +1,6 @@
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import type { ManagedSession, StoredSessionRef } from "@rah/runtime-protocol";
@@ -252,7 +253,7 @@ function mergeRememberedSessions(
 }
 
 async function writeJsonAtomic(pathname: string, value: unknown): Promise<void> {
-  const tmpPath = `${pathname}.${process.pid}.${Date.now()}.tmp`;
+  const tmpPath = `${pathname}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`;
   await writeFile(tmpPath, JSON.stringify(value, null, 2), "utf8");
   await rename(tmpPath, pathname);
 }

@@ -150,3 +150,61 @@ test("zellij mux backend controls a fake shell pane and observes exit state", as
     rmSync(socketDir, { force: true, recursive: true });
   }
 });
+
+test("zellij mux backend writes raw terminal bytes without interpreting escape sequences", async (t) => {
+  const socketDir = path.join(os.tmpdir(), `rah-zellij-raw-${process.pid}`);
+  const backend = new ZellijMuxBackend({ socketDir });
+  if (await skipIfZellijUnavailable(t, backend)) {
+    return;
+  }
+
+  const sessionName = createShortZellijSessionName("rz");
+  try {
+    const created = await backend.createSession({
+      sessionName,
+      cwd: process.cwd(),
+      title: "rah-zellij-raw",
+      command: process.execPath,
+      args: [
+        "-e",
+        [
+          "process.stdin.setRawMode?.(true)",
+          "process.stdin.resume()",
+          "process.stdout.write('RAW_READY\\n')",
+          "process.stdin.on('data', (chunk) => {",
+          "  process.stdout.write('RAW_HEX:' + [...chunk].map((byte) => byte.toString(16).padStart(2, '0')).join(' ') + '\\n')",
+          "  if (chunk.includes(4)) process.exit(0)",
+          "})",
+          "setInterval(() => undefined, 1000)",
+        ].join(";"),
+      ],
+      replaceDefaultPane: true,
+    });
+
+    await waitFor(async () =>
+      (await backend.dumpScreen(sessionName, created.paneId, { full: true })).includes(
+        "RAW_READY",
+      ),
+    );
+
+    await backend.writeBytes(sessionName, created.paneId, "\u001b[A中\r");
+    await waitFor(async () => {
+      const dumped = await backend.dumpScreen(sessionName, created.paneId, { full: true });
+      return /RAW_HEX:.*1b 5b 41 e4 b8 ad 0d/.test(dumped);
+    });
+
+    await backend.writeBytes(sessionName, created.paneId, "\u0004");
+    await waitFor(async () => {
+      const panes = await backend.listPanes(sessionName);
+      return panes.some(
+        (candidate) =>
+          candidate.paneId === created.paneId &&
+          candidate.exited &&
+          candidate.exitStatus === 0,
+      );
+    });
+  } finally {
+    await backend.killSession(sessionName).catch(() => undefined);
+    rmSync(socketDir, { force: true, recursive: true });
+  }
+});

@@ -76,6 +76,7 @@ export interface MuxRuntime {
     options?: SubscribeMuxPaneOptions,
   ): MuxPaneSubscription;
   writeChars(sessionName: string, paneId: MuxPaneId, text: string): Promise<void>;
+  writeBytes(sessionName: string, paneId: MuxPaneId, data: string): Promise<void>;
   sendKeys(sessionName: string, paneId: MuxPaneId, keys: string[]): Promise<void>;
   closePane(sessionName: string, paneId: MuxPaneId): Promise<void>;
   killSession(sessionName: string): Promise<void>;

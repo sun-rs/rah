@@ -42,7 +42,9 @@ The final product decision is still blocked by real provider and device QA:
 | `rah codex --mux zellij` CLI request | `rah-cli-pty-first.test.ts` | Tested with fake daemon |
 | Local terminal zellij attach | `rah-cli-pty-first.test.ts` verifies zellij attach command/env | Tested with fake zellij |
 | Web chat input to zellij pane | `zellij-tui-runtime.test.ts` sends input through engine | Tested with fake providers |
-| Stop uses provider-native key | zellij path sends `Esc` for Codex/Claude, double `Esc` for OpenCode | Tested with fake providers |
+| Web TUI raw input passthrough | zellij path uses `action write` bytes, not partial key parsing | Tested with fake pane |
+| Web Chat input waits on dirty prompt | zellij Chat input is queued while the local TUI prompt has an unsubmitted draft | Tested |
+| Stop uses provider-native key | zellij path sends `Esc` for Codex/Claude, double `Esc` for OpenCode, then waits for prompt-clean/timeout before idle | Tested with fake providers |
 | `/exit` / pane exit syncs to RAH archive semantics | `pollZellijTuiExit()` removes live session and emits `session.closed` | Tested |
 | Web archive closes zellij pane/session | `closeZellijTuiSession()` closes pane then kills session fallback | Tested |
 | Recover persisted zellij live session after daemon restart | `restoreZellijTuiSession()` | Tested |
@@ -59,7 +61,7 @@ These commands passed after the latest zellij lifecycle and diagnostics changes:
 
 ```bash
 npm run typecheck
-npm run test:runtime   # 365 pass
+npm run test:runtime   # 367 pass
 npm run test:web       # 160 pass
 npm run build:web
 git diff --check
@@ -70,18 +72,68 @@ Additional targeted evidence:
 ```bash
 node --import tsx --test \
   packages/runtime-daemon/src/zellij-mux-backend.test.ts \
-  packages/runtime-daemon/src/zellij-tui-runtime.test.ts \
-  packages/runtime-daemon/src/http-server.test.ts
+  packages/runtime-daemon/src/zellij-tui-runtime.test.ts
 ```
 
 This targeted suite covers:
 
 - fake shell zellij pane input/dump/subscribe/exit,
+- raw terminal byte passthrough, including `ESC [ A` and UTF-8 text,
 - Codex / Claude / OpenCode fake zellij runtime,
+- dirty-prompt queueing before Web Chat injection,
 - archive closes zellij pane/session,
 - unmanaged RAH zellij session close,
 - persisted zellij recovery,
 - non-RAH zellij close rejection.
+
+Latest targeted result:
+
+```bash
+node --import tsx --test --test-concurrency=1 --test-force-exit \
+  packages/runtime-daemon/src/zellij-mux-backend.test.ts \
+  packages/runtime-daemon/src/zellij-tui-runtime.test.ts
+
+# 13 pass
+```
+
+Optional real-provider launch probe:
+
+```bash
+RAH_ZELLIJ_REAL_TUI_PROBE_ALLOW_FAILURES=1 npm run test:smoke:zellij-real-tui-launch
+```
+
+This probe launches real Codex / Claude / OpenCode CLIs through the `zellij_tui` backend, observes zellij diagnostics and `dump-screen`, then closes the RAH session. It does not send a model prompt and does not replace human Stop, `/exit`, browser, or iPad/PWA QA.
+
+Latest observed probe result:
+
+- Codex launched through zellij with `--no-alt-screen` and produced visible TUI output.
+- Claude launched through zellij and stopped at the official workspace trust prompt in a new test directory. This is expected provider UI, but it means Web Chat input must not be treated as proven until a human confirms the trust prompt flow.
+- OpenCode launched through zellij and exposed a managed pane that could be diagnosed and closed; in the short non-prompt probe it did not produce visible text before close.
+- All three probe sessions were closed through RAH and were gone from the probe socket after close.
+
+## Edge Case Audit
+
+Code-covered edges:
+
+1. One RAH session maps to one deterministic short `rah-*` zellij session, reducing cross-session collision risk.
+2. Multiple simultaneous Codex / Claude / OpenCode fake sessions are isolated in separate zellij sessions.
+3. WebSocket PTY input is authorized by daemon-side control lease; the URL session id is authoritative.
+4. Web TUI input is byte-level passthrough through `zellij action write`, so arrow keys, control sequences, and UTF-8 text are not manually reinterpreted by RAH.
+5. Web Chat input does not inject into a dirty TUI prompt; it queues until prompt clean, with a max queue length.
+6. Stop does not immediately mark the session idle; it publishes `stopping` and clears only after prompt-clean observation or timeout.
+7. `/exit`, provider pane exit, missing zellij session, and archive all clear RAH live state and remove the PTY hub state.
+8. Archive attempts close-pane first and then kill-session fallback, preventing common orphan zellij sessions.
+9. Daemon restart can recover persisted zellij live sessions only when socket dir and pane still match.
+10. Workbench state atomic writes use a UUID temp path to avoid concurrent daemon/test write collisions.
+
+Still not code-proven:
+
+1. Real Codex / Claude / OpenCode stop semantics during a live model turn.
+2. Real provider trust-folder/login/quota/API-error UI flows.
+3. zellij multi-client resize behavior, because zellij 0.44.2 does not expose an absolute cols/rows resize API for a target pane.
+4. iPad/Safari keyboard and IME viewport stability.
+5. Long-running sessions with high-frequency TUI redraws and large scrollback.
+6. Whether real OpenCode produces readable subscribe/dump output fast enough for Web TUI in all startup states.
 
 ## Remaining Human QA
 
