@@ -48,6 +48,7 @@ export type RahEventFamily =
   | "usage"
   | "runtime"
   | "terminal"
+  | "council"
   | "attention"
   | "notification"
   | "host"
@@ -101,6 +102,7 @@ export const RAH_EVENT_TYPE_FAMILY = {
   "runtime.status": "runtime",
   "terminal.output": "terminal",
   "terminal.exited": "terminal",
+  "council.message.created": "council",
   "attention.required": "attention",
   "attention.cleared": "attention",
   "notification.emitted": "notification",
@@ -123,6 +125,7 @@ export const RAH_CORE_WORKBENCH_FAMILIES = [
   "usage",
   "attention",
   "terminal",
+  "council",
 ] as const satisfies readonly RahEventFamily[];
 
 const RAH_CORE_WORKBENCH_FAMILY_SET = new Set<RahEventFamily>(RAH_CORE_WORKBENCH_FAMILIES);
@@ -2307,6 +2310,33 @@ function validatePayload(event: RahEvent, sink: IssueSink) {
       }
       break;
     case "terminal.exited":
+      break;
+    case "council.message.created":
+      if (!isRecord(payload.room) || !isRecord(payload.message)) {
+        addIssue(
+          sink,
+          "error",
+          "council.message_created.invalid",
+          "council message created payload requires room and message objects",
+          "payload",
+        );
+      } else {
+        const roomPayload = payload.room;
+        const messagePayload = payload.message;
+        const innerRoom = isRecord(roomPayload.room) ? roomPayload.room : {};
+        if (!isNonEmptyString(innerRoom.id)) {
+          addIssue(sink, "error", "council.room.id.invalid", "council room id must be non-empty", "payload.room.room.id");
+        }
+        if (!isNonEmptyString(messagePayload.actorId) || !isNonEmptyString(messagePayload.roomId)) {
+          addIssue(
+            sink,
+            "error",
+            "council.message.identity.invalid",
+            "council message roomId and actorId must be non-empty",
+            "payload.message",
+          );
+        }
+      }
       break;
     case "attention.required":
       validateAttentionItem(payload.item as AttentionItem, sink, "payload.item");

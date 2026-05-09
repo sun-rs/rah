@@ -29,7 +29,10 @@ import {
 } from "./terminal-wrapper-control";
 import { EventBus } from "./event-bus";
 import { applyLocalTerminalInput } from "./native-tui-prompt-state";
-import { buildExternalLockedModeState } from "./session-mode-utils";
+import {
+  buildExternalLockedModeState,
+  providerModeDescriptors,
+} from "./session-mode-utils";
 import { resolveUserPath } from "./workbench-directory-utils";
 import type { NativeTuiLaunchSpec } from "./native-tui-launch-spec";
 import type {
@@ -125,6 +128,61 @@ function initialZellijTuiPromptState(provider: ProviderKind): TerminalWrapperPro
   return provider === "codex" || provider === "claude" || provider === "opencode"
     ? "agent_busy"
     : "prompt_clean";
+}
+
+function providerPrimaryModelOptionId(provider: ProviderKind): string | null {
+  switch (provider) {
+    case "codex":
+      return "model_reasoning_effort";
+    case "claude":
+      return "effort";
+    case "opencode":
+      return "model_reasoning_variant";
+    case "custom":
+    default:
+      return null;
+  }
+}
+
+function nativeTuiStartupSessionPatch(
+  launch: NativeTuiLaunchSpec,
+): Pick<ManagedSession, "mode"> &
+  Partial<Pick<ManagedSession, "model" | "config">> {
+  const patch: Pick<ManagedSession, "mode"> &
+    Partial<Pick<ManagedSession, "model" | "config">> = {
+    mode: launch.modeId
+      ? {
+          currentModeId: launch.modeId,
+          availableModes: providerModeDescriptors(launch.provider, {
+            planAvailable: false,
+          }),
+          mutable: false,
+          source: "external_locked",
+        }
+      : buildExternalLockedModeState(),
+  };
+  if (launch.modelId) {
+    patch.model = {
+      currentModelId: launch.modelId,
+      ...(launch.reasoningId !== undefined ? { currentReasoningId: launch.reasoningId } : {}),
+      availableModels: [],
+      mutable: false,
+      source: "native",
+    };
+  }
+  const optionValues = launch.optionValues ?? (() => {
+    const optionId = providerPrimaryModelOptionId(launch.provider);
+    return optionId && launch.reasoningId !== undefined
+      ? { [optionId]: launch.reasoningId }
+      : undefined;
+  })();
+  if (optionValues !== undefined) {
+    patch.config = {
+      values: optionValues,
+      source: "runtime_session",
+    };
+  }
+  return patch;
 }
 
 function isPromptResetControlInput(data: string): boolean {
@@ -612,7 +670,7 @@ export class RuntimeTerminalCoordinator {
     native.process.write("\u001b");
     const timer = setTimeout(() => {
       const current = this.nativeTuiSessions.get(native.sessionId);
-      if (current === native && current.stopPending) {
+      if (current === native) {
         current.process.write("\u001b");
       }
     }, OPENCODE_SECOND_INTERRUPT_DELAY_MS);
@@ -633,7 +691,7 @@ export class RuntimeTerminalCoordinator {
       .then(async () => {
         await new Promise((resolve) => setTimeout(resolve, OPENCODE_SECOND_INTERRUPT_DELAY_MS));
         const native = this.nativeTuiSessions.get(zellij.sessionId);
-        if (this.isCurrentZellijTuiSession(zellij) && native?.stopPending) {
+        if (this.isCurrentZellijTuiSession(zellij) && native) {
           await sendEsc();
         }
       })
@@ -1030,7 +1088,7 @@ export class RuntimeTerminalCoordinator {
         queuedInputCount: 0,
       },
       ptyId: sessionId,
-      mode: buildExternalLockedModeState(),
+      ...nativeTuiStartupSessionPatch(args.launch),
       capabilities: buildNativeTuiSessionCapabilities(args.launch.provider),
     });
     this.deps.ptyHub.ensureSession(sessionId);
@@ -1164,7 +1222,7 @@ export class RuntimeTerminalCoordinator {
         socketDir: this.zellijMux.getSocketDir(),
       },
       ptyId: sessionId,
-      mode: buildExternalLockedModeState(),
+      ...nativeTuiStartupSessionPatch(launch),
       capabilities: buildZellijTuiSessionCapabilities(launch.provider),
     });
     this.deps.ptyHub.ensureSession(sessionId);

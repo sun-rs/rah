@@ -3,6 +3,13 @@ import type {
   AttachSessionResponse,
   CloseZellijMuxSessionResponse,
   CloseSessionRequest,
+  CouncilAgentTuiResponse,
+  CouncilMcpRequest,
+  CouncilMcpResponse,
+  CouncilPostMessageRequest,
+  CouncilPostMessageResponse,
+  CreateCouncilRoomRequest,
+  CreateCouncilRoomResponse,
   DebugScenarioDescriptor,
   DetachSessionRequest,
   EventBatch,
@@ -22,6 +29,7 @@ import type {
   ListPtyStatsResponse,
   ListProviderModelsResponse,
   ListProvidersResponse,
+  ListCouncilRoomsResponse,
   ListZellijMuxDiagnosticsResponse,
   NativeTuiDiagnostic,
   NativeTuiSurfaceResponse,
@@ -676,6 +684,57 @@ export async function readSessionHistory(
   return requestJson<SessionHistoryPageResponse>(
     `/api/sessions/${sessionId}/history${suffix}`,
   );
+}
+
+export async function listCouncilRooms(): Promise<ListCouncilRoomsResponse> {
+  return requestJson<ListCouncilRoomsResponse>("/api/council/rooms");
+}
+
+export async function createCouncilRoom(
+  request: CreateCouncilRoomRequest,
+): Promise<CreateCouncilRoomResponse> {
+  return requestJson<CreateCouncilRoomResponse>("/api/council/rooms", {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
+}
+
+export async function postCouncilMessage(
+  roomId: string,
+  request: CouncilPostMessageRequest,
+): Promise<CouncilPostMessageResponse> {
+  return requestJson<CouncilPostMessageResponse>(
+    `/api/council/rooms/${encodeURIComponent(roomId)}/messages`,
+    {
+      method: "POST",
+      body: JSON.stringify(request),
+    },
+  );
+}
+
+export async function archiveCouncilRoom(roomId: string): Promise<{ ok: true }> {
+  return requestJson<{ ok: true }>(
+    `/api/council/rooms/${encodeURIComponent(roomId)}/archive`,
+    { method: "POST", body: JSON.stringify({}) },
+  );
+}
+
+export async function getCouncilAgentTui(
+  roomId: string,
+  agentId: string,
+): Promise<CouncilAgentTuiResponse> {
+  return requestJson<CouncilAgentTuiResponse>(
+    `/api/council/rooms/${encodeURIComponent(roomId)}/agents/${encodeURIComponent(agentId)}/tui`,
+  );
+}
+
+export async function callCouncilMcpTool(
+  request: CouncilMcpRequest,
+): Promise<CouncilMcpResponse> {
+  return requestJson<CouncilMcpResponse>("/api/council/mcp", {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
 }
 
 export function createEventsSocket(

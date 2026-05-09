@@ -58,22 +58,21 @@ test("provider mode descriptors expose stable UI roles", () => {
 
 test("provider mode descriptors expose adapter-owned apply timing", () => {
   assert.deepEqual(applyTimings("codex"), {
-    "on-request/read-only": "next_turn",
-    plan: "next_turn",
-    "on-request/workspace-write": "next_turn",
-    "never/workspace-write": "next_turn",
-    "never/danger-full-access": "next_turn",
+    "on-request/read-only": "startup_only",
+    "on-request/workspace-write": "startup_only",
+    "never/workspace-write": "startup_only",
+    "never/danger-full-access": "startup_only",
   });
   assert.deepEqual(applyTimings("claude"), {
-    default: "immediate",
-    acceptEdits: "immediate",
-    plan: "immediate",
-    bypassPermissions: "immediate",
+    default: "startup_only",
+    acceptEdits: "startup_only",
+    plan: "startup_only",
+    bypassPermissions: "startup_only",
   });
   assert.deepEqual(applyTimings("opencode"), {
-    build: "next_turn",
-    "opencode/full-auto": "next_turn",
-    plan: "next_turn",
+    build: "startup_only",
+    "opencode/full-auto": "startup_only",
+    plan: "startup_only",
   });
 });
 

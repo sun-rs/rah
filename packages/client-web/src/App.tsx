@@ -79,6 +79,9 @@ const WorkbenchTerminalDialog = lazy(async () => ({
 const InspectorPane = lazy(async () => ({
   default: (await import("./InspectorPane")).InspectorPane,
 }));
+const CouncilPage = lazy(async () => ({
+  default: (await import("./council/CouncilPage")).CouncilPage,
+}));
 
 type ModelDraft = {
   modelId?: string | null;
@@ -86,7 +89,7 @@ type ModelDraft = {
   optionValues?: Record<string, SessionConfigValue>;
 };
 
-type WorkbenchMode = "single" | "canvas";
+type WorkbenchMode = "single" | "canvas" | "council";
 type CanvasNewSessionDraft = {
   provider: ProviderChoice;
   modeDrafts: Record<ProviderChoice, SessionModeDraft>;
@@ -728,7 +731,7 @@ export function App() {
       unreadSessionIds={unreadSessionIds}
       runtimeStatusBySessionId={runtimeStatusBySessionId}
       onSelectSession={(workspaceDir, id) => {
-        if (workbenchMode === "canvas") {
+        if (workbenchMode !== "single") {
           setWorkbenchMode("single");
         }
         setSelectedWorkspaceOnlyDir(null);
@@ -737,7 +740,7 @@ export function App() {
         setLeftOpen(false);
       }}
       onSelectWorkspace={(dir) => {
-        if (workbenchMode === "canvas") {
+        if (workbenchMode !== "single") {
           setWorkbenchMode("single");
         }
         setSelectedWorkspaceOnlyDir(dir);
@@ -756,7 +759,7 @@ export function App() {
 
   const handleActivateHistorySession = (ref: typeof storedSessions[number]) => {
     setLeftOpen(false);
-    if (workbenchMode === "canvas") {
+    if (workbenchMode !== "single") {
       setWorkbenchMode("single");
     }
     void activateHistorySession(ref, { confirmCreateMissingWorkspace });
@@ -764,7 +767,7 @@ export function App() {
 
   const handleActivateLiveSession = (sessionId: string) => {
     setLeftOpen(false);
-    if (workbenchMode === "canvas") {
+    if (workbenchMode !== "single") {
       setWorkbenchMode("single");
     }
     const projection = projections.get(sessionId);
@@ -834,6 +837,13 @@ export function App() {
         workspaceSortMode={historyWorkspaceSortMode}
         onWorkspaceSortModeChange={setHistoryWorkspaceSortMode}
         canvasActive={workbenchMode === "canvas"}
+        councilActive={workbenchMode === "council"}
+        onOpenCouncil={() => {
+          setWorkbenchMode("council");
+          setRightSidebarOpen(false);
+          setRightOpen(false);
+          setLeftOpen(false);
+        }}
         onDesktopHome={() => {
           setWorkbenchMode("single");
           setSelectedWorkspaceOnlyDir(null);
@@ -1031,7 +1041,20 @@ export function App() {
       <WorkbenchErrorBoundary resetKey={`${workbenchMode}:${selectedSessionId ?? primaryPaneState.kind}`}>
         {/* Center chat */}
         <main className="flex-1 flex flex-col min-w-0 overflow-x-hidden overflow-y-hidden">
-          {workbenchMode === "canvas" ? (
+          {workbenchMode === "council" ? (
+            <Suspense
+              fallback={
+                <div className="flex h-full items-center justify-center text-sm text-[var(--app-hint)]">
+                  Loading council…
+                </div>
+              }
+            >
+              <CouncilPage
+                workspaceDir={availableWorkspaceDir ?? workspaceDir ?? ""}
+                onOpenSidebar={() => setLeftOpen(true)}
+              />
+            </Suspense>
+          ) : workbenchMode === "canvas" ? (
             <CanvasWorkbench
               panes={visibleCanvasPaneIds.map((paneId, index) => {
                 const projection = resolveCanvasProjection(paneId);

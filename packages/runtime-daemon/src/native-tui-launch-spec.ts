@@ -19,6 +19,7 @@ import {
   codexLaunchSpec,
   opencodeLaunchSpec,
 } from "./provider-diagnostics";
+import { buildOpenCodeProviderModelId } from "./opencode-model-catalog";
 import { discoverCodexStoredSessions } from "./codex-stored-sessions";
 import {
   codexHomeForRolloutPath,
@@ -27,6 +28,7 @@ import {
 import { optionValueAsString } from "./session-model-options";
 import {
   isClaudeModeId,
+  isOpenCodeModeId,
   parseCodexModeId,
 } from "./session-mode-utils";
 
@@ -39,12 +41,28 @@ export interface NativeTuiLaunchSpec {
   preview: string;
   providerSessionId?: string;
   env?: Record<string, string>;
+  modeId?: string;
+  modelId?: string;
+  reasoningId?: string | null;
+  optionValues?: Record<string, SessionConfigValue>;
 }
 
 type ModelRequest = {
   model?: string;
   reasoningId?: string | null;
   optionValues?: Record<string, SessionConfigValue>;
+};
+
+export interface NativeTuiMcpServerSpec {
+  name: string;
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+}
+
+export type NativeTuiStartLaunchSpecRequest = StartSessionRequest & {
+  extraMcpServers?: NativeTuiMcpServerSpec[];
+  initialPrompt?: string;
 };
 
 function claudeConfigPath(): string {
@@ -136,10 +154,95 @@ function optionString(
   return optionValueAsString(optionValues ?? {}, optionId);
 }
 
-function appendCodexCommonArgs(args: string[], request: Pick<StartSessionRequest, "cwd" | "model">): void {
+function configString(value: string): string {
+  return JSON.stringify(value);
+}
+
+function configStringArray(values: readonly string[] | undefined): string {
+  return JSON.stringify(values ?? []);
+}
+
+function configInlineStringTable(values: Record<string, string> | undefined): string | null {
+  const entries = Object.entries(values ?? {});
+  if (entries.length === 0) {
+    return null;
+  }
+  return `{ ${entries
+    .map(([key, value]) => `${key} = ${configString(value)}`)
+    .join(", ")} }`;
+}
+
+function normalizeMcpServerName(name: string): string {
+  return name
+    .trim()
+    .replace(/[^A-Za-z0-9_-]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 48) || "rah_council";
+}
+
+function appendCodexMcpArgs(args: string[], servers: readonly NativeTuiMcpServerSpec[] | undefined): void {
+  for (const server of servers ?? []) {
+    const name = normalizeMcpServerName(server.name);
+    args.push(
+      "-c",
+      `mcp_servers.${name}.command=${configString(server.command)}`,
+      "-c",
+      `mcp_servers.${name}.args=${configStringArray(server.args)}`,
+    );
+    const env = configInlineStringTable(server.env);
+    if (env) {
+      args.push("-c", `mcp_servers.${name}.env=${env}`);
+    }
+  }
+}
+
+function appendClaudeMcpArgs(args: string[], servers: readonly NativeTuiMcpServerSpec[] | undefined): void {
+  if (!servers || servers.length === 0) {
+    return;
+  }
+  const mcpServers: Record<string, { command: string; args?: string[]; env?: Record<string, string> }> = {};
+  for (const server of servers) {
+    mcpServers[normalizeMcpServerName(server.name)] = {
+      command: server.command,
+      ...(server.args ? { args: server.args } : {}),
+      ...(server.env ? { env: server.env } : {}),
+    };
+  }
+  args.push("--mcp-config", JSON.stringify({ mcpServers }));
+}
+
+function resolveOptionOrReasoning(
+  request: ModelRequest,
+  optionId: string,
+): string | null | undefined {
+  return optionString(request.optionValues, optionId) ??
+    (request.reasoningId === undefined ? undefined : request.reasoningId);
+}
+
+function launchConfigMetadata(
+  request: ModelRequest & { modeId?: string },
+  optionId: string,
+): Pick<NativeTuiLaunchSpec, "modeId" | "modelId" | "reasoningId" | "optionValues"> {
+  const reasoningId = resolveOptionOrReasoning(request, optionId);
+  return {
+    ...(request.modeId ? { modeId: request.modeId } : {}),
+    ...(request.model ? { modelId: request.model } : {}),
+    ...(reasoningId !== undefined ? { reasoningId } : {}),
+    ...(request.optionValues !== undefined ? { optionValues: request.optionValues } : {}),
+  };
+}
+
+function appendCodexCommonArgs(
+  args: string[],
+  request: Pick<StartSessionRequest, "cwd" | "model" | "reasoningId" | "optionValues">,
+): void {
   args.push("--cd", request.cwd);
   if (request.model) {
     args.push("--model", request.model);
+  }
+  const effort = resolveOptionOrReasoning(request, "model_reasoning_effort");
+  if (effort) {
+    args.push("-c", `model_reasoning_effort=${configString(effort)}`);
   }
 }
 
@@ -147,12 +250,15 @@ function appendCodexModeArgs(
   args: string[],
   request: Pick<StartSessionRequest, "modeId">,
 ): void {
-  if (!request.modeId || request.modeId === "plan") {
+  if (!request.modeId) {
     return;
+  }
+  if (request.modeId === "plan") {
+    throw new Error("Codex plan mode is a native TUI interactive toggle and cannot be pre-set at launch.");
   }
   const parsed = parseCodexModeId(request.modeId);
   if (!parsed) {
-    return;
+    throw new Error(`Unsupported Codex launch mode '${request.modeId}'.`);
   }
   if (
     parsed.approvalPolicy === "never" &&
@@ -164,6 +270,12 @@ function appendCodexModeArgs(
   args.push("--ask-for-approval", parsed.approvalPolicy, "--sandbox", parsed.sandboxMode);
 }
 
+function appendInitialPrompt(args: string[], prompt: string | undefined): void {
+  if (prompt?.trim()) {
+    args.push(prompt);
+  }
+}
+
 function appendClaudeArgs(
   args: string[],
   request: Pick<StartSessionRequest, "modeId"> & ModelRequest,
@@ -172,6 +284,9 @@ function appendClaudeArgs(
 ): void {
   const permissionMode =
     request.modeId && isClaudeModeId(request.modeId) ? request.modeId : undefined;
+  if (request.modeId && !permissionMode) {
+    throw new Error(`Unsupported Claude launch mode '${request.modeId}'.`);
+  }
   if (permissionMode) {
     args.push("--permission-mode", permissionMode);
     if (permissionMode === "bypassPermissions") {
@@ -192,25 +307,83 @@ function appendClaudeArgs(
 
 function appendOpenCodeArgs(
   args: string[],
-  request: { cwd: string } & ModelRequest,
+  request: { cwd: string; initialPrompt?: string } & ModelRequest,
   providerSessionId?: string,
 ): void {
   if (request.model) {
-    args.push("--model", request.model);
+    args.push("--model", buildOpenCodeProviderModelId({
+      modelId: request.model,
+      reasoningId: resolveOptionOrReasoning(request, "model_reasoning_variant"),
+    }));
   }
   if (providerSessionId) {
     args.push("--session", providerSessionId);
   }
+  if (request.initialPrompt?.trim()) {
+    args.push("--prompt", request.initialPrompt);
+  }
   args.push(request.cwd);
 }
 
+function openCodeEnv(args: {
+  modeId?: string;
+  extraMcpServers?: readonly NativeTuiMcpServerSpec[];
+}): Record<string, string> | undefined {
+  const config: Record<string, unknown> = {};
+  if (args.modeId && !isOpenCodeModeId(args.modeId)) {
+    throw new Error(`Unsupported OpenCode launch mode '${args.modeId}'.`);
+  }
+  if (args.modeId) {
+    if (args.modeId === "opencode/full-auto") {
+      config.permission = "allow";
+    }
+    if (args.modeId === "build" || args.modeId === "opencode/full-auto") {
+      config.default_agent = "build";
+    }
+    if (args.modeId === "plan") {
+      config.default_agent = "plan";
+    }
+  }
+  if (args.extraMcpServers && args.extraMcpServers.length > 0) {
+    config.mcp = Object.fromEntries(
+      args.extraMcpServers.map((server) => [
+        normalizeMcpServerName(server.name),
+        {
+          type: "local",
+          command: [server.command, ...(server.args ?? [])],
+          enabled: true,
+          ...(server.env ? { environment: server.env } : {}),
+        },
+      ]),
+    );
+  }
+  if (Object.keys(config).length === 0) {
+    return undefined;
+  }
+  return {
+    OPENCODE_CONFIG_CONTENT: JSON.stringify(config),
+  };
+}
+
+function openCodeEnvForRequest(request: {
+  modeId?: string;
+  extraMcpServers?: readonly NativeTuiMcpServerSpec[];
+}): Record<string, string> | undefined {
+  return openCodeEnv({
+    ...(request.modeId ? { modeId: request.modeId } : {}),
+    ...(request.extraMcpServers ? { extraMcpServers: request.extraMcpServers } : {}),
+  });
+}
+
 export async function nativeTuiStartLaunchSpec(
-  request: StartSessionRequest,
+  request: NativeTuiStartLaunchSpecRequest,
 ): Promise<NativeTuiLaunchSpec> {
   if (request.provider === "codex") {
     const { command, args } = splitLaunchArgv(await codexLaunchSpec(), "codex");
     appendCodexCommonArgs(args, request);
     appendCodexModeArgs(args, request);
+    appendCodexMcpArgs(args, request.extraMcpServers);
+    appendInitialPrompt(args, request.initialPrompt);
     const codexHome = createIsolatedCodexWrapperHome();
     return {
       provider: "codex",
@@ -220,13 +393,16 @@ export async function nativeTuiStartLaunchSpec(
       title: request.title ?? "Codex native TUI session",
       preview: previewCommand(command, args),
       env: { CODEX_HOME: codexHome },
+      ...launchConfigMetadata(request, "model_reasoning_effort"),
     };
   }
   if (request.provider === "claude") {
     const providerSessionId = randomUUID();
     const { command, args } = splitLaunchArgv(await claudeLaunchSpec(), "claude");
     trustClaudeWorkspace(request.cwd);
+    appendClaudeMcpArgs(args, request.extraMcpServers);
     appendClaudeArgs(args, request, providerSessionId, "start");
+    appendInitialPrompt(args, request.initialPrompt);
     return {
       provider: "claude",
       command,
@@ -235,11 +411,13 @@ export async function nativeTuiStartLaunchSpec(
       title: request.title ?? "Claude native TUI session",
       preview: previewCommand(command, args),
       providerSessionId,
+      ...launchConfigMetadata(request, "effort"),
     };
   }
   if (request.provider === "opencode") {
     const { command, args } = splitLaunchArgv(await opencodeLaunchSpec(), "opencode");
     appendOpenCodeArgs(args, request);
+    const env = openCodeEnvForRequest(request);
     return {
       provider: "opencode",
       command,
@@ -247,6 +425,8 @@ export async function nativeTuiStartLaunchSpec(
       cwd: request.cwd,
       title: request.title ?? "OpenCode native TUI session",
       preview: previewCommand(command, args),
+      ...(env ? { env } : {}),
+      ...launchConfigMetadata(request, "model_reasoning_variant"),
     };
   }
   throw new Error(`Native TUI live backend is not implemented for ${request.provider}.`);
@@ -264,6 +444,10 @@ export async function nativeTuiResumeLaunchSpec(
     if (request.model) {
       args.push("--model", request.model);
     }
+    const effort = resolveOptionOrReasoning(request, "model_reasoning_effort");
+    if (effort) {
+      args.push("-c", `model_reasoning_effort=${configString(effort)}`);
+    }
     appendCodexModeArgs(args, request);
     args.push(request.providerSessionId);
     const record = discoverCodexStoredSessions().find(
@@ -278,6 +462,7 @@ export async function nativeTuiResumeLaunchSpec(
       title: "Codex native TUI session",
       preview: previewCommand(command, args),
       ...(codexHome ? { env: { CODEX_HOME: codexHome } } : {}),
+      ...launchConfigMetadata(request, "model_reasoning_effort"),
     };
   }
   if (request.provider === "claude") {
@@ -292,11 +477,13 @@ export async function nativeTuiResumeLaunchSpec(
       title: "Claude native TUI session",
       preview: previewCommand(command, args),
       providerSessionId: request.providerSessionId,
+      ...launchConfigMetadata(request, "effort"),
     };
   }
   if (request.provider === "opencode") {
     const { command, args } = splitLaunchArgv(await opencodeLaunchSpec(), "opencode");
     appendOpenCodeArgs(args, { ...request, cwd: request.cwd }, request.providerSessionId);
+    const env = openCodeEnvForRequest(request);
     return {
       provider: "opencode",
       command,
@@ -305,6 +492,8 @@ export async function nativeTuiResumeLaunchSpec(
       title: "OpenCode native TUI session",
       preview: previewCommand(command, args),
       providerSessionId: request.providerSessionId,
+      ...(env ? { env } : {}),
+      ...launchConfigMetadata(request, "model_reasoning_variant"),
     };
   }
   throw new Error(`Native TUI live backend is not implemented for ${request.provider}.`);

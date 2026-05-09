@@ -1,5 +1,5 @@
 import type { StoredSessionRef, SessionSummary } from "@rah/runtime-protocol";
-import { Columns3, History, Home, Settings } from "lucide-react";
+import { Columns3, History, Home, Settings, UsersRound } from "lucide-react";
 import { SessionHistoryDialog } from "../../SessionHistoryDialog";
 import type { WorkspaceSortMode } from "../../../session-browser";
 
@@ -13,7 +13,9 @@ export function MobileWorkbenchHeaderActions(props: {
   workspaceSortMode: WorkspaceSortMode;
   onWorkspaceSortModeChange: (value: WorkspaceSortMode) => void;
   canvasActive: boolean;
+  councilActive: boolean;
   canvasEnabled: boolean;
+  onOpenCouncil: () => void;
   onHome: () => void;
   onToggleCanvas: () => void;
   onActivateHistory: (ref: StoredSessionRef) => void;
@@ -24,6 +26,19 @@ export function MobileWorkbenchHeaderActions(props: {
 }) {
   return (
     <div className="flex items-center gap-1">
+      <button
+        type="button"
+        className={`${headerButtonClassName} ${
+          props.councilActive
+            ? "bg-[var(--app-bg)] text-[var(--app-fg)]"
+            : "text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)]"
+        }`}
+        onClick={props.onOpenCouncil}
+        aria-label="Open council"
+        title="Council"
+      >
+        <UsersRound size={16} />
+      </button>
       <button
         type="button"
         className={`${headerButtonClassName} ${

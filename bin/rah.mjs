@@ -65,6 +65,7 @@ function printUsage() {
       "  rah restart",
       "  rah logs [--follow]",
       "  rah attach <rahSessionId>",
+      "  rah council-mcp --room <roomId> --actor <actorId>",
       "  rah <provider>",
       "  rah <provider> resume <providerSessionId>",
       "",
@@ -113,7 +114,7 @@ function parseManagementArgs(command, argv) {
   }
   while (rest.length > 0) {
     const option = rest.shift();
-    if (option === "--daemon-url") {
+    if (option === "--daemon-url" || option === "--daemon") {
       daemonUrl = rest.shift() ?? daemonUrl;
       continue;
     }
@@ -142,12 +143,42 @@ function parseManagementArgs(command, argv) {
   return { command, daemonUrl, build, open, follow, ...(sessionId ? { sessionId } : {}) };
 }
 
+function parseCouncilMcpArgs(argv) {
+  let daemonUrl = DEFAULT_DAEMON_URL;
+  let roomId;
+  let actorId;
+  const rest = [...argv];
+  while (rest.length > 0) {
+    const option = rest.shift();
+    if (option === "--daemon-url") {
+      daemonUrl = rest.shift() ?? daemonUrl;
+      continue;
+    }
+    if (option === "--room") {
+      roomId = rest.shift();
+      continue;
+    }
+    if (option === "--actor") {
+      actorId = rest.shift();
+      continue;
+    }
+    throw new Error(`Unknown argument: ${option}`);
+  }
+  if (!roomId || !actorId) {
+    throw new Error("rah council-mcp requires --room and --actor.");
+  }
+  return { help: false, command: "council-mcp", daemonUrl, roomId, actorId };
+}
+
 function parseArgs(argv) {
   if (argv.length === 0 || argv.includes("--help")) {
     return { help: true };
   }
 
   const provider = argv[0];
+  if (provider === "council-mcp") {
+    return parseCouncilMcpArgs(argv.slice(1));
+  }
   if (MANAGEMENT_COMMANDS.has(provider)) {
     return {
       help: false,
@@ -626,6 +657,134 @@ async function startOrResumePtyFirstSession(parsed, client) {
   return result.session;
 }
 
+function councilMcpTools() {
+  return [
+    {
+      name: "channel_join",
+      description: "Join the RAH council room as this actor.",
+      inputSchema: { type: "object", additionalProperties: true },
+    },
+    {
+      name: "channel_post",
+      description: "Post a text message to the RAH council room.",
+      inputSchema: {
+        type: "object",
+        properties: { content: { type: "string" }, text: { type: "string" }, reply_to: { type: "number" } },
+        additionalProperties: true,
+      },
+    },
+    {
+      name: "channel_wait_new",
+      description: "Read council messages newer than since_id.",
+      inputSchema: {
+        type: "object",
+        properties: { since_id: { type: "number" }, limit: { type: "number" } },
+        additionalProperties: true,
+      },
+    },
+    {
+      name: "channel_history",
+      description: "Read recent council room messages.",
+      inputSchema: {
+        type: "object",
+        properties: { since_id: { type: "number" }, limit: { type: "number" } },
+        additionalProperties: true,
+      },
+    },
+    {
+      name: "channel_set_status",
+      description: "Update this actor's council status.",
+      inputSchema: {
+        type: "object",
+        properties: { phase: { type: "string" }, detail: { type: "string" } },
+        additionalProperties: true,
+      },
+    },
+  ];
+}
+
+function writeMcpResponse(id, result) {
+  process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: id ?? null, result })}\n`);
+}
+
+function writeMcpError(id, error) {
+  process.stdout.write(
+    `${JSON.stringify({
+      jsonrpc: "2.0",
+      id: id ?? null,
+      error: {
+        code: -32000,
+        message: error instanceof Error ? error.message : String(error),
+      },
+    })}\n`,
+  );
+}
+
+async function runCouncilMcp(parsed) {
+  const decoder = new StringDecoder("utf8");
+  let buffer = "";
+  process.stdin.on("data", (chunk) => {
+    buffer += decoder.write(chunk);
+    let newlineIndex;
+    while ((newlineIndex = buffer.indexOf("\n")) >= 0) {
+      const line = buffer.slice(0, newlineIndex).trim();
+      buffer = buffer.slice(newlineIndex + 1);
+      if (line) {
+        void handleCouncilMcpLine(parsed, line);
+      }
+    }
+  });
+  process.stdin.on("end", () => {
+    const line = `${buffer}${decoder.end()}`.trim();
+    if (line) {
+      void handleCouncilMcpLine(parsed, line);
+    }
+  });
+  process.stdin.resume();
+}
+
+async function handleCouncilMcpLine(parsed, line) {
+  let request;
+  try {
+    request = JSON.parse(line);
+    if (request.method === "initialize") {
+      writeMcpResponse(request.id, {
+        protocolVersion: request.params?.protocolVersion ?? "2024-11-05",
+        capabilities: { tools: {} },
+        serverInfo: { name: "rah-council", version: "1.0.0" },
+      });
+      return;
+    }
+    if (request.method === "notifications/initialized") {
+      return;
+    }
+    if (request.method === "ping") {
+      writeMcpResponse(request.id, {});
+      return;
+    }
+    if (request.method === "tools/list") {
+      writeMcpResponse(request.id, { tools: councilMcpTools() });
+      return;
+    }
+    if (request.method !== "tools/call") {
+      throw new Error(`Unsupported MCP method: ${request.method ?? "<missing>"}`);
+    }
+    const params = request.params ?? {};
+    const response = await postJson(parsed.daemonUrl, "/api/council/mcp", {
+      roomId: parsed.roomId,
+      actorId: parsed.actorId,
+      tool: params.name,
+      arguments: params.arguments ?? {},
+    });
+    writeMcpResponse(request.id, {
+      content: [{ type: "text", text: JSON.stringify(response.result) }],
+      structuredContent: response.result,
+    });
+  } catch (error) {
+    writeMcpError(request?.id, error);
+  }
+}
+
 function managedSessionFromSummary(summary) {
   if (summary?.session?.id) {
     return summary.session;
@@ -1005,6 +1164,10 @@ async function main() {
   }
 
   if (parsed.command) {
+    if (parsed.command === "council-mcp") {
+      await runCouncilMcp(parsed);
+      return;
+    }
     await handleManagementCommand(parsed);
     return;
   }

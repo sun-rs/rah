@@ -1,3 +1,4 @@
+import type { CouncilMessage, CouncilRoomSnapshot } from "./council";
 import type { ClientKind, ManagedSession, NativeTuiPromptState, ProviderKind } from "./session";
 
 export type JsonPrimitive = string | number | boolean | null;
@@ -371,6 +372,8 @@ export type RahEventPayloadMap = {
 
   "terminal.output": { data: string };
   "terminal.exited": { exitCode?: number; signal?: string };
+
+  "council.message.created": { room: CouncilRoomSnapshot; message: CouncilMessage };
 
   "attention.required": { item: AttentionItem };
   "attention.cleared": { id: string };

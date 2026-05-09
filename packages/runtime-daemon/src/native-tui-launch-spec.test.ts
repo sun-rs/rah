@@ -139,6 +139,10 @@ describe("native TUI launch specs", () => {
         "--session-id",
         start.providerSessionId,
       ]);
+      assert.equal(start.modeId, "bypassPermissions");
+      assert.equal(start.modelId, "opus");
+      assert.equal(start.reasoningId, "max");
+      assert.deepEqual(start.optionValues, { effort: "max" });
 
       const resume = await nativeTuiResumeLaunchSpec({
         provider: "claude",
@@ -187,9 +191,16 @@ describe("native TUI launch specs", () => {
       assert.equal(start.providerSessionId, undefined);
       assert.deepEqual(start.args, [
         "--model",
-        "deepseek/deepseek-v4-pro",
+        "deepseek/deepseek-v4-pro/high",
         "/workspace/demo",
       ]);
+      assert.equal(
+        start.env?.OPENCODE_CONFIG_CONTENT,
+        JSON.stringify({ permission: "allow", default_agent: "build" }),
+      );
+      assert.equal(start.modeId, "opencode/full-auto");
+      assert.equal(start.modelId, "deepseek/deepseek-v4-pro");
+      assert.equal(start.reasoningId, "high");
 
       const resume = await nativeTuiResumeLaunchSpec({
         provider: "opencode",
@@ -207,8 +218,146 @@ describe("native TUI launch specs", () => {
         "/workspace/demo",
       ]);
       assert.equal(resume.providerSessionId, "ses_active");
+
+      const planStart = await nativeTuiStartLaunchSpec({
+        provider: "opencode",
+        cwd: "/workspace/demo",
+        liveBackend: "native_tui",
+        modeId: "plan",
+      });
+      assert.equal(
+        planStart.env?.OPENCODE_CONFIG_CONTENT,
+        JSON.stringify({ default_agent: "plan" }),
+      );
     } finally {
       rmSync(fake.dir, { force: true, recursive: true });
+    }
+  });
+
+  test("rejects native TUI launch modes that cannot be applied by CLI args", async () => {
+    const codex = fakeBinary("codex");
+    const claude = fakeBinary("claude");
+    const opencode = fakeBinary("opencode");
+    const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-native-spec-mode-reject-"));
+    const configDir = mkdtempSync(path.join(os.tmpdir(), "rah-native-spec-mode-reject-claude-"));
+    process.env.RAH_CODEX_BINARY = codex.path;
+    process.env.RAH_CLAUDE_BINARY = claude.path;
+    process.env.RAH_OPENCODE_BINARY = opencode.path;
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    try {
+      await assert.rejects(
+        nativeTuiStartLaunchSpec({
+          provider: "codex",
+          cwd: workspace,
+          liveBackend: "native_tui",
+          modeId: "plan",
+        }),
+        /Codex plan mode is a native TUI interactive toggle/,
+      );
+      await assert.rejects(
+        nativeTuiStartLaunchSpec({
+          provider: "claude",
+          cwd: workspace,
+          liveBackend: "native_tui",
+          modeId: "not-a-mode",
+        }),
+        /Unsupported Claude launch mode/,
+      );
+      await assert.rejects(
+        nativeTuiStartLaunchSpec({
+          provider: "opencode",
+          cwd: workspace,
+          liveBackend: "native_tui",
+          modeId: "not-a-mode",
+        }),
+        /Unsupported OpenCode launch mode/,
+      );
+    } finally {
+      rmSync(codex.dir, { force: true, recursive: true });
+      rmSync(claude.dir, { force: true, recursive: true });
+      rmSync(opencode.dir, { force: true, recursive: true });
+      rmSync(workspace, { force: true, recursive: true });
+      rmSync(configDir, { force: true, recursive: true });
+    }
+  });
+
+  test("injects extra MCP servers into Codex, Claude, and OpenCode startup specs", async () => {
+    const codex = fakeBinary("codex");
+    const claude = fakeBinary("claude");
+    const opencode = fakeBinary("opencode");
+    const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-native-spec-mcp-workspace-"));
+    const configDir = mkdtempSync(path.join(os.tmpdir(), "rah-native-spec-mcp-claude-config-"));
+    process.env.RAH_CODEX_BINARY = codex.path;
+    process.env.RAH_CLAUDE_BINARY = claude.path;
+    process.env.RAH_OPENCODE_BINARY = opencode.path;
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const extraMcpServers = [{
+      name: "rah council",
+      command: process.execPath,
+      args: ["/repo/bin/rah.mjs", "council-mcp", "--room", "room-1", "--actor", "codex-lead"],
+    }];
+    try {
+      const codexStart = await nativeTuiStartLaunchSpec({
+        provider: "codex",
+        cwd: workspace,
+        liveBackend: "native_tui",
+        extraMcpServers,
+        initialPrompt: "join council",
+      });
+      assert.ok(codexStart.args.includes("mcp_servers.rah_council.command=" + JSON.stringify(process.execPath)));
+      assert.ok(codexStart.args.some((arg) => arg.startsWith("mcp_servers.rah_council.args=")));
+      assert.equal(codexStart.args.at(-1), "join council");
+
+      const claudeStart = await nativeTuiStartLaunchSpec({
+        provider: "claude",
+        cwd: workspace,
+        liveBackend: "native_tui",
+        extraMcpServers,
+        initialPrompt: "join council",
+      });
+      const claudeConfigIndex = claudeStart.args.indexOf("--mcp-config");
+      assert.notEqual(claudeConfigIndex, -1);
+      const claudeMcpConfig = JSON.parse(claudeStart.args[claudeConfigIndex + 1]!) as {
+        mcpServers?: Record<string, { command?: string; args?: string[] }>;
+      };
+      assert.equal(claudeMcpConfig.mcpServers?.rah_council?.command, process.execPath);
+      assert.deepEqual(claudeMcpConfig.mcpServers?.rah_council?.args?.slice(1, 3), [
+        "council-mcp",
+        "--room",
+      ]);
+      assert.equal(claudeStart.args.at(-1), "join council");
+
+      const openCodeStart = await nativeTuiStartLaunchSpec({
+        provider: "opencode",
+        cwd: workspace,
+        liveBackend: "native_tui",
+        modeId: "opencode/full-auto",
+        extraMcpServers,
+        initialPrompt: "join council",
+      });
+      assert.ok(openCodeStart.args.includes("--prompt"));
+      assert.ok(openCodeStart.args.includes("join council"));
+      const openCodeConfigContent = openCodeStart.env?.OPENCODE_CONFIG_CONTENT;
+      assert.ok(openCodeConfigContent);
+      const openCodeConfig = JSON.parse(openCodeConfigContent) as {
+        permission?: string;
+        default_agent?: string;
+        mcp?: Record<string, { type?: string; command?: string[]; enabled?: boolean }>;
+      };
+      assert.equal(openCodeConfig.permission, "allow");
+      assert.equal(openCodeConfig.default_agent, "build");
+      assert.equal(openCodeConfig.mcp?.rah_council?.type, "local");
+      assert.deepEqual(openCodeConfig.mcp?.rah_council?.command?.slice(1, 3), [
+        "/repo/bin/rah.mjs",
+        "council-mcp",
+      ]);
+      assert.equal(openCodeConfig.mcp?.rah_council?.enabled, true);
+    } finally {
+      rmSync(codex.dir, { force: true, recursive: true });
+      rmSync(claude.dir, { force: true, recursive: true });
+      rmSync(opencode.dir, { force: true, recursive: true });
+      rmSync(workspace, { force: true, recursive: true });
+      rmSync(configDir, { force: true, recursive: true });
     }
   });
 });

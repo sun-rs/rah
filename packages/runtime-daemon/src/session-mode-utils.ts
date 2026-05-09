@@ -10,32 +10,32 @@ const CLAUDE_MODE_DESCRIPTORS: SessionModeDescriptor[] = [
     role: "ask",
     label: "Ask",
     description: "Ask before actions that need approval.",
-    applyTiming: "immediate",
-    hotSwitch: true,
+    applyTiming: "startup_only",
+    hotSwitch: false,
   },
   {
     id: "acceptEdits",
     role: "auto_edit",
     label: "Auto edit",
     description: "Auto-accept file edits while still prompting for riskier actions.",
-    applyTiming: "immediate",
-    hotSwitch: true,
+    applyTiming: "startup_only",
+    hotSwitch: false,
   },
   {
     id: "plan",
     role: "plan",
     label: "Plan",
     description: "Read-only planning mode.",
-    applyTiming: "immediate",
-    hotSwitch: true,
+    applyTiming: "startup_only",
+    hotSwitch: false,
   },
   {
     id: "bypassPermissions",
     role: "full_auto",
     label: "Full auto",
     description: "Skip permission prompts for all actions.",
-    applyTiming: "immediate",
-    hotSwitch: true,
+    applyTiming: "startup_only",
+    hotSwitch: false,
   },
 ];
 
@@ -45,24 +45,24 @@ const OPENCODE_MODE_DESCRIPTORS: SessionModeDescriptor[] = [
     role: "ask",
     label: "Ask",
     description: "Use OpenCode build mode and ask before tool actions.",
-    applyTiming: "next_turn",
-    hotSwitch: true,
+    applyTiming: "startup_only",
+    hotSwitch: false,
   },
   {
     id: "opencode/full-auto",
     role: "full_auto",
     label: "Full auto",
     description: "Allow common OpenCode tool permissions for this session.",
-    applyTiming: "next_turn",
-    hotSwitch: true,
+    applyTiming: "startup_only",
+    hotSwitch: false,
   },
   {
     id: "plan",
     role: "plan",
     label: "Plan",
     description: "OpenCode plan mode. Edit tools are disabled by the provider.",
-    applyTiming: "next_turn",
-    hotSwitch: true,
+    applyTiming: "startup_only",
+    hotSwitch: false,
   },
 ];
 
@@ -72,32 +72,32 @@ const CODEX_MODE_DESCRIPTORS: SessionModeDescriptor[] = [
     role: "ask",
     label: "Ask",
     description: "Ask before write or shell actions; Codex starts with a read-only sandbox.",
-    applyTiming: "next_turn",
-    hotSwitch: true,
+    applyTiming: "startup_only",
+    hotSwitch: false,
   },
   {
     id: "on-request/workspace-write",
     role: "auto_edit",
     label: "Auto edit",
     description: "Codex low-friction mode: workspace-write sandbox, ask before leaving it.",
-    applyTiming: "next_turn",
-    hotSwitch: true,
+    applyTiming: "startup_only",
+    hotSwitch: false,
   },
   {
     id: "never/workspace-write",
     role: "full_auto",
     label: "Full auto · sandboxed",
     description: "Skip approvals while keeping Codex inside the workspace sandbox.",
-    applyTiming: "next_turn",
-    hotSwitch: true,
+    applyTiming: "startup_only",
+    hotSwitch: false,
   },
   {
     id: "never/danger-full-access",
     role: "full_auto",
     label: "Full auto",
     description: "Skip approvals and allow unrestricted access.",
-    applyTiming: "next_turn",
-    hotSwitch: true,
+    applyTiming: "startup_only",
+    hotSwitch: false,
   },
 ];
 
@@ -106,8 +106,8 @@ const CODEX_PLAN_MODE_DESCRIPTOR: SessionModeDescriptor = {
   role: "plan",
   label: "Plan",
   description: "Codex plan collaboration mode.",
-  applyTiming: "next_turn",
-  hotSwitch: true,
+  applyTiming: "startup_only",
+  hotSwitch: false,
 };
 
 function cloneDescriptor(descriptor: SessionModeDescriptor): SessionModeDescriptor {
@@ -202,12 +202,16 @@ export function providerModeDescriptors(
       return buildCodexModeState({
         currentModeId: defaultProviderModeId("codex")!,
         mutable: true,
-        planAvailable: options?.planAvailable ?? true,
+        planAvailable: options?.planAvailable ?? false,
       }).availableModes;
     case "claude":
       return cloneDescriptors(CLAUDE_MODE_DESCRIPTORS);
     case "opencode":
-      return cloneDescriptors(OPENCODE_MODE_DESCRIPTORS);
+      return cloneDescriptors(
+        options?.planAvailable === false
+          ? OPENCODE_MODE_DESCRIPTORS.filter((mode) => mode.id !== "plan")
+          : OPENCODE_MODE_DESCRIPTORS,
+      );
     case "custom":
     default:
       return [];
@@ -221,8 +225,8 @@ function codexModeDescriptor(modeId: string): SessionModeDescriptor {
     role: "custom",
     label: `${approvalPolicy} · ${sandboxMode}`,
     description: "Current Codex approval and sandbox configuration.",
-    applyTiming: "next_turn",
-    hotSwitch: true,
+    applyTiming: "startup_only",
+    hotSwitch: false,
   };
 }
 

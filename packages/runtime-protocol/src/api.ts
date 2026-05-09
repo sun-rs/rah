@@ -17,6 +17,16 @@ import type {
   StoredSessionRef,
   Workbench,
 } from "./session";
+import type {
+  CouncilAgentTuiResponse,
+  CouncilMcpRequest,
+  CouncilMcpResponse,
+  CouncilPostMessageRequest,
+  CouncilPostMessageResponse,
+  CreateCouncilRoomRequest,
+  CreateCouncilRoomResponse,
+  ListCouncilRoomsResponse,
+} from "./council";
 import type { ContextUsage, EventEnvelope, JsonObject, RahEvent, RahEventType } from "./events";
 
 export interface AttachClientDescriptor {
@@ -687,6 +697,15 @@ export interface NativeTuiSurfaceReleaseRequest {
 
 export interface NativeTuiSurfaceResponse {
   surface?: NativeTuiSurfaceState;
+}
+
+export interface CouncilApi {
+  listRooms(): Promise<ListCouncilRoomsResponse>;
+  createRoom(request: CreateCouncilRoomRequest): Promise<CreateCouncilRoomResponse>;
+  postMessage(roomId: string, request: CouncilPostMessageRequest): Promise<CouncilPostMessageResponse>;
+  archiveRoom(roomId: string): Promise<{ ok: true }>;
+  getAgentTui(roomId: string, agentId: string): Promise<CouncilAgentTuiResponse>;
+  callMcpTool(request: CouncilMcpRequest): Promise<CouncilMcpResponse>;
 }
 
 /**

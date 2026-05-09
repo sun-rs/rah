@@ -23,6 +23,9 @@ import {
   parseClaimControlRequest,
   parseClipboardWriteRequest,
   parseCloseSessionRequest,
+  parseCouncilMcpRequest,
+  parseCouncilPostMessageRequest,
+  parseCreateCouncilRoomRequest,
   parseDetachSessionRequest,
   parseGitFileActionRequest,
   parseGitHunkActionRequest,
@@ -288,6 +291,36 @@ export function createPostRoutes(
         writeJson(req, res, 200, await engine.removeStoredWorkspaceSessions(request.dir));
       },
     },
+    {
+      pattern: /^\/api\/council\/rooms$/,
+      handler: async (req, res, _match, body) => {
+        writeJson(req, res, 200, await engine.createCouncilRoom(parseCreateCouncilRoomRequest(body)));
+      },
+    },
+    {
+      pattern: /^\/api\/council\/rooms\/([^/]+)\/messages$/,
+      handler: async (req, res, match, body) => {
+        writeJson(
+          req,
+          res,
+          200,
+          engine.postCouncilMessage(decodeURIComponent(match[1]!), parseCouncilPostMessageRequest(body)),
+        );
+      },
+    },
+    {
+      pattern: /^\/api\/council\/rooms\/([^/]+)\/archive$/,
+      handler: async (req, res, match) => {
+        await engine.archiveCouncilRoom(decodeURIComponent(match[1]!));
+        writeJson(req, res, 200, { ok: true });
+      },
+    },
+    {
+      pattern: /^\/api\/council\/mcp$/,
+      handler: async (req, res, _match, body) => {
+        writeJson(req, res, 200, engine.callCouncilMcpTool(parseCouncilMcpRequest(body)));
+      },
+    },
   ];
 }
 
@@ -394,6 +427,25 @@ export async function handleHttpRequest(args: {
         sessions: await engine.listZellijMuxDiagnostics(),
       };
       writeJson(req, res, 200, response);
+      return;
+    }
+
+    if (req.method === "GET" && pathname === "/api/council/rooms") {
+      writeJson(req, res, 200, engine.listCouncilRooms());
+      return;
+    }
+
+    const councilAgentTuiMatch = /^\/api\/council\/rooms\/([^/]+)\/agents\/([^/]+)\/tui$/.exec(pathname);
+    if (req.method === "GET" && councilAgentTuiMatch) {
+      writeJson(
+        req,
+        res,
+        200,
+        await engine.getCouncilAgentTui(
+          decodeURIComponent(councilAgentTuiMatch[1]!),
+          decodeURIComponent(councilAgentTuiMatch[2]!),
+        ),
+      );
       return;
     }
 

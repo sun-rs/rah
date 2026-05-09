@@ -3,6 +3,11 @@ import type {
   AttachSessionRequest,
   ClaimControlRequest,
   CloseSessionRequest,
+  CouncilAgentConfig,
+  CouncilMcpRequest,
+  CouncilMcpToolName,
+  CouncilPostMessageRequest,
+  CreateCouncilRoomRequest,
   DetachSessionRequest,
   GitFileActionRequest,
   GitHunkActionRequest,
@@ -26,9 +31,17 @@ import type {
 type JsonRecord = Record<string, unknown>;
 
 const PROVIDERS = new Set<ProviderKind>(["codex", "claude", "opencode", "custom"]);
+const COUNCIL_PROVIDERS = new Set<ProviderKind>(["codex", "claude", "opencode"]);
 const CLIENT_KINDS = new Set(["terminal", "web", "ios", "ipad", "api"]);
 const APPROVAL_POLICIES = new Set(["default", "on-request", "never", "auto_edit", "yolo"]);
 const PUBLIC_LIVE_BACKENDS = new Set(["native_tui", "zellij_tui"]);
+const COUNCIL_MCP_TOOLS = new Set<CouncilMcpToolName>([
+  "channel_join",
+  "channel_post",
+  "channel_wait_new",
+  "channel_history",
+  "channel_set_status",
+]);
 
 export function parseIndependentTerminalStartRequest(body: unknown): IndependentTerminalStartRequest {
   const record = optionalObjectBody(body);
@@ -260,6 +273,60 @@ export function parseStoredSessionRemoveRequest(body: unknown): StoredSessionRem
   };
 }
 
+export function parseCreateCouncilRoomRequest(body: unknown): CreateCouncilRoomRequest {
+  const record = requireObjectBody(body);
+  const agentsRaw = record.agents;
+  if (!Array.isArray(agentsRaw) || agentsRaw.length === 0) {
+    throw badRequest("agents must be a non-empty array.");
+  }
+  const request: CreateCouncilRoomRequest = {
+    workspace: requireString(record, "workspace"),
+    agents: agentsRaw.map((agent, index) => parseCouncilAgentConfig(agent, index)),
+  };
+  const title = optionalString(record, "title");
+  if (title !== undefined) {
+    request.title = title;
+  }
+  return request;
+}
+
+export function parseCouncilPostMessageRequest(body: unknown): CouncilPostMessageRequest {
+  const record = requireObjectBody(body);
+  const request: CouncilPostMessageRequest = {
+    text: requireString(record, "text"),
+  };
+  const actorId = optionalString(record, "actorId");
+  const role = optionalEnum(record, "role", ["user", "agent", "system"]);
+  const replyTo = optionalNumber(record, "replyTo");
+  if (actorId !== undefined) {
+    request.actorId = actorId;
+  }
+  if (role !== undefined) {
+    request.role = role;
+  }
+  if (replyTo !== undefined) {
+    request.replyTo = replyTo;
+  }
+  return request;
+}
+
+export function parseCouncilMcpRequest(body: unknown): CouncilMcpRequest {
+  const record = requireObjectBody(body);
+  const tool = requireString(record, "tool");
+  if (!COUNCIL_MCP_TOOLS.has(tool as CouncilMcpToolName)) {
+    throw badRequest("tool is invalid.");
+  }
+  const request: CouncilMcpRequest = {
+    roomId: requireString(record, "roomId"),
+    actorId: requireString(record, "actorId"),
+    tool: tool as CouncilMcpToolName,
+  };
+  if (record.arguments !== undefined) {
+    request.arguments = requireRecord(record, "arguments");
+  }
+  return request;
+}
+
 export function parseGitFileActionRequest(body: unknown): GitFileActionRequest {
   const record = requireObjectBody(body);
   const request: GitFileActionRequest = {
@@ -332,6 +399,42 @@ function parseOptionalSessionConfig(record: JsonRecord): Partial<StartSessionReq
     config.sandbox = sandbox;
   }
   return config;
+}
+
+function parseCouncilAgentConfig(value: unknown, index: number): CouncilAgentConfig {
+  const record = requireObject(value, `agents[${index}]`);
+  const provider = requireProvider(record, "provider");
+  if (!COUNCIL_PROVIDERS.has(provider)) {
+    throw badRequest("Council agent provider must be codex, claude, or opencode.");
+  }
+  const agent: CouncilAgentConfig = {
+    provider: provider as CouncilAgentConfig["provider"],
+    label: requireString(record, "label"),
+  };
+  const id = optionalString(record, "id");
+  const role = optionalString(record, "role");
+  const modelId = optionalString(record, "modelId");
+  const modeId = optionalString(record, "modeId");
+  const optionValues = optionalConfigValues(record, "optionValues");
+  if (id !== undefined) {
+    agent.id = id;
+  }
+  if (role !== undefined) {
+    agent.role = role;
+  }
+  if (modelId !== undefined) {
+    agent.modelId = modelId;
+  }
+  if (record.reasoningId === null || typeof record.reasoningId === "string") {
+    agent.reasoningId = record.reasoningId;
+  }
+  if (optionValues !== undefined) {
+    agent.optionValues = optionValues;
+  }
+  if (modeId !== undefined) {
+    agent.modeId = modeId;
+  }
+  return agent;
 }
 
 function parseAttachPayload(value: unknown): AttachSessionRequest {

@@ -5,6 +5,13 @@ import type {
   AttachSessionResponse,
   ClaimControlRequest,
   CloseSessionRequest,
+  CouncilAgentTuiResponse,
+  CouncilMcpRequest,
+  CouncilMcpResponse,
+  CouncilPostMessageRequest,
+  CouncilPostMessageResponse,
+  CreateCouncilRoomRequest,
+  CreateCouncilRoomResponse,
   DetachSessionRequest,
   DebugScenarioDescriptor,
   DebugReplayScript,
@@ -20,6 +27,7 @@ import type {
   NativeTuiSurfaceResponse,
   NativeTuiDiagnostic,
   ListSessionsResponse,
+  ListCouncilRoomsResponse,
   ProviderDiagnostic,
   ProviderKind,
   ProviderModelCatalog,
@@ -126,6 +134,7 @@ import {
   hasStructuredPermissionCapability,
   hasWorkspaceInspectionCapability,
 } from "./provider-capability-bindings";
+import { CouncilRuntime } from "./council/council-runtime";
 
 const SYSTEM_SOURCE = {
   provider: "system" as const,
@@ -171,6 +180,7 @@ export class RuntimeEngine {
   private readonly structuredProviders: RuntimeStructuredProviderCoordinator;
   private readonly nativeTuiProviders: NativeTuiProviderRuntime;
   private readonly nativeTuiMirrors: NativeTuiMirrorProvider;
+  private readonly council: CouncilRuntime;
   private readonly defaultLiveBackend: SessionLiveBackend;
 
   private readonly structuredLiveAdaptersByProvider = new Map<
@@ -232,6 +242,7 @@ export class RuntimeEngine {
     this.historySnapshots = new HistorySnapshotStore();
     this.nativeTuiProviders = createDefaultNativeTuiProviderRuntime();
     this.nativeTuiMirrors = createDefaultNativeTuiMirrorProvider();
+    this.council = new CouncilRuntime({ eventBus: this.eventBus });
     this.sessionStore = new SessionStore({
       onSnapshot: (states) => {
         this.workbenchState.persistLiveSessions(states);
@@ -399,6 +410,37 @@ export class RuntimeEngine {
     options?: { cwd?: string; forceRefresh?: boolean },
   ): Promise<ProviderModelCatalog> {
     return this.structuredProviders.listProviderModels(provider, options);
+  }
+
+  listCouncilRooms(): ListCouncilRoomsResponse {
+    return this.council.listRooms();
+  }
+
+  async createCouncilRoom(request: CreateCouncilRoomRequest): Promise<CreateCouncilRoomResponse> {
+    await assertExistingWorkingDirectory(request.workspace, "Council workspace");
+    return await this.council.createRoom(request);
+  }
+
+  postCouncilMessage(
+    roomId: string,
+    request: CouncilPostMessageRequest,
+  ): CouncilPostMessageResponse {
+    return this.council.postMessage(roomId, request);
+  }
+
+  async archiveCouncilRoom(roomId: string): Promise<void> {
+    await this.council.archiveRoom(roomId);
+  }
+
+  async getCouncilAgentTui(
+    roomId: string,
+    agentId: string,
+  ): Promise<CouncilAgentTuiResponse> {
+    return await this.council.getAgentTui(roomId, agentId);
+  }
+
+  callCouncilMcpTool(request: CouncilMcpRequest): CouncilMcpResponse {
+    return this.council.callMcpTool(request);
   }
 
   addWorkspace(rawDir: string): ListSessionsResponse {
