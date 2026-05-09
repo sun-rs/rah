@@ -1198,7 +1198,7 @@ async function probeCodex(): Promise<ProviderProbeResult> {
           ? [
               "Use the shell tool to run this exact command, wait for it to finish, then reply with",
               `exactly ${marker}:`,
-              "python3 -c \"import time; time.sleep(20); print('RAH_CODEX_INTERRUPT_SLEEP_DONE')\"",
+              "python3 -c \"import time; time.sleep(45); print('RAH_CODEX_INTERRUPT_SLEEP_DONE')\"",
             ].join(" ")
           : `Reply exactly ${marker}. Do not use tools.`;
         const turnStart = (await withTimeout(
@@ -1239,7 +1239,22 @@ async function probeCodex(): Promise<ProviderProbeResult> {
                 ),
               { timeoutMs: 10_000, intervalMs: 250 },
             ).catch(() => undefined);
-            await sleep(750);
+            const commandStarted = await waitUntil(
+              "codex command execution started before interrupt",
+              () =>
+                notifications.some(
+                  (notification) =>
+                    notification.method === "item/started" &&
+                    unknownContainsText(notification.params, "commandExecution") &&
+                    unknownContainsText(notification.params, "RAH_CODEX_INTERRUPT_SLEEP_DONE"),
+                ),
+              { timeoutMs: 30_000, intervalMs: 500 },
+            )
+              .then(() => true)
+              .catch(() => false);
+            if (!commandStarted) {
+              await sleep(750);
+            }
             await client.request("turn/interrupt", { threadId, turnId }, TIMEOUT_MS).then(
               () => {
                 checks.push({
