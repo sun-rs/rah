@@ -1,10 +1,10 @@
 # Native TUI 真实 CLI QA 清单
 
-日期：2026-05-08
+日期：2026-05-09
 
-目的：验证 `refactor/pty-first-core` 分支的真实 CLI 路线。自动 smoke 只能证明 RAH 的 PTY、WebSocket、binding、mirror 和假 provider 行为正确；真实 CLI QA 用来覆盖账号、额度、官方 TUI 菜单、权限弹窗、长任务和移动端输入这些无法稳定 mock 的部分。
+目的：验证 `refactor/native-local-server-core` 分支的真实 provider runtime 路线。自动 smoke 能证明 RAH 的协议、daemon lifecycle、mock provider、browser recovery、Codex/OpenCode native local-server probes 和 Claude zellij launch/exit；真实 CLI QA 用来覆盖账号、额度、官方 TUI 菜单、权限弹窗、长任务、真实跨客户端同步和移动端输入这些无法稳定 mock 的部分。
 
-维护边界：Core live QA 只覆盖 Codex、Claude、OpenCode。Gemini/Kimi CLI 一等支持已移除，不再作为 live、history-only、diagnostics 或默认 QA 对象。低频 Gemini/Kimi/Grok/DeepSeek 等 API-key 模型优先通过 OpenCode + API provider / 中转站验证。
+维护边界：Core live QA 只覆盖 Codex、Claude、OpenCode。Codex/OpenCode 默认走 `native_local_server`；Claude 默认走 `zellij_tui` / `tui_mux_fallback`。Gemini/Kimi CLI 一等支持已移除，不再作为 live、history-only、diagnostics 或默认 QA 对象。低频 Gemini/Kimi/Grok/DeepSeek 等 API-key 模型优先通过 OpenCode + API provider / 中转站验证。
 
 ## 当前本机 CLI 版本
 
@@ -12,8 +12,8 @@ Core live CLI 版本：
 
 | Provider | 命令 | 当前输出 |
 |---|---|---|
-| Codex | `codex --version` | `codex-cli 0.129.0` |
-| Claude | `claude --version` | `2.1.133 (Claude Code)` |
+| Codex | `codex --version` | `codex-cli 0.130.0` |
+| Claude | `claude --version` | `2.1.138 (Claude Code)` |
 | OpenCode | `opencode --version` | `1.14.41` |
 
 版本记录不是“兼容承诺”。`npm run test:smoke:native-cli-probe` 会在自动门槛中重新采集 core live CLI 的 `--version` 输出，并记录当前 RAH branch / commit / dirty worktree 状态；同时要求真实 CLI `--help` 探测既包含 native launch 依赖的 flag，也必须以 exit code 0 正常退出。每次升级 Codex、Claude、OpenCode 这类 core live provider CLI 后，至少重跑本文的自动门槛和对应 provider 的真实 QA。
@@ -89,9 +89,9 @@ git diff --check
 
 `test:smoke:native-real-tui-launch` 不在完整 gate 内，原因是它会启动真实 provider TUI，可能受账号登录、官方安全确认、provider 本地状态影响；它适合作为升级 core live provider CLI 后的额外真实启动检查。它可能让 provider 记录空 session metadata，所以默认只写入稳定的 `test-results` 工作区，不使用会被删除的系统临时目录。旧的五家 provider 报告只能作为历史参考；新主线只要求 Codex、Claude、OpenCode 的真实 TUI 启动探针。人工 QA 需要在 TUI 中确认官方提示和真实 turn 行为。
 
-`test:smoke:native-codex-browser` 还会模拟浏览器离线，后台通过 daemon 向同一个 native TUI 写入新输入，然后恢复 online/focus，验证当前页面不用重新选择 session 就能追上 TUI 输出和 Chat mirror；它也会验证 Settings Version 页能从 daemon 读取并展示 PTY terminal replay health，并在手动 Refresh 后显示 refresh-to-refresh delta；它也会验证 Codex native TUI 在 canvas 内可渲染，并在上下二分、三分、四分、左右二分布局切换后仍可恢复 TUI replay，同时断言布局变化会向 native TUI 进程发送 PTY resize；它还会验证 TUI 中存在未提交草稿时 Chat composer 会被阻止且不会把文本误注入 native TUI，并显示切 TUI 提交或清除草稿的 warning；它还会用 mobile/touch browser context 验证 TUI input bridge 和 Ctrl-C、Esc、Tab、方向键、Enter 快捷键按钮会渲染，并验证 Ctrl-C 快捷键、文本输入与 composition 输入都能写入 PTY。它仍不能替代 iPad/Safari 真机输入法、真实拖拽 resize 和旋转测试。
+`test:smoke:native-codex-browser` 还会模拟浏览器离线，后台通过 daemon 向同一个 Codex native runtime 写入新输入，然后恢复 online/focus，验证当前页面不用重新选择 session 就能追上 TUI 输出和 Chat mirror；它也会验证 Settings Version 页能从 daemon 读取并展示 terminal replay health，并在手动 Refresh 后显示 refresh-to-refresh delta；它也会验证 Codex TUI view 在 canvas 内可渲染，并在上下二分、三分、四分、左右二分布局切换后仍可恢复 replay，同时断言布局变化会同步 resize；它还会验证 TUI 中存在未提交草稿时 Chat composer 会被阻止且不会把文本误注入 TUI，并显示切 TUI 提交或清除草稿的 warning；它还会用 mobile/touch browser context 验证 TUI input bridge 和 Ctrl-C、Esc、Tab、方向键、Enter 快捷键按钮会渲染，并验证 Ctrl-C 快捷键、文本输入与 composition 输入都能写入 TUI surface。它仍不能替代 iPad/Safari 真机输入法、真实拖拽 resize 和旋转测试。
 
-`test:smoke:native-provider-browser` 会对 core live provider 做同类浏览器恢复验证：页面离线期间通过 daemon PTY WebSocket 向同一个 native TUI 写入输入，恢复 online/focus 后，当前页面必须不用重新选择 session 就追上 TUI replay；同时验证 TUI 中存在未提交草稿时 `nativeTui.promptState` 会变为 `prompt_dirty`、Chat composer 会被阻止且不会误注入，并显示切 TUI 提交或清除草稿的 warning；OpenCode 还会断言 DB mirror 的 text、reasoning、tool、step 在 Chat UI 可见，且 token/cost usage 会进入 session summary。
+`test:smoke:native-provider-browser` 会对 core live provider 做同类浏览器恢复验证：页面离线期间通过对应 runtime 输入路径向同一个 session 写入输入，恢复 online/focus 后，当前页面必须不用重新选择 session 就追上 TUI replay / Chat mirror；同时验证 TUI 中存在未提交草稿时 `nativeTui.promptState` 会变为 `prompt_dirty`、Chat composer 会被阻止且不会误注入，并显示切 TUI 提交或清除草稿的 warning；OpenCode 还会断言 DB mirror 的 text、reasoning、tool、step 在 Chat UI 可见，且 token/cost usage 会进入 session summary。
 
 `test:native-tui` 当前会运行 Chromium 与 WebKit browser smoke。WebKit 是主 gate 的一部分，用来尽早发现 Safari-like 的焦点、replay、canvas 和 mobile input bridge 回归；它仍不能替代 iPad / Safari 真机输入法和 PWA 后台恢复测试。需要局部复测 WebKit 时，可以单独运行：
 
@@ -117,7 +117,7 @@ npm run test:smoke:native-browser-webkit
 
 ## 通用真实 QA
 
-Core live provider 都按同一组用例跑，只有 provider 原生能力不同。
+Core live provider 都按同一组用例跑，只有 provider 原生能力不同。Codex/OpenCode 的普通 Chat 输入应走 provider server API，不应通过 zellij/键盘注入；Claude fallback 的 Chat 输入仍需要通过 TUI/zellij 工作现场完成。
 
 1. Web new session：从 RAH Web 创建新 session，默认应启动真实官方 TUI。
 2. Chat 输入：在 Chat view 发一句短问题，TUI 应收到输入；如果 TUI 忙，第二句应排队而不是丢失。
