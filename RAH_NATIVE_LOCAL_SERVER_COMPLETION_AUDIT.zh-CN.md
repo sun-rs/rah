@@ -4,9 +4,9 @@ Date: 2026-05-09
 
 Branch: `refactor/native-local-server-core`
 
-Commit: `35b5cfd`
+Commit: use `git log -1 --oneline` for the exact checkout under review. The manual QA template records the current commit and worktree fingerprint.
 
-Worktree: clean at audit time; `test-results/native-manual-qa.json` 已重新生成到当前 commit/fingerprint，但 26 项仍为 `pending`
+Worktree: must be clean before final QA. `test-results/native-manual-qa.json` 已重新生成过，但 26 项仍为 `pending`；每次提交后需要重新生成模板或确认指纹一致。
 
 ## 审计结论
 
@@ -26,11 +26,11 @@ Worktree: clean at audit time; `test-results/native-manual-qa.json` 已重新生
 |---|---|---|
 | Codex 改为 `native_local_server` | `bin/rah.mjs` 默认 Codex liveBackend 为 `native_local_server`；`packages/runtime-daemon/src/session-runtime-descriptor.ts` 声明 Codex runtime；`rah-cli-pty-first.test.ts` 覆盖 `codex --remote ... resume <threadId>` | 已实现 |
 | Codex Web chat 走官方 app-server 事件/控制 | `packages/runtime-daemon/src/codex-app-server-client.ts`、`codex-live-rpc.ts`、`codex-app-server-activity.test.ts`、`codex-live-client.test.ts` | 已实现 |
-| Codex TUI 作为官方 client/view 接入同一 thread | `RAH_NATIVE_LOCAL_SERVER_PROBE_PROVIDERS=codex RAH_NATIVE_LOCAL_SERVER_PROBE_CODEX_REMOTE_TUI=1 npm run test:smoke:native-local-server` 在 `35b5cfd` 通过；CLI 测试断言 attach 命令 | 已自动验证 |
+| Codex TUI 作为官方 client/view 接入同一 thread | `RAH_NATIVE_LOCAL_SERVER_PROBE_PROVIDERS=codex RAH_NATIVE_LOCAL_SERVER_PROBE_CODEX_REMOTE_TUI=1 npm run test:smoke:native-local-server` 在当前 runtime 代码上通过；CLI 测试断言 attach 命令 | 已自动验证 |
 | Codex 不依赖第一句话/rollout 绑定 native local server thread | `RAH_NATIVE_LOCAL_SERVER_REFACTOR_PLAN.zh-CN.md` 已记录确定性绑定规则；`rah-cli-pty-first.test.ts` 断言 session summary 的 `providerSessionId` 被传给 remote TUI | 已实现 |
 | OpenCode 改为 `native_local_server` | `bin/rah.mjs` 默认 OpenCode liveBackend；`opencode-live-client.test.ts`、`runtime-engine.test.ts` | 已实现 |
 | OpenCode Web chat 走 server/API | `legacy-structured/opencode-live-client.ts` 当前承载 native local server client；`opencode-activity.test.ts`、`opencode-live-client.test.ts` | 已实现 |
-| OpenCode TUI attach 精确绑定 session | `bin/rah.mjs` 对 OpenCode 使用 `opencode attach <endpoint> --session <providerSessionId>`；`rah-cli-pty-first.test.ts` 覆盖；`RAH_NATIVE_LOCAL_SERVER_PROBE_PROVIDERS=opencode RAH_NATIVE_LOCAL_SERVER_PROBE_OPENCODE_CROSS_CLIENT=1 ...` 在 `35b5cfd` 通过 | 已自动验证 |
+| OpenCode TUI attach 精确绑定 session | `bin/rah.mjs` 对 OpenCode 使用 `opencode attach <endpoint> --session <providerSessionId>`；`rah-cli-pty-first.test.ts` 覆盖；`RAH_NATIVE_LOCAL_SERVER_PROBE_PROVIDERS=opencode RAH_NATIVE_LOCAL_SERVER_PROBE_OPENCODE_CROSS_CLIENT=1 ...` 在当前 runtime 代码上通过 | 已自动验证 |
 | Claude 保留 zellij/TUI fallback | `session-runtime-descriptor.ts` 对 Claude catalog 返回 `tui_mux_fallback`；`zellij-tui-runtime.test.ts`、`zellij_real_tui_launch_probe.ts` | 已实现 |
 | 不采用 Claude `--sdk-url` 默认路径 | 计划文档和 goal 文档明确禁止；当前默认 adapter/runtime 没有 `--sdk-url` 主链路 | 已满足 |
 | zellij 长期 fallback | 计划文档、runtime descriptor、zellij tests 覆盖；Claude fallback 使用 zellij | 已实现 |
@@ -61,7 +61,7 @@ RAH_NATIVE_BROWSER=firefox npm run test:smoke:native-codex-browser
 RAH_NATIVE_BROWSER=firefox npm run test:smoke:native-provider-browser
 ```
 
-当前 HEAD `35b5cfd` 已通过的真实 provider smoke：
+当前 runtime 代码已通过的真实 provider smoke：
 
 ```sh
 npm run test:smoke:native-local-server
