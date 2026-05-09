@@ -27,14 +27,19 @@ type ManualQaReport = {
 };
 
 const SCRIPT_PATH = path.resolve("scripts/native_manual_qa_status.ts");
+const TSX_LOADER_PATH = path.resolve("node_modules/tsx/dist/loader.mjs");
 
-function runManualQaStatus(args: string[], env: NodeJS.ProcessEnv = {}): {
+function runManualQaStatus(
+  args: string[],
+  env: NodeJS.ProcessEnv = {},
+  cwd = process.cwd(),
+): {
   status: number;
   stdout: string;
 } {
   try {
-    const stdout = execFileSync(process.execPath, ["--import", "tsx", SCRIPT_PATH, ...args], {
-      cwd: process.cwd(),
+    const stdout = execFileSync(process.execPath, ["--import", TSX_LOADER_PATH, SCRIPT_PATH, ...args], {
+      cwd,
       env: { ...process.env, ...env },
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
@@ -104,6 +109,41 @@ test("native manual QA status accepts complete provider and iPad/Safari evidence
   const result = runReport(completeReport());
   assert.equal(result.status, 0);
   assert.equal(result.output.ok, true);
+});
+
+test("native manual QA template reports a clean worktree as dirty false", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "rah-manual-qa-clean-git-"));
+  execFileSync("git", ["init"], { cwd: dir, stdio: "ignore" });
+  writeFileSync(path.join(dir, "README.md"), "clean\n", "utf8");
+  execFileSync("git", ["add", "README.md"], { cwd: dir, stdio: "ignore" });
+  execFileSync(
+    "git",
+    [
+      "-c",
+      "user.name=RAH Test",
+      "-c",
+      "user.email=rah-test@example.invalid",
+      "commit",
+      "-m",
+      "initial",
+    ],
+    { cwd: dir, stdio: "ignore" },
+  );
+
+  const templatePath = path.join(dir, "template.json");
+  const result = runManualQaStatus(
+    ["--print-template"],
+    {
+      RAH_NATIVE_MANUAL_QA_TEMPLATE_OUTPUT: templatePath,
+    },
+    dir,
+  );
+  assert.equal(result.status, 0);
+  const report = JSON.parse(readFileSync(templatePath, "utf8")) as {
+    rah: { dirty?: unknown; changedFiles?: unknown };
+  };
+  assert.equal(report.rah.dirty, false);
+  assert.equal(report.rah.changedFiles, 0);
 });
 
 test("native manual QA status rejects provider pass results without concrete session evidence", () => {

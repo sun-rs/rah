@@ -49,7 +49,7 @@ function readGitField(args: string[]): string | null {
       cwd: process.cwd(),
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
-    }).trim() || null;
+    }).trim();
   } catch {
     return null;
   }
