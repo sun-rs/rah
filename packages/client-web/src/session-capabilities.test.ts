@@ -115,6 +115,66 @@ test("native TUI sessions do not expose RAH-managed mode or model controls", () 
   assert.equal(canSessionSwitchModel(summary), false);
 });
 
+test("runtime config feature gates live mode and model controls", () => {
+  const summary = summaryWithSession({
+    runtime: {
+      kind: "native_local_server",
+      protocolStability: "project_native",
+      liveSource: "provider_server",
+      tuiRole: "none",
+      structuredLiveEvents: true,
+      tuiContinuity: false,
+      features: {
+        structuredLiveEvents: "available",
+        structuredControl: "available",
+        historyBackfill: "available",
+        tuiClientContinuity: "unsupported",
+        crossClientSync: "unverified",
+        prelaunchConfig: "available",
+        runtimeConfig: "unverified",
+        interrupt: "unverified",
+        archiveLifecycle: "unverified",
+      },
+    },
+    capabilities: {
+      ...summaryWithSession().session.capabilities,
+      structuredControl: true,
+      modelSwitch: true,
+    },
+    mode: {
+      currentModeId: "default",
+      availableModes: [{ id: "default", label: "Default" }],
+      mutable: true,
+      source: "native",
+    },
+    model: {
+      currentModelId: "gpt-test",
+      availableModels: [{ id: "gpt-test", label: "gpt-test" }],
+      mutable: true,
+      source: "native",
+    },
+  });
+
+  assert.equal(canSessionSwitchModes(summary), false);
+  assert.equal(canSessionSwitchModel(summary), false);
+
+  const available = {
+    ...summary,
+    session: {
+      ...summary.session,
+      runtime: {
+        ...summary.session.runtime!,
+        features: {
+          ...summary.session.runtime!.features!,
+          runtimeConfig: "available" as const,
+        },
+      },
+    },
+  };
+  assert.equal(canSessionSwitchModes(available), true);
+  assert.equal(canSessionSwitchModel(available), true);
+});
+
 test("session controls are unlocked after failed and stopped states", () => {
   const summary = summaryWithArchiveCapability(true);
   assert.equal(

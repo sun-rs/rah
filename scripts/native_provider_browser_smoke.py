@@ -556,6 +556,7 @@ def exercise_provider(page, base_url: str, workspace: pathlib.Path, config: Prov
         tui_button.click()
         panel = page.locator(".terminal-panel").last
         expect(panel).to_be_visible(timeout=10_000)
+        wait_for_terminal_text(panel, config.ready_marker)
         send_pty_input(base_url, terminal_id, "web-user", dirty_draft)
         wait_for_native_prompt_state(base_url, session_id, "prompt_dirty")
         page.wait_for_timeout(300)

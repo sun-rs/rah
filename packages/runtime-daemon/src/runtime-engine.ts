@@ -533,6 +533,10 @@ export class RuntimeEngine {
   async startSession(request: StartSessionRequest): Promise<StartSessionResponse> {
     this.assertLiveSessionProviderAllowed(request);
     this.assertStructuredLiveBackendAllowed(request);
+    this.assertNativeLocalServerBackendAllowed(request);
+    if (this.shouldUseNativeLocalServerBackend(request)) {
+      return await this.structuredProviders.startSession(request);
+    }
     if (this.shouldUseZellijTuiBackend(request)) {
       await assertExistingWorkingDirectory(request.cwd, "Session working directory");
       this.pruneOrphanSessions();
@@ -555,8 +559,12 @@ export class RuntimeEngine {
   async resumeSession(request: ResumeSessionRequest): Promise<ResumeSessionResponse> {
     this.assertLiveSessionProviderAllowed(request);
     this.assertStructuredLiveBackendAllowed(request);
+    this.assertNativeLocalServerBackendAllowed(request);
     if (request.preferStoredReplay === true) {
       return await this.resumeStoredReplaySession(request);
+    }
+    if (this.shouldUseNativeLocalServerBackend(request)) {
+      return await this.structuredProviders.resumeSession(request);
     }
     if (this.shouldUseZellijTuiBackend(request)) {
       if (request.cwd) {
@@ -622,12 +630,30 @@ export class RuntimeEngine {
     }
   }
 
+  private supportsNativeLocalServerProvider(provider: StartSessionRequest["provider"]): boolean {
+    return provider === "codex" || provider === "opencode";
+  }
+
+  private assertNativeLocalServerBackendAllowed(
+    request: Pick<StartSessionRequest | ResumeSessionRequest, "provider" | "liveBackend">,
+  ): void {
+    if (
+      request.liveBackend === "native_local_server" &&
+      !this.supportsNativeLocalServerProvider(request.provider)
+    ) {
+      throw new Error(
+        `Provider ${request.provider} does not support the native local-server live backend. Use the provider's advertised live backend.`,
+      );
+    }
+  }
+
   private assertLiveSessionProviderAllowed(
     request: Pick<StartSessionRequest | ResumeSessionRequest, "provider"> &
       Partial<Pick<ResumeSessionRequest, "preferStoredReplay">>,
   ): void {
     if (
       request.preferStoredReplay === true ||
+      this.supportsNativeLocalServerProvider(request.provider) ||
       this.structuredLiveAllowedForInjectedAdapters ||
       this.nativeTuiProviders.supports(request.provider)
     ) {
@@ -652,6 +678,19 @@ export class RuntimeEngine {
       this.defaultLiveBackend === "native_tui" &&
       this.nativeTuiProviders.supports(request.provider)
     );
+  }
+
+  private shouldUseNativeLocalServerBackend(
+    request: Pick<StartSessionRequest | ResumeSessionRequest, "provider" | "liveBackend"> &
+      Partial<Pick<ResumeSessionRequest, "preferStoredReplay">>,
+  ): boolean {
+    if (request.liveBackend !== undefined) {
+      return request.liveBackend === "native_local_server";
+    }
+    if (request.preferStoredReplay === true) {
+      return false;
+    }
+    return false;
   }
 
   private shouldUseZellijTuiBackend(

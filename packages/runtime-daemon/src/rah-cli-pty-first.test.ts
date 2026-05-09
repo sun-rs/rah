@@ -163,6 +163,8 @@ test("rah provider command creates a native TUI session and attaches to PTY", as
     [
       "bin/rah.mjs",
       "codex",
+      "--mux",
+      "native",
       "--daemon-url",
       `http://127.0.0.1:${port}`,
       "--cwd",
@@ -208,7 +210,7 @@ test("rah provider command creates a native TUI session and attaches to PTY", as
   };
   assert.equal(startRequest.provider, "codex");
   assert.equal(startRequest.cwd, tmpDir);
-  assert.equal(startRequest.liveBackend, "zellij_tui");
+  assert.equal(startRequest.liveBackend, "native_tui");
   assert.match(startRequest.attach.client.id, /^terminal:/);
   assert.equal(startRequest.attach.client.kind, "terminal");
   assert.equal(startRequest.attach.client.connectionId, `pid:${child.pid}`);
@@ -224,6 +226,477 @@ test("rah provider command creates a native TUI session and attaches to PTY", as
     cols: 100,
     rows: 32,
   });
+});
+
+test("rah codex defaults to native local-server and attaches the official remote TUI client", async () => {
+  const startRequests: unknown[] = [];
+  const attachRequests: unknown[] = [];
+  const detachRequests: unknown[] = [];
+  const wss = new WebSocketServer({ noServer: true });
+  const server = createServer(async (req, res) => {
+    if (req.method === "GET" && req.url === "/readyz") {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end("ok");
+      return;
+    }
+    if (req.method === "POST" && req.url === "/api/sessions/start") {
+      startRequests.push(await readJsonBody(req));
+      writeJson(res, 200, {
+        session: sessionSummary({
+          id: "session-codex-native-local",
+          provider: "codex",
+          providerSessionId: "codex-thread-1",
+          launchSource: "terminal",
+          liveBackend: "native_local_server",
+          cwd: "/tmp",
+          rootDir: "/tmp",
+          runtimeState: "idle",
+          runtime: {
+            kind: "native_local_server",
+            protocolStability: "project_native",
+            liveSource: "provider_server",
+            tuiRole: "client_view",
+            structuredLiveEvents: true,
+            tuiContinuity: true,
+          },
+          runtimeDiagnostics: {
+            serverEndpoint: "ws://127.0.0.1:59999",
+            attachState: "ready",
+            lastEventCursor: "thread:codex-thread-1",
+          },
+          capabilities: {},
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }),
+      });
+      return;
+    }
+    if (req.method === "POST" && req.url === "/api/sessions/session-codex-native-local/attach") {
+      attachRequests.push(await readJsonBody(req));
+      writeJson(res, 200, {
+        session: sessionSummary({
+          id: "session-codex-native-local",
+          provider: "codex",
+          providerSessionId: "codex-thread-1",
+          launchSource: "terminal",
+          liveBackend: "native_local_server",
+          cwd: "/tmp",
+          rootDir: "/tmp",
+          runtimeState: "idle",
+          capabilities: {},
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }),
+      });
+      return;
+    }
+    if (req.method === "POST" && req.url === "/api/sessions/session-codex-native-local/detach") {
+      detachRequests.push(await readJsonBody(req));
+      writeJson(res, 200, {
+        session: sessionSummary({
+          id: "session-codex-native-local",
+          provider: "codex",
+          providerSessionId: "codex-thread-1",
+          launchSource: "terminal",
+          liveBackend: "native_local_server",
+          cwd: "/tmp",
+          rootDir: "/tmp",
+          runtimeState: "idle",
+          capabilities: {},
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }),
+      });
+      return;
+    }
+    res.writeHead(404);
+    res.end("not found");
+  });
+
+  const port = await listen(server);
+  const tmpDir = mkdtempSync(path.join(os.tmpdir(), "rah-cli-codex-native-local-"));
+  const fakeBin = path.join(tmpDir, "bin");
+  const logPath = path.join(tmpDir, "codex-remote-attach.log");
+  const fakeCodex = path.join(fakeBin, "codex");
+  mkdirSync(fakeBin, { recursive: true });
+  writeFileSync(
+    fakeCodex,
+    [
+      "#!/bin/sh",
+      "printf 'cwd=%s\\n' \"$PWD\" > \"$RAH_CODEX_REMOTE_ATTACH_LOG\"",
+      "printf 'args=%s\\n' \"$*\" >> \"$RAH_CODEX_REMOTE_ATTACH_LOG\"",
+    ].join("\n"),
+  );
+  chmodSync(fakeCodex, 0o755);
+
+  const child = spawn(
+    process.execPath,
+    [
+      "bin/rah.mjs",
+      "codex",
+      "--daemon-url",
+      `http://127.0.0.1:${port}`,
+      "--cwd",
+      tmpDir,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? ""}`,
+        RAH_CODEX_BINARY: fakeCodex,
+        RAH_CODEX_REMOTE_ATTACH_LOG: logPath,
+        RAH_MUX_BACKEND: "",
+      },
+    },
+  );
+  let stderr = "";
+  child.stderr?.on("data", (chunk) => {
+    stderr += chunk.toString("utf8");
+  });
+  const exitCode = await new Promise<number | null>((resolve, reject) => {
+    child.on("error", reject);
+    child.on("exit", (code) => resolve(code));
+  });
+  await closeServer(server, wss);
+
+  try {
+    assert.equal(exitCode, 0, stderr);
+    assert.equal(startRequests.length, 1);
+    const startRequest = startRequests[0] as {
+      provider: string;
+      liveBackend: string;
+      attach: { client: { id: string }; claimControl: boolean };
+    };
+    assert.equal(startRequest.provider, "codex");
+    assert.equal(startRequest.liveBackend, "native_local_server");
+    assert.equal(startRequest.attach.claimControl, true);
+    assert.equal(attachRequests.length, 1);
+    const attachRequest = attachRequests[0] as { client: { id: string }; claimControl?: boolean };
+    assert.equal(attachRequest.client.id, startRequest.attach.client.id);
+    assert.equal(attachRequest.claimControl, false);
+    assert.deepEqual(detachRequests, [{ clientId: startRequest.attach.client.id }]);
+    const attachLog = readFileSync(logPath, "utf8");
+    assert.match(attachLog, /^cwd=\/(?:private\/)?tmp$/m);
+    assert.match(attachLog, /args=--remote ws:\/\/127\.0\.0\.1:59999 resume codex-thread-1/);
+  } finally {
+    rmSync(tmpDir, { force: true, recursive: true });
+  }
+});
+
+test("rah codex resume defaults to native local-server and attaches the official remote TUI client", async () => {
+  const resumeRequests: unknown[] = [];
+  const attachRequests: unknown[] = [];
+  const detachRequests: unknown[] = [];
+  const wss = new WebSocketServer({ noServer: true });
+  const server = createServer(async (req, res) => {
+    if (req.method === "GET" && req.url === "/readyz") {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end("ok");
+      return;
+    }
+    if (req.method === "POST" && req.url === "/api/sessions/resume") {
+      resumeRequests.push(await readJsonBody(req));
+      writeJson(res, 200, {
+        session: sessionSummary({
+          id: "session-codex-resume-native-local",
+          provider: "codex",
+          providerSessionId: "codex-thread-resume-1",
+          launchSource: "terminal",
+          liveBackend: "native_local_server",
+          cwd: "/tmp",
+          rootDir: "/tmp",
+          runtimeState: "idle",
+          runtime: {
+            kind: "native_local_server",
+            protocolStability: "project_native",
+            liveSource: "provider_server",
+            tuiRole: "client_view",
+            structuredLiveEvents: true,
+            tuiContinuity: true,
+          },
+          runtimeDiagnostics: {
+            serverEndpoint: "ws://127.0.0.1:59998",
+            attachState: "ready",
+            lastEventCursor: "thread:codex-thread-resume-1",
+          },
+          capabilities: {},
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }),
+      });
+      return;
+    }
+    if (req.method === "POST" && req.url === "/api/sessions/session-codex-resume-native-local/attach") {
+      attachRequests.push(await readJsonBody(req));
+      writeJson(res, 200, {
+        session: sessionSummary({
+          id: "session-codex-resume-native-local",
+          provider: "codex",
+          providerSessionId: "codex-thread-resume-1",
+          launchSource: "terminal",
+          liveBackend: "native_local_server",
+          cwd: "/tmp",
+          rootDir: "/tmp",
+          runtimeState: "idle",
+          capabilities: {},
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }),
+      });
+      return;
+    }
+    if (req.method === "POST" && req.url === "/api/sessions/session-codex-resume-native-local/detach") {
+      detachRequests.push(await readJsonBody(req));
+      writeJson(res, 200, {
+        session: sessionSummary({
+          id: "session-codex-resume-native-local",
+          provider: "codex",
+          providerSessionId: "codex-thread-resume-1",
+          launchSource: "terminal",
+          liveBackend: "native_local_server",
+          cwd: "/tmp",
+          rootDir: "/tmp",
+          runtimeState: "idle",
+          capabilities: {},
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }),
+      });
+      return;
+    }
+    res.writeHead(404);
+    res.end("not found");
+  });
+
+  const port = await listen(server);
+  const tmpDir = mkdtempSync(path.join(os.tmpdir(), "rah-cli-codex-resume-native-local-"));
+  const fakeBin = path.join(tmpDir, "bin");
+  const logPath = path.join(tmpDir, "codex-remote-resume-attach.log");
+  const fakeCodex = path.join(fakeBin, "codex");
+  mkdirSync(fakeBin, { recursive: true });
+  writeFileSync(
+    fakeCodex,
+    [
+      "#!/bin/sh",
+      "printf 'cwd=%s\\n' \"$PWD\" > \"$RAH_CODEX_REMOTE_ATTACH_LOG\"",
+      "printf 'args=%s\\n' \"$*\" >> \"$RAH_CODEX_REMOTE_ATTACH_LOG\"",
+    ].join("\n"),
+  );
+  chmodSync(fakeCodex, 0o755);
+
+  const child = spawn(
+    process.execPath,
+    [
+      "bin/rah.mjs",
+      "codex",
+      "resume",
+      "codex-thread-resume-1",
+      "--daemon-url",
+      `http://127.0.0.1:${port}`,
+      "--cwd",
+      tmpDir,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? ""}`,
+        RAH_CODEX_BINARY: fakeCodex,
+        RAH_CODEX_REMOTE_ATTACH_LOG: logPath,
+        RAH_MUX_BACKEND: "",
+      },
+    },
+  );
+  let stderr = "";
+  child.stderr?.on("data", (chunk) => {
+    stderr += chunk.toString("utf8");
+  });
+  const exitCode = await new Promise<number | null>((resolve, reject) => {
+    child.on("error", reject);
+    child.on("exit", (code) => resolve(code));
+  });
+  await closeServer(server, wss);
+
+  try {
+    assert.equal(exitCode, 0, stderr);
+    assert.equal(resumeRequests.length, 1);
+    const resumeRequest = resumeRequests[0] as {
+      provider: string;
+      providerSessionId: string;
+      liveBackend: string;
+      attach: { client: { id: string }; claimControl: boolean };
+    };
+    assert.equal(resumeRequest.provider, "codex");
+    assert.equal(resumeRequest.providerSessionId, "codex-thread-resume-1");
+    assert.equal(resumeRequest.liveBackend, "native_local_server");
+    assert.equal(resumeRequest.attach.claimControl, true);
+    const attachRequest = attachRequests[0] as { client: { id: string }; claimControl?: boolean };
+    assert.equal(attachRequest.client.id, resumeRequest.attach.client.id);
+    assert.equal(attachRequest.claimControl, false);
+    assert.deepEqual(detachRequests, [{ clientId: resumeRequest.attach.client.id }]);
+    const attachLog = readFileSync(logPath, "utf8");
+    assert.match(attachLog, /^cwd=\/(?:private\/)?tmp$/m);
+    assert.match(attachLog, /args=--remote ws:\/\/127\.0\.0\.1:59998 resume codex-thread-resume-1/);
+  } finally {
+    rmSync(tmpDir, { force: true, recursive: true });
+  }
+});
+
+test("rah opencode defaults to native local-server and attaches the official TUI client", async () => {
+  const startRequests: unknown[] = [];
+  const attachRequests: unknown[] = [];
+  const detachRequests: unknown[] = [];
+  const wss = new WebSocketServer({ noServer: true });
+  const server = createServer(async (req, res) => {
+    if (req.method === "GET" && req.url === "/readyz") {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end("ok");
+      return;
+    }
+    if (req.method === "POST" && req.url === "/api/sessions/start") {
+      startRequests.push(await readJsonBody(req));
+      writeJson(res, 200, {
+        session: sessionSummary({
+          id: "session-opencode-native-local",
+          provider: "opencode",
+          providerSessionId: "opencode-session-1",
+          launchSource: "terminal",
+          liveBackend: "native_local_server",
+          cwd: "/tmp",
+          rootDir: "/tmp",
+          runtimeState: "idle",
+          runtime: {
+            kind: "native_local_server",
+            protocolStability: "project_native",
+            liveSource: "provider_server",
+            tuiRole: "client_view",
+            structuredLiveEvents: true,
+            tuiContinuity: true,
+          },
+          runtimeDiagnostics: {
+            serverEndpoint: "http://127.0.0.1:59997",
+            attachCommand: "opencode attach http://127.0.0.1:59997 --session opencode-session-1",
+            attachState: "ready",
+            lastEventCursor: "session:opencode-session-1",
+          },
+          capabilities: {},
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }),
+      });
+      return;
+    }
+    if (req.method === "POST" && req.url === "/api/sessions/session-opencode-native-local/attach") {
+      attachRequests.push(await readJsonBody(req));
+      writeJson(res, 200, {
+        session: sessionSummary({
+          id: "session-opencode-native-local",
+          provider: "opencode",
+          providerSessionId: "opencode-session-1",
+          launchSource: "terminal",
+          liveBackend: "native_local_server",
+          cwd: "/tmp",
+          rootDir: "/tmp",
+          runtimeState: "idle",
+          capabilities: {},
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }),
+      });
+      return;
+    }
+    if (req.method === "POST" && req.url === "/api/sessions/session-opencode-native-local/detach") {
+      detachRequests.push(await readJsonBody(req));
+      writeJson(res, 200, {
+        session: sessionSummary({
+          id: "session-opencode-native-local",
+          provider: "opencode",
+          providerSessionId: "opencode-session-1",
+          launchSource: "terminal",
+          liveBackend: "native_local_server",
+          cwd: "/tmp",
+          rootDir: "/tmp",
+          runtimeState: "idle",
+          capabilities: {},
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }),
+      });
+      return;
+    }
+    res.writeHead(404);
+    res.end("not found");
+  });
+
+  const port = await listen(server);
+  const tmpDir = mkdtempSync(path.join(os.tmpdir(), "rah-cli-opencode-native-local-"));
+  const fakeBin = path.join(tmpDir, "bin");
+  const logPath = path.join(tmpDir, "opencode-native-attach.log");
+  const fakeOpenCode = path.join(fakeBin, "opencode");
+  mkdirSync(fakeBin, { recursive: true });
+  writeFileSync(
+    fakeOpenCode,
+    [
+      "#!/bin/sh",
+      "printf 'cwd=%s\\n' \"$PWD\" > \"$RAH_OPENCODE_ATTACH_LOG\"",
+      "printf 'args=%s\\n' \"$*\" >> \"$RAH_OPENCODE_ATTACH_LOG\"",
+    ].join("\n"),
+  );
+  chmodSync(fakeOpenCode, 0o755);
+
+  const child = spawn(
+    process.execPath,
+    [
+      "bin/rah.mjs",
+      "opencode",
+      "--daemon-url",
+      `http://127.0.0.1:${port}`,
+      "--cwd",
+      tmpDir,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? ""}`,
+        RAH_OPENCODE_BINARY: fakeOpenCode,
+        RAH_OPENCODE_ATTACH_LOG: logPath,
+        RAH_MUX_BACKEND: "",
+      },
+    },
+  );
+  let stderr = "";
+  child.stderr?.on("data", (chunk) => {
+    stderr += chunk.toString("utf8");
+  });
+  const exitCode = await new Promise<number | null>((resolve, reject) => {
+    child.on("error", reject);
+    child.on("exit", (code) => resolve(code));
+  });
+  await closeServer(server, wss);
+
+  try {
+    assert.equal(exitCode, 0, stderr);
+    assert.equal(startRequests.length, 1);
+    const startRequest = startRequests[0] as {
+      provider: string;
+      liveBackend: string;
+      attach: { client: { id: string }; claimControl: boolean };
+    };
+    assert.equal(startRequest.provider, "opencode");
+    assert.equal(startRequest.liveBackend, "native_local_server");
+    assert.equal(startRequest.attach.claimControl, true);
+    const attachRequest = attachRequests[0] as { client: { id: string }; claimControl?: boolean };
+    assert.equal(attachRequest.client.id, startRequest.attach.client.id);
+    assert.equal(attachRequest.claimControl, false);
+    assert.deepEqual(detachRequests, [{ clientId: startRequest.attach.client.id }]);
+    const attachLog = readFileSync(logPath, "utf8");
+    assert.match(attachLog, /^cwd=\/(?:private\/)?tmp$/m);
+    assert.match(attachLog, /args=attach http:\/\/127\.0\.0\.1:59997 --session opencode-session-1/);
+  } finally {
+    rmSync(tmpDir, { force: true, recursive: true });
+  }
 });
 
 test("rah provider command accepts --mux zellij and requests the zellij live backend", async () => {
@@ -633,6 +1106,156 @@ test("rah provider command attaches local terminal through zellij when mux metad
   }
 });
 
+test("rah attach uses provider-native attach for OpenCode native local-server sessions", async () => {
+  const attachRequests: unknown[] = [];
+  const detachRequests: unknown[] = [];
+  const wss = new WebSocketServer({ noServer: true });
+  const server = createServer(async (req, res) => {
+    if (req.method === "GET" && req.url === "/readyz") {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end("ok");
+      return;
+    }
+    if (req.method === "GET" && req.url === "/api/sessions") {
+      writeJson(res, 200, {
+        sessions: [
+          sessionSummary({
+            id: "session-opencode-native",
+            provider: "opencode",
+            providerSessionId: "opencode-native-1",
+            launchSource: "web",
+            liveBackend: "native_local_server",
+            cwd: "/tmp",
+            rootDir: "/tmp",
+            runtimeState: "idle",
+            runtime: {
+              kind: "native_local_server",
+              protocolStability: "project_native",
+              liveSource: "provider_server",
+              tuiRole: "client_view",
+              structuredLiveEvents: true,
+              tuiContinuity: true,
+            },
+            runtimeDiagnostics: {
+              serverEndpoint: "http://127.0.0.1:49999",
+              attachCommand: "opencode attach http://127.0.0.1:49999 --session opencode-native-1",
+              attachState: "ready",
+              lastEventCursor: "session:opencode-native-1",
+            },
+            ptyId: "session-opencode-native",
+            capabilities: {},
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          }),
+        ],
+        storedSessions: [],
+        recentSessions: [],
+        workspaceDirs: [],
+      });
+      return;
+    }
+    if (req.method === "POST" && req.url === "/api/sessions/session-opencode-native/attach") {
+      attachRequests.push(await readJsonBody(req));
+      writeJson(res, 200, {
+        session: sessionSummary({
+          id: "session-opencode-native",
+          provider: "opencode",
+          launchSource: "web",
+          liveBackend: "native_local_server",
+          cwd: "/tmp",
+          rootDir: "/tmp",
+          runtimeState: "idle",
+          ptyId: "session-opencode-native",
+          capabilities: {},
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }),
+      });
+      return;
+    }
+    if (req.method === "POST" && req.url === "/api/sessions/session-opencode-native/detach") {
+      detachRequests.push(await readJsonBody(req));
+      writeJson(res, 200, {
+        session: sessionSummary({
+          id: "session-opencode-native",
+          provider: "opencode",
+          launchSource: "web",
+          liveBackend: "native_local_server",
+          cwd: "/tmp",
+          rootDir: "/tmp",
+          runtimeState: "idle",
+          ptyId: "session-opencode-native",
+          capabilities: {},
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }),
+      });
+      return;
+    }
+    res.writeHead(404);
+    res.end("not found");
+  });
+
+  const port = await listen(server);
+  const tmpDir = mkdtempSync(path.join(os.tmpdir(), "rah-cli-opencode-attach-"));
+  const fakeBin = path.join(tmpDir, "bin");
+  const logPath = path.join(tmpDir, "opencode-attach.log");
+  const fakeOpenCode = path.join(fakeBin, "opencode");
+  mkdirSync(fakeBin, { recursive: true });
+  writeFileSync(
+    fakeOpenCode,
+    [
+      "#!/bin/sh",
+      "printf 'cwd=%s\\n' \"$PWD\" > \"$RAH_OPENCODE_ATTACH_LOG\"",
+      "printf 'args=%s\\n' \"$*\" >> \"$RAH_OPENCODE_ATTACH_LOG\"",
+    ].join("\n"),
+  );
+  chmodSync(fakeOpenCode, 0o755);
+
+  const child = spawn(
+    process.execPath,
+    [
+      "bin/rah.mjs",
+      "attach",
+      "session-opencode-native",
+      "--daemon-url",
+      `http://127.0.0.1:${port}`,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? ""}`,
+        RAH_OPENCODE_ATTACH_LOG: logPath,
+      },
+    },
+  );
+  let stderr = "";
+  child.stderr?.on("data", (chunk) => {
+    stderr += chunk.toString("utf8");
+  });
+  const exitCode = await new Promise<number | null>((resolve, reject) => {
+    child.on("error", reject);
+    child.on("exit", (code) => resolve(code));
+  });
+  await closeServer(server, wss);
+
+  try {
+    assert.equal(exitCode, 0, stderr);
+    assert.equal(attachRequests.length, 1);
+    assert.equal(detachRequests.length, 1);
+    const attachRequest = attachRequests[0] as { client: { id: string }; claimControl?: boolean };
+    assert.match(attachRequest.client.id, /^terminal:/);
+    assert.equal(attachRequest.claimControl, false);
+    assert.deepEqual(detachRequests, [{ clientId: attachRequest.client.id }]);
+    const attachLog = readFileSync(logPath, "utf8");
+    assert.match(attachLog, /^cwd=\/(?:private\/)?tmp$/m);
+    assert.match(attachLog, /args=attach http:\/\/127\.0\.0\.1:49999 --session opencode-native-1/);
+  } finally {
+    rmSync(tmpDir, { force: true, recursive: true });
+  }
+});
+
 test("rah provider command preserves UTF-8 input split across stdin chunks", async () => {
   const startRequests: unknown[] = [];
   const ptyInputs: string[] = [];
@@ -845,6 +1468,8 @@ test("rah provider resume command creates a native TUI resume session and attach
       "codex",
       "resume",
       "provider-session-1",
+      "--mux",
+      "native",
       "--daemon-url",
       `http://127.0.0.1:${port}`,
       "--cwd",
@@ -890,7 +1515,7 @@ test("rah provider resume command creates a native TUI resume session and attach
   assert.equal(resumeRequest.provider, "codex");
   assert.equal(resumeRequest.providerSessionId, "provider-session-1");
   assert.equal(resumeRequest.cwd, tmpDir);
-  assert.equal(resumeRequest.liveBackend, "zellij_tui");
+  assert.equal(resumeRequest.liveBackend, "native_tui");
   assert.match(resumeRequest.attach.client.id, /^terminal:/);
   assert.equal(resumeRequest.attach.client.kind, "terminal");
   assert.equal(resumeRequest.attach.client.connectionId, `pid:${child.pid}`);

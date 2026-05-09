@@ -436,6 +436,55 @@ class MutableControlsAdapter extends CountingStoredSessionsAdapter {
   }
 }
 
+class NativeLocalServerRoutingAdapter implements ProviderAdapter {
+  readonly id = "native-local-routing";
+  readonly providers: Array<"codex"> = ["codex"];
+  engine: RuntimeEngine | undefined;
+  startRequests: StartSessionRequest[] = [];
+  resumeRequests: ResumeSessionRequest[] = [];
+
+  startSession(request: StartSessionRequest): StartSessionResponse {
+    if (!this.engine) {
+      throw new Error("engine missing");
+    }
+    this.startRequests.push(request);
+    const state = this.engine.sessionStore.createManagedSession({
+      provider: "codex",
+      providerSessionId: "native-local-start",
+      launchSource: "web",
+      liveBackend: request.liveBackend,
+      cwd: request.cwd,
+      rootDir: request.cwd,
+      capabilities: {
+        structuredControl: true,
+        steerInput: true,
+      },
+    });
+    return { session: toSessionSummary(state) };
+  }
+
+  resumeSession(request: ResumeSessionRequest): ResumeSessionResponse {
+    if (!this.engine) {
+      throw new Error("engine missing");
+    }
+    this.resumeRequests.push(request);
+    const cwd = request.cwd ?? workDirGlobal;
+    const state = this.engine.sessionStore.createManagedSession({
+      provider: "codex",
+      providerSessionId: request.providerSessionId,
+      launchSource: "web",
+      liveBackend: request.liveBackend,
+      cwd,
+      rootDir: cwd,
+      capabilities: {
+        structuredControl: true,
+        steerInput: true,
+      },
+    });
+    return { session: toSessionSummary(state) };
+  }
+}
+
 let workDirGlobal = "";
 
 class SnapshotPagingAdapter implements ProviderAdapter {
@@ -825,6 +874,74 @@ describe("RuntimeEngine", () => {
     }
   });
 
+  test("production engine rejects native local-server backend for providers without that runtime", async () => {
+    const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-native-local-unsupported-"));
+    const engine = new RuntimeEngine();
+    try {
+      await assert.rejects(
+        () =>
+          engine.startSession({
+            provider: "claude",
+            cwd: workspace,
+            liveBackend: "native_local_server",
+          }),
+        /Provider claude does not support the native local-server live backend/,
+      );
+      await assert.rejects(
+        () =>
+          engine.resumeSession({
+            provider: "claude",
+            providerSessionId: "claude-native-local-unsupported",
+            cwd: workspace,
+            liveBackend: "native_local_server",
+          }),
+        /Provider claude does not support the native local-server live backend/,
+      );
+    } finally {
+      await engine.shutdown();
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("native local-server backend routes through structured lifecycle and tags runtime", async () => {
+    const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-native-local-routing-"));
+    workDirGlobal = workspace;
+    const adapter = new NativeLocalServerRoutingAdapter();
+    const engine = new RuntimeEngine([adapter]);
+    adapter.engine = engine;
+    try {
+      const started = await engine.startSession({
+        provider: "codex",
+        cwd: workspace,
+        liveBackend: "native_local_server",
+      });
+      assert.equal(adapter.startRequests.length, 1);
+      assert.equal(started.session.session.liveBackend, "native_local_server");
+      assert.equal(started.session.session.runtime?.kind, "native_local_server");
+      assert.equal(started.session.session.runtime?.liveSource, "provider_server");
+      assert.equal(started.session.session.runtime?.structuredLiveEvents, true);
+      assert.equal(started.session.session.runtime?.tuiRole, "client_view");
+      assert.equal(started.session.session.runtime?.tuiContinuity, true);
+
+      const resumed = await engine.resumeSession({
+        provider: "codex",
+        providerSessionId: "native-local-resume",
+        cwd: workspace,
+        liveBackend: "native_local_server",
+      });
+      assert.equal(adapter.resumeRequests.length, 1);
+      assert.equal(resumed.session.session.liveBackend, "native_local_server");
+      assert.equal(resumed.session.session.runtime?.kind, "native_local_server");
+      assert.equal(resumed.session.session.runtime?.liveSource, "provider_server");
+      assert.equal(resumed.session.session.runtime?.structuredLiveEvents, true);
+      assert.equal(resumed.session.session.runtime?.tuiRole, "client_view");
+      assert.equal(resumed.session.session.runtime?.tuiContinuity, true);
+    } finally {
+      await engine.shutdown();
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
   test("production engine rejects unsupported live providers before structured fallback", async () => {
     const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-unsupported-live-provider-"));
     const engine = new RuntimeEngine();
@@ -876,6 +993,66 @@ describe("RuntimeEngine", () => {
     assert.equal(adapter.modelCalls, 0);
 
     engine.sessionStore.setRuntimeState(sessionId, "idle");
+    await engine.setSessionMode(sessionId, "plan");
+    await engine.setSessionModel(sessionId, { modelId: "beta" });
+    assert.equal(adapter.modeCalls, 1);
+    assert.equal(adapter.modelCalls, 1);
+
+    await engine.shutdown();
+  });
+
+  test("blocks mode and model changes when runtime config is not available", async () => {
+    const adapter = new MutableControlsAdapter();
+    const engine = new RuntimeEngine([adapter]);
+    adapter.engine = engine;
+
+    const started = await engine.startSession({
+      provider: "codex",
+      cwd: workDirGlobal,
+    });
+    const sessionId = started.session.session.id;
+    engine.sessionStore.patchManagedSession(sessionId, {
+      runtime: {
+        kind: "native_local_server",
+        protocolStability: "project_native",
+        liveSource: "provider_server",
+        tuiRole: "none",
+        structuredLiveEvents: true,
+        tuiContinuity: false,
+        features: {
+          structuredLiveEvents: "available",
+          structuredControl: "available",
+          historyBackfill: "available",
+          tuiClientContinuity: "unsupported",
+          crossClientSync: "unverified",
+          prelaunchConfig: "available",
+          runtimeConfig: "unverified",
+          interrupt: "unverified",
+          archiveLifecycle: "unverified",
+        },
+      },
+    });
+
+    await assert.rejects(
+      () => engine.setSessionMode(sessionId, "plan"),
+      /Session mode controls are not available for this session runtime/,
+    );
+    await assert.rejects(
+      () => engine.setSessionModel(sessionId, { modelId: "beta" }),
+      /Session model controls are not available for this session runtime/,
+    );
+    assert.equal(adapter.modeCalls, 0);
+    assert.equal(adapter.modelCalls, 0);
+
+    engine.sessionStore.patchManagedSession(sessionId, {
+      runtime: {
+        ...engine.sessionStore.getSession(sessionId)!.session.runtime!,
+        features: {
+          ...engine.sessionStore.getSession(sessionId)!.session.runtime!.features!,
+          runtimeConfig: "available",
+        },
+      },
+    });
     await engine.setSessionMode(sessionId, "plan");
     await engine.setSessionModel(sessionId, { modelId: "beta" });
     assert.equal(adapter.modeCalls, 1);

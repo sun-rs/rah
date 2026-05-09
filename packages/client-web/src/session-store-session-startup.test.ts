@@ -221,6 +221,7 @@ describe("session startup model and mode requests", () => {
     assert.deepEqual(startRequest?.body, {
       provider: "codex",
       cwd: "/tmp/rah",
+      liveBackend: "native_local_server",
       title: "test",
       model: "gpt-5.5",
       optionValues: { model_reasoning_effort: "xhigh" },
@@ -285,7 +286,7 @@ describe("session startup model and mode requests", () => {
     assert.deepEqual(calls, ["created:started", "send"]);
   });
 
-  test("new session lets the daemon choose the default live backend for core provider CLIs", async () => {
+  test("new session selects native local-server backend for providers that support it", async () => {
     const requests = installWebApiMocks((request) => {
       if (request.url.includes("/api/fs/list")) {
         return { path: "/tmp/rah", entries: [] };
@@ -327,9 +328,9 @@ describe("session startup model and mode requests", () => {
         return [body.provider, body.liveBackend ?? null];
       }),
       [
-        ["codex", null],
+        ["codex", "native_local_server"],
         ["claude", null],
-        ["opencode", null],
+        ["opencode", "native_local_server"],
       ],
     );
   });
@@ -416,6 +417,7 @@ describe("session startup model and mode requests", () => {
     assert.deepEqual(resumeRequest?.body, {
       provider: "codex",
       providerSessionId: "thread-1",
+      liveBackend: "native_local_server",
       model: "gpt-5.5",
       optionValues: { model_reasoning_effort: "xhigh" },
       reasoningId: "xhigh",
@@ -445,7 +447,7 @@ describe("session startup model and mode requests", () => {
     });
   });
 
-  test("claim history lets the daemon choose the default live backend for core provider CLIs", async () => {
+  test("claim history selects native local-server backend for providers that support it", async () => {
     const requests = installWebApiMocks((request) => {
       if (request.url.includes("/api/fs/list")) {
         return { path: "/tmp/rah", entries: [] };
@@ -503,9 +505,9 @@ describe("session startup model and mode requests", () => {
         return [body.provider, body.liveBackend ?? null];
       }),
       [
-        ["codex", null],
+        ["codex", "native_local_server"],
         ["claude", null],
-        ["opencode", null],
+        ["opencode", "native_local_server"],
       ],
     );
   });

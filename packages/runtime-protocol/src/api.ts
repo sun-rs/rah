@@ -8,6 +8,7 @@ import type {
   ManagedSession,
   ModelCapabilityProfile,
   ProviderKind,
+  SessionRuntimeDescriptor,
   SessionLiveBackend,
   SessionConfigOption,
   SessionConfigValue,
@@ -511,6 +512,7 @@ export interface ListNativeTuiDiagnosticsResponse {
 
 export interface ProviderModelCatalog {
   provider: ProviderKind;
+  runtime?: SessionRuntimeDescriptor;
   currentModelId?: string;
   currentReasoningId?: string | null;
   models: SessionModelDescriptor[];

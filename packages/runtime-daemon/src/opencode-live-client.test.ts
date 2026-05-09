@@ -9,6 +9,7 @@ import { OpenCodeAdapter } from "./legacy-structured/opencode-structured-adapter
 import { startOpenCodeServer } from "./opencode-api";
 import {
   interruptOpenCodeLiveSession,
+  runtimeDiagnosticsForOpenCodeServer,
   sendInputToOpenCodeLiveSession,
   setOpenCodeLiveSessionMode,
   type LiveOpenCodeSession,
@@ -52,6 +53,25 @@ test("startOpenCodeServer rejects missing working directories before spawn", asy
       process.env.RAH_OPENCODE_BINARY = previousBinary;
     }
   }
+});
+
+test("runtimeDiagnosticsForOpenCodeServer exposes safe attach diagnostics", () => {
+  const diagnostics = runtimeDiagnosticsForOpenCodeServer(
+    {
+      baseUrl: "http://127.0.0.1:43199",
+      cwd: "/tmp/rah-opencode",
+      child: { pid: 12345 },
+    } as never,
+    "opencode-session-1",
+  );
+
+  assert.deepEqual(diagnostics, {
+    serverEndpoint: "http://127.0.0.1:43199",
+    serverPid: 12345,
+    attachCommand: "opencode attach http://127.0.0.1:43199 --session opencode-session-1",
+    attachState: "ready",
+    lastEventCursor: "session:opencode-session-1",
+  });
 });
 
 test("interruptOpenCodeLiveSession requires input control before canceling", () => {

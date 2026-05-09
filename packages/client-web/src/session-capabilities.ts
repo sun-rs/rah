@@ -44,7 +44,15 @@ export function sessionModeState(summary: SessionSummary): SessionModeState | nu
   return summary.session.mode ?? null;
 }
 
+function canUseRuntimeConfig(summary: SessionSummary): boolean {
+  const runtimeConfig = summary.session.runtime?.features?.runtimeConfig;
+  return runtimeConfig === undefined || runtimeConfig === "available";
+}
+
 export function canSessionSwitchModes(summary: SessionSummary): boolean {
+  if (!canUseRuntimeConfig(summary)) {
+    return false;
+  }
   if (!summary.session.capabilities.structuredControl) {
     return false;
   }
@@ -53,6 +61,9 @@ export function canSessionSwitchModes(summary: SessionSummary): boolean {
 }
 
 export function canSessionSwitchModel(summary: SessionSummary): boolean {
+  if (!canUseRuntimeConfig(summary)) {
+    return false;
+  }
   if (!summary.session.capabilities.structuredControl) {
     return false;
   }

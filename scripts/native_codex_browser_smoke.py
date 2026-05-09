@@ -30,6 +30,13 @@ def browser_headless() -> bool:
     return os.environ.get("RAH_NATIVE_HEADLESS", "1") != "0"
 
 
+def browser_supports_mobile_context() -> bool:
+    # Playwright Firefox does not implement Browser.newContext({ isMobile }).
+    # Keep Firefox in the desktop smoke matrix instead of failing on a
+    # browser-runtime limitation unrelated to RAH.
+    return selected_browser_name() != "firefox"
+
+
 def launch_browser(playwright):
     browser_name = selected_browser_name()
     browser_types = {
@@ -124,6 +131,10 @@ def write_fake_codex(path: pathlib.Path) -> None:
                 "process.stdin.on('data', (chunk) => {",
                 "  if (chunk.includes('\\u0003')) {",
                 "    chunk = chunk.split('\\u0003').join('');",
+                "    handleInterrupt();",
+                "  }",
+                "  if (pendingStopTurnId && chunk.includes('\\u001b')) {",
+                "    chunk = chunk.split('\\u001b').join('');",
                 "    handleInterrupt();",
                 "  }",
                 "  buffer += chunk;",
@@ -258,10 +269,15 @@ def count_session_history_timeline_text(
     return len(matches), matches
 
 
-def assert_session_idle(base_url: str, session_id: str) -> None:
-    session = request_json(base_url, f"/api/sessions/{session_id}")["session"]["session"]
-    if session.get("runtimeState") != "idle":
-        raise AssertionError(f"session did not return to idle: {session}")
+def assert_session_idle(base_url: str, session_id: str, timeout_s: int = 15) -> None:
+    started = time.time()
+    last_session: dict[str, Any] | None = None
+    while time.time() - started < timeout_s:
+        last_session = request_json(base_url, f"/api/sessions/{session_id}")["session"]["session"]
+        if last_session.get("runtimeState") == "idle":
+            return
+        time.sleep(0.2)
+    raise AssertionError(f"session did not return to idle: {last_session}")
 
 
 def session_native_terminal_id(base_url: str, session_id: str) -> str:
@@ -385,6 +401,7 @@ def main() -> int:
     mobile_composition_prompt = "中文_NATIVE_OK"
     expected_answer = "RAH_NATIVE_CODEX_BROWSER_MIRROR_1"
     expected_chat_answer = "RAH_NATIVE_CODEX_BROWSER_MIRROR_2"
+    expected_queued_answer = "RAH_NATIVE_CODEX_BROWSER_MIRROR_3"
     expected_foreground_answer = "RAH_NATIVE_CODEX_BROWSER_FOREGROUND_ANSWER"
     port = free_port()
     base_url = f"http://127.0.0.1:{port}"
@@ -500,9 +517,12 @@ def main() -> int:
                 "RAH_NATIVE_CODEX_BROWSER_INTERRUPTED",
                 interrupted_count + 1,
             )
-            page.wait_for_timeout(500)
-            if blocked_chat_prompt in panel.inner_text():
-                raise AssertionError("dirty TUI draft allowed Chat composer text to reach native TUI")
+            wait_for_terminal_text(
+                panel,
+                f"RAH_NATIVE_CODEX_BROWSER_INPUT:{blocked_chat_prompt}",
+            )
+            wait_for_terminal_text(panel, expected_queued_answer)
+            assert_session_idle(base_url, session_id)
 
             page.get_by_role("button", name="Chat", exact=True).click()
             fill_and_submit_chat_composer(page, stop_prompt)
@@ -571,7 +591,7 @@ def main() -> int:
             expect(settings_dialog.get_by_text("Replay chunks").first).to_be_visible(
                 timeout=10_000
             )
-            settings_dialog.get_by_role("button", name="Close", exact=True).click(timeout=10_000)
+            settings_dialog.get_by_label("Close").click(timeout=10_000)
             expect(settings_dialog).to_be_hidden(timeout=10_000)
 
             if page.get_by_text("Canvas", exact=True).count() == 0:
@@ -646,86 +666,92 @@ def main() -> int:
             )
             page.locator('button[title="Hide canvas"]').click(timeout=10_000)
 
-            mobile_context = browser.new_context(
-                viewport={"width": 390, "height": 844},
-                is_mobile=True,
-                has_touch=True,
-            )
-            mobile_page = mobile_context.new_page()
-            mobile_page.goto(base_url, wait_until="domcontentloaded")
-            mobile_page.locator('button[aria-label="Open sidebar"]:visible').first.click(
-                timeout=30_000
-            )
-            mobile_page.locator('button[aria-label="Sessions"]:visible').first.click(timeout=30_000)
-            mobile_page.get_by_role("button", name="Live", exact=True).click(timeout=30_000)
-            mobile_page.locator(f'button[data-session-id="{session_id}"]:visible').first.click(
-                timeout=30_000
-            )
-            mobile_page.get_by_role("button", name="TUI", exact=True).click(timeout=30_000)
-            mobile_panel = mobile_page.locator(".terminal-panel").last
-            expect(mobile_panel).to_be_visible(timeout=10_000)
-            mobile_bridge = mobile_page.locator('[data-testid="terminal-ios-input-bridge"]').last
-            expect(mobile_bridge).to_be_visible(timeout=10_000)
-            mobile_canvas = mobile_page.locator(".terminal-canvas").last
-            mobile_canvas.click()
-            mobile_page.wait_for_timeout(250)
-            focused_after_canvas_click = mobile_page.evaluate(
-                """() => {
-                    const active = document.activeElement;
-                    return active instanceof HTMLElement ? active.className : '';
-                }"""
-            )
-            if "terminal-ios-input" not in str(focused_after_canvas_click):
-                raise AssertionError(
-                    "mobile terminal canvas click should focus the RAH input bridge, "
-                    f"focused={focused_after_canvas_click!r}"
+            mobile_assertions: list[str] = []
+            if browser_supports_mobile_context():
+                mobile_context = browser.new_context(
+                    viewport={"width": 390, "height": 844},
+                    is_mobile=True,
+                    has_touch=True,
                 )
-            for shortcut in [
-                "Ctrl-C",
-                "Esc",
-                "Tab",
-                "Arrow up",
-                "Arrow down",
-                "Arrow left",
-                "Arrow right",
-                "Enter",
-            ]:
-                expect(mobile_bridge.get_by_role("button", name=shortcut, exact=True)).to_be_visible()
-            interrupted_count = count_terminal_text(
-                mobile_panel,
-                "RAH_NATIVE_CODEX_BROWSER_INTERRUPTED",
-            )
-            mobile_bridge.get_by_role("button", name="Ctrl-C", exact=True).click()
-            wait_for_terminal_text_count(
-                mobile_panel,
-                "RAH_NATIVE_CODEX_BROWSER_INTERRUPTED",
-                interrupted_count + 1,
-            )
-            mobile_bridge.locator("input").fill(mobile_prompt)
-            mobile_bridge.get_by_role("button", name="Enter", exact=True).click()
-            wait_for_terminal_text(
-                mobile_panel,
-                f"RAH_NATIVE_CODEX_BROWSER_INPUT:{mobile_prompt}",
-            )
-            mobile_page.evaluate(
-                """(value) => {
-                    const input = document.querySelector('.terminal-ios-input');
-                    if (!(input instanceof HTMLInputElement)) {
-                      throw new Error('terminal ios bridge input not found');
-                    }
-                    input.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true, data: '' }));
-                    input.value = value;
-                    input.dispatchEvent(new Event('input', { bubbles: true }));
-                    input.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: value }));
-                }""",
-                mobile_composition_prompt,
-            )
-            mobile_bridge.get_by_role("button", name="Enter", exact=True).click()
-            wait_for_terminal_text(
-                mobile_panel,
-                f"RAH_NATIVE_CODEX_BROWSER_INPUT:{mobile_composition_prompt}",
-            )
-            mobile_context.close()
+                mobile_page = mobile_context.new_page()
+                mobile_page.goto(base_url, wait_until="domcontentloaded")
+                mobile_page.locator('button[aria-label="Open sidebar"]:visible').first.click(
+                    timeout=30_000
+                )
+                mobile_page.locator('button[aria-label="Sessions"]:visible').first.click(timeout=30_000)
+                mobile_page.get_by_role("button", name="Live", exact=True).click(timeout=30_000)
+                mobile_page.locator(f'button[data-session-id="{session_id}"]:visible').first.click(
+                    timeout=30_000
+                )
+                mobile_page.get_by_role("button", name="TUI", exact=True).click(timeout=30_000)
+                mobile_panel = mobile_page.locator(".terminal-panel").last
+                expect(mobile_panel).to_be_visible(timeout=10_000)
+                mobile_bridge = mobile_page.locator('[data-testid="terminal-ios-input-bridge"]').last
+                expect(mobile_bridge).to_be_visible(timeout=10_000)
+                mobile_canvas = mobile_page.locator(".terminal-canvas").last
+                mobile_canvas.click()
+                mobile_page.wait_for_timeout(250)
+                focused_after_canvas_click = mobile_page.evaluate(
+                    """() => {
+                        const active = document.activeElement;
+                        return active instanceof HTMLElement ? active.className : '';
+                    }"""
+                )
+                if "terminal-ios-input" not in str(focused_after_canvas_click):
+                    raise AssertionError(
+                        "mobile terminal canvas click should focus the RAH input bridge, "
+                        f"focused={focused_after_canvas_click!r}"
+                    )
+                for shortcut in [
+                    "Ctrl-C",
+                    "Esc",
+                    "Tab",
+                    "Arrow up",
+                    "Arrow down",
+                    "Arrow left",
+                    "Arrow right",
+                    "Enter",
+                ]:
+                    expect(mobile_bridge.get_by_role("button", name=shortcut, exact=True)).to_be_visible()
+                interrupted_count = count_terminal_text(
+                    mobile_panel,
+                    "RAH_NATIVE_CODEX_BROWSER_INTERRUPTED",
+                )
+                mobile_bridge.get_by_role("button", name="Ctrl-C", exact=True).click()
+                wait_for_terminal_text_count(
+                    mobile_panel,
+                    "RAH_NATIVE_CODEX_BROWSER_INTERRUPTED",
+                    interrupted_count + 1,
+                )
+                mobile_bridge.locator("input").fill(mobile_prompt)
+                mobile_bridge.get_by_role("button", name="Enter", exact=True).click()
+                wait_for_terminal_text(
+                    mobile_panel,
+                    f"RAH_NATIVE_CODEX_BROWSER_INPUT:{mobile_prompt}",
+                )
+                mobile_page.evaluate(
+                    """(value) => {
+                        const input = document.querySelector('.terminal-ios-input');
+                        if (!(input instanceof HTMLInputElement)) {
+                          throw new Error('terminal ios bridge input not found');
+                        }
+                        input.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true, data: '' }));
+                        input.value = value;
+                        input.dispatchEvent(new Event('input', { bubbles: true }));
+                        input.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: value }));
+                    }""",
+                    mobile_composition_prompt,
+                )
+                mobile_bridge.get_by_role("button", name="Enter", exact=True).click()
+                wait_for_terminal_text(
+                    mobile_panel,
+                    f"RAH_NATIVE_CODEX_BROWSER_INPUT:{mobile_composition_prompt}",
+                )
+                mobile_context.close()
+                mobile_assertions = [
+                    "mobile TUI input bridge sends shortcut keys, text input, and composition input",
+                    "mobile TUI canvas click focuses the RAH input bridge instead of xterm hidden textarea",
+                ]
 
             browser.close()
 
@@ -747,7 +773,7 @@ def main() -> int:
                         "Chat mirror renders provider history output",
                         "Chat mirror dedupes Codex agent_message plus assistant response_item",
                         "Chat composer input reaches daemon-owned native TUI",
-                        "Chat composer is blocked while the native TUI prompt has an unsubmitted draft",
+                        "Chat composer queues while the native TUI prompt has an unsubmitted draft",
                         "Chat view warns when the native TUI prompt has an unsubmitted draft",
                         "Stop button sends Ctrl-C to daemon-owned native TUI",
                         "Stop returns daemon-owned native TUI session to idle",
@@ -757,8 +783,7 @@ def main() -> int:
                         "Settings Version refresh shows PTY terminal replay deltas",
                         "Canvas panes render native TUI and preserve replay across layout changes",
                         "Canvas layout changes send PTY resize events to native TUI",
-                        "mobile TUI input bridge sends shortcut keys, text input, and composition input",
-                        "mobile TUI canvas click focuses the RAH input bridge instead of xterm hidden textarea",
+                        *mobile_assertions,
                     ],
                 },
                 ensure_ascii=False,

@@ -6,17 +6,21 @@ Runtime-owned AI workbench for local-first, cross-device session continuity.
 
 Version: `1.0.0-rc.1`.
 
-RAH `1.0.0-rc.1` is the zellij-backed PTY-first release candidate. The product
-boundary is now intentionally narrow:
+RAH `1.0.0-rc.1` is moving to a provider-native runtime boundary. The product
+boundary is intentionally narrow:
 
 - Codex, Claude, and OpenCode are the only first-class live provider CLIs.
-- `rah <provider>` defaults to zellij-backed native TUI sessions.
-- Web New/Claim/Resume follows the daemon live backend; use `RAH_MUX_BACKEND=zellij`
-  when starting the daemon to make Web-created sessions use the zellij path.
-- structured Chat is a mirror of provider-native history files/DBs, not ANSI screen scraping.
-- zellij screen output is only the native TUI view/control surface.
-- Chat input is injected into the provider TUI without stealing the active TUI display surface.
-- The Web/PWA `TUI` tab is the explicit handoff point that may detach/cover the current terminal surface.
+- Codex and OpenCode default to provider `native_local_server` runtimes. RAH talks to the
+  provider server for structured live events/control, and the local terminal uses the
+  provider-native TUI attach client.
+- Claude defaults to the zellij/TUI mux fallback because Claude Code has no stable Codex/OpenCode-style
+  local app-server.
+- Web New/Claim/Resume follows provider runtime capabilities: Codex/OpenCode use native local server;
+  Claude uses the TUI mux fallback.
+- structured Chat uses provider server events where available and provider-native history files/DBs
+  for backfill/history. It is not ANSI screen scraping.
+- zellij screen output is only the native TUI view/control surface for Claude and fallback paths.
+- The Web/PWA `TUI` tab is the explicit handoff point for TUI surfaces.
 - provider adapters own launch specs, binding probes, mirror parsers, and optional capability catalogs.
 - model/permission/plan/effort controls are optional provider enhancements, not the core contract.
 
@@ -68,13 +72,15 @@ Important behavior:
 
 - `start` does not replace a daemon that is already running.
 - `restart` is the command that shuts down the old daemon and starts the updated code.
-- `restart` interrupts currently managed core live TUIs (`rah codex`, `rah claude`,
+- `restart` interrupts currently managed core live provider runtimes (`rah codex`, `rah claude`,
   `rah opencode`) because the old daemon is stopped.
 - `npm install` is not needed for normal code changes.
 - daemon pid/log files live under `~/.rah/runtime-daemon`.
-- `rah <provider>` now defaults to zellij-backed PTY-first native TUI sessions. It asks the daemon
-  to create/resume a provider TUI inside a zellij mux session and attaches the current terminal to
-  that mux session. Use `--mux native` only as a fallback diagnostic.
+- `rah codex` and `rah opencode` now default to native local-server sessions and attach the current
+  terminal with the provider-native TUI client (`codex --remote ... resume ...` or
+  `opencode attach ... --session ...`).
+- `rah claude` defaults to the zellij/TUI fallback. Use `--mux zellij` or `--mux native` on
+  Codex/OpenCode only when you explicitly want the fallback TUI path for diagnostics.
 - Core live providers are `codex`, `claude`, and `opencode`. Gemini/Kimi CLI first-class support
   has been removed; use OpenCode + API providers for Gemini/Kimi/Grok/DeepSeek-style work. See
   [`docs/provider-scope-codex-claude-opencode.zh-CN.md`](docs/provider-scope-codex-claude-opencode.zh-CN.md).
@@ -177,9 +183,26 @@ RAH now uses five test tiers:
 
 Detailed provider regression coverage is tracked in `docs/provider-regression-testing.zh-CN.md`.
 
-For the current PTY-first branch, the preferred browser smoke commands are `native-codex-browser`,
-`native-provider-browser`, and `native-browser-webkit`. The older provider-specific browser smoke
-commands are still useful as local diagnostics, but they do not replace the native PTY browser smoke.
+For the current native-local-server branch, the preferred smoke coverage is split by runtime:
+`test:smoke:native-local-server` verifies Codex/OpenCode provider-server capabilities, while
+`native-codex-browser`, `native-provider-browser`, and `native-browser-webkit` remain browser/UI
+diagnostics for local machines. Older provider-specific browser smoke commands are still useful as
+local diagnostics, but they do not replace the runtime capability probes.
+
+Manual QA evidence for this branch is checked by:
+
+```bash
+npm run test:smoke:native-manual-qa-status
+```
+
+Generate the current-code template with:
+
+```bash
+RAH_NATIVE_MANUAL_QA_TEMPLATE_OUTPUT=test-results/native-manual-qa.json npm run test:smoke:native-manual-qa-status -- --print-template
+```
+
+The verifier records a `worktreeFingerprint`, so pass results are tied to the exact dirty worktree
+snapshot being tested, not just the last commit.
 
 Provider smoke is intentionally **not** treated as a universal local gate. Installed CLI binaries do
 not prove authentication, quota, or account access.
@@ -251,32 +274,32 @@ Current statuses are:
 
 ## Design boundary
 
-RAH stays close to the proven hapi/paseo product boundary:
+RAH keeps the live runtime boundary explicit:
 
 - transcript, tool calls, permissions, usage, attention, and session state are core workbench data.
-- provider-native history files/DBs are the semantic source of structured Chat.
+- Codex/OpenCode live Chat/control uses provider-native local server APIs when available.
+- provider-native history files/DBs remain the semantic source for history/backfill.
 - zellij/PTY output is a TUI control and viewing surface, not the semantic transcript source.
-- Chat input/Stop can be injected without claiming the Web TUI display surface.
-- only explicit Web/PWA `TUI` view claims the zellij display surface and may detach/cover another attached terminal.
+- only explicit Web/PWA `TUI` view claims a TUI display surface.
 - provider-specific maintenance signals should remain adapter-owned or inspector-only.
 
 ## 1.0 RC Scope
 
 `1.0.0-rc.1` is considered feature-complete enough for the current branch goal:
 
-- zellij-backed mux runtime exists and is the default `rah <provider>` CLI path.
-- one RAH live session maps to one zellij session/pane.
-- terminal, Web, PWA, and reconnect flows attach to the same live provider TUI rather than creating
-  a resume session.
-- Chat mirror remains provider-history-backed and uses canonical timeline identity/reconciliation to
-  avoid live/history duplicates.
-- Chat input no longer steals the active TUI display surface; TUI display ownership is explicit.
-- Archive closes the provider pane and zellij session instead of leaving an orphan mux.
-- zellij diagnostics expose managed/unmanaged `rah-*` sessions.
+- Codex native local-server WebSocket runtime is wired, and Codex 0.130.0 remote TUI cross-client
+  sync has passed `scripts/native_local_server_probe.ts`.
+- OpenCode native local-server attach/cross-client sync has passed `scripts/native_local_server_probe.ts`.
+- Claude zellij/TUI mux fallback remains the production continuity path for Claude.
+- Chat timeline uses canonical identity/reconciliation to avoid live/history duplicates.
+- provider runtime/capability metadata is protocolized so UI controls do not claim unsupported abilities.
+- zellij diagnostics remain for Claude/fallback paths.
 
 Known RC boundaries:
 
-- zellij remains the release-candidate backend, not a claim that every provider TUI/version/device is final-stable.
+- Codex/OpenCode real model turn interrupt/archive behavior still requires provider-version QA after
+  CLI upgrades.
+- zellij remains a fallback/backend for Claude and future TUI-only providers, not the universal default.
 - real provider auth, quota, trust-folder prompts, and slash-command behavior remain owned by the provider TUI.
 - iOS/PWA terminal keyboard behavior is still a product QA area, not a protocol guarantee.
 - Gemini/Kimi CLI will not return as first-class providers; use OpenCode/API-provider configuration instead.

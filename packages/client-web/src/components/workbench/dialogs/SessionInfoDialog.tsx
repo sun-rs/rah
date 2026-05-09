@@ -1,7 +1,11 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { Check, Copy, X } from "lucide-react";
 import { useEffect, useState } from "react";
-import type { SessionSummary } from "@rah/runtime-protocol";
+import type {
+  SessionRuntimeDescriptor,
+  SessionRuntimeDiagnostics,
+  SessionSummary,
+} from "@rah/runtime-protocol";
 import { providerLabel, type SessionProjection } from "../../../types";
 import { writeHostClipboard } from "../../../api";
 
@@ -31,6 +35,146 @@ function InfoRow(props: { label: string; value: React.ReactNode; mono?: boolean 
       </div>
     </div>
   );
+}
+
+function runtimeKindLabel(kind: SessionRuntimeDescriptor["kind"]): string {
+  switch (kind) {
+    case "native_local_server":
+      return "Native local server";
+    case "tui_mux_fallback":
+      return "TUI mux fallback";
+    case "stream_json_fifo":
+      return "Stream JSON FIFO";
+    case "native_cloud_remote":
+      return "Native cloud remote";
+    case "internal_experimental":
+      return "Internal experimental";
+    case "legacy_structured":
+      return "Legacy structured";
+  }
+}
+
+function protocolStabilityLabel(stability: SessionRuntimeDescriptor["protocolStability"]): string {
+  switch (stability) {
+    case "official_stable":
+      return "official stable";
+    case "project_native":
+      return "project native";
+    case "tui_stdio":
+      return "TUI stdio";
+    case "reverse_engineered_internal":
+      return "reverse engineered";
+  }
+}
+
+function formatSessionRuntime(runtime: SessionRuntimeDescriptor | undefined): string {
+  if (!runtime) {
+    return "Unavailable";
+  }
+  return `${runtimeKindLabel(runtime.kind)} · ${protocolStabilityLabel(runtime.protocolStability)}`;
+}
+
+function runtimeLiveSourceLabel(
+  source: SessionRuntimeDescriptor["liveSource"] | undefined,
+): string {
+  switch (source) {
+    case "provider_server":
+      return "provider server";
+    case "provider_history":
+      return "provider history";
+    case "rah_structured":
+      return "RAH structured";
+    case undefined:
+      return "Unavailable";
+  }
+  return source;
+}
+
+function runtimeTuiRoleLabel(role: SessionRuntimeDescriptor["tuiRole"] | undefined): string {
+  switch (role) {
+    case "session_owner":
+      return "session owner";
+    case "client_view":
+      return "client view";
+    case "none":
+      return "none";
+    case undefined:
+      return "Unavailable";
+  }
+  return role;
+}
+
+function formatBooleanCapability(value: boolean | undefined): string {
+  if (value === undefined) {
+    return "Unavailable";
+  }
+  return value ? "yes" : "no";
+}
+
+function runtimeFeatureStatusLabel(
+  status:
+    | NonNullable<SessionRuntimeDescriptor["features"]>[keyof NonNullable<
+        SessionRuntimeDescriptor["features"]
+      >]
+    | undefined,
+): string {
+  switch (status) {
+    case "available":
+      return "available";
+    case "unverified":
+      return "unverified";
+    case "unsupported":
+      return "unsupported";
+    case "experimental":
+      return "experimental";
+    case undefined:
+      return "Unavailable";
+  }
+}
+
+function formatRuntimeFeatureName(name: string): string {
+  return name
+    .replace(/([A-Z])/g, " $1")
+    .replace(/^./, (char) => char.toUpperCase());
+}
+
+function RuntimeFeatureStatusList(props: {
+  features: SessionRuntimeDescriptor["features"] | undefined;
+}) {
+  if (!props.features) {
+    return "Unavailable";
+  }
+  return (
+    <div className="grid gap-1">
+      {Object.entries(props.features).map(([name, status]) => (
+        <div key={name} className="flex min-w-0 items-baseline justify-between gap-3">
+          <span className="min-w-0 truncate text-[var(--app-muted)]">
+            {formatRuntimeFeatureName(name)}
+          </span>
+          <span className="shrink-0 text-[var(--app-fg)]">
+            {runtimeFeatureStatusLabel(status)}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function runtimeAttachStateLabel(
+  state: SessionRuntimeDiagnostics["attachState"] | undefined,
+): string {
+  switch (state) {
+    case "ready":
+      return "ready";
+    case "unverified":
+      return "unverified";
+    case "failed":
+      return "failed";
+    case "unavailable":
+      return "unavailable";
+    case undefined:
+      return "Unavailable";
+  }
 }
 
 type CopyResult = "copied" | "failed";
@@ -183,6 +327,7 @@ export function SessionInfoDialog(props: {
       ? `ZELLIJ_SOCKET_DIR=${session.mux.socketDir} zellij attach ${session.mux.sessionName} options --mirror-session true --pane-frames false --show-startup-tips false`
       : null;
   const runtimeStatus = props.projection?.currentRuntimeStatus ?? null;
+  const runtimeDiagnostics = session?.runtimeDiagnostics;
 
   return (
     <Dialog.Root open={props.open} onOpenChange={props.onOpenChange}>
@@ -262,9 +407,63 @@ export function SessionInfoDialog(props: {
                 }
               />
             ) : null}
+            {runtimeDiagnostics?.attachCommand ? (
+              <InfoRow
+                label="Native attach"
+                mono
+                value={
+                  <div className="flex flex-wrap items-start gap-2">
+                    <span className="min-w-0 flex-1">{runtimeDiagnostics.attachCommand}</span>
+                    <CopyValueButton value={runtimeDiagnostics.attachCommand} label="native attach command" />
+                  </div>
+                }
+              />
+            ) : null}
             <InfoRow label="Launch" value={session?.launchSource ?? "Unavailable"} />
+            <InfoRow label="Backend" value={session?.liveBackend ?? "Unavailable"} />
             <InfoRow label="State" value={session?.runtimeState ?? "Unavailable"} />
-            <InfoRow label="Runtime" value={runtimeStatus ?? "Unavailable"} />
+            <InfoRow label="Runtime" value={formatSessionRuntime(session?.runtime)} />
+            <InfoRow label="Live source" value={runtimeLiveSourceLabel(session?.runtime?.liveSource)} />
+            <InfoRow label="TUI role" value={runtimeTuiRoleLabel(session?.runtime?.tuiRole)} />
+            <InfoRow
+              label="Events"
+              value={formatBooleanCapability(session?.runtime?.structuredLiveEvents)}
+            />
+            <InfoRow
+              label="Continuity"
+              value={formatBooleanCapability(session?.runtime?.tuiContinuity)}
+            />
+            <InfoRow
+              label="Feature truth"
+              value={<RuntimeFeatureStatusList features={session?.runtime?.features} />}
+            />
+            <InfoRow
+              label="Attach state"
+              value={runtimeAttachStateLabel(runtimeDiagnostics?.attachState)}
+            />
+            <InfoRow
+              label="Server"
+              mono
+              value={runtimeDiagnostics?.serverEndpoint ?? "Unavailable"}
+            />
+            <InfoRow
+              label="Server PID"
+              value={
+                runtimeDiagnostics?.serverPid !== undefined
+                  ? String(runtimeDiagnostics.serverPid)
+                  : "Unavailable"
+              }
+            />
+            <InfoRow
+              label="Cursor"
+              mono
+              value={runtimeDiagnostics?.lastEventCursor ?? "Unavailable"}
+            />
+            <InfoRow
+              label="Last error"
+              value={runtimeDiagnostics?.lastError ?? "Unavailable"}
+            />
+            <InfoRow label="Status" value={runtimeStatus ?? "Unavailable"} />
             <InfoRow label="Attached" value={summary ? String(summary.attachedClients.length) : "0"} />
             <InfoRow
               label="Control"

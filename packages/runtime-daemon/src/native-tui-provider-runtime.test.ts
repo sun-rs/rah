@@ -153,7 +153,7 @@ describe("NativeTuiProviderRuntime", () => {
     );
   });
 
-  test("keeps structured provider coordination named as a non-core path", () => {
+  test("keeps structured provider coordination explicit and provider-owned", () => {
     const engineSource = readSource("./runtime-engine.ts");
     const providerCapabilityBindingsSource = readSource("./provider-capability-bindings.ts");
     const providerAdapterSource = readSource("./provider-adapter.ts");
@@ -190,9 +190,9 @@ describe("NativeTuiProviderRuntime", () => {
     assert.match(codexStructuredAdapterSource, /class CodexAdapter/);
     assert.match(claudeStructuredAdapterSource, /class ClaudeAdapter/);
     assert.match(openCodeStructuredAdapterSource, /class OpenCodeAdapter/);
-    assert.doesNotMatch(defaultProviderAdaptersSource, /new CodexAdapter/);
+    assert.match(defaultProviderAdaptersSource, /new CodexAdapter/);
     assert.doesNotMatch(defaultProviderAdaptersSource, /new ClaudeAdapter/);
-    assert.doesNotMatch(defaultProviderAdaptersSource, /new OpenCodeAdapter/);
+    assert.match(defaultProviderAdaptersSource, /new OpenCodeAdapter/);
     assert.match(defaultProviderAdaptersSource, /CodexStoredHistoryAdapter/);
     assert.match(defaultProviderAdaptersSource, /ClaudeStoredHistoryAdapter/);
     assert.match(defaultProviderAdaptersSource, /OpenCodeStoredHistoryAdapter/);

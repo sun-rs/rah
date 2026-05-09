@@ -8,10 +8,13 @@ import type {
   ModelCapabilityProfile,
   SessionResolvedConfig,
   SessionCapabilities,
+  SessionRuntimeDescriptor,
+  SessionRuntimeDiagnostics,
   SessionSummary,
   Workbench,
 } from "@rah/runtime-protocol";
 import { normalizeContextUsage } from "./context-usage";
+import { runtimeDescriptorForLiveBackend, withManagedSessionRuntime } from "./session-runtime-descriptor";
 
 const DEFAULT_CAPABILITIES: SessionCapabilities = {
   liveAttach: true,
@@ -161,6 +164,8 @@ export interface CreateManagedSessionArgs {
   model?: ManagedSession["model"];
   config?: SessionResolvedConfig;
   modelProfile?: ModelCapabilityProfile;
+  runtime?: SessionRuntimeDescriptor;
+  runtimeDiagnostics?: SessionRuntimeDiagnostics;
   capabilities?: Partial<SessionCapabilities>;
 }
 
@@ -186,6 +191,8 @@ export interface PatchManagedSessionArgs {
   model?: ManagedSession["model"];
   config?: SessionResolvedConfig;
   modelProfile?: ModelCapabilityProfile;
+  runtime?: SessionRuntimeDescriptor;
+  runtimeDiagnostics?: SessionRuntimeDiagnostics;
 }
 
 interface SessionStoreOptions {
@@ -241,6 +248,12 @@ export class SessionStore {
       cwd: args.cwd,
       rootDir: args.rootDir,
       runtimeState: "starting",
+      runtime:
+        args.runtime ??
+        runtimeDescriptorForLiveBackend({
+          provider: args.provider,
+          liveBackend: args.liveBackend,
+        }),
       ptyId: args.ptyId ?? crypto.randomUUID(),
       ...(args.nativeTui !== undefined ? { nativeTui: args.nativeTui } : {}),
       ...(args.mux !== undefined ? { mux: args.mux } : {}),
@@ -271,6 +284,12 @@ export class SessionStore {
     }
     if (args.modelProfile !== undefined) {
       session.modelProfile = args.modelProfile;
+    }
+    if (args.runtime !== undefined) {
+      session.runtime = args.runtime;
+    }
+    if (args.runtimeDiagnostics !== undefined) {
+      session.runtimeDiagnostics = args.runtimeDiagnostics;
     }
 
     const state: StoredSessionState = {
@@ -367,6 +386,7 @@ export class SessionStore {
 
   restoreSession(state: StoredSessionState): StoredSessionState {
     const nextState = cloneStoredSessionState(state);
+    nextState.session = withManagedSessionRuntime(nextState.session);
     if (this.sessions.has(nextState.session.id)) {
       throw new Error(`Session ${nextState.session.id} already exists.`);
     }
@@ -511,6 +531,12 @@ export class SessionStore {
     if (patch.modelProfile !== undefined) {
       state.session.modelProfile = patch.modelProfile;
     }
+    if (patch.runtime !== undefined) {
+      state.session.runtime = patch.runtime;
+    }
+    if (patch.runtimeDiagnostics !== undefined) {
+      state.session.runtimeDiagnostics = patch.runtimeDiagnostics;
+    }
 
     const nextProviderSessionId = state.session.providerSessionId;
     if (
@@ -610,6 +636,10 @@ function cloneStoredSessionState(state: StoredSessionState): StoredSessionState 
     session: {
       ...state.session,
       capabilities: { ...state.session.capabilities },
+      ...(state.session.runtime !== undefined ? { runtime: { ...state.session.runtime } } : {}),
+      ...(state.session.runtimeDiagnostics !== undefined
+        ? { runtimeDiagnostics: { ...state.session.runtimeDiagnostics } }
+        : {}),
     },
     clients: state.clients.map((client) => ({ ...client })),
     controlLease: { ...state.controlLease },

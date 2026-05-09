@@ -5,7 +5,34 @@ export type ProviderKind =
   | "custom";
 
 export type SessionLaunchSource = "web" | "terminal";
-export type SessionLiveBackend = "structured" | "native_tui" | "zellij_tui";
+export type SessionLiveBackend = "structured" | "native_local_server" | "native_tui" | "zellij_tui";
+export type ProviderRuntimeKind =
+  | "native_local_server"
+  | "tui_mux_fallback"
+  | "stream_json_fifo"
+  | "native_cloud_remote"
+  | "internal_experimental"
+  | "legacy_structured";
+export type ProtocolStability =
+  | "official_stable"
+  | "project_native"
+  | "tui_stdio"
+  | "reverse_engineered_internal";
+export type RuntimeLiveSource =
+  | "provider_server"
+  | "provider_history"
+  | "tui_mux"
+  | "rah_structured";
+export type RuntimeTuiRole =
+  | "client_view"
+  | "session_owner"
+  | "fallback_surface"
+  | "none";
+export type SessionRuntimeCapabilityStatus =
+  | "available"
+  | "unverified"
+  | "unsupported"
+  | "experimental";
 export type NativeTuiPromptState = "prompt_clean" | "prompt_dirty" | "agent_busy";
 
 export type SessionRuntimeState =
@@ -163,6 +190,41 @@ export interface SessionActionCapabilities {
   rename: SessionRenameMode;
 }
 
+export interface SessionRuntimeDescriptor {
+  kind: ProviderRuntimeKind;
+  protocolStability: ProtocolStability;
+  liveSource: RuntimeLiveSource;
+  tuiRole: RuntimeTuiRole;
+  structuredLiveEvents: boolean;
+  tuiContinuity: boolean;
+  features?: {
+    structuredLiveEvents: SessionRuntimeCapabilityStatus;
+    structuredControl: SessionRuntimeCapabilityStatus;
+    historyBackfill: SessionRuntimeCapabilityStatus;
+    tuiClientContinuity: SessionRuntimeCapabilityStatus;
+    crossClientSync: SessionRuntimeCapabilityStatus;
+    prelaunchConfig: SessionRuntimeCapabilityStatus;
+    runtimeConfig: SessionRuntimeCapabilityStatus;
+    interrupt: SessionRuntimeCapabilityStatus;
+    archiveLifecycle: SessionRuntimeCapabilityStatus;
+  };
+}
+
+export type SessionRuntimeAttachState =
+  | "unavailable"
+  | "unverified"
+  | "ready"
+  | "failed";
+
+export interface SessionRuntimeDiagnostics {
+  serverEndpoint?: string;
+  serverPid?: number;
+  attachCommand?: string;
+  attachState?: SessionRuntimeAttachState;
+  lastEventCursor?: string;
+  lastError?: string;
+}
+
 /**
  * Provider-specific feature flags surfaced to clients so the UI can degrade
  * cleanly instead of assuming every adapter supports the same experience.
@@ -203,6 +265,8 @@ export interface ManagedSession {
   cwd: string;
   rootDir: string;
   runtimeState: SessionRuntimeState;
+  runtime?: SessionRuntimeDescriptor;
+  runtimeDiagnostics?: SessionRuntimeDiagnostics;
   ptyId: string;
   nativeTui?: {
     terminalId: string;

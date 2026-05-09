@@ -26,7 +26,13 @@ import type {
 import type {
   ClientKind,
   NativeTuiPromptState,
+  ProtocolStability,
   ProviderKind,
+  ProviderRuntimeKind,
+  RuntimeLiveSource,
+  RuntimeTuiRole,
+  SessionRuntimeCapabilityStatus,
+  SessionRuntimeAttachState,
   SessionLaunchSource,
   SessionLiveBackend,
   SessionRuntimeState,
@@ -176,8 +182,47 @@ const SESSION_RUNTIME_STATES = new Set<SessionRuntimeState>([
 const SESSION_LAUNCH_SOURCES = new Set<SessionLaunchSource>(["web", "terminal"]);
 const SESSION_LIVE_BACKENDS = new Set<SessionLiveBackend>([
   "structured",
+  "native_local_server",
   "native_tui",
   "zellij_tui",
+]);
+const PROVIDER_RUNTIME_KINDS = new Set<ProviderRuntimeKind>([
+  "native_local_server",
+  "tui_mux_fallback",
+  "stream_json_fifo",
+  "native_cloud_remote",
+  "internal_experimental",
+  "legacy_structured",
+]);
+const PROTOCOL_STABILITIES = new Set<ProtocolStability>([
+  "official_stable",
+  "project_native",
+  "tui_stdio",
+  "reverse_engineered_internal",
+]);
+const RUNTIME_LIVE_SOURCES = new Set<RuntimeLiveSource>([
+  "provider_server",
+  "provider_history",
+  "tui_mux",
+  "rah_structured",
+]);
+const RUNTIME_TUI_ROLES = new Set<RuntimeTuiRole>([
+  "client_view",
+  "session_owner",
+  "fallback_surface",
+  "none",
+]);
+const SESSION_RUNTIME_CAPABILITY_STATUSES = new Set<SessionRuntimeCapabilityStatus>([
+  "available",
+  "unverified",
+  "unsupported",
+  "experimental",
+]);
+const SESSION_RUNTIME_ATTACH_STATES = new Set<SessionRuntimeAttachState>([
+  "unavailable",
+  "unverified",
+  "ready",
+  "failed",
 ]);
 const NATIVE_TUI_PROMPT_STATES = new Set<NativeTuiPromptState>([
   "prompt_clean",
@@ -631,6 +676,152 @@ function validateSessionCapabilities(capabilities: unknown, sink: IssueSink, pat
       "session.capabilities.rename_legacy_mismatch",
       "legacy renameSession should match actions.rename support",
       `${path}.renameSession`,
+    );
+  }
+}
+
+function validateSessionRuntime(runtime: unknown, sink: IssueSink, path: string) {
+  if (!isRecord(runtime)) {
+    addIssue(
+      sink,
+      "error",
+      "session.runtime.invalid",
+      "session runtime must be an object",
+      path,
+    );
+    return;
+  }
+  if (!PROVIDER_RUNTIME_KINDS.has(runtime.kind as ProviderRuntimeKind)) {
+    addIssue(
+      sink,
+      "error",
+      "session.runtime.kind.invalid",
+      "session runtime kind is not canonical",
+      `${path}.kind`,
+    );
+  }
+  if (!PROTOCOL_STABILITIES.has(runtime.protocolStability as ProtocolStability)) {
+    addIssue(
+      sink,
+      "error",
+      "session.runtime.protocol_stability.invalid",
+      "session runtime protocolStability is not canonical",
+      `${path}.protocolStability`,
+    );
+  }
+  if (!RUNTIME_LIVE_SOURCES.has(runtime.liveSource as RuntimeLiveSource)) {
+    addIssue(
+      sink,
+      "error",
+      "session.runtime.live_source.invalid",
+      "session runtime liveSource is not canonical",
+      `${path}.liveSource`,
+    );
+  }
+  if (!RUNTIME_TUI_ROLES.has(runtime.tuiRole as RuntimeTuiRole)) {
+    addIssue(
+      sink,
+      "error",
+      "session.runtime.tui_role.invalid",
+      "session runtime tuiRole is not canonical",
+      `${path}.tuiRole`,
+    );
+  }
+  for (const field of ["structuredLiveEvents", "tuiContinuity"] as const) {
+    if (typeof runtime[field] !== "boolean") {
+      addIssue(
+        sink,
+        "error",
+        "session.runtime.boolean.invalid",
+        `session runtime ${field} must be boolean`,
+        `${path}.${field}`,
+      );
+    }
+  }
+  if (runtime.features !== undefined) {
+    validateSessionRuntimeFeatures(runtime.features, sink, `${path}.features`);
+  }
+}
+
+function validateSessionRuntimeFeatures(features: unknown, sink: IssueSink, path: string) {
+  if (!isRecord(features)) {
+    addIssue(
+      sink,
+      "error",
+      "session.runtime.features.invalid",
+      "session runtime features must be an object",
+      path,
+    );
+    return;
+  }
+  for (const field of [
+    "structuredLiveEvents",
+    "structuredControl",
+    "historyBackfill",
+    "tuiClientContinuity",
+    "crossClientSync",
+    "prelaunchConfig",
+    "runtimeConfig",
+    "interrupt",
+    "archiveLifecycle",
+  ] as const) {
+    if (!SESSION_RUNTIME_CAPABILITY_STATUSES.has(features[field] as SessionRuntimeCapabilityStatus)) {
+      addIssue(
+        sink,
+        "error",
+        "session.runtime.features.status.invalid",
+        `session runtime feature ${field} status is not canonical`,
+        `${path}.${field}`,
+      );
+    }
+  }
+}
+
+function validateSessionRuntimeDiagnostics(diagnostics: unknown, sink: IssueSink, path: string) {
+  if (!isRecord(diagnostics)) {
+    addIssue(
+      sink,
+      "error",
+      "session.runtime_diagnostics.invalid",
+      "session runtimeDiagnostics must be an object",
+      path,
+    );
+    return;
+  }
+  for (const field of ["serverEndpoint", "attachCommand", "lastEventCursor", "lastError"] as const) {
+    if (diagnostics[field] !== undefined && !isNonEmptyString(diagnostics[field])) {
+      addIssue(
+        sink,
+        "error",
+        "session.runtime_diagnostics.string.invalid",
+        `session runtimeDiagnostics.${field} must be a non-empty string when present`,
+        `${path}.${field}`,
+      );
+    }
+  }
+  if (
+    diagnostics.serverPid !== undefined &&
+    (!isOptionalInteger(diagnostics.serverPid) ||
+      (typeof diagnostics.serverPid === "number" && diagnostics.serverPid <= 0))
+  ) {
+    addIssue(
+      sink,
+      "error",
+      "session.runtime_diagnostics.server_pid.invalid",
+      "session runtimeDiagnostics.serverPid must be a positive integer when present",
+      `${path}.serverPid`,
+    );
+  }
+  if (
+    diagnostics.attachState !== undefined &&
+    !SESSION_RUNTIME_ATTACH_STATES.has(diagnostics.attachState as SessionRuntimeAttachState)
+  ) {
+    addIssue(
+      sink,
+      "error",
+      "session.runtime_diagnostics.attach_state.invalid",
+      "session runtimeDiagnostics.attachState is not canonical",
+      `${path}.attachState`,
     );
   }
 }
@@ -1433,6 +1624,9 @@ export function validateProviderModelCatalog(catalog: unknown): RahConformanceRe
         "catalog.provider",
       );
     }
+    if (catalog.runtime !== undefined) {
+      validateSessionRuntime(catalog.runtime, sink, "catalog.runtime");
+    }
     if (
       catalog.currentModelId !== undefined &&
       catalog.currentModelId !== null &&
@@ -1708,6 +1902,16 @@ function validateManagedSession(session: unknown, sink: IssueSink, path: string)
       "session.live_backend.invalid",
       "session liveBackend is not canonical",
       `${path}.liveBackend`,
+    );
+  }
+  if (session.runtime !== undefined) {
+    validateSessionRuntime(session.runtime, sink, `${path}.runtime`);
+  }
+  if (session.runtimeDiagnostics !== undefined) {
+    validateSessionRuntimeDiagnostics(
+      session.runtimeDiagnostics,
+      sink,
+      `${path}.runtimeDiagnostics`,
     );
   }
   if (!isNonEmptyString(session.cwd) || !isNonEmptyString(session.rootDir)) {

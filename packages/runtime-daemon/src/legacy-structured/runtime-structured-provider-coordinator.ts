@@ -28,6 +28,7 @@ import type {
 import type { HistorySnapshotStore } from "../history-snapshots";
 import { defaultProviderModeId, providerModeDescriptors } from "../session-mode-utils";
 import { assertExistingWorkingDirectory } from "../provider-working-directory";
+import { withProviderCatalogRuntime } from "../session-runtime-descriptor";
 
 type ProviderModelAdapter = ProviderCapabilityView<ProviderEnhancedModelAdapter>;
 type ProviderDiagnosticCapabilityAdapter = ProviderCapabilityView<ProviderDiagnosticAdapter>;
@@ -46,12 +47,12 @@ type RuntimeStructuredProviderCoordinatorDeps = {
 };
 
 /**
- * Explicit legacy/enhancement coordinator for the old structured live path.
+ * Explicit coordinator for provider-owned structured transports.
  *
- * PTY-first live start/resume bypasses this class and goes through
- * RuntimeTerminalCoordinator + NativeTuiProviderRuntime. This coordinator remains
- * for stored-history catalogs, diagnostics, debug scenarios, and explicit
- * liveBackend: "structured" requests.
+ * Native TUI / zellij live start/resume bypasses this class and goes through
+ * RuntimeTerminalCoordinator + NativeTuiProviderRuntime. Codex/OpenCode
+ * native_local_server start/resume intentionally routes here because their
+ * provider server event streams are the live source of truth.
  */
 export class RuntimeStructuredProviderCoordinator {
   constructor(private readonly deps: RuntimeStructuredProviderCoordinatorDeps) {}
@@ -107,7 +108,7 @@ export class RuntimeStructuredProviderCoordinator {
   ): Promise<ProviderModelCatalog> {
     const adapter = this.deps.modelAdaptersByProvider.get(provider);
     if (adapter?.listModels) {
-      const catalog = await adapter.listModels(options);
+      const catalog = withProviderCatalogRuntime(await adapter.listModels(options));
       const report = validateProviderModelCatalog(catalog);
       if (!report.ok) {
         throw new Error(
@@ -118,7 +119,7 @@ export class RuntimeStructuredProviderCoordinator {
     }
     const defaultModeId = defaultProviderModeId(provider);
     const modes = providerModeDescriptors(provider);
-    const catalog: ProviderModelCatalog = {
+    const catalog: ProviderModelCatalog = withProviderCatalogRuntime({
       provider,
       models: [],
       fetchedAt: new Date().toISOString(),
@@ -129,7 +130,7 @@ export class RuntimeStructuredProviderCoordinator {
       optionsExact: false,
       ...(defaultModeId ? { defaultModeId } : {}),
       ...(modes.length > 0 ? { modes } : {}),
-    };
+    });
     const report = validateProviderModelCatalog(catalog);
     if (!report.ok) {
       throw new Error(

@@ -13,7 +13,7 @@ import {
   mapCodexQuestionRequestToActivities,
   translateCodexAppServerNotification,
 } from "./codex-app-server-activity";
-import { type CodexJsonRpcClient } from "./codex-live-rpc";
+import { type CodexAppServerRpcClient } from "./codex-live-rpc";
 import {
   SESSION_SOURCE,
   type JsonRpcNotification,
@@ -423,7 +423,7 @@ async function handleCodexLiveRequest(
 
 export function createLiveSessionBridge(
   services: RuntimeServices,
-  client: CodexJsonRpcClient,
+  client: CodexAppServerRpcClient,
 ) {
   const bufferedNotifications: JsonRpcNotification[] = [];
   const bufferedRequests: BufferedServerRequest[] = [];

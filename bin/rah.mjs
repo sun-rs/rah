@@ -84,8 +84,9 @@ function printUsage() {
       "                      Values: default | acceptEdits | auto | bypassPermissions | plan",
       "  --help              Show this help",
       "",
-      "Current status:",
-      "  codex/claude/opencode: daemon-owned PTY-first native TUI",
+    "Current status:",
+    "  codex/opencode: native local-server with provider-native TUI clients",
+    "  claude: zellij/native TUI fallback",
       "",
       "Claude note:",
       "  `rah claude resume <providerSessionId>` maps to `claude --resume <id>`.",
@@ -194,7 +195,9 @@ function parseArgs(argv) {
   let cwd = process.cwd();
   let daemonUrl = DEFAULT_DAEMON_URL;
   let claudePermissionMode;
-  let muxBackend = process.env.RAH_MUX_BACKEND === "native" ? "native" : "zellij";
+  const envMuxBackend = process.env.RAH_MUX_BACKEND;
+  let muxBackend =
+    envMuxBackend === "native" || envMuxBackend === "zellij" ? envMuxBackend : undefined;
 
   const rest = [...argv.slice(1)];
   if (rest[0] === "resume") {
@@ -627,7 +630,14 @@ function terminalClientDescriptor() {
 
 async function startOrResumePtyFirstSession(parsed, client) {
   const modeId = providerModeId(parsed);
-  const liveBackend = parsed.muxBackend === "zellij" ? "zellij_tui" : "native_tui";
+  const liveBackend =
+    parsed.muxBackend === "zellij"
+      ? "zellij_tui"
+      : parsed.muxBackend === "native"
+        ? "native_tui"
+        : parsed.provider === "codex" || parsed.provider === "opencode"
+          ? "native_local_server"
+          : "zellij_tui";
   if (parsed.resumeProviderSessionId) {
     const result = await postJson(parsed.daemonUrl, "/api/sessions/resume", {
       provider: parsed.provider,
@@ -1111,6 +1121,92 @@ async function attachLocalTerminalToZellij(daemonUrl, session, client) {
   }
 }
 
+async function attachRahClient(daemonUrl, sessionId, client, options = {}) {
+  await postJson(daemonUrl, `/api/sessions/${encodeURIComponent(sessionId)}/attach`, {
+    client: client.client,
+    mode: options.mode ?? "interactive",
+    claimControl: options.claimControl === true,
+  });
+}
+
+async function runProviderAttachUntilExitOrClosed(daemonUrl, session, child) {
+  let sessionGone = false;
+  let completed = false;
+  const pollTimer = setInterval(() => {
+    void liveSessionExists(daemonUrl, session.id).then((exists) => {
+      if (exists) {
+        return;
+      }
+      sessionGone = true;
+      child.kill("SIGHUP");
+      setTimeout(() => {
+        if (!completed) {
+          child.kill("SIGTERM");
+        }
+      }, 500).unref?.();
+    });
+  }, 750);
+  pollTimer.unref?.();
+
+  return await new Promise((resolve, reject) => {
+    child.on("error", reject);
+    child.on("exit", (code, signal) => {
+      completed = true;
+      clearInterval(pollTimer);
+      restoreTerminalApplicationModes(process.stdout);
+      if (sessionGone) {
+        resolve(undefined);
+        return;
+      }
+      if (signal) {
+        resolve(undefined);
+        return;
+      }
+      if (code && code !== 0) {
+        reject(new Error(`provider attach exited with code ${code}`));
+        return;
+      }
+      resolve(undefined);
+    });
+  });
+}
+
+async function attachLocalTerminalToNativeLocalServer(daemonUrl, session, client) {
+  const endpoint = session.runtimeDiagnostics?.serverEndpoint;
+  if (!endpoint) {
+    throw new Error("Session does not expose a native local-server endpoint.");
+  }
+  if (session.provider !== "opencode" && session.provider !== "codex") {
+    throw new Error(`Provider ${session.provider} does not expose a stable native TUI attach client yet.`);
+  }
+  if (session.provider === "codex" && !/^wss?:\/\//.test(endpoint)) {
+    throw new Error("Codex native TUI attach requires a websocket app-server endpoint.");
+  }
+  await attachRahClient(daemonUrl, session.id, client, {
+    mode: "interactive",
+    claimControl: false,
+  });
+  const binary =
+    session.provider === "codex"
+      ? process.env.RAH_CODEX_BINARY || "codex"
+      : process.env.RAH_OPENCODE_BINARY || "opencode";
+  const attachArgs =
+    session.provider === "codex"
+      ? ["--remote", endpoint, "resume"]
+      : ["attach", endpoint];
+  if (session.providerSessionId && session.provider === "opencode") {
+    attachArgs.push("--session", session.providerSessionId);
+  } else if (session.providerSessionId && session.provider === "codex") {
+    attachArgs.push(session.providerSessionId);
+  }
+  const child = spawn(binary, attachArgs, {
+    cwd: session.cwd || ROOT_DIR,
+    env: process.env,
+    stdio: "inherit",
+  });
+  await runProviderAttachUntilExitOrClosed(daemonUrl, session, child);
+}
+
 async function attachExistingRahSession(parsed) {
   await ensureDaemon(parsed.daemonUrl);
   const summary = await findLiveSessionSummary(parsed.daemonUrl, parsed.sessionId);
@@ -1120,7 +1216,9 @@ async function attachExistingRahSession(parsed) {
   const session = managedSessionFromSummary(summary);
   const client = terminalClientDescriptor();
   try {
-    if (session.mux?.backend === "zellij") {
+    if (session.liveBackend === "native_local_server") {
+      await attachLocalTerminalToNativeLocalServer(parsed.daemonUrl, session, client);
+    } else if (session.mux?.backend === "zellij") {
       await attachLocalTerminalToZellij(parsed.daemonUrl, session, client);
     } else {
       await attachLocalTerminalToPty(parsed.daemonUrl, ptyIdFromSessionSummary(summary), client.clientId);
@@ -1137,7 +1235,9 @@ async function runPtyFirstProviderCommand(parsed) {
   const session = managedSessionFromSummary(summary);
   const ptyId = ptyIdFromSessionSummary(summary);
   try {
-    if (parsed.muxBackend === "zellij" && session.mux?.backend === "zellij") {
+    if (session.liveBackend === "native_local_server") {
+      await attachLocalTerminalToNativeLocalServer(parsed.daemonUrl, session, client);
+    } else if (parsed.muxBackend === "zellij" && session.mux?.backend === "zellij") {
       await attachLocalTerminalToZellij(parsed.daemonUrl, session, client);
     } else {
       await attachLocalTerminalToPty(parsed.daemonUrl, ptyId, client.clientId);

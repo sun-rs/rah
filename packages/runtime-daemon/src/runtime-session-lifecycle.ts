@@ -154,6 +154,7 @@ export class RuntimeSessionLifecycle {
     if (!state.session.mode.mutable) {
       throw new Error("This session mode is controlled outside RAH.");
     }
+    this.requireRuntimeConfigAvailable(state, "Session mode");
     this.requireIdleForSessionControl(state, "Session mode");
     const adapter = this.deps.requireEnhancedModeAdapter(sessionId);
     if (!adapter.setSessionMode) {
@@ -180,6 +181,7 @@ export class RuntimeSessionLifecycle {
     if (state.session.model && !state.session.model.mutable) {
       throw new Error("This session model is controlled outside RAH.");
     }
+    this.requireRuntimeConfigAvailable(state, "Session model");
     this.requireIdleForSessionControl(state, "Session model");
     const adapter = this.deps.requireEnhancedModelAdapter(sessionId);
     if (!adapter.setSessionModel) {
@@ -271,5 +273,16 @@ export class RuntimeSessionLifecycle {
     if (state.session.runtimeState !== "idle") {
       throw new Error(`${controlName} can only be changed while the session is idle.`);
     }
+  }
+
+  private requireRuntimeConfigAvailable(
+    state: StoredSessionState,
+    controlName: string,
+  ): void {
+    const runtimeConfig = state.session.runtime?.features?.runtimeConfig;
+    if (runtimeConfig === undefined || runtimeConfig === "available") {
+      return;
+    }
+    throw new Error(`${controlName} controls are not available for this session runtime.`);
   }
 }

@@ -121,6 +121,15 @@ export class CodexAdapter implements ProviderAdapter {
   }
 
   private reportAsyncLiveError(sessionId: string, detail: string): void {
+    const state = this.services.sessionStore.getSession(sessionId);
+    if (state) {
+      this.services.sessionStore.patchManagedSession(sessionId, {
+        runtimeDiagnostics: {
+          ...(state.session.runtimeDiagnostics ?? {}),
+          lastError: detail,
+        },
+      });
+    }
     this.services.eventBus.publish({
       sessionId,
       type: "runtime.status",

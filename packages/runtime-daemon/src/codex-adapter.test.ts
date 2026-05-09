@@ -33,12 +33,15 @@ describe("CodexAdapter", () => {
   let tmpHome: string;
   let previousCodexHome: string | undefined;
   let previousBinary: string | undefined;
+  let previousTransport: string | undefined;
 
   beforeEach(() => {
     previousCodexHome = process.env.CODEX_HOME;
     previousBinary = process.env.RAH_CODEX_BINARY;
+    previousTransport = process.env.RAH_CODEX_APP_SERVER_TRANSPORT;
     tmpHome = mkdtempSync(path.join(os.tmpdir(), "rah-codex-home-"));
     process.env.CODEX_HOME = tmpHome;
+    process.env.RAH_CODEX_APP_SERVER_TRANSPORT = "stdio";
   });
 
   afterEach(() => {
@@ -51,6 +54,11 @@ describe("CodexAdapter", () => {
       delete process.env.RAH_CODEX_BINARY;
     } else {
       process.env.RAH_CODEX_BINARY = previousBinary;
+    }
+    if (previousTransport === undefined) {
+      delete process.env.RAH_CODEX_APP_SERVER_TRANSPORT;
+    } else {
+      process.env.RAH_CODEX_APP_SERVER_TRANSPORT = previousTransport;
     }
     rmSync(tmpHome, { recursive: true, force: true });
   });

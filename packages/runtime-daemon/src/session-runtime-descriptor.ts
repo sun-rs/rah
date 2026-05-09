@@ -1,0 +1,157 @@
+import type {
+  ManagedSession,
+  ProviderKind,
+  ProviderModelCatalog,
+  SessionLiveBackend,
+  SessionRuntimeCapabilityStatus,
+  SessionRuntimeDescriptor,
+} from "@rah/runtime-protocol";
+
+type RuntimeFeatureStatus = NonNullable<SessionRuntimeDescriptor["features"]>;
+
+function runtimeFeatures(overrides: Partial<RuntimeFeatureStatus>): RuntimeFeatureStatus {
+  const unsupported: SessionRuntimeCapabilityStatus = "unsupported";
+  return {
+    structuredLiveEvents: unsupported,
+    structuredControl: unsupported,
+    historyBackfill: unsupported,
+    tuiClientContinuity: unsupported,
+    crossClientSync: unsupported,
+    prelaunchConfig: unsupported,
+    runtimeConfig: unsupported,
+    interrupt: unsupported,
+    archiveLifecycle: unsupported,
+    ...overrides,
+  };
+}
+
+function nativeLocalServerFeatures(provider: ProviderKind): RuntimeFeatureStatus {
+  return runtimeFeatures({
+    structuredLiveEvents: "available",
+    structuredControl: "available",
+    historyBackfill: "available",
+    tuiClientContinuity:
+      provider === "codex" || provider === "opencode" ? "available" : "unsupported",
+    crossClientSync:
+      provider === "codex" || provider === "opencode" ? "available" : "unsupported",
+    prelaunchConfig: "available",
+    runtimeConfig:
+      provider === "codex" || provider === "opencode" ? "available" : "unverified",
+    interrupt: provider === "codex" || provider === "opencode" ? "available" : "unverified",
+    archiveLifecycle: provider === "opencode" ? "available" : "unverified",
+  });
+}
+
+function tuiMuxFallbackFeatures(): RuntimeFeatureStatus {
+  return runtimeFeatures({
+    historyBackfill: "available",
+    tuiClientContinuity: "available",
+    prelaunchConfig: "available",
+    interrupt: "available",
+    archiveLifecycle: "available",
+  });
+}
+
+function legacyStructuredFeatures(): RuntimeFeatureStatus {
+  return runtimeFeatures({
+    structuredLiveEvents: "available",
+    structuredControl: "available",
+    historyBackfill: "unverified",
+    prelaunchConfig: "available",
+    runtimeConfig: "available",
+    interrupt: "available",
+    archiveLifecycle: "available",
+  });
+}
+
+export function runtimeDescriptorForLiveBackend(args: {
+  provider: ProviderKind;
+  liveBackend?: SessionLiveBackend | undefined;
+}): SessionRuntimeDescriptor {
+  if (args.liveBackend === "native_local_server") {
+    const providerTuiClientAvailable = args.provider === "codex" || args.provider === "opencode";
+    return {
+      kind: "native_local_server",
+      protocolStability: "project_native",
+      liveSource: "provider_server",
+      tuiRole: providerTuiClientAvailable ? "client_view" : "none",
+      structuredLiveEvents: true,
+      tuiContinuity: providerTuiClientAvailable,
+      features: nativeLocalServerFeatures(args.provider),
+    };
+  }
+
+  if (args.liveBackend === "zellij_tui" || args.liveBackend === "native_tui") {
+    return {
+      kind: "tui_mux_fallback",
+      protocolStability: "tui_stdio",
+      liveSource: "provider_history",
+      tuiRole: "session_owner",
+      structuredLiveEvents: false,
+      tuiContinuity: true,
+      features: tuiMuxFallbackFeatures(),
+    };
+  }
+
+  return {
+    kind: "legacy_structured",
+    protocolStability: "project_native",
+    liveSource: "rah_structured",
+    tuiRole: "none",
+    structuredLiveEvents: true,
+    tuiContinuity: false,
+    features: legacyStructuredFeatures(),
+  };
+}
+
+export function runtimeDescriptorForProviderCatalog(
+  provider: ProviderKind,
+): SessionRuntimeDescriptor {
+  if (provider === "claude") {
+    return {
+      kind: "tui_mux_fallback",
+      protocolStability: "tui_stdio",
+      liveSource: "provider_history",
+      tuiRole: "session_owner",
+      structuredLiveEvents: false,
+      tuiContinuity: true,
+      features: tuiMuxFallbackFeatures(),
+    };
+  }
+  if (provider === "codex" || provider === "opencode") {
+    const providerTuiClientAvailable = provider === "codex" || provider === "opencode";
+    return {
+      kind: "native_local_server",
+      protocolStability: "project_native",
+      liveSource: "provider_server",
+      tuiRole: providerTuiClientAvailable ? "client_view" : "none",
+      structuredLiveEvents: true,
+      tuiContinuity: providerTuiClientAvailable,
+      features: nativeLocalServerFeatures(provider),
+    };
+  }
+  return runtimeDescriptorForLiveBackend({ provider });
+}
+
+export function withProviderCatalogRuntime<TCatalog extends ProviderModelCatalog>(
+  catalog: TCatalog,
+): TCatalog {
+  return {
+    ...catalog,
+    runtime: catalog.runtime ?? runtimeDescriptorForProviderCatalog(catalog.provider),
+  };
+}
+
+export function withManagedSessionRuntime<TSession extends ManagedSession>(
+  session: TSession,
+): TSession {
+  return {
+    ...session,
+    runtime:
+      session.runtime ??
+      runtimeDescriptorForLiveBackend({
+        provider: session.provider,
+        liveBackend: session.liveBackend,
+      }),
+  };
+}

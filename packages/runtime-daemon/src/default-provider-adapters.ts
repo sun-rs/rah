@@ -1,6 +1,8 @@
 import { ClaudeStoredHistoryAdapter } from "./claude-stored-history-adapter";
 import { CodexStoredHistoryAdapter } from "./codex-stored-history-adapter";
 import { DebugAdapter } from "./debug-adapter";
+import { CodexAdapter } from "./legacy-structured/codex-structured-adapter";
+import { OpenCodeAdapter } from "./legacy-structured/opencode-structured-adapter";
 import {
   ClaudeNativeTuiCatalogAdapter,
   CodexNativeTuiCatalogAdapter,
@@ -29,5 +31,7 @@ export function createDefaultProviderAdapters(
     new CodexNativeTuiCatalogAdapter(),
     new ClaudeNativeTuiCatalogAdapter(),
     new OpenCodeNativeTuiCatalogAdapter(),
+    new CodexAdapter(services),
+    new OpenCodeAdapter(services),
   ];
 }

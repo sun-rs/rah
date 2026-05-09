@@ -15,6 +15,7 @@ import type {
   ProviderAdapter,
   ProviderEnhancedModelAdapter,
 } from "./provider-adapter";
+import { withProviderCatalogRuntime } from "./session-runtime-descriptor";
 
 type ListModelsOptions = {
   cwd?: string;
@@ -29,9 +30,9 @@ export class CodexNativeTuiCatalogAdapter
   private readonly catalog = new CodexModelCatalogCache();
 
   async listModels(options?: ListModelsOptions): Promise<ProviderModelCatalog> {
-    return await this.catalog.listModels({
+    return withProviderCatalogRuntime(await this.catalog.listModels({
       ...(options?.forceRefresh !== undefined ? { forceRefresh: options.forceRefresh } : {}),
-    });
+    }));
   }
 }
 
@@ -43,7 +44,7 @@ export class ClaudeNativeTuiCatalogAdapter
   private readonly catalog = new ClaudeModelCatalogCache();
 
   async listModels(options?: ListModelsOptions): Promise<ProviderModelCatalog> {
-    return await this.catalog.listModels(options);
+    return withProviderCatalogRuntime(await this.catalog.listModels(options));
   }
 }
 
@@ -55,6 +56,6 @@ export class OpenCodeNativeTuiCatalogAdapter
   private readonly catalog = new OpenCodeModelCatalogCache();
 
   async listModels(options?: ListModelsOptions): Promise<ProviderModelCatalog> {
-    return await this.catalog.listModels(options);
+    return withProviderCatalogRuntime(await this.catalog.listModels(options));
   }
 }

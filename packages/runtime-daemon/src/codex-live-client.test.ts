@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { CodexAdapter } from "./legacy-structured/codex-structured-adapter";
@@ -29,10 +29,13 @@ function waitFor(predicate: () => boolean, timeoutMs = 5000): Promise<void> {
 describe("Codex live permission flow", () => {
   let tmpDir: string;
   let previousBinary: string | undefined;
+  let previousTransport: string | undefined;
 
   beforeEach(() => {
     tmpDir = mkdtempSync(path.join(os.tmpdir(), "rah-codex-live-"));
     previousBinary = process.env.RAH_CODEX_BINARY;
+    previousTransport = process.env.RAH_CODEX_APP_SERVER_TRANSPORT;
+    process.env.RAH_CODEX_APP_SERVER_TRANSPORT = "stdio";
   });
 
   afterEach(() => {
@@ -40,6 +43,11 @@ describe("Codex live permission flow", () => {
       delete process.env.RAH_CODEX_BINARY;
     } else {
       process.env.RAH_CODEX_BINARY = previousBinary;
+    }
+    if (previousTransport === undefined) {
+      delete process.env.RAH_CODEX_APP_SERVER_TRANSPORT;
+    } else {
+      process.env.RAH_CODEX_APP_SERVER_TRANSPORT = previousTransport;
     }
     rmSync(tmpDir, { recursive: true, force: true });
   });
@@ -140,6 +148,13 @@ rl.on('line', (line) => {
     assert.equal(started.session.session.capabilities.modelSwitch, true);
     assert.equal(started.session.session.capabilities.planMode, false);
     assert.equal(started.session.session.capabilities.subagents, false);
+    assert.equal(started.session.session.runtime?.kind, "native_local_server");
+    assert.equal(started.session.session.runtime?.structuredLiveEvents, true);
+    assert.equal(started.session.session.runtime?.tuiContinuity, true);
+    assert.equal(started.session.session.runtimeDiagnostics?.serverEndpoint, "stdio:codex app-server");
+    assert.equal(started.session.session.runtimeDiagnostics?.attachState, "unavailable");
+    assert.equal(started.session.session.runtimeDiagnostics?.lastEventCursor, "thread:thread-live-1");
+    assert.equal(typeof started.session.session.runtimeDiagnostics?.serverPid, "number");
 
     adapter.sendInput(started.session.session.id, {
       clientId: "web-user",
@@ -277,6 +292,71 @@ rl.on('line', (line) => {
     );
 
     unsubscribe();
+    await adapter.shutdown?.();
+  });
+
+  test("closeSession disposes the Codex app-server process", async () => {
+    const marker = path.join(tmpDir, "codex-disposed.txt");
+    const serverJs = path.join(tmpDir, "mock-codex-close-server.js");
+    writeFileSync(
+      serverJs,
+      `
+const fs = require('node:fs');
+const readline = require('node:readline');
+const marker = ${JSON.stringify(marker)};
+const rl = readline.createInterface({ input: process.stdin });
+function send(msg) { process.stdout.write(JSON.stringify(msg) + "\\n"); }
+process.on('SIGTERM', () => {
+  fs.writeFileSync(marker, 'sigterm');
+  process.exit(0);
+});
+rl.on('line', (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method === 'initialize') {
+    send({ id: msg.id, result: {} });
+    return;
+  }
+  if (msg.method === 'thread/start') {
+    send({ id: msg.id, result: { thread: { id: 'thread-close-1' } } });
+    return;
+  }
+  send({ id: msg.id, result: {} });
+});
+`,
+    );
+    const wrapper = path.join(tmpDir, "mock-codex");
+    writeFileSync(
+      wrapper,
+      `#!/bin/sh\nexec node "${serverJs}" "$@"\n`,
+    );
+    chmodSync(wrapper, 0o755);
+    process.env.RAH_CODEX_BINARY = wrapper;
+
+    const services = {
+      eventBus: new EventBus(),
+      ptyHub: new PtyHub(),
+      sessionStore: new SessionStore(),
+    };
+    const adapter = new CodexAdapter(services);
+
+    const started = await adapter.startSession({
+      provider: "codex",
+      cwd: tmpDir,
+      title: "live close test",
+      attach: {
+        client: {
+          id: "test-client",
+          kind: "web",
+          connectionId: "test-client",
+        },
+        mode: "interactive",
+        claimControl: true,
+      },
+    });
+
+    await adapter.closeSession(started.session.session.id, { clientId: "web-user" });
+    await waitFor(() => existsSync(marker));
+
     await adapter.shutdown?.();
   });
 

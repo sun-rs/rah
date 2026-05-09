@@ -129,6 +129,20 @@ test("native manual QA status rejects provider pass results without concrete ses
   );
 });
 
+test("native manual QA status rejects reports from a different dirty worktree snapshot", () => {
+  const report = completeReport();
+  assert.ok(report.rah && typeof report.rah === "object");
+  (report.rah as { worktreeFingerprint?: string }).worktreeFingerprint = "different-fingerprint";
+
+  const result = runReport(report);
+  assert.notEqual(result.status, 0);
+  assert.equal(result.output.ok, false);
+  assert.ok(
+    blockers(result.output).some((item) => item.includes("worktreeFingerprint")),
+    "manual QA status should reject a stale dirty worktree fingerprint",
+  );
+});
+
 test("native manual QA status rejects iPad/Safari pass results without device evidence", () => {
   const report = completeReport();
   const target = report.results.find((result) => result.id === "ipad-safari.keyboard-resize");

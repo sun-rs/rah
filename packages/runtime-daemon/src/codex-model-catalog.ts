@@ -8,7 +8,7 @@ import type {
   SessionModelDescriptor,
   SessionReasoningOption,
 } from "@rah/runtime-protocol";
-import type { CodexJsonRpcClient } from "./codex-live-rpc";
+import type { CodexAppServerRpcClient } from "./codex-live-rpc";
 import { createCodexAppServerClient } from "./codex-app-server-client";
 import { defaultProviderModeId, providerModeDescriptors } from "./session-mode-utils";
 
@@ -229,7 +229,7 @@ export function resolveCodexRuntimeCapabilityState(args: {
 }
 
 async function requestModelListPage(
-  client: CodexJsonRpcClient,
+  client: CodexAppServerRpcClient,
   cursor?: string,
 ): Promise<CodexModelListResponse> {
   const response = await client.request(
@@ -242,7 +242,7 @@ async function requestModelListPage(
 }
 
 export async function fetchCodexModelCatalogWithClient(
-  client: CodexJsonRpcClient,
+  client: CodexAppServerRpcClient,
 ): Promise<ProviderModelCatalog> {
   const models: SessionModelDescriptor[] = [];
   let cursor: string | undefined;

@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
@@ -11,6 +12,7 @@ type RahMetadata = {
   commit: string | null;
   dirty: boolean | null;
   changedFiles: number | null;
+  worktreeFingerprint: string | null;
 };
 
 type ManualQaCase = {
@@ -118,6 +120,54 @@ function readGitField(args: string[]): string | null {
   }
 }
 
+function readGitBuffer(args: string[]): Buffer | null {
+  try {
+    return execFileSync("git", args, {
+      cwd: process.cwd(),
+      stdio: ["ignore", "pipe", "ignore"],
+    }) as Buffer;
+  } catch {
+    return null;
+  }
+}
+
+function readWorktreeFingerprint(): string | null {
+  const status = readGitBuffer(["status", "--porcelain=v1"]);
+  const stagedDiff = readGitBuffer(["diff", "--cached", "--binary"]);
+  const unstagedDiff = readGitBuffer(["diff", "--binary"]);
+  const untrackedRaw = readGitBuffer(["ls-files", "--others", "--exclude-standard", "-z"]);
+  if (!status || !stagedDiff || !unstagedDiff || !untrackedRaw) {
+    return null;
+  }
+
+  const hash = createHash("sha256");
+  hash.update("rah-manual-qa-worktree-v1\0");
+  hash.update("status\0");
+  hash.update(status);
+  hash.update("\0staged-diff\0");
+  hash.update(stagedDiff);
+  hash.update("\0unstaged-diff\0");
+  hash.update(unstagedDiff);
+
+  const untrackedFiles = untrackedRaw
+    .toString("utf8")
+    .split("\0")
+    .filter(Boolean)
+    .sort();
+  for (const file of untrackedFiles) {
+    hash.update("\0untracked-file\0");
+    hash.update(file);
+    hash.update("\0");
+    try {
+      hash.update(readFileSync(resolve(process.cwd(), file)));
+    } catch {
+      hash.update("unreadable");
+    }
+  }
+
+  return hash.digest("hex");
+}
+
 function readRahMetadata(): RahMetadata {
   const status = readGitField(["status", "--short"]);
   return {
@@ -125,6 +175,7 @@ function readRahMetadata(): RahMetadata {
     commit: readGitField(["rev-parse", "--short", "HEAD"]),
     dirty: status === null ? null : status.length > 0,
     changedFiles: status === null || status.length === 0 ? 0 : status.split(/\r?\n/).length,
+    worktreeFingerprint: readWorktreeFingerprint(),
   };
 }
 
@@ -276,6 +327,16 @@ function main(): void {
   } else if (current.commit && reportRah.commit && reportRah.commit !== current.commit) {
     blockers.push(
       `Manual QA report commit ${reportRah.commit} does not match current commit ${current.commit}.`,
+    );
+  } else if (current.worktreeFingerprint && !reportRah.worktreeFingerprint) {
+    blockers.push("Manual QA report is missing worktreeFingerprint.");
+  } else if (
+    current.worktreeFingerprint &&
+    reportRah.worktreeFingerprint &&
+    reportRah.worktreeFingerprint !== current.worktreeFingerprint
+  ) {
+    blockers.push(
+      `Manual QA report worktreeFingerprint ${reportRah.worktreeFingerprint} does not match current worktreeFingerprint ${current.worktreeFingerprint}.`,
     );
   }
 

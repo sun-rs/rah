@@ -126,11 +126,14 @@ type SessionStartupDeps = {
 };
 
 function defaultLiveBackendForProvider(
-  _provider: string,
+  provider: string,
 ): NonNullable<StartSessionRequest["liveBackend"]> | undefined {
-  // Let the daemon choose its configured live backend. This keeps Web New,
-  // Claim, and Resume aligned with source-started daemon flags such as
-  // RAH_MUX_BACKEND=zellij instead of baking a stale client-side default.
+  // Codex/OpenCode now have native local-server transports. Claude remains on
+  // the daemon-selected TUI mux fallback so it keeps true interactive TUI
+  // continuity instead of pretending SDK/headless is a live attach surface.
+  if (provider === "codex" || provider === "opencode") {
+    return "native_local_server";
+  }
   return undefined;
 }
 

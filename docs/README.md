@@ -4,6 +4,10 @@
 
 ## 1. 当前稳定设计
 
+- [Native Local Server 重构计划](../RAH_NATIVE_LOCAL_SERVER_REFACTOR_PLAN.zh-CN.md)
+- [Native Local Server 重构 Goal](../RAH_NATIVE_LOCAL_SERVER_REFACTOR_GOAL.zh-CN.md)
+- [当前系统设计总览](./current-system-design.zh-CN.md)
+- [Session 入口与权限边界](./session-entry-capability-boundary.zh-CN.md)
 - [RAH 1.0 RC 说明](./1.0-rc-notes.zh-CN.md)
 - [Zellij Mux Backend 状态](../RAH_ZELLIJ_MUX_BACKEND_STATUS.zh-CN.md)
 - [Zellij Mux Backend 完成审计](../RAH_ZELLIJ_MUX_BACKEND_COMPLETION_AUDIT.zh-CN.md)
@@ -11,9 +15,7 @@
 - [PTY-first 进度与验收审计](./pty-first-progress-audit.zh-CN.md)
 - [PTY-first 完成审计](../NATIVE_TUI_COMPLETION_AUDIT.zh-CN.md)
 - [PTY-first 人类 QA 交付说明](../NATIVE_TUI_HUMAN_QA_HANDOFF.zh-CN.md)
-- [当前系统设计总览](./current-system-design.zh-CN.md)
 - [项目总览](./project-overview.zh-CN.md)
-- [Session 入口与权限边界](./session-entry-capability-boundary.zh-CN.md)
 - [历史浏览与分页边界](./history-browsing.zh-CN.md)
 
 ## 2. Legacy Terminal Wrapper / Handoff

@@ -33,7 +33,7 @@ import {
 } from "../codex-live-helpers";
 import {
   createCodexAppServerClient,
-  type CodexJsonRpcClient,
+  type CodexAppServerRpcClient,
 } from "../codex-app-server-client";
 import {
   TURN_START_TIMEOUT_MS,
@@ -96,7 +96,7 @@ function resolveCodexStartupMode(args: {
   };
 }
 
-export async function loadCodexPlanCollaborationMode(client: CodexJsonRpcClient): Promise<LiveCodexSession["planCollaborationMode"]> {
+export async function loadCodexPlanCollaborationMode(client: CodexAppServerRpcClient): Promise<LiveCodexSession["planCollaborationMode"]> {
   const response = (await client.request("collaborationMode/list", {})) as {
     data?: Array<{
       name?: string;
@@ -187,8 +187,15 @@ export async function startCodexLiveSession(params: {
     provider: "codex",
     providerSessionId: threadId,
     launchSource: "web",
+    liveBackend: "native_local_server",
     cwd: request.cwd,
     rootDir: request.cwd,
+    runtimeDiagnostics: {
+      serverEndpoint: client.endpoint ?? "stdio:codex app-server",
+      ...(client.processId !== undefined ? { serverPid: client.processId } : {}),
+      attachState: client.endpoint ? "ready" : "unavailable",
+      lastEventCursor: `thread:${threadId}`,
+    },
     ...(request.title !== undefined ? { title: request.title } : {}),
     ...(request.initialPrompt !== undefined ? { preview: request.initialPrompt } : {}),
     mode: buildCodexModeState({
@@ -214,6 +221,7 @@ export async function startCodexLiveSession(params: {
     }),
     capabilities: {
       modelSwitch: true,
+      structuredControl: true,
       renameSession: true,
       actions: {
         info: true,
@@ -349,8 +357,15 @@ export async function resumeCodexLiveSession(params: {
       provider: "codex",
       providerSessionId: threadId,
       launchSource: "web",
+      liveBackend: "native_local_server",
       cwd,
       rootDir: record?.ref.rootDir ?? cwd,
+      runtimeDiagnostics: {
+        serverEndpoint: client.endpoint ?? "stdio:codex app-server",
+        ...(client.processId !== undefined ? { serverPid: client.processId } : {}),
+        attachState: client.endpoint ? "ready" : "unavailable",
+        lastEventCursor: `thread:${threadId}`,
+      },
       ...(thread &&
       typeof thread.preview === "string" &&
       thread.preview.trim() &&
@@ -400,6 +415,7 @@ export async function resumeCodexLiveSession(params: {
       }),
       capabilities: {
         modelSwitch: true,
+        structuredControl: true,
         renameSession: true,
         actions: {
           info: true,

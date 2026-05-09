@@ -66,23 +66,6 @@ function resolveContextUsageDisplay(
 
 type SessionViewMode = "chat" | "tui";
 
-const rememberedSessionViewModes = new Map<string, SessionViewMode>();
-
-function resolveRememberedSessionViewMode(args: {
-  sessionId: string;
-  nativeTuiAvailable: boolean;
-  preferred: SessionViewMode;
-}): SessionViewMode {
-  const remembered = rememberedSessionViewModes.get(args.sessionId);
-  if (remembered === "tui" && args.nativeTuiAvailable) {
-    return "tui";
-  }
-  if (remembered === "chat") {
-    return "chat";
-  }
-  return args.preferred;
-}
-
 export function WorkbenchSelectedPane(props: {
   selectedSummary: SessionSummary;
   clientId: string;
@@ -166,17 +149,7 @@ export function WorkbenchSelectedPane(props: {
   const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
   const [sessionInfoOpen, setSessionInfoOpen] = useState(false);
   const [paneWidth, setPaneWidth] = useState<number | null>(null);
-  const [sessionViewMode, setSessionViewModeState] = useState<SessionViewMode>(
-    () => resolveRememberedSessionViewMode({
-      sessionId: props.selectedSummary.session.id,
-      nativeTuiAvailable,
-      preferred: preferredSessionViewMode,
-    }),
-  );
-  const setSessionViewMode = (mode: SessionViewMode) => {
-    rememberedSessionViewModes.set(props.selectedSummary.session.id, mode);
-    setSessionViewModeState(mode);
-  };
+  const [sessionViewMode, setSessionViewMode] = useState<SessionViewMode>(preferredSessionViewMode);
   const effectivePaneWidth = paneWidth ?? Number.POSITIVE_INFINITY;
   const sessionMetaMode = props.compactSessionMeta ?? "auto";
   const compactSessionMeta =
@@ -289,13 +262,7 @@ export function WorkbenchSelectedPane(props: {
       return;
     }
     sessionViewResetKeyRef.current = sessionViewResetKey;
-    setSessionViewModeState(
-      resolveRememberedSessionViewMode({
-        sessionId: props.selectedSummary.session.id,
-        nativeTuiAvailable,
-        preferred: preferredSessionViewMode,
-      }),
-    );
+    setSessionViewMode(preferredSessionViewMode);
   }, [
     nativeChatMirrorAvailable,
     nativeTuiAvailable,

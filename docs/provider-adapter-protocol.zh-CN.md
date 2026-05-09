@@ -2,7 +2,7 @@
 
 日期：2026-05-08
 
-本文记录当前 PTY-first 主线下 provider adapter 的边界。旧 structured/enhanced adapter 只作为 legacy/test harness 保留，不再是公开 live 主路径。
+本文记录当前 provider runtime 主线下 provider adapter 的边界。旧 structured/enhanced adapter 只作为 legacy/test harness 保留，不再是公开 live 主路径。
 
 当前 core live provider：
 
@@ -19,8 +19,9 @@ RAH 不把某一家 CLI 的原生概念直接暴露成前端公共逻辑。
 正确边界：
 
 - `runtime-protocol` 定义跨 provider 的能力字段和请求/响应。
-- daemon-owned PTY/TUI session 是 live truth。
-- provider 原厂 jsonl/db/session history 是 structured truth。
+- Codex/OpenCode 的 provider native local server event 是 live truth。
+- Claude fallback 的 zellij/TUI session 是 live surface truth，Claude 原厂 JSONL 是 structured chat truth。
+- provider 原厂 jsonl/db/session history 是 backfill/audit truth。
 - `client-web` 只消费 `SessionSummary`、`ProviderModelCatalog`、`RahEvent` 和通用 API。
 - provider 原生 id 可以作为 `modeId` / `modelId` / `optionValues` 的值存在，但解释权属于 daemon/provider layer。
 
@@ -33,17 +34,18 @@ RAH 不把某一家 CLI 的原生概念直接暴露成前端公共逻辑。
 
 这些都属于 provider-owned implementation。
 
-## 2. PTY-First Provider Seam
+## 2. Provider Runtime Seam
 
 当前 live 主路径由这些能力组成：
 
 | 能力 | 位置 | 说明 |
 | --- | --- | --- |
-| launch/resume spec | `native-tui-launch-spec.ts` | 把 RAH 标准 start/resume request 翻译成 provider CLI 启动命令。 |
-| PTY runtime | `pty-session-runtime.ts` / `PtyHub` | create/attach/detach/replay/resize/interrupt/close。 |
-| binding probe | native TUI provider handler | 把 daemon session 绑定到 provider session id。 |
-| mirror parser | provider 原厂 history/jsonl/db parser | 只读 provider 原始存储，输出 canonical provider activity。 |
-| minimal PTY control | runtime / provider handler | Stop/interrupt、prompt dirty、control lease，不复刻 provider 私有 live RPC。 |
+| runtime descriptor | `session-runtime-descriptor.ts` | 声明 runtime kind、live source、TUI role 和 feature status。 |
+| native local server runtime | Codex app-server / OpenCode serve client | Codex/OpenCode 的 create/resume/send/interrupt/event 主链路。 |
+| TUI mux fallback | `ZellijMuxBackend` / `RuntimeTerminalCoordinator` | Claude 与无 native server provider 的 TUI 工作现场接管、归还、archive。 |
+| launch/resume spec | provider runtime/capability layer | 把 RAH 标准 start/resume request 翻译成 provider 启动参数或 server config。 |
+| mirror parser | provider 原厂 history/jsonl/db parser | 只读 provider 原始存储，输出 canonical provider activity，用于 backfill/audit。 |
+| minimal TUI control | runtime / provider handler | Claude fallback 的 Stop/interrupt、prompt dirty、surface lease，不复刻 provider 私有 live RPC。 |
 
 ## 3. Capability Slices
 
@@ -95,9 +97,9 @@ optionValues?: Record<string, SessionConfigValue>;
 
 OpenCode 边界：
 
-- Native TUI 启动只稳定支持 `--model provider/model`。
+- TUI fallback 启动只稳定支持 `--model provider/model`。
 - `opencode run --variant` 和 ACP `provider/model/variant` 是已验证路径。
-- RAH 不把未公开的 TUI `--variant` 当作稳定启动参数。
+- RAH 不把未公开的 TUI `--variant` 当作稳定启动参数；OpenCode native local server/ACP 路径可声明并使用已验证的 variant 能力。
 
 ## 6. Context Usage
 

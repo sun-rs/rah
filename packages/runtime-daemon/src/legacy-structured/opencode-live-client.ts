@@ -8,6 +8,7 @@ import {
   type ManagedSession,
   type PermissionResponseRequest,
   type ProviderModelCatalog,
+  type SessionRuntimeDiagnostics,
   type SessionInputRequest,
   type StartSessionRequest,
 } from "@rah/runtime-protocol";
@@ -69,6 +70,19 @@ const SESSION_SOURCE = {
 
 const OPENCODE_FULL_AUTO_MODE_ID = "opencode/full-auto";
 const RAH_SESSION_MODE_CONFIG_KEY = "rah_session_mode";
+
+export function runtimeDiagnosticsForOpenCodeServer(
+  server: OpenCodeServerHandle,
+  providerSessionId: string,
+): SessionRuntimeDiagnostics {
+  return {
+    serverEndpoint: server.baseUrl,
+    ...(server.child.pid !== undefined ? { serverPid: server.child.pid } : {}),
+    attachCommand: `opencode attach ${server.baseUrl} --session ${providerSessionId}`,
+    attachState: "ready",
+    lastEventCursor: `session:${providerSessionId}`,
+  };
+}
 
 function openCodePermissionOverride(action: OpenCodePermissionRule["action"]): OpenCodePermissionRule[] {
   return [{ permission: "*", pattern: "*", action }];
@@ -224,6 +238,23 @@ function applyActivity(
   );
 }
 
+function patchOpenCodeRuntimeError(
+  services: RuntimeServices,
+  liveSession: LiveOpenCodeSession,
+  error: unknown,
+): void {
+  const state = services.sessionStore.getSession(liveSession.sessionId);
+  if (!state) {
+    return;
+  }
+  services.sessionStore.patchManagedSession(liveSession.sessionId, {
+    runtimeDiagnostics: {
+      ...(state.session.runtimeDiagnostics ?? {}),
+      lastError: error instanceof Error ? error.message : String(error),
+    },
+  });
+}
+
 export async function startOpenCodeLiveSession(params: {
   services: RuntimeServices;
   request: StartSessionRequest;
@@ -296,9 +327,11 @@ export async function startOpenCodeLiveSession(params: {
     provider: "opencode",
     providerSessionId: providerSession.id,
     launchSource: "web",
+    liveBackend: "native_local_server",
     cwd: request.cwd,
     rootDir: request.cwd,
     title: providerSession.title,
+    runtimeDiagnostics: runtimeDiagnosticsForOpenCodeServer(server, providerSession.id),
     ...(request.initialPrompt !== undefined ? { preview: request.initialPrompt } : {}),
     model: {
       currentModelId,
@@ -314,6 +347,7 @@ export async function startOpenCodeLiveSession(params: {
     ...runtimeCapabilityState,
     capabilities: {
       livePermissions: true,
+      structuredControl: true,
       steerInput: true,
       queuedInput: true,
       renameSession: false,
@@ -444,9 +478,11 @@ export async function resumeOpenCodeLiveSession(params: {
     provider: "opencode",
     providerSessionId: params.providerSessionId,
     launchSource: "web",
+    liveBackend: "native_local_server",
     cwd: params.cwd,
     rootDir: params.cwd,
     title: providerSession.title,
+    runtimeDiagnostics: runtimeDiagnosticsForOpenCodeServer(server, params.providerSessionId),
     model: {
       currentModelId,
       currentReasoningId,
@@ -461,6 +497,7 @@ export async function resumeOpenCodeLiveSession(params: {
     ...runtimeCapabilityState,
     capabilities: {
       livePermissions: true,
+      structuredControl: true,
       steerInput: true,
       queuedInput: true,
       renameSession: false,
@@ -596,6 +633,7 @@ function submitOpenCodePrompt(params: {
       drainQueuedOpenCodeInput(services, liveSession);
     })
     .catch((error) => {
+      patchOpenCodeRuntimeError(services, liveSession, error);
       if (liveSession.activityState.currentTurnId !== turnId) {
         drainQueuedOpenCodeInput(services, liveSession);
         return;
@@ -701,6 +739,7 @@ export function interruptOpenCodeLiveSession(params: {
     handle: liveSession.server,
     providerSessionId: liveSession.providerSessionId,
   }).catch((error) => {
+    patchOpenCodeRuntimeError(services, liveSession, error);
     applyActivity(services, liveSession.sessionId, {
       type: "runtime_status",
       status: "error",
