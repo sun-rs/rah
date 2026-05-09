@@ -8,6 +8,8 @@ Base commit: `3764bbb Prepare council integration and native TUI catalogs`
 
 Completion audit: `/Users/sun/Code/repos/rah/RAH_NATIVE_LOCAL_SERVER_COMPLETION_AUDIT.zh-CN.md`
 
+Manual QA checklist: `/Users/sun/Code/repos/rah/RAH_NATIVE_LOCAL_SERVER_MANUAL_QA.zh-CN.md`
+
 ## 目标
 
 RAH 的核心定位是“无缝衔接的 AI 工作台”：用户在桌面主机上启动原生 CLI agent 工作，离开桌面后可以在 Web/PWA/iOS/iPad 继续监控和对话，回到桌面后仍能衔接同一个真实 session。这个目标不是普通 chatbox，也不是只做 SDK 调用器。
