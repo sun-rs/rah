@@ -86,6 +86,27 @@ function timelineEvent(args: {
   } as RahEvent;
 }
 
+function turnCanceledEvent(args: {
+  seq: number;
+  turnId: string;
+  ts?: string;
+}): RahEvent {
+  return {
+    id: `event-${args.seq}`,
+    seq: args.seq,
+    ts: args.ts ?? `2026-04-15T00:00:${String(args.seq).padStart(2, "0")}.000Z`,
+    sessionId: "session-1",
+    turnId: args.turnId,
+    source: {
+      provider: "codex",
+      channel: args.turnId.startsWith("history:") ? "structured_persisted" : "structured_live",
+      authority: "authoritative",
+    },
+    type: "turn.canceled",
+    payload: { reason: "interrupted" },
+  } as RahEvent;
+}
+
 test("prependHistoryPage keeps repeated same-text messages from different turns", () => {
   const current = replayEventsIntoProjection(summary(), [
     timelineEvent({ seq: 2, turnId: "turn-2", text: "继续" }),
@@ -327,4 +348,81 @@ test("mergeLatestHistoryPage appends newly persisted assistant tail without show
   );
   assert.equal(next.history.phase, "ready");
   assert.equal(next.history.authoritativeApplied, true);
+});
+
+test("mergeLatestHistoryPage dedupes live and history canceled notices by turn anchor", () => {
+  const current = replayEventsIntoProjection(summary(), [
+    timelineEvent({
+      seq: 1,
+      turnId: "live-turn-1",
+      text: "停止测试",
+      ts: "2026-04-15T00:00:01.000Z",
+    }),
+    turnCanceledEvent({
+      seq: 2,
+      turnId: "live-turn-1",
+      ts: "2026-04-15T00:00:02.000Z",
+    }),
+  ]);
+
+  const next = mergeLatestHistoryPage(current, [
+    timelineEvent({
+      seq: 1,
+      turnId: "history:session-1:turn-1",
+      text: "停止测试",
+      messageId: "provider-user-1",
+      ts: "2026-04-15T00:00:01.000Z",
+    }),
+    turnCanceledEvent({
+      seq: 2,
+      turnId: "history:session-1:turn-1",
+      ts: "2026-04-15T00:00:02.000Z",
+    }),
+  ]);
+
+  const notices = next.feed.filter(
+    (entry) =>
+      entry.kind === "notification" &&
+      entry.title === "Conversation interrupted",
+  );
+  assert.equal(notices.length, 1);
+  assert.deepEqual(
+    next.feed.map((entry) => entry.kind),
+    ["timeline", "notification"],
+  );
+});
+
+test("mergeLatestHistoryPage keeps distinct canceled turns separate", () => {
+  const current = replayEventsIntoProjection(summary(), [
+    timelineEvent({ seq: 1, turnId: "live-turn-1", text: "第一个停止" }),
+    turnCanceledEvent({ seq: 2, turnId: "live-turn-1" }),
+  ]);
+
+  const next = mergeLatestHistoryPage(current, [
+    timelineEvent({
+      seq: 1,
+      turnId: "history:session-1:turn-1",
+      text: "第一个停止",
+      messageId: "provider-user-1",
+    }),
+    turnCanceledEvent({ seq: 2, turnId: "history:session-1:turn-1" }),
+    timelineEvent({
+      seq: 3,
+      turnId: "history:session-1:turn-2",
+      text: "第二个停止",
+      messageId: "provider-user-2",
+    }),
+    turnCanceledEvent({ seq: 4, turnId: "history:session-1:turn-2" }),
+  ]);
+
+  const notices = next.feed.filter(
+    (entry) =>
+      entry.kind === "notification" &&
+      entry.title === "Conversation interrupted",
+  );
+  assert.equal(notices.length, 2);
+  assert.deepEqual(
+    next.feed.map((entry) => entry.kind),
+    ["timeline", "notification", "timeline", "notification"],
+  );
 });

@@ -121,6 +121,82 @@ function feedEntriesShareTimelineIdentity(left: FeedEntry, right: FeedEntry): bo
   }
 }
 
+function isTurnCanceledNotice(
+  entry: FeedEntry,
+): entry is Extract<FeedEntry, { kind: "notification" }> {
+  return (
+    entry.kind === "notification" &&
+    entry.title === "Conversation interrupted" &&
+    entry.body === "The previous turn was interrupted."
+  );
+}
+
+function findCancellationAnchor(
+  feed: FeedEntry[],
+  noticeIndex: number,
+  notice: Extract<FeedEntry, { kind: "notification" }>,
+): Extract<FeedEntry, { kind: "timeline" }> | null {
+  if (notice.turnId) {
+    for (let index = noticeIndex - 1; index >= 0; index -= 1) {
+      const candidate = feed[index];
+      if (candidate?.kind === "timeline" && candidate.turnId === notice.turnId) {
+        return candidate;
+      }
+    }
+  }
+  for (let index = noticeIndex - 1; index >= 0; index -= 1) {
+    const candidate = feed[index];
+    if (candidate?.kind === "timeline") {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function turnCanceledNoticesShareIdentity(args: {
+  leftFeed: FeedEntry[];
+  leftIndex: number;
+  rightFeed: FeedEntry[];
+  rightIndex: number;
+}): boolean {
+  const left = args.leftFeed[args.leftIndex];
+  const right = args.rightFeed[args.rightIndex];
+  if (!left || !right || !isTurnCanceledNotice(left) || !isTurnCanceledNotice(right)) {
+    return false;
+  }
+  if (left.key === right.key) {
+    return true;
+  }
+  if (left.turnId && right.turnId && left.turnId === right.turnId) {
+    return true;
+  }
+  const leftAnchor = findCancellationAnchor(args.leftFeed, args.leftIndex, left);
+  const rightAnchor = findCancellationAnchor(args.rightFeed, args.rightIndex, right);
+  if (leftAnchor && rightAnchor) {
+    return feedEntriesShareTimelineIdentity(leftAnchor, rightAnchor);
+  }
+  return false;
+}
+
+function findEquivalentFeedEntryIndex(
+  targetFeed: FeedEntry[],
+  incomingEntry: FeedEntry,
+  incomingFeed: FeedEntry[],
+  incomingIndex: number,
+): number {
+  return targetFeed.findIndex((current, currentIndex) => {
+    if (feedEntriesShareTimelineIdentity(current, incomingEntry)) {
+      return true;
+    }
+    return turnCanceledNoticesShareIdentity({
+      leftFeed: targetFeed,
+      leftIndex: currentIndex,
+      rightFeed: incomingFeed,
+      rightIndex: incomingIndex,
+    });
+  });
+}
+
 function isHistoryTurnId(turnId: string | undefined): boolean {
   return turnId?.startsWith("history:") ?? false;
 }
@@ -240,14 +316,17 @@ export function prependHistoryPage(
   const currentKeyIndex = new Map(
     nextFeed.map((entry, index) => [entry.key, index] as const),
   );
-  const prepend = historyProjection.feed.filter((entry) => {
+  const prepend = historyProjection.feed.filter((entry, entryIndex) => {
     const existingIndex = currentKeyIndex.get(entry.key);
     if (existingIndex !== undefined) {
       nextFeed[existingIndex] = entry;
       return false;
     }
-    const identityIndex = nextFeed.findIndex((current) =>
-      feedEntriesShareTimelineIdentity(current, entry),
+    const identityIndex = findEquivalentFeedEntryIndex(
+      nextFeed,
+      entry,
+      historyProjection.feed,
+      entryIndex,
     );
     if (identityIndex >= 0) {
       nextFeed[identityIndex] = entry;
@@ -313,13 +392,16 @@ function mergeLatestHistoryFeed(
     nextFeed.map((entry, index) => [entry.key, index] as const),
   );
 
-  for (const current of currentFeed) {
+  for (const [currentIndex, current] of currentFeed.entries()) {
     const existingIndex = currentKeyIndex.get(current.key);
     if (existingIndex !== undefined) {
       continue;
     }
-    const identityIndex = nextFeed.findIndex((historyEntry) =>
-      feedEntriesShareTimelineIdentity(historyEntry, current),
+    const identityIndex = findEquivalentFeedEntryIndex(
+      nextFeed,
+      current,
+      currentFeed,
+      currentIndex,
     );
     if (identityIndex >= 0) {
       continue;
