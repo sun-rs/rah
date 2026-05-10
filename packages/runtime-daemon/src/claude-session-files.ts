@@ -132,6 +132,7 @@ export type ClaudeStoredSessionRecord = {
 
 export type ClaudeStoredActivityState = {
   processedRecordKeys: Set<string>;
+  lastEmittedTimestampMs?: number;
 };
 
 export type ClaudeStoredActivityBatchItem = {
@@ -180,6 +181,14 @@ function formatClaudeApiError(error: unknown): string {
     return `${base}. This is a server-side issue, usually temporary.`;
   }
   return base;
+}
+
+function claudeApiErrorNotificationLevel(error: unknown): "warning" | "critical" {
+  const status = objectProperty(error, "status");
+  if (status === 429 || status === "429" || status === 503 || status === "503") {
+    return "warning";
+  }
+  return "critical";
 }
 
 export function createClaudeStoredActivityState(): ClaudeStoredActivityState {
@@ -543,9 +552,20 @@ function translateClaudeRecordsToActivities(
   const activities: ClaudeStoredActivityBatchItem[] = [];
   const processedKeys = options.state?.processedRecordKeys ?? new Set<string>();
   const seenKeys = new Set<string>();
-  let turnCounter = 0;
   let latestTurnId: string | undefined;
   let latestTurnHasAssistantOutput = false;
+  let lastEmittedTimestampMs = options.state?.lastEmittedTimestampMs ?? 0;
+  const nextTimestamp = (recordTimestamp: string | undefined): string => {
+    const parsed = recordTimestamp ? Date.parse(recordTimestamp) : Number.NaN;
+    const candidateMs = Number.isFinite(parsed)
+      ? parsed
+      : lastEmittedTimestampMs > 0
+        ? lastEmittedTimestampMs + 1
+        : 0;
+    const nextMs = Math.max(candidateMs, lastEmittedTimestampMs + 1);
+    lastEmittedTimestampMs = nextMs;
+    return new Date(nextMs).toISOString();
+  };
   for (const record of records) {
     const key = recordKey(record);
     if (seenKeys.has(key)) {
@@ -553,7 +573,6 @@ function translateClaudeRecordsToActivities(
     }
     seenKeys.add(key);
     const alreadyProcessed = processedKeys.has(key);
-    const timestamp = record.timestamp ?? new Date().toISOString();
 
     if (record.type === "summary") {
       if (alreadyProcessed) {
@@ -566,6 +585,7 @@ function translateClaudeRecordsToActivities(
           channel: "structured_persisted",
           authority: "derived",
           raw: record,
+          ts: nextTimestamp(record.timestamp),
         },
         activity: {
           type: "timeline_item",
@@ -584,7 +604,7 @@ function translateClaudeRecordsToActivities(
       if (!text) {
         continue;
       }
-      const turnId = `turn-${++turnCounter}`;
+      const turnId = `turn:${record.uuid}`;
       latestTurnId = turnId;
       latestTurnHasAssistantOutput = false;
       if (alreadyProcessed) {
@@ -597,7 +617,7 @@ function translateClaudeRecordsToActivities(
           channel: "structured_persisted",
           authority: "derived",
           raw: record,
-          ts: timestamp,
+          ts: nextTimestamp(record.timestamp),
         },
         activity: {
           type: "turn_started",
@@ -611,7 +631,7 @@ function translateClaudeRecordsToActivities(
           channel: "structured_persisted",
           authority: "derived",
           raw: record,
-          ts: timestamp,
+          ts: nextTimestamp(record.timestamp),
         },
         activity: {
           type: "timeline_item",
@@ -670,7 +690,7 @@ function translateClaudeRecordsToActivities(
             channel: "structured_persisted",
             authority: "derived",
             raw: record,
-            ts: timestamp,
+            ts: nextTimestamp(record.timestamp),
           },
           activity,
         });
@@ -685,7 +705,7 @@ function translateClaudeRecordsToActivities(
               channel: "structured_persisted",
               authority: "derived",
               raw: record,
-              ts: timestamp,
+              ts: nextTimestamp(record.timestamp),
             },
             activity: {
               type: "turn_canceled",
@@ -709,7 +729,7 @@ function translateClaudeRecordsToActivities(
             channel: "structured_persisted",
             authority: "derived",
             raw: record,
-            ts: timestamp,
+            ts: nextTimestamp(record.timestamp),
           },
           activity: {
             type: "turn_canceled",
@@ -735,7 +755,7 @@ function translateClaudeRecordsToActivities(
           channel: "structured_persisted",
           authority: "derived",
           raw: record,
-          ts: timestamp,
+          ts: nextTimestamp(record.timestamp),
         },
         activity: {
           type: "timeline_item",
@@ -759,11 +779,11 @@ function translateClaudeRecordsToActivities(
             channel: "structured_persisted",
             authority: "derived",
             raw: record,
-            ts: timestamp,
+            ts: nextTimestamp(record.timestamp),
           },
           activity: {
             type: "notification",
-            level: "critical",
+            level: claudeApiErrorNotificationLevel(record.error),
             title: "Claude API error",
             body: formatClaudeApiError(record.error),
           },
@@ -776,6 +796,7 @@ function translateClaudeRecordsToActivities(
     for (const item of activities) {
       options.state.processedRecordKeys.add(item.recordKey);
     }
+    options.state.lastEmittedTimestampMs = lastEmittedTimestampMs;
   }
   return activities;
 }

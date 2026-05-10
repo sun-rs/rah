@@ -103,7 +103,10 @@ export function canSubmitComposerInput(args: {
   if (args.composerSurface.kind !== "compose") {
     return false;
   }
-  if (args.sendPending || !args.draft.trim()) {
+  if (!args.draft.trim()) {
+    return false;
+  }
+  if (args.sendPending && args.nativeTuiPromptState === undefined) {
     return false;
   }
   return true;
@@ -143,7 +146,10 @@ export function deriveComposerSurface(args: {
   }
 
   if (!hasControl) {
-    if (selectedSummary.session.launchSource === "terminal") {
+    if (
+      selectedSummary.session.launchSource === "terminal" ||
+      selectedSummary.session.liveBackend === "native_local_server"
+    ) {
       return {
         kind: "compose",
         showStopButton: isGenerating,

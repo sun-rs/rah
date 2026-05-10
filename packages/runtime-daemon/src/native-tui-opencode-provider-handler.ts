@@ -73,8 +73,14 @@ function observeOpenCodeOutput(
   data: string,
 ): NativeTuiOutputObservation {
   const stripped = data.replace(ANSI_ESCAPE_PATTERN, "");
+  const lastLine = stripped
+    .replace(/\r/g, "\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .at(-1);
   return {
-    promptClean: /\bAsk anything\b/i.test(stripped),
+    promptClean: lastLine ? /\bAsk anything\b/i.test(lastLine) : false,
     binding: null,
   };
 }

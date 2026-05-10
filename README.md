@@ -19,6 +19,10 @@ boundary is intentionally narrow:
   Claude uses the TUI mux fallback.
 - structured Chat uses provider server events where available and provider-native history files/DBs
   for backfill/history. It is not ANSI screen scraping.
+- Session sync has a fixed boundary: new live sessions do not show older-history loading; selecting an
+  existing live session silently syncs the latest tail; only read-only replay or upward scrolling loads
+  older history. See
+  [`docs/history-browsing.zh-CN.md`](docs/history-browsing.zh-CN.md).
 - zellij screen output is only the native TUI view/control surface for Claude and fallback paths.
 - The Web/PWA `TUI` tab is the explicit handoff point for TUI surfaces.
 - provider adapters own launch specs, binding probes, mirror parsers, and optional capability catalogs.
@@ -127,6 +131,7 @@ npm run test:zellij-tui
 npm run test:manual-qa-status
 npm run test:smoke:native-codex-browser
 npm run test:smoke:native-provider-browser
+npm run test:smoke:native-browser
 npm run test:smoke:native-browser-webkit
 npm run test:smoke:history-claim
 npm run test:smoke:tool-flow
@@ -135,6 +140,7 @@ npm run test:smoke:claude-browser
 npm run test:smoke:codex-browser
 npm run test:smoke:opencode-browser
 npm run test:smoke:browser-providers
+npm run test:smoke:real-browser-providers
 npm run test:smoke:provider-flows
 npm run test:smoke:wrapper
 ```
@@ -164,6 +170,7 @@ RAH now uses five test tiers:
   - includes `test:manual-qa-status` so the human QA evidence verifier cannot silently weaken
   - core live provider expectations are Codex, Claude, and OpenCode
 - provider smoke
+  - `native-browser`
   - `native-codex-browser`
   - `native-provider-browser`
   - `native-browser-webkit`
@@ -174,6 +181,7 @@ RAH now uses five test tiers:
   - `claude-browser`
   - `opencode-browser`
   - `browser-providers`
+  - `real-browser-providers`
   - `provider-flows`
 - release/CI gate
   - provider smoke should run only in an environment where the matching provider CLI and account
@@ -185,9 +193,13 @@ Detailed provider regression coverage is tracked in `docs/provider-regression-te
 
 For the current native-local-server branch, the preferred smoke coverage is split by runtime:
 `test:smoke:native-local-server` verifies Codex/OpenCode provider-server capabilities, while
-`native-codex-browser`, `native-provider-browser`, and `native-browser-webkit` remain browser/UI
-diagnostics for local machines. Older provider-specific browser smoke commands are still useful as
-local diagnostics, but they do not replace the runtime capability probes.
+`test:smoke:native-browser` runs deterministic browser/UI smoke coverage for Codex, Claude, and
+OpenCode with fake provider backends. `native-browser-webkit` and `native-browser-firefox` run the
+same browser smoke in alternate engines. The smoke records screenshots for Chat mirror, Web TUI,
+reload replay, and Web resume history, and asserts message ordering, duplicate prevention, Stop
+state convergence, dirty-prompt blocking, and absence of unexpected provider-event/loading-history
+noise on new live sessions. Older provider-specific browser smoke commands are real provider
+diagnostics and do not replace the native local server probe or the deterministic browser smoke.
 
 Manual QA evidence for this branch is checked by:
 
@@ -207,9 +219,10 @@ snapshot being tested, not just the last commit.
 Provider smoke is intentionally **not** treated as a universal local gate. Installed CLI binaries do
 not prove authentication, quota, or account access.
 
-`npm run test:smoke:browser-providers` is a legacy convenience command for a known-good local
-machine with the matching core provider CLIs authenticated. It is not a default gate. Different machines may
-have:
+`npm run test:smoke:browser-providers` is the deterministic browser gate and currently aliases
+`test:smoke:native-browser`. Use `npm run test:smoke:real-browser-providers` only on a known-good
+local machine with the matching core provider CLIs authenticated. Real provider smoke is not a
+default gate. Different machines may have:
 
 - only some provider CLIs installed
 - valid binaries but missing login/auth

@@ -62,6 +62,7 @@ import { syncHistorySelectionSubscription } from "./session-store-history-select
 import {
   ensureSessionHistoryLoadedCommand,
   loadOlderHistoryCommand,
+  refreshLatestHistoryCommand,
 } from "./session-store-history-paging";
 import {
   connectStoreSyncTransport,
@@ -198,6 +199,7 @@ interface SessionState {
   interruptSession: (sessionId: string) => Promise<void>;
   sendInput: (sessionId: string, text: string) => Promise<void>;
   ensureSessionHistoryLoaded: (sessionId: string) => Promise<void>;
+  refreshLatestHistory: (sessionId: string) => Promise<void>;
   loadOlderHistory: (sessionId: string) => Promise<void>;
   respondToPermission: (
     sessionId: string,
@@ -317,6 +319,7 @@ async function ensureSessionHistoryLoaded(sessionId: string) {
   await ensureSessionHistoryLoadedCommand({
     get: useSessionStore.getState,
     loadOlderHistory: useSessionStore.getState().loadOlderHistory,
+    refreshLatestHistory: useSessionStore.getState().refreshLatestHistory,
     sessionId,
   });
 }
@@ -774,6 +777,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   ensureSessionHistoryLoaded: async (sessionId) => {
     await ensureSessionHistoryLoaded(sessionId);
+  },
+
+  refreshLatestHistory: async (sessionId) => {
+    await refreshLatestHistoryCommand({
+      get,
+      set,
+      sessionId,
+      historyPageLimit: HISTORY_PAGE_LIMIT,
+    });
   },
 
   loadOlderHistory: async (sessionId) => {

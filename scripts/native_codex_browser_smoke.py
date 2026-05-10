@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import re
 import shutil
 import socket
 import subprocess
@@ -20,6 +21,7 @@ from native_smoke_process import terminate_process_tree
 
 
 ROOT_DIR = pathlib.Path(__file__).resolve().parent.parent
+SCREENSHOTS: list[str] = []
 
 
 def selected_browser_name() -> str:
@@ -57,6 +59,22 @@ def preflight_browser_runtime() -> None:
         browser.close()
 
 
+def browser_artifact_dir(suite: str) -> pathlib.Path:
+    raw = os.environ.get("RAH_BROWSER_E2E_ARTIFACT_DIR", "test-results/browser-e2e")
+    root = pathlib.Path(raw)
+    if not root.is_absolute():
+        root = ROOT_DIR / root
+    path = root / suite / str(int(time.time()))
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def save_browser_screenshot(page, artifact_dir: pathlib.Path, name: str) -> None:
+    path = artifact_dir / f"{name}.png"
+    page.screenshot(path=str(path), full_page=False)
+    SCREENSHOTS.append(str(path.relative_to(ROOT_DIR) if path.is_relative_to(ROOT_DIR) else path))
+
+
 def request_json(base_url: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
     if payload is None:
         req = request.Request(f"{base_url}{path}")
@@ -84,6 +102,72 @@ def close_session_quietly(base_url: str, session_id: str | None) -> None:
         pass
 
 
+def mark_session_closed(base_url: str, session_id: str | None) -> None:
+    if session_id:
+        close_session_quietly(base_url, session_id)
+
+
+def live_session_ids(base_url: str) -> set[str]:
+    response = request_json(base_url, "/api/sessions")
+    return {
+        str(entry.get("session", {}).get("id"))
+        for entry in response.get("sessions", [])
+        if entry.get("session", {}).get("provider") == "codex"
+        and entry.get("session", {}).get("id")
+    }
+
+
+def wait_for_new_live_session(base_url: str, before: set[str], timeout_s: int = 20) -> str:
+    started = time.time()
+    last_sessions: list[dict[str, Any]] = []
+    while time.time() - started < timeout_s:
+        response = request_json(base_url, "/api/sessions")
+        sessions = [
+            entry.get("session", {})
+            for entry in response.get("sessions", [])
+            if entry.get("session", {}).get("provider") == "codex"
+            and str(entry.get("session", {}).get("id")) not in before
+        ]
+        last_sessions = sessions
+        if sessions:
+            sessions.sort(key=lambda item: str(item.get("createdAt", "")), reverse=True)
+            return str(sessions[0]["id"])
+        time.sleep(0.2)
+    raise AssertionError(f"new Codex live session did not appear; last={last_sessions}")
+
+
+def spawn_rah_codex_cli(
+    base_url: str,
+    workspace: pathlib.Path,
+    provider_session_id: str | None = None,
+) -> subprocess.Popen[str]:
+    args = ["node", "bin/rah.mjs", "codex"]
+    if provider_session_id:
+        args.extend(["resume", provider_session_id])
+    args.extend(["--mux", "native", "--daemon-url", base_url, "--cwd", str(workspace)])
+    return subprocess.Popen(
+        args,
+        cwd=ROOT_DIR,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=os.environ,
+    )
+
+
+def terminate_cli_process(proc: subprocess.Popen[str] | None) -> None:
+    if not proc or proc.poll() is not None:
+        return
+    terminate_process_tree(proc)
+
+
+def open_live_session(page, session_id: str) -> None:
+    page.locator('button[aria-label="Sessions"]:visible').first.click(timeout=30_000)
+    page.get_by_role("button", name="Live", exact=True).click(timeout=30_000)
+    page.locator(f'button[data-session-id="{session_id}"]:visible').first.click(timeout=30_000)
+
+
 def free_port() -> int:
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.bind(("127.0.0.1", 0))
@@ -99,9 +183,11 @@ def write_fake_codex(path: pathlib.Path) -> None:
                 "#!/usr/bin/env node",
                 "const fs = require('node:fs');",
                 "const path = require('node:path');",
-                "const providerSessionId = process.env.MOCK_CODEX_SESSION_ID;",
+                "const baseProviderSessionId = process.env.MOCK_CODEX_SESSION_ID;",
                 "const codexHome = process.env.CODEX_HOME;",
-                "if (!providerSessionId || !codexHome) process.exit(2);",
+                "if (!baseProviderSessionId || !codexHome) process.exit(2);",
+                "const resumeIndex = process.argv.indexOf('resume');",
+                "const providerSessionId = resumeIndex >= 0 && process.argv[resumeIndex + 1] ? process.argv[resumeIndex + 1] : `${baseProviderSessionId}-${process.pid}`;",
                 "const rolloutPath = path.join(codexHome, 'sessions', `rollout-native-browser-${providerSessionId}.jsonl`);",
                 "fs.mkdirSync(path.dirname(rolloutPath), { recursive: true });",
                 "function append(row) { fs.appendFileSync(rolloutPath, JSON.stringify(row) + '\\n'); }",
@@ -115,6 +201,7 @@ def write_fake_codex(path: pathlib.Path) -> None:
                 "process.stdout.on('resize', reportResize);",
                 "setTimeout(reportResize, 50);",
                 "process.stdin.setEncoding('utf8');",
+                "if (process.stdin.isTTY && process.stdin.setRawMode) process.stdin.setRawMode(true);",
                 "process.stdin.resume();",
                 "let buffer = '';",
                 "let turnIndex = 0;",
@@ -145,7 +232,7 @@ def write_fake_codex(path: pathlib.Path) -> None:
                 "    if (!text) continue;",
                 "    turnIndex += 1;",
                 "    const turnId = `native-browser-turn-${turnIndex}`;",
-                "    const answer = text.includes('RAH foreground resume prompt') ? 'RAH_NATIVE_CODEX_BROWSER_FOREGROUND_ANSWER' : `RAH_NATIVE_CODEX_BROWSER_MIRROR_${turnIndex}`;",
+                "    const answer = text.includes('RAH foreground resume prompt') ? 'RAH_NATIVE_CODEX_BROWSER_FOREGROUND_ANSWER' : text.includes('rah cli codex browser native') ? 'RAH_NATIVE_CODEX_BROWSER_CLI_ANSWER' : text.includes('BLOCKED_WHILE_TUI_PROMPT_DIRTY_TWO') ? 'RAH_NATIVE_CODEX_BROWSER_DIRTY_QUEUE_TWO' : text.includes('BLOCKED_WHILE_TUI_PROMPT_DIRTY') ? 'RAH_NATIVE_CODEX_BROWSER_DIRTY_QUEUE_ONE' : `RAH_NATIVE_CODEX_BROWSER_MIRROR_${turnIndex}`;",
                 "    process.stdout.write(`RAH_NATIVE_CODEX_BROWSER_INPUT:${text}\\r\\n`);",
                 "    append({ timestamp: timestamp(1), type: 'event_msg', payload: { type: 'task_started', turn_id: turnId } });",
                 "    append({ timestamp: timestamp(2), type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] } });",
@@ -194,14 +281,28 @@ def start_daemon(env: dict[str, str], port: int) -> subprocess.Popen[str]:
     raise TimeoutError(f"daemon did not start on port {port}; stdout={stdout}")
 
 
-def wait_for_session_provider_id(base_url: str, session_id: str, provider_session_id: str) -> None:
+def wait_for_session_provider_id(
+    base_url: str,
+    session_id: str,
+    provider_session_id: str | None,
+) -> str:
     started = time.time()
+    last_provider_session_id: str | None = None
     while time.time() - started < 15:
         summary = request_json(base_url, f"/api/sessions/{session_id}")["session"]
-        if summary["session"].get("providerSessionId") == provider_session_id:
-            return
+        value = summary["session"].get("providerSessionId")
+        last_provider_session_id = str(value) if value else None
+        if last_provider_session_id and (
+            provider_session_id is None or last_provider_session_id == provider_session_id
+        ):
+            return last_provider_session_id
         time.sleep(0.2)
-    raise AssertionError("native Codex providerSessionId did not bind")
+    if provider_session_id is None:
+        raise AssertionError("native Codex providerSessionId did not bind")
+    raise AssertionError(
+        f"native Codex providerSessionId did not bind to {provider_session_id!r}; "
+        f"last={last_provider_session_id!r}"
+    )
 
 
 def wait_for_terminal_text(panel, needle: str, timeout_s: int = 15) -> None:
@@ -216,13 +317,39 @@ def wait_for_terminal_text(panel, needle: str, timeout_s: int = 15) -> None:
 
 
 def terminal_text_contains(text: str, needle: str) -> bool:
-    return needle in text or needle in text.replace("\n", "")
+    return (
+        needle in text
+        or needle in text.replace("\n", "")
+        or re.sub(r"\s+", "", needle) in re.sub(r"\s+", "", text)
+    )
 
 
 def terminal_text_count(text: str, needle: str) -> int:
     # xterm innerText includes visual soft wraps. Narrow mobile panes can split
     # stable provider markers across lines, so count both raw and de-wrapped text.
-    return max(text.count(needle), text.replace("\n", "").count(needle))
+    return max(
+        text.count(needle),
+        text.replace("\n", "").count(needle),
+        re.sub(r"\s+", "", text).count(re.sub(r"\s+", "", needle)),
+    )
+
+
+def assert_page_text_absent(page, needle: str) -> None:
+    text = page.locator("body").inner_text(timeout=5_000)
+    if needle in text:
+        raise AssertionError(f"page unexpectedly contained {needle!r}; tail={text[-1600:]}")
+
+
+def assert_page_text_order(page, *needles: str) -> None:
+    text = page.locator("body").inner_text(timeout=10_000)
+    cursor = -1
+    for needle in needles:
+        index = text.find(needle, cursor + 1)
+        if index < 0:
+            raise AssertionError(
+                f"page did not contain {needle!r} after offset {cursor}; tail={text[-1600:]}"
+            )
+        cursor = index
 
 
 def count_terminal_text(panel, needle: str) -> int:
@@ -269,6 +396,26 @@ def count_session_history_timeline_text(
     return len(matches), matches
 
 
+def wait_for_session_history_timeline_text(
+    base_url: str,
+    session_id: str,
+    kind: str,
+    text: str,
+    timeout_s: int = 20,
+) -> None:
+    started = time.time()
+    last_matches: list[dict[str, Any]] = []
+    while time.time() - started < timeout_s:
+        count, matches = count_session_history_timeline_text(base_url, session_id, kind, text)
+        last_matches = matches
+        if count > 0:
+            return
+        time.sleep(0.2)
+    raise AssertionError(
+        f"session history did not contain {kind} text {text!r}; matches={last_matches}"
+    )
+
+
 def assert_session_idle(base_url: str, session_id: str, timeout_s: int = 15) -> None:
     started = time.time()
     last_session: dict[str, Any] | None = None
@@ -286,6 +433,14 @@ def session_native_terminal_id(base_url: str, session_id: str) -> str:
     if not terminal_id:
         raise AssertionError(f"native session {session_id} did not expose a terminal id")
     return str(terminal_id)
+
+
+def session_provider_session_id(base_url: str, session_id: str) -> str:
+    session = request_json(base_url, f"/api/sessions/{session_id}")["session"]["session"]
+    value = session.get("providerSessionId")
+    if not value:
+        raise AssertionError(f"session {session_id} did not expose providerSessionId")
+    return str(value)
 
 
 def wait_for_native_prompt_state(
@@ -378,6 +533,109 @@ def print_browser_preflight_error(exc: Exception) -> int:
     return 1
 
 
+def exercise_codex_cli_modes(
+    page,
+    base_url: str,
+    workspace: pathlib.Path,
+    provider_session_id: str,
+    artifact_dir: pathlib.Path,
+) -> dict[str, str]:
+    cli_session_id: str | None = None
+    cli_resume_session_id: str | None = None
+    cli_proc: subprocess.Popen[str] | None = None
+    resume_proc: subprocess.Popen[str] | None = None
+    try:
+        before = live_session_ids(base_url)
+        cli_proc = spawn_rah_codex_cli(base_url, workspace)
+        cli_session_id = wait_for_new_live_session(base_url, before)
+        cli_provider_session_id = wait_for_session_provider_id(base_url, cli_session_id, None)
+        page.goto(base_url, wait_until="domcontentloaded")
+        page.reload(wait_until="domcontentloaded")
+        open_live_session(page, cli_session_id)
+        page.get_by_role("button", name="TUI", exact=True).click(timeout=30_000)
+        panel = page.locator(".terminal-panel").last
+        expect(panel).to_be_visible(timeout=10_000)
+        wait_for_terminal_text(panel, "RAH_NATIVE_CODEX_BROWSER_READY")
+
+        cli_prompt = "rah cli codex browser native"
+        assert cli_proc.stdin is not None
+        cli_proc.stdin.write(f"{cli_prompt}\n")
+        cli_proc.stdin.flush()
+        wait_for_terminal_text(panel, f"RAH_NATIVE_CODEX_BROWSER_INPUT:{cli_prompt}", timeout_s=20)
+        cli_answer = "RAH_NATIVE_CODEX_BROWSER_CLI_ANSWER"
+        wait_for_terminal_text(panel, f"RAH_NATIVE_CODEX_BROWSER_ANSWER:{cli_answer}", timeout_s=20)
+        wait_for_session_history_timeline_text(
+            base_url,
+            cli_session_id,
+            "assistant_message",
+            cli_answer,
+        )
+        page.get_by_role("button", name="Chat", exact=True).click(timeout=30_000)
+        expect(page.get_by_text(cli_answer, exact=True)).to_be_visible(timeout=20_000)
+        assert_page_text_order(page, cli_prompt, cli_answer)
+        assert_page_text_absent(page, "Unhandled provider event")
+        assert_page_text_absent(page, "Loading older history")
+        save_browser_screenshot(page, artifact_dir, "codex-rah-cli-chat-mirror")
+
+        page.get_by_role("button", name="TUI", exact=True).click(timeout=30_000)
+        panel = page.locator(".terminal-panel").last
+        expect(panel).to_be_visible(timeout=10_000)
+        cli_stop_prompt = "STOP_NATIVE_BROWSER rah cli codex stop"
+        interrupted_count = count_terminal_text(panel, "RAH_NATIVE_CODEX_BROWSER_INTERRUPTED")
+        cli_proc.stdin.write(f"{cli_stop_prompt}\n")
+        cli_proc.stdin.flush()
+        wait_for_terminal_text(panel, f"RAH_NATIVE_CODEX_BROWSER_INPUT:{cli_stop_prompt}", timeout_s=20)
+        cli_proc.stdin.write("\x1b")
+        cli_proc.stdin.flush()
+        wait_for_terminal_text_count(
+            panel,
+            "RAH_NATIVE_CODEX_BROWSER_INTERRUPTED",
+            interrupted_count + 1,
+        )
+        assert_session_idle(base_url, cli_session_id)
+        save_browser_screenshot(page, artifact_dir, "codex-rah-cli-terminal-stop")
+
+        close_session_quietly(base_url, cli_session_id)
+        terminate_cli_process(cli_proc)
+        cli_proc = None
+
+        before_resume = live_session_ids(base_url)
+        resume_proc = spawn_rah_codex_cli(base_url, workspace, cli_provider_session_id)
+        cli_resume_session_id = wait_for_new_live_session(base_url, before_resume)
+        wait_for_session_provider_id(base_url, cli_resume_session_id, cli_provider_session_id)
+        page.reload(wait_until="domcontentloaded")
+        open_live_session(page, cli_resume_session_id)
+        page.get_by_role("button", name="Chat", exact=True).click(timeout=30_000)
+        expect(page.get_by_text(cli_answer, exact=True)).to_be_visible(timeout=20_000)
+        answer_count, answer_matches = count_session_history_timeline_text(
+            base_url,
+            cli_resume_session_id,
+            "assistant_message",
+            cli_answer,
+        )
+        if answer_count != 1:
+            raise AssertionError(
+                "Codex rah cli resume duplicated CLI assistant answer; "
+                f"count={answer_count} matches={answer_matches}"
+            )
+        assert_page_text_absent(page, "Unhandled provider event")
+        assert_page_text_absent(page, "Loading older history")
+        save_browser_screenshot(page, artifact_dir, "codex-rah-cli-resume-chat-history")
+
+        close_session_quietly(base_url, cli_resume_session_id)
+        terminate_cli_process(resume_proc)
+        resume_proc = None
+        return {
+            "cliSessionId": cli_session_id,
+            "cliResumeSessionId": cli_resume_session_id,
+        }
+    finally:
+        terminate_cli_process(cli_proc)
+        terminate_cli_process(resume_proc)
+        close_session_quietly(base_url, cli_session_id)
+        close_session_quietly(base_url, cli_resume_session_id)
+
+
 def main() -> int:
     try:
         preflight_browser_runtime()
@@ -395,18 +653,22 @@ def main() -> int:
     chat_prompt = "RAH native browser chat composer prompt"
     dirty_draft = "DIRTY_NATIVE_BROWSER_DRAFT"
     blocked_chat_prompt = "BLOCKED_WHILE_TUI_PROMPT_DIRTY"
+    blocked_chat_prompt_two = "BLOCKED_WHILE_TUI_PROMPT_DIRTY_TWO"
     stop_prompt = "STOP_NATIVE_BROWSER prompt"
     foreground_resume_prompt = "RAH foreground resume prompt"
     mobile_prompt = "MOBILE_OK"
     mobile_composition_prompt = "中文_NATIVE_OK"
     expected_answer = "RAH_NATIVE_CODEX_BROWSER_MIRROR_1"
     expected_chat_answer = "RAH_NATIVE_CODEX_BROWSER_MIRROR_2"
-    expected_queued_answer = "RAH_NATIVE_CODEX_BROWSER_MIRROR_3"
+    expected_queued_answer = "RAH_NATIVE_CODEX_BROWSER_DIRTY_QUEUE_ONE"
+    expected_queued_answer_two = "RAH_NATIVE_CODEX_BROWSER_DIRTY_QUEUE_TWO"
     expected_foreground_answer = "RAH_NATIVE_CODEX_BROWSER_FOREGROUND_ANSWER"
     port = free_port()
     base_url = f"http://127.0.0.1:{port}"
+    artifact_dir = browser_artifact_dir("native-codex-browser")
     daemon: subprocess.Popen[str] | None = None
     session_id: str | None = None
+    cli_modes_result: dict[str, str] | None = None
 
     try:
         workspace.mkdir(parents=True)
@@ -446,7 +708,7 @@ def main() -> int:
             },
         )["session"]
         session_id = started["session"]["id"]
-        wait_for_session_provider_id(base_url, session_id, provider_session_id)
+        provider_session_id = wait_for_session_provider_id(base_url, session_id, None)
 
         with sync_playwright() as playwright:
             browser = launch_browser(playwright)
@@ -476,6 +738,11 @@ def main() -> int:
 
             page.get_by_role("button", name="Chat", exact=True).click()
             expect(page.get_by_text(expected_answer, exact=True)).to_be_visible(timeout=15_000)
+            assert_page_text_order(page, prompt, expected_answer)
+            assert_page_text_absent(page, "Unhandled provider event")
+            assert_page_text_absent(page, "Loading older history")
+            expect(page.get_by_role("button", name="Stop generating")).to_have_count(0, timeout=10_000)
+            save_browser_screenshot(page, artifact_dir, "codex-chat-mirror")
             answer_count, answer_matches = count_session_history_timeline_text(
                 base_url,
                 session_id,
@@ -491,8 +758,21 @@ def main() -> int:
             fill_and_submit_chat_composer(page, chat_prompt)
             page.get_by_role("button", name="TUI", exact=True).click()
             wait_for_terminal_text(panel, f"RAH_NATIVE_CODEX_BROWSER_INPUT:{chat_prompt}")
+            save_browser_screenshot(page, artifact_dir, "codex-web-tui-after-chat-input")
+            page.get_by_label("Close Web TUI client").click(timeout=10_000)
+            expect(page.get_by_test_id("terminal-client-inactive-overlay")).to_be_visible(
+                timeout=10_000
+            )
+            page.get_by_role("button", name="Activate TUI", exact=True).click(timeout=10_000)
+            panel = page.locator(".terminal-panel").last
+            expect(panel).to_be_visible(timeout=10_000)
+            wait_for_terminal_text(panel, f"RAH_NATIVE_CODEX_BROWSER_INPUT:{chat_prompt}")
+            save_browser_screenshot(page, artifact_dir, "codex-web-tui-after-reactivate")
             page.get_by_role("button", name="Chat", exact=True).click()
             expect(page.get_by_text(expected_chat_answer, exact=True)).to_be_visible(timeout=15_000)
+            assert_page_text_order(page, chat_prompt, expected_chat_answer)
+            assert_page_text_absent(page, "Unhandled provider event")
+            assert_page_text_absent(page, "Loading older history")
             assert_session_idle(base_url, session_id)
 
             page.get_by_role("button", name="TUI", exact=True).click()
@@ -505,6 +785,7 @@ def main() -> int:
                 timeout=10_000,
             )
             fill_and_submit_chat_composer(page, blocked_chat_prompt)
+            fill_and_submit_chat_composer(page, blocked_chat_prompt_two)
             page.wait_for_timeout(1000)
             page.get_by_role("button", name="TUI", exact=True).click()
             panel = page.locator(".terminal-panel").last
@@ -517,19 +798,34 @@ def main() -> int:
                 "RAH_NATIVE_CODEX_BROWSER_INTERRUPTED",
                 interrupted_count + 1,
             )
-            wait_for_terminal_text(
-                panel,
-                f"RAH_NATIVE_CODEX_BROWSER_INPUT:{blocked_chat_prompt}",
-            )
+            wait_for_terminal_text(panel, blocked_chat_prompt)
             wait_for_terminal_text(panel, expected_queued_answer)
+            wait_for_terminal_text(panel, blocked_chat_prompt_two)
+            wait_for_terminal_text(panel, expected_queued_answer_two)
             assert_session_idle(base_url, session_id)
+            page.get_by_role("button", name="Chat", exact=True).click()
+            expect(page.get_by_text(expected_queued_answer, exact=True)).to_be_visible(timeout=20_000)
+            expect(page.get_by_text(expected_queued_answer_two, exact=True)).to_be_visible(timeout=20_000)
+            assert_page_text_order(page, blocked_chat_prompt, blocked_chat_prompt_two)
+            assert_page_text_order(page, expected_queued_answer, expected_queued_answer_two)
+            save_browser_screenshot(page, artifact_dir, "codex-chat-dirty-queued-inputs")
 
             page.get_by_role("button", name="Chat", exact=True).click()
             fill_and_submit_chat_composer(page, stop_prompt)
             page.get_by_role("button", name="TUI", exact=True).click()
             wait_for_terminal_text(panel, f"RAH_NATIVE_CODEX_BROWSER_INPUT:{stop_prompt}")
             page.get_by_role("button", name="Chat", exact=True).click()
-            page.get_by_role("button", name="Stop generating").click(timeout=15_000)
+            with page.expect_response(
+                lambda response: response.url.endswith(f"/api/sessions/{session_id}/interrupt"),
+                timeout=15_000,
+            ) as interrupt_response_info:
+                page.get_by_role("button", name="Stop generating").click(timeout=15_000)
+            interrupt_response = interrupt_response_info.value
+            if interrupt_response.status >= 400:
+                raise AssertionError(
+                    f"Codex interrupt request failed with HTTP {interrupt_response.status}: "
+                    f"{interrupt_response.text()}"
+                )
             page.get_by_role("button", name="TUI", exact=True).click()
             wait_for_terminal_text(panel, "RAH_NATIVE_CODEX_BROWSER_INTERRUPTED")
             assert_session_idle(base_url, session_id)
@@ -543,6 +839,7 @@ def main() -> int:
             expect(panel).to_be_visible(timeout=10_000)
             wait_for_terminal_text(panel, f"RAH_NATIVE_CODEX_BROWSER_INPUT:{stop_prompt}")
             wait_for_terminal_text(panel, "RAH_NATIVE_CODEX_BROWSER_INTERRUPTED")
+            save_browser_screenshot(page, artifact_dir, "codex-web-tui-after-reload")
 
             page.context.set_offline(True)
             request_json(
@@ -697,10 +994,24 @@ def main() -> int:
                         return active instanceof HTMLElement ? active.className : '';
                     }"""
                 )
-                if "terminal-ios-input" not in str(focused_after_canvas_click):
+                if "terminal-ios-input" in str(focused_after_canvas_click):
                     raise AssertionError(
-                        "mobile terminal canvas click should focus the RAH input bridge, "
+                        "mobile terminal canvas click should not focus the RAH input bridge; "
+                        "only the bridge composer should open the keyboard, "
                         f"focused={focused_after_canvas_click!r}"
+                    )
+                mobile_bridge.locator("input").click()
+                mobile_page.wait_for_timeout(250)
+                focused_after_bridge_click = mobile_page.evaluate(
+                    """() => {
+                        const active = document.activeElement;
+                        return active instanceof HTMLElement ? active.className : '';
+                    }"""
+                )
+                if "terminal-ios-input" not in str(focused_after_bridge_click):
+                    raise AssertionError(
+                        "mobile RAH input bridge click should focus the bridge input, "
+                        f"focused={focused_after_bridge_click!r}"
                     )
                 for shortcut in [
                     "Ctrl-C",
@@ -747,11 +1058,68 @@ def main() -> int:
                     mobile_panel,
                     f"RAH_NATIVE_CODEX_BROWSER_INPUT:{mobile_composition_prompt}",
                 )
+                save_browser_screenshot(mobile_page, artifact_dir, "codex-mobile-tui-bridge")
                 mobile_context.close()
                 mobile_assertions = [
                     "mobile TUI input bridge sends shortcut keys, text input, and composition input",
-                    "mobile TUI canvas click focuses the RAH input bridge instead of xterm hidden textarea",
+                    "mobile TUI canvas click preserves terminal scrolling; the RAH input bridge owns keyboard focus",
                 ]
+
+            resume_provider_session_id = session_provider_session_id(base_url, session_id)
+            close_session_quietly(base_url, session_id)
+            session_id = None
+            resumed = request_json(
+                base_url,
+                "/api/sessions/resume",
+                {
+                    "provider": "codex",
+                    "providerSessionId": resume_provider_session_id,
+                    "cwd": str(workspace),
+                    "liveBackend": "native_tui",
+                    "model": "gpt-native-browser",
+                    "modeId": "never/danger-full-access",
+                    "attach": {
+                        "client": {
+                            "id": "web-user",
+                            "kind": "web",
+                            "connectionId": "native-codex-browser-resume-smoke",
+                        },
+                        "mode": "interactive",
+                        "claimControl": True,
+                    },
+                },
+            )["session"]
+            resume_session_id = resumed["session"]["id"]
+            session_id = resume_session_id
+            page.reload(wait_until="domcontentloaded")
+            page.locator('button[aria-label="Sessions"]:visible').first.click(timeout=30_000)
+            page.get_by_role("button", name="Live", exact=True).click(timeout=30_000)
+            page.locator(f'button[data-session-id="{resume_session_id}"]:visible').first.click(timeout=30_000)
+            page.get_by_role("button", name="Chat", exact=True).click(timeout=30_000)
+            expect(page.get_by_text(expected_answer, exact=True)).to_be_visible(timeout=20_000)
+            resume_answer_count, resume_answer_matches = count_session_history_timeline_text(
+                base_url,
+                resume_session_id,
+                "assistant_message",
+                expected_answer,
+            )
+            if resume_answer_count != 1:
+                raise AssertionError(
+                    "Codex resumed history duplicated assistant answer; "
+                    f"count={resume_answer_count} matches={resume_answer_matches}"
+                )
+            assert_page_text_absent(page, "Unhandled provider event")
+            save_browser_screenshot(page, artifact_dir, "codex-web-resume-chat-history")
+
+            close_session_quietly(base_url, session_id)
+            session_id = None
+            cli_modes_result = exercise_codex_cli_modes(
+                page,
+                base_url,
+                workspace,
+                provider_session_id,
+                artifact_dir,
+            )
 
             browser.close()
 
@@ -765,20 +1133,30 @@ def main() -> int:
                     "providerSessionId": provider_session_id,
                     "browser": selected_browser_name(),
                     "headless": browser_headless(),
+                    "screenshots": SCREENSHOTS,
+                    "cliResult": cli_modes_result,
                     "asserted": [
                         "Web can select native Codex live session",
                         "Chat/TUI toggle is rendered",
                         "xterm receives native TUI output",
                         "TUI input reaches daemon-owned provider process",
                         "Chat mirror renders provider history output",
+                        "Chat renders provider user messages before assistant replies",
+                        "Chat does not show loading-history or unhandled-provider-event noise for new live sessions",
                         "Chat mirror dedupes Codex agent_message plus assistant response_item",
                         "Chat composer input reaches daemon-owned native TUI",
+                        "Web TUI close and activate restores native TUI replay",
                         "Chat composer queues while the native TUI prompt has an unsubmitted draft",
                         "Chat view warns when the native TUI prompt has an unsubmitted draft",
-                        "Stop button sends Ctrl-C to daemon-owned native TUI",
+                        "Stop button sends provider-native interrupt to daemon-owned native TUI",
                         "Stop returns daemon-owned native TUI session to idle",
+                        "Multiple queued Chat prompts drain in order after prompt clears",
                         "TUI replay survives page reload",
                         "Foreground recovery catches up native TUI and Chat mirror without reselection",
+                        "Web resume opens Codex history without duplicating existing assistant messages",
+                        "rah codex terminal launch can be observed in browser Chat/TUI",
+                        "rah codex terminal stop is mirrored back to the browser",
+                        "rah codex resume can be observed in browser Chat without duplicated history",
                         "Settings Version shows PTY terminal replay health for native TUI sessions",
                         "Settings Version refresh shows PTY terminal replay deltas",
                         "Canvas panes render native TUI and preserve replay across layout changes",
@@ -802,6 +1180,7 @@ def main() -> int:
                     "providerSessionId": provider_session_id,
                     "browser": selected_browser_name(),
                     "headless": browser_headless(),
+                    "screenshots": SCREENSHOTS,
                 },
                 ensure_ascii=False,
                 indent=2,

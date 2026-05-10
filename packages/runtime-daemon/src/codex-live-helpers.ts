@@ -12,6 +12,7 @@ import { applyProviderActivity, type ProviderActivity } from "./provider-activit
 import {
   mapCodexQuestionRequestToActivities,
   translateCodexAppServerNotification,
+  translateCodexAppServerThreadSnapshot,
 } from "./codex-app-server-activity";
 import { type CodexAppServerRpcClient } from "./codex-live-rpc";
 import {
@@ -26,6 +27,10 @@ type BufferedServerRequest = {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
 };
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function makeQuestionPermissionRequestId(itemId: string): string {
   return `permission-${itemId}`;
@@ -206,6 +211,7 @@ function applyCodexLiveTranslatedItems(
       ) {
         if (event.turnId) {
           liveSession.finishedTurnIds.add(event.turnId);
+          liveSession.interruptingTurnIds.delete(event.turnId);
         }
         liveSession.currentTurnId = null;
         liveSession.drainQueuedInput?.();
@@ -214,11 +220,133 @@ function applyCodexLiveTranslatedItems(
   }
 }
 
+function threadIdFromThreadStartedNotification(notification: JsonRpcNotification): string | null {
+  if (notification.method !== "thread/started") {
+    return null;
+  }
+  const params =
+    notification.params && typeof notification.params === "object" && !Array.isArray(notification.params)
+      ? (notification.params as Record<string, unknown>)
+      : null;
+  const thread =
+    params?.thread && typeof params.thread === "object" && !Array.isArray(params.thread)
+      ? (params.thread as Record<string, unknown>)
+      : null;
+  const threadId =
+    typeof thread?.id === "string"
+      ? thread.id
+      : typeof params?.threadId === "string"
+        ? params.threadId
+        : typeof params?.thread_id === "string"
+          ? params.thread_id
+          : null;
+  return threadId && threadId.trim() ? threadId : null;
+}
+
+function threadFromResponse(response: unknown): unknown {
+  return response && typeof response === "object" && !Array.isArray(response)
+    ? (response as Record<string, unknown>).thread
+    : undefined;
+}
+
+function subscribeExternalCodexThreadForMirror(
+  services: RuntimeServices,
+  liveSession: LiveCodexSession,
+) {
+  if (
+    liveSession.externalThreadMirrorSubscribed ||
+    liveSession.externalThreadMirrorSubscribeInFlight ||
+    !liveSession.threadId
+  ) {
+    return;
+  }
+  liveSession.externalThreadMirrorSubscribeInFlight = true;
+  void (async () => {
+    let attempt = 0;
+    try {
+      while (!liveSession.externalThreadMirrorSubscribed) {
+        if (!services.sessionStore.getSession(liveSession.sessionId)) {
+          return;
+        }
+        try {
+          const response = await liveSession.client.request(
+            "thread/resume",
+            { threadId: liveSession.threadId, excludeTurns: true },
+            30_000,
+          );
+          liveSession.externalThreadMirrorSubscribed = true;
+          applyCodexLiveTranslatedItems(
+            services,
+            liveSession,
+            translateCodexAppServerThreadSnapshot(
+              threadFromResponse(response),
+              liveSession.translationState,
+              response,
+            ),
+          );
+          liveSession.drainQueuedInput?.();
+          return;
+        } catch {
+          attempt += 1;
+          await delay(Math.min(1_000, 100 + attempt * 50));
+        }
+      }
+    } finally {
+      liveSession.externalThreadMirrorSubscribeInFlight = false;
+    }
+  })();
+}
+
+function bindCodexThreadFromNotification(
+  services: RuntimeServices,
+  liveSession: LiveCodexSession,
+  notification: JsonRpcNotification,
+) {
+  const threadId = threadIdFromThreadStartedNotification(notification);
+  if (!threadId || liveSession.threadId === threadId) {
+    return;
+  }
+  const wasUnbound = !liveSession.threadId;
+  liveSession.threadId = threadId;
+  const current = services.sessionStore.getSession(liveSession.sessionId);
+  if (!current) {
+    return;
+  }
+  const next = services.sessionStore.patchManagedSession(liveSession.sessionId, {
+    providerSessionId: threadId,
+    nativeTui: {
+      terminalId: liveSession.sessionId,
+      viewAvailable: true,
+      promptState: "prompt_clean",
+      queuedInputCount: 0,
+    },
+    capabilities: {
+      nativeTui: true,
+      rawPtyInput: true,
+    },
+    runtimeDiagnostics: {
+      ...(current.session.runtimeDiagnostics ?? {}),
+      lastEventCursor: `thread:${threadId}`,
+    },
+  });
+  services.eventBus.publish({
+    sessionId: liveSession.sessionId,
+    type: "session.started",
+    source: SESSION_SOURCE,
+    payload: { session: next.session },
+  });
+  if (wasUnbound) {
+    subscribeExternalCodexThreadForMirror(services, liveSession);
+  }
+  liveSession.drainQueuedInput?.();
+}
+
 function handleCodexLiveNotification(
   services: RuntimeServices,
   liveSession: LiveCodexSession,
   notification: JsonRpcNotification,
 ) {
+  bindCodexThreadFromNotification(services, liveSession, notification);
   applyCodexLiveTranslatedItems(
     services,
     liveSession,

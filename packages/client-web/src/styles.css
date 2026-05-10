@@ -525,6 +525,43 @@ html.dark .provider-choice-rail {
   background: var(--terminal-bg, var(--app-code-bg));
 }
 
+.terminal-client-close-button {
+  position: absolute;
+  top: 0.48rem;
+  right: 0.48rem;
+  z-index: 12;
+  display: inline-flex;
+  width: 1.35rem;
+  height: 1.35rem;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in oklab, var(--app-danger) 48%, transparent);
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--app-danger) 13%, var(--app-bg));
+  color: var(--app-danger);
+  font-size: 1rem;
+  font-weight: 900;
+  line-height: 1;
+  opacity: 0.72;
+  transition:
+    background-color 140ms ease,
+    opacity 140ms ease,
+    transform 120ms ease;
+}
+
+.terminal-client-close-button:hover {
+  background: color-mix(in oklab, var(--app-danger) 20%, var(--app-bg));
+  opacity: 1;
+}
+
+.terminal-client-close-button:active {
+  transform: translateY(1px) scale(0.96);
+}
+
+.terminal-client-close-button:disabled {
+  opacity: 0.42;
+}
+
 .terminal-surface-overlay {
   position: absolute;
   inset: 0;

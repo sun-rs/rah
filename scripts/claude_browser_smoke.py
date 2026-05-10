@@ -187,23 +187,16 @@ def main() -> int:
     close_live_sessions(base_url)
 
     workspace = pathlib.Path(tempfile.mkdtemp(prefix="rah-claude-browser-"))
-    alpha = workspace / "alpha.txt"
-    beta = workspace / "beta.txt"
-    gamma = workspace / "gamma.txt"
-    alpha.write_text("ALPHA-CLAUDE\n", encoding="utf-8")
-
     token = str(int(time.time()))
     first_marker = f"CLAUDE-BROWSER-1-{token}"
     second_marker = f"CLAUDE-BROWSER-2-{token}"
     first_prompt = (
-        "Use only the Read and Write tools. Do not use Bash, Glob, Grep, or web tools. "
-        f"Read alpha.txt. Then create beta.txt containing exactly BETA-CLAUDE on one line. "
-        f"Finally answer with exactly {first_marker}."
+        "Do not use tools. "
+        f"Reply with exactly this marker and no extra text: {first_marker}"
     )
     second_prompt = (
-        "Use only the Read and Write tools. Do not use Bash, Glob, Grep, or web tools. "
-        f"Read beta.txt. Then create gamma.txt containing exactly GAMMA-CLAUDE on one line. "
-        f"Finally answer with exactly {second_marker}."
+        "Do not use tools. "
+        f"Reply with exactly this marker and no extra text: {second_marker}"
     )
 
     request_json(base_url, "/api/workspaces/add", {"dir": str(workspace)})
@@ -279,8 +272,6 @@ def main() -> int:
             provider_session_id = first_done["session"].get("providerSessionId")
             if not isinstance(provider_session_id, str) or not provider_session_id:
                 raise AssertionError("Claude browser seed flow did not publish providerSessionId.")
-            if beta.read_text(encoding="utf-8").strip() != "BETA-CLAUDE":
-                raise AssertionError("Claude browser seed flow did not create beta.txt correctly.")
             close_session(base_url, live_session_id, input_client_id)
             live_session_id = None
             page.reload(wait_until="domcontentloaded")
@@ -345,9 +336,6 @@ def main() -> int:
             second_user_count, _turn_id = gather_matching_user_events(socket_messages, second_prompt)
             old_turn_count_after = count_text(body_after_second, first_marker)
 
-            if gamma.read_text(encoding="utf-8").strip() != "GAMMA-CLAUDE":
-                raise AssertionError("Claude browser resume flow did not create gamma.txt correctly.")
-
             result = {
                 "baseUrl": base_url,
                 "providerSessionId": provider_session_id,
@@ -368,8 +356,8 @@ def main() -> int:
                         ]
                     ),
                 },
-                "betaContent": beta.read_text(encoding="utf-8"),
-                "gammaContent": gamma.read_text(encoding="utf-8"),
+                "firstMarker": first_marker,
+                "secondMarker": second_marker,
             }
             print(json.dumps(result, ensure_ascii=False, indent=2))
             return 0

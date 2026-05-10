@@ -26,7 +26,7 @@ function isKnownStalePersistedMirrorActivity(
     return false;
   }
   const activityTimestampMs = timestampMs(meta.ts);
-  return activityTimestampMs !== null && activityTimestampMs <= state.lastInjectedInputAtMs;
+  return activityTimestampMs !== null && activityTimestampMs < state.lastInjectedInputAtMs;
 }
 
 function isStatefulNativeTuiActivity(activity: ProviderActivity): boolean {

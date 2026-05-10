@@ -40,7 +40,11 @@ function installWebApiMocks(handler: (request: CapturedRequest) => unknown): Cap
       body: init?.body ? JSON.parse(String(init.body)) : null,
     };
     requests.push(request);
-    return new Response(JSON.stringify(handler(request)), {
+    const result = handler(request);
+    if (result instanceof Response) {
+      return result;
+    }
+    return new Response(JSON.stringify(result), {
       status: 200,
       headers: { "content-type": "application/json" },
     });
@@ -772,5 +776,76 @@ describe("session startup model and mode requests", () => {
       cwd: "/tmp/missing",
     });
     assert.equal((requests[0]?.body as { liveBackend?: string }).liveBackend, undefined);
+  });
+
+  test("claiming history attaches to already-running provider session instead of surfacing resume failure", async () => {
+    const historySummary = summary({
+      id: "history",
+      provider: "codex",
+      providerSessionId: "thread-running",
+      cwd: "/tmp/rah",
+    });
+    const runningSummary = summary({
+      id: "live",
+      provider: "codex",
+      providerSessionId: "thread-running",
+      cwd: "/tmp/rah",
+    });
+    const projection = createEmptySessionProjection(historySummary);
+    const attached: string[] = [];
+    const requests = installWebApiMocks((request) => {
+      if (request.url.includes("/api/fs/list")) {
+        return { path: "/tmp/rah", entries: [] };
+      }
+      if (request.url.endsWith("/api/sessions/resume")) {
+        return new Response(
+          JSON.stringify({
+            error:
+              "Provider session codex:thread-running is already running; attach instead of resume.",
+          }),
+          { status: 500, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (request.url.endsWith("/api/sessions")) {
+        return {
+          sessions: [runningSummary],
+          storedSessions: [],
+          recentSessions: [],
+          workspaceDirs: ["/tmp/rah"],
+          hiddenWorkspaceDirs: [],
+        };
+      }
+      throw new Error(`Unexpected request ${request.url}`);
+    });
+
+    await claimHistorySessionCommand(
+      startupDeps(
+        {
+          selectedSessionId: "history",
+          projections: new Map([["history", projection]]),
+          recentSessions: [
+            {
+              provider: "codex",
+              providerSessionId: "thread-running",
+              cwd: "/tmp/rah",
+              rootDir: "/tmp/rah",
+              createdAt: "2026-04-29T00:00:00.000Z",
+            },
+          ],
+        },
+        {
+          attachSession: async (next: SessionSummary) => {
+            attached.push(next.session.id);
+          },
+        },
+      ),
+      "history",
+    );
+
+    assert.deepEqual(
+      requests.map((request) => request.url.replace(/^http:\/\/127\.0\.0\.1:43111/, "")),
+      ["/api/fs/list?path=%2Ftmp%2Frah", "/api/sessions/resume", "/api/sessions"],
+    );
+    assert.deepEqual(attached, ["live"]);
   });
 });

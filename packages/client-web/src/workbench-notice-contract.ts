@@ -43,11 +43,7 @@ export function deriveWorkbenchNoticeState(args: {
       ? "Native TUI has an unsent local draft. Chat input will queue until the TUI prompt is clear."
       : null;
   const interactionMessage = selectedSummary
-    ? selectedSummary.session.launchSource === "terminal" &&
-      selectedSummary.controlLease.holderKind === "terminal" &&
-      selectedSummary.session.runtimeState === "running"
-      ? "Terminal started this turn. Web can observe it and request interrupt."
-      : sessionInteractionNotice(selectedSummary)
+    ? sessionInteractionNotice(selectedSummary)
     : null;
   const interactionNotice = nativeTuiDiagnosticMessage
     ? {
@@ -77,19 +73,13 @@ export function deriveWorkbenchNoticeState(args: {
     : null;
 
   const historyNotice =
-    selectedSummary?.session.providerSessionId && selectedProjection
-      ? selectedProjection.history.phase === "loading" &&
-        !selectedProjection.history.authoritativeApplied
-        ? {
-            tone: "info" as const,
-            message: "Syncing session history…",
-          }
-        : selectedProjection.history.phase === "error" && selectedProjection.history.lastError
-          ? {
-              tone: "warning" as const,
-              message: `History sync failed: ${selectedProjection.history.lastError}`,
-            }
-          : null
+    selectedSummary?.session.providerSessionId &&
+    selectedProjection?.history.phase === "error" &&
+    selectedProjection.history.lastError
+      ? {
+          tone: "warning" as const,
+          message: `History sync failed: ${selectedProjection.history.lastError}`,
+        }
       : null;
 
   return {

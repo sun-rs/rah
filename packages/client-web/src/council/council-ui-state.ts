@@ -2,9 +2,10 @@ import type {
   CouncilAgentConfig,
   ProviderModelCatalog,
   SessionConfigValue,
+  SessionModelDescriptor,
+  SessionReasoningOption,
 } from "@rah/runtime-protocol";
 import type { ProviderChoice } from "../components/ProviderSelector";
-import { resolveSelectedModelDraft } from "../components/SessionModelControls";
 import { buildModelOptionValuesFromReasoning } from "../provider-capabilities";
 import { resolveSessionModeControlState } from "../session-mode-ui";
 
@@ -41,17 +42,61 @@ export function createDefaultCouncilAgentDrafts(): CouncilAgentDraft[] {
   ];
 }
 
+export function resolveCouncilAgentModelSelection(args: {
+  draft: CouncilAgentDraft;
+  catalog?: ProviderModelCatalog | null;
+}): {
+  model: SessionModelDescriptor | null;
+  modelId: string | null;
+  reasoning: SessionReasoningOption | null;
+  reasoningId: string | null;
+  reasoningOptions: SessionReasoningOption[];
+} {
+  const catalog = args.catalog;
+  const models = catalog?.models ?? [];
+  const model =
+    models.find((entry) => entry.id === args.draft.modelId) ??
+    models[0] ??
+    null;
+  const reasoningOptions = model?.reasoningOptions ?? [];
+  const reasoning =
+    reasoningOptions.find((entry) => entry.id === args.draft.reasoningId) ??
+    reasoningOptions.at(-1) ??
+    null;
+  return {
+    model,
+    modelId: model?.id ?? null,
+    reasoning,
+    reasoningId: reasoning?.id ?? null,
+    reasoningOptions,
+  };
+}
+
+export function normalizeCouncilAgentDraftForCatalog(args: {
+  draft: CouncilAgentDraft;
+  catalog?: ProviderModelCatalog | null;
+}): CouncilAgentDraft {
+  const selection = resolveCouncilAgentModelSelection(args);
+  if (
+    args.draft.modelId === selection.modelId &&
+    args.draft.reasoningId === selection.reasoningId
+  ) {
+    return args.draft;
+  }
+  return {
+    ...args.draft,
+    modelId: selection.modelId,
+    reasoningId: selection.reasoningId,
+  };
+}
+
 export function councilAgentDraftToConfig(args: {
   draft: CouncilAgentDraft;
   catalog?: ProviderModelCatalog | null;
 }): CouncilAgentConfig {
-  const selectedModel = resolveSelectedModelDraft({
-    catalog: args.catalog,
-    selectedModelId: args.draft.modelId,
-    selectedReasoningId: args.draft.reasoningId,
-  });
-  const modelId = selectedModel.model?.id ?? null;
-  const reasoningId = selectedModel.reasoning?.id ?? null;
+  const selectedModel = resolveCouncilAgentModelSelection(args);
+  const modelId = selectedModel.modelId;
+  const reasoningId = selectedModel.reasoningId;
   const optionValues = buildModelOptionValuesFromReasoning({
     catalog: args.catalog,
     modelId,

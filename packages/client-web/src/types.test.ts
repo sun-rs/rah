@@ -484,7 +484,7 @@ describe("client projection", () => {
     assert.equal(current.feed[0]?.kind, "notification");
   });
 
-  test("inserts late persisted timeline items by timestamp instead of append order", () => {
+  test("keeps live persisted timeline items in daemon event order", () => {
     let current = projection();
     current = applyEventToProjection(
       current,
@@ -515,7 +515,7 @@ describe("client projection", () => {
           ? entry.item.text
           : null,
       ),
-      ["older answer", "newer question"],
+      ["newer question", "older answer"],
     );
   });
 
@@ -1098,6 +1098,51 @@ describe("client projection", () => {
     );
 
     assert.equal(current.summary.session.runtimeState, "waiting_permission");
+  });
+
+  test("applies daemon lifecycle events even when optimistic UI updatedAt is newer", () => {
+    let current: SessionProjection = {
+      ...projection(),
+      summary: {
+        ...baseSummary(),
+        session: {
+          ...baseSummary().session,
+          runtimeState: "idle",
+          updatedAt: "2026-04-15T00:00:10.000Z",
+          nativeTui: {
+            terminalId: "session-1",
+            viewAvailable: true,
+            promptState: "prompt_clean",
+          },
+        },
+      },
+    };
+
+    current = applyEventToProjection(
+      current,
+      {
+        ...event({
+          seq: 11,
+          type: "session.state.changed",
+          payload: { state: "running" },
+        }),
+        ts: "2026-04-15T00:00:09.000Z",
+      },
+    );
+    current = applyEventToProjection(
+      current,
+      {
+        ...event({
+          seq: 12,
+          type: "session.native_tui.prompt_state.changed",
+          payload: { promptState: "agent_busy" },
+        }),
+        ts: "2026-04-15T00:00:09.500Z",
+      },
+    );
+
+    assert.equal(current.summary.session.runtimeState, "running");
+    assert.equal(current.summary.session.nativeTui?.promptState, "agent_busy");
   });
 
   test("does not let stale control events override a fresher claimed summary", () => {

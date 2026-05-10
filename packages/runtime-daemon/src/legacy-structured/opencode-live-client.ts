@@ -19,30 +19,32 @@ import {
   abortOpenCodeSession,
   createOpenCodeSession,
   getOpenCodeSession,
+  promptOpenCodeSessionAsync,
   respondOpenCodePermission,
   setOpenCodeSessionPermission,
   startOpenCodeServer,
   stopOpenCodeServer,
+  subscribeOpenCodeEvents,
   type OpenCodePermissionRule,
   type OpenCodeServerHandle,
   type OpenCodeSessionInfo,
 } from "../opencode-api";
-import { OpenCodeAcpClient, waitForAcpDrain, type OpenCodeAcpPromptUsage } from "../opencode-acp-client";
-import { translateOpenCodeAcpSessionUpdate } from "../opencode-acp-activity";
 import {
   createOpenCodeActivityState,
-  completeOpenCodeTurn,
   startOpenCodeTurn,
+  translateOpenCodeMessage,
+  translateOpenCodeEvent,
   type OpenCodeActivityState,
 } from "../opencode-activity";
+import type { OpenCodeMessageWithParts } from "../opencode-api";
 import {
-  buildOpenCodeProviderModelId,
-  resolveOpenCodeRuntimeCapabilityState,
-} from "../opencode-model-catalog";
+  findOpenCodeStoredSessionRecord,
+  loadOpenCodeStoredMessages,
+} from "../opencode-stored-sessions";
+import { resolveOpenCodeRuntimeCapabilityState } from "../opencode-model-catalog";
 import {
   resolveModelContextWindow,
   type ModelContextWindowResolution,
-  withModelContextWindow,
 } from "../model-context-window";
 import { buildOpenCodeModeState, isOpenCodeModeId } from "../session-mode-utils";
 import { optionValueAsString, resolveModelOptionValues } from "../session-model-options";
@@ -52,9 +54,10 @@ export interface LiveOpenCodeSession {
   providerSessionId: string;
   cwd: string;
   server: OpenCodeServerHandle;
-  acp: OpenCodeAcpClient;
   activityState: OpenCodeActivityState;
-  lastAcpActivityAt: number;
+  stopEvents: () => void;
+  stopHistoryMirror: () => void;
+  mirroredMessageRevisions: Map<string, string>;
   model?: string;
   contextWindow?: ModelContextWindowResolution;
   reasoningId?: string | null;
@@ -70,6 +73,7 @@ const SESSION_SOURCE = {
 
 const OPENCODE_FULL_AUTO_MODE_ID = "opencode/full-auto";
 const RAH_SESSION_MODE_CONFIG_KEY = "rah_session_mode";
+const OPENCODE_HISTORY_MIRROR_INTERVAL_MS = 750;
 
 export function runtimeDiagnosticsForOpenCodeServer(
   server: OpenCodeServerHandle,
@@ -162,24 +166,6 @@ function resolveOpenCodeReasoningId(args: {
   return model?.defaultReasoningId ?? null;
 }
 
-async function applyRequestedOpenCodeModel(args: {
-  acp: OpenCodeAcpClient;
-  providerSessionId: string;
-  modelId: string | null | undefined;
-  reasoningId: string | null | undefined;
-}): Promise<void> {
-  if (!args.modelId) {
-    return;
-  }
-  await args.acp.setSessionModel(
-    args.providerSessionId,
-    buildOpenCodeProviderModelId({
-      modelId: args.modelId,
-      reasoningId: args.reasoningId,
-    }),
-  );
-}
-
 function attachRequestedClient(
   services: RuntimeServices,
   sessionId: string,
@@ -236,6 +222,70 @@ function applyActivity(
     },
     activity,
   );
+}
+
+function isOpenCodeMessageReadyForHistoryMirror(message: OpenCodeMessageWithParts): boolean {
+  if (message.info.role === "user") {
+    return true;
+  }
+  return (
+    message.parts.length > 0 ||
+    message.info.finish !== undefined ||
+    message.info.time?.completed !== undefined
+  );
+}
+
+function openCodeMessageRevision(message: OpenCodeMessageWithParts): string {
+  return JSON.stringify({
+    info: message.info,
+    parts: message.parts,
+  });
+}
+
+function drainOpenCodeHistoryMirror(
+  services: RuntimeServices,
+  liveSession: LiveOpenCodeSession,
+): void {
+  const record = findOpenCodeStoredSessionRecord(liveSession.providerSessionId);
+  if (!record) {
+    return;
+  }
+  const messages = loadOpenCodeStoredMessages(record, { limit: 1000 });
+  for (const message of messages) {
+    if (!isOpenCodeMessageReadyForHistoryMirror(message)) {
+      continue;
+    }
+    const revision = openCodeMessageRevision(message);
+    if (liveSession.mirroredMessageRevisions.get(message.info.id) === revision) {
+      continue;
+    }
+    liveSession.mirroredMessageRevisions.set(message.info.id, revision);
+    for (const activity of translateOpenCodeMessage(liveSession.activityState, message)) {
+      applyActivity(services, liveSession.sessionId, activity, {
+        source: "opencode-history-mirror",
+        messageId: message.info.id,
+      });
+    }
+  }
+}
+
+function startOpenCodeHistoryMirror(params: {
+  services: RuntimeServices;
+  liveSession: LiveOpenCodeSession;
+}): () => void {
+  const { services, liveSession } = params;
+  const tick = () => {
+    try {
+      drainOpenCodeHistoryMirror(services, liveSession);
+      drainQueuedOpenCodeInput(services, liveSession);
+    } catch (error) {
+      patchOpenCodeRuntimeError(services, liveSession, error);
+    }
+  };
+  tick();
+  const timer = setInterval(tick, OPENCODE_HISTORY_MIRROR_INTERVAL_MS);
+  timer.unref?.();
+  return () => clearInterval(timer);
 }
 
 function patchOpenCodeRuntimeError(
@@ -300,33 +350,19 @@ export async function startOpenCodeLiveSession(params: {
   });
   const server = await startOpenCodeServer({ cwd: request.cwd });
   let providerSession: OpenCodeSessionInfo;
-  let acp: OpenCodeAcpClient | undefined;
   try {
     providerSession = await createOpenCodeSession(
       server,
       request.title !== undefined ? { title: request.title } : {},
     );
-    acp = await startAcpForSession({
-      cwd: request.cwd,
-      providerSessionId: providerSession.id,
-    });
-    if (request.model) {
-      await applyRequestedOpenCodeModel({
-        acp,
-        providerSessionId: providerSession.id,
-        modelId: request.model,
-        reasoningId: currentReasoningId,
-      });
-    }
   } catch (error) {
-    await acp?.close().catch(() => undefined);
     await stopOpenCodeServer(server).catch(() => undefined);
     throw error;
   }
   const state = services.sessionStore.createManagedSession({
     provider: "opencode",
     providerSessionId: providerSession.id,
-    launchSource: "web",
+    launchSource: request.attach?.client.kind === "terminal" ? "terminal" : "web",
     liveBackend: "native_local_server",
     cwd: request.cwd,
     rootDir: request.cwd,
@@ -360,26 +396,36 @@ export async function startOpenCodeLiveSession(params: {
       },
     },
   });
+  services.sessionStore.patchManagedSession(state.session.id, {
+    nativeTui: {
+      terminalId: state.session.id,
+      viewAvailable: true,
+      promptState: "prompt_clean",
+      queuedInputCount: 0,
+    },
+    capabilities: {
+      nativeTui: true,
+      rawPtyInput: true,
+    },
+  });
   const liveSession: LiveOpenCodeSession = {
     sessionId: state.session.id,
     providerSessionId: providerSession.id,
     cwd: request.cwd,
     server,
-    acp,
-    activityState: createOpenCodeActivityState(providerSession.id, {
-      userMessagesStartTurns: false,
-      emitUserMessages: false,
-    }),
-    lastAcpActivityAt: Date.now(),
+    activityState: createOpenCodeActivityState(providerSession.id),
+    stopEvents: () => undefined,
+    stopHistoryMirror: () => undefined,
+    mirroredMessageRevisions: new Map(),
     modeId: initialModeId,
     queuedInputs: [],
     ...(currentModelId ? { model: currentModelId } : {}),
     ...(contextWindow ? { contextWindow } : {}),
     ...(currentReasoningId !== undefined ? { reasoningId: currentReasoningId } : {}),
   };
-  await acp.setSessionMode(providerSession.id, openCodeNativeModeId(initialModeId));
   await applyOpenCodePermissionMode(liveSession, initialModeId);
-  attachAcpActivitySink({ services, liveSession });
+  liveSession.stopEvents = attachOpenCodeEventSink({ services, liveSession });
+  liveSession.stopHistoryMirror = startOpenCodeHistoryMirror({ services, liveSession });
   services.sessionStore.setRuntimeState(state.session.id, "idle");
   const session = services.sessionStore.getSession(state.session.id);
   if (!session) {
@@ -454,30 +500,16 @@ export async function resumeOpenCodeLiveSession(params: {
   });
   const server = await startOpenCodeServer({ cwd: params.cwd });
   let providerSession: OpenCodeSessionInfo;
-  let acp: OpenCodeAcpClient | undefined;
   try {
     providerSession = await getOpenCodeSession(server, params.providerSessionId);
-    acp = await startAcpForSession({
-      cwd: params.cwd,
-      providerSessionId: params.providerSessionId,
-    });
-    if (params.model) {
-      await applyRequestedOpenCodeModel({
-        acp,
-        providerSessionId: params.providerSessionId,
-        modelId: params.model,
-        reasoningId: currentReasoningId,
-      });
-    }
   } catch (error) {
-    await acp?.close().catch(() => undefined);
     await stopOpenCodeServer(server).catch(() => undefined);
     throw error;
   }
   const state = services.sessionStore.createManagedSession({
     provider: "opencode",
     providerSessionId: params.providerSessionId,
-    launchSource: "web",
+    launchSource: params.attach?.client.kind === "terminal" ? "terminal" : "web",
     liveBackend: "native_local_server",
     cwd: params.cwd,
     rootDir: params.cwd,
@@ -510,26 +542,36 @@ export async function resumeOpenCodeLiveSession(params: {
       },
     },
   });
+  services.sessionStore.patchManagedSession(state.session.id, {
+    nativeTui: {
+      terminalId: state.session.id,
+      viewAvailable: true,
+      promptState: "prompt_clean",
+      queuedInputCount: 0,
+    },
+    capabilities: {
+      nativeTui: true,
+      rawPtyInput: true,
+    },
+  });
   const liveSession: LiveOpenCodeSession = {
     sessionId: state.session.id,
     providerSessionId: params.providerSessionId,
     cwd: params.cwd,
     server,
-    acp,
-    activityState: createOpenCodeActivityState(params.providerSessionId, {
-      userMessagesStartTurns: false,
-      emitUserMessages: false,
-    }),
-    lastAcpActivityAt: Date.now(),
+    activityState: createOpenCodeActivityState(params.providerSessionId),
+    stopEvents: () => undefined,
+    stopHistoryMirror: () => undefined,
+    mirroredMessageRevisions: new Map(),
     modeId: initialModeId,
     queuedInputs: [],
     ...(currentModelId ? { model: currentModelId } : {}),
     ...(contextWindow ? { contextWindow } : {}),
     ...(currentReasoningId !== undefined ? { reasoningId: currentReasoningId } : {}),
   };
-  await acp.setSessionMode(params.providerSessionId, openCodeNativeModeId(initialModeId));
   await applyOpenCodePermissionMode(liveSession, initialModeId);
-  attachAcpActivitySink({ services, liveSession });
+  liveSession.stopEvents = attachOpenCodeEventSink({ services, liveSession });
+  liveSession.stopHistoryMirror = startOpenCodeHistoryMirror({ services, liveSession });
   services.sessionStore.setRuntimeState(state.session.id, "idle");
   const session = services.sessionStore.getSession(state.session.id);
   if (!session) {
@@ -554,11 +596,6 @@ export function sendInputToOpenCodeLiveSession(params: {
     liveSession.queuedInputs.push(request);
     return;
   }
-  if (!services.sessionStore.hasInputControl(liveSession.sessionId, request.clientId)) {
-    throw new Error(
-      `Client ${request.clientId} does not hold input control for ${liveSession.sessionId}.`,
-    );
-  }
   submitOpenCodePrompt({
     services,
     liveSession,
@@ -574,10 +611,6 @@ export async function setOpenCodeLiveSessionMode(params: {
   if (!isOpenCodeModeId(params.modeId)) {
     throw new Error(`Unsupported OpenCode mode '${params.modeId}'.`);
   }
-  await params.liveSession.acp.setSessionMode(
-    params.liveSession.providerSessionId,
-    openCodeNativeModeId(params.modeId),
-  );
   await applyOpenCodePermissionMode(params.liveSession, params.modeId);
   params.liveSession.modeId = params.modeId;
   const nextState = params.services.sessionStore.patchManagedSession(
@@ -599,7 +632,6 @@ function submitOpenCodePrompt(params: {
 }): void {
   const { services, liveSession, text } = params;
   const turnId = randomUUID();
-  liveSession.lastAcpActivityAt = Date.now();
   for (const activity of startOpenCodeTurn(liveSession.activityState, turnId)) {
     applyActivity(services, liveSession.sessionId, activity);
   }
@@ -608,30 +640,16 @@ function submitOpenCodePrompt(params: {
     turnId,
     item: { kind: "user_message", text },
   });
-  void liveSession.acp
-    .prompt(liveSession.providerSessionId, text)
-    .then(async (response) => {
-      await waitForAcpDrain(() => liveSession.lastAcpActivityAt, 250);
-      if (liveSession.activityState.currentTurnId !== turnId) {
-        drainQueuedOpenCodeInput(services, liveSession);
-        return;
-      }
-      const usage = contextUsageFromAcpPrompt(
-        response.usage,
-        liveSession.contextWindow,
-      );
-      if (usage) {
-        applyActivity(services, liveSession.sessionId, {
-          type: "usage",
-          usage,
-          turnId,
-        });
-      }
-      for (const activity of completeOpenCodeTurn(liveSession.activityState)) {
-        applyActivity(services, liveSession.sessionId, activity);
-      }
-      drainQueuedOpenCodeInput(services, liveSession);
-    })
+  void promptOpenCodeSessionAsync({
+    handle: liveSession.server,
+    providerSessionId: liveSession.providerSessionId,
+    text,
+    ...(liveSession.model ? { model: liveSession.model } : {}),
+    ...(liveSession.reasoningId && liveSession.reasoningId !== "default"
+      ? { variant: liveSession.reasoningId }
+      : {}),
+    agent: openCodeNativeModeId(liveSession.modeId),
+  })
     .catch((error) => {
       patchOpenCodeRuntimeError(services, liveSession, error);
       if (liveSession.activityState.currentTurnId !== turnId) {
@@ -659,57 +677,34 @@ function drainQueuedOpenCodeInput(
   if (!next) {
     return;
   }
-  if (!services.sessionStore.hasInputControl(liveSession.sessionId, next.clientId)) {
-    applyActivity(services, liveSession.sessionId, {
-      type: "runtime_status",
-      status: "error",
-      detail: `Client ${next.clientId} does not hold input control for ${liveSession.sessionId}.`,
-    });
-    services.sessionStore.setRuntimeState(liveSession.sessionId, "failed");
-    return;
-  }
   submitOpenCodePrompt({ services, liveSession, text: next.text });
 }
 
-async function startAcpForSession(params: {
-  cwd: string;
-  providerSessionId: string;
-}): Promise<OpenCodeAcpClient> {
-  const acp = new OpenCodeAcpClient(params.cwd, () => undefined);
-  await acp.start();
-  await acp.loadSession(params.providerSessionId, params.cwd);
-  return acp;
-}
-
-function attachAcpActivitySink(params: {
+function attachOpenCodeEventSink(params: {
   services: RuntimeServices;
   liveSession: LiveOpenCodeSession;
-}): void {
+}): () => void {
   const { services, liveSession } = params;
-  liveSession.acp.setSessionUpdateHandler((update) => {
-    liveSession.lastAcpActivityAt = Date.now();
-    for (const activity of translateOpenCodeAcpSessionUpdate(liveSession.activityState, update)) {
-      applyActivity(services, liveSession.sessionId, activity, update);
+  return subscribeOpenCodeEvents({
+    handle: liveSession.server,
+    onEvent: (event) => {
+      for (const activity of translateOpenCodeEvent(liveSession.activityState, event)) {
+        applyActivity(services, liveSession.sessionId, activity, event);
+      }
+      drainQueuedOpenCodeInput(services, liveSession);
+    },
+    onError: (error) => {
+      patchOpenCodeRuntimeError(services, liveSession, error);
+      applyActivity(services, liveSession.sessionId, {
+        type: "runtime_status",
+        status: "error",
+        detail: error instanceof Error ? error.message : String(error),
+        ...(liveSession.activityState.currentTurnId
+          ? { turnId: liveSession.activityState.currentTurnId }
+          : {}),
+      });
     }
   });
-}
-
-function contextUsageFromAcpPrompt(
-  usage: OpenCodeAcpPromptUsage | undefined,
-  contextWindow?: ModelContextWindowResolution,
-) {
-  if (usage?.totalTokens === undefined) {
-    return undefined;
-  }
-  return withModelContextWindow({
-    usedTokens: usage.totalTokens,
-    source: "opencode.prompt_response.usage",
-    ...(usage.outputTokens !== undefined ? { outputTokens: usage.outputTokens } : {}),
-    ...(usage.inputTokens !== undefined ? { inputTokens: usage.inputTokens } : {}),
-    ...(usage.thoughtTokens !== undefined && usage.thoughtTokens !== null
-      ? { reasoningOutputTokens: usage.thoughtTokens }
-      : {}),
-  }, contextWindow);
 }
 
 export async function closeOpenCodeLiveSession(
@@ -717,7 +712,8 @@ export async function closeOpenCodeLiveSession(
   _request?: CloseSessionRequest,
 ): Promise<void> {
   liveSession.queuedInputs.length = 0;
-  await liveSession.acp.close().catch(() => undefined);
+  liveSession.stopEvents();
+  liveSession.stopHistoryMirror();
   await stopOpenCodeServer(liveSession.server);
 }
 
@@ -726,15 +722,12 @@ export function interruptOpenCodeLiveSession(params: {
   liveSession: LiveOpenCodeSession;
   request: InterruptSessionRequest;
 }): ReturnType<typeof toSessionSummary> {
-  const { services, liveSession, request } = params;
-  if (!services.sessionStore.hasInputControl(liveSession.sessionId, request.clientId)) {
-    throw new Error(
-      `Client ${request.clientId} does not hold input control for ${liveSession.sessionId}.`,
-    );
-  }
+  const { services, liveSession } = params;
   const turnId = liveSession.activityState.currentTurnId;
   liveSession.queuedInputs.length = 0;
-  void liveSession.acp.cancel(liveSession.providerSessionId);
+  if (!turnId) {
+    return toSessionSummary(services.sessionStore.getSession(liveSession.sessionId)!);
+  }
   void abortOpenCodeSession({
     handle: liveSession.server,
     providerSessionId: liveSession.providerSessionId,
@@ -747,14 +740,12 @@ export function interruptOpenCodeLiveSession(params: {
       ...(turnId ? { turnId } : {}),
     });
   });
-  if (turnId) {
-    delete liveSession.activityState.currentTurnId;
-    applyActivity(services, liveSession.sessionId, {
-      type: "turn_canceled",
-      reason: "Stop requested",
-      turnId,
-    });
-  }
+  delete liveSession.activityState.currentTurnId;
+  applyActivity(services, liveSession.sessionId, {
+    type: "turn_canceled",
+    reason: "Stop requested",
+    turnId,
+  });
   return toSessionSummary(services.sessionStore.getSession(liveSession.sessionId)!);
 }
 

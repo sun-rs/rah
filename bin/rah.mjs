@@ -67,6 +67,7 @@ function printUsage() {
       "  rah attach <rahSessionId>",
       "  rah council-mcp --room <roomId> --actor <actorId>",
       "  rah <provider>",
+      "  rah <provider> attach <providerSessionId>",
       "  rah <provider> resume <providerSessionId>",
       "",
       "Providers:",
@@ -171,6 +172,30 @@ function parseCouncilMcpArgs(argv) {
   return { help: false, command: "council-mcp", daemonUrl, roomId, actorId };
 }
 
+function parseProviderAttachArgs(provider, argv) {
+  let daemonUrl = DEFAULT_DAEMON_URL;
+  const rest = [...argv];
+  const providerSessionId = rest.shift();
+  if (!providerSessionId) {
+    throw new Error("Missing provider session id after `attach`.");
+  }
+  while (rest.length > 0) {
+    const option = rest.shift();
+    if (option === "--daemon-url" || option === "--daemon") {
+      daemonUrl = rest.shift() ?? daemonUrl;
+      continue;
+    }
+    throw new Error(`Unknown argument: ${option}`);
+  }
+  return {
+    help: false,
+    command: "attach",
+    provider,
+    providerSessionId,
+    daemonUrl,
+  };
+}
+
 function parseArgs(argv) {
   if (argv.length === 0 || argv.includes("--help")) {
     return { help: true };
@@ -200,6 +225,10 @@ function parseArgs(argv) {
     envMuxBackend === "native" || envMuxBackend === "zellij" ? envMuxBackend : undefined;
 
   const rest = [...argv.slice(1)];
+  if (rest[0] === "attach") {
+    rest.shift();
+    return parseProviderAttachArgs(provider, rest);
+  }
   if (rest[0] === "resume") {
     rest.shift();
     resumeProviderSessionId = rest.shift();
@@ -597,6 +626,21 @@ async function getJson(daemonUrl, pathname) {
 async function findLiveSessionSummary(daemonUrl, sessionId) {
   const response = await getJson(daemonUrl, "/api/sessions");
   return (response.sessions ?? []).find((summary) => summary?.session?.id === sessionId) ?? null;
+}
+
+async function findLiveProviderSessionSummary(daemonUrl, provider, providerSessionId) {
+  const response = await getJson(daemonUrl, "/api/sessions");
+  const matches = (response.sessions ?? []).filter(
+    (summary) =>
+      summary?.session?.provider === provider &&
+      summary?.session?.providerSessionId === providerSessionId,
+  );
+  if (matches.length > 1) {
+    throw new Error(
+      `Multiple live RAH sessions match ${provider}:${providerSessionId}. Use \`rah attach <rahSessionId>\` to choose one explicitly.`,
+    );
+  }
+  return matches[0] ?? null;
 }
 
 async function liveSessionExists(daemonUrl, sessionId) {
@@ -1192,12 +1236,12 @@ async function attachLocalTerminalToNativeLocalServer(daemonUrl, session, client
       : process.env.RAH_OPENCODE_BINARY || "opencode";
   const attachArgs =
     session.provider === "codex"
-      ? ["--remote", endpoint, "resume"]
+      ? ["--remote", endpoint]
       : ["attach", endpoint];
   if (session.providerSessionId && session.provider === "opencode") {
     attachArgs.push("--session", session.providerSessionId);
   } else if (session.providerSessionId && session.provider === "codex") {
-    attachArgs.push(session.providerSessionId);
+    attachArgs.push("resume", session.providerSessionId);
   }
   const child = spawn(binary, attachArgs, {
     cwd: session.cwd || ROOT_DIR,
@@ -1209,8 +1253,19 @@ async function attachLocalTerminalToNativeLocalServer(daemonUrl, session, client
 
 async function attachExistingRahSession(parsed) {
   await ensureDaemon(parsed.daemonUrl);
-  const summary = await findLiveSessionSummary(parsed.daemonUrl, parsed.sessionId);
+  const summary = parsed.provider && parsed.providerSessionId
+    ? await findLiveProviderSessionSummary(
+        parsed.daemonUrl,
+        parsed.provider,
+        parsed.providerSessionId,
+      )
+    : await findLiveSessionSummary(parsed.daemonUrl, parsed.sessionId);
   if (!summary) {
+    if (parsed.provider && parsed.providerSessionId) {
+      throw new Error(
+        `No live ${parsed.provider} session found for provider session ${parsed.providerSessionId}. Use \`rah ${parsed.provider} resume ${parsed.providerSessionId}\` to start it.`,
+      );
+    }
     throw new Error(`No live RAH session found for ${parsed.sessionId}.`);
   }
   const session = managedSessionFromSummary(summary);
@@ -1237,7 +1292,7 @@ async function runPtyFirstProviderCommand(parsed) {
   try {
     if (session.liveBackend === "native_local_server") {
       await attachLocalTerminalToNativeLocalServer(parsed.daemonUrl, session, client);
-    } else if (parsed.muxBackend === "zellij" && session.mux?.backend === "zellij") {
+    } else if (session.mux?.backend === "zellij") {
       await attachLocalTerminalToZellij(parsed.daemonUrl, session, client);
     } else {
       await attachLocalTerminalToPty(parsed.daemonUrl, ptyId, client.clientId);

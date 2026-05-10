@@ -1,8 +1,9 @@
 import * as api from "./api";
 import { readErrorMessage } from "./session-store-bootstrap";
 import { takeDeferredBootstrapEvents } from "./session-store-history-bootstrap";
-import { prependHistoryPage } from "./session-store-history";
+import { mergeLatestHistoryPage, prependHistoryPage } from "./session-store-history";
 import { applyEventBatchToProjection } from "./session-store-projections";
+import { isReadOnlyReplay } from "./session-capabilities";
 import type { SessionProjection } from "./types";
 
 type HistoryPagingState = {
@@ -19,18 +20,87 @@ type HistoryPagingSetState = (
 export async function ensureSessionHistoryLoadedCommand(args: {
   get: () => HistoryPagingState;
   loadOlderHistory: (sessionId: string) => Promise<void>;
+  refreshLatestHistory?: (sessionId: string) => Promise<void>;
   sessionId: string;
 }) {
   const projection = args.get().projections.get(args.sessionId);
   if (
     !projection ||
     projection.history.phase === "loading" ||
-    projection.history.authoritativeApplied ||
     !projection.summary.session.providerSessionId
   ) {
     return;
   }
+  if (!isReadOnlyReplay(projection.summary)) {
+    await args.refreshLatestHistory?.(args.sessionId);
+    return;
+  }
+  if (projection.history.authoritativeApplied) {
+    await args.refreshLatestHistory?.(args.sessionId);
+    return;
+  }
   await args.loadOlderHistory(args.sessionId);
+}
+
+export async function refreshLatestHistoryCommand(args: {
+  get: () => HistoryPagingState;
+  set: HistoryPagingSetState;
+  sessionId: string;
+  historyPageLimit: number;
+}) {
+  const projection = args.get().projections.get(args.sessionId);
+  if (!projection) {
+    return;
+  }
+  if (!projection.summary.session.providerSessionId) {
+    return;
+  }
+
+  const requestGeneration = projection.history.generation;
+
+  try {
+    const page = await api.readSessionHistory(args.sessionId, {
+      limit: args.historyPageLimit,
+    });
+    args.set((state) => {
+      const current = state.projections.get(args.sessionId);
+      if (!current || current.history.generation !== requestGeneration) {
+        return state;
+      }
+      const next = new Map(state.projections);
+      const withHistory = mergeLatestHistoryPage(current, page.events, {
+        ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+        ...(page.nextBeforeTs ? { nextBeforeTs: page.nextBeforeTs } : {}),
+      });
+      const replayed = applyEventBatchToProjection(
+        withHistory,
+        takeDeferredBootstrapEvents(args.sessionId),
+      );
+      next.set(args.sessionId, replayed);
+      return { projections: next, error: null };
+    });
+  } catch (error) {
+    args.set((state) => {
+      const current = state.projections.get(args.sessionId);
+      if (!current) {
+        return state;
+      }
+      const next = new Map(state.projections);
+      const failed = applyEventBatchToProjection(
+        {
+          ...current,
+          history: {
+            ...current.history,
+            lastError: readErrorMessage(error),
+          },
+        },
+        takeDeferredBootstrapEvents(args.sessionId),
+      );
+      next.set(args.sessionId, failed);
+      return { projections: next };
+    });
+    throw error;
+  }
 }
 
 export async function loadOlderHistoryCommand(args: {

@@ -33,6 +33,7 @@ import type {
   ListZellijMuxDiagnosticsResponse,
   NativeTuiDiagnostic,
   NativeTuiSurfaceResponse,
+  NativeTuiClientCloseRequest,
   ListSessionsResponse,
   ProviderDiagnostic,
   ProviderKind,
@@ -164,6 +165,19 @@ export async function getNativeTuiSurface(
 ): Promise<NativeTuiSurfaceResponse> {
   return requestJson<NativeTuiSurfaceResponse>(
     `/api/sessions/${encodeURIComponent(sessionId)}/tui-surface`,
+  );
+}
+
+export async function closeNativeTuiClient(
+  sessionId: string,
+  request: NativeTuiClientCloseRequest,
+): Promise<NativeTuiSurfaceResponse> {
+  return requestJson<NativeTuiSurfaceResponse>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/tui-client/close`,
+    {
+      method: "POST",
+      body: JSON.stringify(request),
+    },
   );
 }
 

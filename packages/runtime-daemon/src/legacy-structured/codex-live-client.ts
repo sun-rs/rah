@@ -11,7 +11,6 @@ import {
   createCodexAppServerTranslationState,
 } from "../codex-app-server-activity";
 import {
-  replayCodexStoredSessionRollout,
   type CodexStoredSessionRecord,
 } from "../codex-stored-sessions";
 import { resolveCodexRuntimeCapabilityState } from "../codex-model-catalog";
@@ -139,6 +138,125 @@ export async function startCodexLiveSession(params: {
     throw new Error("Codex plan mode is not available for this session.");
   }
 
+  const terminalTuiOwnsThreadStart =
+    request.attach?.client.kind === "terminal" && request.initialPrompt === undefined;
+  if (terminalTuiOwnsThreadStart) {
+    const currentModelId = request.model ?? params.initialModelCatalog?.currentModelId ?? null;
+    const currentModel = currentModelId
+      ? params.initialModelCatalog?.models.find((model) => model.id === currentModelId)
+      : undefined;
+    if (request.optionValues !== undefined && !currentModel) {
+      await client.dispose();
+      throw new Error(`Unsupported Codex model '${currentModelId ?? ""}'.`);
+    }
+    const currentOptionValues = currentModel
+      ? resolveModelOptionValues({
+          catalog: params.initialModelCatalog ?? null,
+          model: currentModel,
+          optionValues: request.optionValues,
+          reasoningId: request.reasoningId,
+        })
+      : {};
+    const currentReasoningId =
+      optionValueAsString(currentOptionValues, "model_reasoning_effort") ??
+      request.reasoningId ??
+      params.initialModelCatalog?.currentReasoningId ??
+      null;
+
+    const state = services.sessionStore.createManagedSession({
+      provider: "codex",
+      launchSource: "terminal",
+      liveBackend: "native_local_server",
+      cwd: request.cwd,
+      rootDir: request.cwd,
+      runtimeDiagnostics: {
+        serverEndpoint: client.endpoint ?? "stdio:codex app-server",
+        ...(client.processId !== undefined ? { serverPid: client.processId } : {}),
+        attachState: client.endpoint ? "ready" : "unavailable",
+        lastEventCursor: "thread:pending",
+      },
+      ...(request.title !== undefined ? { title: request.title } : {}),
+      mode: buildCodexModeState({
+        currentModeId: initialMode.activeModeId,
+        mutable: true,
+        preferredAccessModeId: initialMode.accessModeId,
+        planAvailable: Boolean(planCollaborationMode),
+      }),
+      model: {
+        currentModelId,
+        currentReasoningId,
+        availableModels: params.initialModelCatalog?.models ?? [],
+        mutable: true,
+        source: params.initialModelCatalog?.source ?? "native",
+      },
+      ...resolveCodexRuntimeCapabilityState({
+        catalog: params.initialModelCatalog ?? null,
+        modelId: currentModelId,
+        reasoningId: currentReasoningId,
+        ...(Object.keys(currentOptionValues).length > 0
+          ? { optionValues: currentOptionValues }
+          : {}),
+      }),
+      capabilities: {
+        modelSwitch: true,
+        structuredControl: true,
+        renameSession: true,
+        actions: {
+          info: true,
+          archive: true,
+          delete: true,
+          rename: "native",
+        },
+        steerInput: true,
+        queuedInput: true,
+      },
+    });
+    services.ptyHub.ensureSession(state.session.id);
+    services.sessionStore.setRuntimeState(state.session.id, "idle");
+    const runtimeSession = services.sessionStore.getSession(state.session.id);
+    if (!runtimeSession) {
+      await client.dispose();
+      throw new Error("Failed to create runtime session for Codex terminal live session.");
+    }
+    publishSessionBootstrap(services, state.session.id, runtimeSession.session);
+
+    const liveSession: LiveCodexSession = {
+      sessionId: state.session.id,
+      // The official TUI creates the thread after attach. Bind the real id from
+      // the app-server thread/started notification instead of resuming a
+      // not-yet-materialized rollout file.
+      threadId: "",
+      cwd: request.cwd,
+      approvalPolicy: initialMode.approvalPolicy,
+      sandboxMode: initialMode.sandboxMode,
+      modelId: currentModelId,
+      reasoningId: currentReasoningId,
+      modelCatalog: params.initialModelCatalog ?? null,
+      activeModeId: initialMode.activeModeId,
+      lastNonPlanModeId: initialMode.accessModeId,
+      planCollaborationMode,
+      client,
+      translationState: createCodexAppServerTranslationState(),
+      currentTurnId: runtimeSession.activeTurnId ?? null,
+      finishedTurnIds: new Set(),
+      interruptingTurnIds: new Set(),
+      turnStartInFlight: false,
+      interruptWhenTurnStarts: false,
+      queuedInputs: [],
+      externalThreadMirrorSubscribeInFlight: false,
+      externalThreadMirrorSubscribed: false,
+      pendingQuestions: new Map(),
+      pendingApprovals: new Map(),
+    };
+    bridge.activate(liveSession);
+    attachRequestedClient(services, state.session.id, request.attach);
+    params.onLiveSessionReady(liveSession);
+    return {
+      sessionId: state.session.id,
+      summary: toSessionSummary(services.sessionStore.getSession(state.session.id)!),
+    };
+  }
+
   const threadStart = (await client.request("thread/start", {
     ...(request.cwd ? { cwd: request.cwd } : {}),
     approvalPolicy: initialMode.approvalPolicy,
@@ -233,6 +351,18 @@ export async function startCodexLiveSession(params: {
       queuedInput: true,
     },
   });
+  services.sessionStore.patchManagedSession(state.session.id, {
+    nativeTui: {
+      terminalId: state.session.id,
+      viewAvailable: true,
+      promptState: "prompt_clean",
+      queuedInputCount: 0,
+    },
+    capabilities: {
+      nativeTui: true,
+      rawPtyInput: true,
+    },
+  });
   services.ptyHub.ensureSession(state.session.id);
   services.sessionStore.setRuntimeState(state.session.id, "idle");
   const runtimeSession = services.sessionStore.getSession(state.session.id);
@@ -258,9 +388,12 @@ export async function startCodexLiveSession(params: {
     translationState: createCodexAppServerTranslationState(),
     currentTurnId: runtimeSession.activeTurnId ?? null,
     finishedTurnIds: new Set(),
+    interruptingTurnIds: new Set(),
     turnStartInFlight: false,
     interruptWhenTurnStarts: false,
     queuedInputs: [],
+    externalThreadMirrorSubscribeInFlight: false,
+    externalThreadMirrorSubscribed: true,
     pendingQuestions: new Map(),
     pendingApprovals: new Map(),
   };
@@ -287,7 +420,10 @@ export async function resumeCodexLiveSession(params: {
   try {
     const resumeResponse = (await client.request(
       "thread/resume",
-      { threadId: request.providerSessionId },
+      {
+        threadId: request.providerSessionId,
+        excludeTurns: true,
+      },
       TURN_START_TIMEOUT_MS,
     )) as {
       thread?: {
@@ -427,6 +563,18 @@ export async function resumeCodexLiveSession(params: {
         queuedInput: true,
       },
     });
+    services.sessionStore.patchManagedSession(state.session.id, {
+      nativeTui: {
+        terminalId: state.session.id,
+        viewAvailable: true,
+        promptState: "prompt_clean",
+        queuedInputCount: 0,
+      },
+      capabilities: {
+        nativeTui: true,
+        rawPtyInput: true,
+      },
+    });
     services.ptyHub.ensureSession(state.session.id);
     services.sessionStore.setRuntimeState(
       state.session.id,
@@ -439,26 +587,7 @@ export async function resumeCodexLiveSession(params: {
     publishSessionBootstrap(services, state.session.id, runtimeSession.session);
 
     const attachedBanner = `Attached to external Codex thread ${threadId}\r\n`;
-    if (record && request.historyReplay !== "skip") {
-      try {
-        replayCodexStoredSessionRollout({
-          services,
-          sessionId: state.session.id,
-          record,
-          bannerText: attachedBanner,
-        });
-        if (thread?.status !== undefined) {
-          services.sessionStore.setRuntimeState(
-            state.session.id,
-            runtimeStateFromThreadStatus(thread.status) ?? runtimeSession.session.runtimeState,
-          );
-        }
-      } catch {
-        services.ptyHub.appendOutput(state.session.id, attachedBanner);
-      }
-    } else {
-      services.ptyHub.appendOutput(state.session.id, attachedBanner);
-    }
+    services.ptyHub.appendOutput(state.session.id, attachedBanner);
 
     const resumedState = services.sessionStore.getSession(state.session.id);
     if (!resumedState) {
@@ -481,9 +610,12 @@ export async function resumeCodexLiveSession(params: {
       translationState: createCodexAppServerTranslationState(),
       currentTurnId: resumedState.activeTurnId ?? null,
       finishedTurnIds: new Set(),
+      interruptingTurnIds: new Set(),
       turnStartInFlight: false,
       interruptWhenTurnStarts: false,
       queuedInputs: [],
+      externalThreadMirrorSubscribeInFlight: false,
+      externalThreadMirrorSubscribed: true,
       pendingQuestions: new Map(),
       pendingApprovals: new Map(),
     };

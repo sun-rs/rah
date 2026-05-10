@@ -442,6 +442,8 @@ class NativeLocalServerRoutingAdapter implements ProviderAdapter {
   engine: RuntimeEngine | undefined;
   startRequests: StartSessionRequest[] = [];
   resumeRequests: ResumeSessionRequest[] = [];
+  inputRequests: Array<{ sessionId: string; request: SessionInputRequest }> = [];
+  interruptRequests: Array<{ sessionId: string; request: InterruptSessionRequest }> = [];
 
   startSession(request: StartSessionRequest): StartSessionResponse {
     if (!this.engine) {
@@ -482,6 +484,26 @@ class NativeLocalServerRoutingAdapter implements ProviderAdapter {
       },
     });
     return { session: toSessionSummary(state) };
+  }
+
+  sendInput(sessionId: string, request: SessionInputRequest): void {
+    this.inputRequests.push({ sessionId, request });
+  }
+
+  interruptSession(sessionId: string, request: InterruptSessionRequest): SessionSummary {
+    if (!this.engine) {
+      throw new Error("engine missing");
+    }
+    this.interruptRequests.push({ sessionId, request });
+    return this.engine.getSessionSummary(sessionId);
+  }
+
+  onPtyInput(_sessionId: string, _clientId: string, _data: string): void {
+    throw new Error("not implemented");
+  }
+
+  onPtyResize(_sessionId: string, _clientId: string, _cols: number, _rows: number): void {
+    throw new Error("not implemented");
   }
 }
 
@@ -915,6 +937,7 @@ describe("RuntimeEngine", () => {
         cwd: workspace,
         liveBackend: "native_local_server",
       });
+      const sessionId = started.session.session.id;
       assert.equal(adapter.startRequests.length, 1);
       assert.equal(started.session.session.liveBackend, "native_local_server");
       assert.equal(started.session.session.runtime?.kind, "native_local_server");
@@ -922,6 +945,37 @@ describe("RuntimeEngine", () => {
       assert.equal(started.session.session.runtime?.structuredLiveEvents, true);
       assert.equal(started.session.session.runtime?.tuiRole, "client_view");
       assert.equal(started.session.session.runtime?.tuiContinuity, true);
+      engine.claimControl(sessionId, {
+        client: {
+          id: "terminal-client",
+          kind: "terminal",
+          connectionId: "pid:test-terminal",
+        },
+      });
+      assert.doesNotThrow(() =>
+        engine.sendInput(sessionId, {
+          clientId: "web-chat",
+          text: "web chat should not require TUI control",
+        }),
+      );
+      assert.doesNotThrow(() =>
+        engine.interruptSession(sessionId, {
+          clientId: "web-chat",
+        }),
+      );
+      assert.deepEqual(adapter.inputRequests.at(-1), {
+        sessionId,
+        request: {
+          clientId: "web-chat",
+          text: "web chat should not require TUI control",
+        },
+      });
+      assert.deepEqual(adapter.interruptRequests.at(-1), {
+        sessionId,
+        request: {
+          clientId: "web-chat",
+        },
+      });
 
       const resumed = await engine.resumeSession({
         provider: "codex",
@@ -937,6 +991,120 @@ describe("RuntimeEngine", () => {
       assert.equal(resumed.session.session.runtime?.tuiRole, "client_view");
       assert.equal(resumed.session.session.runtime?.tuiContinuity, true);
     } finally {
+      await engine.shutdown();
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("native local-server sessions expose an on-demand Web TUI client", async () => {
+    const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-native-local-web-tui-"));
+    const fakeCodex = path.join(workspace, "fake-codex.js");
+    const previousCodexBinary = process.env.RAH_CODEX_BINARY;
+    writeFileSync(
+      fakeCodex,
+      [
+        "#!/usr/bin/env node",
+        "process.stdout.write(`NATIVE_LOCAL_TUI_READY args=${process.argv.slice(2).join('|')}\\r\\n`);",
+        "process.stdin.setEncoding('utf8');",
+        "process.stdin.resume();",
+        "process.stdin.on('data', (chunk) => process.stdout.write(`NATIVE_LOCAL_TUI_INPUT:${chunk}\\r\\n`));",
+        "setInterval(() => undefined, 1000);",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(fakeCodex, 0o755);
+    process.env.RAH_CODEX_BINARY = fakeCodex;
+    workDirGlobal = workspace;
+    const adapter = new NativeLocalServerRoutingAdapter();
+    const engine = new RuntimeEngine([adapter]);
+    adapter.engine = engine;
+    try {
+      const started = await engine.startSession({
+        provider: "codex",
+        cwd: workspace,
+        liveBackend: "native_local_server",
+      });
+      const sessionId = started.session.session.id;
+      engine.sessionStore.patchManagedSession(sessionId, {
+        nativeTui: {
+          terminalId: sessionId,
+          viewAvailable: true,
+          promptState: "prompt_clean",
+          queuedInputCount: 0,
+        },
+        capabilities: {
+          nativeTui: true,
+          rawPtyInput: true,
+        },
+        runtimeDiagnostics: {
+          serverEndpoint: "ws://127.0.0.1:65531/",
+          attachState: "ready",
+        },
+      });
+
+      let transcript = "";
+      const unsubscribe = engine.ptyHub.subscribe(sessionId, (frame) => {
+        if (frame.type === "pty.replay") {
+          transcript += frame.chunks.join("");
+        } else if (frame.type === "pty.output") {
+          transcript += frame.data;
+        }
+      });
+
+      await engine.claimNativeTuiSurface(sessionId, {
+        clientId: "web-tui",
+        clientKind: "web",
+        cols: 80,
+        rows: 24,
+      });
+
+      await waitFor(() => {
+        assert.match(
+          transcript,
+          /NATIVE_LOCAL_TUI_READY args=--remote\|ws:\/\/127\.0\.0\.1:65531\/\|resume\|native-local-start/,
+        );
+        assert.equal(engine.getSessionSummary(sessionId).controlLease.holderClientId, "web-user");
+      });
+
+      engine.onPtyInput(sessionId, "web-tui", "hello from web tui\r");
+      await waitFor(() => {
+        assert.match(transcript, /NATIVE_LOCAL_TUI_INPUT:hello from web tui/);
+      });
+
+      await engine.closeNativeTuiClient(sessionId, { clientId: "web-tui" });
+      assert.equal(
+        engine.listPtyStats().find((stat) => stat.sessionId === sessionId)?.status,
+        "open",
+      );
+      assert.match(transcript, /Web TUI client closed/);
+
+      let reactivatedTranscript = "";
+      const unsubscribeReactivated = engine.ptyHub.subscribe(sessionId, (frame) => {
+        if (frame.type === "pty.replay") {
+          reactivatedTranscript += frame.chunks.join("");
+        } else if (frame.type === "pty.output") {
+          reactivatedTranscript += frame.data;
+        }
+      });
+      await engine.claimNativeTuiSurface(sessionId, {
+        clientId: "web-tui-reactivated",
+        clientKind: "web",
+        cols: 80,
+        rows: 24,
+      });
+      await waitFor(() => {
+        assert.match(reactivatedTranscript, /NATIVE_LOCAL_TUI_READY/);
+      });
+
+      unsubscribeReactivated();
+      unsubscribe();
+      await engine.closeSession(sessionId, { clientId: "web-tui" });
+    } finally {
+      if (previousCodexBinary === undefined) {
+        delete process.env.RAH_CODEX_BINARY;
+      } else {
+        process.env.RAH_CODEX_BINARY = previousCodexBinary;
+      }
       await engine.shutdown();
       rmSync(workspace, { recursive: true, force: true });
     }
@@ -1581,7 +1749,11 @@ describe("RuntimeEngine", () => {
         "  buffer += chunk;",
         "  if (buffer.includes('\\u0003') || buffer.includes('\\u001b')) {",
         "    process.stdout.write('MOCK_NATIVE_TUI_INTERRUPTED\\r\\n›\\r\\n');",
-        "    buffer = buffer.replace(/[\\u0003\\u001b]/g, '');",
+        "    buffer = 'aborted stale prompt';",
+        "  }",
+        "  if (buffer.includes('\\u0015') || buffer.includes('\\u000b')) {",
+        "    process.stdout.write('MOCK_NATIVE_TUI_CLEARED\\r\\n');",
+        "    buffer = buffer.slice(Math.max(buffer.lastIndexOf('\\u0015'), buffer.lastIndexOf('\\u000b')) + 1);",
         "  }",
         "  const parts = buffer.split(/\\r|\\n/);",
         "  buffer = parts.pop() ?? '';",
@@ -1656,10 +1828,24 @@ describe("RuntimeEngine", () => {
       });
 
       engine.interruptSession(sessionId, { clientId: "web-native" });
+      engine.interruptSession(sessionId, { clientId: "web-native" });
       await waitFor(() => {
         assert.match(transcript, /MOCK_NATIVE_TUI_INTERRUPTED/);
         assert.equal(engine.getSessionSummary(sessionId).session.runtimeState, "idle");
       });
+      assert.equal(transcript.match(/MOCK_NATIVE_TUI_INTERRUPTED/g)?.length, 1);
+      await waitFor(() => {
+        assert.match(transcript, /MOCK_NATIVE_TUI_CLEARED/);
+      });
+
+      engine.sendInput(sessionId, { clientId: "web-native", text: "second native tui" });
+      await waitFor(() => {
+        assert.match(transcript, /MOCK_NATIVE_TUI_INPUT:second native tui/);
+      });
+      assert.doesNotMatch(
+        transcript,
+        /MOCK_NATIVE_TUI_INPUT:aborted stale promptsecond native tui/,
+      );
 
       await engine.closeSession(sessionId, { clientId: "web-native" });
       await waitFor(() => {

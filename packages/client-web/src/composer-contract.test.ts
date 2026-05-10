@@ -114,6 +114,24 @@ describe("composer contract", () => {
     });
   });
 
+  test("allows native local-server Chat to compose even when TUI control belongs elsewhere", () => {
+    const surface = deriveComposerSurface({
+      selectedSummary: summary({
+        launchSource: "web",
+        liveBackend: "native_local_server",
+      }),
+      hasControl: false,
+      isGenerating: true,
+      pendingSessionAction: null,
+    });
+
+    assert.deepEqual(surface, {
+      kind: "compose",
+      showStopButton: true,
+      stopTitle: "Interrupt the native TUI turn from Web.",
+    });
+  });
+
   test("derives compose surface and preserves stop visibility while generating", () => {
     assert.deepEqual(
       deriveComposerSurface({
@@ -272,6 +290,14 @@ describe("composer contract", () => {
         draft: "send this",
         sendPending: true,
         nativeTuiPromptState: "prompt_clean",
+      }),
+      true,
+    );
+    assert.equal(
+      canSubmitComposerInput({
+        composerSurface,
+        draft: "send this",
+        sendPending: true,
       }),
       false,
     );

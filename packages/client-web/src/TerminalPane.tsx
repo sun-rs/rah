@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { Terminal, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
-import { createPtySocket, getNativeTuiSurface, sendPtyMessage } from "./api";
+import { closeNativeTuiClient, createPtySocket, getNativeTuiSurface, sendPtyMessage } from "./api";
 import {
   mobileBridgeFocusOptionsForSource,
   type MobileBridgeFocusOptions,
@@ -13,6 +13,8 @@ interface TerminalPaneProps {
   terminalId: string;
   clientId: string;
   hasControl: boolean;
+  tuiClientActive?: boolean;
+  onTuiClientActiveChange?: (active: boolean) => void;
 }
 
 type MobileTuiShortcut = {
@@ -74,7 +76,7 @@ function readCssVar(style: CSSStyleDeclaration, name: TerminalCssVar, fallback: 
   return style.getPropertyValue(name).trim() || fallback;
 }
 
-function readRahTerminalFontFamily(): string {
+export function readRahTerminalFontFamily(): string {
   if (typeof document === "undefined") {
     return "ui-monospace, monospace";
   }
@@ -86,7 +88,7 @@ function readRahTerminalFontFamily(): string {
   );
 }
 
-function readRahTerminalTheme(): ITheme {
+export function readRahTerminalTheme(): ITheme {
   if (typeof document === "undefined") {
     return {
       background: "#09090b",
@@ -152,6 +154,9 @@ export function TerminalPane(props: TerminalPaneProps) {
   const [terminalFixedLeftPx, setTerminalFixedLeftPx] = useState(0);
   const [terminalFixedWidthPx, setTerminalFixedWidthPx] = useState(0);
   const [surfaceOwnerKind, setSurfaceOwnerKind] = useState<string | null>(null);
+  const [localTuiClientActive, setLocalTuiClientActive] = useState(true);
+  const [tuiClientClosing, setTuiClientClosing] = useState(false);
+  const tuiClientActive = props.tuiClientActive ?? localTuiClientActive;
   const committedBridgeValueRef = useRef("");
   const bridgeInputRef = useRef<HTMLInputElement | null>(null);
   const isComposingRef = useRef(false);
@@ -181,7 +186,26 @@ export function TerminalPane(props: TerminalPaneProps) {
     clientIdRef.current = props.clientId;
   }, [props.clientId]);
 
+  useEffect(() => {
+    if (props.tuiClientActive === undefined) {
+      setLocalTuiClientActive(true);
+    }
+    setTuiClientClosing(false);
+    setSurfaceOwnerKind(null);
+    nextReplaySeqRef.current = 0;
+  }, [props.terminalId, props.tuiClientActive]);
+
+  const setTuiClientActiveState = (active: boolean) => {
+    props.onTuiClientActiveChange?.(active);
+    if (props.tuiClientActive === undefined) {
+      setLocalTuiClientActive(active);
+    }
+  };
+
   const claimCurrentSurface = () => {
+    if (!tuiClientActive) {
+      return;
+    }
     const socket = socketRef.current;
     const terminal = terminalRef.current;
     if (!socket || !terminal) {
@@ -197,7 +221,6 @@ export function TerminalPane(props: TerminalPaneProps) {
     });
     surfaceActiveRef.current = true;
     setSurfaceOwnerKind(null);
-    scheduleTerminalFitRef.current({ force: true });
   };
 
   useEffect(() => {
@@ -242,13 +265,14 @@ export function TerminalPane(props: TerminalPaneProps) {
 
   useEffect(() => {
     const container = containerRef.current;
-    if (!container) {
+    if (!container || !tuiClientActive) {
       return;
     }
     let disposed = false;
     let exited = false;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let surfacePollTimer: ReturnType<typeof setInterval> | null = null;
+    const settleTimers = new Set<number>();
     let fitFrame: number | null = null;
     let forceNextResize = false;
     let writeFrame: number | null = null;
@@ -283,6 +307,9 @@ export function TerminalPane(props: TerminalPaneProps) {
       if (showIosInputBridge) {
         terminal.scrollToBottom();
       }
+      if (forceResize || previousCols !== terminal.cols || previousRows !== terminal.rows) {
+        terminal.refresh(0, Math.max(0, terminal.rows - 1));
+      }
       if (
         previousCols === terminal.cols &&
         previousRows === terminal.rows &&
@@ -312,7 +339,35 @@ export function TerminalPane(props: TerminalPaneProps) {
       fitFrame = window.requestAnimationFrame(fitAndNotifyResize);
     };
     scheduleTerminalFitRef.current = scheduleFitAndResize;
-    scheduleFitAndResize();
+
+    const settleTerminalLayout = () => {
+      scheduleFitAndResize({ force: true });
+      window.requestAnimationFrame(() => {
+        if (disposed) {
+          return;
+        }
+        scheduleFitAndResize({ force: true });
+        window.requestAnimationFrame(() => {
+          if (disposed) {
+            return;
+          }
+          scheduleFitAndResize({ force: true });
+        });
+      });
+      for (const delay of [80, 160]) {
+        const timer = window.setTimeout(() => {
+          settleTimers.delete(timer);
+          if (disposed) {
+            return;
+          }
+          scheduleFitAndResize({ force: true });
+          terminal.refresh(0, Math.max(0, terminal.rows - 1));
+        }, delay);
+        settleTimers.add(timer);
+      }
+    };
+
+    settleTerminalLayout();
 
     const applyTheme = () => {
       terminal.options.fontFamily = readRahTerminalFontFamily();
@@ -368,12 +423,17 @@ export function TerminalPane(props: TerminalPaneProps) {
             terminal.reset();
           }
           enqueueTerminalWrite(message.chunks.join(""));
+          scheduleFitAndResize();
           if (message.nextSeq !== undefined) {
             nextReplaySeqRef.current = message.nextSeq;
           }
           return;
         }
         if (message.type === "pty.output") {
+          if (message.replace === true) {
+            clearPendingTerminalWrite();
+            terminal.reset();
+          }
           enqueueTerminalWrite(message.data);
           if (message.seq !== undefined) {
             nextReplaySeqRef.current = Math.max(nextReplaySeqRef.current, message.seq + 1);
@@ -399,6 +459,7 @@ export function TerminalPane(props: TerminalPaneProps) {
       socket.addEventListener("open", () => {
         fitAddon.fit();
         claimCurrentSurface();
+        settleTerminalLayout();
       });
       scheduleFitAndResize({ force: true });
       socket.addEventListener("close", (event) => {
@@ -467,6 +528,9 @@ export function TerminalPane(props: TerminalPaneProps) {
 
     const resizeObserver = new ResizeObserver(() => scheduleFitAndResize());
     resizeObserver.observe(container);
+    if (panelRef.current) {
+      resizeObserver.observe(panelRef.current);
+    }
 
     return () => {
       disposed = true;
@@ -483,6 +547,10 @@ export function TerminalPane(props: TerminalPaneProps) {
       if (surfacePollTimer) {
         clearInterval(surfacePollTimer);
       }
+      for (const timer of settleTimers) {
+        window.clearTimeout(timer);
+      }
+      settleTimers.clear();
       themeObserver.disconnect();
       resizeObserver.disconnect();
       disposable.dispose();
@@ -501,7 +569,29 @@ export function TerminalPane(props: TerminalPaneProps) {
       sendDataRef.current = () => undefined;
       scheduleTerminalFitRef.current = () => undefined;
     };
-  }, [props.terminalId, showIosInputBridge]);
+  }, [props.terminalId, showIosInputBridge, tuiClientActive]);
+
+  const closeCurrentTuiClient = () => {
+    if (tuiClientClosing) {
+      return;
+    }
+    setTuiClientClosing(true);
+    setTuiClientActiveState(false);
+    surfaceActiveRef.current = false;
+    setSurfaceOwnerKind(null);
+    void closeNativeTuiClient(props.terminalId, { clientId: clientIdRef.current })
+      .catch(() => undefined)
+      .finally(() => {
+        setTuiClientClosing(false);
+      });
+  };
+
+  const activateCurrentTuiClient = () => {
+    nextReplaySeqRef.current = 0;
+    surfaceActiveRef.current = false;
+    setSurfaceOwnerKind(null);
+    setTuiClientActiveState(true);
+  };
 
   const applyBridgeDelta = (nextValue: string) => {
     const previous = committedBridgeValueRef.current;
@@ -587,19 +677,26 @@ export function TerminalPane(props: TerminalPaneProps) {
       data-mobile-input-bridge={showIosInputBridge ? "true" : undefined}
     >
       <div ref={panelRef} className="terminal-panel" data-testid="terminal-panel">
-        <div
-          ref={containerRef}
-          className="terminal-canvas"
-          data-testid="terminal-canvas"
-          onPointerDownCapture={
-            showIosInputBridge
-              ? (event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  focusMobileBridge(mobileBridgeFocusOptionsForSource("surface"));
-                }
-              : undefined
-          }
+        {tuiClientActive ? (
+          <button
+            type="button"
+            className="terminal-client-close-button"
+            onPointerDown={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+            }}
+            onClick={closeCurrentTuiClient}
+            aria-label="Close Web TUI client"
+            title="Close this Web TUI client without stopping the live session"
+            disabled={tuiClientClosing}
+          >
+            ×
+          </button>
+        ) : null}
+          <div
+            ref={containerRef}
+            className="terminal-canvas"
+            data-testid="terminal-canvas"
           onFocusCapture={
             showIosInputBridge
               ? (event) => {
@@ -609,12 +706,29 @@ export function TerminalPane(props: TerminalPaneProps) {
                     target.classList.contains("xterm-helper-textarea")
                   ) {
                     event.stopPropagation();
-                    focusMobileBridge(mobileBridgeFocusOptionsForSource("surface"));
+                    target.blur();
                   }
                 }
               : undefined
           }
         />
+        {!tuiClientActive ? (
+          <div className="terminal-surface-overlay" data-testid="terminal-client-inactive-overlay">
+            <div className="terminal-surface-overlay-card">
+              <div className="terminal-surface-overlay-title">Web TUI client is closed</div>
+              <div className="terminal-surface-overlay-copy">
+                The live session is still running. Activate only when you need the full native TUI.
+              </div>
+              <button
+                type="button"
+                className="terminal-surface-overlay-button"
+                onClick={activateCurrentTuiClient}
+              >
+                Activate TUI
+              </button>
+            </div>
+          </div>
+        ) : null}
         {surfaceOwnerKind ? (
           <div className="terminal-surface-overlay" data-testid="terminal-surface-overlay">
             <div className="terminal-surface-overlay-card">

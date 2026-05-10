@@ -65,6 +65,23 @@ describe("native TUI mirror guard", () => {
     );
   });
 
+  test("does not ignore persisted activity with the same millisecond as injected input", () => {
+    assert.equal(
+      shouldIgnoreStaleMirrorStateActivity(
+        { promptState: "agent_busy", lastInjectedInputAtMs: injectedAt },
+        {
+          provider: "claude",
+          channel: "structured_persisted",
+          authority: "authoritative",
+          ts: "2026-05-03T10:00:00.000Z",
+        },
+        { type: "turn_completed", turnId: "same-ms-turn" },
+        "prompt_clean",
+      ),
+      false,
+    );
+  });
+
   test("does not ignore structured live or heuristic activity", () => {
     assert.equal(
       shouldIgnoreStaleMirrorStateActivity(
@@ -94,6 +111,21 @@ describe("native TUI mirror guard", () => {
         },
       ),
       true,
+    );
+  });
+
+  test("allows Claude assistant prompt clean at the same millisecond as injected input", () => {
+    assert.equal(
+      shouldIgnoreStaleMirrorPromptClean(
+        { promptState: "agent_busy", lastInjectedInputAtMs: injectedAt },
+        {
+          provider: "claude",
+          channel: "structured_persisted",
+          authority: "authoritative",
+          ts: "2026-05-03T10:00:00.000Z",
+        },
+      ),
+      false,
     );
   });
 });

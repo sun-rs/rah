@@ -31,6 +31,7 @@
     "test:smoke:native-codex-browser": "bash scripts/native-codex-browser-smoke.sh",
     "test:smoke:native-providers": "tsx scripts/native_provider_smoke.ts",
     "test:smoke:native-provider-browser": "bash scripts/native-provider-browser-smoke.sh",
+    "test:smoke:native-browser": "npm run test:smoke:native-codex-browser && npm run test:smoke:native-provider-browser",
     "test:smoke:native-browser-webkit": "RAH_NATIVE_BROWSER=webkit npm run test:smoke:native-codex-browser && RAH_NATIVE_BROWSER=webkit npm run test:smoke:native-provider-browser",
     "test:smoke:native-browser-firefox": "RAH_NATIVE_BROWSER=firefox npm run test:smoke:native-codex-browser && RAH_NATIVE_BROWSER=firefox npm run test:smoke:native-provider-browser",
     "test:smoke:native-cli-probe": "tsx scripts/native_cli_probe.ts",
@@ -49,7 +50,8 @@
     "test:smoke:claude-browser": "bash scripts/claude-browser-smoke.sh",
     "test:smoke:codex-browser": "bash scripts/codex-browser-smoke.sh",
     "test:smoke:opencode-browser": "bash scripts/opencode-browser-smoke.sh",
-    "test:smoke:browser-providers": "npm run test:smoke:codex-browser && npm run test:smoke:claude-browser && npm run test:smoke:opencode-browser",
+    "test:smoke:browser-providers": "npm run test:smoke:native-browser",
+    "test:smoke:real-browser-providers": "npm run test:smoke:codex-browser && npm run test:smoke:claude-browser && npm run test:smoke:opencode-browser",
     "test:smoke:provider-flows": "npm run test:smoke:codex-browser && npm run test:smoke:claude-flow && npm run test:smoke:opencode-browser",
     "test:smoke:wrapper": "tsx scripts/terminal_wrapper_smoke.ts"
   },

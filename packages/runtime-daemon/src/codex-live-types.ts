@@ -52,10 +52,13 @@ export type LiveCodexSession = {
   translationState: CodexAppServerTranslationState;
   currentTurnId: string | null;
   finishedTurnIds: Set<string>;
+  interruptingTurnIds: Set<string>;
   turnStartInFlight: boolean;
   interruptWhenTurnStarts: boolean;
   queuedInputs: SessionInputRequest[];
   drainQueuedInput?: () => void;
+  externalThreadMirrorSubscribeInFlight: boolean;
+  externalThreadMirrorSubscribed: boolean;
   pendingQuestions: Map<string, LiveQuestionRequest>;
   pendingApprovals: Map<string, PendingApproval>;
 };

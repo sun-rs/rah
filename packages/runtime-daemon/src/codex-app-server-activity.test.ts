@@ -667,6 +667,38 @@ describe("translateCodexAppServerNotification", () => {
     }
   });
 
+  test("reserves the user item slot when app-server streams assistant before user echo", () => {
+    const state = createCodexAppServerTranslationState();
+
+    const assistant = translateCodexAppServerNotification(
+      {
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "assistant-1",
+          delta: "我是 Codex。",
+        },
+      },
+      state,
+    ).find((item) => item.activity.type === "timeline_item")?.activity;
+
+    assert.equal(assistant?.type, "timeline_item");
+    if (assistant?.type === "timeline_item") {
+      assert.equal(
+        assistant.identity?.canonicalItemId,
+        createCodexTimelineIdentity({
+          providerSessionId: "thread-1",
+          turnId: "turn-1",
+          itemKind: "assistant_message",
+          itemIndex: 1,
+          origin: "history",
+          providerMessageId: "assistant-1",
+        }).canonicalItemId,
+      );
+    }
+  });
+
   test("deduplicates repeated app-server deltas and reasoning section breaks", () => {
     const state = createCodexAppServerTranslationState();
 
@@ -756,6 +788,24 @@ describe("translateCodexAppServerNotification", () => {
       "thread/closed": { method: "thread/closed", params: { threadId: "thread-1" } },
       "skills/changed": { method: "skills/changed", params: {} },
       "thread/name/updated": { method: "thread/name/updated", params: { threadId: "thread-1", threadName: "Demo" } },
+      "thread/goal/updated": {
+        method: "thread/goal/updated",
+        params: {
+          threadId: "thread-1",
+          turnId: null,
+          goal: {
+            threadId: "thread-1",
+            objective: "Ship the feature",
+            status: "active",
+            tokenBudget: null,
+            tokensUsed: 0,
+            timeUsedSeconds: 0,
+            createdAt: 0,
+            updatedAt: 0,
+          },
+        },
+      },
+      "thread/goal/cleared": { method: "thread/goal/cleared", params: { threadId: "thread-1" } },
       "thread/tokenUsage/updated": { method: "thread/tokenUsage/updated", params: { threadId: "thread-1", turnId: "turn-1", tokenUsage: { modelContextWindow: 1000, last: { totalTokens: 100 } } } },
       "turn/started": { method: "turn/started", params: { threadId: "thread-1", turn: { id: "turn-1" } } },
       "hook/started": { method: "hook/started", params: { threadId: "thread-1", turnId: "turn-1", run: { ...run, status: "running" } } },
@@ -802,6 +852,7 @@ describe("translateCodexAppServerNotification", () => {
       "thread/realtime/closed": { method: "thread/realtime/closed", params: { threadId: "thread-1", reason: "done" } },
       "windows/worldWritableWarning": { method: "windows/worldWritableWarning", params: { samplePaths: [], extraCount: 0, failedScan: false } },
       "windowsSandbox/setupCompleted": { method: "windowsSandbox/setupCompleted", params: { mode: "elevated", success: true, error: null } },
+      "remoteControl/status/changed": { method: "remoteControl/status/changed", params: { status: "ready" } },
     };
 
     assert.deepEqual(Object.keys(samples).sort(), [...CODEX_APP_SERVER_NOTIFICATION_METHODS].sort());
@@ -816,6 +867,63 @@ describe("translateCodexAppServerNotification", () => {
       assert.ok(translated.length > 0, method);
       assert.equal(hasInvalidStreamObservation(translated), false, method);
     }
+  });
+
+  test("keeps unknown Codex metadata notifications out of the chat timeline", () => {
+    const state = createCodexAppServerTranslationState();
+
+    assert.deepEqual(
+      translateCodexAppServerNotification(
+        {
+          method: "thread/future/statusChanged",
+          params: { threadId: "thread-1", state: "ready" },
+        },
+        state,
+      ),
+      [],
+    );
+    assert.deepEqual(
+      translateCodexAppServerNotification(
+        {
+          method: "remoteControl/future/statusChanged",
+          params: { state: "ready" },
+        },
+        state,
+      ),
+      [],
+    );
+    assert.deepEqual(
+      translateCodexAppServerNotification(
+        {
+          method: "account/future/updated",
+          params: { plan: "plus" },
+        },
+        state,
+      ),
+      [],
+    );
+  });
+
+  test("keeps critical unknown Codex turn and item notifications visible as adapter diagnostics", () => {
+    const state = createCodexAppServerTranslationState();
+
+    const turnActivities = translateCodexAppServerNotification(
+      {
+        method: "turn/future/critical",
+        params: { threadId: "thread-1", turnId: "turn-1" },
+      },
+      state,
+    );
+    assert.equal(hasInvalidStreamObservation(turnActivities), true);
+
+    const itemActivities = translateCodexAppServerNotification(
+      {
+        method: "item/future/critical",
+        params: { threadId: "thread-1", turnId: "turn-1", itemId: "item-1" },
+      },
+      state,
+    );
+    assert.equal(hasInvalidStreamObservation(itemActivities), true);
   });
 });
 

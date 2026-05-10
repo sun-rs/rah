@@ -22,10 +22,20 @@ function hasClaudePrompt(output: string): boolean {
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean);
-  return lines.slice(-12).some((line) =>
-    /^(?:›|❯|>)\s*$/u.test(line) ||
-    /bypass permissions/i.test(line),
-  );
+  const tail = lines.slice(-12);
+  let promptIndex = -1;
+  for (let index = tail.length - 1; index >= 0; index -= 1) {
+    if (/^(?:›|❯|>)\s*$/u.test(tail[index] ?? "")) {
+      promptIndex = index;
+      break;
+    }
+  }
+  if (promptIndex >= 0) {
+    return tail
+      .slice(promptIndex + 1)
+      .every((line) => /bypass permissions|shift\+tab|^\s*[•>*-]*\s*$/i.test(line));
+  }
+  return tail.at(-1) ? /bypass permissions/i.test(tail.at(-1)!) : false;
 }
 
 function selectClaudeBindingRecord(session: NativeTuiProviderRuntimeSession) {

@@ -1,7 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { RahEvent, SessionSummary } from "@rah/runtime-protocol";
-import { prependHistoryPage, replayEventsIntoProjection } from "./session-store-history";
+import {
+  mergeLatestHistoryPage,
+  prependHistoryPage,
+  replayEventsIntoProjection,
+} from "./session-store-history";
 import { appendOptimisticUserMessage } from "./types";
 
 function summary(): SessionSummary {
@@ -283,4 +287,44 @@ test("prependHistoryPage does not dedupe conflicting message identities", () => 
     ),
     ["message-1", "message-2"],
   );
+});
+
+test("mergeLatestHistoryPage appends newly persisted assistant tail without showing older-history semantics", () => {
+  const current = appendOptimisticUserMessage(
+    replayEventsIntoProjection(summary(), []),
+    "你是谁",
+  );
+
+  const next = mergeLatestHistoryPage(current, [
+    timelineEvent({
+      seq: 1,
+      turnId: "history:session-1:turn-1",
+      text: "你是谁",
+      messageId: "message-user-1",
+      canonicalItemId: "canonical-user-1",
+      ts: current.feed[0]?.ts,
+    }),
+    timelineEvent({
+      seq: 2,
+      turnId: "history:session-1:turn-1",
+      kind: "assistant_message",
+      text: "我是 Codex。",
+      messageId: "message-assistant-1",
+      canonicalItemId: "canonical-assistant-1",
+    }),
+  ]);
+
+  assert.equal(next.feed.length, 2);
+  assert.deepEqual(
+    next.feed.map((entry) => (entry.kind === "timeline" ? entry.item.kind : null)),
+    ["user_message", "assistant_message"],
+  );
+  assert.deepEqual(
+    next.feed.map((entry) =>
+      entry.kind === "timeline" && "text" in entry.item ? entry.item.text : null,
+    ),
+    ["你是谁", "我是 Codex。"],
+  );
+  assert.equal(next.history.phase, "ready");
+  assert.equal(next.history.authoritativeApplied, true);
 });

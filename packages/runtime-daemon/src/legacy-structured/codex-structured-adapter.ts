@@ -148,7 +148,7 @@ export class CodexAdapter implements ProviderAdapter {
   }
 
   private drainQueuedInput(live: LiveCodexSession): void {
-    if (live.currentTurnId || live.turnStartInFlight) {
+    if (!live.threadId || live.currentTurnId || live.turnStartInFlight) {
       return;
     }
     const next = live.queuedInputs.shift();
@@ -159,8 +159,9 @@ export class CodexAdapter implements ProviderAdapter {
   }
 
   private startLiveTurn(live: LiveCodexSession, request: SessionInputRequest): void {
-    if (!this.services.sessionStore.hasInputControl(live.sessionId, request.clientId)) {
-      throw new Error(`Client ${request.clientId} does not hold input control for ${live.sessionId}.`);
+    if (!live.threadId) {
+      live.queuedInputs.push(request);
+      return;
     }
     const collaborationMode = codexCollaborationModeForTurn(live);
     live.turnStartInFlight = true;
@@ -194,15 +195,18 @@ export class CodexAdapter implements ProviderAdapter {
       }
       if (typeof turn?.id === "string" && live.interruptWhenTurnStarts) {
         live.interruptWhenTurnStarts = false;
-        void live.client.request("turn/interrupt", {
-          threadId: live.threadId,
-          turnId: turn.id,
-        }).catch((error) => {
-          this.reportAsyncLiveError(
-            live.sessionId,
-            error instanceof Error ? error.message : String(error),
-          );
-        });
+        if (!live.interruptingTurnIds.has(turn.id)) {
+          live.interruptingTurnIds.add(turn.id);
+          void live.client.request("turn/interrupt", {
+            threadId: live.threadId,
+            turnId: turn.id,
+          }).catch((error) => {
+            this.reportAsyncLiveError(
+              live.sessionId,
+              error instanceof Error ? error.message : String(error),
+            );
+          });
+        }
       }
     }).catch((error) => {
       this.reportAsyncLiveError(
@@ -239,6 +243,7 @@ export class CodexAdapter implements ProviderAdapter {
       provider: "codex",
       providerSessionId: request.providerSessionId,
       preferStoredReplay: request.preferStoredReplay,
+      historySourceSessionId: request.historySourceSessionId,
       rehydratedSessionIds: this.rehydratedSessionIds,
     });
     const existing = this.services.sessionStore.findManagedByProviderSession(
@@ -321,7 +326,7 @@ export class CodexAdapter implements ProviderAdapter {
   sendInput(sessionId: string, request: SessionInputRequest): void {
     const live = this.liveSessions.get(sessionId);
     if (live) {
-      if (live.currentTurnId || live.turnStartInFlight) {
+      if (!live.threadId || live.currentTurnId || live.turnStartInFlight) {
         live.queuedInputs.push(request);
         return;
       }
@@ -489,12 +494,17 @@ export class CodexAdapter implements ProviderAdapter {
   interruptSession(sessionId: string, request: InterruptSessionRequest): SessionSummary {
     const live = this.liveSessions.get(sessionId);
     if (live) {
-      if (!this.services.sessionStore.hasInputControl(sessionId, request.clientId)) {
-        throw new Error(`Client ${request.clientId} does not hold input control for ${sessionId}.`);
+      const state = this.services.sessionStore.getSession(sessionId);
+      if (!state) {
+        throw new Error(`Unknown session ${sessionId}`);
       }
       const turnId = live.currentTurnId;
       live.queuedInputs.length = 0;
       if (turnId) {
+        if (live.interruptingTurnIds.has(turnId)) {
+          return toSessionSummary(state);
+        }
+        live.interruptingTurnIds.add(turnId);
         void live.client.request("turn/interrupt", {
           threadId: live.threadId,
           turnId,
@@ -504,12 +514,8 @@ export class CodexAdapter implements ProviderAdapter {
             error instanceof Error ? error.message : String(error),
           );
         });
-      } else if (live.turnStartInFlight) {
+      } else if (live.turnStartInFlight && !live.interruptWhenTurnStarts) {
         live.interruptWhenTurnStarts = true;
-      }
-      const state = this.services.sessionStore.getSession(sessionId);
-      if (!state) {
-        throw new Error(`Unknown session ${sessionId}`);
       }
       return toSessionSummary(state);
     }

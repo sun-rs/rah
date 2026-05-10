@@ -23,6 +23,7 @@ import type {
   InterruptSessionRequest,
   ManagedSession,
   NativeTuiSurfaceClaimRequest,
+  NativeTuiClientCloseRequest,
   NativeTuiSurfaceReleaseRequest,
   NativeTuiSurfaceResponse,
   NativeTuiDiagnostic,
@@ -783,6 +784,13 @@ export class RuntimeEngine {
     request: NativeTuiSurfaceReleaseRequest,
   ): Promise<NativeTuiSurfaceResponse> {
     return await this.terminals.releaseNativeTuiSurface(sessionId, request);
+  }
+
+  async closeNativeTuiClient(
+    sessionId: string,
+    request: NativeTuiClientCloseRequest,
+  ): Promise<NativeTuiSurfaceResponse> {
+    return await this.terminals.closeNativeTuiClient(sessionId, request);
   }
 
   async respondToPermission(

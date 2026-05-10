@@ -640,6 +640,7 @@ export type PtyServerMessage =
       sessionId: string;
       data: string;
       seq?: number;
+      replace?: boolean;
     }
   | {
       type: "pty.exited";
@@ -694,6 +695,10 @@ export interface NativeTuiSurfaceClaimRequest {
 }
 
 export interface NativeTuiSurfaceReleaseRequest {
+  clientId: string;
+}
+
+export interface NativeTuiClientCloseRequest {
   clientId: string;
 }
 

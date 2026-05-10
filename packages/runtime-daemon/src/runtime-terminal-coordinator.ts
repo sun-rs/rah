@@ -5,6 +5,7 @@ import type {
   IndependentTerminalStartResponse,
   NativeTuiDiagnostic,
   NativeTuiSurfaceClaimRequest,
+  NativeTuiClientCloseRequest,
   NativeTuiSurfaceReleaseRequest,
   NativeTuiSurfaceResponse,
   NativeTuiSurfaceState,
@@ -101,17 +102,41 @@ type ZellijTuiSessionState = {
   paneId: string;
   socketDir: string;
   sizingClientPtyId?: string;
+  lastSizingClientOutputAtMs?: number;
   activeSurface?: NativeTuiSurfaceState;
   subscription?: MuxPaneSubscription;
   subscriptionRestartAttempts?: number;
   subscriptionRestartTimer?: ReturnType<typeof setTimeout>;
   exitPollMisses?: number;
   exitPollTimer?: ReturnType<typeof setInterval>;
+  dumpTimer?: ReturnType<typeof setTimeout>;
+  dumpInFlight?: boolean;
+  dumpPending?: boolean;
+  dumpAllowWebSizingClientFallback?: boolean;
+  actionQueue?: Promise<void>;
 };
 
 const DEFAULT_ZELLIJ_TUI_COLS = 140;
 const DEFAULT_ZELLIJ_TUI_ROWS = 44;
 const ZELLIJ_TUI_EXIT_MISSING_POLL_THRESHOLD = 3;
+const NATIVE_TUI_RECENT_INPUT_PROMPT_CLEAN_GRACE_MS = 800;
+
+function hasRecentInjectedInput(native: NativeTuiSessionState): boolean {
+  return (
+    native.lastInjectedInputAtMs !== undefined &&
+    Date.now() - native.lastInjectedInputAtMs < NATIVE_TUI_RECENT_INPUT_PROMPT_CLEAN_GRACE_MS
+  );
+}
+
+function remainingRecentInjectedInputMs(native: NativeTuiSessionState): number {
+  if (native.lastInjectedInputAtMs === undefined) {
+    return 0;
+  }
+  return Math.max(
+    0,
+    NATIVE_TUI_RECENT_INPUT_PROMPT_CLEAN_GRACE_MS - (Date.now() - native.lastInjectedInputAtMs),
+  );
+}
 const ZELLIJ_TUI_SURFACE_SETTLE_MS = 350;
 const ANSI_ESCAPE_PATTERN = /\u001b\[[0-?]*[ -/]*[@-~]/g;
 
@@ -142,6 +167,38 @@ function providerPrimaryModelOptionId(provider: ProviderKind): string | null {
     default:
       return null;
   }
+}
+
+function nativeLocalServerTuiAttachSpec(session: ManagedSession):
+  | { command: string; args: string[]; attachCommand: string }
+  | null {
+  const providerSessionId = session.providerSessionId;
+  const endpoint = session.runtimeDiagnostics?.serverEndpoint;
+  if (!providerSessionId || !endpoint || session.liveBackend !== "native_local_server") {
+    return null;
+  }
+  if (session.provider === "codex") {
+    if (!/^wss?:\/\//.test(endpoint)) {
+      return null;
+    }
+    const command = process.env.RAH_CODEX_BINARY || "codex";
+    const args = ["--remote", endpoint, "resume", providerSessionId];
+    return {
+      command,
+      args,
+      attachCommand: `${command} --remote ${endpoint} resume ${providerSessionId}`,
+    };
+  }
+  if (session.provider === "opencode") {
+    const command = process.env.RAH_OPENCODE_BINARY || "opencode";
+    const args = ["attach", endpoint, "--session", providerSessionId];
+    return {
+      command,
+      args,
+      attachCommand: `${command} attach ${endpoint} --session ${providerSessionId}`,
+    };
+  }
+  return null;
 }
 
 function nativeTuiStartupSessionPatch(
@@ -198,12 +255,26 @@ function isPromptResetControlInput(data: string): boolean {
 
 const NATIVE_TUI_INTERRUPT_CONFIRM_TIMEOUT_MS = 5_000;
 const OPENCODE_SECOND_INTERRUPT_DELAY_MS = 120;
+const NATIVE_TUI_CLEAR_PROMPT_DATA = "\u0015\u000b";
+const NATIVE_TUI_SUBMIT_DELAY_MS = 250;
+const NATIVE_TUI_OUTPUT_OBSERVATION_TAIL_LIMIT = 12_000;
 
 export function nativeTuiInterruptDataForProvider(provider: ProviderKind): string {
   // Native TUIs treat Ctrl-C inconsistently; for OpenCode it is an app-exit
   // binding, while Escape is the provider-declared session interrupt key.
   // OpenCode requires Escape twice during an active run ("again to interrupt").
   return provider === "opencode" ? "\u001b\u001b" : "\u001b";
+}
+
+function nativeTuiSubmitDataForProvider(provider: ProviderKind): string {
+  return "\r";
+}
+
+function nativeTuiSubmitCountForProvider(provider: ProviderKind): number {
+  // Claude Code can keep long Web-injected prompts in its multiline composer
+  // after the first Enter. A second Enter submits the draft; while an ordinary
+  // short prompt is already running, the second Enter is harmless.
+  return provider === "claude" ? 2 : 1;
 }
 
 function stripTerminalControl(value: string): string {
@@ -229,7 +300,7 @@ function renderZellijViewport(lines: readonly string[]): string {
 
 function renderZellijDump(dumped: string): string {
   const lines = dumped.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
-  return `\u001b[2J\u001b[H${dumped}${zellijSnapshotCursorSuffix(lines)}`;
+  return `\u001b[2J\u001b[H${lines.join("\r\n")}${zellijSnapshotCursorSuffix(lines)}`;
 }
 
 function isZellijSessionMissingError(error: unknown): boolean {
@@ -480,6 +551,7 @@ export class RuntimeTerminalCoordinator {
 
   clearSessionState(sessionId: string): void {
     this.terminalWrappers?.clearSessionState(sessionId);
+    void this.closeNativeLocalServerTuiClient(sessionId).catch(() => undefined);
     this.clearZellijTuiRuntimeState(sessionId);
     this.clearNativeTuiRuntimeState(sessionId);
     this.nativeTuiSessionIds.delete(sessionId);
@@ -493,6 +565,9 @@ export class RuntimeTerminalCoordinator {
     zellij.subscription?.close();
     if (zellij.sizingClientPtyId) {
       void this.ptySessions.close(zellij.sizingClientPtyId).catch(() => undefined);
+    }
+    if (zellij.dumpTimer) {
+      clearTimeout(zellij.dumpTimer);
     }
     if (zellij.subscriptionRestartTimer) {
       clearTimeout(zellij.subscriptionRestartTimer);
@@ -578,21 +653,68 @@ export class RuntimeTerminalCoordinator {
     // Drain already persisted mirror events after the new input watermark is
     // established, so stale persisted completions cannot briefly clear Stop.
     this.mirrorRuntime.mirrorSession(native.sessionId);
+    const prefix = native.clearPromptBeforeNextInput ? NATIVE_TUI_CLEAR_PROMPT_DATA : "";
+    delete native.clearPromptBeforeNextInput;
+    this.writeNativeTuiChatSubmit(native, `${prefix}${text}`);
+  }
+
+  private writeNativeTuiChatSubmit(native: NativeTuiSessionState, text: string): void {
     const zellij = this.zellijTuiSessions.get(native.sessionId);
     if (zellij) {
       void this.withZellijActionSurface(zellij, async () => {
-        await this.writeZellijTuiInput(zellij, `${text}\r`);
+        await this.writeZellijTuiInput(zellij, text);
+        for (let index = 0; index < nativeTuiSubmitCountForProvider(native.provider); index += 1) {
+          await new Promise((resolve) => setTimeout(resolve, NATIVE_TUI_SUBMIT_DELAY_MS));
+          await this.writeZellijTuiInput(zellij, nativeTuiSubmitDataForProvider(native.provider));
+        }
       })
         .catch((error) => {
           this.handleZellijTuiInputFailure(zellij, error);
         });
     } else {
-      native.process.write(`${text}\r`);
+      native.process.write(text);
+      const submitOnce = (remaining: number) => {
+        const current = this.nativeTuiSessions.get(native.sessionId);
+        if (current === native) {
+          current.process.write(nativeTuiSubmitDataForProvider(current.provider));
+        }
+        if (remaining > 1) {
+          const nextTimer = setTimeout(() => submitOnce(remaining - 1), NATIVE_TUI_SUBMIT_DELAY_MS);
+          nextTimer.unref?.();
+        }
+      };
+      const timer = setTimeout(
+        () => submitOnce(nativeTuiSubmitCountForProvider(native.provider)),
+        NATIVE_TUI_SUBMIT_DELAY_MS,
+      );
+      timer.unref?.();
     }
   }
 
   private shouldQueueNativeTuiChatInput(native: NativeTuiSessionState): boolean {
     return native.promptState !== "prompt_clean" || native.promptTracker.draftText.length > 0;
+  }
+
+  private scheduleNativeTuiQueuedDrain(native: NativeTuiSessionState): void {
+    if (native.queuedDrainTimer) {
+      return;
+    }
+    const delayMs = Math.max(25, remainingRecentInjectedInputMs(native) + 10);
+    native.queuedDrainTimer = setTimeout(() => {
+      delete native.queuedDrainTimer;
+      const current = this.nativeTuiSessions.get(native.sessionId);
+      if (
+        current !== native ||
+        current.promptState !== "prompt_clean" ||
+        current.promptTracker.draftText.length > 0 ||
+        current.queuedInputs.length === 0 ||
+        hasRecentInjectedInput(current)
+      ) {
+        return;
+      }
+      this.updateNativeTuiPromptState(current.sessionId, "prompt_clean");
+    }, delayMs);
+    native.queuedDrainTimer.unref?.();
   }
 
   handleNativeTuiInterrupt(sessionId: string, clientId: string): boolean {
@@ -602,9 +724,13 @@ export class RuntimeTerminalCoordinator {
       this.claimWebControl(sessionId, clientId);
       const activeTurnId = this.deps.sessionStore.getSession(sessionId)?.activeTurnId;
       if (native) {
+        if (native.stopPending) {
+          return true;
+        }
         cancelNativeTuiQueuedInputsForClient(native, clientId);
         native.promptTracker.draftText = "";
         delete native.lastInjectedInputAtMs;
+        native.clearPromptBeforeNextInput = true;
         native.stopPending = true;
         if (activeTurnId) {
           native.stopTurnId = activeTurnId;
@@ -637,11 +763,15 @@ export class RuntimeTerminalCoordinator {
     }
     this.claimWebControl(sessionId, clientId);
     const queuedInputCount = native.queuedInputs.length;
+    if (native.stopPending) {
+      return true;
+    }
+    const activeTurnId = this.deps.sessionStore.getSession(sessionId)?.activeTurnId;
     cancelNativeTuiQueuedInputsForClient(native, clientId);
     this.writeNativeTuiInterrupt(native);
     native.promptTracker.draftText = "";
     delete native.lastInjectedInputAtMs;
-    const activeTurnId = this.deps.sessionStore.getSession(sessionId)?.activeTurnId;
+    native.clearPromptBeforeNextInput = true;
     native.stopPending = true;
     if (activeTurnId) {
       native.stopTurnId = activeTurnId;
@@ -665,6 +795,15 @@ export class RuntimeTerminalCoordinator {
   private writeNativeTuiInterrupt(native: NativeTuiSessionState): void {
     if (native.provider !== "opencode") {
       native.process.write(nativeTuiInterruptDataForProvider(native.provider));
+      for (const retryDelay of [350, 900]) {
+        const timer = setTimeout(() => {
+          const current = this.nativeTuiSessions.get(native.sessionId);
+          if (current === native && current.stopPending) {
+            current.process.write(nativeTuiInterruptDataForProvider(current.provider));
+          }
+        }, retryDelay);
+        timer.unref?.();
+      }
       return;
     }
     native.process.write("\u001b");
@@ -677,27 +816,42 @@ export class RuntimeTerminalCoordinator {
     timer.unref?.();
   }
 
-  private sendZellijTuiInterrupt(zellij: ZellijTuiSessionState, provider: ProviderKind): void {
-    const sendEsc = async () => {
-      await this.writeZellijTuiInput(zellij, "\u001b");
-    };
-    if (provider !== "opencode") {
-      void sendEsc().catch((error) => {
+  private clearNativeTuiPromptInput(native: NativeTuiSessionState): void {
+    native.promptTracker.draftText = "";
+    const zellij = this.zellijTuiSessions.get(native.sessionId);
+    if (zellij) {
+      void this.withZellijActionSurface(zellij, async () => {
+        await this.writeZellijTuiInput(zellij, NATIVE_TUI_CLEAR_PROMPT_DATA);
+      }).catch((error) => {
         this.handleZellijTuiInputFailure(zellij, error);
       });
       return;
     }
-    void sendEsc()
-      .then(async () => {
-        await new Promise((resolve) => setTimeout(resolve, OPENCODE_SECOND_INTERRUPT_DELAY_MS));
+    native.process.write(NATIVE_TUI_CLEAR_PROMPT_DATA);
+  }
+
+  private sendZellijTuiInterrupt(zellij: ZellijTuiSessionState, provider: ProviderKind): void {
+    const sendEsc = async (): Promise<void> => {
+      await this.zellijMux.sendKeys(zellij.zellijSessionName, zellij.paneId, ["Esc"]);
+    };
+    void this.withZellijActionSurface(zellij, async () => {
+      await sendEsc();
+      const retryDelays =
+        provider === "opencode" ? [OPENCODE_SECOND_INTERRUPT_DELAY_MS] : [350, 900];
+      for (const retryDelay of retryDelays) {
+        await new Promise((resolve) => setTimeout(resolve, retryDelay));
         const native = this.nativeTuiSessions.get(zellij.sessionId);
-        if (this.isCurrentZellijTuiSession(zellij) && native) {
-          await sendEsc();
+        if (!this.isCurrentZellijTuiSession(zellij)) {
+          break;
         }
-      })
-      .catch((error) => {
-        this.handleZellijTuiInputFailure(zellij, error);
-      });
+        if (provider !== "opencode" && !native?.stopPending) {
+          break;
+        }
+        await sendEsc();
+      }
+    }).catch((error) => {
+      this.handleZellijTuiInputFailure(zellij, error);
+    });
   }
 
   private scheduleNativeTuiInterruptConfirmation(native: NativeTuiSessionState): void {
@@ -771,6 +925,7 @@ export class RuntimeTerminalCoordinator {
     if (isPromptResetControlInput(data)) {
       native.promptTracker.draftText = "";
       delete native.lastInjectedInputAtMs;
+      native.clearPromptBeforeNextInput = true;
       this.updateNativeTuiPromptState(native.sessionId, "prompt_clean");
       return;
     }
@@ -793,7 +948,12 @@ export class RuntimeTerminalCoordinator {
     }
     native.promptState = promptState;
     if (promptState === "prompt_clean") {
-      delete native.lastInjectedInputAtMs;
+      if (!hasRecentInjectedInput(native)) {
+        delete native.lastInjectedInputAtMs;
+      }
+      if (native.stopPending && native.clearPromptBeforeNextInput) {
+        this.clearNativeTuiPromptInput(native);
+      }
       this.completeNativeTuiInterrupt(native);
     }
     this.deps.sessionStore.patchManagedSession(sessionId, {
@@ -824,6 +984,10 @@ export class RuntimeTerminalCoordinator {
       native.promptTracker.draftText.length > 0 ||
       native.queuedInputs.length === 0
     ) {
+      return;
+    }
+    if (hasRecentInjectedInput(native)) {
+      this.scheduleNativeTuiQueuedDrain(native);
       return;
     }
     const queued = dequeueNativeTuiQueuedInput(native);
@@ -865,6 +1029,9 @@ export class RuntimeTerminalCoordinator {
   ): Promise<NativeTuiSurfaceResponse> {
     const zellij = this.zellijTuiSessions.get(sessionId);
     if (!zellij) {
+      if (await this.ensureNativeLocalServerTuiClient(sessionId, request)) {
+        return {};
+      }
       return {};
     }
     const surface: NativeTuiSurfaceState = {
@@ -877,13 +1044,14 @@ export class RuntimeTerminalCoordinator {
     };
     zellij.activeSurface = surface;
     if (this.shouldUseZellijSizingClient(request.clientKind)) {
+      this.deps.ptyHub.resetSession(sessionId);
       await this.ensureZellijTuiSizingClient(
         zellij,
         surface.cols ?? DEFAULT_ZELLIJ_TUI_COLS,
         surface.rows ?? DEFAULT_ZELLIJ_TUI_ROWS,
       );
       await new Promise((resolve) => setTimeout(resolve, ZELLIJ_TUI_SURFACE_SETTLE_MS));
-      await this.dumpZellijTuiScreen(zellij);
+      await this.dumpZellijTuiScreen(zellij, { allowWebSizingClientFallback: true });
     } else {
       await this.closeZellijTuiSizingClient(zellij);
     }
@@ -907,6 +1075,161 @@ export class RuntimeTerminalCoordinator {
       await this.closeZellijTuiSizingClient(zellij);
     }
     return {};
+  }
+
+  async closeNativeTuiClient(
+    sessionId: string,
+    request: NativeTuiClientCloseRequest,
+  ): Promise<NativeTuiSurfaceResponse> {
+    const zellij = this.zellijTuiSessions.get(sessionId);
+    if (zellij) {
+      return await this.releaseNativeTuiSurface(sessionId, request);
+    }
+    const current = this.deps.sessionStore.getSession(sessionId);
+    if (current?.session.liveBackend !== "native_local_server") {
+      return {};
+    }
+    const closed = await this.closeNativeLocalServerTuiClient(sessionId);
+    if (closed) {
+      this.deps.ptyHub.resetSession(sessionId);
+      this.deps.ptyHub.appendOutput(
+        sessionId,
+        "\r\n[rah] Web TUI client closed. Activate TUI to attach a new native client.\r\n",
+      );
+    }
+    if (current) {
+      this.deps.sessionStore.patchManagedSession(sessionId, {
+        runtimeDiagnostics: {
+          ...(current.session.runtimeDiagnostics ?? {}),
+          attachState: "unavailable",
+        },
+      });
+    }
+    return {};
+  }
+
+  async ensureNativeLocalServerTuiClient(
+    sessionId: string,
+    request?: NativeTuiSurfaceClaimRequest,
+  ): Promise<boolean> {
+    const state = this.deps.sessionStore.getSession(sessionId);
+    if (!state) {
+      return false;
+    }
+    const spec = nativeLocalServerTuiAttachSpec(state.session);
+    if (!spec) {
+      return false;
+    }
+    if (request) {
+      ensureClientAttachedAndPublish(this.deps, {
+        sessionId,
+        client: {
+          id: request.clientId,
+          kind: request.clientKind,
+          connectionId: request.clientId,
+        },
+        mode: "interactive",
+      });
+      if (!this.deps.sessionStore.hasInputControl(sessionId, request.clientId)) {
+        claimClientControlAndPublish(this.deps, {
+          sessionId,
+          clientId: request.clientId,
+          clientKind: request.clientKind,
+        });
+      }
+    }
+    this.deps.sessionStore.patchManagedSession(sessionId, {
+      nativeTui: {
+        terminalId: sessionId,
+        viewAvailable: true,
+        promptState: "prompt_clean",
+        queuedInputCount: 0,
+      },
+      capabilities: {
+        nativeTui: true,
+        rawPtyInput: true,
+      },
+      runtimeDiagnostics: {
+        ...(state.session.runtimeDiagnostics ?? {}),
+        attachCommand: spec.attachCommand,
+        attachState: this.ptySessions.has(sessionId) ? "ready" : "unverified",
+      },
+    });
+    if (this.ptySessions.has(sessionId)) {
+      return true;
+    }
+    this.deps.ptyHub.resetSession(sessionId);
+    this.deps.ptyHub.appendOutput(
+      sessionId,
+      `\r\n[rah] Starting ${state.session.provider} TUI client...\r\n`,
+    );
+    try {
+      const terminal = this.ptySessions.create({
+        id: sessionId,
+        cwd: state.session.cwd,
+        ...(request?.cols !== undefined ? { cols: request.cols } : {}),
+        ...(request?.rows !== undefined ? { rows: request.rows } : {}),
+        command: spec.command,
+        args: spec.args,
+        onData: (terminalId, data) => {
+          this.deps.ptyHub.appendOutput(terminalId, data);
+        },
+        onExit: (terminalId, exitArgs) => {
+          this.deps.ptyHub.emitExit(terminalId, exitArgs.exitCode, exitArgs.signal);
+          const current = this.deps.sessionStore.getSession(terminalId);
+          if (!current) {
+            return;
+          }
+          this.deps.sessionStore.patchManagedSession(terminalId, {
+            nativeTui: {
+              terminalId,
+              viewAvailable: true,
+              promptState: "prompt_clean",
+              queuedInputCount: 0,
+            },
+            runtimeDiagnostics: {
+              ...(current.session.runtimeDiagnostics ?? {}),
+              attachState: "unavailable",
+              lastError: `TUI client exited${exitArgs.exitCode !== undefined ? ` with code ${exitArgs.exitCode}` : ""}`,
+            },
+          });
+        },
+      });
+      await terminal.process.waitUntilReady();
+      const latest = this.deps.sessionStore.getSession(sessionId);
+      if (latest) {
+        this.deps.sessionStore.patchManagedSession(sessionId, {
+          runtimeDiagnostics: {
+            ...(latest.session.runtimeDiagnostics ?? {}),
+            attachCommand: spec.attachCommand,
+            attachState: "ready",
+          },
+        });
+      }
+      return true;
+    } catch (error) {
+      await this.ptySessions.close(sessionId).catch(() => undefined);
+      const current = this.deps.sessionStore.getSession(sessionId);
+      if (current) {
+        this.deps.sessionStore.patchManagedSession(sessionId, {
+          runtimeDiagnostics: {
+            ...(current.session.runtimeDiagnostics ?? {}),
+            attachCommand: spec.attachCommand,
+            attachState: "failed",
+            lastError: error instanceof Error ? error.message : String(error),
+          },
+        });
+      }
+      throw error;
+    }
+  }
+
+  async closeNativeLocalServerTuiClient(sessionId: string): Promise<boolean> {
+    if (!this.ptySessions.has(sessionId)) {
+      return false;
+    }
+    await this.ptySessions.close(sessionId);
+    return true;
   }
 
   handlePtyInput(sessionId: string, clientId: string, data: string): boolean {
@@ -987,6 +1310,7 @@ export class RuntimeTerminalCoordinator {
       return;
     }
     delete zellij.sizingClientPtyId;
+    delete zellij.lastSizingClientOutputAtMs;
     await this.ptySessions.close(sizingClientPtyId).catch(() => undefined);
   }
 
@@ -1181,7 +1505,7 @@ export class RuntimeTerminalCoordinator {
     }
 
     const native = this.nativeTuiSessions.get(sessionId);
-    const runtimeState = native?.promptState === "agent_busy" ? "running" : "idle";
+    const runtimeState = "idle";
     const readyState = this.deps.sessionStore.setRuntimeState(sessionId, runtimeState);
     publishSessionStateChanged(this.deps, sessionId, runtimeState);
     return { session: toSessionSummary(readyState) };
@@ -1301,7 +1625,7 @@ export class RuntimeTerminalCoordinator {
       throw error;
     }
 
-    const runtimeState = initialPromptState === "agent_busy" ? "running" : "idle";
+    const runtimeState = "idle";
     const readyState = this.deps.sessionStore.setRuntimeState(sessionId, runtimeState);
     publishSessionStateChanged(this.deps, sessionId, runtimeState);
     return { session: toSessionSummary(readyState) };
@@ -1423,11 +1747,22 @@ export class RuntimeTerminalCoordinator {
       env: {
         ZELLIJ_SOCKET_DIR: args.socketDir,
       },
-      onData: () => undefined,
+      onData: (_terminalId, data) => {
+        const current = this.zellijTuiSessions.get(args.sessionId);
+        if (
+          current?.sizingClientPtyId !== sizingClientPtyId ||
+          current.activeSurface?.clientKind !== "web"
+        ) {
+          return;
+        }
+        current.lastSizingClientOutputAtMs = Date.now();
+        this.observeNativeTuiOutput(args.sessionId, data);
+      },
       onExit: () => {
         const current = this.zellijTuiSessions.get(args.sessionId);
         if (current?.sizingClientPtyId === sizingClientPtyId) {
           delete current.sizingClientPtyId;
+          delete current.lastSizingClientOutputAtMs;
         }
       },
     });
@@ -1458,8 +1793,15 @@ export class RuntimeTerminalCoordinator {
         }
         zellij.subscriptionRestartAttempts = 0;
         const text = renderZellijViewport(update.viewport);
-        this.deps.ptyHub.appendOutput(zellij.sessionId, text, { replaceReplay: true });
         this.observeNativeTuiOutput(zellij.sessionId, text);
+        if (zellij.activeSurface?.clientKind === "web") {
+          // zellij subscribe viewports can briefly use a stale mirror size when
+          // ownership moves between terminal and Web. Use the frame only as a
+          // repaint signal; dump-screen gives xterm the canonical pane snapshot.
+          this.scheduleZellijTuiScreenDump(zellij, { allowWebSizingClientFallback: true });
+          return;
+        }
+        this.deps.ptyHub.appendOutput(zellij.sessionId, text, { replaceReplay: true });
       },
       {
         ansi: true,
@@ -1474,7 +1816,66 @@ export class RuntimeTerminalCoordinator {
     void this.dumpZellijTuiScreen(zellij);
   }
 
-  private async dumpZellijTuiScreen(zellij: ZellijTuiSessionState): Promise<void> {
+  private scheduleZellijTuiScreenDump(
+    zellij: ZellijTuiSessionState,
+    options: { allowWebSizingClientFallback?: boolean } = {},
+  ): void {
+    if (!this.isCurrentZellijTuiSession(zellij)) {
+      return;
+    }
+    zellij.dumpPending = true;
+    if (options.allowWebSizingClientFallback === true) {
+      zellij.dumpAllowWebSizingClientFallback = true;
+    }
+    if (zellij.dumpTimer || zellij.dumpInFlight) {
+      return;
+    }
+    zellij.dumpTimer = setTimeout(() => {
+      delete zellij.dumpTimer;
+      void this.flushZellijTuiScreenDump(zellij);
+    }, 35);
+    zellij.dumpTimer.unref?.();
+  }
+
+  private async flushZellijTuiScreenDump(zellij: ZellijTuiSessionState): Promise<void> {
+    if (!this.isCurrentZellijTuiSession(zellij)) {
+      return;
+    }
+    if (zellij.dumpInFlight) {
+      zellij.dumpPending = true;
+      return;
+    }
+    zellij.dumpPending = false;
+    zellij.dumpInFlight = true;
+    const allowWebSizingClientFallback = zellij.dumpAllowWebSizingClientFallback === true;
+    delete zellij.dumpAllowWebSizingClientFallback;
+    try {
+      await this.dumpZellijTuiScreen(zellij, { allowWebSizingClientFallback });
+    } finally {
+      zellij.dumpInFlight = false;
+      if (zellij.dumpPending && this.isCurrentZellijTuiSession(zellij)) {
+        zellij.dumpPending = false;
+        const pendingAllowWebSizingClientFallback =
+          zellij.dumpAllowWebSizingClientFallback === true;
+        delete zellij.dumpAllowWebSizingClientFallback;
+        this.scheduleZellijTuiScreenDump(zellij, {
+          allowWebSizingClientFallback: pendingAllowWebSizingClientFallback,
+        });
+      }
+    }
+  }
+
+  private async dumpZellijTuiScreen(
+    zellij: ZellijTuiSessionState,
+    options: { allowWebSizingClientFallback?: boolean } = {},
+  ): Promise<void> {
+    if (
+      zellij.activeSurface?.clientKind === "web" &&
+      zellij.sizingClientPtyId &&
+      options.allowWebSizingClientFallback !== true
+    ) {
+      return;
+    }
     const dumped = await this.zellijMux
       .dumpScreen(zellij.zellijSessionName, zellij.paneId, { ansi: true })
       .catch((error) => {
@@ -1555,24 +1956,46 @@ export class RuntimeTerminalCoordinator {
     zellij: ZellijTuiSessionState,
     action: () => Promise<T>,
   ): Promise<T> {
-    const needsTransientSurface = !zellij.activeSurface && !zellij.sizingClientPtyId;
-    if (needsTransientSurface) {
+    const previousAction = zellij.actionQueue ?? Promise.resolve();
+    const queuedAction = previousAction.catch(() => undefined).then(() =>
+      this.withZellijActionSurfaceNow(zellij, action),
+    );
+    const actionTail = queuedAction.then(
+      () => undefined,
+      () => undefined,
+    );
+    zellij.actionQueue = actionTail;
+    void actionTail.finally(() => {
+      if (zellij.actionQueue === actionTail) {
+        delete zellij.actionQueue;
+      }
+    });
+    return queuedAction;
+  }
+
+  private async withZellijActionSurfaceNow<T>(
+    zellij: ZellijTuiSessionState,
+    action: () => Promise<T>,
+  ): Promise<T> {
+    const needsSizingClient = zellij.activeSurface?.clientKind !== "terminal";
+    const shouldCloseAfter = needsSizingClient && !zellij.activeSurface;
+    if (needsSizingClient) {
       await this.ensureZellijTuiSizingClient(
         zellij,
-        DEFAULT_ZELLIJ_TUI_COLS,
-        DEFAULT_ZELLIJ_TUI_ROWS,
+        zellij.activeSurface?.cols ?? DEFAULT_ZELLIJ_TUI_COLS,
+        zellij.activeSurface?.rows ?? DEFAULT_ZELLIJ_TUI_ROWS,
       );
       await new Promise((resolve) => setTimeout(resolve, 120));
     }
     try {
       const result = await action();
-      if (needsTransientSurface) {
+      if (shouldCloseAfter) {
         await new Promise((resolve) => setTimeout(resolve, 500));
         await this.dumpZellijTuiScreen(zellij);
       }
       return result;
     } finally {
-      if (needsTransientSurface && !zellij.activeSurface) {
+      if (shouldCloseAfter && !zellij.activeSurface) {
         await this.closeZellijTuiSizingClient(zellij);
       }
     }
@@ -1733,9 +2156,12 @@ export class RuntimeTerminalCoordinator {
     if (!native) {
       return;
     }
+    native.recentOutputTail = `${native.recentOutputTail ?? ""}${data}`.slice(
+      -NATIVE_TUI_OUTPUT_OBSERVATION_TAIL_LIMIT,
+    );
     const observation = this.deps.nativeTuiProviders.observeOutput(
       nativeTuiProviderRuntimeSession(native),
-      data,
+      native.recentOutputTail,
     );
     if (observation.promptClean && native.promptTracker.draftText.length === 0) {
       native.promptTracker.draftText = "";
@@ -1801,6 +2227,7 @@ export class RuntimeTerminalCoordinator {
       title: nextTitle,
       preview: nextPreview,
     });
+    this.deps.historySnapshots.clear(sessionId);
     publishSessionStarted(this.deps, sessionId);
     this.mirrorRuntime.mirrorSession(sessionId);
   }

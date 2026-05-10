@@ -237,6 +237,7 @@ export class RuntimeSessionLifecycle {
       });
       return;
     }
+    await this.deps.terminals.closeNativeLocalServerTuiClient(sessionId);
     const adapter = this.deps.requireStructuredLifecycleAdapter(sessionId);
     await adapter.closeSession?.(sessionId, request);
     this.deps.sessionStore.removeSession(sessionId);

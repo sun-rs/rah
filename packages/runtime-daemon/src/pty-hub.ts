@@ -69,6 +69,18 @@ export class PtyHub {
     });
   }
 
+  resetSession(sessionId: string): void {
+    const existing = this.sessions.get(sessionId);
+    if (!existing) {
+      this.ensureSession(sessionId);
+      return;
+    }
+    existing.replayEntries = [];
+    existing.replayBytes = 0;
+    existing.nextSeq = 0;
+    delete existing.exitState;
+  }
+
   appendOutput(sessionId: string, data: string, options?: PtyAppendOutputOptions): void {
     const session = this.getOrCreate(sessionId);
     const seq = session.nextSeq++;
@@ -88,6 +100,9 @@ export class PtyHub {
       data,
       seq,
     };
+    if (options?.replaceReplay === true) {
+      frame.replace = true;
+    }
     for (const subscriber of session.subscribers) {
       subscriber(frame);
     }

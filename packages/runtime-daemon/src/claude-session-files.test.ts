@@ -186,6 +186,48 @@ describe("Claude session files", () => {
     }
   });
 
+  test("keeps Claude chat messages in file order when record timestamps go backwards", () => {
+    writeClaudeSession("session-nonmonotonic.jsonl", [
+      {
+        type: "user",
+        uuid: "user-nonmonotonic-1",
+        cwd: workDir,
+        sessionId: "session-nonmonotonic",
+        timestamp: "2025-07-19T22:21:10.000Z",
+        message: {
+          content: "first question",
+        },
+      },
+      {
+        type: "assistant",
+        uuid: "assistant-nonmonotonic-1",
+        cwd: workDir,
+        sessionId: "session-nonmonotonic",
+        timestamp: "2025-07-19T22:21:05.000Z",
+        message: {
+          content: [{ type: "text", text: "first answer" }],
+        },
+      },
+    ]);
+
+    const record = findClaudeStoredSessionRecord("session-nonmonotonic", workDir);
+    assert.ok(record);
+    const page = getClaudeStoredSessionHistoryPage({
+      sessionId: "replay-nonmonotonic",
+      record,
+      limit: 100,
+    });
+    const messages = page.events
+      .filter((event) => event.type === "timeline.item.added")
+      .map((event) => event.payload.item)
+      .filter((item) => item.kind === "user_message" || item.kind === "assistant_message");
+
+    assert.deepEqual(
+      messages.map((item) => item.text),
+      ["first question", "first answer"],
+    );
+  });
+
   test("deduplicates resumed history and skips internal Claude events", () => {
     writeClaudeSession("session-2.jsonl", [
       {
@@ -455,11 +497,67 @@ describe("Claude session files", () => {
     );
     assert.ok(notification);
     if (notification.type === "notification.emitted") {
+      assert.equal(notification.payload.level, "warning");
       assert.equal(
         notification.payload.body,
         "API Error: 503 No available accounts: no available accounts. This is a server-side issue, usually temporary.",
       );
       assert.doesNotMatch(notification.payload.body, /cloudflare|headers|x-request-id/);
+    }
+  });
+
+  test("marks Claude overload and rate-limit api errors as warnings", () => {
+    writeClaudeSession("session-429.jsonl", [
+      {
+        type: "user",
+        uuid: "user-429",
+        cwd: workDir,
+        sessionId: "session-429",
+        timestamp: "2025-07-19T22:32:50.000Z",
+        message: {
+          content: "你是谁",
+        },
+      },
+      {
+        type: "system",
+        uuid: "system-error-429",
+        subtype: "api_error",
+        cwd: workDir,
+        sessionId: "session-429",
+        timestamp: "2025-07-19T22:32:51.000Z",
+        error: {
+          status: 429,
+          error: {
+            error: {
+              message: "The engine is currently overloaded, please try again later",
+              type: "api_error",
+            },
+            type: "error",
+          },
+          type: "api_error",
+        },
+      },
+    ]);
+
+    const record = discoverClaudeStoredSessions(workDir)[0];
+    assert.ok(record);
+    const page = getClaudeStoredSessionHistoryPage({
+      sessionId: "rah-session",
+      record,
+      limit: 100,
+    });
+    const notification = page.events.find(
+      (event) =>
+        event.type === "notification.emitted" &&
+        event.payload.title === "Claude API error",
+    );
+    assert.ok(notification);
+    if (notification.type === "notification.emitted") {
+      assert.equal(notification.payload.level, "warning");
+      assert.equal(
+        notification.payload.body,
+        "API Error: 429 The engine is currently overloaded, please try again later",
+      );
     }
   });
 
@@ -499,7 +597,7 @@ describe("Claude session files", () => {
       page.events.some(
         (event) =>
           event.type === "turn.canceled" &&
-          event.turnId === "turn-1" &&
+          event.turnId === "turn:user-interrupted" &&
           event.payload.reason === "interrupted",
       ),
     );
@@ -578,7 +676,7 @@ describe("Claude session files", () => {
     const canceled = page.events.filter((event) => event.type === "turn.canceled");
 
     assert.equal(canceled.length, 1);
-    assert.equal(canceled[0]?.turnId, "turn-1");
+    assert.equal(canceled[0]?.turnId, "turn:user-no-response");
   });
 
   test("frozen Claude history loader keeps browsing anchored after newer lines append", () => {

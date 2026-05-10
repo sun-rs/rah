@@ -245,7 +245,6 @@ test("rah codex defaults to native local-server and attaches the official remote
         session: sessionSummary({
           id: "session-codex-native-local",
           provider: "codex",
-          providerSessionId: "codex-thread-1",
           launchSource: "terminal",
           liveBackend: "native_local_server",
           cwd: "/tmp",
@@ -262,7 +261,7 @@ test("rah codex defaults to native local-server and attaches the official remote
           runtimeDiagnostics: {
             serverEndpoint: "ws://127.0.0.1:59999",
             attachState: "ready",
-            lastEventCursor: "thread:codex-thread-1",
+            lastEventCursor: "thread:pending",
           },
           capabilities: {},
           createdAt: new Date().toISOString(),
@@ -277,7 +276,6 @@ test("rah codex defaults to native local-server and attaches the official remote
         session: sessionSummary({
           id: "session-codex-native-local",
           provider: "codex",
-          providerSessionId: "codex-thread-1",
           launchSource: "terminal",
           liveBackend: "native_local_server",
           cwd: "/tmp",
@@ -296,7 +294,6 @@ test("rah codex defaults to native local-server and attaches the official remote
         session: sessionSummary({
           id: "session-codex-native-local",
           provider: "codex",
-          providerSessionId: "codex-thread-1",
           launchSource: "terminal",
           liveBackend: "native_local_server",
           cwd: "/tmp",
@@ -378,7 +375,8 @@ test("rah codex defaults to native local-server and attaches the official remote
     assert.deepEqual(detachRequests, [{ clientId: startRequest.attach.client.id }]);
     const attachLog = readFileSync(logPath, "utf8");
     assert.match(attachLog, /^cwd=\/(?:private\/)?tmp$/m);
-    assert.match(attachLog, /args=--remote ws:\/\/127\.0\.0\.1:59999 resume codex-thread-1/);
+    assert.match(attachLog, /args=--remote ws:\/\/127\.0\.0\.1:59999/);
+    assert.doesNotMatch(attachLog, /resume/);
   } finally {
     rmSync(tmpDir, { force: true, recursive: true });
   }
@@ -937,7 +935,7 @@ test("rah provider command honors RAH_MUX_BACKEND=zellij", async () => {
   assert.equal(startRequest.liveBackend, "zellij_tui");
 });
 
-test("rah provider command attaches local terminal through zellij when mux metadata is present", async () => {
+test("rah claude attaches local terminal through zellij when mux metadata is present", async () => {
   const startRequests: unknown[] = [];
   const detachRequests: unknown[] = [];
   const surfaceClaims: unknown[] = [];
@@ -956,7 +954,7 @@ test("rah provider command attaches local terminal through zellij when mux metad
       writeJson(res, 200, {
         session: sessionSummary({
           id: "session-zellij-attach",
-          provider: "codex",
+          provider: "claude",
           launchSource: "terminal",
           liveBackend: "zellij_tui",
           cwd: "/tmp",
@@ -1056,9 +1054,7 @@ test("rah provider command attaches local terminal through zellij when mux metad
     process.execPath,
     [
       "bin/rah.mjs",
-      "codex",
-      "--mux",
-      "zellij",
+      "claude",
       "--daemon-url",
       `http://127.0.0.1:${port}`,
       "--cwd",
@@ -1086,7 +1082,12 @@ test("rah provider command attaches local terminal through zellij when mux metad
   try {
     assert.equal(exitCode, 0, stderr);
     assert.equal(startRequests.length, 1);
-    const startRequest = startRequests[0] as { liveBackend: string; attach: { client: { id: string } } };
+    const startRequest = startRequests[0] as {
+      provider: string;
+      liveBackend: string;
+      attach: { client: { id: string } };
+    };
+    assert.equal(startRequest.provider, "claude");
     assert.equal(startRequest.liveBackend, "zellij_tui");
     assert.equal(ptyConnected, false);
     assert.deepEqual(surfaceClaims, [{
@@ -1254,6 +1255,317 @@ test("rah attach uses provider-native attach for OpenCode native local-server se
   } finally {
     rmSync(tmpDir, { force: true, recursive: true });
   }
+});
+
+test("rah attach terminates the managed provider client when the live session is archived", async () => {
+  const attachRequests: unknown[] = [];
+  const detachRequests: unknown[] = [];
+  const wss = new WebSocketServer({ noServer: true });
+  const sessionPayload = sessionSummary({
+    id: "session-opencode-archive",
+    provider: "opencode",
+    providerSessionId: "opencode-archive-1",
+    launchSource: "web",
+    liveBackend: "native_local_server",
+    cwd: "/tmp",
+    rootDir: "/tmp",
+    runtimeState: "idle",
+    runtime: {
+      kind: "native_local_server",
+      protocolStability: "project_native",
+      liveSource: "provider_server",
+      tuiRole: "client_view",
+      structuredLiveEvents: true,
+      tuiContinuity: true,
+    },
+    runtimeDiagnostics: {
+      serverEndpoint: "http://127.0.0.1:49998",
+      attachCommand: "opencode attach http://127.0.0.1:49998 --session opencode-archive-1",
+      attachState: "ready",
+      lastEventCursor: "session:opencode-archive-1",
+    },
+    ptyId: "session-opencode-archive",
+    capabilities: {},
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  });
+  const server = createServer(async (req, res) => {
+    if (req.method === "GET" && req.url === "/readyz") {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end("ok");
+      return;
+    }
+    if (req.method === "GET" && req.url === "/api/sessions") {
+      writeJson(res, 200, {
+        sessions: attachRequests.length > 0 ? [] : [sessionPayload],
+        storedSessions: [],
+        recentSessions: [],
+        workspaceDirs: [],
+      });
+      return;
+    }
+    if (req.method === "POST" && req.url === "/api/sessions/session-opencode-archive/attach") {
+      attachRequests.push(await readJsonBody(req));
+      writeJson(res, 200, { session: sessionPayload });
+      return;
+    }
+    if (req.method === "POST" && req.url === "/api/sessions/session-opencode-archive/detach") {
+      detachRequests.push(await readJsonBody(req));
+      writeJson(res, 200, { session: sessionPayload });
+      return;
+    }
+    res.writeHead(404);
+    res.end("not found");
+  });
+
+  const port = await listen(server);
+  const tmpDir = mkdtempSync(path.join(os.tmpdir(), "rah-cli-opencode-archive-"));
+  const fakeBin = path.join(tmpDir, "bin");
+  const logPath = path.join(tmpDir, "opencode-archive.log");
+  const fakeOpenCode = path.join(fakeBin, "opencode");
+  mkdirSync(fakeBin, { recursive: true });
+  writeFileSync(
+    fakeOpenCode,
+    [
+      "#!/bin/sh",
+      "printf 'start args=%s\\n' \"$*\" >> \"$RAH_OPENCODE_ATTACH_LOG\"",
+      "trap 'printf signal=HUP\\n >> \"$RAH_OPENCODE_ATTACH_LOG\"; exit 0' HUP",
+      "trap 'printf signal=TERM\\n >> \"$RAH_OPENCODE_ATTACH_LOG\"; exit 0' TERM",
+      "while true; do sleep 1; done",
+    ].join("\n"),
+  );
+  chmodSync(fakeOpenCode, 0o755);
+
+  const child = spawn(
+    process.execPath,
+    [
+      "bin/rah.mjs",
+      "attach",
+      "session-opencode-archive",
+      "--daemon-url",
+      `http://127.0.0.1:${port}`,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? ""}`,
+        RAH_OPENCODE_ATTACH_LOG: logPath,
+      },
+    },
+  );
+  let stderr = "";
+  child.stderr?.on("data", (chunk) => {
+    stderr += chunk.toString("utf8");
+  });
+  const exitCode = await new Promise<number | null>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error("timed out waiting for managed attach to exit"));
+    }, 4_000);
+    child.on("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.on("exit", (code) => {
+      clearTimeout(timeout);
+      resolve(code);
+    });
+  });
+  await closeServer(server, wss);
+
+  try {
+    assert.equal(exitCode, 0, stderr);
+    assert.equal(attachRequests.length, 1);
+    assert.equal(detachRequests.length, 1);
+    const attachRequest = attachRequests[0] as { client: { id: string }; claimControl?: boolean };
+    assert.deepEqual(detachRequests, [{ clientId: attachRequest.client.id }]);
+    const attachLog = readFileSync(logPath, "utf8");
+    assert.match(attachLog, /start args=attach http:\/\/127\.0\.0\.1:49998 --session opencode-archive-1/);
+    assert.equal((attachLog.match(/start args=/g) ?? []).length, 1);
+    assert.match(attachLog, /signal=HUP/);
+  } finally {
+    rmSync(tmpDir, { force: true, recursive: true });
+  }
+});
+
+test("rah provider attach resolves a live session by provider session id", async () => {
+  const attachRequests: unknown[] = [];
+  const detachRequests: unknown[] = [];
+  const wss = new WebSocketServer({ noServer: true });
+  const server = createServer(async (req, res) => {
+    if (req.method === "GET" && req.url === "/readyz") {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end("ok");
+      return;
+    }
+    if (req.method === "GET" && req.url === "/api/sessions") {
+      writeJson(res, 200, {
+        sessions: [
+          sessionSummary({
+            id: "rah-live-opencode-1",
+            provider: "opencode",
+            providerSessionId: "opencode-provider-1",
+            launchSource: "web",
+            liveBackend: "native_local_server",
+            cwd: "/tmp",
+            rootDir: "/tmp",
+            runtimeState: "idle",
+            runtimeDiagnostics: {
+              serverEndpoint: "http://127.0.0.1:49997",
+              attachCommand: "opencode attach http://127.0.0.1:49997 --session opencode-provider-1",
+              attachState: "ready",
+              lastEventCursor: "session:opencode-provider-1",
+            },
+            ptyId: "rah-live-opencode-1",
+            capabilities: {},
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          }),
+        ],
+        storedSessions: [],
+        recentSessions: [],
+        workspaceDirs: [],
+      });
+      return;
+    }
+    if (req.method === "POST" && req.url === "/api/sessions/rah-live-opencode-1/attach") {
+      attachRequests.push(await readJsonBody(req));
+      writeJson(res, 200, { session: sessionSummary({ id: "rah-live-opencode-1" }) });
+      return;
+    }
+    if (req.method === "POST" && req.url === "/api/sessions/rah-live-opencode-1/detach") {
+      detachRequests.push(await readJsonBody(req));
+      writeJson(res, 200, { session: sessionSummary({ id: "rah-live-opencode-1" }) });
+      return;
+    }
+    res.writeHead(404);
+    res.end("not found");
+  });
+
+  const port = await listen(server);
+  const tmpDir = mkdtempSync(path.join(os.tmpdir(), "rah-cli-provider-attach-"));
+  const fakeBin = path.join(tmpDir, "bin");
+  const logPath = path.join(tmpDir, "opencode-provider-attach.log");
+  const fakeOpenCode = path.join(fakeBin, "opencode");
+  mkdirSync(fakeBin, { recursive: true });
+  writeFileSync(
+    fakeOpenCode,
+    [
+      "#!/bin/sh",
+      "printf 'args=%s\\n' \"$*\" > \"$RAH_OPENCODE_ATTACH_LOG\"",
+    ].join("\n"),
+  );
+  chmodSync(fakeOpenCode, 0o755);
+
+  const child = spawn(
+    process.execPath,
+    [
+      "bin/rah.mjs",
+      "opencode",
+      "attach",
+      "opencode-provider-1",
+      "--daemon-url",
+      `http://127.0.0.1:${port}`,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? ""}`,
+        RAH_OPENCODE_ATTACH_LOG: logPath,
+      },
+    },
+  );
+  let stderr = "";
+  child.stderr?.on("data", (chunk) => {
+    stderr += chunk.toString("utf8");
+  });
+  const exitCode = await new Promise<number | null>((resolve, reject) => {
+    child.on("error", reject);
+    child.on("exit", (code) => resolve(code));
+  });
+  await closeServer(server, wss);
+
+  try {
+    assert.equal(exitCode, 0, stderr);
+    assert.equal(attachRequests.length, 1);
+    assert.equal(detachRequests.length, 1);
+    const attachRequest = attachRequests[0] as { client: { id: string }; claimControl?: boolean };
+    assert.deepEqual(detachRequests, [{ clientId: attachRequest.client.id }]);
+    const attachLog = readFileSync(logPath, "utf8");
+    assert.match(attachLog, /args=attach http:\/\/127\.0\.0\.1:49997 --session opencode-provider-1/);
+  } finally {
+    rmSync(tmpDir, { force: true, recursive: true });
+  }
+});
+
+test("rah provider attach reports non-live provider sessions as resumable", async () => {
+  const wss = new WebSocketServer({ noServer: true });
+  const server = createServer(async (req, res) => {
+    if (req.method === "GET" && req.url === "/readyz") {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end("ok");
+      return;
+    }
+    if (req.method === "GET" && req.url === "/api/sessions") {
+      writeJson(res, 200, {
+        sessions: [
+          sessionSummary({
+            id: "session-opencode-native",
+            provider: "opencode",
+            providerSessionId: "opencode-native-1",
+            launchSource: "web",
+            liveBackend: "native_local_server",
+            cwd: "/tmp",
+            rootDir: "/tmp",
+            runtimeState: "idle",
+            ptyId: "session-opencode-native",
+            capabilities: {},
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          }),
+        ],
+        storedSessions: [],
+        recentSessions: [],
+        workspaceDirs: [],
+      });
+      return;
+    }
+    res.writeHead(404);
+    res.end("not found");
+  });
+
+  const port = await listen(server);
+  const child = spawn(
+    process.execPath,
+    [
+      "bin/rah.mjs",
+      "codex",
+      "attach",
+      "codex-provider-missing",
+      "--daemon-url",
+      `http://127.0.0.1:${port}`,
+    ],
+    {
+      cwd: process.cwd(),
+    },
+  );
+  let stderr = "";
+  child.stderr?.on("data", (chunk) => {
+    stderr += chunk.toString("utf8");
+  });
+  const exitCode = await new Promise<number | null>((resolve, reject) => {
+    child.on("error", reject);
+    child.on("exit", (code) => resolve(code));
+  });
+  await closeServer(server, wss);
+
+  assert.equal(exitCode, 1);
+  assert.match(
+    stderr,
+    /No live codex session found for provider session codex-provider-missing\. Use `rah codex resume codex-provider-missing` to start it\./,
+  );
 });
 
 test("rah provider command preserves UTF-8 input split across stdin chunks", async () => {

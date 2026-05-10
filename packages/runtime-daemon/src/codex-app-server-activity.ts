@@ -38,6 +38,7 @@ export interface CodexAppServerTranslationState {
   completedReasoningItemIds: Set<string>;
   reasoningSectionBreakKeys: Set<string>;
   timelineItemIndexByProviderItemKey: Map<string, number>;
+  userTimelineItemIndexByTurnId: Map<string, number>;
   nextTimelineItemIndexByTurnId: Map<string, number>;
   lastAgentMessageDeltaByItemId: Map<string, string>;
   lastReasoningDeltaByItemId: Map<string, string>;
@@ -61,6 +62,7 @@ export function createCodexAppServerTranslationState(): CodexAppServerTranslatio
     completedReasoningItemIds: new Set(),
     reasoningSectionBreakKeys: new Set(),
     timelineItemIndexByProviderItemKey: new Map(),
+    userTimelineItemIndexByTurnId: new Map(),
     nextTimelineItemIndexByTurnId: new Map(),
     lastAgentMessageDeltaByItemId: new Map(),
     lastReasoningDeltaByItemId: new Map(),
@@ -87,6 +89,8 @@ export const CODEX_APP_SERVER_NOTIFICATION_METHODS = [
   "thread/closed",
   "skills/changed",
   "thread/name/updated",
+  "thread/goal/updated",
+  "thread/goal/cleared",
   "thread/tokenUsage/updated",
   "turn/started",
   "hook/started",
@@ -133,6 +137,7 @@ export const CODEX_APP_SERVER_NOTIFICATION_METHODS = [
   "thread/realtime/closed",
   "windows/worldWritableWarning",
   "windowsSandbox/setupCompleted",
+  "remoteControl/status/changed",
 ] as const;
 
 export const CODEX_APP_SERVER_IGNORED_NOTIFICATION_METHODS = [
@@ -140,6 +145,8 @@ export const CODEX_APP_SERVER_IGNORED_NOTIFICATION_METHODS = [
   "thread/unarchived",
   "skills/changed",
   "thread/name/updated",
+  "thread/goal/updated",
+  "thread/goal/cleared",
   "rawResponseItem/completed",
   "command/exec/outputDelta",
   "item/commandExecution/terminalInteraction",
@@ -166,11 +173,29 @@ export const CODEX_APP_SERVER_IGNORED_NOTIFICATION_METHODS = [
   "thread/realtime/closed",
   "windows/worldWritableWarning",
   "windowsSandbox/setupCompleted",
+  "remoteControl/status/changed",
 ] as const satisfies readonly (typeof CODEX_APP_SERVER_NOTIFICATION_METHODS)[number][];
 
 const CODEX_APP_SERVER_IGNORED_NOTIFICATION_METHOD_SET = new Set<string>(
   CODEX_APP_SERVER_IGNORED_NOTIFICATION_METHODS,
 );
+
+const CODEX_APP_SERVER_CRITICAL_UNKNOWN_NOTIFICATION_PREFIXES = [
+  "turn/",
+  "hook/",
+  "item/",
+  "rawResponseItem/",
+  "serverRequest/",
+  "codex/event/",
+  "command/",
+  "process/",
+] as const;
+
+function isCriticalUnknownCodexNotification(method: string): boolean {
+  return CODEX_APP_SERVER_CRITICAL_UNKNOWN_NOTIFICATION_PREFIXES.some((prefix) =>
+    method.startsWith(prefix),
+  );
+}
 
 export const CODEX_APP_SERVER_REQUEST_METHODS = [
   "item/commandExecution/requestApproval",
@@ -286,6 +311,7 @@ function allocateTimelineItemIndex(
   state: CodexAppServerTranslationState,
   params: {
     turnId: string;
+    itemKind: "user_message" | "assistant_message" | "reasoning" | "plan" | "compaction";
     providerItemKey: string;
   },
 ): number {
@@ -294,9 +320,27 @@ function allocateTimelineItemIndex(
   if (existing !== undefined) {
     return existing;
   }
+  const knownUserIndex = state.userTimelineItemIndexByTurnId.get(params.turnId);
+  if (params.itemKind === "user_message") {
+    if (knownUserIndex !== undefined) {
+      state.timelineItemIndexByProviderItemKey.set(scopedKey, knownUserIndex);
+      return knownUserIndex;
+    }
+  } else if (knownUserIndex === undefined) {
+    // Codex app-server can stream assistant/reasoning items without first
+    // echoing the user message for web/headless turns. The rollout JSONL always
+    // contains that user message as the first timeline item, so reserve slot 0
+    // to keep live and history canonical ids aligned.
+    const userIndex = state.nextTimelineItemIndexByTurnId.get(params.turnId) ?? 0;
+    state.nextTimelineItemIndexByTurnId.set(params.turnId, userIndex + 1);
+    state.userTimelineItemIndexByTurnId.set(params.turnId, userIndex);
+  }
   const next = state.nextTimelineItemIndexByTurnId.get(params.turnId) ?? 0;
   state.nextTimelineItemIndexByTurnId.set(params.turnId, next + 1);
   state.timelineItemIndexByProviderItemKey.set(scopedKey, next);
+  if (params.itemKind === "user_message") {
+    state.userTimelineItemIndexByTurnId.set(params.turnId, next);
+  }
   return next;
 }
 
@@ -316,6 +360,7 @@ function createLiveTimelineIdentity(
   }
   const itemIndex = allocateTimelineItemIndex(state, {
     turnId: params.turnId,
+    itemKind: params.itemKind,
     providerItemKey: `${params.itemKind}:${params.providerItemKey}`,
   });
   return createCodexTimelineIdentity({
@@ -1392,6 +1437,66 @@ function mapThreadItem(
   }
 }
 
+export function translateCodexAppServerThreadSnapshot(
+  thread: unknown,
+  state: CodexAppServerTranslationState,
+  raw: unknown = thread,
+): CodexLiveTranslatedActivity[] {
+  const threadRecord =
+    thread && typeof thread === "object" && !Array.isArray(thread)
+      ? (thread as Record<string, unknown>)
+      : null;
+  if (!threadRecord) {
+    return [];
+  }
+  const providerSessionId = stringField(threadRecord, "id");
+  const turns = Array.isArray(threadRecord.turns) ? threadRecord.turns : [];
+  const translatedItems: CodexLiveTranslatedActivity[] = [];
+  for (const turn of turns) {
+    if (!turn || typeof turn !== "object" || Array.isArray(turn)) {
+      continue;
+    }
+    const turnRecord = turn as Record<string, unknown>;
+    const turnId = stringField(turnRecord, "id");
+    if (!turnId) {
+      continue;
+    }
+    translatedItems.push(translated(raw, { type: "turn_started", turnId }));
+    const turnItems = Array.isArray(turnRecord.items) ? turnRecord.items : [];
+    for (const item of turnItems) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        continue;
+      }
+      translatedItems.push(
+        ...mapThreadItem(
+          item as Record<string, unknown>,
+          "completed",
+          turnId,
+          state,
+          providerSessionId ?? undefined,
+        ).map((activity) => translated(raw, activity)),
+      );
+    }
+    const status = stringField(turnRecord, "status");
+    if (status === "completed") {
+      translatedItems.push(translated(raw, { type: "turn_completed", turnId }));
+    } else if (status === "interrupted") {
+      translatedItems.push(translated(raw, { type: "turn_canceled", turnId, reason: "interrupted" }));
+    } else if (status === "failed") {
+      const error =
+        turnRecord.error && typeof turnRecord.error === "object" && !Array.isArray(turnRecord.error)
+          ? stringField(turnRecord.error as Record<string, unknown>, "message")
+          : null;
+      translatedItems.push(translated(raw, {
+        type: "turn_failed",
+        turnId,
+        error: error ?? "Codex turn failed",
+      }));
+    }
+  }
+  return translatedItems;
+}
+
 function makeTerminalCommandPreamble(command: string): string {
   return `$ ${command}\r\n`;
 }
@@ -2382,7 +2487,9 @@ export function translateCodexAppServerNotification(
         }),
       ];
     default:
-      return invalidStreamActivities(notification, "method is not mapped by the Codex adapter");
+      return isCriticalUnknownCodexNotification(notification.method)
+        ? invalidStreamActivities(notification, "critical method is not mapped by the Codex adapter")
+        : [];
   }
 }
 

@@ -318,10 +318,17 @@ export function SessionInfoDialog(props: {
     session?.providerSessionId && session.provider !== "custom"
       ? `rah ${session.provider} resume ${session.providerSessionId}`
       : null;
-  const attachCommand =
-    session?.liveBackend === "zellij_tui" || session?.liveBackend === "native_tui"
-      ? `rah attach ${session.id}`
+  const providerAttachCommand =
+    session?.providerSessionId && session.provider !== "custom"
+      ? `rah ${session.provider} attach ${session.providerSessionId}`
       : null;
+  const rahAttachCommand = session ? `rah attach ${session.id}` : null;
+  const launchDescription =
+    session?.launchSource === "terminal"
+      ? "Local terminal session. Web Chat can continue the same live session."
+      : session?.launchSource === "web"
+        ? "Web-started session. A local terminal can attach with the RAH attach command."
+        : session?.launchSource ?? "Unavailable";
   const zellijCommand =
     session?.mux?.backend === "zellij"
       ? `ZELLIJ_SOCKET_DIR=${session.mux.socketDir} zellij attach ${session.mux.sessionName} options --mirror-session true --pane-frames false --show-startup-tips false`
@@ -368,7 +375,7 @@ export function SessionInfoDialog(props: {
               }
             />
             <InfoRow
-              label="Resume"
+              label="Resume history"
               mono
               value={
                 resumeCommand ? (
@@ -385,16 +392,31 @@ export function SessionInfoDialog(props: {
               label="Attach"
               mono
               value={
-                attachCommand ? (
+                providerAttachCommand || rahAttachCommand ? (
                   <div className="flex flex-wrap items-start gap-2">
-                    <span className="min-w-0 flex-1">{attachCommand}</span>
-                    <CopyValueButton value={attachCommand} label="attach command" />
+                    <span className="min-w-0 flex-1">{providerAttachCommand ?? rahAttachCommand}</span>
+                    <CopyValueButton
+                      value={providerAttachCommand ?? rahAttachCommand ?? ""}
+                      label="attach command"
+                    />
                   </div>
                 ) : (
                   "Unavailable"
                 )
               }
             />
+            {providerAttachCommand && rahAttachCommand ? (
+              <InfoRow
+                label="Attach by RAH ID"
+                mono
+                value={
+                  <div className="flex flex-wrap items-start gap-2">
+                    <span className="min-w-0 flex-1">{rahAttachCommand}</span>
+                    <CopyValueButton value={rahAttachCommand} label="RAH attach command" />
+                  </div>
+                }
+              />
+            ) : null}
             {zellijCommand ? (
               <InfoRow
                 label="Zellij"
@@ -409,17 +431,17 @@ export function SessionInfoDialog(props: {
             ) : null}
             {runtimeDiagnostics?.attachCommand ? (
               <InfoRow
-                label="Native attach"
+                label="Raw attach"
                 mono
                 value={
                   <div className="flex flex-wrap items-start gap-2">
                     <span className="min-w-0 flex-1">{runtimeDiagnostics.attachCommand}</span>
-                    <CopyValueButton value={runtimeDiagnostics.attachCommand} label="native attach command" />
+                    <CopyValueButton value={runtimeDiagnostics.attachCommand} label="raw attach command" />
                   </div>
                 }
               />
             ) : null}
-            <InfoRow label="Launch" value={session?.launchSource ?? "Unavailable"} />
+            <InfoRow label="Origin" value={launchDescription} />
             <InfoRow label="Backend" value={session?.liveBackend ?? "Unavailable"} />
             <InfoRow label="State" value={session?.runtimeState ?? "Unavailable"} />
             <InfoRow label="Runtime" value={formatSessionRuntime(session?.runtime)} />

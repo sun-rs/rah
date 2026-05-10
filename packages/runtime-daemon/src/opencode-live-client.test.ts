@@ -74,7 +74,7 @@ test("runtimeDiagnosticsForOpenCodeServer exposes safe attach diagnostics", () =
   });
 });
 
-test("interruptOpenCodeLiveSession requires input control before canceling", () => {
+test("interruptOpenCodeLiveSession ignores idle stops without requiring input control", () => {
   const services = {
     eventBus: new EventBus(),
     ptyHub: new PtyHub(),
@@ -91,28 +91,46 @@ test("interruptOpenCodeLiveSession requires input control before canceling", () 
   const liveSession = {
     sessionId: session.session.id,
     providerSessionId: "opencode-1",
-    acp: {
-      cancel: () => {
-        cancelCalled = true;
-      },
+    queuedInputs: [],
+    activityState: createOpenCodeActivityState("opencode-1"),
+    server: {
+      baseUrl: "http://127.0.0.1:1",
+      cwd: "/tmp/rah-opencode",
     },
   } as unknown as LiveOpenCodeSession;
 
-  assert.throws(
-    () =>
-      interruptOpenCodeLiveSession({
-        services,
-        liveSession,
-        request: {
-          clientId: "web-client",
-        },
-      }),
-    /does not hold input control/,
-  );
+  interruptOpenCodeLiveSession({
+    services,
+    liveSession,
+    request: {
+      clientId: "web-client",
+    },
+  });
   assert.equal(cancelCalled, false);
 });
 
 test("sendInputToOpenCodeLiveSession queues consecutive inputs", async () => {
+  const prompts: string[] = [];
+  const server = http.createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    req.on("end", () => {
+      const rawBody = Buffer.concat(chunks).toString("utf8");
+      const body = rawBody ? JSON.parse(rawBody) : {};
+      if (req.url?.includes("/prompt_async")) {
+        prompts.push(body.parts?.[0]?.text ?? "");
+        res.statusCode = 204;
+        res.end();
+        return;
+      }
+      res.statusCode = 404;
+      res.end();
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+
   const services = {
     eventBus: new EventBus(),
     ptyHub: new PtyHub(),
@@ -127,80 +145,77 @@ test("sendInputToOpenCodeLiveSession queues consecutive inputs", async () => {
   });
   services.sessionStore.attachClient({
     sessionId: session.session.id,
-    clientId: "web-client",
-    kind: "web",
-    connectionId: "web-client",
+    clientId: "terminal-client",
+    kind: "terminal",
+    connectionId: "pid:test-terminal",
     attachMode: "interactive",
     focus: true,
   });
-  services.sessionStore.claimControl(session.session.id, "web-client", "web");
+  services.sessionStore.claimControl(session.session.id, "terminal-client", "terminal");
 
-  const prompts: string[] = [];
-  const releases: Array<() => void> = [];
   const liveSession = {
     sessionId: session.session.id,
     providerSessionId: "opencode-1",
     cwd: "/tmp/rah-opencode",
     modeId: "build",
     activityState: createOpenCodeActivityState("opencode-1"),
-    lastAcpActivityAt: Date.now(),
     queuedInputs: [],
-    acp: {
-      prompt: async (_sessionId: string, text: string) => {
-        prompts.push(text);
-        await new Promise<void>((resolve) => {
-          releases.push(resolve);
-        });
-        return { usage: { totalTokens: 1, inputTokens: 1, outputTokens: 0 } };
-      },
+    server: {
+      baseUrl: `http://127.0.0.1:${address.port}`,
+      cwd: "/tmp/rah-opencode",
     },
   } as unknown as LiveOpenCodeSession;
 
-  sendInputToOpenCodeLiveSession({
-    services,
-    liveSession,
-    request: { clientId: "web-client", text: "first" },
-  });
-  sendInputToOpenCodeLiveSession({
-    services,
-    liveSession,
-    request: { clientId: "web-client", text: "second" },
-  });
+  try {
+    sendInputToOpenCodeLiveSession({
+      services,
+      liveSession,
+      request: { clientId: "web-user", text: "first" },
+    });
+    sendInputToOpenCodeLiveSession({
+      services,
+      liveSession,
+      request: { clientId: "web-user", text: "second" },
+    });
 
-  await waitFor(() => prompts.length === 1);
-  assert.deepEqual(prompts, ["first"]);
-  releases.shift()?.();
-  await waitFor(() => prompts.length === 2);
-  assert.deepEqual(prompts, ["first", "second"]);
-  releases.shift()?.();
-  await waitFor(
-    () => services.sessionStore.getSession(session.session.id)?.session.runtimeState === "idle",
-  );
+    await waitFor(() => prompts.length === 1);
+    assert.deepEqual(prompts, ["first"]);
+    assert.equal(liveSession.queuedInputs.length, 1);
 
-  const events = services.eventBus.list({ sessionIds: [session.session.id] });
-  assert.equal(
-    events.filter(
-      (event) =>
-        event.type === "timeline.item.added" &&
-        event.payload.item.kind === "user_message" &&
-        ["first", "second"].includes(event.payload.item.text),
-    ).length,
-    2,
-  );
-  assert.equal(events.filter((event) => event.type === "turn.completed").length, 2);
+    const events = services.eventBus.list({ sessionIds: [session.session.id] });
+    assert.equal(
+      events.filter(
+        (event) =>
+          event.type === "timeline.item.added" &&
+          event.payload.item.kind === "user_message" &&
+          event.payload.item.text === "first",
+      ).length,
+      1,
+    );
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 });
 
 test("interruptOpenCodeLiveSession stops an active web turn immediately", async () => {
+  const promptRequests: Array<{ method: string; url: string; body: string }> = [];
   const abortRequests: Array<{ method: string; url: string; body: string }> = [];
   const server = http.createServer((req, res) => {
     const chunks: Buffer[] = [];
     req.on("data", (chunk: Buffer) => chunks.push(chunk));
     req.on("end", () => {
-      abortRequests.push({
+      const record = {
         method: req.method ?? "",
         url: req.url ?? "",
         body: Buffer.concat(chunks).toString("utf8"),
-      });
+      };
+      if (req.url?.includes("/prompt_async")) {
+        promptRequests.push(record);
+        res.statusCode = 204;
+        res.end();
+        return;
+      }
+      abortRequests.push(record);
       res.setHeader("Content-Type", "application/json");
       res.end("true");
     });
@@ -232,25 +247,16 @@ test("interruptOpenCodeLiveSession stops an active web turn immediately", async 
     });
     services.sessionStore.claimControl(session.session.id, "web-client", "web");
 
-    let cancelCalled = false;
     const liveSession = {
       sessionId: session.session.id,
       providerSessionId: "opencode-stop-1",
       cwd: "/tmp/rah-opencode",
       modeId: "build",
       activityState: createOpenCodeActivityState("opencode-stop-1"),
-      lastAcpActivityAt: Date.now(),
       queuedInputs: [],
       server: {
         baseUrl: `http://127.0.0.1:${address.port}`,
         cwd: "/tmp/rah-opencode",
-      },
-      acp: {
-        prompt: async () => await new Promise<never>(() => undefined),
-        cancel: async (providerSessionId: string) => {
-          assert.equal(providerSessionId, "opencode-stop-1");
-          cancelCalled = true;
-        },
       },
     } as unknown as LiveOpenCodeSession;
 
@@ -268,9 +274,14 @@ test("interruptOpenCodeLiveSession stops an active web turn immediately", async 
       liveSession,
       request: { clientId: "web-client" },
     });
+    interruptOpenCodeLiveSession({
+      services,
+      liveSession,
+      request: { clientId: "web-client" },
+    });
 
     assert.equal(summary.session.runtimeState, "idle");
-    await waitFor(() => cancelCalled && abortRequests.length === 1);
+    await waitFor(() => promptRequests.length === 1 && abortRequests.length === 1);
     const state = services.sessionStore.getSession(session.session.id);
     assert.equal(state?.session.runtimeState, "idle");
     assert.equal(state?.activeTurnId, undefined);
@@ -288,7 +299,7 @@ test("interruptOpenCodeLiveSession stops an active web turn immediately", async 
   }
 });
 
-test("setOpenCodeLiveSessionMode applies ACP mode changes", async () => {
+test("setOpenCodeLiveSessionMode updates the OpenCode mode used by later prompts", async () => {
   const services = {
     eventBus: new EventBus(),
     ptyHub: new PtyHub(),
@@ -302,15 +313,13 @@ test("setOpenCodeLiveSessionMode applies ACP mode changes", async () => {
     rootDir: "/tmp/rah-opencode",
     mode: buildOpenCodeModeState({ currentModeId: "build", mutable: true }),
   });
-  const calls: Array<{ sessionId: string; modeId: string }> = [];
   const liveSession = {
     sessionId: session.session.id,
     providerSessionId: "opencode-1",
     modeId: "build",
-    acp: {
-      setSessionMode: async (sessionId: string, modeId: string) => {
-        calls.push({ sessionId, modeId });
-      },
+    server: {
+      baseUrl: "http://127.0.0.1:1",
+      cwd: "/tmp/rah-opencode",
     },
   } as unknown as LiveOpenCodeSession;
 
@@ -320,7 +329,6 @@ test("setOpenCodeLiveSessionMode applies ACP mode changes", async () => {
     modeId: "plan",
   });
 
-  assert.deepEqual(calls, [{ sessionId: "opencode-1", modeId: "plan" }]);
   assert.equal(liveSession.modeId, "plan");
   assert.equal(summary.session.mode?.currentModeId, "plan");
 });
@@ -366,7 +374,6 @@ test("setOpenCodeLiveSessionMode maps full auto to OpenCode session permissions"
       rootDir: "/tmp/rah-opencode",
       mode: buildOpenCodeModeState({ currentModeId: "build", mutable: true }),
     });
-    const acpCalls: Array<{ sessionId: string; modeId: string }> = [];
     const liveSession = {
       sessionId: session.session.id,
       providerSessionId: "opencode-1",
@@ -375,11 +382,6 @@ test("setOpenCodeLiveSessionMode maps full auto to OpenCode session permissions"
         baseUrl: `http://127.0.0.1:${address.port}`,
         cwd: "/tmp/rah-opencode",
       },
-      acp: {
-        setSessionMode: async (sessionId: string, modeId: string) => {
-          acpCalls.push({ sessionId, modeId });
-        },
-      },
     } as unknown as LiveOpenCodeSession;
 
     const fullAuto = await setOpenCodeLiveSessionMode({
@@ -387,7 +389,6 @@ test("setOpenCodeLiveSessionMode maps full auto to OpenCode session permissions"
       liveSession,
       modeId: "opencode/full-auto",
     });
-    assert.deepEqual(acpCalls[0], { sessionId: "opencode-1", modeId: "build" });
     assert.equal(fullAuto.session.mode?.currentModeId, "opencode/full-auto");
     assert.deepEqual(requests[0]?.body, {
       permission: [{ permission: "*", pattern: "*", action: "allow" }],
@@ -398,7 +399,6 @@ test("setOpenCodeLiveSessionMode maps full auto to OpenCode session permissions"
       liveSession,
       modeId: "build",
     });
-    assert.deepEqual(acpCalls[1], { sessionId: "opencode-1", modeId: "build" });
     assert.equal(normal.session.mode?.currentModeId, "build");
     assert.deepEqual(requests[1]?.body, {
       permission: [{ permission: "*", pattern: "*", action: "ask" }],
@@ -414,8 +414,6 @@ test("setOpenCodeLiveSessionMode maps full auto to OpenCode session permissions"
       liveSession,
       modeId: "plan",
     });
-    assert.deepEqual(acpCalls[2], { sessionId: "opencode-1", modeId: "build" });
-    assert.deepEqual(acpCalls[3], { sessionId: "opencode-1", modeId: "plan" });
     assert.equal(plan.session.mode?.currentModeId, "plan");
     assert.deepEqual(requests[2]?.body, {
       permission: [{ permission: "*", pattern: "*", action: "allow" }],
@@ -429,7 +427,6 @@ test("setOpenCodeLiveSessionMode maps full auto to OpenCode session permissions"
       liveSession,
       modeId: "opencode/full-auto",
     });
-    assert.deepEqual(acpCalls[4], { sessionId: "opencode-1", modeId: "build" });
     assert.equal(fullAutoAgain.session.mode?.currentModeId, "opencode/full-auto");
     assert.deepEqual(requests[4]?.body, {
       permission: [{ permission: "*", pattern: "*", action: "allow" }],
@@ -484,9 +481,6 @@ test("setOpenCodeLiveSessionMode maps build to ask permissions", async () => {
         baseUrl: `http://127.0.0.1:${address.port}`,
         cwd: "/tmp/rah-opencode",
       },
-      acp: {
-        setSessionMode: async () => undefined,
-      },
     } as unknown as LiveOpenCodeSession;
 
     const summary = await setOpenCodeLiveSessionMode({
@@ -504,7 +498,7 @@ test("setOpenCodeLiveSessionMode maps build to ask permissions", async () => {
   }
 });
 
-test("OpenCodeAdapter setSessionModel applies provider model and variant through ACP", async () => {
+test("OpenCodeAdapter setSessionModel stores provider model and variant for later prompts", async () => {
   const services = {
     eventBus: new EventBus(),
     ptyHub: new PtyHub(),
@@ -563,7 +557,6 @@ test("OpenCodeAdapter setSessionModel applies provider model and variant through
     fetchedAt: new Date().toISOString(),
     source: "native",
   };
-  const calls: Array<{ sessionId: string; modelId: string }> = [];
   const internals = adapter as unknown as {
     liveSessions: Map<string, LiveOpenCodeSession>;
     modelCatalog: {
@@ -573,29 +566,21 @@ test("OpenCodeAdapter setSessionModel applies provider model and variant through
   internals.modelCatalog = {
     listModels: () => catalog,
   };
-  internals.liveSessions.set(session.session.id, {
+  const liveSession = {
     sessionId: session.session.id,
     providerSessionId: "opencode-1",
     cwd: "/tmp/rah-opencode",
     modeId: "build",
-    acp: {
-      setSessionModel: async (sessionId: string, modelId: string) => {
-        calls.push({ sessionId, modelId });
-      },
-    },
-  } as unknown as LiveOpenCodeSession);
+  } as unknown as LiveOpenCodeSession;
+  internals.liveSessions.set(session.session.id, liveSession);
 
   const updated = await adapter.setSessionModel(session.session.id, {
     modelId: "openai/gpt-5.5",
     optionValues: { model_reasoning_variant: "xhigh" },
   });
 
-  assert.deepEqual(calls, [
-    {
-      sessionId: "opencode-1",
-      modelId: "openai/gpt-5.5/xhigh",
-    },
-  ]);
+  assert.equal(liveSession.model, "openai/gpt-5.5");
+  assert.equal(liveSession.reasoningId, "xhigh");
   assert.equal(updated.session.model?.currentModelId, "openai/gpt-5.5");
   assert.equal(updated.session.model?.currentReasoningId, "xhigh");
 });

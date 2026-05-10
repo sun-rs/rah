@@ -160,4 +160,55 @@ describe("PtyHub", () => {
     assert.equal(exit?.seq, 1);
     assert.equal(exit?.exitCode, 0);
   });
+
+  test("can reset an exited session while preserving live subscribers", () => {
+    const hub = new PtyHub();
+    const frames: PtyServerFrame[] = [];
+    const unsubscribe = hub.subscribe("terminal-1", (frame) => {
+      frames.push(frame);
+    });
+
+    hub.appendOutput("terminal-1", "old");
+    hub.emitExit("terminal-1", 0);
+    hub.resetSession("terminal-1");
+    hub.appendOutput("terminal-1", "new");
+
+    assert.equal(hub.stats("terminal-1")?.status, "open");
+    assert.equal(hub.stats("terminal-1")?.subscriberCount, 1);
+    assert.equal(
+      frames.some((frame) => frame.type === "pty.output" && frame.data === "new"),
+      true,
+    );
+
+    const replayFrames: PtyServerFrame[] = [];
+    hub.subscribe("terminal-1", (frame) => {
+      replayFrames.push(frame);
+    });
+    const replay = replayFrames.find((frame) => frame.type === "pty.replay");
+    assert.equal(replay?.status, "open");
+    assert.deepEqual(replay?.chunks, ["new"]);
+    assert.equal(replayFrames.some((frame) => frame.type === "pty.exited"), false);
+
+    unsubscribe();
+  });
+
+  test("marks live frames that replace the replay buffer", () => {
+    const hub = new PtyHub();
+    const frames: PtyServerFrame[] = [];
+    hub.subscribe("terminal-1", (frame) => {
+      frames.push(frame);
+    });
+
+    hub.appendOutput("terminal-1", "snapshot", { replaceReplay: true });
+
+    const output = frames.find((frame) => frame.type === "pty.output");
+    assert.equal(output?.replace, true);
+
+    const replayFrames: PtyServerFrame[] = [];
+    hub.subscribe("terminal-1", (frame) => {
+      replayFrames.push(frame);
+    });
+    const replay = replayFrames.find((frame) => frame.type === "pty.replay");
+    assert.deepEqual(replay?.chunks, ["snapshot"]);
+  });
 });

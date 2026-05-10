@@ -365,6 +365,35 @@ describe("translateOpenCodeEvent", () => {
     });
   });
 
+  test("does not emit text parts before their message role is known", () => {
+    const state = createOpenCodeActivityState("session-1");
+    const earlyText = translateOpenCodeEvent(state, {
+      type: "message.part.updated",
+      properties: {
+        part: {
+          id: "part-1",
+          sessionID: "session-1",
+          messageID: "message-1",
+          type: "text",
+          text: "hello",
+        },
+      },
+    });
+    const earlyDelta = translateOpenCodeEvent(state, {
+      type: "message.part.delta",
+      properties: {
+        sessionID: "session-1",
+        messageID: "message-1",
+        partID: "part-1",
+        field: "text",
+        delta: " world",
+      },
+    });
+
+    assert.deepEqual(earlyText, []);
+    assert.deepEqual(earlyDelta, []);
+  });
+
   test("web-owned sessions ignore late provider user events after idle", () => {
     const state = createOpenCodeActivityState("session-1", {
       userMessagesStartTurns: false,

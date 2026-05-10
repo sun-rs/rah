@@ -29,7 +29,6 @@ import {
 import { opencodeLaunchSpec, probeProviderDiagnostic } from "../provider-diagnostics";
 import {
   buildOpenCodeFallbackModelCatalog,
-  buildOpenCodeProviderModelId,
   OpenCodeModelCatalogCache,
   resolveOpenCodeRuntimeCapabilityState,
 } from "../opencode-model-catalog";
@@ -74,6 +73,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
       provider: "opencode",
       providerSessionId: request.providerSessionId,
       preferStoredReplay: request.preferStoredReplay,
+      historySourceSessionId: request.historySourceSessionId,
       rehydratedSessionIds: this.rehydratedSessionIds,
     });
     const existing = this.services.sessionStore.findManagedByProviderSession(
@@ -162,13 +162,6 @@ export class OpenCodeAdapter implements ProviderAdapter {
         : request.reasoningId !== undefined
           ? request.reasoningId
           : model.defaultReasoningId ?? null;
-    await live.acp.setSessionModel(
-      live.providerSessionId,
-      buildOpenCodeProviderModelId({
-        modelId: request.modelId,
-        reasoningId,
-      }),
-    );
     live.model = request.modelId;
     live.reasoningId = reasoningId;
     const runtimeCapabilityState = resolveOpenCodeRuntimeCapabilityState({

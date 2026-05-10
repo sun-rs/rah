@@ -982,7 +982,7 @@ rl.on('line', (line) => {
     rmSync(cwd, { recursive: true, force: true });
   });
 
-  test("rehydrates stored history then attaches to a live external Codex thread", async () => {
+  test("attaches to a live external Codex thread while history remains paged", async () => {
     const cwd = mkdtempSync(path.join(os.tmpdir(), "rah-codex-live-cwd-"));
     const sessionId = "019d8888-bbbb-7ccc-8ddd-eeeeffff0000";
     writeRollout(sessionId, cwd);
@@ -1038,6 +1038,7 @@ rl.on('line', (line) => {
       sessionStore: new SessionStore(),
     };
     const adapter = new CodexAdapter(services);
+    const storedHistory = new CodexStoredHistoryAdapter(services);
 
     const resumed = await adapter.resumeSession({
       provider: "codex",
@@ -1068,7 +1069,7 @@ rl.on('line', (line) => {
     assert.equal(resumed.session.session.capabilities.planMode, false);
     assert.equal(resumed.session.session.capabilities.subagents, false);
 
-    const historicalEvents = services.eventBus.list({ sessionIds: [resumed.session.session.id] });
+    const historicalEvents = storedHistory.getSessionHistoryPage(resumed.session.session.id, { limit: 20 }).events;
     assert.ok(
       historicalEvents.some(
         (event) =>

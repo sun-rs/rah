@@ -25,9 +25,12 @@ export type NativeTuiSessionState = {
   promptTracker: LocalTerminalPromptTracker;
   queuedInputs: NativeTuiQueuedInput[];
   lastInjectedInputAtMs?: number;
+  clearPromptBeforeNextInput?: boolean;
   stopPending?: boolean;
   stopTurnId?: string;
   stopTimer?: ReturnType<typeof setTimeout>;
+  queuedDrainTimer?: ReturnType<typeof setTimeout>;
+  recentOutputTail?: string;
   bindingTimer?: ReturnType<typeof setInterval>;
   bindingWarningEmitted?: boolean;
   mirrorTimer?: ReturnType<typeof setInterval>;
@@ -64,6 +67,10 @@ export function clearNativeTuiSessionTimers(native: NativeTuiSessionState | unde
   if (native.stopTimer) {
     clearTimeout(native.stopTimer);
     delete native.stopTimer;
+  }
+  if (native.queuedDrainTimer) {
+    clearTimeout(native.queuedDrainTimer);
+    delete native.queuedDrainTimer;
   }
   delete native.stopPending;
   delete native.stopTurnId;

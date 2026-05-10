@@ -14,6 +14,10 @@ import {
   readJsonBody,
   requestErrorStatus,
 } from "./http-server-response";
+import {
+  parseResumeSessionRequest,
+  parseStartSessionRequest,
+} from "./http-server-request-validation";
 import { isLoopbackRemoteAddress, sendJsonWithBackpressure } from "./http-server-websocket";
 import { isLocalMachineRemoteAddress } from "./http-server-client-address";
 
@@ -315,6 +319,23 @@ describe("startRahDaemon", () => {
     });
     assert.equal(resume.status, 400);
     assert.deepEqual(resume.json, { error: "Bad Request: liveBackend is invalid." });
+  });
+
+  test("accepts native local server live backend at the public HTTP boundary", () => {
+    const start = parseStartSessionRequest({
+      provider: "codex",
+      cwd: tempHome,
+      liveBackend: "native_local_server",
+    });
+    assert.equal(start.liveBackend, "native_local_server");
+
+    const resume = parseResumeSessionRequest({
+      provider: "opencode",
+      providerSessionId: "session-native-local-server",
+      cwd: tempHome,
+      liveBackend: "native_local_server",
+    });
+    assert.equal(resume.liveBackend, "native_local_server");
   });
 
   test("rejects unsupported live providers at the public HTTP boundary", async () => {

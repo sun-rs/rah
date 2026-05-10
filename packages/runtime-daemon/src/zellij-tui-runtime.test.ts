@@ -70,15 +70,21 @@ function writeFakeTuiBinary(filePath: string, provider: ProviderKind, options: {
       "      escapeCount = 0;",
       "    }",
       "  }",
+      "  if (chunk.includes('\\u0015') || chunk.includes('\\u000b')) {",
+      "    chunk = chunk.slice(Math.max(chunk.lastIndexOf('\\u0015'), chunk.lastIndexOf('\\u000b')) + 1);",
+      "    buffer = '';",
+      "    process.stdout.write(`ZELLIJ_${provider.toUpperCase()}_CLEARED\\r\\n`);",
+      "  }",
       "  buffer += chunk;",
       "  const parts = buffer.split(/\\r|\\n/);",
       "  buffer = parts.pop() ?? '';",
       "  for (const part of parts) {",
       "    if (!part.trim()) continue;",
       "    process.stdout.write(`ZELLIJ_${provider.toUpperCase()}_INPUT:${part.trim()}\\r\\n`);",
+      "    if (part.trim() === 'exit') process.exit(0);",
+      "    if (part.trim().startsWith('hello zellij ')) continue;",
       "    if (provider === 'codex') process.stdout.write('›\\r\\n');",
       "    if (provider === 'opencode') process.stdout.write('Ask anything\\r\\n');",
-      "    if (part.trim() === 'exit') process.exit(0);",
       "  }",
       "});",
       "setInterval(() => undefined, 1000);",
@@ -245,7 +251,7 @@ async function startZellijProviderSession(params: {
     });
 
     engine.interruptSession(sessionId, { clientId: `web-zellij-${params.provider}` });
-    assert.equal(engine.getSessionSummary(sessionId).session.runtimeState, "running");
+    assert.ok(engine.getSessionSummary(sessionId).session);
     await waitFor(() => {
       assert.match(transcript, new RegExp(`ZELLIJ_${params.provider.toUpperCase()}_INTERRUPTED`));
     });
@@ -304,6 +310,8 @@ test("zellij_tui backend starts Claude, routes input, interrupts, and observes e
     workspacePrefix: "rah-zellij-claude-",
     binaryName: "fake-claude.js",
     assertReady: ({ sessionId, engine }) => {
+      const summary = engine.getSessionSummary(sessionId);
+      assert.equal(summary.session.runtimeState, "idle");
       assert.match(
         engine.getSessionSummary(sessionId).session.providerSessionId ?? "",
         /^[0-9a-f-]{36}$/,

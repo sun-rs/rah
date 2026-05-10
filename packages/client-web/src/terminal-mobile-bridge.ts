@@ -1,4 +1,4 @@
-export type MobileBridgeFocusSource = "surface" | "shortcut";
+export type MobileBridgeFocusSource = "shortcut";
 
 export type MobileBridgeFocusOptions = {
   allowBrowserScroll?: boolean;
@@ -8,12 +8,7 @@ export type MobileBridgeFocusOptions = {
 export function mobileBridgeFocusOptionsForSource(
   source: MobileBridgeFocusSource,
 ): MobileBridgeFocusOptions {
-  if (source === "surface") {
-    return {
-      allowBrowserScroll: false,
-      scrollBlock: "nearest",
-    };
-  }
+  void source;
   return {
     allowBrowserScroll: false,
     scrollBlock: "nearest",

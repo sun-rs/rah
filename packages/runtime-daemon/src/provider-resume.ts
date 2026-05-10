@@ -13,6 +13,7 @@ export function prepareProviderSessionResume(args: {
   provider: ManagedSession["provider"];
   providerSessionId: string;
   preferStoredReplay: boolean | undefined;
+  historySourceSessionId?: string | undefined;
   rehydratedSessionIds: Set<string>;
 }): { rollback: () => void } {
   const existing = args.services.sessionStore.findManagedByProviderSession(
@@ -22,7 +23,14 @@ export function prepareProviderSessionResume(args: {
   if (!existing) {
     return { rollback: () => undefined };
   }
-  if (!args.preferStoredReplay && args.rehydratedSessionIds.has(existing.session.id)) {
+  const isReplaceableHistorySource =
+    !args.preferStoredReplay &&
+    args.historySourceSessionId === existing.session.id &&
+    existing.session.capabilities.steerInput === false;
+  if (
+    !args.preferStoredReplay &&
+    (args.rehydratedSessionIds.has(existing.session.id) || isReplaceableHistorySource)
+  ) {
     const removed = existing;
     args.rehydratedSessionIds.delete(existing.session.id);
     args.services.sessionStore.removeSession(existing.session.id);

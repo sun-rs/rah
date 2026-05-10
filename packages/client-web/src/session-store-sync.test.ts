@@ -1,7 +1,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import type { ListSessionsResponse } from "@rah/runtime-protocol";
-import { recoverTransportCommand } from "./session-store-sync";
+import type { ListSessionsResponse, RahEvent } from "@rah/runtime-protocol";
+import { coalesceProjectionEvents, recoverTransportCommand } from "./session-store-sync";
 import type { SessionProjection } from "./types";
 
 type RecoverArgs = Parameters<typeof recoverTransportCommand>[0];
@@ -14,6 +14,20 @@ function emptySessionsResponse(): ListSessionsResponse {
     recentSessions: [],
     workspaceDirs: [],
   };
+}
+
+function event(
+  seq: number,
+  value: Omit<RahEvent, "id" | "seq" | "ts" | "sessionId" | "source">,
+): RahEvent {
+  return {
+    id: `event-${seq}`,
+    seq,
+    ts: `2026-05-10T00:00:${String(seq).padStart(2, "0")}.000Z`,
+    sessionId: "session-1",
+    source: { provider: "codex", channel: "structured_live", authority: "derived" },
+    ...value,
+  } as RahEvent;
 }
 
 function deferred<T>() {
@@ -77,6 +91,63 @@ function createRecoverHarness(listSessions: NonNullable<RecoverArgs["listSession
 }
 
 describe("session store recovery", () => {
+  test("coalesces high-frequency timeline updates before projection apply", () => {
+    const events = coalesceProjectionEvents([
+      event(1, {
+        type: "timeline.item.added",
+        payload: {
+          item: { kind: "assistant_message", text: "a" },
+          identity: { canonicalItemId: "item-1" } as never,
+        },
+      }),
+      event(2, {
+        type: "timeline.item.updated",
+        payload: {
+          item: { kind: "assistant_message", text: "ab" },
+          identity: { canonicalItemId: "item-1" } as never,
+        },
+      }),
+      event(3, {
+        type: "timeline.item.updated",
+        payload: {
+          item: { kind: "assistant_message", text: "abc" },
+          identity: { canonicalItemId: "item-1" } as never,
+        },
+      }),
+      event(4, {
+        type: "timeline.item.added",
+        payload: {
+          item: { kind: "user_message", text: "next" },
+          identity: { canonicalItemId: "item-2" } as never,
+        },
+      }),
+    ]);
+
+    assert.equal(events.length, 2);
+    assert.equal(events[0]?.seq, 3);
+    assert.equal(events[1]?.seq, 4);
+  });
+
+  test("drops message part events that are never rendered by the feed", () => {
+    const events = coalesceProjectionEvents([
+      event(1, {
+        type: "message.part.delta",
+        payload: { part: { messageId: "m1", partId: "p1", kind: "text", delta: "a" } },
+      }),
+      event(2, {
+        type: "message.part.delta",
+        payload: { part: { messageId: "m2", partId: "p2", kind: "reasoning", delta: "b" } },
+      }),
+      event(3, {
+        type: "message.part.delta",
+        payload: { part: { messageId: "m3", partId: "p3", kind: "unknown" } },
+      }),
+    ]);
+
+    assert.equal(events.length, 1);
+    assert.equal(events[0]?.seq, 3);
+  });
+
   test("coalesces concurrent foreground transport recoveries", async () => {
     let listCalls = 0;
     const pendingListSessions = deferred<ListSessionsResponse>();

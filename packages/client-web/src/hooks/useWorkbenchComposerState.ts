@@ -35,21 +35,32 @@ export function useWorkbenchComposerState(args: {
   const [emptyStateDraft, setEmptyStateDraft] = useState("");
   const emptyStateComposerRef = useRef<HTMLTextAreaElement | null>(null);
   const [sendPending, setSendPending] = useState(false);
+  const sendChainRef = useRef<Promise<void>>(Promise.resolve());
+  const pendingSendCountRef = useRef(0);
 
   const handleSend = async () => {
-    if (sendPending || !args.selectedSummary || !draft.trim()) {
+    if (!args.selectedSummary || !draft.trim()) {
       return;
     }
     const text = draft.trim();
+    const sessionId = args.selectedSummary.session.id;
     setDraft("");
+    pendingSendCountRef.current += 1;
     setSendPending(true);
-    try {
-      await args.sendInput(args.selectedSummary.session.id, text);
-    } catch {
-      setDraft((current) => (current.trim() ? current : text));
-    } finally {
-      setSendPending(false);
-    }
+    const sendTask = async () => {
+      try {
+        await args.sendInput(sessionId, text);
+      } catch {
+        setDraft((current) => (current.trim() ? current : text));
+      } finally {
+        pendingSendCountRef.current = Math.max(0, pendingSendCountRef.current - 1);
+        if (pendingSendCountRef.current === 0) {
+          setSendPending(false);
+        }
+      }
+    };
+    sendChainRef.current = sendChainRef.current.catch(() => undefined).then(sendTask);
+    await sendChainRef.current;
   };
 
   const handleEmptyStateSend = () => {

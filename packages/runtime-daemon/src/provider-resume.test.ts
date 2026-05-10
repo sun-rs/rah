@@ -96,3 +96,60 @@ test("prepareProviderSessionResume rollback does not overwrite a replacement liv
   );
   assert.equal(rehydratedSessionIds.has(replay.session.id), false);
 });
+
+test("prepareProviderSessionResume replaces explicit history source replay even without rehydration marker", () => {
+  const services = createServices();
+  const replay = services.sessionStore.createManagedSession({
+    provider: "codex",
+    providerSessionId: "provider-1",
+    launchSource: "web",
+    cwd: "/tmp/rah-provider-resume",
+    rootDir: "/tmp/rah-provider-resume",
+    capabilities: {
+      steerInput: false,
+    },
+  });
+  const rehydratedSessionIds = new Set<string>();
+
+  prepareProviderSessionResume({
+    services,
+    provider: "codex",
+    providerSessionId: "provider-1",
+    preferStoredReplay: false,
+    historySourceSessionId: replay.session.id,
+    rehydratedSessionIds,
+  });
+
+  assert.equal(services.sessionStore.getSession(replay.session.id), undefined);
+  assert.equal(
+    services.sessionStore.findManagedByProviderSession("codex", "provider-1"),
+    undefined,
+  );
+});
+
+test("prepareProviderSessionResume does not replace explicit history source when it is live", () => {
+  const services = createServices();
+  const live = services.sessionStore.createManagedSession({
+    provider: "codex",
+    providerSessionId: "provider-1",
+    launchSource: "web",
+    cwd: "/tmp/rah-provider-resume",
+    rootDir: "/tmp/rah-provider-resume",
+    capabilities: {
+      steerInput: true,
+    },
+  });
+
+  assert.throws(
+    () =>
+      prepareProviderSessionResume({
+        services,
+        provider: "codex",
+        providerSessionId: "provider-1",
+        preferStoredReplay: false,
+        historySourceSessionId: live.session.id,
+        rehydratedSessionIds: new Set(),
+      }),
+    /already running; attach instead of resume/,
+  );
+});

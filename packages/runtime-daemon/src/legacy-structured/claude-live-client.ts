@@ -301,11 +301,6 @@ export async function sendInputToClaudeLiveSession(args: {
     args.liveSession.queuedInputs.push(args.request);
     return;
   }
-  if (!args.services.sessionStore.hasInputControl(args.liveSession.sessionId, args.request.clientId)) {
-    throw new Error(
-      `Client ${args.request.clientId} does not hold input control for ${args.liveSession.sessionId}.`,
-    );
-  }
 
   const turnId = randomUUID();
   applyActivity(
@@ -463,11 +458,6 @@ export function interruptClaudeLiveSession(args: {
   liveSession: LiveClaudeSession;
   request: InterruptSessionRequest;
 }) {
-  if (!args.services.sessionStore.hasInputControl(args.liveSession.sessionId, args.request.clientId)) {
-    throw new Error(
-      `Client ${args.request.clientId} does not hold input control for ${args.liveSession.sessionId}.`,
-    );
-  }
   const activeTurn = args.liveSession.activeTurn;
   args.liveSession.queuedInputs.length = 0;
   if (activeTurn) {

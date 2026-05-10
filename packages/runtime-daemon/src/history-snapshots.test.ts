@@ -160,3 +160,140 @@ test("history snapshots dedupe frozen initial and older pages by canonical timel
     ["Older copy"],
   );
 });
+
+test("history snapshots upgrade an early empty materialized page once provider frozen history appears", () => {
+  const store = new HistorySnapshotStore();
+  const firstPage = store.getPage({
+    sessionId: "target-session",
+    limit: 10,
+    loadEvents: () => [],
+    loadFrozenPage: () => undefined,
+  });
+
+  assert.deepEqual(firstPage.events, []);
+
+  const boundary: FrozenHistoryBoundary = {
+    kind: "frozen",
+    sourceRevision: "revision-after-provider-file-appeared",
+  };
+  const loader: FrozenHistoryPageLoader = {
+    loadInitialPage: () => ({
+      boundary,
+      events: [
+        timelineEvent({
+          id: "late-provider-event",
+          seq: 1,
+          ts: "2026-05-03T00:00:00.000Z",
+          canonicalItemId: "late-provider-event",
+          text: "Loaded after provider file appeared",
+        }),
+      ],
+    }),
+    loadOlderPage: () => ({
+      boundary,
+      events: [],
+    }),
+  };
+
+  const upgradedPage = store.getPage({
+    sessionId: "target-session",
+    limit: 10,
+    loadEvents: () => [],
+    loadFrozenPage: () => loader,
+  });
+
+  assert.deepEqual(
+    upgradedPage.events.map(timelineText),
+    ["Loaded after provider file appeared"],
+  );
+  assert.equal(upgradedPage.nextCursor, undefined);
+  assert.equal(upgradedPage.nextBeforeTs, undefined);
+});
+
+test("history snapshots only expose older history markers when an older page exists", () => {
+  const materializedStore = new HistorySnapshotStore();
+  const materializedOnlyPage = materializedStore.getPage({
+    sessionId: "target-session",
+    limit: 10,
+    loadEvents: () => [
+      timelineEvent({
+        id: "only-materialized",
+        seq: 1,
+        ts: "2026-05-03T00:00:00.000Z",
+        canonicalItemId: "only-materialized",
+        text: "Only materialized item",
+      }),
+    ],
+  });
+  assert.equal(materializedOnlyPage.nextCursor, undefined);
+  assert.equal(materializedOnlyPage.nextBeforeTs, undefined);
+
+  const frozenStore = new HistorySnapshotStore();
+  const boundary: FrozenHistoryBoundary = {
+    kind: "frozen",
+    sourceRevision: "single-page-frozen-revision",
+  };
+  const singlePageLoader: FrozenHistoryPageLoader = {
+    loadInitialPage: () => ({
+      boundary,
+      events: [
+        timelineEvent({
+          id: "only-frozen",
+          seq: 1,
+          ts: "2026-05-03T00:00:00.000Z",
+          canonicalItemId: "only-frozen",
+          text: "Only frozen item",
+        }),
+      ],
+    }),
+    loadOlderPage: () => ({
+      boundary,
+      events: [],
+    }),
+  };
+  const frozenOnlyPage = frozenStore.getPage({
+    sessionId: "target-session",
+    limit: 10,
+    loadEvents: () => [],
+    loadFrozenPage: () => singlePageLoader,
+  });
+  assert.equal(frozenOnlyPage.nextCursor, undefined);
+  assert.equal(frozenOnlyPage.nextBeforeTs, undefined);
+
+  const pagedStore = new HistorySnapshotStore();
+  const pagedLoader: FrozenHistoryPageLoader = {
+    loadInitialPage: () => ({
+      boundary,
+      events: [
+        timelineEvent({
+          id: "newer-frozen",
+          seq: 2,
+          ts: "2026-05-03T00:00:01.000Z",
+          canonicalItemId: "newer-frozen",
+          text: "Newer frozen item",
+        }),
+      ],
+      nextCursor: "older",
+    }),
+    loadOlderPage: () => ({
+      boundary,
+      events: [
+        timelineEvent({
+          id: "older-frozen",
+          seq: 1,
+          ts: "2026-05-03T00:00:00.000Z",
+          canonicalItemId: "older-frozen",
+          text: "Older frozen item",
+        }),
+      ],
+    }),
+  };
+  const pagedInitialPage = pagedStore.getPage({
+    sessionId: "target-session",
+    limit: 10,
+    loadEvents: () => [],
+    loadFrozenPage: () => pagedLoader,
+  });
+  assert.equal(pagedInitialPage.nextCursor, "older");
+  assert.equal(pagedInitialPage.nextBeforeTs, "2026-05-03T00:00:01.000Z");
+});

@@ -124,23 +124,28 @@ export function extractCodexTerminalSessionId(output: string): string | null {
 
 export function hasCodexTerminalPrompt(output: string): boolean {
   const stripped = output.replace(ANSI_ESCAPE_PATTERN, "").replace(/\r/g, "\n");
-  const lines = stripped.split("\n");
-  while (lines.length > 0 && !lines.at(-1)?.trim()) {
-    lines.pop();
-  }
-  const tail = lines.slice(-12).map((line) => line.trim());
+  const tail = stripped
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(-12);
   if (tail.some((line) => /Booting MCP server|esc to interrupt/i.test(line))) {
     return false;
   }
-  return tail.some((line, index) => {
+  for (let index = tail.length - 1; index >= 0; index -= 1) {
+    const line = tail[index] ?? "";
     if (/^›\s*$/u.test(line)) {
-      return true;
+      return index === tail.length - 1;
     }
     if (!/^›\s+\S/u.test(line)) {
-      return false;
+      continue;
     }
-    return tail
+    const hasContextStatus = tail
       .slice(index + 1, index + 5)
       .some((candidate) => candidate.includes("·") && /Context|[~/]/i.test(candidate));
-  });
+    if (hasContextStatus) {
+      return true;
+    }
+  }
+  return false;
 }

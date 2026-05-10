@@ -241,6 +241,7 @@ export function App() {
     claimControl,
     interruptSession,
     sendInput,
+    refreshLatestHistory,
     loadOlderHistory,
     respondToPermission,
   } = useSessionStore(
@@ -284,6 +285,7 @@ export function App() {
       claimControl: state.claimControl,
       interruptSession: state.interruptSession,
       sendInput: state.sendInput,
+      refreshLatestHistory: state.refreshLatestHistory,
       loadOlderHistory: state.loadOlderHistory,
       respondToPermission: state.respondToPermission,
     })),
@@ -482,6 +484,38 @@ export function App() {
     ? canSessionRespondToPermissions(selectedSummary)
     : false;
   const selectedIsReadOnlyReplay = selectedSummary ? isReadOnlyReplay(selectedSummary) : false;
+  const shouldSyncSelectedHistoryTail =
+    Boolean(selectedSummary?.session.providerSessionId) &&
+    !selectedIsReadOnlyReplay &&
+    (selectedSummary?.session.liveBackend === "native_local_server" ||
+      selectedSummary?.session.liveBackend === "zellij_tui" ||
+      selectedSummary?.session.liveBackend === "native_tui");
+
+  useEffect(() => {
+    if (!selectedSessionId || !shouldSyncSelectedHistoryTail) {
+      return;
+    }
+    let cancelled = false;
+    let inFlight = false;
+    const syncLatestHistory = () => {
+      if (cancelled || inFlight) {
+        return;
+      }
+      inFlight = true;
+      void refreshLatestHistory(selectedSessionId)
+        .catch(() => undefined)
+        .finally(() => {
+          inFlight = false;
+        });
+    };
+    syncLatestHistory();
+    const interval = window.setInterval(syncLatestHistory, 1500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [refreshLatestHistory, selectedSessionId, shouldSyncSelectedHistoryTail]);
+
   const noticeState = deriveWorkbenchNoticeState({
     selectedSummary,
     selectedProjection,

@@ -221,6 +221,21 @@ export function prependHistoryPage(
   }
 
   const historyProjection = replayEventsIntoProjection(projection.summary, events);
+  if (!projection.history.authoritativeApplied) {
+    return {
+      ...projection,
+      feed: mergeLatestHistoryFeed(projection.feed, historyProjection.feed),
+      history: {
+        ...projection.history,
+        phase: "ready",
+        nextCursor: options?.nextCursor ?? null,
+        nextBeforeTs: options?.nextBeforeTs ?? null,
+        authoritativeApplied: true,
+        lastError: null,
+      },
+    };
+  }
+
   const nextFeed = [...projection.feed];
   const currentKeyIndex = new Map(
     nextFeed.map((entry, index) => [entry.key, index] as const),
@@ -253,4 +268,64 @@ export function prependHistoryPage(
       lastError: null,
     },
   };
+}
+
+export function mergeLatestHistoryPage(
+  projection: SessionProjection,
+  events: RahEvent[],
+  options?: { nextBeforeTs?: string; nextCursor?: string },
+): SessionProjection {
+  if (events.length === 0) {
+    return {
+      ...projection,
+      history: {
+        ...projection.history,
+        phase: "ready",
+        nextCursor: options?.nextCursor ?? projection.history.nextCursor,
+        nextBeforeTs: options?.nextBeforeTs ?? projection.history.nextBeforeTs,
+        authoritativeApplied: projection.history.authoritativeApplied,
+        lastError: null,
+      },
+    };
+  }
+
+  const historyProjection = replayEventsIntoProjection(projection.summary, events);
+  return {
+    ...projection,
+    feed: mergeLatestHistoryFeed(projection.feed, historyProjection.feed),
+    history: {
+      ...projection.history,
+      phase: "ready",
+      nextCursor: options?.nextCursor ?? projection.history.nextCursor,
+      nextBeforeTs: options?.nextBeforeTs ?? projection.history.nextBeforeTs,
+      authoritativeApplied: true,
+      lastError: null,
+    },
+  };
+}
+
+function mergeLatestHistoryFeed(
+  currentFeed: FeedEntry[],
+  historyFeed: FeedEntry[],
+): FeedEntry[] {
+  const nextFeed = [...historyFeed];
+  const currentKeyIndex = new Map(
+    nextFeed.map((entry, index) => [entry.key, index] as const),
+  );
+
+  for (const current of currentFeed) {
+    const existingIndex = currentKeyIndex.get(current.key);
+    if (existingIndex !== undefined) {
+      continue;
+    }
+    const identityIndex = nextFeed.findIndex((historyEntry) =>
+      feedEntriesShareTimelineIdentity(historyEntry, current),
+    );
+    if (identityIndex >= 0) {
+      continue;
+    }
+    nextFeed.push(current);
+  }
+
+  return nextFeed;
 }

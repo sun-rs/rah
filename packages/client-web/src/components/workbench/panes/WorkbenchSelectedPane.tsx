@@ -150,6 +150,7 @@ export function WorkbenchSelectedPane(props: {
   const [sessionInfoOpen, setSessionInfoOpen] = useState(false);
   const [paneWidth, setPaneWidth] = useState<number | null>(null);
   const [sessionViewMode, setSessionViewMode] = useState<SessionViewMode>(preferredSessionViewMode);
+  const [closedTuiTerminalIds, setClosedTuiTerminalIds] = useState<Set<string>>(() => new Set());
   const effectivePaneWidth = paneWidth ?? Number.POSITIVE_INFINITY;
   const sessionMetaMode = props.compactSessionMeta ?? "auto";
   const compactSessionMeta =
@@ -174,6 +175,24 @@ export function WorkbenchSelectedPane(props: {
     effectiveSessionViewMode === "chat" || props.composerSurface.kind !== "compose";
   const terminalHasControl =
     props.isAttached && props.selectedSummary.controlLease.holderClientId === props.clientId;
+  const terminalTuiClientActive = nativeTui
+    ? !closedTuiTerminalIds.has(nativeTui.terminalId)
+    : true;
+  const setTerminalTuiClientActive = (active: boolean) => {
+    if (!nativeTui) {
+      return;
+    }
+    const terminalId = nativeTui.terminalId;
+    setClosedTuiTerminalIds((current) => {
+      const next = new Set(current);
+      if (active) {
+        next.delete(terminalId);
+      } else {
+        next.add(terminalId);
+      }
+      return next;
+    });
+  };
   const showLiveAccessModeControl = Boolean(
     props.canSwitchSessionModes &&
       props.selectedSummary.session.mode &&
@@ -586,6 +605,8 @@ export function WorkbenchSelectedPane(props: {
             terminalId={nativeTui.terminalId}
             clientId={props.clientId}
             hasControl={terminalHasControl}
+            tuiClientActive={terminalTuiClientActive}
+            onTuiClientActiveChange={setTerminalTuiClientActive}
           />
         </div>
       ) : (

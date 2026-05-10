@@ -1,5 +1,17 @@
-import { useEffect, useMemo, useState } from "react";
-import { Archive, Bot, MessageSquare, Plus, RefreshCw, TerminalSquare, UsersRound } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { Terminal } from "@xterm/xterm";
+import { FitAddon } from "@xterm/addon-fit";
+import {
+  Bot,
+  CheckCircle2,
+  MessageSquare,
+  Plus,
+  RefreshCw,
+  Square,
+  TerminalSquare,
+  UsersRound,
+  X,
+} from "lucide-react";
 import type {
   CouncilAgent,
   CouncilAgentTuiResponse,
@@ -10,12 +22,21 @@ import * as api from "../api";
 import { ProviderLogo } from "../components/ProviderLogo";
 import type { ProviderChoice } from "../components/ProviderSelector";
 import { PROVIDER_OPTIONS } from "../components/ProviderSelector";
+import { SessionModelControls } from "../components/SessionModelControls";
+import {
+  readRahTerminalFontFamily,
+  readRahTerminalTheme,
+} from "../TerminalPane";
 import { resolveSessionModeControlState } from "../session-mode-ui";
 import {
   councilAgentDraftToConfig,
   createDefaultCouncilAgentDrafts,
+  normalizeCouncilAgentDraftForCatalog,
+  resolveCouncilAgentModelSelection,
   type CouncilAgentDraft,
 } from "./council-ui-state";
+
+type CouncilPanel = "setup" | "chat" | "agents";
 
 function actorLabel(room: CouncilRoomSnapshot, actorId: string): string {
   if (actorId === "user") return "You";
@@ -33,6 +54,79 @@ function catalogKey(provider: ProviderChoice, workspace: string): string {
   return `${provider}:${workspace}`;
 }
 
+function panelVisibilityClass(panel: CouncilPanel, activePanel: CouncilPanel): string {
+  return activePanel === panel ? "flex" : "hidden lg:flex";
+}
+
+function agentStatusClass(status: CouncilAgent["status"]): string {
+  switch (status) {
+    case "idle":
+    case "waiting":
+      return "bg-emerald-500/10 text-emerald-600";
+    case "thinking":
+    case "starting":
+      return "bg-amber-500/10 text-amber-600";
+    case "blocked":
+    case "failed":
+      return "bg-red-500/10 text-red-600";
+    case "stopped":
+      return "bg-zinc-500/10 text-zinc-500";
+  }
+}
+
+function CouncilTuiSnapshot(props: { screen: string }) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) {
+      return;
+    }
+    let disposed = false;
+    const terminal = new Terminal({
+      convertEol: false,
+      disableStdin: true,
+      fontFamily: readRahTerminalFontFamily(),
+      fontSize: 12,
+      letterSpacing: 0,
+      lineHeight: 1.08,
+      theme: readRahTerminalTheme(),
+    });
+    const fitAddon = new FitAddon();
+    terminal.loadAddon(fitAddon);
+    terminal.open(container);
+    const fit = () => {
+      if (disposed) {
+        return;
+      }
+      try {
+        fitAddon.fit();
+        terminal.refresh(0, Math.max(0, terminal.rows - 1));
+      } catch {
+        // The next resize/snapshot render can recover the static TUI view.
+      }
+    };
+    const resizeObserver = new ResizeObserver(fit);
+    resizeObserver.observe(container);
+    terminal.write(props.screen || "\r\nNo TUI snapshot available yet.\r\n", fit);
+    window.requestAnimationFrame(fit);
+    const settleTimer = window.setTimeout(fit, 120);
+    return () => {
+      disposed = true;
+      window.clearTimeout(settleTimer);
+      resizeObserver.disconnect();
+      terminal.dispose();
+    };
+  }, [props.screen]);
+
+  return (
+    <div
+      ref={containerRef}
+      className="terminal-canvas h-full min-h-0 overflow-hidden rounded-xl border border-[var(--app-border)] bg-[var(--terminal-bg,var(--app-code-bg))] p-2"
+    />
+  );
+}
+
 export function CouncilPage(props: {
   workspaceDir: string;
   onOpenSidebar: () => void;
@@ -48,21 +142,28 @@ export function CouncilPage(props: {
     createDefaultCouncilAgentDrafts(),
   );
   const [catalogs, setCatalogs] = useState<Record<string, ProviderModelCatalog>>({});
+  const [activePanel, setActivePanel] = useState<CouncilPanel>("chat");
   const [selectedTui, setSelectedTui] = useState<CouncilAgentTuiResponse | null>(null);
+  const [selectedTuiLoading, setSelectedTuiLoading] = useState(false);
 
   const selectedRoom = rooms.find((room) => room.room.id === selectedRoomId) ?? rooms[0] ?? null;
 
-  const refreshRooms = async () => {
+  const refreshRooms = async (): Promise<CouncilRoomSnapshot[]> => {
     setLoading(true);
     setError(null);
     try {
       const response = await api.listCouncilRooms();
       setRooms(response.rooms);
-      if (!selectedRoomId && response.rooms[0]) {
-        setSelectedRoomId(response.rooms[0].room.id);
-      }
+      setSelectedRoomId((current) => {
+        if (current && response.rooms.some((room) => room.room.id === current)) {
+          return current;
+        }
+        return response.rooms[0]?.room.id ?? null;
+      });
+      return response.rooms;
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
+      return [];
     } finally {
       setLoading(false);
     }
@@ -107,9 +208,12 @@ export function CouncilPage(props: {
         .then((response) => {
           if (cancelled) return;
           setRooms(response.rooms);
-          if (!selectedRoomId && response.rooms[0]) {
-            setSelectedRoomId(response.rooms[0].room.id);
-          }
+          setSelectedRoomId((current) => {
+            if (current && response.rooms.some((room) => room.room.id === current)) {
+              return current;
+            }
+            return response.rooms[0]?.room.id ?? null;
+          });
         })
         .catch((caught) => {
           if (!cancelled) {
@@ -121,7 +225,7 @@ export function CouncilPage(props: {
       cancelled = true;
       window.clearInterval(intervalId);
     };
-  }, [selectedRoomId]);
+  }, []);
 
   useEffect(() => {
     setWorkspace((current) => current || props.workspaceDir || "");
@@ -141,6 +245,50 @@ export function CouncilPage(props: {
     }
   }, [agentDrafts, catalogs, workspace]);
 
+  useEffect(() => {
+    setAgentDrafts((current) => {
+      let changed = false;
+      const next = current.map((draft) => {
+        const catalog = catalogs[catalogKey(draft.provider, workspace)];
+        if (!catalog) {
+          return draft;
+        }
+        const normalized = normalizeCouncilAgentDraftForCatalog({ draft, catalog });
+        if (normalized !== draft) {
+          changed = true;
+        }
+        return normalized;
+      });
+      return changed ? next : current;
+    });
+  }, [catalogs, workspace]);
+
+  useEffect(() => {
+    if (!selectedTui) {
+      return;
+    }
+    let cancelled = false;
+    const refreshTui = async () => {
+      try {
+        const response = await api.getCouncilAgentTui(selectedTui.roomId, selectedTui.agentId);
+        if (!cancelled) {
+          setSelectedTui(response);
+        }
+      } catch {
+        // Keep the last good snapshot; the room poll will surface failures.
+      }
+    };
+    const intervalId = window.setInterval(() => void refreshTui(), 1_500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [selectedTui?.roomId, selectedTui?.agentId]);
+
+  const updateDraft = (id: string, updater: (draft: CouncilAgentDraft) => CouncilAgentDraft) => {
+    setAgentDrafts((current) => current.map((draft) => draft.id === id ? updater(draft) : draft));
+  };
+
   const startRoom = async () => {
     setLoading(true);
     setError(null);
@@ -157,6 +305,7 @@ export function CouncilPage(props: {
       });
       await refreshRooms();
       setSelectedRoomId(response.room.room.id);
+      setActivePanel("chat");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -179,11 +328,12 @@ export function CouncilPage(props: {
     }
   };
 
-  const archiveRoom = async () => {
-    if (!selectedRoom) return;
+  const stopRoom = async () => {
+    if (!selectedRoom || selectedRoom.room.status === "stopped") return;
     setLoading(true);
     try {
       await api.archiveCouncilRoom(selectedRoom.room.id);
+      setSelectedTui(null);
       await refreshRooms();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -193,10 +343,14 @@ export function CouncilPage(props: {
   };
 
   const openTui = async (agent: CouncilAgent) => {
+    setSelectedTuiLoading(true);
+    setError(null);
     try {
       setSelectedTui(await api.getCouncilAgentTui(agent.roomId, agent.id));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setSelectedTuiLoading(false);
     }
   };
 
@@ -204,9 +358,16 @@ export function CouncilPage(props: {
     return `${rooms.length} room${rooms.length === 1 ? "" : "s"}`;
   }, [rooms.length]);
 
+  const setupPanelClass =
+    `${panelVisibilityClass("setup", activePanel)} min-h-0 flex-col rounded-2xl border border-[var(--app-border)] bg-[var(--app-subtle-bg)]/40`;
+  const chatPanelClass =
+    `${panelVisibilityClass("chat", activePanel)} min-h-0 flex-col rounded-2xl border border-[var(--app-border)] bg-[var(--app-bg)]`;
+  const agentsPanelClass =
+    `${panelVisibilityClass("agents", activePanel)} min-h-0 flex-col rounded-2xl border border-[var(--app-border)] bg-[var(--app-subtle-bg)]/40`;
+
   return (
     <div className="flex h-full min-h-0 flex-col bg-[var(--app-bg)]">
-      <header className="flex h-14 shrink-0 items-center justify-between border-b border-[var(--app-border)] px-4">
+      <header className="flex h-14 shrink-0 items-center justify-between border-b border-[var(--app-border)] px-3 sm:px-4">
         <div className="flex min-w-0 items-center gap-3">
           <button
             type="button"
@@ -218,23 +379,58 @@ export function CouncilPage(props: {
           </button>
           <div className="min-w-0">
             <div className="text-sm font-semibold text-[var(--app-fg)]">Council</div>
-            <div className="truncate text-xs text-[var(--app-hint)]">{roomStats} · plugin-style multi-agent room</div>
+            <div className="truncate text-xs text-[var(--app-hint)]">{roomStats} · multi-agent room</div>
           </div>
         </div>
-        <button
-          type="button"
-          onClick={() => void refreshRooms()}
-          className="icon-click-feedback inline-flex h-9 items-center gap-2 rounded-lg border border-[var(--app-border)] px-3 text-xs font-medium text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)]"
-        >
-          <RefreshCw size={14} />
-          Refresh
-        </button>
+        <div className="flex shrink-0 items-center gap-2">
+          {selectedRoom ? (
+            <button
+              type="button"
+              onClick={() => void stopRoom()}
+              disabled={loading || selectedRoom.room.status === "stopped"}
+              className="icon-click-feedback inline-flex h-9 items-center gap-2 rounded-lg border border-[var(--app-border)] px-2.5 text-xs font-medium text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)] disabled:opacity-40 sm:px-3"
+              title="Stop room and its zellij session"
+            >
+              <Square size={13} />
+              <span className="hidden sm:inline">Stop</span>
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => void refreshRooms()}
+            className="icon-click-feedback inline-flex h-9 items-center gap-2 rounded-lg border border-[var(--app-border)] px-2.5 text-xs font-medium text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)] sm:px-3"
+          >
+            <RefreshCw size={14} />
+            <span className="hidden sm:inline">Refresh</span>
+          </button>
+        </div>
       </header>
 
-      <div className="grid min-h-0 flex-1 grid-cols-[20rem_minmax(0,1fr)_18rem] gap-3 p-3 max-[980px]:grid-cols-1">
-        <aside className="flex min-h-0 flex-col rounded-2xl border border-[var(--app-border)] bg-[var(--app-subtle-bg)]/40">
+      <nav className="grid h-11 shrink-0 grid-cols-3 border-b border-[var(--app-border)] bg-[var(--app-bg)] p-1 lg:hidden">
+        {([
+          ["setup", "Setup"],
+          ["chat", "Chat"],
+          ["agents", "Agents"],
+        ] as const).map(([panel, label]) => (
+          <button
+            key={panel}
+            type="button"
+            onClick={() => setActivePanel(panel)}
+            className={`rounded-lg text-xs font-semibold transition-colors ${
+              activePanel === panel
+                ? "bg-[var(--app-subtle-bg)] text-[var(--app-fg)]"
+                : "text-[var(--app-hint)]"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </nav>
+
+      <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 p-2 sm:p-3 lg:grid-cols-[19rem_minmax(0,1fr)_17rem]">
+        <aside className={setupPanelClass}>
           <div className="border-b border-[var(--app-border)] px-4 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-[var(--app-hint)]">
-            Start Room
+            Setup
           </div>
           <div className="space-y-3 overflow-y-auto p-3">
             <label className="block text-xs font-medium text-[var(--app-hint)]">
@@ -261,8 +457,7 @@ export function CouncilPage(props: {
                   draft: draft.modeId ? { accessModeId: draft.modeId, planEnabled: false } : null,
                   catalog: catalog ?? null,
                 });
-                const model = catalog?.models.find((entry) => entry.id === draft.modelId) ?? catalog?.models[0];
-                const reasoningOptions = model?.reasoningOptions ?? [];
+                const selection = resolveCouncilAgentModelSelection({ draft, catalog: catalog ?? null });
                 return (
                   <div key={draft.id} className="rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-2.5">
                     <div className="mb-2 flex items-center justify-between text-xs font-semibold text-[var(--app-fg)]">
@@ -274,11 +469,13 @@ export function CouncilPage(props: {
                         value={draft.provider}
                         onChange={(event) => {
                           const provider = event.target.value as ProviderChoice;
-                          setAgentDrafts((current) => current.map((item) =>
-                            item.id === draft.id
-                              ? { ...item, provider, modelId: null, reasoningId: null, modeId: null }
-                              : item,
-                          ));
+                          updateDraft(draft.id, (item) => ({
+                            ...item,
+                            provider,
+                            modelId: null,
+                            reasoningId: null,
+                            modeId: null,
+                          }));
                         }}
                         className="h-8 rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] px-2 text-xs text-[var(--app-fg)]"
                       >
@@ -288,9 +485,10 @@ export function CouncilPage(props: {
                       </select>
                       <select
                         value={draft.modeId ?? modeState.selectedAccessModeId ?? ""}
-                        onChange={(event) => setAgentDrafts((current) => current.map((item) =>
-                          item.id === draft.id ? { ...item, modeId: event.target.value || null } : item,
-                        ))}
+                        onChange={(event) => updateDraft(draft.id, (item) => ({
+                          ...item,
+                          modeId: event.target.value || null,
+                        }))}
                         className="h-8 rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] px-2 text-xs text-[var(--app-fg)]"
                       >
                         {modeState.accessModes.map((mode) => (
@@ -300,51 +498,49 @@ export function CouncilPage(props: {
                     </div>
                     <input
                       value={draft.label}
-                      onChange={(event) => setAgentDrafts((current) => current.map((item) =>
-                        item.id === draft.id ? { ...item, label: event.target.value } : item,
-                      ))}
+                      onChange={(event) => updateDraft(draft.id, (item) => ({
+                        ...item,
+                        label: event.target.value,
+                      }))}
                       className="mt-2 h-8 w-full rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] px-2 text-xs text-[var(--app-fg)]"
+                      placeholder="Agent label"
                     />
                     <input
                       value={draft.role}
-                      onChange={(event) => setAgentDrafts((current) => current.map((item) =>
-                        item.id === draft.id ? { ...item, role: event.target.value } : item,
-                      ))}
+                      onChange={(event) => updateDraft(draft.id, (item) => ({
+                        ...item,
+                        role: event.target.value,
+                      }))}
                       className="mt-2 h-8 w-full rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] px-2 text-xs text-[var(--app-fg)]"
+                      placeholder="Agent role"
                     />
-                    <select
-                      value={draft.modelId ?? catalog?.models[0]?.id ?? ""}
-                      onChange={(event) => {
-                        const selected = catalog?.models.find((entry) => entry.id === event.target.value);
-                        setAgentDrafts((current) => current.map((item) =>
-                          item.id === draft.id
-                            ? {
-                                ...item,
-                                modelId: event.target.value || null,
-                                reasoningId: selected?.reasoningOptions?.at(-1)?.id ?? null,
-                              }
-                            : item,
-                        ));
-                      }}
-                      className="mt-2 h-8 w-full rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] px-2 text-xs text-[var(--app-fg)]"
-                    >
-                      {(catalog?.models ?? []).map((entry) => (
-                        <option key={entry.id} value={entry.id}>{entry.label}</option>
-                      ))}
-                    </select>
-                    {reasoningOptions.length > 0 ? (
-                      <select
-                        value={draft.reasoningId ?? reasoningOptions.at(-1)?.id ?? ""}
-                        onChange={(event) => setAgentDrafts((current) => current.map((item) =>
-                          item.id === draft.id ? { ...item, reasoningId: event.target.value || null } : item,
-                        ))}
-                        className="mt-2 h-8 w-full rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] px-2 text-xs text-[var(--app-fg)]"
-                      >
-                        {reasoningOptions.map((entry) => (
-                          <option key={entry.id} value={entry.id}>{entry.label}</option>
-                        ))}
-                      </select>
-                    ) : null}
+                    <div className="mt-2">
+                      <SessionModelControls
+                        catalog={catalog ?? null}
+                        selectedModelId={selection.modelId}
+                        selectedReasoningId={selection.reasoningId}
+                        loading={!catalog && Boolean(workspace)}
+                        compact
+                        onModelChange={(modelId, defaultReasoningId) => {
+                          updateDraft(draft.id, (item) => ({
+                            ...item,
+                            modelId,
+                            reasoningId: defaultReasoningId ?? null,
+                          }));
+                        }}
+                        onReasoningChange={(reasoningId) => {
+                          updateDraft(draft.id, (item) => ({
+                            ...item,
+                            reasoningId,
+                          }));
+                        }}
+                      />
+                      {catalog && selection.model && selection.reasoningOptions.length === 0 ? (
+                        <div className="mt-1 truncate text-[11px] text-[var(--app-hint)]">
+                          {selection.model.label} has no startup parameter options.
+                        </div>
+                      ) : null}
+                    </div>
                   </div>
                 );
               })}
@@ -367,7 +563,7 @@ export function CouncilPage(props: {
                 className="icon-click-feedback inline-flex h-9 flex-1 items-center justify-center gap-2 rounded-lg border border-[var(--app-border)] text-xs font-medium text-[var(--app-fg)] hover:bg-[var(--app-bg)]"
               >
                 <Plus size={14} />
-                Add agent
+                Add
               </button>
               <button
                 type="button"
@@ -378,10 +574,35 @@ export function CouncilPage(props: {
                 Start
               </button>
             </div>
+            {rooms.length > 0 ? (
+              <div className="space-y-1 border-t border-[var(--app-border)] pt-3">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--app-hint)]">
+                  Rooms
+                </div>
+                {rooms.slice(0, 8).map((room) => (
+                  <button
+                    key={room.room.id}
+                    type="button"
+                    onClick={() => {
+                      setSelectedRoomId(room.room.id);
+                      setActivePanel("chat");
+                    }}
+                    className={`flex h-9 w-full items-center justify-between rounded-lg px-2 text-left text-xs ${
+                      selectedRoom?.room.id === room.room.id
+                        ? "bg-[var(--app-bg)] text-[var(--app-fg)]"
+                        : "text-[var(--app-hint)] hover:bg-[var(--app-bg)]"
+                    }`}
+                  >
+                    <span className="truncate">{room.room.title}</span>
+                    <span className="ml-2 shrink-0">{room.room.status}</span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
           </div>
         </aside>
 
-        <section className="flex min-h-0 flex-col rounded-2xl border border-[var(--app-border)] bg-[var(--app-bg)]">
+        <section className={chatPanelClass}>
           <div className="flex h-12 shrink-0 items-center justify-between border-b border-[var(--app-border)] px-4">
             <div className="min-w-0">
               <div className="truncate text-sm font-semibold text-[var(--app-fg)]">
@@ -391,15 +612,11 @@ export function CouncilPage(props: {
                 {selectedRoom ? `${selectedRoom.room.status} · ${selectedRoom.room.workspace}` : "Start a room to begin."}
               </div>
             </div>
-            {selectedRoom ? (
-              <button
-                type="button"
-                onClick={() => void archiveRoom()}
-                className="icon-click-feedback inline-flex h-9 items-center gap-2 rounded-lg border border-[var(--app-border)] px-3 text-xs text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)]"
-              >
-                <Archive size={14} />
-                Archive
-              </button>
+            {selectedRoom?.room.status === "running" ? (
+              <span className="inline-flex h-7 items-center gap-1 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 text-[11px] font-semibold text-emerald-600">
+                <CheckCircle2 size={13} />
+                Live
+              </span>
             ) : null}
           </div>
           {error ? (
@@ -412,11 +629,11 @@ export function CouncilPage(props: {
               {selectedRoom.room.error}
             </div>
           ) : null}
-          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
+          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3 sm:p-4">
             {selectedRoom?.messages.map((message) => (
               <div
                 key={message.id}
-                className={`max-w-[82%] rounded-2xl border px-3 py-2 text-sm ${
+                className={`max-w-[92%] rounded-2xl border px-3 py-2 text-sm sm:max-w-[82%] ${
                   message.role === "user"
                     ? "ml-auto border-[var(--app-border)] bg-[var(--app-fg)] text-[var(--app-bg)]"
                     : message.role === "system"
@@ -425,34 +642,34 @@ export function CouncilPage(props: {
                 }`}
               >
                 <div className="mb-1 text-[11px] font-semibold opacity-70">
-                  {actorLabel(selectedRoom, message.actorId)}
+                  {selectedRoom ? actorLabel(selectedRoom, message.actorId) : message.actorId}
                 </div>
                 <div className="whitespace-pre-wrap leading-relaxed">{textFromParts(message.parts)}</div>
               </div>
             ))}
           </div>
-          <div className="flex shrink-0 items-end gap-2 border-t border-[var(--app-border)] p-3">
+          <div className="flex shrink-0 items-end gap-2 border-t border-[var(--app-border)] p-2 sm:p-3">
             <textarea
               value={composer}
               onChange={(event) => setComposer(event.target.value)}
-              disabled={!selectedRoom}
+              disabled={!selectedRoom || selectedRoom.room.status === "stopped"}
               className="min-h-10 flex-1 resize-none rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] px-3 py-2 text-sm text-[var(--app-fg)] outline-none"
-              placeholder="Post to the council room…"
+              placeholder="Post to the council room..."
               rows={2}
             />
             <button
               type="button"
-              disabled={!selectedRoom || !composer.trim()}
+              disabled={!selectedRoom || !composer.trim() || selectedRoom.room.status === "stopped"}
               onClick={() => void sendMessage()}
-              className="icon-click-feedback inline-flex h-10 items-center gap-2 rounded-xl bg-[var(--app-fg)] px-4 text-sm font-semibold text-[var(--app-bg)] disabled:opacity-40"
+              className="icon-click-feedback inline-flex h-10 items-center gap-2 rounded-xl bg-[var(--app-fg)] px-3 text-sm font-semibold text-[var(--app-bg)] disabled:opacity-40 sm:px-4"
             >
               <MessageSquare size={15} />
-              Send
+              <span className="hidden sm:inline">Send</span>
             </button>
           </div>
         </section>
 
-        <aside className="flex min-h-0 flex-col rounded-2xl border border-[var(--app-border)] bg-[var(--app-subtle-bg)]/40">
+        <aside className={agentsPanelClass}>
           <div className="border-b border-[var(--app-border)] px-4 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-[var(--app-hint)]">
             Agents
           </div>
@@ -467,25 +684,69 @@ export function CouncilPage(props: {
                 <ProviderLogo provider={agent.provider} className="h-5 w-5" variant="bare" />
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm font-semibold text-[var(--app-fg)]">{agent.label}</div>
-                  <div className="truncate text-xs text-[var(--app-hint)]">{agent.status} · {agent.modelId ?? "provider default"}</div>
+                  <div className="truncate text-xs text-[var(--app-hint)]">{agent.modelId ?? "provider default"}</div>
                 </div>
+                <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-semibold ${agentStatusClass(agent.status)}`}>
+                  {agent.status}
+                </span>
                 <TerminalSquare size={15} className="text-[var(--app-hint)]" />
               </button>
             ))}
-          </div>
-          {selectedTui ? (
-            <div className="border-t border-[var(--app-border)] p-3">
-              <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-[var(--app-fg)]">
-                <Bot size={14} />
-                {selectedTui.agentId}
+            {!selectedRoom ? (
+              <div className="rounded-xl border border-dashed border-[var(--app-border)] p-4 text-center text-xs text-[var(--app-hint)]">
+                Start or select a room to see agents.
               </div>
-              <pre className="max-h-52 overflow-auto rounded-xl bg-black p-3 text-[11px] leading-relaxed text-white">
-                {selectedTui.screen || "No TUI snapshot available yet."}
-              </pre>
-            </div>
-          ) : null}
+            ) : null}
+          </div>
         </aside>
       </div>
+
+      {selectedTui ? (
+        <div className="fixed inset-2 z-[70] flex flex-col rounded-2xl border border-[var(--app-border)] bg-[var(--app-bg)] shadow-2xl sm:inset-5">
+          <div className="flex h-12 shrink-0 items-center justify-between border-b border-[var(--app-border)] px-3 sm:px-4">
+            <div className="flex min-w-0 items-center gap-2">
+              <Bot size={15} className="text-[var(--app-hint)]" />
+              <div className="min-w-0">
+                <div className="truncate text-sm font-semibold text-[var(--app-fg)]">
+                  {selectedRoom?.agents.find((agent) => agent.id === selectedTui.agentId)?.label ?? selectedTui.agentId}
+                </div>
+                <div className="truncate text-[11px] text-[var(--app-hint)]">
+                  {selectedTui.zellijSessionName ?? "zellij"} · {selectedTui.paneId ?? "pane pending"}
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => selectedTui && void openTui({
+                  id: selectedTui.agentId,
+                  roomId: selectedTui.roomId,
+                  provider: "codex",
+                  label: selectedTui.agentId,
+                  status: "idle",
+                  updatedAt: "",
+                } as CouncilAgent)}
+                disabled={selectedTuiLoading}
+                className="icon-click-feedback inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--app-border)] text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)]"
+                title="Refresh TUI snapshot"
+              >
+                <RefreshCw size={14} />
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedTui(null)}
+                className="icon-click-feedback inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--app-border)] text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)]"
+                title="Close TUI snapshot"
+              >
+                <X size={15} />
+              </button>
+            </div>
+          </div>
+          <div className="min-h-0 flex-1 p-2 sm:p-3">
+            <CouncilTuiSnapshot screen={selectedTui.screen} />
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

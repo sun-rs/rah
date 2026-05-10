@@ -4,6 +4,8 @@ import type { ProviderModelCatalog } from "@rah/runtime-protocol";
 import {
   councilAgentDraftToConfig,
   createDefaultCouncilAgentDrafts,
+  normalizeCouncilAgentDraftForCatalog,
+  resolveCouncilAgentModelSelection,
 } from "./council-ui-state";
 
 test("council defaults create two editable provider-backed agent drafts", () => {
@@ -148,4 +150,52 @@ test("council agent config uses visible catalog defaults when draft has not been
   assert.equal(config.reasoningId, "xhigh");
   assert.deepEqual(config.optionValues, { model_reasoning_variant: "xhigh" });
   assert.equal(config.modeId, "opencode/full-auto");
+});
+
+test("council model selection clears stale reasoning when selected model has no parameters", () => {
+  const catalog: ProviderModelCatalog = {
+    provider: "opencode",
+    models: [
+      {
+        id: "kimi/kimi-for-coding",
+        label: "Kimi for Coding",
+      },
+      {
+        id: "openai/gpt-5.5",
+        label: "GPT 5.5",
+        reasoningOptions: [
+          { id: "medium", label: "Medium", kind: "reasoning_effort" },
+          { id: "xhigh", label: "XHigh", kind: "reasoning_effort" },
+        ],
+      },
+    ],
+    fetchedAt: new Date().toISOString(),
+    source: "native",
+    modelsExact: true,
+    optionsExact: true,
+  };
+
+  const draft = {
+    id: "opencode-specialist",
+    provider: "opencode" as const,
+    label: "OpenCode Specialist",
+    role: "",
+    modelId: "kimi/kimi-for-coding",
+    reasoningId: "xhigh",
+    modeId: null,
+  };
+
+  const selection = resolveCouncilAgentModelSelection({ draft, catalog });
+  assert.equal(selection.modelId, "kimi/kimi-for-coding");
+  assert.equal(selection.reasoningId, null);
+  assert.deepEqual(selection.reasoningOptions, []);
+
+  const normalized = normalizeCouncilAgentDraftForCatalog({ draft, catalog });
+  assert.equal(normalized.modelId, "kimi/kimi-for-coding");
+  assert.equal(normalized.reasoningId, null);
+
+  const config = councilAgentDraftToConfig({ draft, catalog });
+  assert.equal(config.modelId, "kimi/kimi-for-coding");
+  assert.equal(config.reasoningId, undefined);
+  assert.equal(config.optionValues, undefined);
 });

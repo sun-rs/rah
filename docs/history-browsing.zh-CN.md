@@ -12,29 +12,78 @@ Gemini/Kimi CLI 一等支持已移除；相关模型通过 OpenCode/API provider
 
 ## 1. 前端加载模型
 
-历史浏览采用：
+RAH 把“live 同步”和“旧历史分页”拆成两条不同路径，不能混用：
 
 ```text
-打开 session -> 加载 tail -> 上滚接近顶部 -> 加载更老一页 -> prepend -> 保持滚动锚点
+live/new/current -> provider event/client push -> silent latest-tail sync fallback
+read-only history/up-scroll -> load older page -> prepend -> keep scroll anchor
 ```
 
 前端页大小：
 
 - `HISTORY_PAGE_LIMIT = 250`
 
-触发条件：
+### 1.1 新建 live session
 
-- 打开或选中需要历史的 session 时，调用 `ensureSessionHistoryLoaded`。
-- 第一次加载走 `loadOlderHistory`，没有 cursor 时后端返回最近 tail。
-- 聊天区向上滚动接近顶部时，如果还有 `nextCursor` 或 `nextBeforeTs`，继续加载 older page。
-- 如果当前内容不足一屏，会继续自动加载更早历史，直到填满或没有下一页。
+新建 live session 的首要数据源是当前 provider runtime：
+
+- Codex/OpenCode：native local-server event/client push。
+- Claude：zellij/TUI fallback + provider transcript mirror。
+
+新建 live session 不应触发可见的 older-history 加载，也不应在顶部显示 `Loading older history`。创建时 feed 可以为空，然后由 optimistic user message、provider live event、provider transcript mirror 逐步填充。
+
+如果兼容路径需要在拿到 `providerSessionId` 后做一次 backfill，只能走 `refreshLatestHistory`，并且必须是静默 latest-tail sync：不设置 `history.phase = "loading"`，不展示 loading 文案，不阻塞 live event。
+
+### 1.2 选中已有 live session
+
+用户从左侧 live list、Sessions 弹窗、Canvas pane 选中一个已经存在的 live session 时，应触发一次静默 latest-tail sync：
+
+- 调用 `ensureSessionHistoryLoaded`。
+- 对非 read-only replay，`ensureSessionHistoryLoaded` 必须路由到 `refreshLatestHistory`。
+- `refreshLatestHistory` 读取 provider 当前最近 tail，并通过 `mergeLatestHistoryPage` 与现有 feed 合并。
+- 这一步用于补齐用户离开页面、浏览器 reload、PWA 切后台期间错过的已提交消息。
+
+这不是 older-history paging，因此不能改变滚动锚点语义，也不能显示 `Loading older history`。
+
+### 1.3 正在观察当前 Chat
+
+当用户停留在某个 Chat 页面时，最新消息应该由 live source 主动进入 UI：
+
+- Codex/OpenCode 优先使用 native local-server 的结构化 event/client push。
+- Claude fallback 优先使用 provider transcript mirror。
+- `refreshLatestHistory` 只是恢复性兜底，用于 focus/reload/network gap 后把 provider 文件或 DB 中已经落盘的 tail 补回来。
+
+硬约束：
+
+- live/native-mirror event 不能被 history bootstrap 挡住。
+- history 正在加载时可以推迟 older-page 合并，但不能隐藏已经到达的 live reply。
+- latest-tail sync 只能 merge/upsert，不能把已有 live feed 整体替换成另一套顺序。
+
+### 1.4 只读历史与向上翻页
+
+只有以下场景才是 older-history paging：
+
+- 打开一个 read-only replay 历史 session 的首次历史页。
+- 用户在 Chat 中向上滚动接近顶部。
+- 当前内容不足一屏时，自动继续加载更早历史直到填满或没有下一页。
+
+older-history paging 使用 `loadOlderHistory`：
+
+- 没有 cursor 时后端返回当前 frozen snapshot 的最近 tail。
+- 有 `nextCursor` 或 `nextBeforeTs` 时加载更老一页。
+- 页面 prepend 到当前 feed 前面。
+- prepend 前记录 visible anchor，插入后修正 `scrollTop`，保持阅读位置。
+- 这条路径可以设置 `history.phase = "loading"`，也只有这条路径可以显示 `Loading older history`。
+
+### 1.5 合并规则
 
 前端合并规则：
 
-- older page prepend 到当前 feed 前面。
-- 优先通过 `TimelineIdentity.canonicalItemId` upsert，避免 live/bootstrap 事件与 history replay 重复显示。
+- latest-tail 使用 `mergeLatestHistoryPage`，语义是“补当前尾部缺失消息”。
+- older page 使用 `prependHistoryPage`，语义是“向前扩展历史窗口”。
+- 优先通过 `TimelineIdentity.canonicalItemId` upsert，避免 live/bootstrap event 与 history replay 重复显示。
 - 没有 `canonicalItemId` 的旧事件才退回到 `messageId`、turnId、text/time window 等兼容性去重。
-- prepend 前记录 visible anchor，插入后修正 `scrollTop`，保持阅读位置。
+- `origin` 不参与 canonical key；连续两次相同文本的真实消息不能因为 text hash 被合并。
 
 ## 2. Timeline Identity
 

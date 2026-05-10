@@ -20,6 +20,49 @@ type SessionSyncSetState = (
     | ((state: SessionSyncState) => Partial<SessionSyncState> | SessionSyncState),
 ) => void;
 
+function hiddenMessagePartEvent(event: RahEvent): boolean {
+  if (
+    event.type !== "message.part.added" &&
+    event.type !== "message.part.updated" &&
+    event.type !== "message.part.delta"
+  ) {
+    return false;
+  }
+  const kind = event.payload.part.kind;
+  return kind === "text" || kind === "reasoning" || kind === "step";
+}
+
+function timelineCoalesceKey(event: RahEvent): string | null {
+  if (event.type !== "timeline.item.added" && event.type !== "timeline.item.updated") {
+    return null;
+  }
+  const canonicalItemId = event.payload.identity?.canonicalItemId;
+  return canonicalItemId ? `timeline:${canonicalItemId}` : null;
+}
+
+export function coalesceProjectionEvents(events: RahEvent[]): RahEvent[] {
+  const result: RahEvent[] = [];
+  const indexByKey = new Map<string, number>();
+
+  for (const event of events) {
+    if (hiddenMessagePartEvent(event)) {
+      continue;
+    }
+    const key = timelineCoalesceKey(event);
+    if (key) {
+      const existingIndex = indexByKey.get(key);
+      if (existingIndex !== undefined) {
+        result[existingIndex] = event;
+        continue;
+      }
+      indexByKey.set(key, result.length);
+    }
+    result.push(event);
+  }
+
+  return result;
+}
+
 export async function recoverFromReplayGapCommand(args: {
   batch: EventBatch;
   get: () => SessionSyncState;
@@ -95,6 +138,47 @@ export function connectStoreSyncTransport(args: {
   recoverFromReplayGap: (batch: EventBatch) => Promise<void>;
   refreshWorkbenchState: () => Promise<void>;
 }) {
+  let pendingProjectionEvents: RahEvent[] = [];
+  let pendingUnreadEvents: RahEvent[] = [];
+  let pendingFlushFrame: number | null = null;
+
+  const flushPendingEvents = () => {
+    if (pendingFlushFrame !== null) {
+      window.cancelAnimationFrame(pendingFlushFrame);
+      pendingFlushFrame = null;
+    }
+    if (pendingProjectionEvents.length === 0) {
+      pendingUnreadEvents = [];
+      return;
+    }
+    const projectionEvents = coalesceProjectionEvents(pendingProjectionEvents);
+    const unreadEvents = pendingUnreadEvents;
+    pendingProjectionEvents = [];
+    pendingUnreadEvents = [];
+    args.set((state) => ({
+      projections: args.applyEventsToMap(state.projections, projectionEvents),
+      unreadSessionIds:
+        unreadEvents.length === 0
+          ? state.unreadSessionIds
+          : args.computeUnreadSessionIds(
+              state.unreadSessionIds,
+              state.selectedSessionId,
+              unreadEvents,
+            ),
+      error: state.error === "Events socket failed" ? null : state.error,
+    }));
+  };
+
+  const schedulePendingEventFlush = () => {
+    if (pendingFlushFrame !== null) {
+      return;
+    }
+    pendingFlushFrame = window.requestAnimationFrame(() => {
+      pendingFlushFrame = null;
+      flushPendingEvents();
+    });
+  };
+
   connectSessionStoreTransport({
     getReplayFromSeq: args.getReplayFromSeq,
     isInitialLoaded: args.isInitialLoaded,
@@ -104,17 +188,11 @@ export function connectStoreSyncTransport(args: {
       if (projectionEvents.length === 0) {
         return;
       }
-      args.set((state) => ({
-        projections: args.applyEventsToMap(state.projections, projectionEvents),
-        unreadSessionIds: batch.initial
-          ? state.unreadSessionIds
-          : args.computeUnreadSessionIds(
-              state.unreadSessionIds,
-              state.selectedSessionId,
-              projectionEvents,
-            ),
-        error: state.error === "Events socket failed" ? null : state.error,
-      }));
+      pendingProjectionEvents = [...pendingProjectionEvents, ...projectionEvents];
+      if (!batch.initial) {
+        pendingUnreadEvents = [...pendingUnreadEvents, ...projectionEvents];
+      }
+      schedulePendingEventFlush();
     },
     onError: (error) => {
       args.set({ error: error.message });
@@ -125,6 +203,7 @@ export function connectStoreSyncTransport(args: {
       }));
     },
     onReplayGap: (batch) => {
+      flushPendingEvents();
       void args.recoverFromReplayGap(batch);
     },
     onStoredSessionsRefresh: () => {

@@ -32,6 +32,7 @@ import {
   parseIndependentTerminalStartRequest,
   parseInterruptSessionRequest,
   parseNativeTuiSurfaceClaimRequest,
+  parseNativeTuiClientCloseRequest,
   parseNativeTuiSurfaceReleaseRequest,
   parsePermissionResponseRequest,
   parseReleaseControlRequest,
@@ -180,6 +181,20 @@ export function createPostRoutes(
           await engine.releaseNativeTuiSurface(
             match[1]!,
             parseNativeTuiSurfaceReleaseRequest(body),
+          ),
+        );
+      },
+    },
+    {
+      pattern: /^\/api\/sessions\/([^/]+)\/tui-client\/close$/,
+      handler: async (req, res, match, body) => {
+        writeJson(
+          req,
+          res,
+          200,
+          await engine.closeNativeTuiClient(
+            match[1]!,
+            parseNativeTuiClientCloseRequest(body),
           ),
         );
       },

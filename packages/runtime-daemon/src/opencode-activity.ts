@@ -355,6 +355,9 @@ function translateOpenCodePart(
       if (!text || readBooleanProperty(part, "synthetic") || readBooleanProperty(part, "ignored")) {
         return [];
       }
+      if (!role) {
+        return [];
+      }
       if (role === "user") {
         if (!state.emitUserMessages) {
           return [];
@@ -379,6 +382,9 @@ function translateOpenCodePart(
     }
     case "reasoning": {
       const text = readStringProperty(part, "text");
+      if (!role) {
+        return [];
+      }
       return text
         ? [
             {
@@ -454,6 +460,9 @@ function translatePartDelta(
     return [];
   }
   const role = state.roleByMessageId.get(messageID);
+  if (!role) {
+    return [];
+  }
   const turnId = state.turnByMessageId.get(messageID) ?? state.currentTurnId;
   if (role === "user") {
     return [];

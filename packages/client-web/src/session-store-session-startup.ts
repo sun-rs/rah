@@ -516,10 +516,42 @@ export async function claimHistorySessionCommand(
       };
     });
   } catch (error) {
+    const message = readErrorMessage(error);
+    if (message.includes("attach instead of resume")) {
+      const workspaceVisibilityVersionAtRequest = deps.get().workspaceVisibilityVersion;
+      const sessionsResponse = await api.listSessions();
+      const running = sessionsResponse.sessions.find(
+        (candidate) =>
+          candidate.session.provider === ref.provider &&
+          candidate.session.providerSessionId === ref.providerSessionId,
+      );
+      if (running) {
+        deps.set((current) => {
+          const next = deps.applySessionsResponse(current, sessionsResponse, {
+            workspaceVisibilityVersionAtRequest,
+          });
+          return {
+            ...next,
+            workspaceDir:
+              ref.rootDir ??
+              ref.cwd ??
+              running.session.rootDir ??
+              running.session.cwd ??
+              next.workspaceDir,
+            pendingSessionAction: null,
+            pendingSessionTransition: null,
+            error: null,
+          };
+        });
+        await deps.attachSession(running);
+        deps.set({ pendingSessionAction: null, pendingSessionTransition: null, error: null });
+        return;
+      }
+    }
     deps.set({
       pendingSessionAction: null,
       pendingSessionTransition: null,
-      error: readErrorMessage(error),
+      error: message,
     });
     throw error;
   }

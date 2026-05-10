@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { CodexAdapter } from "./legacy-structured/codex-structured-adapter";
@@ -187,6 +187,152 @@ rl.on('line', (line) => {
     assert.ok(events.some((event) => event.type === "permission.requested"));
     assert.ok(events.some((event) => event.type === "permission.resolved"));
     assert.ok(events.some((event) => event.type === "turn.completed"));
+
+    await adapter.shutdown?.();
+  });
+
+  test("terminal-owned new sessions bind provider id from thread started notification", async () => {
+    const serverJs = path.join(tmpDir, "mock-codex-terminal-start-server.js");
+    writeFileSync(
+      serverJs,
+      `
+const readline = require('node:readline');
+const rl = readline.createInterface({ input: process.stdin });
+function send(msg) { process.stdout.write(JSON.stringify(msg) + "\\n"); }
+let threadStartCalls = 0;
+let threadResumeCalls = 0;
+rl.on('line', (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method === 'initialize') {
+    send({ id: msg.id, result: {} });
+    return;
+  }
+  if (msg.method === 'collaborationMode/list') {
+    send({ id: msg.id, result: { data: [] } });
+    setTimeout(() => send({ method: 'thread/started', params: { thread: { id: 'thread-terminal-new-1' } } }), 10);
+    return;
+  }
+  if (msg.method === 'thread/start') {
+    threadStartCalls += 1;
+    send({ id: msg.id, result: { thread: { id: 'unexpected-thread-start' } } });
+    return;
+  }
+  if (msg.method === 'thread/resume') {
+    threadResumeCalls += 1;
+    send({
+      id: msg.id,
+      result: {
+        thread: {
+          id: 'thread-terminal-new-1',
+          turns: [
+            {
+              id: 'turn-terminal-local-1',
+              status: 'completed',
+              items: [
+                { type: 'userMessage', id: 'user-terminal-local-1', content: [{ type: 'text', text: 'local terminal question' }] },
+                { type: 'agentMessage', id: 'agent-terminal-local-1', text: 'local terminal answer' },
+              ],
+            },
+          ],
+        },
+      },
+    });
+    return;
+  }
+  if (msg.method === 'turn/start') {
+    send({
+      method: 'codex/test/observed',
+      params: { threadStartCalls, threadResumeCalls, threadId: msg.params?.threadId, input: msg.params?.input },
+    });
+    send({ id: msg.id, result: { turn: { id: 'turn-terminal-new-1' } } });
+    send({ method: 'turn/started', params: { turn: { id: 'turn-terminal-new-1' } } });
+    send({ method: 'turn/completed', params: { turn: { id: 'turn-terminal-new-1', status: 'completed' } } });
+    return;
+  }
+  send({ id: msg.id, result: {} });
+});
+`,
+    );
+    const wrapper = path.join(tmpDir, "mock-codex-terminal-start");
+    writeFileSync(
+      wrapper,
+      `#!/bin/sh\nexec node "${serverJs}" "$@"\n`,
+    );
+    chmodSync(wrapper, 0o755);
+    process.env.RAH_CODEX_BINARY = wrapper;
+
+    const services = {
+      eventBus: new EventBus(),
+      ptyHub: new PtyHub(),
+      sessionStore: new SessionStore(),
+    };
+    const adapter = new CodexAdapter(services);
+
+    const started = await adapter.startSession({
+      provider: "codex",
+      cwd: tmpDir,
+      attach: {
+        client: {
+          id: "terminal-client",
+          kind: "terminal",
+          connectionId: "pid:test-terminal",
+        },
+        mode: "interactive",
+        claimControl: true,
+      },
+    });
+    assert.equal(started.session.session.providerSessionId, undefined);
+    assert.equal(started.session.session.launchSource, "terminal");
+    assert.equal(started.session.session.runtimeDiagnostics?.lastEventCursor, "thread:pending");
+
+    adapter.sendInput(started.session.session.id, {
+      clientId: "terminal-client",
+      text: "queued until thread started",
+    });
+
+    await waitFor(() => {
+      const state = services.sessionStore.getSession(started.session.session.id);
+      return state?.session.providerSessionId === "thread-terminal-new-1";
+    });
+    await waitFor(() =>
+      services.eventBus.list({ sessionIds: [started.session.session.id] }).some(
+        (event) =>
+          event.type === "runtime.status" &&
+          event.payload.status === "session_active",
+      ),
+    );
+    await waitFor(() =>
+      services.eventBus.list({ sessionIds: [started.session.session.id] }).some(
+        (event) => event.type === "turn.completed",
+      ),
+    );
+    await waitFor(() =>
+      services.eventBus.list({ sessionIds: [started.session.session.id] }).some(
+        (event) =>
+          event.type === "timeline.item.added" &&
+          event.payload.item.kind === "user_message" &&
+          event.payload.item.text.includes("local terminal question"),
+      ),
+    );
+    await waitFor(() =>
+      services.eventBus.list({ sessionIds: [started.session.session.id] }).some(
+        (event) =>
+          event.type === "timeline.item.added" &&
+          event.payload.item.kind === "assistant_message" &&
+          event.payload.item.text.includes("local terminal answer"),
+      ),
+    );
+
+    const state = services.sessionStore.getSession(started.session.session.id);
+    assert.equal(state?.session.providerSessionId, "thread-terminal-new-1");
+    assert.equal(state?.session.runtimeDiagnostics?.lastEventCursor, "thread:thread-terminal-new-1");
+    assert.equal(state?.controlLease.holderClientId, "terminal-client");
+    assert.doesNotThrow(() =>
+      adapter.sendInput(started.session.session.id, {
+        clientId: "web-user",
+        text: "web chat should not require terminal TUI control",
+      }),
+    );
 
     await adapter.shutdown?.();
   });
@@ -467,6 +613,93 @@ rl.on('line', (line) => {
       ),
       false,
     );
+
+    await adapter.shutdown?.();
+  });
+
+  test("terminal-owned Codex turns can be stopped from Web without duplicate interrupts", async () => {
+    const interruptCountPath = path.join(tmpDir, "interrupt-count.txt");
+    const serverJs = path.join(tmpDir, "mock-codex-terminal-stop-server.js");
+    writeFileSync(
+      serverJs,
+      `
+const fs = require('node:fs');
+const readline = require('node:readline');
+const rl = readline.createInterface({ input: process.stdin });
+const interruptCountPath = ${JSON.stringify(interruptCountPath)};
+function send(msg) { process.stdout.write(JSON.stringify(msg) + "\\n"); }
+let interruptCalls = 0;
+rl.on('line', (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method === 'initialize') {
+    send({ id: msg.id, result: {} });
+    return;
+  }
+  if (msg.method === 'collaborationMode/list') {
+    send({ id: msg.id, result: { data: [] } });
+    setTimeout(() => send({ method: 'thread/started', params: { thread: { id: 'thread-terminal-stop-1' } } }), 10);
+    return;
+  }
+  if (msg.method === 'thread/resume') {
+    send({ id: msg.id, result: { thread: { id: 'thread-terminal-stop-1' } } });
+    return;
+  }
+  if (msg.method === 'turn/start') {
+    send({ id: msg.id, result: { turn: { id: 'turn-terminal-stop-1' } } });
+    send({ method: 'turn/started', params: { turn: { id: 'turn-terminal-stop-1' } } });
+    return;
+  }
+  if (msg.method === 'turn/interrupt') {
+    interruptCalls += 1;
+    fs.writeFileSync(interruptCountPath, String(interruptCalls));
+    send({ method: 'turn/completed', params: { turn: { id: 'turn-terminal-stop-1', status: 'interrupted' } } });
+    send({ id: msg.id, result: {} });
+    return;
+  }
+  send({ id: msg.id, result: {} });
+});
+`,
+    );
+    const wrapper = path.join(tmpDir, "mock-codex-terminal-stop");
+    writeFileSync(wrapper, `#!/bin/sh\nexec node "${serverJs}" "$@"\n`);
+    chmodSync(wrapper, 0o755);
+    process.env.RAH_CODEX_BINARY = wrapper;
+
+    const services = {
+      eventBus: new EventBus(),
+      ptyHub: new PtyHub(),
+      sessionStore: new SessionStore(),
+    };
+    const adapter = new CodexAdapter(services);
+
+    const started = await adapter.startSession({
+      provider: "codex",
+      cwd: tmpDir,
+      attach: {
+        client: {
+          id: "terminal-client",
+          kind: "terminal",
+          connectionId: "pid:test-terminal",
+        },
+        mode: "interactive",
+        claimControl: true,
+      },
+    });
+    adapter.sendInput(started.session.session.id, {
+      clientId: "terminal-client",
+      text: "run until stopped",
+    });
+    await waitFor(() => services.sessionStore.getSession(started.session.session.id)?.activeTurnId === "turn-terminal-stop-1");
+
+    adapter.interruptSession(started.session.session.id, { clientId: "web-client" });
+    adapter.interruptSession(started.session.session.id, { clientId: "web-client" });
+
+    await waitFor(() =>
+      services.eventBus
+        .list({ sessionIds: [started.session.session.id] })
+        .some((event) => event.type === "turn.canceled"),
+    );
+    assert.equal(readFileSync(interruptCountPath, "utf8"), "1");
 
     await adapter.shutdown?.();
   });

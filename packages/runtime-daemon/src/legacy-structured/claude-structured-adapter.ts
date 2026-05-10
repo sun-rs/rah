@@ -105,6 +105,7 @@ export class ClaudeAdapter implements ProviderAdapter {
       provider: "claude",
       providerSessionId: request.providerSessionId,
       preferStoredReplay: request.preferStoredReplay,
+      historySourceSessionId: request.historySourceSessionId,
       rehydratedSessionIds: this.rehydratedSessionIds,
     });
     const existing = this.services.sessionStore.findManagedByProviderSession(

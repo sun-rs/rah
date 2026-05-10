@@ -4,6 +4,8 @@ import net from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
 import { resolveConfiguredBinary } from "./provider-binary-utils";
 
+const OPENCODE_HEALTHCHECK_REQUEST_TIMEOUT_MS = 1_500;
+
 export interface OpenCodeServerHandle {
   baseUrl: string;
   cwd: string;
@@ -266,7 +268,12 @@ export async function waitForOpenCodeServer(handle: OpenCodeServerHandle): Promi
       throw new Error(`OpenCode server exited early with code ${handle.child.exitCode}.`);
     }
     try {
-      await openCodeRequestJson<Record<string, unknown>>(handle, "/path");
+      const signal = timeoutSignal(OPENCODE_HEALTHCHECK_REQUEST_TIMEOUT_MS);
+      await openCodeRequestJson<Record<string, unknown>>(
+        handle,
+        "/path",
+        signal ? { signal } : {},
+      );
       return;
     } catch (error) {
       lastError = error;
@@ -278,6 +285,12 @@ export async function waitForOpenCodeServer(handle: OpenCodeServerHandle): Promi
       lastError instanceof Error ? lastError.message : String(lastError)
     }`,
   );
+}
+
+function timeoutSignal(timeoutMs: number): AbortSignal | undefined {
+  return typeof AbortSignal.timeout === "function"
+    ? AbortSignal.timeout(timeoutMs)
+    : undefined;
 }
 
 export async function openCodeRequestJson<T>(
@@ -363,16 +376,26 @@ export async function promptOpenCodeSessionAsync(params: {
   providerSessionId: string;
   text: string;
   model?: string;
+  variant?: string;
+  agent?: string;
 }): Promise<void> {
   const body: {
     parts: Array<{ type: "text"; text: string }>;
     model?: { providerID: string; modelID: string };
+    variant?: string;
+    agent?: string;
   } = {
     parts: [{ type: "text", text: params.text }],
   };
   const model = parseOpenCodeModel(params.model);
   if (model) {
     body.model = model;
+  }
+  if (params.variant) {
+    body.variant = params.variant;
+  }
+  if (params.agent) {
+    body.agent = params.agent;
   }
   await openCodeRequestJson<void>(
     params.handle,

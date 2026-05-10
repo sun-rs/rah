@@ -36,32 +36,13 @@ export function shouldDeferEventForHistoryBootstrap(
   if (projection.history.phase !== "loading" || projection.history.authoritativeApplied) {
     return false;
   }
-  return (
-    event.type === "timeline.item.added" ||
-    event.type === "timeline.item.updated" ||
-    event.type === "message.part.added" ||
-    event.type === "message.part.updated" ||
-    event.type === "message.part.delta" ||
-    event.type === "message.part.removed" ||
-    event.type === "tool.call.started" ||
-    event.type === "tool.call.delta" ||
-    event.type === "tool.call.completed" ||
-    event.type === "tool.call.failed" ||
-    event.type === "observation.started" ||
-    event.type === "observation.updated" ||
-    event.type === "observation.completed" ||
-    event.type === "observation.failed" ||
-    event.type === "permission.requested" ||
-    event.type === "permission.resolved" ||
-    event.type === "operation.started" ||
-    event.type === "operation.resolved" ||
-    event.type === "operation.requested" ||
-    event.type === "runtime.status" ||
-    event.type === "turn.canceled" ||
-    event.type === "notification.emitted" ||
-    event.type === "attention.required" ||
-    event.type === "attention.cleared"
-  );
+  // Do not hold live/native-mirror events behind initial history bootstrap.
+  // Native TUI sessions use the same persisted provider files for live mirror
+  // and history paging, so deferring here can hide a completed TUI reply until
+  // history loading finishes. prependHistoryPage already reconciles by
+  // canonical/message identity when the page arrives.
+  void event;
+  return false;
 }
 
 export function queueDeferredBootstrapEvent(event: RahEvent) {

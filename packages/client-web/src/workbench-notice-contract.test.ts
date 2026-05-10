@@ -85,7 +85,7 @@ describe("workbench notice contract", () => {
     });
   });
 
-  test("derives terminal-control notice for terminal-owned running turns", () => {
+  test("does not show a special terminal-owned running notice", () => {
     const state = deriveWorkbenchNoticeState({
       selectedSummary: {
         ...summary({
@@ -103,10 +103,7 @@ describe("workbench notice contract", () => {
       error: null,
     });
 
-    assert.deepEqual(state.interactionNotice, {
-      tone: "info",
-      message: "Terminal started this turn. Web can observe it and request interrupt.",
-    });
+    assert.equal(state.interactionNotice, null);
   });
 
   test("derives warning notice for stopped native TUI sessions", () => {
@@ -198,7 +195,7 @@ describe("workbench notice contract", () => {
     });
   });
 
-  test("derives history loading and error notices from projection history state", () => {
+  test("suppresses initial history loading notice and surfaces history errors", () => {
     const loadingProjection: SessionProjection = {
       ...projection(summary({ providerSessionId: "provider-1" })),
       history: {
@@ -213,10 +210,7 @@ describe("workbench notice contract", () => {
         selectedProjection: loadingProjection,
         error: null,
       }).historyNotice,
-      {
-        tone: "info",
-        message: "Syncing session history…",
-      },
+      null,
     );
 
     const errorProjection: SessionProjection = {

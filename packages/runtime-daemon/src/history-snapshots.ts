@@ -96,6 +96,13 @@ function dedupeCanonicalTimelineItems(events: readonly RahEvent[]): RahEvent[] {
   return next;
 }
 
+function paginationTimestamp(nextCursor: string | undefined, events: readonly RahEvent[]): string | undefined {
+  if (!nextCursor) {
+    return undefined;
+  }
+  return events[0]?.ts;
+}
+
 export class HistorySnapshotStore {
   private readonly snapshots = new Map<string, HistorySnapshot>();
 
@@ -125,6 +132,17 @@ export class HistorySnapshotStore {
       return this.getFrozenPagedPage(existing, args.sessionId, args.limit, args.cursor, args.loadFrozenPage);
     }
     if (existing?.mode === "materialized") {
+      if (!args.cursor) {
+        const upgraded = this.createFrozenPagedSnapshot(
+          args.sessionId,
+          args.limit,
+          args.loadFrozenPage,
+        );
+        if (upgraded) {
+          this.snapshots.set(args.sessionId, upgraded);
+          return upgraded.pagesByRequestCursor.get(null)!.response;
+        }
+      }
       return this.getMaterializedPage(existing, args.sessionId, args.limit, args.cursor);
     }
 
@@ -171,6 +189,7 @@ export class HistorySnapshotStore {
     const limit = Math.max(1, limitValue ?? 1000);
     const initial = frozenLoader.loadInitialPage(limit);
     const initialEvents = dedupeCanonicalTimelineItems(initial.events);
+    const initialNextBeforeTs = paginationTimestamp(initial.nextCursor, initialEvents);
     return {
       mode: "frozen_paged",
       boundary: initial.boundary,
@@ -184,7 +203,7 @@ export class HistorySnapshotStore {
               sessionId,
               events: initialEvents,
               ...(initial.nextCursor ? { nextCursor: initial.nextCursor } : {}),
-              ...(initialEvents[0] ? { nextBeforeTs: initialEvents[0].ts } : {}),
+              ...(initialNextBeforeTs ? { nextBeforeTs: initialNextBeforeTs } : {}),
             },
           },
         ],
@@ -204,11 +223,12 @@ export class HistorySnapshotStore {
     const start = Math.max(0, boundedEndExclusive - limit);
     const events = snapshot.events.slice(start, boundedEndExclusive);
     const nextCursor = start > 0 ? encodeOffsetCursor(start) : undefined;
+    const nextBeforeTs = paginationTimestamp(nextCursor, events);
     return {
       sessionId,
       events,
       ...(nextCursor ? { nextCursor } : {}),
-      ...(events[0] ? { nextBeforeTs: events[0].ts } : {}),
+      ...(nextBeforeTs ? { nextBeforeTs } : {}),
     };
   }
 
@@ -232,11 +252,12 @@ export class HistorySnapshotStore {
       throw new Error("Frozen history source revision changed while paging older history.");
     }
     const events = dedupeCanonicalTimelineItems(older.events);
+    const nextBeforeTs = paginationTimestamp(older.nextCursor, events);
     const response: SessionHistoryPageResponse = {
       sessionId,
       events,
       ...(older.nextCursor ? { nextCursor: older.nextCursor } : {}),
-      ...(events[0] ? { nextBeforeTs: events[0].ts } : {}),
+      ...(nextBeforeTs ? { nextBeforeTs } : {}),
     };
     snapshot.pagesByRequestCursor.set(cursor, {
       requestCursor: cursor,

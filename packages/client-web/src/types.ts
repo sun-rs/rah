@@ -173,9 +173,10 @@ function shouldApplySummaryMutation(current: SessionProjection, event: RahEvent)
     case "session.native_tui.prompt_state.changed":
     case "permission.requested":
     case "permission.resolved":
+    case "usage.updated":
+      return true;
     case "control.claimed":
     case "control.released":
-    case "usage.updated":
       return isIsoTsAtLeast(event.ts, current.summary.session.updatedAt);
     default:
       return true;
@@ -465,28 +466,13 @@ function applyTimelineEvent(
 function insertTimelineEntry(
   feed: FeedEntry[],
   entry: Extract<FeedEntry, { kind: "timeline" }>,
-  event: Extract<RahEvent, { type: "timeline.item.added" | "timeline.item.updated" }>,
+  _event: Extract<RahEvent, { type: "timeline.item.added" | "timeline.item.updated" }>,
 ): FeedEntry[] {
-  if (event.type !== "timeline.item.added" || event.source.channel !== "structured_persisted") {
-    return [...feed, entry];
-  }
-  const incomingTs = Date.parse(entry.ts);
-  if (!Number.isFinite(incomingTs)) {
-    return [...feed, entry];
-  }
-  let insertIndex = feed.length;
-  for (let index = feed.length - 1; index >= 0; index--) {
-    const candidateTs = Date.parse(feed[index]?.ts ?? "");
-    if (!Number.isFinite(candidateTs) || candidateTs <= incomingTs) {
-      insertIndex = index + 1;
-      break;
-    }
-    insertIndex = index;
-  }
-  if (insertIndex >= feed.length) {
-    return [...feed, entry];
-  }
-  return [...feed.slice(0, insertIndex), entry, ...feed.slice(insertIndex)];
+  // Live mirrors must preserve daemon event order. Provider timestamps can move
+  // backwards or arrive later than RAH runtime notices, especially for Claude
+  // JSONL and provider-local history mirrors. Older history is merged through
+  // prependHistoryPage, not by re-sorting live events here.
+  return [...feed, entry];
 }
 
 function findDuplicateUserMessageIndex(
