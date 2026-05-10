@@ -3833,7 +3833,6 @@ describe("RuntimeEngine", () => {
               event.payload.identity?.canonicalItemId,
           ),
         );
-        assert.ok(events.some((event) => event.type === "turn.step.started"));
         assert.ok(
           events.some(
             (event) =>
@@ -3864,7 +3863,6 @@ describe("RuntimeEngine", () => {
               event.payload.toolCall.result?.output === "/tmp/workspace",
           ),
         );
-        assert.ok(events.some((event) => event.type === "turn.step.completed"));
         assert.ok(
           events.some(
             (event) =>

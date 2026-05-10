@@ -135,7 +135,11 @@ export function SessionControlPopover(props: {
           setOpen((current) => !current);
         }}
         className={`${props.buttonClassName} ${
-          locked ? "cursor-not-allowed opacity-45 grayscale hover:bg-[var(--app-subtle-bg)]" : ""
+          !enabled
+            ? "cursor-not-allowed opacity-35 grayscale hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-hint)]"
+            : locked
+              ? "cursor-not-allowed opacity-45 grayscale hover:bg-[var(--app-subtle-bg)]"
+              : ""
         }`}
         title={locked ? props.lockedMessage ?? "Session controls are locked." : "Session control"}
         aria-label="Session control"
