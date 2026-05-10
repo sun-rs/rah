@@ -535,7 +535,7 @@ rl.on('line', (line) => {
       method: 'item/agentMessage/delta',
       params: { threadId: 'thread-live-queue-1', turnId, itemId: 'assistant-' + turnCount, delta: 'answer:' + prompt },
     }), 40);
-    setTimeout(() => send({ method: 'turn/completed', params: { turn: { id: turnId, status: 'completed' } } }), 60);
+    setTimeout(() => send({ method: 'turn/completed', params: { turn: { status: 'completed' } } }), 60);
     return;
   }
   send({ id: msg.id, result: {} });

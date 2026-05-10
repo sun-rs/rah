@@ -11,8 +11,6 @@ import {
   type SessionProjection,
 } from "./types";
 
-const LIVE_HISTORY_ECHO_WINDOW_MS = 60_000;
-
 type HistorySelectionState = Pick<
   {
     selectedSessionId: string | null;
@@ -59,6 +57,20 @@ export function replayEventsIntoProjection(
   return projection;
 }
 
+function feedEntriesShareStableIdentity(
+  left: FeedEntry,
+  right: FeedEntry,
+  context?: {
+    leftFeed: readonly FeedEntry[];
+    rightFeed: readonly FeedEntry[];
+  },
+): boolean {
+  return (
+    feedEntriesShareTimelineIdentity(left, right) ||
+    feedEntriesShareInterruptNoticeIdentity(left, right, context)
+  );
+}
+
 function feedEntriesShareTimelineIdentity(left: FeedEntry, right: FeedEntry): boolean {
   if (left.kind !== right.kind) {
     return false;
@@ -72,57 +84,88 @@ function feedEntriesShareTimelineIdentity(left: FeedEntry, right: FeedEntry): bo
     if (leftCanonicalItemId !== undefined && rightCanonicalItemId !== undefined) {
       return leftCanonicalItemId === rightCanonicalItemId;
     }
-    return (
-      entriesLookLikeSameOptimisticHistoryEcho(left, right) ||
-      entriesLookLikeSameLiveHistoryEcho(left, right)
-    );
+    return entriesShareOptimisticUserPlaceholder(left, right);
   }
-  if (entriesLookLikeSameOptimisticHistoryEcho(left, right)) {
+  if (entriesShareOptimisticUserPlaceholder(left, right)) {
     return true;
   }
   if (left.item.kind !== right.item.kind) {
     return false;
   }
-  switch (left.item.kind) {
-    case "user_message":
-    case "assistant_message": {
-      const leftItem = left.item;
-      const rightItem = right.item as typeof leftItem;
-      const leftMessageId = leftItem.messageId;
-      const rightMessageId = rightItem.messageId;
-      if (leftMessageId !== undefined && rightMessageId !== undefined) {
-        return leftMessageId === rightMessageId;
-      }
-      if (entriesLookLikeSameLiveHistoryEcho(left, right)) {
-        return true;
-      }
-      return Boolean(
-        left.turnId &&
-          right.turnId &&
-          left.turnId === right.turnId &&
-          leftItem.text === rightItem.text,
-      );
-    }
-    case "reasoning": {
-      const leftItem = left.item;
-      const rightItem = right.item as typeof leftItem;
-      if (entriesLookLikeSameLiveHistoryEcho(left, right)) {
-        return true;
-      }
-      return Boolean(
-        left.turnId &&
-          right.turnId &&
-          left.turnId === right.turnId &&
-          leftItem.text === rightItem.text,
-      );
-    }
-    default:
-      return false;
+  const leftClientMessageId = readTimelineClientMessageId(left.item);
+  const rightClientMessageId = readTimelineClientMessageId(right.item);
+  if (leftClientMessageId !== undefined || rightClientMessageId !== undefined) {
+    return leftClientMessageId !== undefined && leftClientMessageId === rightClientMessageId;
   }
+  const leftMessageId = readTimelineMessageId(left.item);
+  const rightMessageId = readTimelineMessageId(right.item);
+  if (leftMessageId !== undefined || rightMessageId !== undefined) {
+    return (
+      (leftMessageId !== undefined && leftMessageId === rightMessageId) ||
+      entriesShareWeakUserEcho(left, right)
+    );
+  }
+  if (entriesShareWeakUserEcho(left, right)) {
+    return true;
+  }
+  return false;
 }
 
-function isHistoryTurnId(turnId: string | undefined): boolean {
-  return turnId?.startsWith("history:") ?? false;
+function feedEntriesShareInterruptNoticeIdentity(
+  left: FeedEntry,
+  right: FeedEntry,
+  context:
+    | {
+        leftFeed: readonly FeedEntry[];
+        rightFeed: readonly FeedEntry[];
+      }
+    | undefined,
+): boolean {
+  if (
+    left.kind !== "notification" ||
+    right.kind !== "notification" ||
+    !isInterruptNotice(left) ||
+    !isInterruptNotice(right)
+  ) {
+    return false;
+  }
+  if (
+    left.canonicalTurnId !== undefined &&
+    right.canonicalTurnId !== undefined &&
+    left.canonicalTurnId === right.canonicalTurnId
+  ) {
+    return true;
+  }
+  if (left.turnId !== undefined && right.turnId !== undefined && left.turnId === right.turnId) {
+    return true;
+  }
+  if (
+    left.interruptAnchorKey !== undefined &&
+    right.interruptAnchorKey !== undefined &&
+    left.interruptAnchorKey === right.interruptAnchorKey
+  ) {
+    return true;
+  }
+  if (
+    context === undefined ||
+    left.interruptAnchorKey === undefined ||
+    right.interruptAnchorKey === undefined
+  ) {
+    return false;
+  }
+  const leftAnchor = context.leftFeed.find((entry) => entry.key === left.interruptAnchorKey);
+  const rightAnchor = context.rightFeed.find((entry) => entry.key === right.interruptAnchorKey);
+  if (leftAnchor === undefined || rightAnchor === undefined) {
+    return false;
+  }
+  return feedEntriesShareTimelineIdentity(leftAnchor, rightAnchor);
+}
+
+function isInterruptNotice(entry: Extract<FeedEntry, { kind: "notification" }>): boolean {
+  return (
+    entry.title === "Conversation interrupted" &&
+    entry.body === "The previous turn was interrupted."
+  );
 }
 
 function readTimelineMessageId(
@@ -134,50 +177,33 @@ function readTimelineMessageId(
   return undefined;
 }
 
-function hasTimelineText(
+function readTimelineClientMessageId(
   item: Extract<FeedEntry, { kind: "timeline" }>["item"],
-): item is Extract<Extract<FeedEntry, { kind: "timeline" }>["item"], { text: string }> {
-  return (
-    item.kind === "user_message" ||
-    item.kind === "assistant_message" ||
-    item.kind === "reasoning"
-  );
+): string | undefined {
+  return item.kind === "user_message" ? item.clientMessageId : undefined;
 }
 
-function entriesLookLikeSameLiveHistoryEcho(left: FeedEntry, right: FeedEntry): boolean {
+function entriesShareOptimisticUserPlaceholder(left: FeedEntry, right: FeedEntry): boolean {
   if (left.kind !== "timeline" || right.kind !== "timeline") {
     return false;
   }
-  if (left.item.kind !== right.item.kind) {
+  if (left.item.kind !== "user_message" || right.item.kind !== "user_message") {
     return false;
   }
-  if (!hasTimelineText(left.item) || !hasTimelineText(right.item)) {
+  const leftOptimistic = left.key.startsWith("optimistic:user:");
+  const rightOptimistic = right.key.startsWith("optimistic:user:");
+  if (leftOptimistic === rightOptimistic) {
     return false;
   }
-  if (left.item.text !== right.item.text) {
-    return false;
+  const leftClientMessageId = left.item.clientMessageId;
+  const rightClientMessageId = right.item.clientMessageId;
+  if (leftClientMessageId !== undefined && rightClientMessageId !== undefined) {
+    return leftClientMessageId === rightClientMessageId;
   }
-  const leftTs = Date.parse(left.ts);
-  const rightTs = Date.parse(right.ts);
-  if (!Number.isFinite(leftTs) || !Number.isFinite(rightTs)) {
-    return false;
-  }
-  if (Math.abs(leftTs - rightTs) > LIVE_HISTORY_ECHO_WINDOW_MS) {
-    return false;
-  }
-
-  const leftHistory = isHistoryTurnId(left.turnId);
-  const rightHistory = isHistoryTurnId(right.turnId);
-  if (leftHistory !== rightHistory) {
-    return true;
-  }
-
-  const leftHasMessageId = readTimelineMessageId(left.item) !== undefined;
-  const rightHasMessageId = readTimelineMessageId(right.item) !== undefined;
-  return left.item.kind === "user_message" && leftHasMessageId !== rightHasMessageId;
+  return left.item.text === right.item.text;
 }
 
-function entriesLookLikeSameOptimisticHistoryEcho(left: FeedEntry, right: FeedEntry): boolean {
+function entriesShareWeakUserEcho(left: FeedEntry, right: FeedEntry): boolean {
   if (left.kind !== "timeline" || right.kind !== "timeline") {
     return false;
   }
@@ -187,17 +213,27 @@ function entriesLookLikeSameOptimisticHistoryEcho(left: FeedEntry, right: FeedEn
   if (left.item.text !== right.item.text) {
     return false;
   }
-  const leftOptimistic = left.key.startsWith("optimistic:user:");
-  const rightOptimistic = right.key.startsWith("optimistic:user:");
-  if (leftOptimistic === rightOptimistic) {
-    return false;
-  }
-  const leftTs = Date.parse(left.ts);
-  const rightTs = Date.parse(right.ts);
   return (
-    Number.isFinite(leftTs) &&
-    Number.isFinite(rightTs) &&
-    Math.abs(leftTs - rightTs) <= LIVE_HISTORY_ECHO_WINDOW_MS
+    (isWeakUserEcho(left) && isAuthoritativeUserEcho(right)) ||
+    (isWeakUserEcho(right) && isAuthoritativeUserEcho(left))
+  );
+}
+
+function isWeakUserEcho(entry: Extract<FeedEntry, { kind: "timeline" }>): boolean {
+  return (
+    entry.item.kind === "user_message" &&
+    entry.canonicalItemId === undefined &&
+    entry.item.messageId === undefined &&
+    entry.item.clientMessageId === undefined
+  );
+}
+
+function isAuthoritativeUserEcho(entry: Extract<FeedEntry, { kind: "timeline" }>): boolean {
+  return (
+    entry.item.kind === "user_message" &&
+    (entry.canonicalItemId !== undefined ||
+      entry.item.messageId !== undefined ||
+      entry.item.clientMessageId !== undefined)
   );
 }
 
@@ -240,17 +276,25 @@ export function prependHistoryPage(
   const currentKeyIndex = new Map(
     nextFeed.map((entry, index) => [entry.key, index] as const),
   );
+  const matchedCurrentIndexes = new Set<number>();
   const prepend = historyProjection.feed.filter((entry) => {
     const existingIndex = currentKeyIndex.get(entry.key);
     if (existingIndex !== undefined) {
       nextFeed[existingIndex] = entry;
+      matchedCurrentIndexes.add(existingIndex);
       return false;
     }
-    const identityIndex = nextFeed.findIndex((current) =>
-      feedEntriesShareTimelineIdentity(current, entry),
+    const identityIndex = nextFeed.findIndex(
+      (current, index) =>
+        !matchedCurrentIndexes.has(index) &&
+        feedEntriesShareStableIdentity(current, entry, {
+          leftFeed: nextFeed,
+          rightFeed: historyProjection.feed,
+        }),
     );
     if (identityIndex >= 0) {
       nextFeed[identityIndex] = entry;
+      matchedCurrentIndexes.add(identityIndex);
       return false;
     }
     return true;
@@ -312,20 +356,73 @@ function mergeLatestHistoryFeed(
   const currentKeyIndex = new Map(
     nextFeed.map((entry, index) => [entry.key, index] as const),
   );
+  const matchedHistoryIndexes = new Set<number>();
+  const latestHistoryMs = latestFeedTimestampMs(nextFeed);
 
   for (const current of currentFeed) {
     const existingIndex = currentKeyIndex.get(current.key);
     if (existingIndex !== undefined) {
+      matchedHistoryIndexes.add(existingIndex);
       continue;
     }
-    const identityIndex = nextFeed.findIndex((historyEntry) =>
-      feedEntriesShareTimelineIdentity(historyEntry, current),
+    const identityIndex = nextFeed.findIndex(
+      (historyEntry, index) =>
+        !matchedHistoryIndexes.has(index) &&
+        feedEntriesShareStableIdentity(historyEntry, current, {
+          leftFeed: nextFeed,
+          rightFeed: currentFeed,
+        }),
     );
     if (identityIndex >= 0) {
+      matchedHistoryIndexes.add(identityIndex);
+      continue;
+    }
+    if (isOptimisticPlaceholderCoveredByHistory(current, nextFeed, latestHistoryMs)) {
       continue;
     }
     nextFeed.push(current);
   }
 
   return nextFeed;
+}
+
+function isOptimisticPlaceholderCoveredByHistory(
+  current: FeedEntry,
+  historyFeed: readonly FeedEntry[],
+  latestHistoryMs: number | undefined,
+): boolean {
+  if (
+    current.kind !== "timeline" ||
+    current.item.kind !== "user_message" ||
+    !current.key.startsWith("optimistic:user:")
+  ) {
+    return false;
+  }
+  const currentMs = Date.parse(current.ts);
+  if (!Number.isFinite(currentMs)) {
+    return false;
+  }
+  if (latestHistoryMs !== undefined && currentMs > latestHistoryMs) {
+    return false;
+  }
+  return historyFeed.some((historyEntry) => {
+    if (!feedEntriesShareTimelineIdentity(historyEntry, current)) {
+      return false;
+    }
+    return true;
+  });
+}
+
+function latestFeedTimestampMs(feed: readonly FeedEntry[]): number | undefined {
+  let latest: number | undefined;
+  for (const entry of feed) {
+    const value = Date.parse(entry.ts);
+    if (!Number.isFinite(value)) {
+      continue;
+    }
+    if (latest === undefined || value > latest) {
+      latest = value;
+    }
+  }
+  return latest;
 }

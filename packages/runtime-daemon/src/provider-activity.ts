@@ -12,6 +12,7 @@ import type {
   RahEvent,
   RuntimeOperation,
   TimelineIdentity,
+  TimelineTurnIdentity,
   TimelineItem,
   ToolCall,
   ToolCallDetail,
@@ -20,7 +21,10 @@ import type {
 import { normalizeContextUsage } from "./context-usage";
 import type { RuntimeServices } from "./provider-adapter";
 import { recordTimelineIdentityTelemetry } from "./timeline-identity-telemetry";
-import { reconcileTimelineActivity } from "./timeline-reconciler";
+import {
+  reconcileTimelineActivity,
+  reconcileTurnLifecycleActivity,
+} from "./timeline-reconciler";
 
 export interface ProviderActivityMeta {
   provider: ManagedSession["provider"];
@@ -52,17 +56,20 @@ export type ProviderActivity =
       type: "turn_completed";
       turnId: string;
       usage?: ContextUsage;
+      identity?: TimelineTurnIdentity;
     }
   | {
       type: "turn_failed";
       turnId: string;
       error: string;
       code?: string;
+      identity?: TimelineTurnIdentity;
     }
   | {
       type: "turn_canceled";
       turnId: string;
       reason: string;
+      identity?: TimelineTurnIdentity;
     }
   | {
       type: "turn_step_started";
@@ -340,6 +347,13 @@ export function applyProviderActivity(
 
   switch (activity.type) {
     case "session_state":
+      if (
+        activity.state === "idle" ||
+        activity.state === "stopped" ||
+        activity.state === "failed"
+      ) {
+        services.sessionStore.setActiveTurn(sessionId, undefined);
+      }
       services.sessionStore.setRuntimeState(sessionId, activity.state);
       published.push(
         services.eventBus.publish(
@@ -422,97 +436,122 @@ export function applyProviderActivity(
       );
       break;
     case "turn_completed":
-      services.sessionStore.setActiveTurn(sessionId, undefined);
-      services.sessionStore.setRuntimeState(sessionId, "idle");
-      const completedUsage = activity.usage ? normalizeContextUsage(activity.usage) : undefined;
-      if (activity.usage) {
-        services.sessionStore.updateUsage(sessionId, completedUsage);
-      }
-      published.push(
-        services.eventBus.publish(
-          withRaw(
-            withTs(
-              {
-                sessionId,
-                type: "turn.completed",
-                source,
-                payload: completedUsage ? { usage: completedUsage } : {},
-                turnId: activity.turnId,
-              },
-              ts,
+      {
+        const reconciled = reconcileTurnLifecycleActivity(services, sessionId, activity);
+        if (reconciled === null) {
+          break;
+        }
+        services.sessionStore.setActiveTurn(sessionId, undefined);
+        services.sessionStore.setRuntimeState(sessionId, "idle");
+        const completedUsage = activity.usage ? normalizeContextUsage(activity.usage) : undefined;
+        if (activity.usage) {
+          services.sessionStore.updateUsage(sessionId, completedUsage);
+        }
+        published.push(
+          services.eventBus.publish(
+            withRaw(
+              withTs(
+                {
+                  sessionId,
+                  type: "turn.completed",
+                  source,
+                  payload: {
+                    ...(completedUsage ? { usage: completedUsage } : {}),
+                    ...(reconciled.identity !== undefined ? { identity: reconciled.identity } : {}),
+                  },
+                  turnId: reconciled.activity.turnId,
+                },
+                ts,
+              ),
+              meta,
             ),
-            meta,
           ),
-        ),
-      );
+        );
+      }
       break;
     case "turn_failed":
-      services.sessionStore.setActiveTurn(sessionId, undefined);
-      services.sessionStore.setRuntimeState(sessionId, "failed");
-      published.push(
-        services.eventBus.publish(
-          withRaw(
-            withTs(
-              {
-                sessionId,
-                type: "turn.failed",
-                source,
-                payload: {
-                  error: activity.error,
-                  ...(activity.code !== undefined ? { code: activity.code } : {}),
+      {
+        const reconciled = reconcileTurnLifecycleActivity(services, sessionId, activity);
+        if (reconciled === null) {
+          break;
+        }
+        services.sessionStore.setActiveTurn(sessionId, undefined);
+        services.sessionStore.setRuntimeState(sessionId, "failed");
+        published.push(
+          services.eventBus.publish(
+            withRaw(
+              withTs(
+                {
+                  sessionId,
+                  type: "turn.failed",
+                  source,
+                  payload: {
+                    error: reconciled.activity.error,
+                    ...(reconciled.activity.code !== undefined ? { code: reconciled.activity.code } : {}),
+                    ...(reconciled.identity !== undefined ? { identity: reconciled.identity } : {}),
+                  },
+                  turnId: reconciled.activity.turnId,
                 },
-                turnId: activity.turnId,
-              },
-              ts,
+                ts,
+              ),
+              meta,
             ),
-            meta,
           ),
-        ),
-      );
-      published.push(
-        services.eventBus.publish(
-          withRaw(
-            withTs(
-              {
-                sessionId,
-                type: "attention.required",
-                source,
-                payload: {
-                  item: attentionForTurnFailure({
-                    sessionId,
-                    turnId: activity.turnId,
-                    error: activity.error,
-                    ...(ts !== undefined ? { ts } : {}),
-                  }),
+        );
+        published.push(
+          services.eventBus.publish(
+            withRaw(
+              withTs(
+                {
+                  sessionId,
+                  type: "attention.required",
+                  source,
+                  payload: {
+                    item: attentionForTurnFailure({
+                      sessionId,
+                      turnId: reconciled.activity.turnId,
+                      error: reconciled.activity.error,
+                      ...(ts !== undefined ? { ts } : {}),
+                    }),
+                  },
                 },
-              },
-              ts,
+                ts,
+              ),
+              meta,
             ),
-            meta,
           ),
-        ),
-      );
+        );
+      }
       break;
     case "turn_canceled":
-      services.sessionStore.setActiveTurn(sessionId, undefined);
-      services.sessionStore.setRuntimeState(sessionId, "idle");
-      published.push(
-        services.eventBus.publish(
-          withRaw(
-            withTs(
-              {
-                sessionId,
-                type: "turn.canceled",
-                source,
-                payload: { reason: activity.reason },
-                turnId: activity.turnId,
-              },
-              ts,
+      {
+        const reconciled = reconcileTurnLifecycleActivity(services, sessionId, activity);
+        if (reconciled === null) {
+          break;
+        }
+        services.sessionStore.setActiveTurn(sessionId, undefined);
+        services.sessionStore.setRuntimeState(sessionId, "idle");
+        published.push(
+          services.eventBus.publish(
+            withRaw(
+              withTs(
+                {
+                  sessionId,
+                  type: "turn.canceled",
+                  source,
+                  payload: {
+                    reason: reconciled.activity.reason,
+                    ...(reconciled.identity !== undefined ? { identity: reconciled.identity } : {}),
+                  },
+                  turnId: reconciled.activity.turnId,
+                },
+                ts,
+              ),
+              meta,
             ),
-            meta,
           ),
-        ),
-      );
+        );
+      }
       break;
     case "turn_step_started":
       published.push(

@@ -1822,7 +1822,11 @@ describe("RuntimeEngine", () => {
       );
       assert.equal(engine.getSessionSummary(sessionId).session.runtimeState, "idle");
 
-      engine.sendInput(sessionId, { clientId: "web-native", text: "hello native tui" });
+      engine.sendInput(sessionId, {
+        clientId: "web-native",
+        text: "hello native tui",
+        clientTurnId: "client-turn-native-1",
+      });
       await waitFor(() => {
         assert.match(transcript, /MOCK_NATIVE_TUI_INPUT:hello native tui/);
       });
@@ -1834,6 +1838,11 @@ describe("RuntimeEngine", () => {
         assert.equal(engine.getSessionSummary(sessionId).session.runtimeState, "idle");
       });
       assert.equal(transcript.match(/MOCK_NATIVE_TUI_INTERRUPTED/g)?.length, 1);
+      const canceledEvents = engine.eventBus
+        .list({ sessionIds: [sessionId] })
+        .filter((event) => event.type === "turn.canceled");
+      assert.equal(canceledEvents.length, 1);
+      assert.equal(canceledEvents[0]?.turnId, "client-turn-native-1");
       await waitFor(() => {
         assert.match(transcript, /MOCK_NATIVE_TUI_CLEARED/);
       });
@@ -2104,6 +2113,7 @@ describe("RuntimeEngine", () => {
       await waitFor(() => {
         assert.equal(engine.getSessionSummary(sessionId).session.nativeTui?.queuedInputCount, 1);
       });
+      assert.equal(engine.getSessionSummary(sessionId).session.runtimeState, "running");
 
       await new Promise((resolve) => setTimeout(resolve, 100));
       assert.doesNotMatch(transcript, /send after dirty prompt/);
@@ -2924,7 +2934,7 @@ describe("RuntimeEngine", () => {
     }
   });
 
-  test("native TUI mirror does not mark newer web input idle with stale Claude history", async () => {
+  test("Claude native TUI mirror remains a history mirror instead of owning busy state", async () => {
     const engine = new RuntimeEngine([]);
     const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-native-tui-claude-stale-"));
     const fakeClaude = path.join(workspace, "fake-claude-stale.js");
@@ -3022,7 +3032,7 @@ describe("RuntimeEngine", () => {
             ),
         );
       });
-      assert.equal(engine.getSessionSummary(sessionId).session.runtimeState, "running");
+      assert.equal(engine.getSessionSummary(sessionId).session.runtimeState, "idle");
 
       engine.interruptSession(sessionId, { clientId: "web-native" });
       unsubscribe();
@@ -3048,7 +3058,7 @@ describe("RuntimeEngine", () => {
     }
   });
 
-  test("native TUI mirror does not clean an unsubmitted Claude prompt draft", async () => {
+  test("Claude native TUI chat input bypasses hidden queue and clears known draft first", async () => {
     const engine = new RuntimeEngine([]);
     const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-native-tui-claude-dirty-mirror-"));
     const fakeClaude = path.join(workspace, "fake-claude-dirty-mirror.js");
@@ -3148,9 +3158,10 @@ describe("RuntimeEngine", () => {
         );
       });
       assert.equal(engine.getSessionSummary(sessionId).session.nativeTui?.promptState, "prompt_dirty");
-      engine.sendInput(sessionId, { clientId: "web-native", text: "must remain queued" });
+      engine.sendInput(sessionId, { clientId: "web-native", text: "sent after draft" });
       await new Promise((resolve) => setTimeout(resolve, 100));
-      assert.doesNotMatch(transcript, /must remain queued/);
+      assert.equal(engine.getSessionSummary(sessionId).session.nativeTui?.queuedInputCount, 0);
+      assert.match(transcript, /sent after draft/);
 
       unsubscribe();
       await engine.closeSession(sessionId, { clientId: "web-native" });
@@ -3838,7 +3849,8 @@ describe("RuntimeEngine", () => {
         assert.ok(
           events.some(
             (event) =>
-              event.type === "timeline.item.added" &&
+              (event.type === "timeline.item.added" ||
+                event.type === "timeline.item.updated") &&
               event.payload.item.kind === "assistant_message" &&
               event.payload.item.text === "OpenCode native answer" &&
               event.payload.identity?.canonicalItemId,

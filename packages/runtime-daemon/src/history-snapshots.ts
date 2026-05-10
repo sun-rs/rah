@@ -1,4 +1,5 @@
 import type { RahEvent, SessionHistoryPageResponse } from "@rah/runtime-protocol";
+import { normalizeTranscriptEvents } from "./timeline-reconciler";
 
 export type FrozenHistoryBoundary = {
   kind: "frozen";
@@ -73,27 +74,7 @@ function decodeOffsetCursor(cursor: string): number {
 }
 
 function normalizeSnapshotEvents(events: readonly RahEvent[]): RahEvent[] {
-  return dedupeCanonicalTimelineItems(
-    [...events].sort((left, right) => left.ts.localeCompare(right.ts) || left.seq - right.seq),
-  );
-}
-
-function dedupeCanonicalTimelineItems(events: readonly RahEvent[]): RahEvent[] {
-  const seenCanonicalItemIds = new Set<string>();
-  const next: RahEvent[] = [];
-  for (const event of events) {
-    if (
-      event.type === "timeline.item.added" &&
-      typeof event.payload.identity?.canonicalItemId === "string"
-    ) {
-      if (seenCanonicalItemIds.has(event.payload.identity.canonicalItemId)) {
-        continue;
-      }
-      seenCanonicalItemIds.add(event.payload.identity.canonicalItemId);
-    }
-    next.push(event);
-  }
-  return next;
+  return normalizeTranscriptEvents([...events].sort((left, right) => left.seq - right.seq));
 }
 
 function paginationTimestamp(nextCursor: string | undefined, events: readonly RahEvent[]): string | undefined {
@@ -188,7 +169,7 @@ export class HistorySnapshotStore {
     }
     const limit = Math.max(1, limitValue ?? 1000);
     const initial = frozenLoader.loadInitialPage(limit);
-    const initialEvents = dedupeCanonicalTimelineItems(initial.events);
+    const initialEvents = normalizeTranscriptEvents(initial.events);
     const initialNextBeforeTs = paginationTimestamp(initial.nextCursor, initialEvents);
     return {
       mode: "frozen_paged",
@@ -251,7 +232,7 @@ export class HistorySnapshotStore {
     if (older.boundary.sourceRevision !== snapshot.boundary.sourceRevision) {
       throw new Error("Frozen history source revision changed while paging older history.");
     }
-    const events = dedupeCanonicalTimelineItems(older.events);
+    const events = normalizeTranscriptEvents(older.events);
     const nextBeforeTs = paginationTimestamp(older.nextCursor, events);
     const response: SessionHistoryPageResponse = {
       sessionId,

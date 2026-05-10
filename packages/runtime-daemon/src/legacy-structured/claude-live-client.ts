@@ -320,6 +320,8 @@ export async function sendInputToClaudeLiveSession(args: {
       item: {
         kind: "user_message",
         text: args.request.text,
+        ...(args.request.clientMessageId !== undefined ? { clientMessageId: args.request.clientMessageId } : {}),
+        ...(args.request.clientTurnId !== undefined ? { clientTurnId: args.request.clientTurnId } : {}),
       },
     },
   );

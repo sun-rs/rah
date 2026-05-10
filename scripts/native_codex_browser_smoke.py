@@ -22,6 +22,26 @@ from native_smoke_process import terminate_process_tree
 
 ROOT_DIR = pathlib.Path(__file__).resolve().parent.parent
 SCREENSHOTS: list[str] = []
+CASE_IDS = [
+    "TRANSCRIPT-ORDER-001",
+    "TRANSCRIPT-UNIQUE-001",
+    "TRANSCRIPT-REPEAT-001",
+    "INTERRUPT-ANCHOR-001",
+    "INTERRUPT-MULTI-001",
+    "INTERRUPT-STATE-001",
+    "QUEUE-INPUT-001",
+    "NEW-SESSION-001",
+    "REFRESH-LIVE-001",
+    "HISTORY-PAGING-001",
+    "HISTORY-CLAIM-001",
+    "CODEX-EVENT-001",
+    "TUI-SURFACE-001",
+    "TUI-EXIT-001",
+    "ARCHIVE-001",
+    "MISSING-CWD-001",
+    "MOBILE-COMPOSER-001",
+    "MOBILE-TUI-001",
+]
 
 
 def selected_browser_name() -> str:
@@ -230,6 +250,10 @@ def write_fake_codex(path: pathlib.Path) -> None:
                 "  for (const raw of parts) {",
                 "    const text = raw.trim();",
                 "    if (!text) continue;",
+                "    if (text === 'exit') {",
+                "      process.stdout.write('RAH_NATIVE_CODEX_BROWSER_EXITING\\r\\n');",
+                "      process.exit(0);",
+                "    }",
                 "    turnIndex += 1;",
                 "    const turnId = `native-browser-turn-${turnIndex}`;",
                 "    const answer = text.includes('RAH foreground resume prompt') ? 'RAH_NATIVE_CODEX_BROWSER_FOREGROUND_ANSWER' : text.includes('rah cli codex browser native') ? 'RAH_NATIVE_CODEX_BROWSER_CLI_ANSWER' : text.includes('BLOCKED_WHILE_TUI_PROMPT_DIRTY_TWO') ? 'RAH_NATIVE_CODEX_BROWSER_DIRTY_QUEUE_TWO' : text.includes('BLOCKED_WHILE_TUI_PROMPT_DIRTY') ? 'RAH_NATIVE_CODEX_BROWSER_DIRTY_QUEUE_ONE' : `RAH_NATIVE_CODEX_BROWSER_MIRROR_${turnIndex}`;",
@@ -254,6 +278,82 @@ def write_fake_codex(path: pathlib.Path) -> None:
         encoding="utf-8",
     )
     path.chmod(0o755)
+
+
+def write_long_codex_history(
+    codex_home: pathlib.Path,
+    workspace: pathlib.Path,
+    provider_session_id: str,
+    turns: int = 180,
+) -> pathlib.Path:
+    rollout_dir = codex_home / "sessions" / "2026" / "05" / "10"
+    rollout_dir.mkdir(parents=True, exist_ok=True)
+    rollout_path = rollout_dir / f"rollout-2026-05-10T00-00-00-{provider_session_id}.jsonl"
+
+    def ts(index: int) -> str:
+        minute = index // 60
+        second = index % 60
+        return f"2026-05-10T00:{minute:02d}:{second:02d}.000Z"
+
+    rows: list[dict[str, Any]] = [
+        {
+            "timestamp": ts(0),
+            "type": "session_meta",
+            "payload": {
+                "id": provider_session_id,
+                "cwd": str(workspace),
+                "timestamp": ts(0),
+            },
+        }
+    ]
+    event_index = 1
+    for turn in range(1, turns + 1):
+        user_text = f"HISTORY_PAGING_USER_{turn:03d}"
+        assistant_text = f"HISTORY_PAGING_ASSISTANT_{turn:03d}"
+        turn_id = f"history-paging-turn-{turn:03d}"
+        rows.extend(
+            [
+                {
+                    "timestamp": ts(event_index),
+                    "type": "event_msg",
+                    "payload": {"type": "task_started", "turn_id": turn_id},
+                },
+                {
+                    "timestamp": ts(event_index + 1),
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": user_text}],
+                    },
+                },
+                {
+                    "timestamp": ts(event_index + 2),
+                    "type": "event_msg",
+                    "payload": {"type": "agent_message", "message": assistant_text},
+                },
+                {
+                    "timestamp": ts(event_index + 3),
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": assistant_text}],
+                    },
+                },
+                {
+                    "timestamp": ts(event_index + 4),
+                    "type": "event_msg",
+                    "payload": {"type": "task_complete", "turn_id": turn_id},
+                },
+            ]
+        )
+        event_index += 5
+    rollout_path.write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n",
+        encoding="utf-8",
+    )
+    return rollout_path
 
 
 def start_daemon(env: dict[str, str], port: int) -> subprocess.Popen[str]:
@@ -305,6 +405,308 @@ def wait_for_session_provider_id(
     )
 
 
+def start_codex_browser_session(
+    base_url: str,
+    workspace: pathlib.Path,
+    connection_id: str,
+    title: str,
+) -> tuple[str, str]:
+    started = request_json(
+        base_url,
+        "/api/sessions/start",
+        {
+            "provider": "codex",
+            "cwd": str(workspace),
+            "liveBackend": "native_tui",
+            "title": title,
+            "model": "gpt-native-browser",
+            "modeId": "never/danger-full-access",
+            "attach": {
+                "client": {
+                    "id": "web-user",
+                    "kind": "web",
+                    "connectionId": connection_id,
+                },
+                "mode": "interactive",
+                "claimControl": True,
+            },
+        },
+    )["session"]
+    session_id = str(started["session"]["id"])
+    return session_id, wait_for_session_provider_id(base_url, session_id, None)
+
+
+def session_exists(base_url: str, session_id: str) -> bool:
+    try:
+        request_json(base_url, f"/api/sessions/{session_id}")
+        return True
+    except RuntimeError as exc:
+        if "HTTP 404" in str(exc):
+            return False
+        raise
+
+
+def wait_for_session_absent(base_url: str, session_id: str, timeout_s: int = 20) -> None:
+    started = time.time()
+    while time.time() - started < timeout_s:
+        if not session_exists(base_url, session_id):
+            return
+        time.sleep(0.2)
+    raise AssertionError(f"session {session_id} still exists after {timeout_s}s")
+
+
+def wait_for_live_session_absent(base_url: str, session_id: str, timeout_s: int = 20) -> None:
+    started = time.time()
+    while time.time() - started < timeout_s:
+        if session_id not in live_session_ids(base_url):
+            return
+        time.sleep(0.2)
+    raise AssertionError(f"session {session_id} still appears in live sessions")
+
+
+def assert_session_not_in_pty_stats(base_url: str, session_id: str) -> None:
+    stats = request_json(base_url, "/api/pty/stats")
+    sessions = stats.get("sessions", [])
+    if any(str(entry.get("sessionId")) == session_id for entry in sessions):
+        raise AssertionError(f"session {session_id} still appears in PTY stats: {sessions}")
+
+
+def wait_for_pty_status(
+    base_url: str,
+    session_id: str,
+    expected: str,
+    timeout_s: int = 20,
+) -> None:
+    started = time.time()
+    last_sessions: list[dict[str, Any]] = []
+    while time.time() - started < timeout_s:
+        stats = request_json(base_url, "/api/pty/stats")
+        last_sessions = stats.get("sessions", [])
+        for entry in last_sessions:
+            if str(entry.get("sessionId")) == session_id and entry.get("status") == expected:
+                return
+        time.sleep(0.2)
+    raise AssertionError(
+        f"PTY session {session_id} status did not become {expected!r}; last={last_sessions}"
+    )
+
+
+def wait_for_session_not_running(
+    base_url: str,
+    session_id: str,
+    timeout_s: int = 20,
+) -> None:
+    started = time.time()
+    last_session: dict[str, Any] | None = None
+    while time.time() - started < timeout_s:
+        last_session = request_json(base_url, f"/api/sessions/{session_id}")["session"]["session"]
+        if last_session.get("runtimeState") != "running":
+            return
+        time.sleep(0.2)
+    raise AssertionError(f"session {session_id} stayed running after TUI exit: {last_session}")
+
+
+def wait_for_stored_history_ref(
+    base_url: str,
+    provider_session_id: str,
+    timeout_s: int = 20,
+) -> None:
+    started = time.time()
+    last_response: dict[str, Any] = {}
+    while time.time() - started < timeout_s:
+        response = request_json(base_url, "/api/sessions")
+        last_response = response
+        candidates = [
+            *response.get("storedSessions", []),
+            *response.get("recentSessions", []),
+        ]
+        if any(
+            entry.get("provider") == "codex"
+            and str(entry.get("providerSessionId")) == provider_session_id
+            for entry in candidates
+        ):
+            return
+        time.sleep(0.2)
+    raise AssertionError(
+        f"Codex provider history {provider_session_id!r} was not retained; "
+        f"last={json.dumps(last_response, ensure_ascii=False)[:2000]}"
+    )
+
+
+def exercise_codex_tui_exit(
+    page,
+    base_url: str,
+    workspace: pathlib.Path,
+    artifact_dir: pathlib.Path,
+) -> None:
+    session_id, _provider_session_id = start_codex_browser_session(
+        base_url,
+        workspace,
+        "native-codex-browser-tui-exit-smoke",
+        "Codex TUI exit smoke",
+    )
+    try:
+        page.reload(wait_until="domcontentloaded")
+        open_live_session(page, session_id)
+        page.get_by_role("button", name="TUI", exact=True).click(timeout=30_000)
+        panel = page.locator(".terminal-panel").last
+        expect(panel).to_be_visible(timeout=10_000)
+        wait_for_terminal_text(panel, "RAH_NATIVE_CODEX_BROWSER_READY")
+        terminal_id = session_native_terminal_id(base_url, session_id)
+        send_pty_input(base_url, terminal_id, "web-user", "exit\r")
+        wait_for_pty_status(base_url, session_id, "exited")
+        wait_for_session_not_running(base_url, session_id)
+        time.sleep(0.5)
+        wait_for_pty_status(base_url, session_id, "exited", timeout_s=2)
+        page.reload(wait_until="domcontentloaded")
+        save_browser_screenshot(page, artifact_dir, "codex-tui-exit-live-cleanup")
+    finally:
+        close_session_quietly(base_url, session_id)
+
+
+def exercise_codex_archive(
+    page,
+    base_url: str,
+    workspace: pathlib.Path,
+    artifact_dir: pathlib.Path,
+) -> None:
+    session_id, provider_session_id = start_codex_browser_session(
+        base_url,
+        workspace,
+        "native-codex-browser-archive-smoke",
+        "Codex archive smoke",
+    )
+    try:
+        page.reload(wait_until="domcontentloaded")
+        open_live_session(page, session_id)
+        page.get_by_role("button", name="TUI", exact=True).click(timeout=30_000)
+        panel = page.locator(".terminal-panel").last
+        expect(panel).to_be_visible(timeout=10_000)
+        wait_for_terminal_text(panel, "RAH_NATIVE_CODEX_BROWSER_READY")
+        page.get_by_role("button", name="Chat", exact=True).click(timeout=30_000)
+        page.locator('button[title="Archive this live session"]:visible').first.click(timeout=30_000)
+        page.get_by_role("dialog").filter(has_text="Archive session?").get_by_role(
+            "button",
+            name="Archive",
+            exact=True,
+        ).click(timeout=30_000)
+        wait_for_session_absent(base_url, session_id)
+        wait_for_live_session_absent(base_url, session_id)
+        assert_session_not_in_pty_stats(base_url, session_id)
+        wait_for_stored_history_ref(base_url, provider_session_id)
+        save_browser_screenshot(page, artifact_dir, "codex-archive-live-cleanup-history-retained")
+    finally:
+        close_session_quietly(base_url, session_id)
+
+
+def exercise_codex_history_paging(
+    page,
+    base_url: str,
+    provider_session_id: str,
+    artifact_dir: pathlib.Path,
+) -> None:
+    page.reload(wait_until="domcontentloaded")
+    page.locator('button[aria-label="Sessions"]:visible').first.click(timeout=30_000)
+    page.get_by_role("button", name="All", exact=True).click(timeout=30_000)
+    page.locator('input[placeholder*="Search"]:visible').first.fill(provider_session_id)
+    page.locator(
+        f'button[data-provider-session-id="{provider_session_id}"]:visible',
+    ).first.click(timeout=30_000)
+    chat_button = page.get_by_role("button", name="Chat", exact=True)
+    if chat_button.count() > 0:
+        chat_button.click(timeout=30_000)
+    latest_marker = "HISTORY_PAGING_ASSISTANT_180"
+    earliest_marker = "HISTORY_PAGING_USER_001"
+    scroll_container = page.locator(
+        '[data-testid="chat-thread-scroll-container"], .custom-scrollbar',
+    ).last
+    expect(scroll_container).to_be_visible(timeout=10_000)
+    expect(scroll_container.get_by_text(latest_marker, exact=True)).to_be_visible(timeout=20_000)
+    if earliest_marker in scroll_container.inner_text(timeout=10_000):
+        raise AssertionError("history paging loaded the oldest marker before scrolling up")
+    element = scroll_container.element_handle(timeout=10_000)
+    if element is None:
+        raise AssertionError("chat scroll container element was not available")
+    scroll_container.evaluate(
+        """(node) => {
+          node.scrollTop = 0;
+          node.dispatchEvent(new Event('scroll', { bubbles: true }));
+        }"""
+    )
+    page.wait_for_function(
+        """(node) => node.scrollTop > 80""",
+        arg=element,
+        timeout=20_000,
+    )
+    preserved_scroll_top = scroll_container.evaluate("(node) => node.scrollTop")
+    if preserved_scroll_top <= 80:
+        raise AssertionError(
+            f"older-history prepend did not preserve scroll anchor; scrollTop={preserved_scroll_top}"
+        )
+    found_earliest = False
+    for _ in range(8):
+        scroll_container.evaluate(
+            """(node) => {
+              node.scrollTop = 0;
+              node.dispatchEvent(new Event('scroll', { bubbles: true }));
+            }"""
+        )
+        started = time.time()
+        while time.time() - started < 5:
+            if earliest_marker in scroll_container.inner_text(timeout=5_000):
+                found_earliest = True
+                break
+            page.wait_for_timeout(200)
+        if found_earliest:
+            break
+    if not found_earliest:
+        raise AssertionError(f"older-history marker {earliest_marker!r} did not render in chat")
+    save_browser_screenshot(page, artifact_dir, "codex-history-paging-older-anchor")
+
+
+def exercise_missing_cwd_history(
+    page,
+    base_url: str,
+    provider_session_id: str,
+    missing_workspace: pathlib.Path,
+    artifact_dir: pathlib.Path,
+) -> None:
+    if missing_workspace.exists():
+        raise AssertionError(f"missing cwd fixture unexpectedly exists: {missing_workspace}")
+
+    page.reload(wait_until="domcontentloaded")
+    page.locator('button[aria-label="Sessions"]:visible').first.click(timeout=30_000)
+    page.get_by_role("button", name="All", exact=True).click(timeout=30_000)
+    page.locator('input[placeholder*="Search"]:visible').first.fill(provider_session_id)
+    page.locator(
+        f'button[data-provider-session-id="{provider_session_id}"]:visible',
+    ).first.click(timeout=30_000)
+    chat_button = page.get_by_role("button", name="Chat", exact=True)
+    if chat_button.count() > 0:
+        chat_button.click(timeout=30_000)
+
+    expect(page.get_by_text("HISTORY_PAGING_ASSISTANT_003", exact=True)).to_be_visible(
+        timeout=20_000,
+    )
+    expect(page.get_by_role("dialog").filter(has_text="Workspace is missing")).to_have_count(0)
+
+    page.get_by_role("button", name="Claim control", exact=True).last.click(timeout=30_000)
+    dialog = page.get_by_role("dialog").filter(has_text="Workspace is missing")
+    expect(dialog).to_be_visible(timeout=10_000)
+    expect(dialog.get_by_text("Create this workspace before starting the session?")).to_be_visible(
+        timeout=10_000,
+    )
+    expect(dialog.get_by_text(str(missing_workspace), exact=True)).to_be_visible(timeout=10_000)
+    expect(dialog.get_by_role("button", name="Create workspace", exact=True)).to_be_visible(
+        timeout=10_000,
+    )
+    dialog.get_by_role("button", name="Cancel", exact=True).click(timeout=10_000)
+    expect(dialog).to_be_hidden(timeout=10_000)
+    if missing_workspace.exists():
+        raise AssertionError(f"claim-cancel created missing cwd unexpectedly: {missing_workspace}")
+    save_browser_screenshot(page, artifact_dir, "codex-missing-cwd-history-claim-prompt")
+
+
 def wait_for_terminal_text(panel, needle: str, timeout_s: int = 15) -> None:
     started = time.time()
     last = ""
@@ -350,6 +752,53 @@ def assert_page_text_order(page, *needles: str) -> None:
                 f"page did not contain {needle!r} after offset {cursor}; tail={text[-1600:]}"
             )
         cursor = index
+
+
+def page_text_occurrences(page, needle: str) -> int:
+    return page.locator("body").inner_text(timeout=10_000).count(needle)
+
+
+def wait_for_page_text_occurrences(page, needle: str, expected: int, timeout_s: int = 15) -> None:
+    started = time.time()
+    last_count = 0
+    while time.time() - started < timeout_s:
+        last_count = page_text_occurrences(page, needle)
+        if last_count == expected:
+            return
+        page.wait_for_timeout(200)
+    raise AssertionError(
+        f"page text {needle!r} count did not become {expected}; last={last_count}"
+    )
+
+
+def wait_for_page_text_at_least(page, needle: str, minimum: int, timeout_s: int = 15) -> None:
+    started = time.time()
+    last_count = 0
+    while time.time() - started < timeout_s:
+        last_count = page_text_occurrences(page, needle)
+        if last_count >= minimum:
+            return
+        page.wait_for_timeout(200)
+    raise AssertionError(
+        f"page text {needle!r} count did not reach {minimum}; last={last_count}"
+    )
+
+
+def chat_user_message_occurrences(page, needle: str) -> int:
+    return page.get_by_test_id("chat-user-message").filter(has_text=needle).count()
+
+
+def wait_for_chat_user_message_occurrences(page, needle: str, expected: int, timeout_s: int = 15) -> None:
+    started = time.time()
+    last_count = 0
+    while time.time() - started < timeout_s:
+        last_count = chat_user_message_occurrences(page, needle)
+        if last_count == expected:
+            return
+        page.wait_for_timeout(200)
+    raise AssertionError(
+        f"chat user message {needle!r} count did not become {expected}; last={last_count}"
+    )
 
 
 def count_terminal_text(panel, needle: str) -> int:
@@ -413,6 +862,33 @@ def wait_for_session_history_timeline_text(
         time.sleep(0.2)
     raise AssertionError(
         f"session history did not contain {kind} text {text!r}; matches={last_matches}"
+    )
+
+
+def wait_for_session_history_timeline_text_count(
+    base_url: str,
+    session_id: str,
+    kind: str,
+    text: str,
+    expected: int,
+    timeout_s: int = 20,
+) -> None:
+    started = time.time()
+    last_matches: list[dict[str, Any]] = []
+    last_count = 0
+    while time.time() - started < timeout_s:
+        last_count, last_matches = count_session_history_timeline_text(
+            base_url,
+            session_id,
+            kind,
+            text,
+        )
+        if last_count == expected:
+            return
+        time.sleep(0.2)
+    raise AssertionError(
+        f"session history {kind} text {text!r} count did not become {expected}; "
+        f"last={last_count} matches={last_matches}"
     )
 
 
@@ -648,6 +1124,9 @@ def main() -> int:
     codex_home = tmp_root / "codex-home"
     fake_codex = tmp_root / "fake-codex.js"
     provider_session_id = str(uuid.uuid4())
+    long_history_provider_session_id = str(uuid.uuid4())
+    missing_cwd_provider_session_id = str(uuid.uuid4())
+    missing_workspace = tmp_root / "missing-workspace"
     title = "Native Codex Browser Smoke"
     prompt = "RAH native browser prompt"
     chat_prompt = "RAH native browser chat composer prompt"
@@ -674,6 +1153,13 @@ def main() -> int:
         workspace.mkdir(parents=True)
         (codex_home / "sessions").mkdir(parents=True)
         write_fake_codex(fake_codex)
+        write_long_codex_history(codex_home, workspace, long_history_provider_session_id)
+        write_long_codex_history(
+            codex_home,
+            missing_workspace,
+            missing_cwd_provider_session_id,
+            turns=3,
+        )
         daemon = start_daemon(
             {
                 "RAH_HOME": str(rah_home),
@@ -810,16 +1296,42 @@ def main() -> int:
             assert_page_text_order(page, expected_queued_answer, expected_queued_answer_two)
             save_browser_screenshot(page, artifact_dir, "codex-chat-dirty-queued-inputs")
 
+            repeated_prompt = "REPEAT_NATIVE_BROWSER_PROMPT"
+            fill_and_submit_chat_composer(page, repeated_prompt)
+            wait_for_session_history_timeline_text_count(
+                base_url,
+                session_id,
+                "user_message",
+                repeated_prompt,
+                1,
+            )
+            fill_and_submit_chat_composer(page, repeated_prompt)
+            wait_for_session_history_timeline_text_count(
+                base_url,
+                session_id,
+                "user_message",
+                repeated_prompt,
+                2,
+            )
+            wait_for_chat_user_message_occurrences(page, repeated_prompt, 2)
+
             page.get_by_role("button", name="Chat", exact=True).click()
             fill_and_submit_chat_composer(page, stop_prompt)
+            wait_for_chat_user_message_occurrences(page, stop_prompt, 1)
             page.get_by_role("button", name="TUI", exact=True).click()
             wait_for_terminal_text(panel, f"RAH_NATIVE_CODEX_BROWSER_INPUT:{stop_prompt}")
             page.get_by_role("button", name="Chat", exact=True).click()
+            interrupted_notice_count = page_text_occurrences(page, "Conversation interrupted")
             with page.expect_response(
                 lambda response: response.url.endswith(f"/api/sessions/{session_id}/interrupt"),
                 timeout=15_000,
             ) as interrupt_response_info:
-                page.get_by_role("button", name="Stop generating").click(timeout=15_000)
+                stop_button = page.get_by_role("button", name="Stop generating")
+                stop_button.click(timeout=15_000)
+                try:
+                    stop_button.click(timeout=500)
+                except Exception:
+                    pass
             interrupt_response = interrupt_response_info.value
             if interrupt_response.status >= 400:
                 raise AssertionError(
@@ -829,6 +1341,15 @@ def main() -> int:
             page.get_by_role("button", name="TUI", exact=True).click()
             wait_for_terminal_text(panel, "RAH_NATIVE_CODEX_BROWSER_INTERRUPTED")
             assert_session_idle(base_url, session_id)
+            wait_for_terminal_text(panel, "RAH_NATIVE_CODEX_BROWSER_READY")
+            page.get_by_role("button", name="Chat", exact=True).click()
+            wait_for_page_text_occurrences(
+                page,
+                "Conversation interrupted",
+                interrupted_notice_count + 1,
+            )
+            assert_page_text_order(page, stop_prompt, "Conversation interrupted")
+            expect(page.get_by_role("button", name="Stop generating")).to_have_count(0, timeout=10_000)
 
             page.reload(wait_until="domcontentloaded")
             page.locator('button[aria-label="Sessions"]:visible').first.click(timeout=30_000)
@@ -1059,10 +1580,106 @@ def main() -> int:
                     f"RAH_NATIVE_CODEX_BROWSER_INPUT:{mobile_composition_prompt}",
                 )
                 save_browser_screenshot(mobile_page, artifact_dir, "codex-mobile-tui-bridge")
+
+                try:
+                    mobile_page.locator('button[aria-label="Open sidebar"]:visible').first.click(
+                        timeout=2_000,
+                    )
+                except Exception:
+                    pass
+                mobile_page.locator('button[aria-label="Home"]:visible').first.click(timeout=30_000)
+                expect(
+                    mobile_page.get_by_text("What would you like to build?", exact=True),
+                ).to_be_visible(timeout=10_000)
+                expect(
+                    mobile_page.locator('textarea[placeholder="Message…"]:visible').first,
+                ).to_be_visible(timeout=10_000)
+                composer_layout = mobile_page.evaluate(
+                    """() => {
+                        const viewportWidth = window.innerWidth;
+                        const textarea = document.querySelector('textarea[placeholder="Message…"]');
+                        if (!(textarea instanceof HTMLElement)) {
+                          return { error: 'textarea missing' };
+                        }
+                        const textRect = textarea.getBoundingClientRect();
+                        const buttons = [...document.querySelectorAll('button')]
+                          .filter((element) => {
+                            const rect = element.getBoundingClientRect();
+                            if (rect.width <= 0 || rect.height <= 0) return false;
+                            return rect.bottom >= textRect.top
+                              && rect.top <= textRect.bottom + 24
+                              && rect.right >= textRect.left - 16
+                              && rect.left <= textRect.right + 16;
+                          })
+                          .map((element, index) => {
+                            const rect = element.getBoundingClientRect();
+                            return {
+                              index,
+                              label: element.getAttribute('aria-label')
+                                || element.getAttribute('title')
+                                || element.textContent?.trim()
+                                || '',
+                              left: rect.left,
+                              right: rect.right,
+                              top: rect.top,
+                              bottom: rect.bottom,
+                              width: rect.width,
+                              height: rect.height,
+                            };
+                          });
+                        const overlaps = [];
+                        for (let i = 0; i < buttons.length; i += 1) {
+                          for (let j = i + 1; j < buttons.length; j += 1) {
+                            const a = buttons[i];
+                            const b = buttons[j];
+                            const horizontal = Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left));
+                            const vertical = Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
+                            if (horizontal > 2 && vertical > 2) {
+                              overlaps.push([a.label, b.label, horizontal, vertical]);
+                            }
+                          }
+                        }
+                        return {
+                          viewportWidth,
+                          scrollWidth: document.documentElement.scrollWidth,
+                          documentOverflowX: document.documentElement.scrollWidth > viewportWidth + 2,
+                          textarea: {
+                            left: textRect.left,
+                            right: textRect.right,
+                            top: textRect.top,
+                            bottom: textRect.bottom,
+                            width: textRect.width,
+                          },
+                          buttons,
+                          overlaps,
+                          startVisible: buttons.some((button) => button.label === 'Start session'),
+                          minButtonHeight: buttons.length
+                            ? Math.min(...buttons.map((button) => button.height))
+                            : 0,
+                        };
+                    }""",
+                )
+                if composer_layout.get("error"):
+                    raise AssertionError(f"mobile composer layout error: {composer_layout}")
+                if composer_layout["documentOverflowX"]:
+                    raise AssertionError(f"mobile composer caused horizontal overflow: {composer_layout}")
+                if composer_layout["overlaps"]:
+                    raise AssertionError(f"mobile composer controls overlap: {composer_layout}")
+                if not composer_layout["startVisible"]:
+                    raise AssertionError(f"mobile composer start button missing: {composer_layout}")
+                if composer_layout["minButtonHeight"] < 30:
+                    raise AssertionError(f"mobile composer controls are too small: {composer_layout}")
+                if (
+                    composer_layout["textarea"]["left"] < -1
+                    or composer_layout["textarea"]["right"] > composer_layout["viewportWidth"] + 1
+                ):
+                    raise AssertionError(f"mobile composer textarea exceeds viewport: {composer_layout}")
+                save_browser_screenshot(mobile_page, artifact_dir, "codex-mobile-new-session-composer")
                 mobile_context.close()
                 mobile_assertions = [
                     "mobile TUI input bridge sends shortcut keys, text input, and composition input",
                     "mobile TUI canvas click preserves terminal scrolling; the RAH input bridge owns keyboard focus",
+                    "mobile new-session composer controls fit compact iPhone viewport without overflow or overlap",
                 ]
 
             resume_provider_session_id = session_provider_session_id(base_url, session_id)
@@ -1120,6 +1737,21 @@ def main() -> int:
                 provider_session_id,
                 artifact_dir,
             )
+            exercise_codex_history_paging(
+                page,
+                base_url,
+                long_history_provider_session_id,
+                artifact_dir,
+            )
+            exercise_missing_cwd_history(
+                page,
+                base_url,
+                missing_cwd_provider_session_id,
+                missing_workspace,
+                artifact_dir,
+            )
+            exercise_codex_tui_exit(page, base_url, workspace, artifact_dir)
+            exercise_codex_archive(page, base_url, workspace, artifact_dir)
 
             browser.close()
 
@@ -1133,6 +1765,7 @@ def main() -> int:
                     "providerSessionId": provider_session_id,
                     "browser": selected_browser_name(),
                     "headless": browser_headless(),
+                    "caseIds": CASE_IDS,
                     "screenshots": SCREENSHOTS,
                     "cliResult": cli_modes_result,
                     "asserted": [
@@ -1154,6 +1787,8 @@ def main() -> int:
                         "TUI replay survives page reload",
                         "Foreground recovery catches up native TUI and Chat mirror without reselection",
                         "Web resume opens Codex history without duplicating existing assistant messages",
+                        "Stored Codex history loads the latest page first and preserves scroll anchor when older pages prepend",
+                        "Missing-cwd history browsing does not prompt until Claim control",
                         "rah codex terminal launch can be observed in browser Chat/TUI",
                         "rah codex terminal stop is mirrored back to the browser",
                         "rah codex resume can be observed in browser Chat without duplicated history",
@@ -1161,6 +1796,8 @@ def main() -> int:
                         "Settings Version refresh shows PTY terminal replay deltas",
                         "Canvas panes render native TUI and preserve replay across layout changes",
                         "Canvas layout changes send PTY resize events to native TUI",
+                        "TUI client exit marks PTY as exited and leaves the session not running",
+                        "Archive closes the live session and PTY state while retaining provider history",
                         *mobile_assertions,
                     ],
                 },

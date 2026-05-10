@@ -6,13 +6,17 @@ import type {
   PermissionResolution,
   RuntimeOperation,
   TimelineIdentity,
+  TimelineTurnIdentity,
   ToolCall,
   ToolCallArtifact,
   WorkbenchObservation,
 } from "@rah/runtime-protocol";
 import { classifyCodexCommand } from "./codex-command-classifier";
 import { normalizeContextUsage } from "./context-usage";
-import { createCodexTimelineIdentity } from "./codex-timeline-identity";
+import {
+  createCodexTimelineIdentity,
+  createCodexTimelineTurnIdentity,
+} from "./codex-timeline-identity";
 import type { ProviderActivity } from "./provider-activity";
 
 export interface CodexLiveTranslatedActivity {
@@ -304,6 +308,10 @@ function providerSessionIdFromParams(params: Record<string, unknown> | null | un
 }
 
 function timelineIdentityProps(identity: TimelineIdentity | undefined): { identity?: TimelineIdentity } {
+  return identity !== undefined ? { identity } : {};
+}
+
+function turnIdentityProps(identity: TimelineTurnIdentity | undefined): { identity?: TimelineTurnIdentity } {
   return identity !== undefined ? { identity } : {};
 }
 
@@ -1478,10 +1486,27 @@ export function translateCodexAppServerThreadSnapshot(
       );
     }
     const status = stringField(turnRecord, "status");
+    const lifecycleIdentity = providerSessionId
+      ? createCodexTimelineTurnIdentity({
+          providerSessionId,
+          turnId,
+          origin: "history",
+          confidence: "derived",
+        })
+      : undefined;
     if (status === "completed") {
-      translatedItems.push(translated(raw, { type: "turn_completed", turnId }));
+      translatedItems.push(
+        translated(raw, { type: "turn_completed", turnId, ...turnIdentityProps(lifecycleIdentity) }),
+      );
     } else if (status === "interrupted") {
-      translatedItems.push(translated(raw, { type: "turn_canceled", turnId, reason: "interrupted" }));
+      translatedItems.push(
+        translated(raw, {
+          type: "turn_canceled",
+          turnId,
+          reason: "interrupted",
+          ...turnIdentityProps(lifecycleIdentity),
+        }),
+      );
     } else if (status === "failed") {
       const error =
         turnRecord.error && typeof turnRecord.error === "object" && !Array.isArray(turnRecord.error)
@@ -1491,6 +1516,7 @@ export function translateCodexAppServerThreadSnapshot(
         type: "turn_failed",
         turnId,
         error: error ?? "Codex turn failed",
+        ...turnIdentityProps(lifecycleIdentity),
       }));
     }
   }
@@ -1662,6 +1688,15 @@ export function translateCodexAppServerNotification(
         return invalidStreamActivities(notification, "turn/completed did not include turn.status");
       }
       const turnId = typeof turn.id === "string" ? turn.id : "current-turn";
+      const providerSessionId = providerSessionIdFromParams(params);
+      const identity = providerSessionId
+        ? createCodexTimelineTurnIdentity({
+            providerSessionId,
+            turnId,
+            origin: "live",
+            confidence: "derived",
+          })
+        : undefined;
       if (turn.status === "failed") {
         const error =
           turn.error && typeof turn.error === "object" && !Array.isArray(turn.error)
@@ -1672,6 +1707,7 @@ export function translateCodexAppServerNotification(
             type: "turn_failed",
             turnId,
             error: typeof error?.message === "string" ? error.message : "Codex turn failed",
+            ...turnIdentityProps(identity),
           }),
         ];
       }
@@ -1681,10 +1717,11 @@ export function translateCodexAppServerNotification(
             type: "turn_canceled",
             turnId,
             reason: "interrupted",
+            ...turnIdentityProps(identity),
           }),
         ];
       }
-      return [translated(notification, { type: "turn_completed", turnId })];
+      return [translated(notification, { type: "turn_completed", turnId, ...turnIdentityProps(identity) })];
     }
     case "hook/completed": {
       const params = paramsRecord(notification);

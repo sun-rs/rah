@@ -4,6 +4,7 @@ import type {
   TimelineIdentity,
   TimelineIdentityConfidence,
   TimelineIdentityOrigin,
+  TimelineTurnIdentity,
   TimelineSourceCursor,
 } from "@rah/runtime-protocol";
 
@@ -52,6 +53,31 @@ export function createTimelineIdentity(params: CreateTimelineIdentityParams): Ti
   }
   if (params.contentHash !== undefined) {
     identity.contentHash = params.contentHash;
+  }
+  return identity;
+}
+
+export function createTimelineTurnIdentity(params: {
+  provider: ProviderKind;
+  providerSessionId?: string;
+  turnKey: string;
+  origin: TimelineIdentityOrigin;
+  confidence?: TimelineIdentityConfidence;
+}): TimelineTurnIdentity {
+  const identity: TimelineTurnIdentity = {
+    canonicalTurnId: stableTimelineHash([
+      "rah.timeline.turn.v2",
+      params.provider,
+      params.providerSessionId ?? "",
+      params.turnKey,
+    ]),
+    provider: params.provider,
+    turnKey: params.turnKey,
+    origin: params.origin,
+    confidence: params.confidence ?? "derived",
+  };
+  if (params.providerSessionId !== undefined) {
+    identity.providerSessionId = params.providerSessionId;
   }
   return identity;
 }

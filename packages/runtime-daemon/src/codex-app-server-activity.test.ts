@@ -73,6 +73,27 @@ describe("translateCodexAppServerNotification", () => {
     });
   });
 
+  test("maps interrupted turn lifecycle with canonical turn identity when thread id is present", () => {
+    const state = createCodexAppServerTranslationState();
+    const interrupted = translateCodexAppServerNotification(
+      {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turn: { id: "turn-1", status: "interrupted" },
+        },
+      },
+      state,
+    );
+
+    assert.equal(interrupted[0]?.activity.type, "turn_canceled");
+    if (interrupted[0]?.activity.type === "turn_canceled") {
+      assert.equal(interrupted[0].activity.turnId, "turn-1");
+      assert.equal(interrupted[0].activity.identity?.providerSessionId, "thread-1");
+      assert.equal(interrupted[0].activity.identity?.turnKey, "turn:turn-1");
+    }
+  });
+
   test("extracts retry count from reconnecting runtime errors", () => {
     const state = createCodexAppServerTranslationState();
     const retry = translateCodexAppServerNotification(

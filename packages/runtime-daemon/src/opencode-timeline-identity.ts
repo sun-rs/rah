@@ -1,5 +1,5 @@
-import type { TimelineIdentity, TimelineItem } from "@rah/runtime-protocol";
-import { createTimelineIdentity } from "./timeline-identity";
+import type { TimelineIdentity, TimelineItem, TimelineTurnIdentity } from "@rah/runtime-protocol";
+import { createTimelineIdentity, createTimelineTurnIdentity } from "./timeline-identity";
 
 type OpenCodeTimelineItemKind = Extract<
   TimelineItem,
@@ -9,6 +9,7 @@ type OpenCodeTimelineItemKind = Extract<
 export function createOpenCodeTimelineIdentity(args: {
   providerSessionId: string;
   messageId: string;
+  turnMessageId?: string;
   itemKind: OpenCodeTimelineItemKind;
   origin: "live" | "history";
   partId?: string;
@@ -17,7 +18,7 @@ export function createOpenCodeTimelineIdentity(args: {
   return createTimelineIdentity({
     provider: "opencode",
     providerSessionId: args.providerSessionId,
-    turnKey: `message:${args.messageId}`,
+    turnKey: `message:${args.turnMessageId ?? args.messageId}`,
     itemKind: args.itemKind,
     itemKey: args.partId ?? args.messageId,
     origin: args.origin,
@@ -26,5 +27,20 @@ export function createOpenCodeTimelineIdentity(args: {
       providerMessageId: args.messageId,
       ...(args.partId !== undefined ? { providerEventId: args.partId } : {}),
     },
+  });
+}
+
+export function createOpenCodeTimelineTurnIdentity(args: {
+  providerSessionId: string;
+  messageId: string;
+  origin: "live" | "history";
+  confidence?: TimelineIdentity["confidence"];
+}): TimelineTurnIdentity {
+  return createTimelineTurnIdentity({
+    provider: "opencode",
+    providerSessionId: args.providerSessionId,
+    turnKey: `message:${args.messageId}`,
+    origin: args.origin,
+    confidence: args.confidence ?? "native",
   });
 }

@@ -1,5 +1,5 @@
-import type { TimelineIdentity, TimelineItem } from "@rah/runtime-protocol";
-import { createTimelineIdentity } from "./timeline-identity";
+import type { TimelineIdentity, TimelineItem, TimelineTurnIdentity } from "@rah/runtime-protocol";
+import { createTimelineIdentity, createTimelineTurnIdentity } from "./timeline-identity";
 
 type CodexTimelineItemKind = Extract<
   TimelineItem,
@@ -29,5 +29,20 @@ export function createCodexTimelineIdentity(args: {
       ...(args.providerEventId !== undefined ? { providerEventId: args.providerEventId } : {}),
       ...(args.providerMessageId !== undefined ? { providerMessageId: args.providerMessageId } : {}),
     },
+  });
+}
+
+export function createCodexTimelineTurnIdentity(args: {
+  providerSessionId?: string | undefined;
+  turnId: string;
+  origin: "live" | "history";
+  confidence?: TimelineIdentity["confidence"];
+}): TimelineTurnIdentity {
+  return createTimelineTurnIdentity({
+    provider: "codex",
+    ...(args.providerSessionId !== undefined ? { providerSessionId: args.providerSessionId } : {}),
+    turnKey: `turn:${args.turnId}`,
+    origin: args.origin,
+    confidence: args.confidence ?? "derived",
   });
 }

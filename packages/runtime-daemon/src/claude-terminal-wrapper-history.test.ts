@@ -55,6 +55,32 @@ describe("claude terminal wrapper history helpers", () => {
     );
   });
 
+  test("strips Claude turn_aborted context fragments from transcript text", () => {
+    assert.equal(
+      extractUserMessageText([
+        {
+          type: "text",
+          text: [
+            "休眠五秒",
+            "<turn_aborted>",
+            "The user interrupted the previous turn on purpose.",
+            "</turn_aborted>",
+          ].join("\n"),
+        },
+      ]),
+      "休眠五秒",
+    );
+    assert.equal(
+      extractUserMessageText([
+        {
+          type: "text",
+          text: "<turn_aborted>\nThe user interrupted the previous turn on purpose.\n</turn_aborted>",
+        },
+      ]),
+      null,
+    );
+  });
+
   test("preserves markdown line breaks and indentation", () => {
     const markdown = [
       "会涉及抽象。",

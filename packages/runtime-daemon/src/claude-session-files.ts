@@ -34,8 +34,11 @@ import {
   listClaudeWrapperHomes,
   resolveClaudeBaseHome,
 } from "./claude-wrapper-home";
-import { createClaudeTimelineIdentity } from "./claude-timeline-identity";
-import type { TimelineIdentity } from "@rah/runtime-protocol";
+import {
+  createClaudeTimelineIdentity,
+  createClaudeTimelineTurnIdentity,
+} from "./claude-timeline-identity";
+import type { TimelineIdentity, TimelineTurnIdentity } from "@rah/runtime-protocol";
 
 const REHYDRATED_CAPABILITIES = {
   livePermissions: false,
@@ -141,56 +144,6 @@ export type ClaudeStoredActivityBatchItem = {
   activity: ProviderActivity;
 };
 
-function objectProperty(value: unknown, key: string): unknown {
-  if (typeof value !== "object" || value === null) {
-    return undefined;
-  }
-  return (value as Record<string, unknown>)[key];
-}
-
-function firstString(...values: unknown[]): string | undefined {
-  for (const value of values) {
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
-  }
-  return undefined;
-}
-
-function formatClaudeApiError(error: unknown): string {
-  if (typeof error === "string" && error.trim()) {
-    return error.trim();
-  }
-  if (typeof error !== "object" || error === null) {
-    return "Unknown Claude error";
-  }
-  const nestedError = objectProperty(error, "error");
-  const nestedNestedError = objectProperty(nestedError, "error");
-  const status = objectProperty(error, "status");
-  const statusText = firstString(objectProperty(error, "statusText"));
-  const message = firstString(
-    objectProperty(error, "message"),
-    objectProperty(nestedError, "message"),
-    objectProperty(nestedNestedError, "message"),
-    statusText,
-  );
-  const statusPrefix =
-    typeof status === "number" || typeof status === "string" ? `API Error: ${status}` : "API Error";
-  const base = message ? `${statusPrefix} ${message}` : statusText ? `${statusPrefix} ${statusText}` : statusPrefix;
-  if (status === 503 || status === "503") {
-    return `${base}. This is a server-side issue, usually temporary.`;
-  }
-  return base;
-}
-
-function claudeApiErrorNotificationLevel(error: unknown): "warning" | "critical" {
-  const status = objectProperty(error, "status");
-  if (status === 429 || status === "429" || status === 503 || status === "503") {
-    return "warning";
-  }
-  return "critical";
-}
-
 export function createClaudeStoredActivityState(): ClaudeStoredActivityState {
   return {
     processedRecordKeys: new Set(),
@@ -252,6 +205,10 @@ function trimClaudeTranscriptBlankLines(value: string): string {
     .replace(/(?:\r?\n[ \t]*)+$/, "");
 }
 
+function stripClaudeTurnAbortedContext(value: string): string {
+  return value.replace(/<turn_aborted>[\s\S]*?<\/turn_aborted>/gi, "");
+}
+
 function isClaudeInterruptPlaceholderText(value: unknown): boolean {
   const normalized = normalizeClaudeTranscriptText(value);
   return normalized !== null && /^\[Request interrupted by user(?:[^\]]*)\]$/.test(normalized);
@@ -259,6 +216,18 @@ function isClaudeInterruptPlaceholderText(value: unknown): boolean {
 
 function isClaudeNoResponsePlaceholderText(value: unknown): boolean {
   return normalizeClaudeTranscriptText(value) === "No response requested.";
+}
+
+function isClaudeResumeInterruptedBannerText(value: unknown): boolean {
+  const normalized = normalizeClaudeTranscriptText(value);
+  return (
+    normalized !== null &&
+    (/^Continue from where you left off\.\s+Conversation interrupted\s+[—-]\s+The previous turn was interrupted\.$/.test(
+      normalized,
+    ) ||
+      normalized === "Continue from where you left off." ||
+      /^Conversation interrupted\s+[—-]\s+The previous turn was interrupted\.$/.test(normalized))
+  );
 }
 
 function isClaudeLocalCommandStdout(value: unknown): boolean {
@@ -270,9 +239,17 @@ function isClaudeLocalCommandStdout(value: unknown): boolean {
 }
 
 function isClaudeTranscriptNoiseText(value: unknown): boolean {
+  if (
+    typeof value === "string" &&
+    stripClaudeTurnAbortedContext(value).trim().length === 0 &&
+    /<turn_aborted>[\s\S]*?<\/turn_aborted>/i.test(value)
+  ) {
+    return true;
+  }
   return (
     isClaudeInterruptPlaceholderText(value) ||
     isClaudeNoResponsePlaceholderText(value) ||
+    isClaudeResumeInterruptedBannerText(value) ||
     isClaudeLocalCommandStdout(value)
   );
 }
@@ -319,7 +296,7 @@ function isClaudeNoResponsePlaceholderContent(content: unknown): boolean {
 
 function extractUserMessageText(content: unknown): string | null {
   if (typeof content === "string") {
-    const text = trimClaudeTranscriptBlankLines(content);
+    const text = trimClaudeTranscriptBlankLines(stripClaudeTurnAbortedContext(content));
     if (!text.trim() || isClaudeTranscriptNoiseText(text)) {
       return null;
     }
@@ -327,7 +304,7 @@ function extractUserMessageText(content: unknown): string | null {
   }
   const parts = collectClaudeTextContentParts(content).filter(
     (part) => !isClaudeTranscriptNoiseText(part),
-  );
+  ).map(stripClaudeTurnAbortedContext);
   if (parts.length === 0) {
     return null;
   }
@@ -338,7 +315,7 @@ function extractUserMessageText(content: unknown): string | null {
 function extractAssistantMessageText(content: unknown): string | null {
   const parts = collectClaudeTextContentParts(content).filter(
     (part) => !isClaudeTranscriptNoiseText(part),
-  );
+  ).map(stripClaudeTurnAbortedContext);
   if (parts.length === 0) {
     return null;
   }
@@ -451,6 +428,10 @@ function timelineIdentityProps(identity: TimelineIdentity | undefined): { identi
   return identity !== undefined ? { identity } : {};
 }
 
+function turnIdentityProps(identity: TimelineTurnIdentity | undefined): { identity?: TimelineTurnIdentity } {
+  return identity !== undefined ? { identity } : {};
+}
+
 function createStoredClaudeIdentity(
   record: ClaudeRawRecord,
   itemKind: "user_message" | "assistant_message" | "system",
@@ -461,6 +442,24 @@ function createStoredClaudeIdentity(
     providerSessionId: providerSessionId ?? record.sessionId,
     recordUuid,
     itemKind,
+    origin: "history",
+  });
+}
+
+function createStoredClaudeTurnIdentity(
+  turnId: string | undefined,
+  providerSessionId?: string,
+): TimelineTurnIdentity | undefined {
+  if (!turnId?.startsWith("turn:")) {
+    return undefined;
+  }
+  const recordUuid = turnId.slice("turn:".length);
+  if (!recordUuid) {
+    return undefined;
+  }
+  return createClaudeTimelineTurnIdentity({
+    providerSessionId,
+    recordUuid,
     origin: "history",
   });
 }
@@ -697,23 +696,6 @@ function translateClaudeRecordsToActivities(
       }
 
       if (isClaudeInterruptPlaceholderContent(record.message.content)) {
-        if (latestTurnId !== undefined) {
-          activities.push({
-            recordKey: key,
-            meta: {
-              provider: "claude",
-              channel: "structured_persisted",
-              authority: "derived",
-              raw: record,
-              ts: nextTimestamp(record.timestamp),
-            },
-            activity: {
-              type: "turn_canceled",
-              turnId: latestTurnId,
-              reason: "interrupted",
-            },
-          });
-        }
         continue;
       }
 
@@ -722,21 +704,6 @@ function translateClaudeRecordsToActivities(
         latestTurnId !== undefined &&
         !latestTurnHasAssistantOutput
       ) {
-        activities.push({
-          recordKey: key,
-          meta: {
-            provider: "claude",
-            channel: "structured_persisted",
-            authority: "derived",
-            raw: record,
-            ts: nextTimestamp(record.timestamp),
-          },
-          activity: {
-            type: "turn_canceled",
-            turnId: latestTurnId,
-            reason: "interrupted",
-          },
-        });
         continue;
       }
 
@@ -770,26 +737,10 @@ function translateClaudeRecordsToActivities(
       continue;
     }
 
-    if (record.type === "system") {
-      if (record.subtype === "api_error") {
-        activities.push({
-          recordKey: key,
-          meta: {
-            provider: "claude",
-            channel: "structured_persisted",
-            authority: "derived",
-            raw: record,
-            ts: nextTimestamp(record.timestamp),
-          },
-          activity: {
-            type: "notification",
-            level: claudeApiErrorNotificationLevel(record.error),
-            title: "Claude API error",
-            body: formatClaudeApiError(record.error),
-          },
-        });
-      }
-    }
+    // Claude zellij/native mode treats Chat as a transcript mirror. Provider
+    // system records such as API overload/rate-limit errors are runtime status,
+    // not chat turns; rendering them as timeline notifications makes them drift
+    // relative to user/assistant bubbles during history backfill.
   }
 
   if (options.state) {

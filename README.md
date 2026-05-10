@@ -125,6 +125,7 @@ npm run typecheck
 npm run test:provider-contracts
 npm run test:web
 npm run test:runtime
+npm run test:regression:e2e-browser
 npm run test:native-tui
 npm run test:zellij-tui-auto
 npm run test:zellij-tui
@@ -184,10 +185,9 @@ RAH now uses five test tiers:
   - `real-browser-providers`
   - `provider-flows`
 - release/CI gate
-  - provider smoke should run only in an environment where the matching provider CLI and account
-    are already configured
-  - provider smoke should be selected per provider, not treated as one universal gate for every
-    machine
+  - `npm run test:regression:e2e-browser`
+  - runs real Codex, Claude, and OpenCode browser smoke against the current local machine
+  - requires matching provider CLIs, account login, quota, and network to be healthy
 
 Detailed provider regression coverage is tracked in `docs/provider-regression-testing.zh-CN.md`.
 
@@ -198,8 +198,13 @@ OpenCode with fake provider backends. `native-browser-webkit` and `native-browse
 same browser smoke in alternate engines. The smoke records screenshots for Chat mirror, Web TUI,
 reload replay, and Web resume history, and asserts message ordering, duplicate prevention, Stop
 state convergence, dirty-prompt blocking, and absence of unexpected provider-event/loading-history
-noise on new live sessions. Older provider-specific browser smoke commands are real provider
-diagnostics and do not replace the native local server probe or the deterministic browser smoke.
+noise on new live sessions.
+
+The formal handoff gate is `npm run test:regression:e2e-browser`. It runs the real provider browser
+smokes for Codex, Claude, and OpenCode and hard-fails on the regressions that have historically hurt
+human testing: duplicate bubbles, wrong message order, Stop not disappearing, repeated Stop exiting a
+TUI, interrupt notices duplicating/drifting, history replay noise, claim/resume duplication, and
+follow-up Web chat turns not reaching the provider.
 
 Manual QA evidence for this branch is checked by:
 
@@ -216,13 +221,13 @@ RAH_NATIVE_MANUAL_QA_TEMPLATE_OUTPUT=test-results/native-manual-qa.json npm run 
 The verifier records a `worktreeFingerprint`, so pass results are tied to the exact dirty worktree
 snapshot being tested, not just the last commit.
 
-Provider smoke is intentionally **not** treated as a universal local gate. Installed CLI binaries do
-not prove authentication, quota, or account access.
+Provider smoke is intentionally tied to this local workstation. Installed CLI binaries do not prove
+authentication, quota, or account access.
 
-`npm run test:smoke:browser-providers` is the deterministic browser gate and currently aliases
-`test:smoke:native-browser`. Use `npm run test:smoke:real-browser-providers` only on a known-good
-local machine with the matching core provider CLIs authenticated. Real provider smoke is not a
-default gate. Different machines may have:
+`npm run test:smoke:browser-providers` is the deterministic fake browser gate and currently aliases
+`test:smoke:native-browser`. `npm run test:regression:e2e-browser` and
+`npm run test:smoke:real-browser-providers` require a known-good local machine with the matching core
+provider CLIs authenticated. Different machines may have:
 
 - only some provider CLIs installed
 - valid binaries but missing login/auth

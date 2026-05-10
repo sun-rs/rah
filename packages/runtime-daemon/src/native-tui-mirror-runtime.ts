@@ -104,16 +104,17 @@ export class NativeTuiMirrorRuntime {
     meta: ProviderActivityMeta,
     activity: ProviderActivity,
   ): RahEvent[] {
+    const activityWithClientInput = attachSubmittedClientInput(native, activity);
     const activeTurnId = this.deps.sessionStore.getSession(native.sessionId)?.activeTurnId;
-    const nextPromptState = nextPromptStateFromActivity(native.promptState, activity);
-    if (shouldIgnoreStaleMirrorStateActivity(native, meta, activity, nextPromptState)) {
+    const nextPromptState = nextPromptStateFromActivity(native.promptState, activityWithClientInput);
+    if (shouldIgnoreStaleMirrorStateActivity(native, meta, activityWithClientInput, nextPromptState)) {
       return [];
     }
     const shouldClearDirtyPromptForCurrentTurn =
       native.promptState === "prompt_dirty" &&
-      isTurnEndingActivity(activity) &&
-      (activity.type === "turn_canceled" ||
-        (activeTurnId !== undefined && activity.turnId === activeTurnId));
+      isTurnEndingActivity(activityWithClientInput) &&
+      (activityWithClientInput.type === "turn_canceled" ||
+        (activeTurnId !== undefined && activityWithClientInput.turnId === activeTurnId));
     const events = applyProviderActivity(
       {
         eventBus: this.deps.eventBus,
@@ -122,7 +123,7 @@ export class NativeTuiMirrorRuntime {
       },
       native.sessionId,
       meta,
-      activity,
+      activityWithClientInput,
     );
     if (shouldClearDirtyPromptForCurrentTurn) {
       native.promptTracker.draftText = "";
@@ -132,8 +133,8 @@ export class NativeTuiMirrorRuntime {
     } else if (
       native.promptState !== "prompt_dirty" &&
       native.promptTracker.draftText.length === 0 &&
-      activity.type === "timeline_item" &&
-      activity.item.kind === "assistant_message" &&
+      activityWithClientInput.type === "timeline_item" &&
+      activityWithClientInput.item.kind === "assistant_message" &&
       native.provider === "claude"
     ) {
       if (shouldIgnoreStaleMirrorPromptClean(native, meta)) {
@@ -182,4 +183,46 @@ export class NativeTuiMirrorRuntime {
     );
     native.mirrorFailureWarningEmitted = alreadyLogged || logged;
   }
+}
+
+function attachSubmittedClientInput(
+  native: NativeTuiSessionState,
+  activity: ProviderActivity,
+): ProviderActivity {
+  if (
+    activity.type !== "timeline_item" ||
+    activity.item.kind !== "user_message" ||
+    activity.item.clientMessageId !== undefined
+  ) {
+    pruneSubmittedInputs(native);
+    return activity;
+  }
+  const inputs = native.submittedInputs;
+  if (!inputs || inputs.length === 0) {
+    return activity;
+  }
+  const userText = activity.item.text;
+  const matchIndex = inputs.findIndex((input) => input.text === userText);
+  if (matchIndex < 0) {
+    pruneSubmittedInputs(native);
+    return activity;
+  }
+  const [match] = inputs.splice(matchIndex, 1);
+  return {
+    ...activity,
+    item: {
+      ...activity.item,
+      ...(match?.clientMessageId !== undefined ? { clientMessageId: match.clientMessageId } : {}),
+      ...(match?.clientTurnId !== undefined ? { clientTurnId: match.clientTurnId } : {}),
+    },
+  };
+}
+
+function pruneSubmittedInputs(native: NativeTuiSessionState): void {
+  const inputs = native.submittedInputs;
+  if (!inputs || inputs.length === 0) {
+    return;
+  }
+  const cutoff = Date.now() - 10 * 60_000;
+  native.submittedInputs = inputs.filter((input) => Date.parse(input.submittedAt) >= cutoff);
 }

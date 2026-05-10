@@ -399,6 +399,8 @@ export class DebugEngine {
         item: {
           kind: "user_message",
           text: request.text,
+          ...(request.clientMessageId !== undefined ? { clientMessageId: request.clientMessageId } : {}),
+          ...(request.clientTurnId !== undefined ? { clientTurnId: request.clientTurnId } : {}),
         },
       },
     });

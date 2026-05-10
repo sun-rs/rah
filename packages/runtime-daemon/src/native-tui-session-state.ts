@@ -11,6 +11,16 @@ export type NativeTuiQueuedInput = {
   clientId: string;
   text: string;
   queuedAt: string;
+  clientMessageId?: string;
+  clientTurnId?: string;
+};
+
+export type NativeTuiSubmittedInput = {
+  clientId: string;
+  text: string;
+  submittedAt: string;
+  clientMessageId?: string;
+  clientTurnId?: string;
 };
 
 export type NativeTuiSessionState = {
@@ -24,16 +34,19 @@ export type NativeTuiSessionState = {
   promptState: TerminalWrapperPromptState;
   promptTracker: LocalTerminalPromptTracker;
   queuedInputs: NativeTuiQueuedInput[];
+  submittedInputs?: NativeTuiSubmittedInput[];
   lastInjectedInputAtMs?: number;
   clearPromptBeforeNextInput?: boolean;
   stopPending?: boolean;
   stopTurnId?: string;
   stopTimer?: ReturnType<typeof setTimeout>;
+  lastInterruptCompletedAtMs?: number;
   queuedDrainTimer?: ReturnType<typeof setTimeout>;
   recentOutputTail?: string;
   bindingTimer?: ReturnType<typeof setInterval>;
   bindingWarningEmitted?: boolean;
   mirrorTimer?: ReturnType<typeof setInterval>;
+  mirrorWakeTimer?: ReturnType<typeof setTimeout>;
   mirrorWarningEmitted?: boolean;
   mirrorFailureWarningEmitted?: boolean;
   providerMirror?: NativeTuiProviderMirror;
@@ -63,6 +76,10 @@ export function clearNativeTuiSessionTimers(native: NativeTuiSessionState | unde
   if (native.mirrorTimer) {
     clearInterval(native.mirrorTimer);
     delete native.mirrorTimer;
+  }
+  if (native.mirrorWakeTimer) {
+    clearTimeout(native.mirrorWakeTimer);
+    delete native.mirrorWakeTimer;
   }
   if (native.stopTimer) {
     clearTimeout(native.stopTimer);

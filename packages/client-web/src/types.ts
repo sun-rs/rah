@@ -94,7 +94,16 @@ export type FeedEntry =
       url?: string;
       ts: string;
       turnId?: string;
+      canonicalTurnId?: TimelineIdentity["canonicalTurnId"];
+      interruptAnchorKey?: string;
     };
+
+interface InterruptIntent {
+  requestedAt: string;
+  anchorKey?: string;
+  turnId?: string;
+  canonicalTurnId?: TimelineIdentity["canonicalTurnId"];
+}
 
 export interface SessionProjection {
   summary: SessionSummary;
@@ -103,6 +112,7 @@ export interface SessionProjection {
   lastSeq: number;
   currentRuntimeStatus?: Extract<RahEvent, { type: "runtime.status" }>["payload"]["status"];
   history: HistorySyncState;
+  pendingInterrupt?: InterruptIntent;
 }
 
 export interface HistorySyncState {
@@ -112,6 +122,44 @@ export interface HistorySyncState {
   generation: number;
   authoritativeApplied: boolean;
   lastError: string | null;
+}
+
+export function markPendingInterruptIntent(current: SessionProjection): SessionProjection {
+  const anchor = findLastInterruptIntentAnchor(current.feed);
+  const intent: InterruptIntent = {
+    requestedAt: new Date().toISOString(),
+    ...(anchor?.key !== undefined ? { anchorKey: anchor.key } : {}),
+    ...(anchor?.turnId !== undefined ? { turnId: anchor.turnId } : {}),
+    ...(anchor?.canonicalTurnId !== undefined ? { canonicalTurnId: anchor.canonicalTurnId } : {}),
+  };
+  return {
+    ...current,
+    pendingInterrupt: intent,
+  };
+}
+
+function findLastInterruptIntentAnchor(feed: FeedEntry[]):
+  | { key: string; turnId?: string; canonicalTurnId?: TimelineIdentity["canonicalTurnId"] }
+  | undefined {
+  for (let index = feed.length - 1; index >= 0; index--) {
+    const entry = feed[index];
+    if (
+      !entry ||
+      entry.kind === "notification" ||
+      entry.kind === "runtime_status" ||
+      entry.kind === "attention"
+    ) {
+      continue;
+    }
+    return {
+      key: entry.key,
+      ...("turnId" in entry && entry.turnId !== undefined ? { turnId: entry.turnId } : {}),
+      ...("canonicalTurnId" in entry && entry.canonicalTurnId !== undefined
+        ? { canonicalTurnId: entry.canonicalTurnId }
+        : {}),
+    };
+  }
+  return undefined;
 }
 
 export interface SessionMap {
@@ -181,6 +229,33 @@ function shouldApplySummaryMutation(current: SessionProjection, event: RahEvent)
     default:
       return true;
   }
+}
+
+function sessionSummaryIsActivelyRunning(summary: SessionSummary): boolean {
+  return [
+    "starting",
+    "running",
+    "thinking",
+    "streaming",
+    "retrying",
+  ].includes(summary.session.runtimeState);
+}
+
+function nextRuntimeStatusForEvent(
+  current: SessionProjection,
+  nextSummary: SessionSummary,
+  event: RahEvent,
+): Extract<RahEvent, { type: "runtime.status" }>["payload"]["status"] | undefined {
+  if (event.type === "runtime.status") {
+    return event.payload.status;
+  }
+  if (event.type === "turn.completed" || event.type === "turn.failed" || event.type === "turn.canceled") {
+    return undefined;
+  }
+  if (!sessionSummaryIsActivelyRunning(nextSummary)) {
+    return undefined;
+  }
+  return current.currentRuntimeStatus;
 }
 
 function summaryWithRuntimeState(
@@ -331,6 +406,32 @@ function applyTimelineEvent(
     }
   }
 
+  const clientMessageId = readTimelineClientMessageId(event.payload.item);
+  if (clientMessageId) {
+    const clientMessageIndex = feed.findIndex(
+      (candidate) =>
+        candidate.kind === "timeline" &&
+        candidate.item.kind === "user_message" &&
+        readTimelineClientMessageId(candidate.item) === clientMessageId &&
+        canMergeTimelineCanonicalIdentity(candidate, identityFields),
+    );
+    if (clientMessageIndex >= 0) {
+      const next = [...feed];
+      const current = next[clientMessageIndex] as Extract<FeedEntry, { kind: "timeline" }>;
+      next[clientMessageIndex] = createTimelineEntry(
+        {
+          key: current.key,
+          kind: "timeline",
+          item: event.payload.item,
+          ts: event.ts,
+          ...mergeTimelineIdentityFields(current, identityFields),
+        },
+        event.turnId ?? current.turnId,
+      );
+      return next;
+    }
+  }
+
   const messageId = readTimelineMessageId(event.payload.item);
   if (messageId) {
     const messageIndex = feed.findIndex(
@@ -358,16 +459,36 @@ function applyTimelineEvent(
     }
   }
 
-  if (event.type === "timeline.item.added" && hasTimelineText(event.payload.item)) {
-    const incomingItem = event.payload.item;
-    const duplicateIndex = feed.findIndex(
-      (candidate) =>
-        candidate.kind === "timeline" &&
-        candidate.item.kind === incomingItem.kind &&
-        hasTimelineText(candidate.item) &&
-        candidate.item.text === incomingItem.text &&
-        canMergeTimelineCanonicalIdentity(candidate, identityFields) &&
-        isTimelineMetadataUpgrade(candidate, event),
+  if (event.type === "timeline.item.added" && event.payload.item.kind === "user_message") {
+    const incomingUserItem = event.payload.item;
+    const weakEchoIndex = findWeakUserEchoIndex(feed, incomingUserItem, identityFields);
+    if (weakEchoIndex >= 0) {
+      if (
+        identityFields.canonicalItemId === undefined &&
+        incomingUserItem.messageId === undefined &&
+        incomingUserItem.clientMessageId === undefined
+      ) {
+        return feed;
+      }
+      const next = [...feed];
+      const weakEcho = next[weakEchoIndex] as Extract<FeedEntry, { kind: "timeline" }>;
+      next[weakEchoIndex] = createTimelineEntry(
+        {
+          key: weakEcho.key,
+          kind: "timeline",
+          item: event.payload.item,
+          ts: event.ts,
+          ...mergeTimelineIdentityFields(weakEcho, identityFields),
+        },
+        event.turnId ?? weakEcho.turnId,
+      );
+      return next;
+    }
+
+    const duplicateIndex = findOptimisticUserMessageIndex(
+      feed,
+      incomingUserItem.text,
+      identityFields,
     );
     if (duplicateIndex >= 0) {
       const next = [...feed];
@@ -384,21 +505,16 @@ function applyTimelineEvent(
       );
       return next;
     }
-  }
 
-  if (event.type === "timeline.item.added" && event.payload.item.kind === "user_message") {
-    const incomingUserItem = event.payload.item;
-    const duplicateIndex = findDuplicateUserMessageIndex(
+    const duplicateEchoIndex = findSameTurnUserEchoIndex(
       feed,
       incomingUserItem.text,
       event.turnId,
-      event.ts,
-      identityFields,
     );
-    if (duplicateIndex >= 0) {
+    if (duplicateEchoIndex >= 0) {
       const next = [...feed];
-      const duplicate = next[duplicateIndex] as Extract<FeedEntry, { kind: "timeline" }>;
-      next[duplicateIndex] = createTimelineEntry(
+      const duplicate = next[duplicateEchoIndex] as Extract<FeedEntry, { kind: "timeline" }>;
+      next[duplicateEchoIndex] = createTimelineEntry(
         {
           key: duplicate.key,
           kind: "timeline",
@@ -475,14 +591,12 @@ function insertTimelineEntry(
   return [...feed, entry];
 }
 
-function findDuplicateUserMessageIndex(
+function findOptimisticUserMessageIndex(
   feed: FeedEntry[],
   text: string,
-  turnId: string | undefined,
-  incomingTs: string,
   incomingIdentity: TimelineIdentityFields,
 ): number {
-  for (let index = feed.length - 1; index >= 0; index--) {
+  for (let index = 0; index < feed.length; index++) {
     const candidate = feed[index];
     if (
       candidate?.kind !== "timeline" ||
@@ -494,17 +608,70 @@ function findDuplicateUserMessageIndex(
     if (!canMergeTimelineCanonicalIdentity(candidate, incomingIdentity)) {
       continue;
     }
-    if (
-      isOptimisticUserMessageEntry(candidate) &&
-      entriesAreWithinLiveHistoryEchoWindow(candidate.ts, incomingTs)
-    ) {
+    if (isOptimisticUserMessageEntry(candidate)) {
       return index;
     }
+  }
+  return -1;
+}
+
+function findWeakUserEchoIndex(
+  feed: FeedEntry[],
+  incoming: Extract<TimelineItem, { kind: "user_message" }>,
+  incomingIdentity: TimelineIdentityFields,
+): number {
+  const incomingAuthoritative =
+    incomingIdentity.canonicalItemId !== undefined ||
+    incoming.messageId !== undefined ||
+    incoming.clientMessageId !== undefined;
+  const incomingWeak = !incomingAuthoritative;
+  for (let index = feed.length - 1; index >= 0; index--) {
+    const candidate = feed[index];
     if (
-      (candidate.turnId !== undefined &&
-        turnId !== undefined &&
-        candidate.turnId === turnId) ||
-      isTrailingUserMessageEcho(feed, index)
+      candidate?.kind !== "timeline" ||
+      candidate.item.kind !== "user_message" ||
+      candidate.item.text !== incoming.text
+    ) {
+      continue;
+    }
+    const candidateIsUnresolvedOptimistic =
+      candidate.key.startsWith("optimistic:user:") && candidate.turnId === undefined;
+    const candidateAuthoritative =
+      !candidateIsUnresolvedOptimistic &&
+      (candidate.canonicalItemId !== undefined ||
+        candidate.item.messageId !== undefined ||
+        candidate.item.clientMessageId !== undefined);
+    if ((incomingWeak && candidateAuthoritative) || (incomingAuthoritative && !candidateAuthoritative)) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function findSameTurnUserEchoIndex(
+  feed: FeedEntry[],
+  text: string,
+  incomingTurnId: string | undefined,
+): number {
+  if (incomingTurnId === undefined) {
+    return -1;
+  }
+  for (let index = feed.length - 1; index >= 0; index--) {
+    const candidate = feed[index];
+    if (
+      candidate?.kind === "notification" ||
+      candidate?.kind === "runtime_status" ||
+      candidate?.kind === "attention"
+    ) {
+      continue;
+    }
+    if (candidate?.kind !== "timeline") {
+      continue;
+    }
+    if (
+      candidate.turnId === incomingTurnId &&
+      candidate.item.kind === "user_message" &&
+      candidate.item.text === text
     ) {
       return index;
     }
@@ -518,31 +685,8 @@ function isOptimisticUserMessageEntry(
   return (
     entry.kind === "timeline" &&
     entry.key.startsWith("optimistic:user:") &&
+    entry.turnId === undefined &&
     entry.item.kind === "user_message"
-  );
-}
-
-function entriesAreWithinLiveHistoryEchoWindow(leftTsText: string, rightTsText: string): boolean {
-  const leftTs = Date.parse(leftTsText);
-  const rightTs = Date.parse(rightTsText);
-  return (
-    Number.isFinite(leftTs) &&
-    Number.isFinite(rightTs) &&
-    Math.abs(leftTs - rightTs) <= 60_000
-  );
-}
-
-function isTrailingUserMessageEcho(feed: FeedEntry[], index: number): boolean {
-  return feed.slice(index + 1).every((entry) => entry.kind === "runtime_status");
-}
-
-function hasTimelineText(
-  item: TimelineItem,
-): item is Extract<TimelineItem, { text: string }> {
-  return (
-    item.kind === "user_message" ||
-    item.kind === "assistant_message" ||
-    item.kind === "reasoning"
   );
 }
 
@@ -602,35 +746,15 @@ function mergeOrReplaceTimelineItem(
   };
 }
 
-function isTimelineMetadataUpgrade(
-  candidate: Extract<FeedEntry, { kind: "timeline" }>,
-  event: Extract<RahEvent, { type: "timeline.item.added" | "timeline.item.updated" }>,
-): boolean {
-  if (!hasTimelineText(candidate.item) || !hasTimelineText(event.payload.item)) {
-    return false;
-  }
-  const candidateMessageId = readTimelineMessageId(candidate.item);
-  const eventMessageId = readTimelineMessageId(event.payload.item);
-  if (candidateMessageId !== undefined && eventMessageId !== undefined) {
-    return candidateMessageId === eventMessageId;
-  }
-  if (candidateMessageId !== undefined && eventMessageId === undefined) {
-    return false;
-  }
-  const hasUpgradedIdentity =
-    (candidate.turnId === undefined && event.turnId !== undefined) ||
-    eventMessageId !== undefined;
-  if (hasUpgradedIdentity) {
-    return true;
-  }
-  return candidate.turnId !== undefined && candidate.turnId === event.turnId;
-}
-
 function readTimelineMessageId(item: TimelineItem): string | undefined {
   if (item.kind === "user_message" || item.kind === "assistant_message") {
     return item.messageId;
   }
   return undefined;
+}
+
+function readTimelineClientMessageId(item: TimelineItem): string | undefined {
+  return item.kind === "user_message" ? item.clientMessageId : undefined;
 }
 
 function canMergeTimelineIdentity(current: TimelineItem, incoming: TimelineItem): boolean {
@@ -1215,30 +1339,11 @@ function applyRuntimeStatusEvent(
   feed: FeedEntry[],
   event: Extract<RahEvent, { type: "runtime.status" }>,
 ): FeedEntry[] {
-  if (event.payload.status !== "retrying" && event.payload.status !== "error") {
-    return feed;
-  }
-  const key = `${event.turnId ?? "session"}:runtime:${event.payload.status}`;
-  const entry = createRuntimeStatusEntry(
-    {
-      key,
-      kind: "runtime_status",
-      status: event.payload.status,
-      ...(event.payload.detail !== undefined ? { detail: event.payload.detail } : {}),
-      ...(event.payload.retryCount !== undefined ? { retryCount: event.payload.retryCount } : {}),
-      ts: event.ts,
-    },
-    event.turnId,
-  );
-  const index = feed.findIndex(
-    (candidate) => candidate.kind === "runtime_status" && candidate.key === key,
-  );
-  if (index < 0) {
-    return [...feed, entry];
-  }
-  const next = [...feed];
-  next[index] = entry;
-  return next;
+  void event;
+  // Runtime status is session chrome, not transcript content. Keeping retry /
+  // reconnect state out of the feed prevents it from reordering around turn
+  // notices when live and persisted events interleave.
+  return feed;
 }
 
 function applyTurnStepEvent(
@@ -1256,9 +1361,20 @@ function applyTurnStepEvent(
   const existing = existingIndex >= 0 ? feed[existingIndex] : undefined;
   const existingStep =
     existing?.kind === "timeline" && existing.item.kind === "step" ? existing.item : undefined;
+  const eventTitle = event.type === "turn.step.started" ? event.payload.title : undefined;
+  if (
+    event.source.provider === "opencode" &&
+    eventTitle === undefined &&
+    existingStep?.title === undefined
+  ) {
+    // OpenCode emits anonymous step markers for internal model/tool cycles.
+    // Tool calls and reasoning already carry the user-visible content; showing
+    // these markers as chat cards creates confusing "Step N / stop" bubbles.
+    return feed;
+  }
   const title =
     event.type === "turn.step.started"
-      ? event.payload.title ?? existingStep?.title ?? `Step ${index + 1}`
+      ? eventTitle ?? existingStep?.title ?? `Step ${index + 1}`
       : existingStep?.title ?? `Step ${index + 1}`;
   const status =
     event.type === "turn.step.started"
@@ -1316,8 +1432,33 @@ function applyNotificationEvent(
 function applyTurnCanceledEvent(
   feed: FeedEntry[],
   event: Extract<RahEvent, { type: "turn.canceled" }>,
-): FeedEntry[] {
-  const key = `${event.turnId}:turn:canceled`;
+  pendingInterrupt: InterruptIntent | undefined,
+): { feed: FeedEntry[]; pendingInterrupt?: InterruptIntent | undefined } {
+  const canonicalTurnId = event.payload.identity?.canonicalTurnId;
+  const turnKey = canonicalTurnId ?? event.turnId;
+  const intentMatches =
+    pendingInterrupt !== undefined &&
+    (pendingInterrupt.canonicalTurnId === undefined ||
+      canonicalTurnId === undefined ||
+      pendingInterrupt.canonicalTurnId === canonicalTurnId) &&
+    (pendingInterrupt.turnId === undefined ||
+      event.turnId === undefined ||
+      pendingInterrupt.turnId === event.turnId);
+  const intentAnchorKey = intentMatches ? pendingInterrupt?.anchorKey : undefined;
+  const resolvedAnchorKey =
+    intentAnchorKey ??
+    findLastTurnAnchorKey(feed, { turnId: event.turnId, canonicalTurnId }) ??
+    findExistingInterruptAnchorKey(feed, {
+      turnId: event.turnId,
+      canonicalTurnId,
+    }) ??
+    (turnKey === undefined ? findLastTurnAnchorKey(feed, {}) : undefined);
+  const key =
+    turnKey !== undefined && resolvedAnchorKey === undefined
+      ? `${turnKey}:turn:canceled`
+      : resolvedAnchorKey !== undefined
+        ? `anchor:${resolvedAnchorKey}:turn:canceled`
+        : `event:${event.id}:turn:canceled`;
   const entry = createNotificationEntry(
     {
       key,
@@ -1326,18 +1467,161 @@ function applyTurnCanceledEvent(
       title: "Conversation interrupted",
       body: "The previous turn was interrupted.",
       ts: event.ts,
+      ...(canonicalTurnId !== undefined ? { canonicalTurnId } : {}),
+      ...(resolvedAnchorKey !== undefined ? { interruptAnchorKey: resolvedAnchorKey } : {}),
     },
     event.turnId,
   );
-  const existingIndex = feed.findIndex(
-    (candidate) => candidate.kind === "notification" && candidate.key === key,
-  );
-  if (existingIndex < 0) {
-    return [...feed, entry];
+  const nextFeed = upsertTurnAnchoredNotification(feed, entry, {
+    turnId: event.turnId,
+    canonicalTurnId,
+    anchorKey: resolvedAnchorKey,
+  });
+  return {
+    feed: nextFeed,
+    ...(intentMatches ? {} : pendingInterrupt !== undefined ? { pendingInterrupt } : {}),
+  };
+}
+
+function findExistingInterruptAnchorKey(
+  feed: FeedEntry[],
+  anchor: { turnId?: string | undefined; canonicalTurnId?: string | undefined },
+): string | undefined {
+  for (let index = feed.length - 1; index >= 0; index--) {
+    const entry = feed[index];
+    if (entry?.kind !== "notification" || !isInterruptNotice(entry)) {
+      continue;
+    }
+    if (
+      anchor.canonicalTurnId !== undefined &&
+      entry.canonicalTurnId !== undefined &&
+      entry.canonicalTurnId !== anchor.canonicalTurnId
+    ) {
+      continue;
+    }
+    if (
+      anchor.turnId !== undefined &&
+      entry.turnId !== undefined &&
+      entry.turnId !== anchor.turnId
+    ) {
+      continue;
+    }
+    if (entry.interruptAnchorKey !== undefined) {
+      return entry.interruptAnchorKey;
+    }
   }
-  const next = [...feed];
-  next[existingIndex] = entry;
-  return next;
+  return undefined;
+}
+
+function isInterruptNotice(entry: Extract<FeedEntry, { kind: "notification" }>): boolean {
+  return (
+    entry.title === "Conversation interrupted" &&
+    entry.body === "The previous turn was interrupted."
+  );
+}
+
+function upsertTurnAnchoredNotification(
+  feed: FeedEntry[],
+  entry: Extract<FeedEntry, { kind: "notification" }>,
+  anchor: {
+    turnId?: string | undefined;
+    canonicalTurnId?: string | undefined;
+    anchorKey?: string | undefined;
+  },
+): FeedEntry[] {
+  const resolvedAnchorKey = anchor.anchorKey ?? findLastTurnAnchorKey(feed, anchor);
+  const stripped = feed.filter((candidate) =>
+    !isSameTurnNotification(candidate, entry, { ...anchor, anchorKey: resolvedAnchorKey }),
+  );
+  const anchorIndex = resolvedAnchorKey !== undefined
+    ? stripped.findIndex((candidate) => candidate.key === resolvedAnchorKey)
+    : findLastTurnAnchorIndex(stripped, anchor);
+  if (anchorIndex < 0) {
+    return [...stripped, entry];
+  }
+  return [
+    ...stripped.slice(0, anchorIndex + 1),
+    entry,
+    ...stripped.slice(anchorIndex + 1),
+  ];
+}
+
+function isSameTurnNotification(
+  candidate: FeedEntry,
+  entry: Extract<FeedEntry, { kind: "notification" }>,
+  anchor: {
+    turnId?: string | undefined;
+    canonicalTurnId?: string | undefined;
+    anchorKey?: string | undefined;
+  },
+): boolean {
+  if (candidate.kind !== "notification") {
+    return false;
+  }
+  if (candidate.key === entry.key) {
+    return true;
+  }
+  if (candidate.title !== entry.title || candidate.body !== entry.body) {
+    return false;
+  }
+  if (
+    anchor.canonicalTurnId !== undefined &&
+    candidate.canonicalTurnId === anchor.canonicalTurnId
+  ) {
+    return true;
+  }
+  if (
+    anchor.anchorKey !== undefined &&
+    (candidate.interruptAnchorKey === anchor.anchorKey ||
+      candidate.key === `anchor:${anchor.anchorKey}:turn:canceled`)
+  ) {
+    return true;
+  }
+  if (anchor.turnId !== undefined && candidate.turnId === anchor.turnId) {
+    return true;
+  }
+  if (anchor.turnId !== undefined && candidate.key === `${anchor.turnId}:turn:canceled`) {
+    return true;
+  }
+  return false;
+}
+
+function findLastTurnAnchorIndex(
+  feed: FeedEntry[],
+  anchor: { turnId?: string | undefined; canonicalTurnId?: string | undefined },
+): number {
+  const anchorKey = findLastTurnAnchorKey(feed, anchor);
+  if (anchorKey !== undefined) {
+    return feed.findIndex((entry) => entry.key === anchorKey);
+  }
+  return -1;
+}
+
+function findLastTurnAnchorKey(
+  feed: FeedEntry[],
+  anchor: { turnId?: string | undefined; canonicalTurnId?: string | undefined },
+): string | undefined {
+  const acceptAnyTurn = anchor.turnId === undefined && anchor.canonicalTurnId === undefined;
+  for (let index = feed.length - 1; index >= 0; index--) {
+    const entry = feed[index];
+    if (!entry || entry.kind === "notification" || entry.kind === "runtime_status") {
+      continue;
+    }
+    if (acceptAnyTurn) {
+      return entry.key;
+    }
+    if (
+      anchor.canonicalTurnId !== undefined &&
+      "canonicalTurnId" in entry &&
+      entry.canonicalTurnId === anchor.canonicalTurnId
+    ) {
+      return entry.key;
+    }
+    if (anchor.turnId !== undefined && "turnId" in entry && entry.turnId === anchor.turnId) {
+      return entry.key;
+    }
+  }
+  return undefined;
 }
 
 export function applyEventToProjection(
@@ -1453,6 +1737,7 @@ export function applyEventToProjection(
               : current.summary;
 
   let nextFeed = current.feed;
+  let nextPendingInterrupt = current.pendingInterrupt;
   switch (event.type) {
     case "timeline.item.added":
     case "timeline.item.updated":
@@ -1500,7 +1785,11 @@ export function applyEventToProjection(
       nextFeed = applyTurnStepEvent(nextFeed, event);
       break;
     case "turn.canceled":
-      nextFeed = applyTurnCanceledEvent(nextFeed, event);
+      {
+        const result = applyTurnCanceledEvent(nextFeed, event, nextPendingInterrupt);
+        nextFeed = result.feed;
+        nextPendingInterrupt = result.pendingInterrupt;
+      }
       break;
     case "notification.emitted":
       nextFeed = applyNotificationEvent(nextFeed, event);
@@ -1509,28 +1798,15 @@ export function applyEventToProjection(
       break;
   }
 
+  const nextRuntimeStatus = nextRuntimeStatusForEvent(current, nextSummary, event);
   return {
     summary: nextSummary,
     feed: nextFeed,
     events: [...current.events.slice(-199), event],
     lastSeq: event.seq,
-    ...(event.type === "runtime.status"
-      ? { currentRuntimeStatus: event.payload.status }
-      : event.type === "session.state.changed"
-        ? event.payload.state === "running"
-          ? current.currentRuntimeStatus !== undefined
-            ? { currentRuntimeStatus: current.currentRuntimeStatus }
-            : {}
-          : {}
-        : event.type === "session.failed" ||
-            event.type === "turn.completed" ||
-            event.type === "turn.failed" ||
-            event.type === "turn.canceled"
-          ? {}
-        : current.currentRuntimeStatus !== undefined
-          ? { currentRuntimeStatus: current.currentRuntimeStatus }
-          : {}),
+    ...(nextRuntimeStatus !== undefined ? { currentRuntimeStatus: nextRuntimeStatus } : {}),
     history: current.history,
+    ...(nextPendingInterrupt !== undefined ? { pendingInterrupt: nextPendingInterrupt } : {}),
   };
 }
 
@@ -1547,16 +1823,26 @@ export function sortFeed(feed: FeedEntry[]): FeedEntry[] {
 export function appendOptimisticUserMessage(
   current: SessionProjection,
   text: string,
+  options?: { clientMessageId?: string; clientTurnId?: string },
 ): SessionProjection {
   const ts = new Date().toISOString();
+  const key = options?.clientMessageId
+    ? `optimistic:user:${options.clientMessageId}`
+    : `optimistic:user:${ts}:${Math.random().toString(36).slice(2, 10)}`;
+  const item: Extract<TimelineItem, { kind: "user_message" }> = {
+    kind: "user_message",
+    text,
+    ...(options?.clientMessageId !== undefined ? { clientMessageId: options.clientMessageId } : {}),
+    ...(options?.clientTurnId !== undefined ? { clientTurnId: options.clientTurnId } : {}),
+  };
   return {
     ...current,
     feed: [
       ...current.feed,
       {
-        key: `optimistic:user:${ts}:${Math.random().toString(36).slice(2, 10)}`,
+        key,
         kind: "timeline",
-        item: { kind: "user_message", text },
+        item,
         ts,
       },
     ],
@@ -1566,6 +1852,7 @@ export function appendOptimisticUserMessage(
 export function removeOptimisticUserMessage(
   current: SessionProjection,
   text: string,
+  clientMessageId?: string,
 ): SessionProjection {
   const feed = current.feed.filter(
     (entry) =>
@@ -1573,7 +1860,9 @@ export function removeOptimisticUserMessage(
         entry.kind === "timeline" &&
         entry.key.startsWith("optimistic:user:") &&
         entry.item.kind === "user_message" &&
-        entry.item.text === text
+        (clientMessageId !== undefined
+          ? entry.item.clientMessageId === clientMessageId
+          : entry.item.text === text)
       ),
   );
   if (feed.length === current.feed.length) {

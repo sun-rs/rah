@@ -157,6 +157,31 @@ export function attachCurrentTurn(
   } as ProviderActivity;
 }
 
+function normalizeCurrentTurnLifecycle(
+  activity: ProviderActivity,
+  currentTurnId: string | null,
+): ProviderActivity {
+  if (
+    !currentTurnId ||
+    (activity.type !== "turn_completed" &&
+      activity.type !== "turn_failed" &&
+      activity.type !== "turn_canceled")
+  ) {
+    return activity;
+  }
+  // Some Codex app-server builds emit turn/completed without a stable turn id.
+  // The translator uses "current-turn" as a placeholder; replacing it here keeps
+  // the lifecycle tied to the active web turn and prevents dedupe from swallowing
+  // later completions under the same placeholder.
+  if (activity.turnId !== "current-turn") {
+    return activity;
+  }
+  return {
+    ...activity,
+    turnId: currentTurnId,
+  } as ProviderActivity;
+}
+
 export function publishSessionBootstrap(
   services: RuntimeServices,
   sessionId: string,
@@ -188,7 +213,10 @@ function applyCodexLiveTranslatedItems(
     ) {
       continue;
     }
-    const activity = attachCurrentTurn(item.activity, liveSession.currentTurnId);
+    const activity = attachCurrentTurn(
+      normalizeCurrentTurnLifecycle(item.activity, liveSession.currentTurnId),
+      liveSession.currentTurnId,
+    );
     const events = applyProviderActivity(
       services,
       liveSession.sessionId,

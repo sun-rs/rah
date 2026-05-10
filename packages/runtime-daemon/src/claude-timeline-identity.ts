@@ -1,5 +1,5 @@
-import type { TimelineIdentity, TimelineItem } from "@rah/runtime-protocol";
-import { createTimelineIdentity } from "./timeline-identity";
+import type { TimelineIdentity, TimelineItem, TimelineTurnIdentity } from "@rah/runtime-protocol";
+import { createTimelineIdentity, createTimelineTurnIdentity } from "./timeline-identity";
 
 type ClaudeTimelineItemKind = Extract<
   TimelineItem,
@@ -27,5 +27,20 @@ export function createClaudeTimelineIdentity(args: {
       providerMessageId: args.recordUuid,
       partIndex,
     },
+  });
+}
+
+export function createClaudeTimelineTurnIdentity(args: {
+  providerSessionId?: string | undefined;
+  recordUuid: string;
+  origin: "live" | "history";
+  confidence?: TimelineIdentity["confidence"];
+}): TimelineTurnIdentity {
+  return createTimelineTurnIdentity({
+    provider: "claude",
+    ...(args.providerSessionId !== undefined ? { providerSessionId: args.providerSessionId } : {}),
+    turnKey: `record:${args.recordUuid}`,
+    origin: args.origin,
+    confidence: args.confidence ?? "native",
   });
 }

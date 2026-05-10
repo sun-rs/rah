@@ -63,6 +63,8 @@ export interface LiveOpenCodeSession {
   reasoningId?: string | null;
   modeId: string;
   queuedInputs: SessionInputRequest[];
+  abortRetryTimers?: Array<ReturnType<typeof setTimeout>>;
+  abortPendingTurnId?: string;
 }
 
 const SESSION_SOURCE = {
@@ -439,7 +441,7 @@ export async function startOpenCodeLiveSession(params: {
     submitOpenCodePrompt({
       services,
       liveSession,
-      text: initialPrompt,
+      request: { clientId: "system", text: initialPrompt },
     });
   }
   return {
@@ -599,7 +601,7 @@ export function sendInputToOpenCodeLiveSession(params: {
   submitOpenCodePrompt({
     services,
     liveSession,
-    text: request.text,
+    request,
   });
 }
 
@@ -628,9 +630,13 @@ export async function setOpenCodeLiveSessionMode(params: {
 function submitOpenCodePrompt(params: {
   services: RuntimeServices;
   liveSession: LiveOpenCodeSession;
-  text: string;
+  request: SessionInputRequest;
 }): void {
-  const { services, liveSession, text } = params;
+  const { services, liveSession, request } = params;
+  // Abort retries belong to the previously interrupted turn. If a recovery
+  // prompt starts, stale retry timers must not cancel that new provider turn.
+  clearOpenCodeAbortRetries(liveSession);
+  const { text } = request;
   const turnId = randomUUID();
   for (const activity of startOpenCodeTurn(liveSession.activityState, turnId)) {
     applyActivity(services, liveSession.sessionId, activity);
@@ -638,7 +644,12 @@ function submitOpenCodePrompt(params: {
   applyActivity(services, liveSession.sessionId, {
     type: "timeline_item",
     turnId,
-    item: { kind: "user_message", text },
+    item: {
+      kind: "user_message",
+      text,
+      ...(request.clientMessageId !== undefined ? { clientMessageId: request.clientMessageId } : {}),
+      ...(request.clientTurnId !== undefined ? { clientTurnId: request.clientTurnId } : {}),
+    },
   });
   void promptOpenCodeSessionAsync({
     handle: liveSession.server,
@@ -677,7 +688,7 @@ function drainQueuedOpenCodeInput(
   if (!next) {
     return;
   }
-  submitOpenCodePrompt({ services, liveSession, text: next.text });
+  submitOpenCodePrompt({ services, liveSession, request: next });
 }
 
 function attachOpenCodeEventSink(params: {
@@ -688,9 +699,11 @@ function attachOpenCodeEventSink(params: {
   return subscribeOpenCodeEvents({
     handle: liveSession.server,
     onEvent: (event) => {
-      for (const activity of translateOpenCodeEvent(liveSession.activityState, event)) {
+      const activities = translateOpenCodeEvent(liveSession.activityState, event);
+      for (const activity of activities) {
         applyActivity(services, liveSession.sessionId, activity, event);
       }
+      reconcileOpenCodeAbortProgress(liveSession, activities);
       drainQueuedOpenCodeInput(services, liveSession);
     },
     onError: (error) => {
@@ -712,9 +725,44 @@ export async function closeOpenCodeLiveSession(
   _request?: CloseSessionRequest,
 ): Promise<void> {
   liveSession.queuedInputs.length = 0;
+  clearOpenCodeAbortRetries(liveSession);
   liveSession.stopEvents();
   liveSession.stopHistoryMirror();
   await stopOpenCodeServer(liveSession.server);
+}
+
+function clearOpenCodeAbortRetries(liveSession: LiveOpenCodeSession): void {
+  for (const timer of liveSession.abortRetryTimers ?? []) {
+    clearTimeout(timer);
+  }
+  liveSession.abortRetryTimers = [];
+}
+
+function clearOpenCodePendingAbort(liveSession: LiveOpenCodeSession): void {
+  clearOpenCodeAbortRetries(liveSession);
+  delete liveSession.abortPendingTurnId;
+}
+
+function activityFinishesOpenCodeTurn(activity: ProviderActivity, turnId: string): boolean {
+  return (
+    (activity.type === "turn_completed" ||
+      activity.type === "turn_canceled" ||
+      activity.type === "turn_failed") &&
+    activity.turnId === turnId
+  );
+}
+
+function reconcileOpenCodeAbortProgress(
+  liveSession: LiveOpenCodeSession,
+  activities: readonly ProviderActivity[],
+): void {
+  const abortTurnId = liveSession.abortPendingTurnId;
+  if (!abortTurnId) {
+    return;
+  }
+  if (activities.some((activity) => activityFinishesOpenCodeTurn(activity, abortTurnId))) {
+    clearOpenCodePendingAbort(liveSession);
+  }
 }
 
 export function interruptOpenCodeLiveSession(params: {
@@ -728,22 +776,37 @@ export function interruptOpenCodeLiveSession(params: {
   if (!turnId) {
     return toSessionSummary(services.sessionStore.getSession(liveSession.sessionId)!);
   }
-  void abortOpenCodeSession({
-    handle: liveSession.server,
-    providerSessionId: liveSession.providerSessionId,
-  }).catch((error) => {
-    patchOpenCodeRuntimeError(services, liveSession, error);
-    applyActivity(services, liveSession.sessionId, {
-      type: "runtime_status",
-      status: "error",
-      detail: error instanceof Error ? error.message : String(error),
-      ...(turnId ? { turnId } : {}),
+  liveSession.abortPendingTurnId = turnId;
+  const abortOnce = () => {
+    if (liveSession.abortPendingTurnId !== turnId) {
+      return;
+    }
+    void abortOpenCodeSession({
+      handle: liveSession.server,
+      providerSessionId: liveSession.providerSessionId,
+    }).catch((error) => {
+      patchOpenCodeRuntimeError(services, liveSession, error);
+      applyActivity(services, liveSession.sessionId, {
+        type: "runtime_status",
+        status: "error",
+        detail: error instanceof Error ? error.message : String(error),
+        ...(turnId ? { turnId } : {}),
+      });
     });
+  };
+  abortOnce();
+  clearOpenCodeAbortRetries(liveSession);
+  liveSession.abortRetryTimers = [250, 750, 1500, 2500, 4000, 6500, 9000].map((delayMs) => {
+    const timer = setTimeout(() => {
+      abortOnce();
+    }, delayMs);
+    timer.unref?.();
+    return timer;
   });
-  delete liveSession.activityState.currentTurnId;
   applyActivity(services, liveSession.sessionId, {
-    type: "turn_canceled",
-    reason: "Stop requested",
+    type: "runtime_status",
+    status: "thinking",
+    detail: "Interrupt requested",
     turnId,
   });
   return toSessionSummary(services.sessionStore.getSession(liveSession.sessionId)!);

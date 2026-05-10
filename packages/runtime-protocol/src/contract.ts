@@ -2109,6 +2109,16 @@ function validateTimelineItem(item: TimelineItem, sink: IssueSink, path: string)
 
   switch (item.kind) {
     case "user_message":
+      if (!isOptionalString(item.clientMessageId)) {
+        addIssue(sink, "error", "timeline.client_message_id.invalid", "timeline clientMessageId must be a string", `${path}.clientMessageId`);
+      }
+      if (!isOptionalString(item.clientTurnId)) {
+        addIssue(sink, "error", "timeline.client_turn_id.invalid", "timeline clientTurnId must be a string", `${path}.clientTurnId`);
+      }
+      if (typeof item.text !== "string") {
+        addIssue(sink, "error", "timeline.text.invalid", "timeline text must be a string", `${path}.text`);
+      }
+      break;
     case "assistant_message":
     case "reasoning":
     case "plan":
@@ -2167,7 +2177,7 @@ function validateTimelineIdentity(identity: TimelineIdentity, sink: IssueSink, p
   if (!isNonEmptyString(identity.canonicalTurnId)) {
     addIssue(sink, "error", "timeline.identity.turn_id.invalid", "timeline canonicalTurnId must be non-empty", `${path}.canonicalTurnId`);
   }
-  if (!PROVIDERS.has(identity.provider)) {
+  if (!PROVIDERS.has(identity.provider as ProviderKind | "system")) {
     addIssue(sink, "error", "timeline.identity.provider.invalid", "timeline identity provider is not canonical", `${path}.provider`);
   }
   if (identity.providerSessionId !== undefined && !isNonEmptyString(identity.providerSessionId)) {
@@ -2182,10 +2192,13 @@ function validateTimelineIdentity(identity: TimelineIdentity, sink: IssueSink, p
   if (!isNonEmptyString(identity.itemKey)) {
     addIssue(sink, "error", "timeline.identity.item_key.invalid", "timeline itemKey must be non-empty", `${path}.itemKey`);
   }
-  if (!["live", "history"].includes(identity.origin)) {
+  if (typeof identity.origin !== "string" || !["live", "history"].includes(identity.origin)) {
     addIssue(sink, "error", "timeline.identity.origin.invalid", "timeline identity origin is not canonical", `${path}.origin`);
   }
-  if (!["native", "derived", "provisional", "heuristic"].includes(identity.confidence)) {
+  if (
+    typeof identity.confidence !== "string" ||
+    !["native", "derived", "provisional", "heuristic"].includes(identity.confidence)
+  ) {
     addIssue(sink, "error", "timeline.identity.confidence.invalid", "timeline identity confidence is not canonical", `${path}.confidence`);
   }
   if (identity.contentHash !== undefined && !isNonEmptyString(identity.contentHash)) {
@@ -2193,6 +2206,38 @@ function validateTimelineIdentity(identity: TimelineIdentity, sink: IssueSink, p
   }
   if (identity.sourceCursor !== undefined) {
     validateTimelineSourceCursor(identity.sourceCursor, sink, `${path}.sourceCursor`);
+  }
+}
+
+function validateTimelineTurnIdentity(identity: unknown, sink: IssueSink, path: string) {
+  if (!isRecord(identity)) {
+    addIssue(sink, "error", "timeline.turn_identity.invalid", "timeline turn identity must be an object", path);
+    return;
+  }
+  if (!isNonEmptyString(identity.canonicalTurnId)) {
+    addIssue(sink, "error", "timeline.turn_identity.turn_id.invalid", "timeline canonicalTurnId must be non-empty", `${path}.canonicalTurnId`);
+  }
+  if (
+    typeof identity.provider !== "string" ||
+    !PROVIDERS.has(identity.provider as ProviderKind | "system") ||
+    identity.provider === "system"
+  ) {
+    addIssue(sink, "error", "timeline.turn_identity.provider.invalid", "timeline turn identity provider is not canonical", `${path}.provider`);
+  }
+  if (identity.providerSessionId !== undefined && !isNonEmptyString(identity.providerSessionId)) {
+    addIssue(sink, "error", "timeline.turn_identity.provider_session_id.invalid", "timeline providerSessionId must be non-empty", `${path}.providerSessionId`);
+  }
+  if (!isNonEmptyString(identity.turnKey)) {
+    addIssue(sink, "error", "timeline.turn_identity.turn_key.invalid", "timeline turnKey must be non-empty", `${path}.turnKey`);
+  }
+  if (typeof identity.origin !== "string" || !["live", "history"].includes(identity.origin)) {
+    addIssue(sink, "error", "timeline.turn_identity.origin.invalid", "timeline turn identity origin is not canonical", `${path}.origin`);
+  }
+  if (
+    typeof identity.confidence !== "string" ||
+    !["native", "derived", "provisional", "heuristic"].includes(identity.confidence)
+  ) {
+    addIssue(sink, "error", "timeline.turn_identity.confidence.invalid", "timeline turn identity confidence is not canonical", `${path}.confidence`);
   }
 }
 
@@ -2419,6 +2464,14 @@ function validatePayload(event: RahEvent, sink: IssueSink) {
     case "turn.input.appended":
       if (!isNonEmptyString(event.turnId)) {
         addIssue(sink, "error", "turn.id.missing", "turn events must carry turnId", "turnId");
+      }
+      if (
+        (event.type === "turn.completed" ||
+          event.type === "turn.failed" ||
+          event.type === "turn.canceled") &&
+        payload.identity !== undefined
+      ) {
+        validateTimelineTurnIdentity(payload.identity, sink, "payload.identity");
       }
       break;
     case "timeline.item.added":

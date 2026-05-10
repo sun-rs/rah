@@ -283,7 +283,7 @@ describe("translateCodexRolloutLine", () => {
   });
 
   test("emits a visible canceled turn activity when Codex aborts a plain chat turn", () => {
-    const state = createCodexRolloutTranslationState();
+    const state = createCodexRolloutTranslationState({ providerSessionId: "thread-1" });
 
     translateCodexRolloutLine(
       {
@@ -316,6 +316,8 @@ describe("translateCodexRolloutLine", () => {
     if (canceledTurn.activity.type === "turn_canceled") {
       assert.equal(canceledTurn.activity.turnId, "turn-plain");
       assert.equal(canceledTurn.activity.reason, "interrupted");
+      assert.equal(canceledTurn.activity.identity?.providerSessionId, "thread-1");
+      assert.equal(canceledTurn.activity.identity?.turnKey, "turn:turn-plain");
     }
   });
 

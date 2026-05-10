@@ -144,10 +144,19 @@ export function parseReleaseControlRequest(body: unknown): ReleaseControlRequest
 
 export function parseSessionInputRequest(body: unknown): SessionInputRequest {
   const record = requireObjectBody(body);
-  return {
+  const request: SessionInputRequest = {
     clientId: requireString(record, "clientId"),
     text: requireString(record, "text"),
   };
+  const clientMessageId = optionalString(record, "clientMessageId");
+  const clientTurnId = optionalString(record, "clientTurnId");
+  if (clientMessageId !== undefined) {
+    request.clientMessageId = clientMessageId;
+  }
+  if (clientTurnId !== undefined) {
+    request.clientTurnId = clientTurnId;
+  }
+  return request;
 }
 
 export function parseInterruptSessionRequest(body: unknown): InterruptSessionRequest {

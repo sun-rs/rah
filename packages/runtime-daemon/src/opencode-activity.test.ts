@@ -73,7 +73,7 @@ describe("translateOpenCodeEvent", () => {
       },
     });
 
-    assert.deepEqual(activities, [
+    assert.deepEqual(activities.map(withoutIdentity), [
       {
         type: "runtime_status",
         status: "finished",
@@ -113,7 +113,7 @@ describe("translateOpenCodeEvent", () => {
       },
     });
 
-    assert.deepEqual(activities, [
+    assert.deepEqual(activities.map(withoutIdentity), [
       {
         type: "turn_canceled",
         turnId,
@@ -365,7 +365,7 @@ describe("translateOpenCodeEvent", () => {
     });
   });
 
-  test("does not emit text parts before their message role is known", () => {
+  test("buffers text parts and deltas until their message role is known", () => {
     const state = createOpenCodeActivityState("session-1");
     const earlyText = translateOpenCodeEvent(state, {
       type: "message.part.updated",
@@ -392,6 +392,150 @@ describe("translateOpenCodeEvent", () => {
 
     assert.deepEqual(earlyText, []);
     assert.deepEqual(earlyDelta, []);
+    const message = translateOpenCodeEvent(state, {
+      type: "message.updated",
+      properties: {
+        info: {
+          id: "message-1",
+          sessionID: "session-1",
+          role: "assistant",
+        },
+      },
+    });
+    assert.deepEqual(message.map((activity) => withoutIdentity(activity)), [
+      {
+        type: "timeline_item",
+        turnId: "opencode:message-1",
+        item: {
+          kind: "assistant_message",
+          text: "hello",
+          messageId: "message-1",
+        },
+      },
+      {
+        type: "timeline_item",
+        turnId: "opencode:message-1",
+        item: {
+          kind: "assistant_message",
+          text: "hello world",
+          messageId: "message-1",
+        },
+      },
+    ]);
+  });
+
+  test("buffers OpenCode text deltas until part metadata is known", () => {
+    const state = createOpenCodeActivityState("session-1");
+    translateOpenCodeEvent(state, {
+      type: "message.updated",
+      properties: {
+        info: {
+          id: "assistant-1",
+          sessionID: "session-1",
+          role: "assistant",
+        },
+      },
+    });
+
+    const earlyDelta = translateOpenCodeEvent(state, {
+      type: "message.part.delta",
+      properties: {
+        sessionID: "session-1",
+        messageID: "assistant-1",
+        partID: "text-part",
+        field: "text",
+        delta: "hello",
+      },
+    });
+    const part = translateOpenCodeEvent(state, {
+      type: "message.part.updated",
+      properties: {
+        part: {
+          id: "text-part",
+          sessionID: "session-1",
+          messageID: "assistant-1",
+          type: "text",
+        },
+      },
+    });
+
+    assert.deepEqual(earlyDelta, []);
+    assert.deepEqual(part.map((activity) => withoutIdentity(activity)), [
+      {
+        type: "timeline_item",
+        turnId: "opencode:assistant-1",
+        item: {
+          kind: "assistant_message",
+          text: "hello",
+          messageId: "assistant-1",
+        },
+      },
+    ]);
+  });
+
+  test("emits cumulative OpenCode text deltas for event-first chat", () => {
+    const state = createOpenCodeActivityState("session-1");
+    translateOpenCodeEvent(state, {
+      type: "message.updated",
+      properties: {
+        info: {
+          id: "assistant-1",
+          sessionID: "session-1",
+          role: "assistant",
+        },
+      },
+    });
+    translateOpenCodeEvent(state, {
+      type: "message.part.updated",
+      properties: {
+        part: {
+          id: "text-part",
+          sessionID: "session-1",
+          messageID: "assistant-1",
+          type: "text",
+        },
+      },
+    });
+
+    const first = translateOpenCodeEvent(state, {
+      type: "message.part.delta",
+      properties: {
+        sessionID: "session-1",
+        messageID: "assistant-1",
+        partID: "text-part",
+        field: "text",
+        delta: "hello",
+      },
+    });
+    const second = translateOpenCodeEvent(state, {
+      type: "message.part.delta",
+      properties: {
+        sessionID: "session-1",
+        messageID: "assistant-1",
+        partID: "text-part",
+        field: "text",
+        delta: " world",
+      },
+    });
+
+    assert.deepEqual(withoutIdentity(first[0]!), {
+      type: "timeline_item",
+      turnId: "opencode:assistant-1",
+      item: {
+        kind: "assistant_message",
+        text: "hello",
+        messageId: "assistant-1",
+      },
+    });
+    assert.deepEqual(withoutIdentity(second[0]!), {
+      type: "timeline_item",
+      turnId: "opencode:assistant-1",
+      item: {
+        kind: "assistant_message",
+        text: "hello world",
+        messageId: "assistant-1",
+      },
+    });
   });
 
   test("web-owned sessions ignore late provider user events after idle", () => {
@@ -587,12 +731,7 @@ describe("translateOpenCodeEvent", () => {
       },
     });
 
-    assert.deepEqual(activities, [
-      {
-        type: "turn_step_completed",
-        turnId: "opencode:assistant-1",
-        reason: "stop",
-      },
+    assert.deepEqual(activities.map(withoutIdentity), [
       {
         type: "runtime_status",
         status: "finished",
@@ -631,14 +770,101 @@ describe("translateOpenCodeEvent", () => {
       },
     });
 
-    assert.deepEqual(activities, [
+    assert.deepEqual(activities, []);
+    assert.equal(state.currentTurnId, "opencode:assistant-1");
+  });
+
+  test("deduplicates repeated titled OpenCode step part revisions", () => {
+    const state = createOpenCodeActivityState("session-1");
+    translateOpenCodeEvent(state, {
+      type: "message.updated",
+      properties: {
+        info: {
+          id: "msg-user",
+          sessionID: "session-1",
+          role: "user",
+        },
+      },
+    });
+    translateOpenCodeEvent(state, {
+      type: "message.updated",
+      properties: {
+        info: {
+          id: "msg-assistant",
+          sessionID: "session-1",
+          parentID: "msg-user",
+          role: "assistant",
+        },
+      },
+    });
+
+    const firstStart = translateOpenCodeEvent(state, {
+      type: "message.part.updated",
+      properties: {
+        part: {
+          id: "step-start-1",
+          sessionID: "session-1",
+          messageID: "msg-assistant",
+          type: "step-start",
+          title: "Read files",
+        },
+      },
+    });
+    const duplicateStart = translateOpenCodeEvent(state, {
+      type: "message.part.updated",
+      properties: {
+        part: {
+          id: "step-start-1",
+          sessionID: "session-1",
+          messageID: "msg-assistant",
+          type: "step-start",
+          title: "Read files",
+        },
+      },
+    });
+    const firstFinish = translateOpenCodeEvent(state, {
+      type: "message.part.updated",
+      properties: {
+        part: {
+          id: "step-finish-1",
+          sessionID: "session-1",
+          messageID: "msg-assistant",
+          type: "step-finish",
+          reason: "tool-calls",
+        },
+      },
+    });
+    const duplicateFinish = translateOpenCodeEvent(state, {
+      type: "message.part.updated",
+      properties: {
+        part: {
+          id: "step-finish-1",
+          sessionID: "session-1",
+          messageID: "msg-assistant",
+          type: "step-finish",
+          reason: "tool-calls",
+        },
+      },
+    });
+
+    assert.deepEqual(firstStart, [
+      {
+        type: "turn_step_started",
+        turnId: "opencode:msg-user",
+        index: 1,
+        title: "Read files",
+      },
+    ]);
+    assert.deepEqual(duplicateStart, []);
+    assert.deepEqual(firstFinish, [
       {
         type: "turn_step_completed",
-        turnId: "opencode:assistant-1",
+        turnId: "opencode:msg-user",
+        index: 1,
         reason: "tool-calls",
       },
     ]);
-    assert.equal(state.currentTurnId, "opencode:assistant-1");
+    assert.deepEqual(duplicateFinish, []);
   });
 
   test("finishes turn on terminal step finish even when message role is not known yet", () => {
@@ -659,11 +885,6 @@ describe("translateOpenCodeEvent", () => {
     });
 
     assert.deepEqual(activities, [
-      {
-        type: "turn_step_completed",
-        turnId: "turn-1",
-        reason: "stop",
-      },
       {
         type: "runtime_status",
         status: "finished",
@@ -775,17 +996,8 @@ describe("translateOpenCodeEvent", () => {
       ),
       true,
     );
-    assert.equal(
-      activities.some((activity) => activity.type === "turn_step_started"),
-      true,
-    );
-    assert.equal(
-      activities.some(
-        (activity) =>
-          activity.type === "turn_step_completed" && activity.reason === "stop",
-      ),
-      true,
-    );
+    assert.equal(activities.some((activity) => activity.type === "turn_step_started"), false);
+    assert.equal(activities.some((activity) => activity.type === "turn_step_completed"), false);
     assert.equal(
       activities.some(
         (activity) =>
@@ -865,5 +1077,77 @@ describe("translateOpenCodeEvent", () => {
         .map((activity) => activity.type),
       ["turn_canceled"],
     );
+  });
+
+  test("starts a fresh history turn for a later user message even if the previous turn is unfinished", () => {
+    const activities = translateOpenCodeHistory([
+      {
+        info: {
+          id: "msg-user-1",
+          sessionID: "session-1",
+          role: "user",
+          time: { created: 1 },
+        },
+        parts: [
+          {
+            id: "part-user-1",
+            sessionID: "session-1",
+            messageID: "msg-user-1",
+            type: "text",
+            text: "first question",
+          },
+        ],
+      },
+      {
+        info: {
+          id: "msg-assistant-1",
+          sessionID: "session-1",
+          role: "assistant",
+          parentID: "msg-user-1",
+          time: { created: 2 },
+        },
+        parts: [
+          {
+            id: "part-reasoning-1",
+            sessionID: "session-1",
+            messageID: "msg-assistant-1",
+            type: "reasoning",
+            text: "still working",
+          },
+        ],
+      },
+      {
+        info: {
+          id: "msg-user-2",
+          sessionID: "session-1",
+          role: "user",
+          time: { created: 3 },
+        },
+        parts: [
+          {
+            id: "part-user-2",
+            sessionID: "session-1",
+            messageID: "msg-user-2",
+            type: "text",
+            text: "second question",
+          },
+        ],
+      },
+    ]);
+
+    assert.deepEqual(
+      activities
+        .filter((activity) => activity.type === "turn_started")
+        .map((activity) => activity.turnId),
+      ["opencode:msg-user-1", "opencode:msg-user-2"],
+    );
+    const secondUser = activities.find(
+      (activity) =>
+        activity.type === "timeline_item" &&
+        activity.item.kind === "user_message" &&
+        activity.item.text === "second question",
+    );
+    assert.equal(secondUser?.type, "timeline_item");
+    assert.equal(secondUser?.turnId, "opencode:msg-user-2");
   });
 });

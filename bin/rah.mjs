@@ -103,7 +103,7 @@ function printUsage() {
 
 function parseManagementArgs(command, argv) {
   let daemonUrl = DEFAULT_DAEMON_URL;
-  let build = command === "start";
+  let build = command === "start" || command === "restart";
   let open = command === "start";
   let follow = false;
   let sessionId;

@@ -9,6 +9,7 @@
 - [当前系统设计总览](./current-system-design.zh-CN.md)
 - [Session 入口与权限边界](./session-entry-capability-boundary.zh-CN.md)
 - [RAH 1.0 RC 说明](./1.0-rc-notes.zh-CN.md)
+- [Claude Zellij Native Mode 边界](./claude-zellij-native-mode.zh-CN.md)
 - [Zellij Mux Backend 状态](../RAH_ZELLIJ_MUX_BACKEND_STATUS.zh-CN.md)
 - [Zellij Mux Backend 完成审计](../RAH_ZELLIJ_MUX_BACKEND_COMPLETION_AUDIT.zh-CN.md)
 - [PTY-first 无缝工作台计划](../RAH_PTY_FIRST_SEAMLESS_WORKBENCH_PLAN.zh-CN.md)

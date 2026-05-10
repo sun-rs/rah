@@ -12,6 +12,27 @@ import {
   type SessionsResponse,
 } from "./types";
 
+function sessionSummaryIsActivelyRunning(summary: SessionProjection["summary"]): boolean {
+  return [
+    "starting",
+    "running",
+    "thinking",
+    "streaming",
+    "retrying",
+  ].includes(summary.session.runtimeState);
+}
+
+function projectionWithFreshSummary(
+  projection: SessionProjection,
+  summary: SessionProjection["summary"],
+): SessionProjection {
+  const next: SessionProjection = { ...projection, summary };
+  if (!sessionSummaryIsActivelyRunning(summary)) {
+    delete next.currentRuntimeStatus;
+  }
+  return next;
+}
+
 type ProjectionStateSlice = {
   projections: Map<string, SessionProjection>;
   workspaceDir: string;
@@ -137,7 +158,7 @@ export function updateSessionSummaryInProjectionMap(
   const next = new Map(projections);
   const projection = next.get(summary.session.id);
   if (projection) {
-    next.set(summary.session.id, { ...projection, summary });
+    next.set(summary.session.id, projectionWithFreshSummary(projection, summary));
   }
   return next;
 }
@@ -189,10 +210,7 @@ export function mergeSessionsIntoProjections(
   for (const [sessionId, existing] of current) {
     const fresh = next.get(sessionId);
     if (fresh) {
-      next.set(sessionId, {
-        ...existing,
-        summary: fresh.summary,
-      });
+      next.set(sessionId, projectionWithFreshSummary(existing, fresh.summary));
     }
   }
   return applyEventsToProjectionMap(

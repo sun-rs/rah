@@ -2,12 +2,16 @@ import type {
   EventAuthority,
   EventChannel,
   TimelineIdentity,
+  TimelineTurnIdentity,
   ToolCall,
   ToolCallArtifact,
   WorkbenchObservation,
 } from "@rah/runtime-protocol";
 import { classifyCodexCommand } from "./codex-command-classifier";
-import { createCodexTimelineIdentity } from "./codex-timeline-identity";
+import {
+  createCodexTimelineIdentity,
+  createCodexTimelineTurnIdentity,
+} from "./codex-timeline-identity";
 import type { ProviderActivity } from "./provider-activity";
 
 export interface CodexTranslatedActivity {
@@ -175,6 +179,10 @@ function shouldSkipDuplicateTimelineText(
 }
 
 function timelineIdentityProps(identity: TimelineIdentity | undefined): { identity?: TimelineIdentity } {
+  return identity !== undefined ? { identity } : {};
+}
+
+function turnIdentityProps(identity: TimelineTurnIdentity | undefined): { identity?: TimelineTurnIdentity } {
   return identity !== undefined ? { identity } : {};
 }
 
@@ -688,6 +696,15 @@ export function translateCodexRolloutLine(
       const turnId =
         typeof payload.turn_id === "string" ? payload.turn_id : turnIdBeforeSync;
       const reason = typeof payload.reason === "string" ? payload.reason : "interrupted";
+      const identity =
+        turnId !== undefined && state.providerSessionId !== undefined
+          ? createCodexTimelineTurnIdentity({
+              providerSessionId: state.providerSessionId,
+              turnId,
+              origin: "history",
+              confidence: "derived",
+            })
+          : undefined;
       return [
         ...(turnId !== undefined
           ? [
@@ -697,6 +714,7 @@ export function translateCodexRolloutLine(
                   type: "turn_canceled" as const,
                   turnId,
                   reason,
+                  ...turnIdentityProps(identity),
                 },
                 "authoritative" as const,
               ),

@@ -50,6 +50,19 @@ CONFIGS = {
     ),
 }
 
+REAL_BROWSER_CASE_IDS = [
+    "REAL-PROVIDER-001",
+    "REAL-CHAT-ORDER-001",
+    "REAL-CHAT-UNIQUE-001",
+    "REAL-STOP-NORMAL-IDLE-001",
+    "REAL-INTERRUPT-ONCE-001",
+    "REAL-INTERRUPT-RECOVERY-001",
+    "REAL-INTERRUPT-MULTI-TURN-001",
+    "REAL-HISTORY-REPLAY-001",
+    "REAL-HISTORY-CLAIM-001",
+    "REAL-SECOND-TURN-001",
+]
+
 SCREENSHOTS: list[str] = []
 
 
@@ -273,6 +286,89 @@ def wait_for_body_text_count(page, text: str, minimum: int, *, timeout_s: int = 
     )
 
 
+def chat_text(page) -> str:
+    return page.get_by_test_id("chat-thread-scroll-container").inner_text()
+
+
+def wait_for_chat_contains(page, text: str, *, timeout_s: int = 90) -> str:
+    started = time.time()
+    last = ""
+    while time.time() - started < timeout_s:
+        last = chat_text(page)
+        if text in last:
+            return last
+        page.wait_for_timeout(1000)
+    raise TimeoutError(f"Timed out waiting for chat to contain {text!r}. Last chat snippet: {last[-1200:]}")
+
+
+def wait_for_chat_text_count(page, text: str, minimum: int, *, timeout_s: int = 90) -> str:
+    started = time.time()
+    last = ""
+    while time.time() - started < timeout_s:
+        last = chat_text(page)
+        if count_text(last, text) >= minimum:
+            return last
+        page.wait_for_timeout(1000)
+    raise TimeoutError(
+        f"Timed out waiting for chat to contain {text!r} at least {minimum} times. "
+        f"Last count={count_text(last, text)} snippet: {last[-1200:]}"
+    )
+
+
+def stop_button(page):
+    return page.get_by_role("button", name="Stop generating")
+
+
+def send_button(page):
+    return page.get_by_role("button", name="Send message").last
+
+
+def visible_composer(page):
+    return page.locator("textarea:visible").last
+
+
+def assert_stop_absent(page, *, timeout_s: int = 45) -> None:
+    expect(stop_button(page)).to_have_count(0, timeout=timeout_s * 1000)
+
+
+def assert_composer_ready(page, *, timeout_s: int = 45) -> None:
+    composer = visible_composer(page)
+    expect(composer).to_be_visible(timeout=timeout_s * 1000)
+    expect(composer).to_be_enabled(timeout=timeout_s * 1000)
+
+
+def send_chat_message(page, text: str) -> None:
+    composer = visible_composer(page)
+    expect(composer).to_be_visible(timeout=90_000)
+    expect(composer).to_be_enabled(timeout=45_000)
+    composer.fill(text)
+    expect(send_button(page)).to_be_enabled(timeout=45_000)
+    page.keyboard.press("Enter")
+
+
+def interrupt_prompt(config: ProviderSmokeConfig, marker: str) -> str:
+    return (
+        "Use the available shell tool to run a command that sleeps for 20 seconds. "
+        f"Only after the sleep finishes, reply exactly {marker}. "
+        "This turn is part of a real browser interruption test."
+    )
+
+
+def recovery_prompt(config: ProviderSmokeConfig, marker: str) -> str:
+    return (
+        "Reply immediately with exactly this marker and no extra text: "
+        f"{marker}"
+    )
+
+
+def assert_interrupt_notice_count(body: str, expected: int) -> None:
+    count = count_text(body, "Conversation interrupted")
+    if count != expected:
+        raise AssertionError(
+            f"Expected exactly {expected} interrupt notice(s), saw {count}. Body tail: {body[-1600:]}"
+        )
+
+
 def choose_allow_action(request_payload: dict[str, Any]) -> str:
     actions = request_payload.get("actions")
     if isinstance(actions, list):
@@ -405,8 +501,16 @@ def main() -> int:
     token = str(int(time.time()))
     first_marker = f"{config.first_marker_prefix}-{token}"
     second_marker = f"{config.second_marker_prefix}-{token}"
+    interrupt_marker = f"{config.first_marker_prefix}-INTERRUPT-{token}"
+    recovery_marker = f"{config.second_marker_prefix}-RECOVERY-{token}"
+    interrupt2_marker = f"{config.first_marker_prefix}-INTERRUPT2-{token}"
+    recovery2_marker = f"{config.second_marker_prefix}-RECOVERY2-{token}"
     first_text = first_prompt(config, first_marker)
     second_text = second_prompt(config, second_marker)
+    interrupt_text = interrupt_prompt(config, interrupt_marker)
+    recovery_text = recovery_prompt(config, recovery_marker)
+    interrupt2_text = interrupt_prompt(config, interrupt2_marker)
+    recovery2_text = recovery_prompt(config, recovery2_marker)
 
     request_json(base_url, "/api/workspaces/add", {"dir": str(workspace)})
     request_json(base_url, "/api/workspaces/select", {"dir": str(workspace)})
@@ -521,7 +625,7 @@ def main() -> int:
             )
             replay_session_id = replay["session"]["id"]
             expect(page.get_by_text("History only", exact=True)).to_be_visible(timeout=60_000)
-            body_after_replay = wait_for_body_contains(page, first_marker, timeout_s=90)
+            body_after_replay = wait_for_chat_contains(page, first_marker, timeout_s=90)
             if count_text(body_after_replay, first_marker) < 1:
                 raise AssertionError(f"{config.provider} history replay did not show the first turn marker.")
             assert_no_environment_leak(body_after_replay)
@@ -555,7 +659,7 @@ def main() -> int:
             )
             resumed_session_id = resumed["session"]["id"]
 
-            old_turn_count_before = count_text(page.locator("body").inner_text(), first_marker)
+            old_turn_count_before = count_text(chat_text(page), first_marker)
 
             composer.fill(second_text)
             page.keyboard.press("Enter")
@@ -567,7 +671,110 @@ def main() -> int:
             )
             if second_done["session"]["runtimeState"] == "failed":
                 raise AssertionError(f"{config.provider} claim flow failed: {second_done['session']}")
-            body_after_second = wait_for_body_text_count(page, second_marker, 2, timeout_s=240)
+            body_after_second = wait_for_chat_text_count(page, second_marker, 2, timeout_s=240)
+            assert_stop_absent(page)
+            assert_composer_ready(page)
+            if count_text(body_after_second, second_marker) != 2:
+                raise AssertionError(
+                    f"Expected one visible user prompt and one visible assistant answer for {config.provider}; "
+                    f"marker count={count_text(body_after_second, second_marker)}."
+                )
+
+            send_chat_message(page, interrupt_text)
+            expect(stop_button(page)).to_be_visible(timeout=60_000)
+            stop_button(page).last.click()
+            try:
+                stop_button(page).last.click(timeout=1000)
+            except Exception:
+                pass
+            interrupt_done, _interrupt_permissions = wait_for_idle_with_auto_permissions(
+                page,
+                base_url,
+                resumed_session_id,
+                timeout_s=180,
+            )
+            if interrupt_done["session"]["runtimeState"] in ("failed", "stopped"):
+                raise AssertionError(
+                    f"{config.provider} interrupt flow ended in {interrupt_done['session']['runtimeState']}: "
+                    f"{interrupt_done['session']}"
+                )
+            assert_stop_absent(page)
+            assert_composer_ready(page)
+            body_after_interrupt = chat_text(page)
+            assert_interrupt_notice_count(body_after_interrupt, 1)
+            if count_text(body_after_interrupt, interrupt_marker) != 1:
+                raise AssertionError(
+                    f"Interrupted {config.provider} turn should only show the user prompt marker once; "
+                    f"count={count_text(body_after_interrupt, interrupt_marker)}."
+                )
+
+            send_chat_message(page, recovery_text)
+            recovery_done, _recovery_permissions = wait_for_idle_with_auto_permissions(
+                page,
+                base_url,
+                resumed_session_id,
+                timeout_s=240,
+            )
+            if recovery_done["session"]["runtimeState"] == "failed":
+                raise AssertionError(f"{config.provider} recovery flow failed: {recovery_done['session']}")
+            body_after_recovery = wait_for_chat_text_count(page, recovery_marker, 2, timeout_s=240)
+            assert_stop_absent(page)
+            assert_composer_ready(page)
+            assert_interrupt_notice_count(body_after_recovery, 1)
+            if count_text(body_after_recovery, recovery_marker) != 2:
+                raise AssertionError(
+                    f"Expected one visible user prompt and one visible assistant answer for {config.provider} recovery; "
+                    f"marker count={count_text(body_after_recovery, recovery_marker)}."
+                )
+
+            send_chat_message(page, interrupt2_text)
+            expect(stop_button(page)).to_be_visible(timeout=60_000)
+            stop_button(page).last.click()
+            try:
+                stop_button(page).last.click(timeout=1000)
+            except Exception:
+                pass
+            second_interrupt_done, _second_interrupt_permissions = wait_for_idle_with_auto_permissions(
+                page,
+                base_url,
+                resumed_session_id,
+                timeout_s=180,
+            )
+            if second_interrupt_done["session"]["runtimeState"] in ("failed", "stopped"):
+                raise AssertionError(
+                    f"{config.provider} second interrupt flow ended in {second_interrupt_done['session']['runtimeState']}: "
+                    f"{second_interrupt_done['session']}"
+                )
+            assert_stop_absent(page)
+            assert_composer_ready(page)
+            body_after_second_interrupt = chat_text(page)
+            assert_interrupt_notice_count(body_after_second_interrupt, 2)
+            if count_text(body_after_second_interrupt, interrupt2_marker) != 1:
+                raise AssertionError(
+                    f"Second interrupted {config.provider} turn should only show the user prompt marker once; "
+                    f"count={count_text(body_after_second_interrupt, interrupt2_marker)}."
+                )
+
+            send_chat_message(page, recovery2_text)
+            second_recovery_done, _second_recovery_permissions = wait_for_idle_with_auto_permissions(
+                page,
+                base_url,
+                resumed_session_id,
+                timeout_s=240,
+            )
+            if second_recovery_done["session"]["runtimeState"] == "failed":
+                raise AssertionError(
+                    f"{config.provider} second recovery flow failed: {second_recovery_done['session']}"
+                )
+            body_after_recovery2 = wait_for_chat_text_count(page, recovery2_marker, 2, timeout_s=240)
+            assert_stop_absent(page)
+            assert_composer_ready(page)
+            assert_interrupt_notice_count(body_after_recovery2, 2)
+            if count_text(body_after_recovery2, recovery2_marker) != 2:
+                raise AssertionError(
+                    f"Expected one visible user prompt and one visible assistant answer for {config.provider} second recovery; "
+                    f"marker count={count_text(body_after_recovery2, recovery2_marker)}."
+                )
             save_screenshot(page, screenshots_dir, f"{config.provider}-real-claim-response")
             socket_messages = page.evaluate("window.__rahSocketMessages")
             second_user_count, second_turn_id = gather_matching_user_events(socket_messages, second_text)
@@ -578,8 +785,22 @@ def main() -> int:
             gamma_content = gamma.read_text(encoding="utf-8") if gamma.exists() else None
 
             result = {
+                "ok": True,
                 "baseUrl": base_url,
                 "provider": config.provider,
+                "browser": "chromium",
+                "headless": True,
+                "caseIds": REAL_BROWSER_CASE_IDS,
+                "asserted": [
+                    "real provider binary/server path was used; no fake provider is created by this script",
+                    "history replay shows the first real turn",
+                    "claimed session accepts a second real browser chat turn",
+                    "Stop disappears after normal completion",
+                    "double Stop click does not close the session",
+                    "interrupt notice appears once",
+                    "recovery turn after interrupt reaches the provider",
+                    "marker counts reject duplicate user/assistant bubbles",
+                ],
                 "providerSessionId": provider_session_id,
                 "screenshots": SCREENSHOTS,
                 "seedFlow": {
@@ -601,17 +822,31 @@ def main() -> int:
                     "oldTurnVisibleCountAfterClaim": old_turn_count_after,
                 },
                 "gammaContent": gamma_content,
+                "interruptFlow": {
+                    "interruptMarkerVisibleCount": count_text(body_after_recovery2, interrupt_marker),
+                    "interrupt2MarkerVisibleCount": count_text(body_after_recovery2, interrupt2_marker),
+                    "interruptNoticeCount": count_text(body_after_recovery2, "Conversation interrupted"),
+                    "recoveryMarkerVisibleCount": count_text(body_after_recovery2, recovery_marker),
+                    "recovery2MarkerVisibleCount": count_text(body_after_recovery2, recovery2_marker),
+                },
             }
             print(json.dumps(result, ensure_ascii=False, indent=2))
 
-            assert_no_environment_leak(body_after_second)
-            assert_no_chat_noise(body_after_second)
-            assert_text_order(body_after_second, second_text, second_marker)
-            if count_text(body_after_second, second_marker) != 2:
-                raise AssertionError(
-                    f"Expected one visible user prompt and one visible assistant answer for {config.provider}; "
-                    f"marker count={count_text(body_after_second, second_marker)}."
-                )
+            assert_no_environment_leak(body_after_recovery2)
+            assert_no_chat_noise(body_after_recovery2)
+            assert_text_order(
+                body_after_recovery2,
+                second_text,
+                second_marker,
+                interrupt_text,
+                "Conversation interrupted",
+                recovery_text,
+                recovery_marker,
+                interrupt2_text,
+                "Conversation interrupted",
+                recovery2_text,
+                recovery2_marker,
+            )
             if second_assistant_count < 1:
                 raise AssertionError(f"Expected at least one assistant event for the claimed {config.provider} turn.")
             if len(second_tool_names) < 1:
@@ -633,6 +868,7 @@ def main() -> int:
             try:
                 save_screenshot(page, screenshots_dir, f"{config.provider}-real-failure")
                 body = page.locator("body").inner_text()
+                visible_chat = chat_text(page)
                 socket_messages = page.evaluate("window.__rahSocketMessages")
                 print(
                     json.dumps(
@@ -640,6 +876,7 @@ def main() -> int:
                             "provider": config.provider,
                             "error": str(exc),
                             "bodySnippet": body[-1600:],
+                            "chatSnippet": visible_chat[-1600:],
                             "socketMessageCount": len(socket_messages),
                         },
                         ensure_ascii=False,

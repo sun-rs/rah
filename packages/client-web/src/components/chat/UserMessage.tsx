@@ -1,7 +1,7 @@
 import { Check, Copy } from "lucide-react";
 import { useState } from "react";
 
-export function UserMessage(props: { content: string }) {
+export function UserMessage(props: { content: string; entryKey?: string | undefined }) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
@@ -11,7 +11,11 @@ export function UserMessage(props: { content: string }) {
   };
 
   return (
-    <div className="flex items-start justify-end gap-3">
+    <div
+      className="flex items-start justify-end gap-3"
+      data-testid="chat-user-message"
+      data-feed-key={props.entryKey}
+    >
       <div className="min-w-0 max-w-[85%] sm:max-w-[75%]">
         <div className="rounded-2xl rounded-tr-md border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-4 py-3 text-[var(--app-fg)]">
           <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[15px] leading-relaxed">

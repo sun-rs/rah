@@ -230,6 +230,18 @@ export interface AttachSessionRequest {
 export interface SessionInputRequest {
   clientId: string;
   text: string;
+  /**
+   * Stable client-generated id for this submitted user message. The daemon and
+   * provider mirrors should echo it when they can so optimistic UI rows can be
+   * replaced by authoritative transcript rows without text-based guessing.
+   */
+  clientMessageId?: string;
+  /**
+   * Stable client-generated id for the user-visible turn started by this input.
+   * Provider-native turn ids may differ; this id exists only to correlate the
+   * web optimistic row, queued input state, and later echo/notice anchoring.
+   */
+  clientTurnId?: string;
 }
 
 export interface InterruptSessionRequest {

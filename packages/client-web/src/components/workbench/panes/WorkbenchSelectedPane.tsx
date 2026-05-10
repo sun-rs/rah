@@ -736,7 +736,10 @@ export function WorkbenchSelectedPane(props: {
 
                 {props.composerSurface.showStopButton ? (
                   <div className={COMPOSER_LAYOUT.stopWrapperClassName}>
-                    <span className={COMPOSER_LAYOUT.stopSpinnerClassName} />
+                    {props.composerSurface.kind === "compose" &&
+                    props.composerSurface.stopSpinner !== false ? (
+                      <span className={COMPOSER_LAYOUT.stopSpinnerClassName} />
+                    ) : null}
                     <button
                       type="button"
                       disabled={stopDisabled}
@@ -746,9 +749,23 @@ export function WorkbenchSelectedPane(props: {
                           ? props.composerSurface.stopTitle
                           : undefined
                       }
-                      className={COMPOSER_LAYOUT.stopButtonClassName}
+                      className={
+                        props.composerSurface.kind === "compose" &&
+                        props.composerSurface.stopTone === "warning"
+                          ? COMPOSER_LAYOUT.stopWarningButtonClassName
+                          : COMPOSER_LAYOUT.stopButtonClassName
+                      }
                     >
-                      <span className="sr-only">Stop generating</span>
+                      {props.composerSurface.kind === "compose" &&
+                      props.composerSurface.stopTone === "warning" ? (
+                        <span aria-hidden="true">Esc</span>
+                      ) : null}
+                      <span className="sr-only">
+                        {props.composerSurface.kind === "compose" &&
+                        props.composerSurface.stopAriaLabel
+                          ? props.composerSurface.stopAriaLabel
+                          : "Stop generating"}
+                      </span>
                     </button>
                   </div>
                 ) : null}

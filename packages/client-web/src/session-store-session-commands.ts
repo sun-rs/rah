@@ -13,6 +13,7 @@ import {
 import { updateSessionSummaryInProjectionMap } from "./session-store-projections";
 import {
   appendOptimisticUserMessage,
+  markPendingInterruptIntent,
   removeOptimisticUserMessage,
   type SessionProjection,
 } from "./types";
@@ -50,6 +51,15 @@ type SessionCommandSetState = (
     | Partial<SessionCommandState>
     | ((state: SessionCommandState) => Partial<SessionCommandState> | SessionCommandState),
 ) => void;
+
+function createClientSideId(prefix: string): string {
+  const randomUUID =
+    typeof globalThis.crypto === "object" &&
+    typeof globalThis.crypto.randomUUID === "function"
+      ? globalThis.crypto.randomUUID()
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  return `${prefix}:${randomUUID}`;
+}
 
 export function createInteractiveAttachRequest(
   clientId: string,
@@ -217,6 +227,15 @@ export async function interruptSessionCommand(args: {
   sessionId: string;
 }) {
   try {
+    args.set((state) => {
+      const projection = state.projections.get(args.sessionId);
+      if (!projection) {
+        return state;
+      }
+      const projections = new Map(state.projections);
+      projections.set(args.sessionId, markPendingInterruptIntent(projection));
+      return { projections };
+    });
     const summary = await api.interruptSession(args.sessionId, args.get().clientId);
     args.set((state) => ({
       projections: updateSessionSummaryInProjectionMap(state.projections, summary),
@@ -237,6 +256,8 @@ export async function sendInputCommand(args: {
   const previousProjection = args.get().projections.get(args.sessionId);
   const previousRuntimeState = previousProjection?.summary.session.runtimeState;
   const previousRuntimeStatus = previousProjection?.currentRuntimeStatus;
+  const clientTurnId = createClientSideId("client-turn");
+  const clientMessageId = createClientSideId("client-message");
   try {
     args.set((state) => {
       const projection = state.projections.get(args.sessionId);
@@ -244,7 +265,12 @@ export async function sendInputCommand(args: {
         return state;
       }
       const next = new Map(state.projections);
-      const optimistic = appendOptimisticUserMessage(projection, args.text);
+      const optimistic = shouldAppendTranscriptOptimisticUserMessage(projection)
+        ? appendOptimisticUserMessage(projection, args.text, {
+            clientMessageId,
+            clientTurnId,
+          })
+        : projection;
       const now = new Date().toISOString();
       const nativeTui = optimistic.summary.session.nativeTui;
       const willQueueInNativeTui =
@@ -258,18 +284,12 @@ export async function sendInputCommand(args: {
           : nativeTui;
       next.set(args.sessionId, {
         ...optimistic,
-        ...(willQueueInNativeTui
-          ? optimistic.currentRuntimeStatus !== undefined
-            ? { currentRuntimeStatus: optimistic.currentRuntimeStatus }
-            : {}
-          : { currentRuntimeStatus: "thinking" as const }),
+        currentRuntimeStatus: "thinking" as const,
         summary: {
           ...optimistic.summary,
           session: {
             ...optimistic.summary.session,
-            runtimeState: willQueueInNativeTui
-              ? optimistic.summary.session.runtimeState
-              : "running",
+            runtimeState: "running",
             ...(nextNativeTui ? { nativeTui: nextNativeTui } : {}),
             updatedAt: now,
           },
@@ -286,6 +306,8 @@ export async function sendInputCommand(args: {
     await api.sendSessionInput(args.sessionId, {
       clientId: args.get().clientId,
       text: args.text,
+      clientMessageId,
+      clientTurnId,
     });
     args.set({ error: null });
   } catch (error) {
@@ -299,7 +321,7 @@ export async function sendInputCommand(args: {
       const baseRestored =
         previousProjection && projection.lastSeq === previousProjection.lastSeq
           ? previousProjection
-          : removeOptimisticUserMessage(projection, args.text);
+          : removeOptimisticUserMessage(projection, args.text, clientMessageId);
       const restored: SessionProjection = {
         ...baseRestored,
         summary: {
@@ -320,6 +342,11 @@ export async function sendInputCommand(args: {
     });
     throw error;
   }
+}
+
+function shouldAppendTranscriptOptimisticUserMessage(projection: SessionProjection): boolean {
+  void projection;
+  return true;
 }
 
 export async function respondToPermissionCommand(args: {

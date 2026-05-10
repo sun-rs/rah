@@ -132,6 +132,53 @@ describe("composer contract", () => {
     });
   });
 
+  test("shows Claude native TUI Esc control as best-effort instead of generating stop", () => {
+    const surface = deriveComposerSurface({
+      selectedSummary: summary({
+        provider: "claude",
+        liveBackend: "zellij_tui",
+        nativeTui: {
+          terminalId: "terminal-claude-1",
+          viewAvailable: true,
+          promptState: "prompt_clean",
+          queuedInputCount: 0,
+        },
+      }),
+      hasControl: false,
+      isGenerating: false,
+      pendingSessionAction: null,
+    });
+
+    assert.equal(surface.kind, "compose");
+    if (surface.kind !== "compose") {
+      return;
+    }
+    assert.equal(surface.showStopButton, true);
+    assert.equal(surface.stopTone, "warning");
+    assert.equal(surface.stopSpinner, false);
+    assert.equal(surface.stopAriaLabel, "Send Esc to Claude TUI");
+    assert.match(surface.stopTitle ?? "", /best-effort/);
+  });
+
+  test("shows Claude Esc control even before live backend and native TUI metadata are refreshed", () => {
+    const surface = deriveComposerSurface({
+      selectedSummary: summary({
+        provider: "claude",
+      }),
+      hasControl: true,
+      isGenerating: false,
+      pendingSessionAction: null,
+    });
+
+    assert.equal(surface.kind, "compose");
+    if (surface.kind !== "compose") {
+      return;
+    }
+    assert.equal(surface.showStopButton, true);
+    assert.equal(surface.stopTone, "warning");
+    assert.equal(surface.stopSpinner, false);
+  });
+
   test("derives compose surface and preserves stop visibility while generating", () => {
     assert.deepEqual(
       deriveComposerSurface({
@@ -217,6 +264,7 @@ describe("composer contract", () => {
     );
     assert.match(COMPOSER_LAYOUT.stopSpinnerClassName, /animate-\[spin_/);
     assert.match(COMPOSER_LAYOUT.stopButtonClassName, /inset-\[3px\]/);
+    assert.match(COMPOSER_LAYOUT.stopWarningButtonClassName, /amber/);
     assert.match(COMPOSER_LAYOUT.textareaClassName, /\bblock\b/);
     assert.match(COMPOSER_LAYOUT.textareaClassName, /min-h-10/);
     assert.match(EMPTY_STATE_COMPOSER_LAYOUT.attachButtonClassName, /h-10/);

@@ -70,6 +70,10 @@ function trimClaudeTranscriptBlankLines(value: string): string {
     .replace(/(?:\r?\n[ \t]*)+$/, "");
 }
 
+function stripClaudeTurnAbortedContext(value: string): string {
+  return value.replace(/<turn_aborted>[\s\S]*?<\/turn_aborted>/gi, "");
+}
+
 function normalizeClaudeTranscriptText(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
@@ -98,6 +102,13 @@ function isClaudeLocalCommandTranscriptText(value: unknown): boolean {
 }
 
 function isClaudeTranscriptNoiseText(value: unknown): boolean {
+  if (
+    typeof value === "string" &&
+    stripClaudeTurnAbortedContext(value).trim().length === 0 &&
+    /<turn_aborted>[\s\S]*?<\/turn_aborted>/i.test(value)
+  ) {
+    return true;
+  }
   return (
     isClaudeInterruptPlaceholderText(value) ||
     isClaudeNoResponsePlaceholderText(value) ||
@@ -124,6 +135,7 @@ export function extractUserMessageText(content: unknown): string | null {
   }
   const text = trimClaudeTranscriptBlankLines(extractTextParts(content)
     .filter((part) => !isClaudeTranscriptNoiseText(part))
+    .map(stripClaudeTurnAbortedContext)
     .join("\n"));
   return text || null;
 }
@@ -131,6 +143,7 @@ export function extractUserMessageText(content: unknown): string | null {
 export function extractAssistantMessageText(content: unknown): string | null {
   const text = trimClaudeTranscriptBlankLines(extractTextParts(content)
     .filter((part) => !isClaudeTranscriptNoiseText(part))
+    .map(stripClaudeTurnAbortedContext)
     .join("\n"));
   return text || null;
 }

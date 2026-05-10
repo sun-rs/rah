@@ -18,6 +18,7 @@ function timelineEvent(args: {
   seq: number;
   ts: string;
   sessionId?: string;
+  turnId?: string;
   canonicalItemId: string;
   text: string;
 }): RahEvent {
@@ -26,6 +27,7 @@ function timelineEvent(args: {
     seq: args.seq,
     ts: args.ts,
     sessionId: args.sessionId ?? "source-session",
+    ...(args.turnId !== undefined ? { turnId: args.turnId } : {}),
     type: "timeline.item.added",
     source,
     payload: {
@@ -45,6 +47,24 @@ function timelineEvent(args: {
   };
 }
 
+function turnCanceledEvent(args: {
+  id: string;
+  seq: number;
+  ts: string;
+  turnId: string;
+}): RahEvent {
+  return {
+    id: args.id,
+    seq: args.seq,
+    ts: args.ts,
+    sessionId: "source-session",
+    type: "turn.canceled",
+    source,
+    payload: { reason: "interrupted" },
+    turnId: args.turnId,
+  };
+}
+
 function timelineText(event: RahEvent): string | null {
   if (event.type !== "timeline.item.added") {
     return null;
@@ -52,6 +72,77 @@ function timelineText(event: RahEvent): string | null {
   const item = event.payload.item;
   return "text" in item ? item.text : null;
 }
+
+test("history snapshots keep provider sequence order instead of timestamp sorting", () => {
+  const store = new HistorySnapshotStore();
+  const page = store.getPage({
+    sessionId: "target-session",
+    limit: 10,
+    loadEvents: () => [
+      timelineEvent({
+        id: "user",
+        seq: 1,
+        ts: "2026-05-03T00:00:03.000Z",
+        canonicalItemId: "user",
+        text: "Question",
+      }),
+      timelineEvent({
+        id: "assistant",
+        seq: 2,
+        ts: "2026-05-03T00:00:01.000Z",
+        canonicalItemId: "assistant",
+        text: "Answer",
+      }),
+    ],
+  });
+
+  assert.deepEqual(page.events.map(timelineText), ["Question", "Answer"]);
+});
+
+test("history snapshots dedupe turn canceled events by canonical turn identity", () => {
+  const store = new HistorySnapshotStore();
+  const page = store.getPage({
+    sessionId: "target-session",
+    limit: 10,
+    loadEvents: () => [
+      timelineEvent({
+        id: "live-timeline",
+        seq: 1,
+        ts: "2026-05-03T00:00:00.000Z",
+        turnId: "live-turn",
+        canonicalItemId: "same-turn-item",
+        text: "Answer",
+      }),
+      turnCanceledEvent({
+        id: "live-cancel",
+        seq: 2,
+        ts: "2026-05-03T00:00:01.000Z",
+        turnId: "live-turn",
+      }),
+      timelineEvent({
+        id: "history-timeline",
+        seq: 3,
+        ts: "2026-05-03T00:00:02.000Z",
+        turnId: "history-turn",
+        canonicalItemId: "same-turn-item",
+        text: "Answer duplicate",
+      }),
+      turnCanceledEvent({
+        id: "history-cancel",
+        seq: 4,
+        ts: "2026-05-03T00:00:03.000Z",
+        turnId: "history-turn",
+      }),
+    ],
+  });
+
+  const canceled = page.events.filter((event) => event.type === "turn.canceled");
+  assert.equal(canceled.length, 1);
+  assert.equal(canceled[0]?.type, "turn.canceled");
+  if (canceled[0]?.type === "turn.canceled") {
+    assert.equal(canceled[0].payload.identity?.canonicalTurnId, "turn:same-turn-item");
+  }
+});
 
 test("history snapshots dedupe materialized pages by canonical timeline item id", () => {
   const store = new HistorySnapshotStore();

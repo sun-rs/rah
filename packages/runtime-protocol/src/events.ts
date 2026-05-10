@@ -66,8 +66,17 @@ export interface TimelineIdentity {
   confidence: TimelineIdentityConfidence;
 }
 
+export interface TimelineTurnIdentity {
+  canonicalTurnId: string;
+  provider: ProviderKind;
+  providerSessionId?: string;
+  turnKey: string;
+  origin: TimelineIdentityOrigin;
+  confidence: TimelineIdentityConfidence;
+}
+
 export type TimelineItem =
-  | { kind: "user_message"; text: string; messageId?: string }
+  | { kind: "user_message"; text: string; messageId?: string; clientMessageId?: string; clientTurnId?: string }
   | { kind: "assistant_message"; text: string; messageId?: string }
   | { kind: "reasoning"; text: string; section?: string }
   | { kind: "plan"; text: string }
@@ -318,9 +327,9 @@ export type RahEventPayloadMap = {
   "control.released": { clientId?: string };
 
   "turn.started": Record<string, never>;
-  "turn.completed": { usage?: ContextUsage };
-  "turn.failed": { error: string; code?: string };
-  "turn.canceled": { reason: string };
+  "turn.completed": { usage?: ContextUsage; identity?: TimelineTurnIdentity };
+  "turn.failed": { error: string; code?: string; identity?: TimelineTurnIdentity };
+  "turn.canceled": { reason: string; identity?: TimelineTurnIdentity };
   "turn.step.started": { index?: number; title?: string };
   "turn.step.completed": { index?: number; reason?: string };
   "turn.step.interrupted": { index?: number; reason?: string };

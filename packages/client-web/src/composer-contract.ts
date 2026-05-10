@@ -4,7 +4,15 @@ import { canSessionSendInput, isReadOnlyReplay } from "./session-capabilities";
 export type ComposerSurface =
   | { kind: "history_claim"; actionLabel: string; actionPending: boolean }
   | { kind: "claim_control"; actionLabel: string; actionPending: boolean }
-  | { kind: "compose"; showStopButton: boolean; stopDisabled?: boolean; stopTitle?: string }
+  | {
+      kind: "compose";
+      showStopButton: boolean;
+      stopDisabled?: boolean;
+      stopTitle?: string;
+      stopTone?: "danger" | "warning";
+      stopSpinner?: boolean;
+      stopAriaLabel?: string;
+    }
   | { kind: "unavailable" };
 
 /* ── Unified sizing tokens ── */
@@ -50,6 +58,8 @@ export const COMPOSER_LAYOUT = {
     "pointer-events-none absolute inset-0 rounded-full border-2 border-[var(--app-danger)]/30 border-t-white/90 animate-[spin_0.95s_linear_infinite]",
   stopButtonClassName:
     "absolute inset-[3px] rounded-full bg-[var(--app-danger)] text-white flex items-center justify-center transition-all duration-200 hover:opacity-90 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:opacity-50",
+  stopWarningButtonClassName:
+    "absolute inset-[3px] rounded-full border border-amber-400/70 bg-amber-100 text-amber-700 flex items-center justify-center text-[10px] font-semibold tracking-[0.02em] transition-all duration-200 hover:bg-amber-200 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-amber-100",
 
   textareaClassName:
     `${TEXTAREA_BASE} ${ROUNDED} min-h-10 md:min-h-9 lg:min-h-8 px-3 py-2 md:px-3 md:py-2 lg:py-1.5 max-h-[280px]`,
@@ -143,6 +153,18 @@ export function deriveComposerSurface(args: {
           actionPending: isClaimingHistory,
         }
       : { kind: "unavailable" };
+  }
+
+  const isClaudeNativeTuiMirror = selectedSummary.session.provider === "claude";
+  if (isClaudeNativeTuiMirror) {
+    return {
+      kind: "compose",
+      showStopButton: true,
+      stopTone: "warning",
+      stopSpinner: false,
+      stopAriaLabel: "Send Esc to Claude TUI",
+      stopTitle: "Send Esc to the Claude TUI. Chat is a history mirror, so this is best-effort.",
+    };
   }
 
   if (!hasControl) {

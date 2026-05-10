@@ -6,6 +6,7 @@ import {
   appendOptimisticUserMessage,
   applyEventToProjection,
   initialHistorySyncState,
+  markPendingInterruptIntent,
   removeOptimisticUserMessage,
   type SessionProjection,
 } from "./types";
@@ -125,6 +126,173 @@ describe("client projection", () => {
       [{ kind: "timeline", itemKind: "user_message" }],
     );
     assert.equal(current.feed[0]?.turnId, "turn-1");
+  });
+
+  test("replaces optimistic user message by clientMessageId before text fallback", () => {
+    let current = appendOptimisticUserMessage(projection(), "继续", {
+      clientMessageId: "client-message-1",
+      clientTurnId: "client-turn-1",
+    });
+
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 1,
+        turnId: "provider-turn-1",
+        type: "timeline.item.added",
+        payload: {
+          item: {
+            kind: "user_message",
+            text: "继续",
+            messageId: "provider-user-1",
+            clientMessageId: "client-message-1",
+            clientTurnId: "client-turn-1",
+          },
+        },
+      }),
+    );
+
+    const userMessages = current.feed.filter(
+      (entry) => entry.kind === "timeline" && entry.item.kind === "user_message",
+    );
+    assert.equal(userMessages.length, 1);
+    const only = userMessages[0];
+    assert.equal(only?.kind === "timeline" ? only.key : null, "optimistic:user:client-message-1");
+    assert.equal(
+      only?.kind === "timeline" && only.item.kind === "user_message"
+        ? only.item.messageId
+        : null,
+      "provider-user-1",
+    );
+    assert.equal(only?.turnId, "provider-turn-1");
+  });
+
+  test("replaces repeated optimistic user messages in provider event order", () => {
+    let current = appendOptimisticUserMessage(projection(), "继续", {
+      clientMessageId: "client-message-1",
+      clientTurnId: "client-turn-1",
+    });
+    current = appendOptimisticUserMessage(current, "继续", {
+      clientMessageId: "client-message-2",
+      clientTurnId: "client-turn-2",
+    });
+
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 1,
+        turnId: "provider-turn-1",
+        type: "timeline.item.added",
+        payload: {
+          item: { kind: "user_message", text: "继续" },
+        },
+      }),
+    );
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 2,
+        turnId: "provider-turn-2",
+        type: "timeline.item.added",
+        payload: {
+          item: { kind: "user_message", text: "继续" },
+        },
+      }),
+    );
+
+    const userMessages = current.feed.filter(
+      (entry) => entry.kind === "timeline" && entry.item.kind === "user_message",
+    );
+    assert.equal(userMessages.length, 2);
+    assert.deepEqual(
+      userMessages.map((entry) => (entry.kind === "timeline" ? entry.turnId : null)),
+      ["provider-turn-1", "provider-turn-2"],
+    );
+  });
+
+  test("dedupes same-turn user echoes even when they arrive after assistant output", () => {
+    let current = projection();
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 1,
+        turnId: "provider-turn-1",
+        type: "timeline.item.added",
+        payload: {
+          item: { kind: "user_message", text: "你是谁" },
+        },
+      }),
+    );
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 2,
+        turnId: "provider-turn-1",
+        type: "timeline.item.added",
+        payload: {
+          item: { kind: "assistant_message", text: "我是 Codex。" },
+        },
+      }),
+    );
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 3,
+        turnId: "provider-turn-1",
+        type: "timeline.item.added",
+        payload: {
+          item: { kind: "user_message", text: "你是谁" },
+        },
+      }),
+    );
+
+    assert.deepEqual(
+      current.feed.map((entry) =>
+        entry.kind === "timeline" ? `${entry.item.kind}:${entry.item.text}` : entry.kind,
+      ),
+      ["user_message:你是谁", "assistant_message:我是 Codex。"],
+    );
+  });
+
+  test("drops weak user echoes that arrive after authoritative user history", () => {
+    let current = projection();
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 1,
+        turnId: "provider-turn-1",
+        type: "timeline.item.added",
+        payload: {
+          item: {
+            kind: "user_message",
+            text: "继续",
+            messageId: "provider-user-1",
+          },
+        },
+      }),
+    );
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 2,
+        turnId: "weak-turn-1",
+        type: "timeline.item.added",
+        payload: {
+          item: { kind: "user_message", text: "继续" },
+        },
+      }),
+    );
+
+    const userMessages = current.feed.filter(
+      (entry) => entry.kind === "timeline" && entry.item.kind === "user_message",
+    );
+    assert.equal(userMessages.length, 1);
+    assert.equal(
+      userMessages[0]?.kind === "timeline" && userMessages[0].item.kind === "user_message"
+        ? userMessages[0].item.messageId
+        : null,
+      "provider-user-1",
+    );
   });
 
   test("upgrades optimistic native TUI user echo with canonical history identity", () => {
@@ -484,6 +652,166 @@ describe("client projection", () => {
     assert.equal(current.feed[0]?.kind, "notification");
   });
 
+  test("does not duplicate turn canceled notices for the same canonical turn", () => {
+    const canonicalIdentity = {
+      canonicalTurnId: "canonical-turn-1",
+      provider: "codex" as const,
+      providerSessionId: "provider-session-1",
+      turnKey: "turn:provider-turn-1",
+      origin: "history" as const,
+      confidence: "derived" as const,
+    };
+    let current = projection();
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 1,
+        turnId: "live-turn-1",
+        type: "turn.canceled",
+        payload: { reason: "interrupted", identity: canonicalIdentity },
+      }),
+    );
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 2,
+        turnId: "history:turn-1",
+        type: "turn.canceled",
+        payload: { reason: "interrupted", identity: canonicalIdentity },
+      }),
+    );
+
+    assert.equal(current.feed.length, 1);
+    const notice = current.feed[0];
+    assert.equal(notice?.kind, "notification");
+    assert.equal(notice?.key, "canonical-turn-1:turn:canceled");
+  });
+
+  test("anchors a turn canceled notice after its turn and replaces legacy duplicates", () => {
+    const canonicalIdentity = {
+      canonicalTurnId: "canonical-turn-1",
+      provider: "codex" as const,
+      providerSessionId: "provider-session-1",
+      turnKey: "turn:provider-turn-1",
+      origin: "live" as const,
+      confidence: "derived" as const,
+    };
+    let current = projection();
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 1,
+        turnId: "provider-turn-1",
+        type: "timeline.item.added",
+        payload: {
+          item: { kind: "user_message", text: "你是谁" },
+          identity: {
+            ...canonicalIdentity,
+            canonicalItemId: "canonical-item-1",
+            itemKind: "user_message",
+            itemKey: "item:0",
+          },
+        },
+      }),
+    );
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 2,
+        turnId: "provider-turn-1",
+        type: "timeline.item.added",
+        payload: {
+          item: { kind: "assistant_message", text: "我是 Codex。" },
+          identity: {
+            ...canonicalIdentity,
+            canonicalItemId: "canonical-item-2",
+            itemKind: "assistant_message",
+            itemKey: "item:1",
+          },
+        },
+      }),
+    );
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 3,
+        turnId: "provider-turn-1",
+        type: "turn.canceled",
+        payload: { reason: "interrupted" },
+      }),
+    );
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 4,
+        turnId: "provider-turn-1",
+        type: "turn.canceled",
+        payload: { reason: "interrupted", identity: canonicalIdentity },
+      }),
+    );
+
+    assert.deepEqual(
+      current.feed.map((entry) => entry.kind === "timeline" ? entry.item.kind : entry.kind),
+      ["user_message", "assistant_message", "notification"],
+    );
+    const notices = current.feed.filter((entry) => entry.kind === "notification");
+    assert.equal(notices.length, 1);
+    assert.equal(notices[0]?.kind, "notification");
+    assert.equal(notices[0]?.interruptAnchorKey, "timeline:canonical-item-2");
+  });
+
+  test("uses the local stop intent anchor when cancel confirmation has no turn identity", () => {
+    let current = projection();
+    for (const item of [
+      { seq: 1, turnId: "turn-1", kind: "user_message" as const, text: "第一问" },
+      { seq: 2, turnId: "turn-1", kind: "assistant_message" as const, text: "第一答" },
+      { seq: 3, turnId: "turn-2", kind: "user_message" as const, text: "第二问" },
+      { seq: 4, turnId: "turn-2", kind: "assistant_message" as const, text: "第二答" },
+    ]) {
+      current = applyEventToProjection(
+        current,
+        event({
+          seq: item.seq,
+          turnId: item.turnId,
+          type: "timeline.item.added",
+          payload: { item: { kind: item.kind, text: item.text } },
+        }),
+      );
+    }
+
+    current = markPendingInterruptIntent(current);
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 5,
+        type: "turn.canceled",
+        payload: { reason: "interrupted" },
+      }),
+    );
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 6,
+        type: "turn.canceled",
+        payload: { reason: "interrupted" },
+      }),
+    );
+
+    assert.deepEqual(
+      current.feed.map((entry) =>
+        entry.kind === "timeline" ? `${entry.item.kind}:${"text" in entry.item ? entry.item.text : ""}` : entry.kind,
+      ),
+      [
+        "user_message:第一问",
+        "assistant_message:第一答",
+        "user_message:第二问",
+        "assistant_message:第二答",
+        "notification",
+      ],
+    );
+    assert.equal(current.feed.filter((entry) => entry.kind === "notification").length, 1);
+  });
+
   test("keeps live persisted timeline items in daemon event order", () => {
     let current = projection();
     current = applyEventToProjection(
@@ -553,7 +881,7 @@ describe("client projection", () => {
     );
   });
 
-  test("upgrades history assistant text into authoritative live message without duplicating", () => {
+  test("does not merge history assistant text into live message without shared identity", () => {
     let current = projection();
     current = applyEventToProjection(
       current,
@@ -577,14 +905,22 @@ describe("client projection", () => {
       }),
     );
 
-    assert.equal(current.feed.length, 1);
-    const only = current.feed[0];
-    assert.equal(only?.kind, "timeline");
-    if (only?.kind === "timeline" && only.item.kind === "assistant_message") {
-      assert.equal(only.turnId, "turn-1");
-      assert.equal(only.item.messageId, "assistant-1");
-      assert.equal(only.item.text, "我是 Codex");
-    }
+    assert.equal(current.feed.length, 2);
+    assert.deepEqual(
+      current.feed.map((entry) =>
+        entry.kind === "timeline" && entry.item.kind === "assistant_message"
+          ? {
+              turnId: entry.turnId ?? null,
+              messageId: entry.item.messageId ?? null,
+              text: entry.item.text,
+            }
+          : null,
+      ),
+      [
+        { turnId: null, messageId: null, text: "我是 Codex" },
+        { turnId: "turn-1", messageId: "assistant-1", text: "我是 Codex" },
+      ],
+    );
   });
 
   test("resets live projection when the same terminal session rebinds to a new provider session", () => {
@@ -634,7 +970,7 @@ describe("client projection", () => {
     assert.deepEqual(rebound.events, [reboundEvent]);
   });
 
-  test("coalesces retry runtime status and hides non-actionable runtime status", () => {
+  test("keeps retry runtime status out of the transcript feed", () => {
     let current = projection();
     current = applyEventToProjection(
       current,
@@ -674,14 +1010,208 @@ describe("client projection", () => {
       }),
     );
 
-    assert.deepEqual(current.feed.map((entry) => entry.kind), ["runtime_status"]);
-    const runtime = current.feed[0];
-    assert.equal(runtime?.kind, "runtime_status");
-    if (runtime?.kind === "runtime_status") {
-      assert.equal(runtime.detail, "Reconnecting... 5/5");
-      assert.equal(runtime.retryCount, 5);
-    }
+    assert.deepEqual(current.feed.map((entry) => entry.kind), []);
     assert.equal(current.currentRuntimeStatus, "retrying");
+  });
+
+  test("does not let reconnect status drift around an anchored interrupt notice", () => {
+    let current = projection();
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 1,
+        turnId: "turn-1",
+        type: "timeline.item.added",
+        payload: { item: { kind: "assistant_message", text: "休眠中" } },
+      }),
+    );
+    current = markPendingInterruptIntent(current);
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 2,
+        turnId: "turn-1",
+        type: "runtime.status",
+        payload: { status: "retrying", detail: "Reconnecting... 1/5", retryCount: 1 },
+      }),
+    );
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 3,
+        type: "turn.canceled",
+        payload: { reason: "interrupted" },
+      }),
+    );
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 4,
+        turnId: "turn-1",
+        type: "runtime.status",
+        payload: { status: "retrying", detail: "Reconnecting... 2/5", retryCount: 2 },
+      }),
+    );
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 5,
+        turnId: "turn-1",
+        type: "turn.canceled",
+        payload: {
+          reason: "interrupted",
+          identity: {
+            canonicalTurnId: "canonical-turn-1",
+            provider: "codex",
+            providerSessionId: "provider-session-1",
+            turnKey: "turn-1",
+            origin: "history",
+            confidence: "derived",
+          },
+        },
+      }),
+    );
+
+    assert.deepEqual(
+      current.feed.map((entry) => entry.kind === "timeline" ? entry.item.kind : entry.kind),
+      ["assistant_message", "notification"],
+    );
+    assert.equal(current.feed.filter((entry) => entry.kind === "notification").length, 1);
+    assert.equal(current.currentRuntimeStatus, undefined);
+  });
+
+  test("keeps multiple delayed stop notices anchored after their own user turns", () => {
+    let current = projection();
+
+    current = appendOptimisticUserMessage(current, "休眠五秒 A");
+    current = markPendingInterruptIntent(current);
+    current = appendOptimisticUserMessage(current, "恢复 A");
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 1,
+        type: "turn.canceled",
+        payload: { reason: "interrupted" },
+      }),
+    );
+
+    current = appendOptimisticUserMessage(current, "休眠五秒 B");
+    current = markPendingInterruptIntent(current);
+    current = appendOptimisticUserMessage(current, "恢复 B");
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 2,
+        type: "turn.canceled",
+        payload: { reason: "interrupted" },
+      }),
+    );
+
+    assert.deepEqual(
+      current.feed.map((entry) =>
+        entry.kind === "timeline"
+          ? `${entry.item.kind}:${"text" in entry.item ? entry.item.text : ""}`
+          : `${entry.kind}:${entry.kind === "notification" ? entry.title : ""}`,
+      ),
+      [
+        "user_message:休眠五秒 A",
+        "notification:Conversation interrupted",
+        "user_message:恢复 A",
+        "user_message:休眠五秒 B",
+        "notification:Conversation interrupted",
+        "user_message:恢复 B",
+      ],
+    );
+
+    const notices = current.feed.filter((entry) => entry.kind === "notification");
+    assert.equal(notices.length, 2);
+    assert.deepEqual(
+      notices.map((entry) => (entry.kind === "notification" ? entry.interruptAnchorKey : undefined)),
+      [
+        current.feed.find((entry) => entry.kind === "timeline" && entry.item.text === "休眠五秒 A")?.key,
+        current.feed.find((entry) => entry.kind === "timeline" && entry.item.text === "休眠五秒 B")?.key,
+      ],
+    );
+  });
+
+  test("clears stale runtime status when daemon reports the session is idle", () => {
+    let current = projection();
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 1,
+        type: "runtime.status",
+        payload: { status: "thinking", detail: "Thinking" },
+      }),
+    );
+    assert.equal(current.currentRuntimeStatus, "thinking");
+
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 2,
+        type: "session.state.changed",
+        payload: { state: "idle" },
+      }),
+    );
+
+    assert.equal(current.summary.session.runtimeState, "idle");
+    assert.equal(current.currentRuntimeStatus, undefined);
+  });
+
+  test("dedupes same-turn user echoes even when provider identities drift", () => {
+    let current = projection();
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 1,
+        turnId: "turn-1",
+        type: "timeline.item.added",
+        payload: {
+          item: { kind: "user_message", text: "你是谁", messageId: "opencode-live-user" },
+          identity: {
+            canonicalItemId: "opencode-live-item",
+            canonicalTurnId: "opencode-turn-1",
+            provider: "opencode",
+            providerSessionId: "provider-session-1",
+            turnKey: "message:live",
+            itemKind: "user_message",
+            itemKey: "part-live",
+            origin: "live",
+            confidence: "native",
+          },
+        },
+      }),
+    );
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 2,
+        turnId: "turn-1",
+        type: "timeline.item.added",
+        payload: {
+          item: { kind: "user_message", text: "你是谁", messageId: "opencode-history-user" },
+          identity: {
+            canonicalItemId: "opencode-history-item",
+            canonicalTurnId: "opencode-turn-1",
+            provider: "opencode",
+            providerSessionId: "provider-session-1",
+            turnKey: "message:history",
+            itemKind: "user_message",
+            itemKey: "part-history",
+            origin: "history",
+            confidence: "native",
+          },
+        },
+      }),
+    );
+
+    assert.equal(
+      current.feed.filter(
+        (entry) => entry.kind === "timeline" && entry.item.kind === "user_message",
+      ).length,
+      1,
+    );
   });
 
   test("updates session runtimeState from turn lifecycle events", () => {
@@ -722,7 +1252,7 @@ describe("client projection", () => {
     assert.equal(current.currentRuntimeStatus, undefined);
   });
 
-  test("collapses adjacent duplicate user message echoes", () => {
+  test("does not collapse adjacent user messages without shared identity", () => {
     let current = applyEventToProjection(
       projection(),
       event({
@@ -749,9 +1279,12 @@ describe("client projection", () => {
 
     assert.deepEqual(
       current.feed.map((entry) => entry.kind === "timeline" ? entry.item.kind : entry.kind),
-      ["user_message"],
+      ["user_message", "user_message"],
     );
-    assert.equal(current.feed[0]?.turnId, "turn-2");
+    assert.deepEqual(
+      current.feed.map((entry) => (entry.kind === "timeline" ? entry.turnId : null)),
+      ["turn-1", "turn-2"],
+    );
   });
 
   test("keeps intentional repeated user messages after an assistant response", () => {
@@ -970,6 +1503,45 @@ describe("client projection", () => {
         text: "stop",
       });
     }
+  });
+
+  test("hides anonymous OpenCode step markers from the visible chat feed", () => {
+    let current = projection();
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 1,
+        turnId: "turn-1",
+        type: "turn.step.started",
+        source: {
+          provider: "opencode",
+          channel: "structured_persisted",
+          authority: "authoritative",
+        },
+        payload: {
+          index: 1,
+        },
+      }),
+    );
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 2,
+        turnId: "turn-1",
+        type: "turn.step.completed",
+        source: {
+          provider: "opencode",
+          channel: "structured_persisted",
+          authority: "authoritative",
+        },
+        payload: {
+          index: 1,
+          reason: "stop",
+        },
+      }),
+    );
+
+    assert.equal(current.feed.length, 0);
   });
 
   test("marks parent workspaces as blocked when a descendant live session exists", () => {

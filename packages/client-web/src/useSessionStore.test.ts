@@ -12,7 +12,10 @@ import {
   resolveHiddenWorkspaceDirsFromSessionsResponse,
 } from "./useSessionStore";
 import { activateHistorySessionCommand } from "./session-store-session-startup";
-import { applyEventsToProjectionMap } from "./session-store-projections";
+import {
+  applyEventsToProjectionMap,
+  updateSessionSummaryInProjectionMap,
+} from "./session-store-projections";
 import { initialHistorySyncState, type SessionProjection } from "./types";
 
 function sessionSummary(rootDir: string): SessionSummary {
@@ -84,6 +87,31 @@ function liveStoredSessionRef(rootDir: string): StoredSessionRef {
 }
 
 describe("workspace response reconciliation", () => {
+  test("clears stale runtime status when a refreshed session summary is idle", () => {
+    const running = projection("/workspace/rah");
+    const current = new Map([
+      [
+        running.summary.session.id,
+        {
+          ...running,
+          currentRuntimeStatus: "thinking" as const,
+        },
+      ],
+    ]);
+    const idleSummary: SessionSummary = {
+      ...running.summary,
+      session: {
+        ...running.summary.session,
+        runtimeState: "idle",
+        updatedAt: "2026-04-21T00:00:01.000Z",
+      },
+    };
+
+    const next = updateSessionSummaryInProjectionMap(current, idleSummary);
+    assert.equal(next.get(running.summary.session.id)?.summary.session.runtimeState, "idle");
+    assert.equal(next.get(running.summary.session.id)?.currentRuntimeStatus, undefined);
+  });
+
   test("keeps hidden deletions filtered when an older response still includes them", () => {
     const reconciled = reconcileVisibleWorkspaceSelection({
       workspaceDirs: ["/workspace/a", "/workspace/b", "/workspace/c"],

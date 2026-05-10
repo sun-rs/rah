@@ -32,6 +32,29 @@ function createSession(services: ReturnType<typeof createServices>) {
 }
 
 describe("applyProviderActivity", () => {
+  test("clears active turn when provider reports the session is idle", () => {
+    const services = createServices();
+    const sessionId = createSession(services);
+
+    applyProviderActivity(
+      services,
+      sessionId,
+      { provider: "codex" },
+      { type: "turn_started", turnId: "turn-1" },
+    );
+    assert.equal(services.sessionStore.getSession(sessionId)?.activeTurnId, "turn-1");
+
+    applyProviderActivity(
+      services,
+      sessionId,
+      { provider: "codex" },
+      { type: "session_state", state: "idle" },
+    );
+
+    assert.equal(services.sessionStore.getSession(sessionId)?.activeTurnId, undefined);
+    assert.equal(services.sessionStore.getSession(sessionId)?.session.runtimeState, "idle");
+  });
+
   test("passes timeline identity through without making origin part of the key", () => {
     const services = createServices();
     const sessionId = createSession(services);

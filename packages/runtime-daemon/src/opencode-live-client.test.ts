@@ -197,7 +197,7 @@ test("sendInputToOpenCodeLiveSession queues consecutive inputs", async () => {
   }
 });
 
-test("interruptOpenCodeLiveSession stops an active web turn immediately", async () => {
+test("interruptOpenCodeLiveSession keeps the turn active until OpenCode confirms stop", async () => {
   const promptRequests: Array<{ method: string; url: string; body: string }> = [];
   const abortRequests: Array<{ method: string; url: string; body: string }> = [];
   const server = http.createServer((req, res) => {
@@ -280,19 +280,29 @@ test("interruptOpenCodeLiveSession stops an active web turn immediately", async 
       request: { clientId: "web-client" },
     });
 
-    assert.equal(summary.session.runtimeState, "idle");
-    await waitFor(() => promptRequests.length === 1 && abortRequests.length === 1);
+    assert.equal(summary.session.runtimeState, "running");
+    await waitFor(() => promptRequests.length === 1 && abortRequests.length >= 1);
     const state = services.sessionStore.getSession(session.session.id);
-    assert.equal(state?.session.runtimeState, "idle");
-    assert.equal(state?.activeTurnId, undefined);
-    assert.equal(liveSession.activityState.currentTurnId, undefined);
+    assert.equal(state?.session.runtimeState, "running");
+    assert.ok(state?.activeTurnId);
+    assert.ok(liveSession.activityState.currentTurnId);
     assert.equal(liveSession.queuedInputs.length, 0);
+    assert.ok(abortRequests.length >= 1);
     assert.equal(abortRequests[0]?.method, "POST");
     assert.match(abortRequests[0]?.url ?? "", /\/session\/opencode-stop-1\/abort/);
+
+    sendInputToOpenCodeLiveSession({
+      services,
+      liveSession,
+      request: { clientId: "web-client", text: "recovery after stop" },
+    });
+    assert.equal(promptRequests.length, 1);
+    assert.equal(liveSession.queuedInputs.length, 1);
+
     assert.ok(
       services.eventBus
         .list({ sessionIds: [session.session.id] })
-        .some((event) => event.type === "turn.canceled"),
+        .some((event) => event.type === "runtime.status" && event.payload.status === "thinking"),
     );
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));

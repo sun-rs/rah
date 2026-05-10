@@ -228,6 +228,81 @@ describe("Claude session files", () => {
     );
   });
 
+  test("filters Claude resume interrupted banner from chat history", () => {
+    writeClaudeSession("session-resume-banner.jsonl", [
+      {
+        type: "user",
+        uuid: "user-1",
+        cwd: workDir,
+        sessionId: "session-resume-banner",
+        timestamp: "2025-07-19T22:21:00.000Z",
+        message: {
+          content: "first question",
+        },
+      },
+      {
+        type: "assistant",
+        uuid: "assistant-1",
+        cwd: workDir,
+        sessionId: "session-resume-banner",
+        timestamp: "2025-07-19T22:21:04.000Z",
+        message: {
+          content: [{ type: "text", text: "first answer" }],
+        },
+      },
+      {
+        type: "user",
+        uuid: "user-resume-banner-1",
+        cwd: workDir,
+        sessionId: "session-resume-banner",
+        timestamp: "2025-07-19T22:21:05.000Z",
+        message: {
+          content: "Continue from where you left off.\nConversation interrupted — The previous turn was interrupted.",
+        },
+      },
+      {
+        type: "user",
+        uuid: "user-resume-banner-2",
+        cwd: workDir,
+        sessionId: "session-resume-banner",
+        timestamp: "2025-07-19T22:21:05.500Z",
+        message: {
+          content: [
+            { type: "text", text: "Continue from where you left off." },
+            { type: "text", text: "Conversation interrupted — The previous turn was interrupted." },
+          ],
+        },
+      },
+      {
+        type: "user",
+        uuid: "user-2",
+        cwd: workDir,
+        sessionId: "session-resume-banner",
+        timestamp: "2025-07-19T22:21:06.000Z",
+        message: {
+          content: "second question",
+        },
+      },
+    ]);
+
+    const record = findClaudeStoredSessionRecord("session-resume-banner", workDir);
+    assert.ok(record);
+    const page = getClaudeStoredSessionHistoryPage({
+      sessionId: "replay-resume-banner",
+      record,
+      limit: 100,
+    });
+    const messages = page.events
+      .filter((event) => event.type === "timeline.item.added")
+      .map((event) => event.payload.item)
+      .filter((item) => item.kind === "user_message" || item.kind === "assistant_message");
+
+    assert.deepEqual(
+      messages.map((item) => item.text),
+      ["first question", "first answer", "second question"],
+    );
+  });
+
   test("deduplicates resumed history and skips internal Claude events", () => {
     writeClaudeSession("session-2.jsonl", [
       {
@@ -436,17 +511,17 @@ describe("Claude session files", () => {
       ),
       false,
     );
-    assert.ok(
+    assert.equal(
       page.events.some(
         (event) =>
           event.type === "notification.emitted" &&
-          event.payload.title === "Claude API error" &&
-          event.payload.body === "Claude upstream rejected the request",
+          event.payload.title === "Claude API error",
       ),
+      false,
     );
   });
 
-  test("condenses structured Claude api error payloads before displaying history notifications", () => {
+  test("filters Claude api errors out of chat history notifications", () => {
     writeClaudeSession("session-503.jsonl", [
       {
         type: "user",
@@ -490,23 +565,21 @@ describe("Claude session files", () => {
       record,
       limit: 100,
     });
-    const notification = page.events.find(
-      (event) =>
-        event.type === "notification.emitted" &&
-        event.payload.title === "Claude API error",
+    assert.equal(
+      page.events.some(
+        (event) =>
+          event.type === "notification.emitted" &&
+          event.payload.title === "Claude API error",
+      ),
+      false,
     );
-    assert.ok(notification);
-    if (notification.type === "notification.emitted") {
-      assert.equal(notification.payload.level, "warning");
-      assert.equal(
-        notification.payload.body,
-        "API Error: 503 No available accounts: no available accounts. This is a server-side issue, usually temporary.",
-      );
-      assert.doesNotMatch(notification.payload.body, /cloudflare|headers|x-request-id/);
-    }
+    assert.equal(
+      JSON.stringify(page.events).includes("No available accounts"),
+      false,
+    );
   });
 
-  test("marks Claude overload and rate-limit api errors as warnings", () => {
+  test("filters Claude overload and rate-limit api errors out of chat history", () => {
     writeClaudeSession("session-429.jsonl", [
       {
         type: "user",
@@ -546,22 +619,21 @@ describe("Claude session files", () => {
       record,
       limit: 100,
     });
-    const notification = page.events.find(
-      (event) =>
-        event.type === "notification.emitted" &&
-        event.payload.title === "Claude API error",
+    assert.equal(
+      page.events.some(
+        (event) =>
+          event.type === "notification.emitted" &&
+          event.payload.title === "Claude API error",
+      ),
+      false,
     );
-    assert.ok(notification);
-    if (notification.type === "notification.emitted") {
-      assert.equal(notification.payload.level, "warning");
-      assert.equal(
-        notification.payload.body,
-        "API Error: 429 The engine is currently overloaded, please try again later",
-      );
-    }
+    assert.equal(
+      JSON.stringify(page.events).includes("The engine is currently overloaded"),
+      false,
+    );
   });
 
-  test("maps Claude interrupt placeholders to turn canceled events", () => {
+  test("filters Claude interrupt placeholders instead of creating chat notices", () => {
     writeClaudeSession("session-interrupted.jsonl", [
       {
         type: "user",
@@ -593,14 +665,7 @@ describe("Claude session files", () => {
       limit: 100,
     });
 
-    assert.ok(
-      page.events.some(
-        (event) =>
-          event.type === "turn.canceled" &&
-          event.turnId === "turn:user-interrupted" &&
-          event.payload.reason === "interrupted",
-      ),
-    );
+    assert.equal(page.events.some((event) => event.type === "turn.canceled"), false);
     assert.equal(
       page.events.some(
         (event) =>
@@ -612,7 +677,45 @@ describe("Claude session files", () => {
     );
   });
 
-  test("maps Claude no-response placeholders to turn canceled only before assistant output", () => {
+  test("strips Claude turn_aborted context from user messages", () => {
+    writeClaudeSession("session-turn-aborted-context.jsonl", [
+      {
+        type: "user",
+        uuid: "user-turn-aborted-context",
+        cwd: workDir,
+        sessionId: "session-turn-aborted-context",
+        timestamp: "2025-07-19T22:35:00.000Z",
+        message: {
+          content:
+            "休眠五秒\n<turn_aborted>\nThe user interrupted the previous turn on purpose.\n</turn_aborted>",
+        },
+      },
+    ]);
+
+    const record = discoverClaudeStoredSessions(workDir).find(
+      (session) => session.ref.providerSessionId === "session-turn-aborted-context",
+    );
+    assert.ok(record);
+    const page = getClaudeStoredSessionHistoryPage({
+      sessionId: "rah-session",
+      record,
+      limit: 100,
+    });
+
+    const user = page.events.find(
+      (event) =>
+        event.type === "timeline.item.added" &&
+        event.payload.item.kind === "user_message",
+    );
+    assert.equal(
+      user?.type === "timeline.item.added" && user.payload.item.kind === "user_message"
+        ? user.payload.item.text
+        : null,
+      "休眠五秒",
+    );
+  });
+
+  test("filters Claude no-response placeholders without creating chat notices", () => {
     writeClaudeSession("session-no-response.jsonl", [
       {
         type: "user",
@@ -674,9 +777,7 @@ describe("Claude session files", () => {
       limit: 100,
     });
     const canceled = page.events.filter((event) => event.type === "turn.canceled");
-
-    assert.equal(canceled.length, 1);
-    assert.equal(canceled[0]?.turnId, "turn:user-no-response");
+    assert.equal(canceled.length, 0);
   });
 
   test("frozen Claude history loader keeps browsing anchored after newer lines append", () => {

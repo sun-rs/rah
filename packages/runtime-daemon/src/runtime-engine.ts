@@ -41,6 +41,7 @@ import type {
   SetSessionModelRequest,
   SessionFileSearchResponse,
   SessionHistoryPageResponse,
+  SessionInputRequest,
   SessionLiveBackend,
   SessionSummary,
   StartSessionRequest,
@@ -677,6 +678,7 @@ export class RuntimeEngine {
     }
     return (
       this.defaultLiveBackend === "native_tui" &&
+      request.provider !== "claude" &&
       this.nativeTuiProviders.supports(request.provider)
     );
   }
@@ -705,7 +707,7 @@ export class RuntimeEngine {
       return false;
     }
     return (
-      this.defaultLiveBackend === "zellij_tui" &&
+      (request.provider === "claude" || this.defaultLiveBackend === "zellij_tui") &&
       this.nativeTuiProviders.supports(request.provider)
     );
   }
@@ -737,11 +739,16 @@ export class RuntimeEngine {
     return this.sessionLifecycle.setSessionModel(sessionId, request);
   }
 
-  sendInput(sessionId: string, request: { clientId: string; text: string }): void {
+  sendInput(sessionId: string, request: SessionInputRequest): void {
     if (this.terminals.handleWrapperInput(sessionId, request.clientId, request.text)) {
       return;
     }
-    if (this.terminals.handleNativeTuiInput(sessionId, request.clientId, request.text)) {
+    if (
+      this.terminals.handleNativeTuiInput(sessionId, request.clientId, request.text, {
+        ...(request.clientMessageId !== undefined ? { clientMessageId: request.clientMessageId } : {}),
+        ...(request.clientTurnId !== undefined ? { clientTurnId: request.clientTurnId } : {}),
+      })
+    ) {
       return;
     }
     this.requireStructuredInputControlAdapter(sessionId).sendInput(sessionId, request);

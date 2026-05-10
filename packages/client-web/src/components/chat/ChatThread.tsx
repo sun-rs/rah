@@ -115,10 +115,10 @@ function TimelineCard(props: {
   );
 }
 
-function renderTimelineItem(item: TimelineItem) {
+function renderTimelineItem(item: TimelineItem, entryKey?: string) {
   switch (item.kind) {
     case "user_message":
-      return <UserMessage content={item.text} />;
+      return <UserMessage content={item.text} entryKey={entryKey} />;
     case "assistant_message":
       return <AssistantMessage content={item.text} />;
     case "reasoning":
@@ -254,7 +254,7 @@ function renderEntry(
 ) {
   switch (entry.kind) {
     case "timeline":
-      return renderTimelineItem(entry.item);
+      return renderTimelineItem(entry.item, entry.key);
     case "tool_call":
       return (
         <ToolCallCard
@@ -665,6 +665,7 @@ export function ChatThread(props: {
     <div className="relative min-h-0 flex-1">
       <div
         ref={containerRef}
+        data-testid="chat-thread-scroll-container"
         className="h-full overflow-y-scroll overflow-x-hidden custom-scrollbar scrollbar-stable px-4 py-5"
       >
         <div ref={contentRef} className="mx-auto w-full min-w-0 max-w-3xl space-y-5">

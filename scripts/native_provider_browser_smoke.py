@@ -12,7 +12,7 @@ import tempfile
 import time
 from dataclasses import dataclass
 from typing import Any
-from urllib import request
+from urllib import error, request
 
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import expect, sync_playwright
@@ -22,6 +22,26 @@ from native_smoke_process import terminate_process_tree
 
 ROOT_DIR = pathlib.Path(__file__).resolve().parent.parent
 SCREENSHOTS: list[str] = []
+CASE_IDS = [
+    "TRANSCRIPT-ORDER-001",
+    "TRANSCRIPT-UNIQUE-001",
+    "TRANSCRIPT-REPEAT-001",
+    "INTERRUPT-ANCHOR-001",
+    "INTERRUPT-MULTI-001",
+    "INTERRUPT-STATE-001",
+    "QUEUE-INPUT-001",
+    "NEW-SESSION-001",
+    "REFRESH-LIVE-001",
+    "HISTORY-CLAIM-001",
+    "CLAUDE-ABORT-CONTEXT-001",
+    "CLAUDE-ERROR-001",
+    "CLAUDE-ZELLIJ-001",
+    "OPENCODE-STOP-001",
+    "OPENCODE-MIRROR-001",
+    "TUI-SURFACE-001",
+    "TUI-EXIT-001",
+    "ARCHIVE-001",
+]
 
 
 def selected_browser_name() -> str:
@@ -228,7 +248,8 @@ def write_fake_provider(path: pathlib.Path, config: ProviderConfig) -> None:
             "  const now = new Date().toISOString();",
             "  fs.mkdirSync(projectDir, { recursive: true });",
             "  fs.writeFileSync(path.join(projectDir, `${sessionId}.jsonl`), [",
-            "    JSON.stringify({ type: 'user', uuid: 'claude-native-browser-user', cwd: process.cwd(), sessionId, timestamp: now, message: { content: 'Claude native browser question' } }),",
+            "    JSON.stringify({ type: 'user', uuid: 'claude-native-browser-user', cwd: process.cwd(), sessionId, timestamp: now, message: { content: 'Claude native browser question\\n<turn_aborted>\\nThe user interrupted the previous turn on purpose.\\n</turn_aborted>' } }),",
+            "    JSON.stringify({ type: 'system', uuid: 'claude-native-browser-api-error', subtype: 'api_error', cwd: process.cwd(), sessionId, timestamp: now, error: { status: 503, headers: { server: 'cloudflare', 'x-request-id': 'f589e5e5-1066-4763-abe4-14122f11c486' }, error: { error: { message: 'No available accounts: no available accounts', type: 'api_error' }, type: 'error' }, type: 'api_error' } }),",
             "    JSON.stringify({ type: 'assistant', uuid: 'claude-native-browser-assistant', cwd: process.cwd(), sessionId, timestamp: now, message: { content: [{ type: 'text', text: 'Claude native browser answer' }] } }),",
             "  ].join('\\n') + '\\n');",
             "}, 100);",
@@ -399,6 +420,10 @@ def write_fake_provider(path: pathlib.Path, config: ProviderConfig) -> None:
                 "  for (const raw of parts) {",
                 "    const text = raw.trim();",
                 "    if (text) {",
+                "      if (text === 'exit') {",
+                f"        process.stdout.write(`{config.ready_marker}_EXITING\\r\\n`);",
+                "        process.exit(0);",
+                "      }",
                 "      turnIndex += 1;",
                 "      process.stdout.write(`" + config.input_marker + ":${text}\\r\\n`);",
                 "      const holdForStopSmoke = text.startsWith('chat composer ');",
@@ -514,6 +539,63 @@ def assert_page_text_order(page, *needles: str) -> None:
                 f"page did not contain {needle!r} after offset {cursor}; tail={text[-1600:]}"
             )
         cursor = index
+
+
+def page_text_occurrences(page, needle: str) -> int:
+    return page.locator("body").inner_text(timeout=10_000).count(needle)
+
+
+def wait_for_page_text_occurrences(page, needle: str, expected: int, timeout_s: int = 15) -> None:
+    started = time.time()
+    last_count = 0
+    while time.time() - started < timeout_s:
+        last_count = page_text_occurrences(page, needle)
+        if last_count == expected:
+            return
+        page.wait_for_timeout(200)
+    raise AssertionError(
+        f"page text {needle!r} count did not become {expected}; last={last_count}"
+    )
+
+
+def wait_for_page_text_at_least(page, needle: str, minimum: int, timeout_s: int = 15) -> None:
+    started = time.time()
+    last_count = 0
+    while time.time() - started < timeout_s:
+        last_count = page_text_occurrences(page, needle)
+        if last_count >= minimum:
+            return
+        page.wait_for_timeout(200)
+    raise AssertionError(
+        f"page text {needle!r} count did not reach {minimum}; last={last_count}"
+    )
+
+
+def chat_user_message_occurrences(page, needle: str) -> int:
+    return page.get_by_test_id("chat-user-message").filter(has_text=needle).count()
+
+
+def chat_user_message_texts(page) -> list[str]:
+    return page.evaluate(
+        """() => [...document.querySelectorAll('[data-testid="chat-user-message"]')]
+            .map((node) => `${node.getAttribute('data-feed-key') || '<no-key>'}: ${node.textContent || ''}`)"""
+    )
+
+
+def wait_for_chat_user_message_occurrences(page, needle: str, expected: int, timeout_s: int = 15) -> None:
+    started = time.time()
+    last_count = 0
+    last_texts: list[str] = []
+    while time.time() - started < timeout_s:
+        last_count = chat_user_message_occurrences(page, needle)
+        last_texts = chat_user_message_texts(page)
+        if last_count == expected:
+            return
+        page.wait_for_timeout(200)
+    raise AssertionError(
+        f"chat user message {needle!r} count did not become {expected}; "
+        f"last={last_count}; user_messages={last_texts}"
+    )
 
 
 def dynamic_answer_for(config: ProviderConfig, prompt: str) -> str:
@@ -632,6 +714,27 @@ def count_session_history_timeline_text(
     text: str,
 ) -> int:
     return len(session_history_timeline_text_matches(base_url, session_id, kind, text))
+
+
+def wait_for_session_history_timeline_text_count(
+    base_url: str,
+    session_id: str,
+    kind: str,
+    text: str,
+    expected: int,
+    timeout_s: int = 20,
+) -> None:
+    started = time.time()
+    last_matches: list[dict[str, Any]] = []
+    while time.time() - started < timeout_s:
+        last_matches = session_history_timeline_text_matches(base_url, session_id, kind, text)
+        if len(last_matches) == expected:
+            return
+        time.sleep(0.2)
+    raise AssertionError(
+        f"session history {kind} text {text!r} count did not become {expected}; "
+        f"last={len(last_matches)} matches={last_matches}"
+    )
 
 
 def session_history_timeline_text_matches(
@@ -816,6 +919,175 @@ def mark_session_closed(base_url: str, session_id: str) -> None:
         pass
 
 
+def session_exists(base_url: str, session_id: str) -> bool:
+    try:
+        request_json(base_url, f"/api/sessions/{session_id}")
+        return True
+    except error.HTTPError as exc:
+        if exc.code == 404:
+            return False
+        raise
+
+
+def wait_for_session_absent(base_url: str, session_id: str, timeout_s: int = 20) -> None:
+    started = time.time()
+    while time.time() - started < timeout_s:
+        if not session_exists(base_url, session_id):
+            return
+        time.sleep(0.2)
+    raise AssertionError(f"session {session_id} still exists after {timeout_s}s")
+
+
+def wait_for_live_session_absent(
+    base_url: str,
+    provider: str,
+    session_id: str,
+    timeout_s: int = 20,
+) -> None:
+    started = time.time()
+    while time.time() - started < timeout_s:
+        if session_id not in live_session_ids(base_url, provider):
+            return
+        time.sleep(0.2)
+    raise AssertionError(f"{provider} session {session_id} still appears in live sessions")
+
+
+def assert_session_not_in_pty_stats(base_url: str, session_id: str) -> None:
+    stats = request_json(base_url, "/api/pty/stats")
+    sessions = stats.get("sessions", [])
+    if any(str(entry.get("sessionId")) == session_id for entry in sessions):
+        raise AssertionError(f"session {session_id} still appears in PTY stats: {sessions}")
+
+
+def wait_for_pty_status(
+    base_url: str,
+    session_id: str,
+    expected: str,
+    timeout_s: int = 20,
+) -> None:
+    started = time.time()
+    last_sessions: list[dict[str, Any]] = []
+    while time.time() - started < timeout_s:
+        stats = request_json(base_url, "/api/pty/stats")
+        last_sessions = stats.get("sessions", [])
+        for entry in last_sessions:
+            if str(entry.get("sessionId")) == session_id and entry.get("status") == expected:
+                return
+        time.sleep(0.2)
+    raise AssertionError(
+        f"PTY session {session_id} status did not become {expected!r}; last={last_sessions}"
+    )
+
+
+def wait_for_session_not_running(
+    base_url: str,
+    session_id: str,
+    provider: str,
+    timeout_s: int = 20,
+) -> None:
+    started = time.time()
+    last_session: dict[str, Any] | None = None
+    while time.time() - started < timeout_s:
+        last_session = request_json(base_url, f"/api/sessions/{session_id}")["session"]["session"]
+        if last_session.get("runtimeState") != "running":
+            return
+        time.sleep(0.2)
+    raise AssertionError(f"{provider} session {session_id} stayed running after TUI exit: {last_session}")
+
+
+def wait_for_stored_history_ref(
+    base_url: str,
+    provider: str,
+    provider_session_id: str,
+    timeout_s: int = 20,
+) -> None:
+    started = time.time()
+    last_response: dict[str, Any] = {}
+    while time.time() - started < timeout_s:
+        response = request_json(base_url, "/api/sessions")
+        last_response = response
+        candidates = [
+            *response.get("storedSessions", []),
+            *response.get("recentSessions", []),
+        ]
+        if any(
+            entry.get("provider") == provider
+            and str(entry.get("providerSessionId")) == provider_session_id
+            for entry in candidates
+        ):
+            return
+        time.sleep(0.2)
+    raise AssertionError(
+        f"{provider} provider history {provider_session_id!r} was not retained; "
+        f"last={json.dumps(last_response, ensure_ascii=False)[:2000]}"
+    )
+
+
+def exercise_provider_tui_exit(
+    page,
+    base_url: str,
+    workspace: pathlib.Path,
+    config: ProviderConfig,
+) -> None:
+    session_id = start_native_session(base_url, workspace, config)
+    try:
+        page.reload(wait_until="domcontentloaded")
+        select_live_session(page, session_id)
+        page.get_by_role("button", name="TUI", exact=True).click(timeout=30_000)
+        panel = page.locator(".terminal-panel").last
+        expect(panel).to_be_visible(timeout=10_000)
+        wait_for_terminal_text(panel, config.ready_marker)
+        terminal_id = session_native_terminal_id(base_url, session_id)
+        send_pty_input(base_url, terminal_id, "web-user", "exit\r")
+        wait_for_pty_status(base_url, session_id, "exited")
+        wait_for_session_not_running(base_url, session_id, config.provider)
+        time.sleep(0.5)
+        wait_for_pty_status(base_url, session_id, "exited", timeout_s=2)
+        mark_session_closed(base_url, session_id)
+        artifact_dir = getattr(page, "_rah_artifact_dir", None)
+        if artifact_dir:
+            page.reload(wait_until="domcontentloaded")
+            save_browser_screenshot(page, artifact_dir, f"{config.provider}-tui-exit-live-cleanup")
+    finally:
+        close_session_quietly(base_url, session_id)
+        mark_session_closed(base_url, session_id)
+
+
+def exercise_provider_archive(
+    page,
+    base_url: str,
+    workspace: pathlib.Path,
+    config: ProviderConfig,
+) -> None:
+    session_id = start_native_session(base_url, workspace, config)
+    try:
+        provider_session_id = session_provider_session_id(base_url, session_id)
+        page.reload(wait_until="domcontentloaded")
+        select_live_session(page, session_id)
+        page.get_by_role("button", name="TUI", exact=True).click(timeout=30_000)
+        panel = page.locator(".terminal-panel").last
+        expect(panel).to_be_visible(timeout=10_000)
+        wait_for_terminal_text(panel, config.ready_marker)
+        page.get_by_role("button", name="Chat", exact=True).click(timeout=30_000)
+        page.locator('button[title="Archive this live session"]:visible').first.click(timeout=30_000)
+        page.get_by_role("dialog").filter(has_text="Archive session?").get_by_role(
+            "button",
+            name="Archive",
+            exact=True,
+        ).click(timeout=30_000)
+        wait_for_session_absent(base_url, session_id)
+        wait_for_live_session_absent(base_url, config.provider, session_id)
+        assert_session_not_in_pty_stats(base_url, session_id)
+        wait_for_stored_history_ref(base_url, config.provider, provider_session_id)
+        mark_session_closed(base_url, session_id)
+        artifact_dir = getattr(page, "_rah_artifact_dir", None)
+        if artifact_dir:
+            save_browser_screenshot(page, artifact_dir, f"{config.provider}-archive-live-cleanup")
+    finally:
+        close_session_quietly(base_url, session_id)
+        mark_session_closed(base_url, session_id)
+
+
 def exercise_provider_cli_modes(
     page,
     base_url: str,
@@ -934,6 +1206,19 @@ def exercise_provider(page, base_url: str, workspace: pathlib.Path, config: Prov
         chat_button.click()
         if config.expected_mirror_text:
             expect(page.get_by_text(config.expected_mirror_text)).to_be_visible(timeout=15_000)
+            if config.provider == "claude":
+                assert_page_text_absent(page, "<turn_aborted>")
+                assert_page_text_absent(page, "The user interrupted the previous turn on purpose.")
+                compact_error = (
+                    "Claude API error — API Error: 503 No available accounts: no available accounts. "
+                    "This is a server-side issue, usually temporary."
+                )
+                expect(page.get_by_text(compact_error, exact=True).first).to_be_visible(timeout=15_000)
+                assert_page_text_order(page, "Claude native browser question", "Claude API error")
+                assert_page_text_absent(page, "cloudflare")
+                assert_page_text_absent(page, "x-request-id")
+                assert_page_text_absent(page, "f589e5e5-1066-4763-abe4-14122f11c486")
+                assert_page_text_absent(page, '"headers"')
             artifact_dir = getattr(page, "_rah_artifact_dir", None)
             if artifact_dir:
                 save_browser_screenshot(page, artifact_dir, f"{config.provider}-chat-mirror")
@@ -990,8 +1275,27 @@ def exercise_provider(page, base_url: str, workspace: pathlib.Path, config: Prov
         artifact_dir = getattr(page, "_rah_artifact_dir", None)
         if artifact_dir:
             save_browser_screenshot(page, artifact_dir, f"{config.provider}-chat-dirty-queued-inputs")
+        repeated_prompt = f"repeat {config.provider} browser native"
+        fill_and_submit_chat_composer(page, repeated_prompt)
+        wait_for_session_history_timeline_text_count(
+            base_url,
+            session_id,
+            "user_message",
+            repeated_prompt,
+            1,
+        )
+        fill_and_submit_chat_composer(page, repeated_prompt)
+        wait_for_session_history_timeline_text_count(
+            base_url,
+            session_id,
+            "user_message",
+            repeated_prompt,
+            2,
+        )
+        wait_for_chat_user_message_occurrences(page, repeated_prompt, 2)
         chat_prompt = f"chat composer {config.provider} browser native"
         fill_and_submit_chat_composer(page, chat_prompt)
+        wait_for_chat_user_message_occurrences(page, chat_prompt, 1)
         tui_button.click()
         panel = page.locator(".terminal-panel").last
         expect(panel).to_be_visible(timeout=10_000)
@@ -1008,8 +1312,14 @@ def exercise_provider(page, base_url: str, workspace: pathlib.Path, config: Prov
         if artifact_dir:
             save_browser_screenshot(page, artifact_dir, f"{config.provider}-web-tui-after-reactivate")
         page.get_by_role("button", name="Chat", exact=True).click()
+        interrupted_notice_count = page_text_occurrences(page, "Conversation interrupted")
         try:
-            page.get_by_role("button", name="Stop generating").click(timeout=15_000)
+            stop_button = page.get_by_role("button", name="Stop generating")
+            stop_button.click(timeout=15_000)
+            try:
+                stop_button.click(timeout=500)
+            except Exception:
+                pass
         except Exception as exc:
             runtime_state = session_runtime_state(base_url, session_id)
             raise AssertionError(
@@ -1019,7 +1329,15 @@ def exercise_provider(page, base_url: str, workspace: pathlib.Path, config: Prov
         page.get_by_role("button", name="TUI", exact=True).click()
         wait_for_terminal_text(panel, config.interrupt_marker)
         wait_for_session_idle(base_url, session_id, config.provider)
+        wait_for_terminal_text(panel, config.ready_marker)
         page.get_by_role("button", name="Chat", exact=True).click()
+        wait_for_page_text_occurrences(
+            page,
+            "Conversation interrupted",
+            interrupted_notice_count + 1,
+        )
+        assert_page_text_order(page, chat_prompt, "Conversation interrupted")
+        expect(page.get_by_role("button", name="Stop generating")).to_have_count(0, timeout=10_000)
         assert_page_text_absent(page, "Unhandled provider event")
         page.get_by_role("button", name="TUI", exact=True).click()
         if config.provider == "opencode":
@@ -1159,6 +1477,9 @@ def main() -> int:
                 exercise_provider_cli_modes(page, base_url, workspace, config)
                 for config in CONFIGS
             ]
+            for config in CONFIGS:
+                exercise_provider_tui_exit(page, base_url, workspace, config)
+                exercise_provider_archive(page, base_url, workspace, config)
             browser.close()
         print(
             json.dumps(
@@ -1167,6 +1488,7 @@ def main() -> int:
                     "baseUrl": base_url,
                     "browser": selected_browser_name(),
                     "headless": browser_headless(),
+                    "caseIds": CASE_IDS,
                     "screenshots": SCREENSHOTS,
                     "asserted": [
                         "Claude native sessions expose Chat/TUI when JSONL mirror is available",
@@ -1175,6 +1497,7 @@ def main() -> int:
                         "provider history mirror updates dynamically after native TUI input",
                         "Chat renders provider user messages before assistant replies",
                         "Chat does not show loading-history or unhandled-provider-event noise for new live sessions",
+                        "Claude structured 503/429-style API errors render as compact warnings without raw headers",
                         "Chat composer input reaches daemon-owned provider TUI",
                         "Web TUI close and activate restores provider TUI replay",
                         "Chat composer is blocked while provider native TUI prompt has an unsubmitted draft",
@@ -1189,6 +1512,8 @@ def main() -> int:
                         "rah <provider> terminal launch can be observed in browser Chat/TUI",
                         "rah <provider> terminal stop is mirrored back to the browser",
                         "rah <provider> resume can be observed in browser Chat without duplicated history",
+                        "provider TUI process exit marks PTY as exited and leaves the session not running",
+                        "Archive closes provider live sessions and PTY state while retaining provider history",
                     ],
                     "results": results,
                     "cliResults": cli_results,
