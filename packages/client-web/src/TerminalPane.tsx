@@ -13,6 +13,10 @@ interface TerminalPaneProps {
   terminalId: string;
   clientId: string;
   hasControl: boolean;
+  tuiClientCloseEnabled?: boolean;
+  onClose?: () => void;
+  closeLabel?: string;
+  closeTitle?: string;
   tuiClientActive?: boolean;
   onTuiClientActiveChange?: (active: boolean) => void;
 }
@@ -156,7 +160,11 @@ export function TerminalPane(props: TerminalPaneProps) {
   const [surfaceOwnerKind, setSurfaceOwnerKind] = useState<string | null>(null);
   const [localTuiClientActive, setLocalTuiClientActive] = useState(true);
   const [tuiClientClosing, setTuiClientClosing] = useState(false);
-  const tuiClientActive = props.tuiClientActive ?? localTuiClientActive;
+  const tuiClientCloseEnabled = props.tuiClientCloseEnabled === true;
+  const tuiClientActive = tuiClientCloseEnabled
+    ? props.tuiClientActive ?? localTuiClientActive
+    : true;
+  const showPanelCloseButton = tuiClientCloseEnabled ? tuiClientActive : Boolean(props.onClose);
   const committedBridgeValueRef = useRef("");
   const bridgeInputRef = useRef<HTMLInputElement | null>(null);
   const isComposingRef = useRef(false);
@@ -586,6 +594,14 @@ export function TerminalPane(props: TerminalPaneProps) {
       });
   };
 
+  const closePanel = () => {
+    if (tuiClientCloseEnabled) {
+      closeCurrentTuiClient();
+      return;
+    }
+    props.onClose?.();
+  };
+
   const activateCurrentTuiClient = () => {
     nextReplaySeqRef.current = 0;
     surfaceActiveRef.current = false;
@@ -677,7 +693,7 @@ export function TerminalPane(props: TerminalPaneProps) {
       data-mobile-input-bridge={showIosInputBridge ? "true" : undefined}
     >
       <div ref={panelRef} className="terminal-panel" data-testid="terminal-panel">
-        {tuiClientActive ? (
+        {showPanelCloseButton ? (
           <button
             type="button"
             className="terminal-client-close-button"
@@ -685,10 +701,18 @@ export function TerminalPane(props: TerminalPaneProps) {
               event.preventDefault();
               event.stopPropagation();
             }}
-            onClick={closeCurrentTuiClient}
-            aria-label="Close Web TUI client"
-            title="Close this Web TUI client without stopping the live session"
-            disabled={tuiClientClosing}
+            onClick={closePanel}
+            aria-label={
+              tuiClientCloseEnabled
+                ? "Close Web TUI client"
+                : props.closeLabel ?? "Close terminal"
+            }
+            title={
+              tuiClientCloseEnabled
+                ? "Close this Web TUI client without stopping the live session"
+                : props.closeTitle ?? "Close terminal"
+            }
+            disabled={tuiClientCloseEnabled ? tuiClientClosing : false}
           >
             <span aria-hidden="true" className="terminal-client-close-icon" />
           </button>
@@ -712,7 +736,7 @@ export function TerminalPane(props: TerminalPaneProps) {
               : undefined
           }
         />
-        {!tuiClientActive ? (
+        {tuiClientCloseEnabled && !tuiClientActive ? (
           <div className="terminal-surface-overlay" data-testid="terminal-client-inactive-overlay">
             <div className="terminal-surface-overlay-card">
               <div className="terminal-surface-overlay-title">Web TUI client is closed</div>

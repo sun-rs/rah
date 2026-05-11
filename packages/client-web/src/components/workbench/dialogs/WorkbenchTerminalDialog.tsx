@@ -36,6 +36,9 @@ export function WorkbenchTerminalDialog(props: {
   );
   const displayCwd = activeTerminal?.cwd ?? props.cwd;
   const workspaceTitle = useMemo(() => terminalTitle(displayCwd), [displayCwd]);
+  const activeTerminalLabel = activeTerminal
+    ? labelsByTerminalId[activeTerminal.id] || terminalTitle(activeTerminal.cwd)
+    : "terminal";
 
   useEffect(() => {
     terminalsRef.current = terminals;
@@ -328,6 +331,9 @@ export function WorkbenchTerminalDialog(props: {
                 terminalId={activeTerminal.id}
                 clientId={props.clientId}
                 hasControl
+                closeLabel={`Close ${activeTerminalLabel} terminal`}
+                closeTitle={`Close ${activeTerminalLabel} terminal`}
+                onClose={() => requestCloseSingleTerminal(activeTerminal.id)}
               />
             ) : null}
           </div>

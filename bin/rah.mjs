@@ -23,7 +23,7 @@ const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_DAEMON_URL = "http://127.0.0.1:43111";
 const CORE_LIVE_PROVIDERS = new Set(["codex", "claude", "opencode"]);
 const SUPPORTED_PROVIDERS = CORE_LIVE_PROVIDERS;
-const MANAGEMENT_COMMANDS = new Set(["start", "status", "stop", "restart", "logs", "attach"]);
+const MANAGEMENT_COMMANDS = new Set(["start", "status", "stop", "restart", "logs", "attach", "archive"]);
 const CLIENT_INDEX_PATH = join(ROOT_DIR, "packages", "client-web", "dist", "index.html");
 const TERMINAL_MODE_RESET_SEQUENCE = [
   "\u001b[<1u",
@@ -65,6 +65,7 @@ function printUsage() {
       "  rah restart",
       "  rah logs [--follow]",
       "  rah attach <rahSessionId>",
+      "  rah archive <rahSessionId>",
       "  rah council-mcp --room <roomId> --actor <actorId>",
       "  rah <provider>",
       "  rah <provider> attach <providerSessionId>",
@@ -108,10 +109,10 @@ function parseManagementArgs(command, argv) {
   let follow = false;
   let sessionId;
   const rest = [...argv];
-  if (command === "attach") {
+  if (command === "attach" || command === "archive") {
     sessionId = rest.shift();
     if (!sessionId) {
-      throw new Error("Missing RAH session id after `attach`.");
+      throw new Error(`Missing RAH session id after \`${command}\`.`);
     }
   }
   while (rest.length > 0) {
@@ -563,6 +564,12 @@ async function handleManagementCommand(parsed) {
   }
   if (parsed.command === "attach") {
     await attachExistingRahSession(parsed);
+    return;
+  }
+  if (parsed.command === "archive") {
+    await archiveRahSession(parsed.daemonUrl, parsed.sessionId);
+    process.stdout.write(`[rah] archived session ${parsed.sessionId}\n`);
+    return;
   }
 }
 
@@ -865,6 +872,36 @@ async function detachPtyFirstClient(daemonUrl, sessionId, clientId) {
     // Detach is best-effort cleanup for a local terminal client. Failure must
     // not close or otherwise disturb the daemon-owned TUI session.
   }
+}
+
+async function archiveRahSession(daemonUrl, sessionId, client = terminalClientDescriptor()) {
+  await attachRahClient(daemonUrl, sessionId, client, {
+    mode: "interactive",
+    claimControl: false,
+  });
+  await postJson(daemonUrl, `/api/sessions/${encodeURIComponent(sessionId)}/close`, {
+    clientId: client.clientId,
+  });
+}
+
+async function printLiveSessionExitHint(daemonUrl, session) {
+  if (!(await liveSessionExists(daemonUrl, session.id))) {
+    return;
+  }
+  const provider = session.provider ?? "provider";
+  const providerSessionId = session.providerSessionId;
+  const attachCommand = providerSessionId
+    ? `rah ${provider} attach ${providerSessionId}`
+    : `rah attach ${session.id}`;
+  process.stdout.write(
+    [
+      "",
+      `[rah] Terminal client detached. RAH session is still live: ${session.id}`,
+      `[rah] Reattach: ${attachCommand}`,
+      `[rah] End everywhere: rah archive ${session.id}`,
+      "",
+    ].join("\n"),
+  );
 }
 
 function sendPtyResize(socket, sessionId, clientId) {
@@ -1281,6 +1318,7 @@ async function attachExistingRahSession(parsed) {
   } finally {
     await detachPtyFirstClient(parsed.daemonUrl, session.id, client.clientId);
   }
+  await printLiveSessionExitHint(parsed.daemonUrl, session);
 }
 
 async function runPtyFirstProviderCommand(parsed) {
@@ -1300,6 +1338,7 @@ async function runPtyFirstProviderCommand(parsed) {
   } finally {
     await detachPtyFirstClient(parsed.daemonUrl, session.id, client.clientId);
   }
+  await printLiveSessionExitHint(parsed.daemonUrl, session);
 }
 
 async function main() {

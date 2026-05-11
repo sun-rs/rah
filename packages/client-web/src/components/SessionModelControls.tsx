@@ -96,6 +96,8 @@ export function SessionModelControls(props: {
 
   const [open, setOpen] = useState(false);
   const [panelView, setPanelView] = useState<"model-list" | "param-list">("model-list");
+  const [draftModelId, setDraftModelId] = useState<string | null>(null);
+  const [draftReasoningId, setDraftReasoningId] = useState<string | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const modelViewRef = useRef<HTMLDivElement>(null);
@@ -103,15 +105,23 @@ export function SessionModelControls(props: {
   const modelListRef = useRef<HTMLDivElement>(null);
   const paramListRef = useRef<HTMLDivElement>(null);
   const [panelStyle, setPanelStyle] = useState<CSSProperties>({});
+  const panelModel =
+    panelView === "param-list"
+      ? selectedModel(props.catalog, draftModelId ?? model?.id ?? null)
+      : model;
+  const panelReasoningOptions = panelModel?.reasoningOptions ?? [];
+  const panelReasoning = selectedReasoning(panelModel, draftReasoningId ?? reasoning?.id ?? null);
   const visibleOptionCount =
     panelView === "param-list"
-      ? Math.max(reasoningOptions.length, 1)
+      ? Math.max(panelReasoningOptions.length, 1)
       : Math.max(models.length, props.loading ? 1 : 0);
 
   /* Reset to model-list when panel closes */
   useEffect(() => {
     if (!open) {
       setPanelView("model-list");
+      setDraftModelId(null);
+      setDraftReasoningId(null);
     }
   }, [open]);
 
@@ -186,18 +196,25 @@ export function SessionModelControls(props: {
   const handleModelSelect = (modelId: string) => {
     const nextModel = models.find((m) => m.id === modelId);
     const nextReasoningOptions = nextModel?.reasoningOptions ?? [];
-    props.onModelChange(modelId, defaultReasoningIdForModel(nextModel));
+    const defaultReasoningId = defaultReasoningIdForModel(nextModel);
 
     if (nextReasoningOptions.length > 1) {
+      setDraftModelId(modelId);
+      setDraftReasoningId(defaultReasoningId);
       setPanelView("param-list");
     } else {
+      props.onModelChange(modelId, defaultReasoningId);
       /* 0 or 1 option — nothing further to choose */
       setOpen(false);
     }
   };
 
   const handleReasoningSelect = (reasoningId: string) => {
-    props.onReasoningChange(reasoningId);
+    if (draftModelId && draftModelId !== model?.id) {
+      props.onModelChange(draftModelId, reasoningId);
+    } else {
+      props.onReasoningChange(reasoningId);
+    }
     setOpen(false);
   };
 
@@ -331,7 +348,7 @@ export function SessionModelControls(props: {
                     </button>
                     <div className="min-w-0">
                       <div className="text-xs font-semibold text-[var(--app-fg)] truncate">
-                        {model?.label}
+                        {panelModel?.label}
                       </div>
                       <div className="text-[11px] text-[var(--app-hint)]">
                         Select parameter
@@ -342,23 +359,23 @@ export function SessionModelControls(props: {
                     ref={paramListRef}
                     className="min-h-0 flex-1 overflow-y-auto custom-scrollbar p-1.5"
                   >
-                    {reasoningOptions.length > 1 ? (
-                      reasoningOptions.map((r) => (
+                    {panelReasoningOptions.length > 1 ? (
+                      panelReasoningOptions.map((r) => (
                         <button
                           key={r.id}
                           type="button"
                           onClick={() => handleReasoningSelect(r.id)}
-                          className={optionBtn(r.id === reasoning?.id)}
+                          className={optionBtn(r.id === panelReasoning?.id)}
                         >
                           <span className="flex-1 truncate">{r.label}</span>
-                          {r.id === reasoning?.id && (
+                          {r.id === panelReasoning?.id && (
                             <Check size={14} className="shrink-0 text-[var(--app-success)]" />
                           )}
                         </button>
                       ))
-                    ) : reasoningOptions.length === 1 ? (
+                    ) : panelReasoningOptions.length === 1 ? (
                       <div className="px-2.5 py-2 text-sm text-[var(--app-hint)]">
-                        {reasoningOptions[0]?.label}
+                        {panelReasoningOptions[0]?.label}
                       </div>
                     ) : (
                       <div className="px-2.5 py-2 text-sm text-[var(--app-hint)]">

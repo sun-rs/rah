@@ -39,6 +39,7 @@
     "test:smoke:native-browser-firefox": "RAH_NATIVE_BROWSER=firefox npm run test:smoke:native-codex-browser && RAH_NATIVE_BROWSER=firefox npm run test:smoke:native-provider-browser",
     "test:smoke:native-cli-probe": "tsx scripts/native_cli_probe.ts",
     "test:smoke:native-local-server": "tsx scripts/native_local_server_probe.ts",
+    "test:smoke:session-control-capabilities": "tsx scripts/session_control_capability_probe.ts",
     "test:smoke:native-real-tui-launch": "tsx scripts/native_real_tui_launch_probe.ts",
     "test:smoke:zellij-real-tui-launch": "tsx scripts/zellij_real_tui_launch_probe.ts",
     "test:smoke:zellij-real-tui-exit": "bash scripts/zellij-real-tui-exit-smoke.sh",

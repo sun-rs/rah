@@ -613,6 +613,7 @@ export function WorkbenchSelectedPane(props: {
             terminalId={nativeTui.terminalId}
             clientId={props.clientId}
             hasControl={terminalHasControl}
+            tuiClientCloseEnabled
             tuiClientActive={terminalTuiClientActive}
             onTuiClientActiveChange={setTerminalTuiClientActive}
           />

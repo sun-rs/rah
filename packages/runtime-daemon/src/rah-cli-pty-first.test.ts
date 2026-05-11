@@ -347,6 +347,10 @@ test("rah codex defaults to native local-server and attaches the official remote
       },
     },
   );
+  let stdout = "";
+  child.stdout?.on("data", (chunk) => {
+    stdout += chunk.toString("utf8");
+  });
   let stderr = "";
   child.stderr?.on("data", (chunk) => {
     stderr += chunk.toString("utf8");
@@ -506,6 +510,10 @@ test("rah codex resume defaults to native local-server and attaches the official
       },
     },
   );
+  let stdout = "";
+  child.stdout?.on("data", (chunk) => {
+    stdout += chunk.toString("utf8");
+  });
   let stderr = "";
   child.stderr?.on("data", (chunk) => {
     stderr += chunk.toString("utf8");
@@ -1231,6 +1239,10 @@ test("rah attach uses provider-native attach for OpenCode native local-server se
       },
     },
   );
+  let stdout = "";
+  child.stdout?.on("data", (chunk) => {
+    stdout += chunk.toString("utf8");
+  });
   let stderr = "";
   child.stderr?.on("data", (chunk) => {
     stderr += chunk.toString("utf8");
@@ -1252,9 +1264,71 @@ test("rah attach uses provider-native attach for OpenCode native local-server se
     const attachLog = readFileSync(logPath, "utf8");
     assert.match(attachLog, /^cwd=\/(?:private\/)?tmp$/m);
     assert.match(attachLog, /args=attach http:\/\/127\.0\.0\.1:49999 --session opencode-native-1/);
+    assert.match(stdout, /Terminal client detached\. RAH session is still live: session-opencode-native/);
+    assert.match(stdout, /Reattach: rah opencode attach opencode-native-1/);
+    assert.match(stdout, /End everywhere: rah archive session-opencode-native/);
   } finally {
     rmSync(tmpDir, { force: true, recursive: true });
   }
+});
+
+test("rah archive closes a live session from CLI", async () => {
+  const attachRequests: unknown[] = [];
+  const closeRequests: unknown[] = [];
+  const wss = new WebSocketServer({ noServer: true });
+  const server = createServer(async (req, res) => {
+    if (req.method === "GET" && req.url === "/readyz") {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end("ok");
+      return;
+    }
+    if (req.method === "POST" && req.url === "/api/sessions/session-to-archive/attach") {
+      attachRequests.push(await readJsonBody(req));
+      writeJson(res, 200, { session: sessionSummary({ id: "session-to-archive" }) });
+      return;
+    }
+    if (req.method === "POST" && req.url === "/api/sessions/session-to-archive/close") {
+      closeRequests.push(await readJsonBody(req));
+      writeJson(res, 200, { ok: true });
+      return;
+    }
+    res.writeHead(404);
+    res.end("not found");
+  });
+
+  const port = await listen(server);
+  const child = spawn(
+    process.execPath,
+    [
+      "bin/rah.mjs",
+      "archive",
+      "session-to-archive",
+      "--daemon-url",
+      `http://127.0.0.1:${port}`,
+    ],
+    { cwd: process.cwd() },
+  );
+  let stdout = "";
+  let stderr = "";
+  child.stdout?.on("data", (chunk) => {
+    stdout += chunk.toString("utf8");
+  });
+  child.stderr?.on("data", (chunk) => {
+    stderr += chunk.toString("utf8");
+  });
+  const exitCode = await new Promise<number | null>((resolve, reject) => {
+    child.on("error", reject);
+    child.on("exit", (code) => resolve(code));
+  });
+  await closeServer(server, wss);
+
+  assert.equal(exitCode, 0, stderr);
+  assert.equal(attachRequests.length, 1);
+  assert.equal(closeRequests.length, 1);
+  const attachedClientId = (attachRequests[0] as { client: { id: string } }).client.id;
+  assert.match(attachedClientId, /^terminal:/);
+  assert.deepEqual(closeRequests, [{ clientId: attachedClientId }]);
+  assert.match(stdout, /archived session session-to-archive/);
 });
 
 test("rah attach terminates the managed provider client when the live session is archived", async () => {
