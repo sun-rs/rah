@@ -110,7 +110,7 @@ describe("NativeTuiProviderRuntime", () => {
       "./claude-session-files",
       "./codex-rollout-activity",
       "./codex-stored-sessions",
-      "./codex-terminal-wrapper-bridge",
+      "./codex-native-tui-bridge",
       "./opencode-activity",
       "./opencode-api",
       "./opencode-stored-sessions",

@@ -505,7 +505,6 @@ const cases: RegressionCase[] = [
     ],
     evidence: [
       "packages/runtime-daemon/src/claude-session-files.test.ts",
-      "packages/runtime-daemon/src/claude-terminal-wrapper-history.test.ts",
     ],
   },
   {

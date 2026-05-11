@@ -104,13 +104,17 @@ describe("native TUI session state", () => {
     const bindingTimer = setInterval(() => undefined, 60_000);
     const mirrorTimer = setInterval(() => undefined, 60_000);
     const stopTimer = setTimeout(() => undefined, 60_000);
+    const promptClearTimer = setTimeout(() => undefined, 60_000);
     bindingTimer.unref();
     mirrorTimer.unref();
     stopTimer.unref();
+    promptClearTimer.unref();
     const native = nativeSession({
       bindingTimer,
       mirrorTimer,
       stopTimer,
+      promptClearTimer,
+      promptClearScheduledAtMs: 1_000,
       stopPending: true,
       stopTurnId: "turn-1",
     });
@@ -120,6 +124,8 @@ describe("native TUI session state", () => {
     assert.equal(native.bindingTimer, undefined);
     assert.equal(native.mirrorTimer, undefined);
     assert.equal(native.stopTimer, undefined);
+    assert.equal(native.promptClearTimer, undefined);
+    assert.equal(native.promptClearScheduledAtMs, undefined);
     assert.equal(native.stopPending, undefined);
     assert.equal(native.stopTurnId, undefined);
   });

@@ -1,14 +1,14 @@
+import type { NativeTuiPromptState } from "@rah/runtime-protocol";
 import type { ProviderActivity } from "./provider-activity";
-import type { TerminalWrapperPromptState } from "./terminal-wrapper-control";
 
 export interface LocalTerminalPromptTracker {
   draftText: string;
 }
 
 export function nextPromptStateFromActivity(
-  current: TerminalWrapperPromptState,
+  current: NativeTuiPromptState,
   activity: ProviderActivity,
-): TerminalWrapperPromptState {
+): NativeTuiPromptState {
   if (current === "prompt_dirty") {
     return "prompt_dirty";
   }
@@ -40,9 +40,9 @@ function isPrintableInput(char: string): boolean {
 
 export function applyLocalTerminalInput(params: {
   tracker: LocalTerminalPromptTracker;
-  promptState: TerminalWrapperPromptState;
+  promptState: NativeTuiPromptState;
   data: string;
-}): TerminalWrapperPromptState {
+}): NativeTuiPromptState {
   if (params.promptState === "agent_busy") {
     params.tracker.draftText = "";
     return "agent_busy";

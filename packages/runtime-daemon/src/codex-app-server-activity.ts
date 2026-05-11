@@ -151,6 +151,7 @@ export const CODEX_APP_SERVER_IGNORED_NOTIFICATION_METHODS = [
   "thread/name/updated",
   "thread/goal/updated",
   "thread/goal/cleared",
+  "turn/diff/updated",
   "rawResponseItem/completed",
   "command/exec/outputDelta",
   "item/commandExecution/terminalInteraction",
@@ -1731,27 +1732,6 @@ export function translateCodexAppServerNotification(
       }
       const activity = makeOperationFromRun(run, "resolved");
       return [translated(notification, withTurnId(activity, turnIdFromParams(params!)))];
-    }
-    case "turn/diff/updated": {
-      const params = paramsRecord(notification);
-      if (!params || !stringField(params, "turnId")) {
-        return invalidStreamActivities(notification, "turn/diff/updated did not include turnId");
-      }
-      const turnId = stringField(params, "turnId")!;
-      const diff = stringField(params, "diff") ?? "";
-      return [
-        translated(notification, {
-          type: "observation_updated",
-          turnId,
-          observation: {
-            id: `obs-turn-diff-${turnId}`,
-            kind: "patch.apply",
-            status: "running",
-            title: "Turn diff updated",
-            detail: { artifacts: [{ kind: "diff", format: "unified", text: diff }] },
-          },
-        }),
-      ];
     }
     case "thread/tokenUsage/updated": {
       const usage = parseUsage(notification);

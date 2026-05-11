@@ -59,7 +59,7 @@ export const COMPOSER_LAYOUT = {
   stopButtonClassName:
     "absolute inset-[3px] rounded-full bg-[var(--app-danger)] text-white flex items-center justify-center transition-all duration-200 hover:opacity-90 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:opacity-50",
   stopWarningButtonClassName:
-    "absolute inset-[3px] rounded-full border border-amber-400/70 bg-amber-100 text-amber-700 flex items-center justify-center text-[10px] font-semibold tracking-[0.02em] transition-all duration-200 hover:bg-amber-200 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-amber-100",
+    "absolute inset-0 rounded-full border border-amber-400/70 bg-amber-100 text-amber-700 flex items-center justify-center text-[10px] font-semibold tracking-[0.02em] transition-all duration-200 hover:bg-amber-200 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-amber-100",
 
   textareaClassName:
     `${TEXTAREA_BASE} ${ROUNDED} min-h-10 md:min-h-9 lg:min-h-8 px-3 py-2 md:px-3 md:py-2 lg:py-1.5 max-h-[280px]`,

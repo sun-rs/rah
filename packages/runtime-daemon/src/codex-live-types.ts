@@ -53,6 +53,8 @@ export type LiveCodexSession = {
   currentTurnId: string | null;
   finishedTurnIds: Set<string>;
   interruptingTurnIds: Set<string>;
+  interruptFallbackTimer?: ReturnType<typeof setTimeout>;
+  interruptFallbackTurnId?: string;
   turnStartInFlight: boolean;
   interruptWhenTurnStarts: boolean;
   queuedInputs: SessionInputRequest[];

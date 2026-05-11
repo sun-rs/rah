@@ -204,9 +204,6 @@ export class RuntimeSessionLifecycle {
     }
     this.deps.rememberSession(state);
     this.deps.refreshRememberedState();
-    if (this.deps.terminals.requestWrapperClose(sessionId, request)) {
-      return;
-    }
     if (await this.deps.terminals.closeNativeTuiSession(sessionId)) {
       this.deps.sessionStore.removeSession(sessionId);
       this.deps.ptyHub.removeSession(sessionId);

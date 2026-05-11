@@ -1,22 +1,5 @@
 import type { ProviderKind, SessionCapabilities } from "@rah/runtime-protocol";
 
-export function buildTerminalWrapperSessionCapabilities(
-  provider: ProviderKind,
-): Partial<SessionCapabilities> {
-  return {
-    livePermissions: provider !== "claude",
-    renameSession: false,
-    actions: {
-      info: true,
-      archive: true,
-      delete: false,
-      rename: "none",
-    },
-    steerInput: true,
-    queuedInput: true,
-  };
-}
-
 export function buildNativeTuiSessionCapabilities(
   provider: ProviderKind,
 ): Partial<SessionCapabilities> {

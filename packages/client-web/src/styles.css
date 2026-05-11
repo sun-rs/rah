@@ -527,30 +527,64 @@ html.dark .provider-choice-rail {
 
 .terminal-client-close-button {
   position: absolute;
-  top: 0.48rem;
-  right: 0.48rem;
+  top: 0.55rem;
+  right: 0.55rem;
   z-index: 12;
   display: inline-flex;
-  width: 1.35rem;
-  height: 1.35rem;
+  width: 1.5rem;
+  height: 1.5rem;
   align-items: center;
   justify-content: center;
-  border: 1px solid color-mix(in oklab, var(--app-danger) 48%, transparent);
+  border: 1px solid color-mix(in oklab, var(--app-danger) 42%, transparent);
   border-radius: 999px;
-  background: color-mix(in oklab, var(--app-danger) 13%, var(--app-bg));
+  background: color-mix(in oklab, var(--app-danger) 10%, var(--app-bg));
+  box-shadow:
+    0 8px 18px color-mix(in oklab, var(--app-danger) 10%, transparent),
+    inset 0 1px 0 color-mix(in oklab, white 48%, transparent);
   color: var(--app-danger);
-  font-size: 1rem;
-  font-weight: 900;
-  line-height: 1;
   opacity: 0.72;
   transition:
     background-color 140ms ease,
+    border-color 140ms ease,
+    box-shadow 140ms ease,
     opacity 140ms ease,
     transform 120ms ease;
 }
 
+.terminal-client-close-icon {
+  position: relative;
+  width: 0.66rem;
+  height: 0.66rem;
+  display: block;
+}
+
+.terminal-client-close-icon::before,
+.terminal-client-close-icon::after {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0.72rem;
+  height: 1.8px;
+  border-radius: 999px;
+  background: currentColor;
+  content: "";
+  transform-origin: center;
+}
+
+.terminal-client-close-icon::before {
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+
+.terminal-client-close-icon::after {
+  transform: translate(-50%, -50%) rotate(-45deg);
+}
+
 .terminal-client-close-button:hover {
-  background: color-mix(in oklab, var(--app-danger) 20%, var(--app-bg));
+  border-color: color-mix(in oklab, var(--app-danger) 58%, transparent);
+  background: color-mix(in oklab, var(--app-danger) 16%, var(--app-bg));
+  box-shadow:
+    0 10px 22px color-mix(in oklab, var(--app-danger) 15%, transparent),
+    inset 0 1px 0 color-mix(in oklab, white 54%, transparent);
   opacity: 1;
 }
 

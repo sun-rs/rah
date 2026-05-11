@@ -88,4 +88,5 @@ export interface MuxRuntime {
   sendKeys(sessionName: string, paneId: MuxPaneId, keys: string[]): Promise<void>;
   closePane(sessionName: string, paneId: MuxPaneId): Promise<void>;
   killSession(sessionName: string): Promise<void>;
+  deleteSession?(sessionName: string): Promise<void>;
 }

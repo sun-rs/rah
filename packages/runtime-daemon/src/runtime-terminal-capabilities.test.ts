@@ -4,7 +4,6 @@ import type { ProviderKind } from "@rah/runtime-protocol";
 import {
   buildNativeTuiSessionCapabilities,
   buildStoppedNativeTuiSessionCapabilities,
-  buildTerminalWrapperSessionCapabilities,
 } from "./runtime-terminal-capabilities";
 import { nativeTuiInterruptDataForProvider } from "./runtime-terminal-coordinator";
 
@@ -46,21 +45,6 @@ describe("runtime terminal capabilities", () => {
     assert.equal(capabilities.queuedInput, false);
     assert.equal(capabilities.actions?.archive, true);
     assert.equal(capabilities.actions?.info, true);
-  });
-
-  test("terminal wrapper permissions match provider support boundaries", () => {
-    assert.equal(buildTerminalWrapperSessionCapabilities("codex").livePermissions, true);
-    assert.equal(buildTerminalWrapperSessionCapabilities("opencode").livePermissions, true);
-    assert.equal(buildTerminalWrapperSessionCapabilities("claude").livePermissions, false);
-  });
-
-  test("terminal wrapper sessions remain external-control surfaces", () => {
-    const capabilities = buildTerminalWrapperSessionCapabilities("codex");
-    assert.equal(capabilities.steerInput, true);
-    assert.equal(capabilities.queuedInput, true);
-    assert.equal(capabilities.renameSession, false);
-    assert.equal(capabilities.actions?.archive, true);
-    assert.equal(capabilities.actions?.delete, false);
   });
 
   test("native TUI interrupt keys follow provider-native stop semantics", () => {

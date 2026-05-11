@@ -6,7 +6,7 @@
 - Claude 默认走 `tui_mux_fallback`，由 zellij/TUI mux 保持原生 TUI 工作现场，RAH 的结构化 Chat 来自 Claude 原厂 JSONL mirror。
 - zellij 不再是所有 provider 的统一默认主线，而是 Claude 当前默认路径和未来无 server provider 的 fallback。
 
-旧的 “terminal handoff vs web-owned structured live” 仍作为 legacy/enhancement 参考保留，但不再从公开 `rah xxx` 入口暴露。
+旧 terminal handoff / wrapper-control 运行时代码已经删除；仅 legacy structured control plane 作为内部测试/兼容面保留。
 
 2026-05-07 后的维护边界进一步收敛为：
 
@@ -47,8 +47,9 @@ Native local server / TUI fallback 分层后，权限、模型、effort、thinki
 
 启动前：
 
-- Web New、Canvas New、Web Claim、`rah xxx` 可以把 `modeId`、`model`、`optionValues` 传给 provider runtime。
-- daemon 尽量把这些值翻译成 provider-native 启动或 server config，例如 Codex app-server config、Claude `--model` / `--permission-mode`、OpenCode model/variant config。
+- Web New、Canvas New、Web Claim 可以把 `modeId`、`model`、`optionValues` 传给 provider runtime。
+- `rah xxx` CLI 当前只暴露稳定的启动参数子集，主要是 provider、cwd、mux backend，以及 Claude 的 `--permission-mode` / `modeId`。
+- daemon 尽量把 Web/Canvas 选择翻译成 provider-native 启动或 server config，例如 Codex app-server config、Claude `--model` / `--permission-mode`、OpenCode model/variant config。
 - OpenCode 的 `opencode run --variant` 和 ACP `provider/model/variant` 是已验证路径；OpenCode TUI 入口没有稳定 `--variant` 参数，所以 PTY-first core 不把 variant/effort 当作启动成功条件。
 - 如果 provider CLI 改名、废弃或改变某个参数，RAH 不应因此破坏 PTY create/attach/replay/close 主链路。
 
@@ -65,9 +66,9 @@ Native local server / TUI fallback 分层后，权限、模型、effort、thinki
 - `SessionModeDescriptor.role` 是 UI 语义层；provider 原生 `id` 是提交给 adapter 的 opaque value。
 - `SessionModeDescriptor.applyTiming` 只描述增强能力的时机，不是 core session 生命周期。
 
-## 4. Legacy structured / wrapper 参考
+## 4. Legacy structured 参考
 
-显式 `liveBackend: "structured"` 是旧 adapter control plane。公开 HTTP API 拒绝该值；只允许测试注入 adapter 直接调用 engine 时使用；`preferStoredReplay` 的只读历史 replay 不受此限制。旧 terminal wrapper handoff 代码仍作为内部 legacy 参考和 synthetic test surface 存在，但公开 `rah xxx` CLI 不再进入该路径。保留这些 legacy surface 的目的只是测试/兼容，不是继续维护第三条 live 主链路。它们的权限/模型能力大致如下，但不再是 PTY-first core 的承诺：
+显式 `liveBackend: "structured"` 是旧 adapter control plane。公开 HTTP API 拒绝该值；只允许测试注入 adapter 直接调用 engine 时使用；`preferStoredReplay` 的只读历史 replay 不受此限制。旧 terminal wrapper handoff 运行时代码已经删除。保留 legacy structured surface 的目的只是测试/兼容，不是继续维护第三条 live 主链路。它们的权限/模型能力大致如下，但不再是 native local-server / TUI mux core 的承诺：
 
 | Provider | Legacy structured 能力边界 |
 | --- | --- |

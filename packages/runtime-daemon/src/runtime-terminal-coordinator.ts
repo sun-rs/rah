@@ -1,33 +1,23 @@
 import type {
-  CloseSessionRequest,
   ClientKind,
   IndependentTerminalStartRequest,
   IndependentTerminalStartResponse,
   NativeTuiDiagnostic,
+  NativeTuiPromptState,
   NativeTuiSurfaceClaimRequest,
   NativeTuiClientCloseRequest,
   NativeTuiSurfaceReleaseRequest,
   NativeTuiSurfaceResponse,
   NativeTuiSurfaceState,
-  PermissionResponseRequest,
   ProviderKind,
   ManagedSession,
   StartSessionRequest,
   StartSessionResponse,
-  RahEvent,
   ZellijMuxSessionDiagnostic,
 } from "@rah/runtime-protocol";
 import type { HistorySnapshotStore } from "./history-snapshots";
-import { type ProviderActivity } from "./provider-activity";
 import { PtyHub } from "./pty-hub";
 import { SessionStore, toSessionSummary, type StoredSessionState } from "./session-store";
-import {
-  type TerminalWrapperFromDaemonMessage,
-  type TerminalWrapperPromptState,
-  type WrapperHelloMessage,
-  type WrapperProviderBoundMessage,
-  type WrapperReadyMessage,
-} from "./terminal-wrapper-control";
 import { EventBus } from "./event-bus";
 import { applyLocalTerminalInput } from "./native-tui-prompt-state";
 import {
@@ -77,7 +67,6 @@ import {
   SYSTEM_SOURCE,
 } from "./runtime-session-events";
 import { NativeTuiMirrorRuntime } from "./native-tui-mirror-runtime";
-import { TerminalWrapperSessionRuntime } from "./terminal-wrapper-session-runtime";
 import {
   createZellijSessionNameForRahSession,
   ZellijCommandError,
@@ -93,7 +82,6 @@ type RuntimeTerminalCoordinatorDeps = {
   historySnapshots: HistorySnapshotStore;
   nativeTuiProviders: NativeTuiProviderRuntime;
   nativeTuiMirrors: NativeTuiMirrorProvider;
-  enableLegacyWrapperRuntime?: boolean;
   onRememberSession: (state: StoredSessionState) => void;
   onSessionOwnerRemoved: (sessionId: string) => void;
 };
@@ -152,13 +140,13 @@ function remainingRecentInjectedInputMs(native: NativeTuiSessionState): number {
 const ZELLIJ_TUI_SURFACE_SETTLE_MS = 350;
 const ANSI_ESCAPE_PATTERN = /\u001b\[[0-?]*[ -/]*[@-~]/g;
 
-function initialNativeTuiPromptState(provider: ProviderKind): TerminalWrapperPromptState {
+function initialNativeTuiPromptState(provider: ProviderKind): NativeTuiPromptState {
   // OpenCode paints its input prompt after a full-screen redraw. Keep Web
   // composer input queued until the provider handler sees the prompt marker.
   return provider === "opencode" ? "agent_busy" : "prompt_clean";
 }
 
-function initialZellijTuiPromptState(provider: ProviderKind): TerminalWrapperPromptState {
+function initialZellijTuiPromptState(provider: ProviderKind): NativeTuiPromptState {
   // zellij sessions need a sizing/attach surface before the provider prompt is
   // reliable. Queue initial Web chat input until the viewport observer sees a
   // real prompt marker.
@@ -274,6 +262,7 @@ const NATIVE_TUI_INTERRUPT_CONFIRM_TIMEOUT_MS = 5_000;
 const OPENCODE_SECOND_INTERRUPT_DELAY_MS = 120;
 const NATIVE_TUI_CLEAR_PROMPT_DATA = "\u0015\u000b";
 const NATIVE_TUI_SUBMIT_DELAY_MS = 250;
+const ZELLIJ_TUI_CLEAR_PROMPT_SETTLE_MS = 120;
 const NATIVE_TUI_OUTPUT_OBSERVATION_TAIL_LIMIT = 12_000;
 
 export function nativeTuiInterruptDataForProvider(provider: ProviderKind): string {
@@ -382,7 +371,7 @@ function isZellijSessionMissingError(error: unknown): boolean {
     return false;
   }
   const detail = `${error.stdout}\n${error.stderr}\n${error.message}`;
-  return /No session named|Session '[^']+' not found|There is no active session|session may have exited/i.test(detail);
+  return /No session named|Session:?\s*['"][^'"]+['"] not found|There is no active session|session may have exited/i.test(detail);
 }
 
 function isExitedZellijPane(pane: { exited: boolean; held: boolean; exitStatus: number | null }): boolean {
@@ -405,7 +394,6 @@ function appendCodexZellijArgs(launch: NativeTuiLaunchSpec): NativeTuiLaunchSpec
 }
 
 export class RuntimeTerminalCoordinator {
-  private readonly terminalWrappers: TerminalWrapperSessionRuntime | undefined;
   private readonly ptySessions = new PtySessionRuntime();
   private readonly zellijMux = new ZellijMuxBackend();
   private readonly zellijTuiSessions = new Map<string, ZellijTuiSessionState>();
@@ -414,12 +402,9 @@ export class RuntimeTerminalCoordinator {
   private readonly closingNativeTuiSessionIds = new Set<string>();
   private readonly nativeTuiDiagnostics = new NativeTuiDiagnosticStore();
   private readonly mirrorRuntime: NativeTuiMirrorRuntime;
+  private zellijActionQueue?: Promise<void>;
 
   constructor(private readonly deps: RuntimeTerminalCoordinatorDeps) {
-    this.terminalWrappers =
-      deps.enableLegacyWrapperRuntime === true
-        ? new TerminalWrapperSessionRuntime(deps)
-        : undefined;
     this.mirrorRuntime = new NativeTuiMirrorRuntime({
       eventBus: deps.eventBus,
       ptyHub: deps.ptyHub,
@@ -431,21 +416,6 @@ export class RuntimeTerminalCoordinator {
         this.updateNativeTuiPromptState(sessionId, promptState);
       },
     });
-  }
-
-  private requireTerminalWrappers(): TerminalWrapperSessionRuntime {
-    if (!this.terminalWrappers) {
-      throw new Error("Legacy terminal wrapper runtime is disabled.");
-    }
-    return this.terminalWrappers;
-  }
-
-  hasWrapperSession(sessionId: string): boolean {
-    return this.terminalWrappers?.hasSession(sessionId) ?? false;
-  }
-
-  isClosingWrapperSession(sessionId: string): boolean {
-    return this.terminalWrappers?.isClosingSession(sessionId) ?? false;
   }
 
   hasNativeTuiSession(sessionId: string): boolean {
@@ -615,7 +585,22 @@ export class RuntimeTerminalCoordinator {
     if (managed) {
       throw new Error("This zellij session is managed by a live RAH session. Archive the live session instead.");
     }
-    await this.zellijMux.killSession(trimmedSessionName).catch((error) => {
+    await this.removeZellijMuxSession(trimmedSessionName).catch((error) => {
+      if (isZellijSessionMissingError(error)) {
+        return;
+      }
+      throw error;
+    });
+  }
+
+  private async removeZellijMuxSession(sessionName: string): Promise<void> {
+    await this.zellijMux.killSession(sessionName).catch((error) => {
+      if (isZellijSessionMissingError(error)) {
+        return;
+      }
+      throw error;
+    });
+    await this.zellijMux.deleteSession(sessionName).catch((error) => {
       if (isZellijSessionMissingError(error)) {
         return;
       }
@@ -624,7 +609,6 @@ export class RuntimeTerminalCoordinator {
   }
 
   clearSessionState(sessionId: string): void {
-    this.terminalWrappers?.clearSessionState(sessionId);
     void this.closeNativeLocalServerTuiClient(sessionId).catch(() => undefined);
     this.clearZellijTuiRuntimeState(sessionId);
     this.clearNativeTuiRuntimeState(sessionId);
@@ -731,9 +715,11 @@ export class RuntimeTerminalCoordinator {
     options?: { clientMessageId?: string; clientTurnId?: string },
   ): void {
     this.claimWebControl(native.sessionId, clientId);
+    this.cancelNativeTuiPromptClear(native);
     const clearPromptBeforeSubmit =
       native.clearPromptBeforeNextInput === true ||
-      (isClaudeNativeTuiPassthrough(native) && native.promptTracker.draftText.length > 0);
+      isClaudeNativeTuiPassthrough(native) ||
+      native.promptTracker.draftText.length > 0;
     native.promptTracker.draftText = "";
     native.lastInjectedInputAtMs = Date.now();
     registerSubmittedNativeTuiInput(native, {
@@ -763,6 +749,11 @@ export class RuntimeTerminalCoordinator {
       void this.withZellijActionSurface(zellij, async () => {
         if (options?.clearPromptBeforeSubmit) {
           await this.sendZellijTuiClearPrompt(zellij);
+          // zellij action send-keys returns after enqueueing synthesized keys,
+          // not necessarily after the target TUI has consumed them. Give the
+          // clear sequence a short deterministic settle window so the next
+          // raw write is not erased by a delayed Ctrl-K/Ctrl-U.
+          await new Promise((resolve) => setTimeout(resolve, ZELLIJ_TUI_CLEAR_PROMPT_SETTLE_MS));
         }
         await this.writeZellijTuiInput(zellij, text);
         for (let index = 0; index < nativeTuiSubmitCountForProvider(native.provider); index += 1) {
@@ -962,31 +953,56 @@ export class RuntimeTerminalCoordinator {
   }
 
   private scheduleClaudeNativeTuiPromptClear(native: NativeTuiSessionState): void {
-    const timer = setTimeout(() => {
+    this.cancelNativeTuiPromptClear(native);
+    const scheduledAtMs = Date.now();
+    native.promptClearScheduledAtMs = scheduledAtMs;
+    native.promptClearTimer = setTimeout(() => {
       const current = this.nativeTuiSessions.get(native.sessionId);
-      if (current !== native || !isClaudeNativeTuiPassthrough(current)) {
+      if (current !== native) {
+        return;
+      }
+      delete current.promptClearTimer;
+      delete current.promptClearScheduledAtMs;
+      if (!isClaudeNativeTuiPassthrough(current)) {
+        return;
+      }
+      if (
+        current.lastInjectedInputAtMs !== undefined &&
+        current.lastInjectedInputAtMs >= scheduledAtMs
+      ) {
         return;
       }
       this.clearNativeTuiPromptInput(current);
     }, NATIVE_TUI_SUBMIT_DELAY_MS);
-    timer.unref?.();
+    native.promptClearTimer.unref?.();
+  }
+
+  private cancelNativeTuiPromptClear(native: NativeTuiSessionState): void {
+    if (native.promptClearTimer) {
+      clearTimeout(native.promptClearTimer);
+      delete native.promptClearTimer;
+    }
+    delete native.promptClearScheduledAtMs;
   }
 
   private sendZellijTuiInterrupt(zellij: ZellijTuiSessionState, provider: ProviderKind): void {
     const sendEsc = async (): Promise<void> => {
-      await this.zellijMux.sendKeys(zellij.zellijSessionName, zellij.paneId, ["Esc"]);
+      await this.writeZellijTuiInput(zellij, "\u001b");
     };
     void this.withZellijActionSurface(zellij, async () => {
+      if (provider === "opencode") {
+        await this.writeZellijTuiInput(zellij, nativeTuiInterruptDataForProvider(provider));
+        return;
+      }
       await sendEsc();
-      const retryDelays =
-        provider === "opencode" ? [OPENCODE_SECOND_INTERRUPT_DELAY_MS] : [350, 900];
+      const retryDelays = [350, 900];
       for (const retryDelay of retryDelays) {
         await new Promise((resolve) => setTimeout(resolve, retryDelay));
         const native = this.nativeTuiSessions.get(zellij.sessionId);
         if (!this.isCurrentZellijTuiSession(zellij)) {
           break;
         }
-        if (provider !== "opencode" && !native?.stopPending) {
+        if (!native?.stopPending) {
           break;
         }
         await sendEsc();
@@ -1103,7 +1119,7 @@ export class RuntimeTerminalCoordinator {
 
   private updateNativeTuiPromptState(
     sessionId: string,
-    promptState: TerminalWrapperPromptState,
+    promptState: NativeTuiPromptState,
   ): void {
     const native = this.nativeTuiSessions.get(sessionId);
     const existingState = this.deps.sessionStore.getSession(sessionId);
@@ -1164,28 +1180,6 @@ export class RuntimeTerminalCoordinator {
       ...(queued.clientMessageId !== undefined ? { clientMessageId: queued.clientMessageId } : {}),
       ...(queued.clientTurnId !== undefined ? { clientTurnId: queued.clientTurnId } : {}),
     });
-  }
-
-  handleWrapperInput(sessionId: string, clientId: string, text: string): boolean {
-    return this.terminalWrappers?.handleInput(sessionId, clientId, text) ?? false;
-  }
-
-  handleWrapperInterrupt(sessionId: string, clientId: string): boolean {
-    return this.terminalWrappers?.handleInterrupt(sessionId, clientId) ?? false;
-  }
-
-  requestWrapperClose(sessionId: string, request: CloseSessionRequest): boolean {
-    return this.terminalWrappers?.requestClose(sessionId, request) ?? false;
-  }
-
-  handlePermissionResponse(
-    sessionId: string,
-    requestId: string,
-    response: PermissionResponseRequest,
-  ): boolean {
-    return (
-      this.terminalWrappers?.handlePermissionResponse(sessionId, requestId, response) ?? false
-    );
   }
 
   getNativeTuiSurface(sessionId: string): NativeTuiSurfaceResponse {
@@ -1790,9 +1784,9 @@ export class RuntimeTerminalCoordinator {
         await this.ptySessions.close(sizingClientPtyId).catch(() => undefined);
       }
       if (zellij) {
-        await this.zellijMux.killSession(zellij.zellijSessionName).catch(() => undefined);
+        await this.removeZellijMuxSession(zellij.zellijSessionName).catch(() => undefined);
       } else {
-        await this.zellijMux.killSession(zellijSessionName).catch(() => undefined);
+        await this.removeZellijMuxSession(zellijSessionName).catch(() => undefined);
       }
       throw error;
     }
@@ -1836,7 +1830,7 @@ export class RuntimeTerminalCoordinator {
     provider: ProviderKind;
     cwd: string;
     providerSessionId?: string;
-    promptState: TerminalWrapperPromptState;
+    promptState: NativeTuiPromptState;
     startupTimestampMs: number;
     zellijSessionName: string;
     paneId: string;
@@ -2131,7 +2125,7 @@ export class RuntimeTerminalCoordinator {
   ): Promise<T> {
     const previousAction = zellij.actionQueue ?? Promise.resolve();
     const queuedAction = previousAction.catch(() => undefined).then(() =>
-      this.withZellijActionSurfaceNow(zellij, action),
+      this.withZellijGlobalAction(() => this.withZellijActionSurfaceNow(zellij, action)),
     );
     const actionTail = queuedAction.then(
       () => undefined,
@@ -2146,12 +2140,27 @@ export class RuntimeTerminalCoordinator {
     return queuedAction;
   }
 
+  private async withZellijGlobalAction<T>(action: () => Promise<T>): Promise<T> {
+    const previousAction = this.zellijActionQueue ?? Promise.resolve();
+    const queuedAction = previousAction.catch(() => undefined).then(action);
+    const actionTail = queuedAction.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.zellijActionQueue = actionTail;
+    void actionTail.finally(() => {
+      if (this.zellijActionQueue === actionTail) {
+        delete this.zellijActionQueue;
+      }
+    });
+    return queuedAction;
+  }
+
   private async withZellijActionSurfaceNow<T>(
     zellij: ZellijTuiSessionState,
     action: () => Promise<T>,
   ): Promise<T> {
-    const needsSizingClient = zellij.activeSurface?.clientKind !== "terminal";
-    const shouldCloseAfter = needsSizingClient && !zellij.activeSurface;
+    const needsSizingClient = zellij.activeSurface?.clientKind === "web";
     if (needsSizingClient) {
       await this.ensureZellijTuiSizingClient(
         zellij,
@@ -2160,18 +2169,11 @@ export class RuntimeTerminalCoordinator {
       );
       await new Promise((resolve) => setTimeout(resolve, ZELLIJ_TUI_SURFACE_SETTLE_MS));
     }
-    try {
-      const result = await action();
-      if (shouldCloseAfter) {
-        await new Promise((resolve) => setTimeout(resolve, 500));
-        await this.dumpZellijTuiScreen(zellij);
-      }
-      return result;
-    } finally {
-      if (shouldCloseAfter && !zellij.activeSurface) {
-        await this.closeZellijTuiSizingClient(zellij);
-      }
-    }
+    // Active Web TUI surfaces own the sizing client lifecycle. Chat-only
+    // actions without a visible surface should not create or close a zellij
+    // attach client; direct pane-targeted actions are more reliable and avoid
+    // stealing redraw ownership from an existing terminal attach.
+    return await action();
   }
 
   private handleZellijTuiInputFailure(zellij: ZellijTuiSessionState, error: unknown): void {
@@ -2259,7 +2261,7 @@ export class RuntimeTerminalCoordinator {
           : {}),
       });
     }
-    await this.zellijMux.killSession(zellij.zellijSessionName).catch(() => undefined);
+    await this.removeZellijMuxSession(zellij.zellijSessionName).catch(() => undefined);
   }
 
   private async closeZellijTuiSession(zellij: ZellijTuiSessionState): Promise<void> {
@@ -2283,11 +2285,11 @@ export class RuntimeTerminalCoordinator {
       }
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
-    await this.zellijMux.killSession(zellij.zellijSessionName).catch((error) => {
+    await this.removeZellijMuxSession(zellij.zellijSessionName).catch((error) => {
       if (isZellijSessionMissingError(error)) {
         return;
       }
-      console.warn("[rah] failed to kill zellij session", {
+      console.warn("[rah] failed to remove zellij session", {
         sessionId: zellij.sessionId,
         zellijSessionName: zellij.zellijSessionName,
         error,
@@ -2423,45 +2425,7 @@ export class RuntimeTerminalCoordinator {
     this.mirrorRuntime.mirrorSession(sessionId);
   }
 
-  registerTerminalWrapperSession(
-    request: WrapperHelloMessage,
-    sendMessage: (message: TerminalWrapperFromDaemonMessage) => void,
-  ): WrapperReadyMessage {
-    return this.requireTerminalWrappers().registerSession(request, sendMessage);
-  }
-
-  disconnectTerminalWrapperSession(sessionId: string): void {
-    this.terminalWrappers?.disconnectSession(sessionId);
-  }
-
-  bindTerminalWrapperProviderSession(message: WrapperProviderBoundMessage): void {
-    this.terminalWrappers?.bindProviderSession(message);
-  }
-
-  updateTerminalWrapperPromptState(
-    sessionId: string,
-    promptState: TerminalWrapperPromptState,
-  ): void {
-    this.terminalWrappers?.updatePromptState(sessionId, promptState);
-  }
-
-  applyTerminalWrapperActivity(sessionId: string, activity: ProviderActivity): RahEvent[] {
-    return this.terminalWrappers?.applyActivity(sessionId, activity) ?? [];
-  }
-
-  appendTerminalWrapperPtyOutput(sessionId: string, data: string): RahEvent[] {
-    return this.terminalWrappers?.appendPtyOutput(sessionId, data) ?? [];
-  }
-
-  markTerminalWrapperExited(
-    sessionId: string,
-    options?: { exitCode?: number; signal?: string },
-  ): RahEvent[] {
-    return this.terminalWrappers?.markExited(sessionId, options) ?? [];
-  }
-
   async shutdown(): Promise<void> {
-    this.terminalWrappers?.shutdown();
     const zellijSessions = Array.from(this.zellijTuiSessions.values());
     for (const zellij of zellijSessions) {
       this.clearZellijTuiRuntimeState(zellij.sessionId);

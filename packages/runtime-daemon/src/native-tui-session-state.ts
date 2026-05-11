@@ -1,3 +1,4 @@
+import type { NativeTuiPromptState } from "@rah/runtime-protocol";
 import type { IndependentTerminalProcess } from "./independent-terminal";
 import type { NativeTuiLaunchSpec } from "./native-tui-launch-spec";
 import type {
@@ -5,7 +6,6 @@ import type {
   NativeTuiProviderRuntimeSession,
 } from "./native-tui-provider-runtime";
 import type { LocalTerminalPromptTracker } from "./native-tui-prompt-state";
-import type { TerminalWrapperPromptState } from "./terminal-wrapper-control";
 
 export type NativeTuiQueuedInput = {
   clientId: string;
@@ -31,7 +31,7 @@ export type NativeTuiSessionState = {
   startupTimestampMs: number;
   launchEnv?: Record<string, string>;
   providerSessionId?: string;
-  promptState: TerminalWrapperPromptState;
+  promptState: NativeTuiPromptState;
   promptTracker: LocalTerminalPromptTracker;
   queuedInputs: NativeTuiQueuedInput[];
   submittedInputs?: NativeTuiSubmittedInput[];
@@ -41,6 +41,8 @@ export type NativeTuiSessionState = {
   stopTurnId?: string;
   stopTimer?: ReturnType<typeof setTimeout>;
   lastInterruptCompletedAtMs?: number;
+  promptClearTimer?: ReturnType<typeof setTimeout>;
+  promptClearScheduledAtMs?: number;
   queuedDrainTimer?: ReturnType<typeof setTimeout>;
   recentOutputTail?: string;
   bindingTimer?: ReturnType<typeof setInterval>;
@@ -85,10 +87,15 @@ export function clearNativeTuiSessionTimers(native: NativeTuiSessionState | unde
     clearTimeout(native.stopTimer);
     delete native.stopTimer;
   }
+  if (native.promptClearTimer) {
+    clearTimeout(native.promptClearTimer);
+    delete native.promptClearTimer;
+  }
   if (native.queuedDrainTimer) {
     clearTimeout(native.queuedDrainTimer);
     delete native.queuedDrainTimer;
   }
+  delete native.promptClearScheduledAtMs;
   delete native.stopPending;
   delete native.stopTurnId;
 }

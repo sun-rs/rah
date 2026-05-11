@@ -202,6 +202,14 @@ export function WorkbenchSelectedPane(props: {
     props.canSwitchSessionModes && liveModeControl.planModeAvailable;
   const showLiveModelControl =
     props.canSwitchSessionModel && Boolean(props.modelCatalog || props.modelCatalogLoading);
+  const liveSessionControlUnavailableMessage =
+    !showLiveAccessModeControl &&
+    !showLivePlanModeControl &&
+    !showLiveModelControl &&
+    props.selectedSummary.session.provider === "claude" &&
+    props.selectedSummary.session.liveBackend === "zellij_tui"
+      ? "Claude runs as a native TUI session here. Change model or permissions inside the Claude TUI, or choose them before launch/resume."
+      : undefined;
   const composerActionPending =
     props.composerSurface.kind === "history_claim" ||
     props.composerSurface.kind === "claim_control"
@@ -688,6 +696,9 @@ export function WorkbenchSelectedPane(props: {
                   disabled={props.modeChangePending || props.modelChangePending}
                   locked={sessionControlBusy}
                   lockedMessage="Session controls are locked while this session is thinking."
+                  {...(liveSessionControlUnavailableMessage
+                    ? { unavailableMessage: liveSessionControlUnavailableMessage }
+                    : {})}
                   showModel={showLiveModelControl}
                   buttonClassName={COMPOSER_LAYOUT.settingsButtonClassName}
                   onAccessModeChange={props.onSetSessionMode}

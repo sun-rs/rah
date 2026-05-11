@@ -674,6 +674,7 @@ function translateClaudeRecordsToActivities(
             : undefined;
         const activity: ProviderActivity = {
           type: "tool_call_completed",
+          ...(latestTurnId !== undefined ? { turnId: latestTurnId } : {}),
           toolCall: {
             id: toolId,
             family: "other",
@@ -726,6 +727,7 @@ function translateClaudeRecordsToActivities(
         },
         activity: {
           type: "timeline_item",
+          ...(latestTurnId !== undefined ? { turnId: latestTurnId } : {}),
           item: {
             kind: "assistant_message",
             text,

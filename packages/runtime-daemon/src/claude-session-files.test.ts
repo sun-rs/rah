@@ -226,6 +226,12 @@ describe("Claude session files", () => {
       messages.map((item) => item.text),
       ["first question", "first answer"],
     );
+    const assistantEvent = page.events.find(
+      (event) =>
+        event.type === "timeline.item.added" &&
+        event.payload.item.kind === "assistant_message",
+    );
+    assert.equal(assistantEvent?.turnId, "turn:user-nonmonotonic-1");
   });
 
   test("filters Claude resume interrupted banner from chat history", () => {

@@ -143,12 +143,11 @@ npm run test:smoke:opencode-browser
 npm run test:smoke:browser-providers
 npm run test:smoke:real-browser-providers
 npm run test:smoke:provider-flows
-npm run test:smoke:wrapper
 ```
 
 ## Test tiers
 
-RAH now uses five test tiers:
+RAH now uses four test tiers:
 
 - default gate
   - `npm run typecheck`
@@ -159,11 +158,6 @@ RAH now uses five test tiers:
   - `npm run test:provider-contracts`
   - deterministic contract coverage for Codex, Claude, and OpenCode live paths
   - protects queued input, no duplicate live/history merge, Stop state convergence, model/mode/permission propagation, and Markdown/timeline rendering contracts on the core live path
-- daemon smoke
-  - `npm run test:smoke:wrapper`
-  - exercises the legacy wrapper-control path in a dedicated test daemon
-    without invoking external provider CLIs or model APIs
-  - starts an isolated temporary daemon automatically; the normal daemon keeps wrapper-control and the wrapper runtime disabled
 - native TUI gate
   - `npm run test:native-tui`
   - exercises the PTY-first lifecycle, fake native provider TUIs, browser replay/reconnect,
@@ -200,7 +194,7 @@ reload replay, and Web resume history, and asserts message ordering, duplicate p
 state convergence, dirty-prompt blocking, and absence of unexpected provider-event/loading-history
 noise on new live sessions.
 
-The formal handoff gate is `npm run test:regression:e2e-browser`. It runs the real provider browser
+The formal real-browser regression gate is `npm run test:regression:e2e-browser`. It runs the real provider browser
 smokes for Codex, Claude, and OpenCode and hard-fails on the regressions that have historically hurt
 human testing: duplicate bubbles, wrong message order, Stop not disappearing, repeated Stop exiting a
 TUI, interrupt notices duplicating/drifting, history replay noise, claim/resume duplication, and
@@ -233,11 +227,9 @@ provider CLIs authenticated. Different machines may have:
 - valid binaries but missing login/auth
 - valid auth for one provider but not another
 
-For that reason, provider smoke can still be run explicitly per provider. `npm run test:smoke:wrapper`
-is the deterministic legacy/internal smoke for wrapper lifecycle, web input injection, canonical
-timeline identity propagation, and cleanup across the core live provider registrations. It starts an isolated
-temporary daemon with wrapper-control and the wrapper runtime enabled; the normal daemon keeps both
-disabled.
+For that reason, provider smoke can still be run explicitly per provider. The old wrapper-control
+smoke path has been removed; current deterministic coverage lives in the native TUI, native local-server,
+and browser regression gates.
 
 ## Package layout
 
@@ -340,12 +332,8 @@ Core design and freeze documents:
 - [Provider Capability Matrix](./docs/provider-capability-matrix.md)
 - [Provider Capability Protocol Draft](./docs/provider-capability-protocol-draft.md)
 - [Architecture Benchmark (中文)](./docs/architecture-benchmark.zh-CN.md)
-- [rah codex handoff 模式设计（中文）](./docs/rah-codex-handoff-mode.zh-CN.md)
-- [rah claude handoff 模式设计（中文）](./docs/rah-claude-handoff-mode.zh-CN.md)
 - [Session 入口与权限边界（中文）](./docs/session-entry-capability-boundary.zh-CN.md)
 - [PTY-first 进度审计（中文）](./docs/pty-first-progress-audit.zh-CN.md)
-- [Terminal Wrapper Live Sessions（中文）](./docs/terminal-wrapper-live-sessions.zh-CN.md)
-- [Terminal Wrapper Protocol Draft（中文）](./docs/terminal-wrapper-protocol.zh-CN.md)
 - [Protocol Freeze Status](./docs/protocol-freeze-status.md)
 - [Release Checklist](./docs/release-checklist.md)
 - [UI 回归清单（中文）](./docs/ui-regression-checklist.zh-CN.md)

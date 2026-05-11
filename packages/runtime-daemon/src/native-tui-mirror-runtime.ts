@@ -1,4 +1,4 @@
-import type { RahEvent } from "@rah/runtime-protocol";
+import type { NativeTuiPromptState, RahEvent } from "@rah/runtime-protocol";
 
 import { EventBus } from "./event-bus";
 import {
@@ -29,7 +29,6 @@ import {
 } from "./provider-activity";
 import { PtyHub } from "./pty-hub";
 import { SessionStore } from "./session-store";
-import type { TerminalWrapperPromptState } from "./terminal-wrapper-control";
 
 type NativeTuiMirrorRuntimeDeps = {
   eventBus: EventBus;
@@ -38,7 +37,7 @@ type NativeTuiMirrorRuntimeDeps = {
   nativeTuiMirrors: NativeTuiMirrorProvider;
   diagnostics: NativeTuiDiagnosticStore;
   getSession: (sessionId: string) => NativeTuiSessionState | undefined;
-  updatePromptState: (sessionId: string, promptState: TerminalWrapperPromptState) => void;
+  updatePromptState: (sessionId: string, promptState: NativeTuiPromptState) => void;
 };
 
 function isTurnEndingActivity(activity: ProviderActivity): activity is Extract<

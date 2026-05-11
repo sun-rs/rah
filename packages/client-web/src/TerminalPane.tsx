@@ -690,7 +690,7 @@ export function TerminalPane(props: TerminalPaneProps) {
             title="Close this Web TUI client without stopping the live session"
             disabled={tuiClientClosing}
           >
-            ×
+            <span aria-hidden="true" className="terminal-client-close-icon" />
           </button>
         ) : null}
           <div

@@ -20,6 +20,7 @@ export function SessionControlPopover(props: {
   disabled?: boolean;
   locked?: boolean;
   lockedMessage?: string;
+  unavailableMessage?: string;
   allowProviderDefault?: boolean;
   showModel: boolean;
   buttonClassName: string;
@@ -33,12 +34,13 @@ export function SessionControlPopover(props: {
   const panelRef = useRef<HTMLDivElement | null>(null);
   const [open, setOpen] = useState(false);
   const [panelStyle, setPanelStyle] = useState<CSSProperties>({});
-  const [lockedNoticeStyle, setLockedNoticeStyle] = useState<CSSProperties | null>(null);
+  const [notice, setNotice] = useState<{ message: string; style: CSSProperties } | null>(null);
   const hasModes = props.accessModes.length > 0 || props.planModeAvailable;
   const hasModel =
     props.showModel && Boolean(props.modelCatalog || props.modelCatalogLoading);
   const hasControls = hasModes || hasModel;
-  const enabled = hasControls && !props.disabled;
+  const unavailable = !hasControls && Boolean(props.unavailableMessage);
+  const enabled = (hasControls || unavailable) && !props.disabled;
   const locked = enabled && props.locked === true;
 
   useEffect(() => {
@@ -106,19 +108,19 @@ export function SessionControlPopover(props: {
   }, [open]);
 
   useEffect(() => {
-    if (!lockedNoticeStyle) return;
-    const timeout = window.setTimeout(() => setLockedNoticeStyle(null), 1800);
+    if (!notice) return;
+    const timeout = window.setTimeout(() => setNotice(null), 2400);
     return () => window.clearTimeout(timeout);
-  }, [lockedNoticeStyle]);
+  }, [notice]);
 
-  const showLockedNotice = () => {
+  const showNotice = (message: string) => {
     const rect = triggerRef.current?.getBoundingClientRect();
     if (!rect) return;
     const width = 236;
     const pad = 8;
     const left = Math.max(pad, Math.min(rect.left, window.innerWidth - width - pad));
     const top = Math.max(pad, rect.top - 46);
-    setLockedNoticeStyle({ top, left, width });
+    setNotice({ message, style: { top, left, width } });
   };
 
   return (
@@ -129,7 +131,11 @@ export function SessionControlPopover(props: {
         disabled={!enabled}
         onClick={() => {
           if (locked) {
-            showLockedNotice();
+            showNotice(props.lockedMessage ?? "Session controls are locked while this session is busy.");
+            return;
+          }
+          if (unavailable) {
+            showNotice(props.unavailableMessage ?? "Session controls are unavailable for this session.");
             return;
           }
           setOpen((current) => !current);
@@ -137,25 +143,31 @@ export function SessionControlPopover(props: {
         className={`${props.buttonClassName} ${
           !enabled
             ? "cursor-not-allowed opacity-35 grayscale hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-hint)]"
-            : locked
+            : locked || unavailable
               ? "cursor-not-allowed opacity-45 grayscale hover:bg-[var(--app-subtle-bg)]"
               : ""
         }`}
-        title={locked ? props.lockedMessage ?? "Session controls are locked." : "Session control"}
+        title={
+          locked
+            ? props.lockedMessage ?? "Session controls are locked."
+            : unavailable
+              ? props.unavailableMessage
+              : "Session control"
+        }
         aria-label="Session control"
-        aria-disabled={locked || undefined}
+        aria-disabled={locked || unavailable || undefined}
         aria-expanded={open}
       >
         <SlidersHorizontal size={16} />
       </button>
-      {lockedNoticeStyle
+      {notice
         ? createPortal(
             <div
               className="rah-popover-panel fixed z-[70] rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] px-2.5 py-2 text-xs font-medium text-[var(--app-fg)] shadow-xl"
-              style={lockedNoticeStyle}
+              style={notice.style}
               role="status"
             >
-              {props.lockedMessage ?? "Session controls are locked while this session is busy."}
+              {notice.message}
             </div>,
             document.body,
           )

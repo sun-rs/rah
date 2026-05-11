@@ -77,7 +77,7 @@ npm run test:regression:e2e-browser
 - `scripts/claude-browser-smoke.sh`
 - `scripts/opencode-browser-smoke.sh`
 
-它会校验每家 provider 都报告 `ok=true`，并且每家都覆盖真实浏览器核心 case：
+它会校验每家 provider 都报告 `ok=true`。Codex / OpenCode 必须覆盖真实浏览器核心 case：
 
 - `REAL-PROVIDER-001`
 - `REAL-CHAT-ORDER-001`
@@ -89,6 +89,16 @@ npm run test:regression:e2e-browser
 - `REAL-HISTORY-REPLAY-001`
 - `REAL-HISTORY-CLAIM-001`
 - `REAL-SECOND-TURN-001`
+
+Claude 使用 zellij/TUI passthrough 专用 case，而不是 Codex/OpenCode 的 provider-server Stop/interrupt case：
+
+- `REAL-CLAUDE-ZELLIJ-MIRROR-001`
+- `REAL-CLAUDE-PASSTHROUGH-001`
+- `REAL-CLAUDE-ESC-BEST-EFFORT-001`
+- `REAL-CLAUDE-NO-SYNTHETIC-INTERRUPT-001`
+- `REAL-CLAUDE-HISTORY-REPLAY-001`
+- `REAL-CLAUDE-HISTORY-CLAIM-001`
+- `REAL-CLAUDE-SECOND-TURN-001`
 
 旧的 deterministic fake browser smoke 仍然有价值，但只能作为开发期保护和快速定位工具，不能用于“可交付给人类测试”的结论。
 
@@ -106,6 +116,7 @@ npm run test:regression:e2e-browser
 | `REAL-HISTORY-REPLAY-001` | real-provider covered |
 | `REAL-HISTORY-CLAIM-001` | real-provider covered |
 | `REAL-SECOND-TURN-001` | real-provider covered |
+| `REAL-CLAUDE-*` | Claude zellij passthrough covered |
 
 当前 release browser gate 聚焦真实 provider 的核心痛点：Chat 气泡顺序、重复气泡、Stop 消失、重复 Stop、中断提示唯一且锚定、history replay、claim 后继续发送。P1 移动端输入法、TUI surface 视觉细节、Council UI 仍需要额外 fake/browser/manual QA。后续新增历史 bug 时，先在 manifest 增加 case，再补对应 browser 或 runtime gate。
 

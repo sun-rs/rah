@@ -19,16 +19,7 @@
 - [项目总览](./project-overview.zh-CN.md)
 - [历史浏览与分页边界](./history-browsing.zh-CN.md)
 
-## 2. Legacy Terminal Wrapper / Handoff
-
-这些文档记录旧 wrapper/handoff 方案，只作为 internal legacy/test harness 参考。当前 public `rah codex/claude/opencode` 入口走 daemon-owned PTY Session Runtime。
-
-- [Terminal Wrapper Live Session 设计](./terminal-wrapper-live-sessions.zh-CN.md)
-- [`rah codex` handoff 模式](./rah-codex-handoff-mode.zh-CN.md)
-- [`rah claude` handoff 模式](./rah-claude-handoff-mode.zh-CN.md)
-- [Terminal Wrapper Protocol Draft](./terminal-wrapper-protocol.zh-CN.md)
-
-## 3. Provider 与能力边界
+## 2. Provider 与能力边界
 
 - [Provider Capability Matrix](./provider-capability-matrix.md)
 - [Provider Capability Protocol Draft](./provider-capability-protocol-draft.md)
@@ -37,14 +28,14 @@
 - [Canonical Event Taxonomy](./canonical-event-taxonomy.md)
 - [Codex Adapter Event Coverage](./codex-event-coverage.md)
 
-## 4. 历史、状态与质量
+## 3. 历史、状态与质量
 
 - [Codex 历史 liveness 与 pending tool 收口边界](./codex-history-liveness.zh-CN.md)
 - [History Quality Plan](./history-quality-plan.zh-CN.md)
 - [Client Web Store Ownership](./client-web-store-ownership.zh-CN.md)
 - [Workbench Boundary](./workbench-boundary.md)
 
-## 5. 发布与回归
+## 4. 发布与回归
 
 - [Release Checklist](./release-checklist.md)
 - [UI 回归清单](./ui-regression-checklist.zh-CN.md)

@@ -145,13 +145,12 @@ These are product-facing diagnostics, not protocol guarantees of auth or quota.
 - terminal-first takeover semantics
 - terminal replay durability beyond the current structured workbench boundary
 
-### Terminal Wrapper Live Sessions
+### Native TUI Runtime
 
-- wrapper <-> daemon control channel
-- operator-group level control semantics
-- surface identity and focus semantics
-- prompt-boundary aware queued input
-- any future `rah codex` / `rah claude` wrapper protocol
+- native local-server client/session control for Codex and OpenCode
+- zellij/TUI mux fallback surface semantics for Claude
+- prompt-boundary diagnostics where the provider exposes enough signal
+- chat ledger and provider-history mirror reconciliation
 
 ### Adapter Internals
 

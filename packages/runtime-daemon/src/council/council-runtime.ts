@@ -268,5 +268,5 @@ function isZellijSessionMissingError(error: unknown): boolean {
     return false;
   }
   const detail = `${error.stdout}\n${error.stderr}\n${error.message}`;
-  return /No session named|Session '[^']+' not found|There is no active session|session may have exited/i.test(detail);
+  return /No session named|Session:?\s*['"][^'"]+['"] not found|There is no active session|session may have exited/i.test(detail);
 }

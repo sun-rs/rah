@@ -12,6 +12,5 @@ export * from "./codex-stored-sessions";
 export * from "./claude-session-files";
 export * from "./claude-wrapper-home";
 export * from "./workbench-state";
-export * from "./terminal-wrapper-control";
 export * from "./runtime-engine";
 export * from "./http-server";

@@ -37,12 +37,14 @@ import { codexLaunchSpec, probeProviderDiagnostic } from "../provider-diagnostic
 import { toSessionSummary } from "../session-store";
 import { buildCodexModeState, parseCodexModeId } from "../session-mode-utils";
 import { optionValueAsString, resolveModelOptionValues } from "../session-model-options";
+import { applyProviderActivity } from "../provider-activity";
 
 const CODEX_EVENT_SOURCE = {
   provider: "codex" as const,
   channel: "structured_live" as const,
   authority: "derived" as const,
 };
+const CODEX_INTERRUPT_FALLBACK_MS = 1_500;
 
 type CodexTurnCollaborationMode = {
   mode: "default" | "plan";
@@ -158,6 +160,41 @@ export class CodexAdapter implements ProviderAdapter {
     this.startLiveTurn(live, next);
   }
 
+  private clearInterruptFallback(live: LiveCodexSession): void {
+    if (live.interruptFallbackTimer) {
+      clearTimeout(live.interruptFallbackTimer);
+      delete live.interruptFallbackTimer;
+    }
+    delete live.interruptFallbackTurnId;
+  }
+
+  private scheduleInterruptFallback(live: LiveCodexSession, turnId: string): void {
+    this.clearInterruptFallback(live);
+    live.interruptFallbackTurnId = turnId;
+    live.interruptFallbackTimer = setTimeout(() => {
+      delete live.interruptFallbackTimer;
+      delete live.interruptFallbackTurnId;
+      if (
+        this.liveSessions.get(live.sessionId) !== live ||
+        live.currentTurnId !== turnId ||
+        !live.interruptingTurnIds.has(turnId)
+      ) {
+        return;
+      }
+      live.finishedTurnIds.add(turnId);
+      live.interruptingTurnIds.delete(turnId);
+      live.currentTurnId = null;
+      live.interruptWhenTurnStarts = false;
+      applyProviderActivity(this.services, live.sessionId, CODEX_EVENT_SOURCE, {
+        type: "turn_canceled",
+        turnId,
+        reason: "Interrupted",
+      });
+      live.drainQueuedInput?.();
+    }, CODEX_INTERRUPT_FALLBACK_MS);
+    live.interruptFallbackTimer.unref?.();
+  }
+
   private startLiveTurn(live: LiveCodexSession, request: SessionInputRequest): void {
     if (!live.threadId) {
       live.queuedInputs.push(request);
@@ -194,18 +231,24 @@ export class CodexAdapter implements ProviderAdapter {
         live.currentTurnId = turn.id;
       }
       if (typeof turn?.id === "string" && live.interruptWhenTurnStarts) {
+        const turnId = turn.id;
         live.interruptWhenTurnStarts = false;
-        if (!live.interruptingTurnIds.has(turn.id)) {
-          live.interruptingTurnIds.add(turn.id);
-          void live.client.request("turn/interrupt", {
-            threadId: live.threadId,
-            turnId: turn.id,
-          }).catch((error) => {
-            this.reportAsyncLiveError(
-              live.sessionId,
-              error instanceof Error ? error.message : String(error),
-            );
-          });
+        if (!live.interruptingTurnIds.has(turnId)) {
+          live.interruptingTurnIds.add(turnId);
+          void live.client
+            .request("turn/interrupt", {
+              threadId: live.threadId,
+              turnId,
+            })
+            .then(() => {
+              this.scheduleInterruptFallback(live, turnId);
+            })
+            .catch((error) => {
+              this.reportAsyncLiveError(
+                live.sessionId,
+                error instanceof Error ? error.message : String(error),
+              );
+            });
         }
       }
     }).catch((error) => {
@@ -477,6 +520,7 @@ export class CodexAdapter implements ProviderAdapter {
     const live = this.liveSessions.get(sessionId);
     if (live) {
       this.liveSessions.delete(sessionId);
+      this.clearInterruptFallback(live);
       await live.client.dispose();
     }
     this.rehydratedSessionIds.delete(sessionId);
@@ -486,6 +530,7 @@ export class CodexAdapter implements ProviderAdapter {
     const live = this.liveSessions.get(sessionId);
     if (live) {
       this.liveSessions.delete(sessionId);
+      this.clearInterruptFallback(live);
       await live.client.dispose();
     }
     this.rehydratedSessionIds.delete(sessionId);
@@ -505,15 +550,20 @@ export class CodexAdapter implements ProviderAdapter {
           return toSessionSummary(state);
         }
         live.interruptingTurnIds.add(turnId);
-        void live.client.request("turn/interrupt", {
-          threadId: live.threadId,
-          turnId,
-        }).catch((error) => {
-          this.reportAsyncLiveError(
-            sessionId,
-            error instanceof Error ? error.message : String(error),
-          );
-        });
+        void live.client
+          .request("turn/interrupt", {
+            threadId: live.threadId,
+            turnId,
+          })
+          .then(() => {
+            this.scheduleInterruptFallback(live, turnId);
+          })
+          .catch((error) => {
+            this.reportAsyncLiveError(
+              sessionId,
+              error instanceof Error ? error.message : String(error),
+            );
+          });
       } else if (live.turnStartInFlight && !live.interruptWhenTurnStarts) {
         live.interruptWhenTurnStarts = true;
       }
@@ -569,6 +619,7 @@ export class CodexAdapter implements ProviderAdapter {
   async shutdown(): Promise<void> {
     const sessions = [...this.liveSessions.values()];
     this.liveSessions.clear();
+    sessions.forEach((live) => this.clearInterruptFallback(live));
     const results = await Promise.allSettled(sessions.map((live) => live.client.dispose()));
     results.forEach((result, index) => {
       if (result.status === "rejected") {

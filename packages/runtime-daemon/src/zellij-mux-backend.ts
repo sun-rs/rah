@@ -126,7 +126,7 @@ function stripAnsi(value: string): string {
 }
 
 function outputMentionsMissingSession(value: string): boolean {
-  return /Session '[^']+' not found|There is no active session/i.test(stripAnsi(value));
+  return /Session:?\s*['"][^'"]+['"] not found|There is no active session/i.test(stripAnsi(value));
 }
 
 function normalizePane(raw: RawZellijPane): MuxPaneState {
@@ -383,6 +383,10 @@ export class ZellijMuxBackend implements MuxRuntime {
 
   async killSession(sessionName: string): Promise<void> {
     await this.exec(["kill-session", sessionName]);
+  }
+
+  async deleteSession(sessionName: string): Promise<void> {
+    await this.exec(["delete-session", sessionName]);
   }
 
   private async ensureSession(sessionName: string): Promise<void> {

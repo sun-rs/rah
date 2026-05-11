@@ -1,8 +1,8 @@
+import type { NativeTuiPromptState } from "@rah/runtime-protocol";
 import type { ProviderActivity, ProviderActivityMeta } from "./provider-activity";
-import type { TerminalWrapperPromptState } from "./terminal-wrapper-control";
 
 export type NativeTuiMirrorGuardState = {
-  promptState: TerminalWrapperPromptState;
+  promptState: NativeTuiPromptState;
   lastInjectedInputAtMs?: number;
 };
 
@@ -48,7 +48,7 @@ export function shouldIgnoreStaleMirrorStateActivity(
   state: NativeTuiMirrorGuardState,
   meta: ProviderActivityMeta,
   activity: ProviderActivity,
-  nextPromptState: TerminalWrapperPromptState,
+  nextPromptState: NativeTuiPromptState,
 ): boolean {
   if (!isKnownStalePersistedMirrorActivity(state, meta)) {
     return false;

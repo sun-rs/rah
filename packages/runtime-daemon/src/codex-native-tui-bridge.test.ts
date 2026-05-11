@@ -6,9 +6,9 @@ import {
   readPersistedTaskLifecycle,
   selectCodexStoredSessionCandidate,
   sliceUnprocessedRolloutLines,
-} from "./codex-terminal-wrapper-bridge";
+} from "./codex-native-tui-bridge";
 
-describe("codex terminal wrapper bridge helpers", () => {
+describe("codex native TUI bridge helpers", () => {
   test("prefers the resumed provider session id when provided", () => {
     const record = selectCodexStoredSessionCandidate({
       records: [

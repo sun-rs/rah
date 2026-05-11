@@ -704,6 +704,100 @@ rl.on('line', (line) => {
     await adapter.shutdown?.();
   });
 
+  test("terminal-owned Codex queued input drains when interrupt lacks completion event", async () => {
+    const nextPromptPath = path.join(tmpDir, "next-prompt.txt");
+    const serverJs = path.join(tmpDir, "mock-codex-terminal-stop-no-complete-server.js");
+    writeFileSync(
+      serverJs,
+      `
+const fs = require('node:fs');
+const readline = require('node:readline');
+const rl = readline.createInterface({ input: process.stdin });
+const nextPromptPath = ${JSON.stringify(nextPromptPath)};
+function send(msg) { process.stdout.write(JSON.stringify(msg) + "\\n"); }
+let turnCount = 0;
+rl.on('line', (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method === 'initialize') {
+    send({ id: msg.id, result: {} });
+    return;
+  }
+  if (msg.method === 'collaborationMode/list') {
+    send({ id: msg.id, result: { data: [] } });
+    setTimeout(() => send({ method: 'thread/started', params: { thread: { id: 'thread-terminal-stop-no-complete' } } }), 10);
+    return;
+  }
+  if (msg.method === 'thread/resume') {
+    send({ id: msg.id, result: { thread: { id: 'thread-terminal-stop-no-complete' } } });
+    return;
+  }
+  if (msg.method === 'turn/start') {
+    turnCount += 1;
+    const prompt = msg.params.input[0].text;
+    const turnId = 'turn-terminal-stop-no-complete-' + turnCount;
+    if (turnCount === 2) {
+      fs.writeFileSync(nextPromptPath, prompt);
+    }
+    send({ id: msg.id, result: { turn: { id: turnId } } });
+    send({ method: 'turn/started', params: { turn: { id: turnId } } });
+    return;
+  }
+  if (msg.method === 'turn/interrupt') {
+    // Some real app-server builds acknowledge interrupt but do not promptly
+    // emit turn/completed. RAH must not leave later Web input queued forever.
+    send({ id: msg.id, result: {} });
+    return;
+  }
+  send({ id: msg.id, result: {} });
+});
+`,
+    );
+    const wrapper = path.join(tmpDir, "mock-codex-terminal-stop-no-complete");
+    writeFileSync(wrapper, `#!/bin/sh\nexec node "${serverJs}" "$@"\n`);
+    chmodSync(wrapper, 0o755);
+    process.env.RAH_CODEX_BINARY = wrapper;
+
+    const services = {
+      eventBus: new EventBus(),
+      ptyHub: new PtyHub(),
+      sessionStore: new SessionStore(),
+    };
+    const adapter = new CodexAdapter(services);
+
+    const started = await adapter.startSession({
+      provider: "codex",
+      cwd: tmpDir,
+      attach: {
+        client: {
+          id: "terminal-client",
+          kind: "terminal",
+          connectionId: "pid:test-terminal",
+        },
+        mode: "interactive",
+        claimControl: true,
+      },
+    });
+    adapter.sendInput(started.session.session.id, {
+      clientId: "terminal-client",
+      text: "run until stopped without completion",
+    });
+    await waitFor(() =>
+      services.sessionStore.getSession(started.session.session.id)?.activeTurnId ===
+      "turn-terminal-stop-no-complete-1",
+    );
+
+    adapter.interruptSession(started.session.session.id, { clientId: "web-client" });
+    adapter.sendInput(started.session.session.id, {
+      clientId: "web-client",
+      text: "after stop should reach codex",
+    });
+
+    await waitFor(() => existsSync(nextPromptPath), 5_000);
+    assert.equal(readFileSync(nextPromptPath, "utf8"), "after stop should reach codex");
+
+    await adapter.shutdown?.();
+  });
+
   test("honors immediate Codex stop while turn/start is still pending", async () => {
     const serverJs = path.join(tmpDir, "mock-codex-stop-pending-server.js");
     writeFileSync(

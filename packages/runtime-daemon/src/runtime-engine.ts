@@ -61,7 +61,6 @@ import {
 } from "./workspace-utils";
 import { EventBus } from "./event-bus";
 import { HistorySnapshotStore } from "./history-snapshots";
-import type { ProviderActivity } from "./provider-activity";
 import type {
   ProviderActionCapabilityAdapter,
   ProviderAdapter,
@@ -86,13 +85,6 @@ import {
   sameStoredSessionRefs,
 } from "./runtime-session-list";
 import { StoredSessionMonitor } from "./stored-session-monitor";
-import {
-  type TerminalWrapperFromDaemonMessage,
-  type TerminalWrapperPromptState,
-  type WrapperHelloMessage,
-  type WrapperProviderBoundMessage,
-  type WrapperReadyMessage,
-} from "./terminal-wrapper-control";
 import { RuntimeTerminalCoordinator } from "./runtime-terminal-coordinator";
 import { RuntimeSessionLifecycle } from "./runtime-session-lifecycle";
 import {
@@ -147,10 +139,6 @@ const SYSTEM_SOURCE = {
 const MAX_MATERIALIZED_HISTORY_EVENTS = 5_000;
 
 type StructuredSessionOwnerProvider = StoredSessionState["session"]["provider"];
-
-type RuntimeEngineOptions = {
-  enableLegacyWrapperRuntime?: boolean;
-};
 
 async function runShutdownStep(label: string, task: () => Promise<unknown> | unknown) {
   try {
@@ -230,7 +218,7 @@ export class RuntimeEngine {
   private readonly historyMirrorAdapters: ProviderStoredHistoryAdapter[] = [];
   private readonly structuredLiveAllowedForInjectedAdapters: boolean;
 
-  constructor(adapters?: ProviderAdapter[], options: RuntimeEngineOptions = {}) {
+  constructor(adapters?: ProviderAdapter[]) {
     this.defaultLiveBackend =
       adapters === undefined
         ? process.env.RAH_MUX_BACKEND === "zellij"
@@ -270,7 +258,6 @@ export class RuntimeEngine {
       historySnapshots: this.historySnapshots,
       nativeTuiProviders: this.nativeTuiProviders,
       nativeTuiMirrors: this.nativeTuiMirrors,
-      enableLegacyWrapperRuntime: options.enableLegacyWrapperRuntime === true,
       onRememberSession: (state) => {
         this.workbenchState.rememberSession(state);
         this.refreshRememberedState();
@@ -740,9 +727,6 @@ export class RuntimeEngine {
   }
 
   sendInput(sessionId: string, request: SessionInputRequest): void {
-    if (this.terminals.handleWrapperInput(sessionId, request.clientId, request.text)) {
-      return;
-    }
     if (
       this.terminals.handleNativeTuiInput(sessionId, request.clientId, request.text, {
         ...(request.clientMessageId !== undefined ? { clientMessageId: request.clientMessageId } : {}),
@@ -758,9 +742,6 @@ export class RuntimeEngine {
     sessionId: string,
     request: InterruptSessionRequest,
   ): SessionSummary {
-    if (this.terminals.handleWrapperInterrupt(sessionId, request.clientId)) {
-      return this.getSessionSummary(sessionId);
-    }
     if (this.terminals.handleNativeTuiInterrupt(sessionId, request.clientId)) {
       return this.getSessionSummary(sessionId);
     }
@@ -805,9 +786,6 @@ export class RuntimeEngine {
     requestId: string,
     response: PermissionResponseRequest,
   ): Promise<void> {
-    if (this.terminals.handlePermissionResponse(sessionId, requestId, response)) {
-      return;
-    }
     const adapter = this.requireStructuredPermissionAdapter(sessionId);
     await adapter.respondToPermission(sessionId, requestId, response);
   }
@@ -1155,43 +1133,6 @@ export class RuntimeEngine {
     await this.terminals.closeIndependentTerminal(id);
   }
 
-  registerTerminalWrapperSession(
-    request: WrapperHelloMessage,
-    sendMessage: (message: TerminalWrapperFromDaemonMessage) => void,
-  ): WrapperReadyMessage {
-    return this.terminals.registerTerminalWrapperSession(request, sendMessage);
-  }
-
-  disconnectTerminalWrapperSession(sessionId: string): void {
-    this.terminals.disconnectTerminalWrapperSession(sessionId);
-  }
-
-  bindTerminalWrapperProviderSession(message: WrapperProviderBoundMessage): void {
-    this.terminals.bindTerminalWrapperProviderSession(message);
-  }
-
-  updateTerminalWrapperPromptState(
-    sessionId: string,
-    promptState: TerminalWrapperPromptState,
-  ): void {
-    this.terminals.updateTerminalWrapperPromptState(sessionId, promptState);
-  }
-
-  applyTerminalWrapperActivity(sessionId: string, activity: ProviderActivity): RahEvent[] {
-    return this.terminals.applyTerminalWrapperActivity(sessionId, activity);
-  }
-
-  appendTerminalWrapperPtyOutput(sessionId: string, data: string): RahEvent[] {
-    return this.terminals.appendTerminalWrapperPtyOutput(sessionId, data);
-  }
-
-  markTerminalWrapperExited(
-    sessionId: string,
-    options?: { exitCode?: number; signal?: string },
-  ): RahEvent[] {
-    return this.terminals.markTerminalWrapperExited(sessionId, options);
-  }
-
   async shutdown(): Promise<void> {
     await runShutdownStep("stored session monitor", () => this.storedSessionMonitor.shutdown());
     await runShutdownStep("terminal sessions", () => this.terminals.shutdown());
@@ -1340,7 +1281,7 @@ export class RuntimeEngine {
         rememberedHiddenSessionKeys: this.rememberedHiddenSessionKeys,
         rememberedSessionTitleOverrides: this.rememberedSessionTitleOverrides,
       },
-      isClosingSession: (sessionId) => this.terminals.isClosingWrapperSession(sessionId),
+      isClosingSession: () => false,
     });
   }
 

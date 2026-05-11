@@ -7,7 +7,7 @@
 本文是当前实现审计，不是完成声明。最终完成仍需要真实 CLI / 真机 QA。
 
 > 维护说明：本文记录 `refactor/pty-first-core` 阶段的历史审计。当前 `1.0.0-rc.1`
-> 以 `experiment/zellij-mux-backend` 为准，最新状态见
+> 以 `refactor/native-local-server-core` 为准，最新状态见
 > [`RAH 1.0 RC 说明`](./1.0-rc-notes.zh-CN.md) 和
 > [`RAH_ZELLIJ_MUX_BACKEND_STATUS.zh-CN.md`](../RAH_ZELLIJ_MUX_BACKEND_STATUS.zh-CN.md)。
 
@@ -29,7 +29,7 @@ RAH 收敛到一个 live core：
 
 | Requirement | Current artifact / evidence | Status |
 | --- | --- | --- |
-| Phase 0 boundary audit | `docs/pty-first-phase0-audit.zh-CN.md`; `RAH_PTY_FIRST_SEAMLESS_WORKBENCH_PLAN.zh-CN.md` | Done, historical audit partially superseded by three-provider reduction |
+| Phase 0 boundary audit | `RAH_PTY_FIRST_SEAMLESS_WORKBENCH_PLAN.zh-CN.md` | Done; obsolete wrapper-control audit notes removed |
 | Provider scope reduction | `packages/runtime-protocol/src/session.ts`, `bin/rah.mjs`, `ProviderSelector.tsx`, `provider-diagnostics.ts` | Done |
 | Gemini/Kimi CLI removal | runtime/client/scripts grep has no non-doc Gemini/Kimi refs; deleted provider files and smoke scripts | Done |
 | PTY runtime extraction | `packages/runtime-daemon/src/pty-session-runtime.ts`; `pty-session-runtime.test.ts` | Done |
@@ -47,7 +47,7 @@ RAH 收敛到一个 live core：
 | Mobile terminal input bridge | `terminal-mobile-bridge.ts`, `terminal-viewport.ts`, tests | Covered by tests; real iPad QA still required |
 | Enhanced controls downgraded | native TUI capabilities expose `structuredControl: false`; session capability tests hide RAH-managed controls | Covered |
 | Legacy structured path no longer public default | HTTP rejects `liveBackend: "structured"`; default adapters no longer construct legacy structured live | Done |
-| Wrapper-control not public live path | normal daemon keeps wrapper-control closed; `test:smoke:wrapper` uses dedicated test daemon | Done |
+| Wrapper-control removed |旧 wrapper-control / terminal handoff runtime、smoke 脚本和测试面已删除 | Done |
 | OpenCode model/variant boundary | native TUI launch spec passes `--model provider/model`; ACP setSessionModel test passes `provider/model/variant` | Done |
 
 ## Verification Run
@@ -68,7 +68,6 @@ Latest verified gates after Gemini/Kimi CLI removal and the 2026-05-08 PTY-first
 - `npm run test:smoke:native-real-tui-launch`: pass for real Codex、Claude、OpenCode TUI startup inside RAH PTY host; no model prompt is sent
 - `npm run test:smoke:native-qa-status`: pass for current saved CLI probe and real TUI launch evidence
 - `npm run test:smoke:native-manual-qa-status`: expected fail with 26 pending; pass results now require concrete provider session/device evidence
-- `npm run test:smoke:wrapper`: pass for the isolated legacy wrapper-control harness
 - `git diff --check`: pass
 - `GET /api/providers`: returns only `codex`, `claude`, `opencode`
 - non-doc grep over runtime/client/scripts/package/bin: no Gemini/Kimi refs

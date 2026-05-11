@@ -179,6 +179,13 @@ describe("composer contract", () => {
     assert.equal(surface.stopSpinner, false);
   });
 
+  test("sizes the Claude Esc control to the same outer box as send", () => {
+    assert.match(COMPOSER_LAYOUT.stopWrapperClassName, /h-10 w-10 md:h-9 md:w-9 lg:h-8 lg:w-8/);
+    assert.match(COMPOSER_LAYOUT.sendButtonClassName, /h-10 w-10 md:h-9 md:w-9 lg:h-8 lg:w-8/);
+    assert.match(COMPOSER_LAYOUT.stopWarningButtonClassName, /inset-0/);
+    assert.doesNotMatch(COMPOSER_LAYOUT.stopWarningButtonClassName, /inset-\[3px\]/);
+  });
+
   test("derives compose surface and preserves stop visibility while generating", () => {
     assert.deepEqual(
       deriveComposerSurface({

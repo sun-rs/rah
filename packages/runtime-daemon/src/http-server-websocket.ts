@@ -7,8 +7,6 @@ import type {
 } from "@rah/runtime-protocol";
 import { RuntimeEngine } from "./runtime-engine";
 import { isAllowedOrigin } from "./http-server-cors";
-import { isLoopbackRemoteAddress } from "./http-server-client-address";
-import type { TerminalWrapperToDaemonMessage } from "./terminal-wrapper-control";
 
 const WEBSOCKET_HEARTBEAT_INTERVAL_MS = 30_000;
 const DEFAULT_MAX_WEBSOCKET_BUFFERED_BYTES = 8 * 1024 * 1024;
@@ -136,20 +134,12 @@ function parsePtyReplaySeq(raw: string | null): number | undefined {
 export function attachWebSocketHandlers(
   server: Server,
   engine: RuntimeEngine,
-  options: { enableLegacyWrapperControl?: boolean } = {},
 ): {
   close(): void;
 } {
   const wssEvents = new WebSocketServer({ noServer: true });
   const wssPty = new WebSocketServer({ noServer: true });
-  const wssWrapper = options.enableLegacyWrapperControl
-    ? new WebSocketServer({ noServer: true })
-    : undefined;
-  const stopHeartbeat = installWebSocketHeartbeat(
-    [wssEvents, wssPty, wssWrapper].filter(
-      (server): server is WebSocketServer => server !== undefined,
-    ),
-  );
+  const stopHeartbeat = installWebSocketHeartbeat([wssEvents, wssPty]);
 
   wssEvents.on("connection", (socket, req) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -280,57 +270,6 @@ export function attachWebSocketHandlers(
     });
   });
 
-  wssWrapper?.on("connection", (socket) => {
-    let wrapperSessionId: string | null = null;
-    const send = (message: unknown) => {
-      socket.send(JSON.stringify(message));
-    };
-
-    socket.on("message", (raw) => {
-      try {
-        const parsed = JSON.parse(raw.toString("utf8")) as TerminalWrapperToDaemonMessage;
-        switch (parsed.type) {
-          case "wrapper.hello": {
-            const ready = engine.registerTerminalWrapperSession(parsed, (message) => {
-              send(message);
-            });
-            wrapperSessionId = ready.sessionId;
-            send(ready);
-            break;
-          }
-          case "wrapper.provider_bound":
-            engine.bindTerminalWrapperProviderSession(parsed);
-            break;
-          case "wrapper.prompt_state.changed":
-            engine.updateTerminalWrapperPromptState(parsed.sessionId, parsed.state);
-            break;
-          case "wrapper.activity":
-            engine.applyTerminalWrapperActivity(parsed.sessionId, parsed.activity);
-            break;
-          case "wrapper.pty.output":
-            engine.appendTerminalWrapperPtyOutput(parsed.sessionId, parsed.data);
-            break;
-          case "wrapper.exited":
-            engine.markTerminalWrapperExited(parsed.sessionId, {
-              ...(parsed.exitCode !== undefined ? { exitCode: parsed.exitCode } : {}),
-              ...(parsed.signal !== undefined ? { signal: parsed.signal } : {}),
-            });
-            break;
-          default:
-            send({ error: "Unsupported wrapper control message" });
-        }
-      } catch {
-        send({ error: "Invalid wrapper control payload" });
-      }
-    });
-
-    socket.on("close", () => {
-      if (wrapperSessionId) {
-        engine.disconnectTerminalWrapperSession(wrapperSessionId);
-      }
-    });
-  });
-
   server.on("upgrade", (req, socket, head) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
     if (url.pathname.startsWith("/api/") && !isAllowedOrigin(req)) {
@@ -349,20 +288,6 @@ export function attachWebSocketHandlers(
       });
       return;
     }
-    if (url.pathname === "/api/wrapper-control") {
-      if (!wssWrapper) {
-        socket.destroy();
-        return;
-      }
-      if (!isLoopbackRemoteAddress(req.socket.remoteAddress)) {
-        socket.destroy();
-        return;
-      }
-      wssWrapper.handleUpgrade(req, socket, head, (ws) => {
-        wssWrapper.emit("connection", ws, req);
-      });
-      return;
-    }
     socket.destroy();
   });
 
@@ -371,7 +296,6 @@ export function attachWebSocketHandlers(
       stopHeartbeat();
       wssEvents.close();
       wssPty.close();
-      wssWrapper?.close();
     },
   };
 }

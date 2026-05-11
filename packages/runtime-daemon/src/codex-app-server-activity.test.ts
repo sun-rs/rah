@@ -783,6 +783,24 @@ describe("translateCodexAppServerNotification", () => {
     assert.deepEqual(repeatedCommandDelta, []);
   });
 
+  test("keeps transient turn diff snapshots out of the chat timeline", () => {
+    const state = createCodexAppServerTranslationState();
+
+    const translated = translateCodexAppServerNotification(
+      {
+        method: "turn/diff/updated",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          diff: "diff --git a/test.md b/test.md",
+        },
+      },
+      state,
+    );
+
+    assert.deepEqual(translated, []);
+  });
+
   test("maps or deliberately ignores every known Codex app-server notification method without invalid fallback", () => {
     const b64 = Buffer.from("hello").toString("base64");
     const run = {

@@ -11,7 +11,7 @@ import {
   readPersistedTaskLifecycle,
   selectCodexStoredSessionCandidate,
   sliceUnprocessedRolloutLines,
-} from "./codex-terminal-wrapper-bridge";
+} from "./codex-native-tui-bridge";
 import { discoverCodexStoredSessions } from "./codex-stored-sessions";
 import type {
   NativeTuiMirrorUpdate,

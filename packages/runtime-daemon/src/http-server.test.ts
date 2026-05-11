@@ -403,19 +403,12 @@ describe("startRahDaemon", () => {
     );
   });
 
-  test("limits wrapper control upgrades to loopback clients", () => {
+  test("recognizes loopback clients for host-only websocket fallbacks", () => {
     assert.equal(isLoopbackRemoteAddress("127.0.0.1"), true);
     assert.equal(isLoopbackRemoteAddress("::1"), true);
     assert.equal(isLoopbackRemoteAddress("::ffff:127.0.0.1"), true);
     assert.equal(isLoopbackRemoteAddress("192.168.1.20"), false);
     assert.equal(isLoopbackRemoteAddress(undefined), false);
-  });
-
-  test("keeps wrapper-control websocket disabled by default", async () => {
-    const result = await waitForWebSocketOpenOrClose(
-      `ws://127.0.0.1:${port}/api/wrapper-control`,
-    );
-    assert.equal(result, "closed");
   });
 
   test("recognizes same-machine LAN clients for host-only fallbacks", () => {
