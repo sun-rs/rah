@@ -713,12 +713,18 @@ function councilMcpTools() {
   return [
     {
       name: "channel_join",
-      description: "Join the RAH council room as this actor.",
+      description: [
+        "Join the RAH council room as this actor. Must be called before posting or waiting.",
+        "Read recent_messages as private catch-up context, then enter the listening loop with channel_wait_new.",
+      ].join(" "),
       inputSchema: { type: "object", additionalProperties: true },
     },
     {
       name: "channel_post",
-      description: "Post a text message to the RAH council room.",
+      description: [
+        "Post a text message to the RAH council room.",
+        "After posting a reply, immediately call channel_wait_new again; do not stop listening after a reply.",
+      ].join(" "),
       inputSchema: {
         type: "object",
         properties: { content: { type: "string" }, text: { type: "string" }, reply_to: { type: "number" } },
@@ -727,7 +733,12 @@ function councilMcpTools() {
     },
     {
       name: "channel_wait_new",
-      description: "Block until a newer message from another participant arrives, or timeout.",
+      description: [
+        "Block until a newer message from another participant arrives, or until a heartbeat timeout.",
+        "Use this proactively in an infinite listening loop: wait, process message if any, post if needed, then wait again.",
+        "If the result has timed_out=true, this is NOT completion and NOT a reason to summarize; immediately call channel_wait_new again.",
+        "The loop exits only when the user interrupts you, the room stops, or the tool returns ok=false/error.",
+      ].join(" "),
       inputSchema: {
         type: "object",
         properties: {

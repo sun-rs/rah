@@ -126,7 +126,12 @@ export function handleCouncilMcpRequest(
           ok: true,
           result: immediate
             ? { ok: true, msg: toChannelMessage(immediate) }
-            : { ok: true, timed_out: true },
+            : {
+                ok: true,
+                timed_out: true,
+                next_action: "call_channel_wait_new_again",
+                instruction: "Timeout is a heartbeat, not completion. Call channel_wait_new again immediately without natural-language output.",
+              },
         };
       }
       return options.waitNew({
@@ -137,7 +142,14 @@ export function handleCouncilMcpRequest(
         timeoutMs: timeoutS * 1000,
       }).then((message) => ({
         ok: true,
-        result: message ? { ok: true, msg: toChannelMessage(message) } : { ok: true, timed_out: true },
+        result: message
+          ? { ok: true, msg: toChannelMessage(message) }
+          : {
+              ok: true,
+              timed_out: true,
+              next_action: "call_channel_wait_new_again",
+              instruction: "Timeout is a heartbeat, not completion. Call channel_wait_new again immediately without natural-language output.",
+            },
       }));
     }
     case "channel_history": {
