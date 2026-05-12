@@ -551,23 +551,6 @@ export class DebugEngine {
           source: DEBUG_SOURCE,
           payload: { usage },
         });
-        this.eventBus.publish({
-          sessionId,
-          type: "attention.required",
-          source: DEBUG_SOURCE,
-          payload: {
-            item: {
-              id: crypto.randomUUID(),
-              sessionId,
-              level: "info",
-              reason: "turn_finished",
-              title: "Turn finished",
-              body: "Debug session completed a turn.",
-              dedupeKey: `${sessionId}:${turnId}:turn_finished`,
-              createdAt: new Date().toISOString(),
-            },
-          },
-        });
         this.sessionStore.setActiveTurn(sessionId, undefined);
         this.sessionStore.setRuntimeState(sessionId, "idle");
         this.pendingTurns.delete(sessionId);
@@ -1187,38 +1170,6 @@ export class DebugEngine {
           ),
         );
         return;
-      case "attention_cleared":
-        this.eventBus.publish(
-          withOptionalTurnId(
-            {
-              sessionId,
-              type: "attention.cleared",
-              source: DEBUG_SOURCE,
-              payload: { id: step.id },
-            },
-            step.turnId,
-          ),
-        );
-        return;
-      case "attention":
-        this.eventBus.publish({
-          sessionId,
-          type: "attention.required",
-          source: DEBUG_SOURCE,
-          payload: {
-            item: {
-              id: crypto.randomUUID(),
-              sessionId,
-              level: step.level ?? "info",
-              reason: step.reason,
-              title: step.title,
-              body: step.body,
-              dedupeKey: step.dedupeKey,
-              createdAt: new Date().toISOString(),
-            },
-          },
-        });
-        return;
     }
   }
 
@@ -1612,40 +1563,6 @@ export class DebugEngine {
               step.turnId,
             ),
           );
-          break;
-        case "attention_cleared":
-          bus.publish(
-            withOptionalTurnId(
-              {
-                sessionId,
-                type: "attention.cleared",
-                source: DEBUG_SOURCE,
-                payload: { id: step.id },
-                ts,
-              },
-              step.turnId,
-            ),
-          );
-          break;
-        case "attention":
-          bus.publish({
-            sessionId,
-            type: "attention.required",
-            source: DEBUG_SOURCE,
-            payload: {
-              item: {
-                id: crypto.randomUUID(),
-                sessionId,
-                level: step.level ?? "info",
-                reason: step.reason,
-                title: step.title,
-                body: step.body,
-                dedupeKey: step.dedupeKey,
-                createdAt: ts,
-              },
-            },
-            ts,
-          });
           break;
         case "pty":
           break;

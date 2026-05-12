@@ -15,7 +15,6 @@ import {
 } from "lucide-react";
 import { AssistantMessage } from "./AssistantMessage";
 import { AssistantTurnHeader } from "./AssistantTurnHeader";
-import { AttentionCard } from "./AttentionCard";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { MessagePartCard } from "./MessagePartCard";
 import { ObservationCard } from "./ObservationCard";
@@ -286,8 +285,6 @@ function renderEntry(
           {...(entry.error !== undefined ? { error: entry.error } : {})}
         />
       );
-    case "attention":
-      return <AttentionCard item={entry.item} />;
     case "operation":
       return <OperationCard operation={entry.operation} status={entry.status} />;
     case "message_part":

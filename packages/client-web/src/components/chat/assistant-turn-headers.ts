@@ -38,7 +38,6 @@ function isAssistantOwnedEntry(entry: FeedEntry): boolean {
     case "permission":
     case "operation":
       return true;
-    case "attention":
     case "runtime_status":
     case "notification":
       return false;

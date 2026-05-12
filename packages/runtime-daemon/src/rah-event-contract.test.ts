@@ -285,23 +285,6 @@ describe("RAH event contract", () => {
       usage: { usedTokens: 100, contextWindow: 1000, percentUsed: 10, percentRemaining: 90 },
     });
     applyActivity(services, sessionId, {
-      type: "attention",
-      item: {
-        id: "attention-1",
-        sessionId,
-        level: "info",
-        reason: "turn_finished",
-        title: "Turn finished",
-        body: "Ready",
-        dedupeKey: "turn-finished",
-        createdAt: new Date().toISOString(),
-      },
-    });
-    applyActivity(services, sessionId, {
-      type: "attention_cleared",
-      id: "attention-1",
-    });
-    applyActivity(services, sessionId, {
       type: "notification",
       turnId,
       level: "info",

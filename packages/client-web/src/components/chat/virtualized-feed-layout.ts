@@ -55,8 +55,6 @@ function estimateFeedEntryHeight(entry: FeedEntry): number {
       return 152;
     case "observation":
       return 84;
-    case "attention":
-      return 112;
     case "operation":
     case "message_part":
       return 72;

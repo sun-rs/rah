@@ -304,23 +304,6 @@ export interface RuntimeOperation {
   input?: JsonObject;
 }
 
-export interface AttentionItem {
-  id: string;
-  sessionId: string;
-  level: "info" | "warning" | "critical";
-  reason:
-    | "permission_needed"
-    | "turn_finished"
-    | "turn_failed"
-    | "session_stalled"
-    | "background_exit"
-    | "review_ready";
-  title: string;
-  body: string;
-  dedupeKey: string;
-  createdAt: string;
-}
-
 export type RahEventPayloadMap = {
   "session.discovery": { version: number };
   "session.created": { session: ManagedSession };
@@ -396,9 +379,6 @@ export type RahEventPayloadMap = {
   "terminal.exited": { exitCode?: number; signal?: string };
 
   "council.message.created": { room: CouncilRoomSnapshot; message: CouncilMessage };
-
-  "attention.required": { item: AttentionItem };
-  "attention.cleared": { id: string };
 
   "notification.emitted": {
     level: "info" | "warning" | "critical";

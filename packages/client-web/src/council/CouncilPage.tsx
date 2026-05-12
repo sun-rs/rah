@@ -35,6 +35,11 @@ import { COMPOSER_LAYOUT } from "../composer-contract";
 import { resolveSessionModeControlState } from "../session-mode-ui";
 import { ConfirmDialog } from "../components/workbench/dialogs/ConfirmDialog";
 import {
+  HEADER_ACTION_GROUP_CLASS,
+  HEADER_ICON_BUTTON_CLASS,
+  HEADER_TEXT_BUTTON_CLASS,
+} from "../components/workbench/header-button-styles";
+import {
   councilAgentDraftToConfig,
   createDefaultCouncilAgentDrafts,
   normalizeCouncilAgentDraftForCatalog,
@@ -212,6 +217,9 @@ export function CouncilPage(props: {
   const [infoDialogOpen, setInfoDialogOpen] = useState(false);
   const [councilSidebarOpen, setCouncilSidebarOpen] = useState(true);
   const [sideTab, setSideTab] = useState<CouncilSideTab>("agents");
+  const [isCouncilWide, setIsCouncilWide] = useState(() =>
+    typeof window === "undefined" ? false : window.matchMedia("(min-width: 900px)").matches,
+  );
   const [stopConfirmOpen, setStopConfirmOpen] = useState(false);
   const [pendingDeleteHistoryRoom, setPendingDeleteHistoryRoom] = useState<CouncilRoomSnapshot | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
@@ -229,6 +237,15 @@ export function CouncilPage(props: {
       setSideTab("setup");
     }
   }, [selectedRoom]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const query = window.matchMedia("(min-width: 900px)");
+    const handleChange = () => setIsCouncilWide(query.matches);
+    handleChange();
+    query.addEventListener("change", handleChange);
+    return () => query.removeEventListener("change", handleChange);
+  }, []);
 
   const isCouncilChatNearBottom = (): boolean => {
     const node = chatScrollRef.current;
@@ -509,9 +526,29 @@ export function CouncilPage(props: {
     }
   };
 
-  const openTui = (agent: CouncilAgent) => {
+  const openRoomInfo = (roomId: string) => {
+    setSelectedRoomId(roomId);
+    setHistoryDialogOpen(false);
+    setInfoDialogOpen(true);
+  };
+
+  const openTui = async (agent: CouncilAgent) => {
+    if (!selectedRoom) {
+      return;
+    }
     setError(null);
-    setSelectedTerminalAgentId(agent.id);
+    try {
+      const response = await api.getCouncilAgentTui(selectedRoom.room.id, agent.id);
+      if (!response.terminalId) {
+        setError(response.screen || "This council agent terminal is not live anymore.");
+        setSelectedTerminalAgentId(null);
+        await refreshRooms();
+        return;
+      }
+      setSelectedTerminalAgentId(agent.id);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
   };
 
   const replaceRoom = (room: CouncilRoomSnapshot) => {
@@ -604,15 +641,16 @@ export function CouncilPage(props: {
       councilSidebarOpen ? "min-[900px]:flex" : "min-[900px]:hidden"
     } min-h-0 w-full flex-col overflow-hidden bg-[var(--app-subtle-bg)] min-[900px]:w-[clamp(20rem,28vw,28rem)] min-[900px]:shrink-0`;
   const councilSidePanelVisible = activePanel === "setup" || activePanel === "agents";
+  const councilControlsVisible = councilSidePanelVisible || (isCouncilWide && councilSidebarOpen);
   const councilSidebarButtonLabel =
-    councilSidePanelVisible || councilSidebarOpen ? "Hide council controls" : "Show council controls";
+    councilControlsVisible ? "Hide council controls" : "Show council controls";
   const visibleSideTab: CouncilSideTab =
     activePanel === "setup" || activePanel === "agents" ? activePanel : sideTab;
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-[var(--app-bg)]">
       <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[var(--app-border)] bg-[var(--app-bg)]/85 px-4 backdrop-blur-sm">
-        <div className="flex min-w-0 items-center gap-2">
+        <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
           <button
             type="button"
             className="icon-click-feedback inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] md:hidden"
@@ -633,7 +671,7 @@ export function CouncilPage(props: {
               <Menu size={18} />
             </button>
           ) : null}
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <div className="truncate text-sm font-semibold text-[var(--app-fg)]">
               {selectedRoom?.room.title ?? "Council"}
             </div>
@@ -642,7 +680,7 @@ export function CouncilPage(props: {
             </div>
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
+        <div className={HEADER_ACTION_GROUP_CLASS}>
           {selectedRoom?.room.status === "running" ? (
             <>
               <span className="inline-flex h-7 items-center gap-1 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 text-[11px] font-semibold text-emerald-600">
@@ -653,63 +691,26 @@ export function CouncilPage(props: {
                 type="button"
                 onClick={() => setStopConfirmOpen(true)}
                 disabled={loading}
-                className="icon-click-feedback inline-flex h-7 items-center gap-1 rounded-full border border-[var(--app-border)] px-2 text-[11px] font-semibold text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)] disabled:opacity-40"
+                className={HEADER_TEXT_BUTTON_CLASS}
                 title="Stop room and close agent terminals"
               >
-                <Square size={12} />
-                <span className="hidden sm:inline">Stop</span>
+                <Square size={14} className="text-[var(--app-danger)] min-[900px]:mr-1" />
+                <span className="hidden min-[900px]:inline">Stop</span>
               </button>
             </>
           ) : null}
           <button
             type="button"
             onClick={() => {
-              setSelectedRoomId(null);
-              setSelectedTerminalAgentId(null);
-            }}
-            disabled={!selectedRoom}
-            className="icon-click-feedback inline-flex h-8 w-8 items-center justify-center rounded-md border border-[var(--app-border)] text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] disabled:opacity-40"
-            aria-label="Clear selected council room"
-            title="Clear selected room"
-          >
-            <X size={14} />
-          </button>
-          <button
-            type="button"
-            onClick={() => setHistoryDialogOpen(true)}
-            className="icon-click-feedback inline-flex h-8 w-8 items-center justify-center rounded-md border border-[var(--app-border)] text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
-            aria-label="Open council rooms"
-            title="Council rooms"
-          >
-            <History size={14} />
-          </button>
-          <button
-            type="button"
-            onClick={() => setInfoDialogOpen(true)}
-            disabled={!selectedRoom}
-            className="icon-click-feedback inline-flex h-8 w-8 items-center justify-center rounded-md border border-[var(--app-border)] text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] disabled:opacity-40"
-            aria-label="Open council room info"
-            title="Room info"
-          >
-            <Info size={14} />
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              if (councilSidePanelVisible) {
+              if (councilControlsVisible) {
                 setActivePanel("chat");
                 setCouncilSidebarOpen(false);
                 return;
               }
-              setCouncilSidebarOpen((open) => {
-                const nextOpen = !open;
-                if (nextOpen) {
-                  setActivePanel(sideTab);
-                }
-                return nextOpen;
-              });
+              setCouncilSidebarOpen(true);
+              setActivePanel(sideTab);
             }}
-            className="icon-click-feedback inline-flex h-8 w-8 items-center justify-center rounded-md border border-[var(--app-border)] text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)]"
+            className={HEADER_ICON_BUTTON_CLASS}
             title={councilSidebarButtonLabel}
             aria-label={councilSidebarButtonLabel}
           >
@@ -717,12 +718,21 @@ export function CouncilPage(props: {
           </button>
           <button
             type="button"
+            onClick={() => setHistoryDialogOpen(true)}
+            className={HEADER_ICON_BUTTON_CLASS}
+            aria-label="Open council rooms"
+            title="Council rooms"
+          >
+            <History size={14} />
+          </button>
+          <button
+            type="button"
             onClick={props.onHide}
-            className="icon-click-feedback inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--app-border)] px-2.5 text-xs font-medium text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)]"
+            className={HEADER_TEXT_BUTTON_CLASS}
             title="Hide council"
           >
-            <EyeOff size={14} />
-            <span className="hidden sm:inline">Hide</span>
+            <EyeOff size={14} className="min-[900px]:mr-1" />
+            <span className="hidden min-[900px]:inline">Hide</span>
           </button>
         </div>
       </header>
@@ -1235,29 +1245,40 @@ export function CouncilPage(props: {
                   </span>
                 </div>
                 {activeRooms.length > 0 ? activeRooms.map((room) => (
-                  <button
+                  <div
                     key={room.room.id}
-                    type="button"
-                    onClick={() => {
-                      setSelectedRoomId(room.room.id);
-                      setSideTab("agents");
-                      setActivePanel("chat");
-                      setHistoryDialogOpen(false);
-                    }}
-                    className={`flex w-full items-center justify-between gap-3 rounded-xl border px-3 py-2 text-left text-sm transition-colors ${
+                    className={`flex w-full items-center gap-2 rounded-xl border px-2 py-1.5 text-sm transition-colors ${
                       selectedRoom?.room.id === room.room.id
                         ? "border-[var(--app-border)] bg-[var(--app-subtle-bg)] text-[var(--app-fg)]"
                         : "border-transparent text-[var(--app-hint)] hover:border-[var(--app-border)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
                     }`}
                   >
-                    <span className="min-w-0">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedRoomId(room.room.id);
+                        setSideTab("agents");
+                        setActivePanel("chat");
+                        setHistoryDialogOpen(false);
+                      }}
+                      className="min-w-0 flex-1 rounded-lg px-1 py-0.5 text-left"
+                    >
                       <span className="block truncate font-medium">{room.room.title}</span>
                       <span className="block truncate text-xs opacity-75">{room.room.workspace}</span>
-                    </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => openRoomInfo(room.room.id)}
+                      className="icon-click-feedback inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-transparent text-[var(--app-hint)] transition-colors hover:border-[var(--app-border)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)]"
+                      aria-label={`Show info for ${room.room.title}`}
+                      title="Room info"
+                    >
+                      <Info size={14} />
+                    </button>
                     <span className="shrink-0 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-600">
                       Live
                     </span>
-                  </button>
+                  </div>
                 )) : (
                   <div className="rounded-xl border border-dashed border-[var(--app-border)] p-4 text-center text-sm text-[var(--app-hint)]">
                     No running rooms.
@@ -1298,6 +1319,15 @@ export function CouncilPage(props: {
                     <span className="hidden shrink-0 rounded-full bg-[var(--app-subtle-bg)] px-2 py-0.5 text-[10px] font-semibold text-[var(--app-hint)] sm:inline-flex">
                       {room.room.status}
                     </span>
+                    <button
+                      type="button"
+                      onClick={() => openRoomInfo(room.room.id)}
+                      className="icon-click-feedback inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-transparent text-[var(--app-hint)] transition-colors hover:border-[var(--app-border)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)]"
+                      aria-label={`Show info for ${room.room.title}`}
+                      title="Room info"
+                    >
+                      <Info size={14} />
+                    </button>
                     <button
                       type="button"
                       disabled={loading}
@@ -1526,7 +1556,7 @@ export function CouncilPage(props: {
                     <button
                       key={agent.id}
                       type="button"
-                      onClick={() => setSelectedTerminalAgentId(agent.id)}
+                      onClick={() => void openTui(agent)}
                       className={`flex min-w-0 items-center gap-1.5 rounded-lg border px-2.5 py-1 text-left transition-colors ${
                         active
                           ? "border-[var(--app-border)] bg-[var(--app-subtle-bg)] text-[var(--app-fg)]"
@@ -1556,7 +1586,6 @@ export function CouncilPage(props: {
                   closeLabel={`Close ${activeTerminalAgent?.label ?? "agent"} terminal`}
                   closeTitle={`Close ${activeTerminalAgent?.label ?? "agent"} terminal`}
                   onClose={() => setSelectedTerminalAgentId(null)}
-                  initialReplay={false}
                 />
               ) : (
                 <div className="flex h-full items-center justify-center rounded-xl border border-dashed border-[var(--app-border)] p-4 text-center text-sm text-[var(--app-hint)]">

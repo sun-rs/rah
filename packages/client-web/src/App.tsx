@@ -16,6 +16,7 @@ import { WorkbenchErrorBoundary } from "./components/workbench/WorkbenchErrorBou
 import { CanvasNewSessionPane } from "./components/workbench/canvas/CanvasNewSessionPane";
 import { CanvasSessionPane } from "./components/workbench/canvas/CanvasSessionPane";
 import { CanvasWorkbench, type CanvasLayout } from "./components/workbench/canvas/CanvasWorkbench";
+import { CouncilPage } from "./council/CouncilPage";
 import { WorkbenchEmptyPane } from "./components/workbench/panes/WorkbenchEmptyPane";
 import { WorkbenchOpeningPane } from "./components/workbench/panes/WorkbenchOpeningPane";
 import { WorkbenchSelectedPane } from "./components/workbench/panes/WorkbenchSelectedPane";
@@ -78,9 +79,6 @@ const WorkbenchTerminalDialog = lazy(async () => ({
 }));
 const InspectorPane = lazy(async () => ({
   default: (await import("./InspectorPane")).InspectorPane,
-}));
-const CouncilPage = lazy(async () => ({
-  default: (await import("./council/CouncilPage")).CouncilPage,
 }));
 
 type ModelDraft = {
@@ -1082,24 +1080,16 @@ export function App() {
         {/* Center chat */}
         <main className="flex-1 flex flex-col min-w-0 overflow-x-hidden overflow-y-hidden">
           {workbenchMode === "council" ? (
-            <Suspense
-              fallback={
-                <div className="flex h-full items-center justify-center text-sm text-[var(--app-hint)]">
-                  Loading council…
-                </div>
-              }
-            >
-              <CouncilPage
-                clientId={clientId}
-                workspaceDir={availableWorkspaceDir ?? workspaceDir ?? ""}
-                workspaceDirs={workspaceDirs}
-                sidebarOpen={sidebarOpen}
-                onExpandSidebar={() => setSidebarOpen(true)}
-                onOpenLeft={() => setLeftOpen(true)}
-                onAddWorkspace={(dir) => void addWorkspace(dir)}
-                onHide={hideCouncilMode}
-              />
-            </Suspense>
+            <CouncilPage
+              clientId={clientId}
+              workspaceDir={availableWorkspaceDir ?? workspaceDir ?? ""}
+              workspaceDirs={workspaceDirs}
+              sidebarOpen={sidebarOpen}
+              onExpandSidebar={() => setSidebarOpen(true)}
+              onOpenLeft={() => setLeftOpen(true)}
+              onAddWorkspace={(dir) => void addWorkspace(dir)}
+              onHide={hideCouncilMode}
+            />
           ) : workbenchMode === "canvas" ? (
             <CanvasWorkbench
               panes={visibleCanvasPaneIds.map((paneId, index) => {
@@ -1647,8 +1637,6 @@ export function App() {
               onOpenRight={() => setRightOpen(true)}
               onExpandInspector={() => setRightSidebarOpen(true)}
               onToggleInspector={() => setRightSidebarOpen((open) => !open)}
-              showInspectorToggle={false}
-              reserveInspectorToggleSpace
               onFloatingAnchorOffsetChange={setFloatingAnchorOffsetPx}
               {...(!selectedIsReadOnlyReplay
                 ? {
@@ -1852,7 +1840,7 @@ export function App() {
         ) : null}
       </WorkbenchErrorBoundary>
 
-      {workbenchMode === "single" ? (
+      {workbenchMode === "single" && primaryPaneState.kind !== "active" ? (
         <>
           <button
             type="button"

@@ -1,5 +1,4 @@
 import type {
-  AttentionItem,
   EventAuthority,
   EventChannel,
   EventEnvelope,
@@ -55,7 +54,6 @@ export type RahEventFamily =
   | "runtime"
   | "terminal"
   | "council"
-  | "attention"
   | "notification"
   | "host"
   | "transport"
@@ -109,8 +107,6 @@ export const RAH_EVENT_TYPE_FAMILY = {
   "terminal.output": "terminal",
   "terminal.exited": "terminal",
   "council.message.created": "council",
-  "attention.required": "attention",
-  "attention.cleared": "attention",
   "notification.emitted": "notification",
   "host.updated": "host",
   "transport.changed": "transport",
@@ -129,7 +125,6 @@ export const RAH_CORE_WORKBENCH_FAMILIES = [
   "observation",
   "permission",
   "usage",
-  "attention",
   "terminal",
   "council",
 ] as const satisfies readonly RahEventFamily[];
@@ -2451,37 +2446,6 @@ function validateRuntimeOperation(operation: RuntimeOperation, sink: IssueSink, 
   }
 }
 
-function validateAttentionItem(item: AttentionItem, sink: IssueSink, path: string) {
-  if (!isRecord(item)) {
-    addIssue(sink, "error", "attention.invalid", "attention item must be an object", path);
-    return;
-  }
-  if (!isNonEmptyString(item.id) || !isNonEmptyString(item.sessionId)) {
-    addIssue(sink, "error", "attention.id.invalid", "attention item id and sessionId must be non-empty", path);
-  }
-  if (!["info", "warning", "critical"].includes(item.level)) {
-    addIssue(sink, "error", "attention.level.invalid", "attention level is not canonical", `${path}.level`);
-  }
-  if (
-    ![
-      "permission_needed",
-      "turn_finished",
-      "turn_failed",
-      "session_stalled",
-      "background_exit",
-      "review_ready",
-    ].includes(item.reason)
-  ) {
-    addIssue(sink, "error", "attention.reason.invalid", "attention reason is not canonical", `${path}.reason`);
-  }
-  if (!isNonEmptyString(item.title) || !isNonEmptyString(item.body) || !isNonEmptyString(item.dedupeKey)) {
-    addIssue(sink, "error", "attention.content.invalid", "attention title/body/dedupeKey must be non-empty", path);
-  }
-  if (!isNonEmptyString(item.createdAt) || Number.isNaN(Date.parse(item.createdAt))) {
-    addIssue(sink, "error", "attention.created_at.invalid", "attention createdAt must be a valid timestamp", `${path}.createdAt`);
-  }
-}
-
 function validatePayload(event: RahEvent, sink: IssueSink) {
   const payload = event.payload as Record<string, unknown>;
   if (!isRecord(payload)) {
@@ -2637,14 +2601,6 @@ function validatePayload(event: RahEvent, sink: IssueSink) {
             "payload.message",
           );
         }
-      }
-      break;
-    case "attention.required":
-      validateAttentionItem(payload.item as AttentionItem, sink, "payload.item");
-      break;
-    case "attention.cleared":
-      if (!isNonEmptyString(payload.id)) {
-        addIssue(sink, "error", "attention.clear.invalid", "attention clear id must be non-empty", "payload.id");
       }
       break;
     case "notification.emitted":

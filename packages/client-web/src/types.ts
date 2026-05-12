@@ -1,5 +1,4 @@
 import type {
-  AttentionItem,
   ListSessionsResponse,
   ManagedSession,
   MessagePartRef,
@@ -64,12 +63,6 @@ export type FeedEntry =
       resolution?: PermissionResolution;
       ts: string;
       turnId?: string;
-    }
-  | {
-      key: string;
-      kind: "attention";
-      item: AttentionItem;
-      ts: string;
     }
   | {
       key: string;
@@ -149,8 +142,7 @@ function findLastInterruptIntentAnchor(feed: FeedEntry[]):
     if (
       !entry ||
       entry.kind === "notification" ||
-      entry.kind === "runtime_status" ||
-      entry.kind === "attention"
+      entry.kind === "runtime_status"
     ) {
       continue;
     }
@@ -722,8 +714,7 @@ function findSameTurnUserEchoIndex(
     const candidate = feed[index];
     if (
       candidate?.kind === "notification" ||
-      candidate?.kind === "runtime_status" ||
-      candidate?.kind === "attention"
+      candidate?.kind === "runtime_status"
     ) {
       continue;
     }
@@ -1297,8 +1288,12 @@ function shouldDisplayMessagePart(part: MessagePartRef): boolean {
 function applyPermissionEvent(
   feed: FeedEntry[],
   event: Extract<RahEvent, { type: "permission.requested" | "permission.resolved" }>,
+  resolvedPermissionRequestIds: ReadonlySet<string>,
 ): FeedEntry[] {
   if (event.type === "permission.requested") {
+    if (resolvedPermissionRequestIds.has(event.payload.request.id)) {
+      return removePermissionArtifacts(feed, event.payload.request.id);
+    }
     const key = `perm:${event.payload.request.id}`;
     const index = feed.findIndex(
       (candidate) => candidate.kind === "permission" && candidate.key === key,
@@ -1337,45 +1332,22 @@ function applyPermissionEvent(
     return next;
   }
 
-  const key = `perm:${event.payload.resolution.requestId}`;
-  const index = feed.findIndex(
-    (candidate) => candidate.kind === "permission" && candidate.key === key,
-  );
-  if (index < 0) {
-    return feed;
-  }
-  const current = feed[index];
-  if (!current || current.kind !== "permission") {
-    return feed;
-  }
-  const next: FeedEntry[] = [];
-  for (const [candidateIndex, candidate] of feed.entries()) {
-    if (candidate.kind !== "permission" || candidate.key !== key) {
-      next.push(candidate);
-      continue;
+  return removePermissionArtifacts(feed, event.payload.resolution.requestId);
+}
+
+function removePermissionArtifacts(feed: FeedEntry[], requestId: string): FeedEntry[] {
+  const key = `perm:${requestId}`;
+  return feed.filter((entry) => {
+    if (entry.kind === "permission") {
+      return entry.key !== key && entry.request.id !== requestId;
     }
-    if (candidateIndex !== index) {
-      continue;
-    }
-    next.push(
-      createPermissionEntry(
-        {
-          key: current.key,
-          kind: "permission",
-          request: current.request,
-          resolution: event.payload.resolution,
-          ts: event.ts,
-        },
-        event.turnId ?? current.turnId,
-      ),
-    );
-  }
-  return next;
+    return true;
+  });
 }
 
 function clearPendingPermissionEntriesForTurn(
   feed: FeedEntry[],
-  event: Extract<RahEvent, { type: "turn.failed" | "turn.canceled" }>,
+  event: Extract<RahEvent, { type: "turn.completed" | "turn.failed" | "turn.canceled" }>,
 ): FeedEntry[] {
   if (!event.turnId) {
     return feed;
@@ -1396,9 +1368,6 @@ function clearPendingPermissionEntriesForTurn(
   return feed.filter((entry) => {
     if (entry.kind === "permission") {
       return !(entry.turnId === event.turnId && pendingRequestIds.has(entry.request.id));
-    }
-    if (entry.kind === "attention") {
-      return !pendingRequestIds.has(entry.item.id.replace(/^attention-permission-/, ""));
     }
     return true;
   });
@@ -1441,31 +1410,6 @@ function applyObservationEvent(
   const next = [...feed];
   next[index] = nextEntry;
   return next;
-}
-
-function applyAttentionEvent(
-  feed: FeedEntry[],
-  event: Extract<RahEvent, { type: "attention.required" }>,
-): FeedEntry[] {
-  const key = `attention:${event.payload.item.id}`;
-  const next = feed.filter(
-    (candidate) => candidate.kind !== "attention" || candidate.key !== key,
-  );
-  next.push({
-    key,
-    kind: "attention",
-    item: event.payload.item,
-    ts: event.ts,
-  });
-  return next;
-}
-
-function applyAttentionClearedEvent(
-  feed: FeedEntry[],
-  event: Extract<RahEvent, { type: "attention.cleared" }>,
-): FeedEntry[] {
-  const key = `attention:${event.payload.id}`;
-  return feed.filter((candidate) => candidate.kind !== "attention" || candidate.key !== key);
 }
 
 function applyOperationEvent(
@@ -2008,6 +1952,11 @@ export function applyEventToProjection(
 
   let nextFeed = current.feed;
   let nextPendingInterrupt = current.pendingInterrupt;
+  const resolvedPermissionRequestIds = new Set(
+    current.events.flatMap((candidate) =>
+      candidate.type === "permission.resolved" ? [candidate.payload.resolution.requestId] : [],
+    ),
+  );
   switch (event.type) {
     case "timeline.item.added":
     case "timeline.item.updated":
@@ -2033,13 +1982,7 @@ export function applyEventToProjection(
       break;
     case "permission.requested":
     case "permission.resolved":
-      nextFeed = applyPermissionEvent(nextFeed, event);
-      break;
-    case "attention.required":
-      nextFeed = applyAttentionEvent(nextFeed, event);
-      break;
-    case "attention.cleared":
-      nextFeed = applyAttentionClearedEvent(nextFeed, event);
+      nextFeed = applyPermissionEvent(nextFeed, event, resolvedPermissionRequestIds);
       break;
     case "operation.started":
     case "operation.resolved":
@@ -2069,6 +2012,7 @@ export function applyEventToProjection(
       nextFeed = clearPendingPermissionEntriesForTurn(nextFeed, event);
       break;
     case "turn.completed":
+      nextFeed = clearPendingPermissionEntriesForTurn(nextFeed, event);
       break;
     case "notification.emitted":
       nextFeed = applyNotificationEvent(nextFeed, event);

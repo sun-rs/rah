@@ -9,6 +9,14 @@ import { ProviderLogo } from "../../ProviderLogo";
 import { SessionControlPopover } from "../../SessionControlPopover";
 import { TokenizedTextarea } from "../../TokenizedTextarea";
 import { canSubmitComposerInput, COMPOSER_LAYOUT, type ComposerSurface } from "../../../composer-contract";
+import {
+  HEADER_ACTION_GROUP_CLASS,
+  HEADER_ICON_BUTTON_BASE_CLASS,
+  HEADER_ICON_BUTTON_CLASS,
+  HEADER_SEGMENTED_BUTTON_BASE_CLASS,
+  HEADER_SEGMENTED_CONTROL_CLASS,
+  HEADER_TEXT_BUTTON_CLASS,
+} from "../header-button-styles";
 import type { InlineWorkbenchNotice } from "../../../workbench-notice-contract";
 import { SessionInfoDialog } from "../dialogs/SessionInfoDialog";
 import {
@@ -135,7 +143,6 @@ export function WorkbenchSelectedPane(props: {
   compactComposerPrompts?: boolean | "auto";
   compactSessionMeta?: boolean | "auto";
   showInspectorToggle?: boolean;
-  reserveInspectorToggleSpace?: boolean;
 }) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const composerContainerRef = useRef<HTMLDivElement | null>(null);
@@ -367,11 +374,9 @@ export function WorkbenchSelectedPane(props: {
   return (
     <div ref={rootRef} className="flex h-full min-h-0 flex-col">
       <header
-        className={`relative z-20 h-14 flex items-center justify-between gap-3 border-b border-[var(--app-border)] pl-4 ${
-          props.reserveInspectorToggleSpace ? "pr-14" : "pr-4"
-        } bg-[var(--app-bg)]/80 backdrop-blur-sm shrink-0`}
+        className="relative z-20 flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[var(--app-border)] bg-[var(--app-bg)]/80 pl-4 pr-4 backdrop-blur-sm"
       >
-        <div className="flex items-center gap-2 min-w-0">
+        <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
           <button
             type="button"
             className="icon-click-feedback inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] md:hidden"
@@ -391,8 +396,8 @@ export function WorkbenchSelectedPane(props: {
               <Menu size={18} />
             </button>
           )}
-          <ProviderLogo provider={props.selectedSummary.session.provider} className="h-6 w-6" />
-          <div className="min-w-0">
+          <ProviderLogo provider={props.selectedSummary.session.provider} className="h-6 w-6 shrink-0" />
+          <div className="min-w-0 flex-1">
             <div className="text-sm font-medium truncate text-[var(--app-fg)]">
               {props.selectedSummary.session.title ?? props.selectedSummary.session.id}
             </div>
@@ -463,14 +468,14 @@ export function WorkbenchSelectedPane(props: {
             )}
             </div>
           </div>
-        <div className="flex items-center gap-1 shrink-0">
+        <div className={HEADER_ACTION_GROUP_CLASS}>
           {nativeTuiAvailable ? (
-            <div className="inline-flex h-8 items-center rounded-md border border-[var(--app-border)] bg-[var(--app-subtle-bg)] p-0.5">
+            <div className={HEADER_SEGMENTED_CONTROL_CLASS}>
               {(["chat", "tui"] as const).map((mode) => (
                 <button
                   key={mode}
                   type="button"
-                  className={`icon-click-feedback inline-flex h-6 min-w-9 items-center justify-center rounded px-2 text-[11px] font-semibold transition-colors ${
+                  className={`${HEADER_SEGMENTED_BUTTON_BASE_CLASS} ${
                     effectiveSessionViewMode === mode
                       ? "bg-[var(--app-bg)] text-[var(--app-fg)] shadow-sm"
                       : "text-[var(--app-hint)] hover:text-[var(--app-fg)]"
@@ -487,7 +492,7 @@ export function WorkbenchSelectedPane(props: {
           <div ref={sessionMenuRef} className="relative">
             <button
               type="button"
-              className="icon-click-feedback inline-flex h-8 w-8 items-center justify-center rounded-md border border-[var(--app-border)] text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
+              className={HEADER_ICON_BUTTON_CLASS}
               onClick={() => setSessionMenuOpen((open) => !open)}
               aria-label="Session actions"
               title="Session actions"
@@ -540,7 +545,7 @@ export function WorkbenchSelectedPane(props: {
           </div>
           <button
             type="button"
-            className="inline-flex h-8 items-center justify-center rounded-md border border-[var(--app-border)] px-2 text-xs text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] disabled:opacity-40 transition-colors"
+            className={HEADER_TEXT_BUTTON_CLASS}
             disabled={archiveOrCloseDisabled}
             onClick={props.onArchiveOrClose}
             title={
@@ -555,31 +560,31 @@ export function WorkbenchSelectedPane(props: {
           >
             {props.selectedIsReadOnlyReplay ? (
               <>
-                <X size={14} className="sm:mr-1" />
-                <span className="hidden sm:inline">Close</span>
+                <X size={14} className="min-[900px]:mr-1" />
+                <span className="hidden min-[900px]:inline">Close</span>
               </>
             ) : (
               <>
-                <Archive size={14} className="sm:mr-1" />
-                <span className="hidden sm:inline">Archive</span>
+                <Archive size={14} className="min-[900px]:mr-1" />
+                <span className="hidden min-[900px]:inline">Archive</span>
               </>
             )}
           </button>
           {props.onHideSession && !props.selectedIsReadOnlyReplay ? (
             <button
               type="button"
-              className="inline-flex h-8 items-center justify-center rounded-md border border-[var(--app-border)] px-2 text-xs text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
+              className={HEADER_TEXT_BUTTON_CLASS}
               onClick={props.onHideSession}
               title="Hide this session without closing it"
             >
-              <EyeOff size={14} className="sm:mr-1" />
-              <span className="hidden sm:inline">Hide</span>
+              <EyeOff size={14} className="min-[900px]:mr-1" />
+              <span className="hidden min-[900px]:inline">Hide</span>
             </button>
           ) : null}
           {showInspectorToggle ? (
             <button
               type="button"
-              className="icon-click-feedback hidden h-8 w-8 items-center justify-center rounded-md border border-[var(--app-border)] text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] md:inline-flex"
+              className={`hidden ${HEADER_ICON_BUTTON_BASE_CLASS} md:inline-flex`}
               onClick={props.onToggleInspector ?? props.onExpandInspector}
               aria-label={props.rightSidebarOpen ? "Collapse inspector" : "Expand inspector"}
               title={props.rightSidebarOpen ? "Collapse inspector" : "Expand inspector"}
@@ -590,11 +595,11 @@ export function WorkbenchSelectedPane(props: {
           {showInspectorToggle ? (
             <button
               type="button"
-              className="icon-click-feedback inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] md:hidden"
+              className={`inline-flex ${HEADER_ICON_BUTTON_BASE_CLASS} md:hidden`}
               onClick={props.onOpenRight}
               aria-label="Open inspector"
             >
-              <PanelRight size={18} />
+              <PanelRight size={16} />
             </button>
           ) : null}
         </div>

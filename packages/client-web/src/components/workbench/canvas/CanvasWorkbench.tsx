@@ -1,6 +1,12 @@
 import { useRef } from "react";
 import type { ReactNode, PointerEvent as ReactPointerEvent } from "react";
 import { Columns2, Columns3, Eraser, EyeOff, Grid2X2, Maximize2, Menu, Minimize2, Rows2 } from "lucide-react";
+import {
+  HEADER_ACTION_GROUP_CLASS,
+  HEADER_SEGMENTED_BUTTON_BASE_CLASS,
+  HEADER_SEGMENTED_CONTROL_CLASS,
+  HEADER_TEXT_BUTTON_CLASS,
+} from "../header-button-styles";
 
 export type CanvasPaneView = {
   id: string;
@@ -196,7 +202,7 @@ export function CanvasWorkbench(props: {
   return (
     <div className="hidden h-full min-h-0 flex-1 flex-col bg-[var(--app-bg)] min-[700px]:flex">
       <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[var(--app-border)] bg-[var(--app-bg)]/85 px-4 backdrop-blur-sm">
-        <div className="flex min-w-0 items-center gap-2">
+        <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
           {!props.sidebarOpen ? (
             <button
               type="button"
@@ -208,22 +214,22 @@ export function CanvasWorkbench(props: {
               <Menu size={18} />
             </button>
           ) : null}
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <div className="text-sm font-semibold text-[var(--app-fg)]">Canvas</div>
             <div className="truncate text-xs text-[var(--app-hint)]">
               Split sessions. Hide without closing live work.
             </div>
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <div className="flex items-center gap-1 rounded-lg border border-[var(--app-border)] bg-[var(--app-subtle-bg)] p-1">
+        <div className={HEADER_ACTION_GROUP_CLASS}>
+          <div className={HEADER_SEGMENTED_CONTROL_CLASS}>
             {LAYOUT_OPTIONS.map((layout) => {
               const Icon = layout.icon;
               return (
               <button
                 key={layout.id}
                 type="button"
-                className={`inline-flex h-8 items-center gap-1 rounded-md px-2 text-xs font-medium transition-colors ${
+                className={`${HEADER_SEGMENTED_BUTTON_BASE_CLASS} gap-1 ${
                   props.layout === layout.id && !props.maximizedPaneId
                     ? "bg-[var(--app-bg)] text-[var(--app-fg)] shadow-sm"
                     : "text-[var(--app-hint)] hover:text-[var(--app-fg)]"
@@ -239,12 +245,12 @@ export function CanvasWorkbench(props: {
           </div>
           <button
             type="button"
-            className="inline-flex h-9 items-center gap-2 rounded-lg border border-[var(--app-border)] px-3 text-xs font-medium text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
+            className={HEADER_TEXT_BUTTON_CLASS}
             onClick={props.onExitCanvas}
             title="Hide canvas"
           >
-            <EyeOff size={14} />
-            Hide
+            <EyeOff size={14} className="min-[900px]:mr-1" />
+            <span className="hidden min-[900px]:inline">Hide</span>
           </button>
         </div>
       </header>

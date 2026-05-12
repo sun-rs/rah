@@ -1,5 +1,4 @@
 import type {
-  AttentionItem,
   ContextUsage,
   EventAuthority,
   EventChannel,
@@ -227,14 +226,6 @@ export type ProviderActivity =
       turnId?: string;
     }
   | {
-      type: "attention";
-      item: AttentionItem;
-    }
-  | {
-      type: "attention_cleared";
-      id: string;
-    }
-  | {
       type: "notification";
       level: "info" | "warning" | "critical";
       title: string;
@@ -301,41 +292,6 @@ function withTs<T extends object>(value: T, ts?: string): T & { ts?: string } {
   return {
     ...value,
     ts,
-  };
-}
-
-function attentionForPermission(params: {
-  sessionId: string;
-  request: PermissionRequest;
-  ts?: string;
-}): AttentionItem {
-  return {
-    id: `attention-permission-${params.request.id}`,
-    sessionId: params.sessionId,
-    level: "warning",
-    reason: "permission_needed",
-    title: params.request.title,
-    body: params.request.description ?? "Agent needs permission to continue.",
-    dedupeKey: `permission:${params.request.id}`,
-    createdAt: params.ts ?? new Date().toISOString(),
-  };
-}
-
-function attentionForTurnFailure(params: {
-  sessionId: string;
-  turnId: string;
-  error: string;
-  ts?: string;
-}): AttentionItem {
-  return {
-    id: `attention-turn-failed-${params.turnId}`,
-    sessionId: params.sessionId,
-    level: "critical",
-    reason: "turn_failed",
-    title: "Turn failed",
-    body: params.error,
-    dedupeKey: `turn_failed:${params.turnId}`,
-    createdAt: params.ts ?? new Date().toISOString(),
   };
 }
 
@@ -495,29 +451,6 @@ export function applyProviderActivity(
                     ...(reconciled.identity !== undefined ? { identity: reconciled.identity } : {}),
                   },
                   turnId: reconciled.activity.turnId,
-                },
-                ts,
-              ),
-              meta,
-            ),
-          ),
-        );
-        published.push(
-          services.eventBus.publish(
-            withRaw(
-              withTs(
-                {
-                  sessionId,
-                  type: "attention.required",
-                  source,
-                  payload: {
-                    item: attentionForTurnFailure({
-                      sessionId,
-                      turnId: reconciled.activity.turnId,
-                      error: reconciled.activity.error,
-                      ...(ts !== undefined ? { ts } : {}),
-                    }),
-                  },
                 },
                 ts,
               ),
@@ -1019,31 +952,6 @@ export function applyProviderActivity(
           ),
         ),
       );
-      published.push(
-        services.eventBus.publish(
-          withRaw(
-            withTurnId(
-              withTs(
-                {
-                  sessionId,
-                  type: "attention.required",
-                  source,
-                  payload: {
-                    item: attentionForPermission({
-                      sessionId,
-                      request: activity.request,
-                      ...(ts !== undefined ? { ts } : {}),
-                    }),
-                  },
-                },
-                ts,
-              ),
-              activity.turnId,
-            ),
-            meta,
-          ),
-        ),
-      );
       break;
     case "permission_resolved":
       services.sessionStore.setRuntimeState(sessionId, "running");
@@ -1057,25 +965,6 @@ export function applyProviderActivity(
                   type: "permission.resolved",
                   source,
                   payload: { resolution: activity.resolution },
-                },
-                ts,
-              ),
-              activity.turnId,
-            ),
-            meta,
-          ),
-        ),
-      );
-      published.push(
-        services.eventBus.publish(
-          withRaw(
-            withTurnId(
-              withTs(
-                {
-                  sessionId,
-                  type: "attention.cleared",
-                  source,
-                  payload: { id: `attention-permission-${activity.resolution.requestId}` },
                 },
                 ts,
               ),
@@ -1212,42 +1101,6 @@ export function applyProviderActivity(
                 ts,
               ),
               activity.turnId,
-            ),
-            meta,
-          ),
-        ),
-      );
-      break;
-    case "attention":
-      published.push(
-        services.eventBus.publish(
-          withRaw(
-            withTs(
-              {
-                sessionId,
-                type: "attention.required",
-                source,
-                payload: { item: activity.item },
-              },
-              ts,
-            ),
-            meta,
-          ),
-        ),
-      );
-      break;
-    case "attention_cleared":
-      published.push(
-        services.eventBus.publish(
-          withRaw(
-            withTs(
-              {
-                sessionId,
-                type: "attention.cleared",
-                source,
-                payload: { id: activity.id },
-              },
-              ts,
             ),
             meta,
           ),

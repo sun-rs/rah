@@ -1914,33 +1914,12 @@ describe("client projection", () => {
         },
       }),
     );
+    assert.equal(current.feed.some((entry) => entry.kind === "permission"), true);
+
     current = applyEventToProjection(
       current,
       event({
         seq: 3,
-        turnId: "turn-approval",
-        type: "attention.required",
-        payload: {
-          item: {
-            id: "attention-permission-perm-approval",
-            level: "warning",
-            reason: "permission_needed",
-            title: "Approval required",
-            body: "Agent needs permission to continue.",
-            dedupeKey: "permission:perm-approval",
-            createdAt: "2026-04-15T00:00:03.000Z",
-          },
-        },
-      }),
-    );
-
-    assert.equal(current.feed.some((entry) => entry.kind === "permission"), true);
-    assert.equal(current.feed.some((entry) => entry.kind === "attention"), true);
-
-    current = applyEventToProjection(
-      current,
-      event({
-        seq: 4,
         turnId: "turn-approval",
         type: "turn.canceled",
         payload: { reason: "interrupted" },
@@ -1990,7 +1969,7 @@ describe("client projection", () => {
     assert.equal(permissionEntries[0]?.request.title, "Apply file changes again");
   });
 
-  test("keeps resolved approval cards after their turn completes", () => {
+  test("removes resolved approval cards after response", () => {
     let current = applyEventToProjection(
       projection(),
       event({
@@ -2030,10 +2009,10 @@ describe("client projection", () => {
       }),
     );
 
-    assert.equal(current.feed.filter((entry) => entry.kind === "permission").length, 1);
+    assert.equal(current.feed.filter((entry) => entry.kind === "permission").length, 0);
   });
 
-  test("keeps pending approval cards when a turn completes without a resolution", () => {
+  test("clears pending approval cards when a turn completes without a resolution", () => {
     let current = applyEventToProjection(
       projection(),
       event({
@@ -2059,7 +2038,7 @@ describe("client projection", () => {
       }),
     );
 
-    assert.equal(current.feed.filter((entry) => entry.kind === "permission").length, 1);
+    assert.equal(current.feed.filter((entry) => entry.kind === "permission").length, 0);
   });
 
   test("does not regress a resolved approval back to pending after a stale request replay", () => {
@@ -2109,8 +2088,7 @@ describe("client projection", () => {
     );
 
     const permissionEntries = current.feed.filter((entry) => entry.kind === "permission");
-    assert.equal(permissionEntries.length, 1);
-    assert.equal(permissionEntries[0]?.resolution?.behavior, "allow");
+    assert.equal(permissionEntries.length, 0);
   });
 
   test("applies daemon lifecycle events even when optimistic UI updatedAt is newer", () => {

@@ -63,15 +63,6 @@ export type DebugScenarioStep =
       title: string;
       body: string;
       url?: string;
-    })
-  | (BaseStep & { kind: "attention_cleared"; turnId?: string; id: string })
-  | (BaseStep & {
-      kind: "attention";
-      reason: "permission_needed" | "turn_finished" | "turn_failed";
-      title: string;
-      body: string;
-      dedupeKey: string;
-      level?: "info" | "warning" | "critical";
     });
 
 export interface DebugScenario extends DebugScenarioDescriptor {
@@ -375,14 +366,6 @@ const codexRefactorScenario: DebugScenario = {
       },
     },
     {
-      delayMs: 1210,
-      kind: "attention",
-      reason: "turn_finished",
-      title: "Refactor turn finished",
-      body: "The client-web refactor scenario completed successfully.",
-      dedupeKey: "scenario:codex-rah-refactor:turn-finished",
-    },
-    {
       delayMs: 1220,
       kind: "pty",
       data: "$ ",
@@ -448,15 +431,6 @@ const permissionScenario: DebugScenario = {
           { id: "deny", label: "Deny", behavior: "deny", variant: "danger" },
         ],
       },
-    },
-    {
-      delayMs: 240,
-      kind: "attention",
-      reason: "permission_needed",
-      title: "Permission required",
-      body: "A shell cleanup command is waiting for user approval.",
-      dedupeKey: "scenario:permission-gate:approval",
-      level: "warning",
     },
     {
       delayMs: 560,
@@ -525,14 +499,6 @@ const permissionScenario: DebugScenario = {
       },
     },
     { delayMs: 1010, kind: "turn_completed", turnId: permissionTurnId },
-    {
-      delayMs: 1040,
-      kind: "attention",
-      reason: "turn_finished",
-      title: "Approved turn finished",
-      body: "The approved cleanup workflow completed successfully.",
-      dedupeKey: "scenario:permission-gate:turn-finished",
-    },
     { delayMs: 1060, kind: "pty", data: "$ " },
   ],
 };
@@ -721,15 +687,6 @@ const structuredUiScenario: DebugScenario = {
       },
     },
     {
-      delayMs: 520,
-      kind: "attention",
-      reason: "permission_needed",
-      title: "Permission required",
-      body: "A verification command is waiting for approval.",
-      dedupeKey: "scenario:structured-ui:permission",
-      level: "warning",
-    },
-    {
       delayMs: 650,
       kind: "permission_resolved",
       turnId: structuredTurnId,
@@ -738,12 +695,6 @@ const structuredUiScenario: DebugScenario = {
         behavior: "allow",
         message: "Approved for scenario.",
       },
-    },
-    {
-      delayMs: 680,
-      kind: "attention_cleared",
-      turnId: structuredTurnId,
-      id: "attention-permission-perm-structured-command",
     },
     {
       delayMs: 720,
@@ -835,21 +786,12 @@ const structuredUiScenario: DebugScenario = {
       error: "1 failing fixture",
     },
     {
-      delayMs: 820,
-      kind: "attention",
-      reason: "turn_failed",
-      title: "Test verification failed",
-      body: "The structured UI scenario includes a failing observation card.",
-      dedupeKey: "scenario:structured-ui:failed-observation",
-      level: "critical",
-    },
-    {
       delayMs: 900,
       kind: "timeline",
       turnId: structuredTurnId,
       item: {
         kind: "assistant_message",
-        text: "The Activity feed now includes message parts, tool deltas, observations, permissions, attention, operations, runtime status, and notifications.",
+        text: "The Activity feed now includes message parts, tool deltas, observations, permissions, operations, runtime status, and notifications.",
       },
     },
     {

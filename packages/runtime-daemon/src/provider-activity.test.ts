@@ -286,13 +286,6 @@ describe("applyProviderActivity", () => {
       services.sessionStore.getSession(sessionId)?.session.runtimeState,
       "waiting_permission",
     );
-    assert.ok(
-      services.eventBus.list({ sessionIds: [sessionId] }).some(
-        (event) =>
-          event.type === "attention.required" &&
-          event.payload.item.reason === "permission_needed",
-      ),
-    );
 
     applyProviderActivity(
       services,
@@ -306,13 +299,6 @@ describe("applyProviderActivity", () => {
           behavior: "deny",
         },
       },
-    );
-    assert.ok(
-      services.eventBus.list({ sessionIds: [sessionId] }).some(
-        (event) =>
-          event.type === "attention.cleared" &&
-          event.payload.id === "attention-permission-perm-1",
-      ),
     );
 
     const usageEvents = applyProviderActivity(
@@ -340,7 +326,7 @@ describe("applyProviderActivity", () => {
     });
   });
 
-  test("turn failures request attention without notifying successful turns", () => {
+  test("turn failures publish only turn failure events", () => {
     const services = createServices();
     const sessionId = createSession(services);
 
@@ -382,10 +368,13 @@ describe("applyProviderActivity", () => {
       },
     );
 
-    const attentionEvents = services.eventBus.list({ sessionIds: [sessionId] }).filter(
-      (event) => event.type === "attention.required",
+    assert.deepEqual(
+      services.eventBus
+        .list({ sessionIds: [sessionId] })
+        .filter((event) => event.type === "turn.failed")
+        .map((event) => event.payload.error),
+      ["model error"],
     );
-    assert.deepEqual(attentionEvents.map((event) => event.payload.item.reason), ["turn_failed"]);
   });
 
   test("mirrors terminal output into both PTY replay and canonical terminal events", () => {

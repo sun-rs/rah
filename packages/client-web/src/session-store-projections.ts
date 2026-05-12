@@ -65,7 +65,6 @@ function shouldMarkSessionUnread(event: RahEvent): boolean {
     case "observation.completed":
     case "observation.failed":
     case "permission.requested":
-    case "attention.required":
     case "notification.emitted":
     case "turn.completed":
     case "turn.failed":

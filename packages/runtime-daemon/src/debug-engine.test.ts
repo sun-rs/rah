@@ -20,8 +20,6 @@ describe("DebugEngine structured UI scenarios", () => {
       "observation.failed",
       "permission.requested",
       "permission.resolved",
-      "attention.required",
-      "attention.cleared",
       "operation.started",
       "operation.resolved",
       "runtime.status",

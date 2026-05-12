@@ -458,7 +458,7 @@ describe("Codex reference adapter fixtures", () => {
     }
   });
 
-  test("live errors, retries, usage, and attention stay within hapi/paseo boundary", () => {
+  test("live errors, retries, and usage stay within hapi/paseo boundary", () => {
     const retryHarness = applyLiveFixture([
       { method: "turn/started", params: { threadId: "thread-1", turn: { id: "turn-retry" } } },
       {
@@ -496,10 +496,6 @@ describe("Codex reference adapter fixtures", () => {
         (event) => event.type === "usage.updated" && event.payload.usage.usedTokens === 250,
       ),
     );
-    assert.equal(
-      retryHarness.events().some((event) => event.type === "attention.required"),
-      false,
-    );
 
     const failedHarness = applyLiveFixture([
       { method: "turn/started", params: { threadId: "thread-1", turn: { id: "turn-failed" } } },
@@ -519,8 +515,8 @@ describe("Codex reference adapter fixtures", () => {
     assert.ok(
       failedHarness.events().some(
         (event) =>
-          event.type === "attention.required" &&
-          event.payload.item.reason === "turn_failed",
+          event.type === "turn.failed" &&
+          event.payload.error === "context window exceeded",
       ),
     );
   });
