@@ -2120,7 +2120,17 @@ function validateTimelineItem(item: TimelineItem, sink: IssueSink, path: string)
       }
       break;
     case "assistant_message":
+      validateTimelineRuntimeModel(item.runtimeModel, sink, `${path}.runtimeModel`);
+      if (typeof item.text !== "string") {
+        addIssue(sink, "error", "timeline.text.invalid", "timeline text must be a string", `${path}.text`);
+      }
+      break;
     case "reasoning":
+      validateTimelineRuntimeModel(item.runtimeModel, sink, `${path}.runtimeModel`);
+      if (typeof item.text !== "string") {
+        addIssue(sink, "error", "timeline.text.invalid", "timeline text must be a string", `${path}.text`);
+      }
+      break;
     case "plan":
     case "system":
     case "error":
@@ -2135,6 +2145,7 @@ function validateTimelineItem(item: TimelineItem, sink: IssueSink, path: string)
       if (!["started", "completed", "interrupted"].includes(item.status)) {
         addIssue(sink, "error", "timeline.step.status.invalid", "step status is not canonical", `${path}.status`);
       }
+      validateTimelineRuntimeModel(item.runtimeModel, sink, `${path}.runtimeModel`);
       break;
     case "todo":
       if (!Array.isArray(item.items)) {
@@ -2163,6 +2174,31 @@ function validateTimelineItem(item: TimelineItem, sink: IssueSink, path: string)
       break;
     default:
       addIssue(sink, "error", "timeline.kind.invalid", "timeline kind is not canonical", `${path}.kind`);
+  }
+}
+
+function validateTimelineRuntimeModel(value: unknown, sink: IssueSink, path: string) {
+  if (value === undefined) {
+    return;
+  }
+  if (!isRecord(value)) {
+    addIssue(sink, "error", "timeline.runtime_model.invalid", "runtimeModel must be an object", path);
+    return;
+  }
+  if (value.modelId !== undefined && !isNonEmptyString(value.modelId)) {
+    addIssue(sink, "error", "timeline.runtime_model.model.invalid", "runtimeModel modelId must be non-empty", `${path}.modelId`);
+  }
+  if (value.optionId !== undefined && !isNonEmptyString(value.optionId)) {
+    addIssue(sink, "error", "timeline.runtime_model.option.invalid", "runtimeModel optionId must be non-empty", `${path}.optionId`);
+  }
+  if (
+    value.optionKind !== undefined &&
+    !["reasoning_effort", "thinking", "model_variant"].includes(String(value.optionKind))
+  ) {
+    addIssue(sink, "error", "timeline.runtime_model.option_kind.invalid", "runtimeModel optionKind is not canonical", `${path}.optionKind`);
+  }
+  if (!["native", "request", "launch", "inferred"].includes(String(value.source))) {
+    addIssue(sink, "error", "timeline.runtime_model.source.invalid", "runtimeModel source is not canonical", `${path}.source`);
   }
 }
 
@@ -2472,6 +2508,14 @@ function validatePayload(event: RahEvent, sink: IssueSink) {
         payload.identity !== undefined
       ) {
         validateTimelineTurnIdentity(payload.identity, sink, "payload.identity");
+      }
+      if (
+        (event.type === "turn.step.started" ||
+          event.type === "turn.step.completed" ||
+          event.type === "turn.step.interrupted") &&
+        payload.runtimeModel !== undefined
+      ) {
+        validateTimelineRuntimeModel(payload.runtimeModel, sink, "payload.runtimeModel");
       }
       break;
     case "timeline.item.added":

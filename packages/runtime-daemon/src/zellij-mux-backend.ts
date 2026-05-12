@@ -3,6 +3,7 @@ import { execFile, spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { createInterface } from "node:readline";
+import { setTimeout as delay } from "node:timers/promises";
 
 import type {
   CreateMuxPaneRequest,
@@ -21,6 +22,7 @@ const DEFAULT_ZELLIJ_SOCKET_DIR = "/tmp/rah-zellij-sock";
 const ZELLIJ_SOCKET_DIR_ENV = "RAH_ZELLIJ_SOCKET_DIR";
 const DEFAULT_COMMAND_TIMEOUT_MS = 10_000;
 const WRITE_BYTES_CHUNK_SIZE = 512;
+const TAB_PANE_DISCOVERY_TIMEOUT_MS = 2_000;
 const ENV_COMMAND = "/usr/bin/env";
 
 type ExecResult = {
@@ -213,7 +215,9 @@ export class ZellijMuxBackend implements MuxRuntime {
   async createProviderPane(request: CreateMuxPaneRequest): Promise<CreateMuxPaneResult> {
     await this.ensureSession(request.sessionName);
     await this.closeStartupFloatingPanes(request.sessionName);
-    const paneId = await this.runPane(request);
+    const paneId = request.placement === "tab"
+      ? await this.runTab(request)
+      : await this.runPane(request);
     if (request.replaceDefaultPane === true) {
       await this.closePane(request.sessionName, "terminal_0").catch(() => undefined);
     }
@@ -415,20 +419,7 @@ export class ZellijMuxBackend implements MuxRuntime {
     if (request.title) {
       args.push("--name", request.title);
     }
-    const commandEnv = Object.entries(request.env ?? {}).filter(
-      ([name]) => name.trim().length > 0 && !name.includes("="),
-    );
-    const command =
-      commandEnv.length > 0
-        ? {
-            command: ENV_COMMAND,
-            args: [
-              ...commandEnv.map(([name, value]) => `${name}=${value}`),
-              request.command,
-              ...(request.args ?? []),
-            ],
-          }
-        : { command: request.command, args: request.args ?? [] };
+    const command = commandForRequest(request);
     args.push("--cwd", request.cwd, "--", command.command, ...command.args);
     const result = await this.exec(args);
     const paneId = result.stdout.trim();
@@ -436,6 +427,40 @@ export class ZellijMuxBackend implements MuxRuntime {
       throw new Error("zellij run did not return a pane id.");
     }
     return paneId;
+  }
+
+  private async runTab(request: CreateMuxPaneRequest): Promise<MuxPaneId> {
+    const args = ["--session", request.sessionName, "action", "new-tab"];
+    if (request.title) {
+      args.push("--name", request.title);
+    }
+    const command = commandForRequest(request);
+    args.push("--cwd", request.cwd, "--", command.command, ...command.args);
+    const result = await this.exec(args);
+    const tabId = Number(result.stdout.trim());
+    if (!Number.isFinite(tabId)) {
+      throw new Error("zellij new-tab did not return a tab id.");
+    }
+    return await this.waitForTabPane(request.sessionName, tabId, request.title);
+  }
+
+  private async waitForTabPane(
+    sessionName: string,
+    tabId: number,
+    title: string | undefined,
+  ): Promise<MuxPaneId> {
+    const deadline = Date.now() + TAB_PANE_DISCOVERY_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      const panes = await this.listPanes(sessionName).catch(() => []);
+      const candidates = panes.filter((pane) => pane.tabId === tabId && !pane.isPlugin);
+      const titled = title ? candidates.find((pane) => pane.title === title) : undefined;
+      const pane = titled ?? candidates.find((candidate) => !candidate.exited) ?? candidates[0];
+      if (pane) {
+        return pane.paneId;
+      }
+      await delay(50);
+    }
+    throw new Error(`Timed out waiting for zellij tab ${tabId} to expose a terminal pane.`);
   }
 
   private zellijEnv(): NodeJS.ProcessEnv {
@@ -483,4 +508,20 @@ export class ZellijMuxBackend implements MuxRuntime {
       env: this.zellijEnv(),
     });
   }
+}
+
+function commandForRequest(request: CreateMuxPaneRequest): { command: string; args: string[] } {
+  const commandEnv = Object.entries(request.env ?? {}).filter(
+    ([name]) => name.trim().length > 0 && !name.includes("="),
+  );
+  return commandEnv.length > 0
+    ? {
+        command: ENV_COMMAND,
+        args: [
+          ...commandEnv.map(([name, value]) => `${name}=${value}`),
+          request.command,
+          ...(request.args ?? []),
+        ],
+      }
+    : { command: request.command, args: request.args ?? [] };
 }

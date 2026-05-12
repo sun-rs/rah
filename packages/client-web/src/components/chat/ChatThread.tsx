@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { FeedEntry } from "../../types";
-import type { PermissionResponseRequest, TimelineItem } from "@rah/runtime-protocol";
+import type { PermissionResponseRequest, ProviderKind, TimelineItem } from "@rah/runtime-protocol";
 import {
   AlertCircle,
   ArrowDown,
@@ -14,6 +14,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { AssistantMessage } from "./AssistantMessage";
+import { AssistantTurnHeader } from "./AssistantTurnHeader";
 import { AttentionCard } from "./AttentionCard";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { MessagePartCard } from "./MessagePartCard";
@@ -24,6 +25,7 @@ import { Reasoning } from "./Reasoning";
 import { SystemNotice } from "./SystemNotice";
 import { ToolCallCard } from "./ToolCallCard";
 import { UserMessage } from "./UserMessage";
+import { buildAssistantTurnHeaders } from "./assistant-turn-headers";
 import {
   buildVirtualFeedLayout,
   resolveVirtualFeedWindow,
@@ -115,10 +117,12 @@ function TimelineCard(props: {
   );
 }
 
-function renderTimelineItem(item: TimelineItem, entryKey?: string) {
+function renderTimelineItem(item: TimelineItem, options: {
+  entryKey?: string;
+} = {}) {
   switch (item.kind) {
     case "user_message":
-      return <UserMessage content={item.text} entryKey={entryKey} />;
+      return <UserMessage content={item.text} entryKey={options.entryKey} />;
     case "assistant_message":
       return <AssistantMessage content={item.text} />;
     case "reasoning":
@@ -254,7 +258,9 @@ function renderEntry(
 ) {
   switch (entry.kind) {
     case "timeline":
-      return renderTimelineItem(entry.item, entry.key);
+      return renderTimelineItem(entry.item, {
+        entryKey: entry.key,
+      });
     case "tool_call":
       return (
         <ToolCallCard
@@ -348,6 +354,8 @@ export function ChatThread(props: {
   sessionId: string;
   feed: FeedEntry[];
   hideToolCalls?: boolean;
+  showModelInfo?: boolean;
+  provider?: ProviderKind;
   canLoadOlderHistory?: boolean;
   historyLoading?: boolean;
   onLoadOlderHistory?: () => void | Promise<void>;
@@ -380,6 +388,10 @@ export function ChatThread(props: {
   const entries = useMemo(
     () => visibleFeedEntries(props.feed, props.hideToolCalls ?? false),
     [props.feed, props.hideToolCalls],
+  );
+  const assistantTurnHeaders = useMemo(
+    () => buildAssistantTurnHeaders(entries),
+    [entries],
   );
   const virtualLayout = useMemo(
     () => buildVirtualFeedLayout(entries, measuredHeightsRef.current),
@@ -682,15 +694,31 @@ export function ChatThread(props: {
             style={{ height: `${virtualWindow.topSpacerHeight}px` }}
           />
         ) : null}
-        {visibleEntriesWindow.map((entry) => (
-          <MeasuredFeedEntry
-            key={entry.key}
-            entryKey={entry.key}
-            onHeightChange={handleEntryHeightChange}
-          >
-            {renderEntry(entry, props.canRespondToPermission, props.onPermissionRespond)}
-          </MeasuredFeedEntry>
-        ))}
+        {visibleEntriesWindow.map((entry) => {
+          const showAssistantTurnHeader =
+            Boolean(props.showModelInfo && props.provider) &&
+            assistantTurnHeaders.has(entry.key);
+          const runtimeModel = assistantTurnHeaders.get(entry.key);
+          return (
+            <MeasuredFeedEntry
+              key={entry.key}
+              entryKey={entry.key}
+              onHeightChange={handleEntryHeightChange}
+            >
+              {showAssistantTurnHeader && props.provider ? (
+                <AssistantTurnHeader
+                  provider={props.provider}
+                  {...(runtimeModel ? { runtimeModel } : {})}
+                />
+              ) : null}
+              {renderEntry(
+                entry,
+                props.canRespondToPermission,
+                props.onPermissionRespond,
+              )}
+            </MeasuredFeedEntry>
+          );
+        })}
         {virtualWindow.bottomSpacerHeight > 0 ? (
           <div
             aria-hidden="true"

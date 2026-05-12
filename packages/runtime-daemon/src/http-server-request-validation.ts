@@ -41,7 +41,14 @@ const COUNCIL_MCP_TOOLS = new Set<CouncilMcpToolName>([
   "channel_post",
   "channel_wait_new",
   "channel_history",
+  "channel_state",
+  "channel_peek_inbox",
   "channel_set_status",
+  "channel_claim_file",
+  "channel_release_file",
+  "channel_list_claims",
+  "channel_send_control",
+  "channel_peek_control",
 ]);
 
 export function parseIndependentTerminalStartRequest(body: unknown): IndependentTerminalStartRequest {
@@ -338,6 +345,10 @@ export function parseCouncilMcpRequest(body: unknown): CouncilMcpRequest {
     actorId: requireString(record, "actorId"),
     tool: tool as CouncilMcpToolName,
   };
+  const clientId = optionalString(record, "clientId");
+  if (clientId !== undefined) {
+    request.clientId = clientId;
+  }
   if (record.arguments !== undefined) {
     request.arguments = requireRecord(record, "arguments");
   }

@@ -75,12 +75,25 @@ export interface TimelineTurnIdentity {
   confidence: TimelineIdentityConfidence;
 }
 
+export type TimelineRuntimeModelSource =
+  | "native"
+  | "request"
+  | "launch"
+  | "inferred";
+
+export interface TimelineRuntimeModel {
+  modelId?: string;
+  optionId?: string;
+  optionKind?: "reasoning_effort" | "thinking" | "model_variant";
+  source: TimelineRuntimeModelSource;
+}
+
 export type TimelineItem =
   | { kind: "user_message"; text: string; messageId?: string; clientMessageId?: string; clientTurnId?: string }
-  | { kind: "assistant_message"; text: string; messageId?: string }
-  | { kind: "reasoning"; text: string; section?: string }
+  | { kind: "assistant_message"; text: string; messageId?: string; runtimeModel?: TimelineRuntimeModel }
+  | { kind: "reasoning"; text: string; section?: string; runtimeModel?: TimelineRuntimeModel }
   | { kind: "plan"; text: string }
-  | { kind: "step"; title: string; status: "started" | "completed" | "interrupted"; text?: string }
+  | { kind: "step"; title: string; status: "started" | "completed" | "interrupted"; text?: string; runtimeModel?: TimelineRuntimeModel }
   | { kind: "todo"; items: Array<{ text: string; completed: boolean }> }
   | { kind: "system"; text: string }
   | { kind: "error"; text: string }
@@ -330,9 +343,9 @@ export type RahEventPayloadMap = {
   "turn.completed": { usage?: ContextUsage; identity?: TimelineTurnIdentity };
   "turn.failed": { error: string; code?: string; identity?: TimelineTurnIdentity };
   "turn.canceled": { reason: string; identity?: TimelineTurnIdentity };
-  "turn.step.started": { index?: number; title?: string };
-  "turn.step.completed": { index?: number; reason?: string };
-  "turn.step.interrupted": { index?: number; reason?: string };
+  "turn.step.started": { index?: number; title?: string; runtimeModel?: TimelineRuntimeModel };
+  "turn.step.completed": { index?: number; reason?: string; runtimeModel?: TimelineRuntimeModel };
+  "turn.step.interrupted": { index?: number; reason?: string; runtimeModel?: TimelineRuntimeModel };
   "turn.input.appended": { text?: string; parts?: JsonValue[] };
 
   "timeline.item.added": { item: TimelineItem; identity?: TimelineIdentity };

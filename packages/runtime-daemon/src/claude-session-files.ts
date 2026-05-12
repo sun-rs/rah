@@ -99,6 +99,7 @@ type ClaudeRawRecord =
       message?: {
         role?: string;
         content: unknown;
+        model?: string;
         usage?: ClaudeUsage;
       };
     }
@@ -732,6 +733,14 @@ function translateClaudeRecordsToActivities(
             kind: "assistant_message",
             text,
             messageId: record.uuid,
+            ...(record.message?.model
+              ? {
+                  runtimeModel: {
+                    modelId: record.message.model,
+                    source: "native",
+                  },
+                }
+              : {}),
           },
           ...timelineIdentityProps(createStoredClaudeIdentity(record, "assistant_message", options.providerSessionId)),
         },

@@ -18,8 +18,31 @@ type CouncilStoreFile = {
   rooms: CouncilRoom[];
   agents: CouncilAgent[];
   messages: CouncilMessage[];
+  claims: CouncilFileClaim[];
+  controls: CouncilControlMessage[];
   nextMessageId: number;
+  nextControlId: number;
 };
+
+export type CouncilFileClaim = {
+  roomId: string;
+  path: string;
+  actorId: string;
+  claimedAt: string;
+};
+
+export type CouncilControlMessage = {
+  id: number;
+  roomId: string;
+  fromActorId: string;
+  targetActorId: string;
+  action: string;
+  taskId?: string;
+  data?: unknown;
+  createdAt: string;
+};
+
+const CLAIM_TTL_MS = 10 * 60 * 1000;
 
 function resolveRahHome(): string {
   return process.env.RAH_HOME ?? path.join(os.homedir(), ".rah");
@@ -33,14 +56,18 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-function slugActorId(value: string): string {
-  const slug = value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 40);
-  return slug || `agent-${randomUUID().slice(0, 8)}`;
+function councilActorName(agent: CouncilAgentConfig, index: number): string {
+  return agent.label.trim() || agent.id?.trim() || `Agent ${index + 1}`;
+}
+
+function nextDefaultRoomTitle(rooms: CouncilRoom[]): string {
+  let maxRoomNumber = 0;
+  for (const room of rooms) {
+    const match = /^Room-(\d+)$/.exec(room.title.trim());
+    if (!match) continue;
+    maxRoomNumber = Math.max(maxRoomNumber, Number.parseInt(match[1]!, 10));
+  }
+  return `Room-${String(maxRoomNumber + 1).padStart(4, "0")}`;
 }
 
 function loadStoreFile(filePath: string): CouncilStoreFile {
@@ -50,9 +77,15 @@ function loadStoreFile(filePath: string): CouncilStoreFile {
       rooms: Array.isArray(parsed.rooms) ? parsed.rooms as CouncilRoom[] : [],
       agents: Array.isArray(parsed.agents) ? parsed.agents as CouncilAgent[] : [],
       messages: Array.isArray(parsed.messages) ? parsed.messages as CouncilMessage[] : [],
+      claims: Array.isArray(parsed.claims) ? parsed.claims as CouncilFileClaim[] : [],
+      controls: Array.isArray(parsed.controls) ? parsed.controls as CouncilControlMessage[] : [],
       nextMessageId:
         typeof parsed.nextMessageId === "number" && Number.isInteger(parsed.nextMessageId)
           ? parsed.nextMessageId
+          : 1,
+      nextControlId:
+        typeof parsed.nextControlId === "number" && Number.isInteger(parsed.nextControlId)
+          ? parsed.nextControlId
           : 1,
     };
   } catch {
@@ -60,7 +93,10 @@ function loadStoreFile(filePath: string): CouncilStoreFile {
       rooms: [],
       agents: [],
       messages: [],
+      claims: [],
+      controls: [],
       nextMessageId: 1,
+      nextControlId: 1,
     };
   }
 }
@@ -92,7 +128,7 @@ export class CouncilStore {
     const roomId = randomUUID();
     const room: CouncilRoom = {
       id: roomId,
-      title: args.title?.trim() || "Council",
+      title: args.title?.trim() || nextDefaultRoomTitle(this.state.rooms),
       workspace: args.workspace,
       status: "starting",
       ...(args.zellijSessionName ? { zellijSessionName: args.zellijSessionName } : {}),
@@ -101,11 +137,11 @@ export class CouncilStore {
     };
     const usedAgentIds = new Set<string>();
     const agents = args.agents.map((agent, index): CouncilAgent => {
-      const baseId = slugActorId(agent.id ?? agent.label ?? `agent-${index + 1}`);
+      const baseId = councilActorName(agent, index);
       let id = baseId;
       let suffix = 2;
       while (usedAgentIds.has(id)) {
-        id = `${baseId}-${suffix}`;
+        id = `${baseId} ${suffix}`;
         suffix += 1;
       }
       usedAgentIds.add(id);
@@ -113,7 +149,7 @@ export class CouncilStore {
         ...agent,
         id,
         roomId,
-        label: agent.label.trim() || id,
+        label: id,
         status: "starting",
         updatedAt: timestamp,
       };
@@ -128,7 +164,7 @@ export class CouncilStore {
     const room = this.requireRoom(roomId);
     const since = options?.sinceMessageId ?? 0;
     const limit = options?.limit ?? 200;
-    const messages = this.state.messages
+    const messages = limit <= 0 ? [] : this.state.messages
       .filter((message) => message.roomId === roomId && message.id > since)
       .sort((a, b) => a.id - b.id)
       .slice(-limit);
@@ -144,6 +180,7 @@ export class CouncilStore {
   appendMessage(args: {
     roomId: string;
     actorId: string;
+    clientId?: string;
     role: CouncilMessageRole;
     text: string;
     replyTo?: number;
@@ -158,6 +195,7 @@ export class CouncilStore {
       id: this.state.nextMessageId,
       roomId: room.id,
       actorId: args.actorId,
+      ...(args.clientId ? { clientId: args.clientId } : {}),
       role: args.role,
       parts: [textPart(args.text)],
       ...(args.replyTo !== undefined ? { replyTo: args.replyTo } : {}),
@@ -168,6 +206,50 @@ export class CouncilStore {
     room.updatedAt = timestamp;
     this.persist();
     return { ...message, parts: [...message.parts] };
+  }
+
+  lastMessageId(roomId: string): number {
+    this.requireRoom(roomId);
+    return this.state.messages
+      .filter((message) => message.roomId === roomId)
+      .reduce((max, message) => Math.max(max, message.id), 0);
+  }
+
+  recentMessages(roomId: string, limit = 50): CouncilMessage[] {
+    return this.messagesSince(roomId, 0, { limit });
+  }
+
+  messagesSince(
+    roomId: string,
+    sinceMessageId: number,
+    options?: {
+      limit?: number;
+      excludeClientId?: string;
+      excludeActorIdWhenClientMissing?: string;
+    },
+  ): CouncilMessage[] {
+    this.requireRoom(roomId);
+    const limit = options?.limit ?? 50;
+    return this.state.messages
+      .filter((message) => {
+        if (message.roomId !== roomId || message.id <= sinceMessageId) {
+          return false;
+        }
+        if (options?.excludeClientId && message.clientId === options.excludeClientId) {
+          return false;
+        }
+        if (
+          options?.excludeActorIdWhenClientMissing &&
+          !message.clientId &&
+          message.actorId === options.excludeActorIdWhenClientMissing
+        ) {
+          return false;
+        }
+        return true;
+      })
+      .sort((a, b) => a.id - b.id)
+      .slice(0, limit)
+      .map((message) => ({ ...message, parts: [...message.parts] }));
   }
 
   updateRoom(roomId: string, patch: Partial<Pick<CouncilRoom, "status" | "zellijSessionName" | "error">>): CouncilRoomSnapshot {
@@ -213,6 +295,122 @@ export class CouncilStore {
     });
   }
 
+  roomState(roomId: string): {
+    room: CouncilRoom;
+    agents: CouncilAgent[];
+    lastMessageId: number;
+    claims: CouncilFileClaim[];
+    controls: CouncilControlMessage[];
+  } {
+    const snapshot = this.snapshot(roomId, { limit: 0 });
+    this.pruneExpiredClaims(roomId);
+    return {
+      room: snapshot.room,
+      agents: snapshot.agents,
+      lastMessageId: this.lastMessageId(roomId),
+      claims: this.listClaims(roomId),
+      controls: this.state.controls
+        .filter((control) => control.roomId === roomId)
+        .map((control) => ({ ...control })),
+    };
+  }
+
+  claimFile(roomId: string, actorId: string, filePath: string): CouncilFileClaim {
+    this.requireAgent(roomId, actorId);
+    const normalizedPath = filePath.trim();
+    if (!normalizedPath) {
+      throw new Error("channel_claim_file requires path.");
+    }
+    this.pruneExpiredClaims(roomId);
+    const existing = this.state.claims.find(
+      (claim) => claim.roomId === roomId && claim.path === normalizedPath,
+    );
+    if (existing && existing.actorId !== actorId) {
+      throw new Error(`file_conflict: ${normalizedPath} is already claimed by ${existing.actorId}.`);
+    }
+    const timestamp = nowIso();
+    if (existing) {
+      existing.claimedAt = timestamp;
+      this.persist();
+      return { ...existing };
+    }
+    const claim: CouncilFileClaim = {
+      roomId,
+      path: normalizedPath,
+      actorId,
+      claimedAt: timestamp,
+    };
+    this.state.claims.push(claim);
+    this.persist();
+    return { ...claim };
+  }
+
+  releaseFile(roomId: string, actorId: string, filePath: string): boolean {
+    this.requireAgent(roomId, actorId);
+    const normalizedPath = filePath.trim();
+    const before = this.state.claims.length;
+    this.state.claims = this.state.claims.filter(
+      (claim) => !(claim.roomId === roomId && claim.path === normalizedPath && claim.actorId === actorId),
+    );
+    if (this.state.claims.length !== before) {
+      this.persist();
+      return true;
+    }
+    return false;
+  }
+
+  listClaims(roomId: string): CouncilFileClaim[] {
+    this.requireRoom(roomId);
+    this.pruneExpiredClaims(roomId);
+    return this.state.claims
+      .filter((claim) => claim.roomId === roomId)
+      .map((claim) => ({ ...claim }));
+  }
+
+  appendControl(args: {
+    roomId: string;
+    fromActorId: string;
+    targetActorId: string;
+    action: string;
+    taskId?: string;
+    data?: unknown;
+  }): CouncilControlMessage {
+    this.requireAgent(args.roomId, args.fromActorId);
+    this.requireAgent(args.roomId, args.targetActorId);
+    const action = args.action.trim();
+    if (!action) {
+      throw new Error("channel_send_control requires action.");
+    }
+    const control: CouncilControlMessage = {
+      id: this.state.nextControlId,
+      roomId: args.roomId,
+      fromActorId: args.fromActorId,
+      targetActorId: args.targetActorId,
+      action,
+      ...(args.taskId ? { taskId: args.taskId } : {}),
+      ...(args.data !== undefined ? { data: args.data } : {}),
+      createdAt: nowIso(),
+    };
+    this.state.nextControlId += 1;
+    this.state.controls.push(control);
+    this.persist();
+    return { ...control };
+  }
+
+  takeControls(roomId: string, actorId: string): CouncilControlMessage[] {
+    this.requireAgent(roomId, actorId);
+    const controls = this.state.controls
+      .filter((control) => control.roomId === roomId && control.targetActorId === actorId)
+      .map((control) => ({ ...control }));
+    if (controls.length === 0) {
+      return [];
+    }
+    const ids = new Set(controls.map((control) => control.id));
+    this.state.controls = this.state.controls.filter((control) => !ids.has(control.id));
+    this.persist();
+    return controls;
+  }
+
   stopRoom(roomId: string): CouncilRoomSnapshot {
     const timestamp = nowIso();
     const room = this.requireRoom(roomId);
@@ -222,8 +420,20 @@ export class CouncilStore {
       agent.status = "stopped";
       agent.updatedAt = timestamp;
     }
+    this.state.claims = this.state.claims.filter((claim) => claim.roomId !== roomId);
+    this.state.controls = this.state.controls.filter((control) => control.roomId !== roomId);
     this.persist();
     return this.snapshot(roomId);
+  }
+
+  deleteRoom(roomId: string): void {
+    this.requireRoom(roomId);
+    this.state.rooms = this.state.rooms.filter((room) => room.id !== roomId);
+    this.state.agents = this.state.agents.filter((agent) => agent.roomId !== roomId);
+    this.state.messages = this.state.messages.filter((message) => message.roomId !== roomId);
+    this.state.claims = this.state.claims.filter((claim) => claim.roomId !== roomId);
+    this.state.controls = this.state.controls.filter((control) => control.roomId !== roomId);
+    this.persist();
   }
 
   requireAgent(roomId: string, agentId: string): CouncilAgent {
@@ -242,6 +452,21 @@ export class CouncilStore {
       throw new Error(`Unknown council room ${roomId}.`);
     }
     return room;
+  }
+
+  private pruneExpiredClaims(roomId: string): void {
+    const now = Date.now();
+    const before = this.state.claims.length;
+    this.state.claims = this.state.claims.filter((claim) => {
+      if (claim.roomId !== roomId) {
+        return true;
+      }
+      const claimedAt = Date.parse(claim.claimedAt);
+      return Number.isFinite(claimedAt) && now - claimedAt <= CLAIM_TTL_MS;
+    });
+    if (this.state.claims.length !== before) {
+      this.persist();
+    }
   }
 
   private persist(): void {

@@ -1,10 +1,11 @@
 import type { StoredSessionRef, SessionSummary } from "@rah/runtime-protocol";
-import { Columns3, History, Home, Settings, UsersRound } from "lucide-react";
+import { Columns3, History, Settings, UsersRound } from "lucide-react";
 import { SessionHistoryDialog } from "../../SessionHistoryDialog";
 import type { WorkspaceSortMode } from "../../../session-browser";
 
 const headerButtonClassName =
   "icon-click-feedback inline-flex h-9 w-9 items-center justify-center rounded-md active:bg-[var(--app-bg)]";
+const headerIconSize = 17;
 
 export function MobileWorkbenchHeaderActions(props: {
   storedSessions: StoredSessionRef[];
@@ -16,7 +17,6 @@ export function MobileWorkbenchHeaderActions(props: {
   councilActive: boolean;
   canvasEnabled: boolean;
   onOpenCouncil: () => void;
-  onHome: () => void;
   onToggleCanvas: () => void;
   onActivateHistory: (ref: StoredSessionRef) => void;
   onActivateLive: (sessionId: string) => void;
@@ -34,10 +34,10 @@ export function MobileWorkbenchHeaderActions(props: {
             : "text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)]"
         }`}
         onClick={props.onOpenCouncil}
-        aria-label="Open council"
-        title="Council"
+        aria-label={props.councilActive ? "Hide council" : "Open council"}
+        title={props.councilActive ? "Hide council" : "Council"}
       >
-        <UsersRound size={16} />
+        <UsersRound size={headerIconSize} />
       </button>
       <button
         type="button"
@@ -51,16 +51,7 @@ export function MobileWorkbenchHeaderActions(props: {
         aria-label={props.canvasActive ? "Exit canvas" : "Open canvas"}
         title={props.canvasEnabled ? (props.canvasActive ? "Exit canvas" : "Canvas") : "Canvas needs a wider screen"}
       >
-        <Columns3 size={16} />
-      </button>
-      <button
-        type="button"
-        className={`${headerButtonClassName} text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)]`}
-        onClick={props.onHome}
-        aria-label="Home"
-        title="Home"
-      >
-        <Home size={16} />
+        <Columns3 size={headerIconSize} />
       </button>
       <SessionHistoryDialog
         storedSessions={props.storedSessions}
@@ -79,7 +70,7 @@ export function MobileWorkbenchHeaderActions(props: {
           aria-label="Sessions"
           title="Sessions"
         >
-          <History size={18} />
+          <History size={headerIconSize} />
         </button>
       </SessionHistoryDialog>
       <button
@@ -89,7 +80,7 @@ export function MobileWorkbenchHeaderActions(props: {
         aria-label="Open settings"
         title="Settings"
       >
-        <Settings size={16} />
+        <Settings size={headerIconSize} />
       </button>
     </div>
   );

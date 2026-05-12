@@ -19,6 +19,7 @@ interface TerminalPaneProps {
   closeTitle?: string;
   tuiClientActive?: boolean;
   onTuiClientActiveChange?: (active: boolean) => void;
+  initialReplay?: boolean;
 }
 
 type MobileTuiShortcut = {
@@ -461,7 +462,10 @@ export function TerminalPane(props: TerminalPaneProps) {
       (error) => {
         enqueueTerminalWrite(`\r\n[pty error] ${error.message}\r\n`);
       },
-        fromSeq !== undefined ? { fromSeq } : undefined,
+        {
+          ...(fromSeq !== undefined ? { fromSeq } : {}),
+          replay: props.initialReplay !== false,
+        },
       );
       socketRef.current = socket;
       socket.addEventListener("open", () => {

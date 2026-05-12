@@ -33,6 +33,7 @@ export type LiveCodexSession = {
   cwd: string;
   approvalPolicy: string;
   sandboxMode: string;
+  approvalsReviewer: "user" | "auto_review";
   modelId: string | null;
   reasoningId: string | null;
   modelCatalog: ProviderModelCatalog | null;

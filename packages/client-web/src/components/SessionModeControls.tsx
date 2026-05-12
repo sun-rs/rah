@@ -12,6 +12,7 @@ export function SessionModeControls(props: {
   compact?: boolean;
   iconOnly?: boolean;
   variant?: "compact" | "toolbar";
+  onOpen?: (() => void) | undefined;
   onAccessModeChange: (modeId: string) => void;
   onPlanModeToggle: (enabled: boolean) => void;
 }) {
@@ -80,8 +81,16 @@ export function SessionModeControls(props: {
     : "relative inline-flex h-10 min-[700px]:h-9 lg:h-8 w-10 min-[700px]:w-[7.25rem] shrink-0 items-center justify-center min-[700px]:justify-start gap-1.5 rounded-full border border-[var(--app-border)] bg-[var(--app-bg)]/90 px-0 min-[700px]:px-2.5 text-[11px] text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]";
   const showAccessSelect = props.accessModes.length > 0;
   const selectedAccessLabel =
-    props.accessModes.find((mode) => mode.id === props.selectedAccessModeId)?.label ?? "Access";
+    props.accessModes.find((mode) => mode.id === props.selectedAccessModeId)?.label ?? "Mode";
   const selectedAccessDisplayLabel = selectedAccessLabel.split(" · ")[0] ?? selectedAccessLabel;
+  const toggleAccessOpen = () => {
+    setAccessOpen((current) => {
+      if (!current) {
+        props.onOpen?.();
+      }
+      return !current;
+    });
+  };
 
   return (
     <div
@@ -95,13 +104,13 @@ export function SessionModeControls(props: {
               ref={accessButtonRef}
               type="button"
               disabled={props.disabled}
-              onClick={() => setAccessOpen((open) => !open)}
               className="icon-click-feedback relative inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[var(--app-border)] bg-[var(--app-bg)] text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] disabled:opacity-50"
               title={selectedAccessLabel}
               aria-haspopup="listbox"
               aria-expanded={accessOpen}
+              onClick={toggleAccessOpen}
             >
-              <span className="sr-only">Access mode</span>
+              <span className="sr-only">Session mode</span>
               <Shield size={13} />
             </button>
           ) : (
@@ -111,7 +120,7 @@ export function SessionModeControls(props: {
               className={`${compactControlClassName} inline-flex min-w-0 flex-1 items-center justify-start gap-2 transition-colors hover:bg-[var(--app-subtle-bg)] disabled:opacity-50`}
               title={selectedAccessLabel}
               disabled={props.disabled}
-              onClick={() => setAccessOpen((open) => !open)}
+              onClick={toggleAccessOpen}
               aria-haspopup="listbox"
               aria-expanded={accessOpen}
             >
@@ -133,11 +142,11 @@ export function SessionModeControls(props: {
               className={toolbarAccessClassName}
               title={selectedAccessLabel}
               disabled={props.disabled}
-              onClick={() => setAccessOpen((open) => !open)}
+              onClick={toggleAccessOpen}
               aria-haspopup="listbox"
               aria-expanded={accessOpen}
             >
-              <span className="sr-only">Access mode</span>
+              <span className="sr-only">Session mode</span>
               <Shield size={12} className="shrink-0 text-[var(--app-hint)]" />
               {props.iconOnly ? null : (
                 <>
@@ -164,7 +173,7 @@ export function SessionModeControls(props: {
               className="rah-popover-panel fixed z-[60] overflow-y-auto rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-1.5 shadow-2xl focus:outline-none"
               style={accessPanelStyle}
               role="listbox"
-              aria-label="Access mode"
+              aria-label="Session mode"
             >
               {props.accessModes.map((mode) => (
                 <button

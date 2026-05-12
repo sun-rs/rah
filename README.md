@@ -66,12 +66,6 @@ If only backend code changed and the web bundle does not need rebuilding:
 node bin/rah.mjs restart --no-build --no-open
 ```
 
-Run the daemon with zellij as the default Web live backend:
-
-```bash
-RAH_MUX_BACKEND=zellij node bin/rah.mjs restart --no-open
-```
-
 Important behavior:
 
 - `start` does not replace a daemon that is already running.
@@ -83,8 +77,9 @@ Important behavior:
 - `rah codex` and `rah opencode` now default to native local-server sessions and attach the current
   terminal with the provider-native TUI client (`codex --remote ... resume ...` or
   `opencode attach ... --session ...`).
-- `rah claude` defaults to the zellij/TUI fallback. Use `--mux zellij` or `--mux native` on
-  Codex/OpenCode only when you explicitly want the fallback TUI path for diagnostics.
+- `rah claude` defaults to the zellij/TUI fallback.
+- There is no public `--mux` CLI switch. Provider runtime selection is fixed by provider:
+  Codex/OpenCode use native local-server; Claude uses zellij/TUI fallback.
 - Core live providers are `codex`, `claude`, and `opencode`. Gemini/Kimi CLI first-class support
   has been removed; use OpenCode + API providers for Gemini/Kimi/Grok/DeepSeek-style work. See
   [`docs/provider-scope-codex-claude-opencode.zh-CN.md`](docs/provider-scope-codex-claude-opencode.zh-CN.md).

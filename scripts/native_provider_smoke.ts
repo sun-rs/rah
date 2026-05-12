@@ -82,10 +82,11 @@ const PROVIDERS: ProviderConfig[] = [
     request: {
       model: "deepseek/deepseek-v4-pro",
       optionValues: { model_reasoning_variant: "high" },
-      modeId: "opencode/full-auto",
+      modeId: "build",
     },
     expectedArgFragments: [
       "--model|deepseek/deepseek-v4-pro",
+      "--agent|build",
     ],
     expectsPreboundProviderSessionId: false,
     expectsProviderSessionIdAfterBinding: true,

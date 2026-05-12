@@ -5,6 +5,7 @@ import type {
   SessionConfigOption,
   SessionConfigValue,
   SessionModelDescriptor,
+  SessionModeDescriptor,
   SessionReasoningOption,
   SessionResolvedConfig,
 } from "@rah/runtime-protocol";
@@ -14,6 +15,7 @@ import {
   stopOpenCodeServer,
 } from "./opencode-api";
 import {
+  buildOpenCodeAgentModeDescriptors,
   defaultProviderModeId,
   providerModeDescriptors,
 } from "./session-mode-utils";
@@ -27,6 +29,16 @@ type OpenCodeConfigResponse = {
 type OpenCodeConfigProvidersResponse = {
   providers?: unknown;
   default?: unknown;
+};
+
+type OpenCodeAgentsResponse = unknown[];
+
+type OpenCodeAgentRecord = {
+  name?: unknown;
+  id?: unknown;
+  description?: unknown;
+  mode?: unknown;
+  hidden?: unknown;
 };
 
 type OpenCodeProviderRecord = {
@@ -60,6 +72,37 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+export function mapOpenCodeAgentModeDescriptors(
+  agents: readonly unknown[],
+): SessionModeDescriptor[] {
+  return buildOpenCodeAgentModeDescriptors(
+    agents.flatMap((rawAgent) => {
+      const agent = asRecord(rawAgent) as OpenCodeAgentRecord | null;
+      if (!agent) {
+        return [];
+      }
+      const mode = asNonEmptyString(agent.mode);
+      if (mode === "subagent") {
+        return [];
+      }
+      if (agent.hidden === true) {
+        return [];
+      }
+      const id = asNonEmptyString(agent.name) ?? asNonEmptyString(agent.id);
+      if (!id) {
+        return [];
+      }
+      return [{
+        id,
+        label: id,
+        ...(asNonEmptyString(agent.description)
+          ? { description: asNonEmptyString(agent.description)! }
+          : {}),
+      }];
+    }),
+  );
 }
 
 function positiveNumber(value: unknown): number | undefined {
@@ -262,6 +305,7 @@ function buildOpenCodeCatalog(args: {
   providers: OpenCodeProviderRecord[];
   defaultByProvider: Record<string, unknown>;
   currentModelId?: string | null;
+  modes?: SessionModeDescriptor[];
 }): ProviderModelCatalog {
   const models: SessionModelDescriptor[] = [];
   const providerModels = new Map<string, OpenCodeModelRecord>();
@@ -305,18 +349,21 @@ function buildOpenCodeCatalog(args: {
     source: "native",
     sourceDetail: "native_online",
     freshness: "authoritative",
-    revision: profileRevision(
-      models.map((model) => ({
+    revision: profileRevision({
+      models: models.map((model) => ({
         id: model.id,
         label: model.label,
         contextWindow: model.contextWindow ?? null,
         reasoningOptions: model.reasoningOptions?.map((option) => option.id) ?? [],
       })),
-    ),
+      modes: (args.modes ?? []).map((mode) => mode.id),
+    }),
     modelsExact: true,
     optionsExact: true,
     defaultModeId: defaultProviderModeId("opencode")!,
-    modes: providerModeDescriptors("opencode"),
+    modes: args.modes && args.modes.length > 0
+      ? args.modes
+      : providerModeDescriptors("opencode"),
     modelProfiles: buildOpenCodeModelProfiles({ models, providerModels }),
   };
 }
@@ -343,18 +390,23 @@ export async function fetchOpenCodeModelCatalog(options?: {
   const cwd = options?.cwd ?? process.cwd();
   const server = await startOpenCodeServer({ cwd });
   try {
-    const [config, configProviders] = await Promise.all([
+    const [config, configProviders, agents] = await Promise.all([
       openCodeRequestJson<OpenCodeConfigResponse>(server, "/config"),
       openCodeRequestJson<OpenCodeConfigProvidersResponse>(server, "/config/providers"),
+      openCodeRequestJson<OpenCodeAgentsResponse>(server, "/agent").catch(() => []),
     ]);
     const providers = Array.isArray(configProviders.providers)
       ? (configProviders.providers as OpenCodeProviderRecord[])
       : [];
     const defaultByProvider = asRecord(configProviders.default) ?? {};
+    const modes = Array.isArray(agents)
+      ? mapOpenCodeAgentModeDescriptors(agents)
+      : providerModeDescriptors("opencode");
     return buildOpenCodeCatalog({
       providers,
       defaultByProvider,
       currentModelId: asNonEmptyString(config.model),
+      modes,
     });
   } finally {
     await stopOpenCodeServer(server).catch(() => undefined);

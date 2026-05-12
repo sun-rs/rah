@@ -165,7 +165,7 @@ export function createPostRoutes(
           res,
           200,
           await engine.claimNativeTuiSurface(
-            match[1]!,
+            decodeURIComponent(match[1]!),
             parseNativeTuiSurfaceClaimRequest(body),
           ),
         );
@@ -179,7 +179,7 @@ export function createPostRoutes(
           res,
           200,
           await engine.releaseNativeTuiSurface(
-            match[1]!,
+            decodeURIComponent(match[1]!),
             parseNativeTuiSurfaceReleaseRequest(body),
           ),
         );
@@ -193,7 +193,7 @@ export function createPostRoutes(
           res,
           200,
           await engine.closeNativeTuiClient(
-            match[1]!,
+            decodeURIComponent(match[1]!),
             parseNativeTuiClientCloseRequest(body),
           ),
         );
@@ -331,9 +331,50 @@ export function createPostRoutes(
       },
     },
     {
+      pattern: /^\/api\/council\/rooms\/([^/]+)\/delete$/,
+      handler: async (req, res, match) => {
+        engine.deleteCouncilRoom(decodeURIComponent(match[1]!));
+        writeJson(req, res, 200, { ok: true });
+      },
+    },
+    {
+      pattern: /^\/api\/council\/rooms\/([^/]+)\/reinject-missing$/,
+      handler: async (req, res, match) => {
+        writeJson(req, res, 200, engine.reinjectMissingCouncilAgentPrompts(decodeURIComponent(match[1]!)));
+      },
+    },
+    {
+      pattern: /^\/api\/council\/rooms\/([^/]+)\/agents\/([^/]+)\/reinject$/,
+      handler: async (req, res, match) => {
+        writeJson(
+          req,
+          res,
+          200,
+          engine.reinjectCouncilAgentPrompt(
+            decodeURIComponent(match[1]!),
+            decodeURIComponent(match[2]!),
+          ),
+        );
+      },
+    },
+    {
+      pattern: /^\/api\/council\/rooms\/([^/]+)\/agents\/([^/]+)\/remove$/,
+      handler: async (req, res, match) => {
+        writeJson(
+          req,
+          res,
+          200,
+          engine.removeCouncilAgent(
+            decodeURIComponent(match[1]!),
+            decodeURIComponent(match[2]!),
+          ),
+        );
+      },
+    },
+    {
       pattern: /^\/api\/council\/mcp$/,
       handler: async (req, res, _match, body) => {
-        writeJson(req, res, 200, engine.callCouncilMcpTool(parseCouncilMcpRequest(body)));
+        writeJson(req, res, 200, await engine.callCouncilMcpTool(parseCouncilMcpRequest(body)));
       },
     },
   ];
@@ -496,7 +537,7 @@ export async function handleHttpRequest(args: {
 
     const surfaceMatch = /^\/api\/sessions\/([^/]+)\/tui-surface$/.exec(pathname);
     if (req.method === "GET" && surfaceMatch) {
-      writeJson(req, res, 200, engine.getNativeTuiSurface(surfaceMatch[1]!));
+      writeJson(req, res, 200, engine.getNativeTuiSurface(decodeURIComponent(surfaceMatch[1]!)));
       return;
     }
 

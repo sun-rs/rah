@@ -12,6 +12,7 @@ import type {
   ProviderKind,
   ResumeSessionRequest,
   SessionConfigValue,
+  SessionModeDescriptor,
   StartSessionRequest,
 } from "@rah/runtime-protocol";
 import {
@@ -19,7 +20,10 @@ import {
   codexLaunchSpec,
   opencodeLaunchSpec,
 } from "./provider-diagnostics";
-import { buildOpenCodeProviderModelId } from "./opencode-model-catalog";
+import {
+  buildOpenCodeProviderModelId,
+  fetchOpenCodeModelCatalog,
+} from "./opencode-model-catalog";
 import { discoverCodexStoredSessions } from "./codex-stored-sessions";
 import {
   codexHomeForRolloutPath,
@@ -28,6 +32,7 @@ import {
 import { optionValueAsString } from "./session-model-options";
 import {
   isClaudeModeId,
+  isCodexPlanModeId,
   isOpenCodeModeId,
   parseCodexModeId,
 } from "./session-mode-utils";
@@ -63,6 +68,11 @@ export interface NativeTuiMcpServerSpec {
 export type NativeTuiStartLaunchSpecRequest = StartSessionRequest & {
   extraMcpServers?: NativeTuiMcpServerSpec[];
   initialPrompt?: string;
+  availableModes?: readonly SessionModeDescriptor[];
+};
+
+export type NativeTuiResumeLaunchSpecRequest = ResumeSessionRequest & {
+  availableModes?: readonly SessionModeDescriptor[];
 };
 
 function claudeConfigPath(): string {
@@ -253,7 +263,7 @@ function appendCodexModeArgs(
   if (!request.modeId) {
     return;
   }
-  if (request.modeId === "plan") {
+  if (isCodexPlanModeId(request.modeId)) {
     throw new Error("Codex plan mode is a native TUI interactive toggle and cannot be pre-set at launch.");
   }
   const parsed = parseCodexModeId(request.modeId);
@@ -268,6 +278,9 @@ function appendCodexModeArgs(
     return;
   }
   args.push("--ask-for-approval", parsed.approvalPolicy, "--sandbox", parsed.sandboxMode);
+  if (parsed.approvalsReviewer === "auto_review") {
+    args.push("-c", "approvals_reviewer=\"auto_review\"");
+  }
 }
 
 function appendInitialPrompt(args: string[], prompt: string | undefined): void {
@@ -305,11 +318,29 @@ function appendClaudeArgs(
   args.push(mode === "resume" ? "--resume" : "--session-id", providerSessionId);
 }
 
-function appendOpenCodeArgs(
+async function resolveOpenCodeLaunchModes(request: {
+  cwd: string;
+  modeId?: string;
+  availableModes?: readonly SessionModeDescriptor[];
+}): Promise<readonly SessionModeDescriptor[] | undefined> {
+  if (!request.modeId) {
+    return request.availableModes;
+  }
+  if (request.availableModes && request.availableModes.length > 0) {
+    return request.availableModes;
+  }
+  try {
+    return (await fetchOpenCodeModelCatalog({ cwd: request.cwd })).modes;
+  } catch {
+    return undefined;
+  }
+}
+
+async function appendOpenCodeArgs(
   args: string[],
-  request: { cwd: string; initialPrompt?: string } & ModelRequest,
+  request: { cwd: string; initialPrompt?: string; modeId?: string; availableModes?: readonly SessionModeDescriptor[] } & ModelRequest,
   providerSessionId?: string,
-): void {
+): Promise<void> {
   if (request.model) {
     args.push("--model", buildOpenCodeProviderModelId({
       modelId: request.model,
@@ -318,6 +349,13 @@ function appendOpenCodeArgs(
   }
   if (providerSessionId) {
     args.push("--session", providerSessionId);
+  }
+  if (request.modeId) {
+    const availableModes = await resolveOpenCodeLaunchModes(request);
+    if (!isOpenCodeModeId(request.modeId, availableModes)) {
+      throw new Error(`Unsupported OpenCode launch agent '${request.modeId}'.`);
+    }
+    args.push("--agent", request.modeId);
   }
   if (request.initialPrompt?.trim()) {
     args.push("--prompt", request.initialPrompt);
@@ -330,20 +368,6 @@ function openCodeEnv(args: {
   extraMcpServers?: readonly NativeTuiMcpServerSpec[];
 }): Record<string, string> | undefined {
   const config: Record<string, unknown> = {};
-  if (args.modeId && !isOpenCodeModeId(args.modeId)) {
-    throw new Error(`Unsupported OpenCode launch mode '${args.modeId}'.`);
-  }
-  if (args.modeId) {
-    if (args.modeId === "opencode/full-auto") {
-      config.permission = "allow";
-    }
-    if (args.modeId === "build" || args.modeId === "opencode/full-auto") {
-      config.default_agent = "build";
-    }
-    if (args.modeId === "plan") {
-      config.default_agent = "plan";
-    }
-  }
   if (args.extraMcpServers && args.extraMcpServers.length > 0) {
     config.mcp = Object.fromEntries(
       args.extraMcpServers.map((server) => [
@@ -416,7 +440,7 @@ export async function nativeTuiStartLaunchSpec(
   }
   if (request.provider === "opencode") {
     const { command, args } = splitLaunchArgv(await opencodeLaunchSpec(), "opencode");
-    appendOpenCodeArgs(args, request);
+    await appendOpenCodeArgs(args, request);
     const env = openCodeEnvForRequest(request);
     return {
       provider: "opencode",
@@ -433,7 +457,7 @@ export async function nativeTuiStartLaunchSpec(
 }
 
 export async function nativeTuiResumeLaunchSpec(
-  request: ResumeSessionRequest,
+  request: NativeTuiResumeLaunchSpecRequest,
 ): Promise<NativeTuiLaunchSpec> {
   if (!request.cwd) {
     throw new Error("Native TUI resume requires a working directory.");
@@ -482,7 +506,7 @@ export async function nativeTuiResumeLaunchSpec(
   }
   if (request.provider === "opencode") {
     const { command, args } = splitLaunchArgv(await opencodeLaunchSpec(), "opencode");
-    appendOpenCodeArgs(args, { ...request, cwd: request.cwd }, request.providerSessionId);
+    await appendOpenCodeArgs(args, { ...request, cwd: request.cwd }, request.providerSessionId);
     const env = openCodeEnvForRequest(request);
     return {
       provider: "opencode",

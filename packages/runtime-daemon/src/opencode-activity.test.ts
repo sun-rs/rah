@@ -2,9 +2,11 @@ import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import {
   createOpenCodeActivityState,
+  recordOpenCodeSubmittedUserMessage,
   startOpenCodeTurn,
   translateOpenCodeEvent,
   translateOpenCodeHistory,
+  translateOpenCodeMessage,
 } from "./opencode-activity";
 
 function withoutIdentity(activity: unknown): unknown {
@@ -581,6 +583,248 @@ describe("translateOpenCodeEvent", () => {
     assert.deepEqual(lateUserPart, []);
   });
 
+  test("attaches client ids to the provider user message for web-submitted prompts", () => {
+    const state = createOpenCodeActivityState("session-1");
+    const turnId = "11111111-1111-4111-8111-111111111111";
+    startOpenCodeTurn(state, turnId);
+    recordOpenCodeSubmittedUserMessage(state, {
+      text: "hello",
+      turnId,
+      clientMessageId: "client-message-1",
+      clientTurnId: "client-turn-1",
+    });
+
+    const activities = translateOpenCodeMessage(state, {
+      info: {
+        id: "msg-user",
+        sessionID: "session-1",
+        role: "user",
+      },
+      parts: [
+        {
+          id: "part-user",
+          sessionID: "session-1",
+          messageID: "msg-user",
+          type: "text",
+          text: "hello",
+        },
+      ],
+    });
+
+    const user = activities.find(
+      (activity) => activity.type === "timeline_item" && activity.item.kind === "user_message",
+    );
+    assert.equal(user?.type, "timeline_item");
+    if (user?.type === "timeline_item" && user.item.kind === "user_message") {
+      assert.equal(user.turnId, turnId);
+      assert.equal(user.item.messageId, "msg-user");
+      assert.equal(user.item.clientMessageId, "client-message-1");
+      assert.equal(user.item.clientTurnId, "client-turn-1");
+    }
+  });
+
+  test("does not emit provisional OpenCode user bubble before provider message id is known", () => {
+    const state = createOpenCodeActivityState("session-1");
+    const turnId = "11111111-1111-4111-8111-111111111111";
+    startOpenCodeTurn(state, turnId);
+    recordOpenCodeSubmittedUserMessage(state, {
+      text: "hello",
+      turnId,
+      clientMessageId: "client-message-1",
+      clientTurnId: "client-turn-1",
+    });
+
+    const provisional = translateOpenCodeEvent(state, {
+      type: "message.part.updated",
+      properties: {
+        part: {
+          id: "part-user-provisional",
+          sessionID: "session-1",
+          type: "text",
+          text: "hello",
+        },
+      },
+    });
+
+    assert.deepEqual(provisional, []);
+
+    const canonical = translateOpenCodeMessage(state, {
+      info: {
+        id: "msg-user",
+        sessionID: "session-1",
+        role: "user",
+      },
+      parts: [
+        {
+          id: "part-user",
+          sessionID: "session-1",
+          messageID: "msg-user",
+          type: "text",
+          text: "hello",
+        },
+      ],
+    });
+
+    const user = canonical.find(
+      (activity) => activity.type === "timeline_item" && activity.item.kind === "user_message",
+    );
+    assert.equal(user?.type, "timeline_item");
+    if (user?.type === "timeline_item" && user.item.kind === "user_message") {
+      assert.equal(user.item.messageId, "msg-user");
+      assert.equal(user.item.clientMessageId, "client-message-1");
+      assert.equal(user.item.clientTurnId, "client-turn-1");
+    }
+  });
+
+  test("drops OpenCode internal system reminder user messages from history", () => {
+    const activities = translateOpenCodeMessage(createOpenCodeActivityState("session-1", { origin: "history" }), {
+      info: {
+        id: "msg-internal",
+        sessionID: "session-1",
+        role: "user",
+      },
+      parts: [
+        {
+          id: "part-internal",
+          sessionID: "session-1",
+          messageID: "msg-internal",
+          type: "text",
+          text: [
+            "<system-reminder>",
+            "[BACKGROUND TASK COMPLETED]",
+            "Use `background_output(task_id=\"bg_1\")` to retrieve this result when ready.",
+            "</system-reminder>",
+            "<!-- OMO_INTERNAL_INITIATOR -->",
+          ].join("\n"),
+        },
+      ],
+    });
+
+    assert.deepEqual(activities, []);
+  });
+
+  test("keeps ordinary user system-reminder text without OpenCode internal markers", () => {
+    const activities = translateOpenCodeMessage(createOpenCodeActivityState("session-1", { origin: "history" }), {
+      info: {
+        id: "msg-user",
+        sessionID: "session-1",
+        role: "user",
+      },
+      parts: [
+        {
+          id: "part-user",
+          sessionID: "session-1",
+          messageID: "msg-user",
+          type: "text",
+          text: [
+            "<system-reminder>",
+            "Treat this as user-visible text for this test.",
+            "</system-reminder>",
+          ].join("\n"),
+        },
+      ],
+    });
+
+    assert.equal(activities[0]?.type, "turn_started");
+    assert.equal(activities[1]?.type, "timeline_item");
+    if (activities[1]?.type === "timeline_item") {
+      assert.equal(activities[1].item.kind, "user_message");
+    }
+  });
+
+  test("drops live OpenCode internal system reminder parts and clears the synthetic turn", () => {
+    const state = createOpenCodeActivityState("session-1");
+    const message = translateOpenCodeEvent(state, {
+      type: "message.updated",
+      properties: {
+        info: {
+          id: "msg-internal",
+          sessionID: "session-1",
+          role: "user",
+        },
+      },
+    });
+    const part = translateOpenCodeEvent(state, {
+      type: "message.part.updated",
+      properties: {
+        part: {
+          id: "part-internal",
+          sessionID: "session-1",
+          messageID: "msg-internal",
+          type: "text",
+          text: [
+            "<system-reminder>",
+            "[BACKGROUND TASK COMPLETED]",
+            "Use `background_output(task_id=\"bg_1\")` to retrieve this result when ready.",
+            "</system-reminder>",
+            "<!-- OMO_INTERNAL_INITIATOR -->",
+          ].join("\n"),
+        },
+      },
+    });
+
+    assert.equal(message[0]?.type, "turn_started");
+    const turnId = message[0]?.type === "turn_started" ? message[0].turnId : undefined;
+    assert.deepEqual(part.map(withoutIdentity), [
+      {
+        type: "runtime_status",
+        status: "finished",
+        turnId,
+      },
+      {
+        type: "turn_completed",
+        turnId,
+      },
+    ]);
+    const completed = part[1];
+    assert.equal(completed?.type, "turn_completed");
+    if (completed?.type === "turn_completed") {
+      assert.equal(completed.identity?.provider, "opencode");
+      assert.equal(completed.identity?.providerSessionId, "session-1");
+      assert.equal(completed.identity?.turnKey, "message:msg-internal");
+      assert.equal(completed.identity?.origin, "live");
+      assert.equal(completed.identity?.confidence, "native");
+    }
+    assert.equal(state.currentTurnId, undefined);
+  });
+
+  test("drops live OpenCode internal reminders without clearing an existing real turn", () => {
+    const state = createOpenCodeActivityState("session-1");
+    const [started] = startOpenCodeTurn(state, "00000000-0000-4000-8000-000000000002");
+    const message = translateOpenCodeEvent(state, {
+      type: "message.updated",
+      properties: {
+        info: {
+          id: "msg-internal",
+          sessionID: "session-1",
+          role: "user",
+        },
+      },
+    });
+    const part = translateOpenCodeEvent(state, {
+      type: "message.part.updated",
+      properties: {
+        part: {
+          id: "part-internal",
+          sessionID: "session-1",
+          messageID: "msg-internal",
+          type: "text",
+          text: [
+            "<system-reminder>",
+            "[BACKGROUND TASK COMPLETED]",
+            "</system-reminder>",
+            "<!-- OMO_INTERNAL_INITIATOR -->",
+          ].join("\n"),
+        },
+      },
+    });
+
+    assert.equal(started?.type, "turn_started");
+    assert.deepEqual(message, []);
+    assert.deepEqual(part, []);
+    assert.equal(state.currentTurnId, "00000000-0000-4000-8000-000000000002");
+  });
+
   test("web-owned sessions can attach late assistant parts after idle to the original turn", () => {
     const state = createOpenCodeActivityState("session-1");
     const turnId = "00000000-0000-4000-8000-000000000001";
@@ -1149,5 +1393,214 @@ describe("translateOpenCodeEvent", () => {
     );
     assert.equal(secondUser?.type, "timeline_item");
     assert.equal(secondUser?.turnId, "opencode:msg-user-2");
+  });
+
+  test("attaches OpenCode provider model metadata to assistant text parts", () => {
+    const activities = translateOpenCodeHistory([
+      {
+        info: {
+          id: "msg-user-model",
+          sessionID: "session-1",
+          role: "user",
+          time: { created: 1 },
+        },
+        parts: [
+          {
+            id: "part-user-model",
+            sessionID: "session-1",
+            messageID: "msg-user-model",
+            type: "text",
+            text: "which model",
+          },
+        ],
+      },
+      {
+        info: {
+          id: "msg-assistant-model",
+          sessionID: "session-1",
+          role: "assistant",
+          parentID: "msg-user-model",
+          providerID: "aihubmix",
+          modelID: "grok-4.3",
+          variant: "high",
+          time: { created: 2, completed: 3 },
+          finish: "stop",
+        },
+        parts: [
+          {
+            id: "part-assistant-model",
+            sessionID: "session-1",
+            messageID: "msg-assistant-model",
+            type: "text",
+            text: "model answer",
+          },
+        ],
+      },
+    ]);
+
+    const assistant = activities.find(
+      (activity) =>
+        activity.type === "timeline_item" &&
+        activity.item.kind === "assistant_message" &&
+        activity.item.text === "model answer",
+    );
+    assert.equal(assistant?.type, "timeline_item");
+    if (assistant?.type === "timeline_item" && assistant.item.kind === "assistant_message") {
+      assert.deepEqual(assistant.item.runtimeModel, {
+        modelId: "aihubmix/grok-4.3",
+        optionId: "high",
+        optionKind: "model_variant",
+        source: "native",
+      });
+    }
+  });
+
+  test("attaches OpenCode provider model metadata to reasoning and step-only assistant parts", () => {
+    const activities = translateOpenCodeHistory([
+      {
+        info: {
+          id: "msg-user-model",
+          sessionID: "session-1",
+          role: "user",
+          time: { created: 1 },
+        },
+        parts: [
+          {
+            id: "part-user-model",
+            sessionID: "session-1",
+            messageID: "msg-user-model",
+            type: "text",
+            text: "which model",
+          },
+        ],
+      },
+      {
+        info: {
+          id: "msg-assistant-model",
+          sessionID: "session-1",
+          role: "assistant",
+          parentID: "msg-user-model",
+          providerID: "aihubmix",
+          modelID: "grok-4.3",
+          variant: "high",
+          time: { created: 2, completed: 3 },
+          finish: "tool-calls",
+        },
+        parts: [
+          {
+            id: "part-step-start",
+            sessionID: "session-1",
+            messageID: "msg-assistant-model",
+            type: "step-start",
+            title: "Analyze",
+          },
+          {
+            id: "part-reasoning-model",
+            sessionID: "session-1",
+            messageID: "msg-assistant-model",
+            type: "reasoning",
+            text: "thinking",
+          },
+          {
+            id: "part-step-finish",
+            sessionID: "session-1",
+            messageID: "msg-assistant-model",
+            type: "step-finish",
+            reason: "stop",
+          },
+        ],
+      },
+    ]);
+
+    const expectedRuntimeModel = {
+      modelId: "aihubmix/grok-4.3",
+      optionId: "high",
+      optionKind: "model_variant",
+      source: "native",
+    };
+    const step = activities.find((activity) => activity.type === "turn_step_started");
+    const reasoning = activities.find(
+      (activity) => activity.type === "timeline_item" && activity.item.kind === "reasoning",
+    );
+    assert.equal(step?.type, "turn_step_started");
+    if (step?.type === "turn_step_started") {
+      assert.deepEqual(step.runtimeModel, expectedRuntimeModel);
+    }
+    assert.equal(reasoning?.type, "timeline_item");
+    if (reasoning?.type === "timeline_item" && reasoning.item.kind === "reasoning") {
+      assert.deepEqual(reasoning.item.runtimeModel, expectedRuntimeModel);
+    }
+  });
+
+  test("backfills late OpenCode provider model metadata into live reasoning and step entries", () => {
+    const state = createOpenCodeActivityState("session-1");
+    startOpenCodeTurn(state, "00000000-0000-4000-8000-000000000003");
+    translateOpenCodeEvent(state, {
+      type: "message.updated",
+      properties: {
+        info: {
+          id: "msg-assistant-model",
+          sessionID: "session-1",
+          role: "assistant",
+        },
+      },
+    });
+    translateOpenCodeEvent(state, {
+      type: "message.part.updated",
+      properties: {
+        part: {
+          id: "part-step-start",
+          sessionID: "session-1",
+          messageID: "msg-assistant-model",
+          type: "step-start",
+          title: "Analyze",
+        },
+      },
+    });
+    translateOpenCodeEvent(state, {
+      type: "message.part.updated",
+      properties: {
+        part: {
+          id: "part-reasoning-model",
+          sessionID: "session-1",
+          messageID: "msg-assistant-model",
+          type: "reasoning",
+          text: "thinking",
+        },
+      },
+    });
+
+    const updates = translateOpenCodeEvent(state, {
+      type: "message.updated",
+      properties: {
+        info: {
+          id: "msg-assistant-model",
+          sessionID: "session-1",
+          role: "assistant",
+          providerID: "aihubmix",
+          modelID: "grok-4.3",
+          variant: "high",
+        },
+      },
+    });
+
+    const expectedRuntimeModel = {
+      modelId: "aihubmix/grok-4.3",
+      optionId: "high",
+      optionKind: "model_variant",
+      source: "native",
+    };
+    const stepUpdate = updates.find((activity) => activity.type === "turn_step_started");
+    const reasoningUpdate = updates.find(
+      (activity) => activity.type === "timeline_item_updated" && activity.item.kind === "reasoning",
+    );
+    assert.equal(stepUpdate?.type, "turn_step_started");
+    if (stepUpdate?.type === "turn_step_started") {
+      assert.deepEqual(stepUpdate.runtimeModel, expectedRuntimeModel);
+    }
+    assert.equal(reasoningUpdate?.type, "timeline_item_updated");
+    if (reasoningUpdate?.type === "timeline_item_updated" && reasoningUpdate.item.kind === "reasoning") {
+      assert.deepEqual(reasoningUpdate.item.runtimeModel, expectedRuntimeModel);
+    }
   });
 });

@@ -159,6 +159,7 @@ describe("Claude session files", () => {
         sessionId: "session-markdown",
         timestamp: "2025-07-19T22:21:04.000Z",
         message: {
+          model: "claude-opus-4-7",
           content: [{ type: "text", text: `\n${markdown}\n` }],
         },
       },
@@ -183,6 +184,10 @@ describe("Claude session files", () => {
       assistantMessage.payload.item.kind === "assistant_message"
     ) {
       assert.equal(assistantMessage.payload.item.text, markdown);
+      assert.deepEqual(assistantMessage.payload.item.runtimeModel, {
+        modelId: "claude-opus-4-7",
+        source: "native",
+      });
     }
   });
 

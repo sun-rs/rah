@@ -35,9 +35,14 @@ import {
 } from "../provider-resume";
 import { codexLaunchSpec, probeProviderDiagnostic } from "../provider-diagnostics";
 import { toSessionSummary } from "../session-store";
-import { buildCodexModeState, parseCodexModeId } from "../session-mode-utils";
+import {
+  buildCodexModeState,
+  codexPlanAccessModeId,
+  parseCodexModeId,
+} from "../session-mode-utils";
 import { optionValueAsString, resolveModelOptionValues } from "../session-model-options";
 import { applyProviderActivity } from "../provider-activity";
+import { timelineRuntimeModel } from "../timeline-runtime-model";
 
 const CODEX_EVENT_SOURCE = {
   provider: "codex" as const,
@@ -201,6 +206,17 @@ export class CodexAdapter implements ProviderAdapter {
       return;
     }
     const collaborationMode = codexCollaborationModeForTurn(live);
+    const requestRuntimeModel = timelineRuntimeModel({
+      modelId: live.modelId,
+      optionId: live.reasoningId,
+      optionKind: "reasoning_effort",
+      source: "request",
+    });
+    if (requestRuntimeModel) {
+      live.translationState.pendingRuntimeModel = requestRuntimeModel;
+    } else {
+      delete live.translationState.pendingRuntimeModel;
+    }
     live.turnStartInFlight = true;
     void live.client.request(
       "turn/start",
@@ -209,6 +225,9 @@ export class CodexAdapter implements ProviderAdapter {
         input: [{ type: "text", text: request.text }],
         cwd: live.cwd,
         approvalPolicy: live.approvalPolicy,
+        ...(live.approvalsReviewer === "auto_review"
+          ? { approvalsReviewer: live.approvalsReviewer }
+          : {}),
         sandboxPolicy: codexSandboxPolicyForTurn({
           sandboxMode: live.sandboxMode,
           cwd: live.cwd,
@@ -229,6 +248,17 @@ export class CodexAdapter implements ProviderAdapter {
         !live.finishedTurnIds.has(turn.id)
       ) {
         live.currentTurnId = turn.id;
+      }
+      if (
+        typeof turn?.id === "string" &&
+        live.translationState.pendingRuntimeModel &&
+        !live.translationState.runtimeModelByTurnId.has(turn.id)
+      ) {
+        live.translationState.runtimeModelByTurnId.set(
+          turn.id,
+          live.translationState.pendingRuntimeModel,
+        );
+        delete live.translationState.pendingRuntimeModel;
       }
       if (typeof turn?.id === "string" && live.interruptWhenTurnStarts) {
         const turnId = turn.id;
@@ -444,12 +474,23 @@ export class CodexAdapter implements ProviderAdapter {
     if (!live) {
       throw new Error("Codex mode switching is only available for live sessions.");
     }
-    if (modeId === "plan") {
+    const planAccessModeId = codexPlanAccessModeId(modeId);
+    if (modeId === "plan" || planAccessModeId) {
       if (!live.planCollaborationMode) {
         live.planCollaborationMode = await loadCodexPlanCollaborationMode(live.client);
       }
       if (!live.planCollaborationMode) {
         throw new Error("Codex plan mode is not available for this session.");
+      }
+      if (planAccessModeId) {
+        const parsed = parseCodexModeId(planAccessModeId);
+        if (!parsed) {
+          throw new Error(`Unsupported Codex mode '${modeId}'.`);
+        }
+        live.approvalPolicy = parsed.approvalPolicy;
+        live.sandboxMode = parsed.sandboxMode;
+        live.approvalsReviewer = parsed.approvalsReviewer ?? "user";
+        live.lastNonPlanModeId = planAccessModeId;
       }
       live.activeModeId = "plan";
       const nextState = this.services.sessionStore.patchManagedSession(sessionId, {
@@ -468,6 +509,7 @@ export class CodexAdapter implements ProviderAdapter {
     }
     live.approvalPolicy = parsed.approvalPolicy;
     live.sandboxMode = parsed.sandboxMode;
+    live.approvalsReviewer = parsed.approvalsReviewer ?? "user";
     live.activeModeId = modeId;
     live.lastNonPlanModeId = modeId;
     const nextState = this.services.sessionStore.patchManagedSession(sessionId, {

@@ -1717,7 +1717,7 @@ describe("RuntimeEngine", () => {
     rmSync(workspace, { force: true, recursive: true });
   });
 
-  test("default live start uses native TUI and routes chat input through PTY", async () => {
+  test("explicit native_tui backend routes chat input through PTY", async () => {
     const engine = new RuntimeEngine();
     const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-native-tui-"));
     const fakeCodex = path.join(workspace, "fake-codex.js");
@@ -1770,6 +1770,7 @@ describe("RuntimeEngine", () => {
       const started = await engine.startSession({
         provider: "codex",
         cwd: workspace,
+        liveBackend: "native_tui",
         model: "gpt-native-test",
         modeId: "never/danger-full-access",
         attach: {
@@ -3772,7 +3773,7 @@ describe("RuntimeEngine", () => {
         liveBackend: "native_tui",
         model: "deepseek/deepseek-v4-pro",
         optionValues: { model_reasoning_variant: "high" },
-        modeId: "opencode/full-auto",
+        modeId: "build",
         attach: {
           client: {
             id: "web-native",

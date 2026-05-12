@@ -82,6 +82,7 @@ export function SessionModelControls(props: {
   iconOnly?: boolean;
   mobileIconOnly?: boolean;
   allowProviderDefault?: boolean;
+  onOpen?: (() => void) | undefined;
   onModelChange: (modelId: string, defaultReasoningId?: string | null) => void;
   onReasoningChange: (reasoningId: string) => void;
 }) {
@@ -255,7 +256,14 @@ export function SessionModelControls(props: {
         ref={triggerRef}
         type="button"
         disabled={props.disabled || props.loading}
-        onClick={() => setOpen((v) => !v)}
+        onClick={() =>
+          setOpen((current) => {
+            if (!current) {
+              props.onOpen?.();
+            }
+            return !current;
+          })
+        }
         className={triggerClass}
         aria-haspopup="listbox"
         aria-expanded={open}

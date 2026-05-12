@@ -153,13 +153,13 @@ Legacy structured 的保留决策：
 | --- | --- | --- | --- | --- |
 | Codex | native local server | `codex app-server` + `codex --remote <endpoint> resume <threadId>` | app-server event + rollout/session backfill | model/mode/runtime config 按 Codex app-server 能力开放 |
 | Claude | zellij/TUI mux fallback | `claude --session-id <uuid>` / `claude --resume <id>` inside zellij | `~/.claude/projects/**/*.jsonl` | permission/model/effort 作为启动参数增强；运行中以原生 TUI 为准 |
-| OpenCode | native local server | OpenCode serve/session + `opencode attach <url> --session <id>` | OpenCode server/session event + SQLite backfill | model/permission/variant 按 OpenCode API/ACP 能力开放 |
+| OpenCode | native local server | OpenCode serve/session + `opencode attach <url> --session <id>` | OpenCode server/session event + SQLite backfill | model/variant 和原生 agent 按 OpenCode API 能力开放 |
 
 默认权限策略见 [Session 入口与权限边界](./session-entry-capability-boundary.zh-CN.md)。当前默认统一偏向低摩擦最大权限：
 
 - Codex：`never/danger-full-access`
 - Claude：`bypassPermissions`
-- OpenCode：`opencode/full-auto`
+- OpenCode：provider 原生默认 agent，通常为 `build`
 
 这些默认值由 adapter 的 `ProviderModelCatalog.defaultModeId` 提供。前端只传 RAH 标准 `modeId`，daemon 在 native TUI launch spec 中尽量翻译为 provider 启动参数。启动增强失败或 provider 语义变化不应影响 PTY core 的产品边界；用户始终可以切到原生 TUI 使用官方 `/permission`、`/model`、`/plan`、`/goal` 等能力。具体映射见 [Provider Adapter 协议与能力边界](./provider-adapter-protocol.zh-CN.md)。
 

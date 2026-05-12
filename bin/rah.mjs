@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import {
   closeSync,
   existsSync,
@@ -77,7 +78,6 @@ function printUsage() {
       "Options:",
       "  --cwd <dir>         Override working directory",
       "  --daemon-url <url>  Override daemon base URL",
-      "  --mux <backend>     Experimental TUI mux backend (native | zellij)",
       "  --no-build          Skip web build for rah start",
       "  --no-open           Do not open the browser for rah start",
       "  --follow, -f        Follow logs for rah logs",
@@ -170,7 +170,14 @@ function parseCouncilMcpArgs(argv) {
   if (!roomId || !actorId) {
     throw new Error("rah council-mcp requires --room and --actor.");
   }
-  return { help: false, command: "council-mcp", daemonUrl, roomId, actorId };
+  return {
+    help: false,
+    command: "council-mcp",
+    daemonUrl,
+    roomId,
+    actorId,
+    clientId: `mcp:${actorId}:${randomUUID()}`,
+  };
 }
 
 function parseProviderAttachArgs(provider, argv) {
@@ -221,9 +228,6 @@ function parseArgs(argv) {
   let cwd = process.cwd();
   let daemonUrl = DEFAULT_DAEMON_URL;
   let claudePermissionMode;
-  const envMuxBackend = process.env.RAH_MUX_BACKEND;
-  let muxBackend =
-    envMuxBackend === "native" || envMuxBackend === "zellij" ? envMuxBackend : undefined;
 
   const rest = [...argv.slice(1)];
   if (rest[0] === "attach") {
@@ -248,14 +252,6 @@ function parseArgs(argv) {
       daemonUrl = rest.shift() ?? daemonUrl;
       continue;
     }
-    if (option === "--mux") {
-      const value = rest.shift();
-      if (value !== "native" && value !== "zellij") {
-        throw new Error("Unsupported mux backend. Use `native` or `zellij`.");
-      }
-      muxBackend = value;
-      continue;
-    }
     if (option === "--permission-mode") {
       if (provider !== "claude") {
         throw new Error("`--permission-mode` is only supported for `rah claude`.");
@@ -278,7 +274,6 @@ function parseArgs(argv) {
     provider,
     cwd: resolve(cwd),
     daemonUrl,
-    muxBackend,
     ...(resumeProviderSessionId ? { resumeProviderSessionId } : {}),
     ...(claudePermissionMode ? { claudePermissionMode } : {}),
   };
@@ -682,13 +677,9 @@ function terminalClientDescriptor() {
 async function startOrResumePtyFirstSession(parsed, client) {
   const modeId = providerModeId(parsed);
   const liveBackend =
-    parsed.muxBackend === "zellij"
-      ? "zellij_tui"
-      : parsed.muxBackend === "native"
-        ? "native_tui"
-        : parsed.provider === "codex" || parsed.provider === "opencode"
-          ? "native_local_server"
-          : "zellij_tui";
+    parsed.provider === "codex" || parsed.provider === "opencode"
+      ? "native_local_server"
+      : "zellij_tui";
   if (parsed.resumeProviderSessionId) {
     const result = await postJson(parsed.daemonUrl, "/api/sessions/resume", {
       provider: parsed.provider,
@@ -736,7 +727,20 @@ function councilMcpTools() {
     },
     {
       name: "channel_wait_new",
-      description: "Read council messages newer than since_id.",
+      description: "Block until a newer message from another participant arrives, or timeout.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          since_id: { type: "number" },
+          timeout_s: { type: "number" },
+          limit: { type: "number" },
+        },
+        additionalProperties: true,
+      },
+    },
+    {
+      name: "channel_history",
+      description: "Read recent council room messages.",
       inputSchema: {
         type: "object",
         properties: { since_id: { type: "number" }, limit: { type: "number" } },
@@ -744,8 +748,13 @@ function councilMcpTools() {
       },
     },
     {
-      name: "channel_history",
-      description: "Read recent council room messages.",
+      name: "channel_state",
+      description: "Get council room state, agents, last message id, claims, and pending controls.",
+      inputSchema: { type: "object", additionalProperties: true },
+    },
+    {
+      name: "channel_peek_inbox",
+      description: "Non-blocking check for newer messages from other participants.",
       inputSchema: {
         type: "object",
         properties: { since_id: { type: "number" }, limit: { type: "number" } },
@@ -760,6 +769,51 @@ function councilMcpTools() {
         properties: { phase: { type: "string" }, detail: { type: "string" } },
         additionalProperties: true,
       },
+    },
+    {
+      name: "channel_claim_file",
+      description: "Claim a file before editing so other agents can avoid conflicts.",
+      inputSchema: {
+        type: "object",
+        properties: { path: { type: "string" } },
+        required: ["path"],
+        additionalProperties: true,
+      },
+    },
+    {
+      name: "channel_release_file",
+      description: "Release a previously claimed file.",
+      inputSchema: {
+        type: "object",
+        properties: { path: { type: "string" } },
+        required: ["path"],
+        additionalProperties: true,
+      },
+    },
+    {
+      name: "channel_list_claims",
+      description: "List active file claims in the council room.",
+      inputSchema: { type: "object", additionalProperties: true },
+    },
+    {
+      name: "channel_send_control",
+      description: "Send a control signal to another council participant.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          target: { type: "string" },
+          action: { type: "string" },
+          task_id: { type: "string" },
+          data: { type: "object" },
+        },
+        required: ["target", "action"],
+        additionalProperties: true,
+      },
+    },
+    {
+      name: "channel_peek_control",
+      description: "Non-blocking check for control signals addressed to this actor.",
+      inputSchema: { type: "object", additionalProperties: true },
     },
   ];
 }
@@ -834,6 +888,7 @@ async function handleCouncilMcpLine(parsed, line) {
     const response = await postJson(parsed.daemonUrl, "/api/council/mcp", {
       roomId: parsed.roomId,
       actorId: parsed.actorId,
+      clientId: parsed.clientId,
       tool: params.name,
       arguments: params.arguments ?? {},
     });

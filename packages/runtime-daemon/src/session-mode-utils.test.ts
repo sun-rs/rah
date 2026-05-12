@@ -2,36 +2,41 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildClaudeModeState,
+  buildClaudeModeDescriptorsFromHelp,
   buildCodexModeState,
+  buildOpenCodeAgentModeDescriptors,
   buildOpenCodeModeState,
+  codexPlanAccessModeId,
+  codexPlanModeId,
+  isCodexModeId,
+  parseCodexModeId,
   providerModeDescriptors,
 } from "./session-mode-utils";
 
-test("provider mode descriptors use canonical access labels", () => {
+test("provider mode descriptors use provider-native labels", () => {
   assert.deepEqual(accessLabels(buildCodexModeState({
     currentModeId: "never/danger-full-access",
     mutable: true,
     planAvailable: true,
   })), {
-    "on-request/read-only": "Ask",
-    "on-request/workspace-write": "Auto edit",
-    "never/workspace-write": "Full auto · sandboxed",
-    "never/danger-full-access": "Full auto",
+    "on-request/workspace-write": "Default",
+    "auto-review/workspace-write": "Auto Review",
+    "never/danger-full-access": "Full Access",
   });
   assert.deepEqual(accessLabels(buildClaudeModeState({
     currentModeId: "bypassPermissions",
     mutable: true,
   })), {
-    default: "Ask",
-    acceptEdits: "Auto edit",
-    bypassPermissions: "Full auto",
+    default: "Default",
+    acceptEdits: "Accept Edits",
+    bypassPermissions: "Bypass Permissions",
   });
-  assert.deepEqual(accessLabels(buildOpenCodeModeState({
-    currentModeId: "opencode/full-auto",
+  assert.deepEqual(allLabels(buildOpenCodeModeState({
+    currentModeId: "build",
     mutable: true,
   })), {
-    build: "Ask",
-    "opencode/full-auto": "Full auto",
+    build: "Build",
+    plan: "Plan",
   });
 });
 
@@ -41,9 +46,8 @@ test("provider mode descriptors expose stable UI roles", () => {
     mutable: true,
     planAvailable: true,
   })), {
-    "on-request/read-only": "ask",
-    "on-request/workspace-write": "auto_edit",
-    "never/workspace-write": "full_auto",
+    "on-request/workspace-write": "ask",
+    "auto-review/workspace-write": "auto_edit",
     "never/danger-full-access": "full_auto",
   });
   assert.equal(
@@ -58,9 +62,8 @@ test("provider mode descriptors expose stable UI roles", () => {
 
 test("provider mode descriptors expose adapter-owned apply timing", () => {
   assert.deepEqual(applyTimings("codex"), {
-    "on-request/read-only": "startup_only",
     "on-request/workspace-write": "startup_only",
-    "never/workspace-write": "startup_only",
+    "auto-review/workspace-write": "startup_only",
     "never/danger-full-access": "startup_only",
   });
   assert.deepEqual(applyTimings("claude"), {
@@ -70,10 +73,49 @@ test("provider mode descriptors expose adapter-owned apply timing", () => {
     bypassPermissions: "startup_only",
   });
   assert.deepEqual(applyTimings("opencode"), {
-    build: "startup_only",
-    "opencode/full-auto": "startup_only",
-    plan: "startup_only",
+    build: "next_turn",
+    plan: "next_turn",
   });
+});
+
+test("Claude permission-mode choices are parsed from help and hidden modes are omitted", () => {
+  const modes = buildClaudeModeDescriptorsFromHelp(
+    '--permission-mode <mode> Permission mode (choices: "acceptEdits", "auto", "bypassPermissions", "default", "dontAsk", "plan")',
+  );
+  assert.deepEqual(modes.map((mode) => mode.id), [
+    "default",
+    "acceptEdits",
+    "plan",
+    "bypassPermissions",
+  ]);
+});
+
+test("OpenCode agent descriptors preserve dynamic custom agents", () => {
+  const modes = buildOpenCodeAgentModeDescriptors([
+    { id: "build", label: "Build" },
+    { id: "sisyfus", label: "sisyfus", description: "Custom agent" },
+  ]);
+  assert.deepEqual(modes.map((mode) => [mode.id, mode.label]), [
+    ["build", "Build"],
+    ["sisyfus", "sisyfus"],
+  ]);
+});
+
+test("Codex Auto Review mode maps to app-server approvalsReviewer", () => {
+  assert.deepEqual(parseCodexModeId("auto-review/workspace-write"), {
+    approvalPolicy: "on-request",
+    sandboxMode: "workspace-write",
+    approvalsReviewer: "auto_review",
+  });
+});
+
+test("Codex plan mode id carries the selected access preset", () => {
+  const modeId = codexPlanModeId("auto-review/workspace-write");
+  assert.equal(modeId, "plan:auto-review/workspace-write");
+  assert.equal(codexPlanAccessModeId(modeId), "auto-review/workspace-write");
+  assert.equal(isCodexModeId(modeId), true);
+  assert.equal(codexPlanAccessModeId("plan:not-a-mode"), null);
+  assert.equal(isCodexModeId("plan:not-a-mode"), false);
 });
 
 function accessLabels(state: ReturnType<typeof buildCodexModeState>): Record<string, string> {
@@ -82,6 +124,10 @@ function accessLabels(state: ReturnType<typeof buildCodexModeState>): Record<str
       .filter((mode) => mode.id !== "plan")
       .map((mode) => [mode.id, mode.label]),
   );
+}
+
+function allLabels(state: ReturnType<typeof buildCodexModeState>): Record<string, string> {
+  return Object.fromEntries(state.availableModes.map((mode) => [mode.id, mode.label]));
 }
 
 function accessRoles(state: ReturnType<typeof buildCodexModeState>): Record<string, string | undefined> {

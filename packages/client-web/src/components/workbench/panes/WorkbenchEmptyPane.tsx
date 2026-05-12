@@ -52,6 +52,7 @@ export function WorkbenchEmptyPane(props: {
   modelCatalogLoading: boolean;
   selectedModelId: string | null;
   selectedReasoningId: string | null;
+  onRequestCatalogRefresh: () => void;
   onModelChange: (modelId: string, defaultReasoningId?: string | null) => void;
   onReasoningChange: (reasoningId: string) => void;
   accessModes: SessionModeChoice[];
@@ -100,12 +101,12 @@ export function WorkbenchEmptyPane(props: {
           {!props.sidebarOpen && (
             <button
               type="button"
-              className="icon-click-feedback hidden md:inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
+              className="icon-click-feedback hidden h-8 w-8 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] md:inline-flex"
               onClick={props.onExpandSidebar}
               aria-label="Expand sidebar"
               title="Expand sidebar"
             >
-              <Menu size={16} />
+              <Menu size={18} />
             </button>
           )}
           <div className="min-w-0 md:hidden">
@@ -225,6 +226,7 @@ export function WorkbenchEmptyPane(props: {
                   buttonClassName={`${EMPTY_STATE_COMPOSER_LAYOUT.attachButtonClassName} ${
                     compactSessionControls ? "" : "hidden"
                   }`}
+                  onOpen={props.onRequestCatalogRefresh}
                   onAccessModeChange={props.onAccessModeChange}
                   onPlanModeToggle={props.onPlanModeToggle}
                   onModelChange={props.onModelChange}
@@ -242,6 +244,7 @@ export function WorkbenchEmptyPane(props: {
                     selectedAccessModeId={props.selectedAccessModeId}
                     planModeAvailable={props.planModeAvailable}
                     planModeEnabled={props.planModeEnabled}
+                    onOpen={props.onRequestCatalogRefresh}
                     onAccessModeChange={props.onAccessModeChange}
                     onPlanModeToggle={props.onPlanModeToggle}
                   />
@@ -253,6 +256,7 @@ export function WorkbenchEmptyPane(props: {
                     loading={props.modelCatalogLoading}
                     allowProviderDefault
                     mobileIconOnly
+                    onOpen={props.onRequestCatalogRefresh}
                     onModelChange={props.onModelChange}
                     onReasoningChange={props.onReasoningChange}
                   />

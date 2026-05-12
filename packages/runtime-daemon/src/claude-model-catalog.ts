@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { execFile } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -13,10 +14,16 @@ import type {
   SessionConfigValue,
   SessionResolvedConfig,
   SessionModelDescriptor,
+  SessionModeDescriptor,
   SessionReasoningOption,
 } from "@rah/runtime-protocol";
 import { knownModelContextWindow } from "./model-context-window";
-import { defaultProviderModeId, providerModeDescriptors } from "./session-mode-utils";
+import { resolveConfiguredBinary } from "./provider-binary-utils";
+import {
+  buildClaudeModeDescriptorsFromHelp,
+  defaultProviderModeId,
+  providerModeDescriptors,
+} from "./session-mode-utils";
 
 type ClaudeSettingsFile = {
   env?: Record<string, unknown>;
@@ -30,6 +37,7 @@ type ClaudeConfigState = {
 
 const CLAUDE_CATALOG_CACHE_TTL_MS = 30_000;
 const CLAUDE_MODEL_FETCH_TIMEOUT_MS = 15_000;
+const CLAUDE_HELP_FETCH_TIMEOUT_MS = 3_000;
 const CLAUDE_EFFORT_LABELS: Record<string, string> = {
   low: "Low",
   medium: "Medium",
@@ -319,6 +327,26 @@ async function fetchClaudeSupportedModels(cwd?: string): Promise<ClaudeSdkModelI
   }
 }
 
+async function fetchClaudeModeDescriptorsFromHelp(): Promise<SessionModeDescriptor[]> {
+  const binary = await resolveConfiguredBinary("RAH_CLAUDE_BINARY", "claude");
+  const helpText = await new Promise<string>((resolve, reject) => {
+    const child = execFile(
+      binary,
+      ["--help"],
+      { timeout: CLAUDE_HELP_FETCH_TIMEOUT_MS, maxBuffer: 128_000 },
+      (error, stdout, stderr) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve(`${stdout}\n${stderr}`);
+      },
+    );
+    child.stdin?.destroy();
+  });
+  return buildClaudeModeDescriptorsFromHelp(helpText);
+}
+
 function buildClaudeCatalogFromModelInfos(args: {
   modelInfos: readonly ClaudeSdkModelInfo[];
   cwd?: string;
@@ -328,6 +356,7 @@ function buildClaudeCatalogFromModelInfos(args: {
   freshness: NonNullable<ProviderModelCatalog["freshness"]>;
   modelsExact: boolean;
   optionsExact: boolean;
+  modes?: SessionModeDescriptor[];
 }): ProviderModelCatalog {
   const models = buildClaudeModelDescriptors(args.modelInfos);
   const currentModelId =
@@ -359,11 +388,14 @@ function buildClaudeCatalogFromModelInfos(args: {
         contextWindow: model.contextWindow ?? null,
         defaultReasoningId: model.defaultReasoningId ?? null,
       })),
+      modes: (args.modes ?? []).map((mode) => mode.id),
     }),
     modelsExact: args.modelsExact,
     optionsExact: args.optionsExact,
     defaultModeId: defaultProviderModeId("claude")!,
-    modes: providerModeDescriptors("claude"),
+    modes: args.modes && args.modes.length > 0
+      ? args.modes
+      : providerModeDescriptors("claude"),
     modelProfiles: buildClaudeModelProfiles(models).map((profile) => ({
       ...profile,
       source: args.sourceDetail,
@@ -414,6 +446,9 @@ export async function buildClaudeModelCatalog(options?: {
   cwd?: string;
 }): Promise<ProviderModelCatalog> {
   const merged = readMergedClaudeConfig(options?.cwd);
+  const modes = await fetchClaudeModeDescriptorsFromHelp().catch(() =>
+    providerModeDescriptors("claude"),
+  );
   try {
     const modelInfos = await fetchClaudeSupportedModels(options?.cwd);
     if (modelInfos.length > 0) {
@@ -426,6 +461,7 @@ export async function buildClaudeModelCatalog(options?: {
         freshness: "authoritative",
         modelsExact: true,
         optionsExact: true,
+        modes,
       });
     }
   } catch {
@@ -440,6 +476,7 @@ export async function buildClaudeModelCatalog(options?: {
     freshness: "stale",
     modelsExact: false,
     optionsExact: false,
+    modes,
   });
 }
 

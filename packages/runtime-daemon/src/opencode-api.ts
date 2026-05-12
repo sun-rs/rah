@@ -33,6 +33,7 @@ export interface OpenCodeMessageInfo {
   agent?: string;
   providerID?: string;
   modelID?: string;
+  variant?: string;
   finish?: string;
   error?: unknown;
   time?: {
@@ -400,6 +401,42 @@ export async function promptOpenCodeSessionAsync(params: {
   await openCodeRequestJson<void>(
     params.handle,
     `/session/${encodeURIComponent(params.providerSessionId)}/prompt_async`,
+    {
+      method: "POST",
+      body: JSON.stringify(body),
+    },
+  );
+}
+
+export async function promptOpenCodeSession(params: {
+  handle: Pick<OpenCodeServerHandle, "baseUrl" | "cwd" | "authHeader">;
+  providerSessionId: string;
+  text: string;
+  model?: string;
+  variant?: string;
+  agent?: string;
+}): Promise<OpenCodeMessageWithParts> {
+  const body: {
+    parts: Array<{ type: "text"; text: string }>;
+    model?: { providerID: string; modelID: string };
+    variant?: string;
+    agent?: string;
+  } = {
+    parts: [{ type: "text", text: params.text }],
+  };
+  const model = parseOpenCodeModel(params.model);
+  if (model) {
+    body.model = model;
+  }
+  if (params.variant) {
+    body.variant = params.variant;
+  }
+  if (params.agent) {
+    body.agent = params.agent;
+  }
+  return await openCodeRequestJson<OpenCodeMessageWithParts>(
+    params.handle,
+    `/session/${encodeURIComponent(params.providerSessionId)}/message`,
     {
       method: "POST",
       body: JSON.stringify(body),

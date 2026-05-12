@@ -21,7 +21,8 @@ test("CouncilStore persists rooms, agents, ordered messages, and stopped status"
 
     assert.equal(created.room.title, "Runtime Council");
     assert.equal(created.agents.length, 2);
-    assert.deepEqual(created.agents.map((agent) => agent.id), ["codex-lead", "codex-lead-2"]);
+    assert.deepEqual(created.agents.map((agent) => agent.id), ["Codex Lead", "Claude Reviewer"]);
+    assert.deepEqual(created.agents.map((agent) => agent.label), ["Codex Lead", "Claude Reviewer"]);
 
     const first = store.appendMessage({
       roomId: created.room.id,
@@ -54,6 +55,10 @@ test("CouncilStore persists rooms, agents, ordered messages, and stopped status"
     assert.equal(snapshot.agents[0]!.status, "stopped");
     assert.equal(snapshot.agents[0]!.zellijPaneId, "terminal_1");
     assert.equal(snapshot.messages.length, 2);
+
+    reloaded.deleteRoom(created.room.id);
+    assert.equal(reloaded.listRooms().length, 0);
+    assert.throws(() => reloaded.snapshot(created.room.id), /Unknown council room/);
   } finally {
     rmSync(root, { force: true, recursive: true });
   }
@@ -74,6 +79,33 @@ test("CouncilStore marks rooms and active agents failed with diagnostic detail",
     assert.equal(failed.room.error, "launch failed");
     assert.equal(failed.agents[0]!.status, "failed");
     assert.equal(failed.agents[0]!.lastStatusDetail, "launch failed");
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test("CouncilStore assigns numbered room titles when title is omitted", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-store-title-"));
+  try {
+    const store = new CouncilStore(path.join(root, "rooms.json"));
+    const first = store.createRoom({
+      workspace: root,
+      agents: [{ provider: "codex", label: "Codex" }],
+    });
+    const second = store.createRoom({
+      title: "  ",
+      workspace: root,
+      agents: [{ provider: "claude", label: "Claude" }],
+    });
+    const named = store.createRoom({
+      title: "Architecture Review",
+      workspace: root,
+      agents: [{ provider: "opencode", label: "OpenCode" }],
+    });
+
+    assert.equal(first.room.title, "Room-0001");
+    assert.equal(second.room.title, "Room-0002");
+    assert.equal(named.room.title, "Architecture Review");
   } finally {
     rmSync(root, { force: true, recursive: true });
   }

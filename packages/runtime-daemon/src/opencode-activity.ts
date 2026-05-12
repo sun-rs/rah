@@ -14,6 +14,7 @@ import {
   createOpenCodeTimelineIdentity,
   createOpenCodeTimelineTurnIdentity,
 } from "./opencode-timeline-identity";
+import { openCodeRuntimeModelFromMessage } from "./timeline-runtime-model";
 import type {
   OpenCodeEvent,
   OpenCodeMessageInfo,
@@ -44,10 +45,15 @@ export interface OpenCodeActivityState {
   readonly turnByMessageId: Map<string, string>;
   readonly turnRootMessageIdByMessageId: Map<string, string>;
   readonly roleByMessageId: Map<string, OpenCodeMessageRole>;
+  readonly ignoredMessageIds: Set<string>;
+  readonly userStartedTurnByMessageId: Map<string, string>;
+  readonly runtimeModelByMessageId: Map<string, ReturnType<typeof openCodeRuntimeModelFromMessage>>;
+  readonly partMessageIdByPartId: Map<string, string>;
   readonly partTypeByPartId: Map<string, string>;
   readonly partTextByPartId: Map<string, string>;
   readonly pendingPartsByMessageId: Map<string, OpenCodePart[]>;
   readonly pendingTextDeltasByPartId: Map<string, PendingOpenCodeTextDelta[]>;
+  readonly pendingSubmittedUserMessages: PendingSubmittedOpenCodeUserMessage[];
   readonly startedToolCallIds: Set<string>;
   readonly completedToolCallIds: Set<string>;
   readonly stepStartedPartIds: Set<string>;
@@ -64,6 +70,78 @@ interface PendingOpenCodeTextDelta {
   delta: string;
 }
 
+interface PendingSubmittedOpenCodeUserMessage {
+  text: string;
+  turnId: string;
+  clientMessageId?: string;
+  clientTurnId?: string;
+}
+
+function isOpenCodeInternalInitiatorText(text: string): boolean {
+  if (/<!--\s*OMO_INTERNAL_INITIATOR\s*-->/.test(text)) {
+    return true;
+  }
+  if (!/^\s*<system-reminder>[\s\S]*<\/system-reminder>\s*$/m.test(text)) {
+    return false;
+  }
+  return /\[(?:ALL BACKGROUND TASKS COMPLETE|BACKGROUND TASK COMPLETED|BACKGROUND TASK FAILED)\]/.test(text);
+}
+
+function isOpenCodeInternalUserPart(part: OpenCodePart): boolean {
+  if (part.type !== "text") {
+    return false;
+  }
+  const text = readStringProperty(part, "text");
+  return typeof text === "string" && isOpenCodeInternalInitiatorText(text);
+}
+
+function isOpenCodeInternalUserMessage(message: OpenCodeMessageWithParts): boolean {
+  return message.info.role === "user" && message.parts.some(isOpenCodeInternalUserPart);
+}
+
+function forgetOpenCodeInternalUserMessage(state: OpenCodeActivityState, messageId: string): ProviderActivity[] {
+  state.ignoredMessageIds.add(messageId);
+  const internalTurnId = state.userStartedTurnByMessageId.get(messageId);
+  const turnIdentity = internalTurnId ? openCodeTurnIdentityForTurn(state, internalTurnId) : undefined;
+  state.turnByMessageId.delete(messageId);
+  state.turnRootMessageIdByMessageId.delete(messageId);
+  state.roleByMessageId.delete(messageId);
+  state.userStartedTurnByMessageId.delete(messageId);
+  state.runtimeModelByMessageId.delete(messageId);
+  state.pendingPartsByMessageId.delete(messageId);
+  for (const [partId, deltas] of [...state.pendingTextDeltasByPartId]) {
+    const remaining = deltas.filter((delta) => delta.messageID !== messageId);
+    if (remaining.length === 0) {
+      state.pendingTextDeltasByPartId.delete(partId);
+    } else if (remaining.length !== deltas.length) {
+      state.pendingTextDeltasByPartId.set(partId, remaining);
+    }
+  }
+  for (const [partId, mappedMessageId] of [...state.partMessageIdByPartId]) {
+    if (mappedMessageId !== messageId) {
+      continue;
+    }
+    state.partMessageIdByPartId.delete(partId);
+    state.partTypeByPartId.delete(partId);
+    state.partTextByPartId.delete(partId);
+    state.pendingTextDeltasByPartId.delete(partId);
+  }
+  if (!internalTurnId) {
+    return [];
+  }
+  if (state.currentTurnId === internalTurnId) {
+    delete state.currentTurnId;
+  }
+  return [
+    { type: "runtime_status", status: "finished", turnId: internalTurnId },
+    {
+      type: "turn_completed",
+      turnId: internalTurnId,
+      ...turnIdentityProps(turnIdentity),
+    },
+  ];
+}
+
 export function createOpenCodeActivityState(
   providerSessionId: string,
   options: OpenCodeActivityStateOptions = {},
@@ -77,10 +155,15 @@ export function createOpenCodeActivityState(
     turnByMessageId: new Map(),
     turnRootMessageIdByMessageId: new Map(),
     roleByMessageId: new Map(),
+    ignoredMessageIds: new Set(),
+    userStartedTurnByMessageId: new Map(),
+    runtimeModelByMessageId: new Map(),
+    partMessageIdByPartId: new Map(),
     partTypeByPartId: new Map(),
     partTextByPartId: new Map(),
     pendingPartsByMessageId: new Map(),
     pendingTextDeltasByPartId: new Map(),
+    pendingSubmittedUserMessages: [],
     startedToolCallIds: new Set(),
     completedToolCallIds: new Set(),
     stepStartedPartIds: new Set(),
@@ -90,6 +173,13 @@ export function createOpenCodeActivityState(
     stepIndexByPartId: new Map(),
     pendingPermissions: new Map(),
   };
+}
+
+export function recordOpenCodeSubmittedUserMessage(
+  state: OpenCodeActivityState,
+  message: PendingSubmittedOpenCodeUserMessage,
+): void {
+  state.pendingSubmittedUserMessages.push(message);
 }
 
 export function startOpenCodeTurn(
@@ -138,6 +228,9 @@ export function translateOpenCodeMessage(
   state: OpenCodeActivityState,
   message: OpenCodeMessageWithParts,
 ): ProviderActivity[] {
+  if (isOpenCodeInternalUserMessage(message)) {
+    return [];
+  }
   const activities: ProviderActivity[] = [];
   activities.push(...rememberMessageInfo(state, message.info));
   activities.push(...usageActivitiesForMessageInfo(state, message.info));
@@ -271,10 +364,19 @@ function rememberMessageInfo(
   if (info.sessionID !== state.providerSessionId) {
     return [];
   }
+  if (state.ignoredMessageIds.has(info.id)) {
+    return [];
+  }
+  if (info.role === "assistant") {
+    const runtimeModel = openCodeRuntimeModelFromMessage(info);
+    if (runtimeModel) {
+      state.runtimeModelByMessageId.set(info.id, runtimeModel);
+    }
+  }
   const knownTurnId = state.turnByMessageId.get(info.id);
   if (knownTurnId) {
     state.roleByMessageId.set(info.id, info.role);
-    return [];
+    return runtimeModelUpdatesForKnownAssistantMessage(state, info.id, knownTurnId);
   }
   state.roleByMessageId.set(info.id, info.role);
   if (info.role === "user") {
@@ -284,6 +386,9 @@ function rememberMessageInfo(
     const reuseLiveTurn = state.origin === "live" && state.currentTurnId !== undefined;
     const turnId = reuseLiveTurn ? state.currentTurnId! : `opencode:${info.id}`;
     const started = reuseLiveTurn ? [] : [{ type: "turn_started" as const, turnId }];
+    if (!reuseLiveTurn) {
+      state.userStartedTurnByMessageId.set(info.id, turnId);
+    }
     state.turnRootMessageIdByMessageId.set(info.id, info.id);
     state.currentTurnId = turnId;
     state.turnByMessageId.set(info.id, turnId);
@@ -298,6 +403,88 @@ function rememberMessageInfo(
   }
   state.turnByMessageId.set(info.id, turnId);
   return [];
+}
+
+function runtimeModelPropsForMessage(state: OpenCodeActivityState, messageId: string) {
+  const runtimeModel = state.runtimeModelByMessageId.get(messageId);
+  return runtimeModel ? { runtimeModel } : {};
+}
+
+function runtimeModelUpdatesForKnownAssistantMessage(
+  state: OpenCodeActivityState,
+  messageId: string,
+  turnId: string,
+): ProviderActivity[] {
+  const runtimeModel = state.runtimeModelByMessageId.get(messageId);
+  if (!runtimeModel || state.roleByMessageId.get(messageId) !== "assistant") {
+    return [];
+  }
+  const activities: ProviderActivity[] = [];
+  for (const [partId, mappedMessageId] of state.partMessageIdByPartId) {
+    if (mappedMessageId !== messageId) {
+      continue;
+    }
+    const partType = state.partTypeByPartId.get(partId);
+    const text = state.partTextByPartId.get(partId);
+    if (partType === "text" && text) {
+      activities.push({
+        type: "timeline_item_updated",
+        item: {
+          kind: "assistant_message",
+          text,
+          messageId,
+          runtimeModel,
+        },
+        ...timelineIdentityProps(openCodeDeltaTimelineIdentity(state, messageId, partId, "assistant_message")),
+        turnId,
+      });
+      continue;
+    }
+    if (partType === "reasoning" && text) {
+      activities.push({
+        type: "timeline_item_updated",
+        item: {
+          kind: "reasoning",
+          text,
+          runtimeModel,
+        },
+        ...timelineIdentityProps(openCodeDeltaTimelineIdentity(state, messageId, partId, "reasoning")),
+        turnId,
+      });
+      continue;
+    }
+    const stepIndex = state.stepIndexByPartId.get(partId);
+    if (partType === "step-start" && stepIndex !== undefined) {
+      activities.push({
+        type: "turn_step_started",
+        turnId,
+        index: stepIndex,
+        runtimeModel,
+      });
+      continue;
+    }
+    if (partType === "step-finish" && stepIndex !== undefined) {
+      activities.push({
+        type: "turn_step_completed",
+        turnId,
+        index: stepIndex,
+        runtimeModel,
+      });
+    }
+  }
+  return activities;
+}
+
+function takePendingSubmittedUserMessage(
+  state: OpenCodeActivityState,
+  text: string,
+): PendingSubmittedOpenCodeUserMessage | undefined {
+  const index = state.pendingSubmittedUserMessages.findIndex((message) => message.text === text);
+  if (index < 0) {
+    return undefined;
+  }
+  const [message] = state.pendingSubmittedUserMessages.splice(index, 1);
+  return message;
 }
 
 function timelineIdentityProps(identity: TimelineIdentity | undefined): { identity?: TimelineIdentity } {
@@ -425,6 +612,15 @@ function translatePartUpdated(
   if (!part || part.sessionID !== state.providerSessionId) {
     return [];
   }
+  if (typeof part.id !== "string" || typeof part.messageID !== "string") {
+    return [];
+  }
+  if (state.ignoredMessageIds.has(part.messageID)) {
+    return [];
+  }
+  if (isOpenCodeInternalUserPart(part)) {
+    return forgetOpenCodeInternalUserMessage(state, part.messageID);
+  }
   rememberPartInfo(state, part);
   if (!state.roleByMessageId.has(part.messageID) && part.type !== "step-finish") {
     queuePendingPart(state, part);
@@ -439,6 +635,9 @@ function translateOpenCodePart(
   state: OpenCodeActivityState,
   part: OpenCodePart,
 ): ProviderActivity[] {
+  if (typeof part.id !== "string" || typeof part.messageID !== "string") {
+    return [];
+  }
   rememberPartInfo(state, part);
   const role = state.roleByMessageId.get(part.messageID);
   const turnId = state.turnByMessageId.get(part.messageID) ?? state.currentTurnId;
@@ -453,22 +652,40 @@ function translateOpenCodePart(
         return [];
       }
       if (role === "user") {
+        if (isOpenCodeInternalInitiatorText(text)) {
+          return forgetOpenCodeInternalUserMessage(state, part.messageID);
+        }
         if (!state.emitUserMessages) {
           return [];
         }
+        const submitted = takePendingSubmittedUserMessage(state, text);
+        const userTurnId = submitted?.turnId ?? turnId;
         return [
           {
             type: "timeline_item",
-            item: { kind: "user_message", text, messageId: part.messageID },
+            item: {
+              kind: "user_message",
+              text,
+              messageId: part.messageID,
+              ...(submitted?.clientMessageId !== undefined
+                ? { clientMessageId: submitted.clientMessageId }
+                : {}),
+              ...(submitted?.clientTurnId !== undefined ? { clientTurnId: submitted.clientTurnId } : {}),
+            },
             ...timelineIdentityProps(openCodeTimelineIdentity(state, part, "user_message")),
-            ...(turnId ? { turnId } : {}),
+            ...(userTurnId ? { turnId: userTurnId } : {}),
           },
         ];
       }
       return [
         {
           type: "timeline_item",
-          item: { kind: "assistant_message", text, messageId: part.messageID },
+          item: {
+            kind: "assistant_message",
+            text,
+            messageId: part.messageID,
+            ...runtimeModelPropsForMessage(state, part.messageID),
+          },
           ...timelineIdentityProps(openCodeTimelineIdentity(state, part, "assistant_message")),
           ...(turnId ? { turnId } : {}),
         },
@@ -486,7 +703,7 @@ function translateOpenCodePart(
         ? [
             {
               type: "timeline_item",
-              item: { kind: "reasoning", text },
+              item: { kind: "reasoning", text, ...runtimeModelPropsForMessage(state, part.messageID) },
               ...timelineIdentityProps(openCodeTimelineIdentity(state, part, "reasoning")),
               ...(turnId ? { turnId } : {}),
             },
@@ -544,6 +761,9 @@ function translatePartDelta(
   if (!messageID || !partID || field !== "text" || !delta) {
     return [];
   }
+  if (state.ignoredMessageIds.has(messageID)) {
+    return [];
+  }
   const role = state.roleByMessageId.get(messageID);
   if (!role) {
     queuePendingTextDelta(state, { messageID, partID, delta });
@@ -563,7 +783,7 @@ function translatePartDelta(
     return [
       {
         type: "timeline_item",
-        item: { kind: "reasoning", text },
+        item: { kind: "reasoning", text, ...runtimeModelPropsForMessage(state, messageID) },
         ...timelineIdentityProps(openCodeDeltaTimelineIdentity(state, messageID, partID, "reasoning")),
         ...(turnId ? { turnId } : {}),
       },
@@ -576,7 +796,12 @@ function translatePartDelta(
   return [
     {
       type: "timeline_item",
-      item: { kind: "assistant_message", text, messageId: messageID },
+      item: {
+        kind: "assistant_message",
+        text,
+        messageId: messageID,
+        ...runtimeModelPropsForMessage(state, messageID),
+      },
       ...timelineIdentityProps(openCodeDeltaTimelineIdentity(state, messageID, partID, "assistant_message")),
       ...(turnId ? { turnId } : {}),
     },
@@ -666,7 +891,7 @@ function translateKnownOpenCodeTextDelta(
     return [
       {
         type: "timeline_item",
-        item: { kind: "reasoning", text },
+        item: { kind: "reasoning", text, ...runtimeModelPropsForMessage(state, delta.messageID) },
         ...timelineIdentityProps(openCodeDeltaTimelineIdentity(state, delta.messageID, delta.partID, "reasoning")),
         ...(turnId ? { turnId } : {}),
       },
@@ -675,7 +900,12 @@ function translateKnownOpenCodeTextDelta(
   return [
     {
       type: "timeline_item",
-      item: { kind: "assistant_message", text, messageId: delta.messageID },
+      item: {
+        kind: "assistant_message",
+        text,
+        messageId: delta.messageID,
+        ...runtimeModelPropsForMessage(state, delta.messageID),
+      },
       ...timelineIdentityProps(openCodeDeltaTimelineIdentity(state, delta.messageID, delta.partID, "assistant_message")),
       ...(turnId ? { turnId } : {}),
     },
@@ -692,6 +922,9 @@ function translatePartRemoved(
   const messageID = typeof properties.messageID === "string" ? properties.messageID : undefined;
   const partID = typeof properties.partID === "string" ? properties.partID : undefined;
   if (!messageID || !partID) {
+    return [];
+  }
+  if (state.ignoredMessageIds.has(messageID)) {
     return [];
   }
   return [
@@ -871,6 +1104,7 @@ function startOpenCodeStep(
       turnId,
       index,
       ...(title ? { title } : {}),
+      ...runtimeModelPropsForMessage(state, part.messageID),
     },
   ];
 }
@@ -898,6 +1132,7 @@ function finishOpenCodeStep(
       turnId,
       index,
       ...(reason ? { reason } : {}),
+      ...runtimeModelPropsForMessage(state, part.messageID),
     },
   ];
 }
@@ -940,6 +1175,7 @@ function toolTitle(tool: string, state: Record<string, unknown>): string {
 }
 
 function rememberPartInfo(state: OpenCodeActivityState, part: OpenCodePart): void {
+  state.partMessageIdByPartId.set(part.id, part.messageID);
   state.partTypeByPartId.set(part.id, part.type);
 }
 

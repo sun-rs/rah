@@ -22,19 +22,19 @@ export type CouncilAgentDraft = {
 export function createDefaultCouncilAgentDrafts(): CouncilAgentDraft[] {
   return [
     {
-      id: "codex-lead",
+      id: "draft-1",
       provider: "codex",
-      label: "Codex Lead",
-      role: "Implementer / planner",
+      label: "",
+      role: "",
       modelId: null,
       reasoningId: null,
       modeId: null,
     },
     {
-      id: "claude-reviewer",
+      id: "draft-2",
       provider: "claude",
-      label: "Claude Reviewer",
-      role: "Architecture and review",
+      label: "",
+      role: "",
       modelId: null,
       reasoningId: null,
       modeId: null,
@@ -90,6 +90,29 @@ export function normalizeCouncilAgentDraftForCatalog(args: {
   };
 }
 
+export function resolveCouncilAgentAutoLabel(args: {
+  draft: CouncilAgentDraft;
+  catalog?: ProviderModelCatalog | null;
+}): string {
+  const selection = resolveCouncilAgentModelSelection(args);
+  const modelLabel = selection.model?.label ?? selection.modelId;
+  const reasoningLabel = selection.reasoning?.label ?? selection.reasoningId;
+  if (modelLabel && reasoningLabel) {
+    return `${modelLabel}-${reasoningLabel}`;
+  }
+  if (modelLabel) {
+    return modelLabel;
+  }
+  return `${args.draft.provider} agent`;
+}
+
+export function resolveCouncilAgentDraftLabel(args: {
+  draft: CouncilAgentDraft;
+  catalog?: ProviderModelCatalog | null;
+}): string {
+  return args.draft.label.trim() || resolveCouncilAgentAutoLabel(args);
+}
+
 export function councilAgentDraftToConfig(args: {
   draft: CouncilAgentDraft;
   catalog?: ProviderModelCatalog | null;
@@ -108,10 +131,11 @@ export function councilAgentDraftToConfig(args: {
     catalog: args.catalog ?? null,
   });
   const modeId = args.draft.modeId ?? modeState.effectiveModeId;
+  const label = resolveCouncilAgentDraftLabel(args);
   return {
-    id: args.draft.id,
+    id: label,
     provider: args.draft.provider,
-    label: args.draft.label,
+    label,
     ...(args.draft.role.trim() ? { role: args.draft.role.trim() } : {}),
     ...(modelId ? { modelId } : {}),
     ...(reasoningId !== null ? { reasoningId } : {}),

@@ -11,7 +11,11 @@ import { TokenizedTextarea } from "../../TokenizedTextarea";
 import { canSubmitComposerInput, COMPOSER_LAYOUT, type ComposerSurface } from "../../../composer-contract";
 import type { InlineWorkbenchNotice } from "../../../workbench-notice-contract";
 import { SessionInfoDialog } from "../dialogs/SessionInfoDialog";
-import { resolveSessionModeControlState, type SessionModeChoice } from "../../../session-mode-ui";
+import {
+  codexPlanModeId,
+  resolveSessionModeControlState,
+  type SessionModeChoice,
+} from "../../../session-mode-ui";
 import { isSessionControlLocked } from "../../../session-capabilities";
 
 function formatContextPercent(value: number): string {
@@ -77,6 +81,7 @@ export function WorkbenchSelectedPane(props: {
   interactionNotice: InlineWorkbenchNotice | null;
   historyNotice: InlineWorkbenchNotice | null;
   hideToolCallsInChat: boolean;
+  showModelInfoInChat: boolean;
   canLoadOlderHistory: boolean;
   historyLoading: boolean;
   canRespondToPermission: boolean;
@@ -123,6 +128,7 @@ export function WorkbenchSelectedPane(props: {
   modelCatalog: ProviderModelCatalog | null;
   modelCatalogLoading: boolean;
   modelChangePending: boolean;
+  onRequestModelCatalogRefresh?: (() => void) | undefined;
   onRenameSession: () => void;
   onSetSessionMode: (modeId: string) => void;
   onSetSessionModel: (modelId: string, reasoningId?: string | null) => void;
@@ -234,8 +240,6 @@ export function WorkbenchSelectedPane(props: {
   const showInspectorToggle = props.showInspectorToggle !== false;
   const claimComposerButtonClassName =
     "inline-flex h-8 shrink-0 items-center justify-center rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground transition-colors hover:opacity-90 disabled:opacity-50";
-  const claimControlButtonClassName =
-    "icon-click-feedback inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] disabled:opacity-40";
   const renderClaimComposer = (args: {
     title: string;
     actionLabel: string;
@@ -266,7 +270,8 @@ export function WorkbenchSelectedPane(props: {
         disabled={claimSessionControlDisabled}
         showModel
         align="right"
-        buttonClassName={claimControlButtonClassName}
+        buttonClassName={COMPOSER_LAYOUT.settingsButtonClassName}
+        onOpen={props.onRequestModelCatalogRefresh}
         onAccessModeChange={props.onClaimAccessModeChange}
         onPlanModeToggle={props.onClaimPlanModeToggle}
         onModelChange={props.onClaimModelChange}
@@ -378,12 +383,12 @@ export function WorkbenchSelectedPane(props: {
           {!props.sidebarOpen && (
             <button
               type="button"
-              className="icon-click-feedback hidden md:inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
+              className="icon-click-feedback hidden h-8 w-8 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] md:inline-flex"
               onClick={props.onExpandSidebar}
               aria-label="Expand sidebar"
               title="Expand sidebar"
             >
-              <Menu size={16} />
+              <Menu size={18} />
             </button>
           )}
           <ProviderLogo provider={props.selectedSummary.session.provider} className="h-6 w-6" />
@@ -624,6 +629,8 @@ export function WorkbenchSelectedPane(props: {
           sessionId={props.selectedSummary.session.id}
           feed={props.selectedProjection?.feed ?? []}
           hideToolCalls={props.hideToolCallsInChat}
+          showModelInfo={props.showModelInfoInChat}
+          provider={props.selectedSummary.session.provider}
           canLoadOlderHistory={props.canLoadOlderHistory}
           historyLoading={props.historyLoading}
           onLoadOlderHistory={props.onLoadOlderHistory}
@@ -702,10 +709,22 @@ export function WorkbenchSelectedPane(props: {
                     : {})}
                   showModel={showLiveModelControl}
                   buttonClassName={COMPOSER_LAYOUT.settingsButtonClassName}
-                  onAccessModeChange={props.onSetSessionMode}
+                  onOpen={props.onRequestModelCatalogRefresh}
+                  onAccessModeChange={(modeId) => {
+                    props.onSetSessionMode(
+                      props.selectedSummary.session.provider === "codex" &&
+                        liveModeControl.planModeEnabled
+                        ? codexPlanModeId(modeId) ?? modeId
+                        : modeId,
+                    );
+                  }}
                   onPlanModeToggle={(enabled) => {
                     props.onSetSessionMode(
-                      enabled ? "plan" : liveModeControl.selectedAccessModeId ?? "default",
+                      enabled
+                        ? props.selectedSummary.session.provider === "codex"
+                          ? codexPlanModeId(liveModeControl.selectedAccessModeId) ?? "plan"
+                          : "plan"
+                        : liveModeControl.selectedAccessModeId ?? "default",
                     );
                   }}
                   onModelChange={(modelId, defaultReasoningId) => {

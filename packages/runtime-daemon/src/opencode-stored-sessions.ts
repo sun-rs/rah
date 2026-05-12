@@ -560,6 +560,7 @@ function buildMessageInfo(row: OpenCodeMessageRow): OpenCodeMessageInfo | null {
     ...(typeof data.agent === "string" ? { agent: data.agent } : {}),
     ...(typeof data.providerID === "string" ? { providerID: data.providerID } : {}),
     ...(typeof data.modelID === "string" ? { modelID: data.modelID } : {}),
+    ...(typeof data.variant === "string" ? { variant: data.variant } : {}),
     ...(typeof data.finish === "string" ? { finish: data.finish } : {}),
     ...(data.error !== undefined ? { error: data.error } : {}),
     time: {

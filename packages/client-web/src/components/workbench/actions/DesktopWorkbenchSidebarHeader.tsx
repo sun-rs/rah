@@ -1,10 +1,11 @@
 import type { SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
-import { Columns3, History, Home, Menu, Settings, UsersRound } from "lucide-react";
+import { Columns3, History, Menu, Settings, UsersRound } from "lucide-react";
 import { SessionHistoryDialog } from "../../SessionHistoryDialog";
 import type { WorkspaceSortMode } from "../../../session-browser";
 
 const headerButtonClassName =
-  "icon-click-feedback inline-flex h-10 w-10 items-center justify-center rounded-md active:bg-[var(--app-bg)]";
+  "icon-click-feedback inline-flex h-8 w-8 items-center justify-center rounded-md active:bg-[var(--app-bg)]";
+const headerIconSize = 18;
 
 export function DesktopWorkbenchSidebarHeader(props: {
   storedSessions: StoredSessionRef[];
@@ -15,19 +16,27 @@ export function DesktopWorkbenchSidebarHeader(props: {
   canvasActive: boolean;
   councilActive: boolean;
   onOpenCouncil: () => void;
-  onHome: () => void;
   onToggleCanvas: () => void;
   onActivateHistory: (ref: StoredSessionRef) => void;
   onActivateLive: (sessionId: string) => void;
   onRemoveHistorySession: (session: Pick<StoredSessionRef, "provider" | "providerSessionId">) => void;
   onRemoveHistoryWorkspace: (workspaceDir: string) => void;
+  onHome: () => void;
   onOpenSettings: () => void;
   onCollapseSidebar: () => void;
 }) {
   return (
     <>
-      <div className="shrink-0 text-lg font-semibold tracking-tight">RAH</div>
-      <div className="flex items-center gap-1 shrink-0">
+      <button
+        type="button"
+        onClick={props.onHome}
+        className="icon-click-feedback shrink-0 rounded-md px-1 text-lg font-semibold tracking-tight text-[var(--app-fg)] transition-colors hover:bg-[var(--app-bg)]"
+        aria-label="Home"
+        title="Home"
+      >
+        RAH
+      </button>
+      <div className="ml-auto flex shrink-0 items-center gap-0.5">
         <button
           type="button"
           className={`${headerButtonClassName} ${
@@ -36,10 +45,10 @@ export function DesktopWorkbenchSidebarHeader(props: {
               : "text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)]"
           }`}
           onClick={props.onOpenCouncil}
-          aria-label="Open council"
-          title="Council"
+          aria-label={props.councilActive ? "Hide council" : "Open council"}
+          title={props.councilActive ? "Hide council" : "Council"}
         >
-          <UsersRound size={16} />
+          <UsersRound size={headerIconSize} />
         </button>
         <button
           type="button"
@@ -52,16 +61,7 @@ export function DesktopWorkbenchSidebarHeader(props: {
           aria-label={props.canvasActive ? "Exit canvas" : "Open canvas"}
           title={props.canvasActive ? "Exit canvas" : "Canvas"}
         >
-          <Columns3 size={16} />
-        </button>
-        <button
-          type="button"
-          className={`${headerButtonClassName} text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)]`}
-          onClick={props.onHome}
-          aria-label="Home"
-          title="Home"
-        >
-          <Home size={16} />
+          <Columns3 size={headerIconSize} />
         </button>
         <SessionHistoryDialog
           storedSessions={props.storedSessions}
@@ -80,7 +80,7 @@ export function DesktopWorkbenchSidebarHeader(props: {
             aria-label="Sessions"
             title="Sessions"
           >
-            <History size={18} />
+            <History size={headerIconSize} />
           </button>
         </SessionHistoryDialog>
         <button
@@ -90,7 +90,7 @@ export function DesktopWorkbenchSidebarHeader(props: {
           aria-label="Open settings"
           title="Settings"
         >
-          <Settings size={16} />
+          <Settings size={headerIconSize} />
         </button>
         <button
           type="button"
@@ -99,7 +99,7 @@ export function DesktopWorkbenchSidebarHeader(props: {
           aria-label="Collapse sidebar"
           title="Collapse sidebar"
         >
-          <Menu size={18} />
+          <Menu size={headerIconSize} />
         </button>
       </div>
     </>

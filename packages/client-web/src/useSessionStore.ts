@@ -124,6 +124,7 @@ type ModelCatalogLoadState = {
   catalog: ProviderModelCatalog | null;
   loading: boolean;
   error: string | null;
+  loadedAt: number | null;
 };
 
 interface SessionState {
@@ -162,7 +163,7 @@ interface SessionState {
   setNewSessionProvider: (provider: ProviderChoice) => void;
   loadProviderModels: (
     provider: ProviderChoice,
-    options?: { cwd?: string; forceRefresh?: boolean },
+    options?: { cwd?: string; forceRefresh?: boolean; staleMs?: number },
   ) => Promise<void>;
   startSession: (options?: StartSessionOptions) => Promise<string | null>;
   startScenario: (scenario: DebugScenarioDescriptor) => Promise<void>;
@@ -210,11 +211,12 @@ interface SessionState {
 
 let lastEventSeq = 0;
 const HISTORY_PAGE_LIMIT = 250;
-const PRELOAD_MODEL_PROVIDERS = new Set<ProviderChoice>([
+const MODEL_CATALOG_PROVIDERS = new Set<ProviderChoice>([
   "codex",
   "claude",
   "opencode",
 ]);
+const MODEL_CATALOG_TTL_MS = 5 * 60 * 1000;
 
 function createProjectionReplayHandling() {
   return {
@@ -546,13 +548,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     },
   setNewSessionProvider: (provider) => {
     set({ newSessionProvider: provider });
-    if (PRELOAD_MODEL_PROVIDERS.has(provider)) {
+    if (MODEL_CATALOG_PROVIDERS.has(provider)) {
       void get().loadProviderModels(provider).catch(() => undefined);
     }
   },
 
   loadProviderModels: async (provider, options) => {
-    if (!PRELOAD_MODEL_PROVIDERS.has(provider)) {
+    if (!MODEL_CATALOG_PROVIDERS.has(provider)) {
       set((state) => ({
         modelCatalogs: {
           ...state.modelCatalogs,
@@ -560,13 +562,23 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             catalog: null,
             loading: false,
             error: null,
+            loadedAt: null,
           },
         },
       }));
       return;
     }
     const current = get().modelCatalogs[provider];
-    if (current?.loading && !options?.forceRefresh) {
+    if (current?.loading) {
+      return;
+    }
+    const staleMs = options?.staleMs ?? MODEL_CATALOG_TTL_MS;
+    if (
+      current?.catalog &&
+      current.loadedAt !== null &&
+      !options?.forceRefresh &&
+      Date.now() - current.loadedAt < staleMs
+    ) {
       return;
     }
     set((state) => ({
@@ -576,11 +588,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           catalog: current?.catalog ?? null,
           loading: true,
           error: null,
+          loadedAt: current?.loadedAt ?? null,
         },
       },
     }));
     try {
-      const catalog = await api.listProviderModels(provider, options);
+      const catalog = await api.listProviderModels(provider, {
+        ...(options?.cwd ? { cwd: options.cwd } : {}),
+        ...(options?.forceRefresh ? { forceRefresh: options.forceRefresh } : {}),
+      });
+      const loadedAt = Date.now();
       set((state) => ({
         modelCatalogs: {
           ...state.modelCatalogs,
@@ -588,6 +605,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             catalog,
             loading: false,
             error: null,
+            loadedAt,
           },
         },
       }));
@@ -599,10 +617,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             catalog: state.modelCatalogs[provider]?.catalog ?? null,
             loading: false,
             error: readErrorMessage(error),
+            loadedAt: state.modelCatalogs[provider]?.loadedAt ?? null,
           },
         },
       }));
-      throw error;
     }
   },
 
@@ -633,7 +651,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
     try {
       await get().refreshWorkbenchState();
-      void get().loadProviderModels("codex").catch(() => undefined);
       set({ isInitialLoaded: true });
       connectStoreTransport();
     } catch (error) {

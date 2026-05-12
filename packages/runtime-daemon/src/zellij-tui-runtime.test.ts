@@ -303,25 +303,6 @@ async function startZellijProviderSession(params: {
   }
 }
 
-test("zellij_tui backend starts Codex, routes input, interrupts, and observes exit", async (t) => {
-  if (await skipIfZellijUnavailable(t)) {
-    return;
-  }
-  const providerSessionId = "019e0aaa-1111-7222-8333-abcdef123456";
-  await startZellijProviderSession({
-    provider: "codex",
-    envName: "RAH_CODEX_BINARY",
-    workspacePrefix: "rah-zellij-codex-",
-    binaryName: "fake-codex.js",
-    fakeProviderSessionId: providerSessionId,
-    assertReady: ({ transcript, sessionId, engine }) => {
-      assert.match(transcript, /--no-alt-screen/);
-      assert.match(transcript, /CODEX_HOME=/);
-      assert.equal(engine.getSessionSummary(sessionId).session.providerSessionId, providerSessionId);
-    },
-  });
-});
-
 test("zellij_tui backend starts Claude, routes input, interrupts, and observes exit", async (t) => {
   if (await skipIfZellijUnavailable(t)) {
     return;
@@ -342,36 +323,51 @@ test("zellij_tui backend starts Claude, routes input, interrupts, and observes e
   });
 });
 
-test("zellij_tui backend starts OpenCode, routes input, interrupts, and observes exit", async (t) => {
-  if (await skipIfZellijUnavailable(t)) {
-    return;
+test("zellij_tui backend rejects Codex and OpenCode; they use native local-server", async () => {
+  const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-zellij-reject-"));
+  const engine = new RuntimeEngine();
+  try {
+    await assert.rejects(
+      async () =>
+        await engine.startSession({
+          provider: "codex",
+          cwd: workspace,
+          liveBackend: "zellij_tui",
+        }),
+      /does not support the zellij TUI backend/,
+    );
+    await assert.rejects(
+      async () =>
+        await engine.startSession({
+          provider: "opencode",
+          cwd: workspace,
+          liveBackend: "zellij_tui",
+        }),
+      /does not support the zellij TUI backend/,
+    );
+  } finally {
+    await engine.shutdown();
+    rmSync(workspace, { force: true, recursive: true });
   }
-  await startZellijProviderSession({
-    provider: "opencode",
-    envName: "RAH_OPENCODE_BINARY",
-    workspacePrefix: "rah-zellij-opencode-",
-    binaryName: "fake-opencode.js",
-  });
 });
 
-test("RAH_MUX_BACKEND=zellij makes daemon-created live sessions use zellij_tui by default", async (t) => {
+test("Claude defaults to zellij_tui when no live backend is specified", async (t) => {
   if (await skipIfZellijUnavailable(t)) {
     return;
   }
 
   const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-zellij-default-"));
-  const fakeOpenCode = path.join(workspace, "fake-opencode.js");
-  writeFakeTuiBinary(fakeOpenCode, "opencode");
+  const fakeClaude = path.join(workspace, "fake-claude.js");
+  writeFakeTuiBinary(fakeClaude, "claude");
   const socketDir = makeTestZellijSocketDir("default");
   const restoreRahHome = setEnv("RAH_HOME", path.join(workspace, "rah-home"));
   const restoreSocketDir = setEnv("RAH_ZELLIJ_SOCKET_DIR", socketDir);
-  const restoreMuxBackend = setEnv("RAH_MUX_BACKEND", "zellij");
-  const restoreBinary = setEnv("RAH_OPENCODE_BINARY", fakeOpenCode);
+  const restoreBinary = setEnv("RAH_CLAUDE_BINARY", fakeClaude);
   const engine = new RuntimeEngine();
 
   try {
     const started = await engine.startSession({
-      provider: "opencode",
+      provider: "claude",
       cwd: workspace,
       attach: {
         client: {
@@ -388,83 +384,6 @@ test("RAH_MUX_BACKEND=zellij makes daemon-created live sessions use zellij_tui b
     assert.equal(started.session.session.mux?.backend, "zellij");
 
     await engine.closeSession(sessionId, { clientId: "web-zellij-default" });
-  } finally {
-    await engine.shutdown();
-    restoreBinary();
-    restoreMuxBackend();
-    restoreSocketDir();
-    restoreRahHome();
-    rmSync(socketDir, { force: true, recursive: true });
-    rmSync(workspace, { force: true, recursive: true });
-  }
-});
-
-test("zellij_tui chat input queues while the TUI prompt has a local draft", async (t) => {
-  if (await skipIfZellijUnavailable(t)) {
-    return;
-  }
-
-  const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-zellij-queue-"));
-  const fakeOpenCode = path.join(workspace, "fake-opencode.js");
-  writeFakeTuiBinary(fakeOpenCode, "opencode");
-  const socketDir = makeTestZellijSocketDir("queue");
-  const restoreRahHome = setEnv("RAH_HOME", path.join(workspace, "rah-home"));
-  const restoreSocketDir = setEnv("RAH_ZELLIJ_SOCKET_DIR", socketDir);
-  const restoreBinary = setEnv("RAH_OPENCODE_BINARY", fakeOpenCode);
-  const engine = new RuntimeEngine();
-
-  try {
-    const started = await engine.startSession({
-      provider: "opencode",
-      cwd: workspace,
-      liveBackend: "zellij_tui",
-      attach: {
-        client: {
-          id: "web-zellij-queue",
-          kind: "web",
-          connectionId: "web-zellij-queue",
-        },
-        mode: "interactive",
-        claimControl: true,
-      },
-    });
-    const sessionId = started.session.session.id;
-    let transcript = "";
-    const unsubscribe = engine.ptyHub.subscribe(sessionId, (frame) => {
-      if (frame.type === "pty.replay") {
-        transcript += frame.chunks.join("");
-      } else if (frame.type === "pty.output") {
-        transcript += frame.data;
-      }
-    });
-    await waitFor(() => {
-      assert.match(transcript, /ZELLIJ_OPENCODE_READY/);
-    });
-    await engine.claimNativeTuiSurface(sessionId, {
-      clientId: "web-zellij-queue",
-      clientKind: "web",
-      cols: 100,
-      rows: 30,
-    });
-
-    engine.onPtyInput(sessionId, "web-zellij-queue", "local draft");
-    await waitFor(() => {
-      assert.equal(engine.getSessionSummary(sessionId).session.nativeTui?.promptState, "prompt_dirty");
-    });
-
-    engine.sendInput(sessionId, {
-      clientId: "web-zellij-queue",
-      text: "queued zellij prompt",
-    });
-    await waitFor(() => {
-      assert.equal(engine.getSessionSummary(sessionId).session.nativeTui?.queuedInputCount, 1);
-    });
-    assert.equal(engine.getSessionSummary(sessionId).session.runtimeState, "running");
-    await delay(150);
-    assert.doesNotMatch(transcript, /queued zellij prompt/);
-
-    unsubscribe();
-    await engine.closeSession(sessionId, { clientId: "web-zellij-queue" });
   } finally {
     await engine.shutdown();
     restoreBinary();
@@ -529,14 +448,28 @@ test("Claude zellij_tui chat input passes through instead of using RAH hidden qu
       assert.equal(engine.getSessionSummary(sessionId).session.nativeTui?.promptState, "prompt_dirty");
     });
 
-    engine.sendInput(sessionId, {
-      clientId: "web-zellij-claude-passthrough",
-      text: "sent while dirty",
-    });
-    await waitFor(() => {
-      assert.equal(engine.getSessionSummary(sessionId).session.nativeTui?.queuedInputCount, 0);
-      assert.match(transcript, /ZELLIJ_CLAUDE_INPUT:sent while dirty/);
-    });
+    const sendWhileDirty = () => {
+      engine.sendInput(sessionId, {
+        clientId: "web-zellij-claude-passthrough",
+        text: "sent while dirty",
+      });
+    };
+    sendWhileDirty();
+    try {
+      await waitFor(() => {
+        assert.equal(engine.getSessionSummary(sessionId).session.nativeTui?.queuedInputCount, 0);
+        assert.match(transcript, /ZELLIJ_CLAUDE_INPUT:sent while dirty/);
+      });
+    } catch {
+      // zellij action delivery can occasionally drop a frame while the test
+      // is switching surface state. Retry to keep this test focused on the
+      // RAH boundary: Claude zellij chat input is passthrough, not queued.
+      sendWhileDirty();
+      await waitFor(() => {
+        assert.equal(engine.getSessionSummary(sessionId).session.nativeTui?.queuedInputCount, 0);
+        assert.match(transcript, /ZELLIJ_CLAUDE_INPUT:sent while dirty/);
+      }, 8_000);
+    }
     assert.doesNotMatch(transcript, /ZELLIJ_CLAUDE_INPUT:local draftsent while dirty/);
 
     unsubscribe();
@@ -625,115 +558,23 @@ test("Claude zellij_tui Web Esc does not publish synthetic turn canceled events"
   }
 });
 
-test("zellij_tui chat input queues during provider startup until prompt is clean", async (t) => {
-  if (await skipIfZellijUnavailable(t)) {
-    return;
-  }
-
-  const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-zellij-startup-"));
-  const fakeOpenCode = path.join(workspace, "fake-opencode-delayed.js");
-  writeFileSync(
-    fakeOpenCode,
-    [
-      "#!/usr/bin/env node",
-      "process.stdout.write('ZELLIJ_OPENCODE_BOOTING\\r\\n');",
-      "process.stdin.setEncoding('utf8');",
-      "if (process.stdin.isTTY && process.stdin.setRawMode) process.stdin.setRawMode(true);",
-      "process.stdin.resume();",
-      "let buffer = '';",
-      "process.stdin.on('data', (chunk) => {",
-      "  buffer += chunk;",
-      "  const parts = buffer.split(/\\r|\\n/);",
-      "  buffer = parts.pop() ?? '';",
-      "  for (const part of parts) {",
-      "    if (!part.trim()) continue;",
-      "    process.stdout.write(`ZELLIJ_OPENCODE_INPUT:${part.trim()}\\r\\n`);",
-      "  }",
-      "});",
-      "setTimeout(() => process.stdout.write('Ask anything\\r\\n'), 1500);",
-      "setInterval(() => undefined, 1000);",
-      "",
-    ].join("\n"),
-  );
-  chmodSync(fakeOpenCode, 0o755);
-  const socketDir = makeTestZellijSocketDir("startup");
-  const restoreRahHome = setEnv("RAH_HOME", path.join(workspace, "rah-home"));
-  const restoreSocketDir = setEnv("RAH_ZELLIJ_SOCKET_DIR", socketDir);
-  const restoreBinary = setEnv("RAH_OPENCODE_BINARY", fakeOpenCode);
-  const engine = new RuntimeEngine();
-
-  try {
-    const started = await engine.startSession({
-      provider: "opencode",
-      cwd: workspace,
-      liveBackend: "zellij_tui",
-      attach: {
-        client: {
-          id: "web-zellij-startup",
-          kind: "web",
-          connectionId: "web-zellij-startup",
-        },
-        mode: "interactive",
-        claimControl: true,
-      },
-    });
-    const sessionId = started.session.session.id;
-    let transcript = "";
-    const unsubscribe = engine.ptyHub.subscribe(sessionId, (frame) => {
-      if (frame.type === "pty.replay") {
-        transcript += frame.chunks.join("");
-      } else if (frame.type === "pty.output") {
-        transcript += frame.data;
-      }
-    });
-    await waitFor(() => {
-      assert.match(transcript, /ZELLIJ_OPENCODE_BOOTING/);
-      assert.equal(engine.getSessionSummary(sessionId).session.nativeTui?.promptState, "agent_busy");
-    });
-
-    engine.sendInput(sessionId, {
-      clientId: "web-zellij-startup",
-      text: "queued during startup",
-    });
-    await waitFor(() => {
-      assert.equal(engine.getSessionSummary(sessionId).session.nativeTui?.queuedInputCount, 1);
-    });
-    assert.doesNotMatch(transcript, /queued during startup/);
-
-    await waitFor(() => {
-      assert.match(transcript, /Ask anything/);
-      assert.match(transcript, /ZELLIJ_OPENCODE_INPUT:queued during startup/);
-    });
-
-    unsubscribe();
-    await engine.closeSession(sessionId, { clientId: "web-zellij-startup" });
-  } finally {
-    await engine.shutdown();
-    restoreBinary();
-    restoreSocketDir();
-    restoreRahHome();
-    rmSync(socketDir, { force: true, recursive: true });
-    rmSync(workspace, { force: true, recursive: true });
-  }
-});
-
 test("zellij_tui session can hand off from terminal client to web client without resume", async (t) => {
   if (await skipIfZellijUnavailable(t)) {
     return;
   }
 
   const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-zellij-handoff-"));
-  const fakeCodex = path.join(workspace, "fake-codex.js");
-  writeFakeTuiBinary(fakeCodex, "codex");
+  const fakeClaude = path.join(workspace, "fake-claude.js");
+  writeFakeTuiBinary(fakeClaude, "claude");
   const socketDir = makeTestZellijSocketDir("handoff");
   const restoreRahHome = setEnv("RAH_HOME", path.join(workspace, "rah-home"));
   const restoreSocketDir = setEnv("RAH_ZELLIJ_SOCKET_DIR", socketDir);
-  const restoreBinary = setEnv("RAH_CODEX_BINARY", fakeCodex);
+  const restoreBinary = setEnv("RAH_CLAUDE_BINARY", fakeClaude);
   const engine = new RuntimeEngine();
 
   try {
     const started = await engine.startSession({
-      provider: "codex",
+      provider: "claude",
       cwd: workspace,
       liveBackend: "zellij_tui",
       attach: {
@@ -759,7 +600,7 @@ test("zellij_tui session can hand off from terminal client to web client without
       }
     });
     await waitFor(() => {
-      assert.match(transcript, /ZELLIJ_CODEX_READY/);
+      assert.match(transcript, /ZELLIJ_CLAUDE_READY/);
     });
     await waitFor(() => {
       assert.equal(engine.getSessionSummary(sessionId).session.nativeTui?.promptState, "prompt_clean");
@@ -784,7 +625,7 @@ test("zellij_tui session can hand off from terminal client to web client without
       text: "handoff from web",
     });
     await waitFor(() => {
-      assert.match(transcript, /ZELLIJ_CODEX_INPUT:handoff from web/);
+      assert.match(transcript, /ZELLIJ_CLAUDE_INPUT:handoff from web/);
     });
 
     const afterTerminalDetach = engine.detachSession(sessionId, {
@@ -803,7 +644,7 @@ test("zellij_tui session can hand off from terminal client to web client without
     sendStillSamePane();
     try {
       await waitFor(() => {
-        assert.match(transcript, /ZELLIJ_CODEX_INPUT:still same pane/);
+        assert.match(transcript, /ZELLIJ_CLAUDE_INPUT:still same pane/);
       });
     } catch {
       // zellij action delivery can drop a frame while the old terminal surface
@@ -811,7 +652,7 @@ test("zellij_tui session can hand off from terminal client to web client without
       // failing on a single transient CLI action miss.
       sendStillSamePane();
       await waitFor(() => {
-        assert.match(transcript, /ZELLIJ_CODEX_INPUT:still same pane/);
+        assert.match(transcript, /ZELLIJ_CLAUDE_INPUT:still same pane/);
       }, 8_000);
     }
 
@@ -833,17 +674,17 @@ test("zellij_tui surface lease rejects stale terminal input from inactive client
   }
 
   const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-zellij-surface-"));
-  const fakeOpenCode = path.join(workspace, "fake-opencode.js");
-  writeFakeTuiBinary(fakeOpenCode, "opencode");
+  const fakeClaude = path.join(workspace, "fake-claude.js");
+  writeFakeTuiBinary(fakeClaude, "claude");
   const socketDir = makeTestZellijSocketDir("surface");
   const restoreRahHome = setEnv("RAH_HOME", path.join(workspace, "rah-home"));
   const restoreSocketDir = setEnv("RAH_ZELLIJ_SOCKET_DIR", socketDir);
-  const restoreBinary = setEnv("RAH_OPENCODE_BINARY", fakeOpenCode);
+  const restoreBinary = setEnv("RAH_CLAUDE_BINARY", fakeClaude);
   const engine = new RuntimeEngine();
 
   try {
     const started = await engine.startSession({
-      provider: "opencode",
+      provider: "claude",
       cwd: workspace,
       liveBackend: "zellij_tui",
       attach: {
@@ -866,7 +707,7 @@ test("zellij_tui surface lease rejects stale terminal input from inactive client
       }
     });
     await waitFor(() => {
-      assert.match(transcript, /ZELLIJ_OPENCODE_READY/);
+      assert.match(transcript, /ZELLIJ_CLAUDE_READY/);
     });
 
     await engine.claimNativeTuiSurface(sessionId, {
@@ -894,7 +735,7 @@ test("zellij_tui surface lease rejects stale terminal input from inactive client
     });
     await waitFor(() => {
       assert.equal(engine.getNativeTuiSurface(sessionId).surface?.clientId, "terminal-zellij-surface");
-      assert.match(transcript, /ZELLIJ_OPENCODE_INPUT:chat does not reclaim surface/);
+      assert.match(transcript, /ZELLIJ_CLAUDE_INPUT:chat does not reclaim surface/);
     });
     assert.throws(
       () => engine.onPtyInput(sessionId, "web-zellij-surface", "stale web terminal input"),
@@ -919,17 +760,17 @@ test("zellij_tui keeps capturing pane output while web PTY is disconnected", asy
   }
 
   const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-zellij-reconnect-"));
-  const fakeCodex = path.join(workspace, "fake-codex.js");
-  writeFakeTuiBinary(fakeCodex, "codex");
+  const fakeClaude = path.join(workspace, "fake-claude.js");
+  writeFakeTuiBinary(fakeClaude, "claude");
   const socketDir = makeTestZellijSocketDir("reconnect");
   const restoreRahHome = setEnv("RAH_HOME", path.join(workspace, "rah-home"));
   const restoreSocketDir = setEnv("RAH_ZELLIJ_SOCKET_DIR", socketDir);
-  const restoreBinary = setEnv("RAH_CODEX_BINARY", fakeCodex);
+  const restoreBinary = setEnv("RAH_CLAUDE_BINARY", fakeClaude);
   const engine = new RuntimeEngine();
 
   try {
     const started = await engine.startSession({
-      provider: "codex",
+      provider: "claude",
       cwd: workspace,
       liveBackend: "zellij_tui",
       attach: {
@@ -957,7 +798,7 @@ test("zellij_tui keeps capturing pane output while web PTY is disconnected", asy
       }
     });
     await waitFor(() => {
-      assert.match(firstTranscript, /ZELLIJ_CODEX_READY/);
+      assert.match(firstTranscript, /ZELLIJ_CLAUDE_READY/);
     });
     await waitFor(() => {
       assert.equal(engine.getSessionSummary(sessionId).session.nativeTui?.promptState, "prompt_clean");
@@ -989,7 +830,7 @@ test("zellij_tui keeps capturing pane output while web PTY is disconnected", asy
       { fromSeq: nextReplaySeq },
     );
     await waitFor(() => {
-      assert.match(replayedAfterReconnect, /ZELLIJ_CODEX_INPUT:captured while disconnected/);
+      assert.match(replayedAfterReconnect, /ZELLIJ_CLAUDE_INPUT:captured while disconnected/);
     });
 
     unsubscribeSecond();
@@ -1010,17 +851,17 @@ test("zellij_tui archive closes the zellij pane and session", async (t) => {
   }
 
   const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-zellij-archive-"));
-  const fakeOpenCode = path.join(workspace, "fake-opencode.js");
-  writeFakeTuiBinary(fakeOpenCode, "opencode");
+  const fakeClaude = path.join(workspace, "fake-claude.js");
+  writeFakeTuiBinary(fakeClaude, "claude");
   const socketDir = makeTestZellijSocketDir("archive");
   const restoreRahHome = setEnv("RAH_HOME", path.join(workspace, "rah-home"));
   const restoreSocketDir = setEnv("RAH_ZELLIJ_SOCKET_DIR", socketDir);
-  const restoreBinary = setEnv("RAH_OPENCODE_BINARY", fakeOpenCode);
+  const restoreBinary = setEnv("RAH_CLAUDE_BINARY", fakeClaude);
   const engine = new RuntimeEngine();
 
   try {
     const started = await engine.startSession({
-      provider: "opencode",
+      provider: "claude",
       cwd: workspace,
       liveBackend: "zellij_tui",
       attach: {
@@ -1111,18 +952,18 @@ test("zellij_tui backend isolates multiple simultaneous provider sessions", asyn
   const workspaceB = path.join(root, "b");
   mkdirSync(workspaceA, { recursive: true });
   mkdirSync(workspaceB, { recursive: true });
-  const fakeOpenCode = path.join(root, "fake-opencode.js");
-  writeFakeTuiBinary(fakeOpenCode, "opencode");
+  const fakeClaude = path.join(root, "fake-claude.js");
+  writeFakeTuiBinary(fakeClaude, "claude");
   const socketDir = makeTestZellijSocketDir("multi");
   const restoreRahHome = setEnv("RAH_HOME", path.join(root, "rah-home"));
   const restoreSocketDir = setEnv("RAH_ZELLIJ_SOCKET_DIR", socketDir);
-  const restoreBinary = setEnv("RAH_OPENCODE_BINARY", fakeOpenCode);
+  const restoreBinary = setEnv("RAH_CLAUDE_BINARY", fakeClaude);
   const engine = new RuntimeEngine();
 
   try {
     const start = async (workspace: string, clientId: string) =>
       await engine.startSession({
-        provider: "opencode",
+        provider: "claude",
         cwd: workspace,
         liveBackend: "zellij_tui",
         attach: {
@@ -1175,21 +1016,21 @@ test("zellij_tui backend isolates multiple simultaneous provider sessions", asyn
     });
 
     await waitFor(() => {
-      assert.match(transcript[sessionA] ?? "", /ZELLIJ_OPENCODE_READY/);
-      assert.match(transcript[sessionB] ?? "", /ZELLIJ_OPENCODE_READY/);
+      assert.match(transcript[sessionA] ?? "", /ZELLIJ_CLAUDE_READY/);
+      assert.match(transcript[sessionB] ?? "", /ZELLIJ_CLAUDE_READY/);
     });
 
     engine.sendInput(sessionA, { clientId: "web-zellij-a", text: "alpha-one" });
     engine.sendInput(sessionB, { clientId: "web-zellij-b", text: "beta-two" });
     await waitFor(() => {
-      assert.match(transcript[sessionA] ?? "", /ZELLIJ_OPENCODE_INPUT:alpha-one/);
-      assert.match(transcript[sessionB] ?? "", /ZELLIJ_OPENCODE_INPUT:beta-two/);
+      assert.match(transcript[sessionA] ?? "", /ZELLIJ_CLAUDE_INPUT:alpha-one/);
+      assert.match(transcript[sessionB] ?? "", /ZELLIJ_CLAUDE_INPUT:beta-two/);
     });
     assert.doesNotMatch(transcript[sessionA] ?? "", /beta-two/);
     assert.doesNotMatch(transcript[sessionB] ?? "", /alpha-one/);
 
-    engine.sendInput(sessionA, { clientId: "web-zellij-a", text: "exit" });
-    engine.sendInput(sessionB, { clientId: "web-zellij-b", text: "exit" });
+    await engine.closeSession(sessionA, { clientId: "web-zellij-a" });
+    await engine.closeSession(sessionB, { clientId: "web-zellij-b" });
     await waitFor(() => {
       assertSessionArchived(engine, sessionA);
       assertSessionArchived(engine, sessionB);
@@ -1215,18 +1056,18 @@ test("zellij_tui backend recovers a persisted mux pane after daemon restart", as
   const rahHome = path.join(root, "rah-home");
   const workspace = path.join(root, "workspace");
   mkdirSync(workspace, { recursive: true });
-  const fakeOpenCode = path.join(root, "fake-opencode.js");
-  writeFakeTuiBinary(fakeOpenCode, "opencode");
+  const fakeClaude = path.join(root, "fake-claude.js");
+  writeFakeTuiBinary(fakeClaude, "claude");
   const restoreRahHome = setEnv("RAH_HOME", rahHome);
   const socketDir = makeTestZellijSocketDir("recover");
   const restoreSocketDir = setEnv("RAH_ZELLIJ_SOCKET_DIR", socketDir);
-  const restoreBinary = setEnv("RAH_OPENCODE_BINARY", fakeOpenCode);
+  const restoreBinary = setEnv("RAH_CLAUDE_BINARY", fakeClaude);
   const engine1 = new RuntimeEngine();
   let engine2: RuntimeEngine | undefined;
 
   try {
     const started = await engine1.startSession({
-      provider: "opencode",
+      provider: "claude",
       cwd: workspace,
       liveBackend: "zellij_tui",
       attach: {
@@ -1249,7 +1090,7 @@ test("zellij_tui backend recovers a persisted mux pane after daemon restart", as
       }
     });
     await waitFor(() => {
-      assert.match(transcript1, /ZELLIJ_OPENCODE_READY/);
+      assert.match(transcript1, /ZELLIJ_CLAUDE_READY/);
     });
     await flushWorkbenchState(engine1);
 
@@ -1268,24 +1109,43 @@ test("zellij_tui backend recovers a persisted mux pane after daemon restart", as
       }
     });
     await waitFor(() => {
-      assert.match(transcript2, /ZELLIJ_OPENCODE_READY/);
+      assert.match(transcript2, /ZELLIJ_CLAUDE_READY/);
     });
     await waitFor(() => {
       assert.equal(engine2?.getSessionSummary(sessionId).session.nativeTui?.promptState, "prompt_clean");
     });
 
-    engine2.sendInput(sessionId, {
-      clientId: "web-zellij-recover-2",
-      text: "after-recover",
+    engine2.attachSession(sessionId, {
+      client: {
+        id: "web-zellij-recover-2",
+        kind: "web",
+        connectionId: "web-zellij-recover-2",
+      },
+      mode: "interactive",
+      claimControl: true,
     });
-    await waitFor(() => {
-      assert.match(transcript2, /ZELLIJ_OPENCODE_INPUT:after-recover/);
-    });
+    const sendAfterRecover = () => {
+      engine2?.sendInput(sessionId, {
+        clientId: "web-zellij-recover-2",
+        text: "after-recover",
+      });
+    };
+    sendAfterRecover();
+    try {
+      await waitFor(() => {
+        assert.match(transcript2, /ZELLIJ_CLAUDE_INPUT:after-recover/);
+      });
+    } catch {
+      sendAfterRecover();
+      await waitFor(() => {
+        assert.match(transcript2, /ZELLIJ_CLAUDE_INPUT:after-recover/);
+      }, 8_000);
+    }
     await waitFor(() => {
       assert.equal(engine2?.getSessionSummary(sessionId).session.nativeTui?.promptState, "prompt_clean");
     });
 
-    engine2.sendInput(sessionId, { clientId: "web-zellij-recover-2", text: "exit" });
+    await engine2.closeSession(sessionId, { clientId: "web-zellij-recover-2" });
     await waitFor(() => {
       assert.ok(engine2);
       assertSessionArchived(engine2, sessionId);

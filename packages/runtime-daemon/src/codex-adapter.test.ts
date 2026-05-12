@@ -401,6 +401,8 @@ rl.on('line', (line) => {
         delta:
           'model=' + msg.params.model +
           ';effort=' + msg.params.effort +
+          ';approval=' + msg.params.approvalPolicy +
+          ';reviewer=' + (msg.params.approvalsReviewer || 'user') +
           ';collab=' + (msg.params.collaborationMode && msg.params.collaborationMode.settings
             ? msg.params.collaborationMode.mode + '/' + msg.params.collaborationMode.settings.model + '/' + msg.params.collaborationMode.settings.reasoning_effort
             : 'none')
@@ -471,9 +473,16 @@ rl.on('line', (line) => {
     assert.equal(updated?.session.modelProfile?.modelId, "gpt-beta");
     assert.equal(updated?.session.config?.values.model_reasoning_effort, "low");
 
-    const planned = await adapter.setSessionMode?.(started.session.session.id, "plan");
+    const planned = await adapter.setSessionMode?.(
+      started.session.session.id,
+      "plan:auto-review/workspace-write",
+    );
     assert.ok(planned?.session.mode);
     assert.equal(planned?.session.mode.currentModeId, "plan");
+    assert.equal(
+      planned?.session.mode.availableModes[0]?.id,
+      "auto-review/workspace-write",
+    );
 
     adapter.sendInput(started.session.session.id, {
       clientId: "web-user",
@@ -485,9 +494,10 @@ rl.on('line', (line) => {
         (event) =>
           event.type === "timeline.item.added" &&
           event.payload.item.kind === "assistant_message" &&
-          event.payload.item.text.includes(
-            "model=gpt-beta;effort=low;collab=plan/gpt-beta/low",
-          ),
+          event.payload.item.text.includes("model=gpt-beta;effort=low") &&
+          event.payload.item.text.includes("collab=plan/gpt-beta/low") &&
+          event.payload.item.text.includes("approval=on-request") &&
+          event.payload.item.text.includes("reviewer=auto_review"),
       ),
     ).catch((error) => {
       throw new Error(`plan wait failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -517,9 +527,8 @@ rl.on('line', (line) => {
         (event) =>
           event.type === "timeline.item.added" &&
           event.payload.item.kind === "assistant_message" &&
-          event.payload.item.text.includes(
-            "model=gpt-beta;effort=low;collab=default/gpt-beta/low",
-          ),
+          event.payload.item.text.includes("model=gpt-beta;effort=low") &&
+          event.payload.item.text.includes("collab=default/gpt-beta/low"),
       ),
     ).catch((error) => {
       throw new Error(`default wait failed: ${error instanceof Error ? error.message : String(error)}`);

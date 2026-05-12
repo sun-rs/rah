@@ -12,6 +12,7 @@ import type {
   RahEvent,
   RuntimeOperation,
   TimelineIdentity,
+  TimelineRuntimeModel,
   TimelineTurnIdentity,
   TimelineItem,
   ToolCall,
@@ -76,18 +77,21 @@ export type ProviderActivity =
       turnId: string;
       index?: number;
       title?: string;
+      runtimeModel?: TimelineRuntimeModel;
     }
   | {
       type: "turn_step_completed";
       turnId: string;
       index?: number;
       reason?: string;
+      runtimeModel?: TimelineRuntimeModel;
     }
   | {
       type: "turn_step_interrupted";
       turnId: string;
       index?: number;
       reason?: string;
+      runtimeModel?: TimelineRuntimeModel;
     }
   | {
       type: "turn_input_appended";
@@ -565,6 +569,7 @@ export function applyProviderActivity(
                 payload: {
                   ...(activity.index !== undefined ? { index: activity.index } : {}),
                   ...(activity.title !== undefined ? { title: activity.title } : {}),
+                  ...(activity.runtimeModel !== undefined ? { runtimeModel: activity.runtimeModel } : {}),
                 },
                 turnId: activity.turnId,
               },
@@ -587,6 +592,7 @@ export function applyProviderActivity(
                 payload: {
                   ...(activity.index !== undefined ? { index: activity.index } : {}),
                   ...(activity.reason !== undefined ? { reason: activity.reason } : {}),
+                  ...(activity.runtimeModel !== undefined ? { runtimeModel: activity.runtimeModel } : {}),
                 },
                 turnId: activity.turnId,
               },
@@ -609,6 +615,7 @@ export function applyProviderActivity(
                 payload: {
                   ...(activity.index !== undefined ? { index: activity.index } : {}),
                   ...(activity.reason !== undefined ? { reason: activity.reason } : {}),
+                  ...(activity.runtimeModel !== undefined ? { runtimeModel: activity.runtimeModel } : {}),
                 },
                 turnId: activity.turnId,
               },

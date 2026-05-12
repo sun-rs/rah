@@ -30,7 +30,7 @@ export function ConfirmDialog(props: {
               <button
                 type="button"
                 disabled={props.pending}
-                className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] disabled:opacity-40 transition-colors"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] disabled:opacity-40 transition-colors"
                 aria-label="Close"
               >
                 <X size={16} />

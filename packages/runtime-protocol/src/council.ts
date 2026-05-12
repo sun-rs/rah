@@ -63,6 +63,7 @@ export interface CouncilMessage {
   id: number;
   roomId: string;
   actorId: string;
+  clientId?: string;
   role: CouncilMessageRole;
   parts: CouncilMessagePart[];
   replyTo?: number;
@@ -106,7 +107,18 @@ export interface CouncilAgentTuiResponse {
   agentId: string;
   zellijSessionName?: string;
   paneId?: string;
-  screen: string;
+  terminalId?: string;
+  screen?: string;
+}
+
+export interface CouncilReinjectAgentsResponse {
+  room: CouncilRoomSnapshot;
+  injectedAgentIds: string[];
+  skippedAgentIds: string[];
+}
+
+export interface CouncilRemoveAgentResponse {
+  room: CouncilRoomSnapshot;
 }
 
 export type CouncilMcpToolName =
@@ -114,11 +126,19 @@ export type CouncilMcpToolName =
   | "channel_post"
   | "channel_wait_new"
   | "channel_history"
-  | "channel_set_status";
+  | "channel_state"
+  | "channel_peek_inbox"
+  | "channel_set_status"
+  | "channel_claim_file"
+  | "channel_release_file"
+  | "channel_list_claims"
+  | "channel_send_control"
+  | "channel_peek_control";
 
 export interface CouncilMcpRequest {
   roomId: string;
   actorId: string;
+  clientId?: string;
   tool: CouncilMcpToolName;
   arguments?: Record<string, unknown>;
 }

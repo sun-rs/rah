@@ -244,6 +244,62 @@ test("zellij mux backend passes provider pane environment overrides", async (t) 
   }
 });
 
+test("zellij mux backend can place provider panes in separate tabs", async (t) => {
+  const socketDir = path.join(os.tmpdir(), `rah-zellij-tabs-${process.pid}`);
+  const backend = new ZellijMuxBackend({ socketDir });
+  if (await skipIfZellijUnavailable(t, backend)) {
+    return;
+  }
+
+  const sessionName = createShortZellijSessionName("rz");
+  try {
+    const first = await backend.createProviderPane({
+      sessionName,
+      cwd: process.cwd(),
+      title: "agent-one",
+      command: process.execPath,
+      args: [
+        "-e",
+        "process.stdout.write('AGENT_ONE_READY\\n'); setInterval(() => undefined, 1000)",
+      ],
+      placement: "tab",
+      replaceDefaultPane: true,
+    });
+    const second = await backend.createProviderPane({
+      sessionName,
+      cwd: process.cwd(),
+      title: "agent-two",
+      command: process.execPath,
+      args: [
+        "-e",
+        "process.stdout.write('AGENT_TWO_READY\\n'); setInterval(() => undefined, 1000)",
+      ],
+      placement: "tab",
+    });
+
+    await waitFor(async () =>
+      (await backend.dumpScreen(sessionName, first.paneId, { full: true })).includes(
+        "AGENT_ONE_READY",
+      ),
+    );
+    await waitFor(async () =>
+      (await backend.dumpScreen(sessionName, second.paneId, { full: true })).includes(
+        "AGENT_TWO_READY",
+      ),
+    );
+
+    const panes = await backend.listPanes(sessionName);
+    const firstPane = panes.find((pane) => pane.paneId === first.paneId);
+    const secondPane = panes.find((pane) => pane.paneId === second.paneId);
+    assert.ok(firstPane);
+    assert.ok(secondPane);
+    assert.notEqual(firstPane.tabId, secondPane.tabId);
+  } finally {
+    await backend.killSession(sessionName).catch(() => undefined);
+    rmSync(socketDir, { force: true, recursive: true });
+  }
+});
+
 test("zellij mux backend reports unexpected subscription exit", async () => {
   const tmpDir = mkdtempSync(path.join(os.tmpdir(), "rah-zellij-sub-exit-"));
   const fakeZellij = path.join(tmpDir, "zellij");

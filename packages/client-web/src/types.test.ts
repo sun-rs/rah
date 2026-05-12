@@ -356,7 +356,17 @@ describe("client projection", () => {
         turnId: "turn-1",
         type: "timeline.item.added",
         payload: {
-          item: { kind: "assistant_message", text: "我是", messageId: "assistant-1" },
+          item: {
+            kind: "assistant_message",
+            text: "我是",
+            messageId: "assistant-1",
+            runtimeModel: {
+              modelId: "gpt-5.5",
+              optionId: "xhigh",
+              optionKind: "reasoning_effort",
+              source: "native",
+            },
+          },
         },
       }),
     );
@@ -389,6 +399,12 @@ describe("client projection", () => {
     if (only?.kind === "timeline" && only.item.kind === "assistant_message") {
       assert.equal(only.item.text, "我是 Codex");
       assert.equal(only.item.messageId, "assistant-1");
+      assert.deepEqual(only.item.runtimeModel, {
+        modelId: "gpt-5.5",
+        optionId: "xhigh",
+        optionKind: "reasoning_effort",
+        source: "native",
+      });
     }
   });
 
@@ -812,6 +828,104 @@ describe("client projection", () => {
     assert.equal(current.feed.filter((entry) => entry.kind === "notification").length, 1);
   });
 
+  test("replaces an early unanchored cancel with the later anchored provider cancel", () => {
+    let current = projection();
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 1,
+        turnId: "live-cancel-before-user",
+        type: "turn.canceled",
+        payload: { reason: "interrupted" },
+      }),
+    );
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 2,
+        turnId: "provider-turn",
+        type: "timeline.item.added",
+        payload: {
+          item: {
+            kind: "user_message",
+            text: "Use the available shell tool to run a command that sleeps for 20 seconds.",
+          },
+        },
+      }),
+    );
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 3,
+        turnId: "provider-cancel-after-user",
+        type: "turn.canceled",
+        payload: { reason: "interrupted" },
+      }),
+    );
+
+    assert.deepEqual(
+      current.feed.map((entry) =>
+        entry.kind === "timeline" ? entry.item.kind : `${entry.kind}:${entry.title}`,
+      ),
+      ["user_message", "notification:Conversation interrupted"],
+    );
+    const notices = current.feed.filter((entry) => entry.kind === "notification");
+    assert.equal(notices.length, 1);
+    assert.equal(
+      notices[0]?.kind === "notification" ? notices[0].interruptAnchorKey : undefined,
+      current.feed.find((entry) => entry.kind === "timeline" && entry.item.kind === "user_message")?.key,
+    );
+  });
+
+  test("keeps one interrupt notice when provider cancel events anchor to different items in the same turn", () => {
+    let current = projection();
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 1,
+        turnId: "turn-user",
+        type: "timeline.item.added",
+        payload: { item: { kind: "user_message", text: "sleep 20" } },
+      }),
+    );
+    current = markPendingInterruptIntent(current);
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 2,
+        turnId: "turn-live-cancel",
+        type: "turn.canceled",
+        payload: { reason: "interrupted" },
+      }),
+    );
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 3,
+        turnId: "turn-assistant",
+        type: "timeline.item.added",
+        payload: { item: { kind: "reasoning", text: "partial reasoning" } },
+      }),
+    );
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 4,
+        turnId: "turn-history-cancel",
+        type: "turn.canceled",
+        payload: { reason: "interrupted" },
+      }),
+    );
+
+    assert.deepEqual(
+      current.feed.map((entry) =>
+        entry.kind === "timeline" ? entry.item.kind : `${entry.kind}:${entry.title}`,
+      ),
+      ["user_message", "reasoning", "notification:Conversation interrupted"],
+    );
+    assert.equal(current.feed.filter((entry) => entry.kind === "notification").length, 1);
+  });
+
   test("keeps live persisted timeline items in daemon event order", () => {
     let current = projection();
     current = applyEventToProjection(
@@ -1211,6 +1325,107 @@ describe("client projection", () => {
         (entry) => entry.kind === "timeline" && entry.item.kind === "user_message",
       ).length,
       1,
+    );
+  });
+
+  test("drops late provisional user echo after canonical provider user message", () => {
+    let current = projection();
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 1,
+        turnId: "provider-turn-1",
+        type: "timeline.item.added",
+        payload: {
+          item: { kind: "user_message", text: "你是谁，你在 build 模式吗", messageId: "provider-user-1" },
+          identity: {
+            canonicalItemId: "opencode-user-1",
+            canonicalTurnId: "opencode-turn-1",
+            provider: "opencode",
+            providerSessionId: "provider-session-1",
+            turnKey: "message:provider-user-1",
+            itemKind: "user_message",
+            itemKey: "part:user-1",
+            origin: "history",
+            confidence: "native",
+          },
+        },
+      }),
+    );
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 2,
+        turnId: "client-turn-1",
+        type: "timeline.item.added",
+        payload: {
+          item: {
+            kind: "user_message",
+            text: "你是谁，你在 build 模式吗",
+            clientMessageId: "client-message-1",
+            clientTurnId: "client-turn-1",
+          },
+        },
+      }),
+    );
+
+    const userMessages = current.feed.filter(
+      (entry) => entry.kind === "timeline" && entry.item.kind === "user_message",
+    );
+    assert.equal(userMessages.length, 1);
+    assert.equal(userMessages[0]?.kind === "timeline" ? userMessages[0].canonicalItemId : null, "opencode-user-1");
+  });
+
+  test("upgrades provisional user echo when canonical provider user message arrives", () => {
+    let current = projection();
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 1,
+        turnId: "client-turn-1",
+        type: "timeline.item.added",
+        payload: {
+          item: {
+            kind: "user_message",
+            text: "你是谁，你在 build 模式吗",
+            clientMessageId: "client-message-1",
+            clientTurnId: "client-turn-1",
+          },
+        },
+      }),
+    );
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 2,
+        turnId: "provider-turn-1",
+        type: "timeline.item.added",
+        payload: {
+          item: { kind: "user_message", text: "你是谁，你在 build 模式吗", messageId: "provider-user-1" },
+          identity: {
+            canonicalItemId: "opencode-user-1",
+            canonicalTurnId: "opencode-turn-1",
+            provider: "opencode",
+            providerSessionId: "provider-session-1",
+            turnKey: "message:provider-user-1",
+            itemKind: "user_message",
+            itemKey: "part:user-1",
+            origin: "live",
+            confidence: "native",
+          },
+        },
+      }),
+    );
+
+    const userMessages = current.feed.filter(
+      (entry) => entry.kind === "timeline" && entry.item.kind === "user_message",
+    );
+    assert.equal(userMessages.length, 1);
+    const [only] = userMessages;
+    assert.equal(only?.kind === "timeline" ? only.canonicalItemId : null, "opencode-user-1");
+    assert.equal(
+      only?.kind === "timeline" && only.item.kind === "user_message" ? only.item.messageId : null,
+      "provider-user-1",
     );
   });
 
@@ -1670,6 +1885,232 @@ describe("client projection", () => {
     );
 
     assert.equal(current.summary.session.runtimeState, "waiting_permission");
+  });
+
+  test("clears unresolved approval cards when their turn is canceled", () => {
+    let current = applyEventToProjection(
+      projection(),
+      event({
+        seq: 1,
+        turnId: "turn-approval",
+        type: "timeline.item.added",
+        payload: {
+          item: { kind: "assistant_message", text: "I need approval." },
+        },
+      }),
+    );
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 2,
+        turnId: "turn-approval",
+        type: "permission.requested",
+        payload: {
+          request: {
+            id: "perm-approval",
+            kind: "tool",
+            title: "Apply file changes",
+          },
+        },
+      }),
+    );
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 3,
+        turnId: "turn-approval",
+        type: "attention.required",
+        payload: {
+          item: {
+            id: "attention-permission-perm-approval",
+            level: "warning",
+            reason: "permission_needed",
+            title: "Approval required",
+            body: "Agent needs permission to continue.",
+            dedupeKey: "permission:perm-approval",
+            createdAt: "2026-04-15T00:00:03.000Z",
+          },
+        },
+      }),
+    );
+
+    assert.equal(current.feed.some((entry) => entry.kind === "permission"), true);
+    assert.equal(current.feed.some((entry) => entry.kind === "attention"), true);
+
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 4,
+        turnId: "turn-approval",
+        type: "turn.canceled",
+        payload: { reason: "interrupted" },
+      }),
+    );
+
+    assert.deepEqual(
+      current.feed.map((entry) => entry.kind),
+      ["timeline", "notification"],
+    );
+  });
+
+  test("does not duplicate approval cards when the same request is re-emitted", () => {
+    let current = applyEventToProjection(
+      projection(),
+      event({
+        seq: 1,
+        turnId: "turn-approval",
+        type: "permission.requested",
+        payload: {
+          request: {
+            id: "perm-approval",
+            kind: "tool",
+            title: "Apply file changes",
+          },
+        },
+      }),
+    );
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 2,
+        turnId: "turn-approval",
+        type: "permission.requested",
+        payload: {
+          request: {
+            id: "perm-approval",
+            kind: "tool",
+            title: "Apply file changes again",
+          },
+        },
+      }),
+    );
+
+    const permissionEntries = current.feed.filter((entry) => entry.kind === "permission");
+    assert.equal(permissionEntries.length, 1);
+    assert.equal(permissionEntries[0]?.request.title, "Apply file changes again");
+  });
+
+  test("keeps resolved approval cards after their turn completes", () => {
+    let current = applyEventToProjection(
+      projection(),
+      event({
+        seq: 1,
+        turnId: "turn-approved",
+        type: "permission.requested",
+        payload: {
+          request: {
+            id: "perm-approved",
+            kind: "tool",
+            title: "Apply file changes",
+          },
+        },
+      }),
+    );
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 2,
+        turnId: "turn-approved",
+        type: "permission.resolved",
+        payload: {
+          resolution: {
+            requestId: "perm-approved",
+            behavior: "allow",
+          },
+        },
+      }),
+    );
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 3,
+        turnId: "turn-approved",
+        type: "turn.completed",
+        payload: {},
+      }),
+    );
+
+    assert.equal(current.feed.filter((entry) => entry.kind === "permission").length, 1);
+  });
+
+  test("keeps pending approval cards when a turn completes without a resolution", () => {
+    let current = applyEventToProjection(
+      projection(),
+      event({
+        seq: 1,
+        turnId: "turn-pending",
+        type: "permission.requested",
+        payload: {
+          request: {
+            id: "perm-pending",
+            kind: "tool",
+            title: "Apply file changes",
+          },
+        },
+      }),
+    );
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 2,
+        turnId: "turn-pending",
+        type: "turn.completed",
+        payload: {},
+      }),
+    );
+
+    assert.equal(current.feed.filter((entry) => entry.kind === "permission").length, 1);
+  });
+
+  test("does not regress a resolved approval back to pending after a stale request replay", () => {
+    let current = applyEventToProjection(
+      projection(),
+      event({
+        seq: 1,
+        turnId: "turn-approved",
+        type: "permission.requested",
+        payload: {
+          request: {
+            id: "perm-approved",
+            kind: "tool",
+            title: "Apply file changes",
+          },
+        },
+      }),
+    );
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 2,
+        turnId: "turn-approved",
+        type: "permission.resolved",
+        payload: {
+          resolution: {
+            requestId: "perm-approved",
+            behavior: "allow",
+          },
+        },
+      }),
+    );
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 3,
+        turnId: "turn-approved",
+        type: "permission.requested",
+        payload: {
+          request: {
+            id: "perm-approved",
+            kind: "tool",
+            title: "Apply file changes",
+          },
+        },
+      }),
+    );
+
+    const permissionEntries = current.feed.filter((entry) => entry.kind === "permission");
+    assert.equal(permissionEntries.length, 1);
+    assert.equal(permissionEntries[0]?.resolution?.behavior, "allow");
   });
 
   test("applies daemon lifecycle events even when optimistic UI updatedAt is newer", () => {

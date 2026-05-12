@@ -8,6 +8,8 @@ import type {
   CouncilMcpResponse,
   CouncilPostMessageRequest,
   CouncilPostMessageResponse,
+  CouncilReinjectAgentsResponse,
+  CouncilRemoveAgentResponse,
   CreateCouncilRoomRequest,
   CreateCouncilRoomResponse,
   DebugScenarioDescriptor,
@@ -733,12 +735,48 @@ export async function archiveCouncilRoom(roomId: string): Promise<{ ok: true }> 
   );
 }
 
+export async function deleteCouncilRoom(roomId: string): Promise<{ ok: true }> {
+  return requestJson<{ ok: true }>(
+    `/api/council/rooms/${encodeURIComponent(roomId)}/delete`,
+    { method: "POST", body: JSON.stringify({}) },
+  );
+}
+
 export async function getCouncilAgentTui(
   roomId: string,
   agentId: string,
 ): Promise<CouncilAgentTuiResponse> {
   return requestJson<CouncilAgentTuiResponse>(
     `/api/council/rooms/${encodeURIComponent(roomId)}/agents/${encodeURIComponent(agentId)}/tui`,
+  );
+}
+
+export async function reinjectCouncilAgentPrompt(
+  roomId: string,
+  agentId: string,
+): Promise<CouncilReinjectAgentsResponse> {
+  return requestJson<CouncilReinjectAgentsResponse>(
+    `/api/council/rooms/${encodeURIComponent(roomId)}/agents/${encodeURIComponent(agentId)}/reinject`,
+    { method: "POST", body: JSON.stringify({}) },
+  );
+}
+
+export async function reinjectMissingCouncilAgentPrompts(
+  roomId: string,
+): Promise<CouncilReinjectAgentsResponse> {
+  return requestJson<CouncilReinjectAgentsResponse>(
+    `/api/council/rooms/${encodeURIComponent(roomId)}/reinject-missing`,
+    { method: "POST", body: JSON.stringify({}) },
+  );
+}
+
+export async function removeCouncilAgent(
+  roomId: string,
+  agentId: string,
+): Promise<CouncilRemoveAgentResponse> {
+  return requestJson<CouncilRemoveAgentResponse>(
+    `/api/council/rooms/${encodeURIComponent(roomId)}/agents/${encodeURIComponent(agentId)}/remove`,
+    { method: "POST", body: JSON.stringify({}) },
   );
 }
 
@@ -789,10 +827,10 @@ export function createPtySocket(
   sessionId: string,
   onMessage: (message: PtyServerMessage) => void,
   onError?: (error: Error) => void,
-  options?: { fromSeq?: number },
+  options?: { fromSeq?: number; replay?: boolean },
 ): WebSocket {
   const url = new URL(`/api/pty/${sessionId}`, getBaseUrl().replace(/^http/, "ws"));
-  url.searchParams.set("replay", "true");
+  url.searchParams.set("replay", options?.replay === false ? "false" : "true");
   if (options?.fromSeq !== undefined) {
     url.searchParams.set("fromSeq", String(options.fromSeq));
   }

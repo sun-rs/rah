@@ -37,6 +37,7 @@ export function CanvasSessionPane(props: {
   projection: SessionProjection | null;
   clientId: string;
   hideToolCallsInChat: boolean;
+  showModelInfoInChat: boolean;
   pendingSessionAction:
     | {
         kind: "attach_session" | "claim_control" | "claim_history";
@@ -45,6 +46,7 @@ export function CanvasSessionPane(props: {
     | null;
   modelCatalog: ProviderModelCatalog | null;
   modelCatalogLoading: boolean;
+  onRequestModelCatalogRefresh?: (() => void) | undefined;
   claimModeDraft: SessionModeDraft | undefined;
   claimModelDraft: ModelDraft | undefined;
   modeChangePending: boolean;
@@ -166,6 +168,7 @@ export function CanvasSessionPane(props: {
       interactionNotice={noticeState.interactionNotice}
       historyNotice={noticeState.historyNotice}
       hideToolCallsInChat={props.hideToolCallsInChat}
+      showModelInfoInChat={props.showModelInfoInChat}
       canLoadOlderHistory={Boolean(
         props.summary.session.providerSessionId &&
           props.projection?.history.authoritativeApplied &&
@@ -291,6 +294,7 @@ export function CanvasSessionPane(props: {
       modelCatalog={props.modelCatalog}
       modelCatalogLoading={props.modelCatalogLoading}
       modelChangePending={props.modelChangePending}
+      onRequestModelCatalogRefresh={props.onRequestModelCatalogRefresh}
       onRenameSession={() => props.onRename(props.summary.session.id)}
       onSetSessionMode={(modeId) => {
         void props.onSetSessionMode(props.summary.session.id, modeId);

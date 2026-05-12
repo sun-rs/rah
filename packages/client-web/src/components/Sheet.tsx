@@ -1,13 +1,14 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { X } from "lucide-react";
+import type { ReactNode } from "react";
 
 export function Sheet(props: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   side: "left" | "right";
-  title: string;
-  children: React.ReactNode;
-  headerRight?: React.ReactNode;
+  title: ReactNode;
+  children: ReactNode;
+  headerRight?: ReactNode;
 }) {
   return (
     <Dialog.Root open={props.open} onOpenChange={props.onOpenChange}>
@@ -29,7 +30,7 @@ export function Sheet(props: {
               <Dialog.Close asChild>
                 <button
                   type="button"
-                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] transition-colors"
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] transition-colors"
                   aria-label="Close"
                 >
                   <X size={16} />

@@ -27,12 +27,12 @@ export function WorkbenchOpeningPane(props: {
           {!props.sidebarOpen && (
             <button
               type="button"
-              className="icon-click-feedback hidden md:inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
+              className="icon-click-feedback hidden h-8 w-8 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] md:inline-flex"
               onClick={props.onExpandSidebar}
               aria-label="Expand sidebar"
               title="Expand sidebar"
             >
-              <Menu size={16} />
+              <Menu size={18} />
             </button>
           )}
           <div className="min-w-0">

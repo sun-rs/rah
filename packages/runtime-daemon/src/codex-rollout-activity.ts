@@ -2,6 +2,7 @@ import type {
   EventAuthority,
   EventChannel,
   TimelineIdentity,
+  TimelineRuntimeModel,
   TimelineTurnIdentity,
   ToolCall,
   ToolCallArtifact,
@@ -13,6 +14,7 @@ import {
   createCodexTimelineTurnIdentity,
 } from "./codex-timeline-identity";
 import type { ProviderActivity } from "./provider-activity";
+import { codexRuntimeModelFromTurnContext } from "./timeline-runtime-model";
 
 export interface CodexTranslatedActivity {
   activity: ProviderActivity;
@@ -35,6 +37,7 @@ export interface CodexRolloutTranslationState {
   lastTimelineTextSignature: string | null;
   providerSessionId?: string | undefined;
   currentTurnId?: string | undefined;
+  currentRuntimeModel?: TimelineRuntimeModel | undefined;
   nextTimelineItemIndex: number;
 }
 
@@ -211,7 +214,15 @@ function syncRolloutStateFromRecord(
   if (!turnId) {
     return;
   }
-  if (payload.type === "task_started" || record.type === "turn_context") {
+  if (record.type === "turn_context") {
+    if (state.currentTurnId !== turnId) {
+      state.currentTurnId = turnId;
+      state.nextTimelineItemIndex = 0;
+    }
+    state.currentRuntimeModel = codexRuntimeModelFromTurnContext(payload);
+    return;
+  }
+  if (payload.type === "task_started") {
     if (state.currentTurnId !== turnId) {
       state.currentTurnId = turnId;
       state.nextTimelineItemIndex = 0;
@@ -221,6 +232,7 @@ function syncRolloutStateFromRecord(
   if (payload.type === "task_complete" || payload.type === "turn_aborted") {
     if (state.currentTurnId === turnId) {
       state.currentTurnId = undefined;
+      state.currentRuntimeModel = undefined;
       state.nextTimelineItemIndex = 0;
     }
   }
@@ -685,7 +697,11 @@ export function translateCodexRolloutLine(
           record,
           {
             type: "timeline_item",
-            item: { kind: "assistant_message", text },
+            item: {
+              kind: "assistant_message",
+              text,
+              ...(state.currentRuntimeModel ? { runtimeModel: state.currentRuntimeModel } : {}),
+            },
             ...timelineIdentityProps(identity),
           },
           "authoritative",
@@ -893,7 +909,11 @@ export function translateCodexRolloutLine(
           record,
           {
             type: "timeline_item",
-            item: { kind: "assistant_message", text },
+            item: {
+              kind: "assistant_message",
+              text,
+              ...(state.currentRuntimeModel ? { runtimeModel: state.currentRuntimeModel } : {}),
+            },
             ...timelineIdentityProps(identity),
           },
           "authoritative",

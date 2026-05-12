@@ -22,6 +22,7 @@ export function CanvasNewSessionPane(props: {
   modelCatalogLoading: boolean;
   selectedModelId: string | null;
   selectedReasoningId: string | null;
+  onRequestCatalogRefresh: () => void;
   accessModes: SessionModeChoice[];
   selectedAccessModeId: string | null;
   planModeAvailable: boolean;
@@ -194,6 +195,7 @@ export function CanvasNewSessionPane(props: {
                 buttonClassName={`${EMPTY_STATE_COMPOSER_LAYOUT.attachButtonClassName} ${
                   compactSessionControls ? "" : "hidden"
                 }`}
+                onOpen={props.onRequestCatalogRefresh}
                 onAccessModeChange={props.onAccessModeChange}
                 onPlanModeToggle={props.onPlanModeToggle}
                 onModelChange={props.onModelChange}
@@ -207,6 +209,7 @@ export function CanvasNewSessionPane(props: {
                   selectedAccessModeId={props.selectedAccessModeId}
                   planModeAvailable={props.planModeAvailable}
                   planModeEnabled={props.planModeEnabled}
+                  onOpen={props.onRequestCatalogRefresh}
                   onAccessModeChange={props.onAccessModeChange}
                   onPlanModeToggle={props.onPlanModeToggle}
                 />
@@ -218,6 +221,7 @@ export function CanvasNewSessionPane(props: {
                   loading={props.modelCatalogLoading}
                   allowProviderDefault
                   mobileIconOnly
+                  onOpen={props.onRequestCatalogRefresh}
                   onModelChange={props.onModelChange}
                   onReasoningChange={props.onReasoningChange}
                 />

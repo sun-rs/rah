@@ -111,16 +111,16 @@ test("interruptOpenCodeLiveSession ignores idle stops without requiring input co
 
 test("sendInputToOpenCodeLiveSession queues consecutive inputs", async () => {
   const prompts: string[] = [];
+  const pendingPromptResponses: http.ServerResponse[] = [];
   const server = http.createServer((req, res) => {
     const chunks: Buffer[] = [];
     req.on("data", (chunk: Buffer) => chunks.push(chunk));
     req.on("end", () => {
       const rawBody = Buffer.concat(chunks).toString("utf8");
       const body = rawBody ? JSON.parse(rawBody) : {};
-      if (req.url?.includes("/prompt_async")) {
+      if (/\/message(?:\?|$)/.test(req.url ?? "")) {
         prompts.push(body.parts?.[0]?.text ?? "");
-        res.statusCode = 204;
-        res.end();
+        pendingPromptResponses.push(res);
         return;
       }
       res.statusCode = 404;
@@ -183,6 +183,8 @@ test("sendInputToOpenCodeLiveSession queues consecutive inputs", async () => {
     assert.equal(liveSession.queuedInputs.length, 1);
 
     const events = services.eventBus.list({ sessionIds: [session.session.id] });
+    // Web already owns the optimistic user bubble. The daemon should wait for
+    // OpenCode's provider message instead of emitting a second provisional echo.
     assert.equal(
       events.filter(
         (event) =>
@@ -190,16 +192,32 @@ test("sendInputToOpenCodeLiveSession queues consecutive inputs", async () => {
           event.payload.item.kind === "user_message" &&
           event.payload.item.text === "first",
       ).length,
-      1,
+      0,
     );
   } finally {
+    for (const response of pendingPromptResponses) {
+      if (!response.writableEnded) {
+        response.setHeader("Content-Type", "application/json");
+        response.end(JSON.stringify({
+          info: {
+            id: "msg-final",
+            sessionID: "opencode-1",
+            role: "assistant",
+            time: { completed: Date.now() },
+            finish: "stop",
+          },
+          parts: [],
+        }));
+      }
+    }
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
 
-test("interruptOpenCodeLiveSession keeps the turn active until OpenCode confirms stop", async () => {
+test("interruptOpenCodeLiveSession settles the turn when OpenCode accepts abort", async () => {
   const promptRequests: Array<{ method: string; url: string; body: string }> = [];
   const abortRequests: Array<{ method: string; url: string; body: string }> = [];
+  const pendingPromptResponses: http.ServerResponse[] = [];
   const server = http.createServer((req, res) => {
     const chunks: Buffer[] = [];
     req.on("data", (chunk: Buffer) => chunks.push(chunk));
@@ -209,10 +227,9 @@ test("interruptOpenCodeLiveSession keeps the turn active until OpenCode confirms
         url: req.url ?? "",
         body: Buffer.concat(chunks).toString("utf8"),
       };
-      if (req.url?.includes("/prompt_async")) {
+      if (/\/message(?:\?|$)/.test(req.url ?? "")) {
         promptRequests.push(record);
-        res.statusCode = 204;
-        res.end();
+        pendingPromptResponses.push(res);
         return;
       }
       abortRequests.push(record);
@@ -280,12 +297,15 @@ test("interruptOpenCodeLiveSession keeps the turn active until OpenCode confirms
       request: { clientId: "web-client" },
     });
 
-    assert.equal(summary.session.runtimeState, "running");
     await waitFor(() => promptRequests.length === 1 && abortRequests.length >= 1);
+    await waitFor(
+      () => services.sessionStore.getSession(session.session.id)?.session.runtimeState === "idle",
+    );
     const state = services.sessionStore.getSession(session.session.id);
-    assert.equal(state?.session.runtimeState, "running");
-    assert.ok(state?.activeTurnId);
-    assert.ok(liveSession.activityState.currentTurnId);
+    assert.equal(summary.session.runtimeState, "running");
+    assert.equal(state?.session.runtimeState, "idle");
+    assert.equal(state?.activeTurnId, undefined);
+    assert.equal(liveSession.activityState.currentTurnId, undefined);
     assert.equal(liveSession.queuedInputs.length, 0);
     assert.ok(abortRequests.length >= 1);
     assert.equal(abortRequests[0]?.method, "POST");
@@ -296,8 +316,8 @@ test("interruptOpenCodeLiveSession keeps the turn active until OpenCode confirms
       liveSession,
       request: { clientId: "web-client", text: "recovery after stop" },
     });
-    assert.equal(promptRequests.length, 1);
-    assert.equal(liveSession.queuedInputs.length, 1);
+    await waitFor(() => promptRequests.length === 2);
+    assert.equal(liveSession.queuedInputs.length, 0);
 
     assert.ok(
       services.eventBus
@@ -305,6 +325,21 @@ test("interruptOpenCodeLiveSession keeps the turn active until OpenCode confirms
         .some((event) => event.type === "runtime.status" && event.payload.status === "thinking"),
     );
   } finally {
+    for (const response of pendingPromptResponses) {
+      if (!response.writableEnded) {
+        response.setHeader("Content-Type", "application/json");
+        response.end(JSON.stringify({
+          info: {
+            id: "msg-final",
+            sessionID: "opencode-stop-1",
+            role: "assistant",
+            error: { name: "MessageAbortedError" },
+            time: { completed: Date.now() },
+          },
+          parts: [],
+        }));
+      }
+    }
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
@@ -343,7 +378,7 @@ test("setOpenCodeLiveSessionMode updates the OpenCode mode used by later prompts
   assert.equal(summary.session.mode?.currentModeId, "plan");
 });
 
-test("setOpenCodeLiveSessionMode maps full auto to OpenCode session permissions", async () => {
+test("setOpenCodeLiveSessionMode keeps OpenCode modes provider-native", async () => {
   const requests: Array<{ method: string; url: string; body: unknown }> = [];
   const server = http.createServer((req, res) => {
     const chunks: Buffer[] = [];
@@ -394,59 +429,26 @@ test("setOpenCodeLiveSessionMode maps full auto to OpenCode session permissions"
       },
     } as unknown as LiveOpenCodeSession;
 
-    const fullAuto = await setOpenCodeLiveSessionMode({
-      services,
-      liveSession,
-      modeId: "opencode/full-auto",
-    });
-    assert.equal(fullAuto.session.mode?.currentModeId, "opencode/full-auto");
-    assert.deepEqual(requests[0]?.body, {
-      permission: [{ permission: "*", pattern: "*", action: "allow" }],
-    });
-
-    const normal = await setOpenCodeLiveSessionMode({
+    const build = await setOpenCodeLiveSessionMode({
       services,
       liveSession,
       modeId: "build",
     });
-    assert.equal(normal.session.mode?.currentModeId, "build");
-    assert.deepEqual(requests[1]?.body, {
-      permission: [{ permission: "*", pattern: "*", action: "ask" }],
-    });
+    assert.equal(build.session.mode?.currentModeId, "build");
 
-    await setOpenCodeLiveSessionMode({
-      services,
-      liveSession,
-      modeId: "opencode/full-auto",
-    });
     const plan = await setOpenCodeLiveSessionMode({
       services,
       liveSession,
       modeId: "plan",
     });
     assert.equal(plan.session.mode?.currentModeId, "plan");
-    assert.deepEqual(requests[2]?.body, {
-      permission: [{ permission: "*", pattern: "*", action: "allow" }],
-    });
-    assert.deepEqual(requests[3]?.body, {
-      permission: [{ permission: "*", pattern: "*", action: "ask" }],
-    });
-
-    const fullAutoAgain = await setOpenCodeLiveSessionMode({
-      services,
-      liveSession,
-      modeId: "opencode/full-auto",
-    });
-    assert.equal(fullAutoAgain.session.mode?.currentModeId, "opencode/full-auto");
-    assert.deepEqual(requests[4]?.body, {
-      permission: [{ permission: "*", pattern: "*", action: "allow" }],
-    });
+    assert.equal(requests.length, 0);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
 
-test("setOpenCodeLiveSessionMode maps build to ask permissions", async () => {
+test("setOpenCodeLiveSessionMode rejects non-native OpenCode modes", async () => {
   const requests: Array<{ body: unknown }> = [];
   const server = http.createServer((req, res) => {
     const chunks: Buffer[] = [];
@@ -493,16 +495,15 @@ test("setOpenCodeLiveSessionMode maps build to ask permissions", async () => {
       },
     } as unknown as LiveOpenCodeSession;
 
-    const summary = await setOpenCodeLiveSessionMode({
-      services,
-      liveSession,
-      modeId: "build",
-    });
-
-    assert.equal(summary.session.mode?.currentModeId, "build");
-    assert.deepEqual(requests[0]?.body, {
-      permission: [{ permission: "*", pattern: "*", action: "ask" }],
-    });
+    await assert.rejects(
+      setOpenCodeLiveSessionMode({
+        services,
+        liveSession,
+        modeId: "opencode/full-auto",
+      }),
+      /Unsupported OpenCode mode 'opencode\/full-auto'/,
+    );
+    assert.equal(requests.length, 0);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }

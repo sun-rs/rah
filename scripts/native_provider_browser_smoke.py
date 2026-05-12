@@ -126,9 +126,9 @@ CONFIGS = (
         request={
             "model": "deepseek/deepseek-v4-pro",
             "optionValues": {"model_reasoning_variant": "high"},
-            "modeId": "opencode/full-auto",
+            "modeId": "build",
         },
-        expected_arg_fragments=("--model|deepseek/deepseek-v4-pro",),
+        expected_arg_fragments=("--model|deepseek/deepseek-v4-pro", "--agent|build"),
         expects_chat_mirror=True,
         expected_mirror_text="OpenCode native browser answer",
     ),
@@ -203,7 +203,7 @@ def spawn_rah_cli(
     args = ["node", "bin/rah.mjs", provider]
     if provider_session_id:
         args.extend(["resume", provider_session_id])
-    args.extend(["--mux", "native", "--daemon-url", base_url, "--cwd", str(workspace)])
+    args.extend(["--daemon-url", base_url, "--cwd", str(workspace)])
     return subprocess.Popen(
         args,
         cwd=ROOT_DIR,

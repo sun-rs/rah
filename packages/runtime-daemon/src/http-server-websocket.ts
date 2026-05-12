@@ -131,6 +131,14 @@ function parsePtyReplaySeq(raw: string | null): number | undefined {
   return Math.max(0, Math.floor(parsed));
 }
 
+function decodePathSegment(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
 export function attachWebSocketHandlers(
   server: Server,
   engine: RuntimeEngine,
@@ -203,7 +211,7 @@ export function attachWebSocketHandlers(
       socket.close();
       return;
     }
-    const sessionId = match[1]!;
+    const sessionId = decodePathSegment(match[1]!);
     const replay = url.searchParams.get("replay") !== "false";
     const fromSeq = parsePtyReplaySeq(
       url.searchParams.get("fromSeq") ?? url.searchParams.get("cursor"),

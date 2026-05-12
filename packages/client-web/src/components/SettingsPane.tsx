@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type {
   NativeTuiDiagnostic,
   ProviderDiagnostic,
   PtySessionStats,
   ZellijMuxSessionDiagnostic,
 } from "@rah/runtime-protocol";
-import { AlertTriangle, CheckCircle2, Info, LoaderCircle, MessageSquareText, Palette, RefreshCw, TerminalSquare, Waypoints } from "lucide-react";
+import { Activity, AlertTriangle, CheckCircle2, Info, LoaderCircle, MessageSquareText, Palette, RefreshCw, TerminalSquare, Waypoints } from "lucide-react";
 import {
   closeZellijMuxSession,
   listNativeTuiDiagnostics,
@@ -26,12 +26,14 @@ import {
 import { ProviderLogo } from "./ProviderLogo";
 import { ThemeToggle } from "./ThemeToggle";
 import { useChatPreferences } from "../hooks/useChatPreferences";
+import type { ProviderChoice } from "./ProviderSelector";
 
-type SettingsTab = "appearance" | "chat" | "version" | "about";
+type SettingsTab = "chat" | "status" | "appearance" | "version" | "about";
 
 const TABS: { id: SettingsTab; label: string; icon: typeof Palette }[] = [
-  { id: "appearance", label: "Appearance", icon: Palette },
   { id: "chat", label: "Chat", icon: MessageSquareText },
+  { id: "status", label: "Status", icon: Activity },
+  { id: "appearance", label: "Appearance", icon: Palette },
   { id: "version", label: "Version", icon: Waypoints },
   { id: "about", label: "About", icon: Info },
 ];
@@ -51,19 +53,26 @@ function errorMessage(error: unknown, fallback: string): string {
 }
 
 export function SettingsPane() {
-  const [activeTab, setActiveTab] = useState<SettingsTab>("appearance");
-  const { hideToolCallsInChat, setHideToolCallsInChat } = useChatPreferences();
+  const [activeTab, setActiveTab] = useState<SettingsTab>("chat");
+  const {
+    hideToolCallsInChat,
+    setHideToolCallsInChat,
+    showModelInfoInChat,
+    setShowModelInfoInChat,
+  } = useChatPreferences();
   const [providerDiagnostics, setProviderDiagnostics] = useState<ProviderDiagnostic[]>([]);
   const [providerDiagnosticsError, setProviderDiagnosticsError] = useState<string | null>(null);
   const [providerDiagnosticsLoading, setProviderDiagnosticsLoading] = useState(false);
   const [providerDiagnosticsLoaded, setProviderDiagnosticsLoaded] = useState(false);
+  const [runtimeDiagnosticsError, setRuntimeDiagnosticsError] = useState<string | null>(null);
+  const [runtimeDiagnosticsLoading, setRuntimeDiagnosticsLoading] = useState(false);
+  const [runtimeDiagnosticsLoaded, setRuntimeDiagnosticsLoaded] = useState(false);
   const [nativeTuiDiagnostics, setNativeTuiDiagnostics] = useState<NativeTuiDiagnostic[]>([]);
   const [ptyStats, setPtyStats] = useState<PtySessionStats[]>([]);
   const [zellijMuxDiagnostics, setZellijMuxDiagnostics] = useState<ZellijMuxSessionDiagnostic[]>([]);
   const [closingZellijSessionNames, setClosingZellijSessionNames] = useState<Set<string>>(() => new Set());
   const ptyStatsRef = useRef<PtySessionStats[] | null>(null);
   const [previousPtyStats, setPreviousPtyStats] = useState<PtySessionStats[] | null>(null);
-  const versionAutoRequestedRef = useRef(false);
 
   const sortedProviderDiagnostics = useMemo(
     () => [...providerDiagnostics].sort((left, right) => left.provider.localeCompare(right.provider)),
@@ -93,74 +102,53 @@ export function SettingsPane() {
     [sortedZellijMuxDiagnostics],
   );
 
-  useEffect(() => {
-    if (activeTab !== "version" || versionAutoRequestedRef.current || providerDiagnosticsLoading) {
-      return;
-    }
-    versionAutoRequestedRef.current = true;
-    void loadProviderDiagnostics();
-  }, [activeTab, providerDiagnosticsLoading]);
-
-  async function loadProviderDiagnostics(forceRefresh = false, signal?: AbortSignal) {
+  async function loadVersionDiagnostics(forceRefresh = false, signal?: AbortSignal) {
     setProviderDiagnosticsLoading(true);
     setProviderDiagnosticsError(null);
     try {
-      const [
-        providersResult,
-        nativeDiagnosticsResult,
-        terminalStatsResult,
-        zellijMuxDiagnosticsResult,
-      ] = await Promise.allSettled([
-        listProviders({
-          forceRefresh,
-          ...(signal ? { signal } : {}),
-        }),
-        listNativeTuiDiagnostics({
-          ...(signal ? { signal } : {}),
-        }),
-        listPtyStats({
-          ...(signal ? { signal } : {}),
-        }),
-        listZellijMuxDiagnostics({
-          ...(signal ? { signal } : {}),
-        }),
-      ]);
+      const providers = await listProviders({
+        forceRefresh,
+        ...(signal ? { signal } : {}),
+      });
+      setProviderDiagnostics(providers);
+      setProviderDiagnosticsLoaded(true);
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        return;
+      }
+      setProviderDiagnosticsError(errorMessage(error, "Failed to load provider versions."));
+    } finally {
+      setProviderDiagnosticsLoading(false);
+    }
+  }
 
-      if (
-        providersResult.status === "rejected" &&
-        providersResult.reason instanceof DOMException &&
-        providersResult.reason.name === "AbortError"
-      ) {
-        return;
-      }
-      if (
-        nativeDiagnosticsResult.status === "rejected" &&
-        nativeDiagnosticsResult.reason instanceof DOMException &&
-        nativeDiagnosticsResult.reason.name === "AbortError"
-      ) {
-        return;
-      }
-      if (
-        terminalStatsResult.status === "rejected" &&
-        terminalStatsResult.reason instanceof DOMException &&
-        terminalStatsResult.reason.name === "AbortError"
-      ) {
-        return;
-      }
-      if (
-        zellijMuxDiagnosticsResult.status === "rejected" &&
-        zellijMuxDiagnosticsResult.reason instanceof DOMException &&
-        zellijMuxDiagnosticsResult.reason.name === "AbortError"
-      ) {
-        return;
-      }
+  async function loadStatusDiagnostics(signal?: AbortSignal) {
+    setRuntimeDiagnosticsLoading(true);
+    setRuntimeDiagnosticsError(null);
+    try {
+      const [nativeDiagnosticsResult, terminalStatsResult, zellijMuxDiagnosticsResult] =
+        await Promise.allSettled([
+          listNativeTuiDiagnostics({
+            ...(signal ? { signal } : {}),
+          }),
+          listPtyStats({
+            ...(signal ? { signal } : {}),
+          }),
+          listZellijMuxDiagnostics({
+            ...(signal ? { signal } : {}),
+          }),
+        ]);
 
+      for (const result of [nativeDiagnosticsResult, terminalStatsResult, zellijMuxDiagnosticsResult]) {
+        if (
+          result.status === "rejected" &&
+          result.reason instanceof DOMException &&
+          result.reason.name === "AbortError"
+        ) {
+          return;
+        }
+      }
       const errors: string[] = [];
-      if (providersResult.status === "fulfilled") {
-        setProviderDiagnostics(providersResult.value);
-      } else {
-        errors.push(errorMessage(providersResult.reason, "Failed to load provider versions."));
-      }
       if (nativeDiagnosticsResult.status === "fulfilled") {
         setNativeTuiDiagnostics(nativeDiagnosticsResult.value);
       } else {
@@ -179,34 +167,33 @@ export function SettingsPane() {
         errors.push(errorMessage(zellijMuxDiagnosticsResult.reason, "Failed to load zellij diagnostics."));
       }
       if (errors.length > 0) {
-        setProviderDiagnosticsError(errors.join(" "));
+        setRuntimeDiagnosticsError(errors.join(" "));
       }
       if (
-        providersResult.status === "fulfilled" ||
         nativeDiagnosticsResult.status === "fulfilled" ||
         terminalStatsResult.status === "fulfilled" ||
         zellijMuxDiagnosticsResult.status === "fulfilled"
       ) {
-        setProviderDiagnosticsLoaded(true);
+        setRuntimeDiagnosticsLoaded(true);
       }
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
         return;
       }
-      setProviderDiagnosticsError(error instanceof Error ? error.message : "Failed to load provider versions.");
+      setRuntimeDiagnosticsError(errorMessage(error, "Failed to load runtime status."));
     } finally {
-      setProviderDiagnosticsLoading(false);
+      setRuntimeDiagnosticsLoading(false);
     }
   }
 
   async function closeZellijSessionFromDiagnostics(sessionName: string): Promise<void> {
     setClosingZellijSessionNames((current) => new Set(current).add(sessionName));
-    setProviderDiagnosticsError(null);
+    setRuntimeDiagnosticsError(null);
     try {
       await closeZellijMuxSession(sessionName);
-      await loadProviderDiagnostics(false);
+      await loadStatusDiagnostics();
     } catch (error) {
-      setProviderDiagnosticsError(errorMessage(error, `Failed to close zellij session ${sessionName}.`));
+      setRuntimeDiagnosticsError(errorMessage(error, `Failed to close zellij session ${sessionName}.`));
     } finally {
       setClosingZellijSessionNames((current) => {
         const next = new Set(current);
@@ -222,16 +209,16 @@ export function SettingsPane() {
     }
     const names = unmanagedZellijMuxDiagnostics.map((session) => session.sessionName);
     setClosingZellijSessionNames((current) => new Set([...current, ...names]));
-    setProviderDiagnosticsError(null);
+    setRuntimeDiagnosticsError(null);
     try {
       const results = await Promise.allSettled(names.map((name) => closeZellijMuxSession(name)));
       const failed = results.filter((result) => result.status === "rejected");
       if (failed.length > 0) {
         throw new Error(`Failed to close ${failed.length} unmanaged zellij session${failed.length === 1 ? "" : "s"}.`);
       }
-      await loadProviderDiagnostics(false);
+      await loadStatusDiagnostics();
     } catch (error) {
-      setProviderDiagnosticsError(errorMessage(error, "Failed to close unmanaged zellij sessions."));
+      setRuntimeDiagnosticsError(errorMessage(error, "Failed to close unmanaged zellij sessions."));
     } finally {
       setClosingZellijSessionNames((current) => {
         const next = new Set(current);
@@ -243,10 +230,27 @@ export function SettingsPane() {
     }
   }
 
+  function selectSettingsTab(tab: SettingsTab): void {
+    setActiveTab(tab);
+    if (tab === "version" && !providerDiagnosticsLoaded && !providerDiagnosticsLoading) {
+      void loadVersionDiagnostics();
+    }
+    if (tab === "status" && !runtimeDiagnosticsLoaded && !runtimeDiagnosticsLoading) {
+      void loadStatusDiagnostics();
+    }
+  }
+
+  const activeDiagnosticsLoading =
+    activeTab === "version" ? providerDiagnosticsLoading : runtimeDiagnosticsLoading;
+  const activeDiagnosticsLoaded =
+    activeTab === "version" ? providerDiagnosticsLoaded : runtimeDiagnosticsLoaded;
+  const activeDiagnosticsError =
+    activeTab === "version" ? providerDiagnosticsError : runtimeDiagnosticsError;
+
   return (
     <div className="flex h-full min-h-0 flex-col md:flex-row">
       <div className="shrink-0 border-b border-[var(--app-border)] p-2 md:w-48 md:border-b-0 md:border-r md:p-3">
-        <div className="grid grid-cols-2 gap-1 sm:grid-cols-4 md:grid-cols-1">
+        <div className="grid grid-cols-2 gap-1 sm:grid-cols-5 md:grid-cols-1">
         {TABS.map((tab) => {
           const Icon = tab.icon;
           const selected = activeTab === tab.id;
@@ -254,7 +258,7 @@ export function SettingsPane() {
             <button
               key={tab.id}
               type="button"
-              onClick={() => setActiveTab(tab.id)}
+              onClick={() => selectSettingsTab(tab.id)}
               className={`flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-xs font-medium transition-colors ${
                 selected
                   ? "bg-[var(--app-subtle-bg)] text-[var(--app-fg)]"
@@ -313,23 +317,68 @@ export function SettingsPane() {
                 </button>
               </div>
             </div>
+            <div className="rounded-2xl border border-[var(--app-border)] bg-[var(--app-bg)] p-4 md:p-5">
+              <div>
+                <div className="text-sm font-medium text-[var(--app-fg)]">Show model on assistant replies</div>
+                <div className="mt-1 text-xs text-[var(--app-hint)]">
+                  Display a subtle model / effort label when the provider exposes it for a reply.
+                </div>
+              </div>
+              <div className="mt-4 space-y-3">
+                {(["codex", "claude", "opencode"] as ProviderChoice[]).map((provider) => (
+                  <div key={provider} className="flex items-center justify-between gap-4">
+                    <div className="flex min-w-0 items-center gap-2 text-sm text-[var(--app-fg)]">
+                      <ProviderLogo provider={provider} className="h-4 w-4" />
+                      <span className="capitalize">{provider}</span>
+                    </div>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={showModelInfoInChat[provider]}
+                      onClick={() => setShowModelInfoInChat(provider, !showModelInfoInChat[provider])}
+                      className={`relative inline-flex h-6 w-11 shrink-0 rounded-full border transition-colors ${
+                        showModelInfoInChat[provider]
+                          ? "border-primary bg-primary"
+                          : "border-[var(--app-border)] bg-[var(--app-subtle-bg)]"
+                      }`}
+                    >
+                      <span
+                        className={`absolute top-0.5 h-4.5 w-4.5 rounded-full bg-white shadow-sm transition-transform ${
+                          showModelInfoInChat[provider] ? "translate-x-5" : "translate-x-0.5"
+                        }`}
+                      />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
-        ) : activeTab === "version" ? (
+        ) : activeTab === "version" || activeTab === "status" ? (
           <div className="space-y-5">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <div className="text-base font-semibold text-[var(--app-fg)]">Version</div>
+                <div className="text-base font-semibold text-[var(--app-fg)]">
+                  {activeTab === "version" ? "Version" : "Status"}
+                </div>
                 <div className="mt-1 text-sm text-[var(--app-hint)]">
-                  Compare CLI versions and inspect active native TUI runtime issues.
+                  {activeTab === "version"
+                    ? "Compare local and official CLI versions."
+                    : "Inspect active native TUI, terminal replay, and zellij runtime state."}
                 </div>
               </div>
               <button
                 type="button"
-                onClick={() => void loadProviderDiagnostics(true)}
-                disabled={providerDiagnosticsLoading}
+                onClick={() => {
+                  if (activeTab === "version") {
+                    void loadVersionDiagnostics(true);
+                    return;
+                  }
+                  void loadStatusDiagnostics();
+                }}
+                disabled={activeDiagnosticsLoading}
                 className="inline-flex items-center gap-1.5 rounded-md border border-[var(--app-border)] px-2 py-1 text-xs font-medium text-[var(--app-hint)] transition-colors hover:text-[var(--app-fg)] disabled:cursor-default disabled:opacity-60"
               >
-                {providerDiagnosticsLoading ? (
+                {activeDiagnosticsLoading ? (
                   <LoaderCircle size={13} className="animate-spin" />
                 ) : (
                   <RefreshCw size={13} />
@@ -338,90 +387,95 @@ export function SettingsPane() {
               </button>
             </div>
 
-            {providerDiagnosticsError ? (
+            {activeDiagnosticsError ? (
               <div className="rounded-2xl border border-[var(--app-danger)]/30 bg-[var(--app-danger-bg)] p-3 text-xs text-[var(--app-danger)]">
-                {providerDiagnosticsError}
+                {activeDiagnosticsError}
               </div>
             ) : null}
 
-            {providerDiagnosticsLoading && !providerDiagnosticsLoaded ? (
+            {activeDiagnosticsLoading && !activeDiagnosticsLoaded ? (
               <div className="flex h-40 items-center justify-center text-xs text-[var(--app-hint)]">
                 <LoaderCircle size={16} className="mr-2 animate-spin" />
-                Checking local and official versions…
+                {activeTab === "version" ? "Checking local and official versions…" : "Checking runtime status…"}
               </div>
             ) : (
               <div className="space-y-3">
-                {sortedProviderDiagnostics.map((diagnostic) => (
-                  <div
-                    key={diagnostic.provider}
-                    className="rounded-2xl border border-[var(--app-border)] bg-[var(--app-bg)] p-4 md:p-5"
-                  >
-                    <div className="flex items-start gap-3">
-                      <ProviderLogo provider={diagnostic.provider} className="mt-0.5 h-6 w-6 shrink-0" />
-                      <div className="min-w-0 flex-1 space-y-3">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="min-w-0 text-sm font-medium text-[var(--app-fg)]">
-                            {providerLabel(diagnostic.provider)}
-                          </span>
-                          <span
-                            className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${
-                              diagnostic.versionStatus === "update_available"
-                                ? "border-[var(--app-warning)]/20 bg-[var(--app-warning-bg)] text-[var(--app-warning)]"
-                                : diagnostic.versionStatus === "up_to_date"
-                                  ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
-                                  : diagnostic.latestVersionError
-                                    ? "border-[var(--app-danger)]/20 bg-[var(--app-danger-bg)] text-[var(--app-danger)]"
-                                    : "border-[var(--app-border)] bg-[var(--app-subtle-bg)] text-[var(--app-hint)]"
-                            }`}
-                          >
-                            {diagnostic.versionStatus === "update_available"
-                              ? "Update available"
-                              : diagnostic.versionStatus === "up_to_date"
-                                ? "Up to date"
-                                : diagnostic.latestVersionError
-                                  ? "Check failed"
-                                  : "Unknown"}
-                          </span>
-                        </div>
-                        <div className="grid gap-3 sm:grid-cols-2">
-                          <div className="rounded-xl border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-3 py-2">
-                            <div className="text-xs font-medium uppercase tracking-wide text-[var(--app-hint)]">
-                              Installed
-                            </div>
-                            <div className="mt-1 break-words font-mono text-sm text-[var(--app-fg)] [overflow-wrap:anywhere]">
-                              {diagnostic.installedVersion ?? "Not found"}
-                            </div>
-                          </div>
-                          <div className="rounded-xl border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-3 py-2">
-                            <div className="text-xs font-medium uppercase tracking-wide text-[var(--app-hint)]">
-                              Latest
-                            </div>
-                            <div
-                              className={`mt-1 break-words font-mono text-sm [overflow-wrap:anywhere] ${
-                                diagnostic.versionStatus === "update_available"
-                                  ? "text-[var(--app-warning)]"
+                {activeTab === "version" ? (
+                  <>
+                    {sortedProviderDiagnostics.map((diagnostic) => (
+                      <div
+                        key={diagnostic.provider}
+                        className="rounded-2xl border border-[var(--app-border)] bg-[var(--app-bg)] p-4 md:p-5"
+                      >
+                        <div className="flex items-start gap-3">
+                          <ProviderLogo provider={diagnostic.provider} className="mt-0.5 h-6 w-6 shrink-0" />
+                          <div className="min-w-0 flex-1 space-y-3">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="min-w-0 text-sm font-medium text-[var(--app-fg)]">
+                                {providerLabel(diagnostic.provider)}
+                              </span>
+                              <span
+                                className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${
+                                  diagnostic.versionStatus === "update_available"
+                                    ? "border-[var(--app-warning)]/20 bg-[var(--app-warning-bg)] text-[var(--app-warning)]"
+                                    : diagnostic.versionStatus === "up_to_date"
+                                      ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
+                                      : diagnostic.latestVersionError
+                                        ? "border-[var(--app-danger)]/20 bg-[var(--app-danger-bg)] text-[var(--app-danger)]"
+                                        : "border-[var(--app-border)] bg-[var(--app-subtle-bg)] text-[var(--app-hint)]"
+                                }`}
+                              >
+                                {diagnostic.versionStatus === "update_available"
+                                  ? "Update available"
                                   : diagnostic.versionStatus === "up_to_date"
-                                    ? "text-emerald-700 dark:text-emerald-400"
+                                    ? "Up to date"
                                     : diagnostic.latestVersionError
-                                      ? "text-[var(--app-danger)]"
-                                      : "text-[var(--app-hint)]"
-                              }`}
-                              title={diagnostic.latestVersionError ?? diagnostic.latestVersion}
-                            >
-                              {diagnostic.latestVersion ??
-                                (diagnostic.latestVersionError ? "Check failed" : "Unavailable")}
+                                      ? "Check failed"
+                                      : "Unknown"}
+                              </span>
+                            </div>
+                            <div className="grid gap-3 sm:grid-cols-2">
+                              <div className="rounded-xl border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-3 py-2">
+                                <div className="text-xs font-medium uppercase tracking-wide text-[var(--app-hint)]">
+                                  Installed
+                                </div>
+                                <div className="mt-1 break-words font-mono text-sm text-[var(--app-fg)] [overflow-wrap:anywhere]">
+                                  {diagnostic.installedVersion ?? "Not found"}
+                                </div>
+                              </div>
+                              <div className="rounded-xl border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-3 py-2">
+                                <div className="text-xs font-medium uppercase tracking-wide text-[var(--app-hint)]">
+                                  Latest
+                                </div>
+                                <div
+                                  className={`mt-1 break-words font-mono text-sm [overflow-wrap:anywhere] ${
+                                    diagnostic.versionStatus === "update_available"
+                                      ? "text-[var(--app-warning)]"
+                                      : diagnostic.versionStatus === "up_to_date"
+                                        ? "text-emerald-700 dark:text-emerald-400"
+                                        : diagnostic.latestVersionError
+                                          ? "text-[var(--app-danger)]"
+                                          : "text-[var(--app-hint)]"
+                                  }`}
+                                  title={diagnostic.latestVersionError ?? diagnostic.latestVersion}
+                                >
+                                  {diagnostic.latestVersion ??
+                                    (diagnostic.latestVersionError ? "Check failed" : "Unavailable")}
+                                </div>
+                              </div>
                             </div>
                           </div>
                         </div>
+                        {diagnostic.latestVersionError ? (
+                          <div className="mt-3 text-xs text-[var(--app-danger)] break-words [overflow-wrap:anywhere]">
+                            Latest version check failed: {diagnostic.latestVersionError}
+                          </div>
+                        ) : null}
                       </div>
-                    </div>
-                    {diagnostic.latestVersionError ? (
-                      <div className="mt-3 text-xs text-[var(--app-danger)] break-words [overflow-wrap:anywhere]">
-                        Latest version check failed: {diagnostic.latestVersionError}
-                      </div>
-                    ) : null}
-                  </div>
-                ))}
+                    ))}
+                  </>
+                ) : (
+                  <>
                 <div className="rounded-2xl border border-[var(--app-border)] bg-[var(--app-bg)] p-4 md:p-5">
                   <div className="flex items-start justify-between gap-3">
                     <div>
@@ -717,6 +771,8 @@ export function SettingsPane() {
                     )}
                   </div>
                 </div>
+                  </>
+                )}
               </div>
             )}
           </div>

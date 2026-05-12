@@ -10,6 +10,7 @@ import type {
   SessionSummary,
   TimelineIdentity,
   TimelineItem,
+  TimelineRuntimeModel,
   ToolCallArtifact,
   ToolCall,
   ToolCallDetail,
@@ -17,6 +18,8 @@ import type {
 } from "@rah/runtime-protocol";
 
 export type SessionsResponse = ListSessionsResponse;
+
+const PROVISIONAL_USER_ECHO_WINDOW_MS = 5_000;
 
 export type FeedEntry =
   | {
@@ -461,8 +464,15 @@ function applyTimelineEvent(
 
   if (event.type === "timeline.item.added" && event.payload.item.kind === "user_message") {
     const incomingUserItem = event.payload.item;
-    const weakEchoIndex = findWeakUserEchoIndex(feed, incomingUserItem, identityFields);
+    const weakEchoIndex = findWeakUserEchoIndex(feed, incomingUserItem, identityFields, event.ts);
     if (weakEchoIndex >= 0) {
+      const weakEcho = feed[weakEchoIndex] as Extract<FeedEntry, { kind: "timeline" }>;
+      if (
+        isAuthoritativeUserMessageEntry(weakEcho) &&
+        !isAuthoritativeUserMessage(incomingUserItem, identityFields)
+      ) {
+        return feed;
+      }
       if (
         identityFields.canonicalItemId === undefined &&
         incomingUserItem.messageId === undefined &&
@@ -471,7 +481,6 @@ function applyTimelineEvent(
         return feed;
       }
       const next = [...feed];
-      const weakEcho = next[weakEchoIndex] as Extract<FeedEntry, { kind: "timeline" }>;
       next[weakEchoIndex] = createTimelineEntry(
         {
           key: weakEcho.key,
@@ -547,6 +556,7 @@ function applyTimelineEvent(
           latestEntry.item as MergeableTimelineItem,
           event.payload.item as MergeableTimelineItem,
         ),
+        ...assistantRuntimeModelPatch(latestEntry.item, event.payload.item),
       },
       ts: event.ts,
       ...mergeTimelineIdentityFields(latestEntry, identityFields),
@@ -619,11 +629,10 @@ function findWeakUserEchoIndex(
   feed: FeedEntry[],
   incoming: Extract<TimelineItem, { kind: "user_message" }>,
   incomingIdentity: TimelineIdentityFields,
+  incomingTs: string,
 ): number {
-  const incomingAuthoritative =
-    incomingIdentity.canonicalItemId !== undefined ||
-    incoming.messageId !== undefined ||
-    incoming.clientMessageId !== undefined;
+  const incomingAuthoritative = isAuthoritativeUserMessage(incoming, incomingIdentity);
+  const incomingProvisional = isProvisionalClientUserMessage(incoming, incomingIdentity);
   const incomingWeak = !incomingAuthoritative;
   for (let index = feed.length - 1; index >= 0; index--) {
     const candidate = feed[index];
@@ -637,15 +646,68 @@ function findWeakUserEchoIndex(
     const candidateIsUnresolvedOptimistic =
       candidate.key.startsWith("optimistic:user:") && candidate.turnId === undefined;
     const candidateAuthoritative =
-      !candidateIsUnresolvedOptimistic &&
-      (candidate.canonicalItemId !== undefined ||
-        candidate.item.messageId !== undefined ||
-        candidate.item.clientMessageId !== undefined);
+      !candidateIsUnresolvedOptimistic && isAuthoritativeUserMessageEntry(candidate);
+    const candidateProvisional =
+      !candidateIsUnresolvedOptimistic && isProvisionalClientUserMessageEntry(candidate);
+    if (
+      ((incomingProvisional && candidateAuthoritative) ||
+        (incomingAuthoritative && candidateProvisional)) &&
+      !timelineTimestampsWithinMs(candidate.ts, incomingTs, PROVISIONAL_USER_ECHO_WINDOW_MS)
+    ) {
+      continue;
+    }
     if ((incomingWeak && candidateAuthoritative) || (incomingAuthoritative && !candidateAuthoritative)) {
       return index;
     }
   }
   return -1;
+}
+
+function isAuthoritativeUserMessage(
+  item: Extract<TimelineItem, { kind: "user_message" }>,
+  identity: TimelineIdentityFields,
+): boolean {
+  return identity.canonicalItemId !== undefined || item.messageId !== undefined;
+}
+
+function isAuthoritativeUserMessageEntry(
+  entry: Extract<FeedEntry, { kind: "timeline" }>,
+): boolean {
+  return (
+    entry.item.kind === "user_message" &&
+    (entry.canonicalItemId !== undefined || entry.item.messageId !== undefined)
+  );
+}
+
+function isProvisionalClientUserMessage(
+  item: Extract<TimelineItem, { kind: "user_message" }>,
+  identity: TimelineIdentityFields,
+): boolean {
+  return (
+    identity.canonicalItemId === undefined &&
+    item.messageId === undefined &&
+    item.clientMessageId !== undefined
+  );
+}
+
+function isProvisionalClientUserMessageEntry(
+  entry: Extract<FeedEntry, { kind: "timeline" }>,
+): boolean {
+  return (
+    entry.item.kind === "user_message" &&
+    entry.canonicalItemId === undefined &&
+    entry.item.messageId === undefined &&
+    entry.item.clientMessageId !== undefined
+  );
+}
+
+function timelineTimestampsWithinMs(leftTs: string, rightTs: string, maxMs: number): boolean {
+  const leftMs = Date.parse(leftTs);
+  const rightMs = Date.parse(rightTs);
+  if (!Number.isFinite(leftMs) || !Number.isFinite(rightMs)) {
+    return false;
+  }
+  return Math.abs(leftMs - rightMs) <= maxMs;
 }
 
 function findSameTurnUserEchoIndex(
@@ -734,16 +796,55 @@ function mergeOrReplaceTimelineItem(
   eventType: "timeline.item.added" | "timeline.item.updated",
 ): TimelineItem {
   if (eventType === "timeline.item.updated") {
-    return incoming;
+    return preserveAssistantRuntimeModel(current, incoming);
   }
   if (!canMergeTimelineText(current, incoming)) {
-    return incoming;
+    return preserveAssistantRuntimeModel(current, incoming);
   }
   const mergeableIncoming = incoming as MergeableTimelineItem;
+  const mergeableCurrent = current as MergeableTimelineItem;
   return {
+    ...mergeableCurrent,
     ...mergeableIncoming,
-    text: mergeTimelineText(current as MergeableTimelineItem, mergeableIncoming),
+    text: mergeTimelineText(mergeableCurrent, mergeableIncoming),
+    ...assistantRuntimeModelPatch(current, incoming),
   };
+}
+
+function assistantRuntimeModelPatch(current: TimelineItem, incoming: TimelineItem) {
+  const runtimeModel =
+    timelineItemRuntimeModel(incoming) ?? timelineItemRuntimeModel(current);
+  return runtimeModel ? { runtimeModel } : {};
+}
+
+type RuntimeModelTimelineItem =
+  | Extract<TimelineItem, { kind: "assistant_message" }>
+  | Extract<TimelineItem, { kind: "reasoning" }>
+  | Extract<TimelineItem, { kind: "step" }>;
+
+function preserveAssistantRuntimeModel(current: TimelineItem, incoming: TimelineItem): TimelineItem {
+  if (
+    !timelineItemSupportsRuntimeModel(current) ||
+    !timelineItemSupportsRuntimeModel(incoming) ||
+    incoming.runtimeModel !== undefined
+  ) {
+    return incoming;
+  }
+  const runtimeModel = timelineItemRuntimeModel(current);
+  return {
+    ...incoming,
+    ...(runtimeModel !== undefined ? { runtimeModel } : {}),
+  };
+}
+
+function timelineItemSupportsRuntimeModel(
+  item: TimelineItem,
+): item is RuntimeModelTimelineItem {
+  return item.kind === "assistant_message" || item.kind === "reasoning" || item.kind === "step";
+}
+
+function timelineItemRuntimeModel(item: TimelineItem): TimelineRuntimeModel | undefined {
+  return timelineItemSupportsRuntimeModel(item) ? item.runtimeModel : undefined;
 }
 
 function readTimelineMessageId(item: TimelineItem): string | undefined {
@@ -1198,18 +1299,42 @@ function applyPermissionEvent(
   event: Extract<RahEvent, { type: "permission.requested" | "permission.resolved" }>,
 ): FeedEntry[] {
   if (event.type === "permission.requested") {
-    return [
-      ...feed,
-      createPermissionEntry(
-        {
-          key: `perm:${event.payload.request.id}`,
-          kind: "permission",
-          request: event.payload.request,
-          ts: event.ts,
-        },
-        event.turnId,
-      ),
-    ];
+    const key = `perm:${event.payload.request.id}`;
+    const index = feed.findIndex(
+      (candidate) => candidate.kind === "permission" && candidate.key === key,
+    );
+    if (index < 0) {
+      return [
+        ...feed,
+        createPermissionEntry(
+          {
+            key,
+            kind: "permission",
+            request: event.payload.request,
+            ts: event.ts,
+          },
+          event.turnId,
+        ),
+      ];
+    }
+    const current = feed[index];
+    if (!current || current.kind !== "permission") {
+      return feed;
+    }
+    if (current.resolution !== undefined) {
+      return feed;
+    }
+    const next = [...feed];
+    next[index] = createPermissionEntry(
+      {
+        key: current.key,
+        kind: "permission",
+        request: event.payload.request,
+        ts: event.ts,
+      },
+      event.turnId ?? current.turnId,
+    );
+    return next;
   }
 
   const key = `perm:${event.payload.resolution.requestId}`;
@@ -1223,15 +1348,60 @@ function applyPermissionEvent(
   if (!current || current.kind !== "permission") {
     return feed;
   }
-  const next = [...feed];
-  next[index] = createPermissionEntry({
-    key: current.key,
-    kind: "permission",
-    request: current.request,
-    resolution: event.payload.resolution,
-    ts: event.ts,
-  }, current.turnId);
+  const next: FeedEntry[] = [];
+  for (const [candidateIndex, candidate] of feed.entries()) {
+    if (candidate.kind !== "permission" || candidate.key !== key) {
+      next.push(candidate);
+      continue;
+    }
+    if (candidateIndex !== index) {
+      continue;
+    }
+    next.push(
+      createPermissionEntry(
+        {
+          key: current.key,
+          kind: "permission",
+          request: current.request,
+          resolution: event.payload.resolution,
+          ts: event.ts,
+        },
+        event.turnId ?? current.turnId,
+      ),
+    );
+  }
   return next;
+}
+
+function clearPendingPermissionEntriesForTurn(
+  feed: FeedEntry[],
+  event: Extract<RahEvent, { type: "turn.failed" | "turn.canceled" }>,
+): FeedEntry[] {
+  if (!event.turnId) {
+    return feed;
+  }
+  const pendingRequestIds = new Set(
+    feed
+      .filter(
+        (entry): entry is Extract<FeedEntry, { kind: "permission" }> =>
+          entry.kind === "permission" &&
+          entry.turnId === event.turnId &&
+          entry.resolution === undefined,
+      )
+      .map((entry) => entry.request.id),
+  );
+  if (pendingRequestIds.size === 0) {
+    return feed;
+  }
+  return feed.filter((entry) => {
+    if (entry.kind === "permission") {
+      return !(entry.turnId === event.turnId && pendingRequestIds.has(entry.request.id));
+    }
+    if (entry.kind === "attention") {
+      return !pendingRequestIds.has(entry.item.id.replace(/^attention-permission-/, ""));
+    }
+    return true;
+  });
 }
 
 function applyObservationEvent(
@@ -1395,6 +1565,7 @@ function applyTurnStepEvent(
         title,
         status,
         ...(text ? { text } : {}),
+        ...(event.payload.runtimeModel !== undefined ? { runtimeModel: event.payload.runtimeModel } : {}),
       },
       ts: event.ts,
     },
@@ -1452,6 +1623,7 @@ function applyTurnCanceledEvent(
       turnId: event.turnId,
       canonicalTurnId,
     }) ??
+    (hasOrphanInterruptNotice(feed) ? findLastTurnAnchorKey(feed, {}) : undefined) ??
     (turnKey === undefined ? findLastTurnAnchorKey(feed, {}) : undefined);
   const key =
     turnKey !== undefined && resolvedAnchorKey === undefined
@@ -1478,7 +1650,7 @@ function applyTurnCanceledEvent(
     anchorKey: resolvedAnchorKey,
   });
   return {
-    feed: nextFeed,
+    feed: dedupeInterruptNotices(nextFeed),
     ...(intentMatches ? {} : pendingInterrupt !== undefined ? { pendingInterrupt } : {}),
   };
 }
@@ -1531,7 +1703,8 @@ function upsertTurnAnchoredNotification(
 ): FeedEntry[] {
   const resolvedAnchorKey = anchor.anchorKey ?? findLastTurnAnchorKey(feed, anchor);
   const stripped = feed.filter((candidate) =>
-    !isSameTurnNotification(candidate, entry, { ...anchor, anchorKey: resolvedAnchorKey }),
+    !isSameTurnNotification(candidate, entry, { ...anchor, anchorKey: resolvedAnchorKey }) &&
+    !isSameVisibleTurnInterruptNotice(feed, candidate, resolvedAnchorKey),
   );
   const anchorIndex = resolvedAnchorKey !== undefined
     ? stripped.findIndex((candidate) => candidate.key === resolvedAnchorKey)
@@ -1544,6 +1717,34 @@ function upsertTurnAnchoredNotification(
     entry,
     ...stripped.slice(anchorIndex + 1),
   ];
+}
+
+function isSameVisibleTurnInterruptNotice(
+  feed: FeedEntry[],
+  candidate: FeedEntry,
+  anchorKey: string | undefined,
+): boolean {
+  if (
+    anchorKey === undefined ||
+    candidate.kind !== "notification" ||
+    !isInterruptNotice(candidate)
+  ) {
+    return false;
+  }
+  if (isOrphanInterruptNotice(candidate)) {
+    return true;
+  }
+  if (candidate.interruptAnchorKey === undefined) {
+    return false;
+  }
+  const anchorIndex = feed.findIndex((entry) => entry.key === anchorKey);
+  const candidateAnchorIndex = feed.findIndex((entry) => entry.key === candidate.interruptAnchorKey);
+  if (anchorIndex < 0 || candidateAnchorIndex < 0) {
+    return false;
+  }
+  const anchorTurnStart = findLastUserMessageIndexAtOrBefore(feed, anchorIndex);
+  const candidateTurnStart = findLastUserMessageIndexAtOrBefore(feed, candidateAnchorIndex);
+  return anchorTurnStart >= 0 && anchorTurnStart === candidateTurnStart;
 }
 
 function isSameTurnNotification(
@@ -1577,6 +1778,9 @@ function isSameTurnNotification(
   ) {
     return true;
   }
+  if (anchor.anchorKey !== undefined && isOrphanInterruptNotice(candidate)) {
+    return true;
+  }
   if (anchor.turnId !== undefined && candidate.turnId === anchor.turnId) {
     return true;
   }
@@ -1584,6 +1788,72 @@ function isSameTurnNotification(
     return true;
   }
   return false;
+}
+
+function findLastUserMessageIndexAtOrBefore(feed: FeedEntry[], index: number): number {
+  for (let cursor = index; cursor >= 0; cursor--) {
+    const entry = feed[cursor];
+    if (entry?.kind === "timeline" && entry.item.kind === "user_message") {
+      return cursor;
+    }
+  }
+  return -1;
+}
+
+function isOrphanInterruptNotice(entry: Extract<FeedEntry, { kind: "notification" }>): boolean {
+  return (
+    isInterruptNotice(entry) &&
+    entry.interruptAnchorKey === undefined &&
+    entry.canonicalTurnId === undefined
+  );
+}
+
+function hasOrphanInterruptNotice(feed: FeedEntry[]): boolean {
+  return feed.some((entry) => entry.kind === "notification" && isOrphanInterruptNotice(entry));
+}
+
+function dedupeInterruptNotices(feed: FeedEntry[]): FeedEntry[] {
+  const keepIndexByGroup = new Map<string, number>();
+  const keep = new Set<number>();
+  for (let index = 0; index < feed.length; index++) {
+    const entry = feed[index];
+    if (entry?.kind !== "notification" || !isInterruptNotice(entry)) {
+      keep.add(index);
+      continue;
+    }
+    const group = interruptNoticeGroupKey(feed, index, entry);
+    const previous = keepIndexByGroup.get(group);
+    if (previous !== undefined) {
+      keep.delete(previous);
+    }
+    keepIndexByGroup.set(group, index);
+    keep.add(index);
+  }
+  return feed.filter((_, index) => keep.has(index));
+}
+
+function interruptNoticeGroupKey(
+  feed: FeedEntry[],
+  index: number,
+  entry: Extract<FeedEntry, { kind: "notification" }>,
+): string {
+  const anchorIndex = entry.interruptAnchorKey !== undefined
+    ? feed.findIndex((candidate) => candidate.key === entry.interruptAnchorKey)
+    : -1;
+  const userIndex = findLastUserMessageIndexAtOrBefore(
+    feed,
+    anchorIndex >= 0 ? anchorIndex : index,
+  );
+  if (userIndex >= 0) {
+    return `user:${feed[userIndex]!.key}`;
+  }
+  if (entry.canonicalTurnId !== undefined) {
+    return `canonical:${entry.canonicalTurnId}`;
+  }
+  if (entry.turnId !== undefined) {
+    return `turn:${entry.turnId}`;
+  }
+  return "orphan";
 }
 
 function findLastTurnAnchorIndex(
@@ -1786,10 +2056,19 @@ export function applyEventToProjection(
       break;
     case "turn.canceled":
       {
-        const result = applyTurnCanceledEvent(nextFeed, event, nextPendingInterrupt);
+        const result = applyTurnCanceledEvent(
+          clearPendingPermissionEntriesForTurn(nextFeed, event),
+          event,
+          nextPendingInterrupt,
+        );
         nextFeed = result.feed;
         nextPendingInterrupt = result.pendingInterrupt;
       }
+      break;
+    case "turn.failed":
+      nextFeed = clearPendingPermissionEntriesForTurn(nextFeed, event);
+      break;
+    case "turn.completed":
       break;
     case "notification.emitted":
       nextFeed = applyNotificationEvent(nextFeed, event);

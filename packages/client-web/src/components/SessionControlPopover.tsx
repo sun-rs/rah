@@ -25,6 +25,7 @@ export function SessionControlPopover(props: {
   showModel: boolean;
   buttonClassName: string;
   align?: "left" | "right";
+  onOpen?: (() => void) | undefined;
   onAccessModeChange: (modeId: string) => void;
   onPlanModeToggle: (enabled: boolean) => void;
   onModelChange: (modelId: string, defaultReasoningId?: string | null) => void;
@@ -37,7 +38,7 @@ export function SessionControlPopover(props: {
   const [notice, setNotice] = useState<{ message: string; style: CSSProperties } | null>(null);
   const hasModes = props.accessModes.length > 0 || props.planModeAvailable;
   const hasModel =
-    props.showModel && Boolean(props.modelCatalog || props.modelCatalogLoading);
+    props.showModel && Boolean(props.modelCatalog || props.modelCatalogLoading || props.onOpen);
   const hasControls = hasModes || hasModel;
   const unavailable = !hasControls && Boolean(props.unavailableMessage);
   const enabled = (hasControls || unavailable) && !props.disabled;
@@ -138,7 +139,12 @@ export function SessionControlPopover(props: {
             showNotice(props.unavailableMessage ?? "Session controls are unavailable for this session.");
             return;
           }
-          setOpen((current) => !current);
+          setOpen((current) => {
+            if (!current) {
+              props.onOpen?.();
+            }
+            return !current;
+          });
         }}
         className={`${props.buttonClassName} ${
           !enabled
@@ -192,6 +198,7 @@ export function SessionControlPopover(props: {
                     planModeAvailable={props.planModeAvailable}
                     planModeEnabled={props.planModeEnabled}
                     disabled={props.disabled || (props.modeDisabled ?? false)}
+                    onOpen={props.onOpen}
                     onAccessModeChange={props.onAccessModeChange}
                     onPlanModeToggle={props.onPlanModeToggle}
                   />
@@ -207,6 +214,7 @@ export function SessionControlPopover(props: {
                     {...(props.allowProviderDefault !== undefined
                       ? { allowProviderDefault: props.allowProviderDefault }
                       : {})}
+                    onOpen={props.onOpen}
                     onModelChange={props.onModelChange}
                     onReasoningChange={props.onReasoningChange}
                   />

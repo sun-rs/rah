@@ -262,7 +262,7 @@ const NATIVE_TUI_INTERRUPT_CONFIRM_TIMEOUT_MS = 5_000;
 const OPENCODE_SECOND_INTERRUPT_DELAY_MS = 120;
 const NATIVE_TUI_CLEAR_PROMPT_DATA = "\u0015\u000b";
 const NATIVE_TUI_SUBMIT_DELAY_MS = 250;
-const ZELLIJ_TUI_CLEAR_PROMPT_SETTLE_MS = 120;
+const ZELLIJ_TUI_CLEAR_PROMPT_SETTLE_MS = 250;
 const NATIVE_TUI_OUTPUT_OBSERVATION_TAIL_LIMIT = 12_000;
 
 export function nativeTuiInterruptDataForProvider(provider: ProviderKind): string {
@@ -940,6 +940,7 @@ export class RuntimeTerminalCoordinator {
 
   private clearNativeTuiPromptInput(native: NativeTuiSessionState): void {
     native.promptTracker.draftText = "";
+    delete native.clearPromptBeforeNextInput;
     const zellij = this.zellijTuiSessions.get(native.sessionId);
     if (zellij) {
       void this.withZellijActionSurface(zellij, async () => {

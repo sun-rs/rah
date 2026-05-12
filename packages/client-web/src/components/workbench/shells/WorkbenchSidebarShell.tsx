@@ -22,14 +22,13 @@ export function WorkbenchSidebarShell(props: {
   councilActive: boolean;
   mobileCanvasEnabled: boolean;
   onOpenCouncil: () => void;
-  onDesktopHome: () => void;
   onDesktopToggleCanvas: () => void;
   onMobileToggleCanvas: () => void;
-  onMobileHome: () => void;
   onActivateHistory: (ref: StoredSessionRef) => void;
   onActivateLive: (sessionId: string) => void;
   onRemoveHistorySession: (session: Pick<StoredSessionRef, "provider" | "providerSessionId">) => void;
   onRemoveHistoryWorkspace: (workspaceDir: string) => void;
+  onHome: () => void;
   onOpenSettings: () => void;
   onCollapseSidebar: () => void;
 }) {
@@ -39,7 +38,7 @@ export function WorkbenchSidebarShell(props: {
         className="hidden md:flex flex-col bg-[var(--app-subtle-bg)] shrink-0 transition-[width] duration-200 overflow-hidden"
         style={{ width: props.sidebarOpen ? props.sidebarWidth : 0 }}
       >
-        <div className="h-14 px-4 flex items-center justify-between shrink-0">
+        <div className="h-14 pl-4 pr-2 flex items-center gap-4 shrink-0">
           {props.sidebarOpen ? (
             <DesktopWorkbenchSidebarHeader
               storedSessions={props.storedSessions}
@@ -50,12 +49,12 @@ export function WorkbenchSidebarShell(props: {
               canvasActive={props.canvasActive}
               councilActive={props.councilActive}
               onOpenCouncil={props.onOpenCouncil}
-              onHome={props.onDesktopHome}
               onToggleCanvas={props.onDesktopToggleCanvas}
               onActivateHistory={props.onActivateHistory}
               onActivateLive={props.onActivateLive}
               onRemoveHistorySession={props.onRemoveHistorySession}
               onRemoveHistoryWorkspace={props.onRemoveHistoryWorkspace}
+              onHome={props.onHome}
               onOpenSettings={props.onOpenSettings}
               onCollapseSidebar={props.onCollapseSidebar}
             />
@@ -75,7 +74,17 @@ export function WorkbenchSidebarShell(props: {
         open={props.leftOpen}
         onOpenChange={props.onLeftOpenChange}
         side="left"
-        title="Workbench"
+        title={
+          <button
+            type="button"
+            onClick={props.onHome}
+            className="icon-click-feedback rounded-md px-1 text-sm font-semibold text-[var(--app-fg)] transition-colors hover:bg-[var(--app-bg)]"
+            aria-label="Home"
+            title="Home"
+          >
+            RAH
+          </button>
+        }
         headerRight={
           <MobileWorkbenchHeaderActions
             storedSessions={props.storedSessions}
@@ -87,7 +96,6 @@ export function WorkbenchSidebarShell(props: {
             councilActive={props.councilActive}
             canvasEnabled={props.mobileCanvasEnabled}
             onOpenCouncil={props.onOpenCouncil}
-            onHome={props.onMobileHome}
             onToggleCanvas={props.onMobileToggleCanvas}
             onActivateHistory={props.onActivateHistory}
             onActivateLive={props.onActivateLive}

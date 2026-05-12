@@ -17,6 +17,7 @@ import { resolveCodexRuntimeCapabilityState } from "../codex-model-catalog";
 import { toSessionSummary } from "../session-store";
 import {
   buildCodexModeState,
+  codexPlanAccessModeId,
   codexModeId,
   isCodexModeId,
   parseCodexModeId,
@@ -48,29 +49,42 @@ function resolveCodexStartupMode(args: {
   sandbox?: string | undefined;
   fallbackApprovalPolicy?: string | undefined;
   fallbackSandboxMode?: string | undefined;
+  fallbackApprovalsReviewer?: "user" | "auto_review" | undefined;
 }): {
   activeModeId: string;
   accessModeId: string;
   approvalPolicy: string;
   sandboxMode: string;
+  approvalsReviewer: "user" | "auto_review";
 } {
   const fallbackApprovalPolicy = args.fallbackApprovalPolicy ?? "never";
   const fallbackSandboxMode = args.fallbackSandboxMode ?? "danger-full-access";
+  const fallbackApprovalsReviewer = args.fallbackApprovalsReviewer ?? "user";
   const requestedModeId = args.modeId?.trim();
   if (requestedModeId) {
     if (!isCodexModeId(requestedModeId)) {
       throw new Error(`Unsupported Codex mode '${requestedModeId}'.`);
     }
-    if (requestedModeId === "plan") {
-      const accessModeId = codexModeId({
-        approvalPolicy: fallbackApprovalPolicy,
-        sandboxMode: fallbackSandboxMode,
-      });
+    const planAccessModeId = codexPlanAccessModeId(requestedModeId);
+    if (requestedModeId === "plan" || planAccessModeId) {
+      const parsedAccessMode = planAccessModeId ? parseCodexModeId(planAccessModeId) : null;
+      const approvalPolicy = parsedAccessMode?.approvalPolicy ?? fallbackApprovalPolicy;
+      const sandboxMode = parsedAccessMode?.sandboxMode ?? fallbackSandboxMode;
+      const approvalsReviewer =
+        parsedAccessMode?.approvalsReviewer ?? fallbackApprovalsReviewer;
+      const accessModeId =
+        planAccessModeId ??
+        codexAccessModeIdForConfig({
+          approvalPolicy,
+          sandboxMode,
+          approvalsReviewer,
+        });
       return {
         activeModeId: "plan",
         accessModeId,
-        approvalPolicy: fallbackApprovalPolicy,
-        sandboxMode: fallbackSandboxMode,
+        approvalPolicy,
+        sandboxMode,
+        approvalsReviewer,
       };
     }
     const parsed = parseCodexModeId(requestedModeId);
@@ -82,17 +96,41 @@ function resolveCodexStartupMode(args: {
       accessModeId: requestedModeId,
       approvalPolicy: parsed.approvalPolicy,
       sandboxMode: parsed.sandboxMode,
+      approvalsReviewer: parsed.approvalsReviewer ?? "user",
     };
   }
   const approvalPolicy = args.approvalPolicy ?? fallbackApprovalPolicy;
   const sandboxMode = args.sandbox ?? fallbackSandboxMode;
-  const accessModeId = codexModeId({ approvalPolicy, sandboxMode });
+  const accessModeId = codexAccessModeIdForConfig({
+    approvalPolicy,
+    sandboxMode,
+    approvalsReviewer: fallbackApprovalsReviewer,
+  });
   return {
     activeModeId: accessModeId,
     accessModeId,
     approvalPolicy,
     sandboxMode,
+    approvalsReviewer: fallbackApprovalsReviewer,
   };
+}
+
+function codexAccessModeIdForConfig(args: {
+  approvalPolicy: string;
+  sandboxMode: string;
+  approvalsReviewer: "user" | "auto_review";
+}): string {
+  if (
+    args.approvalsReviewer === "auto_review" &&
+    args.approvalPolicy === "on-request" &&
+    args.sandboxMode === "workspace-write"
+  ) {
+    return "auto-review/workspace-write";
+  }
+  return codexModeId({
+    approvalPolicy: args.approvalPolicy,
+    sandboxMode: args.sandboxMode,
+  });
 }
 
 export async function loadCodexPlanCollaborationMode(client: CodexAppServerRpcClient): Promise<LiveCodexSession["planCollaborationMode"]> {
@@ -229,6 +267,7 @@ export async function startCodexLiveSession(params: {
       cwd: request.cwd,
       approvalPolicy: initialMode.approvalPolicy,
       sandboxMode: initialMode.sandboxMode,
+      approvalsReviewer: initialMode.approvalsReviewer,
       modelId: currentModelId,
       reasoningId: currentReasoningId,
       modelCatalog: params.initialModelCatalog ?? null,
@@ -261,6 +300,9 @@ export async function startCodexLiveSession(params: {
     ...(request.cwd ? { cwd: request.cwd } : {}),
     approvalPolicy: initialMode.approvalPolicy,
     sandbox: initialMode.sandboxMode,
+    ...(initialMode.approvalsReviewer === "auto_review"
+      ? { approvalsReviewer: initialMode.approvalsReviewer }
+      : {}),
     ...(request.model ? { model: request.model } : {}),
     experimentalRawEvents: false,
     persistExtendedHistory: true,
@@ -378,6 +420,7 @@ export async function startCodexLiveSession(params: {
     cwd: request.cwd,
     approvalPolicy: initialMode.approvalPolicy,
     sandboxMode: initialMode.sandboxMode,
+    approvalsReviewer: initialMode.approvalsReviewer,
     modelId: currentModelId,
     reasoningId: currentReasoningId,
     modelCatalog: params.initialModelCatalog ?? null,
@@ -418,11 +461,23 @@ export async function resumeCodexLiveSession(params: {
   const bridge = createLiveSessionBridge(services, client);
   const planCollaborationMode = await loadCodexPlanCollaborationMode(client);
   try {
+    const resumeModeOverride = request.modeId
+      ? resolveCodexStartupMode({ modeId: request.modeId })
+      : null;
     const resumeResponse = (await client.request(
       "thread/resume",
       {
         threadId: request.providerSessionId,
         excludeTurns: true,
+        ...(resumeModeOverride
+          ? {
+              approvalPolicy: resumeModeOverride.approvalPolicy,
+              sandbox: resumeModeOverride.sandboxMode,
+              ...(resumeModeOverride.approvalsReviewer === "auto_review"
+                ? { approvalsReviewer: resumeModeOverride.approvalsReviewer }
+                : {}),
+            }
+          : {}),
       },
       TURN_START_TIMEOUT_MS,
     )) as {
@@ -436,6 +491,7 @@ export async function resumeCodexLiveSession(params: {
       cwd?: string;
       approval_policy?: string;
       sandbox?: string;
+      approvalsReviewer?: "user" | "auto_review";
       model?: string;
       reasoningEffort?: string | null;
       reasoning_effort?: string | null;
@@ -459,6 +515,7 @@ export async function resumeCodexLiveSession(params: {
         typeof resumeResponse.sandbox === "string"
           ? resumeResponse.sandbox
         : undefined,
+      fallbackApprovalsReviewer: resumeResponse.approvalsReviewer,
     });
     const currentModelId =
       request.model ??
@@ -600,6 +657,7 @@ export async function resumeCodexLiveSession(params: {
       cwd,
       approvalPolicy: resumedMode.approvalPolicy,
       sandboxMode: resumedMode.sandboxMode,
+      approvalsReviewer: resumedMode.approvalsReviewer,
       modelId: currentModelId,
       reasoningId: currentReasoningId,
       modelCatalog: params.initialModelCatalog ?? null,

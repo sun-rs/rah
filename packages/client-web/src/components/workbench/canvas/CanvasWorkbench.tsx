@@ -200,12 +200,12 @@ export function CanvasWorkbench(props: {
           {!props.sidebarOpen ? (
             <button
               type="button"
-              className="hidden h-7 w-7 shrink-0 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] min-[700px]:inline-flex"
+              className="icon-click-feedback hidden h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] min-[700px]:inline-flex"
               onClick={props.onExpandSidebar}
               aria-label="Expand sidebar"
               title="Expand sidebar"
             >
-              <Menu size={16} />
+              <Menu size={18} />
             </button>
           ) : null}
           <div className="min-w-0">

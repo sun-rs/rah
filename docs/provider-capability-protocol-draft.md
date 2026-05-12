@@ -276,7 +276,7 @@ The UI should not hardcode provider logic such as:
 
 - "Claude always shows effort"
 - "Codex full auto means this exact approval/sandbox tuple"
-- "OpenCode full auto means this exact permission ruleset"
+- "OpenCode mode names imply a RAH-defined permission ruleset"
 
 Those decisions belong to adapter-produced capability profiles.
 

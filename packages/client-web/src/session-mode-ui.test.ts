@@ -8,8 +8,8 @@ import { resolveSelectedModelDraft } from "./components/SessionModelControls";
 import type { ProviderKind, ProviderModelCatalog, SessionSummary } from "@rah/runtime-protocol";
 
 describe("session mode UI defaults", () => {
-  test("uses mode roles from provider catalogs for canonical labels", () => {
-    const catalog = modeCatalog("opencode", "opencode/full-auto");
+  test("uses provider-native labels from catalogs", () => {
+    const catalog = modeCatalog("opencode", "build");
     const state = resolveSessionModeControlState({
       provider: "opencode",
       catalog,
@@ -17,16 +17,16 @@ describe("session mode UI defaults", () => {
 
     assert.deepEqual(
       state.accessModes.map((mode) => mode.label),
-      ["Ask", "Full auto"],
+      ["Build", "Plan"],
     );
-    assert.equal(state.selectedAccessModeId, "opencode/full-auto");
+    assert.equal(state.selectedAccessModeId, "build");
   });
 
   test("uses one canonical label set for new-session and live-session controls", () => {
-    const catalog = modeCatalog("opencode", "opencode/full-auto");
-    const preset = resolveSessionModeControlState({ provider: "opencode", catalog });
+    const catalog = modeCatalog("codex", "never/danger-full-access");
+    const preset = resolveSessionModeControlState({ provider: "codex", catalog });
     const live = resolveSessionModeControlState({
-      provider: "opencode",
+      provider: "codex",
       summary: {
         session: {
           mode: {
@@ -55,12 +55,12 @@ describe("session mode UI defaults", () => {
       {
         codex: selectedAccessModeId("codex", "never/danger-full-access"),
         claude: selectedAccessModeId("claude", "bypassPermissions"),
-        opencode: selectedAccessModeId("opencode", "opencode/full-auto"),
+        opencode: selectedAccessModeId("opencode", "build"),
       },
       {
         codex: "never/danger-full-access",
         claude: "bypassPermissions",
-        opencode: "opencode/full-auto",
+        opencode: "build",
       },
     );
   });
@@ -70,30 +70,30 @@ describe("session mode UI defaults", () => {
     assert.equal(createDefaultModeDraft("opencode").accessModeId, null);
   });
 
-  test("keeps full-auto access modes as the final visible option", () => {
+  test("keeps the provider catalog order for visible controls", () => {
     assert.deepEqual(
       {
         codex: lastAccessModeId("codex", "never/danger-full-access"),
         claude: lastAccessModeId("claude", "bypassPermissions"),
-        opencode: lastAccessModeId("opencode", "opencode/full-auto"),
+        opencode: lastAccessModeId("opencode", "build"),
       },
       {
         codex: "never/danger-full-access",
         claude: "bypassPermissions",
-        opencode: "opencode/full-auto",
+        opencode: "plan",
       },
     );
   });
 
-  test("labels provider prompt modes as Ask", () => {
+  test("labels provider modes with native names", () => {
     assert.deepEqual(
       {
         claude: firstAccessModeLabel("claude", "bypassPermissions"),
-        opencode: firstAccessModeLabel("opencode", "opencode/full-auto"),
+        opencode: firstAccessModeLabel("opencode", "build"),
       },
       {
-        claude: "Ask",
-        opencode: "Ask",
+        claude: "Default",
+        opencode: "Build",
       },
     );
   });
@@ -112,6 +112,21 @@ describe("session mode UI defaults", () => {
       catalog: modeCatalog("claude", "bypassPermissions"),
     });
     assert.equal(claude.accessModes.some((mode) => mode.id === "auto"), false);
+  });
+
+  test("keeps Claude plan as a mutually exclusive session mode", () => {
+    const state = resolveSessionModeControlState({
+      provider: "claude",
+      catalog: modeCatalog("claude", "bypassPermissions"),
+      draft: { accessModeId: "plan", planEnabled: false },
+    });
+
+    assert.deepEqual(
+      state.accessModes.map((mode) => mode.id),
+      ["default", "acceptEdits", "plan", "bypassPermissions"],
+    );
+    assert.equal(state.planModeAvailable, false);
+    assert.equal(state.effectiveModeId, "plan");
   });
 
   test("uses catalog modes when live summary has no available modes", () => {
@@ -168,24 +183,78 @@ describe("session mode UI defaults", () => {
       } as SessionSummary,
     });
 
-    assert.deepEqual(
-      state.accessModes.map((mode) => mode.label),
-      ["Ask", "Full auto"],
-    );
+    assert.deepEqual(state.accessModes.map((mode) => mode.label), ["Ask", "Full Access"]);
     assert.equal(state.planModeAvailable, true);
   });
 
-  test("normalizes provider full-auto labels to the standard wording", () => {
+  test("keeps Codex plan and access preset together in the submitted mode id", () => {
+    const state = resolveSessionModeControlState({
+      provider: "codex",
+      catalog: modeCatalog("codex", "never/danger-full-access"),
+      draft: { accessModeId: "auto-review/workspace-write", planEnabled: true },
+    });
+
+    assert.equal(state.selectedAccessModeId, "auto-review/workspace-write");
+    assert.equal(state.planModeEnabled, true);
+    assert.equal(state.effectiveModeId, "plan:auto-review/workspace-write");
+  });
+
+  test("uses Codex live preferred access when current mode is plan", () => {
+    const state = resolveSessionModeControlState({
+      provider: "codex",
+      catalog: modeCatalog("codex", "never/danger-full-access"),
+      summary: {
+        session: {
+          mode: {
+            currentModeId: "plan",
+            availableModes: [
+              {
+                id: "auto-review/workspace-write",
+                role: "auto_edit",
+                label: "Auto Review",
+                hotSwitch: true,
+              },
+              {
+                id: "on-request/workspace-write",
+                role: "ask",
+                label: "Default",
+                hotSwitch: true,
+              },
+              {
+                id: "plan",
+                role: "plan",
+                label: "Plan",
+                hotSwitch: true,
+              },
+              {
+                id: "never/danger-full-access",
+                role: "full_auto",
+                label: "Full Access",
+                hotSwitch: true,
+              },
+            ],
+            mutable: true,
+            source: "native",
+          },
+        },
+      } as SessionSummary,
+    });
+
+    assert.equal(state.planModeEnabled, true);
+    assert.equal(state.selectedAccessModeId, "auto-review/workspace-write");
+    assert.equal(state.effectiveModeId, "plan:auto-review/workspace-write");
+  });
+
+  test("keeps OpenCode plan as an agent option instead of a separate toggle", () => {
     const state = resolveSessionModeControlState({
       provider: "opencode",
       summary: {
         session: {
           mode: {
-            currentModeId: "opencode/full-auto",
+            currentModeId: "plan",
             availableModes: [
-              { id: "build", label: "Ask", hotSwitch: true },
-              { id: "plan", role: "plan", label: "Plan", hotSwitch: true },
-              { id: "opencode/full-auto", role: "full_auto", label: "YOLO", hotSwitch: true },
+              { id: "build", role: "custom", label: "Build", hotSwitch: true },
+              { id: "plan", role: "custom", label: "Plan", hotSwitch: true },
             ],
             mutable: true,
             source: "native",
@@ -196,9 +265,32 @@ describe("session mode UI defaults", () => {
 
     assert.deepEqual(
       state.accessModes.map((mode) => mode.label),
-      ["Ask", "Full auto"],
+      ["Build", "Plan"],
     );
-    assert.equal(state.selectedAccessModeId, "opencode/full-auto");
+    assert.equal(state.selectedAccessModeId, "plan");
+    assert.equal(state.planModeAvailable, false);
+  });
+
+  test("keeps OpenCode custom agent labels provider-native", () => {
+    const state = resolveSessionModeControlState({
+      provider: "opencode",
+      catalog: {
+        provider: "opencode",
+        models: [],
+        fetchedAt: new Date().toISOString(),
+        source: "native",
+        defaultModeId: "default",
+        modes: [
+          { id: "default", role: "custom", label: "default", hotSwitch: true },
+          { id: "yolo", role: "custom", label: "yolo", hotSwitch: true },
+        ],
+      },
+    });
+
+    assert.deepEqual(
+      state.accessModes.map((mode) => mode.label),
+      ["default", "yolo"],
+    );
   });
 
   test("prefers provider catalog modes over frontend fallback presets", () => {
@@ -209,9 +301,9 @@ describe("session mode UI defaults", () => {
       source: "native",
       defaultModeId: "provider/full",
       modes: [
-        { id: "provider/ask", role: "ask", label: "Provider ask", hotSwitch: true },
-        { id: "plan", role: "plan", label: "Plan", hotSwitch: true },
-        { id: "provider/full", role: "full_auto", label: "Provider full", hotSwitch: true },
+        { id: "provider/ask", role: "custom", label: "Provider ask", hotSwitch: true },
+        { id: "plan", role: "custom", label: "Plan", hotSwitch: true },
+        { id: "provider/full", role: "custom", label: "Provider full", hotSwitch: true },
       ],
     };
 
@@ -222,10 +314,10 @@ describe("session mode UI defaults", () => {
 
     assert.deepEqual(
       state.accessModes.map((mode) => mode.id),
-      ["provider/ask", "provider/full"],
+      ["provider/ask", "plan", "provider/full"],
     );
     assert.equal(state.selectedAccessModeId, "provider/full");
-    assert.equal(state.planModeAvailable, true);
+    assert.equal(state.planModeAvailable, false);
   });
 });
 
@@ -308,22 +400,20 @@ function selectedAccessModeId(provider: ProviderKind, defaultModeId: string): st
 function modeCatalog(provider: ProviderKind, defaultModeId: string): ProviderModelCatalog {
   const modes = {
     codex: [
-      { id: "on-request/read-only", role: "ask", label: "Ask", hotSwitch: true },
-      { id: "on-request/workspace-write", role: "auto_edit", label: "Auto edit", hotSwitch: true },
-      { id: "never/workspace-write", role: "full_auto", label: "Full auto · sandboxed", hotSwitch: true },
+      { id: "on-request/workspace-write", role: "ask", label: "Default", hotSwitch: true },
+      { id: "auto-review/workspace-write", role: "auto_edit", label: "Auto Review", hotSwitch: true },
       { id: "plan", role: "plan", label: "Plan", hotSwitch: true },
-      { id: "never/danger-full-access", role: "full_auto", label: "Full auto", hotSwitch: true },
+      { id: "never/danger-full-access", role: "full_auto", label: "Full Access", hotSwitch: true },
     ],
     claude: [
-      { id: "default", role: "ask", label: "Ask", hotSwitch: true },
-      { id: "acceptEdits", role: "auto_edit", label: "Auto edit", hotSwitch: true },
+      { id: "default", role: "ask", label: "Default", hotSwitch: true },
+      { id: "acceptEdits", role: "auto_edit", label: "Accept Edits", hotSwitch: true },
       { id: "plan", role: "plan", label: "Plan", hotSwitch: true },
-      { id: "bypassPermissions", role: "full_auto", label: "Full auto", hotSwitch: true },
+      { id: "bypassPermissions", role: "full_auto", label: "Bypass Permissions", hotSwitch: true },
     ],
     opencode: [
-      { id: "build", role: "ask", label: "Ask", hotSwitch: true },
-      { id: "plan", role: "plan", label: "Plan", hotSwitch: true },
-      { id: "opencode/full-auto", role: "full_auto", label: "Full auto", hotSwitch: true },
+      { id: "build", role: "custom", label: "Build", hotSwitch: true },
+      { id: "plan", role: "custom", label: "Plan", hotSwitch: true },
     ],
     custom: [],
   } satisfies Record<ProviderKind, NonNullable<ProviderModelCatalog["modes"]>>;

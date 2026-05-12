@@ -48,6 +48,7 @@ function timelineEvent(args: {
   text: string;
   kind?: "user_message" | "assistant_message" | "reasoning";
   messageId?: string;
+  clientMessageId?: string;
   canonicalItemId?: string;
   canonicalTurnId?: string;
   ts?: string;
@@ -70,6 +71,9 @@ function timelineEvent(args: {
         kind,
         text: args.text,
         ...(args.messageId && kind !== "reasoning" ? { messageId: args.messageId } : {}),
+        ...(args.clientMessageId && kind === "user_message"
+          ? { clientMessageId: args.clientMessageId }
+          : {}),
       },
       ...(args.canonicalItemId
         ? {
@@ -344,6 +348,72 @@ test("prependHistoryPage dedupes weak user echoes once authoritative history arr
         : null,
     ),
     ["message-1"],
+  );
+});
+
+test("mergeLatestHistoryPage dedupes provisional OpenCode user echo against canonical history", () => {
+  const current = replayEventsIntoProjection(summary(), [
+    timelineEvent({
+      seq: 2,
+      turnId: "client-turn",
+      text: "你是谁，你在 build 模式吗",
+      clientMessageId: "client-message-1",
+    }),
+  ]);
+
+  const next = mergeLatestHistoryPage(current, [
+    timelineEvent({
+      seq: 1,
+      turnId: "opencode:message-1",
+      text: "你是谁，你在 build 模式吗",
+      messageId: "message-1",
+      canonicalItemId: "opencode-user-1",
+    }),
+  ]);
+
+  assert.equal(next.feed.length, 1);
+  const [entry] = next.feed;
+  assert.equal(entry?.kind, "timeline");
+  assert.equal(entry?.kind === "timeline" ? entry.canonicalItemId : null, "opencode-user-1");
+  assert.equal(
+    entry?.kind === "timeline" && entry.item.kind === "user_message"
+      ? entry.item.messageId
+      : null,
+    "message-1",
+  );
+});
+
+test("mergeLatestHistoryPage keeps far-apart same-text provisional user turns separate", () => {
+  const current = replayEventsIntoProjection(summary(), [
+    timelineEvent({
+      seq: 10,
+      turnId: "client-turn",
+      text: "继续",
+      clientMessageId: "client-message-1",
+    }),
+  ]);
+
+  const next = mergeLatestHistoryPage(current, [
+    timelineEvent({
+      seq: 1,
+      turnId: "opencode:message-1",
+      text: "继续",
+      messageId: "message-1",
+      canonicalItemId: "opencode-user-1",
+    }),
+  ]);
+
+  const userMessages = next.feed.filter(
+    (entry) => entry.kind === "timeline" && entry.item.kind === "user_message",
+  );
+  assert.equal(userMessages.length, 2);
+  assert.deepEqual(
+    userMessages.map((entry) =>
+      entry.kind === "timeline" && entry.item.kind === "user_message"
+        ? entry.item.messageId ?? entry.item.clientMessageId ?? null
+        : null,
+    ),
+    ["message-1", "client-message-1"],
   );
 });
 

@@ -8,8 +8,9 @@ import {
   type ManagedSession,
   type PermissionResponseRequest,
   type ProviderModelCatalog,
-  type SessionRuntimeDiagnostics,
   type SessionInputRequest,
+  type SessionModeDescriptor,
+  type SessionRuntimeDiagnostics,
   type StartSessionRequest,
 } from "@rah/runtime-protocol";
 import type { RuntimeServices } from "../provider-adapter";
@@ -19,18 +20,17 @@ import {
   abortOpenCodeSession,
   createOpenCodeSession,
   getOpenCodeSession,
-  promptOpenCodeSessionAsync,
+  promptOpenCodeSession,
   respondOpenCodePermission,
-  setOpenCodeSessionPermission,
   startOpenCodeServer,
   stopOpenCodeServer,
   subscribeOpenCodeEvents,
-  type OpenCodePermissionRule,
   type OpenCodeServerHandle,
   type OpenCodeSessionInfo,
 } from "../opencode-api";
 import {
   createOpenCodeActivityState,
+  recordOpenCodeSubmittedUserMessage,
   startOpenCodeTurn,
   translateOpenCodeMessage,
   translateOpenCodeEvent,
@@ -46,7 +46,11 @@ import {
   resolveModelContextWindow,
   type ModelContextWindowResolution,
 } from "../model-context-window";
-import { buildOpenCodeModeState, isOpenCodeModeId } from "../session-mode-utils";
+import {
+  buildOpenCodeModeState,
+  defaultProviderModeId,
+  isOpenCodeModeId,
+} from "../session-mode-utils";
 import { optionValueAsString, resolveModelOptionValues } from "../session-model-options";
 
 export interface LiveOpenCodeSession {
@@ -62,9 +66,12 @@ export interface LiveOpenCodeSession {
   contextWindow?: ModelContextWindowResolution;
   reasoningId?: string | null;
   modeId: string;
+  availableModes: SessionModeDescriptor[];
   queuedInputs: SessionInputRequest[];
   abortRetryTimers?: Array<ReturnType<typeof setTimeout>>;
   abortPendingTurnId?: string;
+  locallyCanceledTurnIds?: Set<string>;
+  localCancelMirrorSuppressUntilMs?: number;
 }
 
 const SESSION_SOURCE = {
@@ -73,7 +80,6 @@ const SESSION_SOURCE = {
   authority: "authoritative" as const,
 };
 
-const OPENCODE_FULL_AUTO_MODE_ID = "opencode/full-auto";
 const RAH_SESSION_MODE_CONFIG_KEY = "rah_session_mode";
 const OPENCODE_HISTORY_MIRROR_INTERVAL_MS = 750;
 
@@ -90,48 +96,46 @@ export function runtimeDiagnosticsForOpenCodeServer(
   };
 }
 
-function openCodePermissionOverride(action: OpenCodePermissionRule["action"]): OpenCodePermissionRule[] {
-  return [{ permission: "*", pattern: "*", action }];
-}
-
-function openCodeNativeModeId(modeId: string): "build" | "plan" {
-  return modeId === "plan" ? "plan" : "build";
+function openCodeNativeModeId(modeId: string): string {
+  return modeId;
 }
 
 function resolveRequestedOpenCodeModeId(
   modeId: string | undefined,
   providerConfig: StartSessionRequest["providerConfig"] | undefined,
+  availableModes: readonly SessionModeDescriptor[],
 ): string {
   const requestedMode = modeId ?? providerConfig?.[RAH_SESSION_MODE_CONFIG_KEY];
   if (typeof requestedMode === "string" && requestedMode.trim()) {
     const normalized = requestedMode.trim();
-    if (!isOpenCodeModeId(normalized)) {
+    if (!isOpenCodeModeId(normalized, availableModes)) {
       throw new Error(`Unsupported OpenCode mode '${normalized}'.`);
     }
     return normalized;
   }
-  return OPENCODE_FULL_AUTO_MODE_ID;
+  return defaultProviderModeId("opencode") ?? "build";
 }
 
 async function applyOpenCodePermissionMode(
-  liveSession: LiveOpenCodeSession,
-  modeId: string,
+  _liveSession: LiveOpenCodeSession,
+  _modeId: string,
 ): Promise<void> {
-  if (modeId === OPENCODE_FULL_AUTO_MODE_ID) {
-    await setOpenCodeSessionPermission({
-      handle: liveSession.server,
-      providerSessionId: liveSession.providerSessionId,
-      permission: openCodePermissionOverride("allow"),
-    });
-    return;
+  // OpenCode exposes provider-native agents (for example build/plan) here.
+  // Permission policy is not modeled as a RAH mode; do not synthesize
+  // non-native modes such as "full auto" or rewrite OpenCode permissions.
+}
+
+function openCodeAvailableModes(
+  catalog: ProviderModelCatalog | null | undefined,
+): SessionModeDescriptor[] {
+  const modes = catalog?.modes ?? [];
+  if (modes.length > 0) {
+    return modes;
   }
-  if (modeId === "build" || liveSession.modeId === OPENCODE_FULL_AUTO_MODE_ID) {
-    await setOpenCodeSessionPermission({
-      handle: liveSession.server,
-      providerSessionId: liveSession.providerSessionId,
-      permission: openCodePermissionOverride("ask"),
-    });
-  }
+  return buildOpenCodeModeState({
+    currentModeId: defaultProviderModeId("opencode") ?? "build",
+    mutable: true,
+  }).availableModes;
 }
 
 function publishSessionBootstrap(
@@ -226,6 +230,34 @@ function applyActivity(
   );
 }
 
+function markOpenCodeTurnLocallyCanceled(liveSession: LiveOpenCodeSession, turnId: string): void {
+  const current = liveSession.locallyCanceledTurnIds ?? new Set<string>();
+  current.add(turnId);
+  liveSession.locallyCanceledTurnIds = current;
+  liveSession.localCancelMirrorSuppressUntilMs = Date.now() + 10_000;
+}
+
+function clearOpenCodeLocalCancelSuppression(liveSession: LiveOpenCodeSession): void {
+  liveSession.locallyCanceledTurnIds?.clear();
+  delete liveSession.localCancelMirrorSuppressUntilMs;
+}
+
+function shouldSuppressMirroredOpenCodeActivity(
+  liveSession: LiveOpenCodeSession,
+  activity: ProviderActivity,
+): boolean {
+  if (activity.type !== "turn_canceled") {
+    return false;
+  }
+  if (liveSession.locallyCanceledTurnIds?.has(activity.turnId) === true) {
+    return true;
+  }
+  return (
+    liveSession.localCancelMirrorSuppressUntilMs !== undefined &&
+    Date.now() <= liveSession.localCancelMirrorSuppressUntilMs
+  );
+}
+
 function isOpenCodeMessageReadyForHistoryMirror(message: OpenCodeMessageWithParts): boolean {
   if (message.info.role === "user") {
     return true;
@@ -263,6 +295,9 @@ function drainOpenCodeHistoryMirror(
     }
     liveSession.mirroredMessageRevisions.set(message.info.id, revision);
     for (const activity of translateOpenCodeMessage(liveSession.activityState, message)) {
+      if (shouldSuppressMirroredOpenCodeActivity(liveSession, activity)) {
+        continue;
+      }
       applyActivity(services, liveSession.sessionId, activity, {
         source: "opencode-history-mirror",
         messageId: message.info.id,
@@ -313,7 +348,12 @@ export async function startOpenCodeLiveSession(params: {
   modelCatalog?: ProviderModelCatalog | null;
 }): Promise<{ liveSession: LiveOpenCodeSession; summary: ReturnType<typeof toSessionSummary> }> {
   const { services, request } = params;
-  const initialModeId = resolveRequestedOpenCodeModeId(request.modeId, request.providerConfig);
+  const availableModes = openCodeAvailableModes(params.modelCatalog);
+  const initialModeId = resolveRequestedOpenCodeModeId(
+    request.modeId,
+    request.providerConfig,
+    availableModes,
+  );
   const currentModelId = request.model ?? params.modelCatalog?.currentModelId ?? null;
   const currentModel = currentModelId
     ? params.modelCatalog?.models.find((model) => model.id === currentModelId)
@@ -381,6 +421,7 @@ export async function startOpenCodeLiveSession(params: {
     mode: buildOpenCodeModeState({
       currentModeId: initialModeId,
       mutable: true,
+      availableModes,
     }),
     ...runtimeCapabilityState,
     capabilities: {
@@ -420,6 +461,7 @@ export async function startOpenCodeLiveSession(params: {
     stopHistoryMirror: () => undefined,
     mirroredMessageRevisions: new Map(),
     modeId: initialModeId,
+    availableModes,
     queuedInputs: [],
     ...(currentModelId ? { model: currentModelId } : {}),
     ...(contextWindow ? { contextWindow } : {}),
@@ -463,7 +505,12 @@ export async function resumeOpenCodeLiveSession(params: {
   modelCatalog?: ProviderModelCatalog | null;
 }): Promise<{ liveSession: LiveOpenCodeSession; summary: ReturnType<typeof toSessionSummary> }> {
   const { services } = params;
-  const initialModeId = resolveRequestedOpenCodeModeId(params.modeId, params.providerConfig);
+  const availableModes = openCodeAvailableModes(params.modelCatalog);
+  const initialModeId = resolveRequestedOpenCodeModeId(
+    params.modeId,
+    params.providerConfig,
+    availableModes,
+  );
   const currentModelId = params.model ?? params.modelCatalog?.currentModelId ?? null;
   const currentModel = currentModelId
     ? params.modelCatalog?.models.find((model) => model.id === currentModelId)
@@ -527,6 +574,7 @@ export async function resumeOpenCodeLiveSession(params: {
     mode: buildOpenCodeModeState({
       currentModeId: initialModeId,
       mutable: true,
+      availableModes,
     }),
     ...runtimeCapabilityState,
     capabilities: {
@@ -566,6 +614,7 @@ export async function resumeOpenCodeLiveSession(params: {
     stopHistoryMirror: () => undefined,
     mirroredMessageRevisions: new Map(),
     modeId: initialModeId,
+    availableModes,
     queuedInputs: [],
     ...(currentModelId ? { model: currentModelId } : {}),
     ...(contextWindow ? { contextWindow } : {}),
@@ -610,7 +659,7 @@ export async function setOpenCodeLiveSessionMode(params: {
   liveSession: LiveOpenCodeSession;
   modeId: string;
 }): Promise<ReturnType<typeof toSessionSummary>> {
-  if (!isOpenCodeModeId(params.modeId)) {
+  if (!isOpenCodeModeId(params.modeId, params.liveSession.availableModes)) {
     throw new Error(`Unsupported OpenCode mode '${params.modeId}'.`);
   }
   await applyOpenCodePermissionMode(params.liveSession, params.modeId);
@@ -621,6 +670,7 @@ export async function setOpenCodeLiveSessionMode(params: {
       mode: buildOpenCodeModeState({
         currentModeId: params.modeId,
         mutable: true,
+        availableModes: params.liveSession.availableModes,
       }),
     },
   );
@@ -636,22 +686,19 @@ function submitOpenCodePrompt(params: {
   // Abort retries belong to the previously interrupted turn. If a recovery
   // prompt starts, stale retry timers must not cancel that new provider turn.
   clearOpenCodeAbortRetries(liveSession);
+  clearOpenCodeLocalCancelSuppression(liveSession);
   const { text } = request;
   const turnId = randomUUID();
   for (const activity of startOpenCodeTurn(liveSession.activityState, turnId)) {
     applyActivity(services, liveSession.sessionId, activity);
   }
-  applyActivity(services, liveSession.sessionId, {
-    type: "timeline_item",
+  recordOpenCodeSubmittedUserMessage(liveSession.activityState, {
+    text,
     turnId,
-    item: {
-      kind: "user_message",
-      text,
-      ...(request.clientMessageId !== undefined ? { clientMessageId: request.clientMessageId } : {}),
-      ...(request.clientTurnId !== undefined ? { clientTurnId: request.clientTurnId } : {}),
-    },
+    ...(request.clientMessageId !== undefined ? { clientMessageId: request.clientMessageId } : {}),
+    ...(request.clientTurnId !== undefined ? { clientTurnId: request.clientTurnId } : {}),
   });
-  void promptOpenCodeSessionAsync({
+  void promptOpenCodeSession({
     handle: liveSession.server,
     providerSessionId: liveSession.providerSessionId,
     text,
@@ -661,6 +708,15 @@ function submitOpenCodePrompt(params: {
       : {}),
     agent: openCodeNativeModeId(liveSession.modeId),
   })
+    .then((message) => {
+      for (const activity of translateOpenCodeMessage(liveSession.activityState, message)) {
+        applyActivity(services, liveSession.sessionId, activity, {
+          source: "opencode-prompt-response",
+          messageId: message.info.id,
+        });
+      }
+      drainQueuedOpenCodeInput(services, liveSession);
+    })
     .catch((error) => {
       patchOpenCodeRuntimeError(services, liveSession, error);
       if (liveSession.activityState.currentTurnId !== turnId) {
@@ -701,6 +757,9 @@ function attachOpenCodeEventSink(params: {
     onEvent: (event) => {
       const activities = translateOpenCodeEvent(liveSession.activityState, event);
       for (const activity of activities) {
+        if (shouldSuppressMirroredOpenCodeActivity(liveSession, activity)) {
+          continue;
+        }
         applyActivity(services, liveSession.sessionId, activity, event);
       }
       reconcileOpenCodeAbortProgress(liveSession, activities);
@@ -784,15 +843,32 @@ export function interruptOpenCodeLiveSession(params: {
     void abortOpenCodeSession({
       handle: liveSession.server,
       providerSessionId: liveSession.providerSessionId,
-    }).catch((error) => {
-      patchOpenCodeRuntimeError(services, liveSession, error);
-      applyActivity(services, liveSession.sessionId, {
-        type: "runtime_status",
-        status: "error",
-        detail: error instanceof Error ? error.message : String(error),
-        ...(turnId ? { turnId } : {}),
+    })
+      .then(() => {
+        if (liveSession.abortPendingTurnId !== turnId) {
+          return;
+        }
+        clearOpenCodePendingAbort(liveSession);
+        if (liveSession.activityState.currentTurnId === turnId) {
+          delete liveSession.activityState.currentTurnId;
+        }
+        markOpenCodeTurnLocallyCanceled(liveSession, turnId);
+        applyActivity(services, liveSession.sessionId, {
+          type: "turn_canceled",
+          turnId,
+          reason: "interrupted",
+        });
+        drainQueuedOpenCodeInput(services, liveSession);
+      })
+      .catch((error) => {
+        patchOpenCodeRuntimeError(services, liveSession, error);
+        applyActivity(services, liveSession.sessionId, {
+          type: "runtime_status",
+          status: "error",
+          detail: error instanceof Error ? error.message : String(error),
+          ...(turnId ? { turnId } : {}),
+        });
       });
-    });
   };
   abortOnce();
   clearOpenCodeAbortRetries(liveSession);

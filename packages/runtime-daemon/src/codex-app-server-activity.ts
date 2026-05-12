@@ -6,6 +6,7 @@ import type {
   PermissionResolution,
   RuntimeOperation,
   TimelineIdentity,
+  TimelineRuntimeModel,
   TimelineTurnIdentity,
   ToolCall,
   ToolCallArtifact,
@@ -18,6 +19,7 @@ import {
   createCodexTimelineTurnIdentity,
 } from "./codex-timeline-identity";
 import type { ProviderActivity } from "./provider-activity";
+import { timelineRuntimeModel } from "./timeline-runtime-model";
 
 export interface CodexLiveTranslatedActivity {
   activity: ProviderActivity;
@@ -44,6 +46,8 @@ export interface CodexAppServerTranslationState {
   timelineItemIndexByProviderItemKey: Map<string, number>;
   userTimelineItemIndexByTurnId: Map<string, number>;
   nextTimelineItemIndexByTurnId: Map<string, number>;
+  pendingRuntimeModel?: TimelineRuntimeModel;
+  runtimeModelByTurnId: Map<string, TimelineRuntimeModel>;
   lastAgentMessageDeltaByItemId: Map<string, string>;
   lastReasoningDeltaByItemId: Map<string, string>;
   lastCommandOutputDeltaByCallId: Map<string, string>;
@@ -68,6 +72,7 @@ export function createCodexAppServerTranslationState(): CodexAppServerTranslatio
     timelineItemIndexByProviderItemKey: new Map(),
     userTimelineItemIndexByTurnId: new Map(),
     nextTimelineItemIndexByTurnId: new Map(),
+    runtimeModelByTurnId: new Map(),
     lastAgentMessageDeltaByItemId: new Map(),
     lastReasoningDeltaByItemId: new Map(),
     lastCommandOutputDeltaByCallId: new Map(),
@@ -308,8 +313,36 @@ function providerSessionIdFromParams(params: Record<string, unknown> | null | un
   );
 }
 
+function codexRuntimeModelFromTurnRecord(turn: Record<string, unknown>): TimelineRuntimeModel | undefined {
+  const collaborationMode = recordField(turn, "collaborationMode") ?? recordField(turn, "collaboration_mode");
+  const settings = collaborationMode
+    ? recordField(collaborationMode, "settings")
+    : null;
+  return timelineRuntimeModel({
+    modelId:
+      turn.model ??
+      turn.modelId ??
+      turn.model_id ??
+      settings?.model,
+    optionId:
+      turn.effort ??
+      turn.reasoningEffort ??
+      turn.reasoning_effort ??
+      settings?.reasoning_effort,
+    optionKind: "reasoning_effort",
+    source: "native",
+  });
+}
+
 function timelineIdentityProps(identity: TimelineIdentity | undefined): { identity?: TimelineIdentity } {
   return identity !== undefined ? { identity } : {};
+}
+
+function runtimeModelForTurn(
+  state: CodexAppServerTranslationState,
+  turnId: string | undefined,
+): TimelineRuntimeModel | undefined {
+  return turnId ? state.runtimeModelByTurnId.get(turnId) : undefined;
 }
 
 function turnIdentityProps(identity: TimelineTurnIdentity | undefined): { identity?: TimelineTurnIdentity } {
@@ -1181,13 +1214,19 @@ function mapThreadItem(
         providerItemKey: id,
         providerMessageId: id,
       });
+      const runtimeModel = runtimeModelForTurn(state, turnId);
       if (state.emittedAgentMessageDeltaItemIds.has(id)) {
         return [
           { type: "message_part_updated", turnId, part: { messageId: id, partId: id, kind: "text", text: finalText } },
           {
             type: "timeline_item_updated",
             turnId,
-            item: { kind: "assistant_message", text: finalText, messageId: id },
+            item: {
+              kind: "assistant_message",
+              text: finalText,
+              messageId: id,
+              ...(runtimeModel ? { runtimeModel } : {}),
+            },
             ...timelineIdentityProps(identity),
           },
         ];
@@ -1197,7 +1236,12 @@ function mapThreadItem(
         {
           type: "timeline_item",
           turnId,
-          item: { kind: "assistant_message", text: finalText, messageId: id },
+          item: {
+            kind: "assistant_message",
+            text: finalText,
+            messageId: id,
+            ...(runtimeModel ? { runtimeModel } : {}),
+          },
           ...timelineIdentityProps(identity),
         },
       ];
@@ -1470,6 +1514,10 @@ export function translateCodexAppServerThreadSnapshot(
     if (!turnId) {
       continue;
     }
+    const runtimeModel = codexRuntimeModelFromTurnRecord(turnRecord);
+    if (runtimeModel) {
+      state.runtimeModelByTurnId.set(turnId, runtimeModel);
+    }
     translatedItems.push(translated(raw, { type: "turn_started", turnId }));
     const turnItems = Array.isArray(turnRecord.items) ? turnRecord.items : [];
     for (const item of turnItems) {
@@ -1665,6 +1713,11 @@ export function translateCodexAppServerNotification(
       if (!turn || typeof turn.id !== "string") {
         return invalidStreamActivities(notification, "turn/started did not include turn.id");
       }
+      const runtimeModel = codexRuntimeModelFromTurnRecord(turn) ?? state.pendingRuntimeModel;
+      if (runtimeModel) {
+        state.runtimeModelByTurnId.set(turn.id, runtimeModel);
+      }
+      delete state.pendingRuntimeModel;
       return [translated(notification, { type: "turn_started", turnId: turn.id })];
     }
     case "hook/started": {
@@ -1776,6 +1829,8 @@ export function translateCodexAppServerNotification(
     }
     case "item/agentMessage/delta": {
       const delta = parseTextDelta(notification);
+      const params = paramsRecord(notification);
+      const turnId = params ? turnIdFromParams(params) : undefined;
       if (!delta) {
         return invalidStreamActivities(notification, "agent message delta payload was not recognized");
       }
@@ -1798,15 +1853,21 @@ export function translateCodexAppServerNotification(
         providerItemKey: delta.itemId,
         providerMessageId: delta.itemId,
       });
+      const runtimeModel = runtimeModelForTurn(state, turnId);
       const timelineActivity =
         fullText.trim().length > 0
           ? [
               translated(notification, {
-                type: hasEmittedTimeline ? "timeline_item_updated" : "timeline_item",
-                item: { kind: "assistant_message", text: fullText, messageId: delta.itemId },
-                ...timelineIdentityProps(identity),
-              }),
-            ]
+              type: hasEmittedTimeline ? "timeline_item_updated" : "timeline_item",
+              item: {
+                kind: "assistant_message",
+                text: fullText,
+                messageId: delta.itemId,
+                ...(runtimeModel ? { runtimeModel } : {}),
+              },
+              ...timelineIdentityProps(identity),
+            }),
+          ]
           : [];
       if (timelineActivity.length > 0) {
         state.emittedAgentMessageDeltaItemIds.add(delta.itemId);

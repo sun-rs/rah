@@ -11,8 +11,10 @@ import {
 test("council defaults create two editable provider-backed agent drafts", () => {
   const drafts = createDefaultCouncilAgentDrafts();
   assert.deepEqual(drafts.map((draft) => draft.provider), ["codex", "claude"]);
-  assert.equal(drafts[0]!.id, "codex-lead");
-  assert.equal(drafts[1]!.id, "claude-reviewer");
+  assert.equal(drafts[0]!.id, "draft-1");
+  assert.equal(drafts[1]!.id, "draft-2");
+  assert.deepEqual(drafts.map((draft) => draft.label), ["", ""]);
+  assert.deepEqual(drafts.map((draft) => draft.role), ["", ""]);
 });
 
 test("council agent draft maps model reasoning into provider optionValues", () => {
@@ -68,19 +70,19 @@ test("council agent draft maps model reasoning into provider optionValues", () =
       role: "Run API-key models",
       modelId: "openai/gpt-5.5",
       reasoningId: "xhigh",
-      modeId: "opencode/full-auto",
+      modeId: "build",
     },
   });
 
   assert.deepEqual(config, {
-    id: "opencode-specialist",
+    id: "OpenCode Specialist",
     provider: "opencode",
     label: "OpenCode Specialist",
     role: "Run API-key models",
     modelId: "openai/gpt-5.5",
     reasoningId: "xhigh",
     optionValues: { model_reasoning_variant: "xhigh" },
-    modeId: "opencode/full-auto",
+    modeId: "build",
   });
 });
 
@@ -103,10 +105,10 @@ test("council agent config uses visible catalog defaults when draft has not been
     freshness: "authoritative",
     modelsExact: true,
     optionsExact: true,
-    defaultModeId: "opencode/full-auto",
+    defaultModeId: "build",
     modes: [
-      { id: "build", role: "ask", label: "Ask", applyTiming: "startup_only", hotSwitch: false },
-      { id: "opencode/full-auto", role: "full_auto", label: "Full auto", applyTiming: "startup_only", hotSwitch: false },
+      { id: "build", role: "custom", label: "Build", applyTiming: "next_turn", hotSwitch: true },
+      { id: "plan", role: "custom", label: "Plan", applyTiming: "next_turn", hotSwitch: true },
     ],
     modelProfiles: [
       {
@@ -138,7 +140,7 @@ test("council agent config uses visible catalog defaults when draft has not been
     draft: {
       id: "opencode-specialist",
       provider: "opencode",
-      label: "OpenCode Specialist",
+      label: "",
       role: "",
       modelId: null,
       reasoningId: null,
@@ -146,10 +148,11 @@ test("council agent config uses visible catalog defaults when draft has not been
     },
   });
 
+  assert.equal(config.label, "GPT 5.5-XHigh");
   assert.equal(config.modelId, "openai/gpt-5.5");
   assert.equal(config.reasoningId, "xhigh");
   assert.deepEqual(config.optionValues, { model_reasoning_variant: "xhigh" });
-  assert.equal(config.modeId, "opencode/full-auto");
+  assert.equal(config.modeId, "build");
 });
 
 test("council model selection clears stale reasoning when selected model has no parameters", () => {

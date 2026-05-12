@@ -47,6 +47,7 @@ export type CreateMuxPaneRequest = {
   args?: string[];
   env?: Record<string, string>;
   title?: string;
+  placement?: "pane" | "tab";
   replaceDefaultPane?: boolean;
 };
 

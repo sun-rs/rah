@@ -321,7 +321,7 @@ export function App() {
       createEmptyCanvasNewSessionDrafts(),
     );
   const [settingsDialogMounted, setSettingsDialogMounted] = useState(false);
-  const { hideToolCallsInChat } = useChatPreferences();
+  const { hideToolCallsInChat, showModelInfoInChat } = useChatPreferences();
   const { setWorkspaceSortMode, workspaceSortMode } = useWorkspaceSortModeState();
   const {
     setWorkspaceSortMode: setHistoryWorkspaceSortMode,
@@ -471,6 +471,22 @@ export function App() {
       setSelectedSessionId(activeCanvasSummary.session.id);
     }
     setWorkbenchMode("single");
+  };
+
+  const hideCouncilMode = () => {
+    setWorkbenchMode("single");
+    setRightSidebarOpen(false);
+    setRightOpen(false);
+    setLeftOpen(false);
+  };
+
+  const goHome = () => {
+    setWorkbenchMode("single");
+    setSelectedWorkspaceOnlyDir(null);
+    setSelectedSessionId(null);
+    setRightSidebarOpen(false);
+    setRightOpen(false);
+    setLeftOpen(false);
   };
 
   const selectedProjection = selectedSessionId ? projections.get(selectedSessionId) ?? null : null;
@@ -873,17 +889,14 @@ export function App() {
         canvasActive={workbenchMode === "canvas"}
         councilActive={workbenchMode === "council"}
         onOpenCouncil={() => {
+          if (workbenchMode === "council") {
+            hideCouncilMode();
+            return;
+          }
           setWorkbenchMode("council");
           setRightSidebarOpen(false);
           setRightOpen(false);
           setLeftOpen(false);
-        }}
-        onDesktopHome={() => {
-          setWorkbenchMode("single");
-          setSelectedWorkspaceOnlyDir(null);
-          setSelectedSessionId(null);
-          setRightSidebarOpen(false);
-          setRightOpen(false);
         }}
         onDesktopToggleCanvas={() => {
           if (workbenchMode === "canvas") {
@@ -904,18 +917,11 @@ export function App() {
           setLeftOpen(false);
         }}
         mobileCanvasEnabled={mobileCanvasEnabled}
-        onMobileHome={() => {
-          setWorkbenchMode("single");
-          setSelectedWorkspaceOnlyDir(null);
-          setSelectedSessionId(null);
-          setRightSidebarOpen(false);
-          setRightOpen(false);
-          setLeftOpen(false);
-        }}
         onActivateHistory={handleActivateHistorySession}
         onActivateLive={handleActivateLiveSession}
         onRemoveHistorySession={(session) => void removeHistorySession(session)}
         onRemoveHistoryWorkspace={(workspaceDir) => void removeHistoryWorkspaceSessions(workspaceDir)}
+        onHome={goHome}
         onOpenSettings={() => {
           setSettingsDialogMounted(true);
           setSettingsOpen(true);
@@ -1084,8 +1090,14 @@ export function App() {
               }
             >
               <CouncilPage
+                clientId={clientId}
                 workspaceDir={availableWorkspaceDir ?? workspaceDir ?? ""}
-                onOpenSidebar={() => setLeftOpen(true)}
+                workspaceDirs={workspaceDirs}
+                sidebarOpen={sidebarOpen}
+                onExpandSidebar={() => setSidebarOpen(true)}
+                onOpenLeft={() => setLeftOpen(true)}
+                onAddWorkspace={(dir) => void addWorkspace(dir)}
+                onHide={hideCouncilMode}
               />
             </Suspense>
           ) : workbenchMode === "canvas" ? (
@@ -1167,6 +1179,9 @@ export function App() {
                         modelCatalogLoading={paneModelCatalogState?.loading ?? false}
                         selectedModelId={paneModelControl.model?.id ?? null}
                         selectedReasoningId={paneModelControl.reasoning?.id ?? null}
+                        onRequestCatalogRefresh={() => {
+                          void loadProviderModels(paneProvider).catch(() => undefined);
+                        }}
                         accessModes={paneModeControl.accessModes}
                         selectedAccessModeId={paneModeControl.selectedAccessModeId}
                         planModeAvailable={paneModeControl.planModeAvailable}
@@ -1175,6 +1190,7 @@ export function App() {
                         onAddWorkspace={(dir) => void addWorkspace(dir)}
                         onSelectWorkspace={setWorkspaceDir}
                         onProviderChange={(provider) => {
+                          void loadProviderModels(provider).catch(() => undefined);
                           setCanvasNewSessionDrafts((current) => ({
                             ...current,
                             [typedPaneId]: {
@@ -1324,7 +1340,7 @@ export function App() {
                         onRemoveWorkspace={(workspaceDir) =>
                           void removeHistoryWorkspaceSessions(workspaceDir)
                         }
-                        defaultTab="live"
+                        defaultTab="recent"
                           >
                           <button
                             type="button"
@@ -1365,6 +1381,7 @@ export function App() {
                     projection={projection}
                     clientId={clientId}
                     hideToolCallsInChat={hideToolCallsInChat}
+                    showModelInfoInChat={showModelInfoInChat[provider] ?? true}
                     pendingSessionAction={
                       pendingSessionAction?.sessionId === summary.session.id
                         ? pendingSessionAction
@@ -1372,6 +1389,12 @@ export function App() {
                     }
                     modelCatalog={modelCatalogState?.catalog ?? null}
                     modelCatalogLoading={modelCatalogState?.loading ?? false}
+                    onRequestModelCatalogRefresh={() => {
+                      const provider = summary.session.provider;
+                      if (provider !== "custom") {
+                        void loadProviderModels(provider as ProviderChoice).catch(() => undefined);
+                      }
+                    }}
                     claimModeDraft={claimModeDrafts[summary.session.id]}
                     claimModelDraft={claimModelDrafts[summary.session.id]}
                     modeChangePending={modeChangeSessionId === summary.session.id}
@@ -1448,6 +1471,9 @@ export function App() {
               interactionNotice={interactionNotice}
               historyNotice={historyNotice}
               hideToolCallsInChat={hideToolCallsInChat}
+              showModelInfoInChat={
+                selectedSummary ? (showModelInfoInChat[selectedSummary.session.provider as ProviderChoice] ?? true) : true
+              }
               canLoadOlderHistory={Boolean(
                 selectedSummary.session.providerSessionId &&
                   selectedProjection?.history.authoritativeApplied &&
@@ -1652,6 +1678,12 @@ export function App() {
               modelCatalog={selectedModelCatalogState?.catalog ?? null}
               modelCatalogLoading={selectedModelCatalogState?.loading ?? false}
               modelChangePending={modelChangeSessionId === selectedSummary.session.id}
+              onRequestModelCatalogRefresh={() => {
+                const provider = selectedSummary.session.provider;
+                if (provider !== "custom") {
+                  void loadProviderModels(provider as ProviderChoice).catch(() => undefined);
+                }
+              }}
               onRenameSession={() => setRenameDialogSessionId(selectedSummary.session.id)}
               onSetSessionMode={(modeId) => {
                 setModeChangeSessionId(selectedSummary.session.id);
@@ -1732,6 +1764,9 @@ export function App() {
               modelCatalogLoading={currentModelCatalogState?.loading ?? false}
               selectedModelId={startModelControl.model?.id ?? null}
               selectedReasoningId={startModelControl.reasoning?.id ?? null}
+              onRequestCatalogRefresh={() => {
+                void loadProviderModels(currentProvider).catch(() => undefined);
+              }}
               onModelChange={(modelId, defaultReasoningId) => {
                 const optionValues = modelId
                   ? buildModelOptionValuesFromReasoning({

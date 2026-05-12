@@ -538,6 +538,55 @@ describe("translateCodexAppServerNotification", () => {
     ]);
   });
 
+  test("uses pending request model metadata when Codex turn events omit model fields", () => {
+    const state = createCodexAppServerTranslationState();
+    state.pendingRuntimeModel = {
+      modelId: "gpt-5.5",
+      optionId: "xhigh",
+      optionKind: "reasoning_effort",
+      source: "request",
+    };
+
+    translateCodexAppServerNotification(
+      {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turn: { id: "turn-1" },
+        },
+      },
+      state,
+    );
+    const delta = translateCodexAppServerNotification(
+      {
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "assistant-1",
+          delta: "hello",
+        },
+      },
+      state,
+    );
+
+    const timeline = delta.find((item) => item.activity.type === "timeline_item")?.activity;
+    assert.equal(timeline?.type, "timeline_item");
+    if (timeline?.type === "timeline_item") {
+      assert.deepEqual(timeline.item, {
+        kind: "assistant_message",
+        text: "hello",
+        messageId: "assistant-1",
+        runtimeModel: {
+          modelId: "gpt-5.5",
+          optionId: "xhigh",
+          optionKind: "reasoning_effort",
+          source: "request",
+        },
+      });
+    }
+  });
+
   test("deduplicates item start/completion transcript using app-server item state", () => {
     const state = createCodexAppServerTranslationState();
 

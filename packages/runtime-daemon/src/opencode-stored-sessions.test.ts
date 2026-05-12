@@ -75,8 +75,23 @@ test("loads OpenCode stored messages and materializes history", { skip: !hasSqli
       .map((event) => event.payload.item);
     assert.deepEqual(timelineItems, [
       { kind: "user_message", text: "Hello", messageId: "msg_user" },
-      { kind: "reasoning", text: "Thinking" },
-      { kind: "assistant_message", text: "Assistant answer", messageId: "msg_assistant" },
+      {
+        kind: "reasoning",
+        text: "Thinking",
+        runtimeModel: {
+          modelId: "test/test-model",
+          source: "native",
+        },
+      },
+      {
+        kind: "assistant_message",
+        text: "Assistant answer",
+        messageId: "msg_assistant",
+        runtimeModel: {
+          modelId: "test/test-model",
+          source: "native",
+        },
+      },
     ]);
   } finally {
     rmSync(dataDir, { recursive: true, force: true });

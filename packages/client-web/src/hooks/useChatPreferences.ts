@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
+import type { ProviderChoice } from "../components/ProviderSelector";
 
 const HIDE_TOOL_CALLS_KEY = "rah-hide-tool-calls-in-chat";
+const SHOW_MODEL_INFO_KEY_PREFIX = "rah-show-model-info-in-chat:";
 const CHAT_PREFERENCES_EVENT = "rah:chat-preferences-updated";
+const MODEL_INFO_PROVIDERS: ProviderChoice[] = ["codex", "claude", "opencode"];
 
 function isBrowser(): boolean {
   return typeof window !== "undefined";
@@ -30,18 +33,28 @@ function writeBoolean(key: string, value: boolean): void {
 export function useChatPreferences(): {
   hideToolCallsInChat: boolean;
   setHideToolCallsInChat: (value: boolean) => void;
+  showModelInfoInChat: Record<ProviderChoice, boolean>;
+  setShowModelInfoInChat: (provider: ProviderChoice, value: boolean) => void;
 } {
   const [hideToolCallsInChat, setHideToolCallsInChatState] = useState<boolean>(() =>
     readBoolean(HIDE_TOOL_CALLS_KEY, true),
   );
+  const [showModelInfoInChat, setShowModelInfoInChatState] =
+    useState<Record<ProviderChoice, boolean>>(() => readShowModelInfoPreferences());
 
   useEffect(() => {
     if (!isBrowser()) return;
     const syncPreference = () => {
       setHideToolCallsInChatState(readBoolean(HIDE_TOOL_CALLS_KEY, true));
+      setShowModelInfoInChatState(readShowModelInfoPreferences());
     };
     const onStorage = (event: StorageEvent) => {
-      if (event.key !== HIDE_TOOL_CALLS_KEY) return;
+      if (
+        event.key !== HIDE_TOOL_CALLS_KEY &&
+        !event.key?.startsWith(SHOW_MODEL_INFO_KEY_PREFIX)
+      ) {
+        return;
+      }
       syncPreference();
     };
     const onPreferenceEvent = () => {
@@ -63,5 +76,28 @@ export function useChatPreferences(): {
     }
   }, []);
 
-  return { hideToolCallsInChat, setHideToolCallsInChat };
+  const setShowModelInfoInChat = useCallback((provider: ProviderChoice, value: boolean) => {
+    setShowModelInfoInChatState((current) => ({ ...current, [provider]: value }));
+    writeBoolean(`${SHOW_MODEL_INFO_KEY_PREFIX}${provider}`, value);
+    if (isBrowser()) {
+      window.dispatchEvent(new Event(CHAT_PREFERENCES_EVENT));
+    }
+  }, []);
+
+  return {
+    hideToolCallsInChat,
+    setHideToolCallsInChat,
+    showModelInfoInChat,
+    setShowModelInfoInChat,
+  };
+}
+
+function readShowModelInfoPreferences(): Record<ProviderChoice, boolean> {
+  return MODEL_INFO_PROVIDERS.reduce(
+    (acc, provider) => {
+      acc[provider] = readBoolean(`${SHOW_MODEL_INFO_KEY_PREFIX}${provider}`, true);
+      return acc;
+    },
+    {} as Record<ProviderChoice, boolean>,
+  );
 }

@@ -527,6 +527,48 @@ describe("translateCodexRolloutLine", () => {
     });
   });
 
+  test("attaches Codex turn model metadata to persisted assistant replies", () => {
+    const state = createCodexRolloutTranslationState();
+    translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-14T18:00:06.000Z",
+        type: "turn_context",
+        payload: {
+          turn_id: "turn-model-1",
+          model: "gpt-5.5",
+          effort: "xhigh",
+        },
+      },
+      state,
+    );
+
+    const agentMessage = translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-14T18:00:07.000Z",
+        type: "event_msg",
+        payload: {
+          type: "agent_message",
+          message: "Model-aware answer.",
+        },
+      },
+      state,
+    );
+
+    assert.equal(agentMessage[0]?.activity.type, "timeline_item");
+    if (agentMessage[0]?.activity.type === "timeline_item") {
+      assert.deepEqual(agentMessage[0].activity.item, {
+        kind: "assistant_message",
+        text: "Model-aware answer.",
+        runtimeModel: {
+          modelId: "gpt-5.5",
+          optionId: "xhigh",
+          optionKind: "reasoning_effort",
+          source: "native",
+        },
+      });
+    }
+  });
+
   test("deduplicates persisted agent_message and assistant response_item with matching text", () => {
     const state = createCodexRolloutTranslationState();
     translateCodexRolloutLine(

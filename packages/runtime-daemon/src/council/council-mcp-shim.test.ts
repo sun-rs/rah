@@ -6,42 +6,75 @@ import test from "node:test";
 import { CouncilStore } from "./council-store";
 import { handleCouncilMcpRequest } from "./council-mcp-shim";
 
-test("Council MCP shim handles join, post, history, wait, and status tools", () => {
+test("Council MCP shim handles join, post, history, wait, and status tools", async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-mcp-"));
   try {
     const store = new CouncilStore(path.join(root, "rooms.json"));
     const room = store.createRoom({
       workspace: root,
-      agents: [{ id: "agent-a", provider: "codex", label: "Agent A" }],
+      agents: [
+        { id: "agent-a", provider: "codex", label: "Agent A" },
+        { id: "agent-b", provider: "claude", label: "Agent B" },
+      ],
     });
+    const agentA = room.agents[0]!.id;
+    const agentB = room.agents[1]!.id;
 
     const joined = handleCouncilMcpRequest(store, {
       roomId: room.room.id,
-      actorId: "agent-a",
+      actorId: agentA,
+      clientId: "client-a",
       tool: "channel_join",
-    });
+    }) as { ok: true; result: { room: string; last_msg_id: number; recent_messages: unknown[] } };
     assert.equal(joined.ok, true);
+    assert.equal(joined.result.room, room.room.id);
+    assert.equal(joined.result.last_msg_id, 0);
+    assert.deepEqual(joined.result.recent_messages, []);
     assert.equal(store.snapshot(room.room.id).agents[0]!.status, "idle");
 
     const posted = handleCouncilMcpRequest(store, {
       roomId: room.room.id,
-      actorId: "agent-a",
+      actorId: agentA,
+      clientId: "client-a",
       tool: "channel_post",
       arguments: { content: "agent message" },
-    });
-    assert.equal((posted.result as { actorId: string }).actorId, "agent-a");
+    }) as { ok: true; result: { msg_id: number; message: { actor: string; client_id: string; content: string } } };
+    assert.equal(posted.result.msg_id, 1);
+    assert.equal(posted.result.message.actor, agentA);
+    assert.equal(posted.result.message.client_id, "client-a");
+    assert.equal(posted.result.message.content, "agent message");
 
     const history = handleCouncilMcpRequest(store, {
       roomId: room.room.id,
-      actorId: "agent-a",
+      actorId: agentA,
       tool: "channel_history",
       arguments: { limit: 10 },
-    });
-    assert.equal((history.result as unknown[]).length, 1);
+    }) as { ok: true; result: { messages: unknown[] } };
+    assert.equal(history.result.messages.length, 1);
+
+    const wait = await handleCouncilMcpRequest(store, {
+      roomId: room.room.id,
+      actorId: agentB,
+      clientId: "client-b",
+      tool: "channel_wait_new",
+      arguments: { since_id: 0 },
+    }) as { ok: true; result: { msg: { actor: string; client_id: string; content: string } } };
+    assert.equal(wait.result.msg.actor, agentA);
+    assert.equal(wait.result.msg.client_id, "client-a");
+    assert.equal(wait.result.msg.content, "agent message");
+
+    const selfWait = await handleCouncilMcpRequest(store, {
+      roomId: room.room.id,
+      actorId: agentA,
+      clientId: "client-a",
+      tool: "channel_wait_new",
+      arguments: { since_id: 0 },
+    }) as { ok: true; result: { timed_out: true } };
+    assert.equal(selfWait.result.timed_out, true);
 
     handleCouncilMcpRequest(store, {
       roomId: room.room.id,
-      actorId: "agent-a",
+      actorId: agentA,
       tool: "channel_set_status",
       arguments: { phase: "thinking", detail: "working" },
     });

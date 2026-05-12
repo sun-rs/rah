@@ -99,7 +99,7 @@ export function WorkspacePicker(props: {
             <Dialog.Close asChild>
               <button
                 type="button"
-                className="inline-flex h-9 w-9 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] transition-colors"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] transition-colors"
                 aria-label="Close"
               >
                 <X size={16} />
@@ -113,7 +113,7 @@ export function WorkspacePicker(props: {
               type="button"
               onClick={() => setCurrentPath(getParentPath(listing?.path || currentPath))}
               disabled={currentPath === "/"}
-              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)] disabled:opacity-30 transition-colors"
+              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)] disabled:opacity-30 transition-colors"
               aria-label="Go up"
               title="Go up"
             >

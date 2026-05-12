@@ -14,6 +14,7 @@ import {
   nativeTuiResumeLaunchSpec,
   nativeTuiStartLaunchSpec,
 } from "./native-tui-launch-spec";
+import type { SessionModeDescriptor } from "@rah/runtime-protocol";
 
 const originalEnv = {
   CODEX_HOME: process.env.CODEX_HOME,
@@ -45,6 +46,16 @@ function fakeBinary(name: string): { dir: string; path: string } {
   writeFileSync(binaryPath, "#!/bin/sh\nexit 0\n");
   chmodSync(binaryPath, 0o755);
   return { dir, path: binaryPath };
+}
+
+function openCodeAgentMode(id: string, label = id): SessionModeDescriptor {
+  return {
+    id,
+    role: "custom",
+    label,
+    applyTiming: "next_turn",
+    hotSwitch: true,
+  };
 }
 
 describe("native TUI launch specs", () => {
@@ -185,20 +196,23 @@ describe("native TUI launch specs", () => {
         liveBackend: "native_tui",
         model: "deepseek/deepseek-v4-pro",
         optionValues: { model_reasoning_variant: "high" },
-        modeId: "opencode/full-auto",
+        modeId: "plan",
+        availableModes: [
+          openCodeAgentMode("build", "Build"),
+          openCodeAgentMode("plan", "Plan"),
+        ],
       });
       assert.equal(start.command, fake.path);
       assert.equal(start.providerSessionId, undefined);
       assert.deepEqual(start.args, [
         "--model",
         "deepseek/deepseek-v4-pro/high",
+        "--agent",
+        "plan",
         "/workspace/demo",
       ]);
-      assert.equal(
-        start.env?.OPENCODE_CONFIG_CONTENT,
-        JSON.stringify({ permission: "allow", default_agent: "build" }),
-      );
-      assert.equal(start.modeId, "opencode/full-auto");
+      assert.equal(start.env?.OPENCODE_CONFIG_CONTENT, undefined);
+      assert.equal(start.modeId, "plan");
       assert.equal(start.modelId, "deepseek/deepseek-v4-pro");
       assert.equal(start.reasoningId, "high");
 
@@ -224,11 +238,25 @@ describe("native TUI launch specs", () => {
         cwd: "/workspace/demo",
         liveBackend: "native_tui",
         modeId: "plan",
+        availableModes: [
+          openCodeAgentMode("build", "Build"),
+          openCodeAgentMode("plan", "Plan"),
+        ],
       });
       assert.equal(
-        planStart.env?.OPENCODE_CONFIG_CONTENT,
-        JSON.stringify({ default_agent: "plan" }),
+        planStart.args.includes("--agent"),
+        true,
       );
+      assert.deepEqual(planStart.args.slice(0, 2), ["--agent", "plan"]);
+
+      const customStart = await nativeTuiStartLaunchSpec({
+        provider: "opencode",
+        cwd: "/workspace/demo",
+        liveBackend: "native_tui",
+        modeId: "sisyfus",
+        availableModes: [openCodeAgentMode("sisyfus")],
+      });
+      assert.deepEqual(customStart.args.slice(0, 2), ["--agent", "sisyfus"]);
     } finally {
       rmSync(fake.dir, { force: true, recursive: true });
     }
@@ -268,9 +296,19 @@ describe("native TUI launch specs", () => {
           provider: "opencode",
           cwd: workspace,
           liveBackend: "native_tui",
-          modeId: "not-a-mode",
+          modeId: "not-an-agent",
         }),
-        /Unsupported OpenCode launch mode/,
+        /Unsupported OpenCode launch agent/,
+      );
+      await assert.rejects(
+        nativeTuiStartLaunchSpec({
+          provider: "opencode",
+          cwd: workspace,
+          liveBackend: "native_tui",
+          modeId: "build",
+          availableModes: [openCodeAgentMode("sisyfus")],
+        }),
+        /Unsupported OpenCode launch agent/,
       );
     } finally {
       rmSync(codex.dir, { force: true, recursive: true });
@@ -331,7 +369,11 @@ describe("native TUI launch specs", () => {
         provider: "opencode",
         cwd: workspace,
         liveBackend: "native_tui",
-        modeId: "opencode/full-auto",
+        modeId: "build",
+        availableModes: [
+          openCodeAgentMode("build", "Build"),
+          openCodeAgentMode("plan", "Plan"),
+        ],
         extraMcpServers,
         initialPrompt: "join council",
       });
@@ -340,12 +382,10 @@ describe("native TUI launch specs", () => {
       const openCodeConfigContent = openCodeStart.env?.OPENCODE_CONFIG_CONTENT;
       assert.ok(openCodeConfigContent);
       const openCodeConfig = JSON.parse(openCodeConfigContent) as {
-        permission?: string;
         default_agent?: string;
         mcp?: Record<string, { type?: string; command?: string[]; enabled?: boolean }>;
       };
-      assert.equal(openCodeConfig.permission, "allow");
-      assert.equal(openCodeConfig.default_agent, "build");
+      assert.equal(openCodeConfig.default_agent, undefined);
       assert.equal(openCodeConfig.mcp?.rah_council?.type, "local");
       assert.deepEqual(openCodeConfig.mcp?.rah_council?.command?.slice(1, 3), [
         "/repo/bin/rah.mjs",

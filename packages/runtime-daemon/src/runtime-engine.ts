@@ -10,6 +10,8 @@ import type {
   CouncilMcpResponse,
   CouncilPostMessageRequest,
   CouncilPostMessageResponse,
+  CouncilReinjectAgentsResponse,
+  CouncilRemoveAgentResponse,
   CreateCouncilRoomRequest,
   CreateCouncilRoomResponse,
   DetachSessionRequest,
@@ -42,7 +44,6 @@ import type {
   SessionFileSearchResponse,
   SessionHistoryPageResponse,
   SessionInputRequest,
-  SessionLiveBackend,
   SessionSummary,
   StartSessionRequest,
   StartSessionResponse,
@@ -171,7 +172,6 @@ export class RuntimeEngine {
   private readonly nativeTuiProviders: NativeTuiProviderRuntime;
   private readonly nativeTuiMirrors: NativeTuiMirrorProvider;
   private readonly council: CouncilRuntime;
-  private readonly defaultLiveBackend: SessionLiveBackend;
 
   private readonly structuredLiveAdaptersByProvider = new Map<
     string,
@@ -219,12 +219,6 @@ export class RuntimeEngine {
   private readonly structuredLiveAllowedForInjectedAdapters: boolean;
 
   constructor(adapters?: ProviderAdapter[]) {
-    this.defaultLiveBackend =
-      adapters === undefined
-        ? process.env.RAH_MUX_BACKEND === "zellij"
-          ? "zellij_tui"
-          : "native_tui"
-        : "structured";
     this.structuredLiveAllowedForInjectedAdapters = adapters !== undefined;
     this.workbenchState = new WorkbenchStateStore();
     this.eventBus = new EventBus();
@@ -232,7 +226,7 @@ export class RuntimeEngine {
     this.historySnapshots = new HistorySnapshotStore();
     this.nativeTuiProviders = createDefaultNativeTuiProviderRuntime();
     this.nativeTuiMirrors = createDefaultNativeTuiMirrorProvider();
-    this.council = new CouncilRuntime({ eventBus: this.eventBus });
+    this.council = new CouncilRuntime({ eventBus: this.eventBus, ptyHub: this.ptyHub });
     this.sessionStore = new SessionStore({
       onSnapshot: (states) => {
         this.workbenchState.persistLiveSessions(states);
@@ -336,6 +330,14 @@ export class RuntimeEngine {
       return;
     }
     for (const session of sessions) {
+      if (session.provider !== "claude") {
+        console.warn("[rah] skipping stale non-Claude zellij live session", {
+          sessionId: session.id,
+          provider: session.provider,
+          zellijSessionName: session.mux?.sessionName,
+        });
+        continue;
+      }
       await this.terminals.restoreZellijTuiSession(session).catch((error) => {
         console.warn("[rah] failed to recover zellij live session", {
           sessionId: session.id,
@@ -421,6 +423,10 @@ export class RuntimeEngine {
     await this.council.archiveRoom(roomId);
   }
 
+  deleteCouncilRoom(roomId: string): void {
+    this.council.deleteRoom(roomId);
+  }
+
   async getCouncilAgentTui(
     roomId: string,
     agentId: string,
@@ -428,8 +434,20 @@ export class RuntimeEngine {
     return await this.council.getAgentTui(roomId, agentId);
   }
 
-  callCouncilMcpTool(request: CouncilMcpRequest): CouncilMcpResponse {
-    return this.council.callMcpTool(request);
+  reinjectCouncilAgentPrompt(roomId: string, agentId: string): CouncilReinjectAgentsResponse {
+    return this.council.reinjectAgentPrompt(roomId, agentId);
+  }
+
+  reinjectMissingCouncilAgentPrompts(roomId: string): CouncilReinjectAgentsResponse {
+    return this.council.reinjectMissingAgentPrompts(roomId);
+  }
+
+  removeCouncilAgent(roomId: string, agentId: string): CouncilRemoveAgentResponse {
+    return this.council.removeAgentFromRoom(roomId, agentId);
+  }
+
+  async callCouncilMcpTool(request: CouncilMcpRequest): Promise<CouncilMcpResponse> {
+    return await this.council.callMcpTool(request);
   }
 
   addWorkspace(rawDir: string): ListSessionsResponse {
@@ -523,6 +541,7 @@ export class RuntimeEngine {
     this.assertLiveSessionProviderAllowed(request);
     this.assertStructuredLiveBackendAllowed(request);
     this.assertNativeLocalServerBackendAllowed(request);
+    this.assertZellijTuiBackendAllowed(request);
     if (this.shouldUseNativeLocalServerBackend(request)) {
       return await this.structuredProviders.startSession(request);
     }
@@ -549,6 +568,7 @@ export class RuntimeEngine {
     this.assertLiveSessionProviderAllowed(request);
     this.assertStructuredLiveBackendAllowed(request);
     this.assertNativeLocalServerBackendAllowed(request);
+    this.assertZellijTuiBackendAllowed(request);
     if (request.preferStoredReplay === true) {
       return await this.resumeStoredReplaySession(request);
     }
@@ -636,6 +656,16 @@ export class RuntimeEngine {
     }
   }
 
+  private assertZellijTuiBackendAllowed(
+    request: Pick<StartSessionRequest | ResumeSessionRequest, "provider" | "liveBackend">,
+  ): void {
+    if (request.liveBackend === "zellij_tui" && request.provider !== "claude") {
+      throw new Error(
+        `Provider ${request.provider} does not support the zellij TUI backend. Use native_local_server for Codex/OpenCode live sessions.`,
+      );
+    }
+  }
+
   private assertLiveSessionProviderAllowed(
     request: Pick<StartSessionRequest | ResumeSessionRequest, "provider"> &
       Partial<Pick<ResumeSessionRequest, "preferStoredReplay">>,
@@ -663,11 +693,7 @@ export class RuntimeEngine {
     if (request.preferStoredReplay === true) {
       return false;
     }
-    return (
-      this.defaultLiveBackend === "native_tui" &&
-      request.provider !== "claude" &&
-      this.nativeTuiProviders.supports(request.provider)
-    );
+    return false;
   }
 
   private shouldUseNativeLocalServerBackend(
@@ -680,7 +706,7 @@ export class RuntimeEngine {
     if (request.preferStoredReplay === true) {
       return false;
     }
-    return false;
+    return !this.structuredLiveAllowedForInjectedAdapters && this.supportsNativeLocalServerProvider(request.provider);
   }
 
   private shouldUseZellijTuiBackend(
@@ -693,10 +719,7 @@ export class RuntimeEngine {
     if (request.preferStoredReplay === true) {
       return false;
     }
-    return (
-      (request.provider === "claude" || this.defaultLiveBackend === "zellij_tui") &&
-      this.nativeTuiProviders.supports(request.provider)
-    );
+    return request.provider === "claude" && this.nativeTuiProviders.supports(request.provider);
   }
 
   attachSession(sessionId: string, request: AttachSessionRequest): AttachSessionResponse {
@@ -757,6 +780,10 @@ export class RuntimeEngine {
   }
 
   getNativeTuiSurface(sessionId: string): NativeTuiSurfaceResponse {
+    const councilSurface = this.council.getAgentTuiSurface(sessionId);
+    if (councilSurface !== null) {
+      return councilSurface;
+    }
     return this.terminals.getNativeTuiSurface(sessionId);
   }
 
@@ -764,6 +791,10 @@ export class RuntimeEngine {
     sessionId: string,
     request: NativeTuiSurfaceClaimRequest,
   ): Promise<NativeTuiSurfaceResponse> {
+    const councilSurface = await this.council.claimAgentTuiSurface(sessionId, request);
+    if (councilSurface !== null) {
+      return councilSurface;
+    }
     return await this.terminals.claimNativeTuiSurface(sessionId, request);
   }
 
@@ -771,6 +802,10 @@ export class RuntimeEngine {
     sessionId: string,
     request: NativeTuiSurfaceReleaseRequest,
   ): Promise<NativeTuiSurfaceResponse> {
+    const councilSurface = this.council.releaseAgentTuiSurface(sessionId, request);
+    if (councilSurface !== null) {
+      return councilSurface;
+    }
     return await this.terminals.releaseNativeTuiSurface(sessionId, request);
   }
 
@@ -795,12 +830,18 @@ export class RuntimeEngine {
     if (this.terminals.handlePtyInput(sessionId, clientId, data)) {
       return;
     }
+    if (this.council.handlePtyInput(sessionId, clientId, data)) {
+      return;
+    }
     this.requireStructuredInputControlAdapter(sessionId).onPtyInput(sessionId, clientId, data);
   }
 
   onPtyResize(sessionId: string, clientId: string, cols: number, rows: number): void {
     this.assertPtyInputControl(sessionId, clientId);
     if (this.terminals.handlePtyResize(sessionId, clientId, cols, rows)) {
+      return;
+    }
+    if (this.council.handlePtyResize(sessionId, clientId, cols, rows)) {
       return;
     }
     this.requireStructuredInputControlAdapter(sessionId).onPtyResize(

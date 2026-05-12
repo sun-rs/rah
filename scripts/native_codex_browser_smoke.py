@@ -164,7 +164,7 @@ def spawn_rah_codex_cli(
     args = ["node", "bin/rah.mjs", "codex"]
     if provider_session_id:
         args.extend(["resume", provider_session_id])
-    args.extend(["--mux", "native", "--daemon-url", base_url, "--cwd", str(workspace)])
+    args.extend(["--daemon-url", base_url, "--cwd", str(workspace)])
     return subprocess.Popen(
         args,
         cwd=ROOT_DIR,

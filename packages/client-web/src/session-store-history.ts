@@ -11,6 +11,8 @@ import {
   type SessionProjection,
 } from "./types";
 
+const PROVISIONAL_USER_ECHO_WINDOW_MS = 5_000;
+
 type HistorySelectionState = Pick<
   {
     selectedSessionId: string | null;
@@ -84,7 +86,10 @@ function feedEntriesShareTimelineIdentity(left: FeedEntry, right: FeedEntry): bo
     if (leftCanonicalItemId !== undefined && rightCanonicalItemId !== undefined) {
       return leftCanonicalItemId === rightCanonicalItemId;
     }
-    return entriesShareOptimisticUserPlaceholder(left, right);
+    return (
+      entriesShareOptimisticUserPlaceholder(left, right) ||
+      entriesShareProvisionalUserEcho(left, right)
+    );
   }
   if (entriesShareOptimisticUserPlaceholder(left, right)) {
     return true;
@@ -95,7 +100,10 @@ function feedEntriesShareTimelineIdentity(left: FeedEntry, right: FeedEntry): bo
   const leftClientMessageId = readTimelineClientMessageId(left.item);
   const rightClientMessageId = readTimelineClientMessageId(right.item);
   if (leftClientMessageId !== undefined || rightClientMessageId !== undefined) {
-    return leftClientMessageId !== undefined && leftClientMessageId === rightClientMessageId;
+    return (
+      (leftClientMessageId !== undefined && leftClientMessageId === rightClientMessageId) ||
+      entriesShareProvisionalUserEcho(left, right)
+    );
   }
   const leftMessageId = readTimelineMessageId(left.item);
   const rightMessageId = readTimelineMessageId(right.item);
@@ -219,6 +227,27 @@ function entriesShareWeakUserEcho(left: FeedEntry, right: FeedEntry): boolean {
   );
 }
 
+function entriesShareProvisionalUserEcho(left: FeedEntry, right: FeedEntry): boolean {
+  if (left.kind !== "timeline" || right.kind !== "timeline") {
+    return false;
+  }
+  if (left.item.kind !== "user_message" || right.item.kind !== "user_message") {
+    return false;
+  }
+  if (left.item.text !== right.item.text) {
+    return false;
+  }
+  if (
+    !(
+      (isProvisionalUserEcho(left) && isAuthoritativeUserEcho(right)) ||
+      (isProvisionalUserEcho(right) && isAuthoritativeUserEcho(left))
+    )
+  ) {
+    return false;
+  }
+  return timelineTimestampsWithinMs(left.ts, right.ts, PROVISIONAL_USER_ECHO_WINDOW_MS);
+}
+
 function isWeakUserEcho(entry: Extract<FeedEntry, { kind: "timeline" }>): boolean {
   return (
     entry.item.kind === "user_message" &&
@@ -228,13 +257,29 @@ function isWeakUserEcho(entry: Extract<FeedEntry, { kind: "timeline" }>): boolea
   );
 }
 
+function isProvisionalUserEcho(entry: Extract<FeedEntry, { kind: "timeline" }>): boolean {
+  return (
+    entry.item.kind === "user_message" &&
+    entry.canonicalItemId === undefined &&
+    entry.item.messageId === undefined &&
+    entry.item.clientMessageId !== undefined
+  );
+}
+
 function isAuthoritativeUserEcho(entry: Extract<FeedEntry, { kind: "timeline" }>): boolean {
   return (
     entry.item.kind === "user_message" &&
-    (entry.canonicalItemId !== undefined ||
-      entry.item.messageId !== undefined ||
-      entry.item.clientMessageId !== undefined)
+    (entry.canonicalItemId !== undefined || entry.item.messageId !== undefined)
   );
+}
+
+function timelineTimestampsWithinMs(leftTs: string, rightTs: string, maxMs: number): boolean {
+  const leftMs = Date.parse(leftTs);
+  const rightMs = Date.parse(rightTs);
+  if (!Number.isFinite(leftMs) || !Number.isFinite(rightMs)) {
+    return false;
+  }
+  return Math.abs(leftMs - rightMs) <= maxMs;
 }
 
 export function prependHistoryPage(
