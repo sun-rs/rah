@@ -1,6 +1,8 @@
 import { mkdir, opendir, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import type {
+  AddCouncilAgentRequest,
+  AddCouncilAgentResponse,
   AttachSessionRequest,
   AttachSessionResponse,
   ClaimControlRequest,
@@ -412,6 +414,14 @@ export class RuntimeEngine {
     return await this.council.createRoom(request);
   }
 
+  async addCouncilAgent(roomId: string, request: AddCouncilAgentRequest): Promise<AddCouncilAgentResponse> {
+    const snapshot = this.council.listRooms().rooms.find((room) => room.room.id === roomId);
+    if (snapshot) {
+      await assertExistingWorkingDirectory(snapshot.room.workspace, "Council workspace");
+    }
+    return await this.council.addAgent(roomId, request);
+  }
+
   postCouncilMessage(
     roomId: string,
     request: CouncilPostMessageRequest,
@@ -436,10 +446,6 @@ export class RuntimeEngine {
 
   reinjectCouncilAgentPrompt(roomId: string, agentId: string): CouncilReinjectAgentsResponse {
     return this.council.reinjectAgentPrompt(roomId, agentId);
-  }
-
-  reinjectMissingCouncilAgentPrompts(roomId: string): CouncilReinjectAgentsResponse {
-    return this.council.reinjectMissingAgentPrompts(roomId);
   }
 
   removeCouncilAgent(roomId: string, agentId: string): CouncilRemoveAgentResponse {

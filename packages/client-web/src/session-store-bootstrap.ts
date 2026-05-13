@@ -2,7 +2,6 @@ import type { StoredSessionRef } from "@rah/runtime-protocol";
 import * as api from "./api";
 import {
   clearLastHistorySelection,
-  readLastHistorySelection,
 } from "./history-selection";
 import {
   appendVisibleWorkspaceDir,
@@ -98,41 +97,14 @@ export async function maybeRestoreLastHistorySelection(args: {
     options?: { preferStoredReplay?: boolean; historyReplay?: "include" | "skip" },
   ) => Promise<void>;
 }) {
-  if (
-    attemptedStoredHistoryRestore ||
-    args.isInitialLoaded ||
-    args.sessionsResponse.sessions.length > 0
-  ) {
-    return;
-  }
+  void args;
+  if (attemptedStoredHistoryRestore) return;
   attemptedStoredHistoryRestore = true;
-  const selection = readLastHistorySelection();
-  if (!selection) {
-    return;
-  }
-  const ref =
-    args.sessionsResponse.storedSessions.find(
-      (session) =>
-        session.provider === selection.provider &&
-        session.providerSessionId === selection.providerSessionId,
-    ) ??
-    args.sessionsResponse.recentSessions.find(
-      (session) =>
-        session.provider === selection.provider &&
-        session.providerSessionId === selection.providerSessionId,
-    );
-  if (!ref) {
-    clearLastHistorySelection();
-    return;
-  }
-  if (selection.workspaceDir) {
-    args.revealWorkspaceSelection(selection.workspaceDir);
-  }
-  try {
-    await args.resumeStoredSession(ref, { preferStoredReplay: true });
-  } catch {
-    clearLastHistorySelection();
-  }
+  // Do not reopen a historical session on page load. A stale history
+  // selection makes RAH look like it launched into an arbitrary old chat after
+  // daemon restart; the workbench home/new-session composer is the safer
+  // default, and history remains explicitly reachable from Sessions.
+  clearLastHistorySelection();
 }
 
 export function revealStoredHistoryWorkspace(args: {

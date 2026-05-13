@@ -35,6 +35,16 @@ RAH = input forwarding + session lifecycle management
 
 ## 行为规则
 
+### Council MCP Listening
+
+Council 是 Claude zellij 的特殊场景：Claude agent 会通过 `rah_council.channel_wait_new` 阻塞等待 room 消息。
+
+这个状态下不应使用 Web Esc 暂停监听。`channel_wait_new` 是 RAH 自己定义的 MCP tool，正确暂停方式是让该 tool 正常返回 `paused: true / stop_wait_loop`，让 Claude 自己退出等待循环。
+
+如果对正在执行 MCP tool call 的 Claude TUI 直接发送 Esc，Claude 可能不会回到普通 composer，后续 prompt 注入和 Enter 提交都会失效，表现为 TUI 卡住但进程仍存活。
+
+完整规则见 [Council Listening Control 边界](./council-listening-control.zh-CN.md)。
+
 ### Send
 
 Web chat 发送时，RAH 直接把文本写入 zellij 中的 Claude TUI 并提交。

@@ -460,6 +460,9 @@ export function TerminalPane(props: TerminalPaneProps) {
         }
       },
       (error) => {
+        if (error.message === "PTY socket failed") {
+          return;
+        }
         enqueueTerminalWrite(`\r\n[pty error] ${error.message}\r\n`);
       },
         {

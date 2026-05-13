@@ -62,6 +62,13 @@ class FakePtyRuntime {
     return true;
   }
 
+  emit(id: string, data: string): void {
+    const request = this.sessions.get(id);
+    if (request) {
+      request.onData(id, data);
+    }
+  }
+
   async close(id: string): Promise<boolean> {
     const request = this.sessions.get(id);
     if (!request) {
@@ -96,12 +103,28 @@ function assertBootstrapPromptSubmitted(write: { id: string; data: string }, arg
   assert.doesNotMatch(write.data, /\r$/);
 }
 
+function assertClaudeBootstrapPromptPasted(write: { id: string; data: string }, args: {
+  roomId: string;
+  agentId: string;
+}): void {
+  assert.equal(write.id, councilTerminalId(args.roomId, args.agentId));
+  assert.match(write.data, /^\x1b\[200~/);
+  assert.match(write.data, /\x1b\[201~$/);
+  assert.match(write.data, new RegExp(args.agentId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(write.data, /channel_join/);
+  assert.doesNotMatch(write.data, /\r$/);
+}
+
 function waitForBootstrapPromptSubmit(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 220));
 }
 
+function waitForClaudeBootstrapPromptPaste(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 240));
+}
+
 function waitForClaudeBootstrapPromptSubmit(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, 420));
+  return new Promise((resolve) => setTimeout(resolve, 960));
 }
 
 test("CouncilRuntime launches agent PTYs with provider launch specs and archives the room", async () => {
@@ -244,6 +267,73 @@ test("CouncilRuntime launches agent PTYs with provider launch specs and archives
     else process.env.RAH_CODEX_BINARY = previousCodex;
     if (previousClaude === undefined) delete process.env.RAH_CLAUDE_BINARY;
     else process.env.RAH_CLAUDE_BINARY = previousClaude;
+    if (previousOpenCode === undefined) delete process.env.RAH_OPENCODE_BINARY;
+    else process.env.RAH_OPENCODE_BINARY = previousOpenCode;
+    if (previousRahHome === undefined) delete process.env.RAH_HOME;
+    else process.env.RAH_HOME = previousRahHome;
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test("CouncilRuntime can append an agent to an already running room", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-runtime-add-agent-"));
+  const previousCodex = process.env.RAH_CODEX_BINARY;
+  const previousOpenCode = process.env.RAH_OPENCODE_BINARY;
+  const previousRahHome = process.env.RAH_HOME;
+  process.env.RAH_CODEX_BINARY = fakeBinary(root, "codex");
+  process.env.RAH_OPENCODE_BINARY = fakeBinary(root, "opencode");
+  process.env.RAH_HOME = path.join(root, "rah-home");
+  try {
+    const ptySessions = new FakePtyRuntime();
+    const runtime = new CouncilRuntime({
+      store: new CouncilStore(path.join(root, "rooms.json")),
+      ptySessions,
+    });
+    const created = await runtime.createRoom({
+      title: "Expandable Council",
+      workspace: root,
+      agents: [{ provider: "codex", label: "Codex Lead" }],
+    });
+    const roomId = created.room.room.id;
+    assert.equal(ptySessions.created.length, 1);
+
+    const added = await runtime.addAgent(roomId, {
+      agent: {
+        provider: "opencode",
+        label: "OpenCode Reviewer",
+        role: "Review the current plan.",
+        modelId: "deepseek/deepseek-v4-pro",
+        reasoningId: "high",
+        optionValues: { reasoning_effort: "high" },
+      },
+    });
+
+    assert.equal(added.agent.id, "OpenCode Reviewer");
+    assert.equal(added.room.room.status, "running");
+    assert.equal(added.room.agents.length, 2);
+    assert.equal(ptySessions.created.length, 2);
+    assert.equal(ptySessions.created[1]!.id, councilTerminalId(roomId, "OpenCode Reviewer"));
+    assert.equal(ptySessions.created[1]!.env?.RAH_COUNCIL_ACTOR_ID, "OpenCode Reviewer");
+    assert.equal(ptySessions.created[1]!.env?.RAH_COUNCIL_ACTOR_ROLE, "Review the current plan.");
+    const promptIndex = ptySessions.created[1]!.args?.indexOf("--prompt") ?? -1;
+    assert.notEqual(promptIndex, -1);
+    assert.match(ptySessions.created[1]!.args?.[promptIndex + 1] ?? "", /OpenCode Reviewer/);
+    assert.equal(
+      added.room.messages.some((message) =>
+        message.actorId === "OpenCode Reviewer" &&
+        message.parts.some((part) => part.kind === "text" && part.text === "OpenCode Reviewer sent")
+      ),
+      true,
+    );
+
+    await runtime.archiveRoom(roomId);
+    assert.deepEqual(ptySessions.closed, [
+      councilTerminalId(roomId, "Codex Lead"),
+      councilTerminalId(roomId, "OpenCode Reviewer"),
+    ]);
+  } finally {
+    if (previousCodex === undefined) delete process.env.RAH_CODEX_BINARY;
+    else process.env.RAH_CODEX_BINARY = previousCodex;
     if (previousOpenCode === undefined) delete process.env.RAH_OPENCODE_BINARY;
     else process.env.RAH_OPENCODE_BINARY = previousOpenCode;
     if (previousRahHome === undefined) delete process.env.RAH_HOME;
@@ -904,8 +994,8 @@ test("CouncilRuntime sends OpenCode double escape when pausing council listening
 
     const paused = runtime.removeAgentFromRoom(roomId, agentId);
 
-    assert.equal(paused.room.agents[0]!.status, "idle");
-    assert.equal(paused.room.agents[0]!.lastStatusDetail, "listening paused");
+    assert.equal(paused.room.agents[0]!.status, "waiting");
+    assert.equal(paused.room.agents[0]!.lastStatusDetail, "pause requested");
     assert.deepEqual(ptySessions.writes.at(-1), {
       id: terminalId,
       data: "\x1b\x1b",
@@ -917,7 +1007,113 @@ test("CouncilRuntime sends OpenCode double escape when pausing council listening
   }
 });
 
-test("CouncilRuntime re-injects Claude bootstrap prompts with escape and delayed submit", async () => {
+test("CouncilRuntime interrupts active OpenCode waiters with double escape instead of soft pause", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-runtime-opencode-active-pause-"));
+  const previousOpenCode = process.env.RAH_OPENCODE_BINARY;
+  process.env.RAH_OPENCODE_BINARY = fakeBinary(root, "opencode");
+  try {
+    const ptySessions = new FakePtyRuntime();
+    const runtime = new CouncilRuntime({
+      store: new CouncilStore(path.join(root, "rooms.json")),
+      ptySessions,
+    });
+    const response = await runtime.createRoom({
+      workspace: root,
+      agents: [{ provider: "opencode", label: "OpenCode Builder" }],
+    });
+    const roomId = response.room.room.id;
+    const agentId = response.room.agents[0]!.id;
+    const terminalId = councilTerminalId(roomId, agentId);
+    await runtime.callMcpTool({
+      roomId,
+      actorId: agentId,
+      clientId: "opencode-client",
+      tool: "channel_join",
+    });
+    void runtime.callMcpTool({
+      roomId,
+      actorId: agentId,
+      clientId: "opencode-client",
+      tool: "channel_wait_new",
+      arguments: { timeout_s: 60 },
+    });
+    const writesBeforePause = ptySessions.writes.length;
+
+    const paused = runtime.removeAgentFromRoom(roomId, agentId);
+
+    assert.equal(paused.room.agents[0]!.status, "waiting");
+    assert.equal(paused.room.agents[0]!.lastStatusDetail, "pause requested");
+    assert.deepEqual(ptySessions.writes.at(-1), {
+      id: terminalId,
+      data: "\x1b\x1b",
+    });
+    assert.equal(ptySessions.writes.length, writesBeforePause + 1);
+
+    const reinjected = runtime.reinjectAgentPrompt(roomId, agentId);
+    assert.deepEqual(reinjected.injectedAgentIds, [agentId]);
+    assert.equal(reinjected.room.agents[0]!.status, "starting");
+  } finally {
+    if (previousOpenCode === undefined) delete process.env.RAH_OPENCODE_BINARY;
+    else process.env.RAH_OPENCODE_BINARY = previousOpenCode;
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test("CouncilRuntime pauses active Claude waiters without sending Escape", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-runtime-claude-pause-waiter-"));
+  const previousClaude = process.env.RAH_CLAUDE_BINARY;
+  const previousRahHome = process.env.RAH_HOME;
+  process.env.RAH_CLAUDE_BINARY = fakeBinary(root, "claude");
+  process.env.RAH_HOME = path.join(root, "rah-home");
+  try {
+    const ptySessions = new FakePtyRuntime();
+    const runtime = new CouncilRuntime({
+      store: new CouncilStore(path.join(root, "rooms.json")),
+      ptySessions,
+    });
+    const response = await runtime.createRoom({
+      workspace: root,
+      agents: [{ provider: "claude", label: "Claude Reviewer" }],
+    });
+    const roomId = response.room.room.id;
+    const agentId = response.room.agents[0]!.id;
+    await runtime.callMcpTool({
+      roomId,
+      actorId: agentId,
+      clientId: "claude-client",
+      tool: "channel_join",
+    });
+    const waitPromise = runtime.callMcpTool({
+      roomId,
+      actorId: agentId,
+      clientId: "claude-client",
+      tool: "channel_wait_new",
+      arguments: { timeout_s: 60 },
+    });
+    const writesBeforePause = ptySessions.writes.length;
+
+    const paused = runtime.removeAgentFromRoom(roomId, agentId);
+    const waitResult = await waitPromise;
+
+    assert.equal(paused.room.agents[0]!.status, "idle");
+    assert.equal(paused.room.agents[0]!.lastStatusDetail, "listening paused");
+    assert.equal(ptySessions.writes.length, writesBeforePause);
+    assert.deepEqual(waitResult.result, {
+      ok: true,
+      paused: true,
+      next_action: "stop_wait_loop",
+      instruction: "Council listening was paused by the user. Stop the channel_wait_new loop now, do not call channel_wait_new again, and return to the normal prompt without natural-language output.",
+    });
+  } finally {
+    if (previousClaude === undefined) delete process.env.RAH_CLAUDE_BINARY;
+    else process.env.RAH_CLAUDE_BINARY = previousClaude;
+    if (previousRahHome === undefined) delete process.env.RAH_HOME;
+    else process.env.RAH_HOME = previousRahHome;
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test("CouncilRuntime re-injects Claude bootstrap prompts without interrupting the TUI", async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-runtime-claude-reinject-"));
   const previousClaude = process.env.RAH_CLAUDE_BINARY;
   const previousRahHome = process.env.RAH_HOME;
@@ -939,12 +1135,16 @@ test("CouncilRuntime re-injects Claude bootstrap prompts with escape and delayed
 
     const reinjected = runtime.reinjectAgentPrompt(roomId, agentId);
     assert.deepEqual(reinjected.injectedAgentIds, [agentId]);
+    assert.equal(reinjected.room.agents[0]!.lastStatusDetail, "waiting for Claude TUI prompt before bootstrap prompt");
+    assert.deepEqual(ptySessions.writes, []);
+
+    ptySessions.emit(terminalId, "\r\n❯ ");
     assert.deepEqual(ptySessions.writes.at(-1), {
       id: terminalId,
-      data: "\x1b",
+      data: "\x15",
     });
-    await waitForBootstrapPromptSubmit();
-    assertBootstrapPromptSubmitted(ptySessions.writes.at(-1)!, { roomId, agentId });
+    await waitForClaudeBootstrapPromptPaste();
+    assertClaudeBootstrapPromptPasted(ptySessions.writes.at(-1)!, { roomId, agentId });
     await waitForClaudeBootstrapPromptSubmit();
     assert.deepEqual(ptySessions.writes.at(-1), {
       id: terminalId,
@@ -998,82 +1198,6 @@ test("CouncilRuntime skips bootstrap re-injection while an agent has an active l
     assert.equal(reinjected.room.agents[0]!.status, "waiting");
     runtime.postMessage(roomId, { text: "wake listener" });
     await waitPromise;
-  } finally {
-    if (previousCodex === undefined) delete process.env.RAH_CODEX_BINARY;
-    else process.env.RAH_CODEX_BINARY = previousCodex;
-    rmSync(root, { force: true, recursive: true });
-  }
-});
-
-test("CouncilRuntime re-injects only missing live agents", async () => {
-  const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-runtime-reinject-missing-"));
-  const previousCodex = process.env.RAH_CODEX_BINARY;
-  process.env.RAH_CODEX_BINARY = fakeBinary(root, "codex");
-  try {
-    const ptySessions = new FakePtyRuntime();
-    const runtime = new CouncilRuntime({
-      store: new CouncilStore(path.join(root, "rooms.json")),
-      ptySessions,
-    });
-    const response = await runtime.createRoom({
-      workspace: root,
-      agents: [
-        { provider: "codex", label: "Missing Agent" },
-        { provider: "codex", label: "Joined Only Agent" },
-        { provider: "codex", label: "Waiting Without Listener Agent" },
-        { provider: "codex", label: "Active Waiting Agent" },
-      ],
-    });
-    const roomId = response.room.room.id;
-    const missingId = response.room.agents[0]!.id;
-    const joinedOnlyId = response.room.agents[1]!.id;
-    const waitingWithoutListenerId = response.room.agents[2]!.id;
-    const activeWaitingId = response.room.agents[3]!.id;
-    await runtime.callMcpTool({
-      roomId,
-      actorId: joinedOnlyId,
-      clientId: "client-joined",
-      tool: "channel_join",
-    });
-    await runtime.callMcpTool({
-      roomId,
-      actorId: joinedOnlyId,
-      clientId: "client-joined",
-      tool: "channel_set_status",
-      arguments: { phase: "idle", detail: "joined" },
-    });
-    await runtime.callMcpTool({
-      roomId,
-      actorId: waitingWithoutListenerId,
-      clientId: "client-b",
-      tool: "channel_set_status",
-      arguments: { phase: "waiting", detail: "ready" },
-    });
-    await runtime.callMcpTool({
-      roomId,
-      actorId: activeWaitingId,
-      clientId: "client-active",
-      tool: "channel_join",
-    });
-    await runtime.callMcpTool({
-      roomId,
-      actorId: activeWaitingId,
-      clientId: "client-active",
-      tool: "channel_wait_new",
-      arguments: { timeout_s: 0.01 },
-    });
-
-    const result = runtime.reinjectMissingAgentPrompts(roomId);
-
-    assert.deepEqual(result.injectedAgentIds, [missingId, joinedOnlyId, waitingWithoutListenerId]);
-    assert.equal(ptySessions.writes.length, 3);
-    assertBootstrapPromptSubmitted(ptySessions.writes[0]!, { roomId, agentId: missingId });
-    assertBootstrapPromptSubmitted(ptySessions.writes[1]!, { roomId, agentId: joinedOnlyId });
-    assertBootstrapPromptSubmitted(ptySessions.writes[2]!, { roomId, agentId: waitingWithoutListenerId });
-    assert.equal(
-      ptySessions.writes.some((write) => write.id === councilTerminalId(roomId, activeWaitingId)),
-      false,
-    );
   } finally {
     if (previousCodex === undefined) delete process.env.RAH_CODEX_BINARY;
     else process.env.RAH_CODEX_BINARY = previousCodex;

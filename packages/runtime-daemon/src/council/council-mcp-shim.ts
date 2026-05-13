@@ -55,6 +55,42 @@ function toChannelMessage(message: CouncilMessage): Record<string, unknown> {
 
 const WAIT_TIMEOUT_INSTRUCTION =
   "Timeout is a heartbeat, not completion. Do not answer, summarize, continue roleplay, or use terminal/main-chat memory. Call channel_wait_new again immediately without natural-language output.";
+const WAIT_PAUSED_INSTRUCTION =
+  "Council listening was paused by the user. Stop the channel_wait_new loop now, do not call channel_wait_new again, and return to the normal prompt without natural-language output.";
+
+export type CouncilMcpWaitNewResult =
+  | CouncilMessage
+  | { kind: "paused"; instruction?: string }
+  | null;
+
+function isPausedWaitNewResult(
+  result: CouncilMcpWaitNewResult,
+): result is { kind: "paused"; instruction?: string } {
+  return result !== null &&
+    typeof result === "object" &&
+    "kind" in result &&
+    result.kind === "paused";
+}
+
+function waitNewResultPayload(result: CouncilMcpWaitNewResult): Record<string, unknown> {
+  if (!result) {
+    return {
+      ok: true,
+      timed_out: true,
+      next_action: "call_channel_wait_new_again",
+      instruction: WAIT_TIMEOUT_INSTRUCTION,
+    };
+  }
+  if (isPausedWaitNewResult(result)) {
+    return {
+      ok: true,
+      paused: true,
+      next_action: "stop_wait_loop",
+      instruction: result.instruction ?? WAIT_PAUSED_INSTRUCTION,
+    };
+  }
+  return { ok: true, msg: toChannelMessage(result) };
+}
 
 export type CouncilMcpWaitNew = (args: {
   roomId: string;
@@ -62,7 +98,7 @@ export type CouncilMcpWaitNew = (args: {
   clientId: string;
   sinceMessageId: number;
   timeoutMs: number;
-}) => Promise<CouncilMessage | null>;
+}) => Promise<CouncilMcpWaitNewResult>;
 
 export function handleCouncilMcpRequest(
   store: CouncilStore,
@@ -127,14 +163,7 @@ export function handleCouncilMcpRequest(
       if (immediate || !options.waitNew) {
         return {
           ok: true,
-          result: immediate
-            ? { ok: true, msg: toChannelMessage(immediate) }
-            : {
-                ok: true,
-                timed_out: true,
-                next_action: "call_channel_wait_new_again",
-                instruction: WAIT_TIMEOUT_INSTRUCTION,
-              },
+          result: waitNewResultPayload(immediate),
         };
       }
       return options.waitNew({
@@ -145,14 +174,7 @@ export function handleCouncilMcpRequest(
         timeoutMs: timeoutS * 1000,
       }).then((message) => ({
         ok: true,
-        result: message
-          ? { ok: true, msg: toChannelMessage(message) }
-          : {
-              ok: true,
-              timed_out: true,
-              next_action: "call_channel_wait_new_again",
-              instruction: WAIT_TIMEOUT_INSTRUCTION,
-            },
+        result: waitNewResultPayload(message),
       }));
     }
     case "channel_history": {

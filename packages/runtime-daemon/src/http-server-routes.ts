@@ -19,6 +19,7 @@ import {
   writeText,
 } from "./http-server-response";
 import {
+  parseAddCouncilAgentRequest,
   parseAttachSessionRequest,
   parseClaimControlRequest,
   parseClipboardWriteRequest,
@@ -313,6 +314,20 @@ export function createPostRoutes(
       },
     },
     {
+      pattern: /^\/api\/council\/rooms\/([^/]+)\/agents$/,
+      handler: async (req, res, match, body) => {
+        writeJson(
+          req,
+          res,
+          200,
+          await engine.addCouncilAgent(
+            decodeURIComponent(match[1]!),
+            parseAddCouncilAgentRequest(body),
+          ),
+        );
+      },
+    },
+    {
       pattern: /^\/api\/council\/rooms\/([^/]+)\/messages$/,
       handler: async (req, res, match, body) => {
         writeJson(
@@ -335,12 +350,6 @@ export function createPostRoutes(
       handler: async (req, res, match) => {
         engine.deleteCouncilRoom(decodeURIComponent(match[1]!));
         writeJson(req, res, 200, { ok: true });
-      },
-    },
-    {
-      pattern: /^\/api\/council\/rooms\/([^/]+)\/reinject-missing$/,
-      handler: async (req, res, match) => {
-        writeJson(req, res, 200, engine.reinjectMissingCouncilAgentPrompts(decodeURIComponent(match[1]!)));
       },
     },
     {

@@ -728,7 +728,6 @@ export interface CouncilApi {
   deleteRoom(roomId: string): Promise<{ ok: true }>;
   getAgentTui(roomId: string, agentId: string): Promise<CouncilAgentTuiResponse>;
   reinjectAgent(roomId: string, agentId: string): Promise<CouncilReinjectAgentsResponse>;
-  reinjectMissingAgents(roomId: string): Promise<CouncilReinjectAgentsResponse>;
   removeAgent(roomId: string, agentId: string): Promise<CouncilRemoveAgentResponse>;
   callMcpTool(request: CouncilMcpRequest): Promise<CouncilMcpResponse>;
 }

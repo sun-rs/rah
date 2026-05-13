@@ -531,18 +531,16 @@ html.dark .provider-choice-rail {
   right: 0.55rem;
   z-index: 12;
   display: inline-flex;
-  width: 1.5rem;
-  height: 1.5rem;
+  width: 1.75rem;
+  height: 1.75rem;
   align-items: center;
   justify-content: center;
-  border: 1px solid color-mix(in oklab, var(--app-danger) 42%, transparent);
-  border-radius: 999px;
-  background: color-mix(in oklab, var(--app-danger) 10%, var(--app-bg));
-  box-shadow:
-    0 8px 18px color-mix(in oklab, var(--app-danger) 10%, transparent),
-    inset 0 1px 0 color-mix(in oklab, white 48%, transparent);
-  color: var(--app-danger);
-  opacity: 0.72;
+  border: 1px solid var(--app-border);
+  border-radius: 0.5rem;
+  background: color-mix(in oklab, var(--app-bg) 88%, transparent);
+  box-shadow: 0 8px 18px color-mix(in oklab, black 8%, transparent);
+  color: var(--app-hint);
+  opacity: 0.88;
   transition:
     background-color 140ms ease,
     border-color 140ms ease,
@@ -553,8 +551,8 @@ html.dark .provider-choice-rail {
 
 .terminal-client-close-icon {
   position: relative;
-  width: 0.66rem;
-  height: 0.66rem;
+  width: 0.62rem;
+  height: 0.62rem;
   display: block;
 }
 
@@ -563,8 +561,8 @@ html.dark .provider-choice-rail {
   position: absolute;
   top: 50%;
   left: 50%;
-  width: 0.72rem;
-  height: 1.8px;
+  width: 0.68rem;
+  height: 1.7px;
   border-radius: 999px;
   background: currentColor;
   content: "";
@@ -580,11 +578,10 @@ html.dark .provider-choice-rail {
 }
 
 .terminal-client-close-button:hover {
-  border-color: color-mix(in oklab, var(--app-danger) 58%, transparent);
-  background: color-mix(in oklab, var(--app-danger) 16%, var(--app-bg));
-  box-shadow:
-    0 10px 22px color-mix(in oklab, var(--app-danger) 15%, transparent),
-    inset 0 1px 0 color-mix(in oklab, white 54%, transparent);
+  border-color: color-mix(in oklab, var(--app-fg) 22%, var(--app-border));
+  background: var(--app-subtle-bg);
+  box-shadow: 0 10px 22px color-mix(in oklab, black 10%, transparent);
+  color: var(--app-fg);
   opacity: 1;
 }
 

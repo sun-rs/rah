@@ -160,6 +160,32 @@ export class CouncilStore {
     return this.snapshot(roomId);
   }
 
+  addAgent(roomId: string, agent: CouncilAgentConfig): CouncilAgent {
+    const room = this.requireRoom(roomId);
+    const timestamp = nowIso();
+    const existingAgents = this.state.agents.filter((candidate) => candidate.roomId === roomId);
+    const usedAgentIds = new Set(existingAgents.map((candidate) => candidate.id));
+    const baseId = councilActorName(agent, existingAgents.length);
+    let id = baseId;
+    let suffix = 2;
+    while (usedAgentIds.has(id)) {
+      id = `${baseId} ${suffix}`;
+      suffix += 1;
+    }
+    const nextAgent: CouncilAgent = {
+      ...agent,
+      id,
+      roomId,
+      label: id,
+      status: "starting",
+      updatedAt: timestamp,
+    };
+    this.state.agents.push(nextAgent);
+    room.updatedAt = timestamp;
+    this.persist();
+    return { ...nextAgent };
+  }
+
   snapshot(roomId: string, options?: { sinceMessageId?: number; limit?: number }): CouncilRoomSnapshot {
     const room = this.requireRoom(roomId);
     const since = options?.sinceMessageId ?? 0;

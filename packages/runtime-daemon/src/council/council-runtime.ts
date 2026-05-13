@@ -1,4 +1,6 @@
 import type {
+  AddCouncilAgentRequest,
+  AddCouncilAgentResponse,
   CouncilMessage,
   CouncilAgentTuiResponse,
   CouncilMcpRequest,
@@ -22,17 +24,25 @@ import { PtySessionRuntime, type PtySessionRuntimeStartRequest } from "../pty-se
 import { nativeTuiStartLaunchSpec } from "../native-tui-launch-spec";
 import type { EventBus } from "../event-bus";
 import { CouncilStore } from "./council-store";
-import { handleCouncilMcpRequest, type CouncilMcpWaitNew } from "./council-mcp-shim";
+import { handleCouncilMcpRequest, type CouncilMcpWaitNew, type CouncilMcpWaitNewResult } from "./council-mcp-shim";
 
 const DEFAULT_DAEMON_URL = "http://127.0.0.1:43111";
 const DEFAULT_COUNCIL_AGENT_COLS = 120;
 const DEFAULT_COUNCIL_AGENT_ROWS = 36;
 const CTRL_U_CLEAR_LINE = "\x15";
 const ESCAPE_KEY = "\x1b";
+const BRACKETED_PASTE_START = "\x1b[200~";
+const BRACKETED_PASTE_END = "\x1b[201~";
 const BOOTSTRAP_PROMPT_SUBMIT_DELAY_MS = 180;
 const CLAUDE_BOOTSTRAP_PROMPT_INPUT_DELAY_MS = 180;
+const CLAUDE_BOOTSTRAP_PROMPT_SUBMIT_DELAY_MS = 700;
+const CLAUDE_BOOTSTRAP_PROMPT_READY_TIMEOUT_MS = 10_000;
+const COUNCIL_TERMINAL_OUTPUT_TAIL_LIMIT = 80_000;
+const ANSI_ESCAPE_PATTERN = /\u001b\[[0-?]*[ -/]*[@-~]/g;
 
 type CouncilPtyRuntime = Pick<PtySessionRuntime, "create" | "write" | "resize" | "close" | "has">;
+type CouncilProvider = CouncilRoomSnapshot["agents"][number]["provider"];
+type CouncilBootstrapPromptWriteResult = "sent" | "queued" | "skipped";
 
 export type CouncilRuntimeOptions = {
   store?: CouncilStore;
@@ -46,14 +56,21 @@ type CouncilAgentTerminalState = {
   terminalId: string;
   roomId: string;
   agentId: string;
+  provider: CouncilProvider;
+  outputTail: string;
   activeSurface?: NativeTuiSurfaceState;
+  pendingBootstrapPrompt?: {
+    prompt: string;
+    detail: string;
+    timeout: NodeJS.Timeout;
+  };
 };
 
 type CouncilMessageWaiter = {
   actorId: string;
   clientId: string;
   sinceMessageId: number;
-  resolve: (message: CouncilMessage | null) => void;
+  resolve: (message: CouncilMcpWaitNewResult) => void;
   timeout: NodeJS.Timeout;
 };
 
@@ -122,6 +139,33 @@ export class CouncilRuntime {
       this.publishCouncilMessage(room.room.id, failureMessage);
       return { room: this.projectRuntimeRoomState(this.store.snapshot(room.room.id)) };
     }
+  }
+
+  async addAgent(roomId: string, request: AddCouncilAgentRequest): Promise<AddCouncilAgentResponse> {
+    const current = this.projectRuntimeRoomState(this.store.snapshot(roomId));
+    if (current.room.status === "stopped" || current.room.status === "failed") {
+      throw new Error(`Council room is ${current.room.status} and cannot add agents.`);
+    }
+    const agent = this.store.addAgent(roomId, request.agent);
+    try {
+      await this.launchAgent(this.store.snapshot(roomId), agent);
+      this.store.updateRoom(roomId, { status: "running" });
+    } catch (error) {
+      const message = errorMessage(error);
+      this.store.setAgentStatus(roomId, agent.id, "failed", message);
+      const failureMessage = this.store.appendMessage({
+        roomId,
+        actorId: "system",
+        role: "system",
+        text: `${agent.id} failed to start: ${message}`,
+      });
+      this.publishCouncilMessage(roomId, failureMessage);
+    }
+    const nextRoom = this.projectRuntimeRoomState(this.store.snapshot(roomId));
+    return {
+      room: nextRoom,
+      agent: nextRoom.agents.find((candidate) => candidate.id === agent.id) ?? agent,
+    };
   }
 
   postMessage(roomId: string, request: CouncilPostMessageRequest): CouncilPostMessageResponse {
@@ -203,20 +247,6 @@ export class CouncilRuntime {
     };
   }
 
-  reinjectMissingAgentPrompts(roomId: string): CouncilReinjectAgentsResponse {
-    const rawSnapshot = this.store.snapshot(roomId);
-    const projectedSnapshot = this.projectRuntimeRoomState(rawSnapshot);
-    const targetAgentIds = projectedSnapshot.agents
-      .filter((agent) => this.shouldReinjectMissingAgent(rawSnapshot, agent))
-      .map((agent) => agent.id);
-    const injected = this.reinjectAgentPrompts(roomId, targetAgentIds);
-    return {
-      room: this.projectRuntimeRoomState(this.store.snapshot(roomId)),
-      injectedAgentIds: injected.injectedAgentIds,
-      skippedAgentIds: injected.skippedAgentIds,
-    };
-  }
-
   removeAgentFromRoom(roomId: string, agentId: string): CouncilRemoveAgentResponse {
     const current = this.projectRuntimeRoomState(this.store.snapshot(roomId));
     const agent = current.agents.find((candidate) => candidate.id === agentId);
@@ -224,10 +254,31 @@ export class CouncilRuntime {
       throw new Error(`Unknown council agent ${agentId}.`);
     }
     const terminalId = agent.nativeSessionId ?? agent.zellijPaneId;
-    if (terminalId && this.ptySessions.has(terminalId)) {
+    const terminal = terminalId ? this.agentTerminals.get(terminalId) : undefined;
+    if (terminal?.pendingBootstrapPrompt) {
+      clearTimeout(terminal.pendingBootstrapPrompt.timeout);
+      delete terminal.pendingBootstrapPrompt;
+    }
+
+    if (agent.provider === "opencode") {
+      // OpenCode may treat a soft paused channel_wait_new result as normal tool
+      // output and continue the loop. Use its native two-Escape interrupt path.
+      this.detachCouncilAgentWaiters(roomId, agentId);
+      if (terminalId && this.ptySessions.has(terminalId)) {
+        this.ptySessions.write(terminalId, councilPauseInputForProvider(agent.provider));
+      }
+      this.store.setAgentStatus(roomId, agentId, "waiting", "pause requested");
+      this.appendCouncilSystemMessage({
+        roomId,
+        actorId: "system",
+        clientId: "rah-web",
+        text: `${agentId} pause requested.`,
+      });
+      return { room: this.projectRuntimeRoomState(this.store.snapshot(roomId)) };
+    } else if (!this.cancelCouncilAgentWaiters(roomId, agentId) && terminalId && this.ptySessions.has(terminalId)) {
       this.ptySessions.write(terminalId, councilPauseInputForProvider(agent.provider));
     }
-    this.cancelCouncilAgentWaiters(roomId, agentId);
+
     this.store.setAgentStatus(roomId, agentId, "idle", "listening paused");
     this.appendCouncilSystemMessage({
       roomId,
@@ -366,7 +417,7 @@ export class CouncilRuntime {
     if (immediate) {
       return immediate;
     }
-    return await new Promise<CouncilMessage | null>((resolve) => {
+    return await new Promise<CouncilMcpWaitNewResult>((resolve) => {
       const waiter: CouncilMessageWaiter = {
         actorId: args.actorId,
         clientId: args.clientId,
@@ -419,22 +470,45 @@ export class CouncilRuntime {
     }
   }
 
-  private cancelCouncilAgentWaiters(roomId: string, agentId: string): void {
+  private cancelCouncilAgentWaiters(roomId: string, agentId: string): boolean {
     const waiters = this.messageWaiters.get(roomId);
     if (!waiters) {
-      return;
+      return false;
     }
+    let cancelled = false;
     for (const waiter of [...waiters]) {
       if (waiter.actorId !== agentId) {
         continue;
       }
       clearTimeout(waiter.timeout);
       waiters.delete(waiter);
-      waiter.resolve(null);
+      waiter.resolve({ kind: "paused" });
+      cancelled = true;
     }
     if (waiters.size === 0) {
       this.messageWaiters.delete(roomId);
     }
+    return cancelled;
+  }
+
+  private detachCouncilAgentWaiters(roomId: string, agentId: string): boolean {
+    const waiters = this.messageWaiters.get(roomId);
+    if (!waiters) {
+      return false;
+    }
+    let detached = false;
+    for (const waiter of [...waiters]) {
+      if (waiter.actorId !== agentId) {
+        continue;
+      }
+      clearTimeout(waiter.timeout);
+      waiters.delete(waiter);
+      detached = true;
+    }
+    if (waiters.size === 0) {
+      this.messageWaiters.delete(roomId);
+    }
+    return detached;
   }
 
   private publishCouncilMessage(roomId: string, message: CouncilMessage): void {
@@ -556,32 +630,114 @@ export class CouncilRuntime {
     this.store.setAgentStatus(roomId, actorId, "waiting", "listening");
   }
 
-  private writeCouncilBootstrapPrompt(roomId: string, agentId: string, detail: string): boolean {
+  private writeCouncilBootstrapPrompt(roomId: string, agentId: string, detail: string): CouncilBootstrapPromptWriteResult {
     const snapshot = this.store.snapshot(roomId);
     const agent = snapshot.agents.find((candidate) => candidate.id === agentId);
     const terminalId = agent?.nativeSessionId ?? agent?.zellijPaneId;
     if (!agent || !terminalId || !this.ptySessions.has(terminalId)) {
-      return false;
+      return "skipped";
     }
     if (this.hasActiveCouncilWaiter(roomId, agentId)) {
-      return false;
+      return "skipped";
     }
     const prompt = councilBootstrapPrompt(snapshot, agentId);
-    for (const step of councilBootstrapPromptInputSequence(agent.provider, prompt)) {
+    const terminal = this.agentTerminals.get(terminalId);
+    if (agent.provider === "claude") {
+      if (!terminal) {
+        return "skipped";
+      }
+      if (!hasClaudeCouncilPrompt(terminal.outputTail)) {
+        return this.queueClaudeBootstrapPrompt(terminal, prompt, detail);
+      }
+    }
+    this.sendCouncilBootstrapPromptToTerminal({
+      roomId,
+      agentId,
+      terminalId,
+      provider: agent.provider,
+      prompt,
+      detail,
+    });
+    return "sent";
+  }
+
+  private sendCouncilBootstrapPromptToTerminal(args: {
+    roomId: string;
+    agentId: string;
+    terminalId: string;
+    provider: CouncilProvider;
+    prompt: string;
+    detail: string;
+  }): void {
+    for (const step of councilBootstrapPromptInputSequence(args.provider, args.prompt)) {
       if (step.delayMs === 0) {
-        this.ptySessions.write(terminalId, step.data);
+        this.ptySessions.write(args.terminalId, step.data);
         continue;
       }
       const timer = setTimeout(() => {
-        if (this.ptySessions.has(terminalId)) {
-          this.ptySessions.write(terminalId, step.data);
+        if (this.ptySessions.has(args.terminalId)) {
+          this.ptySessions.write(args.terminalId, step.data);
         }
       }, step.delayMs);
       timer.unref?.();
     }
-    this.appendCouncilAgentStatusMessage(roomId, agentId, "sent");
-    this.store.setAgentStatus(roomId, agentId, "starting", detail);
-    return true;
+    this.appendCouncilAgentStatusMessage(args.roomId, args.agentId, "sent");
+    this.store.setAgentStatus(args.roomId, args.agentId, "starting", args.detail);
+  }
+
+  private queueClaudeBootstrapPrompt(
+    terminal: CouncilAgentTerminalState,
+    prompt: string,
+    detail: string,
+  ): CouncilBootstrapPromptWriteResult {
+    if (terminal.pendingBootstrapPrompt) {
+      clearTimeout(terminal.pendingBootstrapPrompt.timeout);
+    }
+    const timeout = setTimeout(() => {
+      const current = this.agentTerminals.get(terminal.terminalId);
+      if (current !== terminal || current.pendingBootstrapPrompt?.timeout !== timeout) {
+        return;
+      }
+      delete current.pendingBootstrapPrompt;
+      this.store.setAgentStatus(terminal.roomId, terminal.agentId, "idle", "Claude TUI prompt was not detected; bootstrap prompt was not sent.");
+      this.appendCouncilSystemMessage({
+        roomId: terminal.roomId,
+        actorId: "system",
+        clientId: "rah-runtime",
+        text: `bootstrap prompt was not sent for ${terminal.agentId}; Claude TUI did not return to an input prompt.`,
+      });
+    }, CLAUDE_BOOTSTRAP_PROMPT_READY_TIMEOUT_MS);
+    timeout.unref?.();
+    terminal.pendingBootstrapPrompt = { prompt, detail, timeout };
+    this.store.setAgentStatus(terminal.roomId, terminal.agentId, "starting", "waiting for Claude TUI prompt before bootstrap prompt");
+    return "queued";
+  }
+
+  private observeAgentTerminalOutput(terminal: CouncilAgentTerminalState, data: string): void {
+    terminal.outputTail = appendCouncilTerminalOutputTail(terminal.outputTail, data);
+    if (terminal.provider !== "claude" || !terminal.pendingBootstrapPrompt) {
+      return;
+    }
+    if (!hasClaudeCouncilPrompt(terminal.outputTail)) {
+      return;
+    }
+    const pending = terminal.pendingBootstrapPrompt;
+    clearTimeout(pending.timeout);
+    delete terminal.pendingBootstrapPrompt;
+    this.sendCouncilBootstrapPromptToTerminal({
+      roomId: terminal.roomId,
+      agentId: terminal.agentId,
+      terminalId: terminal.terminalId,
+      provider: terminal.provider,
+      prompt: pending.prompt,
+      detail: pending.detail,
+    });
+    this.appendCouncilSystemMessage({
+      roomId: terminal.roomId,
+      actorId: "system",
+      clientId: "rah-runtime",
+      text: `bootstrap prompt re-injected for ${terminal.agentId}.`,
+    });
   }
 
   private appendCouncilAgentStatusMessage(roomId: string, agentId: string, status: "sent" | "joined" | "listening"): void {
@@ -630,54 +786,60 @@ export class CouncilRuntime {
 
   private async launchAgents(room: CouncilRoomSnapshot): Promise<void> {
     for (const agent of room.agents) {
-      const launch = await nativeTuiStartLaunchSpec({
-        provider: agent.provider,
-        cwd: room.room.workspace,
-        ...(agent.modelId ? { model: agent.modelId } : {}),
-        ...(typeof agent.reasoningId === "string" ? { reasoningId: agent.reasoningId } : {}),
-        ...(agent.optionValues !== undefined ? { optionValues: agent.optionValues } : {}),
-        ...(agent.modeId ? { modeId: agent.modeId } : {}),
-        extraMcpServers: [councilMcpServerSpec(room.room.id, agent.id)],
-        initialPrompt: councilBootstrapPrompt(room, agent.id),
-        title: `Council ${agent.label}`,
-      });
-      const terminalId = councilAgentTerminalId(room.room.id, agent.id);
-      if (this.dryRun) {
-        this.store.updateAgent(room.room.id, agent.id, {
-          status: "idle",
-          nativeSessionId: terminalId,
-          zellijPaneId: terminalId,
-        });
-        continue;
-      }
-      this.startAgentPty({
-        terminalId,
-        roomId: room.room.id,
-        agentId: agent.id,
-        cwd: launch.cwd,
-        command: launch.command,
-        args: launch.args,
-        env: {
-          ...(launch.env ?? {}),
-          RAH_COUNCIL_ROOM_ID: room.room.id,
-          RAH_COUNCIL_ACTOR_ID: agent.id,
-          RAH_COUNCIL_ACTOR_LABEL: agent.label,
-          ...(agent.role?.trim() ? { RAH_COUNCIL_ACTOR_ROLE: agent.role.trim() } : {}),
-        },
-      });
+      await this.launchAgent(room, agent);
+    }
+  }
+
+  private async launchAgent(room: CouncilRoomSnapshot, agent: CouncilRoomSnapshot["agents"][number]): Promise<void> {
+    const launch = await nativeTuiStartLaunchSpec({
+      provider: agent.provider,
+      cwd: room.room.workspace,
+      ...(agent.modelId ? { model: agent.modelId } : {}),
+      ...(typeof agent.reasoningId === "string" ? { reasoningId: agent.reasoningId } : {}),
+      ...(agent.optionValues !== undefined ? { optionValues: agent.optionValues } : {}),
+      ...(agent.modeId ? { modeId: agent.modeId } : {}),
+      extraMcpServers: [councilMcpServerSpec(room.room.id, agent.id)],
+      initialPrompt: councilBootstrapPrompt(room, agent.id),
+      title: `Council ${agent.label}`,
+    });
+    const terminalId = councilAgentTerminalId(room.room.id, agent.id);
+    if (this.dryRun) {
       this.store.updateAgent(room.room.id, agent.id, {
-        status: "starting",
+        status: "idle",
         nativeSessionId: terminalId,
         zellijPaneId: terminalId,
       });
-      this.appendCouncilAgentStatusMessage(room.room.id, agent.id, "sent");
+      return;
     }
+    this.startAgentPty({
+      terminalId,
+      roomId: room.room.id,
+      agentId: agent.id,
+      provider: agent.provider,
+      cwd: launch.cwd,
+      command: launch.command,
+      args: launch.args,
+      env: {
+        ...(launch.env ?? {}),
+        RAH_COUNCIL_ROOM_ID: room.room.id,
+        RAH_COUNCIL_ACTOR_ID: agent.id,
+        RAH_COUNCIL_ACTOR_LABEL: agent.label,
+        ...(agent.role?.trim() ? { RAH_COUNCIL_ACTOR_ROLE: agent.role.trim() } : {}),
+      },
+    });
+    this.store.updateAgent(room.room.id, agent.id, {
+      status: "starting",
+      nativeSessionId: terminalId,
+      zellijPaneId: terminalId,
+    });
+    this.appendCouncilAgentStatusMessage(room.room.id, agent.id, "sent");
   }
 
   private startAgentPty(args: {
     terminalId: string;
     roomId: string;
     agentId: string;
+    provider: CouncilProvider;
     cwd: string;
     command: string;
     args: string[];
@@ -690,6 +852,8 @@ export class CouncilRuntime {
       terminalId: args.terminalId,
       roomId: args.roomId,
       agentId: args.agentId,
+      provider: args.provider,
+      outputTail: "",
     };
     this.agentTerminals.set(args.terminalId, terminal);
     this.ptyHub?.ensureSession(args.terminalId);
@@ -702,11 +866,17 @@ export class CouncilRuntime {
       args: args.args,
       ...(args.env ? { env: args.env } : {}),
       onData: (terminalId, data) => {
+        if (this.agentTerminals.get(terminalId) === terminal) {
+          this.observeAgentTerminalOutput(terminal, data);
+        }
         this.ptyHub?.appendOutput(terminalId, data);
       },
       onExit: (terminalId, exitArgs) => {
         this.ptyHub?.emitExit(terminalId, exitArgs.exitCode, exitArgs.signal);
         if (this.agentTerminals.get(terminalId) === terminal) {
+          if (terminal.pendingBootstrapPrompt) {
+            clearTimeout(terminal.pendingBootstrapPrompt.timeout);
+          }
           this.agentTerminals.delete(terminalId);
           const detail = exitArgs.exitCode === undefined
             ? "Agent terminal exited."
@@ -733,7 +903,14 @@ export class CouncilRuntime {
       return;
     }
     if (this.ptySessions.has(terminalId)) {
-      this.agentTerminals.set(terminalId, { terminalId, roomId, agentId });
+      const agent = this.store.snapshot(roomId).agents.find((candidate) => candidate.id === agentId);
+      this.agentTerminals.set(terminalId, {
+        terminalId,
+        roomId,
+        agentId,
+        provider: agent?.provider ?? "codex",
+        outputTail: "",
+      });
       this.ptyHub?.ensureSession(terminalId);
     }
   }
@@ -747,6 +924,10 @@ export class CouncilRuntime {
   }
 
   private async closeAgentTerminal(terminalId: string): Promise<void> {
+    const terminal = this.agentTerminals.get(terminalId);
+    if (terminal?.pendingBootstrapPrompt) {
+      clearTimeout(terminal.pendingBootstrapPrompt.timeout);
+    }
     this.agentTerminals.delete(terminalId);
     await this.ptySessions.close(terminalId).catch(() => false);
     this.ptyHub?.removeSession(terminalId);
@@ -761,60 +942,31 @@ export class CouncilRuntime {
     const skippedAgentIds: string[] = [];
     for (const agentId of agentIds) {
       const agent = snapshot.agents.find((candidate) => candidate.id === agentId);
-      if (!agent || !this.writeCouncilBootstrapPrompt(roomId, agentId, "bootstrap prompt re-injected")) {
+      const result = agent
+        ? this.writeCouncilBootstrapPrompt(roomId, agentId, "bootstrap prompt re-injected")
+        : "skipped";
+      if (result === "skipped") {
         skippedAgentIds.push(agentId);
         continue;
       }
-      this.appendCouncilSystemMessage({
-        roomId,
-        actorId: "system",
-        clientId: "rah-web",
-        text: `bootstrap prompt re-injected for ${agentId}.`,
-      });
+      if (result === "sent") {
+        this.appendCouncilSystemMessage({
+          roomId,
+          actorId: "system",
+          clientId: "rah-web",
+          text: `bootstrap prompt re-injected for ${agentId}.`,
+        });
+      } else {
+        this.appendCouncilSystemMessage({
+          roomId,
+          actorId: "system",
+          clientId: "rah-web",
+          text: `bootstrap prompt queued for ${agentId}; waiting for Claude TUI input prompt.`,
+        });
+      }
       injectedAgentIds.push(agentId);
     }
     return { injectedAgentIds, skippedAgentIds };
-  }
-
-  private shouldReinjectMissingAgent(
-    snapshot: CouncilRoomSnapshot,
-    agent: CouncilRoomSnapshot["agents"][number],
-  ): boolean {
-    if (agent.status === "stopped" || agent.status === "failed" || !this.agentHasLiveTerminal(agent)) {
-      return false;
-    }
-    if (agent.status === "starting") {
-      return true;
-    }
-    if (this.hasActiveCouncilWaiter(snapshot.room.id, agent.id)) {
-      return false;
-    }
-    const sent = this.councilAgentHasSystemMarker(snapshot, agent.id, "sent");
-    const joined = this.councilAgentHasSystemMarker(snapshot, agent.id, "joined");
-    const listening = this.councilAgentHasSystemMarker(snapshot, agent.id, "listening");
-    if (!sent || !joined || !listening) {
-      return true;
-    }
-    if (agent.status === "waiting" || agent.status === "thinking") {
-      return false;
-    }
-    if (agent.status === "idle") {
-      const detail = agent.lastStatusDetail ?? "";
-      return detail === "joined" ||
-        detail === "bootstrap prompt re-injected" ||
-        detail.includes("no active listener") ||
-        detail.includes("wait timed out");
-    }
-    return false;
-  }
-
-  private councilAgentHasSystemMarker(snapshot: CouncilRoomSnapshot, agentId: string, marker: string): boolean {
-    const needle = marker.toLowerCase();
-    return snapshot.messages.some((message) => (
-      message.role === "system" &&
-      message.actorId === agentId &&
-      councilMessageText(message).toLowerCase().includes(needle)
-    ));
   }
 
   private hasActiveCouncilWaiter(roomId: string, agentId: string): boolean {
@@ -870,23 +1022,65 @@ function isReadOnlyCouncilMcpTool(tool: CouncilMcpRequest["tool"]): boolean {
   return tool === "channel_history" || tool === "channel_state" || tool === "channel_list_claims";
 }
 
+function appendCouncilTerminalOutputTail(current: string, data: string): string {
+  const next = `${current}${data}`;
+  if (next.length <= COUNCIL_TERMINAL_OUTPUT_TAIL_LIMIT) {
+    return next;
+  }
+  return next.slice(-COUNCIL_TERMINAL_OUTPUT_TAIL_LIMIT);
+}
+
+function hasClaudeCouncilPrompt(output: string): boolean {
+  const stripped = output.replace(ANSI_ESCAPE_PATTERN, "").replace(/\r/g, "\n");
+  const lines = stripped
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const tail = lines.slice(-16);
+  let promptIndex = -1;
+  for (let index = tail.length - 1; index >= 0; index -= 1) {
+    if (/^(?:›|❯|>)\s*$/u.test(tail[index] ?? "")) {
+      promptIndex = index;
+      break;
+    }
+  }
+  if (promptIndex >= 0) {
+    return tail
+      .slice(promptIndex + 1)
+      .every((line) => /bypass permissions|shift\+tab|^\s*[•>*-]*\s*$/i.test(line));
+  }
+  return tail.at(-1) ? /bypass permissions/i.test(tail.at(-1)!) : false;
+}
+
 function councilBootstrapPromptInputSequence(
   provider: CouncilRoomSnapshot["agents"][number]["provider"],
   prompt: string,
 ): Array<{ delayMs: number; data: string }> {
-  const normalizedPrompt = `${CTRL_U_CLEAR_LINE}${prompt.replace(/\r\n?/g, "\n")}`;
+  const normalizedPromptText = prompt.replace(/\r\n?/g, "\n");
   if (provider !== "claude") {
     return [
-      { delayMs: 0, data: normalizedPrompt },
+      { delayMs: 0, data: `${CTRL_U_CLEAR_LINE}${normalizedPromptText}` },
       { delayMs: BOOTSTRAP_PROMPT_SUBMIT_DELAY_MS, data: "\r" },
     ];
   }
   return [
-    // Claude can be inside a blocking MCP tool call. Escape first to return
-    // focus to the composer, then paste and submit in separate frames.
-    { delayMs: 0, data: ESCAPE_KEY },
-    { delayMs: CLAUDE_BOOTSTRAP_PROMPT_INPUT_DELAY_MS, data: normalizedPrompt },
-    { delayMs: CLAUDE_BOOTSTRAP_PROMPT_INPUT_DELAY_MS + BOOTSTRAP_PROMPT_SUBMIT_DELAY_MS, data: "\r" },
+    // Re-injection is refused while an agent has an active channel_wait_new
+    // waiter. Do not send Escape here: interrupting Claude while it is
+    // finishing a tool call can leave the TUI in a non-composer state.
+    //
+    // Claude receives initial Council prompts as a CLI argument, but
+    // re-injection has to go through the live TUI. Use bracketed paste for the
+    // multi-line bootstrap prompt so the terminal/composer treats it as one
+    // paste operation rather than a stream of interactive Enter-separated keys.
+    { delayMs: 0, data: CTRL_U_CLEAR_LINE },
+    {
+      delayMs: CLAUDE_BOOTSTRAP_PROMPT_INPUT_DELAY_MS,
+      data: `${BRACKETED_PASTE_START}${normalizedPromptText}${BRACKETED_PASTE_END}`,
+    },
+    {
+      delayMs: CLAUDE_BOOTSTRAP_PROMPT_INPUT_DELAY_MS + CLAUDE_BOOTSTRAP_PROMPT_SUBMIT_DELAY_MS,
+      data: "\r",
+    },
   ];
 }
 

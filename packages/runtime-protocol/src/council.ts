@@ -86,6 +86,15 @@ export interface CreateCouncilRoomResponse {
   room: CouncilRoomSnapshot;
 }
 
+export interface AddCouncilAgentRequest {
+  agent: CouncilAgentConfig;
+}
+
+export interface AddCouncilAgentResponse {
+  room: CouncilRoomSnapshot;
+  agent: CouncilAgent;
+}
+
 export interface ListCouncilRoomsResponse {
   rooms: CouncilRoomSnapshot[];
 }

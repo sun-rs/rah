@@ -1,4 +1,5 @@
 import type {
+  AddCouncilAgentRequest,
   AttachClientDescriptor,
   AttachSessionRequest,
   ClaimControlRequest,
@@ -312,6 +313,13 @@ export function parseCreateCouncilRoomRequest(body: unknown): CreateCouncilRoomR
     request.title = title;
   }
   return request;
+}
+
+export function parseAddCouncilAgentRequest(body: unknown): AddCouncilAgentRequest {
+  const record = requireObjectBody(body);
+  return {
+    agent: parseCouncilAgentConfig(record.agent, 0),
+  };
 }
 
 export function parseCouncilPostMessageRequest(body: unknown): CouncilPostMessageRequest {

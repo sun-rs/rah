@@ -15,9 +15,9 @@ import {
   Plus,
   RefreshCw,
   Send,
-  SlidersHorizontal,
   Square,
   Trash2,
+  Users,
   X,
 } from "lucide-react";
 import type {
@@ -50,8 +50,7 @@ import {
   type CouncilAgentDraft,
 } from "./council-ui-state";
 
-type CouncilPanel = "setup" | "chat" | "agents";
-type CouncilSideTab = "setup" | "agents";
+type CouncilPanel = "chat" | "agents";
 type CouncilMessage = CouncilRoomSnapshot["messages"][number];
 type CouncilDisplayItem =
   | { kind: "message"; message: CouncilMessage }
@@ -220,35 +219,6 @@ function councilAgentTheme(room: CouncilRoomSnapshot, agentId: string) {
   return COUNCIL_AGENT_THEMES[index % COUNCIL_AGENT_THEMES.length]!;
 }
 
-function councilAgentHasSystemMarker(room: CouncilRoomSnapshot, agent: CouncilAgent, marker: string): boolean {
-  const needle = marker.toLowerCase();
-  return room.messages.some((message) => (
-    message.role === "system" &&
-    message.actorId === agent.id &&
-    textFromParts(message.parts).toLowerCase().includes(needle)
-  ));
-}
-
-function councilAgentNeedsReinject(room: CouncilRoomSnapshot, agent: CouncilAgent): boolean {
-  if (agent.status === "stopped" || agent.status === "failed") return false;
-  if (agent.status === "waiting" || agent.status === "thinking") return false;
-  if (agent.status === "starting") return true;
-  const sent = councilAgentHasSystemMarker(room, agent, "sent");
-  const joined = councilAgentHasSystemMarker(room, agent, "joined");
-  const listening = councilAgentHasSystemMarker(room, agent, "listening");
-  if (!sent || !joined || !listening) return true;
-  if (agent.status !== "idle") return false;
-  const detail = agent.lastStatusDetail ?? "";
-  return detail === "joined" ||
-    detail === "bootstrap prompt re-injected" ||
-    detail.includes("no active listener") ||
-    detail.includes("wait timed out");
-}
-
-function councilAgentIsActivelyListening(agent: CouncilAgent): boolean {
-  return agent.status === "waiting" || agent.status === "thinking";
-}
-
 function councilAgentOptionsLabel(agent: CouncilAgent): string | null {
   const values = new Set<string>();
   if (agent.reasoningId?.trim()) {
@@ -278,6 +248,159 @@ function createAdditionalCouncilAgentDraft(): CouncilAgentDraft {
   };
 }
 
+function CouncilAgentDraftEditor(props: {
+  drafts: CouncilAgentDraft[];
+  workspace: string;
+  catalogs: Record<string, ProviderModelCatalog>;
+  collapsedDraftIds: Set<string>;
+  minAgents?: number;
+  onUpdateDraft: (id: string, updater: (draft: CouncilAgentDraft) => CouncilAgentDraft) => void;
+  onRemoveDraft: (id: string) => void;
+  onToggleDraftCollapsed: (id: string) => void;
+}) {
+  const minAgents = props.minAgents ?? 1;
+  return (
+    <div className="space-y-2">
+      {props.drafts.map((draft, index) => {
+        const catalog = props.catalogs[catalogKey(draft.provider, props.workspace)];
+        const modeState = resolveSessionModeControlState({
+          provider: draft.provider,
+          draft: draft.modeId ? { accessModeId: draft.modeId, planEnabled: false } : null,
+          catalog: catalog ?? null,
+        });
+        const selection = resolveCouncilAgentModelSelection({ draft, catalog: catalog ?? null });
+        const displayLabel = resolveCouncilAgentDraftLabel({ draft, catalog: catalog ?? null });
+        const removable = props.drafts.length > minAgents;
+        const collapsed = props.collapsedDraftIds.has(draft.id);
+        const titleText = draft.role.trim() ? `${displayLabel} · ${draft.role.trim()}` : displayLabel;
+        return (
+          <div key={draft.id} className="rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-2.5">
+            <div className={`${collapsed ? "" : "mb-2"} flex items-center justify-between gap-2 text-xs font-semibold text-[var(--app-fg)]`}>
+              <button
+                type="button"
+                onClick={() => props.onToggleDraftCollapsed(draft.id)}
+                className="icon-click-feedback flex min-w-0 flex-1 items-center gap-1.5 rounded-lg px-1 py-1 text-left transition-colors hover:bg-[var(--app-subtle-bg)]"
+                title={titleText}
+                aria-expanded={!collapsed}
+                aria-label={`${collapsed ? "Expand" : "Collapse"} agent ${index + 1}`}
+              >
+                <ProviderLogo provider={draft.provider} className="h-4 w-4 shrink-0" variant="bare" />
+                <span className="min-w-0 truncate">
+                  Agent {index + 1}
+                  {collapsed ? ` · ${displayLabel}` : ""}
+                </span>
+              </button>
+              <div className="flex shrink-0 items-center gap-1">
+                {removable ? (
+                  <button
+                    type="button"
+                    onClick={() => props.onRemoveDraft(draft.id)}
+                    className="icon-click-feedback inline-flex h-6 w-6 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-danger)]"
+                    aria-label={`Remove agent ${index + 1}`}
+                    title="Remove agent"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => props.onToggleDraftCollapsed(draft.id)}
+                  className="icon-click-feedback inline-flex h-6 w-6 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
+                  aria-label={`${collapsed ? "Expand" : "Collapse"} agent ${index + 1}`}
+                  title={collapsed ? "Expand agent" : "Collapse agent"}
+                >
+                  {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+                </button>
+              </div>
+            </div>
+            {!collapsed ? (
+              <>
+                <div className="grid grid-cols-2 gap-2">
+                  <select
+                    value={draft.provider}
+                    onChange={(event) => {
+                      const provider = event.target.value as ProviderChoice;
+                      props.onUpdateDraft(draft.id, (item) => ({
+                        ...item,
+                        provider,
+                        modelId: null,
+                        reasoningId: null,
+                        modeId: null,
+                      }));
+                    }}
+                    className="h-8 rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] px-2 text-xs text-[var(--app-fg)]"
+                  >
+                    {PROVIDER_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                  <select
+                    value={draft.modeId ?? modeState.selectedAccessModeId ?? ""}
+                    onChange={(event) => props.onUpdateDraft(draft.id, (item) => ({
+                      ...item,
+                      modeId: event.target.value || null,
+                    }))}
+                    className="h-8 rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] px-2 text-xs text-[var(--app-fg)]"
+                  >
+                    {modeState.accessModes.map((mode) => (
+                      <option key={mode.id} value={mode.id}>{mode.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <input
+                  value={draft.label}
+                  onChange={(event) => props.onUpdateDraft(draft.id, (item) => ({
+                    ...item,
+                    label: event.target.value,
+                  }))}
+                  className="mt-2 h-8 w-full rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] px-2 text-xs text-[var(--app-fg)]"
+                  placeholder={displayLabel}
+                />
+                <input
+                  value={draft.role}
+                  onChange={(event) => props.onUpdateDraft(draft.id, (item) => ({
+                    ...item,
+                    role: event.target.value,
+                  }))}
+                  className="mt-2 h-8 w-full rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] px-2 text-xs text-[var(--app-fg)]"
+                  placeholder="Agent role"
+                />
+                <div className="mt-2">
+                  <SessionModelControls
+                    catalog={catalog ?? null}
+                    selectedModelId={selection.modelId}
+                    selectedReasoningId={selection.reasoningId}
+                    loading={!catalog && Boolean(props.workspace)}
+                    compact
+                    onModelChange={(modelId, defaultReasoningId) => {
+                      props.onUpdateDraft(draft.id, (item) => ({
+                        ...item,
+                        modelId,
+                        reasoningId: defaultReasoningId ?? null,
+                      }));
+                    }}
+                    onReasoningChange={(reasoningId) => {
+                      props.onUpdateDraft(draft.id, (item) => ({
+                        ...item,
+                        reasoningId,
+                      }));
+                    }}
+                  />
+                  {catalog && selection.model && selection.reasoningOptions.length === 0 ? (
+                    <div className="mt-1 truncate text-[11px] text-[var(--app-hint)]">
+                      {selection.model.label} has no startup parameter options.
+                    </div>
+                  ) : null}
+                </div>
+              </>
+            ) : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export function CouncilPage(props: {
   clientId: string;
   workspaceDir: string;
@@ -301,23 +424,35 @@ export function CouncilPage(props: {
   const [catalogs, setCatalogs] = useState<Record<string, ProviderModelCatalog>>({});
   const [activePanel, setActivePanel] = useState<CouncilPanel>("chat");
   const [selectedTerminalAgentId, setSelectedTerminalAgentId] = useState<string | null>(null);
+  const [openedTerminalAgentIds, setOpenedTerminalAgentIds] = useState<Set<string>>(new Set());
   const [collapsedAgentDraftIds, setCollapsedAgentDraftIds] = useState<Set<string>>(new Set());
+  const [addAgentDialogOpen, setAddAgentDialogOpen] = useState(false);
+  const [addAgentDrafts, setAddAgentDrafts] = useState<CouncilAgentDraft[]>(() => [
+    createAdditionalCouncilAgentDraft(),
+  ]);
+  const [collapsedAddAgentDraftIds, setCollapsedAddAgentDraftIds] = useState<Set<string>>(new Set());
   const [showScrollToLatest, setShowScrollToLatest] = useState(false);
   const [historyDialogOpen, setHistoryDialogOpen] = useState(false);
   const [infoDialogOpen, setInfoDialogOpen] = useState(false);
+  const [newRoomDialogOpen, setNewRoomDialogOpen] = useState(false);
   const [councilSidebarOpen, setCouncilSidebarOpen] = useState(true);
-  const [sideTab, setSideTab] = useState<CouncilSideTab>("agents");
   const [isCouncilWide, setIsCouncilWide] = useState(() =>
     typeof window === "undefined" ? false : window.matchMedia("(min-width: 900px)").matches,
   );
+  const [roomStatusCollapsed, setRoomStatusCollapsed] = useState(() =>
+    typeof window === "undefined" ? true : !window.matchMedia("(min-width: 900px)").matches,
+  );
   const [stopConfirmOpen, setStopConfirmOpen] = useState(false);
   const [pendingDeleteHistoryRoom, setPendingDeleteHistoryRoom] = useState<CouncilRoomSnapshot | null>(null);
+  const [pendingPromptAgentId, setPendingPromptAgentId] = useState<string | null>(null);
+  const [pendingPauseAgentId, setPendingPauseAgentId] = useState<string | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const councilStickToLatestRef = useRef(true);
   const previousCouncilRoomIdRef = useRef<string | null>(null);
 
   const selectedRoom = selectedRoomId ? rooms.find((room) => room.room.id === selectedRoomId) ?? null : null;
+  const addAgentWorkspace = selectedRoom?.room.workspace ?? workspace;
   const selectedRoomDisplayItems = useMemo(
     () => selectedRoom ? councilDisplayItems(selectedRoom) : [],
     [selectedRoom],
@@ -325,17 +460,16 @@ export function CouncilPage(props: {
   const terminalDialogOpen = Boolean(selectedRoom && selectedTerminalAgentId);
   const activeTerminalAgent = selectedRoom?.agents.find((agent) => agent.id === selectedTerminalAgentId) ?? null;
   const activeTerminalId = activeTerminalAgent?.nativeSessionId ?? activeTerminalAgent?.zellijPaneId ?? null;
-
-  useEffect(() => {
-    if (!selectedRoom) {
-      setSideTab("setup");
-    }
-  }, [selectedRoom]);
+  const pendingPromptAgent = selectedRoom?.agents.find((agent) => agent.id === pendingPromptAgentId) ?? null;
+  const pendingPauseAgent = selectedRoom?.agents.find((agent) => agent.id === pendingPauseAgentId) ?? null;
 
   useEffect(() => {
     if (typeof window === "undefined") return;
     const query = window.matchMedia("(min-width: 900px)");
-    const handleChange = () => setIsCouncilWide(query.matches);
+    const handleChange = () => {
+      setIsCouncilWide(query.matches);
+      setRoomStatusCollapsed(!query.matches);
+    };
     handleChange();
     query.addEventListener("change", handleChange);
     return () => query.removeEventListener("change", handleChange);
@@ -417,6 +551,18 @@ export function CouncilPage(props: {
       setSelectedTerminalAgentId(null);
     }
   }, [selectedRoom, selectedTerminalAgentId]);
+
+  useEffect(() => {
+    if (!selectedRoom) {
+      setOpenedTerminalAgentIds(new Set());
+      return;
+    }
+    const liveAgentIds = new Set(selectedRoom.agents.map((agent) => agent.id));
+    setOpenedTerminalAgentIds((current) => {
+      const next = new Set([...current].filter((agentId) => liveAgentIds.has(agentId)));
+      return next.size === current.size ? current : next;
+    });
+  }, [selectedRoom]);
 
   useEffect(() => {
     if (!selectedRoomId) return;
@@ -541,17 +687,23 @@ export function CouncilPage(props: {
 
   useEffect(() => {
     const requestedKeys = new Set<string>();
-    for (const draft of agentDrafts) {
-      const key = catalogKey(draft.provider, workspace);
-      if (!workspace || catalogs[key] || requestedKeys.has(key)) continue;
-      requestedKeys.add(key);
-      void api.listProviderModels(draft.provider, { cwd: workspace })
-        .then((catalog) => {
-          setCatalogs((current) => ({ ...current, [key]: catalog }));
-        })
-        .catch(() => undefined);
+    const draftGroups = [
+      { drafts: agentDrafts, cwd: workspace },
+      ...(addAgentDialogOpen ? [{ drafts: addAgentDrafts, cwd: addAgentWorkspace }] : []),
+    ];
+    for (const group of draftGroups) {
+      for (const draft of group.drafts) {
+        const key = catalogKey(draft.provider, group.cwd);
+        if (!group.cwd || catalogs[key] || requestedKeys.has(key)) continue;
+        requestedKeys.add(key);
+        void api.listProviderModels(draft.provider, { cwd: group.cwd })
+          .then((catalog) => {
+            setCatalogs((current) => ({ ...current, [key]: catalog }));
+          })
+          .catch(() => undefined);
+      }
     }
-  }, [agentDrafts, catalogs, workspace]);
+  }, [addAgentDialogOpen, addAgentDrafts, addAgentWorkspace, agentDrafts, catalogs, workspace]);
 
   useEffect(() => {
     setAgentDrafts((current) => {
@@ -570,6 +722,27 @@ export function CouncilPage(props: {
       return changed ? next : current;
     });
   }, [catalogs, workspace]);
+
+  useEffect(() => {
+    if (!addAgentDialogOpen) {
+      return;
+    }
+    setAddAgentDrafts((current) => {
+      let changed = false;
+      const next = current.map((draft) => {
+        const catalog = catalogs[catalogKey(draft.provider, addAgentWorkspace)];
+        if (!catalog) {
+          return draft;
+        }
+        const normalized = normalizeCouncilAgentDraftForCatalog({ draft, catalog });
+        if (normalized !== draft) {
+          changed = true;
+        }
+        return normalized;
+      });
+      return changed ? next : current;
+    });
+  }, [addAgentDialogOpen, addAgentWorkspace, catalogs]);
 
   const updateDraft = (id: string, updater: (draft: CouncilAgentDraft) => CouncilAgentDraft) => {
     setAgentDrafts((current) => current.map((draft) => draft.id === id ? updater(draft) : draft));
@@ -594,6 +767,41 @@ export function CouncilPage(props: {
       }
       return next;
     });
+  };
+
+  const updateAddAgentDraft = (id: string, updater: (draft: CouncilAgentDraft) => CouncilAgentDraft) => {
+    setAddAgentDrafts((current) => current.map((draft) => draft.id === id ? updater(draft) : draft));
+  };
+
+  const removeAddAgentDraft = (id: string) => {
+    setAddAgentDrafts((current) => current.filter((draft) => draft.id !== id));
+    setCollapsedAddAgentDraftIds((current) => {
+      const next = new Set(current);
+      next.delete(id);
+      return next;
+    });
+  };
+
+  const toggleAddAgentDraftCollapsed = (id: string) => {
+    setCollapsedAddAgentDraftIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const resetAddAgentDrafts = () => {
+    setAddAgentDrafts([createAdditionalCouncilAgentDraft()]);
+    setCollapsedAddAgentDraftIds(new Set());
+  };
+
+  const openAddAgentDialog = () => {
+    resetAddAgentDrafts();
+    setAddAgentDialogOpen(true);
   };
 
   const selectWorkspace = (dir: string) => {
@@ -621,8 +829,8 @@ export function CouncilPage(props: {
       await refreshRooms();
       setSelectedRoomId(response.room.room.id);
       setActivePanel("chat");
-      setSideTab("agents");
       setCouncilSidebarOpen(true);
+      setNewRoomDialogOpen(false);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -669,6 +877,41 @@ export function CouncilPage(props: {
     }
   };
 
+  const addAgentToRoom = async () => {
+    if (!selectedRoom) {
+      setError("No council room selected.");
+      return;
+    }
+    if (selectedRoom.room.status !== "running") {
+      setError("Agents can only be added to a running council room.");
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      let latestRoom: CouncilRoomSnapshot | null = null;
+      for (const draft of addAgentDrafts) {
+        const response = await api.addCouncilAgent(selectedRoom.room.id, {
+          agent: councilAgentDraftToConfig({
+            draft,
+            catalog: catalogs[catalogKey(draft.provider, addAgentWorkspace)] ?? null,
+          }),
+        });
+        latestRoom = response.room;
+        replaceRoom(response.room);
+      }
+      if (latestRoom) {
+        replaceRoom(latestRoom);
+      }
+      setAddAgentDialogOpen(false);
+      resetAddAgentDrafts();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const deleteHistoryRoom = async (roomId: string) => {
     setLoading(true);
     setError(null);
@@ -694,15 +937,21 @@ export function CouncilPage(props: {
       return;
     }
     setError(null);
+    setSelectedTerminalAgentId(agent.id);
+    setOpenedTerminalAgentIds((current) => new Set(current).add(agent.id));
     try {
       const response = await api.getCouncilAgentTui(selectedRoom.room.id, agent.id);
       if (!response.terminalId) {
         setError(response.screen || "This council agent terminal is not live anymore.");
-        setSelectedTerminalAgentId(null);
+        setSelectedTerminalAgentId((current) => current === agent.id ? null : current);
+        setOpenedTerminalAgentIds((current) => {
+          const next = new Set(current);
+          next.delete(agent.id);
+          return next;
+        });
         await refreshRooms();
         return;
       }
-      setSelectedTerminalAgentId(agent.id);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     }
@@ -736,23 +985,6 @@ export function CouncilPage(props: {
     }
   };
 
-  const reinjectMissingAgents = async () => {
-    if (!selectedRoom) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const response = await api.reinjectMissingCouncilAgentPrompts(selectedRoom.room.id);
-      replaceRoom(response.room);
-      if (response.injectedAgentIds.length === 0) {
-        setError("No missing live council agents need prompt re-injection.");
-      }
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const pauseAgentCouncilListening = async (agentId: string) => {
     if (!selectedRoom) return;
     setLoading(true);
@@ -765,6 +997,14 @@ export function CouncilPage(props: {
     } finally {
       setLoading(false);
     }
+  };
+
+  const requestReinjectAgent = (agentId: string) => {
+    setPendingPromptAgentId(agentId);
+  };
+
+  const requestPauseAgentCouncilListening = (agentId: string) => {
+    setPendingPauseAgentId(agentId);
   };
 
   const activeRooms = useMemo(
@@ -788,21 +1028,18 @@ export function CouncilPage(props: {
     }
     return `Room-${String(maxRoomNumber + 1).padStart(4, "0")}`;
   }, [rooms]);
-  const missingAgentCount = selectedRoom?.agents.filter((agent) => councilAgentNeedsReinject(selectedRoom, agent)).length ?? 0;
   const sendDisabled = !composer.trim();
 
   const chatPanelClass =
     `${panelVisibilityClass("chat", activePanel)} min-h-0 flex-1 flex-col bg-[var(--app-bg)]`;
   const councilSidebarClass =
-    `${activePanel === "setup" || activePanel === "agents" ? "flex" : "hidden"} ${
+    `${activePanel === "agents" ? "flex" : "hidden"} ${
       councilSidebarOpen ? "min-[900px]:flex" : "min-[900px]:hidden"
     } min-h-0 w-full flex-col overflow-hidden bg-[var(--app-subtle-bg)] min-[900px]:w-[clamp(20rem,28vw,28rem)] min-[900px]:shrink-0`;
-  const councilSidePanelVisible = activePanel === "setup" || activePanel === "agents";
+  const councilSidePanelVisible = activePanel === "agents";
   const councilControlsVisible = councilSidePanelVisible || (isCouncilWide && councilSidebarOpen);
   const councilSidebarButtonLabel =
-    councilControlsVisible ? "Hide council controls" : "Show council controls";
-  const visibleSideTab: CouncilSideTab =
-    activePanel === "setup" || activePanel === "agents" ? activePanel : sideTab;
+    councilControlsVisible ? "Hide agents" : "Show agents";
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-[var(--app-bg)]">
@@ -838,24 +1075,24 @@ export function CouncilPage(props: {
           </div>
         </div>
         <div className={HEADER_ACTION_GROUP_CLASS}>
-          {selectedRoom?.room.status === "running" ? (
-            <>
-              <span className="inline-flex h-7 items-center gap-1 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 text-[11px] font-semibold text-emerald-600">
-                <CheckCircle2 size={13} />
-                Live
-              </span>
-              <button
-                type="button"
-                onClick={() => setStopConfirmOpen(true)}
-                disabled={loading}
-                className={HEADER_TEXT_BUTTON_CLASS}
-                title="Stop room and close agent terminals"
-              >
-                <Square size={14} className="text-[var(--app-danger)] min-[900px]:mr-1" />
-                <span className="hidden min-[900px]:inline">Stop</span>
-              </button>
-            </>
-          ) : null}
+          <button
+            type="button"
+            onClick={() => setHistoryDialogOpen(true)}
+            className={HEADER_ICON_BUTTON_CLASS}
+            aria-label="Open council rooms"
+            title="Council rooms"
+          >
+            <History size={14} />
+          </button>
+          <button
+            type="button"
+            onClick={() => setNewRoomDialogOpen(true)}
+            className={HEADER_ICON_BUTTON_CLASS}
+            title="New council room"
+            aria-label="New council room"
+          >
+            <Plus size={15} />
+          </button>
           <button
             type="button"
             onClick={() => {
@@ -865,22 +1102,13 @@ export function CouncilPage(props: {
                 return;
               }
               setCouncilSidebarOpen(true);
-              setActivePanel(sideTab);
+              setActivePanel("agents");
             }}
             className={HEADER_ICON_BUTTON_CLASS}
             title={councilSidebarButtonLabel}
             aria-label={councilSidebarButtonLabel}
           >
-            <SlidersHorizontal size={15} />
-          </button>
-          <button
-            type="button"
-            onClick={() => setHistoryDialogOpen(true)}
-            className={HEADER_ICON_BUTTON_CLASS}
-            aria-label="Open council rooms"
-            title="Council rooms"
-          >
-            <History size={14} />
+            <Users size={15} />
           </button>
           <button
             type="button"
@@ -896,6 +1124,52 @@ export function CouncilPage(props: {
 
       <div className="flex min-h-0 flex-1">
         <section className={chatPanelClass}>
+          {selectedRoom?.room.status === "running" ? (
+            roomStatusCollapsed ? (
+              <button
+                type="button"
+                onClick={() => setRoomStatusCollapsed(false)}
+                className="icon-click-feedback mx-3 mt-2 flex h-6 w-fit shrink-0 items-center gap-1.5 rounded-full border border-[var(--app-border)] bg-[var(--app-subtle-bg)]/35 px-2 text-[11px] font-semibold text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] sm:mx-4"
+                aria-label="Show room status controls"
+                title="Show room status controls"
+              >
+                <ChevronDown size={12} />
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                <span className="text-emerald-600">Live</span>
+              </button>
+            ) : (
+              <div className="mx-3 mt-2 flex shrink-0 items-center justify-between gap-3 rounded-lg border border-[var(--app-border)] bg-[var(--app-subtle-bg)]/25 px-2.5 py-1.5 text-xs sm:mx-4">
+                <div className="flex min-w-0 items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setRoomStatusCollapsed(true)}
+                    className="icon-click-feedback inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)]"
+                    aria-label="Collapse room status controls"
+                    title="Collapse room status controls"
+                  >
+                    <ChevronRight size={13} />
+                  </button>
+                  <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-600">
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                    Live
+                  </span>
+                  <span className="min-w-0 truncate text-[var(--app-hint)]">
+                    {selectedRoom.agents.length} agent{selectedRoom.agents.length === 1 ? "" : "s"}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setStopConfirmOpen(true)}
+                  disabled={loading}
+                  className="icon-click-feedback inline-flex h-6 shrink-0 items-center justify-center gap-1.5 rounded-md border border-[var(--app-danger)]/25 bg-[var(--app-danger)]/10 px-2.5 text-[11px] font-semibold text-[var(--app-danger)] transition-colors hover:bg-[var(--app-danger)]/15 disabled:opacity-40"
+                  title="Stop room and close agent terminals"
+                >
+                  <Square size={12} />
+                  Stop
+                </button>
+              </div>
+            )
+          ) : null}
           {error ? (
             <div className="mx-4 mt-3 rounded-lg border border-[var(--app-danger)]/30 bg-[var(--app-danger)]/10 px-3 py-2 text-xs text-[var(--app-danger)]">
               {error}
@@ -913,8 +1187,16 @@ export function CouncilPage(props: {
               className="h-full space-y-3 overflow-y-auto p-3 sm:p-4"
             >
               {!selectedRoom ? (
-                <div className="flex h-full items-center justify-center px-6 text-center text-sm text-[var(--app-hint)]">
-                  Start a new room or choose a running room.
+                <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-sm text-[var(--app-hint)]">
+                  <span>Start a new room or choose a running room.</span>
+                  <button
+                    type="button"
+                    onClick={() => setNewRoomDialogOpen(true)}
+                    className="icon-click-feedback inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-[var(--app-border)] px-3 text-xs font-semibold text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)]"
+                  >
+                    <Plus size={14} />
+                    New room
+                  </button>
                 </div>
               ) : selectedRoomDisplayItems.map((item) => {
                 if (item.kind === "agent-status") {
@@ -1043,232 +1325,11 @@ export function CouncilPage(props: {
 
         {councilSidebarOpen ? <div className="inspector-divider hidden min-[900px]:block" /> : null}
         <aside className={councilSidebarClass}>
-          <div className="flex h-12 shrink-0 items-center border-b border-[var(--app-border)] px-3">
-            <div className="grid w-full grid-cols-2 gap-2 rounded-lg bg-[var(--app-subtle-bg)] p-1">
-              {([
-                ["setup", "New"],
-                ["agents", "Agents"],
-              ] as const).map(([tab, label]) => (
-                <button
-                  key={tab}
-                  type="button"
-                  onClick={() => {
-                    setSideTab(tab);
-                    setActivePanel(tab);
-                  }}
-                  className={`rounded-md px-3 py-2 text-sm font-medium transition-colors ${
-                    visibleSideTab === tab
-                      ? "bg-[var(--app-bg)] text-[var(--app-fg)] shadow-sm"
-                      : "text-[var(--app-hint)] hover:text-[var(--app-fg)]"
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          </div>
-
           <div className="min-h-0 flex-1 overflow-y-auto p-3">
-            {visibleSideTab === "setup" ? (
-              <div className="space-y-3">
-                <label className="block text-xs font-medium text-[var(--app-hint)]">
-                  Title
-                  <input
-                    value={title}
-                    onChange={(event) => setTitle(event.target.value)}
-                    className="mt-1 h-11 w-full rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] px-3 text-sm text-[var(--app-fg)]"
-                    placeholder={nextRoomTitle}
-                  />
-                </label>
-                <div className="block text-xs font-medium text-[var(--app-hint)]">
-                  Workspace
-                  <WorkspacePicker
-                    currentDir={workspace}
-                    triggerClassName="mt-1 h-11 w-full rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] px-3 text-left text-xs text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]"
-                    onSelect={selectWorkspace}
-                  />
-                </div>
-                <div className="text-xs font-medium text-[var(--app-hint)]">Agents</div>
-                <div className="space-y-2">
-                  {agentDrafts.map((draft, index) => {
-                    const catalog = catalogs[catalogKey(draft.provider, workspace)];
-                    const modeState = resolveSessionModeControlState({
-                      provider: draft.provider,
-                      draft: draft.modeId ? { accessModeId: draft.modeId, planEnabled: false } : null,
-                      catalog: catalog ?? null,
-                    });
-                    const selection = resolveCouncilAgentModelSelection({ draft, catalog: catalog ?? null });
-                    const displayLabel = resolveCouncilAgentDraftLabel({ draft, catalog: catalog ?? null });
-                    const removable = index > 0;
-                    const collapsed = collapsedAgentDraftIds.has(draft.id);
-                    const titleText = draft.role.trim() ? `${displayLabel} · ${draft.role.trim()}` : displayLabel;
-                    return (
-                      <div key={draft.id} className="rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-2.5">
-                        <div className={`${collapsed ? "" : "mb-2"} flex items-center justify-between gap-2 text-xs font-semibold text-[var(--app-fg)]`}>
-                          <button
-                            type="button"
-                            onClick={() => toggleDraftCollapsed(draft.id)}
-                            className="icon-click-feedback flex min-w-0 flex-1 items-center gap-1.5 rounded-lg px-1 py-1 text-left transition-colors hover:bg-[var(--app-subtle-bg)]"
-                            title={titleText}
-                            aria-expanded={!collapsed}
-                            aria-label={`${collapsed ? "Expand" : "Collapse"} agent ${index + 1}`}
-                          >
-                            <ProviderLogo provider={draft.provider} className="h-4 w-4 shrink-0" variant="bare" />
-                            <span className="min-w-0 truncate">
-                              Agent {index + 1}
-                              {collapsed ? ` · ${displayLabel}` : ""}
-                            </span>
-                          </button>
-                          <div className="flex shrink-0 items-center gap-1">
-                            {removable ? (
-                              <button
-                                type="button"
-                                onClick={() => removeDraft(draft.id)}
-                                className="icon-click-feedback inline-flex h-6 w-6 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-danger)]"
-                                aria-label={`Remove agent ${index + 1}`}
-                                title="Remove agent"
-                              >
-                                <Trash2 size={13} />
-                              </button>
-                            ) : null}
-                            <button
-                              type="button"
-                              onClick={() => toggleDraftCollapsed(draft.id)}
-                              className="icon-click-feedback inline-flex h-6 w-6 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
-                              aria-label={`${collapsed ? "Expand" : "Collapse"} agent ${index + 1}`}
-                              title={collapsed ? "Expand agent" : "Collapse agent"}
-                            >
-                              {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
-                            </button>
-                          </div>
-                        </div>
-                        {!collapsed ? (
-                          <>
-                            <div className="grid grid-cols-2 gap-2">
-                              <select
-                                value={draft.provider}
-                                onChange={(event) => {
-                                  const provider = event.target.value as ProviderChoice;
-                                  updateDraft(draft.id, (item) => ({
-                                    ...item,
-                                    provider,
-                                    modelId: null,
-                                    reasoningId: null,
-                                    modeId: null,
-                                  }));
-                                }}
-                                className="h-8 rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] px-2 text-xs text-[var(--app-fg)]"
-                              >
-                                {PROVIDER_OPTIONS.map((option) => (
-                                  <option key={option.value} value={option.value}>{option.label}</option>
-                                ))}
-                              </select>
-                              <select
-                                value={draft.modeId ?? modeState.selectedAccessModeId ?? ""}
-                                onChange={(event) => updateDraft(draft.id, (item) => ({
-                                  ...item,
-                                  modeId: event.target.value || null,
-                                }))}
-                                className="h-8 rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] px-2 text-xs text-[var(--app-fg)]"
-                              >
-                                {modeState.accessModes.map((mode) => (
-                                  <option key={mode.id} value={mode.id}>{mode.label}</option>
-                                ))}
-                              </select>
-                            </div>
-                            <input
-                              value={draft.label}
-                              onChange={(event) => updateDraft(draft.id, (item) => ({
-                                ...item,
-                                label: event.target.value,
-                              }))}
-                              className="mt-2 h-8 w-full rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] px-2 text-xs text-[var(--app-fg)]"
-                              placeholder={displayLabel}
-                            />
-                            <input
-                              value={draft.role}
-                              onChange={(event) => updateDraft(draft.id, (item) => ({
-                                ...item,
-                                role: event.target.value,
-                              }))}
-                              className="mt-2 h-8 w-full rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] px-2 text-xs text-[var(--app-fg)]"
-                              placeholder="Agent role"
-                            />
-                            <div className="mt-2">
-                              <SessionModelControls
-                                catalog={catalog ?? null}
-                                selectedModelId={selection.modelId}
-                                selectedReasoningId={selection.reasoningId}
-                                loading={!catalog && Boolean(workspace)}
-                                compact
-                                onModelChange={(modelId, defaultReasoningId) => {
-                                  updateDraft(draft.id, (item) => ({
-                                    ...item,
-                                    modelId,
-                                    reasoningId: defaultReasoningId ?? null,
-                                  }));
-                                }}
-                                onReasoningChange={(reasoningId) => {
-                                  updateDraft(draft.id, (item) => ({
-                                    ...item,
-                                    reasoningId,
-                                  }));
-                                }}
-                              />
-                              {catalog && selection.model && selection.reasoningOptions.length === 0 ? (
-                                <div className="mt-1 truncate text-[11px] text-[var(--app-hint)]">
-                                  {selection.model.label} has no startup parameter options.
-                                </div>
-                              ) : null}
-                            </div>
-                          </>
-                        ) : null}
-                      </div>
-                    );
-                  })}
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setAgentDrafts((current) => [
-                        ...current,
-                        createAdditionalCouncilAgentDraft(),
-                      ])
-                    }
-                    className="icon-click-feedback inline-flex h-11 min-w-0 items-center justify-center gap-2 rounded-lg border border-[var(--app-border)] text-xs font-medium text-[var(--app-fg)] hover:bg-[var(--app-bg)]"
-                  >
-                    <Plus size={14} />
-                    Add
-                  </button>
-                  <button
-                    type="button"
-                    disabled={loading || !workspace.trim()}
-                    onClick={() => void startRoom()}
-                    className="icon-click-feedback inline-flex h-11 min-w-0 items-center justify-center gap-2 rounded-lg bg-[var(--app-fg)] px-3 text-xs font-semibold text-[var(--app-bg)] disabled:opacity-40"
-                  >
-                    Start
-                  </button>
-                </div>
-              </div>
-            ) : !selectedRoom ? (
+            {!selectedRoom ? (
               <div className="h-full" />
             ) : (
-              <div className="space-y-2">
-                {selectedRoom.room.status === "running" ? (
-                  <div className="flex justify-end">
-                    <button
-                      type="button"
-                      onClick={() => void reinjectMissingAgents()}
-                      disabled={loading || missingAgentCount === 0}
-                      className="icon-click-feedback inline-flex h-7 items-center gap-1 rounded-md border border-[var(--app-border)] px-2 text-[11px] font-medium text-[var(--app-hint)] transition-colors hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)] disabled:opacity-40"
-                      title="Send bootstrap prompt to missing agents"
-                    >
-                      <Send size={12} />
-                      {missingAgentCount}
-                    </button>
-                  </div>
-                ) : null}
+              <div className="space-y-3">
                 {selectedRoom.agents.map((agent) => {
                   const terminalEnabled = selectedRoom.room.status === "running";
                   const theme = councilAgentTheme(selectedRoom, agent.id);
@@ -1278,7 +1339,6 @@ export function CouncilPage(props: {
                     optionsLabel,
                     agent.lastStatusDetail,
                   ].filter(Boolean).join(" · ");
-                  const agentIsListening = councilAgentIsActivelyListening(agent);
                   return (
                     <div
                       key={agent.id}
@@ -1308,26 +1368,44 @@ export function CouncilPage(props: {
                         <span className={`hidden shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold sm:inline-flex ${agentStatusClass(agent.status)}`}>
                           {agent.status}
                         </span>
-                        <button
-                          type="button"
-                          onClick={() => agentIsListening
-                            ? void pauseAgentCouncilListening(agent.id)
-                            : void reinjectAgent(agent.id)}
-                          disabled={loading || !terminalEnabled || agent.status === "stopped"}
-                          className={`icon-click-feedback inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-[var(--app-border)] text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] disabled:opacity-40 ${
-                            agentIsListening ? "hover:text-amber-600" : "hover:text-[var(--app-fg)]"
-                          }`}
-                          title={agentIsListening ? "Pause council listening" : "Send bootstrap prompt"}
-                          aria-label={agentIsListening
-                            ? `Pause council listening for ${agent.label}`
-                            : `Send bootstrap prompt to ${agent.label}`}
-                        >
-                          {agentIsListening ? <CirclePause size={12} /> : <Send size={12} />}
-                        </button>
+                        <div className="flex shrink-0 items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => requestReinjectAgent(agent.id)}
+                            disabled={loading || !terminalEnabled || agent.status === "stopped"}
+                            className="icon-click-feedback inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-[var(--app-border)] text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] disabled:opacity-40"
+                            title="Send bootstrap prompt"
+                            aria-label={`Send bootstrap prompt to ${agent.label}`}
+                          >
+                            <Send size={12} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => requestPauseAgentCouncilListening(agent.id)}
+                            disabled={loading || !terminalEnabled || agent.status === "stopped"}
+                            className="icon-click-feedback inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-[var(--app-border)] text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-amber-600 disabled:opacity-40"
+                            title="Pause council listening"
+                            aria-label={`Pause council listening for ${agent.label}`}
+                          >
+                            <CirclePause size={12} />
+                          </button>
+                        </div>
                       </div>
                     </div>
                   );
                 })}
+                {selectedRoom.room.status === "running" ? (
+                  <div className="flex justify-center">
+                    <button
+                      type="button"
+                      onClick={openAddAgentDialog}
+                      className="icon-click-feedback inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-[var(--app-border)] px-3 text-xs font-semibold text-[var(--app-fg)] transition-colors hover:bg-[var(--app-bg)]"
+                    >
+                      <Plus size={14} />
+                      Add agent
+                    </button>
+                  </div>
+                ) : null}
               </div>
             )}
           </div>
@@ -1372,6 +1450,215 @@ export function CouncilPage(props: {
           }
         }}
       />
+
+      <ConfirmDialog
+        open={pendingPromptAgent !== null}
+        title="Send bootstrap prompt?"
+        description={
+          pendingPromptAgent
+            ? `Send the Council bootstrap prompt to "${pendingPromptAgent.label}"? Use this when the agent is not listening or needs recovery.`
+            : "Send the Council bootstrap prompt to this agent?"
+        }
+        confirmLabel={loading ? "Sending…" : "Send prompt"}
+        pending={loading}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPendingPromptAgentId(null);
+          }
+        }}
+        onConfirm={() => {
+          const agentId = pendingPromptAgentId;
+          setPendingPromptAgentId(null);
+          if (agentId) {
+            void reinjectAgent(agentId);
+          }
+        }}
+      />
+
+      <ConfirmDialog
+        open={pendingPauseAgent !== null}
+        title="Pause council listening?"
+        description={
+          pendingPauseAgent
+            ? `Pause Council listening for "${pendingPauseAgent.label}"? The TUI stays open; only its Council wait loop is interrupted.`
+            : "Pause Council listening for this agent?"
+        }
+        confirmLabel={loading ? "Pausing…" : "Pause"}
+        pending={loading}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPendingPauseAgentId(null);
+          }
+        }}
+        onConfirm={() => {
+          const agentId = pendingPauseAgentId;
+          setPendingPauseAgentId(null);
+          if (agentId) {
+            void pauseAgentCouncilListening(agentId);
+          }
+        }}
+      />
+
+      <Dialog.Root open={newRoomDialogOpen} onOpenChange={setNewRoomDialogOpen}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 z-40 bg-black/35" />
+          <Dialog.Content className="fixed inset-0 z-50 flex flex-col overflow-hidden bg-[var(--app-bg)] focus:outline-none sm:inset-x-3 sm:top-[6vh] sm:bottom-auto sm:left-1/2 sm:h-[min(88vh,760px)] sm:w-[min(720px,94vw)] sm:-translate-x-1/2 sm:rounded-2xl sm:border sm:border-[var(--app-border)] sm:shadow-2xl">
+            <div className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[var(--app-border)] px-4">
+              <div className="min-w-0">
+                <Dialog.Title className="text-sm font-semibold text-[var(--app-fg)]">
+                  New room
+                </Dialog.Title>
+                <div className="truncate text-xs text-[var(--app-hint)]">
+                  Configure agents before launching the council.
+                </div>
+              </div>
+              <Dialog.Close asChild>
+                <button
+                  type="button"
+                  className="icon-click-feedback inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
+                  aria-label="Close new council room"
+                  title="Close"
+                >
+                  <X size={16} />
+                </button>
+              </Dialog.Close>
+            </div>
+            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
+              <label className="block text-xs font-medium text-[var(--app-hint)]">
+                Title
+                <input
+                  value={title}
+                  onChange={(event) => setTitle(event.target.value)}
+                  className="mt-1 h-11 w-full rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] px-3 text-sm text-[var(--app-fg)]"
+                  placeholder={nextRoomTitle}
+                />
+              </label>
+              <div className="block text-xs font-medium text-[var(--app-hint)]">
+                Workspace
+                <WorkspacePicker
+                  currentDir={workspace}
+                  triggerClassName="mt-1 h-11 w-full rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] px-3 text-left text-xs text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]"
+                  onSelect={selectWorkspace}
+                />
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-xs font-medium text-[var(--app-hint)]">Agents</div>
+                <button
+                  type="button"
+                  onClick={() => setAgentDrafts((current) => [...current, createAdditionalCouncilAgentDraft()])}
+                  className="icon-click-feedback inline-flex h-8 items-center justify-center gap-2 rounded-lg border border-[var(--app-border)] px-2.5 text-xs font-medium text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)]"
+                >
+                  <Plus size={13} />
+                  Add
+                </button>
+              </div>
+              <CouncilAgentDraftEditor
+                drafts={agentDrafts}
+                workspace={workspace}
+                catalogs={catalogs}
+                collapsedDraftIds={collapsedAgentDraftIds}
+                onUpdateDraft={updateDraft}
+                onRemoveDraft={removeDraft}
+                onToggleDraftCollapsed={toggleDraftCollapsed}
+              />
+            </div>
+            <div className="grid shrink-0 grid-cols-2 gap-2 border-t border-[var(--app-border)] p-4">
+              <Dialog.Close asChild>
+                <button
+                  type="button"
+                  className="icon-click-feedback inline-flex h-11 min-w-0 items-center justify-center rounded-lg border border-[var(--app-border)] text-xs font-semibold text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)]"
+                >
+                  Cancel
+                </button>
+              </Dialog.Close>
+              <button
+                type="button"
+                disabled={loading || !workspace.trim()}
+                onClick={() => void startRoom()}
+                className="icon-click-feedback inline-flex h-11 min-w-0 items-center justify-center gap-2 rounded-lg bg-[var(--app-fg)] px-3 text-xs font-semibold text-[var(--app-bg)] disabled:opacity-40"
+              >
+                Start
+              </button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      <Dialog.Root
+        open={addAgentDialogOpen}
+        onOpenChange={(open) => {
+          setAddAgentDialogOpen(open);
+          if (!open) {
+            resetAddAgentDrafts();
+          }
+        }}
+      >
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 z-40 bg-black/35" />
+          <Dialog.Content className="fixed inset-0 z-50 flex flex-col overflow-hidden bg-[var(--app-bg)] focus:outline-none sm:inset-x-3 sm:top-[8vh] sm:bottom-auto sm:left-1/2 sm:h-[min(84vh,720px)] sm:w-[min(720px,94vw)] sm:-translate-x-1/2 sm:rounded-2xl sm:border sm:border-[var(--app-border)] sm:shadow-2xl">
+            <div className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[var(--app-border)] px-4">
+              <div className="min-w-0">
+                <Dialog.Title className="text-sm font-semibold text-[var(--app-fg)]">
+                  Add agents
+                </Dialog.Title>
+                <div className="truncate text-xs text-[var(--app-hint)]">
+                  {selectedRoom ? `Add to ${selectedRoom.room.title}` : "Select a running room first."}
+                </div>
+              </div>
+              <Dialog.Close asChild>
+                <button
+                  type="button"
+                  className="icon-click-feedback inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
+                  aria-label="Close add agent"
+                  title="Close"
+                >
+                  <X size={16} />
+                </button>
+              </Dialog.Close>
+            </div>
+            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-xs font-medium text-[var(--app-hint)]">Agents</div>
+                <button
+                  type="button"
+                  onClick={() => setAddAgentDrafts((current) => [...current, createAdditionalCouncilAgentDraft()])}
+                  className="icon-click-feedback inline-flex h-8 items-center justify-center gap-2 rounded-lg border border-[var(--app-border)] px-2.5 text-xs font-medium text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)]"
+                >
+                  <Plus size={13} />
+                  Add
+                </button>
+              </div>
+              <CouncilAgentDraftEditor
+                drafts={addAgentDrafts}
+                workspace={addAgentWorkspace}
+                catalogs={catalogs}
+                collapsedDraftIds={collapsedAddAgentDraftIds}
+                onUpdateDraft={updateAddAgentDraft}
+                onRemoveDraft={removeAddAgentDraft}
+                onToggleDraftCollapsed={toggleAddAgentDraftCollapsed}
+              />
+            </div>
+            <div className="grid shrink-0 grid-cols-2 gap-2 border-t border-[var(--app-border)] p-4">
+              <Dialog.Close asChild>
+                <button
+                  type="button"
+                  className="icon-click-feedback inline-flex h-11 min-w-0 items-center justify-center rounded-lg border border-[var(--app-border)] text-xs font-semibold text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)]"
+                >
+                  Cancel
+                </button>
+              </Dialog.Close>
+              <button
+                type="button"
+                disabled={loading || !selectedRoom || selectedRoom.room.status !== "running" || !addAgentWorkspace.trim() || addAgentDrafts.length === 0}
+                onClick={() => void addAgentToRoom()}
+                className="icon-click-feedback inline-flex h-11 min-w-0 items-center justify-center gap-2 rounded-lg bg-[var(--app-fg)] px-3 text-xs font-semibold text-[var(--app-bg)] disabled:opacity-40"
+              >
+                Add {addAgentDrafts.length > 1 ? `${addAgentDrafts.length} agents` : "to room"}
+              </button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
 
       <Dialog.Root
         open={historyDialogOpen}
@@ -1435,12 +1722,11 @@ export function CouncilPage(props: {
                   >
                     <button
                       type="button"
-                      onClick={() => {
-                        setSelectedRoomId(room.room.id);
-                        setSideTab("agents");
-                        setActivePanel("chat");
-                        setHistoryDialogOpen(false);
-                      }}
+	                      onClick={() => {
+	                        setSelectedRoomId(room.room.id);
+	                        setActivePanel("chat");
+	                        setHistoryDialogOpen(false);
+	                      }}
                       className="min-w-0 flex-1 rounded-lg px-1 py-0.5 text-left"
                     >
                       <span className="block truncate font-medium">{room.room.title}</span>
@@ -1673,6 +1959,7 @@ export function CouncilPage(props: {
         onOpenChange={(open) => {
           if (!open) {
             setSelectedTerminalAgentId(null);
+            setOpenedTerminalAgentIds(new Set());
           }
         }}
       >
@@ -1691,16 +1978,43 @@ export function CouncilPage(props: {
                   </div>
                 </div>
               </div>
-              <Dialog.Close asChild>
-                <button
-                  type="button"
-                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
-                  aria-label="Close council terminals"
-                  title="Close council terminals"
-                >
-                  <X size={16} />
-                </button>
-              </Dialog.Close>
+              <div className="flex shrink-0 items-center gap-1.5">
+                {selectedRoom?.room.status === "running" && activeTerminalAgent ? (
+                  <>
+                  <button
+                    type="button"
+                    onClick={() => requestReinjectAgent(activeTerminalAgent.id)}
+                    disabled={loading || activeTerminalAgent.status === "stopped"}
+                    className="icon-click-feedback inline-flex h-8 w-8 items-center justify-center rounded-md border border-[var(--app-border)] text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] disabled:opacity-40"
+                    title={`Send bootstrap prompt to ${activeTerminalAgent.label}`}
+                    aria-label={`Send bootstrap prompt to ${activeTerminalAgent.label}`}
+                  >
+                    <Send size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => requestPauseAgentCouncilListening(activeTerminalAgent.id)}
+                    disabled={loading || activeTerminalAgent.status === "stopped"}
+                    className="icon-click-feedback inline-flex h-8 w-8 items-center justify-center rounded-md border border-[var(--app-border)] text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-amber-600 disabled:opacity-40"
+                    title={`Pause council listening for ${activeTerminalAgent.label}`}
+                    aria-label={`Pause council listening for ${activeTerminalAgent.label}`}
+                  >
+                    <CirclePause size={14} />
+                  </button>
+                  </>
+                ) : null}
+                <Dialog.Close asChild>
+                  <button
+                    type="button"
+                    className="icon-click-feedback inline-flex h-8 w-8 items-center justify-center gap-1 rounded-md border border-[var(--app-border)] text-[11px] font-semibold text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] min-[900px]:w-auto min-[900px]:px-2"
+                    aria-label="Close council terminals"
+                    title="Close council terminals"
+                  >
+                    <X size={14} />
+                    <span className="hidden min-[900px]:inline">Close</span>
+                  </button>
+                </Dialog.Close>
+              </div>
             </div>
 
             {selectedRoom && selectedRoom.agents.length > 0 ? (
@@ -1708,58 +2022,55 @@ export function CouncilPage(props: {
                 {selectedRoom.agents.map((agent) => {
                   const active = agent.id === selectedTerminalAgentId;
                   const theme = councilAgentTheme(selectedRoom, agent.id);
-                  const agentIsListening = councilAgentIsActivelyListening(agent);
                   return (
-                    <div key={agent.id} className="flex shrink-0 items-center gap-1">
-                      <button
-                        type="button"
-                        onClick={() => void openTui(agent)}
-                        className={`flex min-w-0 items-center gap-1.5 rounded-lg border px-2.5 py-1 text-left transition-colors ${
-                          active
-                            ? "border-[var(--app-border)] bg-[var(--app-subtle-bg)] text-[var(--app-fg)]"
-                            : "border-transparent bg-transparent text-[var(--app-hint)] hover:border-[var(--app-border)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
-                        }`}
-                        title={agent.label}
-                      >
-                        <span className={`h-2 w-2 shrink-0 rounded-full ${theme.accent}`} />
-                        <ProviderLogo provider={agent.provider} className="h-3.5 w-3.5 shrink-0" variant="bare" />
-                        <span className="max-w-[10rem] truncate text-[11px] font-medium">{agent.label}</span>
-                        <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-semibold ${agentStatusClass(agent.status)}`}>
-                          {agent.status}
-                        </span>
-                      </button>
-                      {active && selectedRoom.room.status === "running" ? (
-                        <button
-                          type="button"
-                          onClick={() => agentIsListening
-                            ? void pauseAgentCouncilListening(agent.id)
-                            : void reinjectAgent(agent.id)}
-                          disabled={loading || agent.status === "stopped"}
-                          className={`icon-click-feedback inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-[var(--app-border)] text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] disabled:opacity-40 ${
-                            agentIsListening ? "hover:text-amber-600" : "hover:text-[var(--app-fg)]"
-                          }`}
-                          title={agentIsListening ? "Pause council listening for this agent" : "Send bootstrap prompt to this agent"}
-                          aria-label={agentIsListening
-                            ? `Pause council listening for ${agent.label}`
-                            : `Send bootstrap prompt to ${agent.label}`}
-                        >
-                          {agentIsListening ? <CirclePause size={12} /> : <Send size={12} />}
-                        </button>
-                      ) : null}
-                    </div>
+                    <button
+                      key={agent.id}
+                      type="button"
+                      onClick={() => void openTui(agent)}
+                      className={`flex min-w-0 shrink-0 items-center gap-1.5 rounded-lg border px-2.5 py-1 text-left transition-colors ${
+                        active
+                          ? "border-[var(--app-border)] bg-[var(--app-subtle-bg)] text-[var(--app-fg)]"
+                          : "border-transparent bg-transparent text-[var(--app-hint)] hover:border-[var(--app-border)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
+                      }`}
+                      title={agent.label}
+                    >
+                      <span className={`h-2 w-2 shrink-0 rounded-full ${theme.accent}`} />
+                      <ProviderLogo provider={agent.provider} className="h-3.5 w-3.5 shrink-0" variant="bare" />
+                      <span className="max-w-[10rem] truncate text-[11px] font-medium">{agent.label}</span>
+                      <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-semibold ${agentStatusClass(agent.status)}`}>
+                        {agent.status}
+                      </span>
+                    </button>
                   );
                 })}
               </div>
             ) : null}
 
-            <div className="min-h-0 flex-1 px-3 pb-3 pt-0 md:px-5 md:pb-5 md:pt-0">
-              {activeTerminalId ? (
-                <TerminalPane
-                  key={activeTerminalId}
-                  terminalId={activeTerminalId}
-                  clientId={props.clientId}
-                  hasControl
-                />
+            <div className="relative min-h-0 flex-1 px-3 pb-3 pt-0 md:px-5 md:pb-5 md:pt-0">
+              {selectedRoom && activeTerminalId ? (
+                selectedRoom.agents
+                  .filter((agent) => openedTerminalAgentIds.has(agent.id))
+                  .map((agent) => {
+                    const terminalId = agent.nativeSessionId ?? agent.zellijPaneId;
+                    if (!terminalId) return null;
+                    const active = agent.id === selectedTerminalAgentId;
+                    return (
+                      <div
+                        key={terminalId}
+                        className={`absolute inset-x-3 bottom-3 top-0 md:inset-x-5 md:bottom-5 ${
+                          active ? "opacity-100" : "pointer-events-none opacity-0"
+                        }`}
+                        aria-hidden={!active}
+                      >
+                        <TerminalPane
+                          terminalId={terminalId}
+                          clientId={props.clientId}
+                          hasControl={active}
+                          initialReplay
+                        />
+                      </div>
+                    );
+                  })
               ) : (
                 <div className="flex h-full items-center justify-center rounded-xl border border-dashed border-[var(--app-border)] p-4 text-center text-sm text-[var(--app-hint)]">
                   This council agent terminal is not live anymore.

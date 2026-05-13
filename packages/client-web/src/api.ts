@@ -1,4 +1,6 @@
 import type {
+  AddCouncilAgentRequest,
+  AddCouncilAgentResponse,
   AttachSessionRequest,
   AttachSessionResponse,
   CloseZellijMuxSessionResponse,
@@ -715,6 +717,19 @@ export async function createCouncilRoom(
   });
 }
 
+export async function addCouncilAgent(
+  roomId: string,
+  request: AddCouncilAgentRequest,
+): Promise<AddCouncilAgentResponse> {
+  return requestJson<AddCouncilAgentResponse>(
+    `/api/council/rooms/${encodeURIComponent(roomId)}/agents`,
+    {
+      method: "POST",
+      body: JSON.stringify(request),
+    },
+  );
+}
+
 export async function postCouncilMessage(
   roomId: string,
   request: CouncilPostMessageRequest,
@@ -757,15 +772,6 @@ export async function reinjectCouncilAgentPrompt(
 ): Promise<CouncilReinjectAgentsResponse> {
   return requestJson<CouncilReinjectAgentsResponse>(
     `/api/council/rooms/${encodeURIComponent(roomId)}/agents/${encodeURIComponent(agentId)}/reinject`,
-    { method: "POST", body: JSON.stringify({}) },
-  );
-}
-
-export async function reinjectMissingCouncilAgentPrompts(
-  roomId: string,
-): Promise<CouncilReinjectAgentsResponse> {
-  return requestJson<CouncilReinjectAgentsResponse>(
-    `/api/council/rooms/${encodeURIComponent(roomId)}/reinject-missing`,
     { method: "POST", body: JSON.stringify({}) },
   );
 }
