@@ -802,6 +802,11 @@ test("CouncilRuntime exposes council agent PTYs through the interactive PTY stre
       cols: 120,
       rows: 36,
     });
+    const framesAfterClaim: PtyServerFrame[] = [];
+    const unsubscribeAfterClaim = ptyHub.subscribe(tui.terminalId!, (frame) => framesAfterClaim.push(frame));
+    unsubscribeAfterClaim();
+    const replayAfterClaim = framesAfterClaim.find((frame) => frame.type === "pty.replay");
+    assert.ok(replayAfterClaim?.chunks.join("").includes(`ready:${tui.terminalId}`));
     assert.equal(runtime.handlePtyInput(tui.terminalId!, "web-client", "hello"), true);
     assert.deepEqual(ptySessions.writes, [
       {
@@ -825,7 +830,7 @@ test("CouncilRuntime exposes council agent PTYs through the interactive PTY stre
   }
 });
 
-test("CouncilRuntime can re-inject bootstrap prompts and remove an agent without closing its terminal", async () => {
+test("CouncilRuntime can re-inject bootstrap prompts and pause an agent listener without closing its terminal", async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-runtime-reinject-"));
   const previousCodex = process.env.RAH_CODEX_BINARY;
   process.env.RAH_CODEX_BINARY = fakeBinary(root, "codex");
@@ -861,21 +866,53 @@ test("CouncilRuntime can re-inject bootstrap prompts and remove an agent without
       tool: "channel_join",
     });
     const removed = runtime.removeAgentFromRoom(roomId, agentId);
-    assert.equal(removed.room.agents[0]!.status, "stopped");
+    assert.equal(removed.room.agents[0]!.status, "idle");
+    assert.equal(removed.room.agents[0]!.lastStatusDetail, "listening paused");
     assert.equal(ptySessions.has(terminalId), true);
-    await assert.rejects(
-      () => runtime.callMcpTool({
-        roomId,
-        actorId: agentId,
-        clientId: "client-a",
-        tool: "channel_wait_new",
-        arguments: { timeout_s: 0.01 },
-      }),
-      /cannot receive MCP writes/,
-    );
+    assert.deepEqual(ptySessions.writes.at(-1), {
+      id: terminalId,
+      data: "\x1b",
+    });
+    const reinjectedAfterPause = runtime.reinjectAgentPrompt(roomId, agentId);
+    assert.deepEqual(reinjectedAfterPause.injectedAgentIds, [agentId]);
+    assert.equal(reinjectedAfterPause.room.agents[0]!.status, "starting");
+    assert.equal(reinjectedAfterPause.room.agents[0]!.lastStatusDetail, "bootstrap prompt re-injected");
   } finally {
     if (previousCodex === undefined) delete process.env.RAH_CODEX_BINARY;
     else process.env.RAH_CODEX_BINARY = previousCodex;
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test("CouncilRuntime sends OpenCode double escape when pausing council listening", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-runtime-opencode-pause-"));
+  const previousOpenCode = process.env.RAH_OPENCODE_BINARY;
+  process.env.RAH_OPENCODE_BINARY = fakeBinary(root, "opencode");
+  try {
+    const ptySessions = new FakePtyRuntime();
+    const runtime = new CouncilRuntime({
+      store: new CouncilStore(path.join(root, "rooms.json")),
+      ptySessions,
+    });
+    const response = await runtime.createRoom({
+      workspace: root,
+      agents: [{ provider: "opencode", label: "OpenCode Builder" }],
+    });
+    const roomId = response.room.room.id;
+    const agentId = response.room.agents[0]!.id;
+    const terminalId = councilTerminalId(roomId, agentId);
+
+    const paused = runtime.removeAgentFromRoom(roomId, agentId);
+
+    assert.equal(paused.room.agents[0]!.status, "idle");
+    assert.equal(paused.room.agents[0]!.lastStatusDetail, "listening paused");
+    assert.deepEqual(ptySessions.writes.at(-1), {
+      id: terminalId,
+      data: "\x1b\x1b",
+    });
+  } finally {
+    if (previousOpenCode === undefined) delete process.env.RAH_OPENCODE_BINARY;
+    else process.env.RAH_OPENCODE_BINARY = previousOpenCode;
     rmSync(root, { force: true, recursive: true });
   }
 });

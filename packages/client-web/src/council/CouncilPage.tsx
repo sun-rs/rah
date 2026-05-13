@@ -7,6 +7,7 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
+  CirclePause,
   EyeOff,
   History,
   Info,
@@ -242,6 +243,10 @@ function councilAgentNeedsReinject(room: CouncilRoomSnapshot, agent: CouncilAgen
     detail === "bootstrap prompt re-injected" ||
     detail.includes("no active listener") ||
     detail.includes("wait timed out");
+}
+
+function councilAgentIsActivelyListening(agent: CouncilAgent): boolean {
+  return agent.status === "waiting" || agent.status === "thinking";
 }
 
 function councilAgentOptionsLabel(agent: CouncilAgent): string | null {
@@ -748,7 +753,7 @@ export function CouncilPage(props: {
     }
   };
 
-  const removeAgentFromCouncil = async (agentId: string) => {
+  const pauseAgentCouncilListening = async (agentId: string) => {
     if (!selectedRoom) return;
     setLoading(true);
     setError(null);
@@ -1273,6 +1278,7 @@ export function CouncilPage(props: {
                     optionsLabel,
                     agent.lastStatusDetail,
                   ].filter(Boolean).join(" · ");
+                  const agentIsListening = councilAgentIsActivelyListening(agent);
                   return (
                     <div
                       key={agent.id}
@@ -1304,23 +1310,19 @@ export function CouncilPage(props: {
                         </span>
                         <button
                           type="button"
-                          onClick={() => void reinjectAgent(agent.id)}
-                          disabled={loading || !terminalEnabled}
-                          className="icon-click-feedback inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-[var(--app-border)] text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] disabled:opacity-40"
-                          title="Send bootstrap prompt"
-                          aria-label={`Send bootstrap prompt to ${agent.label}`}
-                        >
-                          <Send size={12} />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => void removeAgentFromCouncil(agent.id)}
+                          onClick={() => agentIsListening
+                            ? void pauseAgentCouncilListening(agent.id)
+                            : void reinjectAgent(agent.id)}
                           disabled={loading || !terminalEnabled || agent.status === "stopped"}
-                          className="icon-click-feedback inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-[var(--app-border)] text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-danger)] disabled:opacity-40"
-                          title="Remove from council without closing terminal"
-                          aria-label={`Remove ${agent.label} from council`}
+                          className={`icon-click-feedback inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-[var(--app-border)] text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] disabled:opacity-40 ${
+                            agentIsListening ? "hover:text-amber-600" : "hover:text-[var(--app-fg)]"
+                          }`}
+                          title={agentIsListening ? "Pause council listening" : "Send bootstrap prompt"}
+                          aria-label={agentIsListening
+                            ? `Pause council listening for ${agent.label}`
+                            : `Send bootstrap prompt to ${agent.label}`}
                         >
-                          <Trash2 size={12} />
+                          {agentIsListening ? <CirclePause size={12} /> : <Send size={12} />}
                         </button>
                       </div>
                     </div>
@@ -1689,30 +1691,6 @@ export function CouncilPage(props: {
                   </div>
                 </div>
               </div>
-              {activeTerminalAgent && selectedRoom?.room.status === "running" ? (
-                <div className="flex shrink-0 items-center gap-1">
-                  <button
-                    type="button"
-                    onClick={() => void reinjectAgent(activeTerminalAgent.id)}
-                    disabled={loading}
-                    className="icon-click-feedback inline-flex h-7 items-center gap-1 rounded-md border border-[var(--app-border)] px-2 text-[11px] font-medium text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] disabled:opacity-40"
-                    title="Send bootstrap prompt"
-                  >
-                    <Send size={12} />
-                    <span className="hidden sm:inline">Prompt</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void removeAgentFromCouncil(activeTerminalAgent.id)}
-                    disabled={loading || activeTerminalAgent.status === "stopped"}
-                    className="icon-click-feedback inline-flex h-7 items-center gap-1 rounded-md border border-[var(--app-border)] px-2 text-[11px] font-medium text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-danger)] disabled:opacity-40"
-                    title="Remove from council without closing terminal"
-                  >
-                    <Trash2 size={12} />
-                    <span className="hidden sm:inline">Remove</span>
-                  </button>
-                </div>
-              ) : null}
               <Dialog.Close asChild>
                 <button
                   type="button"
@@ -1730,25 +1708,45 @@ export function CouncilPage(props: {
                 {selectedRoom.agents.map((agent) => {
                   const active = agent.id === selectedTerminalAgentId;
                   const theme = councilAgentTheme(selectedRoom, agent.id);
+                  const agentIsListening = councilAgentIsActivelyListening(agent);
                   return (
-                    <button
-                      key={agent.id}
-                      type="button"
-                      onClick={() => void openTui(agent)}
-                      className={`flex min-w-0 items-center gap-1.5 rounded-lg border px-2.5 py-1 text-left transition-colors ${
-                        active
-                          ? "border-[var(--app-border)] bg-[var(--app-subtle-bg)] text-[var(--app-fg)]"
-                          : "border-transparent bg-transparent text-[var(--app-hint)] hover:border-[var(--app-border)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
-                      }`}
-                      title={agent.label}
-                    >
-                      <span className={`h-2 w-2 shrink-0 rounded-full ${theme.accent}`} />
-                      <ProviderLogo provider={agent.provider} className="h-3.5 w-3.5 shrink-0" variant="bare" />
-                      <span className="max-w-[10rem] truncate text-[11px] font-medium">{agent.label}</span>
-                      <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-semibold ${agentStatusClass(agent.status)}`}>
-                        {agent.status}
-                      </span>
-                    </button>
+                    <div key={agent.id} className="flex shrink-0 items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => void openTui(agent)}
+                        className={`flex min-w-0 items-center gap-1.5 rounded-lg border px-2.5 py-1 text-left transition-colors ${
+                          active
+                            ? "border-[var(--app-border)] bg-[var(--app-subtle-bg)] text-[var(--app-fg)]"
+                            : "border-transparent bg-transparent text-[var(--app-hint)] hover:border-[var(--app-border)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
+                        }`}
+                        title={agent.label}
+                      >
+                        <span className={`h-2 w-2 shrink-0 rounded-full ${theme.accent}`} />
+                        <ProviderLogo provider={agent.provider} className="h-3.5 w-3.5 shrink-0" variant="bare" />
+                        <span className="max-w-[10rem] truncate text-[11px] font-medium">{agent.label}</span>
+                        <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-semibold ${agentStatusClass(agent.status)}`}>
+                          {agent.status}
+                        </span>
+                      </button>
+                      {active && selectedRoom.room.status === "running" ? (
+                        <button
+                          type="button"
+                          onClick={() => agentIsListening
+                            ? void pauseAgentCouncilListening(agent.id)
+                            : void reinjectAgent(agent.id)}
+                          disabled={loading || agent.status === "stopped"}
+                          className={`icon-click-feedback inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-[var(--app-border)] text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] disabled:opacity-40 ${
+                            agentIsListening ? "hover:text-amber-600" : "hover:text-[var(--app-fg)]"
+                          }`}
+                          title={agentIsListening ? "Pause council listening for this agent" : "Send bootstrap prompt to this agent"}
+                          aria-label={agentIsListening
+                            ? `Pause council listening for ${agent.label}`
+                            : `Send bootstrap prompt to ${agent.label}`}
+                        >
+                          {agentIsListening ? <CirclePause size={12} /> : <Send size={12} />}
+                        </button>
+                      ) : null}
+                    </div>
                   );
                 })}
               </div>
@@ -1761,9 +1759,6 @@ export function CouncilPage(props: {
                   terminalId={activeTerminalId}
                   clientId={props.clientId}
                   hasControl
-                  closeLabel={`Close ${activeTerminalAgent?.label ?? "agent"} terminal`}
-                  closeTitle={`Close ${activeTerminalAgent?.label ?? "agent"} terminal`}
-                  onClose={() => setSelectedTerminalAgentId(null)}
                 />
               ) : (
                 <div className="flex h-full items-center justify-center rounded-xl border border-dashed border-[var(--app-border)] p-4 text-center text-sm text-[var(--app-hint)]">

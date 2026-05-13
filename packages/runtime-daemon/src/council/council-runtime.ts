@@ -223,12 +223,17 @@ export class CouncilRuntime {
     if (!agent) {
       throw new Error(`Unknown council agent ${agentId}.`);
     }
-    this.store.setAgentStatus(roomId, agentId, "stopped", "removed from council");
+    const terminalId = agent.nativeSessionId ?? agent.zellijPaneId;
+    if (terminalId && this.ptySessions.has(terminalId)) {
+      this.ptySessions.write(terminalId, councilPauseInputForProvider(agent.provider));
+    }
+    this.cancelCouncilAgentWaiters(roomId, agentId);
+    this.store.setAgentStatus(roomId, agentId, "idle", "listening paused");
     this.appendCouncilSystemMessage({
       roomId,
       actorId: "system",
       clientId: "rah-web",
-      text: `${agentId} removed from council.`,
+      text: `${agentId} paused council listening.`,
     });
     return { room: this.projectRuntimeRoomState(this.store.snapshot(roomId)) };
   }
@@ -263,7 +268,6 @@ export class CouncilRuntime {
     };
     const cols = terminal.activeSurface.cols ?? DEFAULT_COUNCIL_AGENT_COLS;
     const rows = terminal.activeSurface.rows ?? DEFAULT_COUNCIL_AGENT_ROWS;
-    this.ptyHub?.resetSession(terminalId);
     this.forceAgentTerminalRedraw(terminalId, cols, rows);
     return { surface: { ...terminal.activeSurface } };
   }
@@ -409,6 +413,24 @@ export class CouncilRuntime {
       clearTimeout(waiter.timeout);
       waiters.delete(waiter);
       waiter.resolve(message);
+    }
+    if (waiters.size === 0) {
+      this.messageWaiters.delete(roomId);
+    }
+  }
+
+  private cancelCouncilAgentWaiters(roomId: string, agentId: string): void {
+    const waiters = this.messageWaiters.get(roomId);
+    if (!waiters) {
+      return;
+    }
+    for (const waiter of [...waiters]) {
+      if (waiter.actorId !== agentId) {
+        continue;
+      }
+      clearTimeout(waiter.timeout);
+      waiters.delete(waiter);
+      waiter.resolve(null);
     }
     if (waiters.size === 0) {
       this.messageWaiters.delete(roomId);
@@ -829,6 +851,11 @@ export class CouncilRuntime {
 
 function councilAgentTerminalId(roomId: string, agentId: string): string {
   return `council:${roomId}:${Buffer.from(agentId, "utf8").toString("base64url")}`;
+}
+
+function councilPauseInputForProvider(provider: CouncilRoomSnapshot["agents"][number]["provider"]): string {
+  // OpenCode uses Escape once to request interruption and again to confirm it.
+  return provider === "opencode" ? `${ESCAPE_KEY}${ESCAPE_KEY}` : ESCAPE_KEY;
 }
 
 function isActiveCouncilRoomStatus(status: CouncilRoomSnapshot["room"]["status"]): boolean {
