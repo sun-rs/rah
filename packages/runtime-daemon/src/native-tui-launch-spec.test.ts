@@ -22,6 +22,7 @@ const originalEnv = {
   RAH_CLAUDE_BINARY: process.env.RAH_CLAUDE_BINARY,
   RAH_OPENCODE_BINARY: process.env.RAH_OPENCODE_BINARY,
   CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
+  RAH_HOME: process.env.RAH_HOME,
 };
 
 afterEach(() => {
@@ -30,6 +31,7 @@ afterEach(() => {
   restoreEnv("RAH_CLAUDE_BINARY", originalEnv.RAH_CLAUDE_BINARY);
   restoreEnv("RAH_OPENCODE_BINARY", originalEnv.RAH_OPENCODE_BINARY);
   restoreEnv("CLAUDE_CONFIG_DIR", originalEnv.CLAUDE_CONFIG_DIR);
+  restoreEnv("RAH_HOME", originalEnv.RAH_HOME);
 });
 
 function restoreEnv(key: keyof typeof originalEnv, value: string | undefined): void {
@@ -325,10 +327,12 @@ describe("native TUI launch specs", () => {
     const opencode = fakeBinary("opencode");
     const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-native-spec-mcp-workspace-"));
     const configDir = mkdtempSync(path.join(os.tmpdir(), "rah-native-spec-mcp-claude-config-"));
+    const rahHome = mkdtempSync(path.join(os.tmpdir(), "rah-native-spec-mcp-rah-home-"));
     process.env.RAH_CODEX_BINARY = codex.path;
     process.env.RAH_CLAUDE_BINARY = claude.path;
     process.env.RAH_OPENCODE_BINARY = opencode.path;
     process.env.CLAUDE_CONFIG_DIR = configDir;
+    process.env.RAH_HOME = rahHome;
     const extraMcpServers = [{
       name: "rah council",
       command: process.execPath,
@@ -355,7 +359,9 @@ describe("native TUI launch specs", () => {
       });
       const claudeConfigIndex = claudeStart.args.indexOf("--mcp-config");
       assert.notEqual(claudeConfigIndex, -1);
-      const claudeMcpConfig = JSON.parse(claudeStart.args[claudeConfigIndex + 1]!) as {
+      const claudeMcpConfigPath = claudeStart.args[claudeConfigIndex + 1]!;
+      assert.ok(claudeMcpConfigPath.startsWith(path.join(rahHome, "runtime-daemon", "claude-mcp-configs")));
+      const claudeMcpConfig = JSON.parse(readFileSync(claudeMcpConfigPath, "utf8")) as {
         mcpServers?: Record<string, { command?: string; args?: string[] }>;
       };
       assert.equal(claudeMcpConfig.mcpServers?.rah_council?.command, process.execPath);
@@ -383,15 +389,18 @@ describe("native TUI launch specs", () => {
       assert.ok(openCodeConfigContent);
       const openCodeConfig = JSON.parse(openCodeConfigContent) as {
         default_agent?: string;
-        mcp?: Record<string, { type?: string; command?: string[]; enabled?: boolean }>;
+        experimental?: { mcp_timeout?: number };
+        mcp?: Record<string, { type?: string; command?: string[]; enabled?: boolean; timeout?: number }>;
       };
       assert.equal(openCodeConfig.default_agent, undefined);
+      assert.equal(openCodeConfig.experimental?.mcp_timeout, 300_000);
       assert.equal(openCodeConfig.mcp?.rah_council?.type, "local");
       assert.deepEqual(openCodeConfig.mcp?.rah_council?.command?.slice(1, 3), [
         "/repo/bin/rah.mjs",
         "council-mcp",
       ]);
       assert.equal(openCodeConfig.mcp?.rah_council?.enabled, true);
+      assert.equal(openCodeConfig.mcp?.rah_council?.timeout, 300_000);
     } finally {
       rmSync(codex.dir, { force: true, recursive: true });
       rmSync(claude.dir, { force: true, recursive: true });

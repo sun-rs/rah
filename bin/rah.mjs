@@ -892,6 +892,14 @@ async function handleCouncilMcpLine(parsed, line) {
       writeMcpResponse(request.id, { tools: councilMcpTools() });
       return;
     }
+    if (request.method === "resources/list") {
+      writeMcpResponse(request.id, { resources: [] });
+      return;
+    }
+    if (request.method === "prompts/list") {
+      writeMcpResponse(request.id, { prompts: [] });
+      return;
+    }
     if (request.method !== "tools/call") {
       throw new Error(`Unsupported MCP method: ${request.method ?? "<missing>"}`);
     }

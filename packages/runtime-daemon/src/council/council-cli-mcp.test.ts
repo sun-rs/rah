@@ -76,24 +76,34 @@ test("rah council-mcp speaks minimal MCP JSON-RPC over stdio", async () => {
   });
 
   try {
-    const linesPromise = collectLines(child.stdout, 3);
+    const linesPromise = collectLines(child.stdout, 5);
     child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05" } })}\n`);
     child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`);
     child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" })}\n`);
-    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "channel_post", arguments: { content: "hello" } } })}\n`);
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 3, method: "resources/list" })}\n`);
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 4, method: "prompts/list" })}\n`);
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "channel_post", arguments: { content: "hello" } } })}\n`);
     child.stdin.end();
 
     const lines = await linesPromise;
     const responses = lines.map((line) => JSON.parse(line) as {
       jsonrpc: string;
       id: number;
-      result?: { tools?: Array<{ name: string }>; content?: Array<{ type: string; text: string }>; structuredContent?: unknown };
+      result?: {
+        tools?: Array<{ name: string }>;
+        resources?: unknown[];
+        prompts?: unknown[];
+        content?: Array<{ type: string; text: string }>;
+        structuredContent?: unknown;
+      };
     });
     assert.equal(responses[0]!.jsonrpc, "2.0");
     assert.equal(responses[0]!.id, 1);
     assert.equal(responses[1]!.result?.tools?.some((tool) => tool.name === "channel_post"), true);
-    assert.equal(responses[2]!.result?.content?.[0]?.type, "text");
-    assert.deepEqual(responses[2]!.result?.structuredContent, { echoedTool: "channel_post" });
+    assert.deepEqual(responses[2]!.result?.resources, []);
+    assert.deepEqual(responses[3]!.result?.prompts, []);
+    assert.equal(responses[4]!.result?.content?.[0]?.type, "text");
+    assert.deepEqual(responses[4]!.result?.structuredContent, { echoedTool: "channel_post" });
     assert.equal((received[0] as { roomId?: string }).roomId, "room-1");
   } finally {
     child.kill("SIGTERM");

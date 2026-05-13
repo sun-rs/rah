@@ -58,6 +58,8 @@ type ModelRequest = {
   optionValues?: Record<string, SessionConfigValue>;
 };
 
+const OPENCODE_MCP_TIMEOUT_MS = 300_000;
+
 export interface NativeTuiMcpServerSpec {
   name: string;
   command: string;
@@ -190,6 +192,10 @@ function normalizeMcpServerName(name: string): string {
     .slice(0, 48) || "rah_council";
 }
 
+function resolveRahHome(): string {
+  return process.env.RAH_HOME || path.join(homedir(), ".rah");
+}
+
 function appendCodexMcpArgs(args: string[], servers: readonly NativeTuiMcpServerSpec[] | undefined): void {
   for (const server of servers ?? []) {
     const name = normalizeMcpServerName(server.name);
@@ -206,6 +212,14 @@ function appendCodexMcpArgs(args: string[], servers: readonly NativeTuiMcpServer
   }
 }
 
+function writeClaudeMcpConfig(mcpServers: Record<string, { command: string; args?: string[]; env?: Record<string, string> }>): string {
+  const dir = path.join(resolveRahHome(), "runtime-daemon", "claude-mcp-configs");
+  mkdirSync(dir, { recursive: true });
+  const filePath = path.join(dir, `mcp-${process.pid}-${Date.now()}-${randomUUID()}.json`);
+  writeFileSync(filePath, `${JSON.stringify({ mcpServers }, null, 2)}\n`, { mode: 0o600 });
+  return filePath;
+}
+
 function appendClaudeMcpArgs(args: string[], servers: readonly NativeTuiMcpServerSpec[] | undefined): void {
   if (!servers || servers.length === 0) {
     return;
@@ -218,7 +232,7 @@ function appendClaudeMcpArgs(args: string[], servers: readonly NativeTuiMcpServe
       ...(server.env ? { env: server.env } : {}),
     };
   }
-  args.push("--mcp-config", JSON.stringify({ mcpServers }));
+  args.push("--mcp-config", writeClaudeMcpConfig(mcpServers));
 }
 
 function resolveOptionOrReasoning(
@@ -369,6 +383,9 @@ function openCodeEnv(args: {
 }): Record<string, string> | undefined {
   const config: Record<string, unknown> = {};
   if (args.extraMcpServers && args.extraMcpServers.length > 0) {
+    config.experimental = {
+      mcp_timeout: OPENCODE_MCP_TIMEOUT_MS,
+    };
     config.mcp = Object.fromEntries(
       args.extraMcpServers.map((server) => [
         normalizeMcpServerName(server.name),
@@ -376,6 +393,7 @@ function openCodeEnv(args: {
           type: "local",
           command: [server.command, ...(server.args ?? [])],
           enabled: true,
+          timeout: OPENCODE_MCP_TIMEOUT_MS,
           ...(server.env ? { environment: server.env } : {}),
         },
       ]),

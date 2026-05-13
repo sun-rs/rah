@@ -53,6 +53,9 @@ function toChannelMessage(message: CouncilMessage): Record<string, unknown> {
   };
 }
 
+const WAIT_TIMEOUT_INSTRUCTION =
+  "Timeout is a heartbeat, not completion. Do not answer, summarize, continue roleplay, or use terminal/main-chat memory. Call channel_wait_new again immediately without natural-language output.";
+
 export type CouncilMcpWaitNew = (args: {
   roomId: string;
   actorId: string;
@@ -130,7 +133,7 @@ export function handleCouncilMcpRequest(
                 ok: true,
                 timed_out: true,
                 next_action: "call_channel_wait_new_again",
-                instruction: "Timeout is a heartbeat, not completion. Call channel_wait_new again immediately without natural-language output.",
+                instruction: WAIT_TIMEOUT_INSTRUCTION,
               },
         };
       }
@@ -148,7 +151,7 @@ export function handleCouncilMcpRequest(
               ok: true,
               timed_out: true,
               next_action: "call_channel_wait_new_again",
-              instruction: "Timeout is a heartbeat, not completion. Call channel_wait_new again immediately without natural-language output.",
+              instruction: WAIT_TIMEOUT_INSTRUCTION,
             },
       }));
     }

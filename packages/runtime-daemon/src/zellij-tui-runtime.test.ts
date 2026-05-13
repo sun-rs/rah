@@ -271,8 +271,14 @@ async function startZellijProviderSession(params: {
       assert.equal(engine.getSessionSummary(sessionId).session.nativeTui?.promptState, "prompt_clean");
     }, 7_000);
 
+    await engine.claimNativeTuiSurface(sessionId, {
+      clientId: `web-zellij-${params.provider}`,
+      clientKind: "web",
+      cols: 96,
+      rows: 28,
+    });
     const sendExit = () => {
-      engine.sendInput(sessionId, { clientId: `web-zellij-${params.provider}`, text: "exit" });
+      engine.onPtyInput(sessionId, `web-zellij-${params.provider}`, "exit\r");
     };
     sendExit();
     try {

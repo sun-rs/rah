@@ -85,6 +85,25 @@ function councilTerminalId(roomId: string, agentId: string): string {
   return `council:${roomId}:${Buffer.from(agentId, "utf8").toString("base64url")}`;
 }
 
+function assertBootstrapPromptSubmitted(write: { id: string; data: string }, args: {
+  roomId: string;
+  agentId: string;
+}): void {
+  assert.equal(write.id, councilTerminalId(args.roomId, args.agentId));
+  assert.match(write.data, /^\x15/);
+  assert.match(write.data, new RegExp(args.agentId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(write.data, /channel_join/);
+  assert.doesNotMatch(write.data, /\r$/);
+}
+
+function waitForBootstrapPromptSubmit(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 220));
+}
+
+function waitForClaudeBootstrapPromptSubmit(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 420));
+}
+
 test("CouncilRuntime launches agent PTYs with provider launch specs and archives the room", async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-runtime-"));
   const previousCodex = process.env.RAH_CODEX_BINARY;
@@ -155,6 +174,7 @@ test("CouncilRuntime launches agent PTYs with provider launch specs and archives
     assert.match(codexPrompt, /你的唯一名字是 'Codex Lead'/);
     assert.match(codexPrompt, /你的角色: Lead implementation and propose concrete changes\./);
     assert.match(codexPrompt, /用户消息优先级最高/);
+    assert.match(codexPrompt, /只能处理 rah_council 工具返回的 recent_messages 或 msg/);
     assert.match(codexPrompt, /timeout 是心跳/);
     assert.match(codexPrompt, /收到 timed_out=true 后不要输出任何自然语言/);
     assert.equal(ptySessions.created[1]!.env?.RAH_COUNCIL_ACTOR_ID, claudeId);
@@ -167,6 +187,8 @@ test("CouncilRuntime launches agent PTYs with provider launch specs and archives
     assert.match(claudePrompt, /你的角色: Review risks and challenge weak assumptions\./);
     assert.match(claudePrompt, /mcp__rah_council__channel_join/);
     assert.match(claudePrompt, /不要用 Bash、echo、curl、ps、node/);
+    assert.match(claudePrompt, /必须先实际调用下面的 MCP 工具/);
+    assert.doesNotMatch(claudePrompt, /工具不可见/);
     assert.equal(ptySessions.created[2]!.env?.RAH_COUNCIL_ACTOR_ID, opencodeId);
     assert.equal(ptySessions.created[2]!.env?.RAH_COUNCIL_ACTOR_LABEL, opencodeId);
     assert.equal(ptySessions.created[2]!.env?.RAH_COUNCIL_ACTOR_ROLE, "Inspect implementation details and report exact findings.");
@@ -175,12 +197,19 @@ test("CouncilRuntime launches agent PTYs with provider launch specs and archives
     const openCodePrompt = ptySessions.created[2]!.args?.[openCodePromptIndex + 1] ?? "";
     assert.match(openCodePrompt, /你的唯一名字是 'OpenCode Builder'/);
     assert.match(openCodePrompt, /你的角色: Inspect implementation details and report exact findings\./);
+    assert.match(openCodePrompt, /timeout_s=120/);
+    const initialStatusTexts = response.room.messages.map((message) =>
+      message.parts.map((part) => part.kind === "text" ? part.text : JSON.stringify(part.data)).join("\n")
+    );
+    assert.equal(initialStatusTexts.includes(`${codexId} sent`), true);
+    assert.equal(initialStatusTexts.includes(`${claudeId} sent`), true);
+    assert.equal(initialStatusTexts.includes(`${opencodeId} sent`), true);
     assert.equal(
       eventBus.list({
         sessionIds: [response.room.room.id],
         eventTypes: ["council.message.created"],
       }).length,
-      1,
+      4,
     );
     await runtime.callMcpTool({
       roomId: response.room.room.id,
@@ -192,8 +221,8 @@ test("CouncilRuntime launches agent PTYs with provider launch specs and archives
       sessionIds: [response.room.room.id],
       eventTypes: ["council.message.created"],
     });
-    assert.equal(councilEvents.length, 2);
-    const agentMessageEvent = councilEvents[1]!;
+    assert.equal(councilEvents.length, 5);
+    const agentMessageEvent = councilEvents.at(-1)!;
     assert.equal(agentMessageEvent.type, "council.message.created");
     if (agentMessageEvent.type === "council.message.created") {
       assert.equal(agentMessageEvent.payload.message.actorId, codexId);
@@ -476,6 +505,113 @@ test("CouncilRuntime treats wait timeout as a heartbeat without auto re-injectio
   }
 });
 
+test("CouncilRuntime does not project legacy wait-timeout noise to frontend rooms or events", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-runtime-timeout-noise-"));
+  try {
+    const eventBus = new EventBus();
+    const runtime = new CouncilRuntime({
+      store: new CouncilStore(path.join(root, "rooms.json")),
+      dryRun: true,
+      eventBus,
+    });
+    const response = await runtime.createRoom({
+      workspace: root,
+      agents: [{ provider: "codex", label: "Codex Listener" }],
+    });
+    const roomId = response.room.room.id;
+
+    const beforeEvents = eventBus.list({
+      sessionIds: [roomId],
+      eventTypes: ["council.message.created"],
+    }).length;
+    runtime.postMessage(roomId, {
+      role: "system",
+      text: "Codex Listener wait timed out; no active listener is currently blocking on channel_wait_new.",
+    });
+
+    const projected = runtime.listRooms().rooms.find((room) => room.room.id === roomId)!;
+    assert.equal(
+      projected.messages.some((message) => (
+        message.parts.some((part) => part.kind === "text" && part.text.includes("wait timed out"))
+      )),
+      false,
+    );
+    assert.equal(
+      eventBus.list({
+        sessionIds: [roomId],
+        eventTypes: ["council.message.created"],
+      }).length,
+      beforeEvents,
+    );
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test("CouncilRuntime projects joined and listening diagnostics for UI status folding", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-runtime-project-status-"));
+  try {
+    const eventBus = new EventBus();
+    const runtime = new CouncilRuntime({
+      store: new CouncilStore(path.join(root, "rooms.json")),
+      dryRun: true,
+      eventBus,
+    });
+    const response = await runtime.createRoom({
+      workspace: root,
+      agents: [{ provider: "codex", label: "Codex Listener" }],
+    });
+    const roomId = response.room.room.id;
+    const agentId = response.room.agents[0]!.id;
+    const beforeEvents = eventBus.list({
+      sessionIds: [roomId],
+      eventTypes: ["council.message.created"],
+    }).length;
+
+    await runtime.callMcpTool({
+      roomId,
+      actorId: agentId,
+      clientId: "client-a",
+      tool: "channel_join",
+    });
+    await runtime.callMcpTool({
+      roomId,
+      actorId: agentId,
+      clientId: "client-a",
+      tool: "channel_wait_new",
+      arguments: { timeout_s: 0.01 },
+    });
+
+    const projected = runtime.listRooms().rooms.find((room) => room.room.id === roomId)!;
+    const visibleTexts = projected.messages.map((message) =>
+      message.parts.map((part) => part.kind === "text" ? part.text : JSON.stringify(part.data)).join("\n")
+    );
+    assert.equal(visibleTexts.includes(`${agentId} joined`), true);
+    assert.equal(visibleTexts.includes(`${agentId} listening`), true);
+    const events = eventBus.list({
+      sessionIds: [roomId],
+      eventTypes: ["council.message.created"],
+    });
+    assert.equal(events.length, beforeEvents + 2);
+    const lastEvent = events.at(-1) as {
+      payload: {
+        message: {
+          parts: Array<{ kind: "text"; text: string } | { kind: "data"; data: unknown }>;
+        };
+      };
+    } | undefined;
+    assert.equal(lastEvent?.payload.message.parts[0]?.kind, "text");
+    assert.equal(
+      lastEvent?.payload.message.parts[0]?.kind === "text"
+        ? lastEvent.payload.message.parts[0].text
+        : "",
+      `${agentId} listening`,
+    );
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
 test("CouncilRuntime keeps an agent waiting when it re-enters wait after timeout", async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-runtime-rewait-"));
   try {
@@ -514,6 +650,59 @@ test("CouncilRuntime keeps an agent waiting when it re-enters wait after timeout
     runtime.postMessage(roomId, { text: "Still listening?" });
     const delivered = await secondWait;
     assert.equal(delivered.result.msg?.content, "Still listening?");
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test("CouncilRuntime announces listening again after an agent re-joins", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-runtime-rejoin-listening-"));
+  try {
+    const runtime = new CouncilRuntime({
+      store: new CouncilStore(path.join(root, "rooms.json")),
+      dryRun: true,
+    });
+    const response = await runtime.createRoom({
+      workspace: root,
+      agents: [{ provider: "codex", label: "Codex Listener" }],
+    });
+    const roomId = response.room.room.id;
+    const agentId = response.room.agents[0]!.id;
+
+    await runtime.callMcpTool({
+      roomId,
+      actorId: agentId,
+      clientId: "client-a",
+      tool: "channel_join",
+    });
+    await runtime.callMcpTool({
+      roomId,
+      actorId: agentId,
+      clientId: "client-a",
+      tool: "channel_wait_new",
+      arguments: { timeout_s: 0.01 },
+    });
+    await runtime.callMcpTool({
+      roomId,
+      actorId: agentId,
+      clientId: "client-a",
+      tool: "channel_join",
+    });
+    await runtime.callMcpTool({
+      roomId,
+      actorId: agentId,
+      clientId: "client-a",
+      tool: "channel_wait_new",
+      arguments: { timeout_s: 0.01 },
+    });
+
+    const snapshot = runtime.listRooms().rooms.find((room) => room.room.id === roomId)!;
+    const listeningMessages = snapshot.messages.filter((message) => (
+      message.role === "system" &&
+      message.actorId === agentId &&
+      message.parts.some((part) => part.kind === "text" && part.text.includes("listening"))
+    ));
+    assert.equal(listeningMessages.length, 2);
   } finally {
     rmSync(root, { force: true, recursive: true });
   }
@@ -656,8 +845,12 @@ test("CouncilRuntime can re-inject bootstrap prompts and remove an agent without
 
     const reinjected = runtime.reinjectAgentPrompt(roomId, agentId);
     assert.deepEqual(reinjected.injectedAgentIds, [agentId]);
-    assert.match(ptySessions.writes.at(-1)?.data ?? "", /channel_join/);
-    assert.match(ptySessions.writes.at(-1)?.data ?? "", /\r$/);
+    assertBootstrapPromptSubmitted(ptySessions.writes.at(-1)!, { roomId, agentId });
+    await waitForBootstrapPromptSubmit();
+    assert.deepEqual(ptySessions.writes.at(-1), {
+      id: terminalId,
+      data: "\r",
+    });
     assert.equal(reinjected.room.agents[0]!.status, "starting");
     assert.equal(reinjected.room.agents[0]!.lastStatusDetail, "bootstrap prompt re-injected");
 
@@ -687,6 +880,94 @@ test("CouncilRuntime can re-inject bootstrap prompts and remove an agent without
   }
 });
 
+test("CouncilRuntime re-injects Claude bootstrap prompts with escape and delayed submit", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-runtime-claude-reinject-"));
+  const previousClaude = process.env.RAH_CLAUDE_BINARY;
+  const previousRahHome = process.env.RAH_HOME;
+  process.env.RAH_CLAUDE_BINARY = fakeBinary(root, "claude");
+  process.env.RAH_HOME = path.join(root, "rah-home");
+  try {
+    const ptySessions = new FakePtyRuntime();
+    const runtime = new CouncilRuntime({
+      store: new CouncilStore(path.join(root, "rooms.json")),
+      ptySessions,
+    });
+    const response = await runtime.createRoom({
+      workspace: root,
+      agents: [{ provider: "claude", label: "Claude Reviewer" }],
+    });
+    const roomId = response.room.room.id;
+    const agentId = response.room.agents[0]!.id;
+    const terminalId = councilTerminalId(roomId, agentId);
+
+    const reinjected = runtime.reinjectAgentPrompt(roomId, agentId);
+    assert.deepEqual(reinjected.injectedAgentIds, [agentId]);
+    assert.deepEqual(ptySessions.writes.at(-1), {
+      id: terminalId,
+      data: "\x1b",
+    });
+    await waitForBootstrapPromptSubmit();
+    assertBootstrapPromptSubmitted(ptySessions.writes.at(-1)!, { roomId, agentId });
+    await waitForClaudeBootstrapPromptSubmit();
+    assert.deepEqual(ptySessions.writes.at(-1), {
+      id: terminalId,
+      data: "\r",
+    });
+  } finally {
+    if (previousClaude === undefined) delete process.env.RAH_CLAUDE_BINARY;
+    else process.env.RAH_CLAUDE_BINARY = previousClaude;
+    if (previousRahHome === undefined) delete process.env.RAH_HOME;
+    else process.env.RAH_HOME = previousRahHome;
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test("CouncilRuntime skips bootstrap re-injection while an agent has an active listener", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-runtime-reinject-active-listener-"));
+  const previousCodex = process.env.RAH_CODEX_BINARY;
+  process.env.RAH_CODEX_BINARY = fakeBinary(root, "codex");
+  try {
+    const ptySessions = new FakePtyRuntime();
+    const runtime = new CouncilRuntime({
+      store: new CouncilStore(path.join(root, "rooms.json")),
+      ptySessions,
+    });
+    const response = await runtime.createRoom({
+      workspace: root,
+      agents: [{ provider: "codex", label: "Codex Listener" }],
+    });
+    const roomId = response.room.room.id;
+    const agentId = response.room.agents[0]!.id;
+    await runtime.callMcpTool({
+      roomId,
+      actorId: agentId,
+      clientId: "client-a",
+      tool: "channel_join",
+    });
+    const waitPromise = runtime.callMcpTool({
+      roomId,
+      actorId: agentId,
+      clientId: "client-a",
+      tool: "channel_wait_new",
+      arguments: { timeout_s: 10 },
+    });
+    const writesBefore = ptySessions.writes.length;
+
+    const reinjected = runtime.reinjectAgentPrompt(roomId, agentId);
+
+    assert.deepEqual(reinjected.injectedAgentIds, []);
+    assert.deepEqual(reinjected.skippedAgentIds, [agentId]);
+    assert.equal(ptySessions.writes.length, writesBefore);
+    assert.equal(reinjected.room.agents[0]!.status, "waiting");
+    runtime.postMessage(roomId, { text: "wake listener" });
+    await waitPromise;
+  } finally {
+    if (previousCodex === undefined) delete process.env.RAH_CODEX_BINARY;
+    else process.env.RAH_CODEX_BINARY = previousCodex;
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
 test("CouncilRuntime re-injects only missing live agents", async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-runtime-reinject-missing-"));
   const previousCodex = process.env.RAH_CODEX_BINARY;
@@ -701,25 +982,61 @@ test("CouncilRuntime re-injects only missing live agents", async () => {
       workspace: root,
       agents: [
         { provider: "codex", label: "Missing Agent" },
-        { provider: "codex", label: "Waiting Agent" },
+        { provider: "codex", label: "Joined Only Agent" },
+        { provider: "codex", label: "Waiting Without Listener Agent" },
+        { provider: "codex", label: "Active Waiting Agent" },
       ],
     });
     const roomId = response.room.room.id;
     const missingId = response.room.agents[0]!.id;
-    const waitingId = response.room.agents[1]!.id;
+    const joinedOnlyId = response.room.agents[1]!.id;
+    const waitingWithoutListenerId = response.room.agents[2]!.id;
+    const activeWaitingId = response.room.agents[3]!.id;
     await runtime.callMcpTool({
       roomId,
-      actorId: waitingId,
+      actorId: joinedOnlyId,
+      clientId: "client-joined",
+      tool: "channel_join",
+    });
+    await runtime.callMcpTool({
+      roomId,
+      actorId: joinedOnlyId,
+      clientId: "client-joined",
+      tool: "channel_set_status",
+      arguments: { phase: "idle", detail: "joined" },
+    });
+    await runtime.callMcpTool({
+      roomId,
+      actorId: waitingWithoutListenerId,
       clientId: "client-b",
       tool: "channel_set_status",
       arguments: { phase: "waiting", detail: "ready" },
     });
+    await runtime.callMcpTool({
+      roomId,
+      actorId: activeWaitingId,
+      clientId: "client-active",
+      tool: "channel_join",
+    });
+    await runtime.callMcpTool({
+      roomId,
+      actorId: activeWaitingId,
+      clientId: "client-active",
+      tool: "channel_wait_new",
+      arguments: { timeout_s: 0.01 },
+    });
 
     const result = runtime.reinjectMissingAgentPrompts(roomId);
 
-    assert.deepEqual(result.injectedAgentIds, [missingId]);
-    assert.equal(ptySessions.writes.length, 1);
-    assert.match(ptySessions.writes[0]!.data, new RegExp(missingId));
+    assert.deepEqual(result.injectedAgentIds, [missingId, joinedOnlyId, waitingWithoutListenerId]);
+    assert.equal(ptySessions.writes.length, 3);
+    assertBootstrapPromptSubmitted(ptySessions.writes[0]!, { roomId, agentId: missingId });
+    assertBootstrapPromptSubmitted(ptySessions.writes[1]!, { roomId, agentId: joinedOnlyId });
+    assertBootstrapPromptSubmitted(ptySessions.writes[2]!, { roomId, agentId: waitingWithoutListenerId });
+    assert.equal(
+      ptySessions.writes.some((write) => write.id === councilTerminalId(roomId, activeWaitingId)),
+      false,
+    );
   } finally {
     if (previousCodex === undefined) delete process.env.RAH_CODEX_BINARY;
     else process.env.RAH_CODEX_BINARY = previousCodex;

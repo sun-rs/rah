@@ -13,6 +13,7 @@ import {
   Menu,
   Plus,
   RefreshCw,
+  Send,
   SlidersHorizontal,
   Square,
   Trash2,
@@ -50,6 +51,19 @@ import {
 
 type CouncilPanel = "setup" | "chat" | "agents";
 type CouncilSideTab = "setup" | "agents";
+type CouncilMessage = CouncilRoomSnapshot["messages"][number];
+type CouncilDisplayItem =
+  | { kind: "message"; message: CouncilMessage }
+  | {
+    kind: "agent-status";
+    key: string;
+    actorId: string;
+    status: "sent" | "joined" | "listening";
+    messageId: number;
+  };
+
+const COUNCIL_SYSTEM_NOTICE_CLASS =
+  "mx-auto flex w-fit max-w-[92%] items-center gap-2 rounded-full bg-[var(--app-subtle-bg)]/35 px-2.5 py-1 text-[10.5px] leading-relaxed text-[var(--app-hint)] sm:max-w-[78%]";
 
 function isCouncilHistoryRoom(room: CouncilRoomSnapshot): boolean {
   return room.room.status === "stopped" || room.room.status === "failed";
@@ -92,6 +106,60 @@ function councilSystemText(room: CouncilRoomSnapshot, text: string): string {
     cleaned = cleaned.replace(new RegExp(`\\s+${escapeRegExp(room.room.id)}\\b`, "g"), "");
   }
   return cleaned.trim();
+}
+
+function isCouncilSystemNoise(text: string): boolean {
+  return /\bwait timed out;\s*no active listener is currently blocking on channel_wait_new\b/i.test(text);
+}
+
+function councilAgentSystemStatus(message: CouncilMessage): "sent" | "joined" | "listening" | null {
+  if (message.role !== "system" || message.actorId === "system") {
+    return null;
+  }
+  const text = textFromParts(message.parts).trim();
+  if (text === `${message.actorId} sent`) {
+    return "sent";
+  }
+  if (text === `${message.actorId} joined`) {
+    return "joined";
+  }
+  if (text === `${message.actorId} listening`) {
+    return "listening";
+  }
+  return null;
+}
+
+function councilDisplayItems(room: CouncilRoomSnapshot): CouncilDisplayItem[] {
+  const items: CouncilDisplayItem[] = [];
+  const statusIndexByActor = new Map<string, number>();
+  for (const message of room.messages) {
+    if (message.role === "system" && isCouncilSystemNoise(textFromParts(message.parts))) {
+      continue;
+    }
+    const status = councilAgentSystemStatus(message);
+    if (!status) {
+      items.push({ kind: "message", message });
+      continue;
+    }
+    const previousIndex = statusIndexByActor.get(message.actorId);
+    if (previousIndex !== undefined) {
+      items.splice(previousIndex, 1);
+      for (const [actorId, index] of statusIndexByActor) {
+        if (index > previousIndex) {
+          statusIndexByActor.set(actorId, index - 1);
+        }
+      }
+    }
+    statusIndexByActor.set(message.actorId, items.length);
+    items.push({
+      kind: "agent-status",
+      key: `agent-status:${message.actorId}`,
+      actorId: message.actorId,
+      status,
+      messageId: message.id,
+    });
+  }
+  return items;
 }
 
 function catalogKey(provider: ProviderChoice, workspace: string): string {
@@ -151,12 +219,29 @@ function councilAgentTheme(room: CouncilRoomSnapshot, agentId: string) {
   return COUNCIL_AGENT_THEMES[index % COUNCIL_AGENT_THEMES.length]!;
 }
 
-function councilAgentNeedsReinject(agent: CouncilAgent): boolean {
+function councilAgentHasSystemMarker(room: CouncilRoomSnapshot, agent: CouncilAgent, marker: string): boolean {
+  const needle = marker.toLowerCase();
+  return room.messages.some((message) => (
+    message.role === "system" &&
+    message.actorId === agent.id &&
+    textFromParts(message.parts).toLowerCase().includes(needle)
+  ));
+}
+
+function councilAgentNeedsReinject(room: CouncilRoomSnapshot, agent: CouncilAgent): boolean {
   if (agent.status === "stopped" || agent.status === "failed") return false;
+  if (agent.status === "waiting" || agent.status === "thinking") return false;
   if (agent.status === "starting") return true;
+  const sent = councilAgentHasSystemMarker(room, agent, "sent");
+  const joined = councilAgentHasSystemMarker(room, agent, "joined");
+  const listening = councilAgentHasSystemMarker(room, agent, "listening");
+  if (!sent || !joined || !listening) return true;
   if (agent.status !== "idle") return false;
   const detail = agent.lastStatusDetail ?? "";
-  return detail === "joined" || detail.includes("no active listener") || detail.includes("wait timed out");
+  return detail === "joined" ||
+    detail === "bootstrap prompt re-injected" ||
+    detail.includes("no active listener") ||
+    detail.includes("wait timed out");
 }
 
 function councilAgentOptionsLabel(agent: CouncilAgent): string | null {
@@ -228,6 +313,10 @@ export function CouncilPage(props: {
   const previousCouncilRoomIdRef = useRef<string | null>(null);
 
   const selectedRoom = selectedRoomId ? rooms.find((room) => room.room.id === selectedRoomId) ?? null : null;
+  const selectedRoomDisplayItems = useMemo(
+    () => selectedRoom ? councilDisplayItems(selectedRoom) : [],
+    [selectedRoom],
+  );
   const terminalDialogOpen = Boolean(selectedRoom && selectedTerminalAgentId);
   const activeTerminalAgent = selectedRoom?.agents.find((agent) => agent.id === selectedTerminalAgentId) ?? null;
   const activeTerminalId = activeTerminalAgent?.nativeSessionId ?? activeTerminalAgent?.zellijPaneId ?? null;
@@ -326,30 +415,93 @@ export function CouncilPage(props: {
 
   useEffect(() => {
     if (!selectedRoomId) return;
-    const socket = api.createEventsSocket(
-      {
-        sessionIds: [selectedRoomId],
-        eventTypes: ["council.message.created"],
-      },
-      (batch) => {
-        const latest = batch.events
-          .filter((event) => event.type === "council.message.created")
-          .at(-1);
-        if (!latest) return;
-        setRooms((current) => {
-          const nextRoom = latest.payload.room;
-          const index = current.findIndex((room) => room.room.id === nextRoom.room.id);
-          if (index < 0) {
-            return [nextRoom, ...current];
-          }
-          const next = [...current];
-          next[index] = nextRoom;
-          return next;
+    let cancelled = false;
+    let socket: WebSocket | null = null;
+    let reconnectTimer: number | null = null;
+
+    const clearReconnectTimer = () => {
+      if (reconnectTimer !== null) {
+        window.clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+    };
+
+    const refreshAfterSocketLoss = () => {
+      void api.listCouncilRooms()
+        .then((response) => {
+          if (cancelled) return;
+          setRooms(response.rooms);
+        })
+        .catch(() => {
+          // The normal 5s polling loop owns user-visible Council refresh errors.
         });
-      },
-      (caught) => setError(caught.message),
-    );
-    return () => socket.close();
+    };
+
+    const scheduleReconnect = () => {
+      if (cancelled || reconnectTimer !== null) return;
+      reconnectTimer = window.setTimeout(() => {
+        reconnectTimer = null;
+        connectSocket();
+      }, document.visibilityState === "visible" ? 750 : 3_000);
+    };
+
+    const connectSocket = () => {
+      if (cancelled) return;
+      socket = api.createEventsSocket(
+        {
+          sessionIds: [selectedRoomId],
+          eventTypes: ["council.message.created"],
+        },
+        (batch) => {
+          const latest = batch.events
+            .filter((event) => event.type === "council.message.created")
+            .at(-1);
+          if (!latest) return;
+          setRooms((current) => {
+            const nextRoom = latest.payload.room;
+            const index = current.findIndex((room) => room.room.id === nextRoom.room.id);
+            if (index < 0) {
+              return [nextRoom, ...current];
+            }
+            const next = [...current];
+            next[index] = nextRoom;
+            return next;
+          });
+        },
+        () => {
+          refreshAfterSocketLoss();
+          if (socket && socket.readyState < WebSocket.CLOSING) {
+            socket.close();
+          }
+        },
+        {
+          onClose: () => {
+            refreshAfterSocketLoss();
+            scheduleReconnect();
+          },
+        },
+      );
+    };
+
+    const handleForegroundResume = () => {
+      if (document.visibilityState !== "visible") return;
+      refreshAfterSocketLoss();
+      if (!socket || socket.readyState >= WebSocket.CLOSING) {
+        clearReconnectTimer();
+        connectSocket();
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleForegroundResume);
+    connectSocket();
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", handleForegroundResume);
+      clearReconnectTimer();
+      if (socket && socket.readyState < WebSocket.CLOSING) {
+        socket.close();
+      }
+    };
   }, [selectedRoomId]);
 
   useEffect(() => {
@@ -631,7 +783,7 @@ export function CouncilPage(props: {
     }
     return `Room-${String(maxRoomNumber + 1).padStart(4, "0")}`;
   }, [rooms]);
-  const missingAgentCount = selectedRoom?.agents.filter(councilAgentNeedsReinject).length ?? 0;
+  const missingAgentCount = selectedRoom?.agents.filter((agent) => councilAgentNeedsReinject(selectedRoom, agent)).length ?? 0;
   const sendDisabled = !composer.trim();
 
   const chatPanelClass =
@@ -759,16 +911,42 @@ export function CouncilPage(props: {
                 <div className="flex h-full items-center justify-center px-6 text-center text-sm text-[var(--app-hint)]">
                   Start a new room or choose a running room.
                 </div>
-              ) : selectedRoom.messages.map((message) => {
+              ) : selectedRoomDisplayItems.map((item) => {
+                if (item.kind === "agent-status") {
+                  const agent = actorAgent(selectedRoom, item.actorId);
+                  const label = actorLabel(selectedRoom, item.actorId);
+                  const isListening = item.status === "listening";
+                  const isJoined = item.status === "joined";
+                  return (
+                    <div
+                      key={`${item.key}:${item.messageId}`}
+                      className={COUNCIL_SYSTEM_NOTICE_CLASS}
+                    >
+                      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                        isListening ? "bg-emerald-500" : isJoined ? "bg-amber-500" : "bg-zinc-400"
+                      }`} />
+                      {agent ? <ProviderLogo provider={agent.provider} className="h-3 w-3 shrink-0" variant="bare" /> : null}
+                      <span className="min-w-0 truncate">{label}</span>
+                      <span className={`shrink-0 ${
+                        isListening
+                          ? "text-emerald-600 dark:text-emerald-300"
+                          : isJoined
+                            ? "text-amber-600 dark:text-amber-300"
+                            : "text-[var(--app-hint)]"
+                      }`}>{isListening ? "ready" : item.status}</span>
+                    </div>
+                  );
+                }
+                const message = item.message;
                 const agent = actorAgent(selectedRoom, message.actorId);
                 if (message.role === "system") {
                   return (
                     <div
                       key={message.id}
-                      className="mx-auto flex w-fit max-w-[92%] items-center gap-2 rounded-md border border-dashed border-[var(--app-border)] bg-[var(--app-subtle-bg)]/45 px-3 py-1.5 text-[11px] text-[var(--app-hint)] sm:max-w-[78%]"
+                      className={COUNCIL_SYSTEM_NOTICE_CLASS}
                     >
                       <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--app-hint)]/50" />
-                      <span className="whitespace-pre-wrap leading-relaxed">
+                      <span className="whitespace-pre-wrap">
                         {councilSystemText(selectedRoom, textFromParts(message.parts))}
                       </span>
                     </div>
@@ -1079,9 +1257,9 @@ export function CouncilPage(props: {
                       onClick={() => void reinjectMissingAgents()}
                       disabled={loading || missingAgentCount === 0}
                       className="icon-click-feedback inline-flex h-7 items-center gap-1 rounded-md border border-[var(--app-border)] px-2 text-[11px] font-medium text-[var(--app-hint)] transition-colors hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)] disabled:opacity-40"
-                      title="Re-inject bootstrap prompt into missing agents"
+                      title="Send bootstrap prompt to missing agents"
                     >
-                      <RefreshCw size={12} />
+                      <Send size={12} />
                       {missingAgentCount}
                     </button>
                   </div>
@@ -1129,10 +1307,10 @@ export function CouncilPage(props: {
                           onClick={() => void reinjectAgent(agent.id)}
                           disabled={loading || !terminalEnabled}
                           className="icon-click-feedback inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-[var(--app-border)] text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] disabled:opacity-40"
-                          title="Re-inject bootstrap prompt"
-                          aria-label={`Re-inject bootstrap prompt for ${agent.label}`}
+                          title="Send bootstrap prompt"
+                          aria-label={`Send bootstrap prompt to ${agent.label}`}
                         >
-                          <RefreshCw size={12} />
+                          <Send size={12} />
                         </button>
                         <button
                           type="button"
@@ -1518,9 +1696,9 @@ export function CouncilPage(props: {
                     onClick={() => void reinjectAgent(activeTerminalAgent.id)}
                     disabled={loading}
                     className="icon-click-feedback inline-flex h-7 items-center gap-1 rounded-md border border-[var(--app-border)] px-2 text-[11px] font-medium text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] disabled:opacity-40"
-                    title="Re-inject bootstrap prompt"
+                    title="Send bootstrap prompt"
                   >
-                    <RefreshCw size={12} />
+                    <Send size={12} />
                     <span className="hidden sm:inline">Prompt</span>
                   </button>
                   <button
