@@ -4,13 +4,14 @@ import json
 import os
 import pathlib
 import re
-import shutil
 import tempfile
 import time
 from typing import Any
 from urllib import request
 
 from playwright.sync_api import expect, sync_playwright
+
+from rah_smoke_cleanup import cleanup_smoke_workspace
 
 REAL_BROWSER_CASE_IDS = [
     "REAL-PROVIDER-001",
@@ -762,7 +763,7 @@ def main() -> int:
                 close_session(base_url, replay_session_id, client_id)
             if live_session_id:
                 close_session(base_url, live_session_id)
-            shutil.rmtree(workspace, ignore_errors=True)
+            cleanup_smoke_workspace(base_url, workspace)
 
 
 if __name__ == "__main__":

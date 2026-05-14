@@ -57,7 +57,8 @@
     "test:smoke:opencode-browser": "bash scripts/opencode-browser-smoke.sh",
     "test:smoke:browser-providers": "npm run test:smoke:native-browser",
     "test:smoke:real-browser-providers": "npm run test:smoke:codex-browser && npm run test:smoke:claude-browser && npm run test:smoke:opencode-browser",
-    "test:smoke:provider-flows": "npm run test:smoke:codex-browser && npm run test:smoke:claude-flow && npm run test:smoke:opencode-browser"
+    "test:smoke:provider-flows": "npm run test:smoke:codex-browser && npm run test:smoke:claude-flow && npm run test:smoke:opencode-browser",
+    "cleanup:smoke-state": "python3 scripts/cleanup_temp_rah_state.py"
   },
   "dependencies": {
     "tsx": "^4.20.6"

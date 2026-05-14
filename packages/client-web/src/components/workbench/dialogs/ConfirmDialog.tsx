@@ -20,8 +20,8 @@ export function ConfirmDialog(props: {
   return (
     <Dialog.Root open={props.open} onOpenChange={props.onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 bg-black/40 z-40" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 flex w-[90vw] max-w-sm -translate-x-1/2 -translate-y-1/2 flex-col rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-0 shadow-xl focus:outline-none max-md:max-w-[calc(100vw-2rem)]">
+        <Dialog.Overlay className="fixed inset-0 bg-black/40 z-[80]" />
+        <Dialog.Content className="fixed left-1/2 top-1/2 z-[90] flex w-[90vw] max-w-sm -translate-x-1/2 -translate-y-1/2 flex-col rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-0 shadow-xl focus:outline-none max-md:max-w-[calc(100vw-2rem)]">
           <div className="flex items-center justify-between border-b border-[var(--app-border)] px-4 py-3 shrink-0">
             <Dialog.Title className="text-sm font-semibold text-[var(--app-fg)]">
               {props.title}

@@ -263,7 +263,7 @@ export class CouncilRuntime {
     if (agent.provider === "opencode") {
       // OpenCode may treat a soft paused channel_wait_new result as normal tool
       // output and continue the loop. Use its native two-Escape interrupt path.
-      this.detachCouncilAgentWaiters(roomId, agentId);
+      this.cancelCouncilAgentWaiters(roomId, agentId);
       if (terminalId && this.ptySessions.has(terminalId)) {
         this.ptySessions.write(terminalId, councilPauseInputForProvider(agent.provider));
       }
@@ -489,26 +489,6 @@ export class CouncilRuntime {
       this.messageWaiters.delete(roomId);
     }
     return cancelled;
-  }
-
-  private detachCouncilAgentWaiters(roomId: string, agentId: string): boolean {
-    const waiters = this.messageWaiters.get(roomId);
-    if (!waiters) {
-      return false;
-    }
-    let detached = false;
-    for (const waiter of [...waiters]) {
-      if (waiter.actorId !== agentId) {
-        continue;
-      }
-      clearTimeout(waiter.timeout);
-      waiters.delete(waiter);
-      detached = true;
-    }
-    if (waiters.size === 0) {
-      this.messageWaiters.delete(roomId);
-    }
-    return detached;
   }
 
   private publishCouncilMessage(roomId: string, message: CouncilMessage): void {

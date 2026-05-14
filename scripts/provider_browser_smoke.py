@@ -4,7 +4,6 @@ import argparse
 import json
 import os
 import pathlib
-import shutil
 import sys
 import tempfile
 import time
@@ -14,6 +13,8 @@ from urllib import request
 
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import expect, sync_playwright
+
+from rah_smoke_cleanup import cleanup_smoke_workspace
 
 
 @dataclass(frozen=True)
@@ -1008,7 +1009,7 @@ def main() -> int:
                 close_session(base_url, replay_session_id)
             if live_session_id:
                 close_session(base_url, live_session_id)
-            shutil.rmtree(workspace, ignore_errors=True)
+            cleanup_smoke_workspace(base_url, workspace)
 
 
 if __name__ == "__main__":

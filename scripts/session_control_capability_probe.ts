@@ -20,6 +20,7 @@ type SessionSummary = {
   runtimeState?: string;
   activeTurnId?: string | null;
   cwd?: string;
+  rootDir?: string;
   title?: string;
   liveBackend?: string;
   runtimeDiagnostics?: {
@@ -72,7 +73,9 @@ type TokenSample = {
 const args = new Set(process.argv.slice(2));
 const providerArg = valueAfter("--provider");
 const baseUrl = process.env.RAH_BASE_URL ?? "http://127.0.0.1:43111";
-const workspace = process.env.RAH_PROBE_WORKSPACE ?? process.cwd();
+const workspaceOverride = process.env.RAH_PROBE_WORKSPACE?.trim() || null;
+let workspace = workspaceOverride ?? "";
+let autoWorkspaceRoot: string | null = null;
 const clientPrefix = `web-session-control-probe-${Date.now()}`;
 const sharedWebClientId = "web-user";
 const keepSessions = args.has("--keep-sessions");
@@ -132,21 +135,34 @@ async function main() {
   const results: ProbeResult[] = [];
 
   await requireDaemon();
-
-  if (providers.includes("codex")) {
-    results.push(...(await runCodexProbe()));
-  }
-  if (providers.includes("claude")) {
-    results.push(...(await runClaudeProbe()));
-  }
-  if (providers.includes("opencode")) {
-    results.push(...(await runOpenCodeProbe()));
+  if (!workspaceOverride) {
+    autoWorkspaceRoot = await mkdtemp(path.join(os.tmpdir(), "rah-session-control-workspace-"));
+    workspace = path.join(autoWorkspaceRoot, "workspace");
+    await mkdir(workspace, { recursive: true });
+  } else {
+    workspace = workspaceOverride;
   }
 
-  const failed = results.filter((result) => !result.ok);
-  console.log(JSON.stringify({ ok: failed.length === 0, baseUrl, workspace, results }, null, 2));
-  if (failed.length > 0) {
-    process.exitCode = 1;
+  try {
+    if (providers.includes("codex")) {
+      results.push(...(await runCodexProbe()));
+    }
+    if (providers.includes("claude")) {
+      results.push(...(await runClaudeProbe()));
+    }
+    if (providers.includes("opencode")) {
+      results.push(...(await runOpenCodeProbe()));
+    }
+
+    const failed = results.filter((result) => !result.ok);
+    console.log(JSON.stringify({ ok: failed.length === 0, baseUrl, workspace, results }, null, 2));
+    if (failed.length > 0) {
+      process.exitCode = 1;
+    }
+  } finally {
+    if (!keepSessions && workspace && !workspaceOverride) {
+      await cleanupProbeWorkspace(workspace, autoWorkspaceRoot ?? undefined);
+    }
   }
 }
 
@@ -165,7 +181,7 @@ Runs real provider E2E probes against a running RAH daemon.
 
 Environment:
   RAH_BASE_URL                         Default: http://127.0.0.1:43111
-  RAH_PROBE_WORKSPACE                  Default: current working directory
+  RAH_PROBE_WORKSPACE                  Optional. Default: isolated temp workspace, removed after the probe.
   RAH_CODEX_PROBE_MODEL                Default: gpt-5.5
   RAH_CODEX_PROBE_LOW_EFFORT           Default: low
   RAH_CODEX_PROBE_HIGH_EFFORT          Default: xhigh
@@ -1027,6 +1043,65 @@ async function maybeCloseSession(session: ProbeSession): Promise<void> {
   }
 }
 
+function belongsToWorkspace(candidate: string | undefined, workspaceDir: string): boolean {
+  if (!candidate) {
+    return false;
+  }
+  const normalizedCandidate = path.resolve(candidate);
+  const normalizedWorkspace = path.resolve(workspaceDir);
+  return normalizedCandidate === normalizedWorkspace ||
+    normalizedCandidate.startsWith(`${normalizedWorkspace}${path.sep}`);
+}
+
+async function closeLiveSessionsForWorkspace(workspaceDir: string): Promise<void> {
+  const response = await requestJson<{
+    sessions?: Array<{
+      session?: SessionSummary;
+      controlLease?: { holderClientId?: string };
+      attachedClients?: Array<{ id?: string }>;
+    }>;
+  }>(`${baseUrl}/api/sessions`).catch(() => ({ sessions: [] }));
+  for (const entry of response.sessions ?? []) {
+    const summary = entry.session;
+    if (!summary?.id || !belongsToWorkspace(summary.rootDir ?? summary.cwd, workspaceDir)) {
+      continue;
+    }
+    const clientId =
+      entry.controlLease?.holderClientId ??
+      entry.attachedClients?.find((client) => typeof client.id === "string")?.id ??
+      sharedWebClientId;
+    try {
+      await requestJson(`${baseUrl}/api/sessions/${encodeURIComponent(summary.id)}/close`, {
+        method: "POST",
+        body: { clientId },
+      });
+    } catch {
+      // best effort cleanup
+    }
+  }
+}
+
+async function cleanupProbeWorkspace(workspaceDir: string, physicalRoot = workspaceDir): Promise<void> {
+  await closeLiveSessionsForWorkspace(workspaceDir);
+  try {
+    await requestJson(`${baseUrl}/api/history/workspaces/remove`, {
+      method: "POST",
+      body: { dir: workspaceDir },
+    });
+  } catch {
+    // best effort cleanup
+  }
+  try {
+    await requestJson(`${baseUrl}/api/workspaces/remove`, {
+      method: "POST",
+      body: { dir: workspaceDir },
+    });
+  } catch {
+    // best effort cleanup
+  }
+  await rm(physicalRoot, { recursive: true, force: true });
+}
+
 async function readCodexEvidence(providerSessionId: string | undefined, marker: string) {
   assertNonEmpty(providerSessionId, "Codex provider session id");
   const file = await waitForCodexRollout(providerSessionId);
@@ -1353,7 +1428,7 @@ async function cleanupPermissionProbeDirs(dirs: PermissionProbeDirs): Promise<vo
   if (keepSessions) {
     return;
   }
-  await rm(dirs.root, { recursive: true, force: true });
+  await cleanupProbeWorkspace(dirs.workspaceDir, dirs.root);
 }
 
 async function waitForPermissionOrFile(
@@ -1576,7 +1651,7 @@ async function findFile(
   dir: string,
   predicate: (file: string) => boolean,
 ): Promise<string | null> {
-  let entries: Awaited<ReturnType<typeof readdir>>;
+  let entries: Array<{ name: string; isFile(): boolean; isDirectory(): boolean }>;
   try {
     entries = await readdir(dir, { withFileTypes: true });
   } catch {

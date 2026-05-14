@@ -58,6 +58,26 @@ async function closeSession(sessionId: string, clientId: string) {
   }
 }
 
+async function cleanupSmokeWorkspace(workdir: string) {
+  try {
+    await requestJson("/api/history/workspaces/remove", {
+      method: "POST",
+      body: JSON.stringify({ dir: workdir }),
+    });
+  } catch {
+    // best effort cleanup
+  }
+  try {
+    await requestJson("/api/workspaces/remove", {
+      method: "POST",
+      body: JSON.stringify({ dir: workdir }),
+    });
+  } catch {
+    // best effort cleanup
+  }
+  await rm(workdir, { recursive: true, force: true });
+}
+
 async function cleanupLiveClaudeSessions() {
   const sessions = ((await requestJson("/api/sessions")) as { sessions: SessionSummary[] }).sessions;
   for (const summary of sessions) {
@@ -336,7 +356,7 @@ async function main() {
     if (liveSessionId) {
       await closeSession(liveSessionId, clientId);
     }
-    await rm(workdir, { recursive: true, force: true });
+    await cleanupSmokeWorkspace(workdir);
   }
 }
 

@@ -888,6 +888,7 @@ export function CouncilPage(props: {
     }
     setLoading(true);
     setError(null);
+    const successfulDraftIds = new Set<string>();
     try {
       let latestRoom: CouncilRoomSnapshot | null = null;
       for (const draft of addAgentDrafts) {
@@ -897,6 +898,7 @@ export function CouncilPage(props: {
             catalog: catalogs[catalogKey(draft.provider, addAgentWorkspace)] ?? null,
           }),
         });
+        successfulDraftIds.add(draft.id);
         latestRoom = response.room;
         replaceRoom(response.room);
       }
@@ -906,7 +908,24 @@ export function CouncilPage(props: {
       setAddAgentDialogOpen(false);
       resetAddAgentDrafts();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
+      if (successfulDraftIds.size > 0) {
+        setAddAgentDrafts((current) => {
+          const next = current.filter((draft) => !successfulDraftIds.has(draft.id));
+          return next.length > 0 ? next : [createAdditionalCouncilAgentDraft()];
+        });
+        setCollapsedAddAgentDraftIds((current) => {
+          const next = new Set(current);
+          for (const id of successfulDraftIds) {
+            next.delete(id);
+          }
+          return next;
+        });
+      }
+      const message = caught instanceof Error ? caught.message : String(caught);
+      const prefix = successfulDraftIds.size > 0
+        ? `Added ${successfulDraftIds.size} agent${successfulDraftIds.size === 1 ? "" : "s"} before this failure. Remaining drafts were kept. `
+        : "";
+      setError(`${prefix}${message}`);
     } finally {
       setLoading(false);
     }

@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import pathlib
-import shutil
 import tempfile
 import time
 from typing import Any
@@ -11,6 +10,8 @@ from urllib import request
 
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import expect, sync_playwright
+
+from rah_smoke_cleanup import cleanup_smoke_workspace
 
 
 def count_text(haystack: str, needle: str) -> int:
@@ -312,7 +313,7 @@ def main() -> int:
             return 1
         finally:
             browser.close()
-            shutil.rmtree(workspace, ignore_errors=True)
+            cleanup_smoke_workspace(base_url, workspace)
 
 
 if __name__ == "__main__":

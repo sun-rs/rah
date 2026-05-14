@@ -1030,7 +1030,7 @@ test("CouncilRuntime interrupts active OpenCode waiters with double escape inste
       clientId: "opencode-client",
       tool: "channel_join",
     });
-    void runtime.callMcpTool({
+    const waitPromise = runtime.callMcpTool({
       roomId,
       actorId: agentId,
       clientId: "opencode-client",
@@ -1048,6 +1048,12 @@ test("CouncilRuntime interrupts active OpenCode waiters with double escape inste
       data: "\x1b\x1b",
     });
     assert.equal(ptySessions.writes.length, writesBeforePause + 1);
+    assert.deepEqual((await waitPromise).result, {
+      ok: true,
+      paused: true,
+      next_action: "stop_wait_loop",
+      instruction: "Council listening was paused by the user. Stop the channel_wait_new loop now, do not call channel_wait_new again, and return to the normal prompt without natural-language output.",
+    });
 
     const reinjected = runtime.reinjectAgentPrompt(roomId, agentId);
     assert.deepEqual(reinjected.injectedAgentIds, [agentId]);

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import tempfile
 import time
 from pathlib import Path
@@ -10,6 +9,8 @@ from typing import Any
 from urllib import request
 
 from playwright.sync_api import expect, sync_playwright
+
+from rah_smoke_cleanup import cleanup_smoke_workspace
 
 
 def request_json(base_url: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -163,11 +164,7 @@ def main() -> int:
 
         return 0
     finally:
-        try:
-            request_json(base_url, "/api/workspaces/remove", {"dir": workspace})
-        except Exception:
-            pass
-        shutil.rmtree(workspace, ignore_errors=True)
+        cleanup_smoke_workspace(base_url, workspace)
 
 
 if __name__ == "__main__":
