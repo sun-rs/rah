@@ -37,6 +37,21 @@ def assert_terminal_output(panel, needle: str, *, timeout_ms: int = 10_000) -> N
     raise AssertionError(f"Terminal output did not contain {needle!r}.")
 
 
+def send_mobile_bridge_command(page, command: str) -> None:
+    bridge_input = page.locator(".terminal-ios-input").last
+    expect(bridge_input).to_be_visible(timeout=10_000)
+    bridge_input.click()
+    page.keyboard.type(command)
+    page.keyboard.press("Enter")
+
+
+def close_terminal_dialog(page, panel) -> None:
+    page.get_by_label("Close terminal").click()
+    if page.get_by_text("Close terminals?").count() > 0 or page.get_by_text("Close terminal?").count() > 0:
+        page.get_by_role("button", name="Close").last.click()
+    expect(panel).not_to_be_visible(timeout=10_000)
+
+
 def wait_for_terminal_entrypoint(page, *, mobile: bool) -> None:
     started = time.time()
     while (time.time() - started) * 1000 < 10_000:
@@ -69,15 +84,19 @@ def run_terminal_smoke(page, workspace: str, marker: str, *, mobile: bool = Fals
 
     panel = page.locator(".terminal-panel").last
     expect(panel).to_be_visible(timeout=10_000)
+    page.wait_for_timeout(750)
 
-    canvas = page.locator(".terminal-canvas").last
-    canvas.click()
-    page.keyboard.type(f"printf '{marker}\\n'")
-    page.keyboard.press("Enter")
+    bridge = page.locator(".terminal-ios-input-bridge").last
+    if bridge.count() > 0 and bridge.is_visible():
+        send_mobile_bridge_command(page, f"printf '{marker}\\n'")
+    else:
+        canvas = page.locator(".terminal-canvas").last
+        canvas.click()
+        page.keyboard.type(f"printf '{marker}\\n'")
+        page.keyboard.press("Enter")
     assert_terminal_output(panel, marker)
 
-    page.get_by_label("Close terminal").click()
-    expect(panel).not_to_be_visible(timeout=10_000)
+    close_terminal_dialog(page, panel)
 
 
 def main() -> int:
@@ -110,13 +129,12 @@ def main() -> int:
             expect(mobile_panel).to_be_visible(timeout=10_000)
             bridge = mobile_page.locator(".terminal-ios-input-bridge").last
             expect(bridge).to_be_visible(timeout=10_000)
+            mobile_page.wait_for_timeout(750)
             bridge_input = mobile_page.locator(".terminal-ios-input").last
-            bridge_input.fill("printf 'RAH_TERMINAL_MOBILE_OK\\n'")
-            bridge_input.press("Enter")
+            send_mobile_bridge_command(mobile_page, "printf 'RAH_TERMINAL_MOBILE_OK\\n'")
             assert_terminal_output(mobile_panel, "RAH_TERMINAL_MOBILE_OK")
 
-            bridge_input.fill("printf 'SYMBOL-[]{}@#'\\n")
-            bridge_input.press("Enter")
+            send_mobile_bridge_command(mobile_page, "printf 'SYMBOL-[]{}@#'\\n")
             assert_terminal_output(mobile_panel, "SYMBOL-[]{}@#")
 
             mobile_page.evaluate(
@@ -134,8 +152,7 @@ def main() -> int:
             bridge_input.press("Enter")
             assert_terminal_output(mobile_panel, "中文")
 
-            mobile_page.get_by_label("Close terminal").click()
-            expect(mobile_panel).not_to_be_visible(timeout=10_000)
+            close_terminal_dialog(mobile_page, mobile_panel)
 
             tablet_context = browser.new_context(
                 viewport={"width": 834, "height": 1194},
@@ -153,7 +170,15 @@ def main() -> int:
             split_page = split_context.new_page()
             split_page.on("dialog", lambda dialog: dialog.accept())
             split_page.goto(base_url, wait_until="domcontentloaded")
-            run_terminal_smoke(split_page, workspace, "RAH_TERMINAL_SPLIT_OK", mobile=True)
+            open_terminal_from_workspace(split_page, workspace, mobile=True)
+            split_panel = split_page.locator(".terminal-panel").last
+            expect(split_panel).to_be_visible(timeout=10_000)
+            split_bridge = split_page.locator(".terminal-ios-input-bridge").last
+            expect(split_bridge).to_be_visible(timeout=10_000)
+            split_page.wait_for_timeout(750)
+            send_mobile_bridge_command(split_page, "printf 'RAH_TERMINAL_SPLIT_OK\\n'")
+            assert_terminal_output(split_panel, "RAH_TERMINAL_SPLIT_OK")
+            close_terminal_dialog(split_page, split_panel)
 
             result["browserSmoke"] = "ok"
             print(json.dumps({"ok": True, **result}, ensure_ascii=False, indent=2))

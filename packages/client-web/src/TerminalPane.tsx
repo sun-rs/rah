@@ -285,6 +285,7 @@ export function TerminalPane(props: TerminalPaneProps) {
     let fitFrame: number | null = null;
     let forceNextResize = false;
     let writeFrame: number | null = null;
+    let writeInFlight = false;
     let pendingWrite = "";
     nextReplaySeqRef.current = 0;
 
@@ -390,20 +391,26 @@ export function TerminalPane(props: TerminalPaneProps) {
 
     const connect = (fromSeq?: number) => {
       const scheduleTerminalWrite = () => {
+        if (writeInFlight) {
+          return;
+        }
         if (writeFrame !== null) {
           return;
         }
         writeFrame = window.requestAnimationFrame(() => {
           writeFrame = null;
-          if (disposed || pendingWrite.length === 0) {
+          if (disposed || writeInFlight || pendingWrite.length === 0) {
             return;
           }
           const chunk = pendingWrite.slice(0, MAX_TERMINAL_WRITE_BATCH_CHARS);
           pendingWrite = pendingWrite.slice(chunk.length);
-          terminal.write(chunk);
-          if (pendingWrite.length > 0) {
-            scheduleTerminalWrite();
-          }
+          writeInFlight = true;
+          terminal.write(chunk, () => {
+            writeInFlight = false;
+            if (!disposed && pendingWrite.length > 0) {
+              scheduleTerminalWrite();
+            }
+          });
         });
       };
 

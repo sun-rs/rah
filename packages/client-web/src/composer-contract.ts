@@ -62,9 +62,9 @@ export const COMPOSER_LAYOUT = {
     "absolute inset-0 rounded-full border border-amber-400/70 bg-amber-100 text-amber-700 flex items-center justify-center text-[10px] font-semibold tracking-[0.02em] transition-all duration-200 hover:bg-amber-200 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-amber-100",
 
   textareaClassName:
-    `${TEXTAREA_BASE} ${ROUNDED} min-h-10 md:min-h-9 lg:min-h-8 px-3 py-2 md:px-3 md:py-2 lg:py-1.5 max-h-[280px]`,
+    `${TEXTAREA_BASE} ${ROUNDED} min-h-10 md:min-h-9 lg:min-h-8 px-3 py-[9px] md:px-3 md:py-[7px] lg:py-[5px] max-h-[280px]`,
   textareaContentClassName:
-    `px-3 py-2 md:px-3 md:py-2 lg:py-1.5 text-base leading-5`,
+    `px-3 py-[9px] md:px-3 md:py-[7px] lg:py-[5px] text-base leading-5`,
 } as const;
 
 export const EMPTY_STATE_COMPOSER_LAYOUT = {

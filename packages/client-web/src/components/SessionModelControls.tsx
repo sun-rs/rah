@@ -298,7 +298,7 @@ export function SessionModelControls(props: {
           <div
             ref={panelRef}
             data-session-model-panel="true"
-            className="rah-popover-panel fixed z-[60] overflow-hidden rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] shadow-2xl focus:outline-none"
+            className="rah-popover-panel pointer-events-auto fixed z-[100] overflow-hidden rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] shadow-2xl focus:outline-none"
             style={panelStyle}
             role="dialog"
             aria-label="Model and parameters"

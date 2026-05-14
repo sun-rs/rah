@@ -78,9 +78,26 @@ function isCouncilHistoryRoom(room: CouncilRoomSnapshot): boolean {
   return room.room.status === "stopped" || room.room.status === "failed";
 }
 
-function keepModelPanelInsideCouncilDialog(event: { target: EventTarget | null; preventDefault: () => void }): void {
-  const target = event.target;
-  if (target instanceof Element && target.closest('[data-session-model-panel="true"]')) {
+type CouncilDialogOutsideEvent = {
+  target: EventTarget | null;
+  detail?: { originalEvent?: Event };
+  preventDefault: () => void;
+};
+
+function isInsideSessionModelPanel(target: EventTarget | null | undefined): boolean {
+  return target instanceof Element && Boolean(target.closest('[data-session-model-panel="true"]'));
+}
+
+function keepModelPanelInsideCouncilDialog(event: CouncilDialogOutsideEvent): void {
+  const originalEvent = event.detail?.originalEvent;
+  const originalPath = typeof originalEvent?.composedPath === "function"
+    ? originalEvent.composedPath()
+    : [];
+  if (
+    isInsideSessionModelPanel(event.target) ||
+    isInsideSessionModelPanel(originalEvent?.target) ||
+    originalPath.some((entry) => isInsideSessionModelPanel(entry))
+  ) {
     event.preventDefault();
   }
 }
@@ -439,7 +456,6 @@ export function CouncilPage(props: {
   );
   const [catalogs, setCatalogs] = useState<Record<string, ProviderModelCatalog>>({});
   const [selectedTerminalAgentId, setSelectedTerminalAgentId] = useState<string | null>(null);
-  const [openedTerminalAgentIds, setOpenedTerminalAgentIds] = useState<Set<string>>(new Set());
   const [collapsedAgentDraftIds, setCollapsedAgentDraftIds] = useState<Set<string>>(new Set());
   const [addAgentDialogOpen, setAddAgentDialogOpen] = useState(false);
   const [addAgentDrafts, setAddAgentDrafts] = useState<CouncilAgentDraft[]>(() => [
@@ -586,18 +602,6 @@ export function CouncilPage(props: {
       setSelectedTerminalAgentId(null);
     }
   }, [selectedRoom, selectedTerminalAgentId]);
-
-  useEffect(() => {
-    if (!selectedRoom) {
-      setOpenedTerminalAgentIds(new Set());
-      return;
-    }
-    const liveAgentIds = new Set(selectedRoom.agents.map((agent) => agent.id));
-    setOpenedTerminalAgentIds((current) => {
-      const next = new Set([...current].filter((agentId) => liveAgentIds.has(agentId)));
-      return next.size === current.size ? current : next;
-    });
-  }, [selectedRoom]);
 
   useEffect(() => {
     if (!selectedRoomId) return;
@@ -1038,17 +1042,11 @@ export function CouncilPage(props: {
     }
     setError(null);
     setSelectedTerminalAgentId(agent.id);
-    setOpenedTerminalAgentIds((current) => new Set(current).add(agent.id));
     try {
       const response = await api.getCouncilAgentTui(selectedRoom.room.id, agent.id);
       if (!response.terminalId) {
         setError(response.screen || "This council agent terminal is not live anymore.");
         setSelectedTerminalAgentId((current) => current === agent.id ? null : current);
-        setOpenedTerminalAgentIds((current) => {
-          const next = new Set(current);
-          next.delete(agent.id);
-          return next;
-        });
         await refreshRooms();
         return;
       }
@@ -2199,7 +2197,6 @@ export function CouncilPage(props: {
         onOpenChange={(open) => {
           if (!open) {
             setSelectedTerminalAgentId(null);
-            setOpenedTerminalAgentIds(new Set());
           }
         }}
       >
@@ -2287,30 +2284,18 @@ export function CouncilPage(props: {
             ) : null}
 
             <div className="relative min-h-0 flex-1 px-3 pb-3 pt-0 md:px-5 md:pb-5 md:pt-0">
-              {selectedRoom && activeTerminalId ? (
-                selectedRoom.agents
-                  .filter((agent) => openedTerminalAgentIds.has(agent.id))
-                  .map((agent) => {
-                    const terminalId = agent.nativeSessionId ?? agent.zellijPaneId;
-                    if (!terminalId) return null;
-                    const active = agent.id === selectedTerminalAgentId;
-                    return (
-                      <div
-                        key={terminalId}
-                        className={`absolute inset-x-3 bottom-3 top-0 md:inset-x-5 md:bottom-5 ${
-                          active ? "opacity-100" : "pointer-events-none opacity-0"
-                        }`}
-                        aria-hidden={!active}
-                      >
-                        <TerminalPane
-                          terminalId={terminalId}
-                          clientId={props.clientId}
-                          hasControl={active}
-                          initialReplay
-                        />
-                      </div>
-                    );
-                  })
+              {selectedRoom && activeTerminalAgent && activeTerminalId ? (
+                <div
+                  key={`${activeTerminalAgent.id}:${activeTerminalId}`}
+                  className="absolute inset-x-3 bottom-3 top-0 md:inset-x-5 md:bottom-5"
+                >
+                  <TerminalPane
+                    terminalId={activeTerminalId}
+                    clientId={props.clientId}
+                    hasControl
+                    initialReplay
+                  />
+                </div>
               ) : (
                 <div className="flex h-full items-center justify-center rounded-xl border border-dashed border-[var(--app-border)] p-4 text-center text-sm text-[var(--app-hint)]">
                   This council agent terminal is not live anymore.
