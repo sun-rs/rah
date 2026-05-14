@@ -79,6 +79,18 @@ function isCouncilHistoryRoom(room: CouncilRoomSnapshot): boolean {
   return room.room.status === "stopped" || room.room.status === "failed";
 }
 
+function isCouncilAgentTerminalAvailable(agent: CouncilAgent): boolean {
+  return (
+    agent.status !== "stopped" &&
+    agent.status !== "failed" &&
+    Boolean(agent.nativeSessionId ?? agent.zellijPaneId)
+  );
+}
+
+function canOpenCouncilAgentTerminal(room: CouncilRoomSnapshot, agent: CouncilAgent): boolean {
+  return room.room.status === "running" && isCouncilAgentTerminalAvailable(agent);
+}
+
 type CouncilDialogOutsideEvent = {
   target: EventTarget | null;
   detail?: { originalEvent?: Event };
@@ -486,10 +498,7 @@ export function CouncilPage(props: {
     [selectedRoom],
   );
   const liveTerminalAgents = useMemo(
-    () => selectedRoom?.agents.filter((agent) =>
-      agent.status !== "stopped" &&
-      Boolean(agent.nativeSessionId ?? agent.zellijPaneId)
-    ) ?? [],
+    () => selectedRoom?.agents.filter(isCouncilAgentTerminalAvailable) ?? [],
     [selectedRoom],
   );
   const terminalDialogOpen = Boolean(selectedRoom && selectedTerminalAgentId);
@@ -1075,7 +1084,7 @@ export function CouncilPage(props: {
     if (!selectedRoom) {
       return;
     }
-    if (selectedRoom.room.status !== "running" || agent.status === "stopped") {
+    if (!canOpenCouncilAgentTerminal(selectedRoom, agent)) {
       return;
     }
     setError(null);
@@ -1186,7 +1195,12 @@ export function CouncilPage(props: {
     return `Room-${String(maxRoomNumber + 1).padStart(4, "0")}`;
   }, [rooms]);
   const councilReferenceRoot = selectedRoom?.room.workspace || workspace || props.workspaceDir || "/";
-  const sendDisabled = sendPending || !composer.trim();
+  const roomCanReceiveMessages = Boolean(
+    selectedRoom &&
+    selectedRoom.room.status !== "stopped" &&
+    selectedRoom.room.status !== "failed",
+  );
+  const sendDisabled = sendPending || !roomCanReceiveMessages || !composer.trim();
 
   const chatPanelClass = "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[var(--app-bg)]";
   const councilSidebarClass =
@@ -1210,7 +1224,7 @@ export function CouncilPage(props: {
         ) : (
           <div className="space-y-3">
             {selectedRoom.agents.map((agent) => {
-              const terminalEnabled = selectedRoom.room.status === "running" && agent.status !== "stopped";
+              const terminalEnabled = canOpenCouncilAgentTerminal(selectedRoom, agent);
               const theme = councilAgentTheme(selectedRoom, agent.id);
               const optionsLabel = councilAgentOptionsLabel(agent);
               const agentMeta = [
@@ -1553,6 +1567,7 @@ export function CouncilPage(props: {
                 <button
                   type="button"
                   onClick={() => setFileReferenceOpen(true)}
+                  disabled={!roomCanReceiveMessages}
                   className={COMPOSER_LAYOUT.attachButtonClassName}
                   title="Insert file or folder reference"
                   aria-label="Insert file or folder reference"
@@ -1622,6 +1637,7 @@ export function CouncilPage(props: {
                     contentClassName={COMPOSER_LAYOUT.textareaContentClassName}
                     value={composer}
                     ariaLabel="Council message composer"
+                    disabled={!roomCanReceiveMessages}
                     onChange={(value) => {
                       setComposer(value);
                       updateCouncilMentionTrigger(value);
@@ -2314,7 +2330,7 @@ export function CouncilPage(props: {
                     <button
                       type="button"
                       onClick={() => requestReinjectAgent(activeTerminalAgent.id)}
-                      disabled={loading || activeTerminalAgent.status === "stopped"}
+                      disabled={loading || !isCouncilAgentTerminalAvailable(activeTerminalAgent)}
                       className="icon-click-feedback inline-flex h-8 w-8 items-center justify-center rounded-md border border-[var(--app-border)] text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] disabled:opacity-40"
                       title={`Send bootstrap prompt to ${activeTerminalAgent.label}`}
                       aria-label={`Send bootstrap prompt to ${activeTerminalAgent.label}`}
@@ -2324,7 +2340,7 @@ export function CouncilPage(props: {
                     <button
                       type="button"
                       onClick={() => requestPauseAgentCouncilListening(activeTerminalAgent.id)}
-                      disabled={loading || activeTerminalAgent.status === "stopped"}
+                      disabled={loading || !isCouncilAgentTerminalAvailable(activeTerminalAgent)}
                       className="icon-click-feedback inline-flex h-8 w-8 items-center justify-center rounded-md border border-[var(--app-border)] text-[var(--app-hint)] transition-colors hover:border-amber-300/60 hover:bg-amber-500/10 hover:text-amber-600 disabled:opacity-40"
                       title={`Pause council listening for ${activeTerminalAgent.label}`}
                       aria-label={`Pause council listening for ${activeTerminalAgent.label}`}
@@ -2334,7 +2350,7 @@ export function CouncilPage(props: {
                     <button
                       type="button"
                       onClick={() => requestStopCouncilAgent(activeTerminalAgent.id)}
-                      disabled={loading || activeTerminalAgent.status === "stopped"}
+                      disabled={loading || !isCouncilAgentTerminalAvailable(activeTerminalAgent)}
                       className="icon-click-feedback inline-flex h-8 w-8 items-center justify-center rounded-md border border-[var(--app-border)] text-[var(--app-hint)] transition-colors hover:border-rose-400/60 hover:bg-rose-500/10 hover:text-rose-600 disabled:opacity-40"
                       title={`Remove ${activeTerminalAgent.label} from room`}
                       aria-label={`Remove ${activeTerminalAgent.label} from room`}
@@ -2387,7 +2403,7 @@ export function CouncilPage(props: {
             ) : null}
 
             <div className="relative min-h-0 flex-1 px-3 pb-3 pt-0 md:px-5 md:pb-5 md:pt-0">
-              {selectedRoom && activeTerminalAgent && activeTerminalAgent.status !== "stopped" && activeTerminalId ? (
+              {selectedRoom && activeTerminalAgent && isCouncilAgentTerminalAvailable(activeTerminalAgent) && activeTerminalId ? (
                 <div
                   key={`${activeTerminalAgent.id}:${activeTerminalId}`}
                   className="absolute inset-x-3 bottom-3 top-0 md:inset-x-5 md:bottom-5"

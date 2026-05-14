@@ -317,7 +317,8 @@ export class CouncilRuntime {
     const hasRemainingAgent = afterAgentRemoval.agents.some((candidate) =>
       candidate.id !== agentId &&
       candidate.status !== "stopped" &&
-      candidate.status !== "failed"
+      candidate.status !== "failed" &&
+      this.agentHasLiveTerminal(candidate)
     );
     if (!hasRemainingAgent) {
       this.resolveCouncilMessageWaiters(roomId, null);
