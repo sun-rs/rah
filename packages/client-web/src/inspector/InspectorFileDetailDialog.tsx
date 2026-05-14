@@ -31,6 +31,7 @@ export function InspectorFileDetailDialog(props: {
   const [truncated, setTruncated] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
   const [fileActionPending, setFileActionPending] = useState<"stage" | "unstage" | null>(null);
+  const [stagedOverride, setStagedOverride] = useState<boolean | undefined>(undefined);
   const [displayMode, setDisplayMode] = useState<"file" | "diff">(
     props.selection.source === "changes" ? "diff" : "file",
   );
@@ -39,7 +40,10 @@ export function InspectorFileDetailDialog(props: {
 
   useEffect(() => {
     setDisplayMode(props.selection.source === "changes" ? "diff" : "file");
+    setStagedOverride(undefined);
   }, [props.selection.path, props.selection.source]);
+
+  const effectiveStaged = stagedOverride ?? props.selection.staged;
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -57,12 +61,12 @@ export function InspectorFileDetailDialog(props: {
     setDiffError(null);
     const diffPromise = props.sessionId
       ? readGitDiff(props.sessionId, props.selection.path, {
-          ...(props.selection.staged !== undefined ? { staged: props.selection.staged } : {}),
+          ...(effectiveStaged !== undefined ? { staged: effectiveStaged } : {}),
           ignoreWhitespace: hideWhitespace,
           ...(props.workspaceRoot ? { scopeRoot: props.workspaceRoot } : {}),
         })
       : readWorkspaceGitDiff(props.workspaceRoot, props.selection.path, {
-          ...(props.selection.staged !== undefined ? { staged: props.selection.staged } : {}),
+          ...(effectiveStaged !== undefined ? { staged: effectiveStaged } : {}),
           ignoreWhitespace: hideWhitespace,
         });
     diffPromise
@@ -114,9 +118,9 @@ export function InspectorFileDetailDialog(props: {
       cancelled = true;
     };
   }, [
+    effectiveStaged,
     hideWhitespace,
     props.selection.path,
-    props.selection.staged,
     props.sessionId,
     props.workspaceRoot,
     reloadToken,
@@ -128,7 +132,7 @@ export function InspectorFileDetailDialog(props: {
   const shouldShowFileTab = props.selection.source === "files" || !diffSummary.isPureAddition;
   const displayPath = getDisplayPath(props.selection.path, props.workspaceRoot);
   const fileName = props.selection.path.split("/").pop() || props.selection.path;
-  const selectionScopeLabel = getChangeScopeLabel(props.selection.staged);
+  const selectionScopeLabel = getChangeScopeLabel(effectiveStaged);
   const isBinaryChange = props.selection.source === "changes" && props.selection.binary === true;
   const showDiffUnavailable = isBinaryChange && !hasDiff && !diffLoading && !diffError;
   const canApplyGitFileAction = Boolean(props.sessionId);
@@ -142,8 +146,9 @@ export function InspectorFileDetailDialog(props: {
       await applyGitFileAction(props.sessionId, {
         path: props.selection.path,
         action,
-        ...(props.selection.staged !== undefined ? { staged: props.selection.staged } : {}),
+        ...(effectiveStaged !== undefined ? { staged: effectiveStaged } : {}),
       });
+      setStagedOverride(action === "stage");
       props.onRefreshChanges();
       setReloadToken((value) => value + 1);
     } finally {
@@ -230,10 +235,10 @@ export function InspectorFileDetailDialog(props: {
                   {props.selection.source === "changes" && canApplyGitFileAction ? (
                     <button
                       type="button"
-                      onClick={() => void handleApplyFileAction(props.selection.staged ? "unstage" : "stage")}
+                      onClick={() => void handleApplyFileAction(effectiveStaged ? "unstage" : "stage")}
                       disabled={fileActionPending !== null}
                       className={`rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors disabled:opacity-50 ${
-                        props.selection.staged
+                        effectiveStaged
                           ? "bg-[var(--app-subtle-bg)] text-[var(--app-fg)]"
                           : "bg-[var(--app-fg)] text-[var(--app-bg)]"
                       }`}
@@ -242,7 +247,7 @@ export function InspectorFileDetailDialog(props: {
                         ? "Adding..."
                         : fileActionPending === "unstage"
                           ? "Reverting..."
-                          : props.selection.staged
+                          : effectiveStaged
                             ? "Revert add"
                             : "Git add"}
                     </button>

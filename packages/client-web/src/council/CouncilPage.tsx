@@ -33,7 +33,9 @@ import { TokenizedTextarea } from "../components/TokenizedTextarea";
 import { WorkspacePicker } from "../components/WorkspacePicker";
 import { TerminalPane } from "../TerminalPane";
 import { Sheet } from "../components/Sheet";
+import { FileReferencePicker } from "../components/FileReferencePicker";
 import { COMPOSER_LAYOUT } from "../composer-contract";
+import { insertTextAtSelection } from "../composer-text-insertion";
 import { resolveSessionModeControlState } from "../session-mode-ui";
 import { ConfirmDialog } from "../components/workbench/dialogs/ConfirmDialog";
 import {
@@ -50,6 +52,13 @@ import {
   resolveCouncilAgentModelSelection,
   type CouncilAgentDraft,
 } from "./council-ui-state";
+import {
+  applyCouncilMention,
+  buildCouncilMentionOptions,
+  filterCouncilMentionOptions,
+  findCouncilMentionTrigger,
+  type CouncilMentionTrigger,
+} from "./council-mentions";
 
 type CouncilMessage = CouncilRoomSnapshot["messages"][number];
 type CouncilDisplayItem =
@@ -67,6 +76,13 @@ const COUNCIL_SYSTEM_NOTICE_CLASS =
 
 function isCouncilHistoryRoom(room: CouncilRoomSnapshot): boolean {
   return room.room.status === "stopped" || room.room.status === "failed";
+}
+
+function keepModelPanelInsideCouncilDialog(event: { target: EventTarget | null; preventDefault: () => void }): void {
+  const target = event.target;
+  if (target instanceof Element && target.closest('[data-session-model-panel="true"]')) {
+    event.preventDefault();
+  }
 }
 
 function councilRoomActivityMs(room: CouncilRoomSnapshot): number {
@@ -412,6 +428,10 @@ export function CouncilPage(props: {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [composer, setComposer] = useState("");
+  const [sendPending, setSendPending] = useState(false);
+  const [fileReferenceOpen, setFileReferenceOpen] = useState(false);
+  const [mentionTrigger, setMentionTrigger] = useState<CouncilMentionTrigger | null>(null);
+  const [mentionSelectedIndex, setMentionSelectedIndex] = useState(0);
   const [title, setTitle] = useState("");
   const [workspace, setWorkspace] = useState(props.workspaceDir || "");
   const [agentDrafts, setAgentDrafts] = useState<CouncilAgentDraft[]>(() =>
@@ -457,6 +477,15 @@ export function CouncilPage(props: {
   const activeTerminalId = activeTerminalAgent?.nativeSessionId ?? activeTerminalAgent?.zellijPaneId ?? null;
   const pendingPromptAgent = selectedRoom?.agents.find((agent) => agent.id === pendingPromptAgentId) ?? null;
   const pendingPauseAgent = selectedRoom?.agents.find((agent) => agent.id === pendingPauseAgentId) ?? null;
+  const mentionOptions = useMemo(() => {
+    if (!selectedRoom || !mentionTrigger) {
+      return [];
+    }
+    return filterCouncilMentionOptions(
+      buildCouncilMentionOptions(selectedRoom.agents),
+      mentionTrigger.query,
+    ).slice(0, 8);
+  }, [mentionTrigger, selectedRoom]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -469,6 +498,17 @@ export function CouncilPage(props: {
     query.addEventListener("change", handleChange);
     return () => query.removeEventListener("change", handleChange);
   }, []);
+
+  useEffect(() => {
+    setMentionTrigger(null);
+    setMentionSelectedIndex(0);
+  }, [selectedRoomId]);
+
+  useEffect(() => {
+    setMentionSelectedIndex((index) =>
+      mentionOptions.length === 0 ? 0 : Math.min(index, mentionOptions.length - 1),
+    );
+  }, [mentionOptions.length]);
 
   const isCouncilChatNearBottom = (): boolean => {
     const node = chatScrollRef.current;
@@ -657,6 +697,7 @@ export function CouncilPage(props: {
         .then((response) => {
           if (cancelled) return;
           setRooms(response.rooms);
+          setError(null);
           setSelectedRoomId((current) => {
             if (current && response.rooms.some((room) => room.room.id === current)) {
               return current;
@@ -833,7 +874,7 @@ export function CouncilPage(props: {
   };
 
   const sendMessage = async () => {
-    if (!composer.trim()) return;
+    if (sendPending || !composer.trim()) return;
     if (!selectedRoom) {
       setError("No council room selected.");
       return;
@@ -844,15 +885,61 @@ export function CouncilPage(props: {
     }
     const text = composer;
     setComposer("");
+    setSendPending(true);
     try {
       const response = await api.postCouncilMessage(selectedRoom.room.id, { text });
       setRooms((current) =>
         current.map((room) => room.room.id === selectedRoom.room.id ? response.room : room),
       );
+      setError(null);
     } catch (caught) {
-      setComposer(text);
+      setComposer((current) => (current.trim() ? current : text));
       setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setSendPending(false);
     }
+  };
+
+  const insertCouncilReference = (reference: string) => {
+    setComposer((current) => {
+      const textarea = composerRef.current;
+      if (!textarea) {
+        return current ? `${current} ${reference}` : reference;
+      }
+      const { nextValue, caret } = insertTextAtSelection({
+        current,
+        selectionStart: textarea.selectionStart ?? current.length,
+        selectionEnd: textarea.selectionEnd ?? current.length,
+        insertedText: reference,
+      });
+      queueMicrotask(() => {
+        textarea.focus();
+        textarea.setSelectionRange(caret, caret);
+      });
+      return nextValue;
+    });
+  };
+
+  const updateCouncilMentionTrigger = (value: string) => {
+    const textarea = composerRef.current;
+    const caret = textarea?.selectionStart ?? value.length;
+    const trigger = findCouncilMentionTrigger(value, caret);
+    setMentionTrigger(trigger);
+    setMentionSelectedIndex(0);
+  };
+
+  const insertCouncilMention = (option = mentionOptions[mentionSelectedIndex]) => {
+    if (!option || !mentionTrigger) {
+      return;
+    }
+    const { nextValue, caret } = applyCouncilMention(composer, mentionTrigger, option);
+    setComposer(nextValue);
+    setMentionTrigger(null);
+    setMentionSelectedIndex(0);
+    queueMicrotask(() => {
+      composerRef.current?.focus();
+      composerRef.current?.setSelectionRange(caret, caret);
+    });
   };
 
   const stopRoom = async () => {
@@ -1041,7 +1128,8 @@ export function CouncilPage(props: {
     }
     return `Room-${String(maxRoomNumber + 1).padStart(4, "0")}`;
   }, [rooms]);
-  const sendDisabled = !composer.trim();
+  const councilReferenceRoot = selectedRoom?.room.workspace || workspace || props.workspaceDir || "/";
+  const sendDisabled = sendPending || !composer.trim();
 
   const chatPanelClass = "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[var(--app-bg)]";
   const councilSidebarClass =
@@ -1388,24 +1476,124 @@ export function CouncilPage(props: {
           <div className="shrink-0 bg-[var(--app-bg)]" style={COMPOSER_LAYOUT.bottomPaddingStyle}>
             <div className="mx-auto max-w-3xl px-3 pt-2 md:px-4 md:pt-3">
               <div
-                className={`grid grid-cols-[1fr_auto] items-end ${COMPOSER_LAYOUT.controlsGapClassName}`}
+                className={`grid grid-cols-[auto_1fr_auto] items-end ${COMPOSER_LAYOUT.controlsGapClassName}`}
                 onPointerDown={(event) => {
                   if (event.target === event.currentTarget) {
                     composerRef.current?.focus();
                   }
                 }}
               >
+                <button
+                  type="button"
+                  onClick={() => setFileReferenceOpen(true)}
+                  className={COMPOSER_LAYOUT.attachButtonClassName}
+                  title="Insert file or folder reference"
+                  aria-label="Insert file or folder reference"
+                >
+                  <Plus size={18} />
+                </button>
                 <div className="relative min-w-0">
+                  {mentionTrigger && selectedRoom && mentionOptions.length > 0 ? (
+                    <div
+                      role="listbox"
+                      aria-label="Council mentions"
+                      className="rah-popover-panel custom-scrollbar absolute bottom-full left-0 z-30 mb-1.5 max-h-64 w-[min(24rem,calc(100vw-5rem))] overflow-y-auto rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-1.5 shadow-lg"
+                    >
+                      {mentionOptions.map((option, index) => {
+                        const selected = index === mentionSelectedIndex;
+                        const optionTheme = option.agent ? councilAgentTheme(selectedRoom, option.agent.id) : null;
+                        return (
+                          <button
+                            key={option.id}
+                            type="button"
+                            role="option"
+                            aria-selected={selected}
+                            onMouseDown={(event) => {
+                              event.preventDefault();
+                              insertCouncilMention(option);
+                            }}
+                            onMouseEnter={() => setMentionSelectedIndex(index)}
+                            className={`flex w-full min-w-0 items-center gap-2 rounded-lg px-2 py-2 text-left text-sm transition-colors ${
+                              selected
+                                ? "bg-[var(--app-subtle-bg)] text-[var(--app-fg)] shadow-sm"
+                                : "text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
+                            }`}
+                          >
+                            <span
+                              className={`h-9 w-1 shrink-0 rounded-full transition-colors ${
+                                selected ? optionTheme?.accent ?? "bg-zinc-400/70" : "bg-transparent"
+                              }`}
+                            />
+                            {option.agent ? (
+                              <ProviderLogo
+                                provider={option.agent.provider}
+                                className={`h-4 w-4 shrink-0 transition-opacity ${selected ? "opacity-100" : "opacity-70"}`}
+                                variant="bare"
+                              />
+                            ) : (
+                              <Bot
+                                size={16}
+                                className={`shrink-0 transition-colors ${selected ? "text-[var(--app-fg)]" : "text-[var(--app-hint)]"}`}
+                              />
+                            )}
+                            <span className="min-w-0 flex-1">
+                              <span className={`block truncate ${selected ? "font-semibold" : "font-medium"}`}>
+                                @{option.label}
+                              </span>
+                              <span className="block truncate text-[11px] text-[var(--app-hint)]">
+                                {option.description}
+                              </span>
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : null}
                   <TokenizedTextarea
                     ref={composerRef}
                     textareaClassName={COMPOSER_LAYOUT.textareaClassName}
                     contentClassName={COMPOSER_LAYOUT.textareaContentClassName}
                     value={composer}
                     ariaLabel="Council message composer"
-                    onChange={setComposer}
+                    onChange={(value) => {
+                      setComposer(value);
+                      updateCouncilMentionTrigger(value);
+                    }}
                     rows={1}
                     onKeyDown={(event) => {
                       const nativeEvent = event.nativeEvent as KeyboardEvent;
+                      const textarea = composerRef.current;
+                      const currentTrigger = findCouncilMentionTrigger(
+                        composer,
+                        textarea?.selectionStart ?? composer.length,
+                      );
+                      if (!currentTrigger) {
+                        setMentionTrigger(null);
+                      }
+                      if (currentTrigger && mentionOptions.length > 0) {
+                        if (event.key === "ArrowDown") {
+                          event.preventDefault();
+                          setMentionSelectedIndex((index) => (index + 1) % mentionOptions.length);
+                          return;
+                        }
+                        if (event.key === "ArrowUp") {
+                          event.preventDefault();
+                          setMentionSelectedIndex((index) =>
+                            (index - 1 + mentionOptions.length) % mentionOptions.length,
+                          );
+                          return;
+                        }
+                        if (event.key === "Enter" || event.key === "Tab") {
+                          event.preventDefault();
+                          insertCouncilMention();
+                          return;
+                        }
+                      }
+                      if (mentionTrigger && event.key === "Escape") {
+                        event.preventDefault();
+                        setMentionTrigger(null);
+                        return;
+                      }
                       if (
                         event.key === "Enter" &&
                         !event.shiftKey &&
@@ -1440,13 +1628,19 @@ export function CouncilPage(props: {
         </aside>
       </div>
 
+      <FileReferencePicker
+        open={fileReferenceOpen}
+        onOpenChange={setFileReferenceOpen}
+        rootPath={councilReferenceRoot}
+        onPick={insertCouncilReference}
+      />
+
       <Sheet
         open={councilSidebarOpen && !isCouncilWide}
         onOpenChange={setCouncilSidebarOpen}
         side="right"
         title="Agents"
         hideHeader
-        modal={false}
         floatingClose="panel"
         floatingCloseLabel="Hide agents"
       >
@@ -1542,7 +1736,11 @@ export function CouncilPage(props: {
       <Dialog.Root open={newRoomDialogOpen} onOpenChange={setNewRoomDialogOpen}>
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 z-40 bg-black/35" />
-          <Dialog.Content className="fixed inset-0 z-50 flex flex-col overflow-hidden bg-[var(--app-bg)] focus:outline-none sm:inset-x-3 sm:top-[6vh] sm:bottom-auto sm:left-1/2 sm:h-[min(88vh,760px)] sm:w-[min(720px,94vw)] sm:-translate-x-1/2 sm:rounded-2xl sm:border sm:border-[var(--app-border)] sm:shadow-2xl">
+          <Dialog.Content
+            className="fixed inset-0 z-50 flex flex-col overflow-hidden bg-[var(--app-bg)] pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] focus:outline-none sm:inset-x-3 sm:top-[6vh] sm:bottom-auto sm:left-1/2 sm:h-[min(88vh,760px)] sm:w-[min(720px,94vw)] sm:-translate-x-1/2 sm:rounded-2xl sm:border sm:border-[var(--app-border)] sm:pt-0 sm:pb-0 sm:shadow-2xl"
+            onPointerDownOutside={keepModelPanelInsideCouncilDialog}
+            onInteractOutside={keepModelPanelInsideCouncilDialog}
+          >
             <div className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[var(--app-border)] px-4">
               <div className="min-w-0">
                 <Dialog.Title className="text-sm font-semibold text-[var(--app-fg)]">
@@ -1635,7 +1833,11 @@ export function CouncilPage(props: {
       >
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 z-40 bg-black/35" />
-          <Dialog.Content className="fixed inset-0 z-50 flex flex-col overflow-hidden bg-[var(--app-bg)] focus:outline-none sm:inset-x-3 sm:top-[8vh] sm:bottom-auto sm:left-1/2 sm:h-[min(84vh,720px)] sm:w-[min(720px,94vw)] sm:-translate-x-1/2 sm:rounded-2xl sm:border sm:border-[var(--app-border)] sm:shadow-2xl">
+          <Dialog.Content
+            className="fixed inset-0 z-50 flex flex-col overflow-hidden bg-[var(--app-bg)] pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] focus:outline-none sm:inset-x-3 sm:top-[8vh] sm:bottom-auto sm:left-1/2 sm:h-[min(84vh,720px)] sm:w-[min(720px,94vw)] sm:-translate-x-1/2 sm:rounded-2xl sm:border sm:border-[var(--app-border)] sm:pt-0 sm:pb-0 sm:shadow-2xl"
+            onPointerDownOutside={keepModelPanelInsideCouncilDialog}
+            onInteractOutside={keepModelPanelInsideCouncilDialog}
+          >
             <div className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[var(--app-border)] px-4">
               <div className="min-w-0">
                 <Dialog.Title className="text-sm font-semibold text-[var(--app-fg)]">

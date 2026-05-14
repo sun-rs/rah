@@ -64,6 +64,20 @@ function providerControlFeatures(): RuntimeFeatureStatus {
   });
 }
 
+export function runtimeDescriptorForStoredHistory(): SessionRuntimeDescriptor {
+  return {
+    kind: "stored_history",
+    protocolStability: "project_native",
+    liveSource: "provider_history",
+    tuiRole: "none",
+    structuredLiveEvents: false,
+    tuiContinuity: false,
+    features: runtimeFeatures({
+      historyBackfill: "available",
+    }),
+  };
+}
+
 export function runtimeDescriptorForLiveBackend(args: {
   provider: ProviderKind;
   liveBackend?: SessionLiveBackend | undefined;

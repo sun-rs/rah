@@ -78,6 +78,17 @@ function resolveContextUsageDisplay(
 
 type SessionViewMode = "chat" | "tui";
 
+function shouldRenderInteractionNotice(notice: InlineWorkbenchNotice | null): notice is InlineWorkbenchNotice {
+  if (!notice) {
+    return false;
+  }
+  // Generic read-only/observe states are already expressed by the composer
+  // surface. Keep this banner for actionable native-TUI diagnostics, queued
+  // input, stopped TUI, and warning states.
+  return notice.message !== "History only. Claim control for live input and approvals." &&
+    notice.message !== "Observe only.";
+}
+
 export function WorkbenchSelectedPane(props: {
   selectedSummary: SessionSummary;
   clientId: string;
@@ -583,7 +594,17 @@ export function WorkbenchSelectedPane(props: {
         </div>
       </header>
 
-      {props.historyNotice ? (
+      {shouldRenderInteractionNotice(props.interactionNotice) ? (
+        <div
+          className={`shrink-0 border-b px-4 py-2 text-xs ${
+            props.interactionNotice.tone === "warning"
+              ? "border-amber-500/20 bg-amber-500/10 text-amber-700 dark:text-amber-300"
+              : "border-[var(--app-border)] bg-[var(--app-subtle-bg)] text-[var(--app-hint)]"
+          }`}
+        >
+          {props.interactionNotice.message}
+        </div>
+      ) : props.historyNotice ? (
         <div className="shrink-0 border-b border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-4 py-2 text-xs text-[var(--app-hint)]">
           {props.historyNotice.message}
         </div>

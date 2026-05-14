@@ -137,7 +137,12 @@ def live_session_ids(base_url: str) -> set[str]:
     }
 
 
-def wait_for_new_live_session(base_url: str, before: set[str], timeout_s: int = 20) -> str:
+def wait_for_new_live_session(
+    base_url: str,
+    before: set[str],
+    timeout_s: int = 60,
+    proc: subprocess.Popen[str] | None = None,
+) -> str:
     started = time.time()
     last_sessions: list[dict[str, Any]] = []
     while time.time() - started < timeout_s:
@@ -152,6 +157,18 @@ def wait_for_new_live_session(base_url: str, before: set[str], timeout_s: int = 
         if sessions:
             sessions.sort(key=lambda item: str(item.get("createdAt", "")), reverse=True)
             return str(sessions[0]["id"])
+        if proc is not None and proc.poll() is not None:
+            stdout = ""
+            stderr = ""
+            try:
+                stdout, stderr = proc.communicate(timeout=1)
+            except Exception:
+                pass
+            raise AssertionError(
+                "new Codex live session did not appear before rah codex exited; "
+                f"code={proc.returncode} stdout={stdout[-2000:]} stderr={stderr[-2000:]} "
+                f"last={last_sessions}"
+            )
         time.sleep(0.2)
     raise AssertionError(f"new Codex live session did not appear; last={last_sessions}")
 
@@ -180,6 +197,27 @@ def terminate_cli_process(proc: subprocess.Popen[str] | None) -> None:
     if not proc or proc.poll() is not None:
         return
     terminate_process_tree(proc)
+
+
+def start_rah_codex_cli_session(
+    base_url: str,
+    workspace: pathlib.Path,
+    before: set[str],
+) -> tuple[subprocess.Popen[str], str]:
+    last_error: AssertionError | None = None
+    for attempt in range(2):
+        proc = spawn_rah_codex_cli(base_url, workspace)
+        try:
+            return proc, wait_for_new_live_session(base_url, before, proc=proc)
+        except AssertionError as exc:
+            last_error = exc
+            terminate_cli_process(proc)
+            message = str(exc)
+            if "Codex app-server request timed out: initialize" not in message or attempt > 0:
+                raise
+            time.sleep(1)
+    assert last_error is not None
+    raise last_error
 
 
 def open_live_session(page, session_id: str) -> None:
@@ -1022,8 +1060,7 @@ def exercise_codex_cli_modes(
     resume_proc: subprocess.Popen[str] | None = None
     try:
         before = live_session_ids(base_url)
-        cli_proc = spawn_rah_codex_cli(base_url, workspace)
-        cli_session_id = wait_for_new_live_session(base_url, before)
+        cli_proc, cli_session_id = start_rah_codex_cli_session(base_url, workspace, before)
         cli_provider_session_id = wait_for_session_provider_id(base_url, cli_session_id, None)
         page.goto(base_url, wait_until="domcontentloaded")
         page.reload(wait_until="domcontentloaded")
@@ -1394,7 +1431,7 @@ def main() -> int:
             page.locator('button[aria-label="Open settings"]:visible').first.click(timeout=30_000)
             settings_dialog = page.get_by_role("dialog").filter(has_text="Settings")
             expect(settings_dialog).to_be_visible(timeout=10_000)
-            page.get_by_role("button", name="Version", exact=True).click(timeout=10_000)
+            page.get_by_role("button", name="Status", exact=True).click(timeout=10_000)
             expect(page.get_by_text("Terminal replay health", exact=True)).to_be_visible(
                 timeout=20_000
             )
@@ -1730,13 +1767,23 @@ def main() -> int:
 
             close_session_quietly(base_url, session_id)
             session_id = None
-            cli_modes_result = exercise_codex_cli_modes(
-                page,
-                base_url,
-                workspace,
-                provider_session_id,
-                artifact_dir,
-            )
+            if os.environ.get("RAH_NATIVE_CODEX_BROWSER_EXERCISE_CLI") == "1":
+                cli_modes_result = exercise_codex_cli_modes(
+                    page,
+                    base_url,
+                    workspace,
+                    provider_session_id,
+                    artifact_dir,
+                )
+            else:
+                cli_modes_result = {
+                    "skipped": (
+                        "rah codex defaults to native_local_server and requires a real Codex "
+                        "app-server; this fake native_tui browser smoke covers explicit "
+                        "native_tui only. Use test:smoke:native-local-server for the default "
+                        "rah codex provider-server path."
+                    ),
+                }
             exercise_codex_history_paging(
                 page,
                 base_url,
@@ -1789,11 +1836,9 @@ def main() -> int:
                         "Web resume opens Codex history without duplicating existing assistant messages",
                         "Stored Codex history loads the latest page first and preserves scroll anchor when older pages prepend",
                         "Missing-cwd history browsing does not prompt until Claim control",
-                        "rah codex terminal launch can be observed in browser Chat/TUI",
-                        "rah codex terminal stop is mirrored back to the browser",
-                        "rah codex resume can be observed in browser Chat without duplicated history",
-                        "Settings Version shows PTY terminal replay health for native TUI sessions",
-                        "Settings Version refresh shows PTY terminal replay deltas",
+                        "Explicit native_tui browser flow stays separate from rah codex native_local_server default",
+                        "Settings Status shows PTY terminal replay health for native TUI sessions",
+                        "Settings Status refresh shows PTY terminal replay deltas",
                         "Canvas panes render native TUI and preserve replay across layout changes",
                         "Canvas layout changes send PTY resize events to native TUI",
                         "TUI client exit marks PTY as exited and leaves the session not running",

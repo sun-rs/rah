@@ -19,6 +19,10 @@ export type CouncilAgentDraft = {
   modeId: string | null;
 };
 
+function normalizeCouncilAgentLabel(value: string): string {
+  return value.replace(/[\\/]+/g, "-");
+}
+
 export function createDefaultCouncilAgentDrafts(): CouncilAgentDraft[] {
   return [
     {
@@ -110,7 +114,7 @@ export function resolveCouncilAgentDraftLabel(args: {
   draft: CouncilAgentDraft;
   catalog?: ProviderModelCatalog | null;
 }): string {
-  return args.draft.label.trim() || resolveCouncilAgentAutoLabel(args);
+  return normalizeCouncilAgentLabel(args.draft.label.trim() || resolveCouncilAgentAutoLabel(args));
 }
 
 export function councilAgentDraftToConfig(args: {

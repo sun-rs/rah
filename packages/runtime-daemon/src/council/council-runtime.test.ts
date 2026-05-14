@@ -198,6 +198,8 @@ test("CouncilRuntime launches agent PTYs with provider launch specs and archives
     assert.match(codexPrompt, /你的角色: Lead implementation and propose concrete changes\./);
     assert.match(codexPrompt, /用户消息优先级最高/);
     assert.match(codexPrompt, /只能处理 rah_council 工具返回的 recent_messages 或 msg/);
+    assert.match(codexPrompt, /@all 表示全体 agent 都应参与讨论/);
+    assert.doesNotMatch(codexPrompt, /@council/);
     assert.match(codexPrompt, /timeout 是心跳/);
     assert.match(codexPrompt, /收到 timed_out=true 后不要输出任何自然语言/);
     assert.equal(ptySessions.created[1]!.env?.RAH_COUNCIL_ACTOR_ID, claudeId);
@@ -205,13 +207,29 @@ test("CouncilRuntime launches agent PTYs with provider launch specs and archives
     assert.equal(ptySessions.created[1]!.env?.RAH_COUNCIL_ACTOR_ROLE, "Review risks and challenge weak assumptions.");
     assert.ok(ptySessions.created[1]!.args?.includes("--effort"));
     assert.ok(ptySessions.created[1]!.args?.includes("--mcp-config"));
-    const claudePrompt = ptySessions.created[1]!.args?.at(-1) ?? "";
-    assert.match(claudePrompt, /你的唯一名字是 'Claude Reviewer'/);
-    assert.match(claudePrompt, /你的角色: Review risks and challenge weak assumptions\./);
-    assert.match(claudePrompt, /mcp__rah_council__channel_join/);
-    assert.match(claudePrompt, /不要用 Bash、echo、curl、ps、node/);
-    assert.match(claudePrompt, /必须先实际调用下面的 MCP 工具/);
-    assert.doesNotMatch(claudePrompt, /工具不可见/);
+    const claudeArgs = ptySessions.created[1]!.args ?? [];
+    const claudePrompt = claudeArgs.join("\n");
+    assert.doesNotMatch(claudePrompt, /mcp__rah_council__channel_join/);
+    assert.match(response.room.agents[1]!.lastStatusDetail ?? "", /waiting for Claude TUI prompt/);
+    ptySessions.emit(councilTerminalId(response.room.room.id, claudeId), "\r\n❯ ");
+    await waitForClaudeBootstrapPromptPaste();
+    assertClaudeBootstrapPromptPasted(ptySessions.writes.at(-1)!, { roomId: response.room.room.id, agentId: claudeId });
+    await waitForClaudeBootstrapPromptSubmit();
+    assert.deepEqual(ptySessions.writes.at(-1), {
+      id: councilTerminalId(response.room.room.id, claudeId),
+      data: "\r",
+    });
+    const claudeSentMessage = runtime.listRooms().rooms
+      .find((room) => room.room.id === response.room.room.id)?.messages
+      .some((message) => message.parts.some((part) => part.kind === "text" && part.text === `${claudeId} sent`));
+    assert.equal(claudeSentMessage, true);
+    const claudePromptWrite = ptySessions.writes.find((write) => write.id === councilTerminalId(response.room.room.id, claudeId) && write.data.includes("channel_join"))?.data ?? "";
+    assert.match(claudePromptWrite, /你的唯一名字是 'Claude Reviewer'/);
+    assert.match(claudePromptWrite, /你的角色: Review risks and challenge weak assumptions\./);
+    assert.match(claudePromptWrite, /mcp__rah_council__channel_join/);
+    assert.match(claudePromptWrite, /不要用 Bash、echo、curl、ps、node/);
+    assert.match(claudePromptWrite, /必须先实际调用下面的 MCP 工具/);
+    assert.doesNotMatch(claudePromptWrite, /工具不可见/);
     assert.equal(ptySessions.created[2]!.env?.RAH_COUNCIL_ACTOR_ID, opencodeId);
     assert.equal(ptySessions.created[2]!.env?.RAH_COUNCIL_ACTOR_LABEL, opencodeId);
     assert.equal(ptySessions.created[2]!.env?.RAH_COUNCIL_ACTOR_ROLE, "Inspect implementation details and report exact findings.");
@@ -225,7 +243,7 @@ test("CouncilRuntime launches agent PTYs with provider launch specs and archives
       message.parts.map((part) => part.kind === "text" ? part.text : JSON.stringify(part.data)).join("\n")
     );
     assert.equal(initialStatusTexts.includes(`${codexId} sent`), true);
-    assert.equal(initialStatusTexts.includes(`${claudeId} sent`), true);
+    assert.equal(initialStatusTexts.includes(`${claudeId} sent`), false);
     assert.equal(initialStatusTexts.includes(`${opencodeId} sent`), true);
     assert.equal(
       eventBus.list({

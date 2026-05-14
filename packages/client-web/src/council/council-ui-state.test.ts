@@ -5,6 +5,7 @@ import {
   councilAgentDraftToConfig,
   createDefaultCouncilAgentDrafts,
   normalizeCouncilAgentDraftForCatalog,
+  resolveCouncilAgentDraftLabel,
   resolveCouncilAgentModelSelection,
 } from "./council-ui-state";
 
@@ -153,6 +154,45 @@ test("council agent config uses visible catalog defaults when draft has not been
   assert.equal(config.reasoningId, "xhigh");
   assert.deepEqual(config.optionValues, { model_reasoning_variant: "xhigh" });
   assert.equal(config.modeId, "build");
+});
+
+test("council agent labels replace provider/model slashes with hyphens", () => {
+  const catalog: ProviderModelCatalog = {
+    provider: "opencode",
+    models: [
+      {
+        id: "aihubmix/grok-4.3",
+        label: "aihubmix/grok-4.3",
+        reasoningOptions: [
+          { id: "low", label: "low", kind: "reasoning_effort" },
+          { id: "high", label: "high", kind: "reasoning_effort" },
+        ],
+      },
+    ],
+    fetchedAt: new Date().toISOString(),
+    source: "native",
+    modelsExact: true,
+    optionsExact: true,
+  };
+  const draft = {
+    id: "opencode-grok",
+    provider: "opencode" as const,
+    label: "",
+    role: "",
+    modelId: "aihubmix/grok-4.3",
+    reasoningId: "high",
+    modeId: null,
+  };
+
+  assert.equal(resolveCouncilAgentDraftLabel({ draft, catalog }), "aihubmix-grok-4.3-high");
+  assert.equal(councilAgentDraftToConfig({ draft, catalog }).id, "aihubmix-grok-4.3-high");
+  assert.equal(
+    resolveCouncilAgentDraftLabel({
+      draft: { ...draft, label: "provider/model/variant" },
+      catalog,
+    }),
+    "provider-model-variant",
+  );
 });
 
 test("council model selection clears stale reasoning when selected model has no parameters", () => {

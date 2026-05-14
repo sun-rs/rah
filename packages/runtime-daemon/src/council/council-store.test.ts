@@ -64,6 +64,33 @@ test("CouncilStore persists rooms, agents, ordered messages, and stopped status"
   }
 });
 
+test("CouncilStore normalizes slashes in agent labels and ids", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-store-label-"));
+  const filePath = path.join(root, "rooms.json");
+  try {
+    const store = new CouncilStore(filePath);
+    const created = store.createRoom({
+      workspace: root,
+      agents: [
+        { provider: "opencode", label: "aihubmix/grok-4.3/high" },
+        { provider: "codex", label: "", id: "gpt-5.5/xhigh" },
+      ],
+    });
+    assert.deepEqual(
+      created.agents.map((agent) => agent.id),
+      ["aihubmix-grok-4.3-high", "gpt-5.5-xhigh"],
+    );
+
+    const added = store.addAgent(created.room.id, {
+      provider: "claude",
+      label: "default/max",
+    });
+    assert.equal(added.id, "default-max");
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
 test("CouncilStore marks rooms and active agents failed with diagnostic detail", () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-store-fail-"));
   try {

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { RahEvent } from "@rah/runtime-protocol";
 import {
   listDirectory,
@@ -34,6 +34,7 @@ export function InspectorPane(props: {
   const [fileSearchLoading, setFileSearchLoading] = useState(false);
   const [fileSearchError, setFileSearchError] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<FileDetailSelection | null>(null);
+  const gitStatusRequestRef = useRef(0);
 
   const loadDirectory = async (directoryPath: string) => {
     setDirectoryLoadingPaths((current) => new Set(current).add(directoryPath));
@@ -71,7 +72,11 @@ export function InspectorPane(props: {
   };
 
   const loadGitStatus = async () => {
-    if (!props.workspaceRoot) {
+    const requestId = gitStatusRequestRef.current + 1;
+    gitStatusRequestRef.current = requestId;
+    const sessionId = props.sessionId;
+    const workspaceRoot = props.workspaceRoot;
+    if (!workspaceRoot) {
       setGitStatus(null);
       setGitStatusError(null);
       setGitStatusLoading(false);
@@ -80,11 +85,14 @@ export function InspectorPane(props: {
     setGitStatusLoading(true);
     setGitStatusError(null);
     try {
-      const response = props.sessionId
-        ? await readGitStatus(props.sessionId, {
-            ...(props.workspaceRoot ? { scopeRoot: props.workspaceRoot } : {}),
+      const response = sessionId
+        ? await readGitStatus(sessionId, {
+            ...(workspaceRoot ? { scopeRoot: workspaceRoot } : {}),
           })
-        : await readWorkspaceGitStatus(props.workspaceRoot);
+        : await readWorkspaceGitStatus(workspaceRoot);
+      if (gitStatusRequestRef.current !== requestId) {
+        return;
+      }
       setGitStatus({
         ...(response.branch ? { branch: response.branch } : {}),
         changedFiles: response.changedFiles,
@@ -94,10 +102,15 @@ export function InspectorPane(props: {
         totalUnstaged: response.totalUnstaged ?? response.unstagedFiles?.length ?? 0,
       });
     } catch (error) {
+      if (gitStatusRequestRef.current !== requestId) {
+        return;
+      }
       setGitStatusError(error instanceof Error ? error.message : String(error));
       setGitStatus(null);
     } finally {
-      setGitStatusLoading(false);
+      if (gitStatusRequestRef.current === requestId) {
+        setGitStatusLoading(false);
+      }
     }
   };
 

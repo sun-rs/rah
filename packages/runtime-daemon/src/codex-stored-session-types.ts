@@ -6,7 +6,16 @@ export interface CodexStoredSessionRecord {
 }
 
 export const REHYDRATED_CAPABILITIES = {
+  liveAttach: false,
+  structuredTimeline: true,
+  nativeTui: false,
+  rawPtyInput: false,
+  chatMirror: false,
+  structuredControl: false,
   livePermissions: false,
+  contextUsage: false,
+  resumeByProvider: true,
+  listProviderSessions: true,
   steerInput: false,
   queuedInput: false,
   renameSession: true,

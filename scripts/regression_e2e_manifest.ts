@@ -514,8 +514,8 @@ const cases: RegressionCase[] = [
     automation: ["fake_browser", "real_provider"],
     title: "Claude API 429/503 retries do not dump large JSON above the user prompt",
     acceptance: [
-      "Retry attempts may be visible as compact grey diagnostics.",
-      "The final user-facing error is concise and appears in the correct turn position.",
+      "Persisted Claude api_error records are filtered out of visible Chat history.",
+      "If a runtime diagnostic is surfaced elsewhere, it stays concise and outside the transcript.",
       "Raw headers and large JSON bodies are not rendered as chat content.",
     ],
     evidence: [

@@ -807,6 +807,10 @@ describe("RuntimeEngine", () => {
         mode: "observe",
       },
     });
+    assert.equal(resumed.session.session.runtime?.kind, "stored_history");
+    assert.equal(resumed.session.session.runtime?.features?.structuredControl, "unsupported");
+    assert.equal(resumed.session.session.capabilities.structuredControl, false);
+    assert.equal(resumed.session.session.capabilities.liveAttach, false);
 
     const page = engine.getSessionHistoryPage(resumed.session.session.id, { limit: 20 });
     assert.ok(

@@ -96,6 +96,18 @@ Council UI 可以展示两个明确动作：
 
 因此 UI 状态判断即使短暂滞后，也不会把第二份 bootstrap prompt 塞进正在监听的 agent。
 
+## Mention 输入规则
+
+Council chat composer 支持 `@` mention，用于把消息明确指向某个 agent 或全体 agent。
+
+- `@all` 是唯一的全体广播目标，表示所有 agent 都应参与当前讨论。
+- 具体 agent 使用 `@<agent name>`，agent name 来自 room 中展示的唯一 agent 名称。
+- 可以在同一条消息里多次 mention，例如 `@all 先看问题。 @GPT-5.5-XHigh 重点检查实现。`
+- `@` 菜单只在行首、文本开头或空白/括号/引号之后触发。
+- 普通正文内部的 `@` 不触发菜单，例如邮箱、代码片段、`foo@bar`、`正文@gpt`。
+- 这是刻意的保守策略：宁可要求用户在 mention 前加空格或换行，也不要在普通文字里误弹菜单。
+- `@council` 不作为公开目标；它和 `@all` 语义重复，统一用 `@all` 表达全体讨论。
+
 ## 与普通 Session Stop 的区别
 
 Council listening pause 只处理 Council MCP 等待循环。

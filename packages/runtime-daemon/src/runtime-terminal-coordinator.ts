@@ -755,7 +755,7 @@ export class RuntimeTerminalCoordinator {
           // raw write is not erased by a delayed Ctrl-K/Ctrl-U.
           await new Promise((resolve) => setTimeout(resolve, ZELLIJ_TUI_CLEAR_PROMPT_SETTLE_MS));
         }
-        await this.writeZellijTuiInput(zellij, text);
+        await this.writeZellijTuiText(zellij, text);
         for (let index = 0; index < nativeTuiSubmitCountForProvider(native.provider); index += 1) {
           await new Promise((resolve) => setTimeout(resolve, NATIVE_TUI_SUBMIT_DELAY_MS));
           await this.writeZellijTuiInput(zellij, nativeTuiSubmitDataForProvider(native.provider));
@@ -2118,6 +2118,16 @@ export class RuntimeTerminalCoordinator {
     data: string,
   ): Promise<void> {
     await this.zellijMux.writeBytes(zellij.zellijSessionName, zellij.paneId, data);
+  }
+
+  private async writeZellijTuiText(
+    zellij: ZellijTuiSessionState,
+    text: string,
+  ): Promise<void> {
+    if (!text) {
+      return;
+    }
+    await this.zellijMux.writeChars(zellij.zellijSessionName, zellij.paneId, text);
   }
 
   private async withZellijActionSurface<T>(

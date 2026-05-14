@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
 from dataclasses import dataclass
 from typing import Any
 from urllib import error, request
@@ -133,6 +134,14 @@ CONFIGS = (
         expected_mirror_text="OpenCode native browser answer",
     ),
 )
+
+def cli_mode_providers() -> frozenset[str]:
+    raw = os.environ.get("RAH_NATIVE_PROVIDER_BROWSER_EXERCISE_CLI", "").strip()
+    if not raw:
+        return frozenset()
+    if raw.lower() in {"1", "true", "all"}:
+        return frozenset(config.provider for config in CONFIGS)
+    return frozenset(part.strip() for part in raw.split(",") if part.strip())
 
 STARTED_SESSIONS: list[tuple[str, str]] = []
 
@@ -703,8 +712,8 @@ def assert_opencode_mirror_details(page) -> None:
     reasoning_button.click()
     expect(page.get_by_text("OpenCode native browser reasoning trace")).to_be_visible(timeout=10_000)
     expect(page.get_by_text("OpenCode browser tool")).to_be_visible(timeout=10_000)
-    expect(page.get_by_text("Step 1")).to_be_visible(timeout=10_000)
-    expect(page.get_by_text("stop")).to_be_visible(timeout=10_000)
+    assert_page_text_absent(page, "Step 1")
+    assert_page_text_absent(page, "Step 2")
 
 
 def count_session_history_timeline_text(
@@ -1209,12 +1218,8 @@ def exercise_provider(page, base_url: str, workspace: pathlib.Path, config: Prov
             if config.provider == "claude":
                 assert_page_text_absent(page, "<turn_aborted>")
                 assert_page_text_absent(page, "The user interrupted the previous turn on purpose.")
-                compact_error = (
-                    "Claude API error — API Error: 503 No available accounts: no available accounts. "
-                    "This is a server-side issue, usually temporary."
-                )
-                expect(page.get_by_text(compact_error, exact=True).first).to_be_visible(timeout=15_000)
-                assert_page_text_order(page, "Claude native browser question", "Claude API error")
+                assert_page_text_absent(page, "Claude API error")
+                assert_page_text_absent(page, "No available accounts")
                 assert_page_text_absent(page, "cloudflare")
                 assert_page_text_absent(page, "x-request-id")
                 assert_page_text_absent(page, "f589e5e5-1066-4763-abe4-14122f11c486")
@@ -1245,36 +1250,37 @@ def exercise_provider(page, base_url: str, workspace: pathlib.Path, config: Prov
         assert_page_text_absent(page, "Unhandled provider event")
         assert_page_text_absent(page, "Loading older history")
         expect(page.get_by_role("button", name="Stop generating")).to_have_count(0, timeout=10_000)
-        tui_button.click()
-        panel = page.locator(".terminal-panel").last
-        send_pty_input(base_url, terminal_id, "web-user", dirty_draft)
-        wait_for_native_prompt_state(base_url, session_id, "prompt_dirty")
-        page.wait_for_timeout(300)
-        page.get_by_role("button", name="Chat", exact=True).click()
-        expect(page.get_by_text("Native TUI has an unsent local draft")).to_be_visible(
-            timeout=10_000,
-        )
-        fill_and_submit_chat_composer(page, blocked_chat_prompt)
-        fill_and_submit_chat_composer(page, blocked_chat_prompt_two)
-        page.wait_for_timeout(1000)
-        tui_button.click()
-        panel = page.locator(".terminal-panel").last
-        assert_terminal_text_absent(panel, blocked_chat_prompt)
-        send_pty_input(base_url, terminal_id, "web-user", "\u0003")
-        wait_for_terminal_text(panel, config.interrupt_marker)
-        wait_for_terminal_text(panel, f"{config.input_marker}:{blocked_chat_prompt}")
-        wait_for_terminal_text(panel, blocked_answer, timeout_s=20)
-        wait_for_terminal_text(panel, f"{config.input_marker}:{blocked_chat_prompt_two}", timeout_s=20)
-        wait_for_terminal_text(panel, blocked_answer_two, timeout_s=20)
-        wait_for_session_idle(base_url, session_id, config.provider)
-        page.get_by_role("button", name="Chat", exact=True).click()
-        expect(page.get_by_text(blocked_answer, exact=True)).to_be_visible(timeout=20_000)
-        expect(page.get_by_text(blocked_answer_two, exact=True)).to_be_visible(timeout=20_000)
-        assert_page_text_order(page, blocked_chat_prompt, blocked_chat_prompt_two)
-        assert_page_text_order(page, blocked_answer, blocked_answer_two)
-        artifact_dir = getattr(page, "_rah_artifact_dir", None)
-        if artifact_dir:
-            save_browser_screenshot(page, artifact_dir, f"{config.provider}-chat-dirty-queued-inputs")
+        if config.provider != "claude":
+            tui_button.click()
+            panel = page.locator(".terminal-panel").last
+            send_pty_input(base_url, terminal_id, "web-user", dirty_draft)
+            wait_for_native_prompt_state(base_url, session_id, "prompt_dirty")
+            page.wait_for_timeout(300)
+            page.get_by_role("button", name="Chat", exact=True).click()
+            expect(page.get_by_text("Native TUI has an unsent local draft")).to_be_visible(
+                timeout=10_000,
+            )
+            fill_and_submit_chat_composer(page, blocked_chat_prompt)
+            fill_and_submit_chat_composer(page, blocked_chat_prompt_two)
+            page.wait_for_timeout(1000)
+            tui_button.click()
+            panel = page.locator(".terminal-panel").last
+            assert_terminal_text_absent(panel, blocked_chat_prompt)
+            send_pty_input(base_url, terminal_id, "web-user", "\u0003")
+            wait_for_terminal_text(panel, config.interrupt_marker)
+            wait_for_terminal_text(panel, f"{config.input_marker}:{blocked_chat_prompt}")
+            wait_for_terminal_text(panel, blocked_answer, timeout_s=20)
+            wait_for_terminal_text(panel, f"{config.input_marker}:{blocked_chat_prompt_two}", timeout_s=20)
+            wait_for_terminal_text(panel, blocked_answer_two, timeout_s=20)
+            wait_for_session_idle(base_url, session_id, config.provider)
+            page.get_by_role("button", name="Chat", exact=True).click()
+            expect(page.get_by_text(blocked_answer, exact=True)).to_be_visible(timeout=20_000)
+            expect(page.get_by_text(blocked_answer_two, exact=True)).to_be_visible(timeout=20_000)
+            assert_page_text_order(page, blocked_chat_prompt, blocked_chat_prompt_two)
+            assert_page_text_order(page, blocked_answer, blocked_answer_two)
+            artifact_dir = getattr(page, "_rah_artifact_dir", None)
+            if artifact_dir:
+                save_browser_screenshot(page, artifact_dir, f"{config.provider}-chat-dirty-queued-inputs")
         repeated_prompt = f"repeat {config.provider} browser native"
         fill_and_submit_chat_composer(page, repeated_prompt)
         wait_for_session_history_timeline_text_count(
@@ -1312,32 +1318,36 @@ def exercise_provider(page, base_url: str, workspace: pathlib.Path, config: Prov
         if artifact_dir:
             save_browser_screenshot(page, artifact_dir, f"{config.provider}-web-tui-after-reactivate")
         page.get_by_role("button", name="Chat", exact=True).click()
-        interrupted_notice_count = page_text_occurrences(page, "Conversation interrupted")
-        try:
-            stop_button = page.get_by_role("button", name="Stop generating")
-            stop_button.click(timeout=15_000)
+        if config.provider == "claude":
+            expect(page.get_by_role("button", name="Stop generating")).to_have_count(0, timeout=10_000)
+            expect(page.get_by_role("button", name="Send Esc to Claude TUI")).to_be_visible(timeout=10_000)
+        else:
+            interrupted_notice_count = page_text_occurrences(page, "Conversation interrupted")
             try:
-                stop_button.click(timeout=500)
-            except Exception:
-                pass
-        except Exception as exc:
-            runtime_state = session_runtime_state(base_url, session_id)
-            raise AssertionError(
-                f"{config.provider} Stop generating button was not available; "
-                f"runtimeState={runtime_state}"
-            ) from exc
-        page.get_by_role("button", name="TUI", exact=True).click()
-        wait_for_terminal_text(panel, config.interrupt_marker)
-        wait_for_session_idle(base_url, session_id, config.provider)
-        wait_for_terminal_text(panel, config.ready_marker)
-        page.get_by_role("button", name="Chat", exact=True).click()
-        wait_for_page_text_occurrences(
-            page,
-            "Conversation interrupted",
-            interrupted_notice_count + 1,
-        )
-        assert_page_text_order(page, chat_prompt, "Conversation interrupted")
-        expect(page.get_by_role("button", name="Stop generating")).to_have_count(0, timeout=10_000)
+                stop_button = page.get_by_role("button", name="Stop generating")
+                stop_button.click(timeout=15_000)
+                try:
+                    stop_button.click(timeout=500)
+                except Exception:
+                    pass
+            except Exception as exc:
+                runtime_state = session_runtime_state(base_url, session_id)
+                raise AssertionError(
+                    f"{config.provider} Stop generating button was not available; "
+                    f"runtimeState={runtime_state}"
+                ) from exc
+            page.get_by_role("button", name="TUI", exact=True).click()
+            wait_for_terminal_text(panel, config.interrupt_marker)
+            wait_for_session_idle(base_url, session_id, config.provider)
+            wait_for_terminal_text(panel, config.ready_marker)
+            page.get_by_role("button", name="Chat", exact=True).click()
+            wait_for_page_text_occurrences(
+                page,
+                "Conversation interrupted",
+                interrupted_notice_count + 1,
+            )
+            assert_page_text_order(page, chat_prompt, "Conversation interrupted")
+            expect(page.get_by_role("button", name="Stop generating")).to_have_count(0, timeout=10_000)
         assert_page_text_absent(page, "Unhandled provider event")
         page.get_by_role("button", name="TUI", exact=True).click()
         if config.provider == "opencode":
@@ -1473,9 +1483,11 @@ def main() -> int:
                 "localStorage.setItem('rah-hide-tool-calls-in-chat', 'false');"
             )
             results = [exercise_provider(page, base_url, workspace, config) for config in CONFIGS]
+            cli_providers = cli_mode_providers()
             cli_results = [
                 exercise_provider_cli_modes(page, base_url, workspace, config)
                 for config in CONFIGS
+                if config.provider in cli_providers
             ]
             for config in CONFIGS:
                 exercise_provider_tui_exit(page, base_url, workspace, config)
@@ -1497,21 +1509,20 @@ def main() -> int:
                         "provider history mirror updates dynamically after native TUI input",
                         "Chat renders provider user messages before assistant replies",
                         "Chat does not show loading-history or unhandled-provider-event noise for new live sessions",
-                        "Claude structured 503/429-style API errors render as compact warnings without raw headers",
+                        "Claude JSONL/history 503/429-style API errors stay out of Chat without raw headers",
                         "Chat composer input reaches daemon-owned provider TUI",
                         "Web TUI close and activate restores provider TUI replay",
-                        "Chat composer is blocked while provider native TUI prompt has an unsubmitted draft",
-                        "Chat view warns when provider native TUI prompt has an unsubmitted draft",
-                        "Stop button sends provider-native interrupt keys to daemon-owned provider TUI",
-                        "Stop returns daemon-owned provider TUI sessions to idle",
-                        "Multiple queued Chat prompts drain in order after prompt clears",
+                        "OpenCode Chat composer is blocked while provider native TUI prompt has an unsubmitted draft",
+                        "OpenCode Chat view warns when provider native TUI prompt has an unsubmitted draft",
+                        "OpenCode Stop button sends provider-native interrupt keys to daemon-owned provider TUI",
+                        "OpenCode Stop returns daemon-owned provider TUI sessions to idle",
+                        "OpenCode queued Chat prompts drain in order after prompt clears",
+                        "Claude native TUI Chat exposes best-effort Esc instead of red Stop",
                         "TUI input reaches daemon-owned provider process",
                         "TUI replay survives page reload for provider sessions",
                         "Foreground recovery catches up provider native TUI output without reselection",
                         "Web resume opens provider history without duplicating existing assistant messages",
-                        "rah <provider> terminal launch can be observed in browser Chat/TUI",
-                        "rah <provider> terminal stop is mirrored back to the browser",
-                        "rah <provider> resume can be observed in browser Chat without duplicated history",
+                        "rah <provider> terminal launch/resume smoke is opt-in because real terminal attach needs a TTY",
                         "provider TUI process exit marks PTY as exited and leaves the session not running",
                         "Archive closes provider live sessions and PTY state while retaining provider history",
                     ],
@@ -1529,6 +1540,7 @@ def main() -> int:
                 {
                     "ok": False,
                     "error": str(exc),
+                    "traceback": traceback.format_exc(),
                     "baseUrl": base_url,
                     "browser": selected_browser_name(),
                     "headless": browser_headless(),

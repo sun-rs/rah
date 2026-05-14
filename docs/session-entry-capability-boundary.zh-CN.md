@@ -6,7 +6,7 @@
 - Claude 默认走 `tui_mux_fallback`，由 zellij/TUI mux 保持原生 TUI 工作现场，RAH 的结构化 Chat 来自 Claude 原厂 JSONL mirror。
 - zellij 不再是所有 provider 的统一默认主线，而是 Claude 当前默认路径和未来无 server provider 的 fallback。
 
-旧 terminal handoff / wrapper-control 运行时代码已经删除。公开入口不再暴露第三条 live 主链路；`liveBackend: "structured"` 只允许测试注入 adapter 使用。
+旧 terminal handoff / wrapper-control 运行时代码已经删除。用户入口不再暴露第三条 live 主链路；`liveBackend: "structured"` 只允许测试注入 adapter 使用。`native_tui` 保留为 daemon 诊断/回归测试入口，不是 Codex/OpenCode 的默认用户路径。
 
 2026-05-07 后的维护边界进一步收敛为：
 

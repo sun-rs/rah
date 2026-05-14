@@ -184,6 +184,7 @@ const SESSION_LIVE_BACKENDS = new Set<SessionLiveBackend>([
 const PROVIDER_RUNTIME_KINDS = new Set<ProviderRuntimeKind>([
   "native_local_server",
   "tui_mux_fallback",
+  "stored_history",
   "stream_json_fifo",
   "native_cloud_remote",
   "internal_experimental",

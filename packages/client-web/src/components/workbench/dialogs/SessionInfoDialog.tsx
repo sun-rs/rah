@@ -43,6 +43,8 @@ function runtimeKindLabel(kind: SessionRuntimeDescriptor["kind"]): string {
       return "Native local server";
     case "tui_mux_fallback":
       return "TUI mux fallback";
+    case "stored_history":
+      return "Stored history";
     case "stream_json_fifo":
       return "Stream JSON FIFO";
     case "native_cloud_remote":

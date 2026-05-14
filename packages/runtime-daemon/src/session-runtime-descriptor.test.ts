@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   runtimeDescriptorForLiveBackend,
   runtimeDescriptorForProviderCatalog,
+  runtimeDescriptorForStoredHistory,
   withManagedSessionRuntime,
   withProviderCatalogRuntime,
 } from "./session-runtime-descriptor";
@@ -32,6 +33,20 @@ test("runtimeDescriptorForLiveBackend marks provider control sessions separately
   assert.equal(runtime.features?.structuredLiveEvents, "available");
   assert.equal(runtime.features?.structuredControl, "available");
   assert.equal(runtime.features?.historyBackfill, "unverified");
+});
+
+test("runtimeDescriptorForStoredHistory describes read-only provider history replay", () => {
+  const runtime = runtimeDescriptorForStoredHistory();
+  assert.equal(runtime.kind, "stored_history");
+  assert.equal(runtime.protocolStability, "project_native");
+  assert.equal(runtime.liveSource, "provider_history");
+  assert.equal(runtime.tuiRole, "none");
+  assert.equal(runtime.structuredLiveEvents, false);
+  assert.equal(runtime.tuiContinuity, false);
+  assert.equal(runtime.features?.historyBackfill, "available");
+  assert.equal(runtime.features?.structuredControl, "unsupported");
+  assert.equal(runtime.features?.interrupt, "unsupported");
+  assert.equal(runtime.features?.archiveLifecycle, "unsupported");
 });
 
 test("runtimeDescriptorForProviderCatalog advertises target provider runtime boundaries", () => {

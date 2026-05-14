@@ -9,6 +9,7 @@ export type SessionLiveBackend = "structured" | "native_local_server" | "native_
 export type ProviderRuntimeKind =
   | "native_local_server"
   | "tui_mux_fallback"
+  | "stored_history"
   | "stream_json_fifo"
   | "native_cloud_remote"
   | "internal_experimental"

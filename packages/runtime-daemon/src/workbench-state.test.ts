@@ -9,6 +9,7 @@ import {
   normalizeDirectory,
   sessionBelongsToWorkspace,
 } from "./workbench-directory-utils";
+import { WorkbenchStateStore } from "./workbench-state";
 
 describe("WorkbenchStateStore", () => {
   let tmpRoot: string;
@@ -246,6 +247,77 @@ describe("WorkbenchStateStore", () => {
     assert.equal(recent, undefined);
 
     await engine.shutdown();
+  });
+
+  test("loading workbench state drops old internal custom debug sessions", () => {
+    const daemonDir = path.join(tmpRoot, "runtime-daemon");
+    mkdirSync(daemonDir, { recursive: true });
+    writeFileSync(
+      path.join(daemonDir, "workbench-state.json"),
+      JSON.stringify(
+        {
+          version: 2,
+          updatedAt: new Date().toISOString(),
+          workspaces: ["/workspace/demo", "/workspace/debug"],
+          hiddenSessionKeys: ["custom:debug-claude-session-1", "codex:thread-visible-1"],
+          sessionTitleOverrides: {
+            "custom:debug-claude-session-1": "debug title",
+            "codex:thread-visible-1": "visible title",
+          },
+          pendingSessionTitleOverrides: {
+            "custom:debug-claude-session-1": "debug pending title",
+            "pending-live-id": "pending title",
+          },
+          sessions: [
+            {
+              provider: "custom",
+              providerSessionId: "debug-claude-session-1",
+              cwd: "/workspace/debug",
+              rootDir: "/workspace/debug",
+              title: "Refactor mobile workbench",
+              updatedAt: "2026-04-23T13:26:21.939Z",
+              source: "previous_live",
+            },
+            {
+              provider: "codex",
+              providerSessionId: "thread-visible-1",
+              cwd: "/workspace/demo",
+              rootDir: "/workspace/demo",
+              title: "Visible",
+              updatedAt: "2026-04-23T13:26:21.939Z",
+              source: "provider_history",
+            },
+          ],
+          recentSessions: [
+            {
+              provider: "custom",
+              providerSessionId: "debug-claude-session-1",
+              cwd: "/workspace/debug",
+              rootDir: "/workspace/debug",
+              title: "Refactor mobile workbench",
+              updatedAt: "2026-04-23T13:26:21.939Z",
+              lastUsedAt: "2026-04-23T13:26:21.939Z",
+              source: "previous_live",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const snapshot = new WorkbenchStateStore().load();
+
+    assert.deepEqual(snapshot.hiddenSessionKeys, ["codex:thread-visible-1"]);
+    assert.deepEqual(snapshot.sessionTitleOverrides, {
+      "codex:thread-visible-1": "visible title",
+    });
+    assert.deepEqual(snapshot.pendingSessionTitleOverrides, {
+      "pending-live-id": "pending title",
+    });
+    assert.ok(snapshot.sessions.every((session) => session.provider !== "custom"));
+    assert.ok(snapshot.recentSessions.every((session) => session.provider !== "custom"));
   });
 
   test("closing a managed session removes it from live sessions and unblocks workspace removal", async () => {

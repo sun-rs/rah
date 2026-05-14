@@ -27,6 +27,7 @@ import {
   REHYDRATED_CAPABILITIES,
 } from "./codex-stored-session-types";
 import type { CodexStoredSessionRecord } from "./codex-stored-session-types";
+import { runtimeDescriptorForStoredHistory } from "./session-runtime-descriptor";
 
 const SYSTEM_SOURCE = {
   provider: "system" as const,
@@ -299,6 +300,7 @@ export function resumeCodexStoredSession(params: {
     rootDir: record.ref.rootDir ?? record.ref.cwd ?? process.cwd(),
     ...(record.ref.title ? { title: record.ref.title } : {}),
     ...(record.ref.preview ? { preview: record.ref.preview } : {}),
+    runtime: runtimeDescriptorForStoredHistory(),
     capabilities: REHYDRATED_CAPABILITIES,
   });
   services.ptyHub.ensureSession(state.session.id);

@@ -57,7 +57,11 @@ function nowIso(): string {
 }
 
 function councilActorName(agent: CouncilAgentConfig, index: number): string {
-  return agent.label.trim() || agent.id?.trim() || `Agent ${index + 1}`;
+  return normalizeCouncilActorName(agent.label.trim() || agent.id?.trim() || `Agent ${index + 1}`);
+}
+
+function normalizeCouncilActorName(value: string): string {
+  return value.replace(/[\\/]+/g, "-");
 }
 
 function nextDefaultRoomTitle(rooms: CouncilRoom[]): string {

@@ -15,7 +15,7 @@ npm run test:provider-contracts
 特点：
 
 - 不调用真实模型 API。
-- 使用 mock CLI / mock SDK / fake ACP server。
+- 使用 mock CLI / fake native TUI / fake provider-server / fake ACP server。
 - 必须适合作为日常代码更新后的快速 gate。
 - 主要验证 RAH 自己的 PTY-first/session mirror 协议、事件合并、队列、权限/模型参数传递、Markdown 渲染、Stop 状态收敛。
 
@@ -31,20 +31,22 @@ npm run test:runtime
 
 这是提交前默认 gate。`test:provider-contracts` 是 provider 主链路的重点子集，不替代完整 runtime/web 测试。
 
-### 3. 真实 provider 冒烟测试
+### 3. 浏览器/主链路冒烟测试
 
 命令：
 
 ```bash
 npm run test:smoke:provider-flows
 npm run test:smoke:browser-providers
+npm run test:smoke:native-local-server
 ```
 
 特点：
 
-- 会依赖本机真实 Codex / Claude / OpenCode CLI、账号登录、API quota、网络状态。
-- 不应作为所有机器的强制 gate。
-- 用来证明真实 agent 确实理解 plan/mode/model，真实工具调用能落到文件系统，真实权限行为符合 provider 当前版本。
+- `test:smoke:browser-providers` 是 deterministic fake browser gate，不等同于真实 provider。
+- `test:smoke:native-local-server` 覆盖 Codex/OpenCode 当前主路径 provider-server event/control 能力。
+- `test:smoke:provider-flows` 会依赖本机真实 Codex / Claude / OpenCode CLI、账号登录、API quota、网络状态，不应作为所有机器的强制 gate。
+- 真实 provider smoke 用来证明真实 agent 确实理解 plan/mode/model，真实工具调用能落到文件系统，真实权限行为符合 provider 当前版本。
 - Gemini/Kimi CLI 一等支持已移除；相关模型通过 OpenCode/API provider 验证。
 
 ## 覆盖矩阵

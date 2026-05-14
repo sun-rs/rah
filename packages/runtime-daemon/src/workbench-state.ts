@@ -119,6 +119,9 @@ function resolveRahHome(): string {
 }
 
 function workbenchSessionRef(state: StoredSessionState): StoredSessionRef | null {
+  if (state.session.provider === "custom") {
+    return null;
+  }
   const providerSessionId = state.session.providerSessionId;
   if (!providerSessionId) {
     return null;
@@ -138,7 +141,7 @@ function workbenchSessionRef(state: StoredSessionState): StoredSessionRef | null
 }
 
 function isRememberableLiveSession(state: StoredSessionState): boolean {
-  return !isReadOnlyReplaySession(state);
+  return state.session.provider !== "custom" && !isReadOnlyReplaySession(state);
 }
 
 function isRecentEligibleLiveSession(state: StoredSessionState): boolean {
@@ -203,6 +206,18 @@ function sanitizeStoredSessionRef(session: StoredSessionRef): StoredSessionRef {
     ...(isInternalBootstrapText(session.title) ? { title: session.providerSessionId } : {}),
     ...(isInternalBootstrapText(session.preview) ? { preview: session.providerSessionId } : {}),
   };
+}
+
+function isInternalDebugStoredSessionRef(session: Pick<StoredSessionRef, "provider">): boolean {
+  return session.provider === "custom";
+}
+
+function isInternalDebugManagedSession(session: Pick<ManagedSession, "provider">): boolean {
+  return session.provider === "custom";
+}
+
+function isInternalDebugSessionKey(key: string): boolean {
+  return key.startsWith("custom:");
 }
 
 function isRecentStoredSessionRef(session: StoredSessionRef): boolean {
@@ -354,7 +369,7 @@ export class WorkbenchStateStore {
               typeof value.provider === "string" &&
               typeof value.providerSessionId === "string",
           ),
-      );
+      ).filter((session) => !isInternalDebugStoredSessionRef(session));
       const recentSessions = Array.isArray(raw.recentSessions)
         ? raw.recentSessions
             .filter((value): value is StoredSessionRef =>
@@ -365,25 +380,32 @@ export class WorkbenchStateStore {
                   typeof value.providerSessionId === "string",
               ),
             )
+            .filter((session) => !isInternalDebugStoredSessionRef(session))
             .map(sanitizeStoredSessionRef)
             .filter(isRecentStoredSessionRef)
         : [];
       const sanitizedSessions = sessions.map(sanitizeStoredSessionRef);
       const zellijLiveSessions = Array.isArray(raw.zellijLiveSessions)
-        ? raw.zellijLiveSessions.filter(isPersistedZellijLiveSession)
+        ? raw.zellijLiveSessions
+            .filter(isPersistedZellijLiveSession)
+            .filter((session) => !isInternalDebugManagedSession(session))
         : [];
       const hiddenWorkspaces = Array.isArray(raw.hiddenWorkspaces)
         ? uniqueDirectoriesInOrder(raw.hiddenWorkspaces)
         : [];
       const hiddenSessionKeys = Array.isArray(raw.hiddenSessionKeys)
         ? uniqueStringsInOrder(raw.hiddenSessionKeys.filter((value): value is string => typeof value === "string"))
+            .filter((key) => !isInternalDebugSessionKey(key))
         : [];
       const sessionTitleOverrides =
         raw.sessionTitleOverrides && typeof raw.sessionTitleOverrides === "object"
           ? Object.fromEntries(
               Object.entries(raw.sessionTitleOverrides).filter(
                 (entry): entry is [string, string] =>
-                  typeof entry[0] === "string" && typeof entry[1] === "string" && entry[1].trim().length > 0,
+                  typeof entry[0] === "string" &&
+                  typeof entry[1] === "string" &&
+                  entry[1].trim().length > 0 &&
+                  !isInternalDebugSessionKey(entry[0]),
               ),
             )
           : {};
@@ -392,7 +414,10 @@ export class WorkbenchStateStore {
           ? Object.fromEntries(
               Object.entries(raw.pendingSessionTitleOverrides).filter(
                 (entry): entry is [string, string] =>
-                  typeof entry[0] === "string" && typeof entry[1] === "string" && entry[1].trim().length > 0,
+                  typeof entry[0] === "string" &&
+                  typeof entry[1] === "string" &&
+                  entry[1].trim().length > 0 &&
+                  !isInternalDebugSessionKey(entry[0]),
               ),
             )
           : {};

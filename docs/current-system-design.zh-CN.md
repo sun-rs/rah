@@ -180,8 +180,9 @@ Provider 原生 mode id 仍可作为 `id` 保留，但前端只用 `role` 做稳
 
 Native local server 与 zellij attach 的目标是：
 
-- Codex/OpenCode 的 provider session 始终由 daemon 管理的 native local server 持有；本地 TUI 和 Web 都是 client/view。
+- 普通 live session 中，Codex/OpenCode 的 provider session 始终由 daemon 管理的 native local server 持有；本地 TUI 和 Web 都是 client/view。
 - Claude 的真实 provider TUI 始终运行在 daemon 管理的 zellij session/pane 中；本地终端、Web terminal、PWA/iPad/iPhone、Canvas pane 都只是 attach client。
+- Council 是例外：Council agent 以 provider TUI + MCP bootstrap 形式运行在 RAH 管理的 agent PTY 中，用来保持 agent 自己的工具循环；它不代表普通 Codex/OpenCode session 的 runtime 边界。
 - `rah xxx` 默认不再拥有 provider 进程生命周期；它请求 daemon 创建/resume live session，然后按 provider runtime 接入 official client 或 zellij mux。
 - 桌面 terminal 断开只 detach，不杀 session；显式 close/archive 才关闭或解除 RAH 管理。
 - Web UI 可以立即看到 live session，并在 reload/focus 后通过 provider event/history 或 zellij replay 追上。

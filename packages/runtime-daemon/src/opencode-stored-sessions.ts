@@ -30,6 +30,7 @@ import type { RuntimeServices } from "./provider-adapter";
 import { SessionStore } from "./session-store";
 import { normalizeDirectory } from "./workbench-directory-utils";
 import { withHistoryMeta } from "./stored-session-history-meta";
+import { runtimeDescriptorForStoredHistory } from "./session-runtime-descriptor";
 
 export interface OpenCodeStoredSessionRecord {
   ref: StoredSessionRef;
@@ -48,7 +49,16 @@ export class OpenCodeSqliteReadError extends Error {
 }
 
 const REHYDRATED_CAPABILITIES = {
+  liveAttach: false,
+  structuredTimeline: true,
+  nativeTui: false,
+  rawPtyInput: false,
+  chatMirror: false,
+  structuredControl: false,
   livePermissions: false,
+  contextUsage: false,
+  resumeByProvider: true,
+  listProviderSessions: true,
   steerInput: false,
   queuedInput: false,
   renameSession: false,
@@ -339,6 +349,7 @@ export function getOpenCodeStoredSessionHistoryPage(params: {
     rootDir: params.record.ref.rootDir ?? cwd,
     ...(params.record.ref.title ? { title: params.record.ref.title } : {}),
     ...(params.record.ref.preview ? { preview: params.record.ref.preview } : {}),
+    runtime: runtimeDescriptorForStoredHistory(),
     capabilities: REHYDRATED_CAPABILITIES,
   });
   const messageLimit = Math.min(Math.max((params.limit ?? 1000) * 4, 100), 10_000);

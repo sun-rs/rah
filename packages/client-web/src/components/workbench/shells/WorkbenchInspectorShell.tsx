@@ -28,7 +28,6 @@ export function WorkbenchInspectorShell(props: {
         side="right"
         title="Inspector"
         hideHeader
-        modal={false}
         floatingClose="panel"
         floatingCloseLabel="Collapse inspector"
       >

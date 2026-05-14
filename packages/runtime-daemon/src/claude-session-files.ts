@@ -34,6 +34,7 @@ import {
   listClaudeWrapperHomes,
   resolveClaudeBaseHome,
 } from "./claude-wrapper-home";
+import { runtimeDescriptorForStoredHistory } from "./session-runtime-descriptor";
 import {
   createClaudeTimelineIdentity,
   createClaudeTimelineTurnIdentity,
@@ -41,7 +42,16 @@ import {
 import type { TimelineIdentity, TimelineTurnIdentity } from "@rah/runtime-protocol";
 
 const REHYDRATED_CAPABILITIES = {
+  liveAttach: false,
+  structuredTimeline: true,
+  nativeTui: false,
+  rawPtyInput: false,
+  chatMirror: false,
+  structuredControl: false,
   livePermissions: false,
+  contextUsage: false,
+  resumeByProvider: true,
+  listProviderSessions: true,
   steerInput: false,
   queuedInput: false,
   renameSession: true,
@@ -972,6 +982,7 @@ export function resumeClaudeStoredSession(args: {
     rootDir: ref.rootDir ?? ref.cwd ?? process.cwd(),
     ...(ref.title ? { title: ref.title } : {}),
     ...(ref.preview ? { preview: ref.preview } : {}),
+    runtime: runtimeDescriptorForStoredHistory(),
     capabilities: REHYDRATED_CAPABILITIES,
   });
 
