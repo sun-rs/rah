@@ -415,11 +415,6 @@ function CouncilAgentDraftEditor(props: {
                       }));
                     }}
                   />
-                  {catalog && selection.model && selection.reasoningOptions.length === 0 ? (
-                    <div className="mt-1 truncate text-[11px] text-[var(--app-hint)]">
-                      {selection.model.label} has no startup parameter options.
-                    </div>
-                  ) : null}
                 </div>
               </>
             ) : null}
@@ -493,6 +488,7 @@ export function CouncilPage(props: {
   const activeTerminalId = activeTerminalAgent?.nativeSessionId ?? activeTerminalAgent?.zellijPaneId ?? null;
   const pendingPromptAgent = selectedRoom?.agents.find((agent) => agent.id === pendingPromptAgentId) ?? null;
   const pendingPauseAgent = selectedRoom?.agents.find((agent) => agent.id === pendingPauseAgentId) ?? null;
+  const newRoomBodyRef = useRef<HTMLDivElement | null>(null);
   const mentionOptions = useMemo(() => {
     if (!selectedRoom || !mentionTrigger) {
       return [];
@@ -806,6 +802,22 @@ export function CouncilPage(props: {
         next.add(id);
       }
       return next;
+    });
+  };
+
+  const addNewRoomAgentDraft = () => {
+    const draft = createAdditionalCouncilAgentDraft();
+    setAgentDrafts((current) => [...current, draft]);
+    setCollapsedAgentDraftIds((current) => {
+      const next = new Set(current);
+      next.delete(draft.id);
+      return next;
+    });
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        const node = newRoomBodyRef.current;
+        node?.scrollTo({ top: node.scrollHeight, behavior: "smooth" });
+      });
     });
   };
 
@@ -1759,7 +1771,7 @@ export function CouncilPage(props: {
                 </button>
               </Dialog.Close>
             </div>
-            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
+            <div ref={newRoomBodyRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
               <label className="block text-xs font-medium text-[var(--app-hint)]">
                 Title
                 <input
@@ -1777,17 +1789,7 @@ export function CouncilPage(props: {
                   onSelect={selectWorkspace}
                 />
               </div>
-              <div className="flex items-center justify-between gap-2">
-                <div className="text-xs font-medium text-[var(--app-hint)]">Agents</div>
-                <button
-                  type="button"
-                  onClick={() => setAgentDrafts((current) => [...current, createAdditionalCouncilAgentDraft()])}
-                  className="icon-click-feedback inline-flex h-8 items-center justify-center gap-2 rounded-lg border border-[var(--app-border)] px-2.5 text-xs font-medium text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)]"
-                >
-                  <Plus size={13} />
-                  Add
-                </button>
-              </div>
+              <div className="text-xs font-medium text-[var(--app-hint)]">Agents</div>
               <CouncilAgentDraftEditor
                 drafts={agentDrafts}
                 workspace={workspace}
@@ -1798,7 +1800,7 @@ export function CouncilPage(props: {
                 onToggleDraftCollapsed={toggleDraftCollapsed}
               />
             </div>
-            <div className="grid shrink-0 grid-cols-2 gap-2 border-t border-[var(--app-border)] p-4">
+            <div className="grid shrink-0 grid-cols-3 gap-2 border-t border-[var(--app-border)] p-4">
               <Dialog.Close asChild>
                 <button
                   type="button"
@@ -1807,6 +1809,14 @@ export function CouncilPage(props: {
                   Cancel
                 </button>
               </Dialog.Close>
+              <button
+                type="button"
+                onClick={addNewRoomAgentDraft}
+                className="icon-click-feedback inline-flex h-11 min-w-0 items-center justify-center gap-2 rounded-lg border border-[var(--app-border)] text-xs font-semibold text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)]"
+              >
+                <Plus size={14} />
+                Add agent
+              </button>
               <button
                 type="button"
                 disabled={loading || !workspace.trim()}
