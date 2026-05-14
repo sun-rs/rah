@@ -14,6 +14,7 @@ import type {
   CouncilPostMessageResponse,
   CouncilReinjectAgentsResponse,
   CouncilRemoveAgentResponse,
+  CouncilStopAgentResponse,
   CreateCouncilRoomRequest,
   CreateCouncilRoomResponse,
   DetachSessionRequest,
@@ -450,6 +451,10 @@ export class RuntimeEngine {
 
   removeCouncilAgent(roomId: string, agentId: string): CouncilRemoveAgentResponse {
     return this.council.removeAgentFromRoom(roomId, agentId);
+  }
+
+  async stopCouncilAgent(roomId: string, agentId: string): Promise<CouncilStopAgentResponse> {
+    return await this.council.stopAgentInRoom(roomId, agentId);
   }
 
   async callCouncilMcpTool(request: CouncilMcpRequest): Promise<CouncilMcpResponse> {

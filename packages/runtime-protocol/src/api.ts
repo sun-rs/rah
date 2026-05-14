@@ -26,6 +26,7 @@ import type {
   CouncilPostMessageResponse,
   CouncilReinjectAgentsResponse,
   CouncilRemoveAgentResponse,
+  CouncilStopAgentResponse,
   CreateCouncilRoomRequest,
   CreateCouncilRoomResponse,
   ListCouncilRoomsResponse,
@@ -729,6 +730,7 @@ export interface CouncilApi {
   getAgentTui(roomId: string, agentId: string): Promise<CouncilAgentTuiResponse>;
   reinjectAgent(roomId: string, agentId: string): Promise<CouncilReinjectAgentsResponse>;
   removeAgent(roomId: string, agentId: string): Promise<CouncilRemoveAgentResponse>;
+  stopAgent(roomId: string, agentId: string): Promise<CouncilStopAgentResponse>;
   callMcpTool(request: CouncilMcpRequest): Promise<CouncilMcpResponse>;
 }
 

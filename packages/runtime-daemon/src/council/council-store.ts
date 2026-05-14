@@ -325,6 +325,21 @@ export class CouncilStore {
     });
   }
 
+  clearAgentRuntimeState(roomId: string, agentId: string): CouncilRoomSnapshot {
+    this.requireAgent(roomId, agentId);
+    this.state.claims = this.state.claims.filter(
+      (claim) => !(claim.roomId === roomId && claim.actorId === agentId),
+    );
+    this.state.controls = this.state.controls.filter(
+      (control) => !(
+        control.roomId === roomId &&
+        (control.fromActorId === agentId || control.targetActorId === agentId)
+      ),
+    );
+    this.persist();
+    return this.snapshot(roomId);
+  }
+
   roomState(roomId: string): {
     room: CouncilRoom;
     agents: CouncilAgent[];

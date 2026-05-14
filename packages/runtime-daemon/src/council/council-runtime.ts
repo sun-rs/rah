@@ -10,6 +10,7 @@ import type {
   CouncilReinjectAgentsResponse,
   CouncilRemoveAgentResponse,
   CouncilRoomSnapshot,
+  CouncilStopAgentResponse,
   CreateCouncilRoomRequest,
   CreateCouncilRoomResponse,
   ListCouncilRoomsResponse,
@@ -37,6 +38,7 @@ const BOOTSTRAP_PROMPT_SUBMIT_DELAY_MS = 180;
 const CLAUDE_BOOTSTRAP_PROMPT_INPUT_DELAY_MS = 180;
 const CLAUDE_BOOTSTRAP_PROMPT_SUBMIT_DELAY_MS = 700;
 const CLAUDE_BOOTSTRAP_PROMPT_READY_TIMEOUT_MS = 3_000;
+const OPENCODE_PAUSE_CONFIRM_TIMEOUT_MS = 4_000;
 const COUNCIL_TERMINAL_OUTPUT_TAIL_LIMIT = 80_000;
 const ANSI_ESCAPE_PATTERN = /\u001b\[[0-?]*[ -/]*[@-~]/g;
 
@@ -63,6 +65,9 @@ type CouncilAgentTerminalState = {
     prompt: string;
     detail: string;
     sentNotice?: string;
+    timeout: NodeJS.Timeout;
+  };
+  pendingPause?: {
     timeout: NodeJS.Timeout;
   };
 };
@@ -116,30 +121,19 @@ export class CouncilRuntime {
     this.store.updateRoom(room.room.id, {
       status: "starting",
     });
-    try {
-      const startingMessage = this.store.appendMessage({
-        roomId: room.room.id,
-        actorId: "system",
-        role: "system",
-        text: `Council started with ${room.agents.length} agent${room.agents.length === 1 ? "" : "s"}.`,
-      });
-      this.publishCouncilMessage(room.room.id, startingMessage);
-      await this.launchAgents(this.store.snapshot(room.room.id));
-      this.store.updateRoom(room.room.id, { status: "running" });
-      return { room: this.projectRuntimeRoomState(this.store.snapshot(room.room.id)) };
-    } catch (error) {
-      const message = errorMessage(error);
-      await this.closeRoomAgentTerminals(room.room.id);
-      this.store.failRoom(room.room.id, message);
-      const failureMessage = this.store.appendMessage({
-        roomId: room.room.id,
-        actorId: "system",
-        role: "system",
-        text: `Council failed to start: ${message}`,
-      });
-      this.publishCouncilMessage(room.room.id, failureMessage);
+    const startingMessage = this.store.appendMessage({
+      roomId: room.room.id,
+      actorId: "system",
+      role: "system",
+      text: `Council started with ${room.agents.length} agent${room.agents.length === 1 ? "" : "s"}.`,
+    });
+    this.publishCouncilMessage(room.room.id, startingMessage);
+    if (this.dryRun) {
+      await this.launchAgents(room.room.id);
       return { room: this.projectRuntimeRoomState(this.store.snapshot(room.room.id)) };
     }
+    this.scheduleRoomAgentLaunch(room.room.id);
+    return { room: this.projectRuntimeRoomState(this.store.snapshot(room.room.id)) };
   }
 
   async addAgent(roomId: string, request: AddCouncilAgentRequest): Promise<AddCouncilAgentResponse> {
@@ -260,15 +254,22 @@ export class CouncilRuntime {
       clearTimeout(terminal.pendingBootstrapPrompt.timeout);
       delete terminal.pendingBootstrapPrompt;
     }
+    if (terminal?.pendingPause) {
+      clearTimeout(terminal.pendingPause.timeout);
+      delete terminal.pendingPause;
+    }
 
     if (agent.provider === "opencode") {
       // OpenCode may treat a soft paused channel_wait_new result as normal tool
       // output and continue the loop. Use its native two-Escape interrupt path.
       this.cancelCouncilAgentWaiters(roomId, agentId);
+      this.store.setAgentStatus(roomId, agentId, "blocked", "pause requested; waiting for OpenCode prompt");
       if (terminalId && this.ptySessions.has(terminalId)) {
         this.ptySessions.write(terminalId, councilPauseInputForProvider(agent.provider));
+        if (terminal) {
+          this.queueOpenCodePauseConfirmation(terminal);
+        }
       }
-      this.store.setAgentStatus(roomId, agentId, "waiting", "pause requested");
       this.appendCouncilSystemMessage({
         roomId,
         actorId: "system",
@@ -287,6 +288,42 @@ export class CouncilRuntime {
       clientId: "rah-web",
       text: `${agentId} paused council listening.`,
     });
+    return { room: this.projectRuntimeRoomState(this.store.snapshot(roomId)) };
+  }
+
+  async stopAgentInRoom(roomId: string, agentId: string): Promise<CouncilStopAgentResponse> {
+    const current = this.projectRuntimeRoomState(this.store.snapshot(roomId));
+    const agent = current.agents.find((candidate) => candidate.id === agentId);
+    if (!agent) {
+      throw new Error(`Unknown council agent ${agentId}.`);
+    }
+    this.cancelCouncilAgentWaiters(roomId, agentId);
+    this.store.clearAgentRuntimeState(roomId, agentId);
+    const terminalId = agent.nativeSessionId ?? agent.zellijPaneId;
+    if (terminalId) {
+      await this.closeAgentTerminal(terminalId);
+    }
+    this.store.updateAgent(roomId, agentId, {
+      status: "stopped",
+      lastStatusDetail: "removed by user",
+    });
+    this.appendCouncilSystemMessage({
+      roomId,
+      actorId: "system",
+      clientId: "rah-web",
+      text: `${agentId} removed from room by user.`,
+    });
+    const afterAgentRemoval = this.store.snapshot(roomId);
+    const hasRemainingAgent = afterAgentRemoval.agents.some((candidate) =>
+      candidate.id !== agentId &&
+      candidate.status !== "stopped" &&
+      candidate.status !== "failed"
+    );
+    if (!hasRemainingAgent) {
+      this.resolveCouncilMessageWaiters(roomId, null);
+      this.clearMcpClientStates(roomId);
+      this.store.stopRoom(roomId);
+    }
     return { room: this.projectRuntimeRoomState(this.store.snapshot(roomId)) };
   }
 
@@ -519,6 +556,19 @@ export class CouncilRuntime {
     if (this.dryRun || !isActiveCouncilRoomStatus(visibleSnapshot.room.status)) {
       return visibleSnapshot;
     }
+    if (visibleSnapshot.room.status === "starting") {
+      const projectedStartingAgents = visibleSnapshot.agents.map((agent) => {
+        const terminalId = agent.nativeSessionId ?? agent.zellijPaneId;
+        if (!terminalId || !isActiveCouncilAgentStatus(agent.status) || this.agentHasLiveTerminal(agent)) {
+          return agent;
+        }
+        return {
+          ...agent,
+          status: "stopped" as const,
+        };
+      });
+      return { ...visibleSnapshot, agents: projectedStartingAgents };
+    }
     const projectedAgents = visibleSnapshot.agents.map((agent) => {
       if (!isActiveCouncilAgentStatus(agent.status) || this.agentHasLiveTerminal(agent)) {
         return agent;
@@ -713,6 +763,19 @@ export class CouncilRuntime {
 
   private observeAgentTerminalOutput(terminal: CouncilAgentTerminalState, data: string): void {
     terminal.outputTail = appendCouncilTerminalOutputTail(terminal.outputTail, data);
+    if (terminal.provider === "opencode" && terminal.pendingPause && hasOpenCodeCouncilPrompt(terminal.outputTail)) {
+      const pending = terminal.pendingPause;
+      clearTimeout(pending.timeout);
+      delete terminal.pendingPause;
+      this.store.setAgentStatus(terminal.roomId, terminal.agentId, "idle", "listening paused");
+      this.appendCouncilSystemMessage({
+        roomId: terminal.roomId,
+        actorId: "system",
+        clientId: "rah-runtime",
+        text: `${terminal.agentId} paused council listening.`,
+      });
+      return;
+    }
     if (terminal.provider !== "claude" || !terminal.pendingBootstrapPrompt) {
       return;
     }
@@ -784,10 +847,93 @@ export class CouncilRuntime {
     }
   }
 
-  private async launchAgents(room: CouncilRoomSnapshot): Promise<void> {
-    for (const agent of room.agents) {
-      await this.launchAgent(room, agent);
+  private scheduleRoomAgentLaunch(roomId: string): void {
+    const timer = setTimeout(() => {
+      void this.launchAgents(roomId).catch((error) => {
+        const message = errorMessage(error);
+        try {
+          this.store.failRoom(roomId, message);
+          this.appendCouncilSystemMessage({
+            roomId,
+            actorId: "system",
+            clientId: "rah-runtime",
+            text: `Council failed to start: ${message}`,
+          });
+        } catch {
+          // The room may have been deleted while background launch was pending.
+        }
+      });
+    }, 0);
+    timer.unref?.();
+  }
+
+  private async launchAgents(roomId: string): Promise<void> {
+    let initial: CouncilRoomSnapshot;
+    try {
+      initial = this.store.snapshot(roomId);
+    } catch {
+      return;
     }
+    for (const agent of initial.agents) {
+      if (!this.shouldContinueLaunchingRoom(roomId)) {
+        return;
+      }
+      try {
+        await this.launchAgent(this.store.snapshot(roomId), agent);
+      } catch (error) {
+        await this.closeAgentTerminal(councilAgentTerminalId(roomId, agent.id));
+        const message = errorMessage(error);
+        this.store.updateAgent(roomId, agent.id, {
+          status: "failed",
+          lastStatusDetail: message,
+        });
+        this.appendCouncilSystemMessage({
+          roomId,
+          actorId: "system",
+          clientId: "rah-runtime",
+          text: `${agent.id} failed to start: ${message}`,
+        });
+      }
+    }
+    this.completeRoomLaunch(roomId);
+  }
+
+  private shouldContinueLaunchingRoom(roomId: string): boolean {
+    try {
+      const status = this.store.snapshot(roomId).room.status;
+      return status === "starting" || status === "running" || status === "idle";
+    } catch {
+      return false;
+    }
+  }
+
+  private completeRoomLaunch(roomId: string): void {
+    let snapshot: CouncilRoomSnapshot;
+    try {
+      snapshot = this.store.snapshot(roomId);
+    } catch {
+      return;
+    }
+    if (!isActiveCouncilRoomStatus(snapshot.room.status)) {
+      return;
+    }
+    const hasViableAgent = snapshot.agents.some((agent) => (
+      agent.status !== "failed" &&
+      agent.status !== "stopped" &&
+      (this.dryRun || this.agentHasLiveTerminal(agent) || Boolean(agent.nativeSessionId ?? agent.zellijPaneId))
+    ));
+    if (hasViableAgent) {
+      this.store.updateRoom(roomId, { status: "running" });
+      return;
+    }
+    const message = "All council agents failed to start.";
+    this.store.failRoom(roomId, message);
+    this.appendCouncilSystemMessage({
+      roomId,
+      actorId: "system",
+      clientId: "rah-runtime",
+      text: `Council failed to start: ${message}`,
+    });
   }
 
   private async launchAgent(room: CouncilRoomSnapshot, agent: CouncilRoomSnapshot["agents"][number]): Promise<void> {
@@ -933,6 +1079,9 @@ export class CouncilRuntime {
     if (terminal?.pendingBootstrapPrompt) {
       clearTimeout(terminal.pendingBootstrapPrompt.timeout);
     }
+    if (terminal?.pendingPause) {
+      clearTimeout(terminal.pendingPause.timeout);
+    }
     this.agentTerminals.delete(terminalId);
     await this.ptySessions.close(terminalId).catch(() => false);
     this.ptyHub?.removeSession(terminalId);
@@ -980,6 +1129,37 @@ export class CouncilRuntime {
       return false;
     }
     return [...waiters].some((waiter) => waiter.actorId === agentId);
+  }
+
+  private queueOpenCodePauseConfirmation(terminal: CouncilAgentTerminalState): void {
+    if (terminal.pendingPause) {
+      clearTimeout(terminal.pendingPause.timeout);
+    }
+    if (hasOpenCodeCouncilPrompt(terminal.outputTail)) {
+      this.store.setAgentStatus(terminal.roomId, terminal.agentId, "idle", "listening paused");
+      return;
+    }
+    const timeout = setTimeout(() => {
+      const current = this.agentTerminals.get(terminal.terminalId);
+      if (current !== terminal || !current.pendingPause) {
+        return;
+      }
+      delete current.pendingPause;
+      this.store.setAgentStatus(
+        terminal.roomId,
+        terminal.agentId,
+        "blocked",
+        "pause requested but OpenCode did not return to a prompt",
+      );
+      this.appendCouncilSystemMessage({
+        roomId: terminal.roomId,
+        actorId: "system",
+        clientId: "rah-runtime",
+        text: `${terminal.agentId} pause requested, but OpenCode did not return to a prompt.`,
+      });
+    }, OPENCODE_PAUSE_CONFIRM_TIMEOUT_MS);
+    timeout.unref?.();
+    terminal.pendingPause = { timeout };
   }
 
   private forceAgentTerminalRedraw(terminalId: string, cols: number, rows: number): void {
@@ -1055,6 +1235,16 @@ function hasClaudeCouncilPrompt(output: string): boolean {
       .every((line) => /bypass permissions|shift\+tab|^\s*[•>*-]*\s*$/i.test(line));
   }
   return tail.at(-1) ? /bypass permissions/i.test(tail.at(-1)!) : false;
+}
+
+function hasOpenCodeCouncilPrompt(output: string): boolean {
+  const stripped = output.replace(ANSI_ESCAPE_PATTERN, "").replace(/\r/g, "\n");
+  const lines = stripped
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const tail = lines.slice(-16);
+  return tail.some((line) => /\bAsk anything\b/i.test(line));
 }
 
 function councilBootstrapPromptInputSequence(

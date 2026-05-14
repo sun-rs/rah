@@ -12,6 +12,7 @@ import type {
   CouncilPostMessageResponse,
   CouncilReinjectAgentsResponse,
   CouncilRemoveAgentResponse,
+  CouncilStopAgentResponse,
   CreateCouncilRoomRequest,
   CreateCouncilRoomResponse,
   DebugScenarioDescriptor,
@@ -782,6 +783,16 @@ export async function removeCouncilAgent(
 ): Promise<CouncilRemoveAgentResponse> {
   return requestJson<CouncilRemoveAgentResponse>(
     `/api/council/rooms/${encodeURIComponent(roomId)}/agents/${encodeURIComponent(agentId)}/remove`,
+    { method: "POST", body: JSON.stringify({}) },
+  );
+}
+
+export async function stopCouncilAgent(
+  roomId: string,
+  agentId: string,
+): Promise<CouncilStopAgentResponse> {
+  return requestJson<CouncilStopAgentResponse>(
+    `/api/council/rooms/${encodeURIComponent(roomId)}/agents/${encodeURIComponent(agentId)}/stop`,
     { method: "POST", body: JSON.stringify({}) },
   );
 }

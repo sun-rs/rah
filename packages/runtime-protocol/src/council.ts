@@ -130,6 +130,10 @@ export interface CouncilRemoveAgentResponse {
   room: CouncilRoomSnapshot;
 }
 
+export interface CouncilStopAgentResponse {
+  room: CouncilRoomSnapshot;
+}
+
 export type CouncilMcpToolName =
   | "channel_join"
   | "channel_post"

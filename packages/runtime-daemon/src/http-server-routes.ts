@@ -381,6 +381,20 @@ export function createPostRoutes(
       },
     },
     {
+      pattern: /^\/api\/council\/rooms\/([^/]+)\/agents\/([^/]+)\/stop$/,
+      handler: async (req, res, match) => {
+        writeJson(
+          req,
+          res,
+          200,
+          await engine.stopCouncilAgent(
+            decodeURIComponent(match[1]!),
+            decodeURIComponent(match[2]!),
+          ),
+        );
+      },
+    },
+    {
       pattern: /^\/api\/council\/mcp$/,
       handler: async (req, res, _match, body) => {
         writeJson(req, res, 200, await engine.callCouncilMcpTool(parseCouncilMcpRequest(body)));

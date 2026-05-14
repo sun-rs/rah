@@ -127,6 +127,21 @@ function waitForClaudeBootstrapPromptSubmit(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 960));
 }
 
+async function waitForCondition(
+  predicate: () => boolean,
+  message: string,
+  timeoutMs = 2_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(predicate(), true, message);
+}
+
 test("CouncilRuntime launches agent PTYs with provider launch specs and archives the room", async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-runtime-"));
   const previousCodex = process.env.RAH_CODEX_BINARY;
@@ -176,12 +191,15 @@ test("CouncilRuntime launches agent PTYs with provider launch specs and archives
       ],
     });
 
-    assert.equal(response.room.room.status, "running");
+    assert.equal(response.room.room.status, "starting");
     assert.deepEqual(response.room.agents.map((agent) => agent.status), ["starting", "starting", "starting"]);
     const codexId = response.room.agents[0]!.id;
     const claudeId = response.room.agents[1]!.id;
     const opencodeId = response.room.agents[2]!.id;
     assert.deepEqual([codexId, claudeId, opencodeId], ["Codex Lead", "Claude Reviewer", "OpenCode Builder"]);
+    await waitForCondition(() => ptySessions.created.length === 3, "expected all council agent PTYs to launch");
+    const launchedRoom = runtime.listRooms().rooms.find((room) => room.room.id === response.room.room.id)!;
+    assert.equal(launchedRoom.room.status, "running");
     assert.equal(ptySessions.created.length, 3);
     assert.equal(ptySessions.created[0]!.id, councilTerminalId(response.room.room.id, codexId));
     assert.equal(ptySessions.created[1]!.id, councilTerminalId(response.room.room.id, claudeId));
@@ -210,7 +228,7 @@ test("CouncilRuntime launches agent PTYs with provider launch specs and archives
     const claudeArgs = ptySessions.created[1]!.args ?? [];
     const claudePrompt = claudeArgs.join("\n");
     assert.doesNotMatch(claudePrompt, /mcp__rah_council__channel_join/);
-    assert.match(response.room.agents[1]!.lastStatusDetail ?? "", /waiting for Claude TUI prompt/);
+    assert.match(launchedRoom.agents[1]!.lastStatusDetail ?? "", /waiting for Claude TUI prompt/);
     ptySessions.emit(councilTerminalId(response.room.room.id, claudeId), "\r\n❯ ");
     await waitForClaudeBootstrapPromptPaste();
     assertClaudeBootstrapPromptPasted(ptySessions.writes.at(-1)!, { roomId: response.room.room.id, agentId: claudeId });
@@ -239,11 +257,11 @@ test("CouncilRuntime launches agent PTYs with provider launch specs and archives
     assert.match(openCodePrompt, /你的唯一名字是 'OpenCode Builder'/);
     assert.match(openCodePrompt, /你的角色: Inspect implementation details and report exact findings\./);
     assert.match(openCodePrompt, /timeout_s=120/);
-    const initialStatusTexts = response.room.messages.map((message) =>
+    const initialStatusTexts = runtime.listRooms().rooms.find((room) => room.room.id === response.room.room.id)!.messages.map((message) =>
       message.parts.map((part) => part.kind === "text" ? part.text : JSON.stringify(part.data)).join("\n")
     );
     assert.equal(initialStatusTexts.includes(`${codexId} sent`), true);
-    assert.equal(initialStatusTexts.includes(`${claudeId} sent`), false);
+    assert.equal(initialStatusTexts.includes(`${claudeId} sent`), true);
     assert.equal(initialStatusTexts.includes(`${opencodeId} sent`), true);
     assert.equal(
       eventBus.list({
@@ -313,6 +331,7 @@ test("CouncilRuntime can append an agent to an already running room", async () =
       agents: [{ provider: "codex", label: "Codex Lead" }],
     });
     const roomId = created.room.room.id;
+    await waitForCondition(() => ptySessions.created.length === 1, "expected initial council agent PTY to launch");
     assert.equal(ptySessions.created.length, 1);
 
     const added = await runtime.addAgent(roomId, {
@@ -892,6 +911,7 @@ test("CouncilRuntime exposes council agent PTYs through the interactive PTY stre
       agents: [{ id: "codex-lead", provider: "codex", label: "Codex Lead" }],
     });
     const agentId = response.room.agents[0]!.id;
+    await waitForCondition(() => ptySessions.created.length === 1, "expected council agent PTY to launch");
 
     const tui = await runtime.getAgentTui(response.room.room.id, agentId);
     assert.equal(tui.terminalId, councilTerminalId(response.room.room.id, agentId));
@@ -955,6 +975,7 @@ test("CouncilRuntime can re-inject bootstrap prompts and pause an agent listener
     const roomId = response.room.room.id;
     const agentId = response.room.agents[0]!.id;
     const terminalId = councilTerminalId(roomId, agentId);
+    await waitForCondition(() => ptySessions.created.length === 1, "expected council agent PTY to launch");
 
     const reinjected = runtime.reinjectAgentPrompt(roomId, agentId);
     assert.deepEqual(reinjected.injectedAgentIds, [agentId]);
@@ -1009,15 +1030,20 @@ test("CouncilRuntime sends OpenCode double escape when pausing council listening
     const roomId = response.room.room.id;
     const agentId = response.room.agents[0]!.id;
     const terminalId = councilTerminalId(roomId, agentId);
+    await waitForCondition(() => ptySessions.created.length === 1, "expected council agent PTY to launch");
 
     const paused = runtime.removeAgentFromRoom(roomId, agentId);
 
-    assert.equal(paused.room.agents[0]!.status, "waiting");
-    assert.equal(paused.room.agents[0]!.lastStatusDetail, "pause requested");
+    assert.equal(paused.room.agents[0]!.status, "blocked");
+    assert.equal(paused.room.agents[0]!.lastStatusDetail, "pause requested; waiting for OpenCode prompt");
     assert.deepEqual(ptySessions.writes.at(-1), {
       id: terminalId,
       data: "\x1b\x1b",
     });
+    ptySessions.emit(terminalId, "\r\nAsk anything...\r\n");
+    const afterPrompt = runtime.listRooms().rooms.find((room) => room.room.id === roomId)!;
+    assert.equal(afterPrompt.agents[0]!.status, "idle");
+    assert.equal(afterPrompt.agents[0]!.lastStatusDetail, "listening paused");
   } finally {
     if (previousOpenCode === undefined) delete process.env.RAH_OPENCODE_BINARY;
     else process.env.RAH_OPENCODE_BINARY = previousOpenCode;
@@ -1042,6 +1068,7 @@ test("CouncilRuntime interrupts active OpenCode waiters with double escape inste
     const roomId = response.room.room.id;
     const agentId = response.room.agents[0]!.id;
     const terminalId = councilTerminalId(roomId, agentId);
+    await waitForCondition(() => ptySessions.created.length === 1, "expected council agent PTY to launch");
     await runtime.callMcpTool({
       roomId,
       actorId: agentId,
@@ -1059,8 +1086,8 @@ test("CouncilRuntime interrupts active OpenCode waiters with double escape inste
 
     const paused = runtime.removeAgentFromRoom(roomId, agentId);
 
-    assert.equal(paused.room.agents[0]!.status, "waiting");
-    assert.equal(paused.room.agents[0]!.lastStatusDetail, "pause requested");
+    assert.equal(paused.room.agents[0]!.status, "blocked");
+    assert.equal(paused.room.agents[0]!.lastStatusDetail, "pause requested; waiting for OpenCode prompt");
     assert.deepEqual(ptySessions.writes.at(-1), {
       id: terminalId,
       data: "\x1b\x1b",
@@ -1072,6 +1099,10 @@ test("CouncilRuntime interrupts active OpenCode waiters with double escape inste
       next_action: "stop_wait_loop",
       instruction: "Council listening was paused by the user. Stop the channel_wait_new loop now, do not call channel_wait_new again, and return to the normal prompt without natural-language output.",
     });
+    ptySessions.emit(terminalId, "\r\nAsk anything...\r\n");
+    const afterPrompt = runtime.listRooms().rooms.find((room) => room.room.id === roomId)!;
+    assert.equal(afterPrompt.agents[0]!.status, "idle");
+    assert.equal(afterPrompt.agents[0]!.lastStatusDetail, "listening paused");
 
     const reinjected = runtime.reinjectAgentPrompt(roomId, agentId);
     assert.deepEqual(reinjected.injectedAgentIds, [agentId]);
@@ -1079,6 +1110,109 @@ test("CouncilRuntime interrupts active OpenCode waiters with double escape inste
   } finally {
     if (previousOpenCode === undefined) delete process.env.RAH_OPENCODE_BINARY;
     else process.env.RAH_OPENCODE_BINARY = previousOpenCode;
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test("CouncilRuntime stops one agent terminal without affecting other agents", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-runtime-stop-agent-"));
+  const previousCodex = process.env.RAH_CODEX_BINARY;
+  process.env.RAH_CODEX_BINARY = fakeBinary(root, "codex");
+  try {
+    const ptySessions = new FakePtyRuntime();
+    const runtime = new CouncilRuntime({
+      store: new CouncilStore(path.join(root, "rooms.json")),
+      ptySessions,
+    });
+    const response = await runtime.createRoom({
+      workspace: root,
+      agents: [
+        { provider: "codex", label: "Codex A" },
+        { provider: "codex", label: "Codex B" },
+      ],
+    });
+    const roomId = response.room.room.id;
+    await waitForCondition(() => ptySessions.created.length === 2, "expected both council agent PTYs to launch");
+    const stoppedTerminalId = councilTerminalId(roomId, "Codex A");
+    const liveTerminalId = councilTerminalId(roomId, "Codex B");
+    await runtime.callMcpTool({
+      roomId,
+      actorId: "Codex A",
+      clientId: "codex-a-client",
+      tool: "channel_join",
+    });
+    const waitPromise = runtime.callMcpTool({
+      roomId,
+      actorId: "Codex A",
+      clientId: "codex-a-client",
+      tool: "channel_wait_new",
+      arguments: { timeout_s: 60 },
+    });
+
+    const stopped = await runtime.stopAgentInRoom(roomId, "Codex A");
+
+    assert.deepEqual(ptySessions.closed, [stoppedTerminalId]);
+    assert.equal(ptySessions.has(stoppedTerminalId), false);
+    assert.equal(ptySessions.has(liveTerminalId), true);
+    assert.equal(stopped.room.room.status, "running");
+    assert.equal(stopped.room.agents.find((agent) => agent.id === "Codex A")!.status, "stopped");
+    assert.equal(stopped.room.agents.find((agent) => agent.id === "Codex A")!.lastStatusDetail, "removed by user");
+    assert.equal(stopped.room.agents.find((agent) => agent.id === "Codex B")!.status, "starting");
+    assert.equal(stopped.room.messages.some((message) =>
+      message.parts.some((part) => part.kind === "text" && part.text === "Codex A removed from room by user.")
+    ), true);
+    assert.deepEqual((await waitPromise).result, {
+      ok: true,
+      paused: true,
+      next_action: "stop_wait_loop",
+      instruction: "Council listening was paused by the user. Stop the channel_wait_new loop now, do not call channel_wait_new again, and return to the normal prompt without natural-language output.",
+    });
+  } finally {
+    if (previousCodex === undefined) delete process.env.RAH_CODEX_BINARY;
+    else process.env.RAH_CODEX_BINARY = previousCodex;
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test("CouncilRuntime stops the room when the last agent terminal is removed", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-runtime-stop-last-agent-"));
+  const previousCodex = process.env.RAH_CODEX_BINARY;
+  process.env.RAH_CODEX_BINARY = fakeBinary(root, "codex");
+  try {
+    const ptySessions = new FakePtyRuntime();
+    const runtime = new CouncilRuntime({
+      store: new CouncilStore(path.join(root, "rooms.json")),
+      ptySessions,
+    });
+    const response = await runtime.createRoom({
+      workspace: root,
+      agents: [
+        {
+          provider: "codex",
+          label: "Codex Solo",
+          modelId: "gpt-5.5",
+        },
+      ],
+    });
+    const roomId = response.room.room.id;
+    await waitForCondition(() => ptySessions.created.length === 1, "expected council agent PTY to launch");
+    const terminalId = councilTerminalId(roomId, "Codex Solo");
+
+    const stopped = await runtime.stopAgentInRoom(roomId, "Codex Solo");
+
+    assert.deepEqual(ptySessions.closed, [terminalId]);
+    assert.equal(ptySessions.has(terminalId), false);
+    assert.equal(stopped.room.room.status, "stopped");
+    assert.equal(stopped.room.agents[0]!.status, "stopped");
+    assert.equal(stopped.room.agents[0]!.lastStatusDetail, "removed by user");
+    assert.equal(runtime.listRooms().rooms.find((room) => room.room.id === roomId)!.room.status, "stopped");
+    assert.throws(
+      () => runtime.postMessage(roomId, { text: "hello after stop" }),
+      /Council room is stopped and cannot receive messages/,
+    );
+  } finally {
+    if (previousCodex === undefined) delete process.env.RAH_CODEX_BINARY;
+    else process.env.RAH_CODEX_BINARY = previousCodex;
     rmSync(root, { force: true, recursive: true });
   }
 });
@@ -1156,6 +1290,7 @@ test("CouncilRuntime re-injects Claude bootstrap prompts without interrupting th
     const roomId = response.room.room.id;
     const agentId = response.room.agents[0]!.id;
     const terminalId = councilTerminalId(roomId, agentId);
+    await waitForCondition(() => ptySessions.created.length === 1, "expected council agent PTY to launch");
 
     const reinjected = runtime.reinjectAgentPrompt(roomId, agentId);
     assert.deepEqual(reinjected.injectedAgentIds, [agentId]);
@@ -1245,7 +1380,9 @@ test("CouncilRuntime returns a diagnostic screen for persisted agents whose PTY 
       agents: [{ id: "opencode-api", provider: "opencode", label: "OpenCode API" }],
     });
     const agentId = response.room.agents[0]!.id;
-    const terminalId = response.room.agents[0]!.nativeSessionId!;
+    await waitForCondition(() => ptySessions.created.length === 1, "expected council agent PTY to launch");
+    const started = runtime.listRooms().rooms.find((room) => room.room.id === response.room.room.id)!;
+    const terminalId = started.agents[0]!.nativeSessionId!;
     await ptySessions.close(terminalId);
 
     const tui = await runtime.getAgentTui(response.room.room.id, agentId);
@@ -1258,7 +1395,7 @@ test("CouncilRuntime returns a diagnostic screen for persisted agents whose PTY 
   }
 });
 
-test("CouncilRuntime cleans up PTYs and records failure when agent launch fails", async () => {
+test("CouncilRuntime isolates a failed background agent launch without closing the room", async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-runtime-fail-"));
   const previousCodex = process.env.RAH_CODEX_BINARY;
   process.env.RAH_CODEX_BINARY = fakeBinary(root, "codex");
@@ -1278,15 +1415,20 @@ test("CouncilRuntime cleans up PTYs and records failure when agent launch fails"
       ],
     });
 
-    assert.equal(response.room.room.status, "failed");
-    assert.match(response.room.room.error ?? "", /pty launch failed/);
-    assert.deepEqual(response.room.agents.map((agent) => agent.status), ["failed", "failed"]);
-    assert.deepEqual(ptySessions.closed, [councilTerminalId(response.room.room.id, "Codex A")]);
-    assert.equal(response.room.messages.at(-1)?.role, "system");
-    const lastPart = response.room.messages.at(-1)?.parts[0];
+    assert.equal(response.room.room.status, "starting");
+    await waitForCondition(
+      () => runtime.listRooms().rooms.find((room) => room.room.id === response.room.room.id)?.agents.some((agent) => agent.status === "failed") === true,
+      "expected failed agent status after background launch",
+    );
+    const snapshot = runtime.listRooms().rooms.find((room) => room.room.id === response.room.room.id)!;
+    assert.equal(snapshot.room.status, "running");
+    assert.deepEqual(snapshot.agents.map((agent) => agent.status), ["starting", "failed"]);
+    assert.deepEqual(ptySessions.closed, []);
+    assert.equal(snapshot.messages.at(-1)?.role, "system");
+    const lastPart = snapshot.messages.at(-1)?.parts[0];
     assert.match(
       lastPart?.kind === "text" ? lastPart.text : "",
-      /Council failed to start/,
+      /Codex B failed to start: pty launch failed/,
     );
   } finally {
     if (previousCodex === undefined) delete process.env.RAH_CODEX_BINARY;
