@@ -1731,7 +1731,7 @@ export function CouncilPage(props: {
         }}
       />
 
-      <Dialog.Root open={newRoomDialogOpen} onOpenChange={setNewRoomDialogOpen}>
+      <Dialog.Root open={newRoomDialogOpen} onOpenChange={setNewRoomDialogOpen} modal={false}>
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 z-40 bg-black/35" />
           <Dialog.Content
@@ -1822,6 +1822,7 @@ export function CouncilPage(props: {
 
       <Dialog.Root
         open={addAgentDialogOpen}
+        modal={false}
         onOpenChange={(open) => {
           setAddAgentDialogOpen(open);
           if (!open) {
