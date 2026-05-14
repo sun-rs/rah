@@ -1,5 +1,8 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { StoredSessionRef } from "@rah/runtime-protocol";
 import { buildSessionsResponse } from "./runtime-session-list";
 import type { StoredSessionState } from "./session-store";
@@ -201,5 +204,35 @@ describe("buildSessionsResponse", () => {
     assert.deepEqual(response.hiddenWorkspaces, []);
     assert.equal(response.activeWorkspaceDir, undefined);
     assert.deepEqual(response.sessions, []);
+  });
+
+  test("dedupes workspace dirs by resolved symlink path even when the child directory is gone", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "rah-workspace-symlink-"));
+    try {
+      const target = path.join(root, "target");
+      const alias = path.join(root, "alias");
+      mkdirSync(target);
+      symlinkSync(target, alias, "dir");
+      const aliasWorkspace = path.join(alias, "crates", "AI", "synapse");
+      const targetWorkspace = path.join(target, "crates", "AI", "synapse");
+
+      const response = buildSessionsResponse({
+        liveStates: [],
+        discoveredStoredSessions: [],
+        remembered: {
+          rememberedSessions: [],
+          rememberedRecentSessions: [],
+          rememberedWorkspaceDirs: [aliasWorkspace, targetWorkspace],
+          rememberedHiddenWorkspaces: [],
+          rememberedHiddenSessionKeys: [],
+          rememberedSessionTitleOverrides: {},
+        },
+        isClosingSession: () => false,
+      });
+
+      assert.deepEqual(response.workspaceDirs, [aliasWorkspace]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

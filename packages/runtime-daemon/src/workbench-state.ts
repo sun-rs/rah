@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import type { ManagedSession, StoredSessionRef } from "@rah/runtime-protocol";
 import type { StoredSessionState } from "./session-store";
-import { isReadOnlyReplaySession } from "./workbench-directory-utils";
+import { canonicalDirectoryKey, isReadOnlyReplaySession } from "./workbench-directory-utils";
 
 const SNAPSHOT_FILE = "workbench-state.json";
 const STORAGE_VERSION = 2;
@@ -57,20 +57,48 @@ function uniqueDirectoriesInOrder(values: readonly string[]): string[] {
   const seen = new Set<string>();
   for (const value of values) {
     const normalized = normalizeDirectory(value);
-    if (normalized && !seen.has(normalized)) {
-      seen.add(normalized);
+    const key = canonicalDirectoryKey(normalized ?? undefined);
+    if (normalized && key && !seen.has(key)) {
+      seen.add(key);
       directories.push(normalized);
     }
   }
   return directories;
 }
 
+function directoryKeySet(values: readonly string[]): Set<string> {
+  const keys = new Set<string>();
+  for (const value of values) {
+    const key = canonicalDirectoryKey(value);
+    if (key) {
+      keys.add(key);
+    }
+  }
+  return keys;
+}
+
+function sameDirectory(left: string | undefined, right: string | undefined): boolean {
+  const leftNormalized = normalizeDirectory(left);
+  const rightNormalized = normalizeDirectory(right);
+  if (!leftNormalized || !rightNormalized) {
+    return false;
+  }
+  const leftKey = canonicalDirectoryKey(leftNormalized);
+  const rightKey = canonicalDirectoryKey(rightNormalized);
+  return leftKey !== null && rightKey !== null
+    ? leftKey === rightKey
+    : leftNormalized === rightNormalized;
+}
+
 function filterHiddenDirectories(
   values: readonly string[],
   hiddenWorkspaces: readonly string[],
 ): string[] {
-  const hidden = new Set(uniqueDirectoriesInOrder(hiddenWorkspaces));
-  return uniqueDirectoriesInOrder(values).filter((directory) => !hidden.has(directory));
+  const hidden = directoryKeySet(hiddenWorkspaces);
+  return uniqueDirectoriesInOrder(values).filter((directory) => {
+    const key = canonicalDirectoryKey(directory);
+    return !key || !hidden.has(key);
+  });
 }
 
 function uniqueStringsInOrder(values: readonly string[]): string[] {
@@ -380,8 +408,10 @@ export class WorkbenchStateStore {
         }),
       ], hiddenWorkspaces);
       const activeWorkspaceDir = normalizeDirectory(raw.activeWorkspaceDir);
+      const hiddenWorkspaceKeys = directoryKeySet(hiddenWorkspaces);
+      const activeWorkspaceKey = canonicalDirectoryKey(activeWorkspaceDir ?? undefined);
       this.state = {
-        ...(activeWorkspaceDir && !hiddenWorkspaces.includes(activeWorkspaceDir)
+        ...(activeWorkspaceDir && activeWorkspaceKey && !hiddenWorkspaceKeys.has(activeWorkspaceKey)
           ? { activeWorkspaceDir }
           : {}),
         workspaces,
@@ -436,10 +466,12 @@ export class WorkbenchStateStore {
       [...this.state.workspaces, ...liveWorkspaceDirs],
       this.state.hiddenWorkspaces,
     );
+    const normalizedActiveWorkspaceDir = normalizeDirectory(this.state.activeWorkspaceDir);
+    const hiddenWorkspaceKeys = directoryKeySet(this.state.hiddenWorkspaces);
+    const activeWorkspaceKey = canonicalDirectoryKey(normalizedActiveWorkspaceDir ?? undefined);
     const activeWorkspaceDir =
-      (normalizeDirectory(this.state.activeWorkspaceDir) &&
-      !this.state.hiddenWorkspaces.includes(normalizeDirectory(this.state.activeWorkspaceDir)!)
-        ? normalizeDirectory(this.state.activeWorkspaceDir)
+      (normalizedActiveWorkspaceDir && activeWorkspaceKey && !hiddenWorkspaceKeys.has(activeWorkspaceKey)
+        ? normalizedActiveWorkspaceDir
         : null) ??
       normalizeDirectory(sessions[0]?.rootDir ?? sessions[0]?.cwd) ??
       workspaces[0];
@@ -517,7 +549,7 @@ export class WorkbenchStateStore {
     if (!directory) {
       return;
     }
-    const hiddenWorkspaces = this.state.hiddenWorkspaces.filter((workspace) => workspace !== directory);
+    const hiddenWorkspaces = this.state.hiddenWorkspaces.filter((workspace) => !sameDirectory(workspace, directory));
     const workspaces = filterHiddenDirectories([...this.state.workspaces, directory], hiddenWorkspaces);
     this.state = {
       activeWorkspaceDir: directory,
@@ -538,10 +570,10 @@ export class WorkbenchStateStore {
     if (!directory) {
       return;
     }
-    const workspaces = this.state.workspaces.filter((workspace) => workspace !== directory);
+    const workspaces = this.state.workspaces.filter((workspace) => !sameDirectory(workspace, directory));
     const hiddenWorkspaces = uniqueDirectoriesInOrder([...this.state.hiddenWorkspaces, directory]);
     const activeWorkspaceDir =
-      this.state.activeWorkspaceDir === directory
+      sameDirectory(this.state.activeWorkspaceDir, directory)
         ? workspaces[0]
         : this.state.activeWorkspaceDir;
     this.state = {

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { RuntimeEngine } from "./runtime-engine";
@@ -452,6 +452,23 @@ describe("WorkbenchStateStore", () => {
     assert.equal(normalizeDirectory("/"), "/");
     assert.equal(sessionBelongsToWorkspace("/Users/sun/project", "/"), true);
     assert.equal(sessionBelongsToWorkspace(undefined, "/"), false);
+  });
+
+  test("workspace list dedupes symlink and real paths even after the workspace child is deleted", async () => {
+    const target = path.join(tmpRoot, "target");
+    const alias = path.join(tmpRoot, "alias");
+    mkdirSync(target);
+    symlinkSync(target, alias, "dir");
+    const aliasWorkspace = path.join(alias, "crates", "AI", "synapse");
+    const targetWorkspace = path.join(target, "crates", "AI", "synapse");
+
+    const engine = new RuntimeEngine();
+    engine.addWorkspace(aliasWorkspace);
+    const listed = engine.addWorkspace(targetWorkspace);
+
+    assert.deepEqual(listed.workspaceDirs, [aliasWorkspace]);
+
+    await engine.shutdown();
   });
 
   test("session store read methods normalize shared web clients without mutating stored state", () => {

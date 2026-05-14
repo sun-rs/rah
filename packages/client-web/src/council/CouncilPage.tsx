@@ -190,27 +190,27 @@ const COUNCIL_AGENT_THEMES = [
   {
     bubble: "border-blue-300/80 bg-gradient-to-br from-blue-50/95 to-white text-slate-950 shadow-sm dark:border-blue-500/25 dark:from-blue-500/10 dark:to-transparent dark:text-blue-50",
     accent: "bg-blue-400/70",
-    card: "border-l-blue-300 dark:border-l-blue-500/60",
+    card: "border-blue-200/70 bg-blue-50/45 hover:border-blue-300/80 dark:border-blue-500/25 dark:bg-blue-500/10 dark:hover:border-blue-400/45",
   },
   {
     bubble: "border-emerald-300/80 bg-gradient-to-br from-emerald-50/95 to-white text-slate-950 shadow-sm dark:border-emerald-500/25 dark:from-emerald-500/10 dark:to-transparent dark:text-emerald-50",
     accent: "bg-emerald-400/70",
-    card: "border-l-emerald-300 dark:border-l-emerald-500/60",
+    card: "border-emerald-200/70 bg-emerald-50/45 hover:border-emerald-300/80 dark:border-emerald-500/25 dark:bg-emerald-500/10 dark:hover:border-emerald-400/45",
   },
   {
     bubble: "border-amber-300/80 bg-gradient-to-br from-amber-50/95 to-white text-slate-950 shadow-sm dark:border-amber-500/25 dark:from-amber-500/10 dark:to-transparent dark:text-amber-50",
     accent: "bg-amber-400/70",
-    card: "border-l-amber-300 dark:border-l-amber-500/60",
+    card: "border-amber-200/75 bg-amber-50/45 hover:border-amber-300/80 dark:border-amber-500/25 dark:bg-amber-500/10 dark:hover:border-amber-400/45",
   },
   {
     bubble: "border-rose-300/80 bg-gradient-to-br from-rose-50/95 to-white text-slate-950 shadow-sm dark:border-rose-500/25 dark:from-rose-500/10 dark:to-transparent dark:text-rose-50",
     accent: "bg-rose-400/70",
-    card: "border-l-rose-300 dark:border-l-rose-500/60",
+    card: "border-rose-200/70 bg-rose-50/40 hover:border-rose-300/75 dark:border-rose-500/25 dark:bg-rose-500/10 dark:hover:border-rose-400/45",
   },
   {
     bubble: "border-sky-300/80 bg-gradient-to-br from-sky-50/95 to-white text-slate-950 shadow-sm dark:border-sky-500/25 dark:from-sky-500/10 dark:to-transparent dark:text-sky-50",
     accent: "bg-sky-400/70",
-    card: "border-l-sky-300 dark:border-l-sky-500/60",
+    card: "border-sky-200/70 bg-sky-50/45 hover:border-sky-300/80 dark:border-sky-500/25 dark:bg-sky-500/10 dark:hover:border-sky-400/45",
   },
 ];
 
@@ -1180,10 +1180,10 @@ export function CouncilPage(props: {
                   type="button"
                   onClick={() => setStopConfirmOpen(true)}
                   disabled={loading}
-                  className="icon-click-feedback inline-flex h-6 shrink-0 items-center justify-center gap-1.5 rounded-md border border-[var(--app-danger)]/25 bg-[var(--app-danger)]/10 px-2.5 text-[11px] font-semibold text-[var(--app-danger)] transition-colors hover:bg-[var(--app-danger)]/15 disabled:opacity-40"
+                  className="icon-click-feedback inline-flex h-6 shrink-0 items-center justify-center gap-1.5 rounded-md border border-[var(--app-border)] bg-[var(--app-bg)] px-2.5 text-[11px] font-semibold text-[var(--app-hint)] transition-colors hover:border-rose-400/30 hover:bg-rose-500/5 hover:text-[var(--app-fg)] disabled:opacity-40"
                   title="Stop room and close agent terminals"
                 >
-                  <Square size={12} />
+                  <Square size={12} className="text-rose-500/65" />
                   Stop
                 </button>
               </div>
@@ -1361,7 +1361,7 @@ export function CouncilPage(props: {
                   return (
                     <div
                       key={agent.id}
-                      className={`group rounded-xl border border-l-4 border-[var(--app-border)] bg-[var(--app-bg)]/85 px-2 py-1.5 transition-colors hover:bg-[var(--app-bg)] ${theme.card} ${
+                      className={`group rounded-xl border px-2.5 py-2 transition-colors ${theme.card} ${
                         terminalEnabled ? "" : "opacity-60"
                       }`}
                     >
@@ -1373,12 +1373,12 @@ export function CouncilPage(props: {
                           className="icon-click-feedback flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1 py-1 text-left disabled:cursor-default"
                           title={terminalEnabled ? "Open agent terminal" : "This room is closed."}
                         >
-                          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[var(--app-border)] bg-[var(--app-subtle-bg)]">
+                          <span className={`h-8 w-1 shrink-0 rounded-full ${theme.accent}`} />
+                          <span className="relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)]/70 shadow-sm">
                             <ProviderLogo provider={agent.provider} className="h-4 w-4" variant="bare" />
                           </span>
                           <div className="min-w-0 flex-1">
                             <div className="flex min-w-0 items-center gap-1.5">
-                              <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${theme.accent}`} />
                               <span className="truncate text-sm font-semibold leading-5 text-[var(--app-fg)]">{agent.label}</span>
                             </div>
                             <div className="truncate text-[11px] leading-4 text-[var(--app-hint)]">{agentMeta}</div>

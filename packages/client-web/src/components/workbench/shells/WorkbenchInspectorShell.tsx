@@ -22,7 +22,14 @@ export function WorkbenchInspectorShell(props: {
         </>
       ) : null}
 
-      <Sheet open={props.rightOpen} onOpenChange={props.onRightOpenChange} side="right" title="Inspector">
+      <Sheet
+        open={props.rightOpen}
+        onOpenChange={props.onRightOpenChange}
+        side="right"
+        title="Inspector"
+        hideHeader
+        modal={false}
+      >
         {props.content}
       </Sheet>
     </>

@@ -374,7 +374,7 @@ export function WorkbenchSelectedPane(props: {
   return (
     <div ref={rootRef} className="flex h-full min-h-0 flex-col">
       <header
-        className="relative z-20 flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[var(--app-border)] bg-[var(--app-bg)]/80 pl-4 pr-4 backdrop-blur-sm"
+        className="relative z-20 flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[var(--app-border)] bg-[var(--app-bg)]/80 pl-4 pr-14 backdrop-blur-sm"
       >
         <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
           <button

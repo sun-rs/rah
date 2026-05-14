@@ -1,5 +1,6 @@
+import { existsSync, realpathSync } from "node:fs";
 import os from "node:os";
-import { resolve } from "node:path";
+import path, { resolve } from "node:path";
 import type { StoredSessionState } from "./session-store";
 
 export function normalizeDirectory(value: string | undefined): string | null {
@@ -28,6 +29,29 @@ export function resolveUserPath(rawPath: string): string {
   return resolve(trimmed);
 }
 
+export function canonicalDirectoryKey(value: string | undefined): string | null {
+  const normalized = normalizeDirectory(value);
+  if (!normalized) {
+    return null;
+  }
+  const absolute = resolve(normalized);
+  const missingSegments: string[] = [];
+  let existingPrefix = absolute;
+  const root = path.parse(absolute).root;
+  while (!existsSync(existingPrefix) && existingPrefix !== root) {
+    missingSegments.unshift(path.basename(existingPrefix));
+    existingPrefix = path.dirname(existingPrefix);
+  }
+  if (!existsSync(existingPrefix)) {
+    return normalized;
+  }
+  try {
+    return normalizeDirectory(path.join(realpathSync.native(existingPrefix), ...missingSegments));
+  } catch {
+    return normalized;
+  }
+}
+
 export function sessionBelongsToWorkspace(
   sessionPath: string | undefined,
   workspaceDir: string,
@@ -37,13 +61,15 @@ export function sessionBelongsToWorkspace(
   if (!normalizedSession || !normalizedWorkspace) {
     return false;
   }
+  const sessionKey = canonicalDirectoryKey(normalizedSession) ?? normalizedSession;
+  const workspaceKey = canonicalDirectoryKey(normalizedWorkspace) ?? normalizedWorkspace;
   if (normalizedWorkspace === "/" || normalizedWorkspace === "\\") {
     return true;
   }
   return (
-    normalizedSession === normalizedWorkspace ||
-    normalizedSession.startsWith(`${normalizedWorkspace}/`) ||
-    normalizedSession.startsWith(`${normalizedWorkspace}\\`)
+    sessionKey === workspaceKey ||
+    sessionKey.startsWith(`${workspaceKey}/`) ||
+    sessionKey.startsWith(`${workspaceKey}\\`)
   );
 }
 
@@ -63,10 +89,11 @@ export function workspaceDirsFromState(
   const seen = new Set<string>();
   for (const rememberedWorkspaceDir of rememberedWorkspaceDirs) {
     const directory = normalizeDirectory(rememberedWorkspaceDir);
-    if (!directory || seen.has(directory)) {
+    const key = canonicalDirectoryKey(directory ?? undefined);
+    if (!directory || !key || seen.has(key)) {
       continue;
     }
-    seen.add(directory);
+    seen.add(key);
     directories.push(directory);
   }
   for (const state of liveStates) {
@@ -74,8 +101,9 @@ export function workspaceDirsFromState(
       continue;
     }
     const directory = normalizeDirectory(state.session.rootDir || state.session.cwd);
-    if (directory && !seen.has(directory)) {
-      seen.add(directory);
+    const key = canonicalDirectoryKey(directory ?? undefined);
+    if (directory && key && !seen.has(key)) {
+      seen.add(key);
       directories.push(directory);
     }
   }

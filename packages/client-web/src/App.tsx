@@ -1710,6 +1710,7 @@ export function App() {
                   ),
                 );
               }}
+              showInspectorToggle={false}
             />
           ) : primaryPaneState.kind === "opening" && activeOpeningSession ? (
             <WorkbenchOpeningPane
@@ -1840,11 +1841,11 @@ export function App() {
         ) : null}
       </WorkbenchErrorBoundary>
 
-      {workbenchMode === "single" && primaryPaneState.kind !== "active" ? (
+      {workbenchMode === "single" ? (
         <>
           <button
             type="button"
-            className="icon-click-feedback fixed right-[max(1rem,env(safe-area-inset-right))] top-[calc(env(safe-area-inset-top,0px)+0.75rem)] z-30 hidden h-8 w-8 items-center justify-center rounded-md border border-[var(--app-border)] bg-[var(--app-bg)]/90 text-[var(--app-hint)] shadow-sm backdrop-blur hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] md:inline-flex"
+            className="icon-click-feedback fixed right-[max(1rem,env(safe-area-inset-right))] top-[calc(env(safe-area-inset-top,0px)+0.75rem)] z-[70] hidden h-8 w-8 items-center justify-center rounded-md border border-[var(--app-border)] bg-[var(--app-bg)]/90 text-[var(--app-hint)] shadow-sm backdrop-blur hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] md:inline-flex"
             onClick={() => setRightSidebarOpen((open) => !open)}
             aria-label={rightSidebarOpen ? "Collapse inspector" : "Expand inspector"}
             title={rightSidebarOpen ? "Collapse inspector" : "Expand inspector"}
@@ -1853,10 +1854,10 @@ export function App() {
           </button>
           <button
             type="button"
-            className="icon-click-feedback fixed right-[max(1rem,env(safe-area-inset-right))] top-[calc(env(safe-area-inset-top,0px)+0.75rem)] z-30 inline-flex h-8 w-8 items-center justify-center rounded-md border border-[var(--app-border)] bg-[var(--app-bg)]/90 text-[var(--app-hint)] shadow-sm backdrop-blur hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] md:hidden"
-            onClick={() => setRightOpen(true)}
-            aria-label="Open inspector"
-            title="Open inspector"
+            className="icon-click-feedback fixed right-[max(1rem,env(safe-area-inset-right))] top-[calc(env(safe-area-inset-top,0px)+0.75rem)] z-[70] inline-flex h-8 w-8 items-center justify-center rounded-md border border-[var(--app-border)] bg-[var(--app-bg)]/90 text-[var(--app-hint)] shadow-sm backdrop-blur hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] md:hidden"
+            onClick={() => setRightOpen((open) => !open)}
+            aria-label={rightOpen ? "Close inspector" : "Open inspector"}
+            title={rightOpen ? "Close inspector" : "Open inspector"}
           >
             <PanelRight size={18} />
           </button>

@@ -1,6 +1,6 @@
 import type { GitChangedFile, RahEvent } from "@rah/runtime-protocol";
 
-export type InspectorTab = "files" | "changes" | "events";
+export type InspectorTab = "files" | "changes";
 export type FileDetailMode = "file" | "diff";
 
 export type FileDetailSelection = {
@@ -50,6 +50,8 @@ export type DiffSummary = {
 };
 
 export const DIFF_PREFERENCES_KEY = "rah.inspector-diff-preferences";
+export const INSPECTOR_TOOLBAR_ICON_BUTTON_CLASS =
+  "icon-click-feedback inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)]";
 
 export function readDiffPreferences(): {
   wrapLines: boolean;
@@ -113,19 +115,6 @@ export function getChangeScopeLabel(staged: boolean | undefined): string | null 
   if (staged === true) return "Staged";
   if (staged === false) return "Unstaged";
   return null;
-}
-
-export function formatEventTimestamp(event: RahEvent): string {
-  try {
-    const date = new Date(event.ts);
-    return date.toLocaleTimeString(undefined, {
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-    });
-  } catch {
-    return event.ts;
-  }
 }
 
 export function joinPath(parentPath: string, name: string): string {

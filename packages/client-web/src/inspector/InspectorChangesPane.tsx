@@ -4,6 +4,7 @@ import type { FileDetailSelection, InspectorGitStatus } from "./shared";
 import {
   getChangedFileStatusLabel,
   getChangedFileStatusTone,
+  INSPECTOR_TOOLBAR_ICON_BUTTON_CLASS,
   isFileChangeObservation,
 } from "./shared";
 
@@ -58,7 +59,7 @@ export function InspectorChangesPane(props: {
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="flex items-center gap-2 text-sm font-medium text-[var(--app-fg)]">
             <GitBranch size={14} className="text-[var(--app-hint)]" />
@@ -71,8 +72,9 @@ export function InspectorChangesPane(props: {
         <button
           type="button"
           onClick={props.onRefresh}
-          className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)]"
+          className={INSPECTOR_TOOLBAR_ICON_BUTTON_CLASS}
           title="Refresh changes"
+          aria-label="Refresh changes"
         >
           <RefreshCcw size={14} />
         </button>
@@ -87,15 +89,15 @@ export function InspectorChangesPane(props: {
           {props.error}
         </div>
       ) : changeCount === 0 ? (
-        <div className="pt-8 text-center text-sm text-[var(--app-hint)]">No changes.</div>
+        null
       ) : (
         <div className="space-y-3">
           {props.gitStatus?.stagedFiles.length ? (
-            <div className="rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)]">
-              <div className="border-b border-[var(--app-border)] px-3 py-2 text-xs font-semibold text-[var(--diff-add-text)]">
+            <section className="space-y-1">
+              <div className="py-1 text-xs font-semibold text-[var(--diff-add-text)]">
                 Staged Changes ({props.gitStatus.stagedFiles.length})
               </div>
-              <div className="space-y-1 p-2">
+              <div className="space-y-0.5 border-t border-[var(--app-border)] pt-1">
                 {props.gitStatus.stagedFiles.map((file) => (
                   <button
                     key={`staged-${file.path}`}
@@ -111,7 +113,7 @@ export function InspectorChangesPane(props: {
                         ...(file.oldPath !== undefined ? { oldPath: file.oldPath } : {}),
                       })
                     }
-                    className="flex w-full items-center gap-2 rounded-md border border-transparent bg-[var(--app-bg)] px-2.5 py-2 text-left transition-colors hover:border-[var(--app-border)] hover:bg-[var(--app-subtle-bg)]"
+                    className="flex w-full items-center gap-2 rounded-md py-1.5 text-left transition-colors hover:bg-[var(--app-bg)]"
                   >
                     <FileText size={14} className="shrink-0 text-[var(--app-hint)]" />
                     <span className={`shrink-0 text-[10px] font-semibold ${getChangedFileStatusTone(file.status)}`}>
@@ -137,15 +139,15 @@ export function InspectorChangesPane(props: {
                   </button>
                 ))}
               </div>
-            </div>
+            </section>
           ) : null}
 
           {props.gitStatus?.unstagedFiles.length ? (
-            <div className="rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)]">
-              <div className="border-b border-[var(--app-border)] px-3 py-2 text-xs font-semibold text-[var(--app-warning)]">
+            <section className="space-y-1">
+              <div className="py-1 text-xs font-semibold text-[var(--app-warning)]">
                 Unstaged Changes ({props.gitStatus.unstagedFiles.length})
               </div>
-              <div className="space-y-1 p-2">
+              <div className="space-y-0.5 border-t border-[var(--app-border)] pt-1">
                 {props.gitStatus.unstagedFiles.map((file) => (
                   <button
                     key={`unstaged-${file.path}`}
@@ -161,7 +163,7 @@ export function InspectorChangesPane(props: {
                         ...(file.oldPath !== undefined ? { oldPath: file.oldPath } : {}),
                       })
                     }
-                    className="flex w-full items-center gap-2 rounded-md border border-transparent bg-[var(--app-bg)] px-2.5 py-2 text-left transition-colors hover:border-[var(--app-border)] hover:bg-[var(--app-subtle-bg)]"
+                    className="flex w-full items-center gap-2 rounded-md py-1.5 text-left transition-colors hover:bg-[var(--app-bg)]"
                   >
                     <FileText size={14} className="shrink-0 text-[var(--app-hint)]" />
                     <span className={`shrink-0 text-[10px] font-semibold ${getChangedFileStatusTone(file.status)}`}>
@@ -187,7 +189,7 @@ export function InspectorChangesPane(props: {
                   </button>
                 ))}
               </div>
-            </div>
+            </section>
           ) : null}
         </div>
       )}

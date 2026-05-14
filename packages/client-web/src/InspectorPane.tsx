@@ -8,7 +8,6 @@ import {
   searchWorkspaceFilesByDirectory,
 } from "./api";
 import { InspectorChangesPane } from "./inspector/InspectorChangesPane";
-import { InspectorEventsPane } from "./inspector/InspectorEventsPane";
 import { InspectorFileDetailDialog } from "./inspector/InspectorFileDetailDialog";
 import { InspectorFilesPane } from "./inspector/InspectorFilesPane";
 import { InspectorHeader } from "./inspector/InspectorHeader";
@@ -35,12 +34,6 @@ export function InspectorPane(props: {
   const [fileSearchLoading, setFileSearchLoading] = useState(false);
   const [fileSearchError, setFileSearchError] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<FileDetailSelection | null>(null);
-
-  useEffect(() => {
-    if (!props.sessionId && activeTab === "events") {
-      setActiveTab("changes");
-    }
-  }, [activeTab, props.sessionId]);
 
   const loadDirectory = async (directoryPath: string) => {
     setDirectoryLoadingPaths((current) => new Set(current).add(directoryPath));
@@ -219,12 +212,10 @@ export function InspectorPane(props: {
         workspaceRoot={props.workspaceRoot}
         activeTab={activeTab}
         changeCount={changeCount}
-        eventCount={props.events.length}
-        hasSession={Boolean(props.sessionId)}
         onTabChange={setActiveTab}
         {...(props.onOpenTerminal ? { onOpenTerminal: props.onOpenTerminal } : {})}
       />
-      <div className="flex-1 overflow-y-scroll custom-scrollbar scrollbar-stable p-3">
+      <div className="flex-1 overflow-y-scroll custom-scrollbar px-4 py-3">
         {activeTab === "changes" ? (
           <InspectorChangesPane
             gitStatus={gitStatus}
@@ -234,7 +225,7 @@ export function InspectorPane(props: {
             onRefresh={() => void loadGitStatus()}
             onOpenFile={(selection) => setSelectedFile(selection)}
           />
-        ) : activeTab === "files" ? (
+        ) : (
           <InspectorFilesPane
             workspaceRoot={props.workspaceRoot}
             topLevelEntries={topLevelEntries}
@@ -251,10 +242,6 @@ export function InspectorPane(props: {
             onToggleDirectory={toggleDirectory}
             onOpenFile={(path) => openFile(path, "files")}
           />
-        ) : props.sessionId ? (
-          <InspectorEventsPane events={props.events} />
-        ) : (
-          <div className="text-sm text-[var(--app-hint)]">No events without a selected session.</div>
         )}
       </div>
 
