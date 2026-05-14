@@ -12,7 +12,7 @@ export type ProviderRuntimeKind =
   | "stream_json_fifo"
   | "native_cloud_remote"
   | "internal_experimental"
-  | "legacy_structured";
+  | "provider_control";
 export type ProtocolStability =
   | "official_stable"
   | "project_native"
@@ -22,7 +22,7 @@ export type RuntimeLiveSource =
   | "provider_server"
   | "provider_history"
   | "tui_mux"
-  | "rah_structured";
+  | "rah_control";
 export type RuntimeTuiRole =
   | "client_view"
   | "session_owner"

@@ -1,8 +1,8 @@
 import { ClaudeStoredHistoryAdapter } from "./claude-stored-history-adapter";
 import { CodexStoredHistoryAdapter } from "./codex-stored-history-adapter";
 import { DebugAdapter } from "./debug-adapter";
-import { CodexAdapter } from "./legacy-structured/codex-structured-adapter";
-import { OpenCodeAdapter } from "./legacy-structured/opencode-structured-adapter";
+import { CodexAdapter } from "./provider-control/codex-structured-adapter";
+import { OpenCodeAdapter } from "./provider-control/opencode-structured-adapter";
 import {
   ClaudeNativeTuiCatalogAdapter,
   CodexNativeTuiCatalogAdapter,

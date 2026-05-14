@@ -52,7 +52,7 @@ function tuiMuxFallbackFeatures(): RuntimeFeatureStatus {
   });
 }
 
-function legacyStructuredFeatures(): RuntimeFeatureStatus {
+function providerControlFeatures(): RuntimeFeatureStatus {
   return runtimeFeatures({
     structuredLiveEvents: "available",
     structuredControl: "available",
@@ -94,13 +94,13 @@ export function runtimeDescriptorForLiveBackend(args: {
   }
 
   return {
-    kind: "legacy_structured",
+    kind: "provider_control",
     protocolStability: "project_native",
-    liveSource: "rah_structured",
+    liveSource: "rah_control",
     tuiRole: "none",
     structuredLiveEvents: true,
     tuiContinuity: false,
-    features: legacyStructuredFeatures(),
+    features: providerControlFeatures(),
   };
 }
 

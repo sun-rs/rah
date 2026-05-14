@@ -117,6 +117,7 @@ npm run dev:web
 npm run build:web
 npm run serve:workbench
 npm run typecheck
+npm run test:protocol
 npm run test:provider-contracts
 npm run test:web
 npm run test:runtime
@@ -146,6 +147,7 @@ RAH now uses four test tiers:
 
 - default gate
   - `npm run typecheck`
+  - `npm run test:protocol`
   - `npm run test:provider-contracts`
   - `npm run test:web`
   - `npm run test:runtime`
@@ -180,7 +182,7 @@ RAH now uses four test tiers:
 
 Detailed provider regression coverage is tracked in `docs/provider-regression-testing.zh-CN.md`.
 
-For the current native-local-server branch, the preferred smoke coverage is split by runtime:
+For the current main branch, the preferred smoke coverage is split by runtime:
 `test:smoke:native-local-server` verifies Codex/OpenCode provider-server capabilities, while
 `test:smoke:native-browser` runs deterministic browser/UI smoke coverage for Codex, Claude, and
 OpenCode with fake provider backends. `native-browser-webkit` and `native-browser-firefox` run the
@@ -290,7 +292,7 @@ RAH keeps the live runtime boundary explicit:
 
 ## 1.0 RC Scope
 
-`1.0.0-rc.1` is considered feature-complete enough for the current branch goal:
+`1.0.0-rc.1` is considered feature-complete enough for the current runtime scope:
 
 - Codex native local-server WebSocket runtime is wired, and Codex 0.130.0 remote TUI cross-client
   sync has passed `scripts/native_local_server_probe.ts`.
@@ -325,10 +327,7 @@ Core design and freeze documents:
 - [Codex Adapter Event Coverage](./docs/codex-event-coverage.md)
 - [Provider Adapter Maintenance](./docs/provider-adapter-maintenance.md)
 - [Provider Capability Matrix](./docs/provider-capability-matrix.md)
-- [Provider Capability Protocol Draft](./docs/provider-capability-protocol-draft.md)
 - [Architecture Benchmark (中文)](./docs/architecture-benchmark.zh-CN.md)
 - [Session 入口与权限边界（中文）](./docs/session-entry-capability-boundary.zh-CN.md)
-- [PTY-first 进度审计（中文）](./docs/pty-first-progress-audit.zh-CN.md)
-- [Protocol Freeze Status](./docs/protocol-freeze-status.md)
 - [Release Checklist](./docs/release-checklist.md)
 - [UI 回归清单（中文）](./docs/ui-regression-checklist.zh-CN.md)

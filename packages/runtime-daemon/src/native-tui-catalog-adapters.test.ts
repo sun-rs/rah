@@ -31,5 +31,15 @@ test("default adapters register native TUI model catalogs for supported provider
       providers: ["opencode"],
       canHotSwitch: false,
     },
+    {
+      id: "codex",
+      providers: ["codex"],
+      canHotSwitch: true,
+    },
+    {
+      id: "opencode",
+      providers: ["opencode"],
+      canHotSwitch: true,
+    },
   ]);
 });

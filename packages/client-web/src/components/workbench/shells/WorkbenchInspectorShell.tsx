@@ -29,6 +29,8 @@ export function WorkbenchInspectorShell(props: {
         title="Inspector"
         hideHeader
         modal={false}
+        floatingClose="panel"
+        floatingCloseLabel="Collapse inspector"
       >
         {props.content}
       </Sheet>

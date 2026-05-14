@@ -49,8 +49,8 @@ function runtimeKindLabel(kind: SessionRuntimeDescriptor["kind"]): string {
       return "Native cloud remote";
     case "internal_experimental":
       return "Internal experimental";
-    case "legacy_structured":
-      return "Legacy structured";
+    case "provider_control":
+      return "Provider control";
   }
 }
 
@@ -82,8 +82,8 @@ function runtimeLiveSourceLabel(
       return "provider server";
     case "provider_history":
       return "provider history";
-    case "rah_structured":
-      return "RAH structured";
+    case "rah_control":
+      return "RAH control";
     case undefined:
       return "Unavailable";
   }

@@ -75,8 +75,9 @@ Primary implementation files:
 
 - `packages/runtime-daemon/src/claude-session-files.ts`
 - `packages/runtime-daemon/src/claude-stored-history-adapter.ts`
-- `packages/runtime-daemon/src/legacy-structured/claude-live-client.ts`
-- `packages/runtime-daemon/src/legacy-structured/claude-structured-adapter.ts`
+- `packages/runtime-daemon/src/native-tui-claude-provider-handler.ts`
+- `packages/runtime-daemon/src/zellij-mux-backend.ts`
+- `packages/runtime-daemon/src/runtime-terminal-coordinator.ts`
 
 ### Stored history
 
@@ -97,30 +98,34 @@ Current filtering explicitly ignores:
 
 ### Live
 
-Claude live follows the paseo-style SDK route instead of raw CLI text parsing:
+Claude live currently uses the zellij/TUI mux fallback, not the removed SDK/headless structured
+adapter path:
 
-- `@anthropic-ai/claude-agent-sdk`
-- minimal live session
-- permission request / response bridge
-- replay -> live upgrade
-- read/write tool flow
-- native rename against Claude stored session files
-- mode catalog roles for `default` / `acceptEdits` / `bypassPermissions` / `plan`
+- RAH starts the real Claude Code TUI inside a daemon-owned zellij pane.
+- local Terminal, Web TUI, PWA, and Canvas attach to that same TUI surface when explicitly requested.
+- structured Chat is mirrored from Claude's JSONL transcript, not from ANSI screen scraping.
+- runtime model/permission changes are not advertised after launch; users should use Claude's native
+  TUI controls for runtime-only private state.
+- startup permission/model/effort options are best-effort launch enhancements.
 
 ### Known operational lessons
 
 - Claude project/session discovery must tolerate project path aliasing such as `/var/...` vs
   `/private/var/...`.
-- Claude permission handling should be treated as a first-class bridge concern, not an afterthought.
+- Claude zellij prompt injection must be guarded by observed composer readiness; blindly sending
+  `Esc` or prompt text while an MCP tool is blocking can wedge the TUI.
+- Council listening pause for Claude should use the RAH MCP soft-pause path when possible, not a
+  raw keyboard interrupt.
 
 ### Verification
 
 - `claude-session-files.test.ts`
-- `claude-adapter.test.ts`
+- `claude-wrapper-home.test.ts`
+- `zellij-tui-runtime.test.ts`
 - `test:smoke:claude-flow`
 - `test:smoke:claude-browser`
 
-## 6. Codex Lessons That Generalize
+## 5. Codex Lessons That Generalize
 
 Codex remains the reference adapter, but some of the hardest-earned lessons are generic:
 
@@ -133,7 +138,7 @@ Codex remains the reference adapter, but some of the hardest-earned lessons are 
   adapter before the first user turn is sent; frontend-side conversion to provider-native startup
   args is not allowed.
 
-## 7. When To Add A New Coverage Doc
+## 6. When To Add A New Coverage Doc
 
 Add a provider-specific coverage document when all of the following are true:
 

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
 import * as Dialog from "@radix-ui/react-dialog";
 import { Check, ChevronDown, ChevronRight, History, ListFilter, Pencil, PlusCircle, Search, Trash2, X } from "lucide-react";
@@ -319,17 +319,26 @@ function SessionRow(props: {
   const live = props.liveSummary !== undefined;
   const metaLabel = historyMetaLabel(props.session);
   const metaTitle = historyMetaTitle(props.session);
+  const activate = () => props.onActivate(props.session);
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      activate();
+    }
+  };
 
   return (
-    <div className="w-full rounded-lg border border-transparent px-3 py-2 transition-colors hover:bg-[var(--app-bg)] hover:border-[var(--app-border)] text-[var(--app-hint)]">
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={activate}
+      onKeyDown={handleKeyDown}
+      className="w-full cursor-pointer rounded-lg border border-transparent px-3 py-2 text-[var(--app-hint)] transition-colors hover:border-[var(--app-border)] hover:bg-[var(--app-bg)] focus:outline-none focus:ring-1 focus:ring-[var(--ring)]"
+      data-provider-session-id={props.session.providerSessionId}
+      data-session-source={props.session.source ?? "provider_history"}
+    >
       <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
-        <button
-          type="button"
-          onClick={() => props.onActivate(props.session)}
-          className="min-w-0 flex-1 text-left"
-          data-provider-session-id={props.session.providerSessionId}
-          data-session-source={props.session.source ?? "provider_history"}
-        >
+        <div className="min-w-0 flex-1 text-left">
           <div className="flex items-center gap-2 min-w-0">
             <ProviderLogo provider={props.session.provider} className="h-5 w-5" />
             <span className="text-sm font-medium truncate text-[var(--app-fg)]">
@@ -344,7 +353,7 @@ function SessionRow(props: {
               {props.session.rootDir ?? props.session.cwd}
             </div>
           ) : null}
-        </button>
+        </div>
         <div className="flex items-center justify-end gap-2 shrink-0">
           {live ? (
             <span className="inline-flex rounded-full border border-blue-500/20 bg-blue-500/10 px-2 py-0.5 text-[11px] font-medium text-blue-600 dark:text-blue-400">
@@ -370,7 +379,10 @@ function SessionRow(props: {
           </span>
           <button
             type="button"
-            onClick={() => props.onRequestRemove(props.session)}
+            onClick={(event) => {
+              event.stopPropagation();
+              props.onRequestRemove(props.session);
+            }}
             className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-danger)]"
             aria-label="Delete session"
             title="Delete session"

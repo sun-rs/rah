@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import type { ProviderModelCatalog } from "@rah/runtime-protocol";
 import { EventBus } from "./event-bus";
-import { OpenCodeAdapter } from "./legacy-structured/opencode-structured-adapter";
+import { OpenCodeAdapter } from "./provider-control/opencode-structured-adapter";
 import { startOpenCodeServer } from "./opencode-api";
 import {
   interruptOpenCodeLiveSession,
@@ -13,7 +13,7 @@ import {
   sendInputToOpenCodeLiveSession,
   setOpenCodeLiveSessionMode,
   type LiveOpenCodeSession,
-} from "./legacy-structured/opencode-live-client";
+} from "./provider-control/opencode-live-client";
 import { createOpenCodeActivityState } from "./opencode-activity";
 import { PtyHub } from "./pty-hub";
 import { SessionStore } from "./session-store";

@@ -256,6 +256,10 @@
 }
 
 @layer utilities {
+  body:has([role="dialog"]) .workbench-fixed-sidebar-toggle {
+    display: none !important;
+  }
+
   .scrollbar-stable {
     scrollbar-gutter: stable both-edges;
   }

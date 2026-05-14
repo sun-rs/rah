@@ -2,7 +2,7 @@
 
 日期：2026-05-09
 
-目的：验证 `refactor/native-local-server-core` 分支的真实 provider runtime 路线。自动 smoke 能证明 RAH 的协议、daemon lifecycle、mock provider、browser recovery、Codex/OpenCode native local-server probes 和 Claude zellij launch/exit；真实 CLI QA 用来覆盖账号、额度、官方 TUI 菜单、权限弹窗、长任务、真实跨客户端同步和移动端输入这些无法稳定 mock 的部分。
+目的：验证当前 `main` 的真实 provider runtime 路线。自动 smoke 能证明 RAH 的协议、daemon lifecycle、mock provider、browser recovery、Codex/OpenCode native local-server probes 和 Claude zellij launch/exit；真实 CLI QA 用来覆盖账号、额度、官方 TUI 菜单、权限弹窗、长任务、真实跨客户端同步和移动端输入这些无法稳定 mock 的部分。
 
 维护边界：Core live QA 只覆盖 Codex、Claude、OpenCode。Codex/OpenCode 默认走 `native_local_server`；Claude 默认走 `zellij_tui` / `tui_mux_fallback`。Gemini/Kimi CLI 一等支持已移除，不再作为 live、history-only、diagnostics 或默认 QA 对象。低频 Gemini/Kimi/Grok/DeepSeek 等 API-key 模型优先通过 OpenCode + API provider / 中转站验证。
 

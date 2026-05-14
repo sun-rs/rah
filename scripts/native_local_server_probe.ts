@@ -6,7 +6,7 @@ import path, { dirname } from "node:path";
 import readline from "node:readline";
 import { WebSocket } from "ws";
 import { createCodexAppServerClient } from "../packages/runtime-daemon/src/codex-app-server-client";
-import { runtimeDiagnosticsForOpenCodeServer } from "../packages/runtime-daemon/src/legacy-structured/opencode-live-client";
+import { runtimeDiagnosticsForOpenCodeServer } from "../packages/runtime-daemon/src/provider-control/opencode-live-client";
 import {
   abortOpenCodeSession,
   archiveOpenCodeSession,

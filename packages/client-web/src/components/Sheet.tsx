@@ -1,5 +1,5 @@
 import * as Dialog from "@radix-ui/react-dialog";
-import { X } from "lucide-react";
+import { PanelRight, X } from "lucide-react";
 import type { ReactNode } from "react";
 
 export function Sheet(props: {
@@ -11,6 +11,8 @@ export function Sheet(props: {
   headerRight?: ReactNode;
   hideHeader?: boolean;
   modal?: boolean;
+  floatingClose?: "panel" | "x";
+  floatingCloseLabel?: string;
 }) {
   return (
     <Dialog.Root open={props.open} onOpenChange={props.onOpenChange} modal={props.modal ?? true}>
@@ -24,7 +26,21 @@ export function Sheet(props: {
           } flex flex-col`}
         >
           {props.hideHeader ? (
-            <Dialog.Title className="sr-only">{props.title}</Dialog.Title>
+            <>
+              <Dialog.Title className="sr-only">{props.title}</Dialog.Title>
+              {props.floatingClose ? (
+                <Dialog.Close asChild>
+                  <button
+                    type="button"
+                    className="icon-click-feedback fixed right-[max(1rem,env(safe-area-inset-right))] top-[calc(env(safe-area-inset-top,0px)+0.75rem)] z-[60] inline-flex h-8 w-8 items-center justify-center rounded-md border border-[var(--app-border)] bg-[var(--app-bg)]/90 text-[var(--app-hint)] shadow-sm backdrop-blur transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
+                    aria-label={props.floatingCloseLabel ?? "Close"}
+                    title={props.floatingCloseLabel ?? "Close"}
+                  >
+                    {props.floatingClose === "panel" ? <PanelRight size={18} /> : <X size={16} />}
+                  </button>
+                </Dialog.Close>
+              ) : null}
+            </>
           ) : (
             <div className="flex items-center justify-between border-b border-[var(--app-border)] px-4 py-3 shrink-0">
               <Dialog.Title className="text-sm font-semibold text-[var(--app-fg)]">

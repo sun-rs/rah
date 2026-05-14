@@ -1,12 +1,12 @@
 # Session 入口与权限边界
 
-本文锁定入口与权限边界。当前 `refactor/native-local-server-core` 分支已把 live 主链路收敛为 provider runtime 分层：
+本文锁定入口与权限边界。当前 `main` 已把 live 主链路收敛为 provider runtime 分层：
 
 - Codex / OpenCode 默认走 `native_local_server`，由 provider 官方本地 server 管 live session，RAH 通过结构化协议发送 turn、订阅事件、执行 stop/abort。
 - Claude 默认走 `tui_mux_fallback`，由 zellij/TUI mux 保持原生 TUI 工作现场，RAH 的结构化 Chat 来自 Claude 原厂 JSONL mirror。
 - zellij 不再是所有 provider 的统一默认主线，而是 Claude 当前默认路径和未来无 server provider 的 fallback。
 
-旧 terminal handoff / wrapper-control 运行时代码已经删除；仅 legacy structured control plane 作为内部测试/兼容面保留。
+旧 terminal handoff / wrapper-control 运行时代码已经删除。公开入口不再暴露第三条 live 主链路；`liveBackend: "structured"` 只允许测试注入 adapter 使用。
 
 2026-05-07 后的维护边界进一步收敛为：
 
@@ -21,7 +21,7 @@
 | `rah codex` / `rah opencode` | provider native local server + official client | 请求 daemon 创建 native local server session，然后本地终端用官方 remote/attach client 接入同一 provider session | 有，provider client view |
 | `rah claude` | zellij/TUI mux fallback + terminal attach client | 请求 daemon 启动 Claude TUI，然后当前终端 attach 到 zellij surface | 有，TUI owner surface |
 | `rah codex/claude/opencode resume <providerSessionId>` | 按 provider runtime 选择 owner | 请求 daemon resume 指定 provider session；Codex/OpenCode 接 native server，Claude 接 zellij fallback | Core provider 有 |
-| `web new` | 按 provider runtime 选择 owner | Codex/OpenCode 走 structured native server；Claude 走 zellij/TUI fallback；可在 Chat/TUI 视图间切换 | Core provider 有 |
+| `web new` | 按 provider runtime 选择 owner | Codex/OpenCode 走 provider native local server；Claude 走 zellij/TUI fallback；可在 Chat/TUI 视图间切换 | Core provider 有 |
 | `web resume` / claim history | 按 provider runtime 选择 owner | Web 从历史 session claim/resume 成 live session；只读浏览不触发 live | Core provider 有 |
 
 关键边界：
@@ -66,14 +66,14 @@ Native local server / TUI fallback 分层后，权限、模型、effort、thinki
 - `SessionModeDescriptor.role` 是 UI 语义层；provider 原生 `id` 是提交给 adapter 的 opaque value。
 - `SessionModeDescriptor.applyTiming` 只描述增强能力的时机，不是 core session 生命周期。
 
-## 4. Legacy structured 参考
+## 4. Structured test surface 参考
 
-显式 `liveBackend: "structured"` 是旧 adapter control plane。公开 HTTP API 拒绝该值；只允许测试注入 adapter 直接调用 engine 时使用；`preferStoredReplay` 的只读历史 replay 不受此限制。旧 terminal wrapper handoff 运行时代码已经删除。保留 legacy structured surface 的目的只是测试/兼容，不是继续维护第三条 live 主链路。它们的权限/模型能力大致如下，但不再是 native local-server / TUI mux core 的承诺：
+显式 `liveBackend: "structured"` 是测试 adapter control plane。公开 HTTP API 拒绝该值；只允许测试注入 adapter 直接调用 engine 时使用；`preferStoredReplay` 的只读历史 replay 不受此限制。旧 terminal wrapper handoff 和 Claude SDK/headless structured live 代码已经删除。保留 structured test surface 的目的只是让 RuntimeEngine 可被 fake adapter 直接验证，不是继续维护第三条 live 主链路。
 
-| Provider | Legacy structured 能力边界 |
+| Provider | Structured test / provider-server 能力边界 |
 | --- | --- |
-| Codex | app-server / JSON-RPC structured live，支持较完整的 approval / interrupt / mode / model 控制。 |
-| Claude | SDK structured live，支持 SDK permission callback 和部分 model/effort 控制。 |
-| OpenCode | ACP/API structured live，permission ruleset 和 model variant 通过 OpenCode 能力实现。 |
+| Codex | 当前生产 `native_local_server` control adapter 使用 app-server / JSON-RPC，支持 approval / interrupt / mode / model 控制。 |
+| Claude | 没有 SDK/headless structured live 生产路径；Claude live 只走 zellij/TUI fallback。 |
+| OpenCode | 当前生产 `native_local_server` control adapter 使用 OpenCode serve/session API，model variant 通过 OpenCode 能力实现。 |
 
-这个 legacy path 可以继续被测试覆盖，但新增产品能力必须优先保证 Codex/OpenCode native local server 与 Claude tui_mux_fallback 主线，而不是扩大旧 structured live 适配面。
+新增产品能力必须优先保证 Codex/OpenCode native local server 与 Claude tui_mux_fallback 主线，而不是扩大 structured test surface。

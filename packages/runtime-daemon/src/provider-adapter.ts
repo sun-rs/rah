@@ -54,9 +54,9 @@ export type ProviderCapabilityView<TCapability> = Pick<ProviderAdapterIdentity, 
 
 export interface ProviderStructuredLifecycleAdapter {
   /**
-   * Legacy/enhancement structured live lifecycle. PTY-first live sessions do
-   * not use this path; they use native TUI launch specs plus the terminal
-   * runtime instead.
+   * Provider control lifecycle for adapters that expose a structured
+   * provider-server client. Native TUI fallback sessions use launch specs plus
+   * the terminal runtime instead.
    */
   startSession?(request: StartSessionRequest): StartSessionResponse | Promise<StartSessionResponse>;
   resumeSession?(request: ResumeSessionRequest): ResumeSessionResponse | Promise<ResumeSessionResponse>;

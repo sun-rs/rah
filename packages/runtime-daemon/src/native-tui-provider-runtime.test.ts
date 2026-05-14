@@ -106,7 +106,7 @@ describe("NativeTuiProviderRuntime", () => {
     const forbiddenProviderModules = [
       "./provider-adapter",
       "./runtime-structured-provider-coordinator",
-      "./legacy-structured/runtime-structured-provider-coordinator",
+      "./provider-control/runtime-structured-provider-coordinator",
       "./claude-session-files",
       "./codex-rollout-activity",
       "./codex-stored-sessions",
@@ -158,14 +158,12 @@ describe("NativeTuiProviderRuntime", () => {
     const providerCapabilityBindingsSource = readSource("./provider-capability-bindings.ts");
     const providerAdapterSource = readSource("./provider-adapter.ts");
     const runtimeSessionLifecycleSource = readSource("./runtime-session-lifecycle.ts");
-    const structuredCoordinatorSource = readSource("./legacy-structured/runtime-structured-provider-coordinator.ts");
-    const defaultStructuredAdaptersSource = readSource("./legacy-structured/default-structured-provider-adapters.ts");
+    const structuredCoordinatorSource = readSource("./provider-control/runtime-structured-provider-coordinator.ts");
     const defaultProviderAdaptersSource = readSource("./default-provider-adapters.ts");
-    const codexStructuredAdapterSource = readSource("./legacy-structured/codex-structured-adapter.ts");
+    const codexStructuredAdapterSource = readSource("./provider-control/codex-structured-adapter.ts");
     const codexStoredHistoryAdapterSource = readSource("./codex-stored-history-adapter.ts");
-    const claudeStructuredAdapterSource = readSource("./legacy-structured/claude-structured-adapter.ts");
     const claudeStoredHistoryAdapterSource = readSource("./claude-stored-history-adapter.ts");
-    const openCodeStructuredAdapterSource = readSource("./legacy-structured/opencode-structured-adapter.ts");
+    const openCodeStructuredAdapterSource = readSource("./provider-control/opencode-structured-adapter.ts");
     const openCodeStoredHistoryAdapterSource = readSource("./opencode-stored-history-adapter.ts");
     const providerAdapterInterface = providerAdapterSource.slice(
       providerAdapterSource.indexOf("export interface ProviderAdapter\n"),
@@ -173,9 +171,6 @@ describe("NativeTuiProviderRuntime", () => {
     const sessionListSource = readSource("./runtime-session-list.ts");
     assert.match(engineSource, /RuntimeStructuredProviderCoordinator/);
     assert.match(engineSource, /createDefaultProviderAdapters/);
-    assert.doesNotMatch(defaultProviderAdaptersSource, /createDefaultLegacyStructuredProviderAdapters/);
-    assert.match(defaultStructuredAdaptersSource, /CodexAdapter/);
-    assert.match(defaultStructuredAdaptersSource, /OpenCodeAdapter/);
     for (const removedRootAdapter of [
       "./codex-adapter.ts",
       "./claude-adapter.ts",
@@ -184,11 +179,10 @@ describe("NativeTuiProviderRuntime", () => {
       assert.equal(
         existsSync(new URL(removedRootAdapter, import.meta.url)),
         false,
-        `${removedRootAdapter} should not re-export legacy structured adapters from the runtime root`,
+        `${removedRootAdapter} should not re-export provider control adapters from the runtime root`,
       );
     }
     assert.match(codexStructuredAdapterSource, /class CodexAdapter/);
-    assert.match(claudeStructuredAdapterSource, /class ClaudeAdapter/);
     assert.match(openCodeStructuredAdapterSource, /class OpenCodeAdapter/);
     assert.match(defaultProviderAdaptersSource, /new CodexAdapter/);
     assert.doesNotMatch(defaultProviderAdaptersSource, /new ClaudeAdapter/);
@@ -196,7 +190,7 @@ describe("NativeTuiProviderRuntime", () => {
     assert.match(defaultProviderAdaptersSource, /CodexStoredHistoryAdapter/);
     assert.match(defaultProviderAdaptersSource, /ClaudeStoredHistoryAdapter/);
     assert.match(defaultProviderAdaptersSource, /OpenCodeStoredHistoryAdapter/);
-    assert.match(engineSource, /legacy-structured\/runtime-structured-provider-coordinator/);
+    assert.match(engineSource, /provider-control\/runtime-structured-provider-coordinator/);
     assert.match(engineSource, /structuredProviders/);
     assert.match(engineSource, /structuredLiveAdaptersByProvider/);
     assert.match(engineSource, /modeAdaptersByProvider/);
@@ -272,9 +266,6 @@ describe("NativeTuiProviderRuntime", () => {
     assert.match(claudeStoredHistoryAdapterSource, /ProviderStoredHistoryAdapter/);
     assert.match(claudeStoredHistoryAdapterSource, /listStoredSessions/);
     assert.match(claudeStoredHistoryAdapterSource, /getSessionHistoryPage/);
-    assert.doesNotMatch(claudeStructuredAdapterSource, /listStoredSessions/);
-    assert.doesNotMatch(claudeStructuredAdapterSource, /getSessionHistoryPage/);
-    assert.doesNotMatch(claudeStructuredAdapterSource, /removeStoredSession/);
     assert.match(openCodeStoredHistoryAdapterSource, /ProviderStoredHistoryAdapter/);
     assert.match(openCodeStoredHistoryAdapterSource, /listStoredSessions/);
     assert.match(openCodeStoredHistoryAdapterSource, /getSessionHistoryPage/);
@@ -313,18 +304,23 @@ describe("NativeTuiProviderRuntime", () => {
     assert.doesNotMatch(sessionListSource, /ProviderAdapter/);
   });
 
-  test("keeps legacy structured live clients out of the runtime root", () => {
-    for (const provider of ["codex", "claude", "opencode"]) {
+  test("keeps provider-server live clients out of the runtime root", () => {
+    for (const provider of ["codex", "opencode"]) {
       assert.equal(
         existsSync(new URL(`./${provider}-live-client.ts`, import.meta.url)),
         false,
-        `${provider} structured live client should live under legacy-structured/`,
+        `${provider} provider-server live client should live under provider-control/`,
       );
       assert.equal(
-        existsSync(new URL(`./legacy-structured/${provider}-live-client.ts`, import.meta.url)),
+        existsSync(new URL(`./provider-control/${provider}-live-client.ts`, import.meta.url)),
         true,
-        `${provider} structured live client should remain available as explicit legacy code`,
+        `${provider} provider-server live client should remain available under the explicit control-plane directory`,
       );
     }
+    assert.equal(
+      existsSync(new URL("./provider-control/claude-live-client.ts", import.meta.url)),
+      false,
+      "Claude SDK/headless structured live client is not part of the current runtime",
+    );
   });
 });

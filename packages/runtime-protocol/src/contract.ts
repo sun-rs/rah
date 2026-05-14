@@ -187,7 +187,7 @@ const PROVIDER_RUNTIME_KINDS = new Set<ProviderRuntimeKind>([
   "stream_json_fifo",
   "native_cloud_remote",
   "internal_experimental",
-  "legacy_structured",
+  "provider_control",
 ]);
 const PROTOCOL_STABILITIES = new Set<ProtocolStability>([
   "official_stable",
@@ -199,7 +199,7 @@ const RUNTIME_LIVE_SOURCES = new Set<RuntimeLiveSource>([
   "provider_server",
   "provider_history",
   "tui_mux",
-  "rah_structured",
+  "rah_control",
 ]);
 const RUNTIME_TUI_ROLES = new Set<RuntimeTuiRole>([
   "client_view",

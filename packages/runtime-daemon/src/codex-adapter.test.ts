@@ -4,7 +4,7 @@ import { chmodSync, mkdtempSync, mkdirSync, rmSync, utimesSync, writeFileSync } 
 import os from "node:os";
 import path from "node:path";
 import { validateProviderModelCatalog } from "@rah/runtime-protocol";
-import { CodexAdapter } from "./legacy-structured/codex-structured-adapter";
+import { CodexAdapter } from "./provider-control/codex-structured-adapter";
 import { CodexStoredHistoryAdapter } from "./codex-stored-history-adapter";
 import { DebugAdapter } from "./debug-adapter";
 import { EventBus } from "./event-bus";

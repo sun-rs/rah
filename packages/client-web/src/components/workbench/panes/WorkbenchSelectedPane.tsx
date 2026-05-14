@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import type { ContextUsage, PermissionResponseRequest, ProviderModelCatalog, SessionSummary } from "@rah/runtime-protocol";
-import { Archive, ArrowUp, Ellipsis, EyeOff, Info, Menu, PanelRight, PencilLine, Plus, Trash2, X } from "lucide-react";
+import { Archive, ArrowUp, Ellipsis, EyeOff, Info, Menu, PencilLine, Plus, Trash2, X } from "lucide-react";
 import { providerLabel } from "../../../types";
 import type { SessionProjection } from "../../../types";
 import { TerminalPane } from "../../../TerminalPane";
@@ -11,11 +11,11 @@ import { TokenizedTextarea } from "../../TokenizedTextarea";
 import { canSubmitComposerInput, COMPOSER_LAYOUT, type ComposerSurface } from "../../../composer-contract";
 import {
   HEADER_ACTION_GROUP_CLASS,
-  HEADER_ICON_BUTTON_BASE_CLASS,
   HEADER_ICON_BUTTON_CLASS,
   HEADER_SEGMENTED_BUTTON_BASE_CLASS,
   HEADER_SEGMENTED_CONTROL_CLASS,
   HEADER_TEXT_BUTTON_CLASS,
+  headerRightPaddingClass,
 } from "../header-button-styles";
 import type { InlineWorkbenchNotice } from "../../../workbench-notice-contract";
 import { SessionInfoDialog } from "../dialogs/SessionInfoDialog";
@@ -244,7 +244,6 @@ export function WorkbenchSelectedPane(props: {
     sendPending: props.sendPending,
     nativeTuiPromptState: nativeTui?.promptState,
   });
-  const showInspectorToggle = props.showInspectorToggle !== false;
   const claimComposerButtonClassName =
     "inline-flex h-8 shrink-0 items-center justify-center rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground transition-colors hover:opacity-90 disabled:opacity-50";
   const renderClaimComposer = (args: {
@@ -374,7 +373,7 @@ export function WorkbenchSelectedPane(props: {
   return (
     <div ref={rootRef} className="flex h-full min-h-0 flex-col">
       <header
-        className="relative z-20 flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[var(--app-border)] bg-[var(--app-bg)]/80 pl-4 pr-14 backdrop-blur-sm"
+        className={`relative z-20 flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[var(--app-border)] bg-[var(--app-bg)]/80 pl-4 backdrop-blur-sm ${headerRightPaddingClass(props.rightSidebarOpen)}`}
       >
         <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
           <button
@@ -467,7 +466,7 @@ export function WorkbenchSelectedPane(props: {
               </div>
             )}
             </div>
-          </div>
+        </div>
         <div className={HEADER_ACTION_GROUP_CLASS}>
           {nativeTuiAvailable ? (
             <div className={HEADER_SEGMENTED_CONTROL_CLASS}>
@@ -581,35 +580,9 @@ export function WorkbenchSelectedPane(props: {
               <span className="hidden min-[900px]:inline">Hide</span>
             </button>
           ) : null}
-          {showInspectorToggle ? (
-            <button
-              type="button"
-              className={`hidden ${HEADER_ICON_BUTTON_BASE_CLASS} md:inline-flex`}
-              onClick={props.onToggleInspector ?? props.onExpandInspector}
-              aria-label={props.rightSidebarOpen ? "Collapse inspector" : "Expand inspector"}
-              title={props.rightSidebarOpen ? "Collapse inspector" : "Expand inspector"}
-            >
-              <PanelRight size={16} />
-            </button>
-          ) : null}
-          {showInspectorToggle ? (
-            <button
-              type="button"
-              className={`inline-flex ${HEADER_ICON_BUTTON_BASE_CLASS} md:hidden`}
-              onClick={props.onOpenRight}
-              aria-label="Open inspector"
-            >
-              <PanelRight size={16} />
-            </button>
-          ) : null}
         </div>
       </header>
 
-      {props.interactionNotice ? (
-        <div className="shrink-0 border-b border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-4 py-3 text-sm text-[var(--app-hint)]">
-          {props.interactionNotice.message}
-        </div>
-      ) : null}
       {props.historyNotice ? (
         <div className="shrink-0 border-b border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-4 py-2 text-xs text-[var(--app-hint)]">
           {props.historyNotice.message}

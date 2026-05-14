@@ -762,7 +762,7 @@ describe("RuntimeEngine", () => {
     assert.equal(later.shutdownCalls, 1);
   });
 
-  test("routes claude stored replay through ClaudeAdapter instead of DebugAdapter", async () => {
+  test("routes claude stored replay through the stored-history adapter instead of DebugAdapter", async () => {
     writeFileSync(
       path.join(projectDir, "session-1.jsonl"),
       [
@@ -863,7 +863,7 @@ describe("RuntimeEngine", () => {
     await engine.shutdown();
   });
 
-  test("production engine rejects explicit legacy structured live backend outside injected adapters", async () => {
+  test("production engine rejects explicit provider control live backend outside injected adapters", async () => {
     const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-structured-live-disabled-"));
     const engine = new RuntimeEngine();
     try {

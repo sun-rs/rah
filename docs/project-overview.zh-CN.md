@@ -104,7 +104,7 @@ npm install
 ### 4.2 启动统一前后台入口
 
 ```bash
-npm run serve:workbench
+node bin/rah.mjs restart --no-open
 ```
 
 然后打开：
@@ -121,6 +121,16 @@ http://127.0.0.1:43111/
 - PTY 通道
 
 都由 daemon 同源提供。
+
+日常代码更新后也使用 `restart`。它会重新 build Web、停止当前 managed daemon，并从当前 checkout 拉起新的 `43111`。
+
+如果只是后端改动，不需要重建 Web bundle：
+
+```bash
+node bin/rah.mjs restart --no-build --no-open
+```
+
+`npm run serve:workbench` 仍可用于开发，但不是普通用户层面的推荐入口。
 
 ### 4.3 开发模式
 
@@ -402,138 +412,31 @@ Codex 现在已经是 reference adapter，而不是 demo：
 - 工具调用或文件读写
 - close 后 recent / stored 恢复
 
-## 8. 未完成
+## 8. 当前 1.0 边界
 
-当前还没有完成的部分同样需要明确。
+RAH 当前 `main` 可以按 1.0 RC 的边界维护：
 
-### 8.1 v1 冻结决策尚未完全锁死
+- canonical event / timeline / history paging 是稳定主线。
+- Codex、Claude、OpenCode 是唯一一等 live provider。
+- Codex/OpenCode 走 provider native local server；Claude 走 zellij/TUI fallback。
+- Gemini/Kimi/Grok/DeepSeek/GLM/MiniMax 等低频模型通过 OpenCode/API provider 承载。
+- Debug/fake provider 只服务测试和 UI exercise，不是产品 provider。
 
-虽然已经有 `protocol-freeze-status.md`，但还没有形成最终发布级“冻结决定”。
+不承诺的内容也必须清楚：
 
-### 8.2 client-web store ownership 已基本收口
+- 不替 provider TUI 复刻所有 `/command` 和私有菜单。
+- 不用 ANSI/TUI screen 反推 structured Chat。
+- 不保证任意机器只要安装 CLI 就能通过真实 provider smoke；真实 smoke 依赖账号、额度、网络和 provider 版本。
+- 不提供对外公网级认证模型；当前定位仍是本机/局域网个人工作台。
 
-这条线现在已经不再是主要结构债。
+## 9. 下一步维护重点
 
-`packages/client-web` 当前已经把 ownership 明确分到：
+- 保持 `ProviderAdapter` identity-only，新增行为必须走显式 capability slice。
+- 新增 provider 或新能力时优先补 provider-specific translator/test，避免修改前端公共逻辑。
+- 默认门禁保持环境无关；真实 provider/browser/PWA 测试作为发布前专门 gate。
+- 继续压缩旧命名和旧测试入口，防止为了让过期测试通过而回滚正确产品边界。
 
-- bootstrap
-- sync / transport
-- projections
-- workspace
-- history
-- history bootstrap / paging / selection sync
-- session lifecycle / commands / startup
-
-`useSessionStore.ts` 现在更接近 orchestration shell，而不是继续承载整团混合逻辑。
-
-剩余工作主要是：
-
-- 少量 local wrapper / deps bridge 的继续压缩
-- 持续防止新逻辑回流进 `useSessionStore.ts`
-
-详细边界见：
-
-- [client-web-store-ownership.zh-CN.md](./client-web-store-ownership.zh-CN.md)
-
-### 8.3 浏览器级自动化回归还没成为正式门禁
-
-当前核心测试强在：
-
-- contract
-- runtime
-- Codex fixtures
-
-但这些 smoke 还没有完全升成发布/CI 的标准门禁。
-
-### 8.4 Codex PTY 双向接管未实现
-
-当前 RAH 的 1.0 边界仍然是：
-
-- 结构化 transcript / tool / permission / history / claim / live upgrade
-
-而不是：
-
-- Codex PTY 主机级双向接管
-
-这件事如果要做，应被视为独立能力线，而不是当前 1.0 的必备组成。
-
-### 8.5 远程访问安全模型未收紧
-
-当前更偏开发/个人设备场景：
-
-- 同源入口已经稳定
-- 但对外暴露的安全和认证边界还没进入正式产品级阶段
-
-## 9. 1.0 边界与下一步
-
-### 9.1 现在是否可以视为 1.0
-
-现在更准确的判断是：
-
-- **契约层：1.0**
-- **多 provider 结构化工作台：1.0**
-
-如果把 1.0 定义为：
-
-- canonical events 稳定
-- Codex / Claude / OpenCode 主线打通
-- history / replay / claim / live upgrade 成立
-- UI 不再暴露 provider 内部噪声
-
-那么 RAH 现在已经可以视为正式 1.0。
-
-但如果把 1.0 定义成：
-
-- 所有 provider auth 都能预先可靠判断
-- Codex PTY 双向接管已经完成
-- 任何机器上只要装了 CLI 就能稳定 smoke
-
-那这个目标本身就不合理，也不是 hapi / paseo 现在真正承诺的边界。
-
-### 9.2 下一步
-
-如果继续沿主线推进，最合理的下一步不是继续做新 UI，而是：
-
-### 9.2.1 锁 v1 freeze decision
-
-把当前已经形成的 freeze candidate 明确写成“默认不改”的协议决策。
-
-### 9.2.2 把 smoke 更明确接入发布/CI 门禁
-
-默认门禁和 provider smoke 的分层已经明确，但还应继续工程化：
-
-- 默认门禁保持环境无关
-- provider smoke 在专门环境执行
-- 文档和 CI 规则保持一致
-
-### 9.2.3 继续补新的 provider adapter
-
-现在已经不是“先别补 provider”的阶段，而是：
-
-- 可以继续补新的真实 provider adapter
-- 同时继续收尾 store ownership 和门禁化
-
-重点不是视觉，而是验证这些产品状态：
-
-- no control
-- read-only replay
-- permission unavailable
-- connection issue
-- live resume / fallback rehydrate
-
-## 10. 设计判断
-
-从当前阶段来看，RAH 现在最强的不是视觉层，而是：
-
-- 契约层已经越来越接近可冻结
-- Codex 参考适配线已经能证明抽象不是空想
-- 前端现在主要是消费 canonical feed，而不是反向定义协议
-
-这说明项目已经从“探索期”进入“收敛期”。
-
-现在最重要的不是继续长更多功能，而是控制变量，把底层边界锁住。
-
-## 11. 阅读顺序建议
+## 10. 阅读顺序建议
 
 如果要按正确顺序理解当前项目，建议这样读：
 
@@ -543,8 +446,7 @@ Codex 现在已经是 reference adapter，而不是 demo：
 4. [Codex Adapter Event Coverage](./codex-event-coverage.md)
 5. [Provider Adapter Maintenance](./provider-adapter-maintenance.md)
 6. [架构对照与强化路线](./architecture-benchmark.zh-CN.md)
-7. [Protocol Freeze Status](./protocol-freeze-status.md)
-8. [Release Checklist](./release-checklist.md)
+7. [Release Checklist](./release-checklist.md)
 
 如果要动代码：
 

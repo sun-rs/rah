@@ -284,7 +284,7 @@ describe("startRahDaemon", () => {
     }
   });
 
-  test("rejects legacy structured live backend at the public HTTP boundary", async () => {
+  test("rejects provider control live backend at the public HTTP boundary", async () => {
     const start = await requestJson({
       port,
       path: "/api/sessions/start",
@@ -312,7 +312,7 @@ describe("startRahDaemon", () => {
       },
       body: {
         provider: "codex",
-        providerSessionId: "thread-legacy-structured",
+        providerSessionId: "thread-provider-control",
         cwd: tempHome,
         liveBackend: "structured",
       },

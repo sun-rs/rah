@@ -21,11 +21,11 @@ test("runtimeDescriptorForLiveBackend describes TUI mux fallback sessions", () =
   assert.equal(runtime.features?.structuredControl, "unsupported");
 });
 
-test("runtimeDescriptorForLiveBackend marks legacy structured sessions separately", () => {
+test("runtimeDescriptorForLiveBackend marks provider control sessions separately", () => {
   const runtime = runtimeDescriptorForLiveBackend({ provider: "codex", liveBackend: "structured" });
-  assert.equal(runtime.kind, "legacy_structured");
+  assert.equal(runtime.kind, "provider_control");
   assert.equal(runtime.protocolStability, "project_native");
-  assert.equal(runtime.liveSource, "rah_structured");
+  assert.equal(runtime.liveSource, "rah_control");
   assert.equal(runtime.tuiRole, "none");
   assert.equal(runtime.structuredLiveEvents, true);
   assert.equal(runtime.tuiContinuity, false);

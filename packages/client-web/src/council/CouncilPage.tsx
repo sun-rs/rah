@@ -8,16 +8,15 @@ import {
   ChevronDown,
   ChevronRight,
   CirclePause,
-  EyeOff,
   History,
   Info,
   Menu,
+  PanelRight,
   Plus,
   RefreshCw,
   Send,
   Square,
   Trash2,
-  Users,
   X,
 } from "lucide-react";
 import type {
@@ -33,6 +32,7 @@ import { SessionModelControls } from "../components/SessionModelControls";
 import { TokenizedTextarea } from "../components/TokenizedTextarea";
 import { WorkspacePicker } from "../components/WorkspacePicker";
 import { TerminalPane } from "../TerminalPane";
+import { Sheet } from "../components/Sheet";
 import { COMPOSER_LAYOUT } from "../composer-contract";
 import { resolveSessionModeControlState } from "../session-mode-ui";
 import { ConfirmDialog } from "../components/workbench/dialogs/ConfirmDialog";
@@ -40,6 +40,7 @@ import {
   HEADER_ACTION_GROUP_CLASS,
   HEADER_ICON_BUTTON_CLASS,
   HEADER_TEXT_BUTTON_CLASS,
+  headerRightPaddingClass,
 } from "../components/workbench/header-button-styles";
 import {
   councilAgentDraftToConfig,
@@ -50,7 +51,6 @@ import {
   type CouncilAgentDraft,
 } from "./council-ui-state";
 
-type CouncilPanel = "chat" | "agents";
 type CouncilMessage = CouncilRoomSnapshot["messages"][number];
 type CouncilDisplayItem =
   | { kind: "message"; message: CouncilMessage }
@@ -164,10 +164,6 @@ function councilDisplayItems(room: CouncilRoomSnapshot): CouncilDisplayItem[] {
 
 function catalogKey(provider: ProviderChoice, workspace: string): string {
   return `${provider}:${workspace}`;
-}
-
-function panelVisibilityClass(panel: CouncilPanel, activePanel: CouncilPanel): string {
-  return activePanel === panel ? "flex" : "hidden min-[900px]:flex";
 }
 
 function agentStatusClass(status: CouncilAgent["status"]): string {
@@ -422,7 +418,6 @@ export function CouncilPage(props: {
     createDefaultCouncilAgentDrafts(),
   );
   const [catalogs, setCatalogs] = useState<Record<string, ProviderModelCatalog>>({});
-  const [activePanel, setActivePanel] = useState<CouncilPanel>("chat");
   const [selectedTerminalAgentId, setSelectedTerminalAgentId] = useState<string | null>(null);
   const [openedTerminalAgentIds, setOpenedTerminalAgentIds] = useState<Set<string>>(new Set());
   const [collapsedAgentDraftIds, setCollapsedAgentDraftIds] = useState<Set<string>>(new Set());
@@ -435,7 +430,7 @@ export function CouncilPage(props: {
   const [historyDialogOpen, setHistoryDialogOpen] = useState(false);
   const [infoDialogOpen, setInfoDialogOpen] = useState(false);
   const [newRoomDialogOpen, setNewRoomDialogOpen] = useState(false);
-  const [councilSidebarOpen, setCouncilSidebarOpen] = useState(true);
+  const [councilSidebarOpen, setCouncilSidebarOpen] = useState(false);
   const [isCouncilWide, setIsCouncilWide] = useState(() =>
     typeof window === "undefined" ? false : window.matchMedia("(min-width: 900px)").matches,
   );
@@ -828,8 +823,7 @@ export function CouncilPage(props: {
       });
       await refreshRooms();
       setSelectedRoomId(response.room.room.id);
-      setActivePanel("chat");
-      setCouncilSidebarOpen(true);
+      setCouncilSidebarOpen(false);
       setNewRoomDialogOpen(false);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -1049,100 +1043,198 @@ export function CouncilPage(props: {
   }, [rooms]);
   const sendDisabled = !composer.trim();
 
-  const chatPanelClass =
-    `${panelVisibilityClass("chat", activePanel)} min-h-0 flex-1 flex-col bg-[var(--app-bg)]`;
+  const chatPanelClass = "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[var(--app-bg)]";
   const councilSidebarClass =
-    `${activePanel === "agents" ? "flex" : "hidden"} ${
-      councilSidebarOpen ? "min-[900px]:flex" : "min-[900px]:hidden"
-    } min-h-0 w-full flex-col overflow-hidden bg-[var(--app-subtle-bg)] min-[900px]:w-[clamp(20rem,28vw,28rem)] min-[900px]:shrink-0`;
-  const councilSidePanelVisible = activePanel === "agents";
-  const councilControlsVisible = councilSidePanelVisible || (isCouncilWide && councilSidebarOpen);
-  const councilSidebarButtonLabel =
-    councilControlsVisible ? "Hide agents" : "Show agents";
-
-  return (
-    <div className="flex h-full min-h-0 flex-col bg-[var(--app-bg)]">
-      <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[var(--app-border)] bg-[var(--app-bg)]/85 px-4 backdrop-blur-sm">
-        <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
-          <button
-            type="button"
-            className="icon-click-feedback inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] md:hidden"
-            onClick={props.onOpenLeft}
-            aria-label="Open sidebar"
-            title="Open sidebar"
-          >
-            <Menu size={18} />
-          </button>
-          {!props.sidebarOpen ? (
-            <button
-              type="button"
-              className="icon-click-feedback hidden h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] md:inline-flex"
-              onClick={props.onExpandSidebar}
-              aria-label="Expand sidebar"
-              title="Expand sidebar"
-            >
-              <Menu size={18} />
-            </button>
-          ) : null}
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-sm font-semibold text-[var(--app-fg)]">
-              {selectedRoom?.room.title ?? "Council"}
-            </div>
-            <div className="truncate text-xs text-[var(--app-hint)]">
-              {selectedRoom ? selectedRoom.room.workspace : "Workspace"}
-            </div>
+    `${councilSidebarOpen ? "hidden min-[900px]:flex" : "hidden"} min-h-0 w-[clamp(20rem,28vw,28rem)] shrink-0 flex-col overflow-hidden bg-[var(--app-subtle-bg)]`;
+  const councilSidebarButtonLabel = councilSidebarOpen ? "Hide agents" : "Show agents";
+  const agentsSidebarContent = (
+    <div className="flex h-full min-h-0 flex-col bg-[var(--app-subtle-bg)]">
+      <div className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[var(--app-border)] pl-4 pr-14">
+        <div className="min-w-0">
+          <div className="text-sm font-medium text-[var(--app-fg)]">Agents</div>
+          <div className="truncate text-xs text-[var(--app-hint)]">
+            {selectedRoom
+              ? `${selectedRoom.agents.length} agent${selectedRoom.agents.length === 1 ? "" : "s"}`
+              : "No running room selected"}
           </div>
         </div>
-        <div className={HEADER_ACTION_GROUP_CLASS}>
-          <button
-            type="button"
-            onClick={() => setHistoryDialogOpen(true)}
-            className={HEADER_ICON_BUTTON_CLASS}
-            aria-label="Open council rooms"
-            title="Council rooms"
-          >
-            <History size={14} />
-          </button>
-          <button
-            type="button"
-            onClick={() => setNewRoomDialogOpen(true)}
-            className={HEADER_ICON_BUTTON_CLASS}
-            title="New council room"
-            aria-label="New council room"
-          >
-            <Plus size={15} />
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              if (councilControlsVisible) {
-                setActivePanel("chat");
-                setCouncilSidebarOpen(false);
-                return;
-              }
-              setCouncilSidebarOpen(true);
-              setActivePanel("agents");
-            }}
-            className={HEADER_ICON_BUTTON_CLASS}
-            title={councilSidebarButtonLabel}
-            aria-label={councilSidebarButtonLabel}
-          >
-            <Users size={15} />
-          </button>
-          <button
-            type="button"
-            onClick={props.onHide}
-            className={HEADER_TEXT_BUTTON_CLASS}
-            title="Hide council"
-          >
-            <EyeOff size={14} className="min-[900px]:mr-1" />
-            <span className="hidden min-[900px]:inline">Hide</span>
-          </button>
-        </div>
-      </header>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto p-3">
+        {!selectedRoom ? (
+          <div className="h-full" />
+        ) : (
+          <div className="space-y-3">
+            {selectedRoom.agents.map((agent) => {
+              const terminalEnabled = selectedRoom.room.status === "running";
+              const theme = councilAgentTheme(selectedRoom, agent.id);
+              const optionsLabel = councilAgentOptionsLabel(agent);
+              const agentMeta = [
+                agent.modelId ?? "default model",
+                optionsLabel,
+                agent.lastStatusDetail,
+              ].filter(Boolean).join(" · ");
+              return (
+                <div
+                  key={agent.id}
+                  className={`group rounded-xl border px-2.5 py-2 transition-colors ${theme.card} ${
+                    terminalEnabled ? "" : "opacity-60"
+                  }`}
+                >
+                  <div className="flex min-w-0 items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => terminalEnabled && void openTui(agent)}
+                      disabled={!terminalEnabled}
+                      className="icon-click-feedback flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1 py-1 text-left disabled:cursor-default"
+                      title={terminalEnabled ? "Open agent terminal" : "This room is closed."}
+                    >
+                      <span className={`h-8 w-1 shrink-0 rounded-full ${theme.accent}`} />
+                      <span className="relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)]/70 shadow-sm">
+                        <ProviderLogo provider={agent.provider} className="h-4 w-4" variant="bare" />
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex min-w-0 items-center gap-1.5">
+                          <span className="truncate text-sm font-semibold leading-5 text-[var(--app-fg)]">{agent.label}</span>
+                        </div>
+                        <div className="truncate text-[11px] leading-4 text-[var(--app-hint)]">{agentMeta}</div>
+                      </div>
+                    </button>
+                    <span className={`hidden shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold sm:inline-flex ${agentStatusClass(agent.status)}`}>
+                      {agent.status}
+                    </span>
+                    <div className="flex shrink-0 items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => requestReinjectAgent(agent.id)}
+                        disabled={loading || !terminalEnabled || agent.status === "stopped"}
+                        className="icon-click-feedback inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-[var(--app-border)] text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] disabled:opacity-40"
+                        title="Send bootstrap prompt"
+                        aria-label={`Send bootstrap prompt to ${agent.label}`}
+                      >
+                        <Send size={12} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => requestPauseAgentCouncilListening(agent.id)}
+                        disabled={loading || !terminalEnabled || agent.status === "stopped"}
+                        className="icon-click-feedback inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-[var(--app-border)] text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-amber-600 disabled:opacity-40"
+                        title="Pause council listening"
+                        aria-label={`Pause council listening for ${agent.label}`}
+                      >
+                        <CirclePause size={12} />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+            {selectedRoom.room.status === "running" ? (
+              <div className="flex justify-center">
+                <button
+                  type="button"
+                  onClick={openAddAgentDialog}
+                  className="icon-click-feedback inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-[var(--app-border)] px-3 text-xs font-semibold text-[var(--app-fg)] transition-colors hover:bg-[var(--app-bg)]"
+                >
+                  <Plus size={14} />
+                  Add agent
+                </button>
+              </div>
+            ) : null}
+          </div>
+        )}
+      </div>
+    </div>
+  );
 
-      <div className="flex min-h-0 flex-1">
+  return (
+    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-[var(--app-bg)]">
+      <button
+        type="button"
+        className="workbench-fixed-sidebar-toggle icon-click-feedback fixed right-[max(1rem,env(safe-area-inset-right))] top-[calc(env(safe-area-inset-top,0px)+0.75rem)] z-[25] hidden h-8 w-8 items-center justify-center rounded-md border border-[var(--app-border)] bg-[var(--app-bg)]/90 text-[var(--app-hint)] shadow-sm backdrop-blur hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] md:inline-flex"
+        onClick={() => setCouncilSidebarOpen((open) => !open)}
+        aria-label={councilSidebarButtonLabel}
+        title={councilSidebarButtonLabel}
+      >
+        <PanelRight size={16} />
+      </button>
+      <button
+        type="button"
+        className="workbench-fixed-sidebar-toggle icon-click-feedback fixed right-[max(1rem,env(safe-area-inset-right))] top-[calc(env(safe-area-inset-top,0px)+0.75rem)] z-[25] inline-flex h-8 w-8 items-center justify-center rounded-md border border-[var(--app-border)] bg-[var(--app-bg)]/90 text-[var(--app-hint)] shadow-sm backdrop-blur hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] md:hidden"
+        onClick={() => setCouncilSidebarOpen((open) => !open)}
+        aria-label={councilSidebarButtonLabel}
+        title={councilSidebarButtonLabel}
+      >
+        <PanelRight size={18} />
+      </button>
+      <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
         <section className={chatPanelClass}>
+          <header className={`relative flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[var(--app-border)] bg-[var(--app-bg)]/85 pl-4 backdrop-blur-sm ${headerRightPaddingClass(councilSidebarOpen)}`}>
+            <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
+              <button
+                type="button"
+                className="icon-click-feedback inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] md:hidden"
+                onClick={props.onOpenLeft}
+                aria-label="Open sidebar"
+                title="Open sidebar"
+              >
+                <Menu size={18} />
+              </button>
+              {!props.sidebarOpen ? (
+                <button
+                  type="button"
+                  className="icon-click-feedback hidden h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] md:inline-flex"
+                  onClick={props.onExpandSidebar}
+                  aria-label="Expand sidebar"
+                  title="Expand sidebar"
+                >
+                  <Menu size={18} />
+                </button>
+              ) : null}
+              <div className="min-w-0 flex-1 overflow-hidden">
+                <div
+                  className="truncate text-sm font-semibold text-[var(--app-fg)]"
+                  title={selectedRoom?.room.title ?? "Council"}
+                >
+                  {selectedRoom?.room.title ?? "Council"}
+                </div>
+                <div
+                  className="truncate text-xs text-[var(--app-hint)]"
+                  title={selectedRoom ? selectedRoom.room.workspace : "Workspace"}
+                >
+                  {selectedRoom ? selectedRoom.room.workspace : "Workspace"}
+                </div>
+              </div>
+            </div>
+            <div className={HEADER_ACTION_GROUP_CLASS}>
+              <button
+                type="button"
+                onClick={() => setNewRoomDialogOpen(true)}
+                className={HEADER_ICON_BUTTON_CLASS}
+                title="New council room"
+                aria-label="New council room"
+              >
+                <Plus size={15} />
+              </button>
+              <button
+                type="button"
+                onClick={() => setHistoryDialogOpen(true)}
+                className={HEADER_ICON_BUTTON_CLASS}
+                aria-label="Open council rooms"
+                title="Council rooms"
+              >
+                <History size={14} />
+              </button>
+              <button
+                type="button"
+                onClick={props.onHide}
+                className={HEADER_TEXT_BUTTON_CLASS}
+                title="Close council"
+              >
+                <X size={14} className="min-[900px]:mr-1" />
+                <span className="hidden min-[900px]:inline">Close</span>
+              </button>
+            </div>
+          </header>
           {selectedRoom?.room.status === "running" ? (
             roomStatusCollapsed ? (
               <button
@@ -1344,93 +1436,22 @@ export function CouncilPage(props: {
 
         {councilSidebarOpen ? <div className="inspector-divider hidden min-[900px]:block" /> : null}
         <aside className={councilSidebarClass}>
-          <div className="min-h-0 flex-1 overflow-y-auto p-3">
-            {!selectedRoom ? (
-              <div className="h-full" />
-            ) : (
-              <div className="space-y-3">
-                {selectedRoom.agents.map((agent) => {
-                  const terminalEnabled = selectedRoom.room.status === "running";
-                  const theme = councilAgentTheme(selectedRoom, agent.id);
-                  const optionsLabel = councilAgentOptionsLabel(agent);
-                  const agentMeta = [
-                    agent.modelId ?? "default model",
-                    optionsLabel,
-                    agent.lastStatusDetail,
-                  ].filter(Boolean).join(" · ");
-                  return (
-                    <div
-                      key={agent.id}
-                      className={`group rounded-xl border px-2.5 py-2 transition-colors ${theme.card} ${
-                        terminalEnabled ? "" : "opacity-60"
-                      }`}
-                    >
-                      <div className="flex min-w-0 items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => terminalEnabled && void openTui(agent)}
-                          disabled={!terminalEnabled}
-                          className="icon-click-feedback flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1 py-1 text-left disabled:cursor-default"
-                          title={terminalEnabled ? "Open agent terminal" : "This room is closed."}
-                        >
-                          <span className={`h-8 w-1 shrink-0 rounded-full ${theme.accent}`} />
-                          <span className="relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)]/70 shadow-sm">
-                            <ProviderLogo provider={agent.provider} className="h-4 w-4" variant="bare" />
-                          </span>
-                          <div className="min-w-0 flex-1">
-                            <div className="flex min-w-0 items-center gap-1.5">
-                              <span className="truncate text-sm font-semibold leading-5 text-[var(--app-fg)]">{agent.label}</span>
-                            </div>
-                            <div className="truncate text-[11px] leading-4 text-[var(--app-hint)]">{agentMeta}</div>
-                          </div>
-                        </button>
-                        <span className={`hidden shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold sm:inline-flex ${agentStatusClass(agent.status)}`}>
-                          {agent.status}
-                        </span>
-                        <div className="flex shrink-0 items-center gap-1">
-                          <button
-                            type="button"
-                            onClick={() => requestReinjectAgent(agent.id)}
-                            disabled={loading || !terminalEnabled || agent.status === "stopped"}
-                            className="icon-click-feedback inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-[var(--app-border)] text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] disabled:opacity-40"
-                            title="Send bootstrap prompt"
-                            aria-label={`Send bootstrap prompt to ${agent.label}`}
-                          >
-                            <Send size={12} />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => requestPauseAgentCouncilListening(agent.id)}
-                            disabled={loading || !terminalEnabled || agent.status === "stopped"}
-                            className="icon-click-feedback inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-[var(--app-border)] text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-amber-600 disabled:opacity-40"
-                            title="Pause council listening"
-                            aria-label={`Pause council listening for ${agent.label}`}
-                          >
-                            <CirclePause size={12} />
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-                {selectedRoom.room.status === "running" ? (
-                  <div className="flex justify-center">
-                    <button
-                      type="button"
-                      onClick={openAddAgentDialog}
-                      className="icon-click-feedback inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-[var(--app-border)] px-3 text-xs font-semibold text-[var(--app-fg)] transition-colors hover:bg-[var(--app-bg)]"
-                    >
-                      <Plus size={14} />
-                      Add agent
-                    </button>
-                  </div>
-                ) : null}
-              </div>
-            )}
-          </div>
-
+          {agentsSidebarContent}
         </aside>
       </div>
+
+      <Sheet
+        open={councilSidebarOpen && !isCouncilWide}
+        onOpenChange={setCouncilSidebarOpen}
+        side="right"
+        title="Agents"
+        hideHeader
+        modal={false}
+        floatingClose="panel"
+        floatingCloseLabel="Hide agents"
+      >
+        {agentsSidebarContent}
+      </Sheet>
 
       <ConfirmDialog
         open={stopConfirmOpen}
@@ -1733,7 +1754,7 @@ export function CouncilPage(props: {
                 {activeRooms.length > 0 ? activeRooms.map((room) => (
                   <div
                     key={room.room.id}
-                    className={`flex w-full items-center gap-2 rounded-xl border px-2 py-1.5 text-sm transition-colors ${
+                    className={`flex min-w-0 w-full items-center gap-2 overflow-hidden rounded-xl border px-2 py-1.5 text-sm transition-colors ${
                       selectedRoom?.room.id === room.room.id
                         ? "border-[var(--app-border)] bg-[var(--app-subtle-bg)] text-[var(--app-fg)]"
                         : "border-transparent text-[var(--app-hint)] hover:border-[var(--app-border)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
@@ -1741,15 +1762,14 @@ export function CouncilPage(props: {
                   >
                     <button
                       type="button"
-	                      onClick={() => {
-	                        setSelectedRoomId(room.room.id);
-	                        setActivePanel("chat");
-	                        setHistoryDialogOpen(false);
-	                      }}
-                      className="min-w-0 flex-1 rounded-lg px-1 py-0.5 text-left"
+                      onClick={() => {
+                        setSelectedRoomId(room.room.id);
+                        setHistoryDialogOpen(false);
+                      }}
+                      className="min-w-0 flex-1 overflow-hidden rounded-lg px-1 py-0.5 text-left"
                     >
-                      <span className="block truncate font-medium">{room.room.title}</span>
-                      <span className="block truncate text-xs opacity-75">{room.room.workspace}</span>
+                      <span className="block truncate font-medium" title={room.room.title}>{room.room.title}</span>
+                      <span className="block truncate text-xs opacity-75" title={room.room.workspace}>{room.room.workspace}</span>
                     </button>
                     <button
                       type="button"
@@ -1783,7 +1803,7 @@ export function CouncilPage(props: {
                 {historyRooms.length > 0 ? historyRooms.map((room) => (
                   <div
                     key={room.room.id}
-                    className={`flex w-full items-center gap-2 rounded-xl border px-2 py-1.5 text-sm transition-colors ${
+                    className={`flex min-w-0 w-full items-center gap-2 overflow-hidden rounded-xl border px-2 py-1.5 text-sm transition-colors ${
                       selectedRoom?.room.id === room.room.id
                         ? "border-[var(--app-border)] bg-[var(--app-subtle-bg)] text-[var(--app-fg)]"
                         : "border-transparent text-[var(--app-hint)] hover:border-[var(--app-border)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
@@ -1793,13 +1813,12 @@ export function CouncilPage(props: {
                       type="button"
                       onClick={() => {
                         setSelectedRoomId(room.room.id);
-                        setActivePanel("chat");
                         setHistoryDialogOpen(false);
                       }}
-                      className="min-w-0 flex-1 rounded-lg px-1 py-0.5 text-left"
+                      className="min-w-0 flex-1 overflow-hidden rounded-lg px-1 py-0.5 text-left"
                     >
-                      <span className="block truncate font-medium">{room.room.title}</span>
-                      <span className="block truncate text-xs opacity-75">{room.room.workspace}</span>
+                      <span className="block truncate font-medium" title={room.room.title}>{room.room.title}</span>
+                      <span className="block truncate text-xs opacity-75" title={room.room.workspace}>{room.room.workspace}</span>
                     </button>
                     <span className="hidden shrink-0 rounded-full bg-[var(--app-subtle-bg)] px-2 py-0.5 text-[10px] font-semibold text-[var(--app-hint)] sm:inline-flex">
                       {room.room.status}

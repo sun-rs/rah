@@ -2,7 +2,7 @@
 
 日期：2026-05-08
 
-本文记录当前 provider runtime 主线下 provider adapter 的边界。旧 structured/enhanced adapter 只作为 legacy/test harness 保留，不再是公开 live 主路径。
+本文记录当前 provider runtime 主线下 provider adapter 的边界。公开 live 主路径只有 Codex/OpenCode native local server 与 Claude zellij/TUI fallback；`liveBackend: "structured"` 只作为测试注入 surface 保留。
 
 当前 core live provider：
 
@@ -57,7 +57,7 @@ RAH 不把某一家 CLI 的原生概念直接暴露成前端公共逻辑。
 - `ProviderActionCapabilityAdapter`：rename/delete/archive/info 等 action。
 - `ProviderDiagnosticAdapter`：CLI/version/launch health。
 - `ProviderShutdownAdapter`：daemon shutdown 的 best-effort 清理。
-- `ProviderStructuredLifecycleAdapter` / input / permission：legacy structured live test surface。
+- `ProviderStructuredLifecycleAdapter` / input / permission：测试注入 surface，以及 Codex/OpenCode provider-server control adapter 的内部能力边界。
 
 新增 provider 或重构 provider 时，不能把所有能力重新塞回一个大 adapter。
 
@@ -116,7 +116,7 @@ Provider 状态：
 | Provider | Context usage 状态 | 说明 |
 | --- | --- | --- |
 | Codex | `context_window / exact` | app-server token usage 与 model context window。 |
-| Claude | `context_window / estimated` 或 `turn / exact` | SDK usage + known context-window fallback。 |
+| Claude | `context_window / estimated` 或 `turn / exact` | Claude transcript usage + known context-window fallback；没有生产 SDK live control path。 |
 | OpenCode | `context_window / exact` 或 `estimated` | ACP usage 或 provider catalog context limit。 |
 
 ## 7. Actions
