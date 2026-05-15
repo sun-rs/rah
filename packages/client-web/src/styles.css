@@ -430,6 +430,50 @@ html.dark .provider-choice-rail {
   z-index: 75;
 }
 
+.terminal-desktop-shortcut-bar {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 0.35rem;
+  overflow-x: auto;
+  border-bottom: 1px solid color-mix(in oklab, var(--app-border) 72%, transparent);
+  background: color-mix(in oklab, var(--terminal-bg, var(--app-code-bg)) 88%, var(--app-bg));
+  padding: 0.42rem 2.75rem 0.36rem 0.55rem;
+  scrollbar-width: none;
+}
+
+.terminal-desktop-shortcut-bar::-webkit-scrollbar {
+  display: none;
+}
+
+.terminal-desktop-shortcut {
+  flex: 0 0 auto;
+  min-width: 2.2rem;
+  height: 1.45rem;
+  border: 1px solid color-mix(in oklab, var(--app-border) 82%, transparent);
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--app-bg) 82%, transparent);
+  padding: 0 0.48rem;
+  color: var(--app-hint);
+  font-size: 0.66rem;
+  font-weight: 750;
+  line-height: 1;
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease,
+    color 140ms ease,
+    transform 120ms ease;
+}
+
+.terminal-desktop-shortcut:hover {
+  border-color: color-mix(in oklab, var(--app-fg) 22%, var(--app-border));
+  background: var(--app-subtle-bg);
+  color: var(--app-fg);
+}
+
+.terminal-desktop-shortcut:active {
+  transform: translateY(1px) scale(0.98);
+}
+
 .terminal-ios-input-bridge {
   position: fixed;
   bottom: calc(
@@ -521,7 +565,6 @@ html.dark .provider-choice-rail {
   min-height: 0;
   flex: 1;
   overflow: hidden;
-  padding: 0.65rem 0.8rem 0.8rem;
   background: var(--terminal-bg, var(--app-code-bg));
 }
 
@@ -670,9 +713,6 @@ html.dark .provider-choice-rail {
     box-shadow: none;
   }
 
-  .terminal-canvas {
-    padding: 0.45rem 0.55rem 0.6rem;
-  }
 }
 
 .provider-choice-chip:hover {

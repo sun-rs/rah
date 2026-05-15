@@ -7,6 +7,7 @@ import {
   type MobileBridgeFocusOptions,
 } from "./terminal-mobile-bridge";
 import { ptySocketCloseNotice } from "./terminal-socket-close";
+import { TERMINAL_TUI_SHORTCUTS, type TerminalShortcut } from "./terminal-shortcuts";
 import { readTerminalViewportMetrics } from "./terminal-viewport";
 
 interface TerminalPaneProps {
@@ -22,13 +23,6 @@ interface TerminalPaneProps {
   initialReplay?: boolean;
 }
 
-type MobileTuiShortcut = {
-  label: string;
-  data: string;
-  clearBridge?: boolean;
-  ariaLabel?: string;
-};
-
 type TerminalCssVar =
   | "--terminal-font-family"
   | "--terminal-bg"
@@ -40,18 +34,7 @@ type TerminalCssVar =
   | "--app-fg"
   | "--app-hint";
 
-const MOBILE_TUI_SHORTCUTS: readonly MobileTuiShortcut[] = [
-  { label: "Ctrl-C", data: "\u0003", clearBridge: true },
-  { label: "Esc", data: "\u001b", clearBridge: true },
-  { label: "Tab", data: "\t" },
-  { label: "↑", data: "\u001b[A", ariaLabel: "Arrow up" },
-  { label: "↓", data: "\u001b[B", ariaLabel: "Arrow down" },
-  { label: "←", data: "\u001b[D", ariaLabel: "Arrow left" },
-  { label: "→", data: "\u001b[C", ariaLabel: "Arrow right" },
-  { label: "Enter", data: "\r", clearBridge: true },
-];
-
-const MAX_TERMINAL_WRITE_BATCH_CHARS = 256 * 1024;
+const MAX_TERMINAL_WRITE_BATCH_CHARS = 512 * 1024;
 
 function shouldShowMobileInputBridge(): boolean {
   if (typeof navigator === "undefined" || typeof window === "undefined") {
@@ -284,9 +267,10 @@ export function TerminalPane(props: TerminalPaneProps) {
     const settleTimers = new Set<number>();
     let fitFrame: number | null = null;
     let forceNextResize = false;
-    let writeFrame: number | null = null;
+    let writeScheduled = false;
     let writeInFlight = false;
     let pendingWrite = "";
+    let pendingReplace: string | null = null;
     nextReplaySeqRef.current = 0;
 
     const terminal = new Terminal({
@@ -394,20 +378,29 @@ export function TerminalPane(props: TerminalPaneProps) {
         if (writeInFlight) {
           return;
         }
-        if (writeFrame !== null) {
+        if (writeScheduled) {
           return;
         }
-        writeFrame = window.requestAnimationFrame(() => {
-          writeFrame = null;
-          if (disposed || writeInFlight || pendingWrite.length === 0) {
+        writeScheduled = true;
+        queueMicrotask(() => {
+          writeScheduled = false;
+          if (disposed || writeInFlight || (pendingReplace === null && pendingWrite.length === 0)) {
             return;
           }
-          const chunk = pendingWrite.slice(0, MAX_TERMINAL_WRITE_BATCH_CHARS);
-          pendingWrite = pendingWrite.slice(chunk.length);
+          let chunk: string;
+          if (pendingReplace !== null) {
+            chunk = pendingReplace;
+            pendingReplace = null;
+            pendingWrite = "";
+            terminal.reset();
+          } else {
+            chunk = pendingWrite.slice(0, MAX_TERMINAL_WRITE_BATCH_CHARS);
+            pendingWrite = pendingWrite.slice(chunk.length);
+          }
           writeInFlight = true;
           terminal.write(chunk, () => {
             writeInFlight = false;
-            if (!disposed && pendingWrite.length > 0) {
+            if (!disposed && (pendingReplace !== null || pendingWrite.length > 0)) {
               scheduleTerminalWrite();
             }
           });
@@ -424,10 +417,13 @@ export function TerminalPane(props: TerminalPaneProps) {
 
       const clearPendingTerminalWrite = () => {
         pendingWrite = "";
-        if (writeFrame !== null) {
-          window.cancelAnimationFrame(writeFrame);
-          writeFrame = null;
-        }
+        pendingReplace = null;
+      };
+
+      const replaceTerminalContents = (data: string) => {
+        clearPendingTerminalWrite();
+        pendingReplace = data;
+        scheduleTerminalWrite();
       };
 
       const socket = createPtySocket(
@@ -435,10 +431,10 @@ export function TerminalPane(props: TerminalPaneProps) {
         (message) => {
         if (message.type === "pty.replay") {
           if (fromSeq === undefined || message.droppedBeforeSeq !== undefined) {
-            clearPendingTerminalWrite();
-            terminal.reset();
+            replaceTerminalContents(message.chunks.join(""));
+          } else {
+            enqueueTerminalWrite(message.chunks.join(""));
           }
-          enqueueTerminalWrite(message.chunks.join(""));
           scheduleFitAndResize();
           if (message.nextSeq !== undefined) {
             nextReplaySeqRef.current = message.nextSeq;
@@ -447,10 +443,10 @@ export function TerminalPane(props: TerminalPaneProps) {
         }
         if (message.type === "pty.output") {
           if (message.replace === true) {
-            clearPendingTerminalWrite();
-            terminal.reset();
+            replaceTerminalContents(message.data);
+          } else {
+            enqueueTerminalWrite(message.data);
           }
-          enqueueTerminalWrite(message.data);
           if (message.seq !== undefined) {
             nextReplaySeqRef.current = Math.max(nextReplaySeqRef.current, message.seq + 1);
           }
@@ -559,9 +555,6 @@ export function TerminalPane(props: TerminalPaneProps) {
       surfaceActiveRef.current = false;
       if (fitFrame !== null) {
         window.cancelAnimationFrame(fitFrame);
-      }
-      if (writeFrame !== null) {
-        window.cancelAnimationFrame(writeFrame);
       }
       if (reconnectTimer) {
         clearTimeout(reconnectTimer);
@@ -675,13 +668,18 @@ export function TerminalPane(props: TerminalPaneProps) {
     window.setTimeout(syncPosition, 420);
   };
 
-  const sendMobileShortcut = (shortcut: MobileTuiShortcut) => {
-    sendDataRef.current(shortcut.data, { focusTerminal: false });
+  const sendTerminalShortcut = (
+    shortcut: TerminalShortcut,
+    options: { keepMobileBridgeFocused?: boolean } = {},
+  ) => {
+    sendDataRef.current(shortcut.data, { focusTerminal: !options.keepMobileBridgeFocused });
     if (shortcut.clearBridge) {
       committedBridgeValueRef.current = "";
       setBridgeValue("");
     }
-    focusMobileBridge(mobileBridgeFocusOptionsForSource("shortcut"));
+    if (options.keepMobileBridgeFocused) {
+      focusMobileBridge(mobileBridgeFocusOptionsForSource("shortcut"));
+    }
   };
 
   const keyboardActive = showIosInputBridge && keyboardInsetPx > 0;
@@ -730,6 +728,23 @@ export function TerminalPane(props: TerminalPaneProps) {
           >
             <span aria-hidden="true" className="terminal-client-close-icon" />
           </button>
+        ) : null}
+        {!showIosInputBridge ? (
+          <div className="terminal-desktop-shortcut-bar" aria-label="TUI shortcut keys">
+            {TERMINAL_TUI_SHORTCUTS.map((shortcut) => (
+              <button
+                key={shortcut.label}
+                type="button"
+                className="terminal-desktop-shortcut"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => sendTerminalShortcut(shortcut)}
+                aria-label={shortcut.ariaLabel ?? shortcut.label}
+                title={`Send ${shortcut.ariaLabel ?? shortcut.label}`}
+              >
+                {shortcut.label}
+              </button>
+            ))}
+          </div>
         ) : null}
           <div
             ref={containerRef}
@@ -783,13 +798,13 @@ export function TerminalPane(props: TerminalPaneProps) {
         {showIosInputBridge ? (
           <div className="terminal-ios-input-bridge" data-testid="terminal-ios-input-bridge">
             <div className="terminal-ios-shortcut-row" aria-label="TUI shortcut keys">
-              {MOBILE_TUI_SHORTCUTS.map((shortcut) => (
+              {TERMINAL_TUI_SHORTCUTS.map((shortcut) => (
                 <button
                   key={shortcut.label}
                   type="button"
                   className="terminal-ios-shortcut"
                   onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => sendMobileShortcut(shortcut)}
+                  onClick={() => sendTerminalShortcut(shortcut, { keepMobileBridgeFocused: true })}
                   aria-label={shortcut.ariaLabel ?? shortcut.label}
                 >
                   {shortcut.label}

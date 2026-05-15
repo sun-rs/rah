@@ -1,5 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type {
@@ -109,11 +117,83 @@ function textPart(text: string): CouncilMessagePart {
   return { kind: "text", text };
 }
 
+function cloneCouncilMessage(message: CouncilMessage): CouncilMessage {
+  return { ...message, parts: [...message.parts] };
+}
+
+function councilMessagesDir(filePath: string): string {
+  return path.join(path.dirname(filePath), "messages");
+}
+
+function councilMessageFilePath(filePath: string, roomId: string): string {
+  return path.join(councilMessagesDir(filePath), `${encodeURIComponent(roomId)}.jsonl`);
+}
+
+function readCouncilMessageLog(filePath: string): CouncilMessage[] {
+  if (!existsSync(filePath)) {
+    return [];
+  }
+  const lines = readFileSync(filePath, "utf8").split(/\r?\n/);
+  const messages: CouncilMessage[] = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(trimmed) as CouncilMessage;
+      if (
+        typeof parsed.id === "number" &&
+        typeof parsed.roomId === "string" &&
+        typeof parsed.actorId === "string" &&
+        Array.isArray(parsed.parts)
+      ) {
+        messages.push(parsed);
+      }
+    } catch {
+      // Keep the room usable even if a single log line is corrupted.
+    }
+  }
+  return messages;
+}
+
+function upsertMessageById(messages: CouncilMessage[], message: CouncilMessage): void {
+  const existingIndex = messages.findIndex((candidate) => candidate.id === message.id);
+  if (existingIndex >= 0) {
+    messages[existingIndex] = message;
+    return;
+  }
+  messages.push(message);
+}
+
+function firstMessageIndexAfter(messages: CouncilMessage[], messageId: number): number {
+  let low = 0;
+  let high = messages.length;
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2);
+    if (messages[mid]!.id <= messageId) {
+      low = mid + 1;
+    } else {
+      high = mid;
+    }
+  }
+  return low;
+}
+
 export class CouncilStore {
   private state: CouncilStoreFile;
+  private readonly messagesByRoom = new Map<string, CouncilMessage[]>();
 
   constructor(private readonly filePath = defaultStoreFilePath()) {
     this.state = loadStoreFile(filePath);
+    const legacyMessages = this.state.messages;
+    this.state.messages = [];
+    this.loadMessageLogs(legacyMessages);
+    this.state.nextMessageId = Math.max(this.state.nextMessageId, this.maxMessageId() + 1);
+    if (legacyMessages.length > 0) {
+      this.writeAllMessageLogs();
+      this.persist();
+    }
   }
 
   listRooms(): CouncilRoomSnapshot[] {
@@ -194,16 +274,15 @@ export class CouncilStore {
     const room = this.requireRoom(roomId);
     const since = options?.sinceMessageId ?? 0;
     const limit = options?.limit ?? 200;
-    const messages = limit <= 0 ? [] : this.state.messages
-      .filter((message) => message.roomId === roomId && message.id > since)
-      .sort((a, b) => a.id - b.id)
-      .slice(-limit);
+    const roomMessages = this.messagesForRoom(roomId);
+    const startIndex = firstMessageIndexAfter(roomMessages, since);
+    const messages = limit <= 0 ? [] : roomMessages.slice(startIndex).slice(-limit);
     return {
       room: { ...room },
       agents: this.state.agents
         .filter((agent) => agent.roomId === roomId)
         .map((agent) => ({ ...agent })),
-      messages: messages.map((message) => ({ ...message, parts: [...message.parts] })),
+      messages: messages.map(cloneCouncilMessage),
     };
   }
 
@@ -232,21 +311,24 @@ export class CouncilStore {
       createdAt: timestamp,
     };
     this.state.nextMessageId += 1;
-    this.state.messages.push(message);
+    this.messagesForRoom(message.roomId).push(message);
+    this.appendMessageToLog(message);
     room.updatedAt = timestamp;
     this.persist();
-    return { ...message, parts: [...message.parts] };
+    return cloneCouncilMessage(message);
   }
 
   lastMessageId(roomId: string): number {
     this.requireRoom(roomId);
-    return this.state.messages
-      .filter((message) => message.roomId === roomId)
-      .reduce((max, message) => Math.max(max, message.id), 0);
+    return this.messagesForRoom(roomId).at(-1)?.id ?? 0;
   }
 
   recentMessages(roomId: string, limit = 50): CouncilMessage[] {
-    return this.messagesSince(roomId, 0, { limit });
+    this.requireRoom(roomId);
+    if (limit <= 0) {
+      return [];
+    }
+    return this.messagesForRoom(roomId).slice(-limit).map(cloneCouncilMessage);
   }
 
   messagesSince(
@@ -260,26 +342,30 @@ export class CouncilStore {
   ): CouncilMessage[] {
     this.requireRoom(roomId);
     const limit = options?.limit ?? 50;
-    return this.state.messages
-      .filter((message) => {
-        if (message.roomId !== roomId || message.id <= sinceMessageId) {
-          return false;
-        }
-        if (options?.excludeClientId && message.clientId === options.excludeClientId) {
-          return false;
-        }
-        if (
-          options?.excludeActorIdWhenClientMissing &&
-          !message.clientId &&
-          message.actorId === options.excludeActorIdWhenClientMissing
-        ) {
-          return false;
-        }
-        return true;
-      })
-      .sort((a, b) => a.id - b.id)
-      .slice(0, limit)
-      .map((message) => ({ ...message, parts: [...message.parts] }));
+    if (limit <= 0) {
+      return [];
+    }
+    const roomMessages = this.messagesForRoom(roomId);
+    const startIndex = firstMessageIndexAfter(roomMessages, sinceMessageId);
+    const results: CouncilMessage[] = [];
+    for (let index = startIndex; index < roomMessages.length; index += 1) {
+      const message = roomMessages[index]!;
+      if (options?.excludeClientId && message.clientId === options.excludeClientId) {
+        continue;
+      }
+      if (
+        options?.excludeActorIdWhenClientMissing &&
+        !message.clientId &&
+        message.actorId === options.excludeActorIdWhenClientMissing
+      ) {
+        continue;
+      }
+      results.push(cloneCouncilMessage(message));
+      if (results.length >= limit) {
+        break;
+      }
+    }
+    return results;
   }
 
   updateRoom(roomId: string, patch: Partial<Pick<CouncilRoom, "status" | "zellijSessionName" | "error">>): CouncilRoomSnapshot {
@@ -475,7 +561,8 @@ export class CouncilStore {
     this.requireRoom(roomId);
     this.state.rooms = this.state.rooms.filter((room) => room.id !== roomId);
     this.state.agents = this.state.agents.filter((agent) => agent.roomId !== roomId);
-    this.state.messages = this.state.messages.filter((message) => message.roomId !== roomId);
+    this.messagesByRoom.delete(roomId);
+    rmSync(this.messageFilePath(roomId), { force: true });
     this.state.claims = this.state.claims.filter((claim) => claim.roomId !== roomId);
     this.state.controls = this.state.controls.filter((control) => control.roomId !== roomId);
     this.persist();
@@ -517,7 +604,66 @@ export class CouncilStore {
   private persist(): void {
     mkdirSync(path.dirname(this.filePath), { recursive: true });
     const tmpPath = `${this.filePath}.${process.pid}.${Date.now()}.tmp`;
-    writeFileSync(tmpPath, `${JSON.stringify(this.state, null, 2)}\n`, "utf8");
+    writeFileSync(tmpPath, `${JSON.stringify({ ...this.state, messages: [] }, null, 2)}\n`, "utf8");
     renameSync(tmpPath, this.filePath);
+  }
+
+  private messagesForRoom(roomId: string): CouncilMessage[] {
+    let messages = this.messagesByRoom.get(roomId);
+    if (!messages) {
+      messages = [];
+      this.messagesByRoom.set(roomId, messages);
+    }
+    return messages;
+  }
+
+  private messageFilePath(roomId: string): string {
+    return councilMessageFilePath(this.filePath, roomId);
+  }
+
+  private loadMessageLogs(legacyMessages: CouncilMessage[]): void {
+    const knownRoomIds = new Set(this.state.rooms.map((room) => room.id));
+    for (const room of this.state.rooms) {
+      const messages = readCouncilMessageLog(this.messageFilePath(room.id));
+      if (messages.length > 0) {
+        this.messagesByRoom.set(room.id, messages);
+      }
+    }
+    for (const message of legacyMessages) {
+      if (!knownRoomIds.has(message.roomId)) {
+        continue;
+      }
+      upsertMessageById(this.messagesForRoom(message.roomId), message);
+    }
+    for (const [roomId, messages] of this.messagesByRoom) {
+      if (!knownRoomIds.has(roomId)) {
+        this.messagesByRoom.delete(roomId);
+        continue;
+      }
+      messages.sort((a, b) => a.id - b.id);
+    }
+  }
+
+  private writeAllMessageLogs(): void {
+    mkdirSync(councilMessagesDir(this.filePath), { recursive: true });
+    for (const [roomId, messages] of this.messagesByRoom) {
+      const tmpPath = `${this.messageFilePath(roomId)}.${process.pid}.${Date.now()}.tmp`;
+      const body = messages.map((message) => JSON.stringify(message)).join("\n");
+      writeFileSync(tmpPath, body ? `${body}\n` : "", "utf8");
+      renameSync(tmpPath, this.messageFilePath(roomId));
+    }
+  }
+
+  private appendMessageToLog(message: CouncilMessage): void {
+    mkdirSync(councilMessagesDir(this.filePath), { recursive: true });
+    appendFileSync(this.messageFilePath(message.roomId), `${JSON.stringify(message)}\n`, "utf8");
+  }
+
+  private maxMessageId(): number {
+    let max = 0;
+    for (const messages of this.messagesByRoom.values()) {
+      max = Math.max(max, messages.at(-1)?.id ?? 0);
+    }
+    return max;
   }
 }

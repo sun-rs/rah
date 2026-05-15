@@ -958,6 +958,108 @@ test("CouncilRuntime exposes council agent PTYs through the interactive PTY stre
   }
 });
 
+test("CouncilRuntime snapshots council PTY replay so late subscribers can restore the current screen", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-runtime-terminal-snapshot-"));
+  const previousCodex = process.env.RAH_CODEX_BINARY;
+  process.env.RAH_CODEX_BINARY = fakeBinary(root, "codex");
+  try {
+    const ptySessions = new FakePtyRuntime();
+    const ptyHub = new PtyHub({ maxReplayChunks: 8, maxReplayBytes: 4096 });
+    const runtime = new CouncilRuntime({
+      store: new CouncilStore(path.join(root, "rooms.json")),
+      ptySessions,
+      ptyHub,
+    });
+    const response = await runtime.createRoom({
+      workspace: root,
+      agents: [{ id: "codex-lead", provider: "codex", label: "Codex Lead" }],
+    });
+    const agentId = response.room.agents[0]!.id;
+    await waitForCondition(() => ptySessions.created.length === 1, "expected council agent PTY to launch");
+
+    const tui = await runtime.getAgentTui(response.room.room.id, agentId);
+    assert.ok(tui.terminalId);
+    for (let index = 0; index < 150; index += 1) {
+      ptySessions.emit(tui.terminalId, `line-${index}\r\n`);
+    }
+    ptySessions.emit(tui.terminalId, "\x1b[40m\x1b[37m\x1b[2J\x1b[Hdark-bg");
+
+    await waitForCondition(() => {
+      const frames: PtyServerFrame[] = [];
+      const unsubscribe = ptyHub.subscribe(tui.terminalId!, (frame) => frames.push(frame));
+      unsubscribe();
+      const replay = frames.find((frame) => frame.type === "pty.replay");
+      const replayText = replay?.chunks.join("") ?? "";
+      return replayText.includes("\x1b[H\x1b[2J")
+        && replayText.includes("dark-bg")
+        && replayText.includes("\x1b[37;40m");
+    }, "expected late replay to include the styled current screen snapshot", 3_000);
+
+    const frames: PtyServerFrame[] = [];
+    const unsubscribe = ptyHub.subscribe(tui.terminalId, (frame) => frames.push(frame));
+    unsubscribe();
+    const replay = frames.find((frame) => frame.type === "pty.replay");
+    assert.ok(replay?.droppedBeforeSeq !== undefined);
+    const replayText = replay?.chunks.join("") ?? "";
+    assert.ok(replayText.includes("\x1b[H\x1b[2J"));
+    assert.ok(replayText.includes("dark-bg"));
+    assert.ok(replayText.includes("\x1b[37;40m"));
+  } finally {
+    if (previousCodex === undefined) delete process.env.RAH_CODEX_BINARY;
+    else process.env.RAH_CODEX_BINARY = previousCodex;
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test("CouncilRuntime does not replace an active council terminal with a delayed snapshot", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-runtime-terminal-active-snapshot-"));
+  const previousCodex = process.env.RAH_CODEX_BINARY;
+  process.env.RAH_CODEX_BINARY = fakeBinary(root, "codex");
+  try {
+    const ptySessions = new FakePtyRuntime();
+    const ptyHub = new PtyHub({ maxReplayChunks: 8, maxReplayBytes: 4096 });
+    const runtime = new CouncilRuntime({
+      store: new CouncilStore(path.join(root, "rooms.json")),
+      ptySessions,
+      ptyHub,
+    });
+    const response = await runtime.createRoom({
+      workspace: root,
+      agents: [{ id: "codex-lead", provider: "codex", label: "Codex Lead" }],
+    });
+    const agentId = response.room.agents[0]!.id;
+    await waitForCondition(() => ptySessions.created.length === 1, "expected council agent PTY to launch");
+
+    const tui = await runtime.getAgentTui(response.room.room.id, agentId);
+    assert.ok(tui.terminalId);
+    for (let index = 0; index < 150; index += 1) {
+      ptySessions.emit(tui.terminalId, `line-${index}\r\n`);
+    }
+
+    const liveFrames: PtyServerFrame[] = [];
+    const unsubscribe = ptyHub.subscribe(tui.terminalId, (frame) => liveFrames.push(frame));
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      assert.equal(liveFrames.some((frame) => frame.type === "pty.output" && frame.replace === true), false);
+    } finally {
+      unsubscribe();
+    }
+
+    ptySessions.emit(tui.terminalId, "\x1b[40m\x1b[37m\x1b[2J\x1b[Hafter-release");
+    await waitForCondition(() => {
+      const frames: PtyServerFrame[] = [];
+      const lateUnsubscribe = ptyHub.subscribe(tui.terminalId!, (frame) => frames.push(frame));
+      lateUnsubscribe();
+      const replayText = frames.find((frame) => frame.type === "pty.replay")?.chunks.join("") ?? "";
+      return replayText.includes("after-release") && replayText.includes("\x1b[37;40m");
+    }, "expected snapshot to resume after terminal subscribers disconnect", 3_000);
+  } finally {
+    if (previousCodex === undefined) delete process.env.RAH_CODEX_BINARY;
+    else process.env.RAH_CODEX_BINARY = previousCodex;
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
 test("CouncilRuntime can re-inject bootstrap prompts and pause an agent listener without closing its terminal", async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-runtime-reinject-"));
   const previousCodex = process.env.RAH_CODEX_BINARY;

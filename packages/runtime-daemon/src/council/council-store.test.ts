@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -48,6 +48,9 @@ test("CouncilStore persists rooms, agents, ordered messages, and stopped status"
       zellijPaneId: "terminal_1",
     });
     store.stopRoom(created.room.id);
+    const persisted = JSON.parse(readFileSync(filePath, "utf8")) as { messages?: unknown[] };
+    assert.deepEqual(persisted.messages, []);
+    assert.ok(existsSync(path.join(root, "messages", `${encodeURIComponent(created.room.id)}.jsonl`)));
 
     const reloaded = new CouncilStore(filePath);
     const snapshot = reloaded.snapshot(created.room.id);

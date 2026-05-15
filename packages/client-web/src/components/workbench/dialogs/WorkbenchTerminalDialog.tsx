@@ -201,6 +201,7 @@ export function WorkbenchTerminalDialog(props: {
             data-testid="workbench-terminal-dialog"
             data-terminal-id={activeTerminal?.id ?? ""}
             data-terminal-cwd={activeTerminal?.cwd ?? props.cwd}
+            onEscapeKeyDown={(event) => event.preventDefault()}
             className="fixed inset-0 z-50 flex h-[100dvh] w-screen flex-col overflow-hidden bg-[var(--app-bg)] pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] focus:outline-none md:left-1/2 md:top-1/2 md:h-[82vh] md:w-[min(1280px,96vw)] md:-translate-x-1/2 md:-translate-y-1/2 md:rounded-2xl md:border md:border-[var(--app-border)] md:pt-0 md:pb-0 md:shadow-2xl"
           >
             <div className="flex items-center justify-between gap-3 border-b border-[var(--app-border)] px-3 py-2.5 md:px-4 md:py-3">

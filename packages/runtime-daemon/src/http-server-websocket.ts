@@ -152,6 +152,9 @@ export function attachWebSocketHandlers(
   wssEvents.on("connection", (socket, req) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
     const replayFromSeq = url.searchParams.get("replayFromSeq");
+    const sendEventFrame = (message: unknown): boolean => sendJsonWithBackpressure(socket, message, {
+      closeReason: "Event client is too slow",
+    });
     let filter: EventSubscriptionRequest = {};
     if (replayFromSeq && Number.isFinite(Number.parseInt(replayFromSeq, 10))) {
       filter.replayFromSeq = Number.parseInt(replayFromSeq, 10);
@@ -160,17 +163,18 @@ export function attachWebSocketHandlers(
     const initial = engine.listEvents(filter);
     const initialReplayGap = replayGapForSubscription(engine, filter);
     if (initial.length > 0 || initialReplayGap) {
-      socket.send(
-        JSON.stringify({
-          events: initial,
-          initial: true,
-          ...(initialReplayGap ? { replayGap: initialReplayGap } : {}),
-        }),
-      );
+      sendEventFrame({
+        events: initial,
+        initial: true,
+        ...(initialReplayGap ? { replayGap: initialReplayGap } : {}),
+      });
     }
 
-    let unsubscribe = engine.eventBus.subscribe(filter, (event) => {
-      socket.send(JSON.stringify({ events: [event] }));
+    let unsubscribe: () => void = () => undefined;
+    unsubscribe = engine.eventBus.subscribe(filter, (event) => {
+      if (!sendEventFrame({ events: [event] })) {
+        unsubscribe();
+      }
     });
 
     socket.on("message", (raw) => {
@@ -184,18 +188,18 @@ export function attachWebSocketHandlers(
         const replay = engine.listEvents(filter);
         const replayGap = replayGapForSubscription(engine, filter);
         if (replay.length > 0 || replayGap) {
-          socket.send(
-            JSON.stringify({
-              events: replay,
-              ...(replayGap ? { replayGap } : {}),
-            }),
-          );
+          sendEventFrame({
+            events: replay,
+            ...(replayGap ? { replayGap } : {}),
+          });
         }
         unsubscribe = engine.eventBus.subscribe(filter, (event) => {
-          socket.send(JSON.stringify({ events: [event] }));
+          if (!sendEventFrame({ events: [event] })) {
+            unsubscribe();
+          }
         });
       } catch {
-        socket.send(JSON.stringify({ error: "Invalid subscription payload" }));
+        sendEventFrame({ error: "Invalid subscription payload" });
       }
     });
 

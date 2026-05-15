@@ -18,10 +18,12 @@
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.114",
     "@rah/runtime-protocol": "file:../runtime-protocol",
+    "@xterm/addon-serialize": "^0.14.0",
+    "@xterm/headless": "^6.0.0",
     "ws": "^8.18.3"
   },
   "devDependencies": {
-    "tsx": "^4.20.6",
-    "@types/ws": "^8.18.1"
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.20.6"
   }
 }

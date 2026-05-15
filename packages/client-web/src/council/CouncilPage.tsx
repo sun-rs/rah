@@ -27,6 +27,7 @@ import type {
 } from "@rah/runtime-protocol";
 import * as api from "../api";
 import { ProviderLogo } from "../components/ProviderLogo";
+import { MarkdownRenderer } from "../components/chat/MarkdownRenderer";
 import type { ProviderChoice } from "../components/ProviderSelector";
 import { PROVIDER_OPTIONS } from "../components/ProviderSelector";
 import { SessionModelControls } from "../components/SessionModelControls";
@@ -140,6 +141,56 @@ function textFromParts(parts: CouncilRoomSnapshot["messages"][number]["parts"]):
   return parts
     .map((part) => part.kind === "text" ? part.text : JSON.stringify(part.data))
     .join("\n");
+}
+
+function shouldCollapseCouncilReply(text: string): boolean {
+  return text.length > 900 || text.split(/\r?\n/).length > 12;
+}
+
+function CouncilMessageContent(props: { role: CouncilMessage["role"]; text: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const canCollapse = props.role === "agent" && shouldCollapseCouncilReply(props.text);
+  const collapsed = canCollapse && !expanded;
+  const content = props.role === "agent" ? (
+    <MarkdownRenderer
+      className="prose-chat max-w-none text-sm leading-relaxed"
+      content={props.text}
+      fallbackClassName="whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-sm leading-relaxed"
+    />
+  ) : (
+    <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] leading-relaxed">
+      {props.text}
+    </div>
+  );
+
+  return (
+    <div>
+      <div
+        className={`relative ${canCollapse ? (expanded ? "cursor-zoom-out" : "cursor-zoom-in") : ""} ${collapsed ? "max-h-56 overflow-hidden" : ""}`}
+        onDoubleClick={() => {
+          if (canCollapse) {
+            setExpanded((value) => !value);
+          }
+        }}
+        title={canCollapse ? (expanded ? "Double-click to collapse" : "Double-click to expand") : undefined}
+      >
+        {content}
+        {collapsed ? (
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-b from-transparent via-white/75 to-white/95 dark:via-zinc-950/70 dark:to-zinc-950/90" />
+        ) : null}
+      </div>
+      {canCollapse ? (
+        <button
+          type="button"
+          onClick={() => setExpanded((value) => !value)}
+          className="mt-2 block w-full rounded-lg px-2 py-1 text-left text-[11px] font-medium text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
+          aria-expanded={expanded}
+        >
+          {expanded ? "Show less" : "Show more"}
+        </button>
+      ) : null}
+    </div>
+  );
 }
 
 function escapeRegExp(value: string): string {
@@ -1536,9 +1587,7 @@ export function CouncilPage(props: {
                       ) : null}
                       <span className="min-w-0 truncate">{actorLabel(selectedRoom, message.actorId)}</span>
                     </div>
-                    <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] leading-relaxed">
-                      {textFromParts(message.parts)}
-                    </div>
+                    <CouncilMessageContent role={message.role} text={textFromParts(message.parts)} />
                   </div>
                 );
               })}
@@ -2311,7 +2360,10 @@ export function CouncilPage(props: {
       >
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 z-40 bg-black/45" />
-          <Dialog.Content className="fixed inset-0 z-50 flex h-[100dvh] w-screen flex-col overflow-hidden bg-[var(--app-bg)] pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] focus:outline-none md:left-1/2 md:top-1/2 md:h-[82vh] md:w-[min(1280px,96vw)] md:-translate-x-1/2 md:-translate-y-1/2 md:rounded-2xl md:border md:border-[var(--app-border)] md:pt-0 md:pb-0 md:shadow-2xl">
+          <Dialog.Content
+            onEscapeKeyDown={(event) => event.preventDefault()}
+            className="fixed inset-0 z-50 flex h-[100dvh] w-screen flex-col overflow-hidden bg-[var(--app-bg)] pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] focus:outline-none md:left-1/2 md:top-1/2 md:h-[82vh] md:w-[min(1280px,96vw)] md:-translate-x-1/2 md:-translate-y-1/2 md:rounded-2xl md:border md:border-[var(--app-border)] md:pt-0 md:pb-0 md:shadow-2xl"
+          >
             <div className="flex items-center justify-between gap-3 border-b border-[var(--app-border)] px-3 py-2.5 md:px-4 md:py-3">
               <div className="flex min-w-0 flex-1 items-center gap-2">
                 <Bot size={15} className="shrink-0 text-[var(--app-hint)]" />
