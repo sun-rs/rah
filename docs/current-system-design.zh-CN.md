@@ -164,6 +164,20 @@ Structured test live 的保留决策：
 
 这些默认值由 adapter 的 `ProviderModelCatalog.defaultModeId` 提供。前端只传 RAH 标准 `modeId`，daemon 在 native TUI launch spec 中尽量翻译为 provider 启动参数。启动增强失败或 provider 语义变化不应影响 PTY core 的产品边界；用户始终可以切到原生 TUI 使用官方 `/permission`、`/model`、`/plan`、`/goal` 等能力。具体映射见 [Provider Adapter 协议与能力边界](./provider-adapter-protocol.zh-CN.md)。
 
+OpenCode 的权限需要额外注意：OpenCode 默认多数工具是 `allow`，但 `external_directory` 默认是 `ask`。因此当 agent 读取或操作启动工作区之外的路径时，即使使用默认 `build` agent，也可能请求 approval。RAH 不应把这误判为 OpenCode 没有高权限模式。需要减少这类确认时，优先在用户级 `~/.config/opencode/opencode.json` 配置：
+
+```json
+{
+  "permission": {
+    "external_directory": {
+      "*": "allow"
+    }
+  }
+}
+```
+
+也可以通过 `OPENCODE_PERMISSION='{"external_directory":{"*":"allow"}}'` 只影响某次启动。`opencode --permissions/--tools` 是允许列表入口，不适合表达 `external_directory` 这种路径规则。
+
 `SessionModeDescriptor.role` 是 UI 的稳定语义层：
 
 - `ask`

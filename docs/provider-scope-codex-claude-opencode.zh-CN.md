@@ -40,3 +40,21 @@ OpenCode 的 reasoning/variant 能力仍属于 OpenCode 自己的 provider-speci
 - PTY-first native TUI 不把 `variant` 拼进 `--model`，也不把未公开的 `--variant` 当作稳定启动参数。
 
 这条边界避免 RAH 伪装支持 OpenCode TUI 尚未稳定公开的能力。需要严格 variant 的任务，应走 OpenCode 原生支持的路径或在 TUI 内自行选择。
+
+## OpenCode 权限边界
+
+OpenCode 的默认配置并不是所有权限都无条件放行。它默认允许大多数工具，但 `external_directory` 默认是 `ask`，用于保护工作区之外的路径。因此 RAH 中的 OpenCode 在读取或操作非当前工作区路径时可能仍会请求 approval。
+
+如果使用者希望 OpenCode 对工作区外路径不再反复确认，应在用户级 OpenCode 配置中显式允许：
+
+```json
+{
+  "permission": {
+    "external_directory": {
+      "*": "allow"
+    }
+  }
+}
+```
+
+这个配置比把全局 `permission` 设成 `"allow"` 更窄，只放开外部目录 guard，不改变其它工具的既有规则。OpenCode 同时支持 `OPENCODE_PERMISSION='{"external_directory":{"*":"allow"}}'` 作为单次启动注入；RAH 若未来需要做 session-scoped 权限增强，应优先使用这个环境变量而不是改写用户全局配置。

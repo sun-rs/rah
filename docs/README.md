@@ -12,6 +12,7 @@
 - [Claude Zellij Native Mode 边界](./claude-zellij-native-mode.zh-CN.md)
 - [Council Listening Control 边界](./council-listening-control.zh-CN.md)
 - [Session Controls 重构设计](./session-controls-refactor-design.zh-CN.md)
+- [Scrollbar UI 协议](./ui-scrollbar-protocol.zh-CN.md)
 
 ## 2. Provider 与能力边界
 
