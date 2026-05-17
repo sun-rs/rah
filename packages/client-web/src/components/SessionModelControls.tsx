@@ -320,7 +320,7 @@ export function SessionModelControls(props: {
                   </div>
                   <div
                     ref={modelListRef}
-                    className="min-h-0 flex-1 overflow-y-auto custom-scrollbar p-1.5"
+                    className="min-h-0 flex-1 overflow-y-auto rah-scroll-panel rah-scroll-panel-y p-1.5"
                   >
                     {models.map((m) => (
                       <button
@@ -365,7 +365,7 @@ export function SessionModelControls(props: {
                   </div>
                   <div
                     ref={paramListRef}
-                    className="min-h-0 flex-1 overflow-y-auto custom-scrollbar p-1.5"
+                    className="min-h-0 flex-1 overflow-y-auto rah-scroll-panel rah-scroll-panel-y p-1.5"
                   >
                     {panelReasoningOptions.length > 1 ? (
                       panelReasoningOptions.map((r) => (

@@ -95,7 +95,7 @@ export function CanvasNewSessionPane(props: {
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col items-center justify-center overflow-y-auto custom-scrollbar px-4 py-4 md:px-6">
+    <div className="flex h-full min-h-0 flex-col items-center justify-center overflow-y-auto rah-scroll-panel rah-scroll-panel-y px-4 py-4 md:px-6">
       <div ref={surfaceRef} className="w-full max-w-2xl space-y-5 md:space-y-6">
         <div className="text-center">
           <h1 className="text-xl font-semibold text-[var(--app-fg)] md:text-2xl">
@@ -154,7 +154,7 @@ export function CanvasNewSessionPane(props: {
                     />
                   </button>
                   {workspaceOpen ? (
-                    <div className="rah-popover-panel absolute bottom-full left-0 z-50 mb-1.5 max-h-64 w-64 overflow-y-auto rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-1.5 shadow-xl">
+                    <div className="rah-popover-panel rah-scroll-panel rah-scroll-panel-y absolute bottom-full left-0 z-50 mb-1.5 max-h-64 w-64 overflow-y-auto rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-1.5 shadow-xl">
                       {props.workspaceDirs.map((dir) => (
                         <button
                           key={dir}

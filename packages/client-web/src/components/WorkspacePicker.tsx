@@ -141,7 +141,7 @@ export function WorkspacePicker(props: {
           </div>
 
           {/* Directory listing */}
-          <div className="flex-1 overflow-y-auto custom-scrollbar px-4 pb-2">
+          <div className="flex-1 overflow-y-auto rah-scroll-panel rah-scroll-panel-y px-4 pb-2">
             {error ? (
               <div className="py-6 text-center text-sm text-[var(--app-danger)]">
                 {error}

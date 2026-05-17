@@ -273,7 +273,7 @@ export function SettingsPane() {
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto custom-scrollbar p-4 md:p-6">
+      <div className="min-h-0 flex-1 overflow-y-auto rah-scroll-panel rah-scroll-panel-y p-4 md:p-6">
         {activeTab === "appearance" ? (
           <div className="space-y-5">
             <div>

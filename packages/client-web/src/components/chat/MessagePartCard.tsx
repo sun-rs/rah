@@ -22,12 +22,12 @@ export function MessagePartCard(props: {
           <span className="min-w-0 break-all">{props.part.messageId}</span>
         </div>
         {props.part.text ? (
-          <pre className="max-w-full overflow-x-auto custom-scrollbar rounded-lg bg-[var(--app-code-bg)] px-3 py-2 text-xs text-[var(--app-fg)]">
+          <pre className="max-w-full overflow-x-auto rah-scroll-code rounded-lg bg-[var(--app-code-bg)] px-3 py-2 text-xs text-[var(--app-fg)]">
             <code>{props.part.text}</code>
           </pre>
         ) : null}
         {props.part.metadata ? (
-          <pre className="max-w-full overflow-x-auto custom-scrollbar rounded-lg bg-[var(--app-code-bg)] px-3 py-2 text-xs text-[var(--app-fg)]">
+          <pre className="max-w-full overflow-x-auto rah-scroll-code rounded-lg bg-[var(--app-code-bg)] px-3 py-2 text-xs text-[var(--app-fg)]">
             <code>{JSON.stringify(props.part.metadata, null, 2)}</code>
           </pre>
         ) : null}

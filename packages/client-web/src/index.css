@@ -264,24 +264,38 @@
     scrollbar-gutter: stable both-edges;
   }
 
+  /*
+   * RAH scrollbar protocol:
+   * - rah-scroll-panel: controls, pickers, dialogs, sidebars, history lists.
+   * - rah-scroll-panel-y: vertical panels that must reserve scrollbar width.
+   * - rah-scroll-main: primary reading surfaces such as session/council chat.
+   * - rah-scroll-code: code, diff, artifact, terminal-tab and technical panes.
+   * custom-scrollbar is a compatibility alias for old panel-style call sites.
+   */
+  .rah-scroll-panel,
   .custom-scrollbar {
+    scrollbar-gutter: stable;
     scrollbar-width: thin;
     scrollbar-color: transparent transparent;
   }
 
+  .rah-scroll-panel:hover,
   .custom-scrollbar:hover {
-    scrollbar-color: rgba(128, 128, 128, 0.35) transparent;
+    scrollbar-color: rgba(128, 128, 128, 0.32) transparent;
   }
 
+  .rah-scroll-panel::-webkit-scrollbar,
   .custom-scrollbar::-webkit-scrollbar {
-    width: 4px;
-    height: 4px;
+    width: 5px;
+    height: 5px;
   }
 
+  .rah-scroll-panel::-webkit-scrollbar-track,
   .custom-scrollbar::-webkit-scrollbar-track {
     background: transparent;
   }
 
+  .rah-scroll-panel::-webkit-scrollbar-thumb,
   .custom-scrollbar::-webkit-scrollbar-thumb {
     background-color: transparent;
     border-radius: 9999px;
@@ -289,15 +303,88 @@
     background-clip: padding-box;
   }
 
+  .rah-scroll-panel:hover::-webkit-scrollbar-thumb,
   .custom-scrollbar:hover::-webkit-scrollbar-thumb {
-    background-color: rgba(128, 128, 128, 0.3);
+    background-color: rgba(128, 128, 128, 0.28);
   }
 
+  .rah-scroll-panel:hover::-webkit-scrollbar-thumb:hover,
   .custom-scrollbar:hover::-webkit-scrollbar-thumb:hover {
-    background-color: rgba(128, 128, 128, 0.5);
+    background-color: rgba(128, 128, 128, 0.46);
   }
 
+  .rah-scroll-panel::-webkit-scrollbar-corner,
   .custom-scrollbar::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  .rah-scroll-panel-y {
+    overflow-y: scroll;
+  }
+
+  .rah-scroll-main {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+  }
+
+  .rah-scroll-main:hover {
+    scrollbar-color: rgba(128, 128, 128, 0.45) transparent;
+  }
+
+  .rah-scroll-main::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  .rah-scroll-main::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .rah-scroll-main::-webkit-scrollbar-thumb {
+    background-color: transparent;
+    border-radius: 9999px;
+    border: 1px solid transparent;
+    background-clip: padding-box;
+  }
+
+  .rah-scroll-main:hover::-webkit-scrollbar-thumb {
+    background-color: rgba(128, 128, 128, 0.34);
+  }
+
+  .rah-scroll-main:hover::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(128, 128, 128, 0.56);
+  }
+
+  .rah-scroll-main::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  .rah-scroll-code {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(128, 128, 128, 0.32) transparent;
+  }
+
+  .rah-scroll-code::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  .rah-scroll-code::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .rah-scroll-code::-webkit-scrollbar-thumb {
+    background-color: rgba(128, 128, 128, 0.28);
+    border-radius: 9999px;
+    border: 1px solid transparent;
+    background-clip: padding-box;
+  }
+
+  .rah-scroll-code::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(128, 128, 128, 0.52);
+  }
+
+  .rah-scroll-code::-webkit-scrollbar-corner {
     background: transparent;
   }
 

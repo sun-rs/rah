@@ -9,6 +9,7 @@ export function ConfirmDialog(props: {
   cancelLabel?: string;
   confirmTone?: "primary" | "danger";
   pending?: boolean;
+  modal?: boolean;
   onOpenChange: (open: boolean) => void;
   onConfirm: () => void;
 }) {
@@ -18,7 +19,7 @@ export function ConfirmDialog(props: {
       : "rounded-lg bg-primary px-3 py-2 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-40 transition-colors";
 
   return (
-    <Dialog.Root open={props.open} onOpenChange={props.onOpenChange}>
+    <Dialog.Root open={props.open} onOpenChange={props.onOpenChange} modal={props.modal ?? true}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 bg-black/40 z-[80]" />
         <Dialog.Content className="fixed left-1/2 top-1/2 z-[90] flex w-[90vw] max-w-sm -translate-x-1/2 -translate-y-1/2 flex-col rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-0 shadow-xl focus:outline-none max-md:max-w-[calc(100vw-2rem)]">

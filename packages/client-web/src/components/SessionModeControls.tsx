@@ -170,7 +170,7 @@ export function SessionModeControls(props: {
             <div
               ref={accessPanelRef}
               data-session-access-panel="true"
-              className="rah-popover-panel fixed z-[60] overflow-y-auto rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-1.5 shadow-2xl focus:outline-none"
+              className="rah-popover-panel fixed z-[60] overflow-y-auto rah-scroll-panel rah-scroll-panel-y rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-1.5 shadow-2xl focus:outline-none"
               style={accessPanelStyle}
               role="listbox"
               aria-label="Session mode"

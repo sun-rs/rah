@@ -565,6 +565,8 @@ html.dark .provider-choice-rail {
   min-height: 0;
   flex: 1;
   overflow: hidden;
+  overscroll-behavior: contain;
+  touch-action: none;
   background: var(--terminal-bg, var(--app-code-bg));
 }
 

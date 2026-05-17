@@ -140,7 +140,7 @@ export function FileContentDisplay(props: { content: string; path: string; wrapL
 
   return (
     <div className="space-y-2">
-      <div className="overflow-auto custom-scrollbar scrollbar-stable rounded-md border border-[var(--app-border)] bg-[var(--app-code-bg)]">
+      <div className="overflow-auto rah-scroll-code scrollbar-stable rounded-md border border-[var(--app-border)] bg-[var(--app-code-bg)]">
         <div className="grid grid-cols-[4rem_minmax(0,1fr)]">
           {visibleLines.map((line, index) => (
             <div key={`${index}-${line}`} className="contents">

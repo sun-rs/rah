@@ -306,7 +306,7 @@ export function InspectorFileDetailDialog(props: {
             </div>
           ) : null}
 
-          <div className="min-h-0 flex-1 overflow-auto custom-scrollbar scrollbar-stable p-3 md:p-5">
+          <div className="min-h-0 flex-1 overflow-auto rah-scroll-code scrollbar-stable p-3 md:p-5">
             {displayMode === "diff" ? (
               diffLoading ? (
                 <div className="flex items-center gap-2 text-sm text-[var(--app-hint)]">

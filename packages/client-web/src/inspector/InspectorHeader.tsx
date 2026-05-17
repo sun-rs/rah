@@ -30,7 +30,7 @@ export function InspectorHeader(props: {
         ) : null}
       </div>
       <div className="shrink-0 px-3 py-2">
-        <div className="overflow-x-auto custom-scrollbar scrollbar-stable">
+        <div className="overflow-x-auto rah-scroll-panel scrollbar-stable">
           <div className="grid min-w-full grid-cols-2 gap-2 rounded-lg bg-[var(--app-subtle-bg)] p-1">
             <button
               type="button"

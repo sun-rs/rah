@@ -60,7 +60,7 @@ export function Sheet(props: {
               </div>
             </div>
           )}
-          <div className="flex-1 overflow-y-auto overscroll-y-contain custom-scrollbar pb-[env(safe-area-inset-bottom)]">
+          <div className="flex-1 overflow-y-auto overscroll-y-contain rah-scroll-panel rah-scroll-panel-y pb-[env(safe-area-inset-bottom)]">
             {props.children}
           </div>
         </Dialog.Content>

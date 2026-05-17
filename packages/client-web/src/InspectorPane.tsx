@@ -228,7 +228,7 @@ export function InspectorPane(props: {
         onTabChange={setActiveTab}
         {...(props.onOpenTerminal ? { onOpenTerminal: props.onOpenTerminal } : {})}
       />
-      <div className="flex-1 overflow-y-scroll custom-scrollbar px-4 py-3">
+      <div className="flex-1 overflow-y-scroll rah-scroll-panel rah-scroll-panel-y px-4 py-3">
         {activeTab === "changes" ? (
           <InspectorChangesPane
             gitStatus={gitStatus}

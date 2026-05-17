@@ -623,7 +623,7 @@ export function SessionHistoryDialog(props: {
             </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto custom-scrollbar p-4">
+          <div className="flex-1 overflow-y-auto rah-scroll-panel rah-scroll-panel-y p-4">
             {tab === "live" ? (
               liveSessions.length > 0 ? (
                 <div className="space-y-1">

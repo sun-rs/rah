@@ -23,7 +23,7 @@ const ROUNDED = "rounded-xl";
 
 /* ── Base textarea ── */
 const TEXTAREA_BASE =
-  `block w-full resize-none overflow-y-auto custom-scrollbar box-border bg-[var(--app-subtle-bg)] border border-[var(--app-border)] text-base leading-5 focus:outline-none focus:ring-1 focus:ring-[var(--ring)]`;
+  `block w-full resize-none overflow-y-auto rah-scroll-panel rah-scroll-panel-y box-border bg-[var(--app-subtle-bg)] border border-[var(--app-border)] text-base leading-5 focus:outline-none focus:ring-1 focus:ring-[var(--ring)]`;
 
 export const COMPOSER_LAYOUT = {
   bottomPaddingStyle: {

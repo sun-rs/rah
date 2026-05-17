@@ -32,7 +32,7 @@ function renderTableRows(rows: Array<Record<string, unknown>>) {
     return null;
   }
   return (
-    <div className="max-w-full overflow-x-auto custom-scrollbar rounded-lg border border-[var(--app-border)]">
+    <div className="max-w-full overflow-x-auto rah-scroll-code rounded-lg border border-[var(--app-border)]">
       <table className="min-w-full text-left text-sm">
         <thead className="bg-[var(--app-code-bg)] text-[var(--app-hint)]">
           <tr>

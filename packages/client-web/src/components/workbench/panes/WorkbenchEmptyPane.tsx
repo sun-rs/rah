@@ -117,7 +117,7 @@ export function WorkbenchEmptyPane(props: {
           </div>
         </div>
       </header>
-      <div className="flex-1 flex flex-col items-center justify-center px-4 md:px-6 overflow-y-auto custom-scrollbar">
+      <div className="flex-1 flex flex-col items-center justify-center px-4 md:px-6 overflow-y-auto rah-scroll-panel rah-scroll-panel-y">
         <div className="w-full max-w-2xl -translate-y-6 space-y-5 md:-translate-y-8 md:space-y-6">
           <div className="text-center">
             <h1 className="text-2xl font-semibold text-[var(--app-fg)]">
@@ -187,7 +187,7 @@ export function WorkbenchEmptyPane(props: {
                       />
                     </button>
                     {props.workspaceDirs.length > 0 && props.workspacePickerOpen ? (
-                      <div className="rah-popover-panel custom-scrollbar absolute bottom-full left-0 z-20 mb-1.5 max-h-[min(18rem,calc(100dvh-12rem))] w-[min(34rem,calc(100vw-2rem))] overflow-y-auto rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-1.5 shadow-lg">
+                      <div className="rah-popover-panel rah-scroll-panel rah-scroll-panel-y absolute bottom-full left-0 z-20 mb-1.5 max-h-[min(18rem,calc(100dvh-12rem))] w-[min(34rem,calc(100vw-2rem))] overflow-y-auto rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-1.5 shadow-lg">
                         {props.workspaceDirs.map((dir) => (
                           <button
                             key={dir}

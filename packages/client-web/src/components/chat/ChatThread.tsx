@@ -675,7 +675,7 @@ export function ChatThread(props: {
       <div
         ref={containerRef}
         data-testid="chat-thread-scroll-container"
-        className="h-full overflow-y-scroll overflow-x-hidden custom-scrollbar scrollbar-stable px-4 py-5"
+        className="h-full overflow-y-scroll overflow-x-hidden rah-scroll-main scrollbar-stable px-4 py-5"
       >
         <div ref={contentRef} className="mx-auto w-full min-w-0 max-w-3xl space-y-5">
         {props.historyLoading && props.canLoadOlderHistory ? (

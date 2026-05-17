@@ -319,6 +319,7 @@ export function App() {
       createEmptyCanvasNewSessionDrafts(),
     );
   const [settingsDialogMounted, setSettingsDialogMounted] = useState(false);
+  const [terminalDialogMounted, setTerminalDialogMounted] = useState(false);
   const { hideToolCallsInChat, showModelInfoInChat } = useChatPreferences();
   const { setWorkspaceSortMode, workspaceSortMode } = useWorkspaceSortModeState();
   const {
@@ -742,6 +743,22 @@ export function App() {
     }
   }, [primaryPaneState.kind, selectedSummary]);
 
+  const availableWorkspaceDir = workspaceDirs.length > 0 ? workspaceDir : "";
+  const selectedInspectorWorkspaceDir = selectedSummary
+    ? availableWorkspaceDir ||
+      selectedSummary.session.rootDir ||
+      selectedSummary.session.cwd ||
+      ""
+    : selectedWorkspaceOnlyDir ?? "";
+  const terminalCwd = selectedInspectorWorkspaceDir || "~";
+  const selectedTerminalSessionId = selectedSummary?.session.id ?? null;
+  const terminalOwner = useMemo(() => {
+    if (selectedTerminalSessionId) {
+      return { kind: "session" as const, id: selectedTerminalSessionId };
+    }
+    return { kind: "workspace" as const, id: selectedWorkspaceOnlyDir || terminalCwd };
+  }, [selectedTerminalSessionId, selectedWorkspaceOnlyDir, terminalCwd]);
+
   if (!isInitialLoaded) {
     return (
       <div className="h-[100dvh] min-h-[100dvh] flex items-center justify-center bg-background text-foreground">
@@ -753,13 +770,6 @@ export function App() {
     );
   }
 
-  const availableWorkspaceDir = workspaceDirs.length > 0 ? workspaceDir : "";
-  const selectedInspectorWorkspaceDir = selectedSummary
-    ? availableWorkspaceDir ||
-      selectedSummary.session.rootDir ||
-      selectedSummary.session.cwd ||
-      ""
-    : selectedWorkspaceOnlyDir ?? "";
   const sidebarContent = (
     <SessionSidebar
       workspaceSections={workspaceSections}
@@ -827,7 +837,6 @@ export function App() {
     setSelectedSessionId(sessionId);
   };
 
-  const terminalCwd = selectedInspectorWorkspaceDir || "~";
   const inspectorContent = selectedSummary || selectedWorkspaceOnlyDir ? (
     <Suspense
       fallback={
@@ -840,7 +849,10 @@ export function App() {
         sessionId={selectedSummary?.session.id ?? null}
         workspaceRoot={selectedInspectorWorkspaceDir}
         events={selectedProjection?.events ?? []}
-        onOpenTerminal={() => setTerminalOpen(true)}
+        onOpenTerminal={() => {
+          setTerminalDialogMounted(true);
+          setTerminalOpen(true);
+        }}
       />
     </Suspense>
   ) : (
@@ -939,7 +951,7 @@ export function App() {
         </Suspense>
       ) : null}
 
-      {terminalOpen ? (
+      {terminalDialogMounted ? (
         <Suspense
           fallback={
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 text-sm text-white">
@@ -952,6 +964,7 @@ export function App() {
             onOpenChange={setTerminalOpen}
             clientId={clientId}
             cwd={terminalCwd}
+            owner={terminalOwner}
           />
         </Suspense>
       ) : null}

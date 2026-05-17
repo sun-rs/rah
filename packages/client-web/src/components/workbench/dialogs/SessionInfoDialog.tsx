@@ -362,7 +362,7 @@ export function SessionInfoDialog(props: {
               </button>
             </Dialog.Close>
           </div>
-          <div className="min-h-0 flex-1 overflow-y-auto custom-scrollbar">
+          <div className="min-h-0 flex-1 overflow-y-auto rah-scroll-panel rah-scroll-panel-y">
             <InfoRow label="Provider" value={session ? providerLabel(session.provider) : "Unavailable"} />
             <InfoRow
               label="Session ID"

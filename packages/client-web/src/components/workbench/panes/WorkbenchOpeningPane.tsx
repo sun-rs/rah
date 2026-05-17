@@ -49,7 +49,7 @@ export function WorkbenchOpeningPane(props: {
           </div>
         </div>
       </header>
-      <div className="flex-1 overflow-y-auto custom-scrollbar">
+      <div className="flex-1 overflow-y-auto rah-scroll-panel rah-scroll-panel-y">
         <div className="mx-auto flex min-h-full w-full max-w-4xl items-center justify-center px-6 py-8 md:px-10 md:py-12 xl:max-w-5xl xl:px-14 xl:py-16">
           <div className="w-full rounded-3xl border border-[var(--app-border)] bg-[var(--app-bg)] px-6 py-8 text-center shadow-sm md:px-14 md:py-16 xl:px-20 xl:py-20">
             <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-[var(--app-subtle-bg)] md:h-20 md:w-20">
