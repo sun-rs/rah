@@ -41,15 +41,74 @@ def send_mobile_bridge_command(page, command: str) -> None:
     bridge_input = page.locator(".terminal-ios-input").last
     expect(bridge_input).to_be_visible(timeout=10_000)
     bridge_input.click()
-    page.keyboard.type(command)
+    bridge_input.fill(command)
+    bridge_input.press("Enter")
+
+
+def send_desktop_terminal_command(page, command: str) -> None:
+    canvas = page.locator(".terminal-canvas").last
+    expect(canvas).to_be_visible(timeout=10_000)
+    canvas.click()
+    page.keyboard.type(command, delay=25)
     page.keyboard.press("Enter")
 
 
-def close_terminal_dialog(page, panel) -> None:
-    page.get_by_label("Close terminal").click()
-    if page.get_by_text("Close terminals?").count() > 0 or page.get_by_text("Close terminal?").count() > 0:
-        page.get_by_role("button", name="Close").last.click()
+def active_terminal_id(page) -> str:
+    dialog = page.get_by_test_id("workbench-terminal-dialog")
+    expect(dialog).to_be_visible(timeout=10_000)
+    started = time.time()
+    while (time.time() - started) * 1000 < 10_000:
+        terminal_id = dialog.get_attribute("data-terminal-id")
+        if terminal_id:
+            return terminal_id
+        page.wait_for_timeout(100)
+    raise AssertionError("Terminal dialog did not expose an active terminal id.")
+
+
+def send_pty_input_via_page(page, terminal_id: str, data: str) -> None:
+    page.evaluate(
+        """async ({ terminalId, data }) => {
+            const url = new URL(`/api/pty/${terminalId}?replay=false`, window.location.href);
+            url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+            const socket = new WebSocket(url.href);
+            await new Promise((resolve, reject) => {
+                const timer = window.setTimeout(() => reject(new Error("PTY websocket open timeout")), 5000);
+                socket.addEventListener("open", () => {
+                    window.clearTimeout(timer);
+                    resolve(undefined);
+                }, { once: true });
+                socket.addEventListener("error", () => {
+                    window.clearTimeout(timer);
+                    reject(new Error("PTY websocket failed"));
+                }, { once: true });
+            });
+            socket.send(JSON.stringify({
+                type: "pty.input",
+                sessionId: terminalId,
+                clientId: "terminal-browser-smoke",
+                data,
+            }));
+            socket.close();
+        }""",
+        {"terminalId": terminal_id, "data": data},
+    )
+
+
+def hide_terminal_dialog(page, panel) -> None:
+    page.get_by_label("Hide terminal window").click()
     expect(panel).not_to_be_visible(timeout=10_000)
+
+
+def terminate_active_terminal(page, panel) -> None:
+    page.get_by_label("Terminate", exact=False).last.click()
+    expect(page.get_by_text("Terminate terminal?")).to_be_visible(timeout=10_000)
+    page.get_by_role("button", name="Terminate").last.click()
+    expect(panel).not_to_be_visible(timeout=10_000)
+
+
+def reopen_terminal_dialog(page, *, mobile: bool) -> None:
+    wait_for_terminal_entrypoint(page, mobile=mobile)
+    page.get_by_role("button", name="Open terminal").click()
 
 
 def wait_for_terminal_entrypoint(page, *, mobile: bool) -> None:
@@ -85,18 +144,33 @@ def run_terminal_smoke(page, workspace: str, marker: str, *, mobile: bool = Fals
     panel = page.locator(".terminal-panel").last
     expect(panel).to_be_visible(timeout=10_000)
     page.wait_for_timeout(750)
+    terminal_id = active_terminal_id(page)
 
     bridge = page.locator(".terminal-ios-input-bridge").last
     if bridge.count() > 0 and bridge.is_visible():
-        send_mobile_bridge_command(page, f"printf '{marker}\\n'")
+        if mobile:
+            send_mobile_bridge_command(page, f"printf '{marker}\\n'")
+        else:
+            send_pty_input_via_page(page, terminal_id, f"printf '{marker}\\n'\r")
     else:
-        canvas = page.locator(".terminal-canvas").last
-        canvas.click()
-        page.keyboard.type(f"printf '{marker}\\n'")
-        page.keyboard.press("Enter")
+        send_desktop_terminal_command(page, f"printf '{marker}\\n'")
     assert_terminal_output(panel, marker)
 
-    close_terminal_dialog(page, panel)
+    after_hide_marker = f"{marker}_AFTER_HIDE"
+    if bridge.count() > 0 and bridge.is_visible():
+        if mobile:
+            send_mobile_bridge_command(page, f"sh -c \"sleep 1; printf '{after_hide_marker}\\n'\"")
+        else:
+            send_pty_input_via_page(page, terminal_id, f"sh -c \"sleep 1; printf '{after_hide_marker}\\n'\"\r")
+    else:
+        send_desktop_terminal_command(page, f"sh -c \"sleep 1; printf '{after_hide_marker}\\n'\"")
+    hide_terminal_dialog(page, panel)
+    page.wait_for_timeout(1_500)
+    reopen_terminal_dialog(page, mobile=mobile)
+    panel = page.locator(".terminal-panel").last
+    expect(panel).to_be_visible(timeout=10_000)
+    assert_terminal_output(panel, after_hide_marker)
+    terminate_active_terminal(page, panel)
 
 
 def main() -> int:
@@ -152,7 +226,7 @@ def main() -> int:
             bridge_input.press("Enter")
             assert_terminal_output(mobile_panel, "中文")
 
-            close_terminal_dialog(mobile_page, mobile_panel)
+            terminate_active_terminal(mobile_page, mobile_panel)
 
             tablet_context = browser.new_context(
                 viewport={"width": 834, "height": 1194},
@@ -178,7 +252,7 @@ def main() -> int:
             split_page.wait_for_timeout(750)
             send_mobile_bridge_command(split_page, "printf 'RAH_TERMINAL_SPLIT_OK\\n'")
             assert_terminal_output(split_panel, "RAH_TERMINAL_SPLIT_OK")
-            close_terminal_dialog(split_page, split_panel)
+            terminate_active_terminal(split_page, split_panel)
 
             result["browserSmoke"] = "ok"
             print(json.dumps({"ok": True, **result}, ensure_ascii=False, indent=2))

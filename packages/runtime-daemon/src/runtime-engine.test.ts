@@ -1682,6 +1682,7 @@ describe("RuntimeEngine", () => {
       cols: 100,
       rows: 32,
     });
+    assert.deepEqual(engine.listIndependentTerminals({ cwd: workspace }), [terminal.terminal]);
 
     let transcript = "";
     let sawExit = false;
@@ -1715,8 +1716,41 @@ describe("RuntimeEngine", () => {
     await waitFor(() => {
       assert.equal(sawExit, true);
     });
+    assert.deepEqual(engine.listIndependentTerminals({ cwd: workspace }), []);
 
     unsubscribe();
+    await engine.shutdown();
+    rmSync(workspace, { force: true, recursive: true });
+  });
+
+  test("independent terminal registry separates session owners in the same cwd", async () => {
+    const engine = new RuntimeEngine([]);
+    const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-terminal-owner-"));
+
+    const first = await engine.startIndependentTerminal({
+      cwd: workspace,
+      owner: { kind: "session", id: "session-a" },
+    });
+    const second = await engine.startIndependentTerminal({
+      cwd: workspace,
+      owner: { kind: "session", id: "session-b" },
+    });
+
+    assert.deepEqual(engine.listIndependentTerminals({
+      cwd: workspace,
+      owner: { kind: "session", id: "session-a" },
+    }), [first.terminal]);
+    assert.deepEqual(engine.listIndependentTerminals({
+      cwd: workspace,
+      owner: { kind: "session", id: "session-b" },
+    }), [second.terminal]);
+    assert.deepEqual(
+      engine.listIndependentTerminals({ cwd: workspace }).map((terminal) => terminal.id).sort(),
+      [first.terminal.id, second.terminal.id].sort(),
+    );
+
+    await engine.closeIndependentTerminal(first.terminal.id);
+    await engine.closeIndependentTerminal(second.terminal.id);
     await engine.shutdown();
     rmSync(workspace, { force: true, recursive: true });
   });

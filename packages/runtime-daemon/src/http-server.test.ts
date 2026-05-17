@@ -284,6 +284,50 @@ describe("startRahDaemon", () => {
     }
   });
 
+  test("lists independent terminals so hidden dialogs can reattach", async () => {
+    const first = await engine.startIndependentTerminal({
+      cwd: tempHome,
+      cols: 80,
+      rows: 24,
+      owner: { kind: "session", id: "session-a" },
+    });
+    const second = await engine.startIndependentTerminal({
+      cwd: tempHome,
+      cols: 80,
+      rows: 24,
+      owner: { kind: "session", id: "session-b" },
+    });
+    try {
+      const response = await requestJson({
+        port,
+        path: `/api/terminal/list?cwd=${encodeURIComponent(tempHome)}`,
+        headers: {
+          Origin: `http://127.0.0.1:${port}`,
+          "x-rah-client": "web",
+        },
+      });
+      assert.equal(response.status, 200);
+      assert.deepEqual(response.json, {
+        terminals: [first.terminal, second.terminal].sort((a, b) => a.id.localeCompare(b.id)),
+      });
+      const scopedResponse = await requestJson({
+        port,
+        path: `/api/terminal/list?cwd=${encodeURIComponent(tempHome)}&ownerKind=session&ownerId=session-a`,
+        headers: {
+          Origin: `http://127.0.0.1:${port}`,
+          "x-rah-client": "web",
+        },
+      });
+      assert.equal(scopedResponse.status, 200);
+      assert.deepEqual(scopedResponse.json, {
+        terminals: [first.terminal],
+      });
+    } finally {
+      await engine.closeIndependentTerminal(first.terminal.id);
+      await engine.closeIndependentTerminal(second.terminal.id);
+    }
+  });
+
   test("rejects provider control live backend at the public HTTP boundary", async () => {
     const start = await requestJson({
       port,

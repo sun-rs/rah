@@ -58,6 +58,7 @@ export function parseIndependentTerminalStartRequest(body: unknown): Independent
   const cwd = optionalString(record, "cwd");
   const cols = optionalNumber(record, "cols");
   const rows = optionalNumber(record, "rows");
+  const owner = optionalObject(record, "owner");
   if (cwd !== undefined) {
     request.cwd = cwd;
   }
@@ -66,6 +67,14 @@ export function parseIndependentTerminalStartRequest(body: unknown): Independent
   }
   if (rows !== undefined) {
     request.rows = rows;
+  }
+  if (owner !== undefined) {
+    const kind = optionalEnum(owner, "kind", ["workspace", "session"]);
+    const id = optionalString(owner, "id");
+    if (!kind || !id) {
+      throw badRequest("terminal owner requires kind and id.");
+    }
+    request.owner = { kind: kind as "workspace" | "session", id };
   }
   return request;
 }
@@ -524,6 +533,14 @@ function requireObject(value: unknown, name: string): JsonRecord {
 
 function requireRecord(record: JsonRecord, key: string): JsonRecord {
   return requireObject(record[key], key);
+}
+
+function optionalObject(record: JsonRecord, key: string): JsonRecord | undefined {
+  const value = record[key];
+  if (value === undefined) {
+    return undefined;
+  }
+  return requireObject(value, key);
 }
 
 function requireString(record: JsonRecord, key: string): string {

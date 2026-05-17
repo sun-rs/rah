@@ -6,6 +6,8 @@ type StoredSessionMonitorOptions = {
   refresh: () => void | Promise<void>;
   debounceMs?: number;
   reconcileMs?: number;
+  watchFs?: boolean;
+  watchFileChanges?: boolean;
 };
 
 function resolveWatchTarget(root: string): { path: string; recursive: boolean } | null {
@@ -39,7 +41,10 @@ export class StoredSessionMonitor {
   private readonly refresh: () => void | Promise<void>;
   private readonly debounceMs: number;
   private readonly reconcileMs: number;
+  private readonly watchFs: boolean;
+  private readonly watchFileChanges: boolean;
   private readonly watchers: FSWatcher[] = [];
+  private readonly installedWatcherTargets = new Set<string>();
 
   private started = false;
   private refreshTimer: NodeJS.Timeout | null = null;
@@ -50,8 +55,10 @@ export class StoredSessionMonitor {
   constructor(options: StoredSessionMonitorOptions) {
     this.roots = [...new Set(options.roots.map((root) => path.resolve(root)))];
     this.refresh = options.refresh;
-    this.debounceMs = options.debounceMs ?? 250;
-    this.reconcileMs = options.reconcileMs ?? 30_000;
+    this.debounceMs = options.debounceMs ?? 2_000;
+    this.reconcileMs = options.reconcileMs ?? 300_000;
+    this.watchFs = options.watchFs ?? false;
+    this.watchFileChanges = options.watchFileChanges ?? false;
   }
 
   start(): void {
@@ -59,9 +66,13 @@ export class StoredSessionMonitor {
       return;
     }
     this.started = true;
-    this.installWatchers();
-    this.reconcileTimer = setInterval(() => {
+    if (this.watchFs) {
       this.installWatchers();
+    }
+    this.reconcileTimer = setInterval(() => {
+      if (this.watchFs) {
+        this.installWatchers();
+      }
       this.scheduleRefresh();
     }, this.reconcileMs);
     this.reconcileTimer.unref?.();
@@ -80,11 +91,16 @@ export class StoredSessionMonitor {
     while (this.watchers.length > 0) {
       this.watchers.pop()?.close();
     }
+    this.installedWatcherTargets.clear();
   }
 
   scheduleRefresh(): void {
-    if (!this.started || this.refreshTimer) {
+    if (!this.started) {
       return;
+    }
+    if (this.refreshTimer) {
+      clearTimeout(this.refreshTimer);
+      this.refreshTimer = null;
     }
     this.refreshTimer = setTimeout(() => {
       this.refreshTimer = null;
@@ -94,36 +110,41 @@ export class StoredSessionMonitor {
   }
 
   private installWatchers(): void {
-    while (this.watchers.length > 0) {
-      this.watchers.pop()?.close();
-    }
-    const installedTargets = new Set<string>();
     for (const root of this.roots) {
       const target = resolveWatchTarget(root);
-      if (!target || installedTargets.has(target.path)) {
+      if (!target || this.installedWatcherTargets.has(target.path)) {
         continue;
       }
-      installedTargets.add(target.path);
       const watcher = this.openWatcher(target);
       if (watcher) {
         watcher.unref?.();
         this.watchers.push(watcher);
+        this.installedWatcherTargets.add(target.path);
       }
     }
   }
 
   private openWatcher(target: { path: string; recursive: boolean }): FSWatcher | null {
-    const handleChange = () => {
+    const handleChange = (eventType?: string) => {
+      if (eventType && eventType !== "rename" && !this.watchFileChanges) {
+        return;
+      }
       this.scheduleRefresh();
     };
     try {
       const watcher = watch(target.path, { recursive: target.recursive }, handleChange);
-      watcher.on("error", handleChange);
+      watcher.on("error", () => {
+        this.installedWatcherTargets.delete(target.path);
+        handleChange();
+      });
       return watcher;
     } catch {
       try {
         const watcher = watch(target.path, handleChange);
-        watcher.on("error", handleChange);
+        watcher.on("error", () => {
+          this.installedWatcherTargets.delete(target.path);
+          handleChange();
+        });
         return watcher;
       } catch {
         return null;

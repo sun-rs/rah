@@ -3,6 +3,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import type {
   EventSubscriptionRequest,
   PtyClientMessage,
+  PtyServerMessage,
   ReplayGapNotice,
 } from "@rah/runtime-protocol";
 import { RuntimeEngine } from "./runtime-engine";
@@ -10,6 +11,8 @@ import { isAllowedOrigin } from "./http-server-cors";
 
 const WEBSOCKET_HEARTBEAT_INTERVAL_MS = 30_000;
 const DEFAULT_MAX_WEBSOCKET_BUFFERED_BYTES = 8 * 1024 * 1024;
+const PTY_OUTPUT_FLUSH_DELAY_MS = 8;
+const PTY_OUTPUT_MAX_BATCH_CHARS = 128 * 1024;
 
 export { isLoopbackRemoteAddress } from "./http-server-client-address";
 
@@ -220,17 +223,71 @@ export function attachWebSocketHandlers(
     const fromSeq = parsePtyReplaySeq(
       url.searchParams.get("fromSeq") ?? url.searchParams.get("cursor"),
     );
+    const tailBytes = parsePtyReplaySeq(url.searchParams.get("tailBytes"));
     let unsubscribe: () => void = () => undefined;
     let closeAfterSubscribe = false;
-    unsubscribe = engine.ptyHub.subscribe(sessionId, (frame) => {
-      const sent = sendJsonWithBackpressure(socket, frame, {
+    let pendingOutput: Extract<PtyServerMessage, { type: "pty.output" }> | null = null;
+    let pendingOutputTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const sendFrame = (frame: PtyServerMessage): boolean =>
+      sendJsonWithBackpressure(socket, frame, {
         closeReason: "PTY client is too slow",
       });
+
+    const flushPendingOutput = () => {
+      if (pendingOutputTimer) {
+        clearTimeout(pendingOutputTimer);
+        pendingOutputTimer = null;
+      }
+      if (!pendingOutput) {
+        return;
+      }
+      const output = pendingOutput;
+      pendingOutput = null;
+      const sent = sendFrame(output);
       if (!sent) {
         closeAfterSubscribe = true;
         unsubscribe();
       }
-    }, { replay, ...(fromSeq !== undefined ? { fromSeq } : {}) });
+    };
+
+    const sendPtyFrame = (frame: PtyServerMessage) => {
+      if (frame.type === "pty.output" && frame.replace !== true) {
+        if (pendingOutput) {
+          pendingOutput = {
+            ...pendingOutput,
+            data: `${pendingOutput.data}${frame.data}`,
+            ...(frame.seq !== undefined ? { seq: frame.seq } : {}),
+          };
+        } else {
+          pendingOutput = frame;
+        }
+        if (pendingOutput.data.length >= PTY_OUTPUT_MAX_BATCH_CHARS) {
+          flushPendingOutput();
+          return;
+        }
+        if (!pendingOutputTimer) {
+          pendingOutputTimer = setTimeout(flushPendingOutput, PTY_OUTPUT_FLUSH_DELAY_MS);
+        }
+        return;
+      }
+      if (pendingOutput) {
+        flushPendingOutput();
+      }
+      const sent = sendFrame(frame);
+      if (!sent) {
+        closeAfterSubscribe = true;
+        unsubscribe();
+      }
+    };
+
+    unsubscribe = engine.ptyHub.subscribe(sessionId, (frame) => {
+      sendPtyFrame(frame);
+    }, {
+      replay,
+      ...(fromSeq !== undefined ? { fromSeq } : {}),
+      ...(fromSeq === undefined && tailBytes !== undefined ? { tailBytes } : {}),
+    });
     if (closeAfterSubscribe) {
       unsubscribe();
     }
@@ -273,6 +330,11 @@ export function attachWebSocketHandlers(
     });
 
     socket.on("close", () => {
+      if (pendingOutputTimer) {
+        clearTimeout(pendingOutputTimer);
+        pendingOutputTimer = null;
+      }
+      pendingOutput = null;
       unsubscribe();
       if (surfaceClientId) {
         void engine

@@ -1,28 +1,28 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import readline from "node:readline";
 import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 
-type TerminalHostMessage =
-  | {
-      type: "ready";
-    }
-  | {
-      type: "output";
-      data?: string;
-      dataBase64?: string;
-    }
-  | {
-      type: "error";
-      message: string;
-    }
-  | {
-      type: "exit";
-      exitCode?: number;
-      signal?: string;
-    };
+const HOST_FRAME_READY = 1;
+const HOST_FRAME_OUTPUT = 2;
+const HOST_FRAME_ERROR = 3;
+const HOST_FRAME_EXIT = 4;
+
+const CLIENT_FRAME_INPUT = 1;
+const CLIENT_FRAME_RESIZE = 2;
+const CLIENT_FRAME_CLOSE = 3;
+
+const FRAME_HEADER_SIZE = 5;
+const MAX_HOST_FRAME_BYTES = 32 * 1024 * 1024;
+
+function encodeClientFrame(frameType: number, payload?: Buffer): Buffer {
+  const body = payload ?? Buffer.alloc(0);
+  const header = Buffer.allocUnsafe(FRAME_HEADER_SIZE);
+  header.writeUInt8(frameType, 0);
+  header.writeUInt32BE(body.length, 1);
+  return body.length === 0 ? header : Buffer.concat([header, body]);
+}
 
 function cleanEnv(args: {
   cols?: number;
@@ -43,6 +43,7 @@ function cleanEnv(args: {
   }
   normalizeTerminalEnvironment(env);
   env.RAH_TERMINAL_SHELL = args.shell;
+  env.RAH_TERMINAL_HOST_PROTOCOL = "2";
   if (args.cols !== undefined) {
     env.COLUMNS = String(args.cols);
   }
@@ -126,11 +127,13 @@ export class IndependentTerminalProcess {
   readonly cwd: string;
 
   private readonly child: ChildProcessWithoutNullStreams;
-  private readonly stdoutReader: readline.Interface;
   private readonly onData: (data: string) => void;
   private readonly onExit: (args: { exitCode?: number; signal?: string }) => void;
   private readonly outputDecoder = new StringDecoder("utf8");
+  private stdoutBuffer: Buffer<ArrayBufferLike> = Buffer.alloc(0);
   private readonly readyPromise: Promise<void>;
+  private resolveReady: (() => void) | null = null;
+  private rejectReady: ((error: Error) => void) | null = null;
   private readySettled = false;
   private exitHandled = false;
   private closed = false;
@@ -162,14 +165,11 @@ export class IndependentTerminalProcess {
         stdio: "pipe",
       },
     );
-    this.child.stdout.setEncoding("utf8");
     this.child.stderr.setEncoding("utf8");
-    this.stdoutReader = readline.createInterface({
-      input: this.child.stdout,
-      crlfDelay: Infinity,
-    });
 
     this.readyPromise = new Promise<void>((resolve, reject) => {
+      this.resolveReady = resolve;
+      this.rejectReady = reject;
       const rejectStartup = (message: string) => {
         if (this.readySettled) {
           return;
@@ -178,41 +178,8 @@ export class IndependentTerminalProcess {
         reject(new Error(message));
       };
 
-      this.stdoutReader.on("line", (line) => {
-        if (!line.trim()) {
-          return;
-        }
-        let message: TerminalHostMessage;
-        try {
-          message = JSON.parse(line) as TerminalHostMessage;
-        } catch {
-          this.onData(`${line}\r\n`);
-          return;
-        }
-
-        if (message.type === "ready") {
-          if (!this.readySettled) {
-            this.readySettled = true;
-            resolve();
-          }
-          return;
-        }
-
-        if (message.type === "output") {
-          this.emitTerminalOutput(message);
-          return;
-        }
-
-        if (message.type === "error") {
-          if (!this.readySettled) {
-            rejectStartup(message.message);
-            return;
-          }
-          this.onData(`\r\n[terminal error] ${message.message}\r\n`);
-          return;
-        }
-
-        this.handleExit(message);
+      this.child.stdout.on("data", (chunk: Buffer | string) => {
+        this.handleStdoutChunk(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
       });
 
       this.child.stderr.on("data", (chunk: string | Buffer) => {
@@ -255,21 +222,17 @@ export class IndependentTerminalProcess {
     if (this.closed) {
       return;
     }
-    this.sendMessage({
-      type: "input",
-      data,
-    });
+    this.sendFrame(CLIENT_FRAME_INPUT, Buffer.from(data, "utf8"));
   }
 
   resize(cols: number, rows: number): void {
     if (this.closed) {
       return;
     }
-    this.sendMessage({
-      type: "resize",
-      cols,
-      rows,
-    });
+    this.sendFrame(
+      CLIENT_FRAME_RESIZE,
+      Buffer.from(JSON.stringify({ cols, rows }), "utf8"),
+    );
   }
 
   async close(): Promise<void> {
@@ -277,7 +240,7 @@ export class IndependentTerminalProcess {
       return;
     }
     this.closed = true;
-    this.sendMessage({ type: "close" });
+    this.sendFrame(CLIENT_FRAME_CLOSE);
 
     await new Promise<void>((resolve) => {
       const timeout = setTimeout(() => {
@@ -299,24 +262,66 @@ export class IndependentTerminalProcess {
     });
   }
 
-  private sendMessage(payload: Record<string, unknown>): void {
+  private sendFrame(frameType: number, payload?: Buffer): void {
     if (this.child.stdin.destroyed) {
       return;
     }
-    this.child.stdin.write(`${JSON.stringify(payload)}\n`);
+    this.child.stdin.write(encodeClientFrame(frameType, payload));
   }
 
-  private emitTerminalOutput(message: Extract<TerminalHostMessage, { type: "output" }>): void {
-    if (typeof message.dataBase64 === "string") {
-      const decoded = this.outputDecoder.write(Buffer.from(message.dataBase64, "base64"));
+  private handleStdoutChunk(chunk: Buffer<ArrayBufferLike>): void {
+    this.stdoutBuffer = this.stdoutBuffer.length === 0
+      ? chunk
+      : Buffer.concat([this.stdoutBuffer, chunk]);
+    while (this.stdoutBuffer.length >= FRAME_HEADER_SIZE) {
+      const frameType = this.stdoutBuffer.readUInt8(0);
+      const payloadLength = this.stdoutBuffer.readUInt32BE(1);
+      if (payloadLength > MAX_HOST_FRAME_BYTES) {
+        this.onData(`\r\n[terminal error] host frame is too large: ${payloadLength} bytes\r\n`);
+        this.child.kill("SIGTERM");
+        this.stdoutBuffer = Buffer.alloc(0);
+        return;
+      }
+      const frameLength = FRAME_HEADER_SIZE + payloadLength;
+      if (this.stdoutBuffer.length < frameLength) {
+        return;
+      }
+      const payload = this.stdoutBuffer.subarray(FRAME_HEADER_SIZE, frameLength);
+      this.stdoutBuffer = this.stdoutBuffer.subarray(frameLength);
+      this.handleHostFrame(frameType, payload);
+    }
+  }
+
+  private handleHostFrame(frameType: number, payload: Buffer): void {
+    if (frameType === HOST_FRAME_READY) {
+      if (!this.readySettled) {
+        this.readySettled = true;
+        this.resolveReady?.();
+      }
+      return;
+    }
+    if (frameType === HOST_FRAME_OUTPUT) {
+      const decoded = this.outputDecoder.write(payload);
       if (decoded) {
         this.onData(decoded);
       }
       return;
     }
-    if (typeof message.data === "string") {
-      this.onData(message.data);
+    if (frameType === HOST_FRAME_ERROR) {
+      const message = decodeHostErrorMessage(payload);
+      if (!this.readySettled) {
+        this.readySettled = true;
+        this.rejectReady?.(new Error(message));
+        return;
+      }
+      this.onData(`\r\n[terminal error] ${message}\r\n`);
+      return;
     }
+    if (frameType === HOST_FRAME_EXIT) {
+      this.handleExit(decodeHostExit(payload));
+      return;
+    }
+    this.onData(`\r\n[terminal error] unknown host frame ${frameType}\r\n`);
   }
 
   private handleExit(message: { exitCode?: number; signal?: string }): void {
@@ -329,10 +334,31 @@ export class IndependentTerminalProcess {
     if (trailingOutput) {
       this.onData(trailingOutput);
     }
-    this.stdoutReader.close();
     this.onExit({
       ...(message.exitCode !== undefined ? { exitCode: message.exitCode } : {}),
       ...(message.signal !== undefined ? { signal: message.signal } : {}),
     });
   }
+}
+
+function decodeHostJsonObject(payload: Buffer<ArrayBufferLike>): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(payload.toString("utf8")) as unknown;
+    return parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+}
+
+function decodeHostErrorMessage(payload: Buffer<ArrayBufferLike>): string {
+  const parsed = decodeHostJsonObject(payload);
+  return typeof parsed.message === "string" ? parsed.message : payload.toString("utf8");
+}
+
+function decodeHostExit(payload: Buffer<ArrayBufferLike>): { exitCode?: number; signal?: string } {
+  const parsed = decodeHostJsonObject(payload);
+  return {
+    ...(typeof parsed.exitCode === "number" ? { exitCode: parsed.exitCode } : {}),
+    ...(typeof parsed.signal === "string" ? { signal: parsed.signal } : {}),
+  };
 }

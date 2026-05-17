@@ -309,20 +309,31 @@ export interface WorkspaceDirectoryResponse {
   path: string;
 }
 
+export interface IndependentTerminalOwner {
+  kind: "workspace" | "session";
+  id: string;
+}
+
 export interface IndependentTerminalStartRequest {
   cwd?: string;
   cols?: number;
   rows?: number;
+  owner?: IndependentTerminalOwner;
 }
 
 export interface IndependentTerminalSession {
   id: string;
   cwd: string;
   shell: string;
+  owner?: IndependentTerminalOwner;
 }
 
 export interface IndependentTerminalStartResponse {
   terminal: IndependentTerminalSession;
+}
+
+export interface IndependentTerminalListResponse {
+  terminals: IndependentTerminalSession[];
 }
 
 export interface PermissionResponseRequest {

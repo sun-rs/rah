@@ -1,4 +1,11 @@
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type TouchEvent as ReactTouchEvent,
+  type WheelEvent as ReactWheelEvent,
+} from "react";
 import { Terminal, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { closeNativeTuiClient, createPtySocket, getNativeTuiSurface, sendPtyMessage } from "./api";
@@ -10,14 +17,21 @@ import { ptySocketCloseNotice } from "./terminal-socket-close";
 import { TERMINAL_TUI_SHORTCUTS, type TerminalShortcut } from "./terminal-shortcuts";
 import { readTerminalViewportMetrics } from "./terminal-viewport";
 
-interface TerminalPaneProps {
+export interface TerminalPaneProps {
   terminalId: string;
   clientId: string;
   hasControl: boolean;
+  claimSurface?: boolean;
+  autoFocus?: boolean;
+  maxWriteBatchChars?: number;
+  replayTailBytes?: number;
+  scrollback?: number;
   tuiClientCloseEnabled?: boolean;
   onClose?: () => void;
   closeLabel?: string;
   closeTitle?: string;
+  nativeSurfaceControl?: boolean;
+  renderOutput?: boolean;
   tuiClientActive?: boolean;
   onTuiClientActiveChange?: (active: boolean) => void;
   initialReplay?: boolean;
@@ -34,7 +48,9 @@ type TerminalCssVar =
   | "--app-fg"
   | "--app-hint";
 
-const MAX_TERMINAL_WRITE_BATCH_CHARS = 512 * 1024;
+const DEFAULT_MAX_TERMINAL_WRITE_BATCH_CHARS = 128 * 1024;
+const MAX_PAUSED_TERMINAL_OUTPUT_TAIL_CHARS = 256 * 1024;
+const TERMINAL_INPUT_FLUSH_DELAY_MS = 2;
 
 function shouldShowMobileInputBridge(): boolean {
   if (typeof navigator === "undefined" || typeof window === "undefined") {
@@ -131,9 +147,18 @@ export function TerminalPane(props: TerminalPaneProps) {
   const sendDataRef = useRef<(data: string, options?: { focusTerminal?: boolean }) => void>(() => undefined);
   const scheduleTerminalFitRef = useRef<(options?: { force?: boolean }) => void>(() => undefined);
   const hasControlRef = useRef(props.hasControl);
+  const claimSurfaceRef = useRef(props.claimSurface !== false);
+  const nativeSurfaceControlRef = useRef(props.nativeSurfaceControl !== false);
+  const renderOutputRef = useRef(props.renderOutput !== false);
+  const autoFocusRef = useRef(props.autoFocus !== false);
   const surfaceActiveRef = useRef(false);
   const clientIdRef = useRef(props.clientId);
   const nextReplaySeqRef = useRef(0);
+  const pausedOutputTailRef = useRef("");
+  const pausedOutputReplaceRef = useRef(false);
+  const flushPausedOutputRef = useRef<() => void>(() => undefined);
+  const terminalScrollRemainderRef = useRef(0);
+  const touchScrollRef = useRef<{ identifier: number; lastY: number } | null>(null);
   const [showIosInputBridge, setShowIosInputBridge] = useState(false);
   const [bridgeValue, setBridgeValue] = useState("");
   const [keyboardInsetPx, setKeyboardInsetPx] = useState(0);
@@ -167,12 +192,102 @@ export function TerminalPane(props: TerminalPaneProps) {
     setShowIosInputBridge(shouldShowMobileInputBridge());
   }, []);
 
+  const claimCurrentSurface = () => {
+    if (!nativeSurfaceControlRef.current) {
+      surfaceActiveRef.current = claimSurfaceRef.current;
+      setSurfaceOwnerKind(null);
+      return;
+    }
+    if (!claimSurfaceRef.current || !tuiClientActive) {
+      return;
+    }
+    const socket = socketRef.current;
+    const terminal = terminalRef.current;
+    if (!socket || !terminal) {
+      return;
+    }
+    sendPtyMessage(socket, {
+      type: "pty.surface.attach",
+      sessionId: props.terminalId,
+      clientId: clientIdRef.current,
+      clientKind: "web",
+      cols: terminal.cols,
+      rows: terminal.rows,
+    });
+    surfaceActiveRef.current = true;
+    setSurfaceOwnerKind(null);
+  };
+
+  const releaseCurrentSurface = () => {
+    if (!nativeSurfaceControlRef.current) {
+      surfaceActiveRef.current = false;
+      setSurfaceOwnerKind(null);
+      return;
+    }
+    if (socketRef.current && surfaceActiveRef.current) {
+      sendPtyMessage(socketRef.current, {
+        type: "pty.surface.detach",
+        sessionId: props.terminalId,
+        clientId: clientIdRef.current,
+      });
+    }
+    surfaceActiveRef.current = false;
+    setSurfaceOwnerKind(null);
+  };
+
   useEffect(() => {
     hasControlRef.current = props.hasControl;
-    if (props.hasControl) {
+    if (props.hasControl && claimSurfaceRef.current) {
       scheduleTerminalFitRef.current({ force: true });
     }
   }, [props.hasControl]);
+
+  useEffect(() => {
+    claimSurfaceRef.current = props.claimSurface !== false;
+    if (!nativeSurfaceControlRef.current) {
+      surfaceActiveRef.current = claimSurfaceRef.current;
+      setSurfaceOwnerKind(null);
+      return;
+    }
+    if (claimSurfaceRef.current) {
+      scheduleTerminalFitRef.current({ force: true });
+      claimCurrentSurface();
+    } else {
+      releaseCurrentSurface();
+    }
+  }, [props.claimSurface]);
+
+  useEffect(() => {
+    nativeSurfaceControlRef.current = props.nativeSurfaceControl !== false;
+    if (!nativeSurfaceControlRef.current) {
+      surfaceActiveRef.current = claimSurfaceRef.current;
+      setSurfaceOwnerKind(null);
+    }
+  }, [props.nativeSurfaceControl]);
+
+  useEffect(() => {
+    const wasRendering = renderOutputRef.current;
+    renderOutputRef.current = props.renderOutput !== false;
+    if (!wasRendering && renderOutputRef.current) {
+      flushPausedOutputRef.current();
+      scheduleTerminalFitRef.current({ force: true });
+    }
+  }, [props.renderOutput]);
+
+  useEffect(() => {
+    const wasAutoFocusEnabled = autoFocusRef.current;
+    const nextAutoFocusEnabled = props.autoFocus !== false;
+    autoFocusRef.current = nextAutoFocusEnabled;
+    if (wasAutoFocusEnabled || !nextAutoFocusEnabled || showIosInputBridge) {
+      return;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      terminalRef.current?.focus();
+    });
+    return () => {
+      window.cancelAnimationFrame(frame);
+    };
+  }, [props.autoFocus, showIosInputBridge]);
 
   useEffect(() => {
     clientIdRef.current = props.clientId;
@@ -192,27 +307,6 @@ export function TerminalPane(props: TerminalPaneProps) {
     if (props.tuiClientActive === undefined) {
       setLocalTuiClientActive(active);
     }
-  };
-
-  const claimCurrentSurface = () => {
-    if (!tuiClientActive) {
-      return;
-    }
-    const socket = socketRef.current;
-    const terminal = terminalRef.current;
-    if (!socket || !terminal) {
-      return;
-    }
-    sendPtyMessage(socket, {
-      type: "pty.surface.attach",
-      sessionId: props.terminalId,
-      clientId: clientIdRef.current,
-      clientKind: "web",
-      cols: terminal.cols,
-      rows: terminal.rows,
-    });
-    surfaceActiveRef.current = true;
-    setSurfaceOwnerKind(null);
   };
 
   useEffect(() => {
@@ -271,9 +365,15 @@ export function TerminalPane(props: TerminalPaneProps) {
     let writeInFlight = false;
     let pendingWrite = "";
     let pendingReplace: string | null = null;
+    let pendingInput = "";
+    let inputFlushTimer: ReturnType<typeof setTimeout> | null = null;
+    const nativeSurfaceControlEnabled = props.nativeSurfaceControl !== false;
     nextReplaySeqRef.current = 0;
+    pausedOutputTailRef.current = "";
+    pausedOutputReplaceRef.current = false;
+    surfaceActiveRef.current = !nativeSurfaceControlEnabled;
 
-    const terminal = new Terminal({
+    const terminalOptions = {
       convertEol: false,
       disableStdin: showIosInputBridge,
       fontFamily: readRahTerminalFontFamily(),
@@ -281,11 +381,13 @@ export function TerminalPane(props: TerminalPaneProps) {
       letterSpacing: 0,
       lineHeight: showIosInputBridge ? 1.12 : 1.1,
       theme: readRahTerminalTheme(),
-    });
+      ...(props.scrollback !== undefined ? { scrollback: props.scrollback } : {}),
+    };
+    const terminal = new Terminal(terminalOptions);
     const fitAddon = new FitAddon();
     terminal.loadAddon(fitAddon);
     terminal.open(container);
-    if (!showIosInputBridge) {
+    if (autoFocusRef.current && !showIosInputBridge) {
       terminal.focus();
     }
     terminalRef.current = terminal;
@@ -309,6 +411,9 @@ export function TerminalPane(props: TerminalPaneProps) {
         previousRows === terminal.rows &&
         !forceResize
       ) {
+        return;
+      }
+      if (nativeSurfaceControlEnabled && !claimSurfaceRef.current) {
         return;
       }
       if (!socketRef.current) {
@@ -336,6 +441,9 @@ export function TerminalPane(props: TerminalPaneProps) {
 
     const settleTerminalLayout = () => {
       scheduleFitAndResize({ force: true });
+      if (!nativeSurfaceControlEnabled) {
+        return;
+      }
       window.requestAnimationFrame(() => {
         if (disposed) {
           return;
@@ -394,7 +502,11 @@ export function TerminalPane(props: TerminalPaneProps) {
             pendingWrite = "";
             terminal.reset();
           } else {
-            chunk = pendingWrite.slice(0, MAX_TERMINAL_WRITE_BATCH_CHARS);
+            const maxWriteBatchChars = Math.max(
+              16 * 1024,
+              props.maxWriteBatchChars ?? DEFAULT_MAX_TERMINAL_WRITE_BATCH_CHARS,
+            );
+            chunk = pendingWrite.slice(0, maxWriteBatchChars);
             pendingWrite = pendingWrite.slice(chunk.length);
           }
           writeInFlight = true;
@@ -415,6 +527,20 @@ export function TerminalPane(props: TerminalPaneProps) {
         scheduleTerminalWrite();
       };
 
+      const storePausedTerminalOutput = (data: string, options?: { replace?: boolean }) => {
+        if (!data) {
+          return;
+        }
+        if (options?.replace) {
+          pausedOutputTailRef.current = data.slice(-MAX_PAUSED_TERMINAL_OUTPUT_TAIL_CHARS);
+          pausedOutputReplaceRef.current = true;
+          return;
+        }
+        pausedOutputTailRef.current = `${pausedOutputTailRef.current}${data}`.slice(
+          -MAX_PAUSED_TERMINAL_OUTPUT_TAIL_CHARS,
+        );
+      };
+
       const clearPendingTerminalWrite = () => {
         pendingWrite = "";
         pendingReplace = null;
@@ -426,14 +552,41 @@ export function TerminalPane(props: TerminalPaneProps) {
         scheduleTerminalWrite();
       };
 
+      const enqueueVisibleTerminalWrite = (data: string, options?: { replace?: boolean }) => {
+        if (renderOutputRef.current) {
+          if (options?.replace) {
+            replaceTerminalContents(data);
+          } else {
+            enqueueTerminalWrite(data);
+          }
+          return;
+        }
+        storePausedTerminalOutput(data, options);
+      };
+
+      flushPausedOutputRef.current = () => {
+        const data = pausedOutputTailRef.current;
+        if (!data) {
+          return;
+        }
+        const replace = pausedOutputReplaceRef.current;
+        pausedOutputTailRef.current = "";
+        pausedOutputReplaceRef.current = false;
+        if (replace) {
+          replaceTerminalContents(data);
+        } else {
+          enqueueTerminalWrite(data);
+        }
+      };
+
       const socket = createPtySocket(
         props.terminalId,
         (message) => {
         if (message.type === "pty.replay") {
           if (fromSeq === undefined || message.droppedBeforeSeq !== undefined) {
-            replaceTerminalContents(message.chunks.join(""));
+            enqueueVisibleTerminalWrite(message.chunks.join(""), { replace: true });
           } else {
-            enqueueTerminalWrite(message.chunks.join(""));
+            enqueueVisibleTerminalWrite(message.chunks.join(""));
           }
           scheduleFitAndResize();
           if (message.nextSeq !== undefined) {
@@ -443,9 +596,9 @@ export function TerminalPane(props: TerminalPaneProps) {
         }
         if (message.type === "pty.output") {
           if (message.replace === true) {
-            replaceTerminalContents(message.data);
+            enqueueVisibleTerminalWrite(message.data, { replace: true });
           } else {
-            enqueueTerminalWrite(message.data);
+            enqueueVisibleTerminalWrite(message.data);
           }
           if (message.seq !== undefined) {
             nextReplaySeqRef.current = Math.max(nextReplaySeqRef.current, message.seq + 1);
@@ -457,7 +610,7 @@ export function TerminalPane(props: TerminalPaneProps) {
           if (message.seq !== undefined) {
             nextReplaySeqRef.current = Math.max(nextReplaySeqRef.current, message.seq + 1);
           }
-          enqueueTerminalWrite(
+          enqueueVisibleTerminalWrite(
             `\r\n[session exited${message.exitCode !== undefined ? ` code=${message.exitCode}` : ""}]\r\n`,
           );
         }
@@ -466,11 +619,14 @@ export function TerminalPane(props: TerminalPaneProps) {
         if (error.message === "PTY socket failed") {
           return;
         }
-        enqueueTerminalWrite(`\r\n[pty error] ${error.message}\r\n`);
+        enqueueVisibleTerminalWrite(`\r\n[pty error] ${error.message}\r\n`);
       },
         {
           ...(fromSeq !== undefined ? { fromSeq } : {}),
           replay: props.initialReplay !== false,
+          ...(props.replayTailBytes !== undefined
+            ? { replayTailBytes: props.replayTailBytes }
+            : {}),
         },
       );
       socketRef.current = socket;
@@ -500,48 +656,95 @@ export function TerminalPane(props: TerminalPaneProps) {
     };
 
     connect();
-    surfacePollTimer = setInterval(() => {
-      void getNativeTuiSurface(props.terminalId)
-        .then((response) => {
-          if (disposed) {
-            return;
-          }
-          const surface = response.surface;
-          if (!surface) {
-            claimCurrentSurface();
-            return;
-          }
-          if (surface.clientId === clientIdRef.current) {
-            surfaceActiveRef.current = true;
-            setSurfaceOwnerKind(null);
-            return;
-          }
-          surfaceActiveRef.current = false;
-          setSurfaceOwnerKind(surface.clientKind);
-        })
-        .catch(() => undefined);
-    }, 1_000);
+    if (nativeSurfaceControlEnabled) {
+      surfacePollTimer = setInterval(() => {
+        if (!claimSurfaceRef.current) {
+          return;
+        }
+        void getNativeTuiSurface(props.terminalId)
+          .then((response) => {
+            if (disposed) {
+              return;
+            }
+            const surface = response.surface;
+            if (!surface) {
+              claimCurrentSurface();
+              return;
+            }
+            if (surface.clientId === clientIdRef.current) {
+              surfaceActiveRef.current = true;
+              setSurfaceOwnerKind(null);
+              return;
+            }
+            surfaceActiveRef.current = false;
+            setSurfaceOwnerKind(surface.clientKind);
+          })
+          .catch(() => undefined);
+      }, 1_000);
+    }
 
-    sendDataRef.current = (data: string, options?: { focusTerminal?: boolean }) => {
-      if (!hasControlRef.current || !surfaceActiveRef.current || !socketRef.current) {
+    const sendPtyInputNow = (data: string) => {
+      const socket = socketRef.current;
+      if (!socket) {
         return;
       }
-      sendPtyMessage(socketRef.current, {
+      sendPtyMessage(socket, {
         type: "pty.input",
         sessionId: props.terminalId,
         clientId: clientIdRef.current,
         data,
       });
-      if (options?.focusTerminal !== false && !showIosInputBridge) {
+    };
+
+    const flushPendingInput = () => {
+      if (inputFlushTimer) {
+        clearTimeout(inputFlushTimer);
+        inputFlushTimer = null;
+      }
+      if (!pendingInput) {
+        return;
+      }
+      const data = pendingInput;
+      pendingInput = "";
+      sendPtyInputNow(data);
+    };
+
+    const enqueuePtyInput = (data: string) => {
+      pendingInput += data;
+      if (data.includes("\r") || data.includes("\n") || data.includes("\u0003") || data.includes("\u0004")) {
+        flushPendingInput();
+        return;
+      }
+      if (!inputFlushTimer) {
+        inputFlushTimer = setTimeout(flushPendingInput, TERMINAL_INPUT_FLUSH_DELAY_MS);
+      }
+    };
+
+    sendDataRef.current = (data: string, options?: { focusTerminal?: boolean }) => {
+      if (!data) {
+        return;
+      }
+      if (
+        !claimSurfaceRef.current ||
+        !hasControlRef.current ||
+        !socketRef.current
+      ) {
+        return;
+      }
+      if (nativeSurfaceControlRef.current && !surfaceActiveRef.current) {
+        return;
+      }
+      enqueuePtyInput(data);
+      if (options?.focusTerminal !== false && autoFocusRef.current && !showIosInputBridge) {
         terminal.focus();
       }
     };
 
     const disposable = terminal.onData((data) => {
-      if (!hasControlRef.current) {
+      if (!claimSurfaceRef.current || !hasControlRef.current) {
         return;
       }
-      sendDataRef.current(data);
+      sendDataRef.current(data, { focusTerminal: false });
     });
 
     const resizeObserver = new ResizeObserver(() => scheduleFitAndResize());
@@ -559,6 +762,11 @@ export function TerminalPane(props: TerminalPaneProps) {
       if (reconnectTimer) {
         clearTimeout(reconnectTimer);
       }
+      if (inputFlushTimer) {
+        clearTimeout(inputFlushTimer);
+        inputFlushTimer = null;
+      }
+      flushPendingInput();
       if (surfacePollTimer) {
         clearInterval(surfacePollTimer);
       }
@@ -566,15 +774,20 @@ export function TerminalPane(props: TerminalPaneProps) {
         window.clearTimeout(timer);
       }
       settleTimers.clear();
+      pausedOutputTailRef.current = "";
+      pausedOutputReplaceRef.current = false;
+      flushPausedOutputRef.current = () => undefined;
       themeObserver.disconnect();
       resizeObserver.disconnect();
       disposable.dispose();
       if (socketRef.current) {
-        sendPtyMessage(socketRef.current, {
-          type: "pty.surface.detach",
-          sessionId: props.terminalId,
-          clientId: clientIdRef.current,
-        });
+        if (nativeSurfaceControlEnabled) {
+          sendPtyMessage(socketRef.current, {
+            type: "pty.surface.detach",
+            sessionId: props.terminalId,
+            clientId: clientIdRef.current,
+          });
+        }
         socketRef.current.close();
       }
       terminal.dispose();
@@ -584,7 +797,7 @@ export function TerminalPane(props: TerminalPaneProps) {
       sendDataRef.current = () => undefined;
       scheduleTerminalFitRef.current = () => undefined;
     };
-  }, [props.terminalId, showIosInputBridge, tuiClientActive]);
+  }, [props.terminalId, props.nativeSurfaceControl, showIosInputBridge, tuiClientActive]);
 
   const closeCurrentTuiClient = () => {
     if (tuiClientClosing) {
@@ -683,6 +896,82 @@ export function TerminalPane(props: TerminalPaneProps) {
   };
 
   const keyboardActive = showIosInputBridge && keyboardInsetPx > 0;
+  const terminalScrollLinePx = () => {
+    const terminal = terminalRef.current;
+    const fontSize = typeof terminal?.options.fontSize === "number" ? terminal.options.fontSize : 13;
+    const lineHeight = typeof terminal?.options.lineHeight === "number" ? terminal.options.lineHeight : 1.1;
+    return Math.max(10, fontSize * lineHeight);
+  };
+  const scrollTerminalByPixels = (deltaY: number): boolean => {
+    const terminal = terminalRef.current;
+    if (!terminal || !Number.isFinite(deltaY) || deltaY === 0) {
+      return false;
+    }
+    const linePx = terminalScrollLinePx();
+    terminalScrollRemainderRef.current += deltaY;
+    const lines = Math.trunc(terminalScrollRemainderRef.current / linePx);
+    if (lines === 0) {
+      return true;
+    }
+    terminalScrollRemainderRef.current -= lines * linePx;
+    terminal.scrollLines(lines);
+    return true;
+  };
+  const handleTerminalWheelCapture = (event: ReactWheelEvent<HTMLDivElement>) => {
+    if (!tuiClientActive) {
+      return;
+    }
+    const linePx = terminalScrollLinePx();
+    const deltaY =
+      event.deltaMode === WheelEvent.DOM_DELTA_LINE
+        ? event.deltaY * linePx
+        : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+          ? event.deltaY * linePx * Math.max(1, terminalRef.current?.rows ?? 24)
+          : event.deltaY;
+    if (scrollTerminalByPixels(deltaY)) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  };
+  const handleTerminalTouchStart = (event: ReactTouchEvent<HTMLDivElement>) => {
+    if (!tuiClientActive || event.touches.length !== 1) {
+      touchScrollRef.current = null;
+      return;
+    }
+    const touch = event.touches.item(0);
+    if (!touch) {
+      touchScrollRef.current = null;
+      return;
+    }
+    touchScrollRef.current = { identifier: touch.identifier, lastY: touch.clientY };
+  };
+  const handleTerminalTouchMove = (event: ReactTouchEvent<HTMLDivElement>) => {
+    const activeTouch = touchScrollRef.current;
+    if (!tuiClientActive || !activeTouch) {
+      return;
+    }
+    let touch: { identifier: number; clientY: number } | null = null;
+    for (let index = 0; index < event.touches.length; index += 1) {
+      const candidate = event.touches.item(index);
+      if (candidate?.identifier === activeTouch.identifier) {
+        touch = candidate;
+        break;
+      }
+    }
+    if (!touch) {
+      touchScrollRef.current = null;
+      return;
+    }
+    const deltaY = activeTouch.lastY - touch.clientY;
+    touchScrollRef.current = { identifier: activeTouch.identifier, lastY: touch.clientY };
+    if (scrollTerminalByPixels(deltaY)) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  };
+  const clearTerminalTouchScroll = () => {
+    touchScrollRef.current = null;
+  };
 
   return (
     <div
@@ -746,10 +1035,15 @@ export function TerminalPane(props: TerminalPaneProps) {
             ))}
           </div>
         ) : null}
-          <div
-            ref={containerRef}
-            className="terminal-canvas"
-            data-testid="terminal-canvas"
+        <div
+          ref={containerRef}
+          className="terminal-canvas"
+          data-testid="terminal-canvas"
+          onWheelCapture={handleTerminalWheelCapture}
+          onTouchStart={handleTerminalTouchStart}
+          onTouchMove={handleTerminalTouchMove}
+          onTouchEnd={clearTerminalTouchScroll}
+          onTouchCancel={clearTerminalTouchScroll}
           onFocusCapture={
             showIosInputBridge
               ? (event) => {

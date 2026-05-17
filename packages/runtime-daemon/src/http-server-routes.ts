@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type {
   CloseZellijMuxSessionResponse,
   DebugReplayScript,
+  IndependentTerminalListResponse,
   ListDebugScenariosResponse,
   ListNativeTuiDiagnosticsResponse,
   ListPtyStatsResponse,
@@ -439,6 +440,30 @@ export async function handleHttpRequest(args: {
 
     if (req.method === "GET" && pathname === "/api/sessions") {
       writeJson(req, res, 200, engine.listSessions());
+      return;
+    }
+
+    if (req.method === "GET" && pathname === "/api/terminal/list") {
+      const cwd = url.searchParams.get("cwd") ?? undefined;
+      const ownerKind = url.searchParams.get("ownerKind") ?? undefined;
+      const ownerId = url.searchParams.get("ownerId") ?? undefined;
+      if ((ownerKind && !ownerId) || (!ownerKind && ownerId)) {
+        writeJson(req, res, 400, { error: "terminal ownerKind and ownerId must be provided together." });
+        return;
+      }
+      if (ownerKind && ownerKind !== "workspace" && ownerKind !== "session") {
+        writeJson(req, res, 400, { error: "terminal ownerKind is invalid." });
+        return;
+      }
+      const response: IndependentTerminalListResponse = {
+        terminals: engine.listIndependentTerminals({
+          ...(cwd ? { cwd } : {}),
+          ...(ownerKind && ownerId
+            ? { owner: { kind: ownerKind as "workspace" | "session", id: ownerId } }
+            : {}),
+        }),
+      };
+      writeJson(req, res, 200, response);
       return;
     }
 

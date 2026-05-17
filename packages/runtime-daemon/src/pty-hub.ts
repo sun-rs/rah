@@ -28,6 +28,7 @@ type PtyState = {
 export interface PtySubscribeOptions {
   replay?: boolean;
   fromSeq?: number;
+  tailBytes?: number;
 }
 
 export interface PtyHubOptions {
@@ -108,6 +109,15 @@ export class PtyHub {
     }
   }
 
+  compactReplay(sessionId: string, data: string): void {
+    const session = this.getOrCreate(sessionId);
+    const seq = session.nextSeq++;
+    const bytes = replayByteLength(data);
+    session.replayEntries = [{ seq, data, bytes }];
+    session.replayBytes = bytes;
+    this.trimReplay(session);
+  }
+
   emitExit(sessionId: string, exitCode?: number, signal?: string): void {
     const session = this.getOrCreate(sessionId);
     if (!session.exitState) {
@@ -136,7 +146,12 @@ export class PtyHub {
         : replayOrOptions;
 
     if (options.replay !== false) {
-      this.replay(session, onFrame, sanitizeFromSeq(options.fromSeq));
+      this.replay(
+        session,
+        onFrame,
+        sanitizeFromSeq(options.fromSeq),
+        sanitizeTailBytes(options.tailBytes),
+      );
     }
 
     return () => {
@@ -190,17 +205,19 @@ export class PtyHub {
     session: PtyState,
     onFrame: PtySubscriber,
     fromSeq: number | undefined,
+    tailBytes: number | undefined,
   ): void {
     const entries =
       fromSeq === undefined
-        ? session.replayEntries
+        ? replayEntriesForTail(session.replayEntries, tailBytes)
         : session.replayEntries.filter((entry) => entry.seq >= fromSeq);
     const firstAvailableSeq = session.replayEntries[0]?.seq;
+    const selectedFirstSeq = entries[0]?.seq;
     const frame: PtyServerFrame = {
       type: "pty.replay",
       sessionId: session.sessionId,
       chunks: entries.map((entry) => entry.data),
-      baseSeq: entries[0]?.seq ?? session.nextSeq,
+      baseSeq: selectedFirstSeq ?? session.nextSeq,
       nextSeq: session.nextSeq,
       status: session.exitState ? "exited" : "open",
     };
@@ -210,6 +227,13 @@ export class PtyHub {
       fromSeq < firstAvailableSeq
     ) {
       frame.droppedBeforeSeq = firstAvailableSeq;
+    } else if (
+      fromSeq === undefined &&
+      firstAvailableSeq !== undefined &&
+      selectedFirstSeq !== undefined &&
+      selectedFirstSeq > firstAvailableSeq
+    ) {
+      frame.droppedBeforeSeq = selectedFirstSeq;
     } else if (
       fromSeq === undefined &&
       firstAvailableSeq !== undefined &&
@@ -267,6 +291,33 @@ function sanitizeFromSeq(fromSeq: number | undefined): number | undefined {
     return undefined;
   }
   return Math.max(0, Math.floor(fromSeq));
+}
+
+function sanitizeTailBytes(tailBytes: number | undefined): number | undefined {
+  if (tailBytes === undefined || !Number.isFinite(tailBytes)) {
+    return undefined;
+  }
+  return Math.max(1, Math.floor(tailBytes));
+}
+
+function replayEntriesForTail(entries: ReplayEntry[], tailBytes: number | undefined): ReplayEntry[] {
+  if (tailBytes === undefined || entries.length === 0) {
+    return entries;
+  }
+  const selected: ReplayEntry[] = [];
+  let bytes = 0;
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (!entry) {
+      continue;
+    }
+    selected.unshift(entry);
+    bytes += entry.bytes;
+    if (bytes >= tailBytes) {
+      break;
+    }
+  }
+  return selected;
 }
 
 function replayByteLength(data: string): number {

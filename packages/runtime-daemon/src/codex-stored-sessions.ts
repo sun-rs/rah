@@ -36,7 +36,7 @@ const MAX_HEAD_LINES = 64;
 const MAX_ROLLOUT_FILES = 400;
 
 export function resolveCodexStoredSessionWatchRoots(): string[] {
-  return [resolveCodexBaseHome()];
+  return resolveCodexSearchRoots();
 }
 
 function resolveCodexSearchRoots(): string[] {

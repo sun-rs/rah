@@ -321,8 +321,13 @@ export class RuntimeEngine {
       refresh: () => {
         this.refreshStoredSessionsCache({ publish: true });
       },
+      ...(adapters !== undefined ? { debounceMs: 50 } : {}),
+      watchFs: adapters !== undefined,
+      watchFileChanges: adapters !== undefined,
     });
-    this.storedSessionMonitor.start();
+    if (process.env.RAH_DISABLE_STORED_SESSION_MONITOR !== "1") {
+      this.storedSessionMonitor.start();
+    }
     void this.restoreZellijLiveSessions(restored.zellijLiveSessions);
   }
 
@@ -1179,6 +1184,13 @@ export class RuntimeEngine {
     request?: IndependentTerminalStartRequest,
   ): Promise<IndependentTerminalStartResponse> {
     return this.terminals.startIndependentTerminal(request);
+  }
+
+  listIndependentTerminals(request?: {
+    cwd?: string;
+    owner?: IndependentTerminalStartRequest["owner"];
+  }): IndependentTerminalStartResponse["terminal"][] {
+    return this.terminals.listIndependentTerminals(request);
   }
 
   async closeIndependentTerminal(id: string): Promise<void> {

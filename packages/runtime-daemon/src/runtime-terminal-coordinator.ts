@@ -378,6 +378,18 @@ function isExitedZellijPane(pane: { exited: boolean; held: boolean; exitStatus: 
   return pane.exited || pane.held || pane.exitStatus !== null;
 }
 
+function normalizeIndependentTerminalOwner(
+  owner: IndependentTerminalStartRequest["owner"] | undefined,
+): IndependentTerminalStartRequest["owner"] | undefined {
+  if (!owner) {
+    return undefined;
+  }
+  if (owner.kind === "workspace") {
+    return { kind: "workspace", id: resolveUserPath(owner.id) };
+  }
+  return owner;
+}
+
 function appendCodexZellijArgs(launch: NativeTuiLaunchSpec): NativeTuiLaunchSpec {
   if (launch.provider !== "codex" || launch.args.includes("--no-alt-screen")) {
     return launch;
@@ -399,10 +411,10 @@ export class RuntimeTerminalCoordinator {
   private readonly zellijTuiSessions = new Map<string, ZellijTuiSessionState>();
   private readonly nativeTuiSessions = new Map<string, NativeTuiSessionState>();
   private readonly nativeTuiSessionIds = new Set<string>();
+  private readonly independentTerminals = new Map<string, IndependentTerminalStartResponse["terminal"]>();
   private readonly closingNativeTuiSessionIds = new Set<string>();
   private readonly nativeTuiDiagnostics = new NativeTuiDiagnosticStore();
   private readonly mirrorRuntime: NativeTuiMirrorRuntime;
-  private zellijActionQueue?: Promise<void>;
 
   constructor(private readonly deps: RuntimeTerminalCoordinatorDeps) {
     this.mirrorRuntime = new NativeTuiMirrorRuntime({
@@ -987,12 +999,16 @@ export class RuntimeTerminalCoordinator {
   }
 
   private sendZellijTuiInterrupt(zellij: ZellijTuiSessionState, provider: ProviderKind): void {
-    const sendEsc = async (): Promise<void> => {
-      await this.writeZellijTuiInput(zellij, "\u001b");
+    const sendEsc = async (count = 1): Promise<void> => {
+      await this.zellijMux.sendKeys(
+        zellij.zellijSessionName,
+        zellij.paneId,
+        Array.from({ length: count }, () => "Esc"),
+      );
     };
     void this.withZellijActionSurface(zellij, async () => {
       if (provider === "opencode") {
-        await this.writeZellijTuiInput(zellij, nativeTuiInterruptDataForProvider(provider));
+        await sendEsc(2);
         return;
       }
       await sendEsc();
@@ -1516,6 +1532,7 @@ export class RuntimeTerminalCoordinator {
       cwd = resolveUserPath("~");
     }
     const id = crypto.randomUUID();
+    const owner = normalizeIndependentTerminalOwner(request?.owner);
     this.deps.ptyHub.ensureSession(id);
     let terminal: PtySessionRuntimeEntry;
     try {
@@ -1528,6 +1545,7 @@ export class RuntimeTerminalCoordinator {
           this.deps.ptyHub.appendOutput(terminalId, data);
         },
         onExit: (terminalId, args) => {
+          this.independentTerminals.delete(terminalId);
           this.deps.ptyHub.emitExit(terminalId, args.exitCode, args.signal);
         },
       });
@@ -1535,16 +1553,34 @@ export class RuntimeTerminalCoordinator {
       this.deps.ptyHub.removeSession(id);
       throw error;
     }
+    const session = {
+      id,
+      cwd,
+      shell: terminal.shell,
+      ...(owner ? { owner } : {}),
+    };
+    this.independentTerminals.set(id, session);
     return {
-      terminal: {
-        id,
-        cwd,
-        shell: terminal.shell,
-      },
+      terminal: session,
     };
   }
 
+  listIndependentTerminals(request?: {
+    cwd?: string;
+    owner?: IndependentTerminalStartRequest["owner"];
+  }): IndependentTerminalStartResponse["terminal"][] {
+    const cwd = request?.cwd ? resolveUserPath(request.cwd) : null;
+    const owner = normalizeIndependentTerminalOwner(request?.owner);
+    return Array.from(this.independentTerminals.values())
+      .filter((terminal) => !cwd || terminal.cwd === cwd)
+      .filter((terminal) =>
+        !owner || (terminal.owner?.kind === owner.kind && terminal.owner.id === owner.id),
+      )
+      .sort((a, b) => a.cwd.localeCompare(b.cwd) || a.id.localeCompare(b.id));
+  }
+
   async closeIndependentTerminal(id: string): Promise<void> {
+    this.independentTerminals.delete(id);
     const closed = await this.ptySessions.close(id);
     if (closed) {
       this.deps.ptyHub.removeSession(id);
@@ -2127,7 +2163,12 @@ export class RuntimeTerminalCoordinator {
     if (!text) {
       return;
     }
-    await this.zellijMux.writeChars(zellij.zellijSessionName, zellij.paneId, text);
+    // Use the same pane-targeted byte channel as submit/interrupt. zellij's
+    // write-chars is convenient for interactive attach surfaces, but it has
+    // proven less deterministic for chat-driven injection into multiple hidden
+    // panes. Plain UTF-8 bytes preserve text exactly and avoid focus-sensitive
+    // character synthesis.
+    await this.zellijMux.writeBytes(zellij.zellijSessionName, zellij.paneId, text);
   }
 
   private async withZellijActionSurface<T>(
@@ -2136,7 +2177,7 @@ export class RuntimeTerminalCoordinator {
   ): Promise<T> {
     const previousAction = zellij.actionQueue ?? Promise.resolve();
     const queuedAction = previousAction.catch(() => undefined).then(() =>
-      this.withZellijGlobalAction(() => this.withZellijActionSurfaceNow(zellij, action)),
+      this.withZellijActionSurfaceNow(zellij, action),
     );
     const actionTail = queuedAction.then(
       () => undefined,
@@ -2146,22 +2187,6 @@ export class RuntimeTerminalCoordinator {
     void actionTail.finally(() => {
       if (zellij.actionQueue === actionTail) {
         delete zellij.actionQueue;
-      }
-    });
-    return queuedAction;
-  }
-
-  private async withZellijGlobalAction<T>(action: () => Promise<T>): Promise<T> {
-    const previousAction = this.zellijActionQueue ?? Promise.resolve();
-    const queuedAction = previousAction.catch(() => undefined).then(action);
-    const actionTail = queuedAction.then(
-      () => undefined,
-      () => undefined,
-    );
-    this.zellijActionQueue = actionTail;
-    void actionTail.finally(() => {
-      if (this.zellijActionQueue === actionTail) {
-        delete this.zellijActionQueue;
       }
     });
     return queuedAction;
@@ -2453,6 +2478,7 @@ export class RuntimeTerminalCoordinator {
     }
     this.nativeTuiSessionIds.clear();
     const results = await this.ptySessions.closeAll();
+    this.independentTerminals.clear();
     for (const result of results) {
       this.deps.ptyHub.removeSession(result.id);
       if (result.status === "rejected") {

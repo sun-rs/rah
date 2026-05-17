@@ -25,6 +25,7 @@ import type {
   GitHunkActionRequest,
   GitHunkActionResponse,
   IndependentTerminalSession,
+  IndependentTerminalListResponse,
   IndependentTerminalStartRequest,
   IndependentTerminalStartResponse,
   GitStatusResponse,
@@ -270,6 +271,25 @@ export async function startIndependentTerminal(
     body: JSON.stringify(request),
   });
   return response.terminal;
+}
+
+export async function listIndependentTerminals(options?: {
+  cwd?: string;
+  owner?: IndependentTerminalStartRequest["owner"];
+}): Promise<IndependentTerminalSession[]> {
+  const params = new URLSearchParams();
+  if (options?.cwd) {
+    params.set("cwd", options.cwd);
+  }
+  if (options?.owner) {
+    params.set("ownerKind", options.owner.kind);
+    params.set("ownerId", options.owner.id);
+  }
+  const search = params.size > 0 ? `?${params.toString()}` : "";
+  const response = await requestJson<IndependentTerminalListResponse>(`/api/terminal/list${search}`, {
+    method: "GET",
+  });
+  return response.terminals;
 }
 
 export async function closeIndependentTerminal(terminalId: string): Promise<void> {
@@ -844,12 +864,14 @@ export function createPtySocket(
   sessionId: string,
   onMessage: (message: PtyServerMessage) => void,
   onError?: (error: Error) => void,
-  options?: { fromSeq?: number; replay?: boolean },
+  options?: { fromSeq?: number; replay?: boolean; replayTailBytes?: number },
 ): WebSocket {
   const url = new URL(`/api/pty/${sessionId}`, getBaseUrl().replace(/^http/, "ws"));
   url.searchParams.set("replay", options?.replay === false ? "false" : "true");
   if (options?.fromSeq !== undefined) {
     url.searchParams.set("fromSeq", String(options.fromSeq));
+  } else if (options?.replayTailBytes !== undefined) {
+    url.searchParams.set("tailBytes", String(options.replayTailBytes));
   }
   const socket = new WebSocket(url);
   socket.addEventListener("message", (event) => {

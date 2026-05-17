@@ -85,6 +85,26 @@ describe("PtyHub", () => {
     unsubscribe();
   });
 
+  test("can replay only a bounded tail for late terminal viewers", () => {
+    const hub = new PtyHub({ maxReplayChunks: 10, maxReplayBytes: 100 });
+    hub.appendOutput("terminal-1", "aa");
+    hub.appendOutput("terminal-1", "bbb");
+    hub.appendOutput("terminal-1", "cccc");
+
+    const frames: PtyServerFrame[] = [];
+    const unsubscribe = hub.subscribe("terminal-1", (frame) => {
+      frames.push(frame);
+    }, { tailBytes: 5 });
+
+    const replay = frames.find((frame) => frame.type === "pty.replay");
+    assert.equal(replay?.baseSeq, 1);
+    assert.equal(replay?.nextSeq, 3);
+    assert.equal(replay?.droppedBeforeSeq, 1);
+    assert.deepEqual(replay?.chunks, ["bbb", "cccc"]);
+
+    unsubscribe();
+  });
+
   test("can compact replay to the latest display snapshot while streaming every output", () => {
     const hub = new PtyHub({ maxReplayChunks: 10, maxReplayBytes: 100 });
     const liveFrames: PtyServerFrame[] = [];
@@ -116,6 +136,41 @@ describe("PtyHub", () => {
 
     unsubscribeLive();
     unsubscribeReplay();
+  });
+
+  test("can compact replay silently without sending a live replace frame", () => {
+    const hub = new PtyHub({ maxReplayChunks: 10, maxReplayBytes: 100 });
+    const liveFrames: PtyServerFrame[] = [];
+    const unsubscribeLive = hub.subscribe("terminal-1", (frame) => {
+      liveFrames.push(frame);
+    });
+
+    hub.appendOutput("terminal-1", "stream-a");
+    hub.compactReplay("terminal-1", "screen-now");
+    hub.appendOutput("terminal-1", "stream-b");
+
+    assert.deepEqual(
+      liveFrames
+        .filter((frame) => frame.type === "pty.output")
+        .map((frame) => frame.data),
+      ["stream-a", "stream-b"],
+    );
+    assert.equal(
+      liveFrames.some((frame) => frame.type === "pty.output" && frame.replace === true),
+      false,
+    );
+
+    const replayFrames: PtyServerFrame[] = [];
+    hub.subscribe("terminal-1", (frame) => {
+      replayFrames.push(frame);
+    });
+    const replay = replayFrames.find((frame) => frame.type === "pty.replay");
+    assert.equal(replay?.baseSeq, 1);
+    assert.equal(replay?.nextSeq, 3);
+    assert.deepEqual(replay?.chunks, ["screen-now", "stream-b"]);
+    assert.equal(hub.stats("terminal-1")?.replayChunks, 2);
+
+    unsubscribeLive();
   });
 
   test("reports PTY replay stats including subscribers and exit state", () => {

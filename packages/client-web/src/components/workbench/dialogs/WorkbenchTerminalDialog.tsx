@@ -1,9 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import * as Dialog from "@radix-ui/react-dialog";
 import { LoaderCircle, PencilLine, Plus, X } from "lucide-react";
 import type { IndependentTerminalSession } from "@rah/runtime-protocol";
-import { closeIndependentTerminal, startIndependentTerminal } from "../../../api";
-import { TerminalPane } from "../../../TerminalPane";
+import {
+  closeIndependentTerminal,
+  listIndependentTerminals,
+  startIndependentTerminal,
+} from "../../../api";
+import {
+  TerminalDialogFrame,
+  TerminalPaneStack,
+  TerminalTabStrip,
+  type TerminalTabDescriptor,
+} from "../../terminal/TerminalSurface";
 import { ConfirmDialog } from "./ConfirmDialog";
 
 function terminalTitle(cwd: string): string {
@@ -16,16 +24,16 @@ export function WorkbenchTerminalDialog(props: {
   onOpenChange: (open: boolean) => void;
   clientId: string;
   cwd: string;
+  owner?: IndependentTerminalSession["owner"];
 }) {
   const [closeIntent, setCloseIntent] = useState<
-    | { kind: "single"; terminalId: string; label: string }
-    | { kind: "all"; count: number }
+    | { terminalId: string; label: string }
     | null
   >(null);
   const [terminals, setTerminals] = useState<IndependentTerminalSession[]>([]);
   const terminalsRef = useRef<IndependentTerminalSession[]>([]);
-  const suppressParentCloseRef = useRef(false);
   const [activeTerminalId, setActiveTerminalId] = useState<string | null>(null);
+  const [visitedTerminalIds, setVisitedTerminalIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [labelsByTerminalId, setLabelsByTerminalId] = useState<Record<string, string>>({});
@@ -37,66 +45,124 @@ export function WorkbenchTerminalDialog(props: {
   );
   const displayCwd = activeTerminal?.cwd ?? props.cwd;
   const workspaceTitle = useMemo(() => terminalTitle(displayCwd), [displayCwd]);
-  const activeTerminalLabel = activeTerminal
-    ? labelsByTerminalId[activeTerminal.id] || terminalTitle(activeTerminal.cwd)
-    : "terminal";
 
   useEffect(() => {
     terminalsRef.current = terminals;
   }, [terminals]);
-
-  const closeTerminals = useCallback(async (terminalIds: string[]) => {
-    await Promise.all(
-      terminalIds.map((terminalId) =>
-        closeIndependentTerminal(terminalId).catch(() => undefined),
-      ),
-    );
-  }, []);
 
   const launchTerminal = useCallback(
     async () => {
       setError(null);
       setLoading(true);
       try {
-        const created = await startIndependentTerminal({ cwd: props.cwd });
-        setTerminals((current) => [...current, created]);
+        const created = await startIndependentTerminal({
+          cwd: props.cwd,
+          ...(props.owner ? { owner: props.owner } : {}),
+        });
+        setTerminals((current) => [
+          ...current.filter((terminal) => terminal.id !== created.id),
+          created,
+        ]);
         setActiveTerminalId(created.id);
+        setVisitedTerminalIds((current) => {
+          const next = new Set(current);
+          next.add(created.id);
+          return next;
+        });
       } catch (nextError) {
         setError(nextError instanceof Error ? nextError.message : String(nextError));
       } finally {
         setLoading(false);
       }
     },
-    [props.cwd],
+    [props.cwd, props.owner],
   );
 
   useEffect(() => {
     if (!props.open) {
-      if (terminalsRef.current.length > 0) {
-        void closeTerminals(terminalsRef.current.map((terminal) => terminal.id));
-      }
-      terminalsRef.current = [];
-      setTerminals([]);
-      setActiveTerminalId(null);
       setError(null);
-      setLabelsByTerminalId({});
       setEditingTerminalId(null);
       setEditingLabel("");
       setCloseIntent(null);
+      setVisitedTerminalIds(new Set());
       setLoading(false);
       return;
     }
-    if (terminalsRef.current.length === 0) {
-      void launchTerminal();
-    }
-    return () => {
-      if (terminalsRef.current.length > 0) {
-        void closeTerminals(terminalsRef.current.map((terminal) => terminal.id));
+
+    let cancelled = false;
+    const restoreOrLaunchTerminal = async () => {
+      setError(null);
+      setLoading(true);
+      try {
+        const existing = await listIndependentTerminals({
+          cwd: props.cwd,
+          ...(props.owner ? { owner: props.owner } : {}),
+        });
+        if (cancelled) {
+          return;
+        }
+        if (existing.length > 0) {
+          const existingTerminalIds = new Set(existing.map((terminal) => terminal.id));
+          const nextActiveTerminalId =
+            activeTerminalId && existingTerminalIds.has(activeTerminalId)
+              ? activeTerminalId
+              : existing[0]?.id ?? null;
+          setTerminals(existing);
+          setActiveTerminalId(nextActiveTerminalId);
+          setVisitedTerminalIds((current) => {
+            if (!nextActiveTerminalId || current.has(nextActiveTerminalId)) {
+              return current;
+            }
+            const next = new Set(current);
+            next.add(nextActiveTerminalId);
+            return next;
+          });
+          return;
+        }
+        const created = await startIndependentTerminal({
+          cwd: props.cwd,
+          ...(props.owner ? { owner: props.owner } : {}),
+        });
+        if (cancelled) {
+          return;
+        }
+        setTerminals([created]);
+        setActiveTerminalId(created.id);
+        setVisitedTerminalIds((current) => {
+          const next = new Set(current);
+          next.add(created.id);
+          return next;
+        });
+      } catch (nextError) {
+        if (!cancelled) {
+          setError(nextError instanceof Error ? nextError.message : String(nextError));
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
       }
     };
-    // Intentionally only keyed by open: changing workspace while terminal is open
-    // should not tear down active shells.
-  }, [props.open]);
+
+    void restoreOrLaunchTerminal();
+    return () => {
+      cancelled = true;
+    };
+  }, [props.open, props.cwd, props.owner]);
+
+  useEffect(() => {
+    if (!activeTerminalId || !terminals.some((terminal) => terminal.id === activeTerminalId)) {
+      return;
+    }
+    setVisitedTerminalIds((current) => {
+      if (current.has(activeTerminalId)) {
+        return current;
+      }
+      const next = new Set(current);
+      next.add(activeTerminalId);
+      return next;
+    });
+  }, [activeTerminalId, terminals]);
 
   const closeSingleTerminal = async (terminalId: string) => {
     await closeIndependentTerminal(terminalId).catch(() => undefined);
@@ -104,7 +170,6 @@ export function WorkbenchTerminalDialog(props: {
       const next = current.filter((terminal) => terminal.id !== terminalId);
       if (next.length === 0) {
         setActiveTerminalId(null);
-        props.onOpenChange(false);
       } else if (activeTerminalId === terminalId) {
         setActiveTerminalId(next[Math.max(0, next.length - 1)]?.id ?? null);
       }
@@ -118,18 +183,19 @@ export function WorkbenchTerminalDialog(props: {
       delete next[terminalId];
       return next;
     });
+    setVisitedTerminalIds((current) => {
+      if (!current.has(terminalId)) {
+        return current;
+      }
+      const next = new Set(current);
+      next.delete(terminalId);
+      return next;
+    });
   };
 
   const handleOpenChange = (nextOpen: boolean) => {
     if (nextOpen) {
       props.onOpenChange(true);
-      return;
-    }
-    if (suppressParentCloseRef.current || closeIntent) {
-      return;
-    }
-    if (terminalsRef.current.length > 0) {
-      setCloseIntent({ kind: "all", count: terminalsRef.current.length });
       return;
     }
     props.onOpenChange(false);
@@ -141,7 +207,6 @@ export function WorkbenchTerminalDialog(props: {
       return;
     }
     setCloseIntent({
-      kind: "single",
       terminalId,
       label: labelsByTerminalId[terminalId] || terminalTitle(target.cwd),
     });
@@ -151,22 +216,9 @@ export function WorkbenchTerminalDialog(props: {
     if (!closeIntent) {
       return;
     }
-    if (closeIntent.kind === "single") {
-      void closeSingleTerminal(closeIntent.terminalId).finally(() => {
-        setCloseIntent(null);
-      });
-      return;
-    }
-    setCloseIntent(null);
-    props.onOpenChange(false);
-  };
-
-  const dismissCloseIntent = () => {
-    suppressParentCloseRef.current = true;
-    setCloseIntent(null);
-    window.setTimeout(() => {
-      suppressParentCloseRef.current = false;
-    }, 150);
+    void closeSingleTerminal(closeIntent.terminalId).finally(() => {
+      setCloseIntent(null);
+    });
   };
 
   const beginRename = (terminal: IndependentTerminalSession) => {
@@ -192,90 +244,102 @@ export function WorkbenchTerminalDialog(props: {
     setEditingLabel("");
   };
 
+  const terminalTabs = useMemo<TerminalTabDescriptor[]>(
+    () =>
+      terminals.map((terminal) => {
+        const tabLabel = labelsByTerminalId[terminal.id] || terminalTitle(terminal.cwd);
+        return {
+          id: terminal.id,
+          title: tabLabel,
+          editing: editingTerminalId === terminal.id,
+          label:
+            editingTerminalId === terminal.id ? (
+              <input
+                value={editingLabel}
+                onChange={(event) => setEditingLabel(event.target.value)}
+                onBlur={commitRename}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    commitRename();
+                  }
+                  if (event.key === "Escape") {
+                    setEditingTerminalId(null);
+                    setEditingLabel("");
+                  }
+                }}
+                autoFocus
+                className="w-32 rounded bg-transparent text-xs font-medium text-[var(--app-fg)] outline-none"
+              />
+            ) : (
+              <span className="max-w-[10rem] truncate text-[11px] font-medium">
+                {tabLabel}
+              </span>
+            ),
+          controls: (
+            <>
+              <button
+                type="button"
+                className="rounded p-0.5 opacity-70 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 coarse-pointer-action-visible"
+                onClick={() => beginRename(terminal)}
+                aria-label={`Rename ${tabLabel} terminal`}
+              >
+                <PencilLine size={12} />
+              </button>
+              <button
+                type="button"
+                className="rounded p-0.5 opacity-70 transition-opacity hover:bg-[var(--app-danger-bg)] hover:text-[var(--app-danger)] group-hover:opacity-100 group-focus-within:opacity-100 coarse-pointer-action-visible"
+                onClick={() => requestCloseSingleTerminal(terminal.id)}
+                aria-label={`Terminate ${tabLabel} terminal`}
+                title={`Terminate ${tabLabel} terminal`}
+              >
+                <X size={12} />
+              </button>
+            </>
+          ),
+        };
+      }),
+    [editingLabel, editingTerminalId, labelsByTerminalId, terminals],
+  );
+  const terminalPaneTabs = useMemo(
+    () =>
+      terminals
+        .filter((terminal) => visitedTerminalIds.has(terminal.id))
+        .map((terminal) => ({
+          id: terminal.id,
+          terminalId: terminal.id,
+          label: labelsByTerminalId[terminal.id] || terminalTitle(terminal.cwd),
+        })),
+    [labelsByTerminalId, terminals, visitedTerminalIds],
+  );
+
   return (
     <>
-      <Dialog.Root open={props.open} onOpenChange={handleOpenChange}>
-        <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 z-40 bg-black/45" />
-          <Dialog.Content
-            data-testid="workbench-terminal-dialog"
-            data-terminal-id={activeTerminal?.id ?? ""}
-            data-terminal-cwd={activeTerminal?.cwd ?? props.cwd}
-            onEscapeKeyDown={(event) => event.preventDefault()}
-            className="fixed inset-0 z-50 flex h-[100dvh] w-screen flex-col overflow-hidden bg-[var(--app-bg)] pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] focus:outline-none md:left-1/2 md:top-1/2 md:h-[82vh] md:w-[min(1280px,96vw)] md:-translate-x-1/2 md:-translate-y-1/2 md:rounded-2xl md:border md:border-[var(--app-border)] md:pt-0 md:pb-0 md:shadow-2xl"
-          >
-            <div className="flex items-center justify-between gap-3 border-b border-[var(--app-border)] px-3 py-2.5 md:px-4 md:py-3">
-              <div className="min-w-0 flex-1">
-                <Dialog.Title className="truncate text-sm font-semibold text-[var(--app-fg)] md:text-base">
-                  {workspaceTitle}
-                </Dialog.Title>
-              </div>
-              <Dialog.Close asChild>
-                <button
-                  type="button"
-                  className="icon-click-feedback inline-flex h-8 w-8 shrink-0 items-center justify-center gap-1 rounded-md border border-[var(--app-border)] text-[11px] font-semibold text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] min-[900px]:w-auto min-[900px]:px-2"
-                  aria-label="Close terminal"
-                  title="Close terminal"
-                >
-                  <X size={14} />
-                  <span className="hidden min-[900px]:inline">Close</span>
-                </button>
-              </Dialog.Close>
-            </div>
-
-            <div className="flex items-center gap-1.5 bg-[var(--app-bg)] px-3 py-1 md:px-4 md:py-1">
-              <div className="flex min-w-0 flex-1 gap-1.5 overflow-x-auto">
-                {terminals.map((terminal) => {
-                  const active = terminal.id === activeTerminalId;
-                  const tabLabel = labelsByTerminalId[terminal.id] || terminalTitle(terminal.cwd);
-                  return (
-                    <div
-                      key={terminal.id}
-                      className={`group flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-left transition-colors ${
-                        active
-                          ? "border-[var(--app-border)] bg-[var(--app-subtle-bg)] text-[var(--app-fg)]"
-                          : "border-transparent bg-transparent text-[var(--app-hint)] hover:border-[var(--app-border)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
-                      }`}
-                    >
-                      <button
-                        type="button"
-                        onClick={() => setActiveTerminalId(terminal.id)}
-                        className="flex min-w-0 items-center gap-2"
-                      >
-                        {editingTerminalId === terminal.id ? (
-                          <input
-                            value={editingLabel}
-                            onChange={(event) => setEditingLabel(event.target.value)}
-                            onBlur={commitRename}
-                            onKeyDown={(event) => {
-                              if (event.key === "Enter") {
-                                commitRename();
-                              }
-                              if (event.key === "Escape") {
-                                setEditingTerminalId(null);
-                                setEditingLabel("");
-                              }
-                            }}
-                            autoFocus
-                            className="w-32 rounded bg-transparent text-xs font-medium text-[var(--app-fg)] outline-none"
-                          />
-                        ) : (
-                          <span className="max-w-[10rem] truncate text-[11px] font-medium">
-                            {tabLabel}
-                          </span>
-                        )}
-                      </button>
-                      <button
-                        type="button"
-                        className="rounded p-0.5 opacity-70 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 coarse-pointer-action-visible"
-                        onClick={() => beginRename(terminal)}
-                        aria-label={`Rename ${tabLabel} terminal`}
-                      >
-                        <PencilLine size={12} />
-                      </button>
-                    </div>
-                  );
-                })}
+      <TerminalDialogFrame
+        open={props.open}
+        onOpenChange={handleOpenChange}
+        title={workspaceTitle}
+        contentTestId="workbench-terminal-dialog"
+        dataTerminalId={activeTerminal?.id ?? ""}
+        dataTerminalCwd={activeTerminal?.cwd ?? props.cwd}
+        closeLabel="Hide terminal window"
+        closeTitle="Hide terminal window without stopping background terminals"
+        closeText="Hide"
+      >
+        <TerminalTabStrip
+          tabs={terminalTabs}
+          activeTabId={activeTerminalId}
+          onTabSelect={(terminalId) => {
+            setVisitedTerminalIds((current) => {
+              if (current.has(terminalId)) {
+                return current;
+              }
+              const next = new Set(current);
+              next.add(terminalId);
+              return next;
+            });
+            setActiveTerminalId(terminalId);
+          }}
+          endAdornment={
                 <button
                   type="button"
                   disabled={loading}
@@ -288,47 +352,73 @@ export function WorkbenchTerminalDialog(props: {
                 >
                   <Plus size={14} />
                 </button>
-              </div>
-            </div>
+          }
+        />
 
-            <div className="min-h-0 flex-1 px-3 pb-3 pt-0 md:px-5 md:pb-5 md:pt-0">
-              {loading ? (
-                <div className="flex h-full items-center justify-center gap-2 text-sm text-[var(--app-hint)]">
-                  <LoaderCircle size={16} className="animate-spin" />
-                  Starting terminal…
-                </div>
-              ) : error ? (
-                <div className="rounded-lg border border-[var(--app-border)] bg-[var(--app-danger-bg)] p-3 text-sm text-[var(--app-fg)]">
-                  Failed to start terminal: {error}
-                </div>
-              ) : activeTerminal ? (
-                <TerminalPane
-                  key={activeTerminal.id}
-                  terminalId={activeTerminal.id}
-                  clientId={props.clientId}
-                  hasControl
-                  closeLabel={`Close ${activeTerminalLabel} terminal`}
-                  closeTitle={`Close ${activeTerminalLabel} terminal`}
-                  onClose={() => requestCloseSingleTerminal(activeTerminal.id)}
-                />
-              ) : null}
+        {loading && terminals.length === 0 ? (
+          <div className="flex min-h-0 flex-1 items-center justify-center gap-2 text-sm text-[var(--app-hint)]">
+            <LoaderCircle size={16} className="animate-spin" />
+            Starting terminal…
+          </div>
+        ) : error && terminals.length === 0 ? (
+          <div className="min-h-0 flex-1 px-3 pb-3 pt-0 md:px-5 md:pb-5 md:pt-0">
+            <div className="rounded-lg border border-[var(--app-border)] bg-[var(--app-danger-bg)] p-3 text-sm text-[var(--app-fg)]">
+              Failed to start terminal: {error}
             </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
+          </div>
+        ) : (
+          <TerminalPaneStack
+            tabs={terminalPaneTabs}
+            activeTabId={activeTerminalId}
+            clientId={props.clientId}
+            emptyState={
+              <div className="flex h-full flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-[var(--app-border)] text-center text-sm text-[var(--app-hint)]">
+                <div>No active terminal tab.</div>
+                <button
+                  type="button"
+                  disabled={loading}
+                  className="icon-click-feedback inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-[var(--app-border)] px-3 text-xs font-semibold text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)] disabled:opacity-50"
+                  onClick={() => {
+                    void launchTerminal();
+                  }}
+                >
+                  <Plus size={14} />
+                  New terminal
+                </button>
+              </div>
+            }
+            terminalProps={(terminal, active) => ({
+              hasControl: active,
+              claimSurface: active,
+              autoFocus: active,
+              renderOutput: active,
+              nativeSurfaceControl: false,
+              replayTailBytes: 512 * 1024,
+              maxWriteBatchChars: 128 * 1024,
+              scrollback: 600,
+              closeLabel: `Terminate ${terminal.label} terminal`,
+              closeTitle: `Terminate ${terminal.label} terminal process`,
+              onClose: () => requestCloseSingleTerminal(terminal.id),
+            })}
+          />
+        )}
+        {error && terminals.length > 0 ? (
+          <div className="pointer-events-none absolute right-3 top-[6.25rem] max-w-[min(28rem,calc(100%-1.5rem))] rounded-lg border border-[var(--app-border)] bg-[var(--app-danger-bg)] px-3 py-2 text-xs text-[var(--app-fg)] shadow-lg">
+            Failed to start terminal: {error}
+          </div>
+        ) : null}
+      </TerminalDialogFrame>
       <ConfirmDialog
         open={closeIntent !== null}
-        title={closeIntent?.kind === "single" ? "Close terminal?" : "Close terminals?"}
+        title="Terminate terminal?"
         description={
-          closeIntent?.kind === "single"
-            ? `Close terminal "${closeIntent.label}"?`
-            : `Close all ${closeIntent?.count ?? 0} terminals?`
+          `Terminate terminal "${closeIntent?.label ?? "terminal"}"? This stops the background process for this tab.`
         }
-        confirmLabel="Close"
+        confirmLabel="Terminate"
         confirmTone="danger"
         onOpenChange={(open) => {
           if (!open) {
-            dismissCloseIntent();
+            setCloseIntent(null);
           }
         }}
         onConfirm={handleConfirmClose}
