@@ -58,6 +58,7 @@
     "test:smoke:browser-providers": "npm run test:smoke:native-browser",
     "test:smoke:real-browser-providers": "npm run test:smoke:codex-browser && npm run test:smoke:claude-browser && npm run test:smoke:opencode-browser",
     "test:smoke:provider-flows": "npm run test:smoke:codex-browser && npm run test:smoke:claude-flow && npm run test:smoke:opencode-browser",
+    "test:smoke-cleanup": "python3 -m unittest scripts/rah_smoke_cleanup_test.py",
     "cleanup:smoke-state": "python3 scripts/cleanup_temp_rah_state.py"
   },
   "dependencies": {

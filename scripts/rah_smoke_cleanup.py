@@ -53,7 +53,10 @@ def is_temp_workspace(path_value: str | pathlib.Path) -> bool:
         temp_root = _resolve_path(tempfile.gettempdir())
     except Exception:
         return False
-    return candidate != temp_root and os.path.commonpath([str(candidate), str(temp_root)]) == str(temp_root)
+    if candidate == temp_root or os.path.commonpath([str(candidate), str(temp_root)]) != str(temp_root):
+        return False
+    relative_parts = candidate.relative_to(temp_root).parts
+    return bool(relative_parts) and relative_parts[0].startswith("rah-")
 
 
 def _close_live_sessions_for_workspace(base_url: str, workspace: str) -> None:
@@ -87,6 +90,46 @@ def _close_live_sessions_for_workspace(base_url: str, workspace: str) -> None:
             continue
 
 
+def _terminal_workspace(terminal: dict[str, Any]) -> str:
+    cwd = terminal.get("cwd") if isinstance(terminal, dict) else None
+    if isinstance(cwd, str):
+        return cwd
+    owner = terminal.get("owner") if isinstance(terminal, dict) else None
+    if isinstance(owner, dict) and owner.get("kind") == "workspace" and isinstance(owner.get("id"), str):
+        return owner["id"]
+    return ""
+
+
+def _close_independent_terminals_for_workspace(base_url: str, workspace: str) -> None:
+    try:
+        terminals = _request_json(base_url, "/api/terminal/list").get("terminals", [])
+    except Exception:
+        return
+    if not isinstance(terminals, list):
+        return
+    for terminal in terminals:
+        if not isinstance(terminal, dict):
+            continue
+        terminal_id = terminal.get("id")
+        if not isinstance(terminal_id, str):
+            continue
+        owner = terminal.get("owner")
+        owner_workspace = (
+            owner.get("id")
+            if isinstance(owner, dict) and owner.get("kind") == "workspace" and isinstance(owner.get("id"), str)
+            else ""
+        )
+        if not (
+            _belongs_to_workspace(owner_workspace, workspace)
+            or _belongs_to_workspace(_terminal_workspace(terminal), workspace)
+        ):
+            continue
+        try:
+            _request_json(base_url, f"/api/terminal/{terminal_id}/close", {})
+        except Exception:
+            continue
+
+
 def cleanup_smoke_workspace(
     base_url: str,
     workspace: str | pathlib.Path,
@@ -96,6 +139,7 @@ def cleanup_smoke_workspace(
     workspace_path = pathlib.Path(workspace)
     workspace_str = str(workspace_path)
     _close_live_sessions_for_workspace(base_url, workspace_str)
+    _close_independent_terminals_for_workspace(base_url, workspace_str)
     try:
         _request_json(base_url, "/api/history/workspaces/remove", {"dir": workspace_str})
     except Exception:
