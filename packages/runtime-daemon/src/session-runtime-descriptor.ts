@@ -6,6 +6,11 @@ import type {
   SessionRuntimeCapabilityStatus,
   SessionRuntimeDescriptor,
 } from "@rah/runtime-protocol";
+import {
+  defaultLiveBackendForProvider,
+  isNativeLocalServerProvider,
+  isTuiMuxFallbackProvider,
+} from "@rah/runtime-protocol";
 
 type RuntimeFeatureStatus = NonNullable<SessionRuntimeDescriptor["features"]>;
 
@@ -26,18 +31,16 @@ function runtimeFeatures(overrides: Partial<RuntimeFeatureStatus>): RuntimeFeatu
 }
 
 function nativeLocalServerFeatures(provider: ProviderKind): RuntimeFeatureStatus {
+  const supported = isNativeLocalServerProvider(provider);
   return runtimeFeatures({
     structuredLiveEvents: "available",
     structuredControl: "available",
     historyBackfill: "available",
-    tuiClientContinuity:
-      provider === "codex" || provider === "opencode" ? "available" : "unsupported",
-    crossClientSync:
-      provider === "codex" || provider === "opencode" ? "available" : "unsupported",
+    tuiClientContinuity: supported ? "available" : "unsupported",
+    crossClientSync: supported ? "available" : "unsupported",
     prelaunchConfig: "available",
-    runtimeConfig:
-      provider === "codex" || provider === "opencode" ? "available" : "unverified",
-    interrupt: provider === "codex" || provider === "opencode" ? "available" : "unverified",
+    runtimeConfig: supported ? "available" : "unverified",
+    interrupt: supported ? "available" : "unverified",
     archiveLifecycle: provider === "opencode" ? "available" : "unverified",
   });
 }
@@ -82,8 +85,9 @@ export function runtimeDescriptorForLiveBackend(args: {
   provider: ProviderKind;
   liveBackend?: SessionLiveBackend | undefined;
 }): SessionRuntimeDescriptor {
-  if (args.liveBackend === "native_local_server") {
-    const providerTuiClientAvailable = args.provider === "codex" || args.provider === "opencode";
+  const liveBackend = args.liveBackend ?? defaultLiveBackendForProvider(args.provider);
+  if (liveBackend === "native_local_server") {
+    const providerTuiClientAvailable = isNativeLocalServerProvider(args.provider);
     return {
       kind: "native_local_server",
       protocolStability: "project_native",
@@ -95,7 +99,7 @@ export function runtimeDescriptorForLiveBackend(args: {
     };
   }
 
-  if (args.liveBackend === "zellij_tui" || args.liveBackend === "native_tui") {
+  if (liveBackend === "zellij_tui" || liveBackend === "native_tui") {
     return {
       kind: "tui_mux_fallback",
       protocolStability: "tui_stdio",
@@ -121,7 +125,7 @@ export function runtimeDescriptorForLiveBackend(args: {
 export function runtimeDescriptorForProviderCatalog(
   provider: ProviderKind,
 ): SessionRuntimeDescriptor {
-  if (provider === "claude") {
+  if (isTuiMuxFallbackProvider(provider)) {
     return {
       kind: "tui_mux_fallback",
       protocolStability: "tui_stdio",
@@ -132,8 +136,8 @@ export function runtimeDescriptorForProviderCatalog(
       features: tuiMuxFallbackFeatures(),
     };
   }
-  if (provider === "codex" || provider === "opencode") {
-    const providerTuiClientAvailable = provider === "codex" || provider === "opencode";
+  if (isNativeLocalServerProvider(provider)) {
+    const providerTuiClientAvailable = isNativeLocalServerProvider(provider);
     return {
       kind: "native_local_server",
       protocolStability: "project_native",

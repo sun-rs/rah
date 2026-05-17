@@ -52,6 +52,7 @@ import {
   isOpenCodeModeId,
 } from "../session-mode-utils";
 import { optionValueAsString, resolveModelOptionValues } from "../session-model-options";
+import { nativeLocalServerRuntimeDiagnostics } from "../native-local-server-attach";
 
 export interface LiveOpenCodeSession {
   sessionId: string;
@@ -87,13 +88,14 @@ export function runtimeDiagnosticsForOpenCodeServer(
   server: OpenCodeServerHandle,
   providerSessionId: string,
 ): SessionRuntimeDiagnostics {
-  return {
-    serverEndpoint: server.baseUrl,
+  return nativeLocalServerRuntimeDiagnostics({
+    provider: "opencode",
+    providerSessionId,
+    endpoint: server.baseUrl,
     ...(server.child.pid !== undefined ? { serverPid: server.child.pid } : {}),
-    attachCommand: `opencode attach ${server.baseUrl} --session ${providerSessionId}`,
     attachState: "ready",
     lastEventCursor: `session:${providerSessionId}`,
-  };
+  });
 }
 
 function openCodeNativeModeId(modeId: string): string {

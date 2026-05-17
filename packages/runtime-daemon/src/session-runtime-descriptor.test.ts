@@ -22,6 +22,12 @@ test("runtimeDescriptorForLiveBackend describes TUI mux fallback sessions", () =
   assert.equal(runtime.features?.structuredControl, "unsupported");
 });
 
+test("runtimeDescriptorForLiveBackend uses canonical provider defaults when backend is omitted", () => {
+  assert.equal(runtimeDescriptorForLiveBackend({ provider: "codex" }).kind, "native_local_server");
+  assert.equal(runtimeDescriptorForLiveBackend({ provider: "opencode" }).kind, "native_local_server");
+  assert.equal(runtimeDescriptorForLiveBackend({ provider: "claude" }).kind, "tui_mux_fallback");
+});
+
 test("runtimeDescriptorForLiveBackend marks provider control sessions separately", () => {
   const runtime = runtimeDescriptorForLiveBackend({ provider: "codex", liveBackend: "structured" });
   assert.equal(runtime.kind, "provider_control");

@@ -333,7 +333,7 @@ describe("session startup model and mode requests", () => {
       }),
       [
         ["codex", "native_local_server"],
-        ["claude", null],
+        ["claude", "zellij_tui"],
         ["opencode", "native_local_server"],
       ],
     );
@@ -510,7 +510,7 @@ describe("session startup model and mode requests", () => {
       }),
       [
         ["codex", "native_local_server"],
-        ["claude", null],
+        ["claude", "zellij_tui"],
         ["opencode", "native_local_server"],
       ],
     );

@@ -660,6 +660,16 @@ function providerModeId(parsed) {
   return undefined;
 }
 
+function defaultLiveBackendForProvider(provider) {
+  if (provider === "codex" || provider === "opencode") {
+    return "native_local_server";
+  }
+  if (provider === "claude") {
+    return "zellij_tui";
+  }
+  return undefined;
+}
+
 function terminalClientDescriptor() {
   const clientId = `terminal:${process.pid}:${Date.now()}`;
   return {
@@ -676,10 +686,10 @@ function terminalClientDescriptor() {
 
 async function startOrResumePtyFirstSession(parsed, client) {
   const modeId = providerModeId(parsed);
-  const liveBackend =
-    parsed.provider === "codex" || parsed.provider === "opencode"
-      ? "native_local_server"
-      : "zellij_tui";
+  const liveBackend = defaultLiveBackendForProvider(parsed.provider);
+  if (!liveBackend) {
+    throw new Error(`Provider ${parsed.provider} is not supported for live attach.`);
+  }
   if (parsed.resumeProviderSessionId) {
     const result = await postJson(parsed.daemonUrl, "/api/sessions/resume", {
       provider: parsed.provider,

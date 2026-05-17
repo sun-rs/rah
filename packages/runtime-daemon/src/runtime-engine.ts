@@ -53,6 +53,12 @@ import type {
   StoredSessionRef,
   ZellijMuxSessionDiagnostic,
 } from "@rah/runtime-protocol";
+import {
+  isCoreLiveProvider,
+  isNativeLocalServerProvider,
+  isTuiMuxFallbackProvider,
+  liveBackendSupportedByProvider,
+} from "@rah/runtime-protocol";
 import { createDefaultProviderAdapters } from "./default-provider-adapters";
 import {
   applyWorkspaceGitFileActionAsync,
@@ -655,16 +661,15 @@ export class RuntimeEngine {
     }
   }
 
-  private supportsNativeLocalServerProvider(provider: StartSessionRequest["provider"]): boolean {
-    return provider === "codex" || provider === "opencode";
-  }
-
   private assertNativeLocalServerBackendAllowed(
     request: Pick<StartSessionRequest | ResumeSessionRequest, "provider" | "liveBackend">,
   ): void {
     if (
       request.liveBackend === "native_local_server" &&
-      !this.supportsNativeLocalServerProvider(request.provider)
+      !liveBackendSupportedByProvider({
+        provider: request.provider,
+        liveBackend: request.liveBackend,
+      })
     ) {
       throw new Error(
         `Provider ${request.provider} does not support the native local-server live backend. Use the provider's advertised live backend.`,
@@ -675,7 +680,13 @@ export class RuntimeEngine {
   private assertZellijTuiBackendAllowed(
     request: Pick<StartSessionRequest | ResumeSessionRequest, "provider" | "liveBackend">,
   ): void {
-    if (request.liveBackend === "zellij_tui" && request.provider !== "claude") {
+    if (
+      request.liveBackend === "zellij_tui" &&
+      !liveBackendSupportedByProvider({
+        provider: request.provider,
+        liveBackend: request.liveBackend,
+      })
+    ) {
       throw new Error(
         `Provider ${request.provider} does not support the zellij TUI backend. Use native_local_server for Codex/OpenCode live sessions.`,
       );
@@ -688,7 +699,7 @@ export class RuntimeEngine {
   ): void {
     if (
       request.preferStoredReplay === true ||
-      this.supportsNativeLocalServerProvider(request.provider) ||
+      isCoreLiveProvider(request.provider) ||
       this.structuredLiveAllowedForInjectedAdapters ||
       this.nativeTuiProviders.supports(request.provider)
     ) {
@@ -722,7 +733,7 @@ export class RuntimeEngine {
     if (request.preferStoredReplay === true) {
       return false;
     }
-    return !this.structuredLiveAllowedForInjectedAdapters && this.supportsNativeLocalServerProvider(request.provider);
+    return !this.structuredLiveAllowedForInjectedAdapters && isNativeLocalServerProvider(request.provider);
   }
 
   private shouldUseZellijTuiBackend(
@@ -735,7 +746,7 @@ export class RuntimeEngine {
     if (request.preferStoredReplay === true) {
       return false;
     }
-    return request.provider === "claude" && this.nativeTuiProviders.supports(request.provider);
+    return isTuiMuxFallbackProvider(request.provider) && this.nativeTuiProviders.supports(request.provider);
   }
 
   attachSession(sessionId: string, request: AttachSessionRequest): AttachSessionResponse {

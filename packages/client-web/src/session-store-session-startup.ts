@@ -1,10 +1,15 @@
 import type {
+  CoreLiveProvider,
   DebugScenarioDescriptor,
   ResumeSessionRequest,
   SessionConfigValue,
   SessionSummary,
   StartSessionRequest,
   StoredSessionRef,
+} from "@rah/runtime-protocol";
+import {
+  defaultLiveBackendForProvider,
+  isCoreLiveProvider,
 } from "@rah/runtime-protocol";
 import * as api from "./api";
 import { readErrorMessage } from "./session-store-bootstrap";
@@ -31,8 +36,7 @@ import {
 } from "./session-store-workspace";
 import { providerLabel, type SessionProjection } from "./types";
 
-type ProviderChoice = "codex" | "claude" | "opencode";
-const CORE_LIVE_PROVIDERS = new Set<ProviderChoice>(["codex", "claude", "opencode"]);
+type ProviderChoice = CoreLiveProvider;
 
 type StartSessionOptions = {
   provider?: ProviderChoice;
@@ -124,22 +128,6 @@ type SessionStartupDeps = {
   takePendingEventsForSessions: (sessionIds: Set<string>) => import("@rah/runtime-protocol").RahEvent[];
   confirmCreateMissingWorkspace: (dir: string) => Promise<boolean>;
 };
-
-function defaultLiveBackendForProvider(
-  provider: string,
-): NonNullable<StartSessionRequest["liveBackend"]> | undefined {
-  // Codex/OpenCode now have native local-server transports. Claude remains on
-  // the daemon-selected TUI mux fallback so it keeps true interactive TUI
-  // continuity instead of pretending SDK/headless is a live attach surface.
-  if (provider === "codex" || provider === "opencode") {
-    return "native_local_server";
-  }
-  return undefined;
-}
-
-function isCoreLiveProvider(provider: string): provider is ProviderChoice {
-  return CORE_LIVE_PROVIDERS.has(provider as ProviderChoice);
-}
 
 function historyOnlyLiveMessage(provider: string): string {
   const label = isCoreLiveProvider(provider) ? providerLabel(provider) : provider;

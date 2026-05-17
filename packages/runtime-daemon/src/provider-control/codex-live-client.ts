@@ -40,6 +40,7 @@ import {
   type LiveCodexSession,
 } from "../codex-live-types";
 import { optionValueAsString, resolveModelOptionValues } from "../session-model-options";
+import { nativeLocalServerRuntimeDiagnostics } from "../native-local-server-attach";
 
 export type { LiveCodexSession } from "../codex-live-types";
 
@@ -207,12 +208,13 @@ export async function startCodexLiveSession(params: {
       liveBackend: "native_local_server",
       cwd: request.cwd,
       rootDir: request.cwd,
-      runtimeDiagnostics: {
-        serverEndpoint: client.endpoint ?? "stdio:codex app-server",
+      runtimeDiagnostics: nativeLocalServerRuntimeDiagnostics({
+        provider: "codex",
+        endpoint: client.endpoint ?? "stdio:codex app-server",
         ...(client.processId !== undefined ? { serverPid: client.processId } : {}),
         attachState: client.endpoint ? "ready" : "unavailable",
         lastEventCursor: "thread:pending",
-      },
+      }),
       ...(request.title !== undefined ? { title: request.title } : {}),
       mode: buildCodexModeState({
         currentModeId: initialMode.activeModeId,
@@ -350,12 +352,14 @@ export async function startCodexLiveSession(params: {
     liveBackend: "native_local_server",
     cwd: request.cwd,
     rootDir: request.cwd,
-    runtimeDiagnostics: {
-      serverEndpoint: client.endpoint ?? "stdio:codex app-server",
+    runtimeDiagnostics: nativeLocalServerRuntimeDiagnostics({
+      provider: "codex",
+      providerSessionId: threadId,
+      endpoint: client.endpoint ?? "stdio:codex app-server",
       ...(client.processId !== undefined ? { serverPid: client.processId } : {}),
       attachState: client.endpoint ? "ready" : "unavailable",
       lastEventCursor: `thread:${threadId}`,
-    },
+    }),
     ...(request.title !== undefined ? { title: request.title } : {}),
     ...(request.initialPrompt !== undefined ? { preview: request.initialPrompt } : {}),
     mode: buildCodexModeState({
@@ -553,12 +557,14 @@ export async function resumeCodexLiveSession(params: {
       liveBackend: "native_local_server",
       cwd,
       rootDir: record?.ref.rootDir ?? cwd,
-      runtimeDiagnostics: {
-        serverEndpoint: client.endpoint ?? "stdio:codex app-server",
+      runtimeDiagnostics: nativeLocalServerRuntimeDiagnostics({
+        provider: "codex",
+        providerSessionId: threadId,
+        endpoint: client.endpoint ?? "stdio:codex app-server",
         ...(client.processId !== undefined ? { serverPid: client.processId } : {}),
         attachState: client.endpoint ? "ready" : "unavailable",
         lastEventCursor: `thread:${threadId}`,
-      },
+      }),
       ...(thread &&
       typeof thread.preview === "string" &&
       thread.preview.trim() &&

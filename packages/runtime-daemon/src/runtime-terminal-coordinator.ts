@@ -38,6 +38,7 @@ import {
   resolveNativeTuiBindingDiagnostic,
 } from "./native-tui-diagnostics";
 import type { NativeTuiMirrorProvider } from "./native-tui-mirror-provider";
+import { nativeLocalServerAttachSpec } from "./native-local-server-attach";
 import {
   buildNativeTuiSessionCapabilities,
   buildStoppedNativeTuiSessionCapabilities,
@@ -172,38 +173,6 @@ function providerPrimaryModelOptionId(provider: ProviderKind): string | null {
     default:
       return null;
   }
-}
-
-function nativeLocalServerTuiAttachSpec(session: ManagedSession):
-  | { command: string; args: string[]; attachCommand: string }
-  | null {
-  const providerSessionId = session.providerSessionId;
-  const endpoint = session.runtimeDiagnostics?.serverEndpoint;
-  if (!providerSessionId || !endpoint || session.liveBackend !== "native_local_server") {
-    return null;
-  }
-  if (session.provider === "codex") {
-    if (!/^wss?:\/\//.test(endpoint)) {
-      return null;
-    }
-    const command = process.env.RAH_CODEX_BINARY || "codex";
-    const args = ["--remote", endpoint, "resume", providerSessionId];
-    return {
-      command,
-      args,
-      attachCommand: `${command} --remote ${endpoint} resume ${providerSessionId}`,
-    };
-  }
-  if (session.provider === "opencode") {
-    const command = process.env.RAH_OPENCODE_BINARY || "opencode";
-    const args = ["attach", endpoint, "--session", providerSessionId];
-    return {
-      command,
-      args,
-      attachCommand: `${command} attach ${endpoint} --session ${providerSessionId}`,
-    };
-  }
-  return null;
 }
 
 function nativeTuiStartupSessionPatch(
@@ -1296,7 +1265,13 @@ export class RuntimeTerminalCoordinator {
     if (!state) {
       return false;
     }
-    const spec = nativeLocalServerTuiAttachSpec(state.session);
+    const spec = state.session.liveBackend === "native_local_server"
+      ? nativeLocalServerAttachSpec({
+          provider: state.session.provider,
+          providerSessionId: state.session.providerSessionId,
+          endpoint: state.session.runtimeDiagnostics?.serverEndpoint,
+        })
+      : null;
     if (!spec) {
       return false;
     }

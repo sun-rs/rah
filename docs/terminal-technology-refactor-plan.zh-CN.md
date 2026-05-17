@@ -84,6 +84,30 @@ Claude：
 - `Provider Headless Runner`：用于 Codex/OpenCode 这类可以由 server/app-server 持续运行的 provider。
 - `Unified Terminal Surface`：前端统一 xterm 多 tab 组件，只负责 attach/detach/input/resize，不决定后台进程是否存在。
 
+### Runner 策略协议
+
+RAH 当前采用一条固定策略：
+
+- Codex / OpenCode：默认 `native_local_server`。provider server 是 session runner，本地 TUI、Web TUI、PWA 都只是 client surface。
+- Claude：默认 `zellij_tui`。Claude 暂时没有等价 native local server，mux TUI 是 session runner fallback。
+- 其它 provider：不进入 live session 主线，只能作为 stored history/custom 扩展处理。
+
+这条策略必须由协议层共享，而不是在前端、daemon、CLI、Council 各自写一遍判断。当前代码中的权威入口是 `packages/runtime-protocol/src/live-backend-policy.ts`：
+
+- `defaultLiveBackendForProvider(provider)`
+- `isNativeLocalServerProvider(provider)`
+- `isTuiMuxFallbackProvider(provider)`
+- `liveBackendSupportedByProvider({ provider, liveBackend })`
+
+任何新入口（例如 Council runner、CLI attach、未来 tmux backend）都必须先经过这套策略。这样 Codex/OpenCode 的 server-client 主线和 Claude 的 mux fallback 不会再次漂移。
+
+Native local server 的 TUI client attach 命令也必须集中生成。当前 daemon 侧入口是 `packages/runtime-daemon/src/native-local-server-attach.ts`：
+
+- Codex：`codex --remote <ws-endpoint> resume <thread-id>`
+- OpenCode：`opencode attach <server-url> --session <session-id>`
+
+该模块同时负责 runtime diagnostics 里的 `attachCommand`。Info 面板、Web TUI client 启动、未来 Council debug terminal 都应引用同一处结果，不能手写 provider-specific attach 字符串。
+
 ## 画面性能与长期运行策略
 
 核心原则：terminal 画面不能依赖“把历史全部重放一遍”。长期运行后打开慢、切 tab 白屏、滚动卡顿，根因通常都是 unbounded replay、unbounded scrollback、反复销毁/重建 xterm、隐藏 terminal 仍高频渲染。
@@ -191,6 +215,24 @@ Claude：
 - 尚未为 Claude 替换 zellij/tmux 抽象。
 - 尚未把 PTY WebSocket 改成 browser binary frame；当前 daemon -> browser 仍是 JSON frame。
 - 尚未完成真实浏览器长输出/连续输入延迟基准测试；第一阶段不能只靠单元测试判定完成。
+
+### 2026-05-17 第二阶段准备：Runner 策略提纯
+
+状态：策略层已开始集中，尚未切 Council。
+
+已完成：
+
+- 在 `runtime-protocol` 增加 live backend policy，统一定义 Codex/OpenCode -> `native_local_server`、Claude -> `zellij_tui`。
+- 前端 new/resume 入口改用共享策略，不再本地硬编码 provider/backend 对应关系。
+- daemon runtime engine 改用共享策略验证 provider/backend 组合，避免 Claude 被误接 native local server、Codex/OpenCode 被误接 mux fallback。
+- runtime descriptor 默认值改为共享策略：缺省 backend 时，Codex/OpenCode 仍描述为 native local server，Claude 描述为 mux fallback。
+- native local server attach 命令集中到 `native-local-server-attach.ts`，Codex/OpenCode diagnostics 与 Web TUI client 启动不再各自拼命令。
+
+仍未完成：
+
+- Council 的 Codex/OpenCode agent 仍是 `nativeTuiStartLaunchSpec + startAgentPty`，还没有复用普通 session 的 native local server runner。
+- Claude 仍是 zellij backend，还没有抽出可替换 tmux 的 backend selection 配置。
+- `bin/rah.mjs` 仍保留 JS 侧轻量策略函数，因为 CLI 当前不直接加载 TypeScript protocol helper；后续可在构建产物稳定后消除这份重复。
 
 ## 必须保证的不变量
 
