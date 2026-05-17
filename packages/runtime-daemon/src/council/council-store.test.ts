@@ -23,6 +23,10 @@ test("CouncilStore persists rooms, agents, ordered messages, and stopped status"
     assert.equal(created.agents.length, 2);
     assert.deepEqual(created.agents.map((agent) => agent.id), ["Codex Lead", "Claude Reviewer"]);
     assert.deepEqual(created.agents.map((agent) => agent.label), ["Codex Lead", "Claude Reviewer"]);
+    assert.deepEqual(created.storage, {
+      storePath: filePath,
+      messageLogPath: path.join(root, "messages", `${encodeURIComponent(created.room.id)}.jsonl`),
+    });
 
     const first = store.appendMessage({
       roomId: created.room.id,

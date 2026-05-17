@@ -43,6 +43,15 @@ export function createDefaultCouncilAgentDrafts(): CouncilAgentDraft[] {
       reasoningId: null,
       modeId: null,
     },
+    {
+      id: "draft-3",
+      provider: "opencode",
+      label: "",
+      role: "",
+      modelId: null,
+      reasoningId: null,
+      modeId: null,
+    },
   ];
 }
 

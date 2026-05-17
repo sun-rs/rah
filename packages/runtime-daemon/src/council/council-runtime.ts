@@ -26,7 +26,6 @@ import { nativeTuiStartLaunchSpec } from "../native-tui-launch-spec";
 import type { EventBus } from "../event-bus";
 import { CouncilStore } from "./council-store";
 import { handleCouncilMcpRequest, type CouncilMcpWaitNew, type CouncilMcpWaitNewResult } from "./council-mcp-shim";
-import { CouncilTerminalScreen } from "./council-terminal-screen";
 
 const DEFAULT_DAEMON_URL = "http://127.0.0.1:43111";
 const DEFAULT_COUNCIL_AGENT_COLS = 120;
@@ -41,9 +40,6 @@ const CLAUDE_BOOTSTRAP_PROMPT_SUBMIT_DELAY_MS = 700;
 const CLAUDE_BOOTSTRAP_PROMPT_READY_TIMEOUT_MS = 3_000;
 const OPENCODE_PAUSE_CONFIRM_TIMEOUT_MS = 4_000;
 const COUNCIL_TERMINAL_OUTPUT_TAIL_LIMIT = 80_000;
-const COUNCIL_TERMINAL_SNAPSHOT_DELAY_MS = 500;
-const COUNCIL_TERMINAL_SNAPSHOT_MIN_CHUNKS = 120;
-const COUNCIL_TERMINAL_SNAPSHOT_MIN_BYTES = 256 * 1024;
 const ANSI_ESCAPE_PATTERN = /\u001b\[[0-?]*[ -/]*[@-~]/g;
 
 type CouncilPtyRuntime = Pick<PtySessionRuntime, "create" | "write" | "resize" | "close" | "has">;
@@ -64,12 +60,6 @@ type CouncilAgentTerminalState = {
   agentId: string;
   provider: CouncilProvider;
   outputTail: string;
-  screen: CouncilTerminalScreen;
-  snapshotBytes: number;
-  snapshotChunks: number;
-  snapshotInFlight?: boolean;
-  snapshotPending?: boolean;
-  snapshotTimer?: NodeJS.Timeout;
   activeSurface?: NativeTuiSurfaceState;
   pendingBootstrapPrompt?: {
     prompt: string;
@@ -280,12 +270,6 @@ export class CouncilRuntime {
           this.queueOpenCodePauseConfirmation(terminal);
         }
       }
-      this.appendCouncilSystemMessage({
-        roomId,
-        actorId: "system",
-        clientId: "rah-web",
-        text: `${agentId} pause requested.`,
-      });
       return { room: this.projectRuntimeRoomState(this.store.snapshot(roomId)) };
     } else if (!this.cancelCouncilAgentWaiters(roomId, agentId) && terminalId && this.ptySessions.has(terminalId)) {
       this.ptySessions.write(terminalId, councilPauseInputForProvider(agent.provider));
@@ -358,6 +342,10 @@ export class CouncilRuntime {
     if (!terminal) {
       return null;
     }
+    const previousSurface = terminal.activeSurface;
+    const previousCols = previousSurface?.cols ?? DEFAULT_COUNCIL_AGENT_COLS;
+    const previousRows = previousSurface?.rows ?? DEFAULT_COUNCIL_AGENT_ROWS;
+    const sameClient = previousSurface?.clientId === request.clientId;
     terminal.activeSurface = {
       sessionId: terminalId,
       clientId: request.clientId,
@@ -368,7 +356,10 @@ export class CouncilRuntime {
     };
     const cols = terminal.activeSurface.cols ?? DEFAULT_COUNCIL_AGENT_COLS;
     const rows = terminal.activeSurface.rows ?? DEFAULT_COUNCIL_AGENT_ROWS;
-    this.forceAgentTerminalRedraw(terminalId, cols, rows);
+    const dimensionsChanged = previousCols !== cols || previousRows !== rows;
+    if (!sameClient || dimensionsChanged) {
+      this.forceAgentTerminalRedraw(terminalId, cols, rows);
+    }
     return { surface: { ...terminal.activeSurface } };
   }
 
@@ -382,7 +373,6 @@ export class CouncilRuntime {
     }
     if (terminal.activeSurface?.clientId === request.clientId) {
       delete terminal.activeSurface;
-      this.scheduleAgentTerminalSnapshotIfNeeded(terminal);
     }
     return terminal.activeSurface ? { surface: { ...terminal.activeSurface } } : {};
   }
@@ -409,7 +399,6 @@ export class CouncilRuntime {
         cols: nextCols,
         rows: nextRows,
       };
-      terminal.screen.resize(nextCols, nextRows);
       this.ptySessions.resize(terminalId, nextCols, nextRows);
     }
     return true;
@@ -775,10 +764,6 @@ export class CouncilRuntime {
   }
 
   private observeAgentTerminalOutput(terminal: CouncilAgentTerminalState, data: string): void {
-    terminal.screen.write(data);
-    terminal.snapshotChunks += 1;
-    terminal.snapshotBytes += Buffer.byteLength(data, "utf8");
-    this.scheduleAgentTerminalSnapshotIfNeeded(terminal);
     terminal.outputTail = appendCouncilTerminalOutputTail(terminal.outputTail, data);
     if (terminal.provider === "opencode" && terminal.pendingPause && hasOpenCodeCouncilPrompt(terminal.outputTail)) {
       const pending = terminal.pendingPause;
@@ -1022,9 +1007,6 @@ export class CouncilRuntime {
       agentId: args.agentId,
       provider: args.provider,
       outputTail: "",
-      screen: new CouncilTerminalScreen(DEFAULT_COUNCIL_AGENT_COLS, DEFAULT_COUNCIL_AGENT_ROWS),
-      snapshotBytes: 0,
-      snapshotChunks: 0,
     };
     this.agentTerminals.set(args.terminalId, terminal);
     this.ptyHub?.ensureSession(args.terminalId);
@@ -1081,9 +1063,6 @@ export class CouncilRuntime {
         agentId,
         provider: agent?.provider ?? "codex",
         outputTail: "",
-        screen: new CouncilTerminalScreen(DEFAULT_COUNCIL_AGENT_COLS, DEFAULT_COUNCIL_AGENT_ROWS),
-        snapshotBytes: 0,
-        snapshotChunks: 0,
       });
       this.ptyHub?.ensureSession(terminalId);
     }
@@ -1105,10 +1084,6 @@ export class CouncilRuntime {
     if (terminal?.pendingPause) {
       clearTimeout(terminal.pendingPause.timeout);
     }
-    if (terminal?.snapshotTimer) {
-      clearTimeout(terminal.snapshotTimer);
-    }
-    terminal?.screen.dispose();
     this.agentTerminals.delete(terminalId);
     await this.ptySessions.close(terminalId).catch(() => false);
     this.ptyHub?.removeSession(terminalId);
@@ -1178,12 +1153,6 @@ export class CouncilRuntime {
         "blocked",
         "pause requested but OpenCode did not return to a prompt",
       );
-      this.appendCouncilSystemMessage({
-        roomId: terminal.roomId,
-        actorId: "system",
-        clientId: "rah-runtime",
-        text: `${terminal.agentId} pause requested, but OpenCode did not return to a prompt.`,
-      });
     }, OPENCODE_PAUSE_CONFIRM_TIMEOUT_MS);
     timeout.unref?.();
     terminal.pendingPause = { timeout };
@@ -1195,68 +1164,6 @@ export class CouncilRuntime {
     const joltCols = nextCols > 20 ? nextCols - 1 : nextCols + 1;
     this.ptySessions.resize(terminalId, joltCols, nextRows);
     this.ptySessions.resize(terminalId, nextCols, nextRows);
-  }
-
-  private scheduleAgentTerminalSnapshotIfNeeded(terminal: CouncilAgentTerminalState): void {
-    if (!this.ptyHub) {
-      return;
-    }
-    if (
-      terminal.snapshotChunks < COUNCIL_TERMINAL_SNAPSHOT_MIN_CHUNKS &&
-      terminal.snapshotBytes < COUNCIL_TERMINAL_SNAPSHOT_MIN_BYTES
-    ) {
-      return;
-    }
-    if ((this.ptyHub.stats(terminal.terminalId)?.subscriberCount ?? 0) > 0) {
-      return;
-    }
-    terminal.snapshotPending = true;
-    if (terminal.snapshotTimer || terminal.snapshotInFlight) {
-      return;
-    }
-    terminal.snapshotTimer = setTimeout(() => {
-      delete terminal.snapshotTimer;
-      void this.flushAgentTerminalSnapshot(terminal);
-    }, COUNCIL_TERMINAL_SNAPSHOT_DELAY_MS);
-    terminal.snapshotTimer.unref?.();
-  }
-
-  private async flushAgentTerminalSnapshot(terminal: CouncilAgentTerminalState): Promise<void> {
-    if (this.agentTerminals.get(terminal.terminalId) !== terminal || terminal.snapshotInFlight) {
-      return;
-    }
-    if ((this.ptyHub?.stats(terminal.terminalId)?.subscriberCount ?? 0) > 0) {
-      terminal.snapshotPending = true;
-      return;
-    }
-    terminal.snapshotPending = false;
-    terminal.snapshotInFlight = true;
-    try {
-      await this.publishAgentTerminalSnapshot(terminal);
-      terminal.snapshotBytes = 0;
-      terminal.snapshotChunks = 0;
-    } finally {
-      terminal.snapshotInFlight = false;
-      if (
-        terminal.snapshotPending &&
-        this.agentTerminals.get(terminal.terminalId) === terminal &&
-        (this.ptyHub?.stats(terminal.terminalId)?.subscriberCount ?? 0) === 0
-      ) {
-        terminal.snapshotPending = false;
-        this.scheduleAgentTerminalSnapshotIfNeeded(terminal);
-      }
-    }
-  }
-
-  private async publishAgentTerminalSnapshot(terminal: CouncilAgentTerminalState): Promise<void> {
-    if (!this.ptyHub) {
-      return;
-    }
-    const snapshot = await terminal.screen.renderSnapshot();
-    if (this.agentTerminals.get(terminal.terminalId) !== terminal || !snapshot) {
-      return;
-    }
-    this.ptyHub.appendOutput(terminal.terminalId, snapshot, { replaceReplay: true });
   }
 
   private assertAgentTerminalSurface(

@@ -74,6 +74,10 @@ export interface CouncilRoomSnapshot {
   room: CouncilRoom;
   agents: CouncilAgent[];
   messages: CouncilMessage[];
+  storage?: {
+    storePath: string;
+    messageLogPath: string;
+  };
 }
 
 export interface CreateCouncilRoomRequest {

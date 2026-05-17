@@ -9,13 +9,14 @@ import {
   resolveCouncilAgentModelSelection,
 } from "./council-ui-state";
 
-test("council defaults create two editable provider-backed agent drafts", () => {
+test("council defaults create three editable provider-backed agent drafts", () => {
   const drafts = createDefaultCouncilAgentDrafts();
-  assert.deepEqual(drafts.map((draft) => draft.provider), ["codex", "claude"]);
+  assert.deepEqual(drafts.map((draft) => draft.provider), ["codex", "claude", "opencode"]);
   assert.equal(drafts[0]!.id, "draft-1");
   assert.equal(drafts[1]!.id, "draft-2");
-  assert.deepEqual(drafts.map((draft) => draft.label), ["", ""]);
-  assert.deepEqual(drafts.map((draft) => draft.role), ["", ""]);
+  assert.equal(drafts[2]!.id, "draft-3");
+  assert.deepEqual(drafts.map((draft) => draft.label), ["", "", ""]);
+  assert.deepEqual(drafts.map((draft) => draft.role), ["", "", ""]);
 });
 
 test("council agent draft maps model reasoning into provider optionValues", () => {

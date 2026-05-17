@@ -283,6 +283,10 @@ export class CouncilStore {
         .filter((agent) => agent.roomId === roomId)
         .map((agent) => ({ ...agent })),
       messages: messages.map(cloneCouncilMessage),
+      storage: {
+        storePath: this.filePath,
+        messageLogPath: this.messageFilePath(roomId),
+      },
     };
   }
 
