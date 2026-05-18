@@ -191,6 +191,98 @@ describe("Claude session files", () => {
     }
   });
 
+  test("projects Claude Council channel_post tool results as assistant messages with native model", () => {
+    writeClaudeSession("session-council-post.jsonl", [
+      {
+        type: "user",
+        uuid: "user-council-1",
+        cwd: workDir,
+        sessionId: "session-council-post",
+        timestamp: "2025-07-19T22:21:00.000Z",
+        message: {
+          content: "join council",
+        },
+      },
+      {
+        type: "assistant",
+        uuid: "assistant-council-tool",
+        cwd: workDir,
+        sessionId: "session-council-post",
+        timestamp: "2025-07-19T22:21:02.000Z",
+        message: {
+          model: "kimi-for-coding",
+          content: [
+            {
+              type: "tool_use",
+              id: "toolu_council_post",
+              name: "mcp__rah_council__channel_post",
+              input: { text: "我是 Claude council agent，已准备好。" },
+            },
+          ],
+        },
+      },
+      {
+        type: "user",
+        uuid: "tool-result-council-post",
+        cwd: workDir,
+        sessionId: "session-council-post",
+        timestamp: "2025-07-19T22:21:03.000Z",
+        message: {
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "toolu_council_post",
+              content: JSON.stringify({ ok: true, msg_id: "msg-1" }),
+            },
+          ],
+        },
+      },
+    ]);
+
+    const record = findClaudeStoredSessionRecord("session-council-post", workDir);
+    assert.ok(record);
+    const page = getClaudeStoredSessionHistoryPage({
+      sessionId: "rah-session-council-post",
+      record,
+      limit: 100,
+    });
+
+    const assistantMessage = page.events.find(
+      (event) =>
+        event.type === "timeline.item.added" &&
+        event.payload.item.kind === "assistant_message" &&
+        event.payload.item.text === "我是 Claude council agent，已准备好。",
+    );
+    assert.ok(assistantMessage);
+    if (
+      assistantMessage.type === "timeline.item.added" &&
+      assistantMessage.payload.item.kind === "assistant_message"
+    ) {
+      assert.deepEqual(assistantMessage.payload.item.runtimeModel, {
+        modelId: "kimi-for-coding",
+        source: "native",
+      });
+      assert.equal(
+        assistantMessage.payload.identity?.canonicalItemId,
+        createClaudeTimelineIdentity({
+          providerSessionId: "session-council-post",
+          recordUuid: "assistant-council-tool",
+          itemKind: "assistant_message",
+          origin: "history",
+          partIndex: 1,
+        }).canonicalItemId,
+      );
+    }
+    assert.equal(
+      page.events.some(
+        (event) =>
+          event.type === "tool.call.completed" &&
+          event.payload.toolCall.providerToolName === "mcp__rah_council__channel_post",
+      ),
+      false,
+    );
+  });
+
   test("keeps Claude chat messages in file order when record timestamps go backwards", () => {
     writeClaudeSession("session-nonmonotonic.jsonl", [
       {

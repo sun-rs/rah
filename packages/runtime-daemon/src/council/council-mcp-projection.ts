@@ -162,7 +162,13 @@ export function projectCouncilMcpToolCall(call: NormalizedCouncilMcpToolCall): C
   if (!callOutputSucceeded(call.output)) {
     return { visibility: "hidden", reason: "failed" };
   }
-  const text = typeof call.args?.content === "string" ? call.args.content.trim() : "";
+  const rawText =
+    typeof call.args?.content === "string"
+      ? call.args.content
+      : typeof call.args?.text === "string"
+        ? call.args.text
+        : "";
+  const text = rawText.trim();
   if (!text) {
     return { visibility: "hidden", reason: "empty" };
   }

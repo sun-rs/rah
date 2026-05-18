@@ -5,6 +5,7 @@ import type {
   RahEvent,
   SessionHistoryPageResponse,
   StoredSessionRef,
+  TimelineRuntimeModel,
 } from "@rah/runtime-protocol";
 import type { RuntimeServices } from "./provider-adapter";
 import { EventBus } from "./event-bus";
@@ -40,6 +41,11 @@ import {
   createClaudeTimelineTurnIdentity,
 } from "./claude-timeline-identity";
 import type { TimelineIdentity, TimelineTurnIdentity } from "@rah/runtime-protocol";
+import {
+  normalizeCouncilMcpToolCall,
+  projectCouncilMcpToolCall,
+  type NormalizedCouncilMcpToolCall,
+} from "./council/council-mcp-projection";
 
 const REHYDRATED_CAPABILITIES = {
   liveAttach: false,
@@ -144,8 +150,17 @@ export type ClaudeStoredSessionRecord = {
   filePath: string;
 };
 
+type PendingClaudeCouncilMcpToolCall = {
+  call: NormalizedCouncilMcpToolCall;
+  sourceRecord: ClaudeRawRecord;
+  partIndex: number;
+  turnId?: string;
+  runtimeModel?: TimelineRuntimeModel;
+};
+
 export type ClaudeStoredActivityState = {
   processedRecordKeys: Set<string>;
+  pendingCouncilMcpToolCalls: Map<string, PendingClaudeCouncilMcpToolCall>;
   lastEmittedTimestampMs?: number;
 };
 
@@ -158,6 +173,7 @@ export type ClaudeStoredActivityBatchItem = {
 export function createClaudeStoredActivityState(): ClaudeStoredActivityState {
   return {
     processedRecordKeys: new Set(),
+    pendingCouncilMcpToolCalls: new Map(),
   };
 }
 
@@ -447,6 +463,7 @@ function createStoredClaudeIdentity(
   record: ClaudeRawRecord,
   itemKind: "user_message" | "assistant_message" | "system",
   providerSessionId?: string,
+  partIndex?: number,
 ): TimelineIdentity {
   const recordUuid = record.type === "summary" ? record.leafUuid : record.uuid;
   return createClaudeTimelineIdentity({
@@ -454,6 +471,7 @@ function createStoredClaudeIdentity(
     recordUuid,
     itemKind,
     origin: "history",
+    ...(partIndex !== undefined ? { partIndex } : {}),
   });
 }
 
@@ -472,6 +490,37 @@ function createStoredClaudeTurnIdentity(
     providerSessionId,
     recordUuid,
     origin: "history",
+  });
+}
+
+function claudeRuntimeModel(model: string | undefined): TimelineRuntimeModel | undefined {
+  const modelId = model?.trim();
+  return modelId ? { modelId, source: "native" } : undefined;
+}
+
+function collectClaudeToolResultBlocks(content: unknown): Array<{
+  toolUseId: string;
+  output?: unknown;
+  failed: boolean;
+}> {
+  if (!Array.isArray(content)) {
+    return [];
+  }
+  return content.flatMap((block) => {
+    if (!block || typeof block !== "object" || Array.isArray(block)) {
+      return [];
+    }
+    const record = block as Record<string, unknown>;
+    if (record.type !== "tool_result" || typeof record.tool_use_id !== "string") {
+      return [];
+    }
+    return [
+      {
+        toolUseId: record.tool_use_id,
+        ...(record.content !== undefined ? { output: record.content } : {}),
+        failed: record.is_error === true,
+      },
+    ];
   });
 }
 
@@ -565,6 +614,8 @@ function translateClaudeRecordsToActivities(
   let latestTurnId: string | undefined;
   let latestTurnHasAssistantOutput = false;
   let lastEmittedTimestampMs = options.state?.lastEmittedTimestampMs ?? 0;
+  const pendingCouncilMcpToolCalls =
+    options.state?.pendingCouncilMcpToolCalls ?? new Map<string, PendingClaudeCouncilMcpToolCall>();
   const nextTimestamp = (recordTimestamp: string | undefined): string => {
     const parsed = recordTimestamp ? Date.parse(recordTimestamp) : Number.NaN;
     const candidateMs = Number.isFinite(parsed)
@@ -610,6 +661,56 @@ function translateClaudeRecordsToActivities(
     }
 
     if (record.type === "user") {
+      if (!alreadyProcessed) {
+        for (const result of collectClaudeToolResultBlocks(record.message.content)) {
+          const pending = pendingCouncilMcpToolCalls.get(result.toolUseId);
+          if (!pending) {
+            continue;
+          }
+          pendingCouncilMcpToolCalls.delete(result.toolUseId);
+          options.state?.processedRecordKeys.add(recordKey(pending.sourceRecord));
+          const projection = projectCouncilMcpToolCall({
+            ...pending.call,
+            status: result.failed ? "failed" : "completed",
+            output: result.output,
+          });
+          if (projection.visibility === "hidden") {
+            continue;
+          }
+          const projectedActivity =
+            projection.activity.type === "timeline_item"
+              ? {
+                  ...projection.activity,
+                  ...(pending.turnId !== undefined ? { turnId: pending.turnId } : {}),
+                  item: {
+                    ...projection.activity.item,
+                    messageId: pending.call.callId,
+                    ...(pending.runtimeModel ? { runtimeModel: pending.runtimeModel } : {}),
+                  },
+                  ...timelineIdentityProps(
+                    createStoredClaudeIdentity(
+                      pending.sourceRecord,
+                      "assistant_message",
+                      options.providerSessionId,
+                      pending.partIndex,
+                    ),
+                  ),
+                }
+              : projection.activity;
+          latestTurnHasAssistantOutput = true;
+          activities.push({
+            recordKey: key,
+            meta: {
+              provider: "claude",
+              channel: "structured_persisted",
+              authority: "derived",
+              raw: record,
+              ts: nextTimestamp(record.timestamp),
+            },
+            activity: projectedActivity,
+          });
+        }
+      }
       const text = extractUserMessageText(record.message.content);
       if (!text) {
         continue;
@@ -674,8 +775,9 @@ function translateClaudeRecordsToActivities(
       if (toolBlocks.length > 0) {
         latestTurnHasAssistantOutput = true;
       }
-      for (const block of toolBlocks) {
+      for (const [toolIndex, block] of toolBlocks.entries()) {
         const tool = block as Record<string, unknown>;
+        const toolPartIndex = toolIndex + 1;
         const toolId =
           typeof tool.id === "string" ? tool.id : `claude-tool-${crypto.randomUUID()}`;
         const toolName = typeof tool.name === "string" ? tool.name : "unknown";
@@ -683,6 +785,26 @@ function translateClaudeRecordsToActivities(
           tool.input && typeof tool.input === "object" && !Array.isArray(tool.input)
             ? (tool.input as Record<string, unknown>)
             : undefined;
+        const providerSessionId = options.providerSessionId ?? record.sessionId;
+        const councilMcpToolCall = normalizeCouncilMcpToolCall({
+          provider: "claude",
+          callId: toolId,
+          toolName,
+          status: "started",
+          ...(providerSessionId !== undefined ? { providerSessionId } : {}),
+          ...(input ? { callArgs: input } : {}),
+        });
+        if (councilMcpToolCall) {
+          const runtimeModel = claudeRuntimeModel(record.message.model);
+          pendingCouncilMcpToolCalls.set(toolId, {
+            call: councilMcpToolCall,
+            sourceRecord: record,
+            partIndex: toolPartIndex,
+            ...(latestTurnId !== undefined ? { turnId: latestTurnId } : {}),
+            ...(runtimeModel ? { runtimeModel } : {}),
+          });
+          continue;
+        }
         const activity: ProviderActivity = {
           type: "tool_call_completed",
           ...(latestTurnId !== undefined ? { turnId: latestTurnId } : {}),
