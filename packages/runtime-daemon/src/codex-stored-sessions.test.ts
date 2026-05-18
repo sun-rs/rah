@@ -389,6 +389,139 @@ describe("codex stored session path resolution", () => {
     assert.deepEqual(timelineTexts(initialAgain.events), ["user 400", "assistant 400"]);
   });
 
+  test("frozen Codex history loader preserves Council posts when tool context crosses page windows", () => {
+    const rolloutPath = path.join(repoRoot, "rollout-council-window.jsonl");
+    const hiddenToolNoise = Array.from({ length: 32 }, (_, index) => ({
+      type: "event_msg",
+      timestamp: `2025-07-19T22:00:${String(index + 3).padStart(2, "0")}.000Z`,
+      payload: {
+        type: "mcp_tool_call_end",
+        turn_id: "turn-council",
+      },
+    }));
+    const laterTurns = Array.from({ length: 24 }, (_, index) => {
+      const n = index + 1;
+      return [
+        {
+          type: "response_item",
+          timestamp: `2025-07-19T22:10:${String(index * 2).padStart(2, "0")}.000Z`,
+          payload: {
+            type: "message",
+            role: "user",
+            id: `user-later-${n}`,
+            content: [{ type: "input_text", text: `later user ${n}` }],
+          },
+        },
+        {
+          type: "response_item",
+          timestamp: `2025-07-19T22:10:${String(index * 2 + 1).padStart(2, "0")}.000Z`,
+          payload: {
+            type: "message",
+            role: "assistant",
+            id: `assistant-later-${n}`,
+            content: [{ type: "output_text", text: `later assistant ${n}` }],
+          },
+        },
+      ];
+    }).flat();
+    writeFileSync(
+      rolloutPath,
+      `${[
+        {
+          type: "session_meta",
+          payload: {
+            id: "provider-council-window",
+            cwd: repoRoot,
+          },
+        },
+        {
+          type: "response_item",
+          timestamp: "2025-07-19T22:00:00.000Z",
+          payload: {
+            type: "message",
+            role: "user",
+            id: "user-council",
+            content: [{ type: "input_text", text: "join council" }],
+          },
+        },
+        {
+          type: "turn_context",
+          timestamp: "2025-07-19T22:00:01.000Z",
+          payload: {
+            turn_id: "turn-council",
+            model: "gpt-5.5",
+            effort: "xhigh",
+          },
+        },
+        {
+          type: "response_item",
+          timestamp: "2025-07-19T22:00:02.000Z",
+          payload: {
+            type: "function_call",
+            name: "channel_post",
+            call_id: "call-council-window",
+            arguments: JSON.stringify({ content: "Council post split across pager windows." }),
+          },
+        },
+        ...hiddenToolNoise,
+        {
+          type: "response_item",
+          timestamp: "2025-07-19T22:01:00.000Z",
+          payload: {
+            type: "function_call_output",
+            call_id: "call-council-window",
+            output: JSON.stringify({ ok: true, msg_id: "msg-window" }),
+          },
+        },
+        ...laterTurns,
+      ].map((line) => JSON.stringify(line)).join("\n")}\n`,
+      "utf8",
+    );
+    const record: CodexStoredSessionRecord = {
+      ref: {
+        provider: "codex",
+        providerSessionId: "provider-council-window",
+        cwd: repoRoot,
+        rootDir: repoRoot,
+        title: "council window",
+        preview: "council window",
+        updatedAt: "2025-07-19T22:10:59.000Z",
+        source: "provider_history",
+      },
+      rolloutPath,
+    };
+
+    const loader = createCodexStoredSessionFrozenHistoryPageLoader({
+      sessionId: "replay-council-window",
+      record,
+    });
+    const collected = [];
+    let page = loader.loadInitialPage(4);
+    for (let index = 0; index < 40; index += 1) {
+      collected.push(...page.events);
+      if (!page.nextCursor) {
+        break;
+      }
+      page = loader.loadOlderPage(page.nextCursor, 4, page.boundary);
+    }
+
+    const projected = collected.find(
+      (event) =>
+        event.type === "timeline.item.added" &&
+        event.payload.item.kind === "assistant_message" &&
+        event.payload.item.text === "Council post split across pager windows.",
+    );
+    assert.ok(projected);
+    if (projected.type === "timeline.item.added" && projected.payload.item.kind === "assistant_message") {
+      assert.deepEqual(projected.payload.item.runtimeModel, {
+        modelId: "gpt-5.5",
+        optionId: "xhigh",
+        optionKind: "reasoning_effort",
+        source: "native",
+      });
+    }
+  });
+
   test("stored Codex history marks unterminated commands as interrupted instead of running forever", () => {
     const rolloutPath = path.join(repoRoot, "rollout-interrupted.jsonl");
     writeFileSync(

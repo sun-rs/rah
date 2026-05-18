@@ -64,6 +64,59 @@ function isCodexUserBoundaryLine(line: string): boolean {
   }
 }
 
+function payloadRecordFromCodexLine(line: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(line) as Record<string, unknown>;
+    return parsed.payload && typeof parsed.payload === "object" && !Array.isArray(parsed.payload)
+      ? (parsed.payload as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function hasOrphanCodexFunctionCallOutput(lines: readonly string[]): boolean {
+  const started = new Set<string>();
+  const completed = new Set<string>();
+  for (const line of lines) {
+    const payload = payloadRecordFromCodexLine(line);
+    if (!payload) {
+      continue;
+    }
+    if (payload.type === "function_call" && typeof payload.call_id === "string") {
+      started.add(payload.call_id);
+      continue;
+    }
+    if (payload.type === "function_call_output" && typeof payload.call_id === "string") {
+      completed.add(payload.call_id);
+    }
+  }
+  return [...completed].some((callId) => !started.has(callId));
+}
+
+function readCodexRolloutWindowWithToolContext(
+  rolloutPath: string,
+  options: { endOffset: number; lineBudget: number },
+) {
+  let maxLines = Math.max(options.lineBudget, 1);
+  const maxContextLines = Math.max(maxLines, 8192);
+  for (;;) {
+    const window = readTrailingLinesWindow(rolloutPath, {
+      endOffset: options.endOffset,
+      maxLines,
+      chunkBytes: 8 * 1024,
+    });
+    if (
+      window.startOffset <= 0 ||
+      maxLines >= maxContextLines ||
+      !hasOrphanCodexFunctionCallOutput(window.lines)
+    ) {
+      return window;
+    }
+    maxLines = Math.min(maxContextLines, Math.max(maxLines + 16, maxLines * 2));
+  }
+}
+
 function sameTimelineText(
   left: RahEvent | undefined,
   right: RahEvent,
@@ -431,10 +484,9 @@ export function createCodexStoredSessionFrozenHistoryPageLoader(args: {
     boundary,
     snapshotEndOffset,
     readWindow: ({ endOffset, lineBudget }) => {
-      const window = readTrailingLinesWindow(args.record.rolloutPath, {
+      const window = readCodexRolloutWindowWithToolContext(args.record.rolloutPath, {
         endOffset,
-        maxLines: Math.max(lineBudget, 1),
-        chunkBytes: 8 * 1024,
+        lineBudget,
       });
       return {
         startOffset: window.startOffset,

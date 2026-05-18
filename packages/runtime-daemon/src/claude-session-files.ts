@@ -368,6 +368,57 @@ function makeClaudeFrozenHistoryBoundary(filePath: string, endOffset: number): F
   };
 }
 
+function hasOrphanClaudeToolResult(lines: readonly string[]): boolean {
+  const toolUseIds = new Set<string>();
+  const toolResultIds = new Set<string>();
+  for (const line of lines) {
+    const record = safeParseClaudeRecord(line);
+    if (!record || record.type === "custom-title") {
+      continue;
+    }
+    if (record.type === "assistant" && Array.isArray(record.message?.content)) {
+      for (const block of record.message.content) {
+        if (!block || typeof block !== "object" || Array.isArray(block)) {
+          continue;
+        }
+        const part = block as Record<string, unknown>;
+        if (part.type === "tool_use" && typeof part.id === "string") {
+          toolUseIds.add(part.id);
+        }
+      }
+      continue;
+    }
+    if (record.type === "user") {
+      for (const result of collectClaudeToolResultBlocks(record.message.content)) {
+        toolResultIds.add(result.toolUseId);
+      }
+    }
+  }
+  return [...toolResultIds].some((toolUseId) => !toolUseIds.has(toolUseId));
+}
+
+function readClaudeHistoryWindowWithToolContext(
+  filePath: string,
+  options: { endOffset: number; lineBudget: number },
+) {
+  let maxLines = Math.max(options.lineBudget, 1);
+  const maxContextLines = Math.max(maxLines, 8192);
+  for (;;) {
+    const window = readTrailingLinesWindow(filePath, {
+      endOffset: options.endOffset,
+      maxLines,
+    });
+    if (
+      window.startOffset <= 0 ||
+      maxLines >= maxContextLines ||
+      !hasOrphanClaudeToolResult(window.lines)
+    ) {
+      return window;
+    }
+    maxLines = Math.min(maxContextLines, Math.max(maxLines + 16, maxLines * 2));
+  }
+}
+
 export function createClaudeStoredSessionFrozenHistoryPageLoader(args: {
   sessionId: string;
   record: ClaudeStoredSessionRecord;
@@ -393,9 +444,9 @@ export function createClaudeStoredSessionFrozenHistoryPageLoader(args: {
     boundary,
     snapshotEndOffset,
     readWindow: ({ endOffset, lineBudget }) => {
-      const window = readTrailingLinesWindow(args.record.filePath, {
+      const window = readClaudeHistoryWindowWithToolContext(args.record.filePath, {
         endOffset,
-        maxLines: Math.max(lineBudget, 1),
+        lineBudget,
       });
       return {
         startOffset: window.startOffset,

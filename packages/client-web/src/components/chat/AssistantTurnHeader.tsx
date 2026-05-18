@@ -13,6 +13,9 @@ export function AssistantTurnHeader(props: {
   runtimeModel?: TimelineRuntimeModel;
 }) {
   const modelLabel = runtimeModelLabel(props.runtimeModel);
+  if (!modelLabel) {
+    return null;
+  }
 
   return (
     <div
@@ -25,7 +28,7 @@ export function AssistantTurnHeader(props: {
         variant="bare"
         className="h-[11px] w-[11px]"
       />
-      {modelLabel ? <span>{modelLabel}</span> : null}
+      <span>{modelLabel}</span>
     </div>
   );
 }

@@ -70,7 +70,7 @@ describe("assistant turn headers", () => {
       modelId: "deepseek/deepseek-v4-pro",
       optionId: "high",
       optionKind: "model_variant",
-      source: "native_event",
+      source: "native",
     };
     const headers = buildAssistantTurnHeaders([
       userEntry("user-1", "Analyze this"),

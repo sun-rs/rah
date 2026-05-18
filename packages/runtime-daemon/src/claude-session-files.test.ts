@@ -283,6 +283,120 @@ describe("Claude session files", () => {
     );
   });
 
+  test("frozen Claude history loader preserves Council posts when tool context crosses page windows", () => {
+    const hiddenSystemRecords = Array.from({ length: 32 }, (_, index) => ({
+      type: "system",
+      uuid: `system-noise-${index}`,
+      cwd: workDir,
+      sessionId: "session-council-window",
+      timestamp: `2025-07-19T22:21:${String(index + 3).padStart(2, "0")}.000Z`,
+      subtype: "noise",
+    }));
+    const laterTurns = Array.from({ length: 24 }, (_, index) => {
+      const n = index + 1;
+      return [
+        {
+          type: "user",
+          uuid: `user-later-${n}`,
+          cwd: workDir,
+          sessionId: "session-council-window",
+          timestamp: `2025-07-19T22:30:${String(index * 2).padStart(2, "0")}.000Z`,
+          message: {
+            content: `later user ${n}`,
+          },
+        },
+        {
+          type: "assistant",
+          uuid: `assistant-later-${n}`,
+          cwd: workDir,
+          sessionId: "session-council-window",
+          timestamp: `2025-07-19T22:30:${String(index * 2 + 1).padStart(2, "0")}.000Z`,
+          message: {
+            content: [{ type: "text", text: `later assistant ${n}` }],
+          },
+        },
+      ];
+    }).flat();
+    writeClaudeSession("session-council-window.jsonl", [
+      {
+        type: "user",
+        uuid: "user-council-window",
+        cwd: workDir,
+        sessionId: "session-council-window",
+        timestamp: "2025-07-19T22:21:00.000Z",
+        message: {
+          content: "join council",
+        },
+      },
+      {
+        type: "assistant",
+        uuid: "assistant-council-window-tool",
+        cwd: workDir,
+        sessionId: "session-council-window",
+        timestamp: "2025-07-19T22:21:02.000Z",
+        message: {
+          model: "kimi-for-coding",
+          content: [
+            {
+              type: "tool_use",
+              id: "toolu_council_window",
+              name: "mcp__rah_council__channel_post",
+              input: { text: "Claude Council post split across pager windows." },
+            },
+          ],
+        },
+      },
+      ...hiddenSystemRecords,
+      {
+        type: "user",
+        uuid: "tool-result-council-window",
+        cwd: workDir,
+        sessionId: "session-council-window",
+        timestamp: "2025-07-19T22:22:00.000Z",
+        message: {
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "toolu_council_window",
+              content: JSON.stringify({ ok: true, msg_id: "msg-window" }),
+            },
+          ],
+        },
+      },
+      ...laterTurns,
+    ]);
+
+    const record = findClaudeStoredSessionRecord("session-council-window", workDir);
+    assert.ok(record);
+    const loader = createClaudeStoredSessionFrozenHistoryPageLoader({
+      sessionId: "replay-council-window",
+      record,
+    });
+    const collected = [];
+    let page = loader.loadInitialPage(4);
+    for (let index = 0; index < 40; index += 1) {
+      collected.push(...page.events);
+      if (!page.nextCursor) {
+        break;
+      }
+      page = loader.loadOlderPage(page.nextCursor, 4, page.boundary);
+    }
+
+    const projected = collected.find(
+      (event) =>
+        event.type === "timeline.item.added" &&
+        event.payload.item.kind === "assistant_message" &&
+        event.payload.item.text === "Claude Council post split across pager windows.",
+    );
+    assert.ok(projected);
+    if (projected.type === "timeline.item.added" && projected.payload.item.kind === "assistant_message") {
+      assert.deepEqual(projected.payload.item.runtimeModel, {
+        modelId: "kimi-for-coding",
+        source: "native",
+      });
+    }
+  });
+
   test("keeps Claude chat messages in file order when record timestamps go backwards", () => {
     writeClaudeSession("session-nonmonotonic.jsonl", [
       {
