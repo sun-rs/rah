@@ -66,6 +66,16 @@ import {
   findCouncilMentionTrigger,
   type CouncilMentionTrigger,
 } from "./council-mentions";
+import {
+  COUNCIL_TUI_WARM_TTL_MS,
+  pruneCouncilTuiCache,
+  removeCouncilTuiAgent,
+  resetCouncilTuiCache,
+  setCouncilTuiDetached,
+  touchCouncilTuiCache,
+  warmCouncilTuiCache,
+  type CouncilTuiCacheState,
+} from "../tui-surface-lifecycle";
 
 type CouncilMessage = CouncilRoomSnapshot["messages"][number];
 type CouncilDisplayItem =
@@ -540,7 +550,9 @@ export function CouncilPage(props: {
   );
   const [catalogs, setCatalogs] = useState<Record<string, ProviderModelCatalog>>({});
   const [selectedTerminalAgentId, setSelectedTerminalAgentId] = useState<string | null>(null);
-  const [visitedTerminalAgentIds, setVisitedTerminalAgentIds] = useState<Set<string>>(new Set());
+  const [councilTuiCache, setCouncilTuiCache] = useState<CouncilTuiCacheState>(() =>
+    resetCouncilTuiCache(),
+  );
   const [collapsedAgentDraftIds, setCollapsedAgentDraftIds] = useState<Set<string>>(new Set());
   const [addAgentDialogOpen, setAddAgentDialogOpen] = useState(false);
   const [addAgentDrafts, setAddAgentDrafts] = useState<CouncilAgentDraft[]>(() => [
@@ -570,6 +582,7 @@ export function CouncilPage(props: {
   const previousCouncilRoomIdRef = useRef<string | null>(null);
   const preserveCouncilSidebarAfterActionRef = useRef(false);
   const preserveTerminalAfterActionRef = useRef<string | null>(null);
+  const autoWarmedCouncilRoomIdRef = useRef<string | null>(null);
 
   const selectedRoom = selectedRoomId ? rooms.find((room) => room.room.id === selectedRoomId) ?? null : null;
   const addAgentWorkspace = selectedRoom?.room.workspace ?? workspace;
@@ -581,11 +594,15 @@ export function CouncilPage(props: {
     () => selectedRoom?.agents.filter(isCouncilAgentTerminalAvailable) ?? [],
     [selectedRoom],
   );
+  const liveTerminalAgentIds = useMemo(
+    () => liveTerminalAgents.map((agent) => agent.id),
+    [liveTerminalAgents],
+  );
   const terminalDialogOpen = Boolean(selectedRoom && selectedTerminalAgentId);
   const activeTerminalAgent = selectedRoom?.agents.find((agent) => agent.id === selectedTerminalAgentId) ?? null;
   const visitedLiveTerminalAgents = useMemo(
-    () => liveTerminalAgents.filter((agent) => visitedTerminalAgentIds.has(agent.id)),
-    [liveTerminalAgents, visitedTerminalAgentIds],
+    () => liveTerminalAgents.filter((agent) => councilTuiCache.visitedAgentIds.has(agent.id)),
+    [councilTuiCache.visitedAgentIds, liveTerminalAgents],
   );
   const pendingPromptAgent = selectedRoom?.agents.find((agent) => agent.id === pendingPromptAgentId) ?? null;
   const pendingPauseAgent = selectedRoom?.agents.find((agent) => agent.id === pendingPauseAgentId) ?? null;
@@ -709,9 +726,35 @@ export function CouncilPage(props: {
   }, [liveTerminalAgents, selectedRoom, selectedTerminalAgentId]);
 
   useEffect(() => {
-    setVisitedTerminalAgentIds(new Set());
+    autoWarmedCouncilRoomIdRef.current = null;
+    setCouncilTuiCache(resetCouncilTuiCache());
     setSelectedTerminalAgentId(null);
   }, [selectedRoom?.room.id]);
+
+  useEffect(() => {
+    setCouncilTuiCache((current) =>
+      pruneCouncilTuiCache({
+        state: current,
+        liveAgentIds: liveTerminalAgentIds,
+        now: Date.now(),
+        activeAgentId: selectedTerminalAgentId,
+      }),
+    );
+  }, [liveTerminalAgentIds, selectedTerminalAgentId]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setCouncilTuiCache((current) =>
+        pruneCouncilTuiCache({
+          state: current,
+          liveAgentIds: liveTerminalAgentIds,
+          now: Date.now(),
+          activeAgentId: selectedTerminalAgentId,
+        }),
+      );
+    }, Math.min(COUNCIL_TUI_WARM_TTL_MS, 60_000));
+    return () => window.clearInterval(timer);
+  }, [liveTerminalAgentIds, selectedTerminalAgentId]);
 
   useEffect(() => {
     if (!selectedRoomId) return;
@@ -1172,7 +1215,10 @@ export function CouncilPage(props: {
     setInfoDialogOpen(true);
   };
 
-  const openTui = (agent: CouncilAgent) => {
+  const selectCouncilTuiAgent = (
+    agent: CouncilAgent,
+    options?: { attach?: boolean; warmAll?: boolean; validateTerminal?: boolean },
+  ) => {
     if (!selectedRoom) {
       return;
     }
@@ -1180,26 +1226,74 @@ export function CouncilPage(props: {
       return;
     }
     setError(null);
-    setVisitedTerminalAgentIds((current) => {
-      if (current.has(agent.id)) {
-        return current;
+    const now = Date.now();
+    const previousAgentId = selectedTerminalAgentId;
+    const roomId = selectedRoom.room.id;
+    const shouldWarmAll = Boolean(options?.warmAll) && autoWarmedCouncilRoomIdRef.current !== roomId;
+    if (shouldWarmAll) {
+      autoWarmedCouncilRoomIdRef.current = roomId;
+    }
+    setCouncilTuiCache((current) => {
+      let next = current;
+      if (
+        previousAgentId &&
+        previousAgentId !== agent.id &&
+        liveTerminalAgentIds.includes(previousAgentId)
+      ) {
+        next = touchCouncilTuiCache({
+          state: next,
+          agentId: previousAgentId,
+          liveAgentIds: liveTerminalAgentIds,
+          now,
+          activeAgentId: previousAgentId,
+          attach: false,
+        });
       }
-      const next = new Set(current);
-      next.add(agent.id);
-      return next;
+      if (shouldWarmAll) {
+        next = warmCouncilTuiCache({
+          state: next,
+          agentIds: liveTerminalAgentIds,
+          liveAgentIds: liveTerminalAgentIds,
+          now,
+          activeAgentId: agent.id,
+          attach: true,
+        });
+      }
+      return touchCouncilTuiCache({
+        state: next,
+        agentId: agent.id,
+        liveAgentIds: liveTerminalAgentIds,
+        now,
+        activeAgentId: agent.id,
+        attach: Boolean(options?.attach),
+      });
     });
     setSelectedTerminalAgentId(agent.id);
-    void api.getCouncilAgentTui(selectedRoom.room.id, agent.id)
-      .then((response) => {
-        if (!response.terminalId) {
-          setError(response.screen || "This council agent terminal is not live anymore.");
-          setSelectedTerminalAgentId((current) => current === agent.id ? null : current);
-          void refreshRooms();
-        }
-      })
-      .catch((caught) => {
-        setError(caught instanceof Error ? caught.message : String(caught));
-      });
+    if (options?.validateTerminal) {
+      void api.getCouncilAgentTui(selectedRoom.room.id, agent.id)
+        .then((response) => {
+          if (!response.terminalId) {
+            setError(response.screen || "This council agent terminal is not live anymore.");
+            setSelectedTerminalAgentId((current) => current === agent.id ? null : current);
+            void refreshRooms();
+          }
+        })
+        .catch((caught) => {
+          setError(caught instanceof Error ? caught.message : String(caught));
+        });
+    }
+  };
+
+  const openTui = (agent: CouncilAgent) => {
+    selectCouncilTuiAgent(agent, { attach: true, warmAll: true, validateTerminal: true });
+  };
+
+  const selectTerminalTab = (agentId: string) => {
+    const agent = liveTerminalAgents.find((item) => item.id === agentId);
+    if (!agent) {
+      return;
+    }
+    selectCouncilTuiAgent(agent, { attach: false, warmAll: false, validateTerminal: false });
   };
 
   const preserveCouncilViewForAgentAction = (options?: { keepTerminal?: boolean }) => {
@@ -1232,8 +1326,20 @@ export function CouncilPage(props: {
       return;
     }
     if (!open) {
+      const agentId = selectedTerminalAgentId;
+      if (agentId && liveTerminalAgentIds.includes(agentId)) {
+        setCouncilTuiCache((current) =>
+          touchCouncilTuiCache({
+            state: current,
+            agentId,
+            liveAgentIds: liveTerminalAgentIds,
+            now: Date.now(),
+            activeAgentId: agentId,
+            attach: false,
+          }),
+        );
+      }
       setSelectedTerminalAgentId(null);
-      setVisitedTerminalAgentIds(new Set());
     }
   };
 
@@ -1305,14 +1411,7 @@ export function CouncilPage(props: {
       if (selectedTerminalAgentId === agentId) {
         setSelectedTerminalAgentId(null);
       }
-      setVisitedTerminalAgentIds((current) => {
-        if (!current.has(agentId)) {
-          return current;
-        }
-        const next = new Set(current);
-        next.delete(agentId);
-        return next;
-      });
+      setCouncilTuiCache((current) => removeCouncilTuiAgent(current, agentId));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -1517,21 +1616,12 @@ export function CouncilPage(props: {
     <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-[var(--app-bg)]">
       <button
         type="button"
-        className="workbench-fixed-sidebar-toggle icon-click-feedback fixed right-[max(1rem,env(safe-area-inset-right))] top-[calc(env(safe-area-inset-top,0px)+0.75rem)] z-[25] hidden h-8 w-8 items-center justify-center rounded-md border border-[var(--app-border)] bg-[var(--app-bg)]/90 text-[var(--app-hint)] shadow-sm backdrop-blur hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] md:inline-flex"
+        className="workbench-fixed-sidebar-toggle icon-click-feedback fixed right-[max(1rem,env(safe-area-inset-right))] top-[calc(env(safe-area-inset-top,0px)+0.75rem)] z-[25] inline-flex h-8 w-8 items-center justify-center rounded-md border border-[var(--app-border)] bg-[var(--app-bg)]/90 text-[var(--app-hint)] shadow-sm backdrop-blur hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
         onClick={() => setCouncilSidebarOpen((open) => !open)}
         aria-label={councilSidebarButtonLabel}
         title={councilSidebarButtonLabel}
       >
         <PanelRight size={16} />
-      </button>
-      <button
-        type="button"
-        className="workbench-fixed-sidebar-toggle icon-click-feedback fixed right-[max(1rem,env(safe-area-inset-right))] top-[calc(env(safe-area-inset-top,0px)+0.75rem)] z-[25] inline-flex h-8 w-8 items-center justify-center rounded-md border border-[var(--app-border)] bg-[var(--app-bg)]/90 text-[var(--app-hint)] shadow-sm backdrop-blur hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] md:hidden"
-        onClick={() => setCouncilSidebarOpen((open) => !open)}
-        aria-label={councilSidebarButtonLabel}
-        title={councilSidebarButtonLabel}
-      >
-        <PanelRight size={18} />
       </button>
       <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
         <section className={chatPanelClass}>
@@ -2541,6 +2631,7 @@ export function CouncilPage(props: {
         closeLabel="Close council terminals"
         closeTitle="Close council terminals"
         closeText="Close"
+        forceMount
         headerActions={
           selectedRoom?.room.status === "running" && activeTerminalAgent ? (
             <>
@@ -2581,12 +2672,7 @@ export function CouncilPage(props: {
         <TerminalTabStrip
           tabs={councilTerminalTabs}
           activeTabId={selectedTerminalAgentId}
-          onTabSelect={(agentId) => {
-            const agent = liveTerminalAgents.find((item) => item.id === agentId);
-            if (agent) {
-              openTui(agent);
-            }
-          }}
+          onTabSelect={selectTerminalTab}
         />
         <TerminalPaneStack
           tabs={visitedCouncilTerminalTabs}
@@ -2597,15 +2683,37 @@ export function CouncilPage(props: {
               This council agent terminal is not live anymore.
             </div>
           }
-          terminalProps={(_, active) => ({
-            hasControl: terminalDialogOpen && active,
-            claimSurface: terminalDialogOpen && active,
-            autoFocus: terminalDialogOpen && active,
-            renderOutput: terminalDialogOpen && active,
-            initialReplay: false,
-            maxWriteBatchChars: 128 * 1024,
-            scrollback: 180,
-          })}
+          terminalProps={(tab, active) => {
+            const tabAgent = selectedRoom?.agents.find((agent) => agent.id === tab.id) ?? null;
+            const terminalVisible = terminalDialogOpen && active;
+            return {
+              hasControl: terminalVisible,
+              claimSurface: terminalVisible,
+              autoFocus: terminalVisible,
+              renderOutput: true,
+              tuiClientCloseEnabled: true,
+              tuiClientActive: tabAgent
+                ? !councilTuiCache.detachedAgentIds.has(tabAgent.id)
+                : true,
+              onTuiClientActiveChange: (active) => {
+                if (!tabAgent) {
+                  return;
+                }
+                const agentId = tabAgent.id;
+                setCouncilTuiCache((current) =>
+                  setCouncilTuiDetached({
+                    state: current,
+                    agentId,
+                    detached: !active,
+                    now: Date.now(),
+                  }),
+                );
+              },
+              initialReplay: false,
+              maxWriteBatchChars: 128 * 1024,
+              scrollback: 180,
+            };
+          }}
         />
       </TerminalDialogFrame>
     </div>
