@@ -88,7 +88,7 @@ function printUsage() {
       "",
     "Current status:",
     "  codex/opencode: native local-server with provider-native TUI clients",
-    "  claude: zellij/native TUI fallback",
+    "  claude: tmux/zellij native TUI fallback",
       "",
       "Claude note:",
       "  `rah claude resume <providerSessionId>` maps to `claude --resume <id>`.",
@@ -1267,13 +1267,90 @@ async function runZellijAttachUntilExitOrRevoked(daemonUrl, session, client) {
   });
 }
 
-async function attachLocalTerminalToZellij(daemonUrl, session, client) {
-  if (!session?.mux || session.mux.backend !== "zellij") {
-    throw new Error("Session does not expose zellij mux metadata.");
+async function runTmuxAttachUntilExitOrRevoked(daemonUrl, session, client) {
+  const child = spawn(
+    "tmux",
+    ["attach-session", "-d", "-t", session.mux.sessionName],
+    {
+      cwd: session.cwd || ROOT_DIR,
+      env: process.env,
+      stdio: "inherit",
+    },
+  );
+  let revoked = false;
+  let sessionGone = false;
+  let completed = false;
+  const pollTimer = setInterval(() => {
+    void (async () => {
+      if (!(await liveSessionExists(daemonUrl, session.id))) {
+        sessionGone = true;
+        child.kill("SIGHUP");
+        setTimeout(() => {
+          if (!completed) {
+            child.kill("SIGTERM");
+          }
+        }, 500).unref?.();
+        return;
+      }
+      const { surface } = await getTuiSurface(daemonUrl, session.id);
+      if (!surface || surface.clientId === client.clientId) {
+        return;
+      }
+      revoked = true;
+      child.kill("SIGHUP");
+      setTimeout(() => {
+        if (!completed) {
+          child.kill("SIGTERM");
+        }
+      }, 500).unref?.();
+    })();
+  }, 250);
+  pollTimer.unref?.();
+
+  return await new Promise((resolve, reject) => {
+    child.on("error", reject);
+    child.on("exit", (code, signal) => {
+      completed = true;
+      clearInterval(pollTimer);
+      restoreTerminalApplicationModes(process.stdout);
+      if (revoked) {
+        resolve({ revoked: true });
+        return;
+      }
+      if (sessionGone) {
+        resolve({ revoked: false, sessionGone: true });
+        return;
+      }
+      if (signal) {
+        resolve({ revoked: false, signal });
+        return;
+      }
+      if (code && code !== 0) {
+        reject(new Error(`tmux attach exited with code ${code}`));
+        return;
+      }
+      resolve({ revoked: false });
+    });
+  });
+}
+
+async function runMuxAttachUntilExitOrRevoked(daemonUrl, session, client) {
+  if (session.mux.backend === "zellij") {
+    return await runZellijAttachUntilExitOrRevoked(daemonUrl, session, client);
+  }
+  if (session.mux.backend === "tmux") {
+    return await runTmuxAttachUntilExitOrRevoked(daemonUrl, session, client);
+  }
+  throw new Error(`Unsupported mux backend: ${session.mux.backend}`);
+}
+
+async function attachLocalTerminalToMux(daemonUrl, session, client) {
+  if (!session?.mux || !["zellij", "tmux"].includes(session.mux.backend)) {
+    throw new Error("Session does not expose TUI mux metadata.");
   }
   while (true) {
     await claimLocalTuiSurface(daemonUrl, session.id, client);
-    const result = await runZellijAttachUntilExitOrRevoked(daemonUrl, session, client);
+    const result = await runMuxAttachUntilExitOrRevoked(daemonUrl, session, client);
     if (!result.revoked) {
       await releaseLocalTuiSurface(daemonUrl, session.id, client.clientId);
       return;
@@ -1394,8 +1471,8 @@ async function attachExistingRahSession(parsed) {
   try {
     if (session.liveBackend === "native_local_server") {
       await attachLocalTerminalToNativeLocalServer(parsed.daemonUrl, session, client);
-    } else if (session.mux?.backend === "zellij") {
-      await attachLocalTerminalToZellij(parsed.daemonUrl, session, client);
+    } else if (session.mux?.backend === "zellij" || session.mux?.backend === "tmux") {
+      await attachLocalTerminalToMux(parsed.daemonUrl, session, client);
     } else {
       await attachLocalTerminalToPty(parsed.daemonUrl, ptyIdFromSessionSummary(summary), client.clientId);
     }
@@ -1414,8 +1491,8 @@ async function runPtyFirstProviderCommand(parsed) {
   try {
     if (session.liveBackend === "native_local_server") {
       await attachLocalTerminalToNativeLocalServer(parsed.daemonUrl, session, client);
-    } else if (session.mux?.backend === "zellij") {
-      await attachLocalTerminalToZellij(parsed.daemonUrl, session, client);
+    } else if (session.mux?.backend === "zellij" || session.mux?.backend === "tmux") {
+      await attachLocalTerminalToMux(parsed.daemonUrl, session, client);
     } else {
       await attachLocalTerminalToPty(parsed.daemonUrl, ptyId, client.clientId);
     }

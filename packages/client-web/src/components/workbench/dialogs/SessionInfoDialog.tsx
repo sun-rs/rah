@@ -331,9 +331,11 @@ export function SessionInfoDialog(props: {
       : session?.launchSource === "web"
         ? "Web-started session. A local terminal can attach with the RAH attach command."
         : session?.launchSource ?? "Unavailable";
-  const zellijCommand =
+  const rawMuxAttachCommand =
     session?.mux?.backend === "zellij"
       ? `ZELLIJ_SOCKET_DIR=${session.mux.socketDir} zellij attach ${session.mux.sessionName} options --mirror-session true --pane-frames false --show-startup-tips false`
+      : session?.mux?.backend === "tmux"
+        ? `tmux attach-session -t ${session.mux.sessionName}`
       : null;
   const runtimeStatus = props.projection?.currentRuntimeStatus ?? null;
   const runtimeDiagnostics = session?.runtimeDiagnostics;
@@ -419,14 +421,14 @@ export function SessionInfoDialog(props: {
                 }
               />
             ) : null}
-            {zellijCommand ? (
+            {rawMuxAttachCommand ? (
               <InfoRow
-                label="Zellij"
+                label="Raw TUI"
                 mono
                 value={
                   <div className="flex flex-wrap items-start gap-2">
-                    <span className="min-w-0 flex-1">{zellijCommand}</span>
-                    <CopyValueButton value={zellijCommand} label="zellij attach command" />
+                    <span className="min-w-0 flex-1">{rawMuxAttachCommand}</span>
+                    <CopyValueButton value={rawMuxAttachCommand} label="raw TUI attach command" />
                   </div>
                 }
               />

@@ -632,7 +632,8 @@ export interface ZellijMuxPaneDiagnostic {
 
 export interface ZellijMuxSessionDiagnostic {
   sessionName: string;
-  socketDir: string;
+  backend?: "zellij" | "tmux";
+  socketDir?: string;
   managedSessionId?: string;
   provider?: ProviderKind;
   runtimeState?: ManagedSession["runtimeState"];

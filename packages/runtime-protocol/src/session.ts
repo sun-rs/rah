@@ -276,10 +276,10 @@ export interface ManagedSession {
     queuedInputCount?: number;
   };
   mux?: {
-    backend: "zellij";
+    backend: "zellij" | "tmux";
     sessionName: string;
     paneId: string;
-    socketDir: string;
+    socketDir?: string;
   };
   pid?: number;
   title?: string;

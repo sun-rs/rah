@@ -152,7 +152,7 @@ function isRecoverableZellijLiveSession(state: StoredSessionState): boolean {
   return (
     isRememberableLiveSession(state) &&
     state.session.liveBackend === "zellij_tui" &&
-    state.session.mux?.backend === "zellij" &&
+    (state.session.mux?.backend === "zellij" || state.session.mux?.backend === "tmux") &&
     state.session.runtimeState !== "stopped" &&
     state.session.runtimeState !== "failed"
   );
@@ -176,13 +176,13 @@ function isPersistedZellijLiveSession(value: unknown): value is ManagedSession {
     Boolean(session.capabilities && typeof session.capabilities === "object") &&
     Boolean(
       mux &&
-        mux.backend === "zellij" &&
+        (mux.backend === "zellij" || mux.backend === "tmux") &&
         typeof mux.sessionName === "string" &&
         mux.sessionName.trim().length > 0 &&
         typeof mux.paneId === "string" &&
         mux.paneId.trim().length > 0 &&
-        typeof mux.socketDir === "string" &&
-        mux.socketDir.trim().length > 0,
+        (mux.backend !== "zellij" ||
+          (typeof mux.socketDir === "string" && mux.socketDir.trim().length > 0)),
     )
   );
 }

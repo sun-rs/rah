@@ -174,6 +174,20 @@ test("session events accept canonical runtime diagnostics", () => {
   assert.equal(issues.some((issue) => issue.severity === "error"), false);
 });
 
+test("session events accept tmux mux metadata without zellij socketDir", () => {
+  const issues = validateRahEvent(
+    buildSessionCreatedEvent({
+      liveBackend: "zellij_tui",
+      mux: {
+        backend: "tmux",
+        sessionName: "rah-session-1234",
+        paneId: "%1",
+      },
+    }),
+  );
+  assert.equal(issues.some((issue) => issue.severity === "error"), false);
+});
+
 test("session events reject non-canonical runtime diagnostics", () => {
   const issues = validateRahEvent(
     buildSessionCreatedEvent({

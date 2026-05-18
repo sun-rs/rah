@@ -354,6 +354,23 @@ export class TmuxMuxBackend implements MuxRuntime {
     await this.exec(["send-keys", "-t", paneId, ...keys.map(tmuxKeyFor)]);
   }
 
+  async resizePane(
+    _sessionName: string,
+    paneId: MuxPaneId,
+    cols: number,
+    rows: number,
+  ): Promise<void> {
+    await this.exec([
+      "resize-pane",
+      "-t",
+      paneId,
+      "-x",
+      String(Math.max(20, Math.floor(cols))),
+      "-y",
+      String(Math.max(8, Math.floor(rows))),
+    ]);
+  }
+
   async closePane(_sessionName: string, paneId: MuxPaneId): Promise<void> {
     await this.exec(["kill-pane", "-t", paneId]);
   }

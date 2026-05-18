@@ -2002,12 +2002,12 @@ function validateManagedSession(session: unknown, sink: IssueSink, path: string)
         `${path}.mux`,
       );
     } else {
-      if (session.mux.backend !== "zellij") {
+      if (session.mux.backend !== "zellij" && session.mux.backend !== "tmux") {
         addIssue(
           sink,
           "error",
           "session.mux.backend.invalid",
-          "session mux.backend must be zellij",
+          "session mux.backend must be zellij or tmux",
           `${path}.mux.backend`,
         );
       }
@@ -2029,12 +2029,15 @@ function validateManagedSession(session: unknown, sink: IssueSink, path: string)
           `${path}.mux.paneId`,
         );
       }
-      if (!isNonEmptyString(session.mux.socketDir)) {
+      if (
+        session.mux.backend === "zellij" &&
+        !isNonEmptyString(session.mux.socketDir)
+      ) {
         addIssue(
           sink,
           "error",
           "session.mux.socket_dir.invalid",
-          "session mux.socketDir must be non-empty",
+          "session mux.socketDir must be non-empty for zellij",
           `${path}.mux.socketDir`,
         );
       }
