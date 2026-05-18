@@ -218,7 +218,7 @@ Claude：
 
 ### 2026-05-17 第二阶段准备：Runner 策略提纯
 
-状态：策略层已开始集中，尚未切 Council。
+状态：策略层已集中，Council 已开始复用普通 session runner；Claude mux fallback 已具备 zellij/tmux 双 backend 能力，但生产默认仍保持 zellij，tmux 需要显式开启后继续人类验证。
 
 已完成：
 
@@ -227,12 +227,23 @@ Claude：
 - daemon runtime engine 改用共享策略验证 provider/backend 组合，避免 Claude 被误接 native local server、Codex/OpenCode 被误接 mux fallback。
 - runtime descriptor 默认值改为共享策略：缺省 backend 时，Codex/OpenCode 仍描述为 native local server，Claude 描述为 mux fallback。
 - native local server attach 命令集中到 `native-local-server-attach.ts`，Codex/OpenCode diagnostics 与 Web TUI client 启动不再各自拼命令。
+- Council 的 Codex/OpenCode agent 已切到普通 session 的 native local server runner，不再用独立的 `startAgentPty` 路径启动 provider TUI。
+- 新增 `MuxRuntime` 的 tmux backend，实现 session/window/pane 创建、pane capture、输入、控制键、resize、关闭和诊断基础能力。
+- `zellij_tui` fallback 的底层 mux backend 允许 `zellij` 或 `tmux`。协议中 `session.mux.backend` 已扩展为 `"zellij" | "tmux"`。
+- `RAH_TUI_MUX=tmux` 可让 Claude mux fallback 新 session 使用 tmux；不设置时仍默认 zellij，避免未验证环境直接切换生产行为。
+- CLI `rah attach` / `rah claude` 可根据 `session.mux.backend` 自动使用 zellij 或 tmux attach。
 
 仍未完成：
 
-- Council 的 Codex/OpenCode agent 仍是 `nativeTuiStartLaunchSpec + startAgentPty`，还没有复用普通 session 的 native local server runner。
-- Claude 仍是 zellij backend，还没有抽出可替换 tmux 的 backend selection 配置。
+- tmux backend 尚未成为默认 mux backend；默认翻转前需要真实 Claude/Council 人类测试。
 - `bin/rah.mjs` 仍保留 JS 侧轻量策略函数，因为 CLI 当前不直接加载 TypeScript protocol helper；后续可在构建产物稳定后消除这份重复。
+- 诊断 API 名称仍沿用 `zellij` 历史命名，内部已能返回 `backend: "tmux"`，后续可再做命名清理。
+
+验证记录：
+
+- `tmux-mux-backend.test.ts` 覆盖 tmux session 名、fake shell pane、tab pane、control bytes。
+- `tmux-tui-runtime.test.ts` 覆盖 `RAH_TUI_MUX=tmux` 下 Claude `zellij_tui` fallback 的启动、输入、中断、关闭和 tmux session 清理。
+- `zellij-tui-runtime.test.ts` 仍保持全绿，说明 tmux selector 没破坏默认 zellij 路径。
 
 ## 必须保证的不变量
 
