@@ -250,7 +250,9 @@ export function TerminalPane(props: TerminalPaneProps) {
       return;
     }
     if (claimSurfaceRef.current) {
+      flushPausedOutputRef.current();
       scheduleTerminalFitRef.current({ force: true });
+      terminalRef.current?.refresh(0, Math.max(0, terminalRef.current.rows - 1));
       claimCurrentSurface();
     } else {
       releaseCurrentSurface();

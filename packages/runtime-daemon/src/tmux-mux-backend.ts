@@ -325,9 +325,6 @@ export class TmuxMuxBackend implements MuxRuntime {
       if (char === "\r" || char === "\n") {
         await flushLiteral();
         await this.sendKeys(sessionName, paneId, ["Enter"]);
-      } else if (char === "\u001b") {
-        await flushLiteral();
-        await this.sendKeys(sessionName, paneId, ["Escape"]);
       } else if (char === "\u0003") {
         await flushLiteral();
         await this.sendKeys(sessionName, paneId, ["C-c"]);

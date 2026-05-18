@@ -1220,6 +1220,7 @@ export class RuntimeEngine {
 
   async shutdown(): Promise<void> {
     await runShutdownStep("stored session monitor", () => this.storedSessionMonitor.shutdown());
+    await runShutdownStep("council runtime", () => this.council.shutdown());
     await runShutdownStep("terminal sessions", () => this.terminals.shutdown());
     await Promise.all(
       [...this.shutdownAdaptersById.values()].map((adapter) =>

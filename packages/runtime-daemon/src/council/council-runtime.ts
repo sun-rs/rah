@@ -212,6 +212,38 @@ export class CouncilRuntime {
     this.store.stopRoom(roomId);
   }
 
+  async shutdown(): Promise<void> {
+    const terminalIds = new Set<string>();
+    const roomIds = new Set<string>();
+    for (const terminal of this.agentTerminals.values()) {
+      terminalIds.add(terminal.terminalId);
+      roomIds.add(terminal.roomId);
+    }
+    for (const room of this.store.listRooms()) {
+      roomIds.add(room.room.id);
+      for (const agent of room.agents) {
+        const terminalId = agent.nativeSessionId ?? agent.zellijPaneId;
+        if (terminalId) {
+          terminalIds.add(terminalId);
+        }
+      }
+    }
+    for (const roomId of roomIds) {
+      this.resolveCouncilMessageWaiters(roomId, null);
+      this.clearMcpClientStates(roomId);
+    }
+    await Promise.all(
+      [...terminalIds].map((terminalId) =>
+        this.closeAgentTerminal(terminalId).catch((error) => {
+          console.error("[rah] council agent terminal shutdown failed", {
+            terminalId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }),
+      ),
+    );
+  }
+
   deleteRoom(roomId: string): void {
     const projected = this.projectRuntimeRoomState(this.store.snapshot(roomId));
     if (projected.room.status !== "stopped" && projected.room.status !== "failed") {

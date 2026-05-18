@@ -223,6 +223,12 @@ test("tmux mux backend maps control bytes to terminal key events", async (t) => 
       ),
     );
 
+    await backend.writeBytes(sessionName, created.paneId, "\u001b[A");
+    await waitFor(async () => {
+      const dumped = await backend.dumpScreen(sessionName, created.paneId, { full: true });
+      return /RAW_HEX:.*1b 5b 41/.test(dumped);
+    });
+
     await backend.writeBytes(sessionName, created.paneId, "\u001b中\r");
     await waitFor(async () => {
       const dumped = await backend.dumpScreen(sessionName, created.paneId, { full: true });

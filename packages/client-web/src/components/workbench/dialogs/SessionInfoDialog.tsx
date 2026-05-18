@@ -423,12 +423,17 @@ export function SessionInfoDialog(props: {
             ) : null}
             {rawMuxAttachCommand ? (
               <InfoRow
-                label="Raw TUI"
+                label="Raw TUI debug"
                 mono
                 value={
-                  <div className="flex flex-wrap items-start gap-2">
-                    <span className="min-w-0 flex-1">{rawMuxAttachCommand}</span>
-                    <CopyValueButton value={rawMuxAttachCommand} label="raw TUI attach command" />
+                  <div className="grid min-w-0 gap-1">
+                    <div className="flex flex-wrap items-start gap-2">
+                      <span className="min-w-0 flex-1">{rawMuxAttachCommand}</span>
+                      <CopyValueButton value={rawMuxAttachCommand} label="raw TUI attach command" />
+                    </div>
+                    <span className="text-[11px] font-normal text-[var(--app-hint)]">
+                      Bypasses RAH ownership; prefer Attach unless debugging.
+                    </span>
                   </div>
                 }
               />

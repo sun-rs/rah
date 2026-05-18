@@ -683,6 +683,9 @@ export function WorkbenchSelectedPane(props: {
             tuiClientCloseEnabled
             tuiClientActive={terminalTuiClientActive}
             onTuiClientActiveChange={setTerminalTuiClientActive}
+            scrollback={600}
+            replayTailBytes={512 * 1024}
+            maxWriteBatchChars={128 * 1024}
           />
         </div>
       ) : (

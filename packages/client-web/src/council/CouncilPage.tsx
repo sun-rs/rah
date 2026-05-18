@@ -2709,7 +2709,8 @@ export function CouncilPage(props: {
                   }),
                 );
               },
-              initialReplay: false,
+              initialReplay: true,
+              replayTailBytes: 512 * 1024,
               maxWriteBatchChars: 128 * 1024,
               scrollback: 180,
             };

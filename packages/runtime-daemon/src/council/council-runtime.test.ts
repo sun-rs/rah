@@ -1054,6 +1054,40 @@ test("CouncilRuntime exposes council agent PTYs through the interactive PTY stre
   }
 });
 
+test("CouncilRuntime shutdown closes live agent PTYs and clears PTY replay", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-runtime-shutdown-"));
+  const previousClaude = process.env.RAH_CLAUDE_BINARY;
+  process.env.RAH_CLAUDE_BINARY = fakeBinary(root, "claude");
+  try {
+    const ptySessions = new FakePtyRuntime();
+    const ptyHub = new PtyHub();
+    const runtime = createCouncilRuntime({
+      store: new CouncilStore(path.join(root, "rooms.json")),
+      ptySessions,
+      ptyHub,
+    });
+    const response = await runtime.createRoom({
+      workspace: root,
+      agents: [{ id: "claude-reviewer", provider: "claude", label: "Claude Reviewer" }],
+    });
+    await waitForCondition(() => ptySessions.created.length === 1, "expected council agent PTY to launch");
+    const agentId = response.room.agents[0]!.id;
+    const terminalId = ptySessions.created[0]!.id ?? councilTerminalId(response.room.room.id, agentId);
+    assert.equal(terminalId, councilTerminalId(response.room.room.id, agentId));
+    assert.ok(ptyHub.stats(terminalId));
+
+    await runtime.shutdown();
+
+    assert.deepEqual(ptySessions.closed, [terminalId]);
+    assert.equal(ptySessions.has(terminalId), false);
+    assert.equal(ptyHub.stats(terminalId), null);
+  } finally {
+    if (previousClaude === undefined) delete process.env.RAH_CLAUDE_BINARY;
+    else process.env.RAH_CLAUDE_BINARY = previousClaude;
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
 test("CouncilRuntime does not push Council terminal snapshot replace frames on surface claim", async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-runtime-terminal-no-snapshot-"));
   const previousClaude = process.env.RAH_CLAUDE_BINARY;

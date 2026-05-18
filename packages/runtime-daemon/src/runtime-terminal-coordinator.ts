@@ -1434,17 +1434,35 @@ export class RuntimeTerminalCoordinator {
           });
         },
       });
-      await terminal.process.waitUntilReady();
-      const latest = this.deps.sessionStore.getSession(sessionId);
-      if (latest) {
-        this.deps.sessionStore.patchManagedSession(sessionId, {
-          runtimeDiagnostics: {
-            ...(latest.session.runtimeDiagnostics ?? {}),
-            attachCommand: spec.attachCommand,
-            attachState: "ready",
-          },
+      void terminal.process.waitUntilReady()
+        .then(() => {
+          const latest = this.deps.sessionStore.getSession(sessionId);
+          if (!latest || !this.ptySessions.has(sessionId)) {
+            return;
+          }
+          this.deps.sessionStore.patchManagedSession(sessionId, {
+            runtimeDiagnostics: {
+              ...(latest.session.runtimeDiagnostics ?? {}),
+              attachCommand: spec.attachCommand,
+              attachState: "ready",
+            },
+          });
+        })
+        .catch((error) => {
+          void this.ptySessions.close(sessionId).catch(() => undefined);
+          const current = this.deps.sessionStore.getSession(sessionId);
+          if (!current) {
+            return;
+          }
+          this.deps.sessionStore.patchManagedSession(sessionId, {
+            runtimeDiagnostics: {
+              ...(current.session.runtimeDiagnostics ?? {}),
+              attachCommand: spec.attachCommand,
+              attachState: "failed",
+              lastError: error instanceof Error ? error.message : String(error),
+            },
+          });
         });
-      }
       return true;
     } catch (error) {
       await this.ptySessions.close(sessionId).catch(() => undefined);

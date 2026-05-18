@@ -30,7 +30,10 @@ export function TerminalDialogFrame(props: TerminalDialogFrameProps) {
   const overlayClassName = props.overlayClassName ?? DEFAULT_TERMINAL_DIALOG_OVERLAY_CLASS;
   const contentClassName = props.contentClassName ?? DEFAULT_TERMINAL_DIALOG_CONTENT_CLASS;
   const forceMountProps = props.forceMount ? ({ forceMount: true } as const) : {};
-  const forceMountedClosedStyle = props.forceMount && !props.open ? { display: "none" } : undefined;
+  const forceMountedClosedStyle =
+    props.forceMount && !props.open
+      ? { opacity: 0, pointerEvents: "none", visibility: "hidden" } as const
+      : undefined;
   return (
     <Dialog.Root open={props.open} onOpenChange={props.onOpenChange} modal={props.open}>
       <Dialog.Portal {...forceMountProps}>
@@ -185,6 +188,7 @@ export function TerminalPaneStack(props: TerminalPaneStackProps) {
                 active ? "visible opacity-100" : "invisible pointer-events-none opacity-0"
               }`}
               aria-hidden={!active}
+              {...(!active ? ({ inert: "" } as Record<string, string>) : {})}
             >
               <TerminalPane
                 terminalId={tab.terminalId}
