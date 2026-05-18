@@ -157,13 +157,17 @@ export async function startOpenCodeServer(params: {
   cwd: string;
   port?: number;
   onOutput?: (data: string) => void;
+  env?: Record<string, string>;
 }): Promise<OpenCodeServerHandle> {
   await assertOpenCodeWorkingDirectory(params.cwd);
   const port = params.port ?? (await allocateOpenCodePort());
   const binary = await resolveOpenCodeBinary();
   const child = spawn(binary, ["serve", "--hostname", "127.0.0.1", "--port", String(port)], {
     cwd: params.cwd,
-    env: process.env,
+    env: {
+      ...process.env,
+      ...(params.env ?? {}),
+    },
     detached: process.platform !== "win32",
     stdio: ["ignore", "pipe", "pipe"],
   });

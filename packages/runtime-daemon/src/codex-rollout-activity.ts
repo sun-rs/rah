@@ -13,6 +13,11 @@ import {
   createCodexTimelineIdentity,
   createCodexTimelineTurnIdentity,
 } from "./codex-timeline-identity";
+import {
+  normalizeCouncilMcpToolCall,
+  projectCouncilMcpToolCall,
+  type NormalizedCouncilMcpToolCall,
+} from "./council/council-mcp-projection";
 import type { ProviderActivity } from "./provider-activity";
 import { codexRuntimeModelFromTurnContext } from "./timeline-runtime-model";
 
@@ -27,6 +32,8 @@ export interface CodexTranslatedActivity {
 type PendingToolCall = {
   toolCall: ToolCall;
   observation?: WorkbenchObservation;
+  hidden?: boolean;
+  councilMcpToolCall?: NormalizedCouncilMcpToolCall;
 };
 
 const CODEX_INTERRUPTED_PENDING_TOOL_ERROR =
@@ -55,15 +62,44 @@ export function createCodexRolloutTranslationState(
   return state;
 }
 
+function attachRuntimeModelToTimelineActivity(
+  activity: ProviderActivity,
+  runtimeModel: TimelineRuntimeModel | undefined,
+): ProviderActivity {
+  if (!runtimeModel || (activity.type !== "timeline_item" && activity.type !== "timeline_item_updated")) {
+    return activity;
+  }
+  if (
+    activity.item.kind !== "assistant_message" &&
+    activity.item.kind !== "reasoning" &&
+    activity.item.kind !== "step"
+  ) {
+    return activity;
+  }
+  if (activity.item.runtimeModel !== undefined) {
+    return activity;
+  }
+  return {
+    ...activity,
+    item: {
+      ...activity.item,
+      runtimeModel,
+    },
+  };
+}
+
 let invalidRolloutSequence = 0;
 const IGNORED_PERSISTED_EVENT_MSG_TYPES = new Set([
   "task_started",
   "task_complete",
+  "context_compacted",
   "token_count",
   "user_message",
   "exec_command_begin",
   "exec_command_output_delta",
   "exec_command_end",
+  "mcp_tool_call_begin",
+  "mcp_tool_call_end",
   "patch_apply_begin",
   "patch_apply_end",
 ]);
@@ -578,6 +614,9 @@ function interruptedPendingToolActivities(
 
   const result: CodexTranslatedActivity[] = [];
   for (const [callId, pending] of state.pendingToolCalls) {
+    if (pending.hidden) {
+      continue;
+    }
     if (pending.observation) {
       result.push(
         persistedActivity(
@@ -609,7 +648,7 @@ function interruptedPendingToolActivities(
   }
   state.pendingToolCalls.clear();
 
-  if (options.includeTimelineStatus) {
+  if (options.includeTimelineStatus && result.length > 0) {
     result.push(
       persistedActivity(
         line,
@@ -684,6 +723,9 @@ export function translateCodexRolloutLine(
     if (payload.type === "agent_message") {
       const text = extractAgentMessageText(payload.message);
       if (!text) {
+        if (typeof payload.message === "string" && payload.message.trim() === "") {
+          return [];
+        }
         return invalidRolloutActivity(record, "agent_message did not contain text");
       }
       if (shouldSkipDuplicateTimelineText(state, record, "assistant_message", text)) {
@@ -873,10 +915,14 @@ export function translateCodexRolloutLine(
       ];
     }
     if (payload.role === "assistant") {
+      const rawText = textFromContentItems(payload.content, "output_text");
       const text = stripCodexContextualFragments(
-        textFromContentItems(payload.content, "output_text") ?? "",
+        rawText ?? "",
       );
       if (!text) {
+        if (rawText !== null) {
+          return [];
+        }
         return invalidRolloutActivity(record, "assistant message did not contain output_text");
       }
       if (shouldSkipDuplicateTimelineText(state, record, "assistant_message", text)) {
@@ -929,6 +975,22 @@ export function translateCodexRolloutLine(
       return invalidRolloutActivity(record, "function_call did not include call_id");
     }
     const args = parseJsonObject(payload.arguments);
+    const councilMcpToolCall = normalizeCouncilMcpToolCall({
+      provider: "codex",
+      callId,
+      toolName: payload.name,
+      status: "started",
+      ...(state.providerSessionId !== undefined ? { providerSessionId: state.providerSessionId } : {}),
+      ...(args !== null ? { callArgs: args } : {}),
+    });
+    if (councilMcpToolCall) {
+      state.pendingToolCalls.set(callId, {
+        toolCall: mapGenericToolCall(payload.name, callId, args ?? payload.arguments),
+        hidden: true,
+        councilMcpToolCall,
+      });
+      return [];
+    }
     const shell = args ? shellCommandFromArgs(payload.name, args) : null;
     if (!shell) {
       const toolCall = mapGenericToolCall(payload.name, callId, args ?? payload.arguments);
@@ -1024,6 +1086,38 @@ export function translateCodexRolloutLine(
     const pending = state.pendingToolCalls.get(payload.call_id);
     if (!pending || typeof payload.output !== "string") {
       return invalidRolloutActivity(record, "function_call_output had no pending call or string output");
+    }
+    if (pending.hidden) {
+      state.pendingToolCalls.delete(payload.call_id);
+      if (!pending.councilMcpToolCall) {
+        return [];
+      }
+      const projection = projectCouncilMcpToolCall({
+        ...pending.councilMcpToolCall,
+        status: "completed",
+        output: payload.output,
+      });
+      if (projection.visibility === "hidden") {
+        return [];
+      }
+      const identity = createHistoryTimelineIdentity(state, {
+        itemKind: "assistant_message",
+        providerEventId: pending.councilMcpToolCall.callId,
+      });
+      const projectedActivity = attachRuntimeModelToTimelineActivity(
+        projection.activity,
+        state.currentRuntimeModel,
+      );
+      return [
+        persistedActivity(
+          record,
+          {
+            ...projectedActivity,
+            ...timelineIdentityProps(identity),
+          },
+          "authoritative",
+        ),
+      ];
     }
 
     const parsedOutput = parseFunctionCallOutput(payload.output);

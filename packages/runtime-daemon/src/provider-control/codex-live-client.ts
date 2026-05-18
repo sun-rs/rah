@@ -41,6 +41,10 @@ import {
 } from "../codex-live-types";
 import { optionValueAsString, resolveModelOptionValues } from "../session-model-options";
 import { nativeLocalServerRuntimeDiagnostics } from "../native-local-server-attach";
+import {
+  codexConfigOverridesForMcpServers,
+  extraMcpServersFromRequest,
+} from "../provider-mcp-server-spec";
 
 export type { LiveCodexSession } from "../codex-live-types";
 
@@ -298,6 +302,7 @@ export async function startCodexLiveSession(params: {
     };
   }
 
+  const configOverrides = codexConfigOverridesForMcpServers(extraMcpServersFromRequest(request));
   const threadStart = (await client.request("thread/start", {
     ...(request.cwd ? { cwd: request.cwd } : {}),
     approvalPolicy: initialMode.approvalPolicy,
@@ -308,6 +313,7 @@ export async function startCodexLiveSession(params: {
     ...(request.model ? { model: request.model } : {}),
     experimentalRawEvents: false,
     persistExtendedHistory: true,
+    ...(configOverrides ? { config: configOverrides } : {}),
     ...(request.title ? { name: request.title } : {}),
   })) as {
     thread?: { id?: string };

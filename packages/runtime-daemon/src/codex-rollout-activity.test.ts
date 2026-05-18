@@ -804,6 +804,33 @@ describe("translateCodexRolloutLine", () => {
       },
       state,
     );
+    const mcpToolCallEnd = translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-14T18:00:10.875Z",
+        type: "event_msg",
+        payload: {
+          type: "mcp_tool_call_end",
+          call_id: "call-mcp",
+          invocation: {
+            server: "rah_council",
+            tool: "channel_wait_new",
+            arguments: { room: "room-1", timeout_s: 60 },
+          },
+          result: { Ok: { content: [] } },
+        },
+      },
+      state,
+    );
+    const contextCompacted = translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-14T18:00:10.900Z",
+        type: "event_msg",
+        payload: {
+          type: "context_compacted",
+        },
+      },
+      state,
+    );
     const developerMessage = translateCodexRolloutLine(
       {
         timestamp: "2026-04-14T18:00:11.000Z",
@@ -829,14 +856,204 @@ describe("translateCodexRolloutLine", () => {
       },
       state,
     );
+    const emptyAgentMessage = translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-14T18:00:13.000Z",
+        type: "event_msg",
+        payload: {
+          type: "agent_message",
+          message: "",
+          phase: "final_answer",
+        },
+      },
+      state,
+    );
+    const emptyAssistantMessage = translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-14T18:00:14.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "" }],
+          phase: "final_answer",
+        },
+      },
+      state,
+    );
 
     assert.deepEqual(taskStarted, []);
     assert.deepEqual(tokenCount, []);
     assert.deepEqual(turnAborted.map((item) => item.activity.type), ["turn_canceled"]);
     assert.deepEqual(execCommandEnd, []);
     assert.deepEqual(patchApplyEnd, []);
+    assert.deepEqual(mcpToolCallEnd, []);
+    assert.deepEqual(contextCompacted, []);
     assert.deepEqual(developerMessage, []);
     assert.deepEqual(encryptedReasoning, []);
+    assert.deepEqual(emptyAgentMessage, []);
+    assert.deepEqual(emptyAssistantMessage, []);
+  });
+
+  test("hides rah_council MCP polling tool calls from Codex session history feed", () => {
+    const state = createCodexRolloutTranslationState();
+
+    const started = translateCodexRolloutLine(
+      {
+        timestamp: "2026-05-15T02:46:10.100Z",
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "channel_wait_new",
+          arguments: '{"room":"room-1","since_id":975,"timeout_s":60}',
+          call_id: "call-council-wait",
+        },
+      },
+      state,
+    );
+    const mcpEnd = translateCodexRolloutLine(
+      {
+        timestamp: "2026-05-15T02:46:10.200Z",
+        type: "event_msg",
+        payload: {
+          type: "mcp_tool_call_end",
+          call_id: "call-council-wait",
+          invocation: {
+            server: "rah_council",
+            tool: "channel_wait_new",
+            arguments: { room: "room-1", since_id: 975, timeout_s: 60 },
+          },
+          result: {
+            Ok: {
+              content: [
+                {
+                  type: "text",
+                  text: '{"ok":true,"timed_out":true}',
+                },
+              ],
+            },
+          },
+        },
+      },
+      state,
+    );
+    const completed = translateCodexRolloutLine(
+      {
+        timestamp: "2026-05-15T02:46:10.300Z",
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "call-council-wait",
+          output: '{"ok":true,"timed_out":true}',
+        },
+      },
+      state,
+    );
+    const finalized = finalizeCodexRolloutTranslationState(state);
+
+    assert.deepEqual(started, []);
+    assert.deepEqual(mcpEnd, []);
+    assert.deepEqual(completed, []);
+    assert.deepEqual(finalized, []);
+  });
+
+  test("projects rah_council channel_post as a Codex assistant timeline message", () => {
+    const state = createCodexRolloutTranslationState({
+      providerSessionId: "019e2986-bbb3-77a2-9e13-5abc9daf9ee0",
+    });
+    translateCodexRolloutLine(
+      {
+        timestamp: "2026-05-15T02:46:10.900Z",
+        type: "turn_context",
+        payload: {
+          turn_id: "turn-council-post",
+          model: "gpt-5.5",
+          effort: "xhigh",
+        },
+      },
+      state,
+    );
+
+    const started = translateCodexRolloutLine(
+      {
+        timestamp: "2026-05-15T02:46:11.100Z",
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "channel_post",
+          arguments: JSON.stringify({
+            room: "room-1",
+            content: "[GPT-5.5-XHigh] 我也读完了。先做一个事实校准。",
+          }),
+          call_id: "call-council-post",
+        },
+      },
+      state,
+    );
+    const completed = translateCodexRolloutLine(
+      {
+        timestamp: "2026-05-15T02:46:11.200Z",
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "call-council-post",
+          output: '{"ok":true,"message_id":"msg-1"}',
+        },
+      },
+      state,
+    );
+
+    assert.deepEqual(started, []);
+    assert.equal(completed.length, 1);
+    const projected = completed[0]?.activity;
+    assert.equal(projected?.type, "timeline_item");
+    if (projected?.type === "timeline_item") {
+      assert.deepEqual(projected.item, {
+        kind: "assistant_message",
+        text: "[GPT-5.5-XHigh] 我也读完了。先做一个事实校准。",
+        runtimeModel: {
+          modelId: "gpt-5.5",
+          optionId: "xhigh",
+          optionKind: "reasoning_effort",
+          source: "native",
+        },
+      });
+    }
+  });
+
+  test("does not project failed rah_council channel_post calls", () => {
+    const state = createCodexRolloutTranslationState();
+
+    translateCodexRolloutLine(
+      {
+        timestamp: "2026-05-15T02:46:12.100Z",
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "mcp__rah_council__channel_post",
+          arguments: JSON.stringify({
+            room: "room-1",
+            content: "这条失败 post 不应该进入 session history。",
+          }),
+          call_id: "call-council-post-failed",
+        },
+      },
+      state,
+    );
+    const completed = translateCodexRolloutLine(
+      {
+        timestamp: "2026-05-15T02:46:12.200Z",
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "call-council-post-failed",
+          output: '{"ok":false,"error":"room closed"}',
+        },
+      },
+      state,
+    );
+
+    assert.deepEqual(completed, []);
   });
 
   test("shows Codex goal commands as concise timeline notifications", () => {

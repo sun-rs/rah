@@ -53,6 +53,10 @@ import {
 } from "../session-mode-utils";
 import { optionValueAsString, resolveModelOptionValues } from "../session-model-options";
 import { nativeLocalServerRuntimeDiagnostics } from "../native-local-server-attach";
+import {
+  extraMcpServersFromRequest,
+  opencodeEnvForMcpServers,
+} from "../provider-mcp-server-spec";
 
 export interface LiveOpenCodeSession {
   sessionId: string;
@@ -392,7 +396,11 @@ export async function startOpenCodeLiveSession(params: {
     modelId: currentModelId,
     catalog: params.modelCatalog ?? null,
   });
-  const server = await startOpenCodeServer({ cwd: request.cwd });
+  const extraMcpEnv = opencodeEnvForMcpServers(extraMcpServersFromRequest(request));
+  const server = await startOpenCodeServer({
+    cwd: request.cwd,
+    ...(extraMcpEnv ? { env: extraMcpEnv } : {}),
+  });
   let providerSession: OpenCodeSessionInfo;
   try {
     providerSession = await createOpenCodeSession(

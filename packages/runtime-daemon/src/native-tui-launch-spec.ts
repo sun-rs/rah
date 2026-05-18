@@ -24,6 +24,11 @@ import {
   buildOpenCodeProviderModelId,
   fetchOpenCodeModelCatalog,
 } from "./opencode-model-catalog";
+import {
+  normalizeMcpServerName,
+  opencodeEnvForMcpServers,
+  type ProviderMcpServerSpec,
+} from "./provider-mcp-server-spec";
 import { discoverCodexStoredSessions } from "./codex-stored-sessions";
 import {
   codexHomeForRolloutPath,
@@ -58,14 +63,7 @@ type ModelRequest = {
   optionValues?: Record<string, SessionConfigValue>;
 };
 
-const OPENCODE_MCP_TIMEOUT_MS = 300_000;
-
-export interface NativeTuiMcpServerSpec {
-  name: string;
-  command: string;
-  args?: string[];
-  env?: Record<string, string>;
-}
+export type NativeTuiMcpServerSpec = ProviderMcpServerSpec;
 
 export type NativeTuiStartLaunchSpecRequest = StartSessionRequest & {
   extraMcpServers?: NativeTuiMcpServerSpec[];
@@ -182,14 +180,6 @@ function configInlineStringTable(values: Record<string, string> | undefined): st
   return `{ ${entries
     .map(([key, value]) => `${key} = ${configString(value)}`)
     .join(", ")} }`;
-}
-
-function normalizeMcpServerName(name: string): string {
-  return name
-    .trim()
-    .replace(/[^A-Za-z0-9_-]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .slice(0, 48) || "rah_council";
 }
 
 function resolveRahHome(): string {
@@ -377,44 +367,11 @@ async function appendOpenCodeArgs(
   args.push(request.cwd);
 }
 
-function openCodeEnv(args: {
-  modeId?: string;
-  extraMcpServers?: readonly NativeTuiMcpServerSpec[];
-}): Record<string, string> | undefined {
-  const config: Record<string, unknown> = {};
-  if (args.extraMcpServers && args.extraMcpServers.length > 0) {
-    config.experimental = {
-      mcp_timeout: OPENCODE_MCP_TIMEOUT_MS,
-    };
-    config.mcp = Object.fromEntries(
-      args.extraMcpServers.map((server) => [
-        normalizeMcpServerName(server.name),
-        {
-          type: "local",
-          command: [server.command, ...(server.args ?? [])],
-          enabled: true,
-          timeout: OPENCODE_MCP_TIMEOUT_MS,
-          ...(server.env ? { environment: server.env } : {}),
-        },
-      ]),
-    );
-  }
-  if (Object.keys(config).length === 0) {
-    return undefined;
-  }
-  return {
-    OPENCODE_CONFIG_CONTENT: JSON.stringify(config),
-  };
-}
-
 function openCodeEnvForRequest(request: {
   modeId?: string;
   extraMcpServers?: readonly NativeTuiMcpServerSpec[];
 }): Record<string, string> | undefined {
-  return openCodeEnv({
-    ...(request.modeId ? { modeId: request.modeId } : {}),
-    ...(request.extraMcpServers ? { extraMcpServers: request.extraMcpServers } : {}),
-  });
+  return opencodeEnvForMcpServers(request.extraMcpServers);
 }
 
 export async function nativeTuiStartLaunchSpec(

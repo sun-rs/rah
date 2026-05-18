@@ -21,6 +21,10 @@ import type {
   OpenCodeMessageWithParts,
   OpenCodePart,
 } from "./opencode-api";
+import {
+  normalizeCouncilMcpToolCall,
+  projectCouncilMcpToolCall,
+} from "./council/council-mcp-projection";
 
 type OpenCodeMessageRole = "user" | "assistant";
 
@@ -406,8 +410,38 @@ function rememberMessageInfo(
 }
 
 function runtimeModelPropsForMessage(state: OpenCodeActivityState, messageId: string) {
-  const runtimeModel = state.runtimeModelByMessageId.get(messageId);
+  const runtimeModel = runtimeModelForMessage(state, messageId);
   return runtimeModel ? { runtimeModel } : {};
+}
+
+function runtimeModelForMessage(state: OpenCodeActivityState, messageId: string) {
+  return state.runtimeModelByMessageId.get(messageId);
+}
+
+function attachRuntimeModelToTimelineActivity(
+  activity: ProviderActivity,
+  runtimeModel: ReturnType<typeof runtimeModelForMessage>,
+): ProviderActivity {
+  if (!runtimeModel || (activity.type !== "timeline_item" && activity.type !== "timeline_item_updated")) {
+    return activity;
+  }
+  if (
+    activity.item.kind !== "assistant_message" &&
+    activity.item.kind !== "reasoning" &&
+    activity.item.kind !== "step"
+  ) {
+    return activity;
+  }
+  if (activity.item.runtimeModel !== undefined) {
+    return activity;
+  }
+  return {
+    ...activity,
+    item: {
+      ...activity.item,
+      runtimeModel,
+    },
+  };
 }
 
 function runtimeModelUpdatesForKnownAssistantMessage(
@@ -544,6 +578,21 @@ function openCodeDeltaTimelineIdentity(
     partId,
     itemKind,
     origin: state.origin,
+  });
+}
+
+function openCodeCouncilMcpTimelineIdentity(
+  state: OpenCodeActivityState,
+  part: OpenCodePart,
+): TimelineIdentity {
+  return createOpenCodeTimelineIdentity({
+    providerSessionId: state.providerSessionId,
+    messageId: part.messageID,
+    turnMessageId: rootMessageIdForMessage(state, part.messageID),
+    partId: part.id,
+    itemKind: "assistant_message",
+    origin: state.origin,
+    confidence: "derived",
   });
 }
 
@@ -1017,6 +1066,50 @@ function translateToolPart(
     return [];
   }
   const input = readRecord(state.input);
+  const output = readToolOutput(state);
+  const councilMcpToolCall = normalizeCouncilMcpToolCall({
+    provider: "opencode",
+    callId,
+    toolName: tool,
+    status: status === "completed" ? "completed" : status === "running" ? "started" : "failed",
+    providerSessionId: activityState.providerSessionId,
+    ...(input ? { callArgs: input } : {}),
+    ...(output !== undefined ? { output } : {}),
+  });
+  if (councilMcpToolCall) {
+    if (status === "pending") {
+      return [];
+    }
+    if (status === "running") {
+      activityState.startedToolCallIds.add(callId);
+      return [];
+    }
+    if (status === "completed") {
+      if (activityState.completedToolCallIds.has(callId)) {
+        return [];
+      }
+      activityState.startedToolCallIds.delete(callId);
+      activityState.completedToolCallIds.add(callId);
+      const projection = projectCouncilMcpToolCall(councilMcpToolCall);
+      if (projection.visibility === "hidden") {
+        return [];
+      }
+      const projectedActivity = attachRuntimeModelToTimelineActivity(
+        projection.activity,
+        runtimeModelForMessage(activityState, part.messageID),
+      );
+      return [
+        {
+          ...projectedActivity,
+          ...timelineIdentityProps(openCodeCouncilMcpTimelineIdentity(activityState, part)),
+          ...(turnId ? { turnId } : {}),
+        },
+      ];
+    }
+    activityState.startedToolCallIds.delete(callId);
+    activityState.completedToolCallIds.add(callId);
+    return [];
+  }
   const toolCall: ToolCall = {
     id: callId,
     family: classifyOpenCodeToolFamily(tool),

@@ -708,7 +708,7 @@ describe("translateCodexAppServerNotification", () => {
           turnId: "turn-1",
           itemKind: "user_message",
           itemIndex: 0,
-          origin: "history",
+          origin: "live",
           providerMessageId: "user-1",
         }).canonicalItemId,
       );
@@ -764,6 +764,108 @@ describe("translateCodexAppServerNotification", () => {
           itemIndex: 1,
           origin: "history",
           providerMessageId: "assistant-1",
+        }).canonicalItemId,
+      );
+    }
+  });
+
+  test("allocates distinct item identities for multiple user messages in one app-server turn", () => {
+    const state = createCodexAppServerTranslationState();
+
+    const firstUser = translateCodexAppServerNotification(
+      {
+        method: "item/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "userMessage",
+            id: "user-1",
+            content: [{ type: "text", text: "你是谁" }],
+          },
+        },
+      },
+      state,
+    ).find((item) => item.activity.type === "timeline_item")?.activity;
+    translateCodexAppServerNotification(
+      {
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "assistant-1",
+          delta: "我是 Codex。",
+        },
+      },
+      state,
+    );
+    const secondUser = translateCodexAppServerNotification(
+      {
+        method: "item/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "userMessage",
+            id: "user-2",
+            content: [{ type: "text", text: "真的吗" }],
+          },
+        },
+      },
+      state,
+    ).find((item) => item.activity.type === "timeline_item")?.activity;
+    const secondAssistant = translateCodexAppServerNotification(
+      {
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "assistant-2",
+          delta: "真的。",
+        },
+      },
+      state,
+    ).find((item) => item.activity.type === "timeline_item")?.activity;
+
+    assert.equal(firstUser?.type, "timeline_item");
+    assert.equal(secondUser?.type, "timeline_item");
+    assert.equal(secondAssistant?.type, "timeline_item");
+    if (
+      firstUser?.type === "timeline_item" &&
+      secondUser?.type === "timeline_item" &&
+      secondAssistant?.type === "timeline_item"
+    ) {
+      assert.equal(
+        firstUser.identity?.canonicalItemId,
+        createCodexTimelineIdentity({
+          providerSessionId: "thread-1",
+          turnId: "turn-1",
+          itemKind: "user_message",
+          itemIndex: 0,
+          origin: "history",
+          providerMessageId: "user-1",
+        }).canonicalItemId,
+      );
+      assert.equal(
+        secondUser.identity?.canonicalItemId,
+        createCodexTimelineIdentity({
+          providerSessionId: "thread-1",
+          turnId: "turn-1",
+          itemKind: "user_message",
+          itemIndex: 2,
+          origin: "live",
+          providerMessageId: "user-2",
+        }).canonicalItemId,
+      );
+      assert.equal(
+        secondAssistant.identity?.canonicalItemId,
+        createCodexTimelineIdentity({
+          providerSessionId: "thread-1",
+          turnId: "turn-1",
+          itemKind: "assistant_message",
+          itemIndex: 3,
+          origin: "live",
+          providerMessageId: "assistant-2",
         }).canonicalItemId,
       );
     }

@@ -45,6 +45,7 @@ export interface CodexAppServerTranslationState {
   reasoningSectionBreakKeys: Set<string>;
   timelineItemIndexByProviderItemKey: Map<string, number>;
   userTimelineItemIndexByTurnId: Map<string, number>;
+  reservedUserTimelineItemIndexByTurnId: Map<string, number>;
   nextTimelineItemIndexByTurnId: Map<string, number>;
   pendingRuntimeModel?: TimelineRuntimeModel;
   runtimeModelByTurnId: Map<string, TimelineRuntimeModel>;
@@ -71,6 +72,7 @@ export function createCodexAppServerTranslationState(): CodexAppServerTranslatio
     reasoningSectionBreakKeys: new Set(),
     timelineItemIndexByProviderItemKey: new Map(),
     userTimelineItemIndexByTurnId: new Map(),
+    reservedUserTimelineItemIndexByTurnId: new Map(),
     nextTimelineItemIndexByTurnId: new Map(),
     runtimeModelByTurnId: new Map(),
     lastAgentMessageDeltaByItemId: new Map(),
@@ -364,24 +366,30 @@ function allocateTimelineItemIndex(
   }
   const knownUserIndex = state.userTimelineItemIndexByTurnId.get(params.turnId);
   if (params.itemKind === "user_message") {
-    if (knownUserIndex !== undefined) {
-      state.timelineItemIndexByProviderItemKey.set(scopedKey, knownUserIndex);
-      return knownUserIndex;
+    const reservedUserIndex = state.reservedUserTimelineItemIndexByTurnId.get(params.turnId);
+    if (reservedUserIndex !== undefined) {
+      state.reservedUserTimelineItemIndexByTurnId.delete(params.turnId);
+      state.timelineItemIndexByProviderItemKey.set(scopedKey, reservedUserIndex);
+      return reservedUserIndex;
     }
   } else if (knownUserIndex === undefined) {
     // Codex app-server can stream assistant/reasoning items without first
     // echoing the user message for web/headless turns. The rollout JSONL always
     // contains that user message as the first timeline item, so reserve slot 0
-    // to keep live and history canonical ids aligned.
+    // for the first later user echo to keep live and history canonical ids
+    // aligned. Do not reuse it for later user messages in the same turn.
     const userIndex = state.nextTimelineItemIndexByTurnId.get(params.turnId) ?? 0;
     state.nextTimelineItemIndexByTurnId.set(params.turnId, userIndex + 1);
     state.userTimelineItemIndexByTurnId.set(params.turnId, userIndex);
+    state.reservedUserTimelineItemIndexByTurnId.set(params.turnId, userIndex);
   }
   const next = state.nextTimelineItemIndexByTurnId.get(params.turnId) ?? 0;
   state.nextTimelineItemIndexByTurnId.set(params.turnId, next + 1);
   state.timelineItemIndexByProviderItemKey.set(scopedKey, next);
   if (params.itemKind === "user_message") {
-    state.userTimelineItemIndexByTurnId.set(params.turnId, next);
+    if (knownUserIndex === undefined) {
+      state.userTimelineItemIndexByTurnId.set(params.turnId, next);
+    }
   }
   return next;
 }

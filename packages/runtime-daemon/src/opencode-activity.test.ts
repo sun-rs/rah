@@ -1263,6 +1263,152 @@ describe("translateOpenCodeEvent", () => {
     }
   });
 
+  test("attaches OpenCode model metadata to live Council MCP channel posts", () => {
+    const state = createOpenCodeActivityState("session-1");
+    translateOpenCodeEvent(state, {
+      type: "message.updated",
+      properties: {
+        info: {
+          id: "msg-assistant",
+          sessionID: "session-1",
+          role: "assistant",
+          parentID: "msg-user",
+          providerID: "deepseek",
+          modelID: "deepseek-v4-pro",
+          variant: "low",
+          time: { created: 2 },
+        },
+      },
+    });
+
+    const activities = translateOpenCodeEvent(state, {
+      type: "message.part.updated",
+      properties: {
+        part: {
+          id: "part-post",
+          sessionID: "session-1",
+          messageID: "msg-assistant",
+          type: "tool",
+          callID: "call-post",
+          tool: "rah_council_channel_post",
+          state: {
+            status: "completed",
+            input: { room_id: "room-1", content: "Live Council reply" },
+            output: JSON.stringify({ ok: true }),
+          },
+        },
+      },
+    });
+
+    const assistant = activities.find(
+      (activity) =>
+        activity.type === "timeline_item" &&
+        activity.item.kind === "assistant_message",
+    );
+    assert.equal(assistant?.type, "timeline_item");
+    if (assistant?.type === "timeline_item" && assistant.item.kind === "assistant_message") {
+      assert.deepEqual(assistant.item, {
+        kind: "assistant_message",
+        text: "Live Council reply",
+        runtimeModel: {
+          modelId: "deepseek/deepseek-v4-pro",
+          optionId: "low",
+          optionKind: "model_variant",
+          source: "native",
+        },
+      });
+    }
+  });
+
+  test("projects Council MCP channel posts and hides polling tools from OpenCode history", () => {
+    const activities = translateOpenCodeHistory([
+      {
+        info: {
+          id: "msg-user",
+          sessionID: "session-1",
+          role: "user",
+          time: { created: 1 },
+        },
+        parts: [
+          {
+            id: "part-user",
+            sessionID: "session-1",
+            messageID: "msg-user",
+            type: "text",
+            text: "Council prompt",
+          },
+        ],
+      },
+      {
+        info: {
+          id: "msg-assistant",
+          sessionID: "session-1",
+          role: "assistant",
+          parentID: "msg-user",
+          providerID: "deepseek",
+          modelID: "deepseek-v4-pro",
+          variant: "low",
+          finish: "stop",
+          time: { created: 2, completed: 3 },
+        },
+        parts: [
+          {
+            id: "part-wait",
+            sessionID: "session-1",
+            messageID: "msg-assistant",
+            type: "tool",
+            callID: "call-wait",
+            tool: "rah_council_channel_wait_new",
+            state: {
+              status: "completed",
+              input: { room_id: "room-1" },
+              output: JSON.stringify({ ok: true, messages: [] }),
+            },
+          },
+          {
+            id: "part-post",
+            sessionID: "session-1",
+            messageID: "msg-assistant",
+            type: "tool",
+            callID: "call-post",
+            tool: "rah_council_channel_post",
+            state: {
+              status: "completed",
+              input: { room_id: "room-1", content: "Visible Council reply" },
+              output: JSON.stringify({ ok: true }),
+            },
+          },
+        ],
+      },
+    ]);
+
+    assert.equal(
+      activities.some((activity) => activity.type === "tool_call_completed"),
+      false,
+    );
+    const assistantMessages = activities.filter(
+      (activity) =>
+        activity.type === "timeline_item" &&
+        activity.item.kind === "assistant_message",
+    );
+    assert.equal(assistantMessages.length, 1);
+    const assistant = assistantMessages[0];
+    assert.equal(assistant?.type, "timeline_item");
+    if (assistant?.type === "timeline_item" && assistant.item.kind === "assistant_message") {
+      assert.equal(assistant.item.text, "Visible Council reply");
+      assert.deepEqual(assistant.item.runtimeModel, {
+        modelId: "deepseek/deepseek-v4-pro",
+        optionId: "low",
+        optionKind: "model_variant",
+        source: "native",
+      });
+      assert.equal(assistant.identity?.provider, "opencode");
+      assert.equal(assistant.identity?.providerSessionId, "session-1");
+      assert.equal(assistant.identity?.sourceCursor?.providerEventId, "part-post");
+      assert.equal(assistant.identity?.confidence, "derived");
+    }
+  });
+
   test("maps stored OpenCode MessageAbortedError into a visible canceled turn", () => {
     const activities = translateOpenCodeHistory([
       {
