@@ -235,7 +235,17 @@ export class RuntimeEngine {
     this.historySnapshots = new HistorySnapshotStore();
     this.nativeTuiProviders = createDefaultNativeTuiProviderRuntime();
     this.nativeTuiMirrors = createDefaultNativeTuiMirrorProvider();
-    this.council = new CouncilRuntime({ eventBus: this.eventBus, ptyHub: this.ptyHub });
+    this.council = new CouncilRuntime({
+      eventBus: this.eventBus,
+      ptyHub: this.ptyHub,
+      startSession: (request) => this.startSession(request),
+      sendInput: (sessionId, request) => this.sendInput(sessionId, request),
+      interruptSession: (sessionId, request) => {
+        this.interruptSession(sessionId, request);
+      },
+      closeSession: (sessionId) => this.closeCouncilManagedSession(sessionId),
+      hasSession: (sessionId) => this.sessionStore?.getSession(sessionId) !== undefined,
+    });
     this.sessionStore = new SessionStore({
       onSnapshot: (states) => {
         this.workbenchState.persistLiveSessions(states);
@@ -1397,6 +1407,36 @@ export class RuntimeEngine {
         payload: {},
       });
     }
+  }
+
+  private async closeCouncilManagedSession(sessionId: string): Promise<void> {
+    const state = this.sessionStore.getSession(sessionId);
+    if (!state) {
+      return;
+    }
+    this.workbenchState.rememberSession(state);
+    this.refreshRememberedState();
+    await this.terminals.closeNativeLocalServerTuiClient(sessionId).catch(() => false);
+    const adapter = this.requireStructuredLifecycleAdapter(sessionId);
+    await Promise.resolve(adapter.destroySession?.(sessionId)).catch((error: unknown) => {
+      console.error(
+        `[rah] destroySession failed for council session ${sessionId}:`,
+        error instanceof Error ? error.message : String(error),
+      );
+    });
+    this.sessionStore.removeSession(sessionId);
+    this.ptyHub.removeSession(sessionId);
+    this.historySnapshots.clear(sessionId);
+    this.structuredSessionOwners.delete(sessionId);
+    this.terminals.clearSessionState(sessionId);
+    this.eventBus.publish({
+      sessionId,
+      type: "session.closed",
+      source: SYSTEM_SOURCE,
+      payload: {
+        clientId: "rah-council",
+      },
+    });
   }
 
   private requireManagedSession(sessionId: string): StoredSessionState {

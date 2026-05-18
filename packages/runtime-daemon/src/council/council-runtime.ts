@@ -18,11 +18,17 @@ import type {
   NativeTuiSurfaceReleaseRequest,
   NativeTuiSurfaceResponse,
   NativeTuiSurfaceState,
+  SessionInputRequest,
+  InterruptSessionRequest,
+  StartSessionRequest,
+  StartSessionResponse,
 } from "@rah/runtime-protocol";
+import { isNativeLocalServerProvider } from "@rah/runtime-protocol";
 import { fileURLToPath } from "node:url";
 import type { PtyHub } from "../pty-hub";
 import { PtySessionRuntime, type PtySessionRuntimeStartRequest } from "../pty-session-runtime";
 import { nativeTuiStartLaunchSpec } from "../native-tui-launch-spec";
+import type { ProviderMcpServerSpec, StartSessionMcpOptions } from "../provider-mcp-server-spec";
 import type { EventBus } from "../event-bus";
 import { CouncilStore } from "./council-store";
 import { handleCouncilMcpRequest, type CouncilMcpWaitNew, type CouncilMcpWaitNewResult } from "./council-mcp-shim";
@@ -52,6 +58,11 @@ export type CouncilRuntimeOptions = {
   ptyHub?: PtyHub;
   dryRun?: boolean;
   eventBus?: EventBus;
+  startSession?: (request: StartSessionRequest & StartSessionMcpOptions) => Promise<StartSessionResponse>;
+  sendInput?: (sessionId: string, request: SessionInputRequest) => void;
+  interruptSession?: (sessionId: string, request: InterruptSessionRequest) => void;
+  closeSession?: (sessionId: string) => Promise<void>;
+  hasSession?: (sessionId: string) => boolean;
 };
 
 type CouncilAgentTerminalState = {
@@ -91,6 +102,11 @@ export class CouncilRuntime {
   private readonly ptyHub: PtyHub | undefined;
   private readonly dryRun: boolean;
   private readonly eventBus: EventBus | undefined;
+  private readonly startSession: CouncilRuntimeOptions["startSession"];
+  private readonly sendInput: CouncilRuntimeOptions["sendInput"];
+  private readonly interruptSession: CouncilRuntimeOptions["interruptSession"];
+  private readonly closeSession: CouncilRuntimeOptions["closeSession"];
+  private readonly hasSession: CouncilRuntimeOptions["hasSession"];
   private readonly agentTerminals = new Map<string, CouncilAgentTerminalState>();
   private readonly messageWaiters = new Map<string, Set<CouncilMessageWaiter>>();
   private readonly mcpClientStates = new Map<string, CouncilMcpClientState>();
@@ -101,6 +117,11 @@ export class CouncilRuntime {
     this.ptyHub = options.ptyHub;
     this.dryRun = options.dryRun === true;
     this.eventBus = options.eventBus;
+    this.startSession = options.startSession;
+    this.sendInput = options.sendInput;
+    this.interruptSession = options.interruptSession;
+    this.closeSession = options.closeSession;
+    this.hasSession = options.hasSession;
   }
 
   listRooms(): ListCouncilRoomsResponse {
@@ -216,6 +237,14 @@ export class CouncilRuntime {
         screen: this.dryRun ? "[dry-run council agent TUI]" : "",
       };
     }
+    if (this.hasManagedSession(terminalId)) {
+      return {
+        roomId,
+        agentId,
+        paneId: terminalId,
+        terminalId,
+      };
+    }
     if (!this.ptySessions.has(terminalId)) {
       return {
         roomId,
@@ -257,6 +286,21 @@ export class CouncilRuntime {
     if (terminal?.pendingPause) {
       clearTimeout(terminal.pendingPause.timeout);
       delete terminal.pendingPause;
+    }
+
+    if (terminalId && this.hasManagedSession(terminalId) && !this.ptySessions.has(terminalId)) {
+      const cancelled = this.cancelCouncilAgentWaiters(roomId, agentId);
+      if (!cancelled) {
+        this.interruptSession?.(terminalId, { clientId: councilSessionClientId(roomId, agentId) });
+      }
+      this.store.setAgentStatus(roomId, agentId, "idle", "listening paused");
+      this.appendCouncilSystemMessage({
+        roomId,
+        actorId: "system",
+        clientId: "rah-web",
+        text: `${agentId} paused council listening.`,
+      });
+      return { room: this.projectRuntimeRoomState(this.store.snapshot(roomId)) };
     }
 
     if (agent.provider === "opencode") {
@@ -595,7 +639,14 @@ export class CouncilRuntime {
 
   private agentHasLiveTerminal(agent: CouncilRoomSnapshot["agents"][number]): boolean {
     const terminalId = agent.nativeSessionId ?? agent.zellijPaneId;
-    return Boolean(terminalId && (this.agentTerminals.has(terminalId) || this.ptySessions.has(terminalId)));
+    return Boolean(
+      terminalId &&
+      (this.agentTerminals.has(terminalId) || this.ptySessions.has(terminalId) || this.hasManagedSession(terminalId)),
+    );
+  }
+
+  private hasManagedSession(sessionId: string): boolean {
+    return this.hasSession?.(sessionId) === true;
   }
 
   private withCouncilMcpCursor(request: CouncilMcpRequest, clientId: string): CouncilMcpRequest {
@@ -667,13 +718,28 @@ export class CouncilRuntime {
     const snapshot = this.store.snapshot(roomId);
     const agent = snapshot.agents.find((candidate) => candidate.id === agentId);
     const terminalId = agent?.nativeSessionId ?? agent?.zellijPaneId;
-    if (!agent || !terminalId || !this.ptySessions.has(terminalId)) {
+    if (!agent || !terminalId) {
       return "skipped";
     }
     if (this.hasActiveCouncilWaiter(roomId, agentId)) {
       return "skipped";
     }
     const prompt = councilBootstrapPrompt(snapshot, agentId);
+    if (this.hasManagedSession(terminalId) && !this.ptySessions.has(terminalId)) {
+      if (!this.sendInput) {
+        return "skipped";
+      }
+      this.sendInput(terminalId, {
+        clientId: councilSessionClientId(roomId, agentId),
+        text: prompt,
+      });
+      this.appendCouncilAgentStatusMessage(roomId, agentId, "sent");
+      this.store.setAgentStatus(roomId, agentId, "starting", detail);
+      return "sent";
+    }
+    if (!this.ptySessions.has(terminalId)) {
+      return "skipped";
+    }
     const terminal = this.agentTerminals.get(terminalId);
     if (agent.provider === "claude") {
       if (!terminal) {
@@ -939,6 +1005,10 @@ export class CouncilRuntime {
   }
 
   private async launchAgent(room: CouncilRoomSnapshot, agent: CouncilRoomSnapshot["agents"][number]): Promise<void> {
+    if (isNativeLocalServerProvider(agent.provider)) {
+      await this.launchStructuredAgent(room, agent);
+      return;
+    }
     const bootstrapPrompt = councilBootstrapPrompt(room, agent.id);
     const launch = await nativeTuiStartLaunchSpec({
       provider: agent.provider,
@@ -986,6 +1056,54 @@ export class CouncilRuntime {
       return;
     }
     this.appendCouncilAgentStatusMessage(room.room.id, agent.id, "sent");
+  }
+
+  private async launchStructuredAgent(
+    room: CouncilRoomSnapshot,
+    agent: CouncilRoomSnapshot["agents"][number],
+  ): Promise<void> {
+    if (this.dryRun) {
+      const terminalId = councilAgentTerminalId(room.room.id, agent.id);
+      this.store.updateAgent(room.room.id, agent.id, {
+        status: "idle",
+        nativeSessionId: terminalId,
+      });
+      return;
+    }
+    if (!this.startSession || !this.sendInput) {
+      throw new Error("Council native local server runner is not configured.");
+    }
+    const session = await this.startSession({
+      provider: agent.provider,
+      cwd: room.room.workspace,
+      liveBackend: "native_local_server",
+      title: `Council ${agent.label}`,
+      ...(agent.modelId ? { model: agent.modelId } : {}),
+      ...(typeof agent.reasoningId === "string" ? { reasoningId: agent.reasoningId } : {}),
+      ...(agent.optionValues !== undefined ? { optionValues: agent.optionValues } : {}),
+      ...(agent.modeId ? { modeId: agent.modeId } : {}),
+      extraMcpServers: [councilMcpServerSpec(room.room.id, agent.id)],
+      attach: {
+        client: {
+          id: councilSessionClientId(room.room.id, agent.id),
+          kind: "api",
+          connectionId: councilSessionClientId(room.room.id, agent.id),
+        },
+        mode: "interactive",
+        claimControl: true,
+      },
+    });
+    const sessionId = session.session.session.id;
+    this.store.updateAgent(room.room.id, agent.id, {
+      status: "starting",
+      nativeSessionId: sessionId,
+      lastStatusDetail: "bootstrap prompt sent",
+    });
+    this.appendCouncilAgentStatusMessage(room.room.id, agent.id, "sent");
+    this.sendInput(sessionId, {
+      clientId: councilSessionClientId(room.room.id, agent.id),
+      text: councilBootstrapPrompt(room, agent.id),
+    });
   }
 
   private startAgentPty(args: {
@@ -1069,9 +1187,24 @@ export class CouncilRuntime {
   }
 
   private async closeRoomAgentTerminals(roomId: string): Promise<void> {
+    const closed = new Set<string>();
     for (const terminal of [...this.agentTerminals.values()]) {
       if (terminal.roomId === roomId) {
+        closed.add(terminal.terminalId);
         await this.closeAgentTerminal(terminal.terminalId);
+      }
+    }
+    let snapshot: CouncilRoomSnapshot | undefined;
+    try {
+      snapshot = this.store.snapshot(roomId);
+    } catch {
+      snapshot = undefined;
+    }
+    for (const agent of snapshot?.agents ?? []) {
+      const terminalId = agent.nativeSessionId ?? agent.zellijPaneId;
+      if (terminalId && !closed.has(terminalId)) {
+        closed.add(terminalId);
+        await this.closeAgentTerminal(terminalId);
       }
     }
   }
@@ -1086,6 +1219,14 @@ export class CouncilRuntime {
     }
     this.agentTerminals.delete(terminalId);
     await this.ptySessions.close(terminalId).catch(() => false);
+    if (this.hasManagedSession(terminalId)) {
+      await this.closeSession?.(terminalId).catch((error) => {
+        console.error("[rah] council managed session close failed", {
+          sessionId: terminalId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
     this.ptyHub?.removeSession(terminalId);
   }
 
@@ -1184,6 +1325,10 @@ export class CouncilRuntime {
 
 function councilAgentTerminalId(roomId: string, agentId: string): string {
   return `council:${roomId}:${Buffer.from(agentId, "utf8").toString("base64url")}`;
+}
+
+function councilSessionClientId(roomId: string, agentId: string): string {
+  return `rah-council:${roomId}:${agentId}`;
 }
 
 function councilPauseInputForProvider(provider: CouncilRoomSnapshot["agents"][number]["provider"]): string {
