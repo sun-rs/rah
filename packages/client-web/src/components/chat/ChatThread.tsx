@@ -29,62 +29,11 @@ import {
   buildVirtualFeedLayout,
   resolveVirtualFeedWindow,
 } from "./virtualized-feed-layout";
-
-const TOOL_BACKED_OBSERVATION_KINDS = new Set([
-  "file.read",
-  "file.list",
-  "file.search",
-  "file.write",
-  "file.edit",
-  "patch.apply",
-  "command.run",
-  "test.run",
-  "build.run",
-  "lint.run",
-  "git.status",
-  "git.diff",
-  "git.apply",
-  "web.search",
-  "web.fetch",
-  "mcp.call",
-  "subagent.lifecycle",
-]);
+import { visibleFeedEntries } from "./chat-feed-filtering";
 
 const BOTTOM_STICK_THRESHOLD_PX = 120;
 const TOP_HISTORY_TRIGGER_PX = 96;
 const TOP_HISTORY_REARM_PX = 220;
-
-function visibleFeedEntries(feed: FeedEntry[], hideToolCalls: boolean): FeedEntry[] {
-  const toolIds = new Set(
-    feed.flatMap((entry) =>
-      entry.kind === "tool_call" ? [entry.toolCall.id] : [],
-    ),
-  );
-
-  return feed.filter((entry) => {
-    if (hideToolCalls && entry.kind === "tool_call" && entry.status === "completed") {
-      return false;
-    }
-    if (entry.kind !== "observation") {
-      return true;
-    }
-    if (
-      hideToolCalls &&
-      entry.status === "completed" &&
-      TOOL_BACKED_OBSERVATION_KINDS.has(entry.observation.kind)
-    ) {
-      return false;
-    }
-    const providerCallId = entry.observation.subject?.providerCallId;
-    if (!providerCallId) {
-      return true;
-    }
-    if (!TOOL_BACKED_OBSERVATION_KINDS.has(entry.observation.kind)) {
-      return true;
-    }
-    return !toolIds.has(providerCallId);
-  });
-}
 
 function TimelineCard(props: {
   icon: React.ReactNode;
@@ -351,6 +300,7 @@ export function ChatThread(props: {
   sessionId: string;
   feed: FeedEntry[];
   hideToolCalls?: boolean;
+  hideOpenCodeReasoning?: boolean;
   showModelInfo?: boolean;
   provider?: ProviderKind;
   canLoadOlderHistory?: boolean;
@@ -383,8 +333,14 @@ export function ChatThread(props: {
   const [measuredHeightsVersion, setMeasuredHeightsVersion] = useState(0);
   const [viewport, setViewport] = useState({ scrollTop: 0, height: 0 });
   const entries = useMemo(
-    () => visibleFeedEntries(props.feed, props.hideToolCalls ?? false),
-    [props.feed, props.hideToolCalls],
+    () =>
+      visibleFeedEntries(
+        props.feed,
+        props.hideToolCalls ?? false,
+        props.hideOpenCodeReasoning ?? false,
+        props.provider,
+      ),
+    [props.feed, props.hideToolCalls, props.hideOpenCodeReasoning, props.provider],
   );
   const assistantTurnHeaders = useMemo(
     () => buildAssistantTurnHeaders(entries),

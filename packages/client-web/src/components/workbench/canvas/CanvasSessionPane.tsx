@@ -37,6 +37,7 @@ export function CanvasSessionPane(props: {
   projection: SessionProjection | null;
   clientId: string;
   hideToolCallsInChat: boolean;
+  hideOpenCodeReasoningInChat: boolean;
   showModelInfoInChat: boolean;
   pendingSessionAction:
     | {
@@ -168,6 +169,7 @@ export function CanvasSessionPane(props: {
       interactionNotice={noticeState.interactionNotice}
       historyNotice={noticeState.historyNotice}
       hideToolCallsInChat={props.hideToolCallsInChat}
+      hideOpenCodeReasoningInChat={props.hideOpenCodeReasoningInChat}
       showModelInfoInChat={props.showModelInfoInChat}
       canLoadOlderHistory={Boolean(
         props.summary.session.providerSessionId &&

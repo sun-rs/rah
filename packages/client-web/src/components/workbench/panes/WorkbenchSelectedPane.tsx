@@ -25,6 +25,12 @@ import {
   type SessionModeChoice,
 } from "../../../session-mode-ui";
 import { isSessionControlLocked } from "../../../session-capabilities";
+import { closeNativeTuiClient } from "../../../api";
+import {
+  resolveActiveSessionTuiSurface,
+  shouldDetachPreviousSessionTui,
+  type ActiveSessionTuiSurface,
+} from "../../../tui-surface-lifecycle";
 
 function formatContextPercent(value: number): string {
   const clamped = Math.max(0, Math.min(100, value));
@@ -100,6 +106,7 @@ export function WorkbenchSelectedPane(props: {
   interactionNotice: InlineWorkbenchNotice | null;
   historyNotice: InlineWorkbenchNotice | null;
   hideToolCallsInChat: boolean;
+  hideOpenCodeReasoningInChat: boolean;
   showModelInfoInChat: boolean;
   canLoadOlderHistory: boolean;
   historyLoading: boolean;
@@ -174,7 +181,9 @@ export function WorkbenchSelectedPane(props: {
   const [sessionInfoOpen, setSessionInfoOpen] = useState(false);
   const [paneWidth, setPaneWidth] = useState<number | null>(null);
   const [sessionViewMode, setSessionViewMode] = useState<SessionViewMode>(preferredSessionViewMode);
+  const [openedTuiTerminalIds, setOpenedTuiTerminalIds] = useState<Set<string>>(() => new Set());
   const [closedTuiTerminalIds, setClosedTuiTerminalIds] = useState<Set<string>>(() => new Set());
+  const activeSessionTuiRef = useRef<ActiveSessionTuiSurface>(null);
   const effectivePaneWidth = paneWidth ?? Number.POSITIVE_INFINITY;
   const sessionMetaMode = props.compactSessionMeta ?? "auto";
   const compactSessionMeta =
@@ -202,11 +211,35 @@ export function WorkbenchSelectedPane(props: {
   const terminalTuiClientActive = nativeTui
     ? !closedTuiTerminalIds.has(nativeTui.terminalId)
     : true;
+  const markCurrentTuiOpened = () => {
+    if (!nativeTui) {
+      return;
+    }
+    const terminalId = nativeTui.terminalId;
+    setOpenedTuiTerminalIds((current) => {
+      if (current.has(terminalId)) {
+        return current;
+      }
+      const next = new Set(current);
+      next.add(terminalId);
+      return next;
+    });
+  };
   const setTerminalTuiClientActive = (active: boolean) => {
     if (!nativeTui) {
       return;
     }
     const terminalId = nativeTui.terminalId;
+    if (active) {
+      setOpenedTuiTerminalIds((current) => {
+        if (current.has(terminalId)) {
+          return current;
+        }
+        const next = new Set(current);
+        next.add(terminalId);
+        return next;
+      });
+    }
     setClosedTuiTerminalIds((current) => {
       const next = new Set(current);
       if (active) {
@@ -319,6 +352,31 @@ export function WorkbenchSelectedPane(props: {
     props.selectedSummary.session.id,
     sessionViewResetKey,
   ]);
+
+  useEffect(() => {
+    const current = resolveActiveSessionTuiSurface({
+      terminalId: nativeTui?.terminalId ?? null,
+      clientId: props.clientId,
+      openedTerminalIds: openedTuiTerminalIds,
+      closedTerminalIds: closedTuiTerminalIds,
+    });
+    const previous = activeSessionTuiRef.current;
+    if (shouldDetachPreviousSessionTui(previous, current)) {
+      void closeNativeTuiClient(previous.terminalId, { clientId: previous.clientId }).catch(() => undefined);
+    }
+    activeSessionTuiRef.current = current;
+  }, [closedTuiTerminalIds, nativeTui, openedTuiTerminalIds, props.clientId, terminalTuiClientActive]);
+
+  useEffect(() => {
+    return () => {
+      const activeTui = activeSessionTuiRef.current;
+      if (!activeTui) {
+        return;
+      }
+      void closeNativeTuiClient(activeTui.terminalId, { clientId: activeTui.clientId }).catch(() => undefined);
+      activeSessionTuiRef.current = null;
+    };
+  }, []);
 
   useEffect(() => {
     if (showComposer) {
@@ -490,7 +548,12 @@ export function WorkbenchSelectedPane(props: {
                       ? "bg-[var(--app-bg)] text-[var(--app-fg)] shadow-sm"
                       : "text-[var(--app-hint)] hover:text-[var(--app-fg)]"
                   }`}
-                  onClick={() => setSessionViewMode(mode)}
+                  onClick={() => {
+                    if (mode === "tui") {
+                      markCurrentTuiOpened();
+                    }
+                    setSessionViewMode(mode);
+                  }}
                   aria-pressed={effectiveSessionViewMode === mode}
                   title={mode === "chat" ? "Show structured chat mirror" : "Show native TUI"}
                 >
@@ -628,6 +691,7 @@ export function WorkbenchSelectedPane(props: {
           sessionId={props.selectedSummary.session.id}
           feed={props.selectedProjection?.feed ?? []}
           hideToolCalls={props.hideToolCallsInChat}
+          hideOpenCodeReasoning={props.hideOpenCodeReasoningInChat}
           showModelInfo={props.showModelInfoInChat}
           provider={props.selectedSummary.session.provider}
           canLoadOlderHistory={props.canLoadOlderHistory}

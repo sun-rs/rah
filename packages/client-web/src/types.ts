@@ -4,6 +4,7 @@ import type {
   MessagePartRef,
   PermissionRequest,
   PermissionResolution,
+  ProviderKind,
   RahEvent,
   RuntimeOperation,
   SessionSummary,
@@ -29,6 +30,7 @@ export type FeedEntry =
       turnId?: string;
       canonicalItemId?: TimelineIdentity["canonicalItemId"];
       canonicalTurnId?: TimelineIdentity["canonicalTurnId"];
+      sourceProvider?: ProviderKind | "system";
     }
   | {
       key: string;
@@ -393,6 +395,7 @@ function applyTimelineEvent(
           kind: "timeline",
           item,
           ts: event.ts,
+          sourceProvider: event.source.provider,
           ...mergeTimelineIdentityFields(current, identityFields),
         },
         event.turnId ?? current.turnId,
@@ -419,6 +422,7 @@ function applyTimelineEvent(
           kind: "timeline",
           item: event.payload.item,
           ts: event.ts,
+          sourceProvider: event.source.provider,
           ...mergeTimelineIdentityFields(current, identityFields),
         },
         event.turnId ?? current.turnId,
@@ -446,6 +450,7 @@ function applyTimelineEvent(
           kind: "timeline",
           item,
           ts: event.ts,
+          sourceProvider: event.source.provider,
           ...mergeTimelineIdentityFields(current, identityFields),
         },
         event.turnId ?? current.turnId,
@@ -479,6 +484,7 @@ function applyTimelineEvent(
           kind: "timeline",
           item: event.payload.item,
           ts: event.ts,
+          sourceProvider: event.source.provider,
           ...mergeTimelineIdentityFields(weakEcho, identityFields),
         },
         event.turnId ?? weakEcho.turnId,
@@ -500,6 +506,7 @@ function applyTimelineEvent(
           kind: "timeline",
           item: event.payload.item,
           ts: event.ts,
+          sourceProvider: event.source.provider,
           ...mergeTimelineIdentityFields(duplicate, identityFields),
         },
         event.turnId ?? duplicate.turnId,
@@ -521,6 +528,7 @@ function applyTimelineEvent(
           kind: "timeline",
           item: event.payload.item,
           ts: event.ts,
+          sourceProvider: event.source.provider,
           ...mergeTimelineIdentityFields(duplicate, identityFields),
         },
         event.turnId ?? duplicate.turnId,
@@ -551,6 +559,7 @@ function applyTimelineEvent(
         ...assistantRuntimeModelPatch(latestEntry.item, event.payload.item),
       },
       ts: event.ts,
+      sourceProvider: event.source.provider,
       ...mergeTimelineIdentityFields(latestEntry, identityFields),
     };
     return next;
@@ -566,6 +575,7 @@ function applyTimelineEvent(
       kind: "timeline",
       item: event.payload.item,
       ts: event.ts,
+      sourceProvider: event.source.provider,
       ...identityFields,
     },
     event.turnId,
@@ -1512,6 +1522,7 @@ function applyTurnStepEvent(
         ...(event.payload.runtimeModel !== undefined ? { runtimeModel: event.payload.runtimeModel } : {}),
       },
       ts: event.ts,
+      sourceProvider: event.source.provider,
     },
     event.turnId,
   );

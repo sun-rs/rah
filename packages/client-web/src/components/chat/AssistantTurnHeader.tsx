@@ -1,5 +1,4 @@
 import type { ProviderKind, TimelineRuntimeModel } from "@rah/runtime-protocol";
-import { providerLabel } from "../../types";
 import { ProviderLogo } from "../ProviderLogo";
 
 function runtimeModelLabel(runtimeModel: TimelineRuntimeModel | undefined): string | null {
@@ -14,7 +13,6 @@ export function AssistantTurnHeader(props: {
   runtimeModel?: TimelineRuntimeModel;
 }) {
   const modelLabel = runtimeModelLabel(props.runtimeModel);
-  const metadataLabel = modelLabel ?? providerLabel(props.provider);
 
   return (
     <div
@@ -27,7 +25,7 @@ export function AssistantTurnHeader(props: {
         variant="bare"
         className="h-[11px] w-[11px]"
       />
-      <span>{metadataLabel}</span>
+      {modelLabel ? <span>{modelLabel}</span> : null}
     </div>
   );
 }

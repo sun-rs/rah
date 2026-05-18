@@ -320,7 +320,7 @@ export function App() {
     );
   const [settingsDialogMounted, setSettingsDialogMounted] = useState(false);
   const [terminalDialogMounted, setTerminalDialogMounted] = useState(false);
-  const { hideToolCallsInChat, showModelInfoInChat } = useChatPreferences();
+  const { hideToolCallsInChat, hideOpenCodeReasoningInChat, showModelInfoInChat } = useChatPreferences();
   const { setWorkspaceSortMode, workspaceSortMode } = useWorkspaceSortModeState();
   const {
     setWorkspaceSortMode: setHistoryWorkspaceSortMode,
@@ -1384,6 +1384,7 @@ export function App() {
                     projection={projection}
                     clientId={clientId}
                     hideToolCallsInChat={hideToolCallsInChat}
+                    hideOpenCodeReasoningInChat={hideOpenCodeReasoningInChat}
                     showModelInfoInChat={showModelInfoInChat[provider] ?? true}
                     pendingSessionAction={
                       pendingSessionAction?.sessionId === summary.session.id
@@ -1474,6 +1475,7 @@ export function App() {
               interactionNotice={interactionNotice}
               historyNotice={historyNotice}
               hideToolCallsInChat={hideToolCallsInChat}
+              hideOpenCodeReasoningInChat={hideOpenCodeReasoningInChat}
               showModelInfoInChat={
                 selectedSummary ? (showModelInfoInChat[selectedSummary.session.provider as ProviderChoice] ?? true) : true
               }

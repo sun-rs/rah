@@ -804,6 +804,7 @@ export function TerminalPane(props: TerminalPaneProps) {
       return;
     }
     setTuiClientClosing(true);
+    releaseCurrentSurface();
     setTuiClientActiveState(false);
     surfaceActiveRef.current = false;
     setSurfaceOwnerKind(null);

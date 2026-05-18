@@ -57,6 +57,8 @@ export function SettingsPane() {
   const {
     hideToolCallsInChat,
     setHideToolCallsInChat,
+    hideOpenCodeReasoningInChat,
+    setHideOpenCodeReasoningInChat,
     showModelInfoInChat,
     setShowModelInfoInChat,
   } = useChatPreferences();
@@ -312,6 +314,31 @@ export function SettingsPane() {
                   <span
                     className={`absolute top-0.5 h-4.5 w-4.5 rounded-full bg-white shadow-sm transition-transform ${
                       hideToolCallsInChat ? "translate-x-5" : "translate-x-0.5"
+                    }`}
+                  />
+                </button>
+              </div>
+              <div className="mt-5 flex items-start justify-between gap-4 border-t border-[var(--app-border)] pt-5">
+                <div className="min-w-0">
+                  <div className="text-sm font-medium text-[var(--app-fg)]">Hide OpenCode reasoning</div>
+                  <div className="mt-1 text-xs text-[var(--app-hint)]">
+                    OpenCode thinking entries stay in the timeline data but are hidden from chat by default.
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={hideOpenCodeReasoningInChat}
+                  onClick={() => setHideOpenCodeReasoningInChat(!hideOpenCodeReasoningInChat)}
+                  className={`relative inline-flex h-6 w-11 shrink-0 rounded-full border transition-colors ${
+                    hideOpenCodeReasoningInChat
+                      ? "border-primary bg-primary"
+                      : "border-[var(--app-border)] bg-[var(--app-subtle-bg)]"
+                  }`}
+                >
+                  <span
+                    className={`absolute top-0.5 h-4.5 w-4.5 rounded-full bg-white shadow-sm transition-transform ${
+                      hideOpenCodeReasoningInChat ? "translate-x-5" : "translate-x-0.5"
                     }`}
                   />
                 </button>

@@ -256,7 +256,7 @@
 }
 
 @layer utilities {
-  body:has([role="dialog"]) .workbench-fixed-sidebar-toggle {
+  body:has([role="dialog"]:not([data-state="closed"])) .workbench-fixed-sidebar-toggle {
     display: none !important;
   }
 

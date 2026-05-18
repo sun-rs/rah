@@ -18,6 +18,7 @@ type TerminalDialogFrameProps = {
   dataTerminalCwd?: string;
   overlayClassName?: string;
   contentClassName?: string;
+  forceMount?: boolean;
   children: ReactNode;
 };
 
@@ -26,16 +27,26 @@ const DEFAULT_TERMINAL_DIALOG_CONTENT_CLASS =
   "fixed inset-0 z-50 flex h-[100dvh] w-screen flex-col overflow-hidden bg-[var(--app-bg)] pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] focus:outline-none md:left-1/2 md:top-1/2 md:h-[82vh] md:w-[min(1280px,96vw)] md:-translate-x-1/2 md:-translate-y-1/2 md:rounded-2xl md:border md:border-[var(--app-border)] md:pt-0 md:pb-0 md:shadow-2xl";
 
 export function TerminalDialogFrame(props: TerminalDialogFrameProps) {
+  const overlayClassName = props.overlayClassName ?? DEFAULT_TERMINAL_DIALOG_OVERLAY_CLASS;
+  const contentClassName = props.contentClassName ?? DEFAULT_TERMINAL_DIALOG_CONTENT_CLASS;
+  const forceMountProps = props.forceMount ? ({ forceMount: true } as const) : {};
+  const forceMountedClosedStyle = props.forceMount && !props.open ? { display: "none" } : undefined;
   return (
-    <Dialog.Root open={props.open} onOpenChange={props.onOpenChange}>
-      <Dialog.Portal>
-        <Dialog.Overlay className={props.overlayClassName ?? DEFAULT_TERMINAL_DIALOG_OVERLAY_CLASS} />
+    <Dialog.Root open={props.open} onOpenChange={props.onOpenChange} modal={props.open}>
+      <Dialog.Portal {...forceMountProps}>
+        <Dialog.Overlay
+          {...forceMountProps}
+          className={overlayClassName}
+          style={forceMountedClosedStyle}
+        />
         <Dialog.Content
+          {...forceMountProps}
           data-testid={props.contentTestId}
           data-terminal-id={props.dataTerminalId}
           data-terminal-cwd={props.dataTerminalCwd}
           onEscapeKeyDown={(event) => event.preventDefault()}
-          className={props.contentClassName ?? DEFAULT_TERMINAL_DIALOG_CONTENT_CLASS}
+          className={contentClassName}
+          style={forceMountedClosedStyle}
         >
           <div className="flex items-center justify-between gap-3 border-b border-[var(--app-border)] px-3 py-2.5 md:px-4 md:py-3">
             <div className="flex min-w-0 flex-1 items-center gap-2">
