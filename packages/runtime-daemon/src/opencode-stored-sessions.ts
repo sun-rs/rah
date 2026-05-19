@@ -178,16 +178,31 @@ export function discoverOpenCodeStoredSessions(options: {
         s.time_updated,
         s.time_archived,
         p.worktree as project_worktree,
-        (
-          select json_extract(pp.data, '$.text')
-          from part pp
-          join message mm on mm.id = pp.message_id
-          where pp.session_id = s.id
-            and json_extract(pp.data, '$.type') = 'text'
-            and coalesce(json_extract(pp.data, '$.synthetic'), 0) = 0
-            and coalesce(json_extract(pp.data, '$.ignored'), 0) = 0
-          order by pp.time_created desc, pp.id desc
-          limit 1
+        coalesce(
+          (
+            select json_extract(pp.data, '$.text')
+            from part pp
+            join message mm on mm.id = pp.message_id
+            where pp.session_id = s.id
+              and json_extract(mm.data, '$.role') = 'assistant'
+              and json_extract(pp.data, '$.type') = 'text'
+              and coalesce(json_extract(pp.data, '$.synthetic'), 0) = 0
+              and coalesce(json_extract(pp.data, '$.ignored'), 0) = 0
+            order by pp.time_created asc, pp.id asc
+            limit 1
+          ),
+          (
+            select json_extract(pp.data, '$.text')
+            from part pp
+            join message mm on mm.id = pp.message_id
+            where pp.session_id = s.id
+              and json_extract(mm.data, '$.role') = 'user'
+              and json_extract(pp.data, '$.type') = 'text'
+              and coalesce(json_extract(pp.data, '$.synthetic'), 0) = 0
+              and coalesce(json_extract(pp.data, '$.ignored'), 0) = 0
+            order by pp.time_created asc, pp.id asc
+            limit 1
+          )
         ) as preview,
         (
           select count(*)
@@ -233,16 +248,31 @@ export function findOpenCodeStoredSessionRecord(
         s.time_updated,
         s.time_archived,
         p.worktree as project_worktree,
-        (
-          select json_extract(pp.data, '$.text')
-          from part pp
-          join message mm on mm.id = pp.message_id
-          where pp.session_id = s.id
-            and json_extract(pp.data, '$.type') = 'text'
-            and coalesce(json_extract(pp.data, '$.synthetic'), 0) = 0
-            and coalesce(json_extract(pp.data, '$.ignored'), 0) = 0
-          order by pp.time_created desc, pp.id desc
-          limit 1
+        coalesce(
+          (
+            select json_extract(pp.data, '$.text')
+            from part pp
+            join message mm on mm.id = pp.message_id
+            where pp.session_id = s.id
+              and json_extract(mm.data, '$.role') = 'assistant'
+              and json_extract(pp.data, '$.type') = 'text'
+              and coalesce(json_extract(pp.data, '$.synthetic'), 0) = 0
+              and coalesce(json_extract(pp.data, '$.ignored'), 0) = 0
+            order by pp.time_created asc, pp.id asc
+            limit 1
+          ),
+          (
+            select json_extract(pp.data, '$.text')
+            from part pp
+            join message mm on mm.id = pp.message_id
+            where pp.session_id = s.id
+              and json_extract(mm.data, '$.role') = 'user'
+              and json_extract(pp.data, '$.type') = 'text'
+              and coalesce(json_extract(pp.data, '$.synthetic'), 0) = 0
+              and coalesce(json_extract(pp.data, '$.ignored'), 0) = 0
+            order by pp.time_created asc, pp.id asc
+            limit 1
+          )
         ) as preview,
         (
           select count(*)

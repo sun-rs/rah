@@ -50,6 +50,19 @@ test("discovers OpenCode stored sessions from opencode.db", { skip: !hasSqlite }
   }
 });
 
+test("uses stable OpenCode stored session preview instead of the latest text part", { skip: !hasSqlite }, () => {
+  const dataDir = createOpenCodeFixture({
+    assistantText: "First assistant answer",
+    laterAssistantText: "Later assistant answer",
+  });
+  try {
+    const sessions = discoverOpenCodeStoredSessions({ dataDir });
+    assert.equal(sessions[0]?.ref.preview, "First assistant answer");
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
 test("loads OpenCode stored messages and materializes history", { skip: !hasSqlite }, () => {
   const dataDir = createOpenCodeFixture();
   try {
@@ -205,7 +218,11 @@ test("OpenCode stored history adapter keeps last-good cache when sqlite refresh 
   }
 });
 
-function createOpenCodeFixture(options: { assistantText?: string; dataDir?: string } = {}): string {
+function createOpenCodeFixture(options: {
+  assistantText?: string;
+  laterAssistantText?: string;
+  dataDir?: string;
+} = {}): string {
   const dataDir = options.dataDir ?? mkdtempSync(path.join(os.tmpdir(), "rah-opencode-history-"));
   mkdirSync(dataDir, { recursive: true });
   const dbPath = path.join(dataDir, "opencode.db");
@@ -213,12 +230,22 @@ function createOpenCodeFixture(options: { assistantText?: string; dataDir?: stri
   const updated = Date.parse("2026-04-26T16:00:05.000Z");
   execFileSync("sqlite3", [
     dbPath,
-    fixtureSql(created, updated, options.assistantText ?? "Assistant answer"),
+    fixtureSql(created, updated, {
+      assistantText: options.assistantText ?? "Assistant answer",
+      laterAssistantText: options.laterAssistantText,
+    }),
   ]);
   return dataDir;
 }
 
-function fixtureSql(created: number, updated: number, assistantText: string): string {
+function fixtureSql(
+  created: number,
+  updated: number,
+  options: {
+    assistantText: string;
+    laterAssistantText?: string | undefined;
+  },
+): string {
   return `
     create table project (
       id text primary key,
@@ -273,7 +300,15 @@ function fixtureSql(created: number, updated: number, assistantText: string): st
         modelID: "test-model",
         finish: "stop",
         time: { created: created + 200, completed: updated },
-      })});
+      })})${options.laterAssistantText ? `,
+      ('msg_assistant_later', 'ses_active', ${created + 300}, ${updated}, ${sqlJson({
+        role: "assistant",
+        parentID: "msg_assistant",
+        providerID: "test",
+        modelID: "test-model",
+        finish: "stop",
+        time: { created: created + 300, completed: updated },
+      })})` : ""};
 
     insert into part (id, message_id, session_id, time_created, time_updated, data)
     values
@@ -287,8 +322,12 @@ function fixtureSql(created: number, updated: number, assistantText: string): st
       })}),
       ('prt_c_assistant', 'msg_assistant', 'ses_active', ${created + 202}, ${updated}, ${sqlJson({
         type: "text",
-        text: assistantText,
-      })});
+        text: options.assistantText,
+      })})${options.laterAssistantText ? `,
+      ('prt_d_assistant_later', 'msg_assistant_later', 'ses_active', ${created + 302}, ${updated}, ${sqlJson({
+        type: "text",
+        text: options.laterAssistantText,
+      })})` : ""};
   `;
 }
 
