@@ -23,6 +23,10 @@ import type {
   WorkbenchObservation,
 } from "./events";
 import type {
+  ConversationPhase,
+  ConversationStatus,
+} from "./conversation-state";
+import type {
   ClientKind,
   NativeTuiPromptState,
   ProtocolStability,
@@ -144,6 +148,7 @@ export function isCoreWorkbenchEvent(event: RahEvent): boolean {
 const PROVIDERS = new Set<ProviderKind | "system">([
   "codex",
   "claude",
+  "gemini",
   "opencode",
   "custom",
   "system",
@@ -173,13 +178,24 @@ const SESSION_RUNTIME_STATES = new Set<SessionRuntimeState>([
   "stopped",
   "failed",
 ]);
+const CONVERSATION_STATUSES = new Set<ConversationStatus>(["running", "stopped"]);
+const CONVERSATION_PHASES = new Set<ConversationPhase>([
+  "starting",
+  "ready",
+  "working",
+  "waiting_input",
+  "waiting_permission",
+  "stopping",
+  "failed",
+  "ended",
+]);
 
 const SESSION_LAUNCH_SOURCES = new Set<SessionLaunchSource>(["web", "terminal"]);
 const SESSION_LIVE_BACKENDS = new Set<SessionLiveBackend>([
   "structured",
   "native_local_server",
   "native_tui",
-  "zellij_tui",
+  "tui_mux",
 ]);
 const PROVIDER_RUNTIME_KINDS = new Set<ProviderRuntimeKind>([
   "native_local_server",
@@ -643,7 +659,7 @@ function validateSessionCapabilities(capabilities: unknown, sink: IssueSink, pat
     );
     return;
   }
-  for (const field of ["info", "archive", "delete"] as const) {
+  for (const field of ["info", "stop", "delete"] as const) {
     if (typeof capabilities.actions[field] !== "boolean") {
       addIssue(
         sink,
@@ -759,7 +775,7 @@ function validateSessionRuntimeFeatures(features: unknown, sink: IssueSink, path
     "prelaunchConfig",
     "runtimeConfig",
     "interrupt",
-    "archiveLifecycle",
+    "stopLifecycle",
   ] as const) {
     if (!SESSION_RUNTIME_CAPABILITY_STATUSES.has(features[field] as SessionRuntimeCapabilityStatus)) {
       addIssue(
@@ -1900,6 +1916,24 @@ function validateManagedSession(session: unknown, sink: IssueSink, path: string)
       `${path}.liveBackend`,
     );
   }
+  if (!CONVERSATION_STATUSES.has(session.status as ConversationStatus)) {
+    addIssue(
+      sink,
+      "error",
+      "session.status.invalid",
+      "session status is not canonical",
+      `${path}.status`,
+    );
+  }
+  if (!CONVERSATION_PHASES.has(session.phase as ConversationPhase)) {
+    addIssue(
+      sink,
+      "error",
+      "session.phase.invalid",
+      "session phase is not canonical",
+      `${path}.phase`,
+    );
+  }
   if (session.runtime !== undefined) {
     validateSessionRuntime(session.runtime, sink, `${path}.runtime`);
   }
@@ -2002,12 +2036,12 @@ function validateManagedSession(session: unknown, sink: IssueSink, path: string)
         `${path}.mux`,
       );
     } else {
-      if (session.mux.backend !== "zellij" && session.mux.backend !== "tmux") {
+      if (session.mux.backend !== "tmux") {
         addIssue(
           sink,
           "error",
           "session.mux.backend.invalid",
-          "session mux.backend must be zellij or tmux",
+          "session mux.backend must be tmux",
           `${path}.mux.backend`,
         );
       }
@@ -2027,18 +2061,6 @@ function validateManagedSession(session: unknown, sink: IssueSink, path: string)
           "session.mux.pane_id.invalid",
           "session mux.paneId must be non-empty",
           `${path}.mux.paneId`,
-        );
-      }
-      if (
-        session.mux.backend === "zellij" &&
-        !isNonEmptyString(session.mux.socketDir)
-      ) {
-        addIssue(
-          sink,
-          "error",
-          "session.mux.socket_dir.invalid",
-          "session mux.socketDir must be non-empty for zellij",
-          `${path}.mux.socketDir`,
         );
       }
     }

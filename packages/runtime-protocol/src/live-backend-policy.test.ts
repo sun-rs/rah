@@ -11,18 +11,22 @@ import {
 test("live backend policy maps core providers to the intended runner families", () => {
   assert.equal(defaultLiveBackendForProvider("codex"), "native_local_server");
   assert.equal(defaultLiveBackendForProvider("opencode"), "native_local_server");
-  assert.equal(defaultLiveBackendForProvider("claude"), "zellij_tui");
+  assert.equal(defaultLiveBackendForProvider("claude"), "tui_mux");
+  assert.equal(defaultLiveBackendForProvider("gemini"), "tui_mux");
   assert.equal(defaultLiveBackendForProvider("custom"), undefined);
 
   assert.equal(isNativeLocalServerProvider("codex"), true);
   assert.equal(isNativeLocalServerProvider("opencode"), true);
   assert.equal(isNativeLocalServerProvider("claude"), false);
+  assert.equal(isNativeLocalServerProvider("gemini"), false);
 
   assert.equal(isTuiMuxFallbackProvider("claude"), true);
+  assert.equal(isTuiMuxFallbackProvider("gemini"), true);
   assert.equal(isTuiMuxFallbackProvider("codex"), false);
 
   assert.equal(isCoreLiveProvider("codex"), true);
   assert.equal(isCoreLiveProvider("claude"), true);
+  assert.equal(isCoreLiveProvider("gemini"), true);
   assert.equal(isCoreLiveProvider("custom"), false);
 });
 
@@ -36,7 +40,11 @@ test("live backend policy rejects accidental backend/provider drift", () => {
     true,
   );
   assert.equal(
-    liveBackendSupportedByProvider({ provider: "claude", liveBackend: "zellij_tui" }),
+    liveBackendSupportedByProvider({ provider: "claude", liveBackend: "tui_mux" }),
+    true,
+  );
+  assert.equal(
+    liveBackendSupportedByProvider({ provider: "gemini", liveBackend: "tui_mux" }),
     true,
   );
 
@@ -45,8 +53,11 @@ test("live backend policy rejects accidental backend/provider drift", () => {
     false,
   );
   assert.equal(
-    liveBackendSupportedByProvider({ provider: "codex", liveBackend: "zellij_tui" }),
+    liveBackendSupportedByProvider({ provider: "gemini", liveBackend: "native_local_server" }),
+    false,
+  );
+  assert.equal(
+    liveBackendSupportedByProvider({ provider: "codex", liveBackend: "tui_mux" }),
     false,
   );
 });
-

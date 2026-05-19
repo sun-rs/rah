@@ -1,16 +1,13 @@
+import type { ConversationPhase, ConversationStatus } from "./conversation-state";
 import type {
   ProviderKind,
   SessionConfigValue,
 } from "./session";
 
-export type CouncilAgentProvider = Extract<ProviderKind, "codex" | "claude" | "opencode">;
+export type CouncilAgentProvider = Extract<ProviderKind, "codex" | "claude" | "gemini" | "opencode">;
 
-export type CouncilRoomStatus =
-  | "starting"
-  | "running"
-  | "idle"
-  | "stopped"
-  | "failed";
+export type CouncilRoomStatus = ConversationStatus;
+export type CouncilRoomPhase = ConversationPhase;
 
 export type CouncilAgentStatus =
   | "starting"
@@ -42,7 +39,7 @@ export interface CouncilAgent extends CouncilAgentConfig {
   id: string;
   roomId: string;
   status: CouncilAgentStatus;
-  zellijPaneId?: string;
+  terminalId?: string;
   nativeSessionId?: string;
   lastStatusDetail?: string;
   updatedAt: string;
@@ -53,7 +50,8 @@ export interface CouncilRoom {
   title: string;
   workspace: string;
   status: CouncilRoomStatus;
-  zellijSessionName?: string;
+  phase: CouncilRoomPhase;
+  muxSessionName?: string;
   error?: string;
   createdAt: string;
   updatedAt: string;
@@ -118,7 +116,7 @@ export interface CouncilPostMessageResponse {
 export interface CouncilAgentTuiResponse {
   roomId: string;
   agentId: string;
-  zellijSessionName?: string;
+  muxSessionName?: string;
   paneId?: string;
   terminalId?: string;
   screen?: string;

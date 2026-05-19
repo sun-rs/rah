@@ -6,6 +6,7 @@ import type {
   ClientKind,
   ControlLease,
   ManagedSession,
+  ManagedSessionOrigin,
   ModelCapabilityProfile,
   ProviderKind,
   SessionRuntimeDescriptor,
@@ -139,6 +140,7 @@ export function isPermissionAbort(args: {
 export interface StartSessionRequest {
   provider: ProviderKind;
   cwd: string;
+  origin?: ManagedSessionOrigin;
   liveBackend?: SessionLiveBackend;
   title?: string;
   model?: string;
@@ -185,6 +187,7 @@ export interface StartSessionRequest {
 export interface ResumeSessionRequest {
   provider: ProviderKind;
   providerSessionId: string;
+  origin?: ManagedSessionOrigin;
   liveBackend?: SessionLiveBackend;
   cwd?: string;
   model?: string;
@@ -567,6 +570,45 @@ export interface ListProviderModelsResponse {
   catalog: ProviderModelCatalog;
 }
 
+export interface ManualProviderModel {
+  provider: ProviderKind;
+  id: string;
+  label?: string;
+  optionIds?: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ListManualProviderModelsResponse {
+  models: ManualProviderModel[];
+}
+
+export interface AddManualProviderModelRequest {
+  id: string;
+  label?: string;
+  optionIds?: string[];
+  /**
+   * Optional workspace used only for duplicate checks against provider-native
+   * catalogs. Manual model supplements remain provider-wide.
+   */
+  cwd?: string;
+}
+
+export interface AddManualProviderModelResponse {
+  model: ManualProviderModel;
+  catalog: ProviderModelCatalog;
+}
+
+export interface DeleteManualProviderModelResponse {
+  ok: true;
+  catalog: ProviderModelCatalog;
+}
+
+export interface DeleteManualProviderModelOptionResponse {
+  model: ManualProviderModel;
+  catalog: ProviderModelCatalog;
+}
+
 export interface DebugScenarioDescriptor {
   id: string;
   label: string;
@@ -616,7 +658,7 @@ export interface ListPtyStatsResponse {
   sessions: PtySessionStats[];
 }
 
-export interface ZellijMuxPaneDiagnostic {
+export interface TuiMuxPaneDiagnostic {
   paneId: string;
   title: string;
   exited: boolean;
@@ -630,23 +672,22 @@ export interface ZellijMuxPaneDiagnostic {
   tabName?: string;
 }
 
-export interface ZellijMuxSessionDiagnostic {
+export interface TuiMuxSessionDiagnostic {
   sessionName: string;
-  backend?: "zellij" | "tmux";
-  socketDir?: string;
+  backend?: "tmux";
   managedSessionId?: string;
   provider?: ProviderKind;
   runtimeState?: ManagedSession["runtimeState"];
   paneId?: string;
-  panes: ZellijMuxPaneDiagnostic[];
+  panes: TuiMuxPaneDiagnostic[];
   error?: string;
 }
 
-export interface ListZellijMuxDiagnosticsResponse {
-  sessions: ZellijMuxSessionDiagnostic[];
+export interface ListTuiMuxDiagnosticsResponse {
+  sessions: TuiMuxSessionDiagnostic[];
 }
 
-export interface CloseZellijMuxSessionResponse {
+export interface CloseTuiMuxSessionResponse {
   ok: true;
 }
 
@@ -737,7 +778,7 @@ export interface CouncilApi {
   listRooms(): Promise<ListCouncilRoomsResponse>;
   createRoom(request: CreateCouncilRoomRequest): Promise<CreateCouncilRoomResponse>;
   postMessage(roomId: string, request: CouncilPostMessageRequest): Promise<CouncilPostMessageResponse>;
-  archiveRoom(roomId: string): Promise<{ ok: true }>;
+  stopRoom(roomId: string): Promise<{ ok: true }>;
   deleteRoom(roomId: string): Promise<{ ok: true }>;
   getAgentTui(roomId: string, agentId: string): Promise<CouncilAgentTuiResponse>;
   reinjectAgent(roomId: string, agentId: string): Promise<CouncilReinjectAgentsResponse>;

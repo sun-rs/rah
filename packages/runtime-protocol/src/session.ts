@@ -1,11 +1,26 @@
+import type { ConversationPhase, ConversationStatus } from "./conversation-state";
+
 export type ProviderKind =
   | "codex"
   | "claude"
+  | "gemini"
   | "opencode"
   | "custom";
 
 export type SessionLaunchSource = "web" | "terminal";
-export type SessionLiveBackend = "structured" | "native_local_server" | "native_tui" | "zellij_tui";
+export type SessionLiveBackend =
+  | "structured"
+  | "native_local_server"
+  | "native_tui"
+  | "tui_mux";
+export type ManagedSessionOrigin =
+  | {
+      kind: "council";
+      roomId: string;
+      roomTitle?: string;
+      agentId: string;
+      agentLabel?: string;
+    };
 export type ProviderRuntimeKind =
   | "native_local_server"
   | "tui_mux_fallback"
@@ -186,7 +201,7 @@ export interface SessionResolvedConfig {
 
 export interface SessionActionCapabilities {
   info: boolean;
-  archive: boolean;
+  stop: boolean;
   delete: boolean;
   rename: SessionRenameMode;
 }
@@ -207,7 +222,7 @@ export interface SessionRuntimeDescriptor {
     prelaunchConfig: SessionRuntimeCapabilityStatus;
     runtimeConfig: SessionRuntimeCapabilityStatus;
     interrupt: SessionRuntimeCapabilityStatus;
-    archiveLifecycle: SessionRuntimeCapabilityStatus;
+    stopLifecycle: SessionRuntimeCapabilityStatus;
   };
 }
 
@@ -254,17 +269,24 @@ export interface SessionCapabilities {
 }
 
 /**
- * A runtime-owned live session. This is the only session kind that can provide
+ * A runtime-owned running session. This is the only session kind that can provide
  * continuity guarantees across terminal and remote clients.
  */
 export interface ManagedSession {
   id: string;
   provider: ProviderKind;
   providerSessionId?: string;
+  origin?: ManagedSessionOrigin;
   launchSource: SessionLaunchSource;
   liveBackend?: SessionLiveBackend;
+  status: ConversationStatus;
+  phase: ConversationPhase;
   cwd: string;
   rootDir: string;
+  /**
+   * @deprecated Use status + phase for user-visible conversation state.
+   * runtimeState remains as a compatibility/source field for adapter internals.
+   */
   runtimeState: SessionRuntimeState;
   runtime?: SessionRuntimeDescriptor;
   runtimeDiagnostics?: SessionRuntimeDiagnostics;
@@ -276,10 +298,9 @@ export interface ManagedSession {
     queuedInputCount?: number;
   };
   mux?: {
-    backend: "zellij" | "tmux";
+    backend: "tmux";
     sessionName: string;
     paneId: string;
-    socketDir?: string;
   };
   pid?: number;
   title?: string;
@@ -314,7 +335,7 @@ export interface StoredSessionRef {
   updatedAt?: string;
   lastUsedAt?: string;
   historyMeta?: StoredSessionHistoryMeta;
-  source?: "provider_history" | "previous_live";
+  source?: "provider_history" | "previous_running";
 }
 
 export interface AttachedClient {

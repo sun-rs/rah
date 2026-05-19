@@ -1,7 +1,7 @@
 import type { ProviderKind, SessionLiveBackend } from "./session";
 
 export type NativeLocalServerProvider = "codex" | "opencode";
-export type TuiMuxFallbackProvider = "claude";
+export type TuiMuxFallbackProvider = "claude" | "gemini";
 export type CoreLiveProvider = NativeLocalServerProvider | TuiMuxFallbackProvider;
 
 export const NATIVE_LOCAL_SERVER_PROVIDERS = [
@@ -11,6 +11,7 @@ export const NATIVE_LOCAL_SERVER_PROVIDERS = [
 
 export const TUI_MUX_FALLBACK_PROVIDERS = [
   "claude",
+  "gemini",
 ] as const satisfies readonly ProviderKind[];
 
 export const CORE_LIVE_PROVIDERS = [
@@ -41,7 +42,7 @@ export function defaultLiveBackendForProvider(
     return "native_local_server";
   }
   if (isTuiMuxFallbackProvider(provider)) {
-    return "zellij_tui";
+    return "tui_mux";
   }
   return undefined;
 }
@@ -53,7 +54,7 @@ export function liveBackendSupportedByProvider(args: {
   if (args.liveBackend === "native_local_server") {
     return isNativeLocalServerProvider(args.provider);
   }
-  if (args.liveBackend === "zellij_tui") {
+  if (args.liveBackend === "tui_mux") {
     return isTuiMuxFallbackProvider(args.provider);
   }
   if (args.liveBackend === "native_tui") {
@@ -61,4 +62,3 @@ export function liveBackendSupportedByProvider(args: {
   }
   return args.liveBackend === "structured";
 }
-

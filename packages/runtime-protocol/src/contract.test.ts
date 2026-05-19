@@ -42,7 +42,7 @@ test("provider model catalog accepts canonical runtime metadata", () => {
         prelaunchConfig: "available",
         runtimeConfig: "unverified",
         interrupt: "available",
-        archiveLifecycle: "available",
+        stopLifecycle: "available",
       },
     },
   });
@@ -87,7 +87,7 @@ test("provider model catalog rejects non-canonical runtime feature status", () =
         prelaunchConfig: "available",
         runtimeConfig: "unverified",
         interrupt: "available",
-        archiveLifecycle: "available",
+        stopLifecycle: "available",
       },
     },
   });
@@ -117,6 +117,8 @@ function buildSessionCreatedEvent(
         liveBackend: "native_local_server",
         cwd: "/tmp/rah",
         rootDir: "/tmp/rah",
+        status: "running",
+        phase: "ready",
         runtimeState: "idle",
         runtime: {
           kind: "native_local_server",
@@ -141,7 +143,7 @@ function buildSessionCreatedEvent(
           renameSession: false,
           actions: {
             info: true,
-            archive: true,
+            stop: true,
             delete: false,
             rename: "none",
           },
@@ -174,10 +176,10 @@ test("session events accept canonical runtime diagnostics", () => {
   assert.equal(issues.some((issue) => issue.severity === "error"), false);
 });
 
-test("session events accept tmux mux metadata without zellij socketDir", () => {
+test("session events accept tmux mux metadata", () => {
   const issues = validateRahEvent(
     buildSessionCreatedEvent({
-      liveBackend: "zellij_tui",
+      liveBackend: "tui_mux",
       mux: {
         backend: "tmux",
         sessionName: "rah-session-1234",
@@ -242,6 +244,8 @@ test("session capability contract warns when legacy rename flag drifts from acti
         launchSource: "web",
         cwd: "/tmp/rah",
         rootDir: "/tmp/rah",
+        status: "running",
+        phase: "ready",
         runtimeState: "idle",
         runtime: {
           kind: "tui_mux_fallback",
@@ -266,7 +270,7 @@ test("session capability contract warns when legacy rename flag drifts from acti
           renameSession: false,
           actions: {
             info: true,
-            archive: true,
+            stop: true,
             delete: true,
             rename: "local",
           },
