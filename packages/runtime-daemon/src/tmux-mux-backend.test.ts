@@ -189,6 +189,42 @@ test("tmux mux backend can place provider panes in separate tabs", async (t) => 
   }
 });
 
+test("tmux mux backend resizes detached TUI windows to the requested surface", async (t) => {
+  const backend = new TmuxMuxBackend();
+  if (await skipIfTmuxUnavailable(t, backend)) {
+    return;
+  }
+
+  const sessionName = createShortTmuxSessionName("rt");
+  try {
+    const created = await backend.createSession({
+      sessionName,
+      cwd: process.cwd(),
+      title: "rah-tmux-resize",
+      command: process.execPath,
+      args: [
+        "-e",
+        "process.stdout.write('RESIZE_READY\\n'); setInterval(() => undefined, 1000)",
+      ],
+    });
+
+    await waitFor(async () =>
+      (await backend.dumpScreen(sessionName, created.paneId, { full: true })).includes(
+        "RESIZE_READY",
+      ),
+    );
+
+    await backend.resizePane?.(sessionName, created.paneId, 132, 43);
+    await waitFor(async () => {
+      const pane = (await backend.listPanes(sessionName))
+        .find((candidate) => candidate.paneId === created.paneId);
+      return Boolean(pane && pane.columns >= 130 && pane.rows >= 43);
+    });
+  } finally {
+    await backend.killSession(sessionName).catch(() => undefined);
+  }
+});
+
 test("tmux mux backend maps control bytes to terminal key events", async (t) => {
   const backend = new TmuxMuxBackend();
   if (await skipIfTmuxUnavailable(t, backend)) {

@@ -115,6 +115,19 @@ function writeFakeGeminiBinary(filePath: string): void {
   chmodSync(filePath, 0o755);
 }
 
+function writeFailingTuiBinary(filePath: string, message: string): void {
+  writeFileSync(
+    filePath,
+    [
+      "#!/usr/bin/env node",
+      `process.stdout.write(${JSON.stringify(`${message}\r\n`)});`,
+      "setTimeout(() => process.exit(1), 900);",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(filePath, 0o755);
+}
+
 async function assertTmuxSessionGone(sessionName: string): Promise<void> {
   const sessions = await new TmuxMuxBackend().listSessions();
   assert.equal(
@@ -264,6 +277,60 @@ test("Gemini tui_mux queues Web input until the prompt is visible", async (t) =>
       unsubscribe();
     }
     await engine.closeSession(sessionId, { clientId: "web-tmux-gemini" });
+  } finally {
+    await engine.shutdown();
+    restoreGemini();
+    restoreMux();
+    restoreRahHome();
+    rmSync(workspace, { force: true, recursive: true });
+  }
+});
+
+test("tui_mux startup failures keep the provider error on a failed session", async (t) => {
+  if (await skipIfTmuxUnavailable(t)) {
+    return;
+  }
+  const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-tmux-failing-gemini-"));
+  const fakeGemini = path.join(workspace, "fake-gemini-failing.js");
+  writeFailingTuiBinary(fakeGemini, "Error: unsupported model gemini-wrong-model");
+  const restoreRahHome = setEnv("RAH_HOME", path.join(workspace, "rah-home"));
+  const restoreMux = setEnv("RAH_TUI_MUX", "tmux");
+  const restoreGemini = setEnv("RAH_GEMINI_BINARY", fakeGemini);
+  const engine = new RuntimeEngine();
+  try {
+    const started = await engine.startSession({
+      provider: "gemini",
+      cwd: workspace,
+      liveBackend: "tui_mux",
+      model: "gemini-wrong-model",
+      attach: {
+        client: {
+          id: "web-tmux-failing-gemini",
+          kind: "web",
+          connectionId: "web-tmux-failing-gemini",
+        },
+        mode: "interactive",
+        claimControl: true,
+      },
+    });
+    const sessionId = started.session.session.id;
+    const muxSessionName = started.session.session.mux?.sessionName;
+    assert.ok(muxSessionName);
+
+    await waitFor(() => {
+      const summary = engine.getSessionSummary(sessionId).session;
+      assert.equal(summary.runtimeState, "failed");
+      assert.equal(summary.status, "stopped");
+      assert.equal(summary.phase, "failed");
+      assert.match(
+        summary.runtimeDiagnostics?.lastError ?? "",
+        /unsupported model gemini-wrong-model/,
+      );
+    }, 7_000);
+    await waitFor(async () => {
+      await assertTmuxSessionGone(muxSessionName);
+    });
+    await engine.closeSession(sessionId, { clientId: "web-tmux-failing-gemini" });
   } finally {
     await engine.shutdown();
     restoreGemini();

@@ -241,6 +241,9 @@ const NATIVE_TUI_CLEAR_PROMPT_DATA = "\u0015\u000b";
 const NATIVE_TUI_SUBMIT_DELAY_MS = 250;
 const TUI_MUX_CLEAR_PROMPT_SETTLE_MS = 250;
 const NATIVE_TUI_OUTPUT_OBSERVATION_TAIL_LIMIT = 12_000;
+const NATIVE_TUI_EXIT_ERROR_MAX_LENGTH = 320;
+const NATIVE_TUI_EXIT_ERROR_PATTERN =
+  /\b(?:error|failed|failure|invalid|unsupported|unknown|not found|unrecognized|unrecognised|exception)\b/i;
 
 export function nativeTuiInterruptDataForProvider(provider: ProviderKind): string {
   // Native TUIs treat Ctrl-C inconsistently; for OpenCode it is an app-exit
@@ -323,6 +326,30 @@ function isIdleNativeTuiInterruptRequest(
 
 function stripTerminalControl(value: string): string {
   return value.replace(ANSI_ESCAPE_PATTERN, "");
+}
+
+function nativeTuiExitErrorFromOutput(native: NativeTuiSessionState | undefined): string | undefined {
+  if (!native?.recentOutputTail) {
+    return undefined;
+  }
+  const lines = stripTerminalControl(native.recentOutputTail)
+    .replace(/\r/g, "\n")
+    .split("\n")
+    .map((line) =>
+      line
+        .replace(/[╭╮╰╯│─┌┐└┘]+/gu, " ")
+        .replace(/\s+/g, " ")
+        .trim(),
+    )
+    .filter(Boolean);
+  const errorLines = lines.filter((line) => NATIVE_TUI_EXIT_ERROR_PATTERN.test(line));
+  const error = errorLines.slice(-3).join(" ").replace(/\s+/g, " ").trim();
+  if (!error) {
+    return undefined;
+  }
+  return error.length > NATIVE_TUI_EXIT_ERROR_MAX_LENGTH
+    ? `${error.slice(0, NATIVE_TUI_EXIT_ERROR_MAX_LENGTH - 3)}...`
+    : error;
 }
 
 function muxSnapshotCursorSuffix(lines: readonly string[]): string {
@@ -1408,6 +1435,7 @@ export class RuntimeTerminalCoordinator {
           if (!current) {
             return;
           }
+          const exitError = `TUI client exited${exitArgs.exitCode !== undefined ? ` with code ${exitArgs.exitCode}` : ""}`;
           this.deps.sessionStore.patchManagedSession(terminalId, {
             nativeTui: {
               terminalId,
@@ -1418,7 +1446,8 @@ export class RuntimeTerminalCoordinator {
             runtimeDiagnostics: {
               ...(current.session.runtimeDiagnostics ?? {}),
               attachState: "unavailable",
-              lastError: `TUI client exited${exitArgs.exitCode !== undefined ? ` with code ${exitArgs.exitCode}` : ""}`,
+              lastError:
+                current.session.runtimeDiagnostics?.lastError?.trim() || exitError,
             },
           });
         },
@@ -1686,11 +1715,18 @@ export class RuntimeTerminalCoordinator {
         onExit: (terminalId, exitArgs) => {
           const native = this.nativeTuiSessions.get(terminalId);
           const expectedClose = this.closingNativeTuiSessionIds.has(terminalId);
+          const exitError = expectedClose ? undefined : nativeTuiExitErrorFromOutput(native);
           this.clearNativeTuiRuntimeState(terminalId);
           this.closingNativeTuiSessionIds.delete(terminalId);
           this.deps.ptyHub.emitExit(terminalId, exitArgs.exitCode, exitArgs.signal);
           const currentState = this.deps.sessionStore.getSession(terminalId);
           if (currentState) {
+            const runtimeDiagnostics = exitError
+              ? {
+                  ...(currentState.session.runtimeDiagnostics ?? {}),
+                  lastError: currentState.session.runtimeDiagnostics?.lastError ?? exitError,
+                }
+              : undefined;
             this.deps.sessionStore.patchManagedSession(terminalId, {
               capabilities: buildStoppedNativeTuiSessionCapabilities(currentState.session.provider),
               nativeTui: {
@@ -1699,10 +1735,12 @@ export class RuntimeTerminalCoordinator {
                 promptState: "prompt_clean",
                 queuedInputCount: 0,
               },
+              ...(runtimeDiagnostics ? { runtimeDiagnostics } : {}),
             });
             this.deps.sessionStore.setActiveTurn(terminalId, undefined);
-            this.deps.sessionStore.setRuntimeState(terminalId, "stopped");
-            publishSessionStateChanged(this.deps, terminalId, "stopped");
+            const runtimeState = exitError ? "failed" : "stopped";
+            this.deps.sessionStore.setRuntimeState(terminalId, runtimeState);
+            publishSessionStateChanged(this.deps, terminalId, runtimeState);
           }
           if (native && !expectedClose) {
             recordNativeTuiProcessExitDiagnostic(this.nativeTuiDiagnostics, native, exitArgs);
@@ -2212,26 +2250,50 @@ export class RuntimeTerminalCoordinator {
     }
     const native = this.nativeTuiSessions.get(sessionId);
     const expectedClose = this.closingNativeTuiSessionIds.has(sessionId);
+    const exitError = expectedClose ? undefined : nativeTuiExitErrorFromOutput(native);
     this.clearTuiMuxRuntimeState(sessionId);
     this.clearNativeTuiRuntimeState(sessionId);
-    this.nativeTuiSessionIds.delete(sessionId);
+    if (!exitError) {
+      this.nativeTuiSessionIds.delete(sessionId);
+    }
     this.closingNativeTuiSessionIds.delete(sessionId);
     this.deps.ptyHub.emitExit(sessionId, pane?.exitStatus ?? undefined, undefined);
     const currentState = this.deps.sessionStore.getSession(sessionId);
     if (currentState) {
-      this.deps.onRememberSession(currentState);
-      this.deps.sessionStore.setActiveTurn(sessionId, undefined);
-      this.deps.sessionStore.removeSession(sessionId);
-      this.deps.historySnapshots.clear(sessionId);
-      this.deps.onSessionOwnerRemoved(sessionId);
-      this.deps.eventBus.publish({
-        sessionId,
-        type: "session.closed",
-        source: SYSTEM_SOURCE,
-        payload: {},
-      });
+      if (exitError) {
+        this.deps.sessionStore.patchManagedSession(sessionId, {
+          capabilities: buildStoppedNativeTuiSessionCapabilities(currentState.session.provider),
+          nativeTui: {
+            terminalId: sessionId,
+            viewAvailable: true,
+            promptState: "prompt_clean",
+            queuedInputCount: 0,
+          },
+          runtimeDiagnostics: {
+            ...(currentState.session.runtimeDiagnostics ?? {}),
+            lastError: currentState.session.runtimeDiagnostics?.lastError ?? exitError,
+          },
+        });
+        this.deps.sessionStore.setActiveTurn(sessionId, undefined);
+        this.deps.sessionStore.setRuntimeState(sessionId, "failed");
+        publishSessionStateChanged(this.deps, sessionId, "failed");
+      } else {
+        this.deps.onRememberSession(currentState);
+        this.deps.sessionStore.setActiveTurn(sessionId, undefined);
+        this.deps.sessionStore.removeSession(sessionId);
+        this.deps.historySnapshots.clear(sessionId);
+        this.deps.onSessionOwnerRemoved(sessionId);
+        this.deps.eventBus.publish({
+          sessionId,
+          type: "session.closed",
+          source: SYSTEM_SOURCE,
+          payload: {},
+        });
+      }
     }
-    this.deps.ptyHub.removeSession(sessionId);
+    if (!exitError) {
+      this.deps.ptyHub.removeSession(sessionId);
+    }
     if (native && !expectedClose) {
       recordNativeTuiProcessExitDiagnostic(this.nativeTuiDiagnostics, native, {
         ...(pane?.exitStatus !== null && pane?.exitStatus !== undefined

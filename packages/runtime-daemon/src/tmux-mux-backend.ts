@@ -93,6 +93,13 @@ function shellCommandForRequest(request: CreateMuxPaneRequest): string {
   ].join(" ");
 }
 
+function shellCommandWithRemainOnExit(request: CreateMuxPaneRequest): string {
+  return [
+    "tmux set-option remain-on-exit on >/dev/null 2>&1 || true",
+    shellCommandForRequest(request),
+  ].join("; ");
+}
+
 function tmuxKeyFor(key: string): string {
   const normalized = key.trim();
   if (/^ctrl\s+/i.test(normalized)) {
@@ -357,8 +364,11 @@ export class TmuxMuxBackend implements MuxRuntime {
     cols: number,
     rows: number,
   ): Promise<void> {
+    // RAH's Claude/Gemini mux sessions are detached single-pane tmux windows.
+    // In that shape `resize-pane -x/-y` cannot grow the pane beyond the
+    // window's current 80x24-ish size; the window itself must be resized.
     await this.exec([
-      "resize-pane",
+      "resize-window",
       "-t",
       paneId,
       "-x",
@@ -399,7 +409,7 @@ export class TmuxMuxBackend implements MuxRuntime {
       request.cwd,
       "-n",
       request.title ?? "rah",
-      shellCommandForRequest(request),
+      shellCommandWithRemainOnExit(request),
     ]);
     const pane = await this.waitForSessionPane(request.sessionName, request.title);
     return { sessionName: request.sessionName, paneId: pane.paneId };
@@ -417,7 +427,7 @@ export class TmuxMuxBackend implements MuxRuntime {
       request.title ?? "rah",
       "-c",
       request.cwd,
-      shellCommandForRequest(request),
+      shellCommandWithRemainOnExit(request),
     ]);
     const paneId = result.stdout.trim();
     if (!paneId) {
@@ -436,7 +446,7 @@ export class TmuxMuxBackend implements MuxRuntime {
       request.sessionName,
       "-c",
       request.cwd,
-      shellCommandForRequest(request),
+      shellCommandWithRemainOnExit(request),
     ]);
     const paneId = result.stdout.trim();
     if (!paneId) {

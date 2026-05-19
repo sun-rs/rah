@@ -2032,6 +2032,73 @@ describe("RuntimeEngine", () => {
     }
   });
 
+  test("native TUI startup failures keep the provider error on the stopped session", async () => {
+    const engine = new RuntimeEngine([]);
+    const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-native-tui-failing-"));
+    const fakeClaude = path.join(workspace, "fake-claude-failing.js");
+    const configDir = mkdtempSync(path.join(os.tmpdir(), "rah-native-tui-failing-claude-config-"));
+    const previousClaudeBinary = process.env.RAH_CLAUDE_BINARY;
+    const previousClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+    writeFileSync(
+      fakeClaude,
+      [
+        "#!/usr/bin/env node",
+        "process.stdout.write('Claude boot\\r\\nError: invalid model claude-wrong-model\\r\\n');",
+        "setTimeout(() => process.exit(1), 80);",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(fakeClaude, 0o755);
+    process.env.RAH_CLAUDE_BINARY = fakeClaude;
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+
+    try {
+      const started = await engine.startSession({
+        provider: "claude",
+        cwd: workspace,
+        liveBackend: "native_tui",
+        model: "claude-wrong-model",
+        attach: {
+          client: {
+            id: "web-native-failing-claude",
+            kind: "web",
+            connectionId: "web-native-failing-claude",
+          },
+          mode: "interactive",
+          claimControl: true,
+        },
+      });
+      const sessionId = started.session.session.id;
+      await waitFor(() => {
+        const summary = engine.getSessionSummary(sessionId).session;
+        assert.equal(summary.runtimeState, "failed");
+        assert.equal(summary.status, "stopped");
+        assert.equal(summary.phase, "failed");
+        assert.match(
+          summary.runtimeDiagnostics?.lastError ?? "",
+          /invalid model claude-wrong-model/,
+        );
+      }, { timeoutMs: 5_000 });
+
+      await engine.closeSession(sessionId, { clientId: "web-native-failing-claude" });
+      assert.throws(() => engine.getSessionSummary(sessionId), /Unknown session/);
+    } finally {
+      if (previousClaudeBinary === undefined) {
+        delete process.env.RAH_CLAUDE_BINARY;
+      } else {
+        process.env.RAH_CLAUDE_BINARY = previousClaudeBinary;
+      }
+      if (previousClaudeConfigDir === undefined) {
+        delete process.env.CLAUDE_CONFIG_DIR;
+      } else {
+        process.env.CLAUDE_CONFIG_DIR = previousClaudeConfigDir;
+      }
+      await engine.shutdown();
+      rmSync(workspace, { force: true, recursive: true });
+      rmSync(configDir, { force: true, recursive: true });
+    }
+  });
+
   test("native TUI backend survives web detach and clientless session listing", async () => {
     const engine = new RuntimeEngine([]);
     const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-native-tui-detached-"));
