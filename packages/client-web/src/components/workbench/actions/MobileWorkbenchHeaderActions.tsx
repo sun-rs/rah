@@ -11,6 +11,7 @@ export function MobileWorkbenchHeaderActions(props: {
   storedSessions: StoredSessionRef[];
   recentSessions: StoredSessionRef[];
   runningSessions: SessionSummary[];
+  runningSessionActivityAtById?: ReadonlyMap<string, string> | undefined;
   councils: readonly CouncilSnapshot[];
   selectedCouncilId?: string | null | undefined;
   workspaceSortMode: WorkspaceSortMode;
@@ -63,6 +64,7 @@ export function MobileWorkbenchHeaderActions(props: {
         storedSessions={props.storedSessions}
         recentSessions={props.recentSessions}
         runningSessions={props.runningSessions}
+        runningSessionActivityAtById={props.runningSessionActivityAtById}
         councils={props.councils}
         selectedCouncilId={props.selectedCouncilId}
         workspaceSortMode={props.workspaceSortMode}

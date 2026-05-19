@@ -3,12 +3,14 @@ import type { CouncilSnapshot, SessionSummary, StoredSessionRef } from "@rah/run
 import * as Dialog from "@radix-ui/react-dialog";
 import { Check, ChevronDown, ChevronRight, History, ListFilter, Pencil, PlusCircle, RefreshCw, Search, Trash2, X } from "lucide-react";
 import { providerLabel } from "../types";
-import { formatRelativeTime, type WorkspaceSortMode } from "../session-browser";
+import { formatRelativeTime, type RelativeTimeFormat, type WorkspaceSortMode } from "../session-browser";
 import { chooseChatListSubtitle } from "../chat-list-display";
 import { ProviderLogo } from "./ProviderLogo";
 import { ChatBrowserRow } from "./ChatBrowserRow";
 import { OverlayScrollArea } from "./OverlayScrollArea";
 import { CouncilsBrowser } from "../council/CouncilsBrowser";
+import { runningSessionActivityAt } from "../session-conversation-activity";
+import { usePwaDisplayMode } from "../hooks/usePwaDisplayMode";
 import {
   dedupeStoredSessionsByIdentity,
   filterStoppedRecentSessions,
@@ -70,8 +72,8 @@ function HistoryFilterMenu(props: {
   }, [disabledHintVisible]);
 
   const sortOptions: Array<{ value: WorkspaceSortMode; label: string }> = [
-    { value: "created", label: "Created first" },
-    { value: "updated", label: "Recently updated" },
+    { value: "created", label: "Created" },
+    { value: "updated", label: "Updated" },
   ];
   const allProvidersSelected = props.selectedProviders.size === HISTORY_PROVIDER_OPTIONS.length;
 
@@ -305,6 +307,8 @@ function SessionChatRow(props: {
   onActivate: (ref: StoredSessionRef) => void;
   onActivateRunning?: ((sessionId: string) => void) | undefined;
   onRequestRemove: (ref: StoredSessionRef) => void;
+  runningActivityAt?: string | undefined;
+  relativeTimeFormat: RelativeTimeFormat;
 }) {
   const title = props.session
     ? sessionTitle(props.session)
@@ -320,10 +324,14 @@ function SessionChatRow(props: {
   const running = props.runningSummary !== undefined;
   const metaLabel = props.session ? historyMetaLabel(props.session) : null;
   const metaTitle = props.session ? historyMetaTitle(props.session) : undefined;
-  const timeLabel = props.session
-    ? formatRelativeTime(props.session.lastUsedAt ?? props.session.updatedAt) ?? "history"
-    : props.runningSummary
-      ? formatRelativeTime(props.runningSummary.session.updatedAt) ?? "running"
+  const timeLabel = props.runningSummary
+    ? formatRelativeTime(runningSessionActivityAt(props.runningSummary, props.runningActivityAt), {
+        format: props.relativeTimeFormat,
+      }) ?? "running"
+    : props.session
+      ? formatRelativeTime(props.session.lastUsedAt ?? props.session.updatedAt, {
+          format: props.relativeTimeFormat,
+        }) ?? "history"
       : null;
   const activate = () => {
     if (props.runningSummary && props.onActivateRunning) {
@@ -377,6 +385,7 @@ export function SessionHistoryDialog(props: {
   storedSessions: StoredSessionRef[];
   recentSessions: StoredSessionRef[];
   runningSessions: SessionSummary[];
+  runningSessionActivityAtById?: ReadonlyMap<string, string> | undefined;
   councils?: readonly CouncilSnapshot[] | undefined;
   selectedCouncilId?: string | null | undefined;
   workspaceSortMode: WorkspaceSortMode;
@@ -400,6 +409,7 @@ export function SessionHistoryDialog(props: {
   const [pendingRemoveSession, setPendingRemoveSession] = useState<StoredSessionRef | null>(null);
   const [pendingRemoveWorkspaceDir, setPendingRemoveWorkspaceDir] = useState<string | null>(null);
   const [pendingRemoveCouncil, setPendingRemoveCouncil] = useState<CouncilSnapshot | null>(null);
+  const relativeTimeFormat: RelativeTimeFormat = usePwaDisplayMode() ? "compact" : "long";
   const [selectedProviders, setSelectedProviders] = useState<Set<HistoryProviderFilter>>(
     () => new Set(HISTORY_PROVIDER_OPTIONS),
   );
@@ -499,8 +509,18 @@ export function SessionHistoryDialog(props: {
     const q = query.trim().toLowerCase();
     return [...props.runningSessions]
       .filter((session) => runningMatchesQuery(session, q))
-      .sort((a, b) => b.session.updatedAt.localeCompare(a.session.updatedAt));
-  }, [props.runningSessions, query]);
+      .sort((a, b) =>
+        runningSessionActivityAt(
+          b,
+          props.runningSessionActivityAtById?.get(b.session.id),
+        ).localeCompare(
+          runningSessionActivityAt(
+            a,
+            props.runningSessionActivityAtById?.get(a.session.id),
+          ),
+        ),
+      );
+  }, [props.runningSessionActivityAtById, props.runningSessions, query]);
 
   useEffect(() => {
     if (query.trim()) {
@@ -688,6 +708,8 @@ export function SessionHistoryDialog(props: {
                             key={summary.session.id}
                             session={identityKey ? historySessionByIdentity.get(identityKey) : undefined}
                             runningSummary={summary}
+                            runningActivityAt={props.runningSessionActivityAtById?.get(summary.session.id)}
+                            relativeTimeFormat={relativeTimeFormat}
                             onActivate={props.onActivate}
                             onActivateRunning={(sessionId) => {
                               props.onActivateRunning?.(sessionId);
@@ -720,6 +742,7 @@ export function SessionHistoryDialog(props: {
                         <SessionChatRow
                           key={`active:${session.provider}:${session.providerSessionId}`}
                           session={session}
+                          relativeTimeFormat={relativeTimeFormat}
                           onActivate={(ref) => {
                             props.onActivate(ref);
                             setOpen(false);
@@ -790,22 +813,33 @@ export function SessionHistoryDialog(props: {
 
                       {isExpanded ? (
                         <div className="border-t border-[var(--app-border)] px-2 pb-2 pt-1 space-y-1">
-                          {visibleItems.map((session) => (
-                            <SessionChatRow
-                              key={`${session.provider}:${session.providerSessionId}`}
-                              session={session}
-                              runningSummary={runningByProviderSessionId.get(sessionIdentityKey(session))}
-                              onActivate={(ref) => {
-                                props.onActivate(ref);
-                                setOpen(false);
-                              }}
-                              onActivateRunning={(sessionId) => {
-                                props.onActivateRunning?.(sessionId);
-                                setOpen(false);
-                              }}
-                              onRequestRemove={setPendingRemoveSession}
-                            />
-                          ))}
+                          {visibleItems.map((session) => {
+                            const runningSummary = runningByProviderSessionId.get(
+                              sessionIdentityKey(session),
+                            );
+                            return (
+                              <SessionChatRow
+                                key={`${session.provider}:${session.providerSessionId}`}
+                                session={session}
+                                runningSummary={runningSummary}
+                                runningActivityAt={
+                                  runningSummary
+                                    ? props.runningSessionActivityAtById?.get(runningSummary.session.id)
+                                    : undefined
+                                }
+                                relativeTimeFormat={relativeTimeFormat}
+                                onActivate={(ref) => {
+                                  props.onActivate(ref);
+                                  setOpen(false);
+                                }}
+                                onActivateRunning={(sessionId) => {
+                                  props.onActivateRunning?.(sessionId);
+                                  setOpen(false);
+                                }}
+                                onRequestRemove={setPendingRemoveSession}
+                              />
+                            );
+                          })}
                           {group.items.length > DEFAULT_GROUP_ITEM_LIMIT ? (
                             remainingCount > 0 ? (
                               <button

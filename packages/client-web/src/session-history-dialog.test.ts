@@ -9,6 +9,7 @@ import {
 } from "./session-history-grouping";
 import {
   councilConversationSubtitle,
+  councilLineLabel,
   defaultRunningCouncilId,
   reconcileCouncilSelection,
   splitCouncils,
@@ -398,6 +399,103 @@ test("derives council browser subtitle from stable visible messages", () => {
   });
 
   assert.equal(councilConversationSubtitle(snapshot), "You: please review");
+});
+
+test("derives council browser subtitle and line count from metadata when only tail is loaded", () => {
+  const snapshot = council({
+    id: "preview-council",
+    title: "Preview",
+    workspace: "/Users/sun/Code/rah",
+    status: "running",
+    updatedAt: "2026-05-01T10:00:00.000Z",
+    agentLabel: "Reviewer",
+    messages: [
+      {
+        id: 20,
+        councilId: "preview-council",
+        actorId: "preview-council-agent",
+        role: "agent",
+        parts: [{ kind: "text", text: "tail answer" }],
+        createdAt: "2026-05-01T10:20:00.000Z",
+      },
+    ],
+  });
+  snapshot.meta = {
+    messageCount: 20,
+    firstUserMessage: {
+      id: 1,
+      role: "user",
+      actorId: "user",
+      text: "please review from the beginning",
+      createdAt: "2026-05-01T10:01:00.000Z",
+    },
+    lastContentMessage: {
+      id: 20,
+      role: "agent",
+      actorId: "preview-council-agent",
+      text: "tail answer",
+      createdAt: "2026-05-01T10:20:00.000Z",
+    },
+    lastMessage: {
+      id: 20,
+      role: "agent",
+      actorId: "preview-council-agent",
+      text: "tail answer",
+      createdAt: "2026-05-01T10:20:00.000Z",
+    },
+  };
+  snapshot.messageWindow = {
+    total: 20,
+    loaded: 1,
+    hasMoreBefore: true,
+    nextBeforeMessageId: 20,
+  };
+
+  assert.equal(councilConversationSubtitle(snapshot), "You: please review from the beginning");
+  assert.equal(councilLineLabel(snapshot), "20 lines");
+});
+
+test("sorts councils by user and agent activity instead of background system updates", () => {
+  const noisy = council({
+    id: "background-noise",
+    title: "Background noise",
+    workspace: "/Users/sun/Code/rah",
+    status: "running",
+    updatedAt: "2026-05-01T10:59:00.000Z",
+    messages: [
+      {
+        id: 10,
+        councilId: "background-noise",
+        actorId: "system",
+        role: "system",
+        parts: [{ kind: "text", text: "agent listening" }],
+        createdAt: "2026-05-01T10:59:00.000Z",
+      },
+    ],
+  });
+  noisy.meta = {
+    messageCount: 10,
+    lastMessage: {
+      id: 10,
+      role: "system",
+      actorId: "system",
+      text: "agent listening",
+      createdAt: "2026-05-01T10:59:00.000Z",
+    },
+  };
+  const humanActivity = council({
+    id: "human-activity",
+    title: "Human activity",
+    workspace: "/Users/sun/Code/rah",
+    status: "running",
+    updatedAt: "2026-05-01T10:10:00.000Z",
+    messageAt: "2026-05-01T10:10:00.000Z",
+  });
+
+  assert.deepEqual(
+    splitCouncils([noisy, humanActivity]).activeCouncils.map((item) => item.id),
+    ["human-activity", "background-noise"],
+  );
 });
 
 test("uses the first council agent reply when the title already contains the user message", () => {

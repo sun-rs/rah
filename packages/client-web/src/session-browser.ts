@@ -86,6 +86,17 @@ export interface WorkspaceSection {
   sessions: SessionSummary[];
 }
 
+type SessionActivityOptions = {
+  sessionActivityAtById?: ReadonlyMap<string, string> | undefined;
+};
+
+function sessionActivityAt(
+  session: SessionSummary,
+  options?: SessionActivityOptions,
+): string {
+  return options?.sessionActivityAtById?.get(session.session.id) ?? session.session.updatedAt;
+}
+
 export function findOwningWorkspace(
   workspaceDirs: readonly string[],
   sessionPath: string | undefined,
@@ -111,6 +122,7 @@ export function deriveWorkspaceInfos(
   sessions: SessionSummary[],
   storedSessions: StoredSessionRef[],
   blockingSessions: SessionSummary[] = sessions,
+  options?: SessionActivityOptions,
 ): WorkspaceInfo[] {
   const map = new Map<
     string,
@@ -153,7 +165,7 @@ export function deriveWorkspaceInfos(
 
     const owner = findOwningWorkspace(workspaceDirs, session.session.rootDir || session.session.cwd);
     if (!owner) continue;
-    const updatedAt = session.session.updatedAt;
+    const updatedAt = sessionActivityAt(session, options);
     const isRunning =
       session.session.status === "running" &&
       ["starting", "working", "waiting_permission", "stopping"].includes(session.session.phase);
@@ -211,6 +223,7 @@ export function sortWorkspaceInfos(
 export function deriveWorkspaceSections(
   workspaces: WorkspaceInfo[],
   runningSessions: SessionSummary[],
+  options?: SessionActivityOptions,
 ): WorkspaceSection[] {
   const byWorkspace = new Map<string, SessionSummary[]>(
     workspaces.map((workspace) => [workspace.directory, []]),
@@ -230,7 +243,7 @@ export function deriveWorkspaceSections(
   return workspaces.map((workspace) => ({
     workspace,
     sessions: [...(byWorkspace.get(workspace.directory) ?? [])].sort((a, b) =>
-      b.session.updatedAt.localeCompare(a.session.updatedAt),
+      sessionActivityAt(b, options).localeCompare(sessionActivityAt(a, options)),
     ),
   }));
 }
@@ -267,6 +280,7 @@ export function getRelativeDirectoryLabel(directory: string, workspaceDir: strin
 export function groupRunningSessionsByDirectory(
   sessions: SessionSummary[],
   workspaceDir: string,
+  options?: SessionActivityOptions,
 ): SessionDirectoryGroup<SessionSummary>[] {
   const groups = new Map<string, SessionDirectoryGroup<SessionSummary>>();
   for (const session of sessions) {
@@ -278,10 +292,11 @@ export function groupRunningSessionsByDirectory(
     const isRunning =
       session.session.status === "running" &&
       ["starting", "working", "waiting_permission", "stopping"].includes(session.session.phase);
+    const updatedAt = sessionActivityAt(session, options);
     if (existing) {
       existing.items.push(session);
-      if (session.session.updatedAt > existing.latestUpdatedAt) {
-        existing.latestUpdatedAt = session.session.updatedAt;
+      if (updatedAt > existing.latestUpdatedAt) {
+        existing.latestUpdatedAt = updatedAt;
       }
       if (isRunning) {
         existing.hasRunningItem = true;
@@ -292,7 +307,7 @@ export function groupRunningSessionsByDirectory(
         directory,
         displayName: getDirectoryDisplayName(directory),
         items: [session],
-        latestUpdatedAt: session.session.updatedAt,
+        latestUpdatedAt: updatedAt,
         hasRunningItem: isRunning,
       });
     }
@@ -301,7 +316,7 @@ export function groupRunningSessionsByDirectory(
     .map((group) => ({
       ...group,
       items: [...group.items].sort((a, b) =>
-        b.session.updatedAt.localeCompare(a.session.updatedAt),
+        sessionActivityAt(b, options).localeCompare(sessionActivityAt(a, options)),
       ),
     }))
     .sort((a, b) => {
@@ -350,7 +365,17 @@ export function groupStoredSessionsByDirectory(
     .sort((a, b) => b.latestUpdatedAt.localeCompare(a.latestUpdatedAt));
 }
 
-export function formatRelativeTime(value: string | undefined): string | null {
+export type RelativeTimeFormat = "long" | "compact";
+
+type RelativeTimeOptions = {
+  format?: RelativeTimeFormat | undefined;
+  nowMs?: number | undefined;
+};
+
+export function formatRelativeTime(
+  value: string | undefined,
+  options: RelativeTimeOptions = {},
+): string | null {
   if (!value) {
     return null;
   }
@@ -359,49 +384,26 @@ export function formatRelativeTime(value: string | undefined): string | null {
   if (!Number.isFinite(ms)) {
     return null;
   }
-  const delta = Date.now() - ms;
+  const format = options.format ?? "long";
+  const delta = (options.nowMs ?? Date.now()) - ms;
   if (delta < 60_000) {
-    return "just now";
+    return format === "compact" ? "just" : "just now";
   }
   const minutes = Math.floor(delta / 60_000);
   if (minutes < 60) {
-    return `${minutes}m ago`;
+    return format === "compact" ? `${minutes}m` : `${minutes}m ago`;
   }
   const hours = Math.floor(minutes / 60);
   if (hours < 24) {
-    return `${hours}h ago`;
+    return format === "compact" ? `${hours}h` : `${hours}h ago`;
   }
   const days = Math.floor(hours / 24);
   if (days < 7) {
-    return `${days}d ago`;
+    return format === "compact" ? `${days}d` : `${days}d ago`;
   }
   return date.toLocaleDateString();
 }
 
 export function formatCompactRelativeTime(value: string | undefined): string | null {
-  if (!value) {
-    return null;
-  }
-  const date = new Date(value);
-  const ms = date.getTime();
-  if (!Number.isFinite(ms)) {
-    return null;
-  }
-  const delta = Date.now() - ms;
-  if (delta < 60_000) {
-    return "just";
-  }
-  const minutes = Math.floor(delta / 60_000);
-  if (minutes < 60) {
-    return `${minutes}m`;
-  }
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) {
-    return `${hours}h`;
-  }
-  const days = Math.floor(hours / 24);
-  if (days < 7) {
-    return `${days}d`;
-  }
-  return date.toLocaleDateString();
+  return formatRelativeTime(value, { format: "compact" });
 }

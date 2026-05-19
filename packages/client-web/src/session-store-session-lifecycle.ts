@@ -6,6 +6,7 @@ import {
   mergeStoredSessionRefs,
   revealWorkspaceCandidates,
 } from "./session-store-workspace";
+import { deriveSessionConversationActivityAt } from "./session-conversation-activity";
 import { initialHistorySyncState, type SessionProjection } from "./types";
 
 type LifecycleState = {
@@ -195,6 +196,10 @@ export function applyClosedSessionState(
   };
   const providerSessionId = summary?.session.providerSessionId;
   if (summary && providerSessionId) {
+    const projection = current.projections.get(sessionId);
+    const activityAt = projection
+      ? deriveSessionConversationActivityAt(projection)
+      : summary.session.updatedAt;
     const remembered = {
       provider: summary.session.provider,
       providerSessionId,
@@ -203,8 +208,8 @@ export function applyClosedSessionState(
       ...(summary.session.title ? { title: summary.session.title } : {}),
       ...(summary.session.preview ? { preview: summary.session.preview } : {}),
       createdAt: summary.session.createdAt,
-      updatedAt: summary.session.updatedAt,
-      lastUsedAt: summary.session.updatedAt,
+      updatedAt: activityAt,
+      lastUsedAt: activityAt,
       source: "previous_running" as const,
     };
     nextState.storedSessions = mergeStoredSessionRefs(current.storedSessions, remembered);

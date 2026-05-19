@@ -59,8 +59,8 @@ function WorkspaceSortMenu(props: {
   }, [open]);
 
   const sortOptions: Array<{ value: WorkspaceSortMode; label: string }> = [
-    { value: "created", label: "Created first" },
-    { value: "updated", label: "Recently updated" },
+    { value: "created", label: "Created" },
+    { value: "updated", label: "Updated" },
   ];
 
   return (
@@ -413,6 +413,7 @@ export function SessionSidebar(props: {
   workspaceSections: WorkspaceSection[];
   workspaceSortMode: WorkspaceSortMode;
   onWorkspaceSortModeChange: (value: WorkspaceSortMode) => void;
+  runningSessionActivityAtById?: ReadonlyMap<string, string> | undefined;
   pinnedSessionIdByWorkspace: Readonly<Record<string, string>>;
   onTogglePinSession: (workspaceDir: string, sessionId: string) => void;
   onTogglePinCouncil: (workspaceDir: string, councilId: string) => void;
@@ -446,6 +447,7 @@ export function SessionSidebar(props: {
         unreadSessionIds: props.unreadSessionIds,
         runtimeStatusBySessionId: props.runtimeStatusBySessionId,
         pinnedSessionIdByWorkspace: props.pinnedSessionIdByWorkspace,
+        runningSessionActivityAtById: props.runningSessionActivityAtById,
         ...(props.councils !== undefined ? { councils: props.councils } : {}),
         selectedCouncilId: props.selectedCouncilId ?? null,
       }),
@@ -453,6 +455,7 @@ export function SessionSidebar(props: {
       props.councils,
       props.pinnedSessionIdByWorkspace,
       props.runtimeStatusBySessionId,
+      props.runningSessionActivityAtById,
       props.selectedCouncilId,
       props.selectedSessionId,
       props.selectedWorkspaceDir,

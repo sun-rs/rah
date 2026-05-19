@@ -1,6 +1,7 @@
 import type { CouncilSnapshot, SessionSummary } from "@rah/runtime-protocol";
 import { findOwningWorkspace, formatCompactRelativeTime, type WorkspaceSection } from "./session-browser";
 import { providerLabel } from "./types";
+import { councilActivityAt } from "./council/council-activity";
 
 export type SidebarSessionStatus = "ready" | "working" | "waiting_permission" | "unread";
 export type SidebarCouncilStatus = "starting" | "ready" | "working" | "waiting_permission";
@@ -105,11 +106,11 @@ function councilStatusLabel(status: SidebarCouncilStatus): string {
   }
 }
 
-function councilSidebarActivityAt(council: CouncilSnapshot): string {
-  const visibleMessage = [...council.messages]
-    .reverse()
-    .find((message) => message.role !== "system");
-  return visibleMessage?.createdAt ?? council.createdAt;
+function sessionSidebarActivityAt(
+  session: SessionSummary,
+  activityAtById: ReadonlyMap<string, string> | undefined,
+): string {
+  return activityAtById?.get(session.session.id) ?? session.session.updatedAt;
 }
 
 function sessionItemKey(sessionId: string): string {
@@ -134,6 +135,7 @@ export function deriveSidebarWorkspaceViewModels(args: {
     "thinking" | "streaming" | "stopping" | "retrying" | undefined
   >;
   pinnedSessionIdByWorkspace: Readonly<Record<string, string>>;
+  runningSessionActivityAtById?: ReadonlyMap<string, string> | undefined;
   councils?: readonly CouncilSnapshot[];
   selectedCouncilId?: string | null;
 }): SidebarWorkspaceViewModel[] {
@@ -145,13 +147,18 @@ export function deriveSidebarWorkspaceViewModels(args: {
 
   return args.workspaceSections.map((section) => {
     const pinnedItemKey = args.pinnedSessionIdByWorkspace[section.workspace.directory];
+    const sortedSessions = [...section.sessions].sort((left, right) =>
+      sessionSidebarActivityAt(right, args.runningSessionActivityAtById).localeCompare(
+        sessionSidebarActivityAt(left, args.runningSessionActivityAtById),
+      ),
+    );
     const orderedSessions =
-      pinnedItemKey && section.sessions.some((session) => isPinnedSession(pinnedItemKey, session.session.id))
+      pinnedItemKey && sortedSessions.some((session) => isPinnedSession(pinnedItemKey, session.session.id))
         ? [
-            ...section.sessions.filter((session) => isPinnedSession(pinnedItemKey, session.session.id)),
-            ...section.sessions.filter((session) => !isPinnedSession(pinnedItemKey, session.session.id)),
+            ...sortedSessions.filter((session) => isPinnedSession(pinnedItemKey, session.session.id)),
+            ...sortedSessions.filter((session) => !isPinnedSession(pinnedItemKey, session.session.id)),
           ]
-        : section.sessions;
+        : sortedSessions;
 
     const sessions = orderedSessions.map((session) => {
       const status = deriveSidebarSessionStatus({
@@ -168,7 +175,10 @@ export function deriveSidebarWorkspaceViewModels(args: {
         title: session.session.title ?? providerLabel(session.session.provider),
         status,
         statusLabel: sidebarStatusLabel(status),
-        updatedAtLabel: formatCompactRelativeTime(session.session.updatedAt) ?? "",
+        updatedAtLabel:
+          formatCompactRelativeTime(
+            sessionSidebarActivityAt(session, args.runningSessionActivityAtById),
+          ) ?? "",
         selected: session.session.id === args.selectedSessionId,
         pinned: pinnedItemKey !== undefined && isPinnedSession(pinnedItemKey, session.session.id),
       };
@@ -179,10 +189,10 @@ export function deriveSidebarWorkspaceViewModels(args: {
           isRunningCouncil(council) &&
           councilOwnerById.get(council.id) === section.workspace.directory,
       )
-      .sort((left, right) => councilSidebarActivityAt(right).localeCompare(councilSidebarActivityAt(left)))
+      .sort((left, right) => councilActivityAt(right).localeCompare(councilActivityAt(left)))
       .map((council) => {
         const status = deriveCouncilStatus(council);
-        const activityAt = councilSidebarActivityAt(council);
+        const activityAt = councilActivityAt(council);
         return {
           kind: "council" as const,
           id: council.id,
@@ -192,7 +202,7 @@ export function deriveSidebarWorkspaceViewModels(args: {
           updatedAtLabel: formatCompactRelativeTime(activityAt) ?? "",
           selected: council.id === args.selectedCouncilId,
           pinned: pinnedItemKey === councilItemKey(council.id),
-          messageCount: council.messages.length,
+          messageCount: council.meta?.messageCount ?? council.messageWindow?.total ?? council.messages.length,
         };
       });
     const items = [...sessions, ...councils].sort((left, right) => {

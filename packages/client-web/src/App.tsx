@@ -20,6 +20,7 @@ import { CanvasWorkbench, type CanvasLayout } from "./components/workbench/canva
 import { CouncilPage } from "./council/CouncilPage";
 import { COUNCIL_ACCENT_ICON_CLASSNAME } from "./council/council-theme";
 import { defaultRunningCouncilId } from "./council/CouncilsBrowser";
+import { mergeCouncilLists, mergeCouncilSnapshot } from "./council/council-message-window";
 import { NewCouncilDialog } from "./council/NewCouncilDialog";
 import { WorkbenchEmptyPane } from "./components/workbench/panes/WorkbenchEmptyPane";
 import { WorkbenchOpeningPane } from "./components/workbench/panes/WorkbenchOpeningPane";
@@ -434,7 +435,7 @@ export function App() {
   const refreshCouncils = useCallback(async () => {
     try {
       const response = await api.listCouncils();
-      setCouncils(response.councils);
+      setCouncils((current) => mergeCouncilLists(current, response.councils));
       setSelectedCouncilId((current) => {
         if (!current || response.councils.some((council) => council.id === current)) {
           return current;
@@ -457,7 +458,7 @@ export function App() {
       const existingIndex = current.findIndex((candidate) => candidate.id === response.council.id);
       if (existingIndex >= 0) {
         const next = [...current];
-        next[existingIndex] = response.council;
+        next[existingIndex] = mergeCouncilSnapshot(next[existingIndex], response.council);
         return next;
       }
       return [response.council, ...current];
@@ -469,7 +470,7 @@ export function App() {
       const existingIndex = current.findIndex((candidate) => candidate.id === council.id);
       if (existingIndex >= 0) {
         const next = [...current];
-        next[existingIndex] = council;
+        next[existingIndex] = mergeCouncilSnapshot(next[existingIndex], council);
         return next;
       }
       return [council, ...current];
@@ -514,6 +515,7 @@ export function App() {
   );
   const {
     runningSessionEntries,
+    runningSessionActivityAtById,
     workspaceSections,
   } = sessionCollections;
   const {
@@ -1057,6 +1059,7 @@ export function App() {
       workspaceSections={workspaceSections}
       workspaceSortMode={workspaceSortMode}
       onWorkspaceSortModeChange={setWorkspaceSortMode}
+      runningSessionActivityAtById={runningSessionActivityAtById}
       pinnedSessionIdByWorkspace={sanitizedPinnedSessionIdByWorkspace}
       onTogglePinSession={togglePinnedSession}
       onTogglePinCouncil={(workspaceDir, councilId) =>
@@ -1220,6 +1223,7 @@ export function App() {
         storedSessions={storedSessions}
         recentSessions={recentSessions}
         runningSessions={runningSessionEntries.map((entry) => entry.summary)}
+        runningSessionActivityAtById={runningSessionActivityAtById}
         councils={councils}
         selectedCouncilId={selectedCouncilId}
         workspaceSortMode={historyWorkspaceSortMode}
@@ -1774,6 +1778,7 @@ export function App() {
                           storedSessions={storedSessions}
                           recentSessions={recentSessions}
                           runningSessions={runningSessionEntries.map((entry) => entry.summary)}
+                          runningSessionActivityAtById={runningSessionActivityAtById}
                           councils={councils}
                           selectedCouncilId={selectedCouncilId}
                           workspaceSortMode={historyWorkspaceSortMode}

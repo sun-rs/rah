@@ -1,18 +1,15 @@
 import type { CouncilSnapshot } from "@rah/runtime-protocol";
-import { useEffect, useRef, useState } from "react";
-import { Ellipsis, Info, MessageSquareText, PencilLine, Trash2 } from "lucide-react";
+import { MessageSquareText } from "lucide-react";
 import { chooseChatListSubtitle, compactChatListText } from "../chat-list-display";
 import { ChatBrowserRow } from "../components/ChatBrowserRow";
+import { formatRelativeTime, type RelativeTimeFormat } from "../session-browser";
+import { usePwaDisplayMode } from "../hooks/usePwaDisplayMode";
+import { councilActivityAt, councilActivityMs } from "./council-activity";
 
 type CouncilMessage = CouncilSnapshot["messages"][number];
 
 export function isCouncilHistory(council: CouncilSnapshot): boolean {
   return council.status === "stopped";
-}
-
-export function councilActivityMs(council: CouncilSnapshot): number {
-  const lastMessage = council.messages.at(-1);
-  return Date.parse(lastMessage?.createdAt ?? council.updatedAt ?? council.createdAt) || 0;
 }
 
 export function defaultRunningCouncilId(councils: readonly CouncilSnapshot[]): string | null {
@@ -48,11 +45,12 @@ export function formatCouncilCount(value: number, unit: string): string {
 }
 
 export function councilLineLabel(council: CouncilSnapshot): string {
-  return formatCouncilCount(council.messages.length, "lines");
+  return formatCouncilCount(council.meta?.messageCount ?? council.messageWindow?.total ?? council.messages.length, "lines");
 }
 
 export function councilLineTitle(council: CouncilSnapshot): string {
-  return `${council.messages.length.toLocaleString()} Council message log lines`;
+  const count = council.meta?.messageCount ?? council.messageWindow?.total ?? council.messages.length;
+  return `${count.toLocaleString()} Council message log lines`;
 }
 
 function actorLabel(council: CouncilSnapshot, actorId: string): string {
@@ -88,12 +86,18 @@ function firstCouncilMessageByRole(
 export function councilConversationSubtitle(council: CouncilSnapshot): string | null {
   const firstUser = firstCouncilMessageByRole(council, "user");
   const firstAgent = firstCouncilMessageByRole(council, "agent");
+  const firstUserSummary = council.meta?.firstUserMessage;
+  const firstAgentSummary = council.meta?.firstAgentMessage;
   return chooseChatListSubtitle(council.title, [
-    firstUser
-      ? { label: actorLabel(council, firstUser.actorId), text: textFromParts(firstUser.parts) }
-      : {},
-    firstAgent
-      ? { label: actorLabel(council, firstAgent.actorId), text: textFromParts(firstAgent.parts) }
+    firstUserSummary
+      ? { label: actorLabel(council, firstUserSummary.actorId), text: firstUserSummary.text }
+      : firstUser
+        ? { label: actorLabel(council, firstUser.actorId), text: textFromParts(firstUser.parts) }
+        : {},
+    firstAgentSummary
+      ? { label: actorLabel(council, firstAgentSummary.actorId), text: firstAgentSummary.text }
+      : firstAgent
+        ? { label: actorLabel(council, firstAgent.actorId), text: textFromParts(firstAgent.parts) }
       : {},
   ]);
 }
@@ -139,39 +143,11 @@ function CouncilRow(props: {
   selected: boolean;
   variant: "running" | "history";
   loading?: boolean | undefined;
+  relativeTimeFormat: RelativeTimeFormat;
   onOpenCouncil: (council: CouncilSnapshot) => void;
-  onShowCouncilInfo?: ((council: CouncilSnapshot) => void) | undefined;
-  onRenameCouncil?: ((council: CouncilSnapshot) => void) | undefined;
   onRequestDeleteCouncil?: ((council: CouncilSnapshot) => void) | undefined;
 }) {
-  const [menuOpen, setMenuOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement | null>(null);
   const canDelete = props.variant === "history" && Boolean(props.onRequestDeleteCouncil);
-  const hasActions = Boolean(props.onShowCouncilInfo || props.onRenameCouncil || canDelete);
-
-  useEffect(() => {
-    if (!menuOpen) {
-      return;
-    }
-    const handlePointerDown = (event: PointerEvent) => {
-      const target = event.target as Node | null;
-      if (target && menuRef.current?.contains(target)) {
-        return;
-      }
-      setMenuOpen(false);
-    };
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setMenuOpen(false);
-      }
-    };
-    document.addEventListener("pointerdown", handlePointerDown);
-    document.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.removeEventListener("pointerdown", handlePointerDown);
-      document.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [menuOpen]);
 
   return (
     <ChatBrowserRow
@@ -189,68 +165,19 @@ function CouncilRow(props: {
         label: councilLineLabel(props.council),
         title: councilLineTitle(props.council),
       }}
+      timeLabel={formatRelativeTime(councilActivityAt(props.council), {
+        format: props.relativeTimeFormat,
+      })}
       onOpen={() => props.onOpenCouncil(props.council)}
-      actions={
-        hasActions ? (
-          <div ref={menuRef} className="relative">
-            <button
-              type="button"
-              onClick={() => setMenuOpen((open) => !open)}
-              className="icon-click-feedback inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-transparent text-[var(--app-hint)] transition-colors hover:border-[var(--app-border)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
-              aria-label={`Actions for ${props.council.title}`}
-              aria-haspopup="menu"
-              aria-expanded={menuOpen}
-              title={`Actions for ${props.council.title}`}
-            >
-              <Ellipsis size={15} />
-            </button>
-            {menuOpen ? (
-              <div className="absolute right-0 top-[calc(100%+0.25rem)] z-50 min-w-[10rem] rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] p-1 shadow-xl">
-                {props.onShowCouncilInfo ? (
-                  <button
-                    type="button"
-                    className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]"
-                    onClick={() => {
-                      setMenuOpen(false);
-                      props.onShowCouncilInfo?.(props.council);
-                    }}
-                  >
-                    <Info size={14} />
-                    <span>Info</span>
-                  </button>
-                ) : null}
-                {props.onRenameCouncil ? (
-                  <button
-                    type="button"
-                    className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]"
-                    onClick={() => {
-                      setMenuOpen(false);
-                      props.onRenameCouncil?.(props.council);
-                    }}
-                  >
-                    <PencilLine size={14} />
-                    <span>Rename</span>
-                  </button>
-                ) : null}
-                {canDelete ? (
-                  <button
-                    type="button"
-                    disabled={props.loading}
-                    className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm text-[var(--app-danger)] transition-colors hover:bg-[var(--app-subtle-bg)] disabled:opacity-40"
-                    onClick={() => {
-                      setMenuOpen(false);
-                      props.onRequestDeleteCouncil?.(props.council);
-                    }}
-                  >
-                    <Trash2 size={14} />
-                    <span>Delete</span>
-                  </button>
-                ) : null}
-              </div>
-            ) : null}
-          </div>
-        ) : undefined
+      onDelete={
+        canDelete
+          ? () => {
+              props.onRequestDeleteCouncil?.(props.council);
+            }
+          : undefined
       }
+      deleteDisabled={props.loading}
+      deleteLabel="Delete Council"
     />
   );
 }
@@ -267,6 +194,7 @@ export function CouncilsBrowser(props: {
 }) {
   const { activeCouncils, historyCouncils } = splitCouncils(props.councils, props.query ?? "");
   const queryActive = Boolean(props.query?.trim());
+  const relativeTimeFormat: RelativeTimeFormat = usePwaDisplayMode() ? "compact" : "long";
 
   return (
     <div className="space-y-4">
@@ -286,9 +214,8 @@ export function CouncilsBrowser(props: {
             selected={props.selectedCouncilId === council.id}
             variant="running"
             loading={props.loading}
+            relativeTimeFormat={relativeTimeFormat}
             onOpenCouncil={props.onOpenCouncil}
-            onShowCouncilInfo={props.onShowCouncilInfo}
-            onRenameCouncil={props.onRenameCouncil}
           />
         )) : (
           <div className="rounded-xl border border-dashed border-[var(--app-border)] p-4 text-center text-sm text-[var(--app-hint)]">
@@ -313,9 +240,8 @@ export function CouncilsBrowser(props: {
             selected={props.selectedCouncilId === council.id}
             variant="history"
             loading={props.loading}
+            relativeTimeFormat={relativeTimeFormat}
             onOpenCouncil={props.onOpenCouncil}
-            onShowCouncilInfo={props.onShowCouncilInfo}
-            onRenameCouncil={props.onRenameCouncil}
             onRequestDeleteCouncil={props.onRequestDeleteCouncil}
           />
         )) : (

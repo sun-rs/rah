@@ -1,7 +1,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import type { SessionSummary } from "@rah/runtime-protocol";
-import { initialHistorySyncState, type SessionProjection } from "./types";
+import { initialHistorySyncState, type FeedEntry, type SessionProjection } from "./types";
 import {
   derivePrimaryPaneState,
   deriveWorkbenchSessionCollections,
@@ -41,14 +41,28 @@ function baseSummary(): SessionSummary {
   };
 }
 
-function projection(summary: SessionSummary): SessionProjection {
+function projection(summary: SessionSummary, feed: FeedEntry[] = []): SessionProjection {
   return {
     summary,
-    feed: [],
+    feed,
     events: [],
     lastSeq: 0,
     history: initialHistorySyncState(),
   };
+}
+
+function messageEntry(
+  sessionId: string,
+  kind: "user_message" | "assistant_message",
+  text: string,
+  ts: string,
+): FeedEntry {
+  return {
+    key: `${sessionId}:${kind}:${ts}`,
+    kind: "timeline",
+    item: { kind, text },
+    ts,
+  } as FeedEntry;
 }
 
 function controlledSummary(args: {
@@ -194,6 +208,69 @@ describe("workbench selectors", () => {
         (section) => section.workspace.directory === "/workspace/two",
       )?.workspace.hasBlockingRunningSessions,
       true,
+    );
+  });
+
+  test("uses visible session activity for updated workspace ordering", () => {
+    const clientId = "web-current";
+    const backgroundRefresh = controlledSummary({
+      id: "background-refresh",
+      clientId,
+      rootDir: "/workspace/one",
+      updatedAt: "2026-05-01T10:59:00.000Z",
+    });
+    const humanActivity = controlledSummary({
+      id: "human-activity",
+      clientId,
+      rootDir: "/workspace/two",
+      updatedAt: "2026-05-01T10:02:00.000Z",
+    });
+
+    const collections = deriveWorkbenchSessionCollections({
+      projections: new Map([
+        [
+          backgroundRefresh.session.id,
+          projection(backgroundRefresh, [
+            messageEntry(
+              backgroundRefresh.session.id,
+              "assistant_message",
+              "older answer",
+              "2026-05-01T10:01:00.000Z",
+            ),
+          ]),
+        ],
+        [
+          humanActivity.session.id,
+          projection(humanActivity, [
+            messageEntry(
+              humanActivity.session.id,
+              "user_message",
+              "newer question",
+              "2026-05-01T10:10:00.000Z",
+            ),
+          ]),
+        ],
+      ]),
+      clientId,
+      workspaceDirs: ["/workspace/one", "/workspace/two"],
+      storedSessions: [],
+      workspaceDir: "/workspace/one",
+      workspaceSortMode: "updated",
+    });
+
+    assert.equal(
+      collections.runningSessionActivityAtById.get("background-refresh"),
+      "2026-05-01T10:01:00.000Z",
+    );
+    assert.deepEqual(
+      collections.sortedWorkspaceInfos.map((workspace) => workspace.directory),
+      ["/workspace/two", "/workspace/one"],
+    );
+    assert.deepEqual(
+      collections.workspaceSections.flatMap((section) =>
+        section.sessions.map((session) => session.session.id),
+      ),
+      ["human-activity", "background-refresh"],
     );
   });
 

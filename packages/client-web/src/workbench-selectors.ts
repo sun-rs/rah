@@ -10,6 +10,7 @@ import {
   type WorkspaceSection,
   type WorkspaceSortMode,
 } from "./session-browser";
+import { deriveSessionConversationActivityAt } from "./session-conversation-activity";
 import type { SessionProjection } from "./types";
 import type { PendingSessionTransition } from "./session-transition-contract";
 
@@ -26,6 +27,7 @@ export interface WorkbenchSessionCollections {
   controlledRunningSessionSummaries: SessionSummary[];
   daemonRunningSessionByProviderSessionId: Map<string, SessionSummary>;
   controlledRunningSessionByProviderSessionId: Map<string, SessionSummary>;
+  runningSessionActivityAtById: ReadonlyMap<string, string>;
   runningGroups: SessionDirectoryGroup<SessionSummary>[];
   workspaceInfos: WorkspaceInfo[];
   sortedWorkspaceInfos: WorkspaceInfo[];
@@ -85,8 +87,20 @@ export function deriveWorkbenchSessionCollections(args: {
   workspaceSortMode: WorkspaceSortMode;
 }): WorkbenchSessionCollections {
   const sessionEntries = sortSessionEntries(args.projections);
+  const sessionActivityAtById = new Map(
+    sessionEntries.map((entry) => [
+      entry.summary.session.id,
+      deriveSessionConversationActivityAt(entry),
+    ] as const),
+  );
   const runningSessionEntries = sessionEntries.filter(
     (entry) => !isReadOnlyReplay(entry.summary) && !isEndedNativeTuiSession(entry.summary),
+  );
+  const runningSessionActivityAtById = new Map(
+    runningSessionEntries.map((entry) => [
+      entry.summary.session.id,
+      sessionActivityAtById.get(entry.summary.session.id) ?? entry.summary.session.updatedAt,
+    ] as const),
   );
   const controlledRunningSessionEntries = runningSessionEntries.filter((entry) =>
     isControlledByClient(entry.summary, args.clientId),
@@ -106,17 +120,20 @@ export function deriveWorkbenchSessionCollections(args: {
   const runningGroups = groupRunningSessionsByDirectory(
     runningSessionSummaries,
     args.workspaceDir,
+    { sessionActivityAtById },
   );
   const workspaceInfos = deriveWorkspaceInfos(
     args.workspaceDirs,
     runningSessionSummaries,
     args.storedSessions,
     runningSessionSummaries,
+    { sessionActivityAtById },
   );
   const sortedWorkspaceInfos = sortWorkspaceInfos(workspaceInfos, args.workspaceSortMode);
   const workspaceSections = deriveWorkspaceSections(
     sortedWorkspaceInfos,
     runningSessionSummaries,
+    { sessionActivityAtById },
   );
 
   return {
@@ -127,6 +144,7 @@ export function deriveWorkbenchSessionCollections(args: {
     controlledRunningSessionSummaries,
     daemonRunningSessionByProviderSessionId,
     controlledRunningSessionByProviderSessionId,
+    runningSessionActivityAtById,
     runningGroups,
     workspaceInfos,
     sortedWorkspaceInfos,

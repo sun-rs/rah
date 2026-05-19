@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import type { CouncilSnapshot, SessionSummary } from "@rah/runtime-protocol";
 import { conversationStateFromRuntimeState } from "@rah/runtime-protocol";
 import { deriveSidebarWorkspaceViewModels } from "./sidebar-view-model";
-import { formatCompactRelativeTime, type WorkspaceSection } from "./session-browser";
+import { formatCompactRelativeTime, formatRelativeTime, type WorkspaceSection } from "./session-browser";
 
 function session(args: {
   id: string;
@@ -93,6 +93,18 @@ describe("sidebar view model", () => {
     );
   });
 
+  test("formats relative times through the shared display protocol", () => {
+    const nowMs = Date.parse("2026-05-01T10:32:05.000Z");
+    const value = "2026-05-01T10:00:00.000Z";
+
+    assert.equal(formatRelativeTime(value, { format: "long", nowMs }), "32m ago");
+    assert.equal(formatRelativeTime(value, { format: "compact", nowMs }), "32m");
+    assert.equal(
+      formatRelativeTime("2026-05-01T10:31:30.000Z", { format: "compact", nowMs }),
+      "just",
+    );
+  });
+
   test("pins the configured session first inside a workspace", () => {
     const items = deriveSidebarWorkspaceViewModels({
       workspaceSections: [workspaceSection([session({ id: "a" }), session({ id: "b" })])],
@@ -132,6 +144,35 @@ describe("sidebar view model", () => {
     assert.equal(sessions.find((entry) => entry.id === "thinking")?.status, "working");
     assert.equal(sessions.find((entry) => entry.id === "unread")?.status, "unread");
     assert.equal(sessions.find((entry) => entry.id === "ready")?.status, "ready");
+  });
+
+  test("uses session conversation activity for sidebar recency when available", () => {
+    const items = deriveSidebarWorkspaceViewModels({
+      workspaceSections: [workspaceSection([
+        session({
+          id: "background-refresh",
+          updatedAt: "2026-05-01T10:59:00.000Z",
+        }),
+        session({
+          id: "human-activity",
+          updatedAt: "2026-05-01T10:02:00.000Z",
+        }),
+      ])],
+      selectedWorkspaceDir: "/workspace/rah",
+      selectedSessionId: null,
+      unreadSessionIds: new Set(),
+      runtimeStatusBySessionId: new Map(),
+      pinnedSessionIdByWorkspace: {},
+      runningSessionActivityAtById: new Map([
+        ["background-refresh", "2026-05-01T10:01:00.000Z"],
+        ["human-activity", "2026-05-01T10:10:00.000Z"],
+      ]),
+    });
+
+    assert.deepEqual(
+      items[0]?.sessions.map((entry) => entry.id),
+      ["human-activity", "background-refresh"],
+    );
   });
 
   test("projects council session origin for sidebar styling", () => {
