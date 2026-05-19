@@ -13,6 +13,45 @@ function createServices() {
   };
 }
 
+test("SessionStore rejects duplicate provider session ownership", () => {
+  const services = createServices();
+  const live = services.sessionStore.createManagedSession({
+    provider: "codex",
+    providerSessionId: "provider-1",
+    launchSource: "web",
+    cwd: "/tmp/rah-provider-resume",
+    rootDir: "/tmp/rah-provider-resume",
+  });
+
+  assert.throws(
+    () =>
+      services.sessionStore.createManagedSession({
+        provider: "codex",
+        providerSessionId: "provider-1",
+        launchSource: "web",
+        cwd: "/tmp/rah-provider-resume",
+        rootDir: "/tmp/rah-provider-resume",
+      }),
+    /already running; attach instead of resume/,
+  );
+
+  const other = services.sessionStore.createManagedSession({
+    provider: "codex",
+    providerSessionId: "provider-2",
+    launchSource: "web",
+    cwd: "/tmp/rah-provider-resume",
+    rootDir: "/tmp/rah-provider-resume",
+  });
+  assert.throws(
+    () => services.sessionStore.patchManagedSession(other.session.id, { providerSessionId: "provider-1" }),
+    /already running; attach instead of resume/,
+  );
+  assert.equal(
+    services.sessionStore.findManagedByProviderSession("codex", "provider-1")?.session.id,
+    live.session.id,
+  );
+});
+
 test("prepareProviderSessionResume restores a removed replay session on rollback", () => {
   const services = createServices();
   const replay = services.sessionStore.createManagedSession({

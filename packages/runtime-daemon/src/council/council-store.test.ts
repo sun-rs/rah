@@ -104,6 +104,39 @@ test("CouncilStore normalizes slashes in agent labels and ids", () => {
   }
 });
 
+test("CouncilStore normalizes file claim paths before conflict checks", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-store-claims-"));
+  try {
+    const store = new CouncilStore(path.join(root, "councils.json"));
+    const created = store.createCouncil({
+      workspace: root,
+      agents: [
+        { id: "agent-a", provider: "codex", label: "Agent A" },
+        { id: "agent-b", provider: "claude", label: "Agent B" },
+      ],
+    });
+
+    const claim = store.claimFile(created.id, created.agents[0]!.id, "./src/../src/file.ts");
+    assert.equal(claim.path, "src/file.ts");
+    assert.throws(
+      () => store.claimFile(created.id, created.agents[1]!.id, "src/file.ts"),
+      /file_conflict: src\/file\.ts is already claimed by Agent A/,
+    );
+
+    assert.equal(store.releaseFile(created.id, created.agents[0]!.id, "src/./file.ts"), true);
+    assert.equal(
+      store.claimFile(created.id, created.agents[1]!.id, path.join(root, "src", "file.ts")).path,
+      "src/file.ts",
+    );
+    assert.throws(
+      () => store.claimFile(created.id, created.agents[0]!.id, path.join(root, "..", "outside.ts")),
+      /must remain inside the council workspace/,
+    );
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
 test("CouncilStore snapshot returns the full transcript unless a limit is requested", () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-store-full-snapshot-"));
   try {

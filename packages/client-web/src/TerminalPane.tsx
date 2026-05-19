@@ -360,6 +360,7 @@ export function TerminalPane(props: TerminalPaneProps) {
     let disposed = false;
     let exited = false;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let reconnectAttempt = 0;
     let surfacePollTimer: ReturnType<typeof setInterval> | null = null;
     const settleTimers = new Set<number>();
     let fitFrame: number | null = null;
@@ -659,6 +660,7 @@ export function TerminalPane(props: TerminalPaneProps) {
       );
       socketRef.current = socket;
       socket.addEventListener("open", () => {
+        reconnectAttempt = 0;
         fitAddon.fit();
         claimCurrentSurface();
         settleTerminalLayout();
@@ -677,9 +679,11 @@ export function TerminalPane(props: TerminalPaneProps) {
         if (closeNotice) {
           enqueueTerminalWrite(`\r\n${closeNotice}\r\n`);
         }
+        const reconnectDelayMs = Math.min(30_000, 1_000 * 2 ** reconnectAttempt);
+        reconnectAttempt += 1;
         reconnectTimer = setTimeout(() => {
           connect(nextReplaySeqRef.current);
-        }, 1_000);
+        }, reconnectDelayMs);
       });
     };
 

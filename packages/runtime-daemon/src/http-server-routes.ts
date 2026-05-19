@@ -54,6 +54,19 @@ import { serveClientApp } from "./http-server-static";
 import { isLocalMachineRemoteAddress } from "./http-server-client-address";
 import { writeHostClipboard } from "./host-clipboard";
 
+const MAX_QUERY_LIMIT = 500;
+
+function parseQueryLimit(raw: string | null, fallback?: number): number | undefined {
+  if (!raw) {
+    return fallback;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    return fallback;
+  }
+  return Math.min(parsed, MAX_QUERY_LIMIT);
+}
+
 export function createPostRoutes(
   engine: RuntimeEngine,
 ): Array<{ pattern: RegExp; handler: JsonHandler }> {
@@ -572,10 +585,7 @@ export async function handleHttpRequest(args: {
         beforeRaw && Number.isFinite(Number.parseInt(beforeRaw, 10))
           ? Number.parseInt(beforeRaw, 10)
           : undefined;
-      const limit =
-        limitRaw && Number.isFinite(Number.parseInt(limitRaw, 10))
-          ? Number.parseInt(limitRaw, 10)
-          : undefined;
+      const limit = parseQueryLimit(limitRaw);
       writeJson(req, res, 200, engine.readCouncilMessages(decodeURIComponent(councilMessagesMatch[1]!), {
         ...(beforeMessageId !== undefined ? { beforeMessageId } : {}),
         ...(limit !== undefined ? { limit } : {}),
@@ -763,10 +773,7 @@ export async function handleHttpRequest(args: {
       const query = url.searchParams.get("query") ?? "";
       const limitRaw = url.searchParams.get("limit");
       const scopeRoot = url.searchParams.get("scopeRoot") ?? undefined;
-      const limit =
-        limitRaw && Number.isFinite(Number.parseInt(limitRaw, 10))
-          ? Number.parseInt(limitRaw, 10)
-          : 100;
+      const limit = parseQueryLimit(limitRaw, 100) ?? 100;
       writeJson(
         req,
         res,
@@ -830,10 +837,7 @@ export async function handleHttpRequest(args: {
         return;
       }
       const limitRaw = url.searchParams.get("limit");
-      const limit =
-        limitRaw && Number.isFinite(Number.parseInt(limitRaw, 10))
-          ? Number.parseInt(limitRaw, 10)
-          : 100;
+      const limit = parseQueryLimit(limitRaw, 100) ?? 100;
       writeJson(req, res, 200, await engine.searchWorkspaceFiles(dir, query, limit));
       return;
     }
@@ -843,10 +847,7 @@ export async function handleHttpRequest(args: {
       const beforeTs = url.searchParams.get("beforeTs") ?? undefined;
       const cursor = url.searchParams.get("cursor") ?? undefined;
       const limitRaw = url.searchParams.get("limit");
-      const limit =
-        limitRaw && Number.isFinite(Number.parseInt(limitRaw, 10))
-          ? Number.parseInt(limitRaw, 10)
-          : undefined;
+      const limit = parseQueryLimit(limitRaw);
       const options = {
         ...(beforeTs !== undefined ? { beforeTs } : {}),
         ...(cursor !== undefined ? { cursor } : {}),

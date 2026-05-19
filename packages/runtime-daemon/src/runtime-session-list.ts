@@ -92,6 +92,9 @@ function isInternalNativeTuiProbeWorkspace(directory: string): boolean {
 }
 
 function sessionRecentTimestamp(session: StoredSessionRef): string {
+  if (session.source === "previous_running") {
+    return session.lastUsedAt ?? session.createdAt ?? session.updatedAt ?? "";
+  }
   return session.lastUsedAt ?? session.updatedAt ?? session.createdAt ?? "";
 }
 
@@ -113,12 +116,8 @@ function mergeStoredSessionRef(left: StoredSessionRef, right: StoredSessionRef):
   const metadata = preferProviderHistoryMetadata(left, right);
   const fallback = metadata === left ? right : left;
   const lastUsedAt = newestTimestamp(
-    left.lastUsedAt,
-    right.lastUsedAt,
-    left.updatedAt,
-    right.updatedAt,
-    left.createdAt,
-    right.createdAt,
+    sessionRecentTimestamp(left),
+    sessionRecentTimestamp(right),
   );
   return {
     ...fallback,
@@ -132,6 +131,7 @@ function runningSessionRef(state: StoredSessionState): StoredSessionRef | null {
   if (!providerSessionId) {
     return null;
   }
+  const activityAt = state.conversationActivityAt ?? state.session.createdAt;
   return {
     provider: state.session.provider,
     providerSessionId,
@@ -140,8 +140,8 @@ function runningSessionRef(state: StoredSessionState): StoredSessionRef | null {
     ...(state.session.title !== undefined ? { title: state.session.title } : {}),
     ...(state.session.preview !== undefined ? { preview: state.session.preview } : {}),
     createdAt: state.session.createdAt,
-    updatedAt: state.session.updatedAt,
-    lastUsedAt: state.session.updatedAt,
+    updatedAt: activityAt,
+    lastUsedAt: activityAt,
     source: "previous_running",
   };
 }

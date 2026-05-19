@@ -423,6 +423,10 @@ function getDefaultStore(): ManualProviderModelStore {
   return defaultStore;
 }
 
+export function resetDefaultManualProviderModelStoreForTests(rootDir?: string): void {
+  defaultStore = rootDir === undefined ? null : new ManualProviderModelStore(rootDir);
+}
+
 export function listManualProviderModels(provider?: ProviderKind): ManualProviderModel[] {
   return getDefaultStore().list(provider);
 }

@@ -83,7 +83,10 @@ export class CouncilRuntime {
   listCouncils(): ListCouncilsResponse {
     return {
       councils: this.store
-        .listCouncils({ messageLimit: COUNCIL_CLIENT_MESSAGE_WINDOW_LIMIT })
+        .listCouncils({
+          messageLimit: COUNCIL_CLIENT_MESSAGE_WINDOW_LIMIT,
+          messageFilter: isFrontendVisibleCouncilMessage,
+        })
         .map((council) => this.projectRuntimeCouncilState(council)),
     };
   }
@@ -95,11 +98,9 @@ export class CouncilRuntime {
     const page = this.store.messagePage(councilId, {
       ...(options?.beforeMessageId !== undefined ? { beforeMessageId: options.beforeMessageId } : {}),
       limit: options?.limit ?? COUNCIL_CLIENT_MESSAGE_WINDOW_LIMIT,
+      messageFilter: isFrontendVisibleCouncilMessage,
     });
-    return {
-      ...page,
-      messages: page.messages.filter((message) => !isFrontendHiddenCouncilMessage(message)),
-    };
+    return page;
   }
 
   async createCouncil(request: CreateCouncilRequest): Promise<CreateCouncilResponse> {
@@ -514,7 +515,10 @@ export class CouncilRuntime {
 
   private clientCouncilSnapshot(councilId: string): CouncilSnapshot {
     return this.projectRuntimeCouncilState(
-      this.store.snapshot(councilId, { limit: COUNCIL_CLIENT_MESSAGE_WINDOW_LIMIT }),
+      this.store.snapshot(councilId, {
+        limit: COUNCIL_CLIENT_MESSAGE_WINDOW_LIMIT,
+        messageFilter: isFrontendVisibleCouncilMessage,
+      }),
     );
   }
 
@@ -983,6 +987,10 @@ function isFrontendHiddenCouncilMessage(message: CouncilMessage): boolean {
   }
   const text = councilMessageText(message);
   return /\bwait timed out;\s*no active listener is currently blocking on channel_wait_new\b/i.test(text);
+}
+
+function isFrontendVisibleCouncilMessage(message: CouncilMessage): boolean {
+  return !isFrontendHiddenCouncilMessage(message);
 }
 
 function projectCouncilStateResult(result: unknown, council: CouncilSnapshot): unknown {

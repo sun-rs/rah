@@ -10,6 +10,7 @@ export type ChatBrowserRowBadge = {
 
 export type ChatBrowserRowMeta = {
   label: string;
+  compactLabel?: string | undefined;
   title?: string | undefined;
   icon?: ReactNode | undefined;
 };
@@ -51,6 +52,21 @@ export function ChatBrowserRow(props: {
   }`;
   const badge = props.badge;
   const meta = props.meta;
+  const liveActionSlot =
+    badge?.tone === "running" ? (
+      <span
+        className={`h-8 w-8 shrink-0 items-center justify-center max-[699px]:inline-flex max-[699px]:w-7 ${
+          props.onDelete || props.onInfo ? "hidden" : "inline-flex"
+        }`}
+        title={badge.title ?? badge.label}
+        aria-label={badge.label}
+      >
+        <span className="hidden h-2 w-2 rounded-full bg-emerald-500 shadow-[0_0_0_2px_rgba(16,185,129,0.12)] max-[699px]:inline-block" />
+      </span>
+    ) : null;
+  const deleteButtonClassName = `icon-click-feedback pointer-events-auto inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-transparent text-[var(--app-hint)] transition-colors hover:border-[var(--app-border)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-danger)] disabled:opacity-40 max-[699px]:w-7 ${
+    props.deleteDisabled ? "max-[699px]:hidden" : ""
+  }`;
 
   return (
     <div
@@ -69,8 +85,8 @@ export function ChatBrowserRow(props: {
         data-session-source={props.dataSessionSource}
         className="absolute inset-0 z-0 rounded-lg focus:outline-none focus:ring-1 focus:ring-[var(--ring)]"
       />
-      <div className="pointer-events-none relative z-10 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
-        <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-2 px-3 py-2 text-left">
+      <div className="pointer-events-none relative z-10 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 max-[699px]:gap-1">
+        <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-2 px-3 py-2 text-left max-[699px]:px-2">
           <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center overflow-hidden">
             {props.leading}
           </span>
@@ -91,10 +107,10 @@ export function ChatBrowserRow(props: {
           </span>
         </div>
 
-        <div className="flex shrink-0 items-center justify-end gap-2 py-2 pr-3">
+        <div className="flex shrink-0 items-center justify-end gap-2 py-2 pr-3 max-[699px]:gap-1 max-[699px]:pr-1.5">
           {badge ? (
             <span
-              className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium ${badgeClassName(badge)}`}
+              className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium max-[699px]:hidden ${badgeClassName(badge)}`}
               title={badge.title}
             >
               {badge.label}
@@ -102,17 +118,18 @@ export function ChatBrowserRow(props: {
           ) : null}
           {meta ? (
             <span
-              className="inline-flex items-center gap-1 rounded-full border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-2 py-0.5 text-[11px] font-medium tabular-nums text-[var(--app-hint)]"
+              className="inline-flex items-center gap-1 rounded-full border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-2 py-0.5 text-[11px] font-medium tabular-nums text-[var(--app-hint)] max-[699px]:px-1.5"
               title={meta.title}
             >
-              <span className="inline-flex h-3 w-3 items-center justify-center">
+              <span className="inline-flex h-3 w-3 items-center justify-center max-[699px]:hidden">
                 {meta.icon ?? <Rows3 size={12} />}
               </span>
-              <span>{meta.label}</span>
+              <span className="max-[699px]:hidden">{meta.label}</span>
+              <span className="hidden max-[699px]:inline">{meta.compactLabel ?? meta.label}</span>
             </span>
           ) : null}
           {props.timeLabel ? (
-            <span className="min-w-[3.5rem] text-right text-xs text-[var(--app-hint)]">
+            <span className="min-w-[3.5rem] text-right text-xs text-[var(--app-hint)] max-[699px]:min-w-0 max-[699px]:text-[11px]">
               {props.timeLabel}
             </span>
           ) : null}
@@ -120,7 +137,7 @@ export function ChatBrowserRow(props: {
             <div className="pointer-events-auto">
               {props.actions}
             </div>
-          ) : null}
+          ) : liveActionSlot}
           {!props.actions && props.onInfo ? (
             <button
               type="button"
@@ -137,7 +154,7 @@ export function ChatBrowserRow(props: {
               type="button"
               disabled={props.deleteDisabled}
               onClick={props.onDelete}
-              className="icon-click-feedback pointer-events-auto inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-transparent text-[var(--app-hint)] transition-colors hover:border-[var(--app-border)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-danger)] disabled:opacity-40"
+              className={deleteButtonClassName}
               aria-label={props.deleteLabel ?? "Delete chat"}
               title={props.deleteLabel ?? "Delete"}
             >

@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { promises as fs, readdirSync } from "node:fs";
 import path from "node:path";
 import type {
@@ -7,6 +7,8 @@ import type {
 } from "@rah/runtime-protocol";
 
 const MAX_READABLE_FILE_BYTES = 1_000_000;
+const MAX_WORKSPACE_FILE_SEARCH_RESULTS = 500;
+const WORKSPACE_FILE_SEARCH_TIMEOUT_MS = 10_000;
 
 export type WorkspaceFileData = Omit<SessionFileResponse, "sessionId">;
 
@@ -42,22 +44,97 @@ export async function searchWorkspaceFilesInDirectoryAsync(
   if (!normalizedQuery) {
     return [];
   }
+  const safeLimit = Math.max(0, Math.min(limit, MAX_WORKSPACE_FILE_SEARCH_RESULTS));
+  if (safeLimit === 0) {
+    return [];
+  }
   try {
-    const output = await execFileUtf8("rg", ["--files", "."], { cwd });
-    return output
-      .split(/\r?\n/)
-      .filter(Boolean)
-      .map(normalizeWorkspaceSearchPath)
-      .filter((relativePath) => relativePath.toLowerCase().includes(normalizedQuery))
-      .slice(0, limit)
-      .map((relativePath) => ({
-        path: relativePath,
-        name: path.basename(relativePath),
-        parentPath: path.dirname(relativePath) === "." ? "" : path.dirname(relativePath),
-      }));
+    return await searchWorkspaceFilesWithRipgrep(cwd, normalizedQuery, safeLimit);
   } catch {
     return [];
   }
+}
+
+async function searchWorkspaceFilesWithRipgrep(
+  cwd: string,
+  normalizedQuery: string,
+  limit: number,
+): Promise<SessionFileSearchItem[]> {
+  return await new Promise<SessionFileSearchItem[]>((resolve, reject) => {
+    const child = spawn("rg", ["--files", "."], {
+      cwd,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const results: SessionFileSearchItem[] = [];
+    let carry = "";
+    let settled = false;
+    let stoppedEarly = false;
+
+    const finish = (value: SessionFileSearchItem[]) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      resolve(value);
+    };
+    const fail = (error: Error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      reject(error);
+    };
+    const stopEarly = () => {
+      if (stoppedEarly) {
+        return;
+      }
+      stoppedEarly = true;
+      child.kill("SIGTERM");
+      finish(results);
+    };
+    const appendMatch = (relativePath: string) => {
+      const normalizedPath = normalizeWorkspaceSearchPath(relativePath);
+      if (!normalizedPath || !normalizedPath.toLowerCase().includes(normalizedQuery)) {
+        return;
+      }
+      results.push({
+        path: normalizedPath,
+        name: path.basename(normalizedPath),
+        parentPath: path.dirname(normalizedPath) === "." ? "" : path.dirname(normalizedPath),
+      });
+      if (results.length >= limit) {
+        stopEarly();
+      }
+    };
+    const consume = (chunk: string, flush = false) => {
+      const lines = `${carry}${chunk}`.split(/\r?\n/);
+      carry = flush ? "" : lines.pop() ?? "";
+      for (const line of lines) {
+        if (settled) {
+          break;
+        }
+        appendMatch(line);
+      }
+      if (flush && carry && !settled) {
+        appendMatch(carry);
+        carry = "";
+      }
+    };
+    const timeout = setTimeout(() => stopEarly(), WORKSPACE_FILE_SEARCH_TIMEOUT_MS);
+    timeout.unref?.();
+
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => consume(String(chunk)));
+    child.on("error", fail);
+    child.on("close", () => {
+      if (!settled) {
+        consume("", true);
+        finish(results);
+      }
+    });
+  });
 }
 
 export async function readWorkspaceFileDataAsync(
@@ -189,6 +266,12 @@ function isLikelyBinary(buffer: Buffer): boolean {
 function readWorkspaceNodes(cwd: string) {
   try {
     return readdirSync(cwd, { withFileTypes: true })
+      .sort((left, right) => {
+        if (left.isDirectory() !== right.isDirectory()) {
+          return left.isDirectory() ? -1 : 1;
+        }
+        return left.name.localeCompare(right.name);
+      })
       .slice(0, 200)
       .map((entry) => ({
         path: path.join(cwd, entry.name),

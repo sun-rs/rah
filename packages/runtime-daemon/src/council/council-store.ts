@@ -34,6 +34,8 @@ type CouncilStoreFile = {
   nextControlId: number;
 };
 
+type CouncilMessageFilter = (message: CouncilMessage) => boolean;
+
 export type CouncilFileClaim = {
   councilId: string;
   path: string;
@@ -62,6 +64,27 @@ function defaultStoreFilePath(): string {
   return path.join(resolveRahHome(), "council", "councils.json");
 }
 
+function quarantineCorruptStoreFile(filePath: string, error: unknown): void {
+  if (!existsSync(filePath)) {
+    return;
+  }
+  const quarantinePath = `${filePath}.corrupt-${Date.now()}`;
+  try {
+    renameSync(filePath, quarantinePath);
+    console.warn("[rah:council-store] quarantined unreadable store file", {
+      filePath,
+      quarantinePath,
+      error,
+    });
+  } catch (renameError) {
+    console.warn("[rah:council-store] failed to quarantine unreadable store file", {
+      filePath,
+      error,
+      renameError,
+    });
+  }
+}
+
 function nowIso(): string {
   return new Date().toISOString();
 }
@@ -72,6 +95,35 @@ function councilActorName(agent: CouncilAgentConfig, index: number): string {
 
 function normalizeCouncilActorName(value: string): string {
   return value.replace(/[\\/]+/g, "-");
+}
+
+function normalizeCouncilClaimPath(workspace: string, filePath: string): string {
+  const trimmed = filePath.trim();
+  if (!trimmed) {
+    return "";
+  }
+  const workspacePath = path.resolve(workspace);
+  const portablePath = trimmed.replace(/\\/g, "/");
+  const targetPath = path.isAbsolute(portablePath)
+    ? path.resolve(portablePath)
+    : path.resolve(workspacePath, portablePath);
+  const relativePath = path.relative(workspacePath, targetPath);
+  if (
+    relativePath === "" ||
+    relativePath.startsWith("..") ||
+    path.isAbsolute(relativePath)
+  ) {
+    throw new Error("Council file claim path must remain inside the council workspace.");
+  }
+  return path.posix.normalize(relativePath.replace(/\\/g, "/"));
+}
+
+function sameCouncilClaimPath(workspace: string, left: string, right: string): boolean {
+  try {
+    return normalizeCouncilClaimPath(workspace, left) === normalizeCouncilClaimPath(workspace, right);
+  } catch {
+    return left.trim() === right.trim();
+  }
 }
 
 function nextDefaultCouncilTitle(councils: Council[]): string {
@@ -105,7 +157,8 @@ function loadStoreFile(filePath: string): CouncilStoreFile {
           ? parsed.nextControlId
           : 1,
     };
-  } catch {
+  } catch (error) {
+    quarantineCorruptStoreFile(filePath, error);
     return {
       councils: [],
       agents: [],
@@ -249,13 +302,18 @@ export class CouncilStore {
     }
   }
 
-  listCouncils(options?: { messageLimit?: number }): CouncilSnapshot[] {
+  listCouncils(options?: { messageLimit?: number; messageFilter?: CouncilMessageFilter }): CouncilSnapshot[] {
     return [...this.state.councils]
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
       .map((council) =>
         this.snapshot(
           council.id,
-          options?.messageLimit !== undefined ? { limit: options.messageLimit } : undefined,
+          options?.messageLimit !== undefined || options?.messageFilter !== undefined
+            ? {
+                ...(options.messageLimit !== undefined ? { limit: options.messageLimit } : {}),
+                ...(options.messageFilter !== undefined ? { messageFilter: options.messageFilter } : {}),
+              }
+            : undefined,
         ),
       );
   }
@@ -329,11 +387,17 @@ export class CouncilStore {
     return { ...nextAgent };
   }
 
-  snapshot(councilId: string, options?: { sinceMessageId?: number; limit?: number }): CouncilSnapshot {
+  snapshot(councilId: string, options?: {
+    sinceMessageId?: number;
+    limit?: number;
+    messageFilter?: CouncilMessageFilter;
+  }): CouncilSnapshot {
     const council = this.requireCouncil(councilId);
     const since = options?.sinceMessageId ?? 0;
     const limit = options?.limit;
-    const councilMessages = this.messagesForCouncil(councilId);
+    const councilMessages = options?.messageFilter
+      ? this.messagesForCouncil(councilId).filter(options.messageFilter)
+      : this.messagesForCouncil(councilId);
     const firstUserMessage = councilMessages.find((message) => message.role === "user");
     const firstAgentMessage = councilMessages.find((message) => message.role === "agent");
     const lastContentMessage = [...councilMessages]
@@ -388,11 +452,17 @@ export class CouncilStore {
 
   messagePage(
     councilId: string,
-    options?: { beforeMessageId?: number; limit?: number },
+    options?: {
+      beforeMessageId?: number;
+      limit?: number;
+      messageFilter?: CouncilMessageFilter;
+    },
   ): CouncilMessagesPageResponse {
     this.requireCouncil(councilId);
     const limit = Math.max(1, options?.limit ?? 100);
-    const councilMessages = this.messagesForCouncil(councilId);
+    const councilMessages = options?.messageFilter
+      ? this.messagesForCouncil(councilId).filter(options.messageFilter)
+      : this.messagesForCouncil(councilId);
     const endIndex =
       options?.beforeMessageId === undefined
         ? councilMessages.length
@@ -578,19 +648,23 @@ export class CouncilStore {
 
   claimFile(councilId: string, actorId: string, filePath: string): CouncilFileClaim {
     this.requireAgent(councilId, actorId);
-    const normalizedPath = filePath.trim();
+    const council = this.requireCouncil(councilId);
+    const normalizedPath = normalizeCouncilClaimPath(council.workspace, filePath);
     if (!normalizedPath) {
       throw new Error("channel_claim_file requires path.");
     }
     this.pruneExpiredClaims(councilId);
     const existing = this.state.claims.find(
-      (claim) => claim.councilId === councilId && claim.path === normalizedPath,
+      (claim) =>
+        claim.councilId === councilId &&
+        sameCouncilClaimPath(council.workspace, claim.path, normalizedPath),
     );
     if (existing && existing.actorId !== actorId) {
       throw new Error(`file_conflict: ${normalizedPath} is already claimed by ${existing.actorId}.`);
     }
     const timestamp = nowIso();
     if (existing) {
+      existing.path = normalizedPath;
       existing.claimedAt = timestamp;
       this.persist();
       return { ...existing };
@@ -608,10 +682,16 @@ export class CouncilStore {
 
   releaseFile(councilId: string, actorId: string, filePath: string): boolean {
     this.requireAgent(councilId, actorId);
-    const normalizedPath = filePath.trim();
+    const council = this.requireCouncil(councilId);
+    const normalizedPath = normalizeCouncilClaimPath(council.workspace, filePath);
     const before = this.state.claims.length;
     this.state.claims = this.state.claims.filter(
-      (claim) => !(claim.councilId === councilId && claim.path === normalizedPath && claim.actorId === actorId),
+      (claim) =>
+        !(
+          claim.councilId === councilId &&
+          sameCouncilClaimPath(council.workspace, claim.path, normalizedPath) &&
+          claim.actorId === actorId
+        ),
     );
     if (this.state.claims.length !== before) {
       this.persist();

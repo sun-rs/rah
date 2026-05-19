@@ -5,6 +5,7 @@ export type ConversationMetaTone =
   | "stopped"
   | "working"
   | "permission"
+  | "failed"
   | "council"
   | "context";
 
@@ -20,6 +21,8 @@ export function conversationMetaToneClassName(tone: ConversationMetaTone): strin
       return "border-sky-500/20 bg-sky-500/10 text-sky-600 dark:text-sky-400";
     case "permission":
       return "border-orange-500/20 bg-orange-500/10 text-orange-700 dark:text-orange-400";
+    case "failed":
+      return "border-rose-500/25 bg-rose-500/10 text-rose-700 dark:text-rose-400";
     case "council":
       return "border-orange-500/25 bg-orange-500/10 text-orange-700 dark:text-orange-300";
     case "context":
@@ -33,6 +36,7 @@ export function ConversationMetaBadge(props: {
   title?: string;
   ariaLabel?: string;
   width?: ConversationMetaBadgeWidth;
+  className?: string;
 }) {
   const widthClassName =
     props.width === "context"
@@ -42,7 +46,7 @@ export function ConversationMetaBadge(props: {
         : "";
   return (
     <span
-      className={`inline-flex h-5 shrink-0 items-center justify-center gap-1 overflow-hidden rounded-md border px-1.5 text-[10px] font-medium leading-none ${widthClassName} ${conversationMetaToneClassName(props.tone)}`}
+      className={`inline-flex h-5 min-w-0 shrink-0 items-center justify-center gap-1 overflow-hidden rounded-md border px-1.5 text-[10px] font-medium leading-none ${widthClassName} ${conversationMetaToneClassName(props.tone)} ${props.className ?? ""}`}
       title={props.title}
       aria-label={props.ariaLabel}
     >

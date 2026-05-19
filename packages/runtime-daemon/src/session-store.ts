@@ -132,6 +132,7 @@ export type StoredSessionState = {
   session: ManagedSession;
   clients: AttachedClient[];
   controlLease: ControlLease;
+  conversationActivityAt?: string;
   usage?: ContextUsage;
   activeTurnId?: string;
 };
@@ -243,6 +244,12 @@ export class SessionStore {
   createManagedSession(args: CreateManagedSessionArgs): StoredSessionState {
     const now = new Date().toISOString();
     const id = args.id ?? crypto.randomUUID();
+    if (this.sessions.has(id)) {
+      throw new Error(`Session ${id} already exists.`);
+    }
+    if (args.providerSessionId) {
+      this.assertProviderSessionAvailable(args.provider, args.providerSessionId, id);
+    }
     const session: ManagedSession = {
       id,
       provider: args.provider,
@@ -501,6 +508,16 @@ export class SessionStore {
   ): StoredSessionState {
     const state = this.requireSession(sessionId);
     const previousProviderSessionId = state.session.providerSessionId;
+    if (
+      patch.providerSessionId !== undefined &&
+      patch.providerSessionId !== previousProviderSessionId
+    ) {
+      this.assertProviderSessionAvailable(
+        state.session.provider,
+        patch.providerSessionId,
+        sessionId,
+      );
+    }
 
     if (patch.providerSessionId !== undefined) {
       state.session.providerSessionId = patch.providerSessionId;
@@ -599,10 +616,23 @@ export class SessionStore {
     return state;
   }
 
-  touchSessionActivity(sessionId: string, updatedAt = new Date().toISOString()): StoredSessionState {
+  touchSessionActivity(
+    sessionId: string,
+    updatedAt = new Date().toISOString(),
+    options?: { conversation?: boolean },
+  ): StoredSessionState {
     const state = this.requireSession(sessionId);
-    if (updatedAt >= state.session.updatedAt) {
+    const shouldUpdateSession = updatedAt >= state.session.updatedAt;
+    const shouldUpdateConversation =
+      options?.conversation === true &&
+      (!state.conversationActivityAt || updatedAt >= state.conversationActivityAt);
+    if (shouldUpdateSession) {
       state.session.updatedAt = updatedAt;
+    }
+    if (shouldUpdateConversation) {
+      state.conversationActivityAt = updatedAt;
+    }
+    if (shouldUpdateSession || shouldUpdateConversation) {
       this.snapshot();
     }
     return state;
@@ -648,6 +678,21 @@ export class SessionStore {
     return `${provider}:${providerSessionId}`;
   }
 
+  private assertProviderSessionAvailable(
+    provider: ManagedSession["provider"],
+    providerSessionId: string,
+    sessionId: string,
+  ): void {
+    const existingSessionId = this.providerSessionIndex.get(
+      this.providerKey(provider, providerSessionId),
+    );
+    if (existingSessionId && existingSessionId !== sessionId) {
+      throw new Error(
+        `Provider session ${provider}:${providerSessionId} is already running; attach instead of resume.`,
+      );
+    }
+  }
+
   private snapshot(): void {
     this.onSnapshot?.(this.listSessions());
   }
@@ -665,6 +710,9 @@ function cloneStoredSessionState(state: StoredSessionState): StoredSessionState 
     },
     clients: state.clients.map((client) => ({ ...client })),
     controlLease: { ...state.controlLease },
+    ...(state.conversationActivityAt !== undefined
+      ? { conversationActivityAt: state.conversationActivityAt }
+      : {}),
     ...(state.usage !== undefined ? { usage: { ...state.usage } } : {}),
     ...(state.activeTurnId !== undefined ? { activeTurnId: state.activeTurnId } : {}),
   };

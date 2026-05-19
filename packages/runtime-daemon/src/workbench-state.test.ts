@@ -150,6 +150,34 @@ describe("WorkbenchStateStore", () => {
     await engine.shutdown();
   });
 
+  test("persists previous running session recency from conversation activity", async () => {
+    const workbench = new WorkbenchStateStore();
+    const sessionStore = new SessionStore();
+    const state = sessionStore.createManagedSession({
+      provider: "codex",
+      providerSessionId: "thread-conversation-activity",
+      launchSource: "web",
+      cwd: "/workspace/demo",
+      rootDir: "/workspace/demo",
+      title: "activity",
+    });
+    state.session.updatedAt = "2026-05-19T10:30:00.000Z";
+    state.conversationActivityAt = "2026-05-19T10:05:00.000Z";
+    state.controlLease = {
+      sessionId: state.session.id,
+      holderClientId: "web-user",
+      holderKind: "web",
+    };
+
+    workbench.persistLiveSessions([state]);
+    const snapshot = workbench.snapshot();
+
+    assert.equal(snapshot.sessions[0]?.updatedAt, "2026-05-19T10:05:00.000Z");
+    assert.equal(snapshot.sessions[0]?.lastUsedAt, "2026-05-19T10:05:00.000Z");
+    assert.equal(snapshot.recentSessions[0]?.lastUsedAt, "2026-05-19T10:05:00.000Z");
+    await workbench.flush();
+  });
+
   test("preserves workspace add order across restart", async () => {
     const first = new RuntimeEngine();
     first.addWorkspace("/workspace/zeta");

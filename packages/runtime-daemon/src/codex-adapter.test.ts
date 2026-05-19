@@ -8,6 +8,7 @@ import { CodexAdapter } from "./provider-control/codex-structured-adapter";
 import { CodexStoredHistoryAdapter } from "./codex-stored-history-adapter";
 import { DebugAdapter } from "./debug-adapter";
 import { EventBus } from "./event-bus";
+import { resetDefaultManualProviderModelStoreForTests } from "./manual-provider-models";
 import { PtyHub } from "./pty-hub";
 import { SessionStore } from "./session-store";
 
@@ -32,15 +33,19 @@ function waitFor(predicate: () => boolean, timeoutMs = 5000): Promise<void> {
 describe("CodexAdapter", () => {
   let tmpHome: string;
   let previousCodexHome: string | undefined;
+  let previousRahHome: string | undefined;
   let previousBinary: string | undefined;
   let previousTransport: string | undefined;
 
   beforeEach(() => {
     previousCodexHome = process.env.CODEX_HOME;
+    previousRahHome = process.env.RAH_HOME;
     previousBinary = process.env.RAH_CODEX_BINARY;
     previousTransport = process.env.RAH_CODEX_APP_SERVER_TRANSPORT;
     tmpHome = mkdtempSync(path.join(os.tmpdir(), "rah-codex-home-"));
     process.env.CODEX_HOME = tmpHome;
+    process.env.RAH_HOME = path.join(tmpHome, "rah-home");
+    resetDefaultManualProviderModelStoreForTests(path.join(process.env.RAH_HOME, "runtime-daemon"));
     process.env.RAH_CODEX_APP_SERVER_TRANSPORT = "stdio";
   });
 
@@ -50,6 +55,12 @@ describe("CodexAdapter", () => {
     } else {
       process.env.CODEX_HOME = previousCodexHome;
     }
+    if (previousRahHome === undefined) {
+      delete process.env.RAH_HOME;
+    } else {
+      process.env.RAH_HOME = previousRahHome;
+    }
+    resetDefaultManualProviderModelStoreForTests();
     if (previousBinary === undefined) {
       delete process.env.RAH_CODEX_BINARY;
     } else {

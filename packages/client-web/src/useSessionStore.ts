@@ -125,6 +125,7 @@ type ModelCatalogLoadState = {
   loading: boolean;
   error: string | null;
   loadedAt: number | null;
+  lastAttemptedAt: number | null;
   lastSuccessfulFetchedAt: string | null;
 };
 
@@ -233,6 +234,7 @@ const MODEL_CATALOG_PROVIDERS = new Set<ProviderChoice>([
   "opencode",
 ]);
 const MODEL_CATALOG_TTL_MS = 5 * 60 * 1000;
+const MODEL_CATALOG_FAILURE_RETRY_MS = 10 * 1000;
 const GEMINI_CATALOG_BACKGROUND_POLL_MS = 1_000;
 const GEMINI_CATALOG_BACKGROUND_MAX_ATTEMPTS = 20;
 const MODEL_CATALOG_BACKGROUND_REFRESH_MS = 30 * 60 * 1_000;
@@ -687,6 +689,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     if (!MODEL_CATALOG_PROVIDERS.has(provider)) {
       return;
     }
+    const now = Date.now();
     set((state) => ({
       modelCatalogs: {
         ...state.modelCatalogs,
@@ -694,7 +697,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           catalog,
           loading: false,
           error: null,
-          loadedAt: Date.now(),
+          loadedAt: now,
+          lastAttemptedAt: now,
           lastSuccessfulFetchedAt: isSuccessfulModelCatalog(catalog)
             ? catalog.fetchedAt
             : state.modelCatalogs[provider]?.lastSuccessfulFetchedAt ?? null,
@@ -713,6 +717,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             loading: false,
             error: null,
             loadedAt: null,
+            lastAttemptedAt: null,
             lastSuccessfulFetchedAt: null,
           },
         },
@@ -827,6 +832,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     ) {
       return;
     }
+    if (
+      options?.background &&
+      !options.forceRefresh &&
+      !current?.catalog &&
+      current?.lastAttemptedAt !== null &&
+      current?.lastAttemptedAt !== undefined &&
+      Date.now() - current.lastAttemptedAt < MODEL_CATALOG_FAILURE_RETRY_MS
+    ) {
+      return;
+    }
     const backgroundInFlightKey = options?.background
       ? modelCatalogBackgroundKey(provider, options.cwd)
       : null;
@@ -837,6 +852,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         return;
       }
     }
+    const startedAt = Date.now();
     if (!options?.background) {
       set((state) => ({
         modelCatalogs: {
@@ -846,12 +862,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             loading: true,
             error: null,
             loadedAt: current?.loadedAt ?? null,
+            lastAttemptedAt: startedAt,
             lastSuccessfulFetchedAt: current?.lastSuccessfulFetchedAt ?? null,
           },
         },
       }));
     }
-    const startedAt = Date.now();
     if (options?.background && options.reason !== "gemini-cache-poll") {
       logModelCatalog("refresh start", {
         provider,
@@ -887,6 +903,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             loading: false,
             error: null,
             loadedAt,
+            lastAttemptedAt: startedAt,
             lastSuccessfulFetchedAt,
           },
         },
@@ -919,18 +936,22 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             error: readErrorMessage(error),
           });
         }
-        set((state) => ({
-          modelCatalogs: {
-            ...state.modelCatalogs,
-            [provider]: {
-              catalog: state.modelCatalogs[provider]?.catalog ?? null,
-              loading: false,
-              error: null,
-              loadedAt: Date.now(),
-              lastSuccessfulFetchedAt: state.modelCatalogs[provider]?.lastSuccessfulFetchedAt ?? null,
+        set((state) => {
+          const currentState = state.modelCatalogs[provider];
+          return {
+            modelCatalogs: {
+              ...state.modelCatalogs,
+              [provider]: {
+                catalog: currentState?.catalog ?? null,
+                loading: false,
+                error: null,
+                loadedAt: currentState?.loadedAt ?? null,
+                lastAttemptedAt: startedAt,
+                lastSuccessfulFetchedAt: currentState?.lastSuccessfulFetchedAt ?? null,
+              },
             },
-          },
-        }));
+          };
+        });
         return;
       }
       set((state) => ({
@@ -941,6 +962,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             loading: false,
             error: readErrorMessage(error),
             loadedAt: state.modelCatalogs[provider]?.loadedAt ?? null,
+            lastAttemptedAt: startedAt,
             lastSuccessfulFetchedAt: state.modelCatalogs[provider]?.lastSuccessfulFetchedAt ?? null,
           },
         },

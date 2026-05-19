@@ -430,6 +430,15 @@ describe("startRahDaemon", () => {
     await assert.rejects(readJsonBody(request), /Request body too large/);
   });
 
+  test("maps malformed JSON request bodies to bad request", async () => {
+    const request = Readable.from(["{"]) as unknown as IncomingMessage;
+    Object.defineProperty(request, "headers", {
+      value: {},
+    });
+
+    await assert.rejects(readJsonBody(request), /Bad Request: invalid JSON body/);
+  });
+
   test("maps known request errors to client-facing HTTP statuses", () => {
     assert.equal(
       requestErrorStatus(
@@ -443,6 +452,10 @@ describe("startRahDaemon", () => {
     );
     assert.equal(
       requestErrorStatus(new Error("Provider custom is not a supported live provider.")),
+      400,
+    );
+    assert.equal(
+      requestErrorStatus(new Error("Bad Request: invalid JSON body.")),
       400,
     );
   });

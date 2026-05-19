@@ -143,6 +143,10 @@ describe("applyProviderActivity", () => {
       services.sessionStore.getSession(sessionId)?.session.updatedAt,
       posted[0]?.ts,
     );
+    assert.equal(
+      services.sessionStore.getSession(sessionId)?.conversationActivityAt,
+      posted[0]?.ts,
+    );
 
     const stopped = applyProviderActivity(
       services,
@@ -152,6 +156,34 @@ describe("applyProviderActivity", () => {
     );
     assert.equal(stopped.length, 1);
     assert.equal(services.sessionStore.getSession(sessionId)?.session.runtimeState, "stopped");
+  });
+
+  test("tracks conversation activity separately from non-chat timeline updates", () => {
+    const services = createServices();
+    const sessionId = createSession(services);
+
+    applyProviderActivity(
+      services,
+      sessionId,
+      { provider: "codex", ts: "2099-05-19T10:00:00.000Z" },
+      {
+        type: "timeline_item",
+        item: { kind: "assistant_message", text: "Visible answer" },
+      },
+    );
+    applyProviderActivity(
+      services,
+      sessionId,
+      { provider: "codex", ts: "2099-05-19T10:05:00.000Z" },
+      {
+        type: "timeline_item",
+        item: { kind: "reasoning", text: "Internal reasoning" },
+      },
+    );
+
+    const state = services.sessionStore.getSession(sessionId);
+    assert.equal(state?.session.updatedAt, "2099-05-19T10:05:00.000Z");
+    assert.equal(state?.conversationActivityAt, "2099-05-19T10:00:00.000Z");
   });
 
   test("clears active turn when provider reports the session is idle", () => {

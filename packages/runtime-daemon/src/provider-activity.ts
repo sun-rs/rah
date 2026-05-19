@@ -307,6 +307,10 @@ export function isCouncilMcpTimelinePost(item: TimelineItem): boolean {
   );
 }
 
+function isConversationTimelineItem(item: TimelineItem): boolean {
+  return item.kind === "user_message" || item.kind === "assistant_message";
+}
+
 export function shouldSuppressCouncilManagedActivity(activity: ProviderActivity): boolean {
   switch (activity.type) {
     case "timeline_item":
@@ -663,7 +667,9 @@ export function applyProviderActivity(
           break;
         }
         const activityTs = ts ?? new Date().toISOString();
-        services.sessionStore.touchSessionActivity(sessionId, activityTs);
+        services.sessionStore.touchSessionActivity(sessionId, activityTs, {
+          conversation: isConversationTimelineItem(reconciled.item),
+        });
         published.push(
           services.eventBus.publish(
             withRaw(
@@ -708,7 +714,9 @@ export function applyProviderActivity(
           break;
         }
         const activityTs = ts ?? new Date().toISOString();
-        services.sessionStore.touchSessionActivity(sessionId, activityTs);
+        services.sessionStore.touchSessionActivity(sessionId, activityTs, {
+          conversation: isConversationTimelineItem(reconciled.item),
+        });
         published.push(
           services.eventBus.publish(
             withRaw(

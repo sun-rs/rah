@@ -98,8 +98,8 @@ export function readJsonBody(
       }
       try {
         resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")));
-      } catch (error) {
-        reject(error);
+      } catch {
+        reject(new Error("Bad Request: invalid JSON body."));
       }
     });
     req.on("error", (error) => {

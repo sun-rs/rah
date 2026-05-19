@@ -48,6 +48,17 @@ export function councilLineLabel(council: CouncilSnapshot): string {
   return formatCouncilCount(council.meta?.messageCount ?? council.messageWindow?.total ?? council.messages.length, "lines");
 }
 
+export function councilLineCompactLabel(council: CouncilSnapshot): string {
+  const count = council.meta?.messageCount ?? council.messageWindow?.total ?? council.messages.length;
+  if (count >= 1_000_000) {
+    return `${(count / 1_000_000).toFixed(1)}m`;
+  }
+  if (count >= 1_000) {
+    return `${(count / 1_000).toFixed(1)}k`;
+  }
+  return String(count);
+}
+
 export function councilLineTitle(council: CouncilSnapshot): string {
   const count = council.meta?.messageCount ?? council.messageWindow?.total ?? council.messages.length;
   return `${count.toLocaleString()} Council message log lines`;
@@ -159,10 +170,11 @@ function CouncilRow(props: {
       badge={
         props.variant === "running"
           ? { label: "Running", tone: "running" }
-          : { label: "Stopped" }
+          : null
       }
       meta={{
         label: councilLineLabel(props.council),
+        compactLabel: councilLineCompactLabel(props.council),
         title: councilLineTitle(props.council),
       }}
       timeLabel={formatRelativeTime(councilActivityAt(props.council), {

@@ -122,6 +122,7 @@ import {
 import { WorkspaceScopeAuthorizer } from "./workspace-scope-authorizer";
 import { assertExistingWorkingDirectory } from "./provider-working-directory";
 import { cleanupRahNativeServerOrphans } from "./native-local-server-orphans";
+import { prepareProviderSessionResume } from "./provider-resume";
 import {
   bindActionCapability,
   bindDebugCapability,
@@ -253,6 +254,7 @@ export class RuntimeEngine {
   >();
   private readonly structuredSessionOwners = new Map<string, StructuredSessionOwnerProvider>();
   private readonly historyMirrorAdapters: ProviderStoredHistoryAdapter[] = [];
+  private readonly nativeTuiRehydratedSessionIds = new Set<string>();
   private readonly structuredLiveAllowedForInjectedAdapters: boolean;
 
   constructor(adapters?: ProviderAdapter[]) {
@@ -485,7 +487,10 @@ export class RuntimeEngine {
     request: AddManualProviderModelRequest,
   ): Promise<AddManualProviderModelResponse> {
     const trimmedModelId = request.id.trim();
-    const catalog = await this.listProviderModels(provider, request.cwd ? { cwd: request.cwd } : {});
+    const catalog = await this.listProviderModels(provider, {
+      ...(request.cwd ? { cwd: request.cwd } : {}),
+      forceRefresh: true,
+    });
     if (catalog.models.some((model) => model.id === trimmedModelId)) {
       throw new Error(`Bad Request: model '${trimmedModelId}' already exists for ${provider}.`);
     }
@@ -736,24 +741,50 @@ export class RuntimeEngine {
         await assertExistingWorkingDirectory(request.cwd, "Session working directory");
       }
       this.pruneOrphanSessions();
-      return await this.terminals.startTuiMuxSession({
-        launch: await this.nativeTuiProviders.resumeLaunchSpec(request),
-        ...(request.attach !== undefined ? { attach: request.attach } : {}),
+      const preparedResume = prepareProviderSessionResume({
+        services: this,
+        provider: request.provider,
         providerSessionId: request.providerSessionId,
-        ...(request.origin !== undefined ? { origin: request.origin } : {}),
+        preferStoredReplay: request.preferStoredReplay,
+        ...(request.historySourceSessionId ? { historySourceSessionId: request.historySourceSessionId } : {}),
+        rehydratedSessionIds: this.nativeTuiRehydratedSessionIds,
       });
+      try {
+        return await this.terminals.startTuiMuxSession({
+          launch: await this.nativeTuiProviders.resumeLaunchSpec(request),
+          ...(request.attach !== undefined ? { attach: request.attach } : {}),
+          providerSessionId: request.providerSessionId,
+          ...(request.origin !== undefined ? { origin: request.origin } : {}),
+        });
+      } catch (error) {
+        preparedResume.rollback();
+        throw error;
+      }
     }
     if (this.shouldUseNativeTuiBackend(request)) {
       if (request.cwd) {
         await assertExistingWorkingDirectory(request.cwd, "Session working directory");
       }
       this.pruneOrphanSessions();
-      return await this.terminals.startNativeTuiSession({
-        launch: await this.nativeTuiProviders.resumeLaunchSpec(request),
-        ...(request.attach !== undefined ? { attach: request.attach } : {}),
+      const preparedResume = prepareProviderSessionResume({
+        services: this,
+        provider: request.provider,
         providerSessionId: request.providerSessionId,
-        ...(request.origin !== undefined ? { origin: request.origin } : {}),
+        preferStoredReplay: request.preferStoredReplay,
+        ...(request.historySourceSessionId ? { historySourceSessionId: request.historySourceSessionId } : {}),
+        rehydratedSessionIds: this.nativeTuiRehydratedSessionIds,
       });
+      try {
+        return await this.terminals.startNativeTuiSession({
+          launch: await this.nativeTuiProviders.resumeLaunchSpec(request),
+          ...(request.attach !== undefined ? { attach: request.attach } : {}),
+          providerSessionId: request.providerSessionId,
+          ...(request.origin !== undefined ? { origin: request.origin } : {}),
+        });
+      } catch (error) {
+        preparedResume.rollback();
+        throw error;
+      }
     }
     return this.structuredProviders.resumeSession(request);
   }

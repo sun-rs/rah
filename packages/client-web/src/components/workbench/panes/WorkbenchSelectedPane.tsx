@@ -34,8 +34,11 @@ import {
 } from "../header-button-styles";
 import {
   ConversationMetaBadge,
-  type ConversationMetaTone,
 } from "../ConversationMetaBadge";
+import {
+  resolveConversationHeaderState,
+  type ConversationHeaderStateIcon,
+} from "../conversation-header-meta";
 import type { InlineWorkbenchNotice } from "../../../workbench-notice-contract";
 import { SessionInfoDialog } from "../dialogs/SessionInfoDialog";
 import {
@@ -102,32 +105,19 @@ function resolveContextUsageDisplay(
   };
 }
 
-function formatSessionLifecycleLabel(status: "running" | "stopped"): string {
-  return status === "running" ? "Running" : "Stopped";
-}
-
-function formatSessionPhaseLabel(phase: SessionSummary["session"]["phase"]): string {
-  switch (phase) {
-    case "starting":
-      return "Starting";
-    case "ready":
-      return "Ready";
-    case "working":
-      return "Working";
-    case "waiting_input":
-      return "Input";
-    case "waiting_permission":
-      return "Approval";
-    case "stopping":
-      return "Stopping";
-    case "failed":
-      return "Failed";
-    case "ended":
-      return "Ended";
-  }
-}
-
 type SessionViewMode = "chat" | "tui";
+
+function ConversationHeaderStateIconView(props: { icon: ConversationHeaderStateIcon }) {
+  switch (props.icon) {
+    case "running":
+      return <Circle size={9} className="fill-current" />;
+    case "activity":
+      return <Activity size={10} />;
+    case "stopped":
+      return <CircleStop size={10} />;
+  }
+  return null;
+}
 
 function shouldRenderInteractionNotice(notice: InlineWorkbenchNotice | null): notice is InlineWorkbenchNotice {
   if (!notice) {
@@ -257,20 +247,14 @@ export function WorkbenchSelectedPane(props: {
   const sessionLifecycleStatus = props.selectedIsReadOnlyReplay
     ? "stopped"
     : props.selectedSummary.session.status;
-  const sessionLifecycleLabel = formatSessionLifecycleLabel(sessionLifecycleStatus);
-  const sessionLifecycleTone: ConversationMetaTone =
-    sessionLifecycleStatus === "running" ? "running" : "stopped";
   const sessionPhase =
     isCouncilSession && props.selectedSummary.session.phase === "working"
       ? "ready"
       : props.selectedSummary.session.phase;
-  const sessionPhaseLabel = formatSessionPhaseLabel(sessionPhase);
-  const sessionPhaseTone: ConversationMetaTone =
-    sessionPhase === "working" || sessionPhase === "starting" || sessionPhase === "stopping"
-      ? "working"
-      : sessionPhase === "waiting_permission"
-        ? "permission"
-        : "stopped";
+  const sessionHeaderState = resolveConversationHeaderState({
+    status: sessionLifecycleStatus,
+    phase: sessionPhase,
+  });
   const effectiveSessionViewMode =
     nativeTuiAvailable && sessionViewMode === "tui" ? "tui" : "chat";
   const showComposer =
@@ -543,18 +527,14 @@ export function WorkbenchSelectedPane(props: {
             <div className="text-sm font-medium truncate text-[var(--app-fg)]">
               {props.selectedSummary.session.title ?? props.selectedSummary.session.id}
             </div>
-            <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-1.5 text-[11px] text-[var(--app-hint)]">
-              <ConversationMetaBadge tone={sessionLifecycleTone} width="status">
-                {sessionLifecycleStatus === "running" ? (
-                  <Circle size={9} className="fill-current" />
-                ) : (
-                  <CircleStop size={10} />
-                )}
-                <span>{sessionLifecycleLabel}</span>
-              </ConversationMetaBadge>
-              <ConversationMetaBadge tone={sessionPhaseTone} width="status">
-                <Activity size={10} />
-                <span>{sessionPhaseLabel}</span>
+            <div className="mt-0.5 flex min-w-0 items-center gap-1.5 overflow-hidden text-[11px] text-[var(--app-hint)]">
+              <ConversationMetaBadge
+                tone={sessionHeaderState.tone}
+                title={sessionHeaderState.title}
+                ariaLabel={sessionHeaderState.title}
+              >
+                <ConversationHeaderStateIconView icon={sessionHeaderState.icon} />
+                <span>{sessionHeaderState.label}</span>
               </ConversationMetaBadge>
               {contextUsageDisplay ? (
                 <span
@@ -562,7 +542,11 @@ export function WorkbenchSelectedPane(props: {
                   aria-label={contextUsageDisplay.ariaLabel}
                   tabIndex={0}
                 >
-                  <ConversationMetaBadge tone="context" width="context" title={contextUsageDisplay.tooltip}>
+                  <ConversationMetaBadge
+                    tone="context"
+                    title={contextUsageDisplay.tooltip}
+                    {...(compactSessionMeta ? {} : { width: "context" as const })}
+                  >
                     <span>{compactSessionMeta ? contextUsageDisplay.compactLabel : contextUsageDisplay.label}</span>
                   </ConversationMetaBadge>
                   <span
@@ -574,9 +558,13 @@ export function WorkbenchSelectedPane(props: {
                 </span>
               ) : null}
               {isCouncilSession ? (
-                <ConversationMetaBadge tone="council" width="status" title="Council agent session">
+                <ConversationMetaBadge
+                  tone="council"
+                  title="Council agent session"
+                  ariaLabel="Council agent session"
+                >
                   <UsersRound size={10} />
-                  <span>Council</span>
+                  <span className={compactSessionMeta ? "sr-only" : ""}>Council</span>
                 </ConversationMetaBadge>
               ) : null}
             </div>

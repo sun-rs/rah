@@ -88,7 +88,7 @@ export function ModelSourceBadge(props: { manual: boolean }) {
     return null;
   }
   return (
-    <span className="shrink-0 rounded-full border border-cyan-500/25 bg-cyan-500/10 px-1.5 py-[1px] text-[9px] font-medium uppercase leading-[11px] tracking-wide text-cyan-700 dark:text-cyan-300">
+    <span className="inline-flex h-4 shrink-0 items-center justify-center rounded-full border border-cyan-500/25 bg-cyan-500/10 px-1.5 text-[9px] font-medium uppercase leading-none tracking-wide text-cyan-700 dark:text-cyan-300">
       Manual
     </span>
   );

@@ -32,13 +32,12 @@ function isHistoryProviderFilter(provider: StoredSessionRef["provider"]): provid
 function HistoryFilterMenu(props: {
   sortMode: WorkspaceSortMode;
   onSortModeChange: (value: WorkspaceSortMode) => void;
+  showWorkspaceSort: boolean;
   selectedProviders: ReadonlySet<HistoryProviderFilter>;
   onToggleProvider: (provider: HistoryProviderFilter) => void;
   onToggleAllProviders: () => void;
-  disabled: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const [disabledHintVisible, setDisabledHintVisible] = useState(false);
 
   useEffect(() => {
     if (!open) {
@@ -63,78 +62,60 @@ function HistoryFilterMenu(props: {
     };
   }, [open]);
 
-  useEffect(() => {
-    if (!disabledHintVisible) {
-      return;
-    }
-    const timeoutId = window.setTimeout(() => setDisabledHintVisible(false), 1600);
-    return () => window.clearTimeout(timeoutId);
-  }, [disabledHintVisible]);
-
   const sortOptions: Array<{ value: WorkspaceSortMode; label: string }> = [
     { value: "created", label: "Created" },
     { value: "updated", label: "Updated" },
   ];
   const allProvidersSelected = props.selectedProviders.size === HISTORY_PROVIDER_OPTIONS.length;
+  const menuTitle = props.showWorkspaceSort ? "Filter and sort sessions" : "Filter providers";
 
   return (
     <div className="relative" data-history-sort-menu>
       <button
         type="button"
-        className={`inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--app-border)] transition-colors ${
-          props.disabled
-            ? "text-[var(--app-hint)] opacity-55 hover:bg-[var(--app-bg)]"
-            : "text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
-        }`}
+        className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--app-border)] text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-disabled={props.disabled}
-        aria-label="Filter and sort history"
-        title={props.disabled ? "Filters are available in All" : "Filter and sort sessions"}
+        aria-label={menuTitle}
+        title={menuTitle}
         onClick={() => {
-          if (props.disabled) {
-            setOpen(false);
-            setDisabledHintVisible(true);
-            return;
-          }
           setOpen((current) => !current);
         }}
       >
         <ListFilter size={14} />
       </button>
-      {disabledHintVisible ? (
-        <div className="absolute right-0 top-9 z-20 w-44 rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] px-3 py-2 text-xs text-[var(--app-hint)] shadow-lg">
-          Switch to All to use filters.
-        </div>
-      ) : null}
       {open ? (
         <div className="absolute right-0 top-9 z-10 w-56 rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] p-1 shadow-lg">
-          <div className="px-2 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--app-hint)]">
-            Workspace sort
-          </div>
-          {sortOptions.map((option) => (
-            <button
-              key={option.value}
-              type="button"
-              className="flex w-full items-center justify-between gap-3 rounded-md px-3 py-2 text-sm text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]"
-              onClick={() => {
-                props.onSortModeChange(option.value);
-              }}
-            >
-              <span className="flex items-center gap-2">
-                {option.value === "created" ? (
-                  <PlusCircle size={14} className="text-[var(--app-hint)]" />
-                ) : (
-                  <Pencil size={14} className="text-[var(--app-hint)]" />
-                )}
-                <span>{option.label}</span>
-              </span>
-              <span className="inline-flex h-4 w-4 items-center justify-center text-[var(--app-hint)]">
-                {props.sortMode === option.value ? <Check size={14} /> : null}
-              </span>
-            </button>
-          ))}
-          <div className="my-1 h-px bg-[var(--app-border)]" />
+          {props.showWorkspaceSort ? (
+            <>
+              <div className="px-2 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--app-hint)]">
+                Workspace sort
+              </div>
+              {sortOptions.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  className="flex w-full items-center justify-between gap-3 rounded-md px-3 py-2 text-sm text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]"
+                  onClick={() => {
+                    props.onSortModeChange(option.value);
+                  }}
+                >
+                  <span className="flex items-center gap-2">
+                    {option.value === "created" ? (
+                      <PlusCircle size={14} className="text-[var(--app-hint)]" />
+                    ) : (
+                      <Pencil size={14} className="text-[var(--app-hint)]" />
+                    )}
+                    <span>{option.label}</span>
+                  </span>
+                  <span className="inline-flex h-4 w-4 items-center justify-center text-[var(--app-hint)]">
+                    {props.sortMode === option.value ? <Check size={14} /> : null}
+                  </span>
+                </button>
+              ))}
+              <div className="my-1 h-px bg-[var(--app-border)]" />
+            </>
+          ) : null}
           <div className="px-2 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--app-hint)]">
             Providers
           </div>
@@ -170,13 +151,6 @@ function HistoryFilterMenu(props: {
   );
 }
 
-function stoppedSessionBadge() {
-  return {
-    label: "Stopped",
-    className: "border-[var(--app-border)] bg-[var(--app-bg)] text-[var(--app-hint)]",
-  };
-}
-
 function sessionTitle(session: StoredSessionRef): string {
   return session.title ?? session.preview ?? session.providerSessionId;
 }
@@ -191,6 +165,16 @@ function formatCount(value: number, unit: string): string {
   return `${value} ${unit}`;
 }
 
+function formatCompactCount(value: number): string {
+  if (value >= 1_000_000) {
+    return `${(value / 1_000_000).toFixed(1)}m`;
+  }
+  if (value >= 1_000) {
+    return `${(value / 1_000).toFixed(1)}k`;
+  }
+  return String(value);
+}
+
 function formatBytes(bytes: number): string {
   if (bytes >= 1024 * 1024) {
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
@@ -201,10 +185,32 @@ function formatBytes(bytes: number): string {
   return `${bytes} B`;
 }
 
-function historyMetaLabel(session: StoredSessionRef): string | null {
+function formatCompactBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) {
+    return `${(bytes / (1024 * 1024)).toFixed(1)}m`;
+  }
+  if (bytes >= 1024) {
+    return `${Math.round(bytes / 1024)}k`;
+  }
+  return String(bytes);
+}
+
+function hasHistoryMeta(session: StoredSessionRef): boolean {
   const meta = session.historyMeta;
   if (!meta) {
-    return null;
+    return false;
+  }
+  return (
+    typeof meta.lines === "number" ||
+    typeof meta.messages === "number" ||
+    typeof meta.bytes === "number"
+  );
+}
+
+function historyMetaLabel(session: StoredSessionRef | undefined): string {
+  const meta = session?.historyMeta;
+  if (!meta) {
+    return formatCount(0, "lines");
   }
   if (typeof meta.lines === "number") {
     return formatCount(meta.lines, "lines");
@@ -215,19 +221,36 @@ function historyMetaLabel(session: StoredSessionRef): string | null {
   if (typeof meta.bytes === "number") {
     return formatBytes(meta.bytes);
   }
-  return null;
+  return formatCount(0, "lines");
 }
 
-function historyMetaTitle(session: StoredSessionRef): string | undefined {
-  const meta = session.historyMeta;
+function historyMetaCompactLabel(session: StoredSessionRef | undefined): string {
+  const meta = session?.historyMeta;
   if (!meta) {
-    return undefined;
+    return "0";
+  }
+  if (typeof meta.lines === "number") {
+    return formatCompactCount(meta.lines);
+  }
+  if (typeof meta.messages === "number") {
+    return formatCompactCount(meta.messages);
+  }
+  if (typeof meta.bytes === "number") {
+    return formatCompactBytes(meta.bytes);
+  }
+  return "0";
+}
+
+function historyMetaTitle(session: StoredSessionRef | undefined): string {
+  const meta = session?.historyMeta;
+  if (!meta) {
+    return formatCount(0, "lines");
   }
   return [
     typeof meta.lines === "number" ? formatCount(meta.lines, "lines") : null,
     typeof meta.messages === "number" ? formatCount(meta.messages, "msgs") : null,
     typeof meta.bytes === "number" ? formatBytes(meta.bytes) : null,
-  ].filter(Boolean).join(" · ") || undefined;
+  ].filter(Boolean).join(" · ") || formatCount(0, "lines");
 }
 
 function sessionHistoryTimestamp(session: StoredSessionRef): string {
@@ -241,8 +264,8 @@ function chooseSessionHistoryRef(
   if (!current) {
     return candidate;
   }
-  const currentHasMeta = historyMetaLabel(current) !== null;
-  const candidateHasMeta = historyMetaLabel(candidate) !== null;
+  const currentHasMeta = hasHistoryMeta(current);
+  const candidateHasMeta = hasHistoryMeta(candidate);
   if (candidateHasMeta !== currentHasMeta) {
     return candidateHasMeta ? candidate : current;
   }
@@ -322,8 +345,9 @@ function SessionChatRow(props: {
     props.session?.cwd ??
     (props.runningSummary ? runningSessionPath(props.runningSummary) : null);
   const running = props.runningSummary !== undefined;
-  const metaLabel = props.session ? historyMetaLabel(props.session) : null;
-  const metaTitle = props.session ? historyMetaTitle(props.session) : undefined;
+  const metaLabel = historyMetaLabel(props.session);
+  const compactMetaLabel = historyMetaCompactLabel(props.session);
+  const metaTitle = historyMetaTitle(props.session);
   const timeLabel = props.runningSummary
     ? formatRelativeTime(runningSessionActivityAt(props.runningSummary, props.runningActivityAt), {
         format: props.relativeTimeFormat,
@@ -344,7 +368,6 @@ function SessionChatRow(props: {
   };
   const deleteDisabled = running || !props.session;
   const showDelete = running || props.session !== undefined;
-  const stoppedBadge = stoppedSessionBadge();
 
   return (
     <ChatBrowserRow
@@ -355,12 +378,9 @@ function SessionChatRow(props: {
       badge={
         running
           ? { label: "Running", tone: "running" }
-          : {
-              label: stoppedBadge.label,
-              className: stoppedBadge.className,
-            }
+          : null
       }
-      meta={metaLabel ? { label: metaLabel, title: metaTitle } : null}
+      meta={{ label: metaLabel, compactLabel: compactMetaLabel, title: metaTitle }}
       timeLabel={timeLabel}
       onOpen={activate}
       onDelete={
@@ -409,6 +429,7 @@ export function SessionHistoryDialog(props: {
   const [pendingRemoveSession, setPendingRemoveSession] = useState<StoredSessionRef | null>(null);
   const [pendingRemoveWorkspaceDir, setPendingRemoveWorkspaceDir] = useState<string | null>(null);
   const [pendingRemoveCouncil, setPendingRemoveCouncil] = useState<CouncilSnapshot | null>(null);
+  const [councilRefreshPending, setCouncilRefreshPending] = useState(false);
   const relativeTimeFormat: RelativeTimeFormat = usePwaDisplayMode() ? "compact" : "long";
   const [selectedProviders, setSelectedProviders] = useState<Set<HistoryProviderFilter>>(
     () => new Set(HISTORY_PROVIDER_OPTIONS),
@@ -495,19 +516,28 @@ export function SessionHistoryDialog(props: {
       .filter((group): group is NonNullable<typeof group> => group !== null);
   }, [groups, query, selectedProviders]);
 
+  const matchesSelectedProvider = (provider: StoredSessionRef["provider"] | SessionSummary["session"]["provider"]) => {
+    if (!isHistoryProviderFilter(provider)) {
+      return selectedProviders.size === HISTORY_PROVIDER_OPTIONS.length;
+    }
+    return selectedProviders.has(provider);
+  };
+
   const stoppedRecentSessions = useMemo(() => {
     const q = query.trim().toLowerCase();
     return filterStoppedRecentSessions(
       dedupeStoredSessionsByIdentity(props.recentSessions),
       runningIdentityKeys,
     )
+      .filter((session) => matchesSelectedProvider(session.provider))
       .filter((session) => matchesQuery(session, q))
       .sort((a, b) => (b.lastUsedAt ?? b.updatedAt ?? "").localeCompare(a.lastUsedAt ?? a.updatedAt ?? ""));
-  }, [runningIdentityKeys, props.recentSessions, query]);
+  }, [runningIdentityKeys, props.recentSessions, query, selectedProviders]);
 
   const runningSessions = useMemo(() => {
     const q = query.trim().toLowerCase();
     return [...props.runningSessions]
+      .filter((session) => matchesSelectedProvider(session.session.provider))
       .filter((session) => runningMatchesQuery(session, q))
       .sort((a, b) =>
         runningSessionActivityAt(
@@ -520,7 +550,19 @@ export function SessionHistoryDialog(props: {
           ),
         ),
       );
-  }, [props.runningSessionActivityAtById, props.runningSessions, query]);
+  }, [props.runningSessionActivityAtById, props.runningSessions, query, selectedProviders]);
+
+  const refreshCouncilsFromDialog = async () => {
+    if (!props.onRefreshCouncils || councilRefreshPending) {
+      return;
+    }
+    setCouncilRefreshPending(true);
+    try {
+      await props.onRefreshCouncils();
+    } finally {
+      setCouncilRefreshPending(false);
+    }
+  };
 
   useEffect(() => {
     if (query.trim()) {
@@ -652,28 +694,28 @@ export function SessionHistoryDialog(props: {
               {tab === "council" ? (
                 <button
                   type="button"
-                  onClick={() => void props.onRefreshCouncils?.()}
-                  disabled={!props.onRefreshCouncils}
+                  onClick={() => void refreshCouncilsFromDialog()}
+                  disabled={!props.onRefreshCouncils || councilRefreshPending}
                   className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-[var(--app-border)] text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] disabled:opacity-40"
                   aria-label="Refresh Councils"
-                  title="Refresh Councils"
+                  title={props.onRefreshCouncils ? "Refresh Councils" : "Refresh unavailable"}
                 >
-                  <RefreshCw size={14} />
+                  <RefreshCw size={14} className={councilRefreshPending ? "animate-spin" : ""} />
                 </button>
               ) : (
                 <HistoryFilterMenu
                   sortMode={props.workspaceSortMode}
                   onSortModeChange={props.onWorkspaceSortModeChange}
+                  showWorkspaceSort={tab === "all"}
                   selectedProviders={selectedProviders}
                   onToggleProvider={toggleProvider}
                   onToggleAllProviders={toggleAllProviders}
-                  disabled={tab !== "all"}
                 />
               )}
             </div>
           </div>
 
-          <OverlayScrollArea className="min-h-0 flex-1" viewportClassName="h-full p-4">
+          <OverlayScrollArea className="min-h-0 flex-1" viewportClassName="h-full p-4 max-[699px]:px-2 max-[699px]:py-3">
             {tab === "council" ? (
               <CouncilsBrowser
                 councils={props.councils ?? []}
@@ -687,6 +729,7 @@ export function SessionHistoryDialog(props: {
                   props.onRemoveCouncil ? setPendingRemoveCouncil : undefined
                 }
                 onRenameCouncil={props.onRenameCouncil}
+                loading={councilRefreshPending}
               />
             ) : tab === "active" ? (
               <div className="space-y-4">

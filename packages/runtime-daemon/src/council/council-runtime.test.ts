@@ -699,6 +699,12 @@ test("CouncilRuntime does not project legacy wait-timeout noise to frontend coun
       )),
       false,
     );
+    const page = runtime.readCouncilMessages(councilId, { limit: 100 });
+    assert.equal(page.total, projected.messages.length);
+    assert.deepEqual(
+      page.messages.map((message) => message.id),
+      projected.messages.map((message) => message.id),
+    );
     assert.equal(
       eventBus.list({
         sessionIds: [councilId],

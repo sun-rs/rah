@@ -1,5 +1,5 @@
 import { mkdir, rename, writeFile } from "node:fs/promises";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
@@ -127,6 +127,7 @@ function workbenchSessionRef(state: StoredSessionState): StoredSessionRef | null
   if (!providerSessionId) {
     return null;
   }
+  const activityAt = state.conversationActivityAt ?? state.session.createdAt;
   return {
     provider: state.session.provider,
     providerSessionId,
@@ -135,10 +136,17 @@ function workbenchSessionRef(state: StoredSessionState): StoredSessionRef | null
     ...(state.session.title !== undefined ? { title: state.session.title } : {}),
     ...(state.session.preview !== undefined ? { preview: state.session.preview } : {}),
     createdAt: state.session.createdAt,
-    updatedAt: state.session.updatedAt,
-    lastUsedAt: state.session.updatedAt,
+    updatedAt: activityAt,
+    lastUsedAt: activityAt,
     source: "previous_running",
   };
+}
+
+function storedSessionActivityTimestamp(session: StoredSessionRef): string {
+  if (session.source === "previous_running") {
+    return session.lastUsedAt ?? session.createdAt ?? session.updatedAt ?? "";
+  }
+  return session.lastUsedAt ?? session.updatedAt ?? session.createdAt ?? "";
 }
 
 function isRememberableLiveSession(state: StoredSessionState): boolean {
@@ -279,11 +287,11 @@ function mergeRecentSessions(
     merged.set(sessionKey(session), {
       ...existing,
       ...normalizedSession,
-      lastUsedAt: normalizedSession.lastUsedAt ?? normalizedSession.updatedAt ?? now,
+      lastUsedAt: normalizedSession.lastUsedAt ?? normalizedSession.createdAt ?? normalizedSession.updatedAt ?? now,
     });
   }
   return [...merged.values()]
-    .sort((a, b) => (b.lastUsedAt ?? b.updatedAt ?? "").localeCompare(a.lastUsedAt ?? a.updatedAt ?? ""))
+    .sort((a, b) => storedSessionActivityTimestamp(b).localeCompare(storedSessionActivityTimestamp(a)))
     .slice(0, RECENT_SESSION_LIMIT);
 }
 
@@ -304,13 +312,34 @@ function mergeRememberedSessions(
       source: "previous_running",
     });
   }
-  return [...merged.values()].sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""));
+  return [...merged.values()].sort((a, b) => storedSessionActivityTimestamp(b).localeCompare(storedSessionActivityTimestamp(a)));
 }
 
 async function writeJsonAtomic(pathname: string, value: unknown): Promise<void> {
   const tmpPath = `${pathname}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`;
   await writeFile(tmpPath, JSON.stringify(value, null, 2), "utf8");
   await rename(tmpPath, pathname);
+}
+
+function quarantineCorruptStateFile(filePath: string, error: unknown): void {
+  if (!existsSync(filePath)) {
+    return;
+  }
+  const quarantinePath = `${filePath}.corrupt-${Date.now()}`;
+  try {
+    renameSync(filePath, quarantinePath);
+    console.warn("[rah:workbench-state] quarantined unreadable state file", {
+      filePath,
+      quarantinePath,
+      error,
+    });
+  } catch (renameError) {
+    console.warn("[rah:workbench-state] failed to quarantine unreadable state file", {
+      filePath,
+      error,
+      renameError,
+    });
+  }
 }
 
 export class WorkbenchStateStore {
@@ -468,7 +497,8 @@ export class WorkbenchStateStore {
         tuiMuxLiveSessions,
       };
       return this.state;
-    } catch {
+    } catch (error) {
+      quarantineCorruptStateFile(this.snapshotPath, error);
       this.state = {
         workspaces: [],
         hiddenWorkspaces: [],

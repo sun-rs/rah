@@ -92,7 +92,12 @@ function computeDefaultBaseUrl(): string {
 }
 
 export function getBaseUrl(): string {
-  const configured = window.localStorage.getItem("rah.baseUrl");
+  let configured: string | null = null;
+  try {
+    configured = window.localStorage.getItem("rah.baseUrl");
+  } catch {
+    configured = null;
+  }
   const trimmed = configured?.trim();
   if (!trimmed) {
     return computeDefaultBaseUrl();

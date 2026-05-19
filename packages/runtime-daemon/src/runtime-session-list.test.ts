@@ -158,6 +158,30 @@ describe("buildSessionsResponse", () => {
     assert.equal(response.recentSessions[1]?.lastUsedAt, "2026-04-29T09:00:00.000Z");
   });
 
+  test("uses running session conversation activity for recent timestamps", () => {
+    const liveState = storedSessionState("live-activity");
+    liveState.session.updatedAt = "2026-05-19T10:30:00.000Z";
+    liveState.conversationActivityAt = "2026-05-19T10:05:00.000Z";
+
+    const response = buildSessionsResponse({
+      liveStates: [liveState],
+      discoveredStoredSessions: [],
+      remembered: {
+        rememberedSessions: [],
+        rememberedRecentSessions: [],
+        rememberedWorkspaceDirs: ["/workspace/demo"],
+        rememberedHiddenWorkspaces: [],
+        rememberedHiddenSessionKeys: [],
+        rememberedSessionTitleOverrides: {},
+      },
+      isClosingSession: () => false,
+    });
+
+    assert.equal(response.recentSessions[0]?.providerSessionId, "live-activity");
+    assert.equal(response.recentSessions[0]?.updatedAt, "2026-05-19T10:05:00.000Z");
+    assert.equal(response.recentSessions[0]?.lastUsedAt, "2026-05-19T10:05:00.000Z");
+  });
+
   test("filters internal native TUI launch probe sessions from user-facing lists", () => {
     const probeWorkspace = "/repo/rah/test-results/native-real-tui-workspaces/codex";
     const normalWorkspace = "/workspace/demo";

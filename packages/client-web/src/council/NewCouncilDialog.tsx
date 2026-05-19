@@ -20,6 +20,7 @@ import {
 
 const COUNCIL_PROVIDER_OPTIONS = PROVIDER_OPTIONS;
 const COUNCIL_MODEL_CATALOG_TTL_MS = 5 * 60 * 1000;
+const COUNCIL_MODEL_CATALOG_FAILURE_RETRY_MS = 10 * 1000;
 
 type CouncilDialogOutsideEvent = {
   target: EventTarget | null;
@@ -51,6 +52,10 @@ export function catalogKey(provider: ProviderChoice, workspace: string): string 
 
 export function isCouncilCatalogFresh(loadedAt: number | undefined): boolean {
   return loadedAt !== undefined && Date.now() - loadedAt < COUNCIL_MODEL_CATALOG_TTL_MS;
+}
+
+export function councilCatalogFailureLoadedAt(now = Date.now()): number {
+  return now - COUNCIL_MODEL_CATALOG_TTL_MS + COUNCIL_MODEL_CATALOG_FAILURE_RETRY_MS;
 }
 
 export function createAdditionalCouncilAgentDraft(): CouncilAgentDraft {
@@ -279,7 +284,7 @@ export function NewCouncilDialog(props: {
           setCatalogs((current) => ({ ...current, [key]: catalog }));
         })
         .catch(() => {
-          catalogLoadedAtRef.current[key] = Date.now();
+          catalogLoadedAtRef.current[key] = councilCatalogFailureLoadedAt();
         })
         .finally(() => {
           catalogRequestsRef.current.delete(key);
