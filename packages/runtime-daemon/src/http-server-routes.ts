@@ -372,13 +372,6 @@ export function createPostRoutes(
       },
     },
     {
-      pattern: /^\/api\/council\/([^/]+)\/archive$/,
-      handler: async (req, res, match) => {
-        await engine.stopCouncil(decodeURIComponent(match[1]!));
-        writeJson(req, res, 200, { ok: true });
-      },
-    },
-    {
       pattern: /^\/api\/council\/([^/]+)\/delete$/,
       handler: async (req, res, match) => {
         engine.deleteCouncil(decodeURIComponent(match[1]!));
