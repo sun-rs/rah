@@ -176,13 +176,12 @@ export interface ModelCapabilityProfile {
 
 export interface SessionModelDescriptor {
   id: string;
-  label: string;
   description?: string;
   contextWindow?: number;
   hidden?: boolean;
   isDefault?: boolean;
   reasoningOptions?: SessionReasoningOption[];
-  defaultReasoningId?: string;
+  defaultReasoningId?: string | null;
 }
 
 export interface SessionModelState {

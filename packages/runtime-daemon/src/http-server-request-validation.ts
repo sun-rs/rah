@@ -325,12 +325,8 @@ export function parseAddManualProviderModelRequest(body: unknown): AddManualProv
   const request: AddManualProviderModelRequest = {
     id: requireString(record, "id"),
   };
-  const label = optionalString(record, "label");
   const optionIds = optionalStringArray(record, "optionIds");
   const cwd = optionalString(record, "cwd");
-  if (label !== undefined) {
-    request.label = label;
-  }
   if (optionIds !== undefined) {
     request.optionIds = optionIds;
   }

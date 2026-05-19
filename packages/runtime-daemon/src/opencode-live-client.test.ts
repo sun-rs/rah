@@ -6,7 +6,11 @@ import path from "node:path";
 import type { ProviderModelCatalog } from "@rah/runtime-protocol";
 import { EventBus } from "./event-bus";
 import { OpenCodeAdapter } from "./provider-control/opencode-structured-adapter";
-import { startOpenCodeServer } from "./opencode-api";
+import {
+  promptOpenCodeSession,
+  promptOpenCodeSessionAsync,
+  startOpenCodeServer,
+} from "./opencode-api";
 import {
   interruptOpenCodeLiveSession,
   runtimeDiagnosticsForOpenCodeServer,
@@ -15,6 +19,12 @@ import {
   type LiveOpenCodeSession,
 } from "./provider-control/opencode-live-client";
 import { createOpenCodeActivityState } from "./opencode-activity";
+import {
+  buildOpenCodeProviderModelId,
+  buildOpenCodeResolvedConfig,
+  normalizeOpenCodeOptionValues,
+  normalizeOpenCodeReasoningId,
+} from "./opencode-model-catalog";
 import { PtyHub } from "./pty-hub";
 import { SessionStore } from "./session-store";
 import { buildOpenCodeModeState } from "./session-mode-utils";
@@ -36,6 +46,84 @@ function waitFor(predicate: () => boolean, timeoutMs = 5000): Promise<void> {
     tick();
   });
 }
+
+test("OpenCode default variant normalizes to no explicit provider parameter", () => {
+  assert.equal(
+    buildOpenCodeProviderModelId({
+      modelId: "deepseek/deepseek-v4-pro",
+      reasoningId: "DEFAULT",
+    }),
+    "deepseek/deepseek-v4-pro",
+  );
+  assert.equal(
+    buildOpenCodeProviderModelId({ modelId: "niubiwudi" }),
+    "niubiwudi",
+  );
+  assert.equal(normalizeOpenCodeReasoningId("default"), null);
+  assert.equal(normalizeOpenCodeReasoningId("HIGH"), "high");
+  assert.deepEqual(
+    normalizeOpenCodeOptionValues({ model_reasoning_variant: "DEFAULT" }),
+    undefined,
+  );
+  assert.deepEqual(
+    normalizeOpenCodeOptionValues({ model_reasoning_variant: "HIGH" }),
+    { model_reasoning_variant: "high" },
+  );
+  assert.equal(
+    buildOpenCodeResolvedConfig({ reasoningId: "default" }),
+    undefined,
+  );
+});
+
+test("OpenCode prompt APIs pass explicit model ids instead of falling back", async () => {
+  const bodies: unknown[] = [];
+  const server = http.createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk: Buffer) => chunks.push(chunk));
+    request.on("end", () => {
+      bodies.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+      if (request.url?.includes("prompt_async")) {
+        response.writeHead(204).end();
+        return;
+      }
+      response.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({
+        info: {
+          id: "msg-1",
+          sessionID: "session-1",
+          role: "assistant",
+        },
+        parts: [],
+      }));
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  const handle = {
+    baseUrl: `http://127.0.0.1:${address.port}`,
+    cwd: "/tmp",
+  };
+  try {
+    await promptOpenCodeSessionAsync({
+      handle,
+      providerSessionId: "session-1",
+      text: "hello",
+      model: "niubiwudi",
+    });
+    await promptOpenCodeSession({
+      handle,
+      providerSessionId: "session-1",
+      text: "hello",
+      model: "aaa/wokao",
+    });
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+  assert.deepEqual(bodies.map((body) => (body as { model?: unknown }).model), [
+    { providerID: "niubiwudi", modelID: "" },
+    { providerID: "aaa", modelID: "wokao" },
+  ]);
+});
 
 test("startOpenCodeServer rejects missing working directories before spawn", async () => {
   const previousBinary = process.env.RAH_OPENCODE_BINARY;
@@ -532,10 +620,8 @@ test("OpenCodeAdapter setSessionModel stores provider model and variant for late
     models: [
       {
         id: "openai/gpt-5.5",
-        label: "OpenAI/GPT-5.5",
-        defaultReasoningId: "default",
+        defaultReasoningId: null,
         reasoningOptions: [
-          { id: "default", label: "Base", kind: "model_variant" },
           { id: "xhigh", label: "XHigh", kind: "reasoning_effort" },
         ],
       },
@@ -554,9 +640,7 @@ test("OpenCodeAdapter setSessionModel stores provider model and variant for late
             source: "native_online",
             mutable: true,
             applyTiming: "next_turn",
-            defaultValue: "default",
             options: [
-              { id: "default", label: "Base" },
               { id: "xhigh", label: "XHigh" },
             ],
             availability: { modelIds: ["openai/gpt-5.5"] },
@@ -594,4 +678,53 @@ test("OpenCodeAdapter setSessionModel stores provider model and variant for late
   assert.equal(liveSession.reasoningId, "xhigh");
   assert.equal(updated.session.model?.currentModelId, "openai/gpt-5.5");
   assert.equal(updated.session.model?.currentReasoningId, "xhigh");
+});
+
+test("OpenCodeAdapter setSessionModel preserves user-supplied models missing from catalog", async () => {
+  const services = {
+    eventBus: new EventBus(),
+    ptyHub: new PtyHub(),
+    sessionStore: new SessionStore(),
+  };
+  const adapter = new OpenCodeAdapter(services);
+  const session = services.sessionStore.createManagedSession({
+    provider: "opencode",
+    providerSessionId: "opencode-1",
+    launchSource: "web",
+    cwd: "/tmp/rah-opencode",
+    rootDir: "/tmp/rah-opencode",
+    capabilities: {
+      modelSwitch: true,
+    },
+    mode: buildOpenCodeModeState({ currentModeId: "build", mutable: true }),
+  });
+  const catalog: ProviderModelCatalog = {
+    provider: "opencode",
+    models: [{ id: "deepseek/deepseek-v4-pro" }],
+    fetchedAt: new Date().toISOString(),
+    source: "native",
+  };
+  const internals = adapter as unknown as {
+    liveSessions: Map<string, LiveOpenCodeSession>;
+    modelCatalog: {
+      listModels: () => ProviderModelCatalog;
+    };
+  };
+  internals.modelCatalog = {
+    listModels: () => catalog,
+  };
+  const liveSession = {
+    sessionId: session.session.id,
+    providerSessionId: "opencode-1",
+    cwd: "/tmp/rah-opencode",
+    modeId: "build",
+  } as unknown as LiveOpenCodeSession;
+  internals.liveSessions.set(session.session.id, liveSession);
+
+  const updated = await adapter.setSessionModel(session.session.id, {
+    modelId: "niubiwudi",
+  });
+
+  assert.equal(liveSession.model, "niubiwudi");
+  assert.equal(updated.session.model?.currentModelId, "niubiwudi");
 });

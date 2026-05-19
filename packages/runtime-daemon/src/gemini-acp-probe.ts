@@ -21,7 +21,6 @@ interface PendingRequest {
 
 export interface GeminiAcpModel {
   id: string;
-  label: string;
   description?: string;
 }
 
@@ -68,11 +67,9 @@ function mapAcpModels(models: unknown): GeminiAcpModel[] {
       return [];
     }
     seen.add(id);
-    const label = asNonEmptyString(model.name) ?? asNonEmptyString(model.label) ?? id;
     const description = asNonEmptyString(model.description);
     return [{
       id,
-      label,
       ...(description ? { description } : {}),
     }];
   });

@@ -35,6 +35,11 @@ type ClaudeConfigState = {
   model: string | null;
 };
 
+type ClaudeModelCatalogInfo = Pick<
+  ClaudeSdkModelInfo,
+  "value" | "description" | "supportsEffort" | "supportedEffortLevels" | "supportsAdaptiveThinking"
+>;
+
 const CLAUDE_CATALOG_CACHE_TTL_MS = 30_000;
 const CLAUDE_MODEL_FETCH_TIMEOUT_MS = 15_000;
 const CLAUDE_HELP_FETCH_TIMEOUT_MS = 3_000;
@@ -45,10 +50,9 @@ const CLAUDE_EFFORT_LABELS: Record<string, string> = {
   xhigh: "X High",
   max: "Max",
 };
-const FALLBACK_CLAUDE_MODELS: ClaudeSdkModelInfo[] = [
+const FALLBACK_CLAUDE_MODELS: ClaudeModelCatalogInfo[] = [
   {
     value: "default",
-    displayName: "Default",
     description: "Use the default model.",
     supportsEffort: true,
     supportedEffortLevels: ["low", "medium", "high", "max"],
@@ -56,7 +60,6 @@ const FALLBACK_CLAUDE_MODELS: ClaudeSdkModelInfo[] = [
   },
   {
     value: "sonnet[1m]",
-    displayName: "Sonnet (1M context)",
     description: "Sonnet long-context model.",
     supportsEffort: true,
     supportedEffortLevels: ["low", "medium", "high", "max"],
@@ -64,7 +67,6 @@ const FALLBACK_CLAUDE_MODELS: ClaudeSdkModelInfo[] = [
   },
   {
     value: "opus[1m]",
-    displayName: "Opus (1M context)",
     description: "Opus long-context model.",
     supportsEffort: true,
     supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
@@ -72,7 +74,6 @@ const FALLBACK_CLAUDE_MODELS: ClaudeSdkModelInfo[] = [
   },
   {
     value: "haiku",
-    displayName: "Haiku",
     description: "Haiku model.",
   },
 ];
@@ -174,10 +175,6 @@ export function resolveClaudeCatalogModelId(
   if (byIdPrefix) {
     return byIdPrefix.id;
   }
-  const byLabel = models.find((model) => model.label.toLowerCase().includes(token));
-  if (byLabel) {
-    return byLabel.id;
-  }
   if (token === "sonnet") {
     return models.find((model) => model.id === "default")?.id ?? "default";
   }
@@ -190,21 +187,6 @@ function claudeEffortReasoningOptions(levels: readonly string[]): SessionReasoni
     label: CLAUDE_EFFORT_LABELS[level] ?? level,
     kind: "reasoning_effort",
   }));
-}
-
-function versionedClaudeLabel(info: ClaudeSdkModelInfo): string {
-  const description = info.description.trim();
-  const versionMatch = /\b(Opus|Sonnet|Haiku)\s+\d+(?:\.\d+)+/i.exec(description);
-  if (info.value === "default") {
-    return versionMatch ? `Default (${versionMatch[0]})` : info.displayName;
-  }
-  if (!versionMatch) {
-    return info.displayName;
-  }
-  if (/\b1M\b/i.test(info.displayName) || /\b1M\b/i.test(description)) {
-    return `${versionMatch[0]} (1M)`;
-  }
-  return versionMatch[0];
 }
 
 function supportedClaudeEffortLevels(model: SessionModelDescriptor): string[] {
@@ -268,7 +250,7 @@ function buildClaudeModelProfiles(models: SessionModelDescriptor[]): ModelCapabi
   });
 }
 
-function descriptorFromClaudeModelInfo(info: ClaudeSdkModelInfo): SessionModelDescriptor {
+function descriptorFromClaudeModelInfo(info: ClaudeModelCatalogInfo): SessionModelDescriptor {
   const levels = info.supportsEffort
     ? (info.supportedEffortLevels ?? []).filter((level) => CLAUDE_EFFORT_LEVELS.has(level))
     : [];
@@ -280,7 +262,6 @@ function descriptorFromClaudeModelInfo(info: ClaudeSdkModelInfo): SessionModelDe
   })?.contextWindow;
   const descriptor: SessionModelDescriptor = {
     id: info.value,
-    label: versionedClaudeLabel(info),
     ...(contextWindow !== undefined ? { contextWindow } : {}),
     ...(description ? { description } : {}),
     ...(info.value === "default" ? { isDefault: true } : {}),
@@ -295,7 +276,7 @@ function descriptorFromClaudeModelInfo(info: ClaudeSdkModelInfo): SessionModelDe
   };
 }
 
-function buildClaudeModelDescriptors(modelInfos: readonly ClaudeSdkModelInfo[]): SessionModelDescriptor[] {
+function buildClaudeModelDescriptors(modelInfos: readonly ClaudeModelCatalogInfo[]): SessionModelDescriptor[] {
   const seen = new Set<string>();
   return modelInfos.flatMap((info) => {
     const id = info.value.trim();
@@ -309,7 +290,7 @@ function buildClaudeModelDescriptors(modelInfos: readonly ClaudeSdkModelInfo[]):
 
 async function* emptyClaudeInput(): AsyncGenerator<never> {}
 
-async function fetchClaudeSupportedModels(cwd?: string): Promise<ClaudeSdkModelInfo[]> {
+async function fetchClaudeSupportedModels(cwd?: string): Promise<ClaudeModelCatalogInfo[]> {
   if (process.env.RAH_CLAUDE_MODEL_CATALOG_OFFLINE === "1") {
     return [];
   }
@@ -348,7 +329,7 @@ async function fetchClaudeModeDescriptorsFromHelp(): Promise<SessionModeDescript
 }
 
 function buildClaudeCatalogFromModelInfos(args: {
-  modelInfos: readonly ClaudeSdkModelInfo[];
+  modelInfos: readonly ClaudeModelCatalogInfo[];
   cwd?: string;
   mergedConfig: ClaudeConfigState;
   source: ProviderModelCatalog["source"];
@@ -384,7 +365,6 @@ function buildClaudeCatalogFromModelInfos(args: {
       },
       models: models.map((model) => ({
         id: model.id,
-        label: model.label,
         contextWindow: model.contextWindow ?? null,
         defaultReasoningId: model.defaultReasoningId ?? null,
       })),

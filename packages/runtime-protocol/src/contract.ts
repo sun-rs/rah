@@ -1047,15 +1047,6 @@ function validateSessionModelDescriptor(
       `${path}.id`,
     );
   }
-  if (!isNonEmptyString(descriptor.label)) {
-    addIssue(
-      sink,
-      "error",
-      "session.model.descriptor.label.invalid",
-      "session model descriptor label must be non-empty",
-      `${path}.label`,
-    );
-  }
   if (
     descriptor.description !== undefined &&
     descriptor.description !== null &&

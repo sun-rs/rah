@@ -592,15 +592,19 @@ function parseOpenCodeModel(model: string | undefined):
       modelID: string;
     }
   | undefined {
-  if (!model) {
+  const trimmed = model?.trim();
+  if (!trimmed) {
     return undefined;
   }
-  const separator = model.indexOf("/");
-  if (separator <= 0 || separator === model.length - 1) {
-    return undefined;
+  const separator = trimmed.indexOf("/");
+  if (separator < 0) {
+    return {
+      providerID: trimmed,
+      modelID: "",
+    };
   }
   return {
-    providerID: model.slice(0, separator),
-    modelID: model.slice(separator + 1),
+    providerID: trimmed.slice(0, separator),
+    modelID: trimmed.slice(separator + 1),
   };
 }

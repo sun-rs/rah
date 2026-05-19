@@ -34,7 +34,6 @@ const GEMINI_STATIC_MODEL_IDS = [
 
 const GEMINI_MODELS: SessionModelDescriptor[] = GEMINI_STATIC_MODEL_IDS.map((id, index) => ({
   id,
-  label: id,
   ...(index === 0 ? { isDefault: true } : {}),
 }));
 
@@ -125,7 +124,6 @@ function modelDescriptorFromAcp(
 ): SessionModelDescriptor {
   return withContextWindow({
     id: model.id,
-    label: model.label,
     ...(model.description ? { description: model.description } : {}),
     ...(currentModelId === model.id ? { isDefault: true } : {}),
   });
@@ -147,7 +145,6 @@ function ensureCurrentModel(
   return [
     withContextWindow({
       id: currentModelId,
-      label: currentModelId,
       isDefault: true,
     }),
     ...models,

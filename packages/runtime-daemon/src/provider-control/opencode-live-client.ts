@@ -41,7 +41,11 @@ import {
   findOpenCodeStoredSessionRecord,
   loadOpenCodeStoredMessages,
 } from "../opencode-stored-sessions";
-import { resolveOpenCodeRuntimeCapabilityState } from "../opencode-model-catalog";
+import {
+  normalizeOpenCodeOptionValues,
+  normalizeOpenCodeReasoningId,
+  resolveOpenCodeRuntimeCapabilityState,
+} from "../opencode-model-catalog";
 import {
   resolveModelContextWindow,
   type ModelContextWindowResolution,
@@ -169,13 +173,13 @@ function resolveOpenCodeReasoningId(args: {
   requestedReasoningId: string | null | undefined;
 }): string | null {
   if (args.requestedReasoningId !== undefined) {
-    return args.requestedReasoningId;
+    return normalizeOpenCodeReasoningId(args.requestedReasoningId) ?? null;
   }
   if (!args.modelId) {
-    return args.catalog?.currentReasoningId ?? null;
+    return normalizeOpenCodeReasoningId(args.catalog?.currentReasoningId) ?? null;
   }
   const model = args.catalog?.models.find((entry) => entry.id === args.modelId);
-  return model?.defaultReasoningId ?? null;
+  return normalizeOpenCodeReasoningId(model?.defaultReasoningId) ?? null;
 }
 
 function attachRequestedClient(
@@ -340,12 +344,25 @@ function patchOpenCodeRuntimeError(
   if (!state) {
     return;
   }
+  const message = error instanceof Error ? error.message : String(error);
+  const previous = state.session.runtimeDiagnostics?.lastError;
+  if (
+    previous &&
+    !isGenericOpenCodeUnexpectedError(previous) &&
+    isGenericOpenCodeUnexpectedError(message)
+  ) {
+    return;
+  }
   services.sessionStore.patchManagedSession(liveSession.sessionId, {
     runtimeDiagnostics: {
       ...(state.session.runtimeDiagnostics ?? {}),
-      lastError: error instanceof Error ? error.message : String(error),
+      lastError: message,
     },
   });
+}
+
+function isGenericOpenCodeUnexpectedError(message: string): boolean {
+  return message.includes("Unexpected server error. Check server logs for details.");
 }
 
 export async function startOpenCodeLiveSession(params: {
@@ -364,18 +381,19 @@ export async function startOpenCodeLiveSession(params: {
   const currentModel = currentModelId
     ? params.modelCatalog?.models.find((model) => model.id === currentModelId)
     : undefined;
-  if (request.optionValues !== undefined && !currentModel) {
-    throw new Error(`Unsupported OpenCode model '${currentModelId ?? ""}'.`);
-  }
+  const requestedOptionValues = normalizeOpenCodeOptionValues(request.optionValues);
+  const requestedReasoningId = normalizeOpenCodeReasoningId(request.reasoningId);
   const optionValues = currentModel
-    ? resolveModelOptionValues({
-        catalog: params.modelCatalog ?? null,
-        model: currentModel,
-        optionValues: request.optionValues,
-        reasoningId: request.reasoningId,
-        useDefaults: Boolean(request.model),
-      })
-    : {};
+    ? normalizeOpenCodeOptionValues(
+        resolveModelOptionValues({
+          catalog: params.modelCatalog ?? null,
+          model: currentModel,
+          optionValues: requestedOptionValues,
+          reasoningId: requestedReasoningId,
+          useDefaults: Boolean(request.model),
+        }),
+      ) ?? {}
+    : requestedOptionValues ?? {};
   const optionReasoningId = optionValueAsString(optionValues, "model_reasoning_variant");
   const currentReasoningId =
     optionReasoningId !== undefined
@@ -383,7 +401,7 @@ export async function startOpenCodeLiveSession(params: {
       : resolveOpenCodeReasoningId({
           catalog: params.modelCatalog,
           modelId: currentModelId,
-          requestedReasoningId: request.reasoningId,
+          requestedReasoningId,
         });
   const runtimeCapabilityState = resolveOpenCodeRuntimeCapabilityState({
     catalog: params.modelCatalog,
@@ -527,18 +545,19 @@ export async function resumeOpenCodeLiveSession(params: {
   const currentModel = currentModelId
     ? params.modelCatalog?.models.find((model) => model.id === currentModelId)
     : undefined;
-  if (params.optionValues !== undefined && !currentModel) {
-    throw new Error(`Unsupported OpenCode model '${currentModelId ?? ""}'.`);
-  }
+  const requestedOptionValues = normalizeOpenCodeOptionValues(params.optionValues);
+  const requestedReasoningId = normalizeOpenCodeReasoningId(params.reasoningId);
   const optionValues = currentModel
-    ? resolveModelOptionValues({
-        catalog: params.modelCatalog ?? null,
-        model: currentModel,
-        optionValues: params.optionValues,
-        reasoningId: params.reasoningId,
-        useDefaults: Boolean(params.model),
-      })
-    : {};
+    ? normalizeOpenCodeOptionValues(
+        resolveModelOptionValues({
+          catalog: params.modelCatalog ?? null,
+          model: currentModel,
+          optionValues: requestedOptionValues,
+          reasoningId: requestedReasoningId,
+          useDefaults: Boolean(params.model),
+        }),
+      ) ?? {}
+    : requestedOptionValues ?? {};
   const optionReasoningId = optionValueAsString(optionValues, "model_reasoning_variant");
   const currentReasoningId =
     optionReasoningId !== undefined
@@ -546,7 +565,7 @@ export async function resumeOpenCodeLiveSession(params: {
       : resolveOpenCodeReasoningId({
           catalog: params.modelCatalog,
           modelId: currentModelId,
-          requestedReasoningId: params.reasoningId,
+          requestedReasoningId,
         });
   const runtimeCapabilityState = resolveOpenCodeRuntimeCapabilityState({
     catalog: params.modelCatalog,
@@ -772,6 +791,9 @@ function attachOpenCodeEventSink(params: {
       for (const activity of activities) {
         if (shouldSuppressMirroredOpenCodeActivity(liveSession, activity)) {
           continue;
+        }
+        if (activity.type === "turn_failed") {
+          patchOpenCodeRuntimeError(services, liveSession, activity.error);
         }
         applyActivity(services, liveSession.sessionId, activity, event);
       }

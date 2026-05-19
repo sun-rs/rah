@@ -86,21 +86,9 @@ function normalizeId(value: unknown, field: string): string {
   return trimmed;
 }
 
-function normalizeOptionalLabel(value: unknown): string | undefined {
-  if (value === undefined || value === null) {
-    return undefined;
-  }
-  if (typeof value !== "string") {
-    throw new Error("Bad Request: model label must be a string.");
-  }
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  if (trimmed.length > 240) {
-    throw new Error("Bad Request: model label is too long.");
-  }
-  return trimmed;
+function normalizeManualModelId(provider: ProviderKind, value: unknown): string {
+  const id = normalizeId(value, "model id");
+  return id;
 }
 
 function providerOptionSpec(provider: ProviderKind): ProviderManualOptionSpec | null {
@@ -152,7 +140,10 @@ function normalizeOptionIds(provider: ProviderKind, values: readonly unknown[] |
   const next: string[] = [];
   const seen = new Set<string>();
   for (const value of values ?? []) {
-    const id = normalizeId(value, "model option");
+    const id = normalizeId(value, "model option").toLowerCase();
+    if (provider === "opencode" && (id === "default" || id === "base")) {
+      continue;
+    }
     if (seen.has(id)) {
       continue;
     }
@@ -185,7 +176,6 @@ function isStoredManualModel(value: unknown): value is ManualProviderModel {
     CORE_PROVIDERS.has(model.provider as ProviderKind) &&
     typeof model.id === "string" &&
     model.id.trim().length > 0 &&
-    (model.label === undefined || typeof model.label === "string") &&
     (model.optionIds === undefined || Array.isArray(model.optionIds)) &&
     typeof model.createdAt === "string" &&
     typeof model.updatedAt === "string"
@@ -196,13 +186,11 @@ function sanitizeStoredModel(value: ManualProviderModel): ManualProviderModel | 
   try {
     const provider = value.provider;
     requireCoreProvider(provider);
-    const id = normalizeId(value.id, "model id");
-    const label = normalizeOptionalLabel(value.label);
+    const id = normalizeManualModelId(provider, value.id);
     const optionIds = normalizeOptionIds(provider, value.optionIds ?? []);
     return {
       provider,
       id,
-      ...(label ? { label } : {}),
       ...(optionIds.length > 0 ? { optionIds } : {}),
       createdAt: Number.isNaN(Date.parse(value.createdAt)) ? new Date().toISOString() : value.createdAt,
       updatedAt: Number.isNaN(Date.parse(value.updatedAt)) ? new Date().toISOString() : value.updatedAt,
@@ -271,7 +259,6 @@ function manualDescriptor(model: ManualProviderModel): SessionModelDescriptor {
   const defaultReasoningId = reasoningOptions.at(-1)?.id;
   return {
     id: model.id,
-    label: model.label ?? model.id,
     ...(reasoningOptions.length > 0
       ? {
           reasoningOptions,
@@ -321,8 +308,7 @@ export class ManualProviderModelStore {
   async add(provider: ProviderKind, request: AddManualProviderModelRequest): Promise<ManualProviderModel> {
     requireCoreProvider(provider);
     this.loadIfNeeded();
-    const id = normalizeId(request.id, "model id");
-    const label = normalizeOptionalLabel(request.label);
+    const id = normalizeManualModelId(provider, request.id);
     const optionIds = normalizeOptionIds(provider, request.optionIds ?? []);
     if (this.models.some((model) => model.provider === provider && model.id === id)) {
       throw new Error(`Bad Request: manual model '${id}' already exists for ${provider}.`);
@@ -331,7 +317,6 @@ export class ManualProviderModelStore {
     const model: ManualProviderModel = {
       provider,
       id,
-      ...(label ? { label } : {}),
       ...(optionIds.length > 0 ? { optionIds } : {}),
       createdAt: now,
       updatedAt: now,

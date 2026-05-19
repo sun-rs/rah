@@ -577,7 +577,6 @@ export interface ListProviderModelsResponse {
 export interface ManualProviderModel {
   provider: ProviderKind;
   id: string;
-  label?: string;
   optionIds?: string[];
   createdAt: string;
   updatedAt: string;
@@ -589,7 +588,6 @@ export interface ListManualProviderModelsResponse {
 
 export interface AddManualProviderModelRequest {
   id: string;
-  label?: string;
   optionIds?: string[];
   /**
    * Optional workspace used only for duplicate checks against provider-native

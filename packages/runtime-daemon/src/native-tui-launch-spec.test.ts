@@ -207,6 +207,100 @@ describe("native TUI launch specs", () => {
     }
   });
 
+  test("passes provider model and effort values without fallback in native TUI args", async () => {
+    const codex = fakeBinary("codex");
+    const claude = fakeBinary("claude");
+    const gemini = fakeBinary("gemini");
+    const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-native-spec-model-values-"));
+    const configDir = mkdtempSync(path.join(os.tmpdir(), "rah-native-spec-model-values-claude-"));
+    process.env.RAH_CODEX_BINARY = codex.path;
+    process.env.RAH_CLAUDE_BINARY = claude.path;
+    process.env.RAH_GEMINI_BINARY = gemini.path;
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    try {
+      const codexStart = await nativeTuiStartLaunchSpec({
+        provider: "codex",
+        cwd: workspace,
+        liveBackend: "native_tui",
+        model: "aaa/wokao",
+        reasoningId: "ultra",
+      });
+      assert.deepEqual(codexStart.args, [
+        "--cd",
+        workspace,
+        "--model",
+        "aaa/wokao",
+        "-c",
+        "model_reasoning_effort=\"ultra\"",
+      ]);
+      assert.equal(codexStart.modelId, "aaa/wokao");
+      assert.equal(codexStart.reasoningId, "ultra");
+
+      const claudeStart = await nativeTuiStartLaunchSpec({
+        provider: "claude",
+        cwd: workspace,
+        liveBackend: "native_tui",
+        model: "claude-does-not-exist",
+        reasoningId: "wokao",
+      });
+      assert.ok(claudeStart.args.includes("--model"));
+      assert.ok(claudeStart.args.includes("claude-does-not-exist"));
+      assert.ok(claudeStart.args.includes("--effort"));
+      assert.ok(claudeStart.args.includes("wokao"));
+      assert.equal(claudeStart.modelId, "claude-does-not-exist");
+      assert.equal(claudeStart.reasoningId, "wokao");
+
+      const geminiStart = await nativeTuiStartLaunchSpec({
+        provider: "gemini",
+        cwd: workspace,
+        liveBackend: "native_tui",
+        model: "gemini-wrong-model",
+      });
+      assert.ok(geminiStart.args.includes("--model"));
+      assert.ok(geminiStart.args.includes("gemini-wrong-model"));
+      assert.equal(geminiStart.modelId, "gemini-wrong-model");
+      assert.equal(geminiStart.reasoningId, undefined);
+      assert.equal(geminiStart.optionValues, undefined);
+    } finally {
+      rmSync(codex.dir, { force: true, recursive: true });
+      rmSync(claude.dir, { force: true, recursive: true });
+      rmSync(gemini.dir, { force: true, recursive: true });
+      rmSync(workspace, { force: true, recursive: true });
+      rmSync(configDir, { force: true, recursive: true });
+    }
+  });
+
+  test("rejects Gemini model effort or variant options instead of ignoring them", async () => {
+    const fake = fakeBinary("gemini");
+    const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-native-spec-gemini-options-"));
+    process.env.RAH_GEMINI_BINARY = fake.path;
+    try {
+      await assert.rejects(
+        nativeTuiStartLaunchSpec({
+          provider: "gemini",
+          cwd: workspace,
+          liveBackend: "native_tui",
+          model: "gemini-2.5-pro",
+          reasoningId: "high",
+        }),
+        /Gemini does not support model effort or variant options/,
+      );
+      await assert.rejects(
+        nativeTuiResumeLaunchSpec({
+          provider: "gemini",
+          providerSessionId: "6b029ead-4e4f-4b2e-90d8-2cad44a9554f",
+          cwd: workspace,
+          liveBackend: "native_tui",
+          optionValues: { model_variant: "high" },
+        }),
+        /Gemini does not support model effort or variant options/,
+      );
+    } finally {
+      rmSync(fake.dir, { force: true, recursive: true });
+      rmSync(workspace, { force: true, recursive: true });
+    }
+  });
+
   test("builds OpenCode native args with project, base model, and session resume", async () => {
     const fake = fakeBinary("opencode");
     process.env.RAH_OPENCODE_BINARY = fake.path;
@@ -404,6 +498,14 @@ describe("native TUI launch specs", () => {
       ]);
       assert.equal(claudeStart.args.at(-1), "join council");
 
+      const geminiBaseSettingsPath = path.join(rahHome, "gemini-base-settings.json");
+      writeFileSync(geminiBaseSettingsPath, `${JSON.stringify({
+        model: { compressionThreshold: 0.4 },
+        mcpServers: {
+          existing_server: { command: "/bin/true" },
+        },
+      })}\n`);
+      process.env.GEMINI_CLI_SYSTEM_SETTINGS_PATH = geminiBaseSettingsPath;
       const geminiStart = await nativeTuiStartLaunchSpec({
         provider: "gemini",
         cwd: workspace,
@@ -416,8 +518,12 @@ describe("native TUI launch specs", () => {
       assert.ok(geminiSystemSettingsPath);
       assert.ok(geminiSystemSettingsPath.startsWith(path.join(rahHome, "runtime-daemon", "gemini-system-settings")));
       const geminiSystemSettings = JSON.parse(readFileSync(geminiSystemSettingsPath, "utf8")) as {
+        model?: { compressionThreshold?: number; disableLoopDetection?: boolean };
         mcpServers?: Record<string, { command?: string; args?: string[]; trust?: boolean }>;
       };
+      assert.equal(geminiSystemSettings.model?.compressionThreshold, 0.4);
+      assert.equal(geminiSystemSettings.model?.disableLoopDetection, true);
+      assert.equal(geminiSystemSettings.mcpServers?.existing_server?.command, "/bin/true");
       assert.equal(geminiSystemSettings.mcpServers?.rah_council?.command, process.execPath);
       assert.deepEqual(geminiSystemSettings.mcpServers?.rah_council?.args?.slice(1, 3), [
         "council-mcp",

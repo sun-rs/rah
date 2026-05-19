@@ -23,8 +23,6 @@ type CodexReasoningOption = {
 type CodexModel = {
   id?: unknown;
   model?: unknown;
-  displayName?: unknown;
-  display_name?: unknown;
   description?: unknown;
   hidden?: unknown;
   isDefault?: unknown;
@@ -95,11 +93,6 @@ function mapCodexModel(model: CodexModel): SessionModelDescriptor | null {
   if (!id) {
     return null;
   }
-  const label =
-    asNonEmptyString(model.displayName) ??
-    asNonEmptyString(model.display_name) ??
-    asNonEmptyString(model.model) ??
-    id;
   const reasoningOptions = mapReasoningOptions(model);
   const defaultReasoningId =
     asNonEmptyString(model.defaultReasoningEffort) ??
@@ -107,7 +100,6 @@ function mapCodexModel(model: CodexModel): SessionModelDescriptor | null {
     reasoningOptions[0]?.id;
   return {
     id,
-    label,
     ...(typeof model.description === "string" && model.description.trim()
       ? { description: model.description }
       : {}),

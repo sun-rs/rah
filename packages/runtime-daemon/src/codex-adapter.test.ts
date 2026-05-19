@@ -347,7 +347,6 @@ rl.on('line', (line) => {
       {
         id: 'gpt-alpha',
         model: 'gpt-alpha',
-        displayName: 'GPT Alpha',
         description: 'Alpha model',
         hidden: false,
         supportedReasoningEfforts: [
@@ -360,7 +359,6 @@ rl.on('line', (line) => {
       {
         id: 'gpt-beta',
         model: 'gpt-beta',
-        displayName: 'GPT Beta',
         hidden: false,
         supportedReasoningEfforts: [
           { reasoningEffort: 'low', description: 'Fast' }
@@ -472,6 +470,33 @@ rl.on('line', (line) => {
     assert.equal(updated?.session.model?.currentReasoningId, "low");
     assert.equal(updated?.session.modelProfile?.modelId, "gpt-beta");
     assert.equal(updated?.session.config?.values.model_reasoning_effort, "low");
+
+    await assert.rejects(
+      async () => {
+        await adapter.setSessionModel!(started.session.session.id, {
+          modelId: "gpt-missing",
+        });
+      },
+      /Unsupported Codex model 'gpt-missing'/,
+    );
+    await assert.rejects(
+      async () => {
+        await adapter.setSessionModel!(started.session.session.id, {
+          modelId: "gpt-beta",
+          optionValues: { model_reasoning_effort: "high" },
+        });
+      },
+      /Unsupported value 'high' for model option 'model_reasoning_effort'/,
+    );
+    assert.equal(
+      services.sessionStore.getSession(started.session.session.id)?.session.model?.currentModelId,
+      "gpt-beta",
+    );
+    assert.equal(
+      services.sessionStore.getSession(started.session.session.id)?.session.config?.values
+        .model_reasoning_effort,
+      "low",
+    );
 
     const planned = await adapter.setSessionMode?.(
       started.session.session.id,

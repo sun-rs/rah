@@ -14,7 +14,6 @@ function catalog(): ProviderModelCatalog {
     models: [
       {
         id: "gpt-a",
-        label: "GPT A",
         reasoningOptions: [
           { id: "low", label: "Low", kind: "reasoning_effort" },
           { id: "xhigh", label: "XHigh", kind: "reasoning_effort" },

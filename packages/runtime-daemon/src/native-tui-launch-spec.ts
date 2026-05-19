@@ -24,6 +24,8 @@ import {
 import {
   buildOpenCodeProviderModelId,
   fetchOpenCodeModelCatalog,
+  normalizeOpenCodeOptionValues,
+  normalizeOpenCodeReasoningId,
 } from "./opencode-model-catalog";
 import {
   geminiSettingsForMcpServers,
@@ -236,6 +238,10 @@ function writeGeminiSystemSettings(
   const mergedSettings = {
     ...baseSettings,
     ...geminiSettings,
+    model: {
+      ...objectValue(baseSettings.model),
+      ...objectValue(geminiSettings.model),
+    },
     mcpServers: {
       ...objectValue(baseSettings.mcpServers),
       ...objectValue(geminiSettings.mcpServers),
@@ -273,6 +279,40 @@ function launchConfigMetadata(
     ...(request.model ? { modelId: request.model } : {}),
     ...(reasoningId !== undefined ? { reasoningId } : {}),
     ...(request.optionValues !== undefined ? { optionValues: request.optionValues } : {}),
+  };
+}
+
+function launchModeModelMetadata(
+  request: ModelRequest & { modeId?: string },
+): Pick<NativeTuiLaunchSpec, "modeId" | "modelId"> {
+  return {
+    ...(request.modeId ? { modeId: request.modeId } : {}),
+    ...(request.model ? { modelId: request.model } : {}),
+  };
+}
+
+function assertNoGeminiModelOptions(request: ModelRequest): void {
+  const reasoningId = request.reasoningId?.trim();
+  if (reasoningId) {
+    throw new Error("Gemini does not support model effort or variant options.");
+  }
+  if (request.optionValues !== undefined && Object.keys(request.optionValues).length > 0) {
+    throw new Error("Gemini does not support model effort or variant options.");
+  }
+}
+
+function openCodeLaunchConfigMetadata(
+  request: ModelRequest & { modeId?: string },
+): Pick<NativeTuiLaunchSpec, "modeId" | "modelId" | "reasoningId" | "optionValues"> {
+  const reasoningId = normalizeOpenCodeReasoningId(
+    resolveOptionOrReasoning(request, "model_reasoning_variant"),
+  );
+  const optionValues = normalizeOpenCodeOptionValues(request.optionValues);
+  return {
+    ...(request.modeId ? { modeId: request.modeId } : {}),
+    ...(request.model ? { modelId: request.model } : {}),
+    ...(reasoningId !== undefined && reasoningId !== null ? { reasoningId } : {}),
+    ...(optionValues !== undefined ? { optionValues } : {}),
   };
 }
 
@@ -403,7 +443,9 @@ async function appendOpenCodeArgs(
   if (request.model) {
     args.push("--model", buildOpenCodeProviderModelId({
       modelId: request.model,
-      reasoningId: resolveOptionOrReasoning(request, "model_reasoning_variant"),
+      reasoningId: normalizeOpenCodeReasoningId(
+        resolveOptionOrReasoning(request, "model_reasoning_variant"),
+      ),
     }));
   }
   if (providerSessionId) {
@@ -469,6 +511,7 @@ export async function nativeTuiStartLaunchSpec(
   if (request.provider === "gemini") {
     const providerSessionId = randomUUID();
     const { command, args } = splitLaunchArgv(await geminiLaunchSpec(), "gemini");
+    assertNoGeminiModelOptions(request);
     appendGeminiArgs(args, request, providerSessionId, "start");
     appendGeminiInitialPrompt(args, request.initialPrompt);
     const env = geminiEnvForMcpServers(request.extraMcpServers);
@@ -481,7 +524,7 @@ export async function nativeTuiStartLaunchSpec(
       preview: previewCommand(command, args),
       providerSessionId,
       ...(env ? { env } : {}),
-      ...launchConfigMetadata(request, "model_variant"),
+      ...launchModeModelMetadata(request),
     };
   }
   if (request.provider === "opencode") {
@@ -496,7 +539,7 @@ export async function nativeTuiStartLaunchSpec(
       title: request.title ?? "OpenCode native TUI session",
       preview: previewCommand(command, args),
       ...(env ? { env } : {}),
-      ...launchConfigMetadata(request, "model_reasoning_variant"),
+      ...openCodeLaunchConfigMetadata(request),
     };
   }
   throw new Error(`Native TUI live backend is not implemented for ${request.provider}.`);
@@ -547,6 +590,7 @@ export async function nativeTuiResumeLaunchSpec(
   }
   if (request.provider === "gemini") {
     const { command, args } = splitLaunchArgv(await geminiLaunchSpec(), "gemini");
+    assertNoGeminiModelOptions(request);
     appendGeminiArgs(args, request, request.providerSessionId, "resume");
     return {
       provider: "gemini",
@@ -556,7 +600,7 @@ export async function nativeTuiResumeLaunchSpec(
       title: "Gemini native TUI session",
       preview: previewCommand(command, args),
       providerSessionId: request.providerSessionId,
-      ...launchConfigMetadata(request, "model_variant"),
+      ...launchModeModelMetadata(request),
     };
   }
   if (request.provider === "opencode") {
@@ -572,7 +616,7 @@ export async function nativeTuiResumeLaunchSpec(
       preview: previewCommand(command, args),
       providerSessionId: request.providerSessionId,
       ...(env ? { env } : {}),
-      ...launchConfigMetadata(request, "model_reasoning_variant"),
+      ...openCodeLaunchConfigMetadata(request),
     };
   }
   throw new Error(`Native TUI live backend is not implemented for ${request.provider}.`);

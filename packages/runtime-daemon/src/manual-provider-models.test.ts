@@ -14,7 +14,7 @@ async function tempStore(): Promise<ManualProviderModelStore> {
 function codexCatalog(): ProviderModelCatalog {
   return {
     provider: "codex",
-    models: [{ id: "gpt-5.5", label: "GPT 5.5" }],
+    models: [{ id: "gpt-5.5" }],
     fetchedAt: new Date().toISOString(),
     source: "native",
     sourceDetail: "native_online",
@@ -36,7 +36,6 @@ test("manual models supplement provider catalogs with fixed provider option keys
   const store = await tempStore();
   await store.add("codex", {
     id: "gpt-5.6",
-    label: "GPT 5.6",
     optionIds: ["high", "low", "high"],
   });
 
@@ -58,7 +57,7 @@ test("native models shadow manual supplements with the same id", async () => {
   await store.add("gemini", { id: "gemma-4-31b-it" });
   const nativeCatalog: ProviderModelCatalog = {
     provider: "gemini",
-    models: [{ id: "gemma-4-31b-it", label: "Gemma native" }],
+    models: [{ id: "gemma-4-31b-it" }],
     fetchedAt: new Date().toISOString(),
     source: "native",
     sourceDetail: "native_online",
@@ -78,19 +77,60 @@ test("native models shadow manual supplements with the same id", async () => {
   const merged = mergeManualProviderModels(nativeCatalog, store);
 
   assert.equal(merged.models.filter((model) => model.id === "gemma-4-31b-it").length, 1);
-  assert.equal(merged.models[0]?.label, "Gemma native");
+  assert.equal(merged.models[0]?.id, "gemma-4-31b-it");
   assert.equal(merged.modelProfiles?.[0]?.source, "native_online");
   assert.equal(merged.modelsExact, true);
 });
 
 test("manual model ids are unique per provider", async () => {
   const store = await tempStore();
-  await store.add("opencode", { id: "openai/gpt-5.6", optionIds: ["default"] });
+  await store.add("opencode", { id: "openai/gpt-5.6", optionIds: ["high"] });
 
   await assert.rejects(
     () => store.add("opencode", { id: "openai/gpt-5.6" }),
     /already exists/,
   );
+});
+
+test("OpenCode manual model ids are stored as user-supplied ids", async () => {
+  const store = await tempStore();
+  await store.add("opencode", { id: "niubiwudi" });
+
+  const merged = mergeManualProviderModels(
+    {
+      provider: "opencode",
+      models: [],
+      fetchedAt: new Date().toISOString(),
+      source: "native",
+      modelsExact: true,
+      optionsExact: true,
+    },
+    store,
+  );
+  assert.equal(merged.models.find((model) => model.id === "niubiwudi")?.id, "niubiwudi");
+});
+
+test("OpenCode manual model options drop base/default sentinels", async () => {
+  const store = await tempStore();
+  await store.add("opencode", {
+    id: "openai/gpt-5.6",
+    optionIds: ["DEFAULT", "Base", "Low", "HIGH"],
+  });
+
+  const merged = mergeManualProviderModels(
+    {
+      provider: "opencode",
+      models: [],
+      fetchedAt: new Date().toISOString(),
+      source: "native",
+      modelsExact: true,
+      optionsExact: true,
+    },
+    store,
+  );
+  const manualModel = merged.models.find((model) => model.id === "openai/gpt-5.6");
+
+  assert.deepEqual(manualModel?.reasoningOptions?.map((option) => option.id), ["low", "high"]);
 });
 
 test("manual model options can be removed without deleting the model", async () => {
@@ -108,9 +148,9 @@ test("manual model options can be removed without deleting the model", async () 
 
 test("removing the last manual model option keeps the model selectable", async () => {
   const store = await tempStore();
-  await store.add("opencode", { id: "openai/gpt-5.6", optionIds: ["default"] });
+  await store.add("opencode", { id: "openai/gpt-5.6", optionIds: ["low"] });
 
-  const updated = await store.removeOption("opencode", "openai/gpt-5.6", "default");
+  const updated = await store.removeOption("opencode", "openai/gpt-5.6", "low");
   const merged = mergeManualProviderModels(
     {
       provider: "opencode",

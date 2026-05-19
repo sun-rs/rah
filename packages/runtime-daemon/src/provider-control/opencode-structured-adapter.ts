@@ -29,6 +29,8 @@ import {
 import { opencodeLaunchSpec, probeProviderDiagnostic } from "../provider-diagnostics";
 import {
   buildOpenCodeFallbackModelCatalog,
+  normalizeOpenCodeOptionValues,
+  normalizeOpenCodeReasoningId,
   OpenCodeModelCatalogCache,
   resolveOpenCodeRuntimeCapabilityState,
 } from "../opencode-model-catalog";
@@ -151,31 +153,33 @@ export class OpenCodeAdapter implements ProviderAdapter {
     }
     const catalog = mergeManualProviderModels(await this.modelCatalog.listModels({ cwd: live.cwd }));
     const model = catalog.models.find((entry) => entry.id === request.modelId);
-    if (!model) {
-      throw new Error(`Unsupported OpenCode model '${request.modelId}'.`);
-    }
-    const optionValues = resolveModelOptionValues({
-      catalog,
-      model,
-      optionValues: request.optionValues,
-      reasoningId: request.reasoningId,
-      useDefaults: true,
-      requireMutable: true,
-    });
-    const optionReasoningId = optionValueAsString(optionValues, "model_reasoning_variant");
+    const requestedOptionValues = normalizeOpenCodeOptionValues(request.optionValues);
+    const requestedReasoningId = normalizeOpenCodeReasoningId(request.reasoningId);
+    const optionValues = model
+      ? resolveModelOptionValues({
+          catalog,
+          model,
+          optionValues: requestedOptionValues,
+          reasoningId: requestedReasoningId,
+          useDefaults: true,
+          requireMutable: true,
+        })
+      : requestedOptionValues ?? {};
+    const normalizedOptionValues = normalizeOpenCodeOptionValues(optionValues) ?? {};
+    const optionReasoningId = optionValueAsString(normalizedOptionValues, "model_reasoning_variant");
     const reasoningId =
       optionReasoningId !== undefined
         ? optionReasoningId
-        : request.reasoningId !== undefined
-          ? request.reasoningId
-          : model.defaultReasoningId ?? null;
+        : requestedReasoningId !== undefined
+          ? requestedReasoningId
+          : model?.defaultReasoningId ?? null;
     live.model = request.modelId;
     live.reasoningId = reasoningId;
     const runtimeCapabilityState = resolveOpenCodeRuntimeCapabilityState({
       catalog,
       modelId: request.modelId,
       reasoningId,
-      optionValues,
+      optionValues: normalizedOptionValues,
     });
     const nextState = this.services.sessionStore.patchManagedSession(sessionId, {
       model: {

@@ -124,8 +124,6 @@ function profileRevision(input: unknown): string {
 
 function humanizeOpenCodeVariantId(value: string): string {
   switch (value) {
-    case "default":
-      return "Base";
     case "xhigh":
       return "XHigh";
     case "none":
@@ -155,15 +153,9 @@ function openCodeVariantKind(
 function mapOpenCodeReasoningOptions(
   variants: Record<string, unknown>,
 ): SessionReasoningOption[] {
-  const options: SessionReasoningOption[] = [
-    {
-      id: "default",
-      label: "Base",
-      kind: "model_variant",
-    },
-  ];
+  const options: SessionReasoningOption[] = [];
   for (const [variantId, rawVariant] of Object.entries(variants)) {
-    if (!variantId.trim()) {
+    if (!variantId.trim() || variantId === "default") {
       continue;
     }
     const variant = asRecord(rawVariant) as OpenCodeVariantRecord | null;
@@ -178,26 +170,23 @@ function mapOpenCodeReasoningOptions(
 
 function mapOpenCodeModel(args: {
   providerId: string;
-  providerName: string;
   modelId: string;
   model: OpenCodeModelRecord;
   isDefault: boolean;
 }): SessionModelDescriptor | null {
   const id = `${args.providerId}/${args.modelId}`;
-  const label = `${args.providerName}/${asNonEmptyString(args.model.name) ?? args.modelId}`;
   const variants = asRecord(args.model.variants) ?? {};
   const reasoningOptions =
     Object.keys(variants).length > 0 ? mapOpenCodeReasoningOptions(variants) : [];
   const contextWindow = openCodeContextWindow(args.model);
   return {
     id,
-    label,
     ...(contextWindow !== undefined ? { contextWindow } : {}),
     ...(asNonEmptyString(args.model.description)
       ? { description: asNonEmptyString(args.model.description)! }
       : {}),
     ...(args.isDefault ? { isDefault: true } : {}),
-    ...(reasoningOptions.length > 0 ? { reasoningOptions, defaultReasoningId: "default" } : {}),
+    ...(reasoningOptions.length > 0 ? { reasoningOptions, defaultReasoningId: null } : {}),
   };
 }
 
@@ -217,7 +206,6 @@ function buildOpenCodeReasoningConfigOption(args: {
     source: "native_online",
     mutable: true,
     applyTiming: "next_turn",
-    defaultValue: args.model.defaultReasoningId ?? "default",
     options: reasoningOptions.map((option) => ({
       id: option.id,
       label: option.label,
@@ -239,7 +227,10 @@ function buildOpenCodeModelProfiles(args: {
     const capabilities = asRecord(rawModel?.capabilities) ?? {};
     const variants = asRecord(rawModel?.variants) ?? {};
     const contextWindow = openCodeContextWindow(rawModel);
-    const variantValues = Object.values(variants).flatMap((value) => {
+    const variantValues = Object.entries(variants).flatMap(([variantId, value]) => {
+      if (variantId === "default") {
+        return [];
+      }
       const record = asRecord(value);
       return record ? [record as OpenCodeVariantRecord] : [];
     });
@@ -260,7 +251,7 @@ function buildOpenCodeModelProfiles(args: {
           ? { supportsThinking: true }
           : {}),
         ...(hasReasoningEffort ? { supportsEffort: true } : {}),
-        ...(Object.keys(variants).length > 0 ? { supportsReasoningVariant: true } : {}),
+        ...((model.reasoningOptions?.length ?? 0) > 0 ? { supportsReasoningVariant: true } : {}),
       },
       configOptions: configOption ? [configOption] : [],
     };
@@ -314,7 +305,6 @@ function buildOpenCodeCatalog(args: {
     if (!providerId) {
       continue;
     }
-    const providerName = asNonEmptyString(provider.name) ?? providerId;
     const rawModels = asRecord(provider.models) ?? {};
     const defaultModelId = asNonEmptyString(args.defaultByProvider[providerId]);
     for (const [modelId, rawModel] of Object.entries(rawModels)) {
@@ -324,7 +314,6 @@ function buildOpenCodeCatalog(args: {
       }
       const mapped = mapOpenCodeModel({
         providerId,
-        providerName,
         modelId,
         model: modelRecord,
         isDefault: defaultModelId === modelId,
@@ -352,7 +341,6 @@ function buildOpenCodeCatalog(args: {
     revision: profileRevision({
       models: models.map((model) => ({
         id: model.id,
-        label: model.label,
         contextWindow: model.contextWindow ?? null,
         reasoningOptions: model.reasoningOptions?.map((option) => option.id) ?? [],
       })),
@@ -427,28 +415,64 @@ export function buildOpenCodeProviderModelId(args: {
   modelId: string;
   reasoningId?: string | null | undefined;
 }): string {
-  if (!args.reasoningId || args.reasoningId === "default") {
+  const reasoningId = normalizeOpenCodeReasoningId(args.reasoningId);
+  if (!reasoningId) {
     return args.modelId;
   }
-  return `${args.modelId}/${args.reasoningId}`;
+  return `${args.modelId}/${reasoningId}`;
+}
+
+export function normalizeOpenCodeReasoningId(
+  reasoningId: string | null | undefined,
+): string | null | undefined {
+  if (reasoningId === undefined) {
+    return undefined;
+  }
+  if (reasoningId === null) {
+    return null;
+  }
+  const trimmed = reasoningId.trim().toLowerCase();
+  return !trimmed || trimmed === "default" ? null : trimmed;
+}
+
+export function normalizeOpenCodeOptionValues(
+  optionValues: Record<string, SessionConfigValue> | null | undefined,
+): Record<string, SessionConfigValue> | undefined {
+  if (!optionValues) {
+    return undefined;
+  }
+  const next = { ...optionValues };
+  const variant = next.model_reasoning_variant;
+  if (
+    variant === null ||
+    variant === undefined ||
+    (typeof variant === "string" && ["", "default", "base"].includes(variant.trim().toLowerCase()))
+  ) {
+    delete next.model_reasoning_variant;
+  } else if (typeof variant === "string") {
+    next.model_reasoning_variant = variant.trim().toLowerCase();
+  }
+  return Object.keys(next).length > 0 ? next : undefined;
 }
 
 export function buildOpenCodeResolvedConfig(args: {
   reasoningId: string | null | undefined;
   optionValues?: Record<string, SessionConfigValue>;
 }): SessionResolvedConfig | undefined {
-  if (args.optionValues !== undefined) {
+  const optionValues = normalizeOpenCodeOptionValues(args.optionValues);
+  if (optionValues !== undefined) {
     return {
-      values: args.optionValues,
+      values: optionValues,
       source: "runtime_session",
     };
   }
-  if (args.reasoningId === undefined || args.reasoningId === null) {
+  const reasoningId = normalizeOpenCodeReasoningId(args.reasoningId);
+  if (reasoningId === undefined || reasoningId === null) {
     return undefined;
   }
   return {
     values: {
-      model_reasoning_variant: args.reasoningId,
+      model_reasoning_variant: reasoningId,
     },
     source: "runtime_session",
   };
