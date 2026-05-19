@@ -22,9 +22,9 @@ import WebSocket from "ws";
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_DAEMON_URL = "http://127.0.0.1:43111";
-const CORE_LIVE_PROVIDERS = new Set(["codex", "claude", "opencode"]);
-const SUPPORTED_PROVIDERS = CORE_LIVE_PROVIDERS;
-const MANAGEMENT_COMMANDS = new Set(["start", "status", "stop", "restart", "logs", "attach", "archive"]);
+const CORE_RUNNING_PROVIDERS = new Set(["codex", "claude", "gemini", "opencode"]);
+const SUPPORTED_PROVIDERS = CORE_RUNNING_PROVIDERS;
+const MANAGEMENT_COMMANDS = new Set(["start", "status", "stop", "restart", "logs", "attach", "close", "archive"]);
 const CLIENT_INDEX_PATH = join(ROOT_DIR, "packages", "client-web", "dist", "index.html");
 const TERMINAL_MODE_RESET_SEQUENCE = [
   "\u001b[<1u",
@@ -66,14 +66,14 @@ function printUsage() {
       "  rah restart",
       "  rah logs [--follow]",
       "  rah attach <rahSessionId>",
-      "  rah archive <rahSessionId>",
+      "  rah close <rahSessionId>",
       "  rah council-mcp --room <roomId> --actor <actorId>",
       "  rah <provider>",
       "  rah <provider> attach <providerSessionId>",
       "  rah <provider> resume <providerSessionId>",
       "",
       "Providers:",
-      "  codex | claude | opencode",
+      "  codex | claude | gemini | opencode",
       "",
       "Options:",
       "  --cwd <dir>         Override working directory",
@@ -88,11 +88,12 @@ function printUsage() {
       "",
     "Current status:",
     "  codex/opencode: native local-server with provider-native TUI clients",
-    "  claude: tmux/zellij native TUI fallback",
+    "  claude/gemini: tmux native TUI fallback",
       "",
-      "Claude note:",
+      "TUI mux note:",
       "  `rah claude resume <providerSessionId>` maps to `claude --resume <id>`.",
-      "  Bare `claude --resume` session-picker mode is intentionally unsupported.",
+      "  `rah gemini resume <providerSessionId>` maps to `gemini --resume <id>`.",
+      "  Bare provider session-picker modes are intentionally unsupported.",
       "",
       "Source workflow:",
       "  `rah start` builds the web client, starts the daemon in the background,",
@@ -109,7 +110,7 @@ function parseManagementArgs(command, argv) {
   let follow = false;
   let sessionId;
   const rest = [...argv];
-  if (command === "attach" || command === "archive") {
+  if (command === "attach" || command === "close" || command === "archive") {
     sessionId = rest.shift();
     if (!sessionId) {
       throw new Error(`Missing RAH session id after \`${command}\`.`);
@@ -486,7 +487,7 @@ async function stopManagedDaemon(daemonUrl) {
     return;
   }
   process.kill(pid, "SIGTERM");
-  const deadline = Date.now() + 5_000;
+  const deadline = Date.now() + 35_000;
   while (Date.now() < deadline) {
     if (!processAlive(pid) && !(await daemonReady(daemonUrl))) {
       break;
@@ -561,9 +562,9 @@ async function handleManagementCommand(parsed) {
     await attachExistingRahSession(parsed);
     return;
   }
-  if (parsed.command === "archive") {
-    await archiveRahSession(parsed.daemonUrl, parsed.sessionId);
-    process.stdout.write(`[rah] archived session ${parsed.sessionId}\n`);
+  if (parsed.command === "close" || parsed.command === "archive") {
+    await closeRahSession(parsed.daemonUrl, parsed.sessionId);
+    process.stdout.write(`[rah] stopped session ${parsed.sessionId}\n`);
     return;
   }
 }
@@ -625,12 +626,12 @@ async function getJson(daemonUrl, pathname) {
   return await response.json();
 }
 
-async function findLiveSessionSummary(daemonUrl, sessionId) {
+async function findRunningSessionSummary(daemonUrl, sessionId) {
   const response = await getJson(daemonUrl, "/api/sessions");
   return (response.sessions ?? []).find((summary) => summary?.session?.id === sessionId) ?? null;
 }
 
-async function findLiveProviderSessionSummary(daemonUrl, provider, providerSessionId) {
+async function findRunningProviderSessionSummary(daemonUrl, provider, providerSessionId) {
   const response = await getJson(daemonUrl, "/api/sessions");
   const matches = (response.sessions ?? []).filter(
     (summary) =>
@@ -639,15 +640,15 @@ async function findLiveProviderSessionSummary(daemonUrl, provider, providerSessi
   );
   if (matches.length > 1) {
     throw new Error(
-      `Multiple live RAH sessions match ${provider}:${providerSessionId}. Use \`rah attach <rahSessionId>\` to choose one explicitly.`,
+      `Multiple running RAH sessions match ${provider}:${providerSessionId}. Use \`rah attach <rahSessionId>\` to choose one explicitly.`,
     );
   }
   return matches[0] ?? null;
 }
 
-async function liveSessionExists(daemonUrl, sessionId) {
+async function runningSessionExists(daemonUrl, sessionId) {
   try {
-    return (await findLiveSessionSummary(daemonUrl, sessionId)) !== null;
+    return (await findRunningSessionSummary(daemonUrl, sessionId)) !== null;
   } catch {
     return true;
   }
@@ -664,8 +665,8 @@ function defaultLiveBackendForProvider(provider) {
   if (provider === "codex" || provider === "opencode") {
     return "native_local_server";
   }
-  if (provider === "claude") {
-    return "zellij_tui";
+  if (provider === "claude" || provider === "gemini") {
+    return "tui_mux";
   }
   return undefined;
 }
@@ -958,7 +959,7 @@ async function detachPtyFirstClient(daemonUrl, sessionId, clientId) {
   }
 }
 
-async function archiveRahSession(daemonUrl, sessionId, client = terminalClientDescriptor()) {
+async function closeRahSession(daemonUrl, sessionId, client = terminalClientDescriptor()) {
   await attachRahClient(daemonUrl, sessionId, client, {
     mode: "interactive",
     claimControl: false,
@@ -968,8 +969,8 @@ async function archiveRahSession(daemonUrl, sessionId, client = terminalClientDe
   });
 }
 
-async function printLiveSessionExitHint(daemonUrl, session) {
-  if (!(await liveSessionExists(daemonUrl, session.id))) {
+async function printRunningSessionExitHint(daemonUrl, session) {
+  if (!(await runningSessionExists(daemonUrl, session.id))) {
     return;
   }
   const provider = session.provider ?? "provider";
@@ -980,9 +981,9 @@ async function printLiveSessionExitHint(daemonUrl, session) {
   process.stdout.write(
     [
       "",
-      `[rah] Terminal client detached. RAH session is still live: ${session.id}`,
+      `[rah] Terminal client detached. RAH session is still running: ${session.id}`,
       `[rah] Reattach: ${attachCommand}`,
-      `[rah] End everywhere: rah archive ${session.id}`,
+      `[rah] End everywhere: rah close ${session.id}`,
       "",
     ].join("\n"),
   );
@@ -1142,7 +1143,7 @@ async function getTuiSurface(daemonUrl, sessionId) {
   }
 }
 
-async function waitForLocalZellijReattachKey(daemonUrl, sessionId) {
+async function waitForLocalMuxReattachKey(daemonUrl, sessionId) {
   const stdin = process.stdin;
   const stdout = process.stdout;
   if (!stdin.isTTY || typeof stdin.setRawMode !== "function") {
@@ -1159,12 +1160,12 @@ async function waitForLocalZellijReattachKey(daemonUrl, sessionId) {
       stdin.pause();
     };
     const sessionPollTimer = setInterval(() => {
-      void liveSessionExists(daemonUrl, sessionId).then((exists) => {
+      void runningSessionExists(daemonUrl, sessionId).then((exists) => {
         if (exists) {
           return;
         }
         cleanup();
-        stdout.write("\r\n[rah] Session was archived from another client.\r\n");
+        stdout.write("\r\n[rah] Session was stopped from another client.\r\n");
         resolve(false);
       });
     }, 750);
@@ -1187,86 +1188,6 @@ async function waitForLocalZellijReattachKey(daemonUrl, sessionId) {
   });
 }
 
-async function runZellijAttachUntilExitOrRevoked(daemonUrl, session, client) {
-  const child = spawn(
-    "zellij",
-    [
-      "attach",
-      session.mux.sessionName,
-      "options",
-      "--mirror-session",
-      "true",
-      "--pane-frames",
-      "false",
-      "--show-startup-tips",
-      "false",
-    ],
-    {
-      cwd: session.cwd || ROOT_DIR,
-      env: {
-        ...process.env,
-        ZELLIJ_SOCKET_DIR: session.mux.socketDir,
-      },
-      stdio: "inherit",
-    },
-  );
-  let revoked = false;
-  let sessionGone = false;
-  let completed = false;
-  const pollTimer = setInterval(() => {
-    void (async () => {
-      if (!(await liveSessionExists(daemonUrl, session.id))) {
-        sessionGone = true;
-        child.kill("SIGHUP");
-        setTimeout(() => {
-          if (!completed) {
-            child.kill("SIGTERM");
-          }
-        }, 500).unref?.();
-        return;
-      }
-      const { surface } = await getTuiSurface(daemonUrl, session.id);
-      if (!surface || surface.clientId === client.clientId) {
-        return;
-      }
-      revoked = true;
-      child.kill("SIGHUP");
-      setTimeout(() => {
-        if (!completed) {
-          child.kill("SIGTERM");
-        }
-      }, 500).unref?.();
-    })();
-  }, 250);
-  pollTimer.unref?.();
-
-  return await new Promise((resolve, reject) => {
-    child.on("error", reject);
-    child.on("exit", (code, signal) => {
-      completed = true;
-      clearInterval(pollTimer);
-      restoreTerminalApplicationModes(process.stdout);
-      if (revoked) {
-        resolve({ revoked: true });
-        return;
-      }
-      if (sessionGone) {
-        resolve({ revoked: false, sessionGone: true });
-        return;
-      }
-      if (signal) {
-        resolve({ revoked: false, signal });
-        return;
-      }
-      if (code && code !== 0) {
-        reject(new Error(`zellij attach exited with code ${code}`));
-        return;
-      }
-      resolve({ revoked: false });
-    });
-  });
-}
-
 async function runTmuxAttachUntilExitOrRevoked(daemonUrl, session, client) {
   const child = spawn(
     "tmux",
@@ -1282,7 +1203,7 @@ async function runTmuxAttachUntilExitOrRevoked(daemonUrl, session, client) {
   let completed = false;
   const pollTimer = setInterval(() => {
     void (async () => {
-      if (!(await liveSessionExists(daemonUrl, session.id))) {
+      if (!(await runningSessionExists(daemonUrl, session.id))) {
         sessionGone = true;
         child.kill("SIGHUP");
         setTimeout(() => {
@@ -1335,9 +1256,6 @@ async function runTmuxAttachUntilExitOrRevoked(daemonUrl, session, client) {
 }
 
 async function runMuxAttachUntilExitOrRevoked(daemonUrl, session, client) {
-  if (session.mux.backend === "zellij") {
-    return await runZellijAttachUntilExitOrRevoked(daemonUrl, session, client);
-  }
   if (session.mux.backend === "tmux") {
     return await runTmuxAttachUntilExitOrRevoked(daemonUrl, session, client);
   }
@@ -1345,7 +1263,7 @@ async function runMuxAttachUntilExitOrRevoked(daemonUrl, session, client) {
 }
 
 async function attachLocalTerminalToMux(daemonUrl, session, client) {
-  if (!session?.mux || !["zellij", "tmux"].includes(session.mux.backend)) {
+  if (!session?.mux || session.mux.backend !== "tmux") {
     throw new Error("Session does not expose TUI mux metadata.");
   }
   while (true) {
@@ -1355,7 +1273,7 @@ async function attachLocalTerminalToMux(daemonUrl, session, client) {
       await releaseLocalTuiSurface(daemonUrl, session.id, client.clientId);
       return;
     }
-    const shouldReattach = await waitForLocalZellijReattachKey(daemonUrl, session.id);
+    const shouldReattach = await waitForLocalMuxReattachKey(daemonUrl, session.id);
     if (!shouldReattach) {
       await releaseLocalTuiSurface(daemonUrl, session.id, client.clientId);
       return;
@@ -1375,7 +1293,7 @@ async function runProviderAttachUntilExitOrClosed(daemonUrl, session, child) {
   let sessionGone = false;
   let completed = false;
   const pollTimer = setInterval(() => {
-    void liveSessionExists(daemonUrl, session.id).then((exists) => {
+    void runningSessionExists(daemonUrl, session.id).then((exists) => {
       if (exists) {
         return;
       }
@@ -1452,26 +1370,26 @@ async function attachLocalTerminalToNativeLocalServer(daemonUrl, session, client
 async function attachExistingRahSession(parsed) {
   await ensureDaemon(parsed.daemonUrl);
   const summary = parsed.provider && parsed.providerSessionId
-    ? await findLiveProviderSessionSummary(
+    ? await findRunningProviderSessionSummary(
         parsed.daemonUrl,
         parsed.provider,
         parsed.providerSessionId,
       )
-    : await findLiveSessionSummary(parsed.daemonUrl, parsed.sessionId);
+    : await findRunningSessionSummary(parsed.daemonUrl, parsed.sessionId);
   if (!summary) {
     if (parsed.provider && parsed.providerSessionId) {
       throw new Error(
         `No live ${parsed.provider} session found for provider session ${parsed.providerSessionId}. Use \`rah ${parsed.provider} resume ${parsed.providerSessionId}\` to start it.`,
       );
     }
-    throw new Error(`No live RAH session found for ${parsed.sessionId}.`);
+    throw new Error(`No running RAH session found for ${parsed.sessionId}.`);
   }
   const session = managedSessionFromSummary(summary);
   const client = terminalClientDescriptor();
   try {
     if (session.liveBackend === "native_local_server") {
       await attachLocalTerminalToNativeLocalServer(parsed.daemonUrl, session, client);
-    } else if (session.mux?.backend === "zellij" || session.mux?.backend === "tmux") {
+    } else if (session.mux?.backend === "tmux") {
       await attachLocalTerminalToMux(parsed.daemonUrl, session, client);
     } else {
       await attachLocalTerminalToPty(parsed.daemonUrl, ptyIdFromSessionSummary(summary), client.clientId);
@@ -1479,7 +1397,7 @@ async function attachExistingRahSession(parsed) {
   } finally {
     await detachPtyFirstClient(parsed.daemonUrl, session.id, client.clientId);
   }
-  await printLiveSessionExitHint(parsed.daemonUrl, session);
+  await printRunningSessionExitHint(parsed.daemonUrl, session);
 }
 
 async function runPtyFirstProviderCommand(parsed) {
@@ -1491,7 +1409,7 @@ async function runPtyFirstProviderCommand(parsed) {
   try {
     if (session.liveBackend === "native_local_server") {
       await attachLocalTerminalToNativeLocalServer(parsed.daemonUrl, session, client);
-    } else if (session.mux?.backend === "zellij" || session.mux?.backend === "tmux") {
+    } else if (session.mux?.backend === "tmux") {
       await attachLocalTerminalToMux(parsed.daemonUrl, session, client);
     } else {
       await attachLocalTerminalToPty(parsed.daemonUrl, ptyId, client.clientId);
@@ -1499,7 +1417,7 @@ async function runPtyFirstProviderCommand(parsed) {
   } finally {
     await detachPtyFirstClient(parsed.daemonUrl, session.id, client.clientId);
   }
-  await printLiveSessionExitHint(parsed.daemonUrl, session);
+  await printRunningSessionExitHint(parsed.daemonUrl, session);
 }
 
 async function main() {
