@@ -4,6 +4,7 @@ import type {
   SessionSummary,
   StoredSessionRef,
 } from "@rah/runtime-protocol";
+import { conversationStateFromRuntimeState } from "@rah/runtime-protocol";
 import * as api from "./api";
 import { readErrorMessage } from "./session-store-bootstrap";
 import {
@@ -28,7 +29,7 @@ type SessionCommandState = {
   workspaceVisibilityVersion: number;
   workspaceDir: string;
   selectedSessionId: string | null;
-  newSessionProvider: "codex" | "claude" | "opencode";
+  newSessionProvider: "codex" | "claude" | "gemini" | "opencode";
   pendingSessionTransition: {
     kind: "new" | "history" | "claim_history";
     provider: StoredSessionRef["provider"];
@@ -289,6 +290,7 @@ export async function sendInputCommand(args: {
           ...optimistic.summary,
           session: {
             ...optimistic.summary.session,
+            ...conversationStateFromRuntimeState("running"),
             runtimeState: "running",
             ...(nextNativeTui ? { nativeTui: nextNativeTui } : {}),
             updatedAt: now,
@@ -328,6 +330,9 @@ export async function sendInputCommand(args: {
           ...baseRestored.summary,
           session: {
             ...baseRestored.summary.session,
+            ...conversationStateFromRuntimeState(
+              previousRuntimeState ?? baseRestored.summary.session.runtimeState,
+            ),
             runtimeState: previousRuntimeState ?? baseRestored.summary.session.runtimeState,
           },
         },

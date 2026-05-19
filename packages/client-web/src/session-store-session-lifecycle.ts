@@ -16,7 +16,7 @@ type LifecycleState = {
   workspaceVisibilityVersion: number;
   workspaceDir: string;
   selectedSessionId: string | null;
-  newSessionProvider: "codex" | "claude" | "opencode";
+  newSessionProvider: "codex" | "claude" | "gemini" | "opencode";
   error: string | null;
   pendingSessionTransition: PendingSessionTransition | null;
   pendingSessionAction:
@@ -205,7 +205,7 @@ export function applyClosedSessionState(
       createdAt: summary.session.createdAt,
       updatedAt: summary.session.updatedAt,
       lastUsedAt: summary.session.updatedAt,
-      source: "previous_live" as const,
+      source: "previous_running" as const,
     };
     nextState.storedSessions = mergeStoredSessionRefs(current.storedSessions, remembered);
     nextState.recentSessions = mergeRecentSessionRefs(current.recentSessions, remembered);

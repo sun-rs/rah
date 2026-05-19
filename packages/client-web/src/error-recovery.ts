@@ -99,7 +99,7 @@ export function describeWorkbenchError(
     return {
       title: "Choose a workspace",
       body:
-        "Pick a workspace directory before starting a new session so the workbench can group history, files, and live sessions correctly.",
+        "Pick a workspace directory before starting a new session so the workbench can group history, files, and running sessions correctly.",
     };
   }
 

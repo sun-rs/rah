@@ -1,8 +1,10 @@
-import type { PointerEvent as ReactPointerEvent, ReactNode } from "react";
-import type { SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
+import { type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import type { CouncilRoomSnapshot, SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
 import { DesktopWorkbenchSidebarHeader } from "../actions/DesktopWorkbenchSidebarHeader";
 import { MobileWorkbenchHeaderActions } from "../actions/MobileWorkbenchHeaderActions";
 import { Sheet } from "../../Sheet";
+import { OverlayScrollArea } from "../../OverlayScrollArea";
+import { SIDEBAR_LAYOUT } from "../../../sidebar-layout-contract";
 import type { WorkspaceSortMode } from "../../../session-browser";
 
 export function WorkbenchSidebarShell(props: {
@@ -15,7 +17,9 @@ export function WorkbenchSidebarShell(props: {
   sidebarContent: ReactNode;
   storedSessions: StoredSessionRef[];
   recentSessions: StoredSessionRef[];
-  liveSessions: SessionSummary[];
+  runningSessions: SessionSummary[];
+  councilRooms: readonly CouncilRoomSnapshot[];
+  selectedCouncilRoomId?: string | null | undefined;
   workspaceSortMode: WorkspaceSortMode;
   onWorkspaceSortModeChange: (value: WorkspaceSortMode) => void;
   canvasActive: boolean;
@@ -25,7 +29,10 @@ export function WorkbenchSidebarShell(props: {
   onDesktopToggleCanvas: () => void;
   onMobileToggleCanvas: () => void;
   onActivateHistory: (ref: StoredSessionRef) => void;
-  onActivateLive: (sessionId: string) => void;
+  onActivateRunning: (sessionId: string) => void;
+  onActivateCouncilRoom: (roomId: string) => void;
+  onRefreshCouncilRooms: () => void | Promise<void>;
+  onRemoveCouncilRoom: (roomId: string) => void | Promise<void>;
   onRemoveHistorySession: (session: Pick<StoredSessionRef, "provider" | "providerSessionId">) => void;
   onRemoveHistoryWorkspace: (workspaceDir: string) => void;
   onHome: () => void;
@@ -43,7 +50,9 @@ export function WorkbenchSidebarShell(props: {
             <DesktopWorkbenchSidebarHeader
               storedSessions={props.storedSessions}
               recentSessions={props.recentSessions}
-              liveSessions={props.liveSessions}
+              runningSessions={props.runningSessions}
+              councilRooms={props.councilRooms}
+              selectedCouncilRoomId={props.selectedCouncilRoomId}
               workspaceSortMode={props.workspaceSortMode}
               onWorkspaceSortModeChange={props.onWorkspaceSortModeChange}
               canvasActive={props.canvasActive}
@@ -51,7 +60,10 @@ export function WorkbenchSidebarShell(props: {
               onOpenCouncil={props.onOpenCouncil}
               onToggleCanvas={props.onDesktopToggleCanvas}
               onActivateHistory={props.onActivateHistory}
-              onActivateLive={props.onActivateLive}
+              onActivateRunning={props.onActivateRunning}
+              onActivateCouncilRoom={props.onActivateCouncilRoom}
+              onRefreshCouncilRooms={props.onRefreshCouncilRooms}
+              onRemoveCouncilRoom={props.onRemoveCouncilRoom}
               onRemoveHistorySession={props.onRemoveHistorySession}
               onRemoveHistoryWorkspace={props.onRemoveHistoryWorkspace}
               onHome={props.onHome}
@@ -60,7 +72,14 @@ export function WorkbenchSidebarShell(props: {
             />
           ) : null}
         </div>
-        <div className="flex-1 overflow-y-auto rah-scroll-panel rah-scroll-panel-y py-3 pl-3 pr-1">{props.sidebarContent}</div>
+        <OverlayScrollArea
+          className={SIDEBAR_LAYOUT.sidebarScrollShellClassName}
+          viewportClassName={SIDEBAR_LAYOUT.sidebarScrollClassName}
+          trackClassName={SIDEBAR_LAYOUT.sidebarScrollTrackClassName}
+          thumbClassName={SIDEBAR_LAYOUT.sidebarScrollThumbClassName}
+        >
+          {props.sidebarContent}
+        </OverlayScrollArea>
       </aside>
 
       {props.sidebarOpen ? (
@@ -89,7 +108,9 @@ export function WorkbenchSidebarShell(props: {
           <MobileWorkbenchHeaderActions
             storedSessions={props.storedSessions}
             recentSessions={props.recentSessions}
-            liveSessions={props.liveSessions}
+            runningSessions={props.runningSessions}
+            councilRooms={props.councilRooms}
+            selectedCouncilRoomId={props.selectedCouncilRoomId}
             workspaceSortMode={props.workspaceSortMode}
             onWorkspaceSortModeChange={props.onWorkspaceSortModeChange}
             canvasActive={props.canvasActive}
@@ -98,14 +119,17 @@ export function WorkbenchSidebarShell(props: {
             onOpenCouncil={props.onOpenCouncil}
             onToggleCanvas={props.onMobileToggleCanvas}
             onActivateHistory={props.onActivateHistory}
-            onActivateLive={props.onActivateLive}
+            onActivateRunning={props.onActivateRunning}
+            onActivateCouncilRoom={props.onActivateCouncilRoom}
+            onRefreshCouncilRooms={props.onRefreshCouncilRooms}
+            onRemoveCouncilRoom={props.onRemoveCouncilRoom}
             onRemoveHistorySession={props.onRemoveHistorySession}
             onRemoveHistoryWorkspace={props.onRemoveHistoryWorkspace}
             onOpenSettings={props.onOpenSettings}
           />
         }
       >
-        <div className="py-3 pl-3 pr-1">{props.sidebarContent}</div>
+        <div className={SIDEBAR_LAYOUT.sidebarSheetContentClassName}>{props.sidebarContent}</div>
       </Sheet>
     </>
   );

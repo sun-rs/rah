@@ -198,7 +198,7 @@ export function resolveCapabilityCautionText(args: {
     return "Prelaunch capability view may change after the session starts.";
   }
   if (catalog.modelsExact === false || catalog.optionsExact === false) {
-    return "Catalog is incomplete and may be refined by live session data.";
+    return "Catalog is incomplete and may be refined by running session data.";
   }
   return null;
 }
@@ -254,7 +254,7 @@ export function resolveConfigPreviewOrigin(args: {
 export function resolveConfigPreviewOriginLabel(origin: ConfigPreviewOrigin): string | null {
   switch (origin) {
     case "session-resolved":
-      return "live option state";
+      return "running option state";
     case "catalog-profile":
       return "catalog profile";
     case "catalog-top-level":
@@ -273,13 +273,13 @@ export function resolveCapabilityHeadline(args: {
   const configOrigin = resolveConfigPreviewOrigin(args);
 
   if (capabilityOrigin === "session-resolved" && configOrigin === "session-resolved") {
-    return "Model and advanced options are confirmed by the live session.";
+    return "Model and advanced options are confirmed by the running session.";
   }
   if (capabilityOrigin === "session-resolved" && configOrigin === "catalog-profile") {
-    return "Current model is confirmed by the live session. Advanced options are inferred from the provider catalog.";
+    return "Current model is confirmed by the running session. Advanced options are inferred from the provider catalog.";
   }
   if (capabilityOrigin === "session-resolved" && configOrigin === "catalog-top-level") {
-    return "Current model is confirmed by the live session. Advanced options are shown from the provider catalog fallback.";
+    return "Current model is confirmed by the running session. Advanced options are shown from the provider catalog fallback.";
   }
   if (capabilityOrigin === "catalog-fallback") {
     return "Capability preview is based on prelaunch provider data.";

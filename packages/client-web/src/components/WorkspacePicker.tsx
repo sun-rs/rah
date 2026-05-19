@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { ChevronUp, Folder, FolderOpen, HardDrive, Search, X } from "lucide-react";
 import { listDirectory, type DirectoryListingResponse } from "../api";
+import { OverlayScrollArea } from "./OverlayScrollArea";
 
 const DEFAULT_WORKSPACE_PICKER_PATH = "~";
 
@@ -141,7 +142,11 @@ export function WorkspacePicker(props: {
           </div>
 
           {/* Directory listing */}
-          <div className="flex-1 overflow-y-auto rah-scroll-panel rah-scroll-panel-y px-4 pb-2">
+          <OverlayScrollArea
+            className="min-h-0 flex-1"
+            viewportClassName="h-full px-4 pb-2"
+            scrollAriaLabel="Workspace folders"
+          >
             {error ? (
               <div className="py-6 text-center text-sm text-[var(--app-danger)]">
                 {error}
@@ -169,7 +174,7 @@ export function WorkspacePicker(props: {
                 {query.trim() ? "No matching folders." : "No folders in this directory."}
               </div>
             )}
-          </div>
+          </OverlayScrollArea>
 
           {/* Footer actions */}
           <div className="border-t border-[var(--app-border)] px-4 py-3 shrink-0 flex items-center justify-between gap-3">

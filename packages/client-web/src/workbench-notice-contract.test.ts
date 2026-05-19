@@ -1,6 +1,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import type { NativeTuiDiagnostic, SessionSummary } from "@rah/runtime-protocol";
+import { conversationStateFromRuntimeState } from "@rah/runtime-protocol";
 import { initialHistorySyncState, type SessionProjection } from "./types";
 import { deriveWorkbenchNoticeState } from "./workbench-notice-contract";
 
@@ -12,6 +13,7 @@ function summary(args?: Partial<SessionSummary["session"]>): SessionSummary {
       launchSource: "web",
       cwd: "/workspace/rah",
       rootDir: "/workspace/rah",
+      ...conversationStateFromRuntimeState(args?.runtimeState ?? "running"),
       runtimeState: "running",
       ptyId: "pty-1",
       capabilities: {
@@ -81,7 +83,7 @@ describe("workbench notice contract", () => {
 
     assert.deepEqual(state.interactionNotice, {
       tone: "info",
-      message: "History only. Claim control for live input and approvals.",
+        message: "History only. Claim running control for input and approvals.",
     });
   });
 
@@ -123,7 +125,7 @@ describe("workbench notice contract", () => {
     assert.deepEqual(state.interactionNotice, {
       tone: "warning",
       message:
-        "Native TUI process is stopped. Archive this session or resume it from history to continue.",
+        "Native TUI process is stopped. Reopen it from Chats to continue.",
     });
   });
 

@@ -52,8 +52,10 @@ function timelineEvent(args: {
   canonicalItemId?: string;
   canonicalTurnId?: string;
   ts?: string;
+  provider?: "codex" | "gemini" | "opencode" | "claude";
 }): RahEvent {
   const kind = args.kind ?? "user_message";
+  const provider = args.provider ?? "codex";
   return {
     id: `event-${args.seq}`,
     seq: args.seq,
@@ -61,7 +63,7 @@ function timelineEvent(args: {
     sessionId: "session-1",
     ...(args.turnId !== undefined ? { turnId: args.turnId } : {}),
     source: {
-      provider: "codex",
+      provider,
       channel: "structured_persisted",
       authority: "authoritative",
     },
@@ -80,7 +82,7 @@ function timelineEvent(args: {
             identity: {
               canonicalItemId: args.canonicalItemId,
               canonicalTurnId: args.canonicalTurnId ?? `canonical:${args.turnId}`,
-              provider: "codex",
+              provider,
               providerSessionId: "provider-session-1",
               turnKey: args.turnId ?? `turn:${args.seq}`,
               itemKind: kind,
@@ -329,6 +331,53 @@ test("mergeLatestHistoryPage keeps newer same-text optimistic placeholders pendi
     (entry) => entry.kind === "timeline" && entry.item.kind === "user_message",
   );
   assert.equal(userMessages.length, 2);
+});
+
+test("mergeLatestHistoryPage drops Gemini optimistic user messages covered by composite history input", () => {
+  let current = replayEventsIntoProjection(summary(), []);
+  current = appendOptimisticUserMessage(current, "厉害了", {
+    clientMessageId: "client-message-1",
+    clientTurnId: "client-turn-1",
+  });
+  current = appendOptimisticUserMessage(current, "现在几点", {
+    clientMessageId: "client-message-2",
+    clientTurnId: "client-turn-2",
+  });
+  current = appendOptimisticUserMessage(current, "你无敌", {
+    clientMessageId: "client-message-3",
+    clientTurnId: "client-turn-3",
+  });
+  current = {
+    ...current,
+    feed: current.feed.map((entry, index) =>
+      entry.kind === "timeline" && entry.key.startsWith("optimistic:user:")
+        ? { ...entry, ts: `2026-04-15T00:00:0${index}.000Z` }
+        : entry,
+    ),
+  };
+
+  const next = mergeLatestHistoryPage(current, [
+    timelineEvent({
+      seq: 1,
+      turnId: "gemini:provider-user-1",
+      text: "厉害了\n\n现在几点\n\n你无敌",
+      messageId: "provider-user-1",
+      canonicalItemId: "gemini-user-1",
+      provider: "gemini",
+      ts: "2026-04-15T00:00:04.000Z",
+    }),
+  ]);
+
+  const userMessages = next.feed.filter(
+    (entry) => entry.kind === "timeline" && entry.item.kind === "user_message",
+  );
+  assert.equal(userMessages.length, 1);
+  assert.equal(
+    userMessages[0]?.kind === "timeline" && userMessages[0].item.kind === "user_message"
+      ? userMessages[0].item.text
+      : null,
+    "厉害了\n\n现在几点\n\n你无敌",
+  );
 });
 
 test("prependHistoryPage dedupes weak user echoes once authoritative history arrives", () => {

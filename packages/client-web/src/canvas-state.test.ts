@@ -5,7 +5,7 @@ import {
   applyCanvasPaneTarget,
   createCanvasLayoutRatios,
   createEmptyCanvasTargets,
-  resolveCanvasLiveUniquenessKey,
+  resolveCanvasRunningUniquenessKey,
   resolveCanvasTargetProjection,
   type CanvasPaneTarget,
 } from "./canvas-state";
@@ -40,7 +40,7 @@ function summary(args: {
         resumeByProvider: true,
         listProviderSessions: true,
         renameSession: false,
-        actions: { info: true, archive: true, delete: false, rename: "none" },
+        actions: { info: true, stop: true, delete: false, rename: "none" },
         steerInput: !readOnlyReplay,
         queuedInput: true,
         modelSwitch: false,
@@ -81,7 +81,7 @@ test("canvas layout ratios match visible pane count", () => {
   assert.deepEqual(createCanvasLayoutRatios("four-grid"), [1, 1, 1, 1]);
 });
 
-test("canvas panes keep a live session unique across panes", () => {
+test("canvas panes keep a running session unique across panes", () => {
   const live = summary({ id: "live-1", providerSessionId: "provider-1" });
   const current = createEmptyCanvasTargets();
   current["canvas-1"] = { kind: "session", sessionId: "live-1" };
@@ -98,7 +98,7 @@ test("canvas panes keep a live session unique across panes", () => {
   assert.deepEqual(current["canvas-1"], { kind: "session", sessionId: "live-1" });
 });
 
-test("canvas stored live target also evicts an existing live pane", () => {
+test("canvas stored running target also evicts an existing running pane", () => {
   const live = summary({ id: "live-1", provider: "opencode", providerSessionId: "provider-1" });
   const storedTarget: CanvasPaneTarget = {
     kind: "stored",
@@ -137,8 +137,27 @@ test("canvas read-only history replay can appear in multiple panes", () => {
   assert.deepEqual(next["canvas-1"], { kind: "session", sessionId: "history-1" });
   assert.deepEqual(next["canvas-2"], { kind: "session", sessionId: "history-1" });
   assert.equal(
-    resolveCanvasLiveUniquenessKey({ kind: "session", sessionId: "history-1" }, projections(replay)),
+    resolveCanvasRunningUniquenessKey({ kind: "session", sessionId: "history-1" }, projections(replay)),
     null,
+  );
+});
+
+test("canvas keeps a council room unique across panes", () => {
+  const current = createEmptyCanvasTargets();
+  current["canvas-1"] = { kind: "council_room", roomId: "room-1" };
+
+  const next = applyCanvasPaneTarget(
+    current,
+    "canvas-2",
+    { kind: "council_room", roomId: "room-1" },
+    projections(),
+  );
+
+  assert.deepEqual(next["canvas-1"], { kind: "empty" });
+  assert.deepEqual(next["canvas-2"], { kind: "council_room", roomId: "room-1" });
+  assert.equal(
+    resolveCanvasRunningUniquenessKey({ kind: "council_room", roomId: "room-1" }, projections()),
+    "council_room:room-1",
   );
 });
 

@@ -1,9 +1,11 @@
 import type {
   AddCouncilAgentRequest,
   AddCouncilAgentResponse,
+  AddManualProviderModelRequest,
+  AddManualProviderModelResponse,
   AttachSessionRequest,
   AttachSessionResponse,
-  CloseZellijMuxSessionResponse,
+  CloseTuiMuxSessionResponse,
   CloseSessionRequest,
   CouncilAgentTuiResponse,
   CouncilMcpRequest,
@@ -15,6 +17,8 @@ import type {
   CouncilStopAgentResponse,
   CreateCouncilRoomRequest,
   CreateCouncilRoomResponse,
+  DeleteManualProviderModelOptionResponse,
+  DeleteManualProviderModelResponse,
   DebugScenarioDescriptor,
   DetachSessionRequest,
   EventBatch,
@@ -31,22 +35,24 @@ import type {
   GitStatusResponse,
   SessionFileSearchResponse,
   ListDebugScenariosResponse,
+  ListManualProviderModelsResponse,
   ListNativeTuiDiagnosticsResponse,
   ListPtyStatsResponse,
   ListProviderModelsResponse,
   ListProvidersResponse,
   ListCouncilRoomsResponse,
-  ListZellijMuxDiagnosticsResponse,
+  ListTuiMuxDiagnosticsResponse,
   NativeTuiDiagnostic,
   NativeTuiSurfaceResponse,
   NativeTuiClientCloseRequest,
   ListSessionsResponse,
+  ManualProviderModel,
   ProviderDiagnostic,
   ProviderKind,
   ProviderModelCatalog,
   PtyClientMessage,
   PtySessionStats,
-  ZellijMuxSessionDiagnostic,
+  TuiMuxSessionDiagnostic,
   PtyServerMessage,
   PermissionResponseRequest,
   RenameSessionRequest,
@@ -344,11 +350,11 @@ export async function listPtyStats(options?: { signal?: AbortSignal }): Promise<
   return response.sessions;
 }
 
-export async function listZellijMuxDiagnostics(options?: {
+export async function listTuiMuxDiagnostics(options?: {
   signal?: AbortSignal;
-}): Promise<ZellijMuxSessionDiagnostic[]> {
-  const response = await requestJson<ListZellijMuxDiagnosticsResponse>(
-    "/api/zellij/diagnostics",
+}): Promise<TuiMuxSessionDiagnostic[]> {
+  const response = await requestJson<ListTuiMuxDiagnosticsResponse>(
+    "/api/tui-mux/diagnostics",
     {
       ...(options?.signal ? { signal: options.signal } : {}),
     },
@@ -356,9 +362,9 @@ export async function listZellijMuxDiagnostics(options?: {
   return response.sessions;
 }
 
-export async function closeZellijMuxSession(sessionName: string): Promise<void> {
-  await requestJson<CloseZellijMuxSessionResponse>(
-    `/api/zellij/sessions/${encodeURIComponent(sessionName)}/close`,
+export async function closeTuiMuxSession(sessionName: string): Promise<void> {
+  await requestJson<CloseTuiMuxSessionResponse>(
+    `/api/tui-mux/sessions/${encodeURIComponent(sessionName)}/close`,
     {
       method: "POST",
       body: JSON.stringify({}),
@@ -389,6 +395,65 @@ export async function listProviderModels(
     },
   );
   return response.catalog;
+}
+
+export async function listManualProviderModels(
+  provider: ProviderKind,
+  options?: { signal?: AbortSignal },
+): Promise<ManualProviderModel[]> {
+  const response = await requestJson<ListManualProviderModelsResponse>(
+    `/api/providers/${provider}/manual-models`,
+    {
+      ...(options?.signal ? { signal: options.signal } : {}),
+    },
+  );
+  return response.models;
+}
+
+export async function addManualProviderModel(
+  provider: ProviderKind,
+  request: AddManualProviderModelRequest,
+): Promise<AddManualProviderModelResponse> {
+  return requestJson<AddManualProviderModelResponse>(
+    `/api/providers/${provider}/manual-models`,
+    {
+      method: "POST",
+      body: JSON.stringify(request),
+    },
+  );
+}
+
+export async function deleteManualProviderModel(
+  provider: ProviderKind,
+  modelId: string,
+  options?: { cwd?: string },
+): Promise<DeleteManualProviderModelResponse> {
+  const query = new URLSearchParams();
+  if (options?.cwd) {
+    query.set("cwd", options.cwd);
+  }
+  const suffix = query.size ? `?${query.toString()}` : "";
+  return requestJson<DeleteManualProviderModelResponse>(
+    `/api/providers/${provider}/manual-models/${encodeURIComponent(modelId)}${suffix}`,
+    { method: "DELETE" },
+  );
+}
+
+export async function deleteManualProviderModelOption(
+  provider: ProviderKind,
+  modelId: string,
+  optionId: string,
+  options?: { cwd?: string },
+): Promise<DeleteManualProviderModelOptionResponse> {
+  const query = new URLSearchParams();
+  if (options?.cwd) {
+    query.set("cwd", options.cwd);
+  }
+  const suffix = query.size ? `?${query.toString()}` : "";
+  return requestJson<DeleteManualProviderModelOptionResponse>(
+    `/api/providers/${provider}/manual-models/${encodeURIComponent(modelId)}/options/${encodeURIComponent(optionId)}${suffix}`,
+    { method: "DELETE" },
+  );
 }
 
 export async function readWorkbench(): Promise<WorkbenchResponse> {
@@ -764,9 +829,9 @@ export async function postCouncilMessage(
   );
 }
 
-export async function archiveCouncilRoom(roomId: string): Promise<{ ok: true }> {
+export async function stopCouncilRoom(roomId: string): Promise<{ ok: true }> {
   return requestJson<{ ok: true }>(
-    `/api/council/rooms/${encodeURIComponent(roomId)}/archive`,
+    `/api/council/rooms/${encodeURIComponent(roomId)}/stop`,
     { method: "POST", body: JSON.stringify({}) },
   );
 }

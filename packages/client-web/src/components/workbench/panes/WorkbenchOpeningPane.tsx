@@ -75,7 +75,7 @@ export function WorkbenchOpeningPane(props: {
               {props.openingSession.kind === "new"
                 ? `Launching ${providerLabel(props.openingSession.provider)} and preparing the workspace.`
                 : props.openingSession.kind === "claim_history"
-                  ? `Claiming ${providerLabel(props.openingSession.provider)} session for live control and rebuilding the timeline.`
+                  ? `Claiming ${providerLabel(props.openingSession.provider)} session for running control and rebuilding the timeline.`
                   : `Restoring ${providerLabel(props.openingSession.provider)} session and rebuilding the timeline.`}
             </div>
             {props.openingSession.cwd ? (

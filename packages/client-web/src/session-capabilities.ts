@@ -32,8 +32,8 @@ export function canSessionDelete(summary: SessionSummary): boolean {
   return summary.session.capabilities.actions.delete && summary.session.providerSessionId !== undefined;
 }
 
-export function canSessionArchive(summary: SessionSummary): boolean {
-  return summary.session.capabilities.actions.archive;
+export function canSessionStop(summary: SessionSummary): boolean {
+  return summary.session.capabilities.actions.stop;
 }
 
 export function canSessionShowInfo(summary: SessionSummary): boolean {
@@ -118,7 +118,7 @@ export function sessionCapabilityTags(summary: SessionSummary): string[] {
 
 export function sessionInteractionNotice(summary: SessionSummary): string | null {
   if (isReadOnlyReplay(summary)) {
-    return "History only. Claim control for live input and approvals.";
+    return "History only. Claim running control for input and approvals.";
   }
   if (!canSessionSendInput(summary)) {
     return "Observe only.";
@@ -127,13 +127,11 @@ export function sessionInteractionNotice(summary: SessionSummary): string | null
 }
 
 export function isSessionActivelyRunning(summary: SessionSummary): boolean {
-  return [
+  return summary.session.status === "running" && [
     "starting",
-    "running",
-    "thinking",
-    "streaming",
-    "retrying",
-  ].includes(summary.session.runtimeState);
+    "working",
+    "stopping",
+  ].includes(summary.session.phase);
 }
 
 export function isRuntimeStatusActivelyRunning(status: string | undefined): boolean {
@@ -153,8 +151,8 @@ export function isSessionControlLocked(summary: SessionSummary): boolean {
   }
   return [
     "starting",
-    "running",
+    "working",
     "waiting_input",
     "waiting_permission",
-  ].includes(summary.session.runtimeState);
+  ].includes(summary.session.phase);
 }

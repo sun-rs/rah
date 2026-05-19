@@ -1,10 +1,11 @@
 import { useLayoutEffect, useRef, useState, type RefObject } from "react";
 import type { ProviderModelCatalog } from "@rah/runtime-protocol";
-import { ArrowUp, ChevronDown, Folder, FolderPlus, Menu, Plus } from "lucide-react";
+import { ArrowUp, ChevronDown, Folder, FolderPlus, Menu, Plus, UsersRound } from "lucide-react";
 import { ProviderSelector, type ProviderChoice } from "../../ProviderSelector";
 import { SessionControlPopover } from "../../SessionControlPopover";
 import { SessionModelControls } from "../../SessionModelControls";
 import { SessionModeControls } from "../../SessionModeControls";
+import { OverlayScrollArea } from "../../OverlayScrollArea";
 import { TokenizedTextarea } from "../../TokenizedTextarea";
 import { WorkspacePicker } from "../../WorkspacePicker";
 import {
@@ -61,6 +62,7 @@ export function WorkbenchEmptyPane(props: {
   planModeEnabled: boolean;
   onAccessModeChange: (modeId: string) => void;
   onPlanModeToggle: (enabled: boolean) => void;
+  onOpenNewCouncilRoom: () => void;
 }) {
   const controlsRowRef = useRef<HTMLDivElement | null>(null);
   const [controlsRowWidth, setControlsRowWidth] = useState<number | null>(null);
@@ -187,26 +189,33 @@ export function WorkbenchEmptyPane(props: {
                       />
                     </button>
                     {props.workspaceDirs.length > 0 && props.workspacePickerOpen ? (
-                      <div className="rah-popover-panel rah-scroll-panel rah-scroll-panel-y absolute bottom-full left-0 z-20 mb-1.5 max-h-[min(18rem,calc(100dvh-12rem))] w-[min(34rem,calc(100vw-2rem))] overflow-y-auto rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-1.5 shadow-lg">
-                        {props.workspaceDirs.map((dir) => (
-                          <button
-                            key={dir}
-                            type="button"
-                            onClick={() => props.onSelectWorkspace(dir)}
-                            title={dir}
-                            className={`flex w-full min-w-0 items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm transition-colors ${
-                              dir === props.availableWorkspaceDir
-                                ? "bg-[var(--app-subtle-bg)] text-[var(--app-fg)]"
-                                : "text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)]"
-                            }`}
-                          >
-                            <Folder size={13} className="shrink-0 text-[var(--app-hint)]" />
-                            <MarqueeText text={dir} enabled={dir.length > 34} />
-                            {dir === props.availableWorkspaceDir ? (
-                              <span className="shrink-0 text-[10px] text-[var(--app-hint)]">●</span>
-                            ) : null}
-                          </button>
-                        ))}
+                      <div className="rah-popover-panel absolute bottom-full left-0 z-20 mb-1.5 max-h-[min(18rem,calc(100dvh-12rem))] w-[min(34rem,calc(100vw-2rem))] overflow-hidden rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] shadow-lg">
+                        <OverlayScrollArea
+                          className="max-h-[min(18rem,calc(100dvh-12rem))]"
+                          viewportClassName="max-h-[min(18rem,calc(100dvh-12rem))]"
+                          contentClassName="p-1.5"
+                          scrollAriaLabel="Workspaces"
+                        >
+                          {props.workspaceDirs.map((dir) => (
+                            <button
+                              key={dir}
+                              type="button"
+                              onClick={() => props.onSelectWorkspace(dir)}
+                              title={dir}
+                              className={`flex w-full min-w-0 items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm transition-colors ${
+                                dir === props.availableWorkspaceDir
+                                  ? "bg-[var(--app-subtle-bg)] text-[var(--app-fg)]"
+                                  : "text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)]"
+                              }`}
+                            >
+                              <Folder size={13} className="shrink-0 text-[var(--app-hint)]" />
+                              <MarqueeText text={dir} enabled={dir.length > 34} />
+                              {dir === props.availableWorkspaceDir ? (
+                                <span className="shrink-0 text-[10px] text-[var(--app-hint)]">●</span>
+                              ) : null}
+                            </button>
+                          ))}
+                        </OverlayScrollArea>
                       </div>
                     ) : null}
                   </div>
@@ -281,6 +290,19 @@ export function WorkbenchEmptyPane(props: {
               onChange={props.onChangeProvider}
               mode="grid"
             />
+          </div>
+
+          <div className="flex w-full justify-center pt-1">
+            <button
+              type="button"
+              onClick={props.onOpenNewCouncilRoom}
+              className="icon-click-feedback inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-transparent px-3 text-xs font-medium text-[var(--app-hint)] transition-colors hover:border-[var(--app-border)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
+              aria-label="Start a council room"
+              title="Start a council room"
+            >
+              <UsersRound size={14} />
+              New council
+            </button>
           </div>
         </div>
       </div>

@@ -187,7 +187,7 @@ export function coerceSelectedSessionId(
   return null;
 }
 
-export function findDaemonLiveSessionForStoredRef(
+export function findDaemonRunningSessionForStoredRef(
   projections: Map<string, SessionProjection>,
   ref: StoredSessionRef,
 ): SessionSummary | null {
@@ -207,15 +207,15 @@ export function findDaemonLiveSessionForStoredRef(
 }
 
 export function resolveHistoryActivationMode(args: {
-  existingLiveSummary: SessionSummary | null;
+  existingRunningSummary: SessionSummary | null;
   clientId: string;
 }): "select" | "attach" | "resume" {
-  if (!args.existingLiveSummary) {
+  if (!args.existingRunningSummary) {
     return "resume";
   }
   const currentClientControlsSession =
-    args.existingLiveSummary.controlLease.holderClientId === args.clientId &&
-    args.existingLiveSummary.attachedClients.some((client) => client.id === args.clientId);
+    args.existingRunningSummary.controlLease.holderClientId === args.clientId &&
+    args.existingRunningSummary.attachedClients.some((client) => client.id === args.clientId);
   return currentClientControlsSession ? "select" : "attach";
 }
 

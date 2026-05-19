@@ -301,6 +301,7 @@ export function ChatThread(props: {
   feed: FeedEntry[];
   hideToolCalls?: boolean;
   hideOpenCodeReasoning?: boolean;
+  hideGeminiReasoning?: boolean;
   showModelInfo?: boolean;
   provider?: ProviderKind;
   canLoadOlderHistory?: boolean;
@@ -338,9 +339,16 @@ export function ChatThread(props: {
         props.feed,
         props.hideToolCalls ?? false,
         props.hideOpenCodeReasoning ?? false,
+        props.hideGeminiReasoning ?? false,
         props.provider,
       ),
-    [props.feed, props.hideToolCalls, props.hideOpenCodeReasoning, props.provider],
+    [
+      props.feed,
+      props.hideToolCalls,
+      props.hideOpenCodeReasoning,
+      props.hideGeminiReasoning,
+      props.provider,
+    ],
   );
   const assistantTurnHeaders = useMemo(
     () => buildAssistantTurnHeaders(entries),

@@ -1013,7 +1013,7 @@ export function TerminalPane(props: TerminalPaneProps) {
             }
             title={
               tuiClientCloseEnabled
-                ? "Close this Web TUI client without stopping the live session"
+                ? "Close this Web TUI client without stopping the running session"
                 : props.closeTitle ?? "Close terminal"
             }
             disabled={tuiClientCloseEnabled ? tuiClientClosing : false}
@@ -1067,7 +1067,7 @@ export function TerminalPane(props: TerminalPaneProps) {
             <div className="terminal-surface-overlay-card">
               <div className="terminal-surface-overlay-title">Web TUI client is closed</div>
               <div className="terminal-surface-overlay-copy">
-                The live session is still running. Activate only when you need the full native TUI.
+                The session is still running. Activate only when you need the full native TUI.
               </div>
               <button
                 type="button"
@@ -1084,7 +1084,7 @@ export function TerminalPane(props: TerminalPaneProps) {
             <div className="terminal-surface-overlay-card">
               <div className="terminal-surface-overlay-title">TUI active on {surfaceOwnerKind}</div>
               <div className="terminal-surface-overlay-copy">
-                Reclaiming here will detach the other zellij viewer.
+                Reclaiming here will detach the other tmux viewer.
               </div>
               <button type="button" className="terminal-surface-overlay-button" onClick={claimCurrentSurface}>
                 Reattach here

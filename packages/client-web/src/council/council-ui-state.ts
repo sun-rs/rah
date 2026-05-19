@@ -5,13 +5,14 @@ import type {
   SessionModelDescriptor,
   SessionReasoningOption,
 } from "@rah/runtime-protocol";
-import type { ProviderChoice } from "../components/ProviderSelector";
 import { buildModelOptionValuesFromReasoning } from "../provider-capabilities";
 import { resolveSessionModeControlState } from "../session-mode-ui";
 
+export type CouncilAgentDraftProvider = CouncilAgentConfig["provider"];
+
 export type CouncilAgentDraft = {
   id: string;
-  provider: ProviderChoice;
+  provider: CouncilAgentDraftProvider;
   label: string;
   role: string;
   modelId: string | null;
@@ -67,8 +68,9 @@ export function resolveCouncilAgentModelSelection(args: {
 } {
   const catalog = args.catalog;
   const models = catalog?.models ?? [];
+  const requestedModelId = args.draft.modelId?.trim() || null;
   const model =
-    models.find((entry) => entry.id === args.draft.modelId) ??
+    (requestedModelId ? models.find((entry) => entry.id === requestedModelId) : null) ??
     models[0] ??
     null;
   const reasoningOptions = model?.reasoningOptions ?? [];

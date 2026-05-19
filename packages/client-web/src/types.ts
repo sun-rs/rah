@@ -16,10 +16,12 @@ import type {
   ToolCallDetail,
   WorkbenchObservation,
 } from "@rah/runtime-protocol";
+import { conversationStateFromRuntimeState } from "@rah/runtime-protocol";
 
 export type SessionsResponse = ListSessionsResponse;
 
 const PROVISIONAL_USER_ECHO_WINDOW_MS = 5_000;
+const COMPOSITE_USER_ECHO_WINDOW_MS = 15_000;
 
 export type FeedEntry =
   | {
@@ -229,13 +231,11 @@ function shouldApplySummaryMutation(current: SessionProjection, event: RahEvent)
 }
 
 function sessionSummaryIsActivelyRunning(summary: SessionSummary): boolean {
-  return [
+  return summary.session.status === "running" && [
     "starting",
-    "running",
-    "thinking",
-    "streaming",
-    "retrying",
-  ].includes(summary.session.runtimeState);
+    "working",
+    "stopping",
+  ].includes(summary.session.phase);
 }
 
 function nextRuntimeStatusForEvent(
@@ -264,6 +264,7 @@ function summaryWithRuntimeState(
     ...current.summary,
     session: {
       ...current.summary.session,
+      ...conversationStateFromRuntimeState(state),
       runtimeState: state,
       updatedAt,
     },
@@ -535,6 +536,34 @@ function applyTimelineEvent(
       );
       return next;
     }
+
+    if (event.source.provider === "gemini" && isAuthoritativeUserMessage(incomingUserItem, identityFields)) {
+      const compositeEchoIndexes = findCompositeOptimisticUserEchoIndexes(
+        feed,
+        incomingUserItem.text,
+        identityFields,
+        event.ts,
+      );
+      if (compositeEchoIndexes.length > 1) {
+        const firstIndex = compositeEchoIndexes[0]!;
+        const removedIndexes = new Set(compositeEchoIndexes.slice(1));
+        const firstEcho = feed[firstIndex] as Extract<FeedEntry, { kind: "timeline" }>;
+        const replacement = createTimelineEntry(
+          {
+            key: firstEcho.key,
+            kind: "timeline",
+            item: event.payload.item,
+            ts: event.ts,
+            sourceProvider: event.source.provider,
+            ...mergeTimelineIdentityFields(firstEcho, identityFields),
+          },
+          event.turnId ?? firstEcho.turnId,
+        );
+        return feed
+          .map((entry, index) => (index === firstIndex ? replacement : entry))
+          .filter((_entry, index) => !removedIndexes.has(index));
+      }
+    }
   }
 
   const latestEntry = feed.at(-1);
@@ -625,6 +654,46 @@ function findOptimisticUserMessageIndex(
     }
   }
   return -1;
+}
+
+function findCompositeOptimisticUserEchoIndexes(
+  feed: FeedEntry[],
+  text: string,
+  incomingIdentity: TimelineIdentityFields,
+  incomingTs: string,
+): number[] {
+  if (!text.includes("\n\n")) {
+    return [];
+  }
+  const candidates = feed
+    .map((entry, index) => ({ entry, index }))
+    .filter(({ entry }) => {
+      if (!isOptimisticUserMessageEntry(entry)) {
+        return false;
+      }
+      if (!canMergeTimelineCanonicalIdentity(entry, incomingIdentity)) {
+        return false;
+      }
+      return timelineTimestampsWithinMs(entry.ts, incomingTs, COMPOSITE_USER_ECHO_WINDOW_MS);
+    }) as Array<{ entry: Extract<FeedEntry, { kind: "timeline" }>; index: number }>;
+
+  for (let start = 0; start < candidates.length; start += 1) {
+    const indexes: number[] = [];
+    const parts: string[] = [];
+    for (let cursor = start; cursor < candidates.length; cursor += 1) {
+      const candidate = candidates[cursor]!;
+      indexes.push(candidate.index);
+      parts.push(candidate.entry.item.kind === "user_message" ? candidate.entry.item.text : "");
+      const joined = parts.join("\n\n");
+      if (joined === text && indexes.length > 1) {
+        return indexes;
+      }
+      if (!text.startsWith(joined)) {
+        break;
+      }
+    }
+  }
+  return [];
 }
 
 function findWeakUserEchoIndex(
@@ -1896,6 +1965,7 @@ export function applyEventToProjection(
             ...current.summary,
             session: {
               ...current.summary.session,
+              ...conversationStateFromRuntimeState(event.payload.state),
               runtimeState: event.payload.state,
               updatedAt: event.ts,
             },
@@ -1924,6 +1994,7 @@ export function applyEventToProjection(
               ...current.summary,
               session: {
                 ...current.summary.session,
+                ...conversationStateFromRuntimeState(permissionRequestedState),
                 runtimeState: permissionRequestedState,
                 updatedAt: event.ts,
               },
@@ -1933,6 +2004,7 @@ export function applyEventToProjection(
                 ...current.summary,
                 session: {
                   ...current.summary.session,
+                  ...conversationStateFromRuntimeState(permissionResolvedState),
                   runtimeState: permissionResolvedState,
                   updatedAt: event.ts,
                 },
@@ -2114,6 +2186,8 @@ export function providerLabel(provider: ManagedSession["provider"]): string {
       return "Codex";
     case "claude":
       return "Claude";
+    case "gemini":
+      return "Gemini";
     case "opencode":
       return "OpenCode";
     case "custom":

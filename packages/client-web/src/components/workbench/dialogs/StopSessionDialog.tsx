@@ -1,9 +1,9 @@
 import type { SessionSummary } from "@rah/runtime-protocol";
 import { ConfirmDialog } from "./ConfirmDialog";
 
-export function ArchiveSessionDialog(props: {
+export function StopSessionDialog(props: {
   open: boolean;
-  archiving: boolean;
+  stopping: boolean;
   targetSummary: SessionSummary | null;
   onOpenChange: (open: boolean) => void;
   onConfirm: () => void;
@@ -11,22 +11,22 @@ export function ArchiveSessionDialog(props: {
   return (
     <ConfirmDialog
       open={props.open}
-      pending={props.archiving}
-      title="Archive session?"
+      pending={props.stopping}
+      title="Stop session?"
       description={
         props.targetSummary ? (
           <>
-            Archive{" "}
+            Stop{" "}
             <span className="font-medium text-[var(--app-fg)]">
               {props.targetSummary.session.title ?? props.targetSummary.session.id}
             </span>
-            ? You can reopen it from Session History.
+            ? You can reopen it from Chats.
           </>
         ) : (
-          "Archive this live session? You can reopen it from Session History."
+          "Stop this running session? You can reopen it from Chats."
         )
       }
-      confirmLabel={props.archiving ? "Archiving…" : "Archive"}
+      confirmLabel={props.stopping ? "Stopping..." : "Stop"}
       onOpenChange={props.onOpenChange}
       onConfirm={props.onConfirm}
     />

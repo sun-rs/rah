@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { DebugScenarioDescriptor } from "@rah/runtime-protocol";
+import type { CouncilRoomSnapshot, DebugScenarioDescriptor } from "@rah/runtime-protocol";
 import type { WorkspaceSection, WorkspaceSortMode } from "./session-browser";
 import {
   Check,
@@ -13,6 +13,7 @@ import {
   Pencil,
   Pin,
   PlusCircle,
+  UsersRound,
   X,
 } from "lucide-react";
 import { ProviderLogo } from "./components/ProviderLogo";
@@ -54,8 +55,8 @@ function WorkspaceSortMenu(props: {
   }, [open]);
 
   const sortOptions: Array<{ value: WorkspaceSortMode; label: string }> = [
-    { value: "created", label: "按创建顺序" },
-    { value: "updated", label: "按最近更新" },
+    { value: "created", label: "Created first" },
+    { value: "updated", label: "Recently updated" },
   ];
 
   return (
@@ -122,7 +123,7 @@ function WorkspaceSortMenu(props: {
   );
 }
 
-function LiveSessionRow(props: {
+function RunningSessionRow(props: {
   session: SidebarWorkspaceViewModel["sessions"][number];
   draggable: boolean;
   onTogglePin: () => void;
@@ -161,12 +162,23 @@ function LiveSessionRow(props: {
                 variant="bare"
               />
             </span>
-            <span className={SIDEBAR_LAYOUT.sessionTitleClassName}>
+            <span
+              className={`${SIDEBAR_LAYOUT.sessionTitleClassName} ${
+                props.session.originKind === "council"
+                  ? "text-amber-700/95 dark:text-amber-300/95"
+                  : ""
+              }`}
+            >
               {props.session.title}
             </span>
           </div>
           <div className={SIDEBAR_LAYOUT.sessionMetaRowClassName}>
             <div className={SIDEBAR_LAYOUT.sessionMetaLeftClassName}>
+              {props.session.originKind === "council" ? (
+                <span className="inline-flex shrink-0 items-center text-[10px] font-medium text-amber-700/85 dark:text-amber-300/85">
+                  council
+                </span>
+              ) : null}
               <span
                 className={`${SIDEBAR_LAYOUT.sessionStatusBadgeBaseClassName} ${statusBadgeClassName}`}
               >
@@ -187,7 +199,8 @@ function LiveSessionRow(props: {
                 ? SIDEBAR_LAYOUT.sessionPinActiveClassName
                 : SIDEBAR_LAYOUT.sessionPinHiddenClassName
             }`}
-            title={props.session.pinned ? "取消置顶" : "置顶"}
+            title={props.session.pinned ? "Unpin" : "Pin"}
+            aria-label={props.session.pinned ? "Unpin session" : "Pin session"}
           >
             <Pin size={12} className={props.session.pinned ? "fill-current" : ""} />
           </button>
@@ -197,19 +210,92 @@ function LiveSessionRow(props: {
   );
 }
 
+function CouncilRoomRow(props: {
+  room: SidebarWorkspaceViewModel["councilRooms"][number];
+  draggable: boolean;
+  onSelect: () => void;
+}) {
+  const statusBadgeClassName =
+    props.room.status === "starting"
+      ? "text-sky-600/90 dark:text-sky-400/90"
+      : props.room.status === "working"
+        ? "text-sky-600/90 dark:text-sky-400/90"
+        : props.room.status === "waiting_permission"
+          ? "text-orange-700/90 dark:text-orange-400/90"
+          : "text-[var(--app-hint)]";
+  const rowClassName = `${SIDEBAR_LAYOUT.sessionRowBaseClassName} ${
+    props.room.selected
+      ? SIDEBAR_LAYOUT.sessionRowSelectedClassName
+      : SIDEBAR_LAYOUT.sessionRowIdleClassName
+  }`;
+
+  return (
+    <div
+      className={rowClassName}
+      draggable={props.draggable}
+      onDragStart={(event) => {
+        if (!props.draggable) {
+          return;
+        }
+        event.dataTransfer.setData("application/x-rah-council-room-id", props.room.id);
+        event.dataTransfer.effectAllowed = "move";
+      }}
+    >
+      <div className={SIDEBAR_LAYOUT.sessionInlineRowClassName}>
+        <button
+          type="button"
+          onClick={props.onSelect}
+          className="min-w-0 flex flex-1 items-center gap-1.5 text-left"
+        >
+          <div className={SIDEBAR_LAYOUT.sessionHeaderClassName}>
+            <span className={SIDEBAR_LAYOUT.sessionIconSlotClassName}>
+              <UsersRound
+                size={16}
+                className="text-emerald-700/90 dark:text-emerald-300/90"
+              />
+            </span>
+            <span className={`${SIDEBAR_LAYOUT.sessionTitleClassName} text-emerald-700/95 dark:text-emerald-300/95`}>
+              {props.room.title}
+            </span>
+          </div>
+          <div className={SIDEBAR_LAYOUT.sessionMetaRowClassName}>
+            <div className={SIDEBAR_LAYOUT.sessionMetaLeftClassName}>
+              <span className="inline-flex shrink-0 items-center text-[10px] font-medium text-emerald-700/85 dark:text-emerald-300/85">
+                room
+              </span>
+              <span className={`${SIDEBAR_LAYOUT.sessionStatusBadgeBaseClassName} ${statusBadgeClassName}`}>
+                {props.room.statusLabel}
+              </span>
+              <span className="hidden shrink-0 text-[10px] text-[var(--app-hint)] min-[900px]:inline">
+                {props.room.agentCount} agents
+              </span>
+            </div>
+            <span className={SIDEBAR_LAYOUT.sessionTimeClassName}>
+              {props.room.updatedAtLabel}
+            </span>
+          </div>
+        </button>
+        <span className={SIDEBAR_LAYOUT.sessionPinSlotClassName} />
+      </div>
+    </div>
+  );
+}
+
 function WorkspaceRow(props: {
   workspace: SidebarWorkspaceViewModel;
   enableSessionDrag: boolean;
+  enableCouncilRoomDrag: boolean;
   onRemoveWorkspace: () => void;
   onTogglePinSession: (sessionId: string) => void;
   onSelectSession: (sessionId: string) => void;
+  onSelectCouncilRoom: (roomId: string) => void;
   onSelectWorkspace: () => void;
   expandAllKey: number;
   expandAllValue: boolean;
 }) {
   const [showRemove, setShowRemove] = useState(false);
   const [expanded, setExpanded] = useState(true);
-  const hasSessions = props.workspace.sessions.length > 0;
+  const hasItems = props.workspace.items.length > 0;
   const toggleExpanded = () => setExpanded((v) => !v);
 
   useEffect(() => {
@@ -260,15 +346,15 @@ function WorkspaceRow(props: {
           {showRemove ? (
             <button
               type="button"
-              disabled={props.workspace.hasBlockingLiveSessions}
+              disabled={props.workspace.hasBlockingRunningSessions}
               onClick={(e) => {
                 e.stopPropagation();
                 props.onRemoveWorkspace();
               }}
               className={`${SIDEBAR_LAYOUT.workspaceActionButtonClassName} ${SIDEBAR_LAYOUT.workspaceActionDangerClassName}`}
               title={
-                props.workspace.hasBlockingLiveSessions
-                  ? "Cannot remove a workspace with live sessions"
+                props.workspace.hasBlockingRunningSessions
+                  ? "Cannot remove a workspace with running sessions"
                   : "Remove workspace"
               }
             >
@@ -290,18 +376,27 @@ function WorkspaceRow(props: {
         </div>
       </div>
 
-      {/* Sessions */}
-      {hasSessions && expanded ? (
+      {/* Running workspace items */}
+      {hasItems && expanded ? (
         <div className={SIDEBAR_LAYOUT.sessionListClassName}>
-          {props.workspace.sessions.map((session) => (
-            <LiveSessionRow
-              key={session.id}
-              session={session}
-              draggable={props.enableSessionDrag}
-              onTogglePin={() => props.onTogglePinSession(session.id)}
-              onSelect={() => props.onSelectSession(session.id)}
-            />
-          ))}
+          {props.workspace.items.map((item) =>
+            item.kind === "session" ? (
+              <RunningSessionRow
+                key={`session:${item.id}`}
+                session={item}
+                draggable={props.enableSessionDrag}
+                onTogglePin={() => props.onTogglePinSession(item.id)}
+                onSelect={() => props.onSelectSession(item.id)}
+              />
+            ) : (
+              <CouncilRoomRow
+                key={`council-room:${item.id}`}
+                room={item}
+                draggable={props.enableCouncilRoomDrag}
+                onSelect={() => props.onSelectCouncilRoom(item.id)}
+              />
+            ),
+          )}
         </div>
       ) : null}
     </div>
@@ -318,14 +413,18 @@ export function SessionSidebar(props: {
   onRemoveWorkspace: (value: string) => void;
   selectedWorkspaceDir: string;
   selectedSessionId: string | null;
+  selectedCouncilRoomId?: string | null;
   unreadSessionIds: ReadonlySet<string>;
   runtimeStatusBySessionId: ReadonlyMap<
     string,
     "thinking" | "streaming" | "stopping" | "retrying" | undefined
   >;
   onSelectSession: (workspaceDir: string, sessionId: string) => void;
+  onSelectCouncilRoom?: (workspaceDir: string, roomId: string) => void;
   onSelectWorkspace: (workspaceDir: string) => void;
   enableSessionDrag?: boolean;
+  enableCouncilRoomDrag?: boolean;
+  councilRooms?: readonly CouncilRoomSnapshot[];
   debugScenarios: DebugScenarioDescriptor[];
   onStartScenario: (scenario: DebugScenarioDescriptor) => void;
 }) {
@@ -340,10 +439,14 @@ export function SessionSidebar(props: {
         unreadSessionIds: props.unreadSessionIds,
         runtimeStatusBySessionId: props.runtimeStatusBySessionId,
         pinnedSessionIdByWorkspace: props.pinnedSessionIdByWorkspace,
+        ...(props.councilRooms !== undefined ? { councilRooms: props.councilRooms } : {}),
+        selectedCouncilRoomId: props.selectedCouncilRoomId ?? null,
       }),
     [
+      props.councilRooms,
       props.pinnedSessionIdByWorkspace,
       props.runtimeStatusBySessionId,
+      props.selectedCouncilRoomId,
       props.selectedSessionId,
       props.selectedWorkspaceDir,
       props.unreadSessionIds,
@@ -351,8 +454,12 @@ export function SessionSidebar(props: {
     ],
   );
   const workspaceCount = workspaceViewModels.length;
-  const liveSessionCount = workspaceViewModels.reduce(
+  const runningSessionCount = workspaceViewModels.reduce(
     (count, workspace) => count + workspace.sessions.length,
+    0,
+  );
+  const runningCouncilRoomCount = workspaceViewModels.reduce(
+    (count, workspace) => count + workspace.councilRooms.length,
     0,
   );
 
@@ -380,9 +487,9 @@ export function SessionSidebar(props: {
           </span>
           <span
             className={SIDEBAR_LAYOUT.toolbarCountBadgeClassName}
-            title={`${liveSessionCount} live sessions`}
+            title={`${runningSessionCount + runningCouncilRoomCount} running workspace items`}
           >
-            {liveSessionCount}
+            {runningSessionCount + runningCouncilRoomCount}
           </span>
         </div>
         <div className={SIDEBAR_LAYOUT.toolbarActionsClassName}>
@@ -409,11 +516,13 @@ export function SessionSidebar(props: {
             key={workspace.directory}
             workspace={workspace}
             enableSessionDrag={props.enableSessionDrag === true}
+            enableCouncilRoomDrag={props.enableCouncilRoomDrag === true}
             onRemoveWorkspace={() => props.onRemoveWorkspace(workspace.directory)}
             onTogglePinSession={(sessionId) =>
               props.onTogglePinSession(workspace.directory, sessionId)
             }
             onSelectSession={(sessionId) => props.onSelectSession(workspace.directory, sessionId)}
+            onSelectCouncilRoom={(roomId) => props.onSelectCouncilRoom?.(workspace.directory, roomId)}
             onSelectWorkspace={() => props.onSelectWorkspace(workspace.directory)}
             expandAllKey={expandAllKey}
             expandAllValue={expandAllValue}

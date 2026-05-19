@@ -104,6 +104,16 @@ export function shouldCompactEmptyStateSessionControls(widthPx: number | null): 
   return widthPx === null || widthPx < EMPTY_STATE_EXPANDED_CONTROLS_MIN_WIDTH_PX;
 }
 
+function bestEffortEscTuiProviderLabel(provider: string): string | undefined {
+  if (provider === "claude") {
+    return "Claude";
+  }
+  if (provider === "gemini") {
+    return "Gemini";
+  }
+  return undefined;
+}
+
 export function canSubmitComposerInput(args: {
   composerSurface: ComposerSurface;
   draft: string;
@@ -155,15 +165,15 @@ export function deriveComposerSurface(args: {
       : { kind: "unavailable" };
   }
 
-  const isClaudeNativeTuiMirror = selectedSummary.session.provider === "claude";
-  if (isClaudeNativeTuiMirror) {
+  const bestEffortEscLabel = bestEffortEscTuiProviderLabel(selectedSummary.session.provider);
+  if (bestEffortEscLabel) {
     return {
       kind: "compose",
       showStopButton: true,
       stopTone: "warning",
       stopSpinner: false,
-      stopAriaLabel: "Send Esc to Claude TUI",
-      stopTitle: "Send Esc to the Claude TUI. Chat is a history mirror, so this is best-effort.",
+      stopAriaLabel: `Send Esc to ${bestEffortEscLabel} TUI`,
+      stopTitle: `Send Esc to the ${bestEffortEscLabel} TUI. Chat is a TUI mirror, so this is best-effort.`,
     };
   }
 

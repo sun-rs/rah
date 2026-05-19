@@ -8,6 +8,7 @@ export type CanvasPaneId = "canvas-1" | "canvas-2" | "canvas-3" | "canvas-4";
 export type CanvasPaneTarget =
   | { kind: "empty" }
   | { kind: "new" }
+  | { kind: "council_room"; roomId: string }
   | { kind: "session"; sessionId: string }
   | { kind: "stored"; ref: StoredSessionRef };
 
@@ -58,7 +59,7 @@ export function resolveCanvasTargetProjection(
   return null;
 }
 
-export function resolveCanvasLiveUniquenessKey(
+export function resolveCanvasRunningUniquenessKey(
   target: CanvasPaneTarget,
   projections: Map<string, SessionProjection>,
 ): string | null {
@@ -67,7 +68,7 @@ export function resolveCanvasLiveUniquenessKey(
     return projection && isReadOnlyReplay(projection.summary) ? null : target.sessionId;
   }
   if (target.kind !== "stored") {
-    return null;
+    return target.kind === "council_room" ? `council_room:${target.roomId}` : null;
   }
   const projection = resolveCanvasTargetProjection(target, projections);
   if (!projection || isReadOnlyReplay(projection.summary)) {
@@ -83,12 +84,12 @@ export function applyCanvasPaneTarget(
   projections: Map<string, SessionProjection>,
 ): Record<CanvasPaneId, CanvasPaneTarget> {
   const next = { ...current, [paneId]: target };
-  const targetLiveKey = resolveCanvasLiveUniquenessKey(target, projections);
+  const targetLiveKey = resolveCanvasRunningUniquenessKey(target, projections);
   if (!targetLiveKey) {
     return next;
   }
   for (const id of CANVAS_PANE_IDS) {
-    if (id !== paneId && resolveCanvasLiveUniquenessKey(current[id], projections) === targetLiveKey) {
+    if (id !== paneId && resolveCanvasRunningUniquenessKey(current[id], projections) === targetLiveKey) {
       next[id] = { kind: "empty" };
     }
   }

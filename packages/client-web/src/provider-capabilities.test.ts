@@ -139,7 +139,7 @@ describe("provider capability helpers", () => {
               renameSession: false,
               actions: {
                 info: true,
-                archive: true,
+                stop: true,
                 delete: true,
                 rename: "local" as const,
               },
@@ -268,7 +268,7 @@ describe("provider capability helpers", () => {
           renameSession: true,
           actions: {
             info: true,
-            archive: true,
+            stop: true,
             delete: true,
             rename: "native" as const,
           },
@@ -297,12 +297,12 @@ describe("provider capability helpers", () => {
     assert.equal(resolveCapabilityViewOrigin({ summary, catalog: catalog() }), "session-resolved");
     assert.equal(resolveCapabilityViewOriginLabel("session-resolved"), "runtime confirmed");
     assert.equal(resolveConfigPreviewOrigin({ summary, catalog: catalog() }), "session-resolved");
-    assert.equal(resolveConfigPreviewOriginLabel("session-resolved"), "live option state");
+    assert.equal(resolveConfigPreviewOriginLabel("session-resolved"), "running option state");
     assert.equal(resolveCapabilityExactnessDisplay({ summary, catalog: catalog() }), null);
     assert.equal(resolveCapabilityCautionText({ summary, catalog: catalog() }), null);
     assert.equal(
       resolveCapabilityHeadline({ summary, catalog: catalog() }),
-      "Model and advanced options are confirmed by the live session.",
+      "Model and advanced options are confirmed by the running session.",
     );
     assert.deepEqual(resolveSessionConfigPreviewRows(summary), [
       {
@@ -370,7 +370,7 @@ describe("provider capability helpers", () => {
           renameSession: true,
           actions: {
             info: true,
-            archive: true,
+            stop: true,
             delete: true,
             rename: "native" as const,
           },
@@ -422,7 +422,7 @@ describe("provider capability helpers", () => {
     );
     assert.equal(
       resolveCapabilityHeadline({ summary, catalog: codexCatalogAfterSwitch }),
-      "Model and advanced options are confirmed by the live session.",
+      "Model and advanced options are confirmed by the running session.",
     );
   });
 
@@ -454,7 +454,7 @@ describe("provider capability helpers", () => {
           renameSession: true,
           actions: {
             info: true,
-            archive: true,
+            stop: true,
             delete: true,
             rename: "native" as const,
           },
@@ -526,7 +526,7 @@ describe("provider capability helpers", () => {
         catalog: claudeCatalog,
         selectedModelId: "default",
       }),
-      "Current model is confirmed by the live session. Advanced options are inferred from the provider catalog.",
+      "Current model is confirmed by the running session. Advanced options are inferred from the provider catalog.",
     );
   });
 });

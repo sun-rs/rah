@@ -1,5 +1,5 @@
-import type { SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
-import { Columns3, History, Menu, Settings, UsersRound } from "lucide-react";
+import type { CouncilRoomSnapshot, SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
+import { Columns3, Menu, MessageCircleMore, Settings, UsersRound } from "lucide-react";
 import { SessionHistoryDialog } from "../../SessionHistoryDialog";
 import type { WorkspaceSortMode } from "../../../session-browser";
 
@@ -10,7 +10,9 @@ const headerIconSize = 18;
 export function DesktopWorkbenchSidebarHeader(props: {
   storedSessions: StoredSessionRef[];
   recentSessions: StoredSessionRef[];
-  liveSessions: SessionSummary[];
+  runningSessions: SessionSummary[];
+  councilRooms: readonly CouncilRoomSnapshot[];
+  selectedCouncilRoomId?: string | null | undefined;
   workspaceSortMode: WorkspaceSortMode;
   onWorkspaceSortModeChange: (value: WorkspaceSortMode) => void;
   canvasActive: boolean;
@@ -18,7 +20,10 @@ export function DesktopWorkbenchSidebarHeader(props: {
   onOpenCouncil: () => void;
   onToggleCanvas: () => void;
   onActivateHistory: (ref: StoredSessionRef) => void;
-  onActivateLive: (sessionId: string) => void;
+  onActivateRunning: (sessionId: string) => void;
+  onActivateCouncilRoom: (roomId: string) => void;
+  onRefreshCouncilRooms: () => void | Promise<void>;
+  onRemoveCouncilRoom: (roomId: string) => void | Promise<void>;
   onRemoveHistorySession: (session: Pick<StoredSessionRef, "provider" | "providerSessionId">) => void;
   onRemoveHistoryWorkspace: (workspaceDir: string) => void;
   onHome: () => void;
@@ -66,21 +71,26 @@ export function DesktopWorkbenchSidebarHeader(props: {
         <SessionHistoryDialog
           storedSessions={props.storedSessions}
           recentSessions={props.recentSessions}
-          liveSessions={props.liveSessions}
+          runningSessions={props.runningSessions}
+          councilRooms={props.councilRooms}
+          selectedCouncilRoomId={props.selectedCouncilRoomId}
           workspaceSortMode={props.workspaceSortMode}
           onWorkspaceSortModeChange={props.onWorkspaceSortModeChange}
           onActivate={props.onActivateHistory}
-          onActivateLive={props.onActivateLive}
+          onActivateRunning={props.onActivateRunning}
+          onActivateCouncilRoom={props.onActivateCouncilRoom}
+          onRefreshCouncilRooms={props.onRefreshCouncilRooms}
+          onRemoveCouncilRoom={props.onRemoveCouncilRoom}
           onRemoveSession={props.onRemoveHistorySession}
           onRemoveWorkspace={props.onRemoveHistoryWorkspace}
         >
           <button
             type="button"
             className={`${headerButtonClassName} text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)]`}
-            aria-label="Sessions"
-            title="Sessions"
+            aria-label="Chats"
+            title="Chats"
           >
-            <History size={headerIconSize} />
+            <MessageCircleMore size={headerIconSize} />
           </button>
         </SessionHistoryDialog>
         <button

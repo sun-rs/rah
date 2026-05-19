@@ -1,8 +1,23 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
+import { OVERLAY_SCROLL_AREA_LAYOUT } from "./components/OverlayScrollArea";
 import { SIDEBAR_LAYOUT } from "./sidebar-layout-contract";
 
 describe("sidebar layout contract", () => {
+  test("uses overlay scrollbars for the desktop sidebar content", () => {
+    assert.match(OVERLAY_SCROLL_AREA_LAYOUT.viewportClassName, /\brah-scroll-overlay-area\b/);
+    assert.doesNotMatch(SIDEBAR_LAYOUT.sidebarScrollClassName, /\brah-scroll-panel\b/);
+    assert.doesNotMatch(SIDEBAR_LAYOUT.sidebarScrollClassName, /\brah-scroll-panel-y\b/);
+    assert.match(OVERLAY_SCROLL_AREA_LAYOUT.shellClassName, /\brelative\b/);
+    assert.match(OVERLAY_SCROLL_AREA_LAYOUT.trackClassName, /\babsolute\b/);
+    assert.match(OVERLAY_SCROLL_AREA_LAYOUT.trackClassName, /\bright-0\b/);
+    assert.match(OVERLAY_SCROLL_AREA_LAYOUT.trackClassName, /\btouch-none\b/);
+    assert.match(OVERLAY_SCROLL_AREA_LAYOUT.thumbClassName, /\bw-1\b/);
+    assert.match(OVERLAY_SCROLL_AREA_LAYOUT.thumbClassName, /\bcursor-grab\b/);
+    assert.match(SIDEBAR_LAYOUT.sidebarScrollClassName, /\bh-full\b/);
+    assert.match(SIDEBAR_LAYOUT.sidebarScrollClassName, /\bpr-0\.5\b/);
+  });
+
   test("locks fixed action slots and row heights", () => {
     assert.match(SIDEBAR_LAYOUT.workspaceActionSlotClassName, /\babsolute\b/);
     assert.match(SIDEBAR_LAYOUT.workspaceActionSlotClassName, /\bright-0\b/);
@@ -30,9 +45,11 @@ describe("sidebar layout contract", () => {
     assert.match(SIDEBAR_LAYOUT.workspaceTitleSelectedClassName, /font-semibold/);
   });
 
-  test("gives selected sessions a clearly visible selection treatment", () => {
-    assert.match(SIDEBAR_LAYOUT.sessionRowSelectedClassName, /\bborder-emerald-500\/20\b/);
-    assert.match(SIDEBAR_LAYOUT.sessionRowSelectedClassName, /inset_3px_0_0_0/);
+  test("gives selected sessions a modern neutral selection treatment", () => {
+    assert.match(SIDEBAR_LAYOUT.sessionRowSelectedClassName, /color-mix\(in_oklab,var\(--app-subtle-bg\)/);
+    assert.match(SIDEBAR_LAYOUT.sessionRowSelectedClassName, /0_8px_24px/);
+    assert.doesNotMatch(SIDEBAR_LAYOUT.sessionRowSelectedClassName, /emerald/);
+    assert.doesNotMatch(SIDEBAR_LAYOUT.sessionRowSelectedClassName, /inset_3px_0_0_0/);
   });
 
   test("keeps session status close to plain text instead of pill badges", () => {

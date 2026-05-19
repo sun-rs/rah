@@ -3,9 +3,10 @@ import type { ProviderChoice } from "../components/ProviderSelector";
 
 const HIDE_TOOL_CALLS_KEY = "rah-hide-tool-calls-in-chat";
 const HIDE_OPENCODE_REASONING_KEY = "rah-hide-opencode-reasoning-in-chat";
+const HIDE_GEMINI_REASONING_KEY = "rah-hide-gemini-reasoning-in-chat";
 const SHOW_MODEL_INFO_KEY_PREFIX = "rah-show-model-info-in-chat:";
 const CHAT_PREFERENCES_EVENT = "rah:chat-preferences-updated";
-const MODEL_INFO_PROVIDERS: ProviderChoice[] = ["codex", "claude", "opencode"];
+const MODEL_INFO_PROVIDERS: ProviderChoice[] = ["codex", "claude", "gemini", "opencode"];
 
 function isBrowser(): boolean {
   return typeof window !== "undefined";
@@ -36,6 +37,8 @@ export function useChatPreferences(): {
   setHideToolCallsInChat: (value: boolean) => void;
   hideOpenCodeReasoningInChat: boolean;
   setHideOpenCodeReasoningInChat: (value: boolean) => void;
+  hideGeminiReasoningInChat: boolean;
+  setHideGeminiReasoningInChat: (value: boolean) => void;
   showModelInfoInChat: Record<ProviderChoice, boolean>;
   setShowModelInfoInChat: (provider: ProviderChoice, value: boolean) => void;
 } {
@@ -45,6 +48,9 @@ export function useChatPreferences(): {
   const [hideOpenCodeReasoningInChat, setHideOpenCodeReasoningInChatState] = useState<boolean>(() =>
     readBoolean(HIDE_OPENCODE_REASONING_KEY, true),
   );
+  const [hideGeminiReasoningInChat, setHideGeminiReasoningInChatState] = useState<boolean>(() =>
+    readBoolean(HIDE_GEMINI_REASONING_KEY, true),
+  );
   const [showModelInfoInChat, setShowModelInfoInChatState] =
     useState<Record<ProviderChoice, boolean>>(() => readShowModelInfoPreferences());
 
@@ -53,12 +59,14 @@ export function useChatPreferences(): {
     const syncPreference = () => {
       setHideToolCallsInChatState(readBoolean(HIDE_TOOL_CALLS_KEY, true));
       setHideOpenCodeReasoningInChatState(readBoolean(HIDE_OPENCODE_REASONING_KEY, true));
+      setHideGeminiReasoningInChatState(readBoolean(HIDE_GEMINI_REASONING_KEY, true));
       setShowModelInfoInChatState(readShowModelInfoPreferences());
     };
     const onStorage = (event: StorageEvent) => {
       if (
         event.key !== HIDE_TOOL_CALLS_KEY &&
         event.key !== HIDE_OPENCODE_REASONING_KEY &&
+        event.key !== HIDE_GEMINI_REASONING_KEY &&
         !event.key?.startsWith(SHOW_MODEL_INFO_KEY_PREFIX)
       ) {
         return;
@@ -92,6 +100,14 @@ export function useChatPreferences(): {
     }
   }, []);
 
+  const setHideGeminiReasoningInChat = useCallback((value: boolean) => {
+    setHideGeminiReasoningInChatState(value);
+    writeBoolean(HIDE_GEMINI_REASONING_KEY, value);
+    if (isBrowser()) {
+      window.dispatchEvent(new Event(CHAT_PREFERENCES_EVENT));
+    }
+  }, []);
+
   const setShowModelInfoInChat = useCallback((provider: ProviderChoice, value: boolean) => {
     setShowModelInfoInChatState((current) => ({ ...current, [provider]: value }));
     writeBoolean(`${SHOW_MODEL_INFO_KEY_PREFIX}${provider}`, value);
@@ -105,6 +121,8 @@ export function useChatPreferences(): {
     setHideToolCallsInChat,
     hideOpenCodeReasoningInChat,
     setHideOpenCodeReasoningInChat,
+    hideGeminiReasoningInChat,
+    setHideGeminiReasoningInChat,
     showModelInfoInChat,
     setShowModelInfoInChat,
   };

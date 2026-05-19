@@ -1,21 +1,26 @@
 import { useEffect, useMemo, useState } from "react";
-import type { SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
+import type { CouncilRoomSnapshot, SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
+import { conversationPhaseLabel } from "@rah/runtime-protocol";
 import * as Dialog from "@radix-ui/react-dialog";
-import { Check, ChevronDown, ChevronRight, History, ListFilter, Pencil, PlusCircle, Search, Trash2, X } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, History, ListFilter, Pencil, PlusCircle, RefreshCw, Search, Trash2, X } from "lucide-react";
 import { providerLabel } from "../types";
 import { formatRelativeTime, type WorkspaceSortMode } from "../session-browser";
 import { ProviderLogo } from "./ProviderLogo";
+import { ChatBrowserRow } from "./ChatBrowserRow";
+import { OverlayScrollArea } from "./OverlayScrollArea";
+import { CouncilRoomsBrowser } from "../council/CouncilRoomsBrowser";
 import {
   dedupeStoredSessionsByIdentity,
+  filterStoppedRecentSessions,
   groupAllStoredSessionsByDirectory,
   sessionIdentityKey,
 } from "../session-history-grouping";
 
 const DEFAULT_GROUP_ITEM_LIMIT = 10;
 const GROUP_ITEM_INCREMENT = 20;
-const HISTORY_PROVIDER_OPTIONS = ["codex", "claude", "opencode"] as const;
+const HISTORY_PROVIDER_OPTIONS = ["codex", "claude", "gemini", "opencode"] as const;
 
-type HistoryTab = "live" | "recent" | "all";
+type ChatTab = "active" | "all" | "council";
 type HistoryProviderFilter = (typeof HISTORY_PROVIDER_OPTIONS)[number];
 
 function isHistoryProviderFilter(provider: StoredSessionRef["provider"]): provider is HistoryProviderFilter {
@@ -65,8 +70,8 @@ function HistoryFilterMenu(props: {
   }, [disabledHintVisible]);
 
   const sortOptions: Array<{ value: WorkspaceSortMode; label: string }> = [
-    { value: "created", label: "按创建顺序" },
-    { value: "updated", label: "按最近更新" },
+    { value: "created", label: "Created first" },
+    { value: "updated", label: "Recently updated" },
   ];
   const allProvidersSelected = props.selectedProviders.size === HISTORY_PROVIDER_OPTIONS.length;
 
@@ -74,10 +79,10 @@ function HistoryFilterMenu(props: {
     <div className="relative" data-history-sort-menu>
       <button
         type="button"
-        className={`inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors ${
+        className={`inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--app-border)] transition-colors ${
           props.disabled
             ? "text-[var(--app-hint)] opacity-55 hover:bg-[var(--app-bg)]"
-            : "text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)]"
+            : "text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
         }`}
         aria-haspopup="menu"
         aria-expanded={open}
@@ -164,11 +169,10 @@ function HistoryFilterMenu(props: {
 }
 
 function sourceBadge(session: StoredSessionRef) {
-  if (session.source === "previous_live") {
+  if (session.source === "previous_running") {
     return {
-      label: "Prev live",
-      className:
-        "border-emerald-500/20 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+      label: "Stopped",
+      className: "border-[var(--app-border)] bg-[var(--app-bg)] text-[var(--app-hint)]",
     };
   }
   return {
@@ -244,180 +248,138 @@ function matchesQuery(session: StoredSessionRef, query: string): boolean {
   );
 }
 
-function liveSessionTitle(summary: SessionSummary): string {
+function runningSessionTitle(summary: SessionSummary): string {
   return summary.session.title ?? summary.session.preview ?? summary.session.providerSessionId ?? summary.session.id;
 }
 
-function liveSessionPath(summary: SessionSummary): string {
+function runningSessionPath(summary: SessionSummary): string {
   return summary.session.rootDir || summary.session.cwd;
 }
 
-function liveMatchesQuery(summary: SessionSummary, query: string): boolean {
+function runningMatchesQuery(summary: SessionSummary, query: string): boolean {
   const q = query.trim().toLowerCase();
   if (!q) {
     return true;
   }
   return (
-    liveSessionTitle(summary).toLowerCase().includes(q) ||
+    runningSessionTitle(summary).toLowerCase().includes(q) ||
     (summary.session.preview ?? "").toLowerCase().includes(q) ||
     summary.session.id.toLowerCase().includes(q) ||
     (summary.session.providerSessionId ?? "").toLowerCase().includes(q) ||
     providerLabel(summary.session.provider).toLowerCase().includes(q) ||
-    liveSessionPath(summary).toLowerCase().includes(q)
+    runningSessionPath(summary).toLowerCase().includes(q)
   );
 }
 
-function LiveSessionRow(props: {
+function RunningSessionRow(props: {
   summary: SessionSummary;
   onActivate: (sessionId: string) => void;
 }) {
-  const title = liveSessionTitle(props.summary);
-  const path = liveSessionPath(props.summary);
+  const title = runningSessionTitle(props.summary);
+  const path = runningSessionPath(props.summary);
   return (
-    <button
-      type="button"
-      onClick={() => props.onActivate(props.summary.session.id)}
-      className="w-full rounded-lg border border-transparent px-3 py-2 text-left text-[var(--app-hint)] transition-colors hover:border-[var(--app-border)] hover:bg-[var(--app-bg)]"
-      data-session-id={props.summary.session.id}
-      data-session-source="live"
-    >
-      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
-        <div className="min-w-0">
-          <div className="flex min-w-0 items-center gap-2">
-            <ProviderLogo provider={props.summary.session.provider} className="h-5 w-5" />
-            <span className="truncate text-sm font-medium text-[var(--app-fg)]">{title}</span>
-          </div>
-          {props.summary.session.preview && props.summary.session.title ? (
-            <div className="mt-1 truncate pl-7 text-xs text-[var(--app-hint)]">
-              {props.summary.session.preview}
-            </div>
-          ) : null}
-          {path ? (
-            <div className="mt-1 truncate pl-7 text-xs text-[var(--app-hint)]">{path}</div>
-          ) : null}
-        </div>
-        <div className="flex shrink-0 items-center justify-end gap-2">
-          <span className="inline-flex rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-600 dark:text-emerald-400">
-            {props.summary.session.runtimeState}
-          </span>
-          <span className="min-w-[3.5rem] text-right text-xs text-[var(--app-hint)]">
-            {formatRelativeTime(props.summary.session.updatedAt) ?? "live"}
-          </span>
-        </div>
-      </div>
-    </button>
+    <ChatBrowserRow
+      title={title}
+      subtitle={props.summary.session.preview && props.summary.session.title ? props.summary.session.preview : null}
+      detail={path}
+      leading={<ProviderLogo provider={props.summary.session.provider} className="h-5 w-5" />}
+      badge={{
+        label: `${props.summary.session.status} · ${conversationPhaseLabel(props.summary.session.phase)}`,
+        tone: "running",
+      }}
+      timeLabel={formatRelativeTime(props.summary.session.updatedAt) ?? "running"}
+      onOpen={() => props.onActivate(props.summary.session.id)}
+      dataSessionId={props.summary.session.id}
+      dataSessionSource="running"
+    />
   );
 }
 
 function SessionRow(props: {
   session: StoredSessionRef;
-  liveSummary: SessionSummary | undefined;
+  runningSummary: SessionSummary | undefined;
   onActivate: (ref: StoredSessionRef) => void;
   onRequestRemove: (ref: StoredSessionRef) => void;
 }) {
   const badge = sourceBadge(props.session);
-  const live = props.liveSummary !== undefined;
+  const running = props.runningSummary !== undefined;
   const metaLabel = historyMetaLabel(props.session);
   const metaTitle = historyMetaTitle(props.session);
   const activate = () => props.onActivate(props.session);
 
   return (
-    <div
-      className="w-full rounded-lg border border-transparent px-3 py-2 text-[var(--app-hint)] transition-colors hover:border-[var(--app-border)] hover:bg-[var(--app-bg)]"
-      data-provider-session-id={props.session.providerSessionId}
-      data-session-source={props.session.source ?? "provider_history"}
-    >
-      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
-        <button
-          type="button"
-          onClick={activate}
-          data-provider-session-id={props.session.providerSessionId}
-          data-session-source={props.session.source ?? "provider_history"}
-          className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-md text-left focus:outline-none focus:ring-1 focus:ring-[var(--ring)]"
-        >
-          <div className="min-w-0 flex-1 text-left">
-            <div className="flex min-w-0 items-center gap-2">
-              <ProviderLogo provider={props.session.provider} className="h-5 w-5" />
-              <span className="truncate text-sm font-medium text-[var(--app-fg)]">
-                {sessionTitle(props.session)}
-              </span>
-            </div>
-            {props.session.preview && props.session.title ? (
-              <div className="mt-1 truncate pl-7 text-xs text-[var(--app-hint)]">{props.session.preview}</div>
-            ) : null}
-            {(props.session.rootDir ?? props.session.cwd) ? (
-              <div className="mt-1 truncate pl-7 text-xs text-[var(--app-hint)]">
-                {props.session.rootDir ?? props.session.cwd}
-              </div>
-            ) : null}
-          </div>
-          <div className="flex shrink-0 items-center justify-end gap-2">
-            {live ? (
-              <span className="inline-flex rounded-full border border-blue-500/20 bg-blue-500/10 px-2 py-0.5 text-[11px] font-medium text-blue-600 dark:text-blue-400">
-                Live
-              </span>
-            ) : (
-              <span
-                className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium ${badge.className}`}
-              >
-                {badge.label}
-              </span>
-            )}
-            {metaLabel ? (
-              <span
-                className="inline-flex rounded-full border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-2 py-0.5 text-[11px] font-medium tabular-nums text-[var(--app-hint)]"
-                title={metaTitle}
-              >
-                {metaLabel}
-              </span>
-            ) : null}
-            <span className="min-w-[3.5rem] text-right text-xs text-[var(--app-hint)]">
-              {formatRelativeTime(props.session.lastUsedAt ?? props.session.updatedAt) ?? "history"}
-            </span>
-          </div>
-        </button>
-        <button
-          type="button"
-          onClick={() => props.onRequestRemove(props.session)}
-          className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-danger)]"
-          aria-label="Delete session"
-          title="Delete session"
-        >
-          <Trash2 size={14} />
-        </button>
-      </div>
-    </div>
+    <ChatBrowserRow
+      title={sessionTitle(props.session)}
+      subtitle={props.session.preview && props.session.title ? props.session.preview : null}
+      detail={props.session.rootDir ?? props.session.cwd ?? null}
+      leading={<ProviderLogo provider={props.session.provider} className="h-5 w-5" />}
+      badge={
+        running
+          ? { label: "Running", tone: "running" }
+          : {
+              label: badge.label,
+              className: badge.className,
+            }
+      }
+      meta={metaLabel ? { label: metaLabel, title: metaTitle } : null}
+      timeLabel={formatRelativeTime(props.session.lastUsedAt ?? props.session.updatedAt) ?? "history"}
+      onOpen={activate}
+      onDelete={() => props.onRequestRemove(props.session)}
+      deleteLabel="Delete session"
+      dataProviderSessionId={props.session.providerSessionId}
+      dataSessionSource={props.session.source ?? "provider_history"}
+    />
   );
 }
 
 export function SessionHistoryDialog(props: {
   storedSessions: StoredSessionRef[];
   recentSessions: StoredSessionRef[];
-  liveSessions: SessionSummary[];
+  runningSessions: SessionSummary[];
+  councilRooms?: readonly CouncilRoomSnapshot[] | undefined;
+  selectedCouncilRoomId?: string | null | undefined;
   workspaceSortMode: WorkspaceSortMode;
   onWorkspaceSortModeChange: (value: WorkspaceSortMode) => void;
   onActivate: (ref: StoredSessionRef) => void;
-  onActivateLive?: (sessionId: string) => void;
+  onActivateRunning?: (sessionId: string) => void;
+  onActivateCouncilRoom?: ((roomId: string) => void) | undefined;
+  onRefreshCouncilRooms?: (() => void | Promise<void>) | undefined;
+  onRemoveCouncilRoom?: ((roomId: string) => void | Promise<void>) | undefined;
   onRemoveSession: (ref: Pick<StoredSessionRef, "provider" | "providerSessionId">) => void;
   onRemoveWorkspace: (workspaceDir: string) => void;
-  defaultTab?: HistoryTab;
+  defaultTab?: ChatTab;
   children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
-  const [tab, setTab] = useState<HistoryTab>(props.defaultTab ?? "recent");
+  const [tab, setTab] = useState<ChatTab>(props.defaultTab ?? "active");
   const [query, setQuery] = useState("");
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [visibleItemCounts, setVisibleItemCounts] = useState<Map<string, number>>(new Map());
   const [pendingRemoveSession, setPendingRemoveSession] = useState<StoredSessionRef | null>(null);
   const [pendingRemoveWorkspaceDir, setPendingRemoveWorkspaceDir] = useState<string | null>(null);
+  const [pendingRemoveCouncilRoom, setPendingRemoveCouncilRoom] = useState<CouncilRoomSnapshot | null>(null);
   const [selectedProviders, setSelectedProviders] = useState<Set<HistoryProviderFilter>>(
     () => new Set(HISTORY_PROVIDER_OPTIONS),
   );
 
-  const liveByProviderSessionId = useMemo(
+  const runningIdentityKeys = useMemo(
+    () =>
+      new Set(
+        props.runningSessions
+          .filter((session) => session.session.providerSessionId)
+          .map((session) =>
+            sessionIdentityKey({
+              provider: session.session.provider,
+              providerSessionId: session.session.providerSessionId!,
+            }),
+          ),
+      ),
+    [props.runningSessions],
+  );
+  const runningByProviderSessionId = useMemo(
     () =>
       new Map(
-        props.liveSessions
+        props.runningSessions
           .filter((session) => session.session.providerSessionId)
           .map((session) => [
             sessionIdentityKey({
@@ -427,12 +389,12 @@ export function SessionHistoryDialog(props: {
             session,
           ]),
       ),
-    [props.liveSessions],
+    [props.runningSessions],
   );
 
   useEffect(() => {
     if (open) {
-      setTab(props.defaultTab ?? "recent");
+      setTab(props.defaultTab ?? "active");
     }
   }, [open, props.defaultTab]);
 
@@ -472,19 +434,22 @@ export function SessionHistoryDialog(props: {
       .filter((group): group is NonNullable<typeof group> => group !== null);
   }, [groups, query, selectedProviders]);
 
-  const recentSessions = useMemo(() => {
+  const stoppedRecentSessions = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return dedupeStoredSessionsByIdentity(props.recentSessions)
+    return filterStoppedRecentSessions(
+      dedupeStoredSessionsByIdentity(props.recentSessions),
+      runningIdentityKeys,
+    )
       .filter((session) => matchesQuery(session, q))
       .sort((a, b) => (b.lastUsedAt ?? b.updatedAt ?? "").localeCompare(a.lastUsedAt ?? a.updatedAt ?? ""));
-  }, [props.recentSessions, query]);
+  }, [runningIdentityKeys, props.recentSessions, query]);
 
-  const liveSessions = useMemo(() => {
+  const runningSessions = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return [...props.liveSessions]
-      .filter((session) => liveMatchesQuery(session, q))
+    return [...props.runningSessions]
+      .filter((session) => runningMatchesQuery(session, q))
       .sort((a, b) => b.session.updatedAt.localeCompare(a.session.updatedAt));
-  }, [props.liveSessions, query]);
+  }, [props.runningSessions, query]);
 
   useEffect(() => {
     if (query.trim()) {
@@ -540,6 +505,7 @@ export function SessionHistoryDialog(props: {
       <div className="text-xs text-[var(--app-hint)] mt-1">{detail}</div>
     </div>
   );
+  const searchPlaceholder = "Search chats by title, id, provider, agent, or workspace...";
 
   return (
     <>
@@ -550,7 +516,7 @@ export function SessionHistoryDialog(props: {
           <Dialog.Content className="fixed left-1/2 top-1/2 z-50 flex h-[90dvh] max-h-[56rem] w-[92vw] max-w-3xl -translate-x-1/2 -translate-y-1/2 flex-col rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-0 shadow-xl focus:outline-none max-[699px]:inset-0 max-[699px]:h-[100dvh] max-[699px]:max-h-[100dvh] max-[699px]:w-screen max-[699px]:max-w-none max-[699px]:translate-x-0 max-[699px]:translate-y-0 max-[699px]:rounded-none max-[699px]:border-0 max-[699px]:pt-[env(safe-area-inset-top)] max-[699px]:pb-[env(safe-area-inset-bottom)]">
           <div className="flex items-center justify-between border-b border-[var(--app-border)] px-4 py-3 shrink-0">
             <Dialog.Title className="text-sm font-semibold text-[var(--app-fg)]">
-              Sessions
+              Chats
             </Dialog.Title>
             <Dialog.Close asChild>
               <button
@@ -564,108 +530,154 @@ export function SessionHistoryDialog(props: {
           </div>
 
           <div className="px-4 pt-3 pb-2 shrink-0">
-            <div className="flex items-center gap-2">
-              <div className="grid flex-1 grid-cols-3 gap-2 rounded-lg bg-[var(--app-subtle-bg)] p-1">
-                <button
-                  type="button"
-                  onClick={() => setTab("live")}
-                  className={`rounded-md px-3 py-2 text-sm font-medium transition-colors ${
-                    tab === "live"
-                      ? "bg-[var(--app-bg)] text-[var(--app-fg)] shadow-sm"
-                      : "text-[var(--app-hint)] hover:text-[var(--app-fg)]"
-                  }`}
-                >
-                  Live
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setTab("recent")}
-                  className={`rounded-md px-3 py-2 text-sm font-medium transition-colors ${
-                    tab === "recent"
-                      ? "bg-[var(--app-bg)] text-[var(--app-fg)] shadow-sm"
-                      : "text-[var(--app-hint)] hover:text-[var(--app-fg)]"
-                  }`}
-                >
-                  Recent
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setTab("all")}
-                  className={`rounded-md px-3 py-2 text-sm font-medium transition-colors ${
-                    tab === "all"
-                      ? "bg-[var(--app-bg)] text-[var(--app-fg)] shadow-sm"
-                      : "text-[var(--app-hint)] hover:text-[var(--app-fg)]"
-                  }`}
-                >
-                  All
-                </button>
-              </div>
-              <HistoryFilterMenu
-                sortMode={props.workspaceSortMode}
-                onSortModeChange={props.onWorkspaceSortModeChange}
-                selectedProviders={selectedProviders}
-                onToggleProvider={toggleProvider}
-                onToggleAllProviders={toggleAllProviders}
-                disabled={tab !== "all"}
-              />
+            <div className="grid grid-cols-3 gap-2 rounded-lg bg-[var(--app-subtle-bg)] p-1">
+              <button
+                type="button"
+                onClick={() => setTab("active")}
+                className={`rounded-md px-3 py-2 text-sm font-medium transition-colors ${
+                  tab === "active"
+                    ? "bg-[var(--app-bg)] text-[var(--app-fg)] shadow-sm"
+                    : "text-[var(--app-hint)] hover:text-[var(--app-fg)]"
+                }`}
+              >
+                Active
+              </button>
+              <button
+                type="button"
+                onClick={() => setTab("all")}
+                className={`rounded-md px-3 py-2 text-sm font-medium transition-colors ${
+                  tab === "all"
+                    ? "bg-[var(--app-bg)] text-[var(--app-fg)] shadow-sm"
+                    : "text-[var(--app-hint)] hover:text-[var(--app-fg)]"
+                }`}
+              >
+                All
+              </button>
+              <button
+                type="button"
+                onClick={() => setTab("council")}
+                className={`rounded-md px-3 py-2 text-sm font-medium transition-colors ${
+                  tab === "council"
+                    ? "bg-[var(--app-bg)] text-[var(--app-fg)] shadow-sm"
+                    : "text-[var(--app-hint)] hover:text-[var(--app-fg)]"
+                }`}
+              >
+                Council
+              </button>
             </div>
           </div>
 
           <div className="px-4 pt-1 pb-2 shrink-0">
-            <div className="flex items-center gap-2 rounded-lg border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-3 py-2">
-              <Search size={14} className="text-[var(--app-hint)] shrink-0" />
-              <input
-                className="flex-1 bg-transparent text-sm text-[var(--app-fg)] placeholder:text-[var(--app-hint)] placeholder:opacity-[0.55] focus:outline-none"
-                placeholder="Search sessions by title, id, provider, or path..."
-                value={query}
-                onChange={(e) => setQuery(e.currentTarget.value)}
-              />
+            <div className="flex items-center gap-2">
+              <div className="flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-3 py-2">
+                <Search size={14} className="text-[var(--app-hint)] shrink-0" />
+                <input
+                  className="min-w-0 flex-1 bg-transparent text-sm text-[var(--app-fg)] placeholder:text-[var(--app-hint)] placeholder:opacity-[0.55] focus:outline-none"
+                  placeholder={searchPlaceholder}
+                  value={query}
+                  onChange={(e) => setQuery(e.currentTarget.value)}
+                />
+              </div>
+              {tab === "council" ? (
+                <button
+                  type="button"
+                  onClick={() => void props.onRefreshCouncilRooms?.()}
+                  disabled={!props.onRefreshCouncilRooms}
+                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-[var(--app-border)] text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] disabled:opacity-40"
+                  aria-label="Refresh council rooms"
+                  title="Refresh council rooms"
+                >
+                  <RefreshCw size={14} />
+                </button>
+              ) : (
+                <HistoryFilterMenu
+                  sortMode={props.workspaceSortMode}
+                  onSortModeChange={props.onWorkspaceSortModeChange}
+                  selectedProviders={selectedProviders}
+                  onToggleProvider={toggleProvider}
+                  onToggleAllProviders={toggleAllProviders}
+                  disabled={tab !== "all"}
+                />
+              )}
             </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto rah-scroll-panel rah-scroll-panel-y p-4">
-            {tab === "live" ? (
-              liveSessions.length > 0 ? (
-                <div className="space-y-1">
-                  {liveSessions.map((summary) => (
-                    <LiveSessionRow
-                      key={summary.session.id}
-                      summary={summary}
-                      onActivate={(sessionId) => {
-                        props.onActivateLive?.(sessionId);
-                        setOpen(false);
-                      }}
-                    />
-                  ))}
-                </div>
-              ) : renderEmpty(
-                query.trim() ? "No matching live sessions" : "No live sessions",
-                query.trim()
-                  ? "Try a different search term."
-                  : "Live sessions will appear here while they are open.",
-              )
-            ) : tab === "recent" ? (
-              recentSessions.length > 0 ? (
-                <div className="space-y-1">
-                  {recentSessions.map((session) => (
-                    <SessionRow
-                      key={`recent:${session.provider}:${session.providerSessionId}`}
-                      session={session}
-                      liveSummary={liveByProviderSessionId.get(sessionIdentityKey(session))}
-                      onActivate={(ref) => {
-                        props.onActivate(ref);
-                        setOpen(false);
-                      }}
-                      onRequestRemove={setPendingRemoveSession}
-                    />
-                  ))}
-                </div>
-              ) : renderEmpty(
-                query.trim() ? "No matching recent sessions" : "No recent sessions",
-                query.trim()
-                  ? "Try a different search term."
-                  : "Recently used sessions will appear here.",
-              )
+          <OverlayScrollArea className="min-h-0 flex-1" viewportClassName="h-full p-4">
+            {tab === "council" ? (
+              <CouncilRoomsBrowser
+                rooms={props.councilRooms ?? []}
+                selectedRoomId={props.selectedCouncilRoomId ?? null}
+                query={query}
+                onOpenRoom={(room) => {
+                  props.onActivateCouncilRoom?.(room.room.id);
+                  setOpen(false);
+                }}
+                onRequestDeleteRoom={
+                  props.onRemoveCouncilRoom ? setPendingRemoveCouncilRoom : undefined
+                }
+              />
+            ) : tab === "active" ? (
+              <div className="space-y-4">
+                <section className="space-y-1.5">
+                  <div className="flex items-center justify-between px-1">
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--app-hint)]">
+                      Running
+                    </div>
+                    <span className="rounded-full bg-[var(--app-subtle-bg)] px-2 py-0.5 text-[10px] font-semibold text-[var(--app-hint)]">
+                      {runningSessions.length}
+                    </span>
+                  </div>
+                  {runningSessions.length > 0 ? (
+                    <div className="space-y-1">
+                      {runningSessions.map((summary) => (
+                        <RunningSessionRow
+                          key={summary.session.id}
+                          summary={summary}
+                          onActivate={(sessionId) => {
+                            props.onActivateRunning?.(sessionId);
+                            setOpen(false);
+                          }}
+                        />
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="rounded-xl border border-dashed border-[var(--app-border)] p-4 text-center text-sm text-[var(--app-hint)]">
+                      {query.trim() ? "No matching running chats." : "No running chats."}
+                    </div>
+                  )}
+                </section>
+
+                <section className="space-y-1.5">
+                  <div className="flex items-center justify-between px-1">
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--app-hint)]">
+                      Recent
+                    </div>
+                    <span className="rounded-full bg-[var(--app-subtle-bg)] px-2 py-0.5 text-[10px] font-semibold text-[var(--app-hint)]">
+                      {stoppedRecentSessions.length}
+                    </span>
+                  </div>
+                  {stoppedRecentSessions.length > 0 ? (
+                    <div className="space-y-1">
+                      {stoppedRecentSessions.map((session) => (
+                        <SessionRow
+                          key={`active:${session.provider}:${session.providerSessionId}`}
+                          session={session}
+                          runningSummary={undefined}
+                          onActivate={(ref) => {
+                            props.onActivate(ref);
+                            setOpen(false);
+                          }}
+                          onRequestRemove={setPendingRemoveSession}
+                        />
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="rounded-xl border border-dashed border-[var(--app-border)] p-4 text-center text-sm text-[var(--app-hint)]">
+                      {query.trim() ? "No matching recent chats." : "No recent chats."}
+                    </div>
+                  )}
+                </section>
+              </div>
             ) : filteredGroups.length > 0 ? (
               <div className="space-y-2">
                 {filteredGroups.map((group) => {
@@ -724,7 +736,7 @@ export function SessionHistoryDialog(props: {
                             <SessionRow
                               key={`${session.provider}:${session.providerSessionId}`}
                               session={session}
-                              liveSummary={liveByProviderSessionId.get(sessionIdentityKey(session))}
+                              runningSummary={runningByProviderSessionId.get(sessionIdentityKey(session))}
                               onActivate={(ref) => {
                                 props.onActivate(ref);
                                 setOpen(false);
@@ -753,9 +765,9 @@ export function SessionHistoryDialog(props: {
               query.trim() ? "No matching results" : "No session history",
               query.trim()
                 ? "Try a different search term."
-                : "Previous live sessions and provider history will appear here.",
+                : "Stopped sessions and provider history will appear here.",
             )}
-          </div>
+          </OverlayScrollArea>
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>
@@ -888,6 +900,74 @@ export function SessionHistoryDialog(props: {
                   }
                   props.onRemoveWorkspace(pendingRemoveWorkspaceDir);
                   setPendingRemoveWorkspaceDir(null);
+                  window.setTimeout(() => setOpen(true), 0);
+                }}
+                className="rounded-lg bg-[var(--app-danger)] px-3 py-2 text-xs font-medium text-white hover:opacity-90 transition-colors"
+              >
+                Delete
+              </button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      <Dialog.Root
+        open={pendingRemoveCouncilRoom !== null}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) {
+            setPendingRemoveCouncilRoom(null);
+          }
+        }}
+      >
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 bg-black/40 z-[60]" />
+          <Dialog.Content className="fixed left-1/2 top-1/2 w-[90vw] max-w-sm -translate-x-1/2 -translate-y-1/2 rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-0 shadow-xl focus:outline-none z-[70] flex flex-col">
+            <div className="flex items-center justify-between border-b border-[var(--app-border)] px-4 py-3 shrink-0">
+              <Dialog.Title className="text-sm font-semibold text-[var(--app-fg)]">
+                Delete council room?
+              </Dialog.Title>
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setPendingRemoveCouncilRoom(null);
+                }}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] transition-colors"
+                aria-label="Close"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="px-4 py-4 text-sm text-[var(--app-hint)]">
+              {pendingRemoveCouncilRoom ? (
+                <>
+                  Delete{" "}
+                  <span className="font-medium text-[var(--app-fg)]">
+                    {pendingRemoveCouncilRoom.room.title}
+                  </span>{" "}
+                  from Council history?
+                </>
+              ) : null}
+            </div>
+            <div className="flex items-center justify-end gap-2 border-t border-[var(--app-border)] px-4 py-3">
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setPendingRemoveCouncilRoom(null);
+                }}
+                className="rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] px-3 py-2 text-xs font-medium text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)] transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!pendingRemoveCouncilRoom) {
+                    return;
+                  }
+                  void props.onRemoveCouncilRoom?.(pendingRemoveCouncilRoom.room.id);
+                  setPendingRemoveCouncilRoom(null);
                   window.setTimeout(() => setOpen(true), 0);
                 }}
                 className="rounded-lg bg-[var(--app-danger)] px-3 py-2 text-xs font-medium text-white hover:opacity-90 transition-colors"

@@ -6,6 +6,7 @@ import { ProviderSelector } from "../../ProviderSelector";
 import { SessionControlPopover } from "../../SessionControlPopover";
 import { SessionModelControls } from "../../SessionModelControls";
 import { SessionModeControls } from "../../SessionModeControls";
+import { OverlayScrollArea } from "../../OverlayScrollArea";
 import { TokenizedTextarea } from "../../TokenizedTextarea";
 import { WorkspacePicker } from "../../WorkspacePicker";
 import {
@@ -154,28 +155,35 @@ export function CanvasNewSessionPane(props: {
                     />
                   </button>
                   {workspaceOpen ? (
-                    <div className="rah-popover-panel rah-scroll-panel rah-scroll-panel-y absolute bottom-full left-0 z-50 mb-1.5 max-h-64 w-64 overflow-y-auto rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-1.5 shadow-xl">
-                      {props.workspaceDirs.map((dir) => (
-                        <button
-                          key={dir}
-                          type="button"
-                          className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs transition-colors ${
-                            dir === props.availableWorkspaceDir
-                              ? "bg-[var(--app-subtle-bg)] text-[var(--app-fg)]"
-                              : "text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)]"
-                          }`}
-                          onClick={() => {
-                            props.onSelectWorkspace(dir);
-                            setWorkspaceOpen(false);
-                          }}
-                        >
-                          <Folder size={13} className="shrink-0 text-[var(--app-hint)]" />
-                          <span className="truncate">{dir}</span>
-                          {dir === props.availableWorkspaceDir ? (
-                            <span className="ml-auto text-[10px] text-[var(--app-hint)]">●</span>
-                          ) : null}
-                        </button>
-                      ))}
+                    <div className="rah-popover-panel absolute bottom-full left-0 z-50 mb-1.5 max-h-64 w-64 overflow-hidden rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] shadow-xl">
+                      <OverlayScrollArea
+                        className="max-h-64"
+                        viewportClassName="max-h-64"
+                        contentClassName="p-1.5"
+                        scrollAriaLabel="Workspaces"
+                      >
+                        {props.workspaceDirs.map((dir) => (
+                          <button
+                            key={dir}
+                            type="button"
+                            className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs transition-colors ${
+                              dir === props.availableWorkspaceDir
+                                ? "bg-[var(--app-subtle-bg)] text-[var(--app-fg)]"
+                                : "text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)]"
+                            }`}
+                            onClick={() => {
+                              props.onSelectWorkspace(dir);
+                              setWorkspaceOpen(false);
+                            }}
+                          >
+                            <Folder size={13} className="shrink-0 text-[var(--app-hint)]" />
+                            <span className="truncate">{dir}</span>
+                            {dir === props.availableWorkspaceDir ? (
+                              <span className="ml-auto text-[10px] text-[var(--app-hint)]">●</span>
+                            ) : null}
+                          </button>
+                        ))}
+                      </OverlayScrollArea>
                     </div>
                   ) : null}
                 </div>

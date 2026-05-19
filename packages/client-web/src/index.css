@@ -266,10 +266,12 @@
 
   /*
    * RAH scrollbar protocol:
-   * - rah-scroll-panel: controls, pickers, dialogs, sidebars, history lists.
-   * - rah-scroll-panel-y: vertical panels that must reserve scrollbar width.
+   * - rah-scroll-overlay-area: hidden native scrollbar for utility panels, sidebars,
+   *   history/info panes, and picker/list popovers rendered through OverlayScrollArea.
    * - rah-scroll-main: primary reading surfaces such as session/council chat.
    * - rah-scroll-code: code, diff, artifact, terminal-tab and technical panes.
+   * - rah-scroll-panel / rah-scroll-panel-y: native fallback for mobile sheets,
+   *   full-canvas placeholder panes, form inputs, and legacy panel surfaces.
    * custom-scrollbar is a compatibility alias for old panel-style call sites.
    */
   .rah-scroll-panel,
@@ -320,6 +322,18 @@
 
   .rah-scroll-panel-y {
     overflow-y: scroll;
+  }
+
+  .rah-scroll-overlay-area {
+    scrollbar-gutter: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  .rah-scroll-overlay-area::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
   }
 
   .rah-scroll-main {

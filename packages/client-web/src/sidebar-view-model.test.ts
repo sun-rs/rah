@@ -1,6 +1,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import type { SessionSummary } from "@rah/runtime-protocol";
+import type { CouncilRoomSnapshot, SessionSummary } from "@rah/runtime-protocol";
+import { conversationStateFromRuntimeState } from "@rah/runtime-protocol";
 import { deriveSidebarWorkspaceViewModels } from "./sidebar-view-model";
 import type { WorkspaceSection } from "./session-browser";
 
@@ -8,6 +9,7 @@ function session(args: {
   id: string;
   runtimeState?: SessionSummary["session"]["runtimeState"];
   updatedAt?: string;
+  origin?: SessionSummary["session"]["origin"];
 }): SessionSummary {
   return {
     session: {
@@ -17,6 +19,7 @@ function session(args: {
       launchSource: "web",
       cwd: "/workspace/rah",
       rootDir: "/workspace/rah",
+      ...conversationStateFromRuntimeState(args.runtimeState ?? "running"),
       runtimeState: args.runtimeState ?? "running",
       ptyId: "pty-1",
       capabilities: {
@@ -35,6 +38,7 @@ function session(args: {
       createdAt: "2026-04-15T00:00:00.000Z",
       updatedAt: args.updatedAt ?? "2026-04-15T00:00:00.000Z",
       title: args.id,
+      ...(args.origin ? { origin: args.origin } : {}),
     },
     attachedClients: [],
     controlLease: { sessionId: args.id },
@@ -47,11 +51,33 @@ function workspaceSection(sessions: SessionSummary[]): WorkspaceSection {
       directory: "/workspace/rah",
       displayName: "workspace/rah",
       latestUpdatedAt: "2026-04-15T00:00:00.000Z",
-      liveCount: sessions.length,
+      runningCount: sessions.length,
       hasRunningItem: true,
-      hasBlockingLiveSessions: true,
+      hasBlockingRunningSessions: true,
     },
     sessions,
+  };
+}
+
+function councilRoom(args: {
+  id: string;
+  workspace?: string;
+  status?: CouncilRoomSnapshot["room"]["status"];
+  phase?: CouncilRoomSnapshot["room"]["phase"];
+  updatedAt?: string;
+}): CouncilRoomSnapshot {
+  return {
+    room: {
+      id: args.id,
+      title: args.id,
+      workspace: args.workspace ?? "/workspace/rah",
+      status: args.status ?? "running",
+      phase: args.phase ?? "ready",
+      createdAt: "2026-04-15T00:00:00.000Z",
+      updatedAt: args.updatedAt ?? "2026-04-15T00:00:00.000Z",
+    },
+    agents: [],
+    messages: [],
   };
 }
 
@@ -73,7 +99,7 @@ describe("sidebar view model", () => {
     assert.equal(items[0]?.selected, true);
   });
 
-  test("uses approval > thinking > unread > ready precedence", () => {
+  test("uses waiting permission > working > unread > ready precedence", () => {
     const approval = session({ id: "approval", runtimeState: "waiting_permission" });
     const thinking = session({ id: "thinking", runtimeState: "idle" });
     const unread = session({ id: "unread", runtimeState: "idle" });
@@ -91,9 +117,58 @@ describe("sidebar view model", () => {
     });
 
     const sessions = items[0]?.sessions ?? [];
-    assert.equal(sessions.find((entry) => entry.id === "approval")?.status, "approval");
-    assert.equal(sessions.find((entry) => entry.id === "thinking")?.status, "thinking");
+    assert.equal(sessions.find((entry) => entry.id === "approval")?.status, "waiting_permission");
+    assert.equal(sessions.find((entry) => entry.id === "thinking")?.status, "working");
     assert.equal(sessions.find((entry) => entry.id === "unread")?.status, "unread");
     assert.equal(sessions.find((entry) => entry.id === "ready")?.status, "ready");
+  });
+
+  test("projects council session origin for sidebar styling", () => {
+    const items = deriveSidebarWorkspaceViewModels({
+      workspaceSections: [workspaceSection([
+        session({
+          id: "council-agent",
+          origin: {
+            kind: "council",
+            roomId: "room-1",
+            roomTitle: "Room",
+            agentId: "agent-1",
+            agentLabel: "Agent",
+          },
+        }),
+      ])],
+      selectedWorkspaceDir: "/workspace/rah",
+      selectedSessionId: null,
+      unreadSessionIds: new Set(),
+      runtimeStatusBySessionId: new Map(),
+      pinnedSessionIdByWorkspace: {},
+    });
+
+    assert.equal(items[0]?.sessions[0]?.originKind, "council");
+  });
+
+  test("projects live council rooms into their owning workspace", () => {
+    const items = deriveSidebarWorkspaceViewModels({
+      workspaceSections: [workspaceSection([session({ id: "session-1" })])],
+      selectedWorkspaceDir: "/workspace/rah",
+      selectedSessionId: null,
+      selectedCouncilRoomId: "room-1",
+      unreadSessionIds: new Set(),
+      runtimeStatusBySessionId: new Map(),
+      pinnedSessionIdByWorkspace: {},
+      councilRooms: [
+        councilRoom({ id: "room-1", status: "running", phase: "ready" }),
+        councilRoom({ id: "archived-room", status: "stopped" }),
+        councilRoom({ id: "other-room", workspace: "/workspace/other" }),
+      ],
+    });
+
+    assert.deepEqual(items[0]?.councilRooms.map((room) => room.id), ["room-1"]);
+    assert.equal(items[0]?.councilRooms[0]?.statusLabel, "ready");
+    assert.equal(items[0]?.councilRooms[0]?.selected, true);
+    assert.deepEqual(
+      items[0]?.items.map((item) => item.kind),
+      ["council_room", "session"],
+    );
   });
 });

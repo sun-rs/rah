@@ -1,13 +1,11 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { Check, Copy, X } from "lucide-react";
-import { useEffect, useState } from "react";
-import type {
-  SessionRuntimeDescriptor,
-  SessionRuntimeDiagnostics,
-  SessionSummary,
-} from "@rah/runtime-protocol";
+import { useEffect, useState, type ReactNode } from "react";
+import type { SessionSummary } from "@rah/runtime-protocol";
+import { conversationPhaseLabel } from "@rah/runtime-protocol";
 import { providerLabel, type SessionProjection } from "../../../types";
 import { writeHostClipboard } from "../../../api";
+import { OverlayScrollArea } from "../../OverlayScrollArea";
 
 function formatDateTime(value: string | undefined): string {
   if (!value) {
@@ -22,7 +20,7 @@ function formatDateTime(value: string | undefined): string {
 
 function InfoRow(props: { label: string; value: React.ReactNode; mono?: boolean }) {
   return (
-    <div className="grid grid-cols-[7rem_1fr] gap-3 border-b border-[var(--app-border)] px-4 py-3 text-sm last:border-b-0">
+    <div className="grid grid-cols-[7rem_1fr] gap-3 border-b border-[var(--app-border)] px-4 py-2.5 text-sm last:border-b-0">
       <div className="text-[var(--app-hint)]">{props.label}</div>
       <div
         className={
@@ -37,146 +35,22 @@ function InfoRow(props: { label: string; value: React.ReactNode; mono?: boolean 
   );
 }
 
-function runtimeKindLabel(kind: SessionRuntimeDescriptor["kind"]): string {
-  switch (kind) {
-    case "native_local_server":
-      return "Native local server";
-    case "tui_mux_fallback":
-      return "TUI mux fallback";
-    case "stored_history":
-      return "Stored history";
-    case "stream_json_fifo":
-      return "Stream JSON FIFO";
-    case "native_cloud_remote":
-      return "Native cloud remote";
-    case "internal_experimental":
-      return "Internal experimental";
-    case "provider_control":
-      return "Provider control";
+function formatSessionOrigin(session: SessionSummary["session"] | undefined): ReactNode | null {
+  if (session?.origin?.kind !== "council") {
+    return null;
   }
-}
-
-function protocolStabilityLabel(stability: SessionRuntimeDescriptor["protocolStability"]): string {
-  switch (stability) {
-    case "official_stable":
-      return "official stable";
-    case "project_native":
-      return "project native";
-    case "tui_stdio":
-      return "TUI stdio";
-    case "reverse_engineered_internal":
-      return "reverse engineered";
-  }
-}
-
-function formatSessionRuntime(runtime: SessionRuntimeDescriptor | undefined): string {
-  if (!runtime) {
-    return "Unavailable";
-  }
-  return `${runtimeKindLabel(runtime.kind)} · ${protocolStabilityLabel(runtime.protocolStability)}`;
-}
-
-function runtimeLiveSourceLabel(
-  source: SessionRuntimeDescriptor["liveSource"] | undefined,
-): string {
-  switch (source) {
-    case "provider_server":
-      return "provider server";
-    case "provider_history":
-      return "provider history";
-    case "rah_control":
-      return "RAH control";
-    case undefined:
-      return "Unavailable";
-  }
-  return source;
-}
-
-function runtimeTuiRoleLabel(role: SessionRuntimeDescriptor["tuiRole"] | undefined): string {
-  switch (role) {
-    case "session_owner":
-      return "session owner";
-    case "client_view":
-      return "client view";
-    case "none":
-      return "none";
-    case undefined:
-      return "Unavailable";
-  }
-  return role;
-}
-
-function formatBooleanCapability(value: boolean | undefined): string {
-  if (value === undefined) {
-    return "Unavailable";
-  }
-  return value ? "yes" : "no";
-}
-
-function runtimeFeatureStatusLabel(
-  status:
-    | NonNullable<SessionRuntimeDescriptor["features"]>[keyof NonNullable<
-        SessionRuntimeDescriptor["features"]
-      >]
-    | undefined,
-): string {
-  switch (status) {
-    case "available":
-      return "available";
-    case "unverified":
-      return "unverified";
-    case "unsupported":
-      return "unsupported";
-    case "experimental":
-      return "experimental";
-    case undefined:
-      return "Unavailable";
-  }
-}
-
-function formatRuntimeFeatureName(name: string): string {
-  return name
-    .replace(/([A-Z])/g, " $1")
-    .replace(/^./, (char) => char.toUpperCase());
-}
-
-function RuntimeFeatureStatusList(props: {
-  features: SessionRuntimeDescriptor["features"] | undefined;
-}) {
-  if (!props.features) {
-    return "Unavailable";
-  }
+  const origin = session.origin;
   return (
-    <div className="grid gap-1">
-      {Object.entries(props.features).map(([name, status]) => (
-        <div key={name} className="flex min-w-0 items-baseline justify-between gap-3">
-          <span className="min-w-0 truncate text-[var(--app-muted)]">
-            {formatRuntimeFeatureName(name)}
-          </span>
-          <span className="shrink-0 text-[var(--app-fg)]">
-            {runtimeFeatureStatusLabel(status)}
-          </span>
-        </div>
-      ))}
+    <div className="grid min-w-0 gap-1">
+      <div className="font-medium text-[var(--app-fg)]">Council agent session</div>
+      <div className="text-[12px] text-[var(--app-muted)]">
+        Room: {origin.roomTitle ?? origin.roomId}
+      </div>
+      <div className="text-[12px] text-[var(--app-muted)]">
+        Agent: {origin.agentLabel ?? origin.agentId}
+      </div>
     </div>
   );
-}
-
-function runtimeAttachStateLabel(
-  state: SessionRuntimeDiagnostics["attachState"] | undefined,
-): string {
-  switch (state) {
-    case "ready":
-      return "ready";
-    case "unverified":
-      return "unverified";
-    case "failed":
-      return "failed";
-    case "unavailable":
-      return "unavailable";
-    case undefined:
-      return "Unavailable";
-  }
 }
 
 type CopyResult = "copied" | "failed";
@@ -315,36 +189,32 @@ export function SessionInfoDialog(props: {
 }) {
   const summary = props.summary;
   const session = summary?.session;
-  const providerSessionId = session?.providerSessionId ?? "Unavailable";
+  const providerSessionId = session?.providerSessionId ?? null;
   const resumeCommand =
     session?.providerSessionId && session.provider !== "custom"
       ? `rah ${session.provider} resume ${session.providerSessionId}`
       : null;
-  const providerAttachCommand =
-    session?.providerSessionId && session.provider !== "custom"
-      ? `rah ${session.provider} attach ${session.providerSessionId}`
-      : null;
   const rahAttachCommand = session ? `rah attach ${session.id}` : null;
-  const launchDescription =
+  const launchSource =
     session?.launchSource === "terminal"
-      ? "Local terminal session. Web Chat can continue the same live session."
+      ? "Terminal"
       : session?.launchSource === "web"
-        ? "Web-started session. A local terminal can attach with the RAH attach command."
+        ? "Web"
         : session?.launchSource ?? "Unavailable";
-  const rawMuxAttachCommand =
-    session?.mux?.backend === "zellij"
-      ? `ZELLIJ_SOCKET_DIR=${session.mux.socketDir} zellij attach ${session.mux.sessionName} options --mirror-session true --pane-frames false --show-startup-tips false`
-      : session?.mux?.backend === "tmux"
-        ? `tmux attach-session -t ${session.mux.sessionName}`
-      : null;
-  const runtimeStatus = props.projection?.currentRuntimeStatus ?? null;
-  const runtimeDiagnostics = session?.runtimeDiagnostics;
+  const origin = formatSessionOrigin(session);
+  const runtimeSummary = session
+    ? [
+        session.liveBackend,
+        `${session.status} · ${conversationPhaseLabel(session.phase)}`,
+      ].filter(Boolean).join(" · ") || "Unavailable"
+    : "Unavailable";
+  const showCwd = Boolean(session?.cwd && session.rootDir && session.cwd !== session.rootDir);
 
   return (
     <Dialog.Root open={props.open} onOpenChange={props.onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-40 bg-black/40" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 flex h-[min(78dvh,680px)] w-[min(720px,94vw)] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-2xl border border-[var(--app-border)] bg-[var(--app-bg)] shadow-2xl focus:outline-none max-md:inset-0 max-md:h-[100dvh] max-md:w-screen max-md:translate-x-0 max-md:translate-y-0 max-md:rounded-none max-md:border-0 max-md:pt-[env(safe-area-inset-top)] max-md:pb-[env(safe-area-inset-bottom)]">
+        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 flex max-h-[min(68dvh,560px)] w-[min(640px,94vw)] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-2xl border border-[var(--app-border)] bg-[var(--app-bg)] shadow-2xl focus:outline-none max-md:inset-0 max-md:h-[100dvh] max-md:max-h-[100dvh] max-md:w-screen max-md:translate-x-0 max-md:translate-y-0 max-md:rounded-none max-md:border-0 max-md:pt-[env(safe-area-inset-top)] max-md:pb-[env(safe-area-inset-bottom)]">
           <div className="flex items-center justify-between border-b border-[var(--app-border)] px-4 py-3 shrink-0">
             <div className="min-w-0">
               <Dialog.Title className="truncate text-sm font-semibold text-[var(--app-fg)]">
@@ -364,151 +234,65 @@ export function SessionInfoDialog(props: {
               </button>
             </Dialog.Close>
           </div>
-          <div className="min-h-0 flex-1 overflow-y-auto rah-scroll-panel rah-scroll-panel-y">
+          <OverlayScrollArea className="min-h-0 flex-1" viewportClassName="h-full">
             <InfoRow label="Provider" value={session ? providerLabel(session.provider) : "Unavailable"} />
             <InfoRow
-              label="Session ID"
+              label="RAH session"
               mono
               value={
                 <div className="flex flex-wrap items-start gap-2">
-                  <span className="min-w-0 flex-1">{providerSessionId}</span>
-                  {session?.providerSessionId ? (
-                    <CopyValueButton value={session.providerSessionId} label="session ID" />
+                  <span className="min-w-0 flex-1">{session?.id ?? "Unavailable"}</span>
+                  {session?.id ? (
+                    <CopyValueButton value={session.id} label="RAH session ID" />
                   ) : null}
                 </div>
               }
             />
-            <InfoRow
-              label="Resume history"
-              mono
-              value={
-                resumeCommand ? (
+            {providerSessionId ? (
+              <InfoRow
+                label="Provider ID"
+                mono
+                value={
                   <div className="flex flex-wrap items-start gap-2">
-                    <span className="min-w-0 flex-1">{resumeCommand}</span>
-                    <CopyValueButton value={resumeCommand} label="resume command" />
+                    <span className="min-w-0 flex-1">{providerSessionId}</span>
+                    <CopyValueButton value={providerSessionId} label="provider session ID" />
                   </div>
-                ) : (
-                  "Unavailable"
-                )
-              }
-            />
+                }
+              />
+            ) : null}
+            <InfoRow label="Runtime" value={runtimeSummary} />
+            <InfoRow label="Launch" value={launchSource} />
+            {origin ? <InfoRow label="Origin" value={origin} /> : null}
             <InfoRow
               label="Attach"
               mono
               value={
-                providerAttachCommand || rahAttachCommand ? (
+                rahAttachCommand ? (
                   <div className="flex flex-wrap items-start gap-2">
-                    <span className="min-w-0 flex-1">{providerAttachCommand ?? rahAttachCommand}</span>
-                    <CopyValueButton
-                      value={providerAttachCommand ?? rahAttachCommand ?? ""}
-                      label="attach command"
-                    />
+                    <span className="min-w-0 flex-1">{rahAttachCommand}</span>
+                    <CopyValueButton value={rahAttachCommand} label="attach command" />
                   </div>
                 ) : (
                   "Unavailable"
                 )
               }
             />
-            {providerAttachCommand && rahAttachCommand ? (
+            {resumeCommand ? (
               <InfoRow
-                label="Attach by RAH ID"
+                label="Resume"
                 mono
                 value={
                   <div className="flex flex-wrap items-start gap-2">
-                    <span className="min-w-0 flex-1">{rahAttachCommand}</span>
-                    <CopyValueButton value={rahAttachCommand} label="RAH attach command" />
+                    <span className="min-w-0 flex-1">{resumeCommand}</span>
+                    <CopyValueButton value={resumeCommand} label="resume command" />
                   </div>
                 }
               />
             ) : null}
-            {rawMuxAttachCommand ? (
-              <InfoRow
-                label="Raw TUI debug"
-                mono
-                value={
-                  <div className="grid min-w-0 gap-1">
-                    <div className="flex flex-wrap items-start gap-2">
-                      <span className="min-w-0 flex-1">{rawMuxAttachCommand}</span>
-                      <CopyValueButton value={rawMuxAttachCommand} label="raw TUI attach command" />
-                    </div>
-                    <span className="text-[11px] font-normal text-[var(--app-hint)]">
-                      Bypasses RAH ownership; prefer Attach unless debugging.
-                    </span>
-                  </div>
-                }
-              />
-            ) : null}
-            {runtimeDiagnostics?.attachCommand ? (
-              <InfoRow
-                label="Raw attach"
-                mono
-                value={
-                  <div className="flex flex-wrap items-start gap-2">
-                    <span className="min-w-0 flex-1">{runtimeDiagnostics.attachCommand}</span>
-                    <CopyValueButton value={runtimeDiagnostics.attachCommand} label="raw attach command" />
-                  </div>
-                }
-              />
-            ) : null}
-            <InfoRow label="Origin" value={launchDescription} />
-            <InfoRow label="Backend" value={session?.liveBackend ?? "Unavailable"} />
-            <InfoRow label="State" value={session?.runtimeState ?? "Unavailable"} />
-            <InfoRow label="Runtime" value={formatSessionRuntime(session?.runtime)} />
-            <InfoRow label="Live source" value={runtimeLiveSourceLabel(session?.runtime?.liveSource)} />
-            <InfoRow label="TUI role" value={runtimeTuiRoleLabel(session?.runtime?.tuiRole)} />
-            <InfoRow
-              label="Events"
-              value={formatBooleanCapability(session?.runtime?.structuredLiveEvents)}
-            />
-            <InfoRow
-              label="Continuity"
-              value={formatBooleanCapability(session?.runtime?.tuiContinuity)}
-            />
-            <InfoRow
-              label="Feature truth"
-              value={<RuntimeFeatureStatusList features={session?.runtime?.features} />}
-            />
-            <InfoRow
-              label="Attach state"
-              value={runtimeAttachStateLabel(runtimeDiagnostics?.attachState)}
-            />
-            <InfoRow
-              label="Server"
-              mono
-              value={runtimeDiagnostics?.serverEndpoint ?? "Unavailable"}
-            />
-            <InfoRow
-              label="Server PID"
-              value={
-                runtimeDiagnostics?.serverPid !== undefined
-                  ? String(runtimeDiagnostics.serverPid)
-                  : "Unavailable"
-              }
-            />
-            <InfoRow
-              label="Cursor"
-              mono
-              value={runtimeDiagnostics?.lastEventCursor ?? "Unavailable"}
-            />
-            <InfoRow
-              label="Last error"
-              value={runtimeDiagnostics?.lastError ?? "Unavailable"}
-            />
-            <InfoRow label="Status" value={runtimeStatus ?? "Unavailable"} />
-            <InfoRow label="Attached" value={summary ? String(summary.attachedClients.length) : "0"} />
-            <InfoRow
-              label="Control"
-              value={
-                summary?.controlLease.holderClientId
-                  ? `${summary.controlLease.holderKind ?? "unknown"} · ${summary.controlLease.holderClientId}`
-                  : "Unclaimed"
-              }
-            />
             <InfoRow label="Workspace" mono value={session?.rootDir ?? "Unavailable"} />
-            <InfoRow label="Cwd" mono value={session?.cwd ?? "Unavailable"} />
-            <InfoRow label="Created" value={formatDateTime(session?.createdAt)} />
+            {showCwd ? <InfoRow label="Cwd" mono value={session?.cwd ?? "Unavailable"} /> : null}
             <InfoRow label="Updated" value={formatDateTime(session?.updatedAt)} />
-          </div>
+          </OverlayScrollArea>
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

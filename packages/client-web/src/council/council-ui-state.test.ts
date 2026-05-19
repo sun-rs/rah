@@ -196,6 +196,47 @@ test("council agent labels replace provider/model slashes with hyphens", () => {
   );
 });
 
+test("council agent config supports Gemini selections without reasoning options", () => {
+  const catalog: ProviderModelCatalog = {
+    provider: "gemini",
+    models: [
+      {
+        id: "gemini-2.5-pro",
+        label: "Gemini 2.5 Pro",
+      },
+    ],
+    fetchedAt: new Date().toISOString(),
+    source: "native",
+    modelsExact: true,
+    optionsExact: true,
+    defaultModeId: "yolo",
+    modes: [
+      { id: "default", role: "custom", label: "Default", applyTiming: "startup_only", hotSwitch: false },
+      { id: "yolo", role: "custom", label: "YOLO", applyTiming: "startup_only", hotSwitch: false },
+    ],
+  };
+
+  const config = councilAgentDraftToConfig({
+    catalog,
+    draft: {
+      id: "gemini-planner",
+      provider: "gemini",
+      label: "",
+      role: "Plan options",
+      modelId: "gemini-2.5-pro",
+      reasoningId: "stale",
+      modeId: null,
+    },
+  });
+
+  assert.equal(config.provider, "gemini");
+  assert.equal(config.label, "Gemini 2.5 Pro");
+  assert.equal(config.modelId, "gemini-2.5-pro");
+  assert.equal(config.reasoningId, undefined);
+  assert.equal(config.optionValues, undefined);
+  assert.equal(config.modeId, "yolo");
+});
+
 test("council model selection clears stale reasoning when selected model has no parameters", () => {
   const catalog: ProviderModelCatalog = {
     provider: "opencode",

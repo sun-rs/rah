@@ -12,6 +12,7 @@ import { InspectorFileDetailDialog } from "./inspector/InspectorFileDetailDialog
 import { InspectorFilesPane } from "./inspector/InspectorFilesPane";
 import { InspectorHeader } from "./inspector/InspectorHeader";
 import type { DirectoryEntry, FileDetailSelection, InspectorGitStatus, InspectorTab } from "./inspector/shared";
+import { OverlayScrollArea } from "./components/OverlayScrollArea";
 
 export function InspectorPane(props: {
   sessionId: string | null;
@@ -228,7 +229,7 @@ export function InspectorPane(props: {
         onTabChange={setActiveTab}
         {...(props.onOpenTerminal ? { onOpenTerminal: props.onOpenTerminal } : {})}
       />
-      <div className="flex-1 overflow-y-scroll rah-scroll-panel rah-scroll-panel-y px-4 py-3">
+      <OverlayScrollArea className="min-h-0 flex-1" viewportClassName="h-full px-4 py-3" scrollAriaLabel="Inspector">
         {activeTab === "changes" ? (
           <InspectorChangesPane
             gitStatus={gitStatus}
@@ -256,7 +257,7 @@ export function InspectorPane(props: {
             onOpenFile={(path) => openFile(path, "files")}
           />
         )}
-      </div>
+      </OverlayScrollArea>
 
       {selectedFile ? (
         <InspectorFileDetailDialog

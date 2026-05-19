@@ -3,7 +3,7 @@ import { isReadOnlyReplay } from "./session-capabilities";
 import {
   deriveWorkspaceInfos,
   deriveWorkspaceSections,
-  groupLiveSessionsByDirectory,
+  groupRunningSessionsByDirectory,
   sortWorkspaceInfos,
   type SessionDirectoryGroup,
   type WorkspaceInfo,
@@ -20,13 +20,13 @@ export interface PrimaryPaneState {
 
 export interface WorkbenchSessionCollections {
   sessionEntries: SessionProjection[];
-  liveSessionEntries: SessionProjection[];
-  controlledLiveSessionEntries: SessionProjection[];
-  liveSessionSummaries: SessionSummary[];
-  controlledLiveSessionSummaries: SessionSummary[];
-  daemonLiveSessionByProviderSessionId: Map<string, SessionSummary>;
-  controlledLiveSessionByProviderSessionId: Map<string, SessionSummary>;
-  liveGroups: SessionDirectoryGroup<SessionSummary>[];
+  runningSessionEntries: SessionProjection[];
+  controlledRunningSessionEntries: SessionProjection[];
+  runningSessionSummaries: SessionSummary[];
+  controlledRunningSessionSummaries: SessionSummary[];
+  daemonRunningSessionByProviderSessionId: Map<string, SessionSummary>;
+  controlledRunningSessionByProviderSessionId: Map<string, SessionSummary>;
+  runningGroups: SessionDirectoryGroup<SessionSummary>[];
   workspaceInfos: WorkspaceInfo[];
   sortedWorkspaceInfos: WorkspaceInfo[];
   workspaceSections: WorkspaceSection[];
@@ -52,7 +52,7 @@ function isControlledByClient(summary: SessionSummary, clientId: string): boolea
 function isEndedNativeTuiSession(summary: SessionSummary): boolean {
   return (
     summary.session.liveBackend === "native_tui" &&
-    (summary.session.runtimeState === "stopped" || summary.session.runtimeState === "failed")
+    (summary.session.status === "stopped" || summary.session.runtimeState === "stopped")
   );
 }
 
@@ -85,49 +85,49 @@ export function deriveWorkbenchSessionCollections(args: {
   workspaceSortMode: WorkspaceSortMode;
 }): WorkbenchSessionCollections {
   const sessionEntries = sortSessionEntries(args.projections);
-  const liveSessionEntries = sessionEntries.filter(
+  const runningSessionEntries = sessionEntries.filter(
     (entry) => !isReadOnlyReplay(entry.summary) && !isEndedNativeTuiSession(entry.summary),
   );
-  const controlledLiveSessionEntries = liveSessionEntries.filter((entry) =>
+  const controlledRunningSessionEntries = runningSessionEntries.filter((entry) =>
     isControlledByClient(entry.summary, args.clientId),
   );
-  const liveSessionSummaries = liveSessionEntries.map((entry) => entry.summary);
-  const controlledLiveSessionSummaries = controlledLiveSessionEntries.map((entry) => entry.summary);
-  const daemonLiveSessionByProviderSessionId = new Map(
-    liveSessionEntries
+  const runningSessionSummaries = runningSessionEntries.map((entry) => entry.summary);
+  const controlledRunningSessionSummaries = controlledRunningSessionEntries.map((entry) => entry.summary);
+  const daemonRunningSessionByProviderSessionId = new Map(
+    runningSessionEntries
       .filter((entry) => entry.summary.session.providerSessionId)
       .map((entry) => [entry.summary.session.providerSessionId!, entry.summary] as const),
   );
-  const controlledLiveSessionByProviderSessionId = new Map(
-    controlledLiveSessionEntries
+  const controlledRunningSessionByProviderSessionId = new Map(
+    controlledRunningSessionEntries
       .filter((entry) => entry.summary.session.providerSessionId)
       .map((entry) => [entry.summary.session.providerSessionId!, entry.summary] as const),
   );
-  const liveGroups = groupLiveSessionsByDirectory(
-    liveSessionSummaries,
+  const runningGroups = groupRunningSessionsByDirectory(
+    runningSessionSummaries,
     args.workspaceDir,
   );
   const workspaceInfos = deriveWorkspaceInfos(
     args.workspaceDirs,
-    liveSessionSummaries,
+    runningSessionSummaries,
     args.storedSessions,
-    liveSessionSummaries,
+    runningSessionSummaries,
   );
   const sortedWorkspaceInfos = sortWorkspaceInfos(workspaceInfos, args.workspaceSortMode);
   const workspaceSections = deriveWorkspaceSections(
     sortedWorkspaceInfos,
-    liveSessionSummaries,
+    runningSessionSummaries,
   );
 
   return {
     sessionEntries,
-    liveSessionEntries,
-    controlledLiveSessionEntries,
-    liveSessionSummaries,
-    controlledLiveSessionSummaries,
-    daemonLiveSessionByProviderSessionId,
-    controlledLiveSessionByProviderSessionId,
-    liveGroups,
+    runningSessionEntries,
+    controlledRunningSessionEntries,
+    runningSessionSummaries,
+    controlledRunningSessionSummaries,
+    daemonRunningSessionByProviderSessionId,
+    controlledRunningSessionByProviderSessionId,
+    runningGroups,
     workspaceInfos,
     sortedWorkspaceInfos,
     workspaceSections,

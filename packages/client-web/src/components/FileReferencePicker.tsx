@@ -9,6 +9,7 @@ import {
   X,
 } from "lucide-react";
 import { listDirectory, type DirectoryListingResponse } from "../api";
+import { OverlayScrollArea } from "./OverlayScrollArea";
 
 function normalizePath(value: string): string {
   const trimmed = value.trim().replace(/[\\/]+$/, "");
@@ -172,7 +173,11 @@ export function FileReferencePicker(props: {
             </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto rah-scroll-panel rah-scroll-panel-y px-4 pb-2">
+          <OverlayScrollArea
+            className="min-h-0 flex-1"
+            viewportClassName="h-full px-4 pb-2"
+            scrollAriaLabel="File references"
+          >
             {error ? (
               <div className="py-6 text-center text-sm text-[var(--app-danger)]">{error}</div>
             ) : loading ? (
@@ -223,7 +228,7 @@ export function FileReferencePicker(props: {
                 {query.trim() ? "No matching files or folders." : "No files or folders in this directory."}
               </div>
             )}
-          </div>
+          </OverlayScrollArea>
 
           <div className="flex items-center justify-between gap-3 border-t border-[var(--app-border)] px-4 py-3 shrink-0">
             <div className="min-w-0 truncate text-xs text-[var(--app-hint)]">

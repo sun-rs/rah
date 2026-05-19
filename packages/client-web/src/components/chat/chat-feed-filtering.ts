@@ -25,6 +25,7 @@ export function visibleFeedEntries(
   feed: FeedEntry[],
   hideToolCalls: boolean,
   hideOpenCodeReasoning = false,
+  hideGeminiReasoning = false,
   provider?: ProviderKind,
 ): FeedEntry[] {
   const toolIds = new Set(
@@ -38,12 +39,16 @@ export function visibleFeedEntries(
       return false;
     }
     if (
-      hideOpenCodeReasoning &&
       entry.kind === "timeline" &&
-      entry.item.kind === "reasoning" &&
-      (entry.sourceProvider ?? provider) === "opencode"
+      entry.item.kind === "reasoning"
     ) {
-      return false;
+      const sourceProvider = entry.sourceProvider ?? provider;
+      if (
+        (hideOpenCodeReasoning && sourceProvider === "opencode") ||
+        (hideGeminiReasoning && sourceProvider === "gemini")
+      ) {
+        return false;
+      }
     }
     if (entry.kind !== "observation") {
       return true;

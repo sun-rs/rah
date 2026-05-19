@@ -29,11 +29,12 @@ function assistantEntry(key: string, sourceProvider?: Extract<FeedEntry, { kind:
 }
 
 describe("chat thread filtering", () => {
-  test("hides only OpenCode reasoning when the chat preference is enabled", () => {
+  test("hides OpenCode reasoning when its chat preference is enabled", () => {
     const entries = visibleFeedEntries(
       [
         reasoningEntry("opencode-reasoning", "opencode"),
         reasoningEntry("codex-reasoning", "codex"),
+        reasoningEntry("gemini-reasoning", "gemini"),
         assistantEntry("opencode-answer", "opencode"),
       ],
       false,
@@ -42,7 +43,26 @@ describe("chat thread filtering", () => {
 
     assert.deepEqual(entries.map((entry) => entry.key), [
       "codex-reasoning",
+      "gemini-reasoning",
       "opencode-answer",
+    ]);
+  });
+
+  test("hides Gemini reasoning when its chat preference is enabled", () => {
+    const entries = visibleFeedEntries(
+      [
+        reasoningEntry("gemini-reasoning", "gemini"),
+        reasoningEntry("opencode-reasoning", "opencode"),
+        assistantEntry("gemini-answer", "gemini"),
+      ],
+      false,
+      false,
+      true,
+    );
+
+    assert.deepEqual(entries.map((entry) => entry.key), [
+      "opencode-reasoning",
+      "gemini-answer",
     ]);
   });
 
@@ -51,7 +71,20 @@ describe("chat thread filtering", () => {
       [reasoningEntry("legacy-reasoning"), assistantEntry("answer")],
       false,
       true,
+      false,
       "opencode",
+    );
+
+    assert.deepEqual(entries.map((entry) => entry.key), ["answer"]);
+  });
+
+  test("uses the Gemini session provider as a fallback for older reasoning entries", () => {
+    const entries = visibleFeedEntries(
+      [reasoningEntry("legacy-reasoning"), assistantEntry("answer")],
+      false,
+      false,
+      true,
+      "gemini",
     );
 
     assert.deepEqual(entries.map((entry) => entry.key), ["answer"]);

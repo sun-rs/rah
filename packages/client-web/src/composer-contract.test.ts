@@ -97,7 +97,7 @@ describe("composer contract", () => {
     });
   });
 
-  test("allows terminal-launched live sessions to compose without an explicit control claim", () => {
+  test("allows terminal-launched running sessions to compose without an explicit control claim", () => {
     const surface = deriveComposerSurface({
       selectedSummary: summary({
         launchSource: "terminal",
@@ -136,7 +136,7 @@ describe("composer contract", () => {
     const surface = deriveComposerSurface({
       selectedSummary: summary({
         provider: "claude",
-        liveBackend: "zellij_tui",
+        liveBackend: "tui_mux",
         nativeTui: {
           terminalId: "terminal-claude-1",
           viewAvailable: true,
@@ -160,6 +160,34 @@ describe("composer contract", () => {
     assert.match(surface.stopTitle ?? "", /best-effort/);
   });
 
+  test("shows Gemini native TUI Esc control as best-effort instead of generating stop", () => {
+    const surface = deriveComposerSurface({
+      selectedSummary: summary({
+        provider: "gemini",
+        liveBackend: "tui_mux",
+        nativeTui: {
+          terminalId: "terminal-gemini-1",
+          viewAvailable: true,
+          promptState: "agent_busy",
+          queuedInputCount: 0,
+        },
+      }),
+      hasControl: false,
+      isGenerating: true,
+      pendingSessionAction: null,
+    });
+
+    assert.equal(surface.kind, "compose");
+    if (surface.kind !== "compose") {
+      return;
+    }
+    assert.equal(surface.showStopButton, true);
+    assert.equal(surface.stopTone, "warning");
+    assert.equal(surface.stopSpinner, false);
+    assert.equal(surface.stopAriaLabel, "Send Esc to Gemini TUI");
+    assert.match(surface.stopTitle ?? "", /best-effort/);
+  });
+
   test("shows Claude Esc control even before live backend and native TUI metadata are refreshed", () => {
     const surface = deriveComposerSurface({
       selectedSummary: summary({
@@ -179,7 +207,7 @@ describe("composer contract", () => {
     assert.equal(surface.stopSpinner, false);
   });
 
-  test("sizes the Claude Esc control to the same outer box as send", () => {
+  test("sizes best-effort Esc controls to the same outer box as send", () => {
     assert.match(COMPOSER_LAYOUT.stopWrapperClassName, /h-10 w-10 md:h-9 md:w-9 lg:h-8 lg:w-8/);
     assert.match(COMPOSER_LAYOUT.sendButtonClassName, /h-10 w-10 md:h-9 md:w-9 lg:h-8 lg:w-8/);
     assert.match(COMPOSER_LAYOUT.stopWarningButtonClassName, /inset-0/);

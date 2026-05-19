@@ -4,7 +4,10 @@ import {
   createDefaultModeDraft,
   resolveSessionModeControlState,
 } from "./session-mode-ui";
-import { resolveSelectedModelDraft } from "./components/SessionModelControls";
+import {
+  isManualSupplementModel,
+  resolveSelectedModelDraft,
+} from "./components/SessionModelControls";
 import type { ProviderKind, ProviderModelCatalog, SessionSummary } from "@rah/runtime-protocol";
 
 describe("session mode UI defaults", () => {
@@ -365,6 +368,27 @@ describe("session model UI defaults", () => {
 
     assert.equal(state.model?.id, "gpt-default");
     assert.equal(state.reasoning?.id, "high");
+  });
+
+  test("identifies manual supplement models from catalog profiles", () => {
+    const catalog = modelCatalog({});
+    catalog.modelProfiles = [
+      {
+        modelId: "gpt-default",
+        source: "native_online",
+        freshness: "authoritative",
+        configOptions: [],
+      },
+      {
+        modelId: "gpt-manual",
+        source: "cached_runtime",
+        freshness: "stale",
+        configOptions: [],
+      },
+    ];
+
+    assert.equal(isManualSupplementModel(catalog, "gpt-manual"), true);
+    assert.equal(isManualSupplementModel(catalog, "gpt-default"), false);
   });
 });
 

@@ -52,13 +52,19 @@ function projection(): SessionProjection {
   };
 }
 
-function event(event: Omit<RahEvent, "id" | "seq" | "ts" | "sessionId" | "source"> & { seq: number }): RahEvent {
+function event(
+  event: Omit<RahEvent, "id" | "seq" | "ts" | "sessionId" | "source"> & {
+    seq: number;
+    source?: RahEvent["source"];
+  },
+): RahEvent {
+  const source = event.source ?? { provider: "codex", channel: "structured_live", authority: "derived" };
   return {
     id: `event-${event.seq}`,
     ts: `2026-04-15T00:00:${String(event.seq).padStart(2, "0")}.000Z`,
     sessionId: "session-1",
-    source: { provider: "codex", channel: "structured_live", authority: "derived" },
     ...event,
+    source,
   } as RahEvent;
 }
 
@@ -207,6 +213,68 @@ describe("client projection", () => {
     assert.deepEqual(
       userMessages.map((entry) => (entry.kind === "timeline" ? entry.turnId : null)),
       ["provider-turn-1", "provider-turn-2"],
+    );
+  });
+
+  test("replaces Gemini optimistic user burst with provider composite user message", () => {
+    let current = appendOptimisticUserMessage(projection(), "厉害了", {
+      clientMessageId: "client-message-1",
+      clientTurnId: "client-turn-1",
+    });
+    current = appendOptimisticUserMessage(current, "现在几点", {
+      clientMessageId: "client-message-2",
+      clientTurnId: "client-turn-2",
+    });
+    current = appendOptimisticUserMessage(current, "你无敌", {
+      clientMessageId: "client-message-3",
+      clientTurnId: "client-turn-3",
+    });
+    current = {
+      ...current,
+      feed: current.feed.map((entry, index) =>
+        entry.kind === "timeline" && entry.key.startsWith("optimistic:user:")
+          ? { ...entry, ts: `2026-04-15T00:00:0${index + 1}.000Z` }
+          : entry,
+      ),
+    };
+
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 1,
+        turnId: "gemini:provider-user-1",
+        source: { provider: "gemini", channel: "structured_persisted", authority: "authoritative" },
+        type: "timeline.item.added",
+        payload: {
+          item: {
+            kind: "user_message",
+            text: "厉害了\n\n现在几点\n\n你无敌",
+            messageId: "provider-user-1",
+          },
+          identity: {
+            canonicalItemId: "gemini-user-1",
+            canonicalTurnId: "gemini-turn-1",
+            provider: "gemini",
+            providerSessionId: "provider-session-1",
+            turnKey: "message:provider-user-1",
+            itemKind: "user_message",
+            itemKey: "provider-user-1",
+            origin: "live",
+            confidence: "native",
+          },
+        },
+      }),
+    );
+
+    const userMessages = current.feed.filter(
+      (entry) => entry.kind === "timeline" && entry.item.kind === "user_message",
+    );
+    assert.equal(userMessages.length, 1);
+    const only = userMessages[0];
+    assert.equal(only?.kind === "timeline" ? only.canonicalItemId : null, "gemini-user-1");
+    assert.equal(
+      only?.kind === "timeline" && only.item.kind === "user_message" ? only.item.text : null,
+      "厉害了\n\n现在几点\n\n你无敌",
     );
   });
 
@@ -1759,20 +1827,20 @@ describe("client projection", () => {
     assert.equal(current.feed.length, 0);
   });
 
-  test("marks parent workspaces as blocked when a descendant live session exists", () => {
+  test("marks parent workspaces as blocked when a descendant running session exists", () => {
     const workspaces = deriveWorkspaceInfos(
       ["/repo", "/repo/app"],
       [workspaceSummary({ id: "live-1", rootDir: "/repo/app" })],
       [],
     );
 
-    assert.equal(workspaces.find((workspace) => workspace.directory === "/repo")?.liveCount, 0);
+    assert.equal(workspaces.find((workspace) => workspace.directory === "/repo")?.runningCount, 0);
     assert.equal(
-      workspaces.find((workspace) => workspace.directory === "/repo")?.hasBlockingLiveSessions,
+      workspaces.find((workspace) => workspace.directory === "/repo")?.hasBlockingRunningSessions,
       true,
     );
     assert.equal(
-      workspaces.find((workspace) => workspace.directory === "/repo/app")?.hasBlockingLiveSessions,
+      workspaces.find((workspace) => workspace.directory === "/repo/app")?.hasBlockingRunningSessions,
       true,
     );
   });
@@ -1785,7 +1853,7 @@ describe("client projection", () => {
     );
 
     assert.equal(workspaces[0]?.directory, "/");
-    assert.equal(workspaces[0]?.hasBlockingLiveSessions, true);
+    assert.equal(workspaces[0]?.hasBlockingRunningSessions, true);
   });
 
   test("does not block workspace removal for read-only replay sessions", () => {
@@ -1802,11 +1870,11 @@ describe("client projection", () => {
       [],
     );
 
-    assert.equal(workspaces[0]?.liveCount, 0);
-    assert.equal(workspaces[0]?.hasBlockingLiveSessions, false);
+    assert.equal(workspaces[0]?.runningCount, 0);
+    assert.equal(workspaces[0]?.hasBlockingRunningSessions, false);
   });
 
-  test("can hide uncontrolled live sessions from sidebar while still blocking workspace removal", () => {
+  test("can hide uncontrolled running sessions from sidebar while still blocking workspace removal", () => {
     const workspaces = deriveWorkspaceInfos(
       ["/repo"],
       [],
@@ -1814,8 +1882,8 @@ describe("client projection", () => {
       [workspaceSummary({ id: "live-1", rootDir: "/repo" })],
     );
 
-    assert.equal(workspaces[0]?.liveCount, 0);
-    assert.equal(workspaces[0]?.hasBlockingLiveSessions, true);
+    assert.equal(workspaces[0]?.runningCount, 0);
+    assert.equal(workspaces[0]?.hasBlockingRunningSessions, true);
   });
 
   test("preserves workspace display order even when a later workspace is more recently active", () => {

@@ -13,13 +13,11 @@ import {
 } from "./types";
 
 function sessionSummaryIsActivelyRunning(summary: SessionProjection["summary"]): boolean {
-  return [
+  return summary.session.status === "running" && [
     "starting",
-    "running",
-    "thinking",
-    "streaming",
-    "retrying",
-  ].includes(summary.session.runtimeState);
+    "working",
+    "stopping",
+  ].includes(summary.session.phase);
 }
 
 function projectionWithFreshSummary(

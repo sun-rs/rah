@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import type { ContextUsage, PermissionResponseRequest, ProviderModelCatalog, SessionSummary } from "@rah/runtime-protocol";
-import { Archive, ArrowUp, Ellipsis, EyeOff, Info, Menu, PencilLine, Plus, Trash2, X } from "lucide-react";
+import { conversationPhaseLabel } from "@rah/runtime-protocol";
+import { ArrowUp, Ellipsis, EyeOff, Info, Menu, PencilLine, Plus, Square, Trash2, X } from "lucide-react";
 import { providerLabel } from "../../../types";
 import type { SessionProjection } from "../../../types";
 import { TerminalPane } from "../../../TerminalPane";
@@ -91,7 +92,7 @@ function shouldRenderInteractionNotice(notice: InlineWorkbenchNotice | null): no
   // Generic read-only/observe states are already expressed by the composer
   // surface. Keep this banner for actionable native-TUI diagnostics, queued
   // input, stopped TUI, and warning states.
-  return notice.message !== "History only. Claim control for live input and approvals." &&
+  return notice.message !== "History only. Claim running control for input and approvals." &&
     notice.message !== "Observe only.";
 }
 
@@ -107,6 +108,7 @@ export function WorkbenchSelectedPane(props: {
   historyNotice: InlineWorkbenchNotice | null;
   hideToolCallsInChat: boolean;
   hideOpenCodeReasoningInChat: boolean;
+  hideGeminiReasoningInChat: boolean;
   showModelInfoInChat: boolean;
   canLoadOlderHistory: boolean;
   historyLoading: boolean;
@@ -142,9 +144,9 @@ export function WorkbenchSelectedPane(props: {
   onToggleInspector?: () => void;
   onFloatingAnchorOffsetChange: (offsetPx: number) => void;
   onHideSession?: () => void;
-  onArchiveOrClose: () => void;
+  onStopOrClose: () => void;
   onDeleteSession: () => void;
-  canArchiveSession: boolean;
+  canStopSession: boolean;
   canDeleteSession: boolean;
   canShowSessionInfo: boolean;
   canRenameSession: boolean;
@@ -194,14 +196,15 @@ export function WorkbenchSelectedPane(props: {
     props.compactComposerPrompts === "auto"
       ? effectivePaneWidth < 640
       : props.compactComposerPrompts === true;
-  const archiveOrCloseDisabled =
-    !props.isAttached || (!props.selectedIsReadOnlyReplay && !props.canArchiveSession);
+  const stopOrCloseDisabled =
+    !props.isAttached || (!props.selectedIsReadOnlyReplay && !props.canStopSession);
   const liveModeControl = resolveSessionModeControlState({
     provider: props.selectedSummary.session.provider,
     summary: props.selectedSummary,
     catalog: props.modelCatalog,
   });
   const contextUsageDisplay = resolveContextUsageDisplay(props.selectedSummary.usage);
+  const isCouncilSession = props.selectedSummary.session.origin?.kind === "council";
   const effectiveSessionViewMode =
     nativeTuiAvailable && sessionViewMode === "tui" ? "tui" : "chat";
   const showComposer =
@@ -259,13 +262,12 @@ export function WorkbenchSelectedPane(props: {
     props.canSwitchSessionModes && liveModeControl.planModeAvailable;
   const showLiveModelControl =
     props.canSwitchSessionModel && Boolean(props.modelCatalog || props.modelCatalogLoading);
-  const liveSessionControlUnavailableMessage =
+  const runningSessionControlUnavailableMessage =
     !showLiveAccessModeControl &&
     !showLivePlanModeControl &&
     !showLiveModelControl &&
-    props.selectedSummary.session.provider === "claude" &&
-    props.selectedSummary.session.liveBackend === "zellij_tui"
-      ? "Claude runs as a native TUI session here. Change model or permissions inside the Claude TUI, or choose them before launch/resume."
+    props.selectedSummary.session.liveBackend === "tui_mux"
+      ? `${providerLabel(props.selectedSummary.session.provider)} runs as a native TUI session here. Change model or permissions inside the provider TUI, or choose them before launch/resume.`
       : undefined;
   const composerActionPending =
     props.composerSurface.kind === "history_claim" ||
@@ -471,6 +473,11 @@ export function WorkbenchSelectedPane(props: {
             </div>
             {compactSessionMeta ? (
               <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] text-[var(--app-hint)]">
+                {isCouncilSession ? (
+                  <span className="inline-flex shrink-0 rounded-full border border-amber-500/15 bg-amber-500/8 px-1.5 py-0.5 text-[10px] font-medium text-amber-700/85 dark:text-amber-300/85">
+                    Council
+                  </span>
+                ) : null}
                 <span
                   className={`group relative inline-flex min-w-0 shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${
                     props.selectedIsReadOnlyReplay
@@ -481,7 +488,7 @@ export function WorkbenchSelectedPane(props: {
                   tabIndex={contextUsageDisplay ? 0 : undefined}
                 >
                   <span className="cursor-default truncate">
-                    {props.selectedIsReadOnlyReplay ? "History" : "Live"}
+                    {props.selectedSummary.session.status}
                     {contextUsageDisplay ? ` ${contextUsageDisplay.compactLabel}` : ""}
                   </span>
                   {contextUsageDisplay ? (
@@ -495,22 +502,30 @@ export function WorkbenchSelectedPane(props: {
                 </span>
               </div>
             ) : (
-            <div className="flex items-center gap-2 text-[11px] md:text-xs text-[var(--app-hint)] mt-0.5">
+              <div className="flex items-center gap-2 text-[11px] md:text-xs text-[var(--app-hint)] mt-0.5">
               <span className="capitalize hidden sm:inline">{providerLabel(props.selectedSummary.session.provider)}</span>
+              {isCouncilSession ? (
+                <>
+                  <span className="hidden sm:inline">·</span>
+                  <span className="inline-flex rounded-full border border-amber-500/15 bg-amber-500/8 px-1.5 py-0.5 text-[10px] font-medium text-amber-700/85 dark:text-amber-300/85">
+                    Council
+                  </span>
+                </>
+              ) : null}
               <span className="hidden sm:inline">·</span>
-              <span>{props.selectedSummary.session.runtimeState}</span>
+              <span>{conversationPhaseLabel(props.selectedSummary.session.phase)}</span>
               {props.selectedIsReadOnlyReplay ? (
                 <>
                   <span className="hidden sm:inline">·</span>
                   <span className="inline-flex rounded-full border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--app-hint)]">
-                    History
+                    stopped
                   </span>
                 </>
               ) : (
                 <>
                   <span className="hidden sm:inline">·</span>
                   <span className="inline-flex rounded-full border border-emerald-500/20 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
-                    Live
+                    running
                   </span>
                 </>
               )}
@@ -619,16 +634,16 @@ export function WorkbenchSelectedPane(props: {
           <button
             type="button"
             className={HEADER_TEXT_BUTTON_CLASS}
-            disabled={archiveOrCloseDisabled}
-            onClick={props.onArchiveOrClose}
+            disabled={stopOrCloseDisabled}
+            onClick={props.onStopOrClose}
             title={
               !props.isAttached
                 ? "This client is not attached"
                 : props.selectedIsReadOnlyReplay
                   ? "Close this history view"
-                  : props.canArchiveSession
-                    ? "Archive this live session"
-                    : "This provider session cannot be archived from RAH"
+                  : props.canStopSession
+                    ? "Stop this running session"
+                    : "This provider session cannot be stopped from RAH"
             }
           >
             {props.selectedIsReadOnlyReplay ? (
@@ -638,8 +653,8 @@ export function WorkbenchSelectedPane(props: {
               </>
             ) : (
               <>
-                <Archive size={14} className="min-[900px]:mr-1" />
-                <span className="hidden min-[900px]:inline">Archive</span>
+                <Square size={14} className="min-[900px]:mr-1" />
+                <span className="hidden min-[900px]:inline">Stop</span>
               </>
             )}
           </button>
@@ -695,6 +710,7 @@ export function WorkbenchSelectedPane(props: {
           feed={props.selectedProjection?.feed ?? []}
           hideToolCalls={props.hideToolCallsInChat}
           hideOpenCodeReasoning={props.hideOpenCodeReasoningInChat}
+          hideGeminiReasoning={props.hideGeminiReasoningInChat}
           showModelInfo={props.showModelInfoInChat}
           provider={props.selectedSummary.session.provider}
           canLoadOlderHistory={props.canLoadOlderHistory}
@@ -770,8 +786,8 @@ export function WorkbenchSelectedPane(props: {
                   disabled={props.modeChangePending || props.modelChangePending}
                   locked={sessionControlBusy}
                   lockedMessage="Session controls are locked while this session is thinking."
-                  {...(liveSessionControlUnavailableMessage
-                    ? { unavailableMessage: liveSessionControlUnavailableMessage }
+                  {...(runningSessionControlUnavailableMessage
+                    ? { unavailableMessage: runningSessionControlUnavailableMessage }
                     : {})}
                   showModel={showLiveModelControl}
                   buttonClassName={COMPOSER_LAYOUT.settingsButtonClassName}

@@ -7,6 +7,7 @@ type ProviderName = SessionSummary["session"]["provider"] | StoredSessionRef["pr
 const PROVIDER_FALLBACK_LABEL: Record<ProviderName, string> = {
   codex: "Cx",
   claude: "Cl",
+  gemini: "Ge",
   opencode: "Op",
   custom: "Cu",
 };
@@ -41,7 +42,9 @@ export function ProviderLogo(props: {
       ? implementedProviderLogoRegistry.codex
       : props.provider === "claude"
         ? implementedProviderLogoRegistry.claude
-        : undefined;
+        : props.provider === "gemini"
+          ? implementedProviderLogoRegistry.gemini
+          : undefined;
   if (logo) {
     return (
       <span className={baseClassName} title={label}>

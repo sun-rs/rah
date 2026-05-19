@@ -6,17 +6,22 @@ import type {
   SessionModelDescriptor,
   SessionReasoningOption,
 } from "@rah/runtime-protocol";
+import { OverlayScrollArea } from "./OverlayScrollArea";
 
 function selectedModel(
   catalog: ProviderModelCatalog | null | undefined,
   selectedModelId: string | null | undefined,
 ): SessionModelDescriptor | null {
-  if (!catalog || catalog.models.length === 0) {
+  const models = catalog?.models ?? [];
+  if (models.length === 0) {
     return null;
   }
+  const normalizedSelectedModelId = selectedModelId?.trim() || null;
   return (
-    catalog.models.find((model) => model.id === selectedModelId) ??
-    catalog.models[0] ??
+    (normalizedSelectedModelId
+      ? models.find((model) => model.id === normalizedSelectedModelId)
+      : null) ??
+    models[0] ??
     null
   );
 }
@@ -49,6 +54,30 @@ function defaultReasoningIdForModel(
   return options.at(-1)?.id ?? null;
 }
 
+function joinClassNames(...values: Array<string | false | null | undefined>): string {
+  return values.filter(Boolean).join(" ");
+}
+
+export function isManualSupplementModel(
+  catalog: ProviderModelCatalog | null | undefined,
+  modelId: string,
+): boolean {
+  return catalog?.modelProfiles?.some(
+    (profile) => profile.modelId === modelId && profile.source === "cached_runtime",
+  ) === true;
+}
+
+export function ModelSourceBadge(props: { manual: boolean }) {
+  if (!props.manual) {
+    return null;
+  }
+  return (
+    <span className="shrink-0 rounded-full border border-cyan-500/25 bg-cyan-500/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-cyan-700 dark:text-cyan-300">
+      Manual
+    </span>
+  );
+}
+
 export function resolveSelectedModelDraft(args: {
   catalog: ProviderModelCatalog | null | undefined;
   selectedModelId?: string | null | undefined;
@@ -70,6 +99,93 @@ export function resolveSelectedModelDraft(args: {
     model,
     reasoning: selectedReasoning(model, args.selectedReasoningId),
   };
+}
+
+export function ModelCatalogList(props: {
+  catalog: ProviderModelCatalog | null | undefined;
+  selectedModelId?: string | null;
+  loading?: boolean;
+  readOnly?: boolean;
+  showModelIds?: boolean;
+  emptyLabel?: string;
+  onModelSelect?: (modelId: string) => void;
+}) {
+  const models = props.catalog?.models ?? [];
+  const selectedModelId = props.selectedModelId?.trim() || null;
+  const interactive = !props.readOnly && props.onModelSelect !== undefined;
+  const optionClass = (isSelected: boolean) =>
+    joinClassNames(
+      "flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors",
+      isSelected
+        ? "bg-[var(--app-subtle-bg)] text-[var(--app-fg)] font-medium"
+        : "text-[var(--app-fg)]",
+      interactive ? "hover:bg-[var(--app-subtle-bg)]/60" : undefined,
+    );
+
+  if (models.length === 0) {
+    return (
+      <div className="px-2.5 py-2 text-sm text-[var(--app-hint)]">
+        {props.loading ? (
+          <span className="inline-flex items-center gap-2">
+            <LoaderCircle size={13} className="animate-spin" />
+            Loading...
+          </span>
+        ) : (
+          props.emptyLabel ?? "No models"
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <>
+      {models.map((model) => {
+        const isSelected = model.id === selectedModelId;
+        const manual = isManualSupplementModel(props.catalog, model.id);
+        const optionCount = model.reasoningOptions?.length ?? 0;
+        const label = (
+          <>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate">{model.label}</span>
+              {props.showModelIds && model.id !== model.label ? (
+                <span className="mt-0.5 block truncate font-mono text-[11px] text-[var(--app-hint)]">
+                  {model.id}
+                </span>
+              ) : null}
+            </span>
+            <ModelSourceBadge manual={manual} />
+            {isSelected ? (
+              <Check size={14} className="shrink-0 text-[var(--app-success)]" />
+            ) : null}
+            {optionCount > 1 ? (
+              <span className="shrink-0 text-[11px] text-[var(--app-hint)]">
+                {optionCount} params
+              </span>
+            ) : null}
+          </>
+        );
+
+        if (interactive) {
+          return (
+            <button
+              key={model.id}
+              type="button"
+              onClick={() => props.onModelSelect?.(model.id)}
+              className={optionClass(isSelected)}
+            >
+              {label}
+            </button>
+          );
+        }
+
+        return (
+          <div key={model.id} className={optionClass(isSelected)} role="listitem">
+            {label}
+          </div>
+        );
+      })}
+    </>
+  );
 }
 
 export function SessionModelControls(props: {
@@ -244,12 +360,6 @@ export function SessionModelControls(props: {
         ? `${pillBase} icon-click-feedback h-10 w-10 shrink-0 justify-center p-0 min-[700px]:h-9 min-[700px]:w-auto min-[700px]:justify-start min-[700px]:px-3 lg:h-8`
         : `${pillBase} h-8 md:h-9 px-2.5 md:px-3`;
 
-  const optionBtn = (isSelected: boolean) =>
-    `flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors ` +
-    (isSelected
-      ? "bg-[var(--app-subtle-bg)] text-[var(--app-fg)] font-medium"
-      : "text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)]/60");
-
   return (
     <>
       <button
@@ -318,29 +428,20 @@ export function SessionModelControls(props: {
                       Select model
                     </div>
                   </div>
-                  <div
-                    ref={modelListRef}
-                    className="min-h-0 flex-1 overflow-y-auto rah-scroll-panel rah-scroll-panel-y p-1.5"
+                  <OverlayScrollArea
+                    className="min-h-0 flex-1"
+                    viewportClassName="h-full"
+                    contentClassName="p-1.5"
+                    contentRef={modelListRef}
+                    scrollAriaLabel="Model list"
                   >
-                    {models.map((m) => (
-                      <button
-                        key={m.id}
-                        type="button"
-                        onClick={() => handleModelSelect(m.id)}
-                        className={optionBtn(m.id === model?.id)}
-                      >
-                        <span className="flex-1 truncate">{m.label}</span>
-                        {m.id === model?.id && (
-                          <Check size={14} className="shrink-0 text-[var(--app-success)]" />
-                        )}
-                        {(m.reasoningOptions?.length ?? 0) > 1 && (
-                          <span className="shrink-0 text-[11px] text-[var(--app-hint)]">
-                            {m.reasoningOptions?.length} params
-                          </span>
-                        )}
-                      </button>
-                    ))}
-                  </div>
+                    <ModelCatalogList
+                      catalog={props.catalog}
+                      selectedModelId={model?.id ?? null}
+                      loading={Boolean(props.loading)}
+                      onModelSelect={handleModelSelect}
+                    />
+                  </OverlayScrollArea>
                 </div>
 
                 {/* ── View 2: Parameter list ── */}
@@ -363,9 +464,12 @@ export function SessionModelControls(props: {
                       </div>
                     </div>
                   </div>
-                  <div
-                    ref={paramListRef}
-                    className="min-h-0 flex-1 overflow-y-auto rah-scroll-panel rah-scroll-panel-y p-1.5"
+                  <OverlayScrollArea
+                    className="min-h-0 flex-1"
+                    viewportClassName="h-full"
+                    contentClassName="p-1.5"
+                    contentRef={paramListRef}
+                    scrollAriaLabel="Model parameter list"
                   >
                     {panelReasoningOptions.length > 1 ? (
                       panelReasoningOptions.map((r) => (
@@ -373,7 +477,12 @@ export function SessionModelControls(props: {
                           key={r.id}
                           type="button"
                           onClick={() => handleReasoningSelect(r.id)}
-                          className={optionBtn(r.id === panelReasoning?.id)}
+                          className={joinClassNames(
+                            "flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors",
+                            r.id === panelReasoning?.id
+                              ? "bg-[var(--app-subtle-bg)] text-[var(--app-fg)] font-medium"
+                              : "text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)]/60",
+                          )}
                         >
                           <span className="flex-1 truncate">{r.label}</span>
                           {r.id === panelReasoning?.id && (
@@ -390,7 +499,7 @@ export function SessionModelControls(props: {
                         No parameters for this model
                       </div>
                     )}
-                  </div>
+                  </OverlayScrollArea>
                 </div>
               </div>
             </div>

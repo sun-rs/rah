@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from
 import { createPortal } from "react-dom";
 import { Check, ChevronDown, Shield } from "lucide-react";
 import type { SessionModeChoice } from "../session-mode-ui";
+import { OverlayScrollArea } from "./OverlayScrollArea";
 
 export function SessionModeControls(props: {
   accessModes: SessionModeChoice[];
@@ -67,7 +68,7 @@ export function SessionModeControls(props: {
         : { bottom: viewportHeight - rect.top + gap }),
       left,
       width,
-      maxHeight: Math.min(320, availableHeight, desiredHeight),
+      height: Math.min(320, availableHeight, desiredHeight),
     });
   }, [accessOpen, props.accessModes.length, variant]);
 
@@ -170,33 +171,40 @@ export function SessionModeControls(props: {
             <div
               ref={accessPanelRef}
               data-session-access-panel="true"
-              className="rah-popover-panel fixed z-[60] overflow-y-auto rah-scroll-panel rah-scroll-panel-y rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-1.5 shadow-2xl focus:outline-none"
+              className="rah-popover-panel fixed z-[60] overflow-hidden rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] shadow-2xl focus:outline-none"
               style={accessPanelStyle}
               role="listbox"
               aria-label="Session mode"
             >
-              {props.accessModes.map((mode) => (
-                <button
-                  key={mode.id}
-                  type="button"
-                  onClick={() => {
-                    props.onAccessModeChange(mode.id);
-                    setAccessOpen(false);
-                  }}
-                  className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors ${
-                    mode.id === props.selectedAccessModeId
-                      ? "bg-[var(--app-subtle-bg)] font-medium text-[var(--app-fg)]"
-                      : "text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)]/70"
-                  }`}
-                  role="option"
-                  aria-selected={mode.id === props.selectedAccessModeId}
-                >
-                  <span className="min-w-0 flex-1 truncate">{mode.label}</span>
-                  {mode.id === props.selectedAccessModeId ? (
-                    <Check size={14} className="shrink-0 text-[var(--app-success)]" />
-                  ) : null}
-                </button>
-              ))}
+              <OverlayScrollArea
+                className="h-full"
+                viewportClassName="h-full"
+                contentClassName="p-1.5"
+                scrollAriaLabel="Session mode"
+              >
+                {props.accessModes.map((mode) => (
+                  <button
+                    key={mode.id}
+                    type="button"
+                    onClick={() => {
+                      props.onAccessModeChange(mode.id);
+                      setAccessOpen(false);
+                    }}
+                    className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors ${
+                      mode.id === props.selectedAccessModeId
+                        ? "bg-[var(--app-subtle-bg)] font-medium text-[var(--app-fg)]"
+                        : "text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)]/70"
+                    }`}
+                    role="option"
+                    aria-selected={mode.id === props.selectedAccessModeId}
+                  >
+                    <span className="min-w-0 flex-1 truncate">{mode.label}</span>
+                    {mode.id === props.selectedAccessModeId ? (
+                      <Check size={14} className="shrink-0 text-[var(--app-success)]" />
+                    ) : null}
+                  </button>
+                ))}
+              </OverlayScrollArea>
             </div>,
             document.body,
           )

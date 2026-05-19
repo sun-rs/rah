@@ -1,9 +1,11 @@
+import type { ReactNode } from "react";
 import type { PermissionResponseRequest, ProviderModelCatalog, SessionConfigValue, SessionSummary } from "@rah/runtime-protocol";
+import type { ObjectPaneVariant } from "../../../object-pane-variant";
 import { useWorkbenchComposerState } from "../../../hooks/useWorkbenchComposerState";
 import { useNativeTuiDiagnostics } from "../../../hooks/useNativeTuiDiagnostics";
 import { buildModelOptionValuesFromReasoning } from "../../../provider-capabilities";
 import {
-  canSessionArchive,
+  canSessionStop,
   canSessionDelete,
   canSessionRename,
   canSessionRespondToPermissions,
@@ -33,11 +35,14 @@ type ModelDraft = {
 };
 
 export function CanvasSessionPane(props: {
+  variant: ObjectPaneVariant;
   summary: SessionSummary;
   projection: SessionProjection | null;
+  inspector?: ReactNode;
   clientId: string;
   hideToolCallsInChat: boolean;
   hideOpenCodeReasoningInChat: boolean;
+  hideGeminiReasoningInChat: boolean;
   showModelInfoInChat: boolean;
   pendingSessionAction:
     | {
@@ -73,7 +78,7 @@ export function CanvasSessionPane(props: {
   onClaimControl: (sessionId: string) => Promise<void>;
   onInterrupt: (sessionId: string) => void;
   onLoadOlderHistory: (sessionId: string) => void | Promise<void>;
-  onArchive: (sessionId: string) => void;
+  onStop: (sessionId: string) => void;
   onCloseHistory: (sessionId: string) => void;
   onDelete: (sessionId: string) => void;
   onRename: (sessionId: string) => void;
@@ -154,8 +159,7 @@ export function CanvasSessionPane(props: {
     };
   };
 
-  return (
-    <div className="flex h-full min-h-0 flex-col">
+  const selectedPane = (
     <WorkbenchSelectedPane
       selectedSummary={props.summary}
       clientId={props.clientId}
@@ -164,12 +168,13 @@ export function CanvasSessionPane(props: {
       compactComposerPrompts="auto"
       compactSessionMeta="auto"
       sidebarOpen
-      rightSidebarOpen
+      rightSidebarOpen={props.variant === "expanded"}
       isAttached={isAttached}
       interactionNotice={noticeState.interactionNotice}
       historyNotice={noticeState.historyNotice}
       hideToolCallsInChat={props.hideToolCallsInChat}
       hideOpenCodeReasoningInChat={props.hideOpenCodeReasoningInChat}
+      hideGeminiReasoningInChat={props.hideGeminiReasoningInChat}
       showModelInfoInChat={props.showModelInfoInChat}
       canLoadOlderHistory={Boolean(
         props.summary.session.providerSessionId &&
@@ -278,15 +283,15 @@ export function CanvasSessionPane(props: {
       onToggleInspector={() => undefined}
       showInspectorToggle={false}
       onFloatingAnchorOffsetChange={() => undefined}
-      onArchiveOrClose={() => {
+      onStopOrClose={() => {
         if (selectedIsReadOnlyReplay) {
           props.onCloseHistory(props.summary.session.id);
           return;
         }
-        props.onArchive(props.summary.session.id);
+        props.onStop(props.summary.session.id);
       }}
       onDeleteSession={() => props.onDelete(props.summary.session.id)}
-      canArchiveSession={canSessionArchive(props.summary)}
+      canStopSession={canSessionStop(props.summary)}
       canDeleteSession={canSessionDelete(props.summary)}
       canShowSessionInfo={canSessionShowInfo(props.summary)}
       canRenameSession={canSessionRename(props.summary)}
@@ -316,6 +321,22 @@ export function CanvasSessionPane(props: {
         void props.onSetSessionModel(props.summary.session.id, modelId, reasoningId, optionValues);
       }}
     />
+  );
+
+  if (props.variant === "expanded" && props.inspector) {
+    return (
+      <div className="flex h-full min-h-0 min-w-0">
+        <div className="min-w-0 flex-1">{selectedPane}</div>
+        <aside className="hidden w-[min(30rem,32vw)] shrink-0 border-l border-[var(--app-border)] bg-[var(--app-subtle-bg)] min-[900px]:flex min-[900px]:flex-col">
+          {props.inspector}
+        </aside>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      {selectedPane}
     </div>
   );
 }

@@ -74,9 +74,9 @@ export interface WorkspaceInfo {
   directory: string;
   displayName: string;
   latestUpdatedAt: string;
-  liveCount: number;
+  runningCount: number;
   hasRunningItem: boolean;
-  hasBlockingLiveSessions: boolean;
+  hasBlockingRunningSessions: boolean;
 }
 
 export type WorkspaceSortMode = "created" | "updated";
@@ -118,9 +118,9 @@ export function deriveWorkspaceInfos(
       directory: string;
       displayName: string;
       latestUpdatedAt: string;
-      liveCount: number;
+      runningCount: number;
       hasRunningItem: boolean;
-      hasBlockingLiveSessions: boolean;
+      hasBlockingRunningSessions: boolean;
     }
   >();
 
@@ -131,37 +131,38 @@ export function deriveWorkspaceInfos(
       directory,
       displayName: getDirectoryDisplayName(directory),
       latestUpdatedAt: "",
-      liveCount: 0,
+      runningCount: 0,
       hasRunningItem: false,
-      hasBlockingLiveSessions: false,
+      hasBlockingRunningSessions: false,
     });
   }
 
   for (const session of blockingSessions) {
-    const isInteractiveLiveSession = !isReadOnlyReplay(session);
-    if (isInteractiveLiveSession) {
+    const isInteractiveRunningSession = !isReadOnlyReplay(session);
+    if (isInteractiveRunningSession) {
       for (const workspace of map.values()) {
         if (matchesWorkspace(session.session.rootDir || session.session.cwd, workspace.directory)) {
-          workspace.hasBlockingLiveSessions = true;
+          workspace.hasBlockingRunningSessions = true;
         }
       }
     }
   }
 
   for (const session of sessions) {
-    const isInteractiveLiveSession = !isReadOnlyReplay(session);
+    const isInteractiveRunningSession = !isReadOnlyReplay(session);
 
     const owner = findOwningWorkspace(workspaceDirs, session.session.rootDir || session.session.cwd);
     if (!owner) continue;
     const updatedAt = session.session.updatedAt;
     const isRunning =
-      session.session.runtimeState !== "idle" && session.session.runtimeState !== "stopped";
+      session.session.status === "running" &&
+      ["starting", "working", "waiting_permission", "stopping"].includes(session.session.phase);
     const workspace = map.get(owner);
     if (!workspace) {
       continue;
     }
-    if (isInteractiveLiveSession) {
-      workspace.liveCount += 1;
+    if (isInteractiveRunningSession) {
+      workspace.runningCount += 1;
     }
     if (updatedAt > workspace.latestUpdatedAt) {
       workspace.latestUpdatedAt = updatedAt;
@@ -209,13 +210,13 @@ export function sortWorkspaceInfos(
 
 export function deriveWorkspaceSections(
   workspaces: WorkspaceInfo[],
-  liveSessions: SessionSummary[],
+  runningSessions: SessionSummary[],
 ): WorkspaceSection[] {
   const byWorkspace = new Map<string, SessionSummary[]>(
     workspaces.map((workspace) => [workspace.directory, []]),
   );
 
-  for (const session of liveSessions) {
+  for (const session of runningSessions) {
     const owner = findOwningWorkspace(
       workspaces.map((workspace) => workspace.directory),
       session.session.rootDir || session.session.cwd,
@@ -263,7 +264,7 @@ export function getRelativeDirectoryLabel(directory: string, workspaceDir: strin
   return normalizedDirectory;
 }
 
-export function groupLiveSessionsByDirectory(
+export function groupRunningSessionsByDirectory(
   sessions: SessionSummary[],
   workspaceDir: string,
 ): SessionDirectoryGroup<SessionSummary>[] {
@@ -274,7 +275,9 @@ export function groupLiveSessionsByDirectory(
       continue;
     }
     const existing = groups.get(directory);
-    const isRunning = session.session.runtimeState !== "idle" && session.session.runtimeState !== "stopped";
+    const isRunning =
+      session.session.status === "running" &&
+      ["starting", "working", "waiting_permission", "stopping"].includes(session.session.phase);
     if (existing) {
       existing.items.push(session);
       if (session.session.updatedAt > existing.latestUpdatedAt) {
@@ -285,7 +288,7 @@ export function groupLiveSessionsByDirectory(
       }
     } else {
       groups.set(directory, {
-        key: `live:${directory}`,
+        key: `running:${directory}`,
         directory,
         displayName: getDirectoryDisplayName(directory),
         items: [session],

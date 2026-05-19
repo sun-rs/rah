@@ -73,6 +73,13 @@ export function dedupeStoredSessionsByIdentity(sessions: StoredSessionRef[]): St
   return [...deduped.values()];
 }
 
+export function filterStoppedRecentSessions(
+  sessions: readonly StoredSessionRef[],
+  runningIdentityKeys: ReadonlySet<string>,
+): StoredSessionRef[] {
+  return sessions.filter((session) => !runningIdentityKeys.has(sessionIdentityKey(session)));
+}
+
 export function groupAllStoredSessionsByDirectory(
   sessions: StoredSessionRef[],
   options?: {
@@ -113,8 +120,8 @@ export function groupAllStoredSessionsByDirectory(
     .map((group) => ({
       ...group,
       items: [...group.items].sort((a, b) => {
-        if ((a.source === "previous_live") !== (b.source === "previous_live")) {
-          return a.source === "previous_live" ? -1 : 1;
+        if ((a.source === "previous_running") !== (b.source === "previous_running")) {
+          return a.source === "previous_running" ? -1 : 1;
         }
         return (b.lastUsedAt ?? b.updatedAt ?? "").localeCompare(a.lastUsedAt ?? a.updatedAt ?? "");
       }),

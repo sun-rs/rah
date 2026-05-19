@@ -31,7 +31,7 @@ import {
   createPendingStoredSessionTransition,
 } from "./session-transition-contract";
 import {
-  findDaemonLiveSessionForStoredRef,
+  findDaemonRunningSessionForStoredRef,
   resolveHistoryActivationMode,
 } from "./session-store-workspace";
 import { providerLabel, type SessionProjection } from "./types";
@@ -129,9 +129,9 @@ type SessionStartupDeps = {
   confirmCreateMissingWorkspace: (dir: string) => Promise<boolean>;
 };
 
-function historyOnlyLiveMessage(provider: string): string {
+function historyOnlyRunningMessage(provider: string): string {
   const label = isCoreLiveProvider(provider) ? providerLabel(provider) : provider;
-  return `${label} is not a supported live provider. Use Codex, Claude, or OpenCode.`;
+  return `${label} is not a supported running provider. Use Codex, Claude, Gemini, or OpenCode.`;
 }
 
 export async function startSessionCommand(
@@ -147,7 +147,7 @@ export async function startSessionCommand(
     }
     const provider = options?.provider ?? state.newSessionProvider;
     if (!isCoreLiveProvider(provider)) {
-      const error = historyOnlyLiveMessage(provider);
+      const error = historyOnlyRunningMessage(provider);
       deps.set({ pendingSessionTransition: null, error });
       throw new Error(error);
     }
@@ -164,6 +164,12 @@ export async function startSessionCommand(
     });
     const initialInput = options?.initialInput?.trim();
     const liveBackend = options?.liveBackend ?? defaultLiveBackendForProvider(provider);
+    const launchInitialPrompt =
+      provider === "gemini" &&
+      (liveBackend === "tui_mux" || liveBackend === "native_tui") &&
+      initialInput
+        ? initialInput
+        : undefined;
     const response = await api.startSession({
       provider,
       cwd,
@@ -173,6 +179,7 @@ export async function startSessionCommand(
       ...(options?.optionValues !== undefined ? { optionValues: options.optionValues } : {}),
       ...(options?.reasoningId ? { reasoningId: options.reasoningId } : {}),
       ...(options?.modeId ? { modeId: options.modeId } : {}),
+      ...(launchInitialPrompt ? { initialPrompt: launchInitialPrompt } : {}),
       attach: createInteractiveAttachRequest(state.clientId, state.connectionId),
     });
     const session =
@@ -200,7 +207,7 @@ export async function startSessionCommand(
       };
     });
     options?.onSessionCreated?.(session.session.id);
-    if (initialInput) {
+    if (initialInput && !launchInitialPrompt) {
       await deps.sendInput(session.session.id, initialInput);
     }
     return session.session.id;
@@ -243,18 +250,18 @@ export async function activateHistorySessionCommand(
   options?: { confirmCreateMissingWorkspace?: (dir: string) => Promise<boolean> },
 ) {
   const state = deps.get();
-  const existingLive = findDaemonLiveSessionForStoredRef(state.projections, ref);
+  const existingRunning = findDaemonRunningSessionForStoredRef(state.projections, ref);
   const mode = resolveHistoryActivationMode({
-    existingLiveSummary: existingLive,
+    existingRunningSummary: existingRunning,
     clientId: state.clientId,
   });
-  if (mode === "select" && existingLive) {
-    deps.set({ selectedSessionId: existingLive.session.id });
-    void deps.ensureSessionHistoryLoaded(existingLive.session.id);
+  if (mode === "select" && existingRunning) {
+    deps.set({ selectedSessionId: existingRunning.session.id });
+    void deps.ensureSessionHistoryLoaded(existingRunning.session.id);
     return;
   }
-  if (mode === "attach" && existingLive) {
-    await deps.attachSession(existingLive);
+  if (mode === "attach" && existingRunning) {
+    await deps.attachSession(existingRunning);
     return;
   }
   await deps.resumeStoredSession(ref, {
@@ -284,7 +291,7 @@ export async function resumeStoredSessionCommand(
       pendingSessionTransition: createPendingStoredSessionTransition(ref, "history"),
       error: null,
     });
-    if (ref.source === "previous_live") {
+    if (ref.source === "previous_running") {
       const workspaceVisibilityVersionAtRequest = deps.get().workspaceVisibilityVersion;
       const sessionsResponse = await api.listSessions();
       const running = sessionsResponse.sessions.find(
@@ -417,7 +424,7 @@ export async function claimHistorySessionCommand(
     throw new Error(error);
   }
   if (!isCoreLiveProvider(ref.provider)) {
-    const error = historyOnlyLiveMessage(ref.provider);
+    const error = historyOnlyRunningMessage(ref.provider);
     deps.set({ pendingSessionAction: null, pendingSessionTransition: null, error });
     throw new Error(error);
   }

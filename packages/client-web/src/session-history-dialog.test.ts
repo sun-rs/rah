@@ -1,10 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { StoredSessionRef } from "@rah/runtime-protocol";
+import type { CouncilRoomSnapshot, StoredSessionRef } from "@rah/runtime-protocol";
 import {
   dedupeStoredSessionsByIdentity,
+  filterStoppedRecentSessions,
   groupAllStoredSessionsByDirectory,
+  sessionIdentityKey,
 } from "./session-history-grouping";
+import {
+  defaultRunningCouncilRoomId,
+  splitCouncilRooms,
+} from "./council/CouncilRoomsBrowser";
 
 function storedSession(overrides: Partial<StoredSessionRef> & Pick<StoredSessionRef, "provider" | "providerSessionId">): StoredSessionRef {
   return {
@@ -21,12 +27,57 @@ function storedSession(overrides: Partial<StoredSessionRef> & Pick<StoredSession
   };
 }
 
+function councilRoom(overrides: {
+  id: string;
+  title: string;
+  workspace: string;
+  status: CouncilRoomSnapshot["room"]["status"];
+  phase?: CouncilRoomSnapshot["room"]["phase"];
+  updatedAt: string;
+  messageAt?: string;
+  agentLabel?: string;
+}): CouncilRoomSnapshot {
+  return {
+    room: {
+      id: overrides.id,
+      title: overrides.title,
+      workspace: overrides.workspace,
+      status: overrides.status,
+      phase: overrides.phase ?? (overrides.status === "running" ? "ready" : "ended"),
+      createdAt: "2026-05-01T00:00:00.000Z",
+      updatedAt: overrides.updatedAt,
+    },
+    agents: [
+      {
+        id: `${overrides.id}-agent`,
+        roomId: overrides.id,
+        provider: "codex",
+        label: overrides.agentLabel ?? "codex",
+        status: "idle",
+        updatedAt: overrides.updatedAt,
+      },
+    ],
+    messages: overrides.messageAt
+      ? [
+          {
+            id: 1,
+            roomId: overrides.id,
+            actorId: "user",
+            role: "user",
+            parts: [{ kind: "text", text: "hello" }],
+            createdAt: overrides.messageAt,
+          },
+        ]
+      : [],
+  };
+}
+
 test("dedupes identical sessions by provider and providerSessionId", () => {
   const sessions: StoredSessionRef[] = [
     storedSession({
       provider: "opencode",
       providerSessionId: "session-1",
-      source: "previous_live",
+      source: "previous_running",
       title: "stale title",
       updatedAt: "2026-04-20T10:00:00.000Z",
     }),
@@ -52,7 +103,7 @@ test("groups deduped sessions and counts each session only once per workspace", 
     storedSession({
       provider: "opencode",
       providerSessionId: "session-1",
-      source: "previous_live",
+      source: "previous_running",
       title: "duplicate stale",
       updatedAt: "2026-04-20T10:00:00.000Z",
     }),
@@ -168,5 +219,88 @@ test("sorts grouped sessions by lastUsedAt before updatedAt", () => {
   assert.deepEqual(
     groups[0]?.items.map((session) => session.providerSessionId),
     ["recently-used", "recently-updated"],
+  );
+});
+
+test("recent chats are stopped and omit current running identities", () => {
+  const liveDuplicate = storedSession({
+    provider: "codex",
+    providerSessionId: "live-1",
+    rootDir: "/Users/sun/Code/rah",
+  });
+  const recentOnly = storedSession({
+    provider: "claude",
+    providerSessionId: "recent-1",
+    rootDir: "/Users/sun/Code/rah",
+  });
+
+  assert.deepEqual(
+    filterStoppedRecentSessions(
+      [liveDuplicate, recentOnly],
+      new Set([sessionIdentityKey(liveDuplicate)]),
+    ).map((session) => session.providerSessionId),
+    ["recent-1"],
+  );
+});
+
+test("splits council rooms for the Chats council tab", () => {
+  const rooms = [
+    councilRoom({
+      id: "old-running",
+      title: "Old running",
+      workspace: "/Users/sun/Code/rah",
+      status: "running",
+      updatedAt: "2026-05-01T10:00:00.000Z",
+    }),
+    councilRoom({
+      id: "new-running",
+      title: "New running",
+      workspace: "/Users/sun/Code/valar",
+      status: "running",
+      updatedAt: "2026-05-01T10:01:00.000Z",
+      messageAt: "2026-05-01T10:03:00.000Z",
+    }),
+    councilRoom({
+      id: "stopped-room",
+      title: "Stopped room",
+      workspace: "/Users/sun/Code/rah",
+      status: "stopped",
+      updatedAt: "2026-05-01T10:02:00.000Z",
+    }),
+  ];
+
+  const split = splitCouncilRooms(rooms);
+  assert.deepEqual(split.activeRooms.map((room) => room.room.id), ["new-running", "old-running"]);
+  assert.deepEqual(split.historyRooms.map((room) => room.room.id), ["stopped-room"]);
+  assert.equal(defaultRunningCouncilRoomId(rooms), "new-running");
+});
+
+test("filters council rooms by workspace and agent metadata", () => {
+  const rooms = [
+    councilRoom({
+      id: "codex-room",
+      title: "Planner",
+      workspace: "/Users/sun/Code/rah",
+      status: "running",
+      updatedAt: "2026-05-01T10:00:00.000Z",
+      agentLabel: "Architect",
+    }),
+    councilRoom({
+      id: "gemini-room",
+      title: "Review",
+      workspace: "/Users/sun/Code/valar",
+      status: "stopped",
+      updatedAt: "2026-05-01T10:01:00.000Z",
+      agentLabel: "Critic",
+    }),
+  ];
+
+  assert.deepEqual(
+    splitCouncilRooms(rooms, "valar").historyRooms.map((room) => room.room.id),
+    ["gemini-room"],
+  );
+  assert.deepEqual(
+    splitCouncilRooms(rooms, "architect").activeRooms.map((room) => room.room.id),
+    ["codex-room"],
   );
 });

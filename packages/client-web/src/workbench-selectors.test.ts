@@ -138,7 +138,7 @@ describe("workbench selectors", () => {
     assert.equal(isSessionAttachedToClient(summary, "web-new-connection"), false);
   });
 
-  test("sidebar contract includes all daemon live sessions while keeping controlled subsets narrow", () => {
+  test("sidebar contract includes all daemon running sessions while keeping controlled subsets narrow", () => {
     const clientId = "web-current";
     const controlled = controlledSummary({
       id: "controlled-1",
@@ -166,15 +166,15 @@ describe("workbench selectors", () => {
     });
 
     assert.deepEqual(
-      collections.controlledLiveSessionEntries.map((entry) => entry.summary.session.id),
+      collections.controlledRunningSessionEntries.map((entry) => entry.summary.session.id),
       ["controlled-1"],
     );
     assert.equal(
-      collections.daemonLiveSessionByProviderSessionId.get("uncontrolled-1-provider")?.session.id,
+      collections.daemonRunningSessionByProviderSessionId.get("uncontrolled-1-provider")?.session.id,
       "uncontrolled-1",
     );
     assert.equal(
-      collections.controlledLiveSessionByProviderSessionId.get("uncontrolled-1-provider"),
+      collections.controlledRunningSessionByProviderSessionId.get("uncontrolled-1-provider"),
       undefined,
     );
     assert.deepEqual(
@@ -192,12 +192,12 @@ describe("workbench selectors", () => {
     assert.equal(
       collections.workspaceSections.find(
         (section) => section.workspace.directory === "/workspace/two",
-      )?.workspace.hasBlockingLiveSessions,
+      )?.workspace.hasBlockingRunningSessions,
       true,
     );
   });
 
-  test("excludes exited native TUI sessions from live collections", () => {
+  test("excludes exited native TUI sessions from running collections", () => {
     const clientId = "web-current";
     const stopped = controlledSummary({
       id: "stopped-native",
@@ -232,7 +232,7 @@ describe("workbench selectors", () => {
     });
 
     assert.deepEqual(
-      collections.liveSessionEntries.map((entry) => entry.summary.session.id),
+      collections.runningSessionEntries.map((entry) => entry.summary.session.id),
       ["active-native"],
     );
   });

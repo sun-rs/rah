@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import {
   ArrowDown,
@@ -8,8 +8,7 @@ import {
   ChevronDown,
   ChevronRight,
   CirclePause,
-  History,
-  Info,
+  ListTree,
   Menu,
   PanelRight,
   Plus,
@@ -28,11 +27,7 @@ import type {
 import * as api from "../api";
 import { ProviderLogo } from "../components/ProviderLogo";
 import { MarkdownRenderer } from "../components/chat/MarkdownRenderer";
-import type { ProviderChoice } from "../components/ProviderSelector";
-import { PROVIDER_OPTIONS } from "../components/ProviderSelector";
-import { SessionModelControls } from "../components/SessionModelControls";
 import { TokenizedTextarea } from "../components/TokenizedTextarea";
-import { WorkspacePicker } from "../components/WorkspacePicker";
 import {
   TerminalDialogFrame,
   TerminalPaneStack,
@@ -41,9 +36,9 @@ import {
 } from "../components/terminal/TerminalSurface";
 import { Sheet } from "../components/Sheet";
 import { FileReferencePicker } from "../components/FileReferencePicker";
+import { OverlayScrollArea } from "../components/OverlayScrollArea";
 import { COMPOSER_LAYOUT } from "../composer-contract";
 import { insertTextAtSelection } from "../composer-text-insertion";
-import { resolveSessionModeControlState } from "../session-mode-ui";
 import { ConfirmDialog } from "../components/workbench/dialogs/ConfirmDialog";
 import {
   HEADER_ACTION_GROUP_CLASS,
@@ -53,12 +48,17 @@ import {
 } from "../components/workbench/header-button-styles";
 import {
   councilAgentDraftToConfig,
-  createDefaultCouncilAgentDrafts,
   normalizeCouncilAgentDraftForCatalog,
-  resolveCouncilAgentDraftLabel,
-  resolveCouncilAgentModelSelection,
   type CouncilAgentDraft,
 } from "./council-ui-state";
+import {
+  catalogKey,
+  CouncilAgentDraftEditor,
+  createAdditionalCouncilAgentDraft,
+  isCouncilCatalogFresh,
+  keepModelPanelInsideCouncilDialog,
+  NewCouncilRoomDialog,
+} from "./NewCouncilRoomDialog";
 import {
   applyCouncilMention,
   buildCouncilMentionOptions,
@@ -76,6 +76,11 @@ import {
   warmCouncilTuiCache,
   type CouncilTuiCacheState,
 } from "../tui-surface-lifecycle";
+import {
+  CouncilRoomsBrowser,
+  defaultRunningCouncilRoomId,
+  isCouncilHistoryRoom,
+} from "./CouncilRoomsBrowser";
 
 type CouncilMessage = CouncilRoomSnapshot["messages"][number];
 type CouncilDisplayItem =
@@ -91,73 +96,16 @@ type CouncilDisplayItem =
 const COUNCIL_SYSTEM_NOTICE_CLASS =
   "mx-auto flex w-fit max-w-[92%] items-center gap-2 rounded-full bg-[var(--app-subtle-bg)]/35 px-2.5 py-1 text-[10.5px] leading-relaxed text-[var(--app-hint)] sm:max-w-[78%]";
 
-function isCouncilHistoryRoom(room: CouncilRoomSnapshot): boolean {
-  return room.room.status === "stopped" || room.room.status === "failed";
-}
-
 function isCouncilAgentTerminalAvailable(agent: CouncilAgent): boolean {
   return (
     agent.status !== "stopped" &&
     agent.status !== "failed" &&
-    Boolean(agent.nativeSessionId ?? agent.zellijPaneId)
+    Boolean(agent.nativeSessionId ?? agent.terminalId)
   );
 }
 
 function canOpenCouncilAgentTerminal(room: CouncilRoomSnapshot, agent: CouncilAgent): boolean {
   return room.room.status === "running" && isCouncilAgentTerminalAvailable(agent);
-}
-
-type CouncilDialogOutsideEvent = {
-  target: EventTarget | null;
-  detail?: { originalEvent?: Event };
-  preventDefault: () => void;
-};
-
-function isInsideSessionModelPanel(target: EventTarget | null | undefined): boolean {
-  return target instanceof Element && Boolean(target.closest('[data-session-model-panel="true"]'));
-}
-
-function keepModelPanelInsideCouncilDialog(event: CouncilDialogOutsideEvent): void {
-  const originalEvent = event.detail?.originalEvent;
-  const originalPath = typeof originalEvent?.composedPath === "function"
-    ? originalEvent.composedPath()
-    : [];
-  if (
-    isInsideSessionModelPanel(event.target) ||
-    isInsideSessionModelPanel(originalEvent?.target) ||
-    originalPath.some((entry) => isInsideSessionModelPanel(entry))
-  ) {
-    event.preventDefault();
-  }
-}
-
-function councilRoomActivityMs(room: CouncilRoomSnapshot): number {
-  const lastMessage = room.messages.at(-1);
-  return Date.parse(lastMessage?.createdAt ?? room.room.updatedAt ?? room.room.createdAt) || 0;
-}
-
-function formatCouncilCount(value: number, unit: string): string {
-  if (value >= 1_000_000) {
-    return `${(value / 1_000_000).toFixed(1)}m ${unit}`;
-  }
-  if (value >= 1_000) {
-    return `${(value / 1_000).toFixed(1)}k ${unit}`;
-  }
-  return `${value} ${unit}`;
-}
-
-function councilRoomLineLabel(room: CouncilRoomSnapshot): string {
-  return formatCouncilCount(room.messages.length, "lines");
-}
-
-function councilRoomLineTitle(room: CouncilRoomSnapshot): string {
-  return `${room.messages.length.toLocaleString()} room message log lines`;
-}
-
-function defaultRunningCouncilRoomId(rooms: CouncilRoomSnapshot[]): string | null {
-  return rooms
-    .filter((room) => !isCouncilHistoryRoom(room))
-    .sort((left, right) => councilRoomActivityMs(right) - councilRoomActivityMs(left))[0]?.room.id ?? null;
 }
 
 function actorAgent(room: CouncilRoomSnapshot, actorId: string): CouncilAgent | null {
@@ -292,10 +240,6 @@ function councilDisplayItems(room: CouncilRoomSnapshot): CouncilDisplayItem[] {
   return items;
 }
 
-function catalogKey(provider: ProviderChoice, workspace: string): string {
-  return `${provider}:${workspace}`;
-}
-
 function agentStatusClass(status: CouncilAgent["status"]): string {
   switch (status) {
     case "idle":
@@ -347,9 +291,6 @@ function councilAgentTheme(room: CouncilRoomSnapshot, agentId: string) {
 
 function councilAgentOptionsLabel(agent: CouncilAgent): string | null {
   const values = new Set<string>();
-  if (agent.reasoningId?.trim()) {
-    values.add(agent.reasoningId.trim());
-  }
   if (agent.optionValues) {
     for (const value of Object.values(agent.optionValues)) {
       if (typeof value === "string" && value.trim()) {
@@ -362,164 +303,44 @@ function councilAgentOptionsLabel(agent: CouncilAgent): string | null {
   return values.size > 0 ? [...values].join(" / ") : null;
 }
 
-function createAdditionalCouncilAgentDraft(): CouncilAgentDraft {
-  return {
-    id: `opencode-extra-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
-    provider: "opencode",
-    label: "",
-    role: "",
-    modelId: null,
-    reasoningId: null,
-    modeId: null,
-  };
+function formatCouncilOptionName(key: string): string {
+  return key
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
-function CouncilAgentDraftEditor(props: {
-  drafts: CouncilAgentDraft[];
-  workspace: string;
-  catalogs: Record<string, ProviderModelCatalog>;
-  collapsedDraftIds: Set<string>;
-  minAgents?: number;
-  onUpdateDraft: (id: string, updater: (draft: CouncilAgentDraft) => CouncilAgentDraft) => void;
-  onRemoveDraft: (id: string) => void;
-  onToggleDraftCollapsed: (id: string) => void;
+function formatCouncilOptionValue(value: unknown): string {
+  if (value === null) {
+    return "Default";
+  }
+  if (typeof value === "boolean") {
+    return value ? "On" : "Off";
+  }
+  if (typeof value === "string" || typeof value === "number") {
+    return String(value);
+  }
+  return JSON.stringify(value) ?? String(value);
+}
+
+function CouncilAgentOptionValues(props: {
+  values: NonNullable<CouncilAgent["optionValues"]>;
 }) {
-  const minAgents = props.minAgents ?? 1;
+  const entries = Object.entries(props.values);
+  if (entries.length === 0) {
+    return null;
+  }
   return (
-    <div className="space-y-2">
-      {props.drafts.map((draft, index) => {
-        const catalog = props.catalogs[catalogKey(draft.provider, props.workspace)];
-        const modeState = resolveSessionModeControlState({
-          provider: draft.provider,
-          draft: draft.modeId ? { accessModeId: draft.modeId, planEnabled: false } : null,
-          catalog: catalog ?? null,
-        });
-        const selection = resolveCouncilAgentModelSelection({ draft, catalog: catalog ?? null });
-        const displayLabel = resolveCouncilAgentDraftLabel({ draft, catalog: catalog ?? null });
-        const removable = props.drafts.length > minAgents;
-        const collapsed = props.collapsedDraftIds.has(draft.id);
-        const titleText = draft.role.trim() ? `${displayLabel} · ${draft.role.trim()}` : displayLabel;
-        return (
-          <div key={draft.id} className="rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-2.5">
-            <div className={`${collapsed ? "" : "mb-2"} flex items-center justify-between gap-2 text-xs font-semibold text-[var(--app-fg)]`}>
-              <button
-                type="button"
-                onClick={() => props.onToggleDraftCollapsed(draft.id)}
-                className="icon-click-feedback flex min-w-0 flex-1 items-center gap-1.5 rounded-lg px-1 py-1 text-left transition-colors hover:bg-[var(--app-subtle-bg)]"
-                title={titleText}
-                aria-expanded={!collapsed}
-                aria-label={`${collapsed ? "Expand" : "Collapse"} agent ${index + 1}`}
-              >
-                <ProviderLogo provider={draft.provider} className="h-4 w-4 shrink-0" variant="bare" />
-                <span className="min-w-0 truncate">
-                  Agent {index + 1}
-                  {collapsed ? ` · ${displayLabel}` : ""}
-                </span>
-              </button>
-              <div className="flex shrink-0 items-center gap-1">
-                {removable ? (
-                  <button
-                    type="button"
-                    onClick={() => props.onRemoveDraft(draft.id)}
-                    className="icon-click-feedback inline-flex h-6 w-6 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-danger)]"
-                    aria-label={`Remove agent ${index + 1}`}
-                    title="Remove agent"
-                  >
-                    <Trash2 size={13} />
-                  </button>
-                ) : null}
-                <button
-                  type="button"
-                  onClick={() => props.onToggleDraftCollapsed(draft.id)}
-                  className="icon-click-feedback inline-flex h-6 w-6 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
-                  aria-label={`${collapsed ? "Expand" : "Collapse"} agent ${index + 1}`}
-                  title={collapsed ? "Expand agent" : "Collapse agent"}
-                >
-                  {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
-                </button>
-              </div>
-            </div>
-            {!collapsed ? (
-              <>
-                <div className="grid grid-cols-2 gap-2">
-                  <select
-                    value={draft.provider}
-                    onChange={(event) => {
-                      const provider = event.target.value as ProviderChoice;
-                      props.onUpdateDraft(draft.id, (item) => ({
-                        ...item,
-                        provider,
-                        modelId: null,
-                        reasoningId: null,
-                        modeId: null,
-                      }));
-                    }}
-                    className="h-8 rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] px-2 text-xs text-[var(--app-fg)]"
-                  >
-                    {PROVIDER_OPTIONS.map((option) => (
-                      <option key={option.value} value={option.value}>{option.label}</option>
-                    ))}
-                  </select>
-                  <select
-                    value={draft.modeId ?? modeState.selectedAccessModeId ?? ""}
-                    onChange={(event) => props.onUpdateDraft(draft.id, (item) => ({
-                      ...item,
-                      modeId: event.target.value || null,
-                    }))}
-                    className="h-8 rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] px-2 text-xs text-[var(--app-fg)]"
-                  >
-                    {modeState.accessModes.map((mode) => (
-                      <option key={mode.id} value={mode.id}>{mode.label}</option>
-                    ))}
-                  </select>
-                </div>
-                <div className="mt-2 grid grid-cols-[minmax(0,3fr)_minmax(0,7fr)] gap-2">
-                  <input
-                    value={draft.label}
-                    onChange={(event) => props.onUpdateDraft(draft.id, (item) => ({
-                      ...item,
-                      label: event.target.value,
-                    }))}
-                    className="h-8 min-w-0 rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] px-2 text-xs text-[var(--app-fg)]"
-                    placeholder={displayLabel}
-                  />
-                  <input
-                    value={draft.role}
-                    onChange={(event) => props.onUpdateDraft(draft.id, (item) => ({
-                      ...item,
-                      role: event.target.value,
-                    }))}
-                    className="h-8 min-w-0 rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] px-2 text-xs text-[var(--app-fg)]"
-                    placeholder="Agent role"
-                  />
-                </div>
-                <div className="mt-2">
-                  <SessionModelControls
-                    catalog={catalog ?? null}
-                    selectedModelId={selection.modelId}
-                    selectedReasoningId={selection.reasoningId}
-                    loading={!catalog && Boolean(props.workspace)}
-                    compact
-                    onModelChange={(modelId, defaultReasoningId) => {
-                      props.onUpdateDraft(draft.id, (item) => ({
-                        ...item,
-                        modelId,
-                        reasoningId: defaultReasoningId ?? null,
-                      }));
-                    }}
-                    onReasoningChange={(reasoningId) => {
-                      props.onUpdateDraft(draft.id, (item) => ({
-                        ...item,
-                        reasoningId,
-                      }));
-                    }}
-                  />
-                </div>
-              </>
-            ) : null}
-          </div>
-        );
-      })}
+    <div className="min-w-0 flex-1 space-y-1">
+      {entries.map(([key, value]) => (
+        <div key={key} className="flex min-w-0 flex-wrap items-baseline justify-end gap-x-2 gap-y-0.5">
+          <span className="text-[11px] text-[var(--app-hint)]">{formatCouncilOptionName(key)}</span>
+          <span className="max-w-full break-words rounded bg-[var(--app-bg)] px-1.5 py-0.5 text-right text-[11px] font-medium text-[var(--app-fg)]">
+            {formatCouncilOptionValue(value)}
+          </span>
+        </div>
+      ))}
     </div>
   );
 }
@@ -528,6 +349,9 @@ export function CouncilPage(props: {
   clientId: string;
   workspaceDir: string;
   workspaceDirs: string[];
+  selectedRoomId?: string | null;
+  onSelectedRoomIdChange?: (roomId: string | null) => void;
+  onRoomsChange?: (rooms: CouncilRoomSnapshot[]) => void;
   sidebarOpen: boolean;
   onExpandSidebar: () => void;
   onOpenLeft: () => void;
@@ -535,7 +359,9 @@ export function CouncilPage(props: {
   onHide: () => void;
 }) {
   const [rooms, setRooms] = useState<CouncilRoomSnapshot[]>([]);
-  const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
+  const [selectedRoomIdState, setSelectedRoomIdState] = useState<string | null>(
+    props.selectedRoomId ?? null,
+  );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [composer, setComposer] = useState("");
@@ -543,17 +369,14 @@ export function CouncilPage(props: {
   const [fileReferenceOpen, setFileReferenceOpen] = useState(false);
   const [mentionTrigger, setMentionTrigger] = useState<CouncilMentionTrigger | null>(null);
   const [mentionSelectedIndex, setMentionSelectedIndex] = useState(0);
-  const [title, setTitle] = useState("");
   const [workspace, setWorkspace] = useState(props.workspaceDir || "");
-  const [agentDrafts, setAgentDrafts] = useState<CouncilAgentDraft[]>(() =>
-    createDefaultCouncilAgentDrafts(),
-  );
   const [catalogs, setCatalogs] = useState<Record<string, ProviderModelCatalog>>({});
+  const catalogLoadedAtRef = useRef<Record<string, number>>({});
+  const catalogRequestsRef = useRef<Set<string>>(new Set());
   const [selectedTerminalAgentId, setSelectedTerminalAgentId] = useState<string | null>(null);
   const [councilTuiCache, setCouncilTuiCache] = useState<CouncilTuiCacheState>(() =>
     resetCouncilTuiCache(),
   );
-  const [collapsedAgentDraftIds, setCollapsedAgentDraftIds] = useState<Set<string>>(new Set());
   const [addAgentDialogOpen, setAddAgentDialogOpen] = useState(false);
   const [addAgentDrafts, setAddAgentDrafts] = useState<CouncilAgentDraft[]>(() => [
     createAdditionalCouncilAgentDraft(),
@@ -583,6 +406,28 @@ export function CouncilPage(props: {
   const preserveCouncilSidebarAfterActionRef = useRef(false);
   const preserveTerminalAfterActionRef = useRef<string | null>(null);
   const autoWarmedCouncilRoomIdRef = useRef<string | null>(null);
+  const selectedRoomId =
+    props.selectedRoomId !== undefined ? props.selectedRoomId : selectedRoomIdState;
+  const setSelectedRoomId = useCallback(
+    (next: string | null | ((current: string | null) => string | null)) => {
+      const current =
+        props.selectedRoomId !== undefined ? props.selectedRoomId : selectedRoomIdState;
+      const resolved = typeof next === "function" ? next(current) : next;
+      setSelectedRoomIdState(resolved);
+      props.onSelectedRoomIdChange?.(resolved);
+    },
+    [props.onSelectedRoomIdChange, props.selectedRoomId, selectedRoomIdState],
+  );
+
+  useEffect(() => {
+    if (props.selectedRoomId !== undefined) {
+      setSelectedRoomIdState(props.selectedRoomId);
+    }
+  }, [props.selectedRoomId]);
+
+  useEffect(() => {
+    props.onRoomsChange?.(rooms);
+  }, [props.onRoomsChange, rooms]);
 
   const selectedRoom = selectedRoomId ? rooms.find((room) => room.room.id === selectedRoomId) ?? null : null;
   const addAgentWorkspace = selectedRoom?.room.workspace ?? workspace;
@@ -600,7 +445,7 @@ export function CouncilPage(props: {
   );
   const terminalDialogOpen = Boolean(selectedRoom && selectedTerminalAgentId);
   const activeTerminalAgent = selectedRoom?.agents.find((agent) => agent.id === selectedTerminalAgentId) ?? null;
-  const visitedLiveTerminalAgents = useMemo(
+  const visitedRunningTerminalAgents = useMemo(
     () => liveTerminalAgents.filter((agent) => councilTuiCache.visitedAgentIds.has(agent.id)),
     [councilTuiCache.visitedAgentIds, liveTerminalAgents],
   );
@@ -610,7 +455,6 @@ export function CouncilPage(props: {
   const agentActionDialogOpen =
     pendingPromptAgent !== null || pendingPauseAgent !== null || pendingStopAgent !== null;
   const blockCouncilParentClose = agentActionDialogOpen || agentActionUiLocked;
-  const newRoomBodyRef = useRef<HTMLDivElement | null>(null);
   const mentionOptions = useMemo(() => {
     if (!selectedRoom || !mentionTrigger) {
       return [];
@@ -880,42 +724,36 @@ export function CouncilPage(props: {
 
   useEffect(() => {
     const requestedKeys = new Set<string>();
-    const draftGroups = [
-      { drafts: agentDrafts, cwd: workspace },
-      ...(addAgentDialogOpen ? [{ drafts: addAgentDrafts, cwd: addAgentWorkspace }] : []),
-    ];
+    const draftGroups = addAgentDialogOpen
+      ? [{ drafts: addAgentDrafts, cwd: addAgentWorkspace }]
+      : [];
     for (const group of draftGroups) {
       const cwd = group.cwd.trim();
       for (const draft of group.drafts) {
         const key = catalogKey(draft.provider, cwd);
-        if (catalogs[key] || requestedKeys.has(key)) continue;
+        if (
+          requestedKeys.has(key) ||
+          catalogRequestsRef.current.has(key) ||
+          isCouncilCatalogFresh(catalogLoadedAtRef.current[key])
+        ) {
+          continue;
+        }
         requestedKeys.add(key);
+        catalogRequestsRef.current.add(key);
         void api.listProviderModels(draft.provider, cwd ? { cwd } : {})
           .then((catalog) => {
+            catalogLoadedAtRef.current[key] = Date.now();
             setCatalogs((current) => ({ ...current, [key]: catalog }));
           })
-          .catch(() => undefined);
+          .catch(() => {
+            catalogLoadedAtRef.current[key] = Date.now();
+          })
+          .finally(() => {
+            catalogRequestsRef.current.delete(key);
+          });
       }
     }
-  }, [addAgentDialogOpen, addAgentDrafts, addAgentWorkspace, agentDrafts, catalogs, workspace]);
-
-  useEffect(() => {
-    setAgentDrafts((current) => {
-      let changed = false;
-      const next = current.map((draft) => {
-        const catalog = catalogs[catalogKey(draft.provider, workspace)];
-        if (!catalog) {
-          return draft;
-        }
-        const normalized = normalizeCouncilAgentDraftForCatalog({ draft, catalog });
-        if (normalized !== draft) {
-          changed = true;
-        }
-        return normalized;
-      });
-      return changed ? next : current;
-    });
-  }, [catalogs, workspace]);
+  }, [addAgentDialogOpen, addAgentDrafts, addAgentWorkspace, catalogs]);
 
   useEffect(() => {
     if (!addAgentDialogOpen) {
@@ -937,47 +775,6 @@ export function CouncilPage(props: {
       return changed ? next : current;
     });
   }, [addAgentDialogOpen, addAgentWorkspace, catalogs]);
-
-  const updateDraft = (id: string, updater: (draft: CouncilAgentDraft) => CouncilAgentDraft) => {
-    setAgentDrafts((current) => current.map((draft) => draft.id === id ? updater(draft) : draft));
-  };
-
-  const removeDraft = (id: string) => {
-    setAgentDrafts((current) => current.filter((draft) => draft.id !== id));
-    setCollapsedAgentDraftIds((current) => {
-      const next = new Set(current);
-      next.delete(id);
-      return next;
-    });
-  };
-
-  const toggleDraftCollapsed = (id: string) => {
-    setCollapsedAgentDraftIds((current) => {
-      const next = new Set(current);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
-      return next;
-    });
-  };
-
-  const addNewRoomAgentDraft = () => {
-    const draft = createAdditionalCouncilAgentDraft();
-    setAgentDrafts((current) => [...current, draft]);
-    setCollapsedAgentDraftIds((current) => {
-      const next = new Set(current);
-      next.delete(draft.id);
-      return next;
-    });
-    window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => {
-        const node = newRoomBodyRef.current;
-        node?.scrollTo({ top: node.scrollHeight, behavior: "smooth" });
-      });
-    });
-  };
 
   const updateAddAgentDraft = (id: string, updater: (draft: CouncilAgentDraft) => CouncilAgentDraft) => {
     setAddAgentDrafts((current) => current.map((draft) => draft.id === id ? updater(draft) : draft));
@@ -1014,46 +811,19 @@ export function CouncilPage(props: {
     setAddAgentDialogOpen(true);
   };
 
-  const selectWorkspace = (dir: string) => {
-    const nextWorkspace = dir.trim();
-    setWorkspace(nextWorkspace);
-    if (nextWorkspace && !props.workspaceDirs.includes(nextWorkspace)) {
-      props.onAddWorkspace(nextWorkspace);
-    }
-  };
-
-  const startRoom = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const response = await api.createCouncilRoom({
-        ...(title.trim() ? { title: title.trim() } : {}),
-        workspace,
-        agents: agentDrafts.map((draft) =>
-          councilAgentDraftToConfig({
-            draft,
-            catalog: catalogs[catalogKey(draft.provider, workspace)] ?? null,
-          }),
-        ),
-      });
-      setRooms((current) => {
-        const existingIndex = current.findIndex((room) => room.room.id === response.room.room.id);
-        if (existingIndex >= 0) {
-          const next = [...current];
-          next[existingIndex] = response.room;
-          return next;
-        }
-        return [response.room, ...current];
-      });
-      setSelectedRoomId(response.room.room.id);
-      setCouncilSidebarOpen(false);
-      setNewRoomDialogOpen(false);
-      void refreshRooms({ silent: true });
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
-    } finally {
-      setLoading(false);
-    }
+  const handleNewRoomCreated = (room: CouncilRoomSnapshot) => {
+    setRooms((current) => {
+      const existingIndex = current.findIndex((candidate) => candidate.room.id === room.room.id);
+      if (existingIndex >= 0) {
+        const next = [...current];
+        next[existingIndex] = room;
+        return next;
+      }
+      return [room, ...current];
+    });
+    setSelectedRoomId(room.room.id);
+    setCouncilSidebarOpen(false);
+    void refreshRooms({ silent: true });
   };
 
   const sendMessage = async () => {
@@ -1062,8 +832,8 @@ export function CouncilPage(props: {
       setError("No council room selected.");
       return;
     }
-    if (selectedRoom.room.status === "stopped" || selectedRoom.room.status === "failed") {
-      setError(`Council room is ${selectedRoom.room.status} and cannot receive messages.`);
+    if (selectedRoom.room.status === "stopped") {
+      setError("Council room is stopped and cannot receive messages.");
       return;
     }
     const text = composer;
@@ -1129,7 +899,7 @@ export function CouncilPage(props: {
     if (!selectedRoom || selectedRoom.room.status === "stopped") return;
     setLoading(true);
     try {
-      await api.archiveCouncilRoom(selectedRoom.room.id);
+      await api.stopCouncilRoom(selectedRoom.room.id);
       setStopConfirmOpen(false);
       setSelectedTerminalAgentId(null);
       const nextRooms = await refreshRooms();
@@ -1273,7 +1043,7 @@ export function CouncilPage(props: {
       void api.getCouncilAgentTui(selectedRoom.room.id, agent.id)
         .then((response) => {
           if (!response.terminalId) {
-            setError(response.screen || "This council agent terminal is not live anymore.");
+            setError(response.screen || "This council agent terminal is not running anymore.");
             setSelectedTerminalAgentId((current) => current === agent.id ? null : current);
             void refreshRooms();
           }
@@ -1366,7 +1136,7 @@ export function CouncilPage(props: {
       const response = await api.reinjectCouncilAgentPrompt(selectedRoom.room.id, agentId);
       replaceRoom(response.room);
       if (response.injectedAgentIds.length === 0) {
-        setError(`No live terminal was available for ${agentId}.`);
+        setError(`No running terminal was available for ${agentId}.`);
       }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -1436,32 +1206,10 @@ export function CouncilPage(props: {
     setPendingStopAgentId(agentId);
   };
 
-  const activeRooms = useMemo(
-    () => rooms
-      .filter((room) => !isCouncilHistoryRoom(room))
-      .sort((left, right) => councilRoomActivityMs(right) - councilRoomActivityMs(left)),
-    [rooms],
-  );
-  const historyRooms = useMemo(
-    () => rooms
-      .filter((room) => isCouncilHistoryRoom(room))
-      .sort((left, right) => councilRoomActivityMs(right) - councilRoomActivityMs(left)),
-    [rooms],
-  );
-  const nextRoomTitle = useMemo(() => {
-    let maxRoomNumber = 0;
-    for (const room of rooms) {
-      const match = /^Room-(\d+)$/.exec(room.room.title.trim());
-      if (!match) continue;
-      maxRoomNumber = Math.max(maxRoomNumber, Number.parseInt(match[1]!, 10));
-    }
-    return `Room-${String(maxRoomNumber + 1).padStart(4, "0")}`;
-  }, [rooms]);
   const councilReferenceRoot = selectedRoom?.room.workspace || workspace || props.workspaceDir || "/";
   const roomCanReceiveMessages = Boolean(
     selectedRoom &&
-    selectedRoom.room.status !== "stopped" &&
-    selectedRoom.room.status !== "failed",
+    selectedRoom.room.status === "running",
   );
   const sendDisabled = sendPending || !roomCanReceiveMessages || !composer.trim();
 
@@ -1481,7 +1229,11 @@ export function CouncilPage(props: {
           </div>
         </div>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto rah-scroll-panel rah-scroll-panel-y p-3">
+      <OverlayScrollArea
+        className="min-h-0 flex-1"
+        viewportClassName="h-full p-3"
+        scrollAriaLabel="Council agents"
+      >
         {!selectedRoom ? (
           <div className="h-full" />
         ) : (
@@ -1578,7 +1330,7 @@ export function CouncilPage(props: {
             ) : null}
           </div>
         )}
-      </div>
+      </OverlayScrollArea>
     </div>
   );
   const councilTerminalTabs: TerminalTabDescriptor[] = selectedRoom
@@ -1604,8 +1356,8 @@ export function CouncilPage(props: {
       };
     })
     : [];
-  const visitedCouncilTerminalTabs = visitedLiveTerminalAgents.flatMap((agent) => {
-    const terminalId = agent.nativeSessionId ?? agent.zellijPaneId;
+  const visitedCouncilTerminalTabs = visitedRunningTerminalAgents.flatMap((agent) => {
+    const terminalId = agent.nativeSessionId ?? agent.terminalId;
     if (!terminalId) {
       return [];
     }
@@ -1679,7 +1431,7 @@ export function CouncilPage(props: {
                 aria-label="Open council rooms"
                 title="Council rooms"
               >
-                <History size={14} />
+                <ListTree size={14} />
               </button>
               <button
                 type="button"
@@ -1703,7 +1455,7 @@ export function CouncilPage(props: {
               >
                 <ChevronDown size={12} />
                 <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                <span className="text-emerald-600">Live</span>
+                <span className="text-emerald-600">Running</span>
               </button>
             ) : (
               <div className="mx-3 mt-2 flex shrink-0 items-center justify-between gap-3 rounded-lg border border-[var(--app-border)] bg-[var(--app-subtle-bg)]/25 px-2.5 py-1.5 text-xs sm:mx-4">
@@ -1719,7 +1471,7 @@ export function CouncilPage(props: {
                   </button>
                   <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-600">
                     <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                    Live
+                    Running
                   </span>
                   <span className="min-w-0 truncate text-[var(--app-hint)]">
                     {selectedRoom.agents.length} agent{selectedRoom.agents.length === 1 ? "" : "s"}
@@ -1865,56 +1617,63 @@ export function CouncilPage(props: {
                     <div
                       role="listbox"
                       aria-label="Council mentions"
-                      className="rah-popover-panel rah-scroll-panel rah-scroll-panel-y absolute bottom-full left-0 z-30 mb-1.5 max-h-64 w-[min(24rem,calc(100vw-5rem))] overflow-y-auto rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-1.5 shadow-lg"
+                      className="rah-popover-panel absolute bottom-full left-0 z-30 mb-1.5 max-h-64 w-[min(24rem,calc(100vw-5rem))] overflow-hidden rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] shadow-lg"
                     >
-                      {mentionOptions.map((option, index) => {
-                        const selected = index === mentionSelectedIndex;
-                        const optionTheme = option.agent ? councilAgentTheme(selectedRoom, option.agent.id) : null;
-                        return (
-                          <button
-                            key={option.id}
-                            type="button"
-                            role="option"
-                            aria-selected={selected}
-                            onMouseDown={(event) => {
-                              event.preventDefault();
-                              insertCouncilMention(option);
-                            }}
-                            onMouseEnter={() => setMentionSelectedIndex(index)}
-                            className={`flex w-full min-w-0 items-center gap-2 rounded-lg px-2 py-2 text-left text-sm transition-colors ${
-                              selected
-                                ? "bg-[var(--app-subtle-bg)] text-[var(--app-fg)] shadow-sm"
-                                : "text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
-                            }`}
-                          >
-                            <span
-                              className={`h-9 w-1 shrink-0 rounded-full transition-colors ${
-                                selected ? optionTheme?.accent ?? "bg-zinc-400/70" : "bg-transparent"
+                      <OverlayScrollArea
+                        className="max-h-64"
+                        viewportClassName="max-h-64"
+                        contentClassName="p-1.5"
+                        scrollAriaLabel="Council mentions"
+                      >
+                        {mentionOptions.map((option, index) => {
+                          const selected = index === mentionSelectedIndex;
+                          const optionTheme = option.agent ? councilAgentTheme(selectedRoom, option.agent.id) : null;
+                          return (
+                            <button
+                              key={option.id}
+                              type="button"
+                              role="option"
+                              aria-selected={selected}
+                              onMouseDown={(event) => {
+                                event.preventDefault();
+                                insertCouncilMention(option);
+                              }}
+                              onMouseEnter={() => setMentionSelectedIndex(index)}
+                              className={`flex w-full min-w-0 items-center gap-2 rounded-lg px-2 py-2 text-left text-sm transition-colors ${
+                                selected
+                                  ? "bg-[var(--app-subtle-bg)] text-[var(--app-fg)] shadow-sm"
+                                  : "text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
                               }`}
-                            />
-                            {option.agent ? (
-                              <ProviderLogo
-                                provider={option.agent.provider}
-                                className={`h-4 w-4 shrink-0 transition-opacity ${selected ? "opacity-100" : "opacity-70"}`}
-                                variant="bare"
+                            >
+                              <span
+                                className={`h-9 w-1 shrink-0 rounded-full transition-colors ${
+                                  selected ? optionTheme?.accent ?? "bg-zinc-400/70" : "bg-transparent"
+                                }`}
                               />
-                            ) : (
-                              <Bot
-                                size={16}
-                                className={`shrink-0 transition-colors ${selected ? "text-[var(--app-fg)]" : "text-[var(--app-hint)]"}`}
-                              />
-                            )}
-                            <span className="min-w-0 flex-1">
-                              <span className={`block truncate ${selected ? "font-semibold" : "font-medium"}`}>
-                                @{option.label}
+                              {option.agent ? (
+                                <ProviderLogo
+                                  provider={option.agent.provider}
+                                  className={`h-4 w-4 shrink-0 transition-opacity ${selected ? "opacity-100" : "opacity-70"}`}
+                                  variant="bare"
+                                />
+                              ) : (
+                                <Bot
+                                  size={16}
+                                  className={`shrink-0 transition-colors ${selected ? "text-[var(--app-fg)]" : "text-[var(--app-hint)]"}`}
+                                />
+                              )}
+                              <span className="min-w-0 flex-1">
+                                <span className={`block truncate ${selected ? "font-semibold" : "font-medium"}`}>
+                                  @{option.label}
+                                </span>
+                                <span className="block truncate text-[11px] text-[var(--app-hint)]">
+                                  {option.description}
+                                </span>
                               </span>
-                              <span className="block truncate text-[11px] text-[var(--app-hint)]">
-                                {option.description}
-                              </span>
-                            </span>
-                          </button>
-                        );
-                      })}
+                            </button>
+                          );
+                        })}
+                      </OverlayScrollArea>
                     </div>
                   ) : null}
                   <TokenizedTextarea
@@ -2022,8 +1781,8 @@ export function CouncilPage(props: {
         title="Stop council room?"
         description={
           selectedRoom
-            ? `Stop "${selectedRoom.room.title}" and close all live agent terminals in this room. The room will remain available in Council History.`
-            : "Stop this council room and close all live agent terminals."
+            ? `Stop "${selectedRoom.room.title}" and close all running agent terminals in this room. The room will remain available in stopped rooms.`
+            : "Stop this council room and close all running agent terminals."
         }
         confirmLabel={loading ? "Stopping…" : "Stop room"}
         confirmTone="danger"
@@ -2140,92 +1899,15 @@ export function CouncilPage(props: {
         }}
       />
 
-      <Dialog.Root open={newRoomDialogOpen} onOpenChange={setNewRoomDialogOpen} modal={false}>
-        <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 z-40 bg-black/35" />
-          <Dialog.Content
-            className="fixed inset-0 z-50 flex flex-col overflow-hidden bg-[var(--app-bg)] pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] focus:outline-none min-[900px]:inset-auto min-[900px]:left-1/2 min-[900px]:top-[calc(50%-10px)] min-[900px]:max-h-[min(calc(100dvh-24px),972px)] min-[900px]:w-[min(720px,94vw)] min-[900px]:-translate-x-1/2 min-[900px]:-translate-y-1/2 min-[900px]:rounded-2xl min-[900px]:border min-[900px]:border-[var(--app-border)] min-[900px]:pt-0 min-[900px]:pb-0 min-[900px]:shadow-2xl"
-            onPointerDownOutside={keepModelPanelInsideCouncilDialog}
-            onInteractOutside={keepModelPanelInsideCouncilDialog}
-          >
-            <div className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[var(--app-border)] px-4">
-              <div className="min-w-0">
-                <Dialog.Title className="text-sm font-semibold text-[var(--app-fg)]">
-                  New room
-                </Dialog.Title>
-                <div className="truncate text-xs text-[var(--app-hint)]">
-                  Configure agents before launching the council.
-                </div>
-              </div>
-              <Dialog.Close asChild>
-                <button
-                  type="button"
-                  className="icon-click-feedback inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
-                  aria-label="Close new council room"
-                  title="Close"
-                >
-                  <X size={16} />
-                </button>
-              </Dialog.Close>
-            </div>
-            <div ref={newRoomBodyRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto rah-scroll-panel rah-scroll-panel-y p-4">
-              <label className="block text-xs font-medium text-[var(--app-hint)]">
-                Title
-                <input
-                  value={title}
-                  onChange={(event) => setTitle(event.target.value)}
-                  className="mt-1 h-11 w-full rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] px-3 text-sm text-[var(--app-fg)]"
-                  placeholder={nextRoomTitle}
-                />
-              </label>
-              <div className="block text-xs font-medium text-[var(--app-hint)]">
-                Workspace
-                <WorkspacePicker
-                  currentDir={workspace}
-                  triggerClassName="mt-1 h-11 w-full rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] px-3 text-left text-xs text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]"
-                  onSelect={selectWorkspace}
-                />
-              </div>
-              <div className="text-xs font-medium text-[var(--app-hint)]">Agents</div>
-              <CouncilAgentDraftEditor
-                drafts={agentDrafts}
-                workspace={workspace}
-                catalogs={catalogs}
-                collapsedDraftIds={collapsedAgentDraftIds}
-                onUpdateDraft={updateDraft}
-                onRemoveDraft={removeDraft}
-                onToggleDraftCollapsed={toggleDraftCollapsed}
-              />
-            </div>
-            <div className="grid shrink-0 grid-cols-3 gap-2 p-4">
-              <Dialog.Close asChild>
-                <button
-                  type="button"
-                  className="icon-click-feedback inline-flex h-11 min-w-0 items-center justify-center rounded-lg border border-[var(--app-border)] text-xs font-semibold text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)]"
-                >
-                  Cancel
-                </button>
-              </Dialog.Close>
-              <button
-                type="button"
-                onClick={addNewRoomAgentDraft}
-                className="icon-click-feedback inline-flex h-11 min-w-0 items-center justify-center gap-2 rounded-lg border border-[var(--app-border)] text-xs font-semibold text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)]"
-              >
-                <Plus size={14} />
-                Add agent
-              </button>
-              <button
-                type="button"
-                disabled={loading || !workspace.trim()}
-                onClick={() => void startRoom()}
-                className="icon-click-feedback inline-flex h-11 min-w-0 items-center justify-center gap-2 rounded-lg bg-[var(--app-fg)] px-3 text-xs font-semibold text-[var(--app-bg)] disabled:opacity-40"
-              >
-                Start
-              </button>
-            </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
+      <NewCouncilRoomDialog
+        open={newRoomDialogOpen}
+        onOpenChange={setNewRoomDialogOpen}
+        workspaceDir={workspace || props.workspaceDir || ""}
+        workspaceDirs={props.workspaceDirs}
+        rooms={rooms}
+        onAddWorkspace={props.onAddWorkspace}
+        onCreated={handleNewRoomCreated}
+      />
 
       <Dialog.Root
         open={addAgentDialogOpen}
@@ -2264,7 +1946,12 @@ export function CouncilPage(props: {
                 </button>
               </Dialog.Close>
             </div>
-            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto rah-scroll-panel rah-scroll-panel-y p-4">
+            <OverlayScrollArea
+              className="min-h-0 flex-1"
+              viewportClassName="h-full p-4"
+              contentClassName="space-y-3"
+              scrollAriaLabel="Add agents"
+            >
               <div className="text-xs font-medium text-[var(--app-hint)]">Agents</div>
               <CouncilAgentDraftEditor
                 drafts={addAgentDrafts}
@@ -2275,7 +1962,7 @@ export function CouncilPage(props: {
                 onRemoveDraft={removeAddAgentDraft}
                 onToggleDraftCollapsed={toggleAddAgentDraftCollapsed}
               />
-            </div>
+            </OverlayScrollArea>
             <div className="grid shrink-0 grid-cols-3 gap-2 p-4">
               <Dialog.Close asChild>
                 <button
@@ -2321,7 +2008,7 @@ export function CouncilPage(props: {
                   Council Rooms
                 </Dialog.Title>
                 <div className="text-xs text-[var(--app-hint)]">
-                  Running rooms are live; stopped rooms are archived chats.
+                  Running rooms can receive messages; stopped rooms are read-only transcripts.
                 </div>
               </div>
               <div className="flex shrink-0 items-center gap-1">
@@ -2347,121 +2034,23 @@ export function CouncilPage(props: {
                 </Dialog.Close>
               </div>
             </div>
-            <div className="max-h-[calc(84vh-4.5rem)] space-y-4 overflow-y-auto rah-scroll-panel rah-scroll-panel-y p-3">
-              <section className="space-y-1.5">
-                <div className="flex items-center justify-between px-1">
-                  <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--app-hint)]">
-                    Running
-                  </div>
-                  <span className="rounded-full bg-[var(--app-subtle-bg)] px-2 py-0.5 text-[10px] font-semibold text-[var(--app-hint)]">
-                    {activeRooms.length}
-                  </span>
-                </div>
-                {activeRooms.length > 0 ? activeRooms.map((room) => (
-                  <div
-                    key={room.room.id}
-                    className={`flex min-w-0 w-full items-center gap-2 overflow-hidden rounded-xl border px-2 py-1.5 text-sm transition-colors ${
-                      selectedRoom?.room.id === room.room.id
-                        ? "border-[var(--app-border)] bg-[var(--app-subtle-bg)] text-[var(--app-fg)]"
-                        : "border-transparent text-[var(--app-hint)] hover:border-[var(--app-border)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
-                    }`}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSelectedRoomId(room.room.id);
-                        setHistoryDialogOpen(false);
-                      }}
-                      className="min-w-0 flex-1 overflow-hidden rounded-lg px-1 py-0.5 text-left"
-                    >
-                      <span className="block truncate font-medium" title={room.room.title}>{room.room.title}</span>
-                      <span className="block truncate text-xs opacity-75" title={room.room.workspace}>{room.room.workspace}</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => openRoomInfo(room.room.id)}
-                      className="icon-click-feedback inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-transparent text-[var(--app-hint)] transition-colors hover:border-[var(--app-border)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)]"
-                      aria-label={`Show info for ${room.room.title}`}
-                      title="Room info"
-                    >
-                      <Info size={14} />
-                    </button>
-                    <span className="shrink-0 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-600">
-                      Live
-                    </span>
-                  </div>
-                )) : (
-                  <div className="rounded-xl border border-dashed border-[var(--app-border)] p-4 text-center text-sm text-[var(--app-hint)]">
-                    No running rooms.
-                  </div>
-                )}
-              </section>
-
-              <section className="space-y-1.5">
-                <div className="flex items-center justify-between px-1">
-                  <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--app-hint)]">
-                    History
-                  </div>
-                  <span className="rounded-full bg-[var(--app-subtle-bg)] px-2 py-0.5 text-[10px] font-semibold text-[var(--app-hint)]">
-                    {historyRooms.length}
-                  </span>
-                </div>
-                {historyRooms.length > 0 ? historyRooms.map((room) => (
-                  <div
-                    key={room.room.id}
-                    className={`flex min-w-0 w-full items-center gap-2 overflow-hidden rounded-xl border px-2 py-1.5 text-sm transition-colors ${
-                      selectedRoom?.room.id === room.room.id
-                        ? "border-[var(--app-border)] bg-[var(--app-subtle-bg)] text-[var(--app-fg)]"
-                        : "border-transparent text-[var(--app-hint)] hover:border-[var(--app-border)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
-                    }`}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSelectedRoomId(room.room.id);
-                        setHistoryDialogOpen(false);
-                      }}
-                      className="min-w-0 flex-1 overflow-hidden rounded-lg px-1 py-0.5 text-left"
-                    >
-                      <span className="block truncate font-medium" title={room.room.title}>{room.room.title}</span>
-                      <span className="block truncate text-xs opacity-75" title={room.room.workspace}>{room.room.workspace}</span>
-                    </button>
-                    <span className="hidden shrink-0 rounded-full bg-[var(--app-subtle-bg)] px-2 py-0.5 text-[10px] font-semibold text-[var(--app-hint)] sm:inline-flex">
-                      {room.room.status}
-                    </span>
-                    <span
-                      className="inline-flex shrink-0 rounded-full border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-2 py-0.5 text-[11px] font-medium tabular-nums text-[var(--app-hint)]"
-                      title={councilRoomLineTitle(room)}
-                    >
-                      {councilRoomLineLabel(room)}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => openRoomInfo(room.room.id)}
-                      className="icon-click-feedback inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-transparent text-[var(--app-hint)] transition-colors hover:border-[var(--app-border)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)]"
-                      aria-label={`Show info for ${room.room.title}`}
-                      title="Room info"
-                    >
-                      <Info size={14} />
-                    </button>
-                    <button
-                      type="button"
-                      disabled={loading}
-                      onClick={() => setPendingDeleteHistoryRoom(room)}
-                      className="icon-click-feedback inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-transparent text-[var(--app-hint)] transition-colors hover:border-[var(--app-border)] hover:bg-[var(--app-bg)] hover:text-[var(--app-danger)] disabled:opacity-40"
-                      aria-label={`Delete ${room.room.title}`}
-                      title="Delete room"
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
-                )) : (
-                  <div className="rounded-xl border border-dashed border-[var(--app-border)] p-4 text-center text-sm text-[var(--app-hint)]">
-                    No historical rooms yet.
-                  </div>
-                )}
-              </section>
-            </div>
+            <OverlayScrollArea
+              className="max-h-[calc(84vh-4.5rem)]"
+              viewportClassName="max-h-[calc(84vh-4.5rem)] p-3"
+              scrollAriaLabel="Council rooms"
+            >
+              <CouncilRoomsBrowser
+                rooms={rooms}
+                selectedRoomId={selectedRoom?.room.id ?? null}
+                loading={loading}
+                onOpenRoom={(room) => {
+                  setSelectedRoomId(room.room.id);
+                  setHistoryDialogOpen(false);
+                }}
+                onShowRoomInfo={(room) => openRoomInfo(room.room.id)}
+                onRequestDeleteRoom={setPendingDeleteHistoryRoom}
+              />
+            </OverlayScrollArea>
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>
@@ -2491,7 +2080,11 @@ export function CouncilPage(props: {
               </Dialog.Close>
             </div>
             {selectedRoom ? (
-              <div className="max-h-[calc(84vh-4.5rem)] space-y-4 overflow-y-auto rah-scroll-panel rah-scroll-panel-y p-4">
+              <OverlayScrollArea
+                className="max-h-[calc(84vh-4.5rem)]"
+                viewportClassName="max-h-[calc(84vh-4.5rem)] p-4"
+                contentClassName="space-y-4"
+              >
                 <div className="grid gap-2 rounded-xl border border-[var(--app-border)] bg-[var(--app-subtle-bg)]/40 p-3 text-xs">
                   <div className="flex items-start justify-between gap-3">
                     <span className="shrink-0 font-semibold text-[var(--app-hint)]">Title</span>
@@ -2511,7 +2104,9 @@ export function CouncilPage(props: {
                   </div>
                   <div className="flex items-start justify-between gap-3">
                     <span className="shrink-0 font-semibold text-[var(--app-hint)]">Status</span>
-                    <span className="text-[var(--app-fg)]">{selectedRoom.room.status}</span>
+                    <span className="text-[var(--app-fg)]">
+                      {selectedRoom.room.status} · {selectedRoom.room.phase}
+                    </span>
                   </div>
                   <div className="flex items-start justify-between gap-3">
                     <span className="shrink-0 font-semibold text-[var(--app-hint)]">Created</span>
@@ -2579,12 +2174,6 @@ export function CouncilPage(props: {
                             <span className="shrink-0 font-semibold text-[var(--app-hint)]">Model</span>
                             <span className="min-w-0 break-words text-right text-[var(--app-fg)]">{agent.modelId ?? "provider default"}</span>
                           </div>
-                          {agent.reasoningId ? (
-                            <div className="flex items-start justify-between gap-3">
-                              <span className="shrink-0 font-semibold text-[var(--app-hint)]">Options</span>
-                              <span className="text-[var(--app-fg)]">{agent.reasoningId}</span>
-                            </div>
-                          ) : null}
                           {agent.modeId ? (
                             <div className="flex items-start justify-between gap-3">
                               <span className="shrink-0 font-semibold text-[var(--app-hint)]">Mode</span>
@@ -2594,16 +2183,14 @@ export function CouncilPage(props: {
                           {agent.optionValues && Object.keys(agent.optionValues).length > 0 ? (
                             <div className="flex items-start justify-between gap-3">
                               <span className="shrink-0 font-semibold text-[var(--app-hint)]">Options</span>
-                              <code className="min-w-0 whitespace-pre-wrap break-all rounded bg-[var(--app-bg)] px-1.5 py-0.5 text-right text-[11px] text-[var(--app-fg)]">
-                                {JSON.stringify(agent.optionValues)}
-                              </code>
+                              <CouncilAgentOptionValues values={agent.optionValues} />
                             </div>
                           ) : null}
-                          {(agent.nativeSessionId ?? agent.zellijPaneId) ? (
+                          {(agent.nativeSessionId ?? agent.terminalId) ? (
                             <div className="flex items-start justify-between gap-3">
                               <span className="shrink-0 font-semibold text-[var(--app-hint)]">Terminal ID</span>
                               <code className="min-w-0 break-all rounded bg-[var(--app-bg)] px-1.5 py-0.5 text-right text-[11px] text-[var(--app-fg)]">
-                                {agent.nativeSessionId ?? agent.zellijPaneId}
+                                {agent.nativeSessionId ?? agent.terminalId}
                               </code>
                             </div>
                           ) : null}
@@ -2612,7 +2199,7 @@ export function CouncilPage(props: {
                     );
                   })}
                 </div>
-              </div>
+              </OverlayScrollArea>
             ) : (
               <div className="p-4 text-sm text-[var(--app-hint)]">No council room selected.</div>
             )}
@@ -2680,7 +2267,7 @@ export function CouncilPage(props: {
           clientId={props.clientId}
           emptyState={
             <div className="flex h-full items-center justify-center rounded-xl border border-dashed border-[var(--app-border)] p-4 text-center text-sm text-[var(--app-hint)]">
-              This council agent terminal is not live anymore.
+              This council agent terminal is not running anymore.
             </div>
           }
           terminalProps={(tab, active) => {

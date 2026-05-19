@@ -27,8 +27,8 @@ export function deriveWorkbenchNoticeState(args: {
     ? nativeTuiDiagnosticNoticeMessage(nativeTuiDiagnostics[0])
     : null;
   const nativeTuiStoppedMessage =
-    selectedSummary?.session.nativeTui && selectedSummary.session.runtimeState === "stopped"
-      ? "Native TUI process is stopped. Archive this session or resume it from history to continue."
+    selectedSummary?.session.nativeTui && selectedSummary.session.status === "stopped"
+      ? "Native TUI process is stopped. Reopen it from Chats to continue."
       : null;
   const nativeTuiQueuedInputCount =
     selectedSummary?.session.nativeTui?.queuedInputCount ?? 0;

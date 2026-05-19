@@ -1,8 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type { SessionSummary } from "@rah/runtime-protocol";
+import { conversationStateFromRuntimeState } from "@rah/runtime-protocol";
 import {
-  canSessionArchive,
+  canSessionStop,
   canSessionSwitchModel,
   canSessionSwitchModes,
   isSessionControlLocked,
@@ -17,6 +18,7 @@ function summaryWithSession(args?: Partial<SessionSummary["session"]>): SessionS
       launchSource: "web",
       cwd: "/workspace/rah",
       rootDir: "/workspace/rah",
+      ...conversationStateFromRuntimeState(args?.runtimeState ?? "idle"),
       runtimeState: "idle",
       ptyId: "pty-1",
       capabilities: {
@@ -33,7 +35,7 @@ function summaryWithSession(args?: Partial<SessionSummary["session"]>): SessionS
         renameSession: false,
         actions: {
           info: true,
-          archive: true,
+          stop: true,
           delete: false,
           rename: "none",
         },
@@ -52,21 +54,21 @@ function summaryWithSession(args?: Partial<SessionSummary["session"]>): SessionS
   };
 }
 
-function summaryWithArchiveCapability(archive: boolean): SessionSummary {
+function summaryWithStopCapability(stop: boolean): SessionSummary {
   return summaryWithSession({
     capabilities: {
       ...summaryWithSession().session.capabilities,
       actions: {
         ...summaryWithSession().session.capabilities.actions,
-        archive,
+        stop,
       },
     },
   });
 }
 
-test("canSessionArchive follows the provider action capability", () => {
-  assert.equal(canSessionArchive(summaryWithArchiveCapability(true)), true);
-  assert.equal(canSessionArchive(summaryWithArchiveCapability(false)), false);
+test("canSessionStop follows the provider stop capability", () => {
+  assert.equal(canSessionStop(summaryWithStopCapability(true)), true);
+  assert.equal(canSessionStop(summaryWithStopCapability(false)), false);
 });
 
 test("native TUI sessions do not expose RAH-managed mode or model controls", () => {
@@ -133,7 +135,7 @@ test("runtime config feature gates live mode and model controls", () => {
         prelaunchConfig: "available",
         runtimeConfig: "unverified",
         interrupt: "unverified",
-        archiveLifecycle: "unverified",
+        stopLifecycle: "unverified",
       },
     },
     capabilities: {
@@ -176,39 +178,39 @@ test("runtime config feature gates live mode and model controls", () => {
 });
 
 test("session controls are unlocked after failed and stopped states", () => {
-  const summary = summaryWithArchiveCapability(true);
+  const summary = summaryWithStopCapability(true);
   assert.equal(
     isSessionControlLocked({
       ...summary,
-      session: { ...summary.session, runtimeState: "running" },
+      session: { ...summary.session, ...conversationStateFromRuntimeState("running"), runtimeState: "running" },
     }),
     true,
   );
   assert.equal(
     isSessionControlLocked({
       ...summary,
-      session: { ...summary.session, runtimeState: "waiting_permission" },
+      session: { ...summary.session, ...conversationStateFromRuntimeState("waiting_permission"), runtimeState: "waiting_permission" },
     }),
     true,
   );
   assert.equal(
     isSessionControlLocked({
       ...summary,
-      session: { ...summary.session, runtimeState: "failed" },
+      session: { ...summary.session, ...conversationStateFromRuntimeState("failed"), runtimeState: "failed" },
     }),
     false,
   );
   assert.equal(
     isSessionControlLocked({
       ...summary,
-      session: { ...summary.session, runtimeState: "stopped" },
+      session: { ...summary.session, ...conversationStateFromRuntimeState("stopped"), runtimeState: "stopped" },
     }),
     false,
   );
 });
 
 test("generation state also respects live runtime status when summary sync lags", () => {
-  const summary = summaryWithArchiveCapability(true);
+  const summary = summaryWithStopCapability(true);
   assert.equal(isSessionGenerationActive(summary, undefined), false);
   assert.equal(isSessionGenerationActive(summary, "thinking"), true);
   assert.equal(isSessionGenerationActive(summary, "streaming"), true);
@@ -217,7 +219,7 @@ test("generation state also respects live runtime status when summary sync lags"
     isSessionGenerationActive(
       {
         ...summary,
-        session: { ...summary.session, runtimeState: "running" },
+        session: { ...summary.session, ...conversationStateFromRuntimeState("running"), runtimeState: "running" },
       },
       undefined,
     ),

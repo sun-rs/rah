@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import type { ProviderDiagnostic } from "@rah/runtime-protocol";
 import { ProviderLogo } from "./ProviderLogo";
 
-export type ProviderChoice = "codex" | "claude" | "opencode";
+export type ProviderChoice = "codex" | "claude" | "gemini" | "opencode";
 
 export interface ProviderOption {
   value: ProviderChoice;
@@ -13,6 +13,7 @@ export interface ProviderOption {
 export const KNOWN_PROVIDER_OPTIONS: ProviderOption[] = [
   { value: "codex", label: "Codex", accentColor: "#6b7280" },
   { value: "claude", label: "Claude", accentColor: "#f59e0b" },
+  { value: "gemini", label: "Gemini", accentColor: "#4285f4" },
   { value: "opencode", label: "OpenCode", accentColor: "#6b7280" },
 ];
 
@@ -34,7 +35,7 @@ function StatusDot({ status }: { status: ProviderDiagnostic["status"] }) {
  * ProviderSelector - Flat, horizontal pill design.
  *
  * Modes:
- * - "grid": For empty states. 3-column grid for core live providers.
+ * - "grid": For empty states. 3-column grid for core running providers.
  * - "rail": Compact inline pill rail with expand animation.
  * - "icons": Dense icon-only row for constrained panes.
  * - "dialog": Dense 3-column grid for modals.
@@ -95,7 +96,7 @@ export function ProviderSelector(props: {
   if (mode === "icons") {
     return (
       <div
-        className="grid grid-cols-3 gap-1.5"
+        className="grid grid-cols-4 gap-1.5"
         role="radiogroup"
         aria-label="Provider selection"
       >
@@ -136,7 +137,7 @@ export function ProviderSelector(props: {
     /* Empty state selector: one compact mobile row, fuller cards on larger screens */
     return (
       <div
-        className="grid grid-cols-3 gap-1.5 sm:gap-3"
+        className="grid grid-cols-4 gap-1.5 sm:gap-3"
         role="radiogroup"
         aria-label="Provider selection"
       >
@@ -197,7 +198,7 @@ export function ProviderSelector(props: {
 
   return (
     <div
-      className="grid grid-cols-3 gap-2.5"
+      className="grid grid-cols-4 gap-2.5"
       role="radiogroup"
       aria-label="Provider selection"
     >

@@ -1,5 +1,13 @@
 export const SIDEBAR_LAYOUT = {
   rootClassName: "space-y-3",
+  sidebarScrollShellClassName: "flex-1",
+  sidebarScrollClassName:
+    "h-full py-3 pl-3 pr-0.5",
+  sidebarScrollTrackClassName:
+    "right-0",
+  sidebarScrollThumbClassName:
+    "w-1",
+  sidebarSheetContentClassName: "py-3 pl-3 pr-0.5",
   toolbarClassName: "flex items-center justify-between px-1",
   toolbarLabelClassName: "text-xs font-medium text-[var(--app-hint)]",
   toolbarCountBadgeClassName:
@@ -37,7 +45,7 @@ export const SIDEBAR_LAYOUT = {
   sessionRowBaseClassName:
     "group/session relative w-full min-h-[32px] rounded-lg border px-2 py-1 text-left transition-colors",
   sessionRowSelectedClassName:
-    "border-emerald-500/20 bg-emerald-500/8 text-[var(--app-fg)] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.02),inset_3px_0_0_0_rgba(52,211,153,0.52)]",
+    "border-[color:color-mix(in_oklab,var(--app-border)_72%,var(--app-fg)_18%)] bg-[color:color-mix(in_oklab,var(--app-subtle-bg)_72%,var(--app-bg)_28%)] text-[var(--app-fg)] shadow-[0_1px_2px_rgba(0,0,0,0.06),0_8px_24px_rgba(0,0,0,0.035),inset_0_1px_0_rgba(255,255,255,0.08)]",
   sessionRowIdleClassName:
     "border-transparent text-[color:color-mix(in_oklab,var(--app-fg)_94%,var(--app-hint))] hover:bg-[var(--app-bg)]/8",
   sessionInlineRowClassName: "flex items-center gap-1.5",
@@ -58,8 +66,8 @@ export const SIDEBAR_LAYOUT = {
   sessionStatusBadgeBaseClassName:
     "inline-flex shrink-0 items-center text-[10px] font-medium tracking-normal",
   sessionStatusBadgeClassByStatus: {
-    approval: "text-orange-700/90 dark:text-orange-400/90",
-    thinking: "text-sky-600/90 dark:text-sky-400/90",
+    waiting_permission: "text-orange-700/90 dark:text-orange-400/90",
+    working: "text-sky-600/90 dark:text-sky-400/90",
     unread: "text-amber-700/90 dark:text-amber-400/90",
     ready: "text-[var(--app-hint)]",
   },

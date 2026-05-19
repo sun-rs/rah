@@ -4,7 +4,7 @@ import type { RahEvent, SessionSummary, StoredSessionRef } from "@rah/runtime-pr
 import {
   coerceSelectedSessionId,
   computeUnreadSessionIds,
-  findDaemonLiveSessionForStoredRef,
+  findDaemonRunningSessionForStoredRef,
   readOrCreateClientId,
   readOrCreateConnectionId,
   reconcileVisibleWorkspaceSelection,
@@ -187,22 +187,22 @@ describe("workspace response reconciliation", () => {
     assert.equal(coerceSelectedSessionId(projections, "session:/workspace/missing"), null);
   });
 
-  test("finds an existing daemon live session for a stored history entry", () => {
+  test("finds an existing daemon running session for a stored history entry", () => {
     const projections = new Map<string, SessionProjection>([
       ["session:/workspace/a", projection("/workspace/a")],
     ]);
 
     assert.equal(
-      findDaemonLiveSessionForStoredRef(projections, liveStoredSessionRef("/workspace/a"))?.session.id,
+      findDaemonRunningSessionForStoredRef(projections, liveStoredSessionRef("/workspace/a"))?.session.id,
       "session:/workspace/a",
     );
     assert.equal(
-      findDaemonLiveSessionForStoredRef(projections, liveStoredSessionRef("/workspace/missing")),
+      findDaemonRunningSessionForStoredRef(projections, liveStoredSessionRef("/workspace/missing")),
       null,
     );
   });
 
-  test("creates a projection immediately when a new live session arrives over the event stream", () => {
+  test("creates a projection immediately when a new running session arrives over the event stream", () => {
     const next = applyEventsToProjectionMap(
       new Map(),
       [
@@ -275,21 +275,21 @@ describe("workspace response reconciliation", () => {
 
     assert.equal(
       resolveHistoryActivationMode({
-        existingLiveSummary: controlled,
+        existingRunningSummary: controlled,
         clientId: "web-current",
       }),
       "select",
     );
     assert.equal(
       resolveHistoryActivationMode({
-        existingLiveSummary: uncontrolled,
+        existingRunningSummary: uncontrolled,
         clientId: "web-current",
       }),
       "attach",
     );
     assert.equal(
       resolveHistoryActivationMode({
-        existingLiveSummary: null,
+        existingRunningSummary: null,
         clientId: "web-current",
       }),
       "resume",
