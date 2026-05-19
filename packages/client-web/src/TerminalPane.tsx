@@ -156,6 +156,7 @@ export function TerminalPane(props: TerminalPaneProps) {
   const nextReplaySeqRef = useRef(0);
   const pausedOutputTailRef = useRef("");
   const pausedOutputReplaceRef = useRef(false);
+  const pausedOutputSoftReplaceRef = useRef(false);
   const flushPausedOutputRef = useRef<() => void>(() => undefined);
   const terminalScrollRemainderRef = useRef(0);
   const touchScrollRef = useRef<{ identifier: number; lastY: number } | null>(null);
@@ -367,12 +368,14 @@ export function TerminalPane(props: TerminalPaneProps) {
     let writeInFlight = false;
     let pendingWrite = "";
     let pendingReplace: string | null = null;
+    let pendingReplaceSoft = false;
     let pendingInput = "";
     let inputFlushTimer: ReturnType<typeof setTimeout> | null = null;
     const nativeSurfaceControlEnabled = props.nativeSurfaceControl !== false;
     nextReplaySeqRef.current = 0;
     pausedOutputTailRef.current = "";
     pausedOutputReplaceRef.current = false;
+    pausedOutputSoftReplaceRef.current = false;
     surfaceActiveRef.current = !nativeSurfaceControlEnabled;
 
     const terminalOptions = {
@@ -499,10 +502,19 @@ export function TerminalPane(props: TerminalPaneProps) {
           }
           let chunk: string;
           if (pendingReplace !== null) {
-            chunk = pendingReplace;
+            if (pendingReplaceSoft) {
+              // tmux snapshot streams replace the visible terminal frequently while
+              // Claude/Gemini are animating. A full xterm reset on every snapshot
+              // visibly flashes; a soft screen replacement keeps terminal state
+              // stable while still presenting the latest captured frame.
+              chunk = `\u001b[H\u001b[2J${pendingReplace}`;
+            } else {
+              chunk = pendingReplace;
+              terminal.reset();
+            }
             pendingReplace = null;
+            pendingReplaceSoft = false;
             pendingWrite = "";
-            terminal.reset();
           } else {
             const maxWriteBatchChars = Math.max(
               16 * 1024,
@@ -529,13 +541,17 @@ export function TerminalPane(props: TerminalPaneProps) {
         scheduleTerminalWrite();
       };
 
-      const storePausedTerminalOutput = (data: string, options?: { replace?: boolean }) => {
+      const storePausedTerminalOutput = (
+        data: string,
+        options?: { replace?: boolean; softReplace?: boolean },
+      ) => {
         if (!data) {
           return;
         }
         if (options?.replace) {
           pausedOutputTailRef.current = data.slice(-MAX_PAUSED_TERMINAL_OUTPUT_TAIL_CHARS);
           pausedOutputReplaceRef.current = true;
+          pausedOutputSoftReplaceRef.current = options.softReplace === true;
           return;
         }
         pausedOutputTailRef.current = `${pausedOutputTailRef.current}${data}`.slice(
@@ -546,18 +562,26 @@ export function TerminalPane(props: TerminalPaneProps) {
       const clearPendingTerminalWrite = () => {
         pendingWrite = "";
         pendingReplace = null;
+        pendingReplaceSoft = false;
       };
 
-      const replaceTerminalContents = (data: string) => {
+      const replaceTerminalContents = (data: string, options?: { soft?: boolean }) => {
         clearPendingTerminalWrite();
         pendingReplace = data;
+        pendingReplaceSoft = options?.soft === true;
         scheduleTerminalWrite();
       };
 
-      const enqueueVisibleTerminalWrite = (data: string, options?: { replace?: boolean }) => {
+      const enqueueVisibleTerminalWrite = (
+        data: string,
+        options?: { replace?: boolean; softReplace?: boolean },
+      ) => {
         if (renderOutputRef.current) {
           if (options?.replace) {
-            replaceTerminalContents(data);
+            replaceTerminalContents(
+              data,
+              options.softReplace === undefined ? undefined : { soft: options.softReplace },
+            );
           } else {
             enqueueTerminalWrite(data);
           }
@@ -572,10 +596,12 @@ export function TerminalPane(props: TerminalPaneProps) {
           return;
         }
         const replace = pausedOutputReplaceRef.current;
+        const softReplace = pausedOutputSoftReplaceRef.current;
         pausedOutputTailRef.current = "";
         pausedOutputReplaceRef.current = false;
+        pausedOutputSoftReplaceRef.current = false;
         if (replace) {
-          replaceTerminalContents(data);
+          replaceTerminalContents(data, { soft: softReplace });
         } else {
           enqueueTerminalWrite(data);
         }
@@ -598,7 +624,7 @@ export function TerminalPane(props: TerminalPaneProps) {
         }
         if (message.type === "pty.output") {
           if (message.replace === true) {
-            enqueueVisibleTerminalWrite(message.data, { replace: true });
+            enqueueVisibleTerminalWrite(message.data, { replace: true, softReplace: true });
           } else {
             enqueueVisibleTerminalWrite(message.data);
           }
@@ -778,6 +804,7 @@ export function TerminalPane(props: TerminalPaneProps) {
       settleTimers.clear();
       pausedOutputTailRef.current = "";
       pausedOutputReplaceRef.current = false;
+      pausedOutputSoftReplaceRef.current = false;
       flushPausedOutputRef.current = () => undefined;
       themeObserver.disconnect();
       resizeObserver.disconnect();

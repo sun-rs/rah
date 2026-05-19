@@ -1,6 +1,6 @@
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
-import { Check, ChevronDown, ChevronLeft, Cpu, LoaderCircle } from "lucide-react";
+import { Check, ChevronDown, ChevronLeft, Cpu, LoaderCircle, Trash2 } from "lucide-react";
 import type {
   ProviderModelCatalog,
   SessionModelDescriptor,
@@ -11,19 +11,20 @@ import { OverlayScrollArea } from "./OverlayScrollArea";
 function selectedModel(
   catalog: ProviderModelCatalog | null | undefined,
   selectedModelId: string | null | undefined,
+  preserveMissingSelectedModel = true,
 ): SessionModelDescriptor | null {
   const models = catalog?.models ?? [];
+  const normalizedSelectedModelId = selectedModelId?.trim() || null;
+  if (normalizedSelectedModelId) {
+    return (
+      models.find((model) => model.id === normalizedSelectedModelId) ??
+      (preserveMissingSelectedModel ? { id: normalizedSelectedModelId } : models[0] ?? null)
+    );
+  }
   if (models.length === 0) {
     return null;
   }
-  const normalizedSelectedModelId = selectedModelId?.trim() || null;
-  return (
-    (normalizedSelectedModelId
-      ? models.find((model) => model.id === normalizedSelectedModelId)
-      : null) ??
-    models[0] ??
-    null
-  );
+  return models[0] ?? null;
 }
 
 function selectedReasoning(
@@ -34,9 +35,19 @@ function selectedReasoning(
   if (options.length === 0) {
     return null;
   }
+  if (selectedReasoningId === null) {
+    return null;
+  }
+  const normalizedReasoningId = selectedReasoningId?.trim() || null;
+  const selected = normalizedReasoningId
+    ? options.find((option) => option.id === normalizedReasoningId) ?? null
+    : null;
+  if (selected && isImplicitDefaultVariant(selected)) {
+    return null;
+  }
   return (
-    options.find((option) => option.id === selectedReasoningId) ??
-    options.at(-1) ??
+    selected ??
+    visibleParameterOptions(options, true).at(-1) ??
     null
   );
 }
@@ -51,7 +62,12 @@ function defaultReasoningIdForModel(
   if (options.length === 0) {
     return null;
   }
-  return options.at(-1)?.id ?? null;
+  if ("defaultReasoningId" in model) {
+    const defaultReasoningId = model.defaultReasoningId ?? null;
+    const option = options.find((entry) => entry.id === defaultReasoningId);
+    return option && isImplicitDefaultVariant(option) ? null : defaultReasoningId;
+  }
+  return visibleParameterOptions(options, true).at(-1)?.id ?? null;
 }
 
 function joinClassNames(...values: Array<string | false | null | undefined>): string {
@@ -72,9 +88,222 @@ export function ModelSourceBadge(props: { manual: boolean }) {
     return null;
   }
   return (
-    <span className="shrink-0 rounded-full border border-cyan-500/25 bg-cyan-500/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-cyan-700 dark:text-cyan-300">
+    <span className="shrink-0 rounded-full border border-cyan-500/25 bg-cyan-500/10 px-1.5 py-[1px] text-[9px] font-medium uppercase leading-[11px] tracking-wide text-cyan-700 dark:text-cyan-300">
       Manual
     </span>
+  );
+}
+
+function isImplicitDefaultVariant(option: SessionReasoningOption): boolean {
+  return option.id === "default" && option.kind === "model_variant";
+}
+
+function visibleParameterOptions(
+  options: readonly SessionReasoningOption[],
+  hideImplicitDefaultVariant: boolean | undefined,
+): SessionReasoningOption[] {
+  if (!hideImplicitDefaultVariant || options.length <= 1) {
+    return [...options];
+  }
+  return options.filter((option) => !isImplicitDefaultVariant(option));
+}
+
+function parameterKeyFallback(options: readonly SessionReasoningOption[]): string {
+  const firstKind = options[0]?.kind;
+  switch (firstKind) {
+    case "reasoning_effort":
+      return "reasoning_effort";
+    case "thinking":
+      return "thinking";
+    case "model_variant":
+      return "variant";
+    default:
+      return "parameter";
+  }
+}
+
+function modelParameterKey(
+  catalog: ProviderModelCatalog | null | undefined,
+  model: SessionModelDescriptor,
+  options: readonly SessionReasoningOption[],
+): string {
+  const optionIds = new Set(options.map((option) => option.id));
+  const profile = catalog?.modelProfiles?.find((entry) => entry.modelId === model.id);
+  const matchingConfigOption = profile?.configOptions.find((option) =>
+    option.options?.some((choice) => optionIds.has(choice.id)),
+  ) ?? profile?.configOptions.find((option) => option.kind === "select");
+  return matchingConfigOption?.backendKey ??
+    matchingConfigOption?.id ??
+    parameterKeyFallback(options);
+}
+
+function ModelParamsInline(props: {
+  parameterKey: string;
+  options: SessionReasoningOption[];
+}) {
+  const title = `${props.parameterKey}: ${props.options.map((option) => option.id).join(", ")}`;
+  return (
+    <span
+      className="hidden min-[900px]:flex min-w-0 shrink-0 items-center justify-end gap-1 overflow-hidden"
+      title={title}
+    >
+      {props.options.map((option) => (
+        <span
+          key={option.id}
+          title={`${props.parameterKey}: ${option.id}`}
+          className="shrink-0 rounded-full border border-[var(--app-border)] bg-[var(--app-bg)] px-1.5 py-0.5 text-[11px] text-[var(--app-hint)]"
+        >
+          {option.id}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+function ModelParamsBadge(props: {
+  parameterKey: string;
+  options: SessionReasoningOption[];
+}) {
+  const tooltipId = useId();
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const tooltipRef = useRef<HTMLDivElement>(null);
+  const closeTimerRef = useRef<number | null>(null);
+  const [open, setOpen] = useState(false);
+  const [tooltipStyle, setTooltipStyle] = useState<CSSProperties>({});
+
+  const clearCloseTimer = () => {
+    if (closeTimerRef.current !== null) {
+      window.clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+  };
+
+  const openTooltip = (autoClose: boolean) => {
+    clearCloseTimer();
+    setOpen(true);
+    if (autoClose) {
+      closeTimerRef.current = window.setTimeout(() => setOpen(false), 3600);
+    }
+  };
+
+  const closeTooltip = () => {
+    clearCloseTimer();
+    setOpen(false);
+  };
+
+  useLayoutEffect(() => {
+    if (!open || !triggerRef.current) {
+      return;
+    }
+    const triggerRect = triggerRef.current.getBoundingClientRect();
+    const tooltipRect = tooltipRef.current?.getBoundingClientRect();
+    const longestTokenLength = Math.max(
+      props.parameterKey.length,
+      ...props.options.map((option) => option.id.length),
+    );
+    const width = Math.min(
+      Math.max(148, 48 + longestTokenLength * 8),
+      220,
+      window.innerWidth - 16,
+    );
+    const height = tooltipRect?.height ??
+      Math.min(168, 42 + Math.ceil(props.options.length / 2) * 26);
+    const left = Math.min(
+      Math.max(8, triggerRect.right - width),
+      Math.max(8, window.innerWidth - width - 8),
+    );
+    const belowTop = triggerRect.bottom + 8;
+    const aboveTop = triggerRect.top - height - 8;
+    const top = belowTop + height <= window.innerHeight - 8
+      ? belowTop
+      : Math.max(8, aboveTop);
+    setTooltipStyle({
+      left,
+      top,
+      width,
+    });
+  }, [open, props.options.length]);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (
+        target &&
+        (triggerRef.current?.contains(target) || tooltipRef.current?.contains(target))
+      ) {
+        return;
+      }
+      closeTooltip();
+    };
+    const handleViewportChange = () => closeTooltip();
+    document.addEventListener("pointerdown", handlePointerDown, true);
+    window.addEventListener("resize", handleViewportChange);
+    window.addEventListener("scroll", handleViewportChange, true);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown, true);
+      window.removeEventListener("resize", handleViewportChange);
+      window.removeEventListener("scroll", handleViewportChange, true);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    return () => clearCloseTimer();
+  }, []);
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        className="shrink-0 cursor-help rounded-full border border-[var(--app-border)] bg-[var(--app-bg)] px-1.5 py-0.5 text-[11px] text-[var(--app-hint)] transition-colors hover:text-[var(--app-fg)]"
+        aria-label={`${props.options.length} parameters for ${props.parameterKey}`}
+        aria-describedby={open ? tooltipId : undefined}
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        title={`${props.parameterKey}: ${props.options.map((option) => option.id).join(", ")}`}
+        onMouseEnter={() => openTooltip(false)}
+        onMouseLeave={closeTooltip}
+        onPointerDown={(event) => {
+          if (event.pointerType !== "mouse") {
+            event.stopPropagation();
+          }
+        }}
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          openTooltip(true);
+        }}
+      >
+        {props.options.length} params
+      </button>
+      {open ? createPortal(
+        <div
+          ref={tooltipRef}
+          id={tooltipId}
+          role="tooltip"
+          style={tooltipStyle}
+          className="fixed z-[120] rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] p-2 text-xs text-[var(--app-fg)] shadow-xl"
+        >
+          <div className="mb-1.5 truncate font-mono text-[11px] text-[var(--app-hint)]">
+            {props.parameterKey}
+          </div>
+          <div className="flex flex-wrap gap-1">
+            {props.options.map((option) => (
+              <span
+                key={option.id}
+                className="rounded-md bg-[var(--app-subtle-bg)] px-1.5 py-1 font-mono text-[11px] text-[var(--app-fg)]"
+              >
+                {option.id}
+              </span>
+            ))}
+          </div>
+        </div>,
+        document.body,
+      ) : null}
+    </>
   );
 }
 
@@ -83,6 +312,7 @@ export function resolveSelectedModelDraft(args: {
   selectedModelId?: string | null | undefined;
   selectedReasoningId?: string | null | undefined;
   allowProviderDefault?: boolean | undefined;
+  preserveMissingSelectedModel?: boolean | undefined;
 }): {
   model: SessionModelDescriptor | null;
   reasoning: SessionReasoningOption | null;
@@ -94,10 +324,19 @@ export function resolveSelectedModelDraft(args: {
   ) {
     return { model: null, reasoning: null };
   }
-  const model = selectedModel(args.catalog, args.selectedModelId);
+  const model = selectedModel(
+    args.catalog,
+    args.selectedModelId,
+    args.preserveMissingSelectedModel,
+  );
+  const selectedReasoningId = args.selectedReasoningId !== undefined
+    ? args.selectedReasoningId
+    : model && "defaultReasoningId" in model && model.defaultReasoningId === null
+      ? null
+      : undefined;
   return {
     model,
-    reasoning: selectedReasoning(model, args.selectedReasoningId),
+    reasoning: selectedReasoning(model, selectedReasoningId),
   };
 }
 
@@ -106,9 +345,12 @@ export function ModelCatalogList(props: {
   selectedModelId?: string | null;
   loading?: boolean;
   readOnly?: boolean;
-  showModelIds?: boolean;
   emptyLabel?: string;
+  paramDisplay?: "count" | "tooltip" | "responsive";
+  hideImplicitDefaultVariant?: boolean;
   onModelSelect?: (modelId: string) => void;
+  onDeleteManualModel?: (modelId: string) => void;
+  deleteManualModelDisabled?: boolean;
 }) {
   const models = props.catalog?.models ?? [];
   const selectedModelId = props.selectedModelId?.trim() || null;
@@ -142,25 +384,55 @@ export function ModelCatalogList(props: {
       {models.map((model) => {
         const isSelected = model.id === selectedModelId;
         const manual = isManualSupplementModel(props.catalog, model.id);
-        const optionCount = model.reasoningOptions?.length ?? 0;
+        const reasoningOptions = model.reasoningOptions ?? [];
+        const displayOptions = visibleParameterOptions(
+          reasoningOptions,
+          props.hideImplicitDefaultVariant ?? true,
+        );
+        const optionCount = displayOptions.length;
+        const parameterKey = modelParameterKey(props.catalog, model, displayOptions);
+        const paramDisplay = props.paramDisplay ?? "count";
+        const showDelete = !interactive && manual && props.onDeleteManualModel !== undefined;
         const label = (
           <>
-            <span className="min-w-0 flex-1">
-              <span className="block truncate">{model.label}</span>
-              {props.showModelIds && model.id !== model.label ? (
-                <span className="mt-0.5 block truncate font-mono text-[11px] text-[var(--app-hint)]">
-                  {model.id}
-                </span>
-              ) : null}
+            <span className="flex min-w-0 flex-1 items-center gap-2">
+              <span className="min-w-0 truncate font-mono">{model.id}</span>
+              <ModelSourceBadge manual={manual} />
             </span>
-            <ModelSourceBadge manual={manual} />
             {isSelected ? (
               <Check size={14} className="shrink-0 text-[var(--app-success)]" />
             ) : null}
             {optionCount > 1 ? (
-              <span className="shrink-0 text-[11px] text-[var(--app-hint)]">
-                {optionCount} params
-              </span>
+              paramDisplay === "responsive" && !interactive ? (
+                <>
+                  <span className="min-[900px]:hidden">
+                    <ModelParamsBadge parameterKey={parameterKey} options={displayOptions} />
+                  </span>
+                  <ModelParamsInline parameterKey={parameterKey} options={displayOptions} />
+                </>
+              ) : paramDisplay === "tooltip" && !interactive ? (
+                <ModelParamsBadge parameterKey={parameterKey} options={displayOptions} />
+              ) : (
+                <span className="shrink-0 text-[11px] text-[var(--app-hint)]">
+                  {optionCount} params
+                </span>
+              )
+            ) : null}
+            {showDelete ? (
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  props.onDeleteManualModel?.(model.id);
+                }}
+                disabled={props.deleteManualModelDisabled}
+                className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-[var(--app-border)] bg-[var(--app-bg)] text-[var(--app-hint)] transition-colors hover:text-[var(--app-danger)] disabled:cursor-default disabled:opacity-50"
+                aria-label={`Delete ${model.id}`}
+                title={`Delete ${model.id}`}
+              >
+                <Trash2 size={13} />
+              </button>
             ) : null}
           </>
         );
@@ -214,7 +486,7 @@ export function SessionModelControls(props: {
   const [open, setOpen] = useState(false);
   const [panelView, setPanelView] = useState<"model-list" | "param-list">("model-list");
   const [draftModelId, setDraftModelId] = useState<string | null>(null);
-  const [draftReasoningId, setDraftReasoningId] = useState<string | null>(null);
+  const [draftReasoningId, setDraftReasoningId] = useState<string | null | undefined>(undefined);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const modelViewRef = useRef<HTMLDivElement>(null);
@@ -226,11 +498,16 @@ export function SessionModelControls(props: {
     panelView === "param-list"
       ? selectedModel(props.catalog, draftModelId ?? model?.id ?? null)
       : model;
-  const panelReasoningOptions = panelModel?.reasoningOptions ?? [];
-  const panelReasoning = selectedReasoning(panelModel, draftReasoningId ?? reasoning?.id ?? null);
+  const panelReasoningOptions = visibleParameterOptions(panelModel?.reasoningOptions ?? [], true);
+  const panelReasoning = selectedReasoning(
+    panelModel,
+    draftReasoningId !== undefined ? draftReasoningId : reasoning?.id ?? null,
+  );
+  const panelHasNoVariantOption =
+    panelModel?.defaultReasoningId === null && panelReasoningOptions.length > 0;
   const visibleOptionCount =
     panelView === "param-list"
-      ? Math.max(panelReasoningOptions.length, 1)
+      ? Math.max(panelReasoningOptions.length + (panelHasNoVariantOption ? 1 : 0), 1)
       : Math.max(models.length, props.loading ? 1 : 0);
 
   /* Reset to model-list when panel closes */
@@ -238,7 +515,7 @@ export function SessionModelControls(props: {
     if (!open) {
       setPanelView("model-list");
       setDraftModelId(null);
-      setDraftReasoningId(null);
+      setDraftReasoningId(undefined);
     }
   }, [open]);
 
@@ -314,8 +591,10 @@ export function SessionModelControls(props: {
     const nextModel = models.find((m) => m.id === modelId);
     const nextReasoningOptions = nextModel?.reasoningOptions ?? [];
     const defaultReasoningId = defaultReasoningIdForModel(nextModel);
+    const hasNoVariantOption =
+      nextModel?.defaultReasoningId === null && nextReasoningOptions.length > 0;
 
-    if (nextReasoningOptions.length > 1) {
+    if (nextReasoningOptions.length > 1 || hasNoVariantOption) {
       setDraftModelId(modelId);
       setDraftReasoningId(defaultReasoningId);
       setPanelView("param-list");
@@ -326,9 +605,14 @@ export function SessionModelControls(props: {
     }
   };
 
-  const handleReasoningSelect = (reasoningId: string) => {
+  const handleReasoningSelect = (reasoningId: string | null) => {
     if (draftModelId && draftModelId !== model?.id) {
       props.onModelChange(draftModelId, reasoningId);
+    } else if (reasoningId === null) {
+      const targetModelId = panelModel?.id ?? model?.id;
+      if (targetModelId) {
+        props.onModelChange(targetModelId, null);
+      }
     } else {
       props.onReasoningChange(reasoningId);
     }
@@ -343,7 +627,7 @@ export function SessionModelControls(props: {
   if (props.loading && models.length === 0) {
     labelParts.push("Loading…");
   } else {
-    labelParts.push(model?.label ?? "Model");
+    labelParts.push(model?.id ?? "Model");
     if (reasoningOptions.length > 1 && reasoning) {
       labelParts.push(reasoning.label);
     }
@@ -457,7 +741,7 @@ export function SessionModelControls(props: {
                     </button>
                     <div className="min-w-0">
                       <div className="text-xs font-semibold text-[var(--app-fg)] truncate">
-                        {panelModel?.label}
+                        {panelModel?.id}
                       </div>
                       <div className="text-[11px] text-[var(--app-hint)]">
                         Select parameter
@@ -471,29 +755,44 @@ export function SessionModelControls(props: {
                     contentRef={paramListRef}
                     scrollAriaLabel="Model parameter list"
                   >
-                    {panelReasoningOptions.length > 1 ? (
-                      panelReasoningOptions.map((r) => (
-                        <button
-                          key={r.id}
-                          type="button"
-                          onClick={() => handleReasoningSelect(r.id)}
-                          className={joinClassNames(
-                            "flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors",
-                            r.id === panelReasoning?.id
-                              ? "bg-[var(--app-subtle-bg)] text-[var(--app-fg)] font-medium"
-                              : "text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)]/60",
-                          )}
-                        >
-                          <span className="flex-1 truncate">{r.label}</span>
-                          {r.id === panelReasoning?.id && (
-                            <Check size={14} className="shrink-0 text-[var(--app-success)]" />
-                          )}
-                        </button>
-                      ))
-                    ) : panelReasoningOptions.length === 1 ? (
-                      <div className="px-2.5 py-2 text-sm text-[var(--app-hint)]">
-                        {panelReasoningOptions[0]?.label}
-                      </div>
+                    {panelReasoningOptions.length > 0 || panelHasNoVariantOption ? (
+                      <>
+                        {panelHasNoVariantOption ? (
+                          <button
+                            type="button"
+                            onClick={() => handleReasoningSelect(null)}
+                            className={joinClassNames(
+                              "flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors",
+                              panelReasoning === null
+                                ? "bg-[var(--app-subtle-bg)] text-[var(--app-fg)] font-medium"
+                                : "text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)]/60",
+                            )}
+                          >
+                            <span className="flex-1 truncate">No variant</span>
+                            {panelReasoning === null ? (
+                              <Check size={14} className="shrink-0 text-[var(--app-success)]" />
+                            ) : null}
+                          </button>
+                        ) : null}
+                        {panelReasoningOptions.map((r) => (
+                          <button
+                            key={r.id}
+                            type="button"
+                            onClick={() => handleReasoningSelect(r.id)}
+                            className={joinClassNames(
+                              "flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors",
+                              r.id === panelReasoning?.id
+                                ? "bg-[var(--app-subtle-bg)] text-[var(--app-fg)] font-medium"
+                                : "text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)]/60",
+                            )}
+                          >
+                            <span className="flex-1 truncate">{r.label}</span>
+                            {r.id === panelReasoning?.id ? (
+                              <Check size={14} className="shrink-0 text-[var(--app-success)]" />
+                            ) : null}
+                          </button>
+                        ))}
+                      </>
                     ) : (
                       <div className="px-2.5 py-2 text-sm text-[var(--app-hint)]">
                         No parameters for this model

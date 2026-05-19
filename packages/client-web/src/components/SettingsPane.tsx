@@ -7,12 +7,11 @@ import type {
   PtySessionStats,
   TuiMuxSessionDiagnostic,
 } from "@rah/runtime-protocol";
-import { Activity, AlertTriangle, CheckCircle2, ChevronDown, Cpu, Info, LoaderCircle, MessageSquareText, Palette, Plus, RefreshCw, TerminalSquare, Trash2, Waypoints, X, XCircle } from "lucide-react";
+import { Activity, AlertTriangle, CheckCircle2, ChevronDown, Cpu, Info, ListRestart, LoaderCircle, MessageSquareText, Palette, Plus, RefreshCw, TerminalSquare, Waypoints, XCircle } from "lucide-react";
 import {
   addManualProviderModel,
   closeTuiMuxSession,
   deleteManualProviderModel,
-  deleteManualProviderModelOption,
   listManualProviderModels,
   listNativeTuiDiagnostics,
   listProviderModels,
@@ -53,6 +52,8 @@ const MODEL_PROVIDERS: ProviderChoice[] = ["codex", "claude", "gemini", "opencod
 const MODEL_REFRESH_STATUS_RESET_MS = 2400;
 const MODEL_REFRESH_POLL_INTERVAL_MS = 1000;
 const MODEL_REFRESH_POLL_ATTEMPTS = 20;
+const SETTINGS_REFRESH_BUTTON_CLASS =
+  "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border text-xs font-medium transition-colors disabled:cursor-default disabled:opacity-60 sm:h-auto sm:w-auto sm:gap-1.5 sm:px-2 sm:py-1";
 
 type ModelRefreshStatus = "idle" | "loading" | "success" | "error";
 type ModelRefreshState = {
@@ -61,7 +62,6 @@ type ModelRefreshState = {
 };
 type ManualModelFormState = {
   modelId: string;
-  label: string;
   options: string;
 };
 type ManualModelActionState = {
@@ -72,7 +72,6 @@ type ManualModelActionState = {
 function emptyManualModelForm(): ManualModelFormState {
   return {
     modelId: "",
-    label: "",
     options: "",
   };
 }
@@ -117,6 +116,46 @@ function formatRefreshTimestamp(value: string | undefined): string {
   }).format(date);
 }
 
+function catalogTimestampMs(catalog: ProviderModelCatalog | null | undefined): number {
+  if (!catalog?.fetchedAt) {
+    return 0;
+  }
+  const time = Date.parse(catalog.fetchedAt);
+  return Number.isNaN(time) ? 0 : time;
+}
+
+function newestModelCatalog(
+  localCatalog: ProviderModelCatalog | null | undefined,
+  storeCatalog: ProviderModelCatalog | null | undefined,
+): ProviderModelCatalog | undefined {
+  if (!localCatalog) {
+    return storeCatalog ?? undefined;
+  }
+  if (!storeCatalog) {
+    return localCatalog;
+  }
+  return catalogTimestampMs(storeCatalog) > catalogTimestampMs(localCatalog)
+    ? storeCatalog
+    : localCatalog;
+}
+
+function newestTimestamp(...values: Array<string | null | undefined>): string | undefined {
+  let newest: string | undefined;
+  let newestMs = 0;
+  for (const value of values) {
+    if (!value) {
+      continue;
+    }
+    const time = Date.parse(value);
+    if (Number.isNaN(time) || time < newestMs) {
+      continue;
+    }
+    newest = value;
+    newestMs = time;
+  }
+  return newest;
+}
+
 function parseManualOptionIds(value: string): string[] {
   const seen = new Set<string>();
   return value
@@ -146,6 +185,7 @@ export function SettingsPane() {
   const [activeTab, setActiveTab] = useState<SettingsTab>("chat");
   const workspaceDir = useSessionStore((state) => state.workspaceDir);
   const loadProviderModels = useSessionStore((state) => state.loadProviderModels);
+  const rememberProviderModelCatalog = useSessionStore((state) => state.rememberProviderModelCatalog);
   const {
     hideToolCallsInChat,
     setHideToolCallsInChat,
@@ -158,6 +198,7 @@ export function SettingsPane() {
   } = useChatPreferences();
   const [providerDiagnostics, setProviderDiagnostics] = useState<ProviderDiagnostic[]>([]);
   const [modelCatalogs, setModelCatalogs] = useState<Partial<Record<ProviderChoice, ProviderModelCatalog>>>({});
+  const storeModelCatalogs = useSessionStore((state) => state.modelCatalogs);
   const [manualModels, setManualModels] = useState<Partial<Record<ProviderChoice, ManualProviderModel[]>>>({});
   const [modelRefreshStates, setModelRefreshStates] = useState<Partial<Record<ProviderChoice, ModelRefreshState>>>({});
   const [expandedModelProviders, setExpandedModelProviders] =
@@ -169,8 +210,6 @@ export function SettingsPane() {
     opencode: emptyManualModelForm(),
   }));
   const [manualModelActions, setManualModelActions] = useState<Partial<Record<ProviderChoice, ManualModelActionState>>>({});
-  const [lastModelRefreshSuccessAt, setLastModelRefreshSuccessAt] =
-    useState<Partial<Record<ProviderChoice, string>>>({});
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsLoaded, setModelsLoaded] = useState(false);
   const [modelsError, setModelsError] = useState<string | null>(null);
@@ -232,9 +271,7 @@ export function SettingsPane() {
 
   function rememberModelCatalog(provider: ProviderChoice, catalog: ProviderModelCatalog): void {
     setModelCatalogs((current) => ({ ...current, [provider]: catalog }));
-    if (isAuthoritativeModelCatalog(catalog)) {
-      setLastModelRefreshSuccessAt((current) => ({ ...current, [provider]: catalog.fetchedAt }));
-    }
+    rememberProviderModelCatalog(provider, catalog);
   }
 
   function setProviderRefreshState(provider: ProviderChoice, state: ModelRefreshState): void {
@@ -282,6 +319,11 @@ export function SettingsPane() {
     const manual = await listManualProviderModels(provider);
     if (mountedRef.current) {
       rememberModelCatalog(provider, catalog);
+      void loadProviderModels(provider, {
+        ...(workspaceDir ? { cwd: workspaceDir } : {}),
+        background: true,
+        reason: "settings-models-tab",
+      }).catch(() => undefined);
       setManualModels((current) => ({ ...current, [provider]: manual }));
     }
     return catalog;
@@ -377,7 +419,6 @@ export function SettingsPane() {
     try {
       const response = await addManualProviderModel(provider, {
         id: modelId,
-        ...(form.label.trim() ? { label: form.label.trim() } : {}),
         ...(providerSupportsManualOptions(provider)
           ? { optionIds: parseManualOptionIds(form.options) }
           : {}),
@@ -434,40 +475,6 @@ export function SettingsPane() {
       setManualModelActions((current) => ({
         ...current,
         [provider]: { error: errorMessage(error, "Failed to delete manual model.") },
-      }));
-    }
-  }
-
-  async function deleteManualModelOption(
-    provider: ProviderChoice,
-    modelId: string,
-    optionId: string,
-  ): Promise<void> {
-    setManualModelActions((current) => ({ ...current, [provider]: { loading: true } }));
-    try {
-      const response = await deleteManualProviderModelOption(provider, modelId, optionId, {
-        ...(workspaceDir ? { cwd: workspaceDir } : {}),
-      });
-      const nextManualModels = await listManualProviderModels(provider);
-      if (!mountedRef.current) {
-        return;
-      }
-      rememberModelCatalog(provider, response.catalog);
-      void loadProviderModels(provider, {
-        ...(workspaceDir ? { cwd: workspaceDir } : {}),
-        background: true,
-        reason: "settings-manual-model-option-delete",
-        staleMs: 0,
-      }).catch(() => undefined);
-      setManualModels((current) => ({ ...current, [provider]: nextManualModels }));
-      setManualModelActions((current) => ({ ...current, [provider]: {} }));
-    } catch (error) {
-      if (!mountedRef.current) {
-        return;
-      }
-      setManualModelActions((current) => ({
-        ...current,
-        [provider]: { error: errorMessage(error, "Failed to delete manual model option.") },
       }));
     }
   }
@@ -618,13 +625,21 @@ export function SettingsPane() {
   }
 
   function renderModelProviderCard(provider: ProviderChoice) {
-    const catalog = modelCatalogs[provider];
+    const storeCatalogState = storeModelCatalogs[provider];
+    const catalog = newestModelCatalog(modelCatalogs[provider], storeCatalogState?.catalog);
     const manual = manualModels[provider] ?? [];
     const refreshState = modelRefreshStates[provider] ?? { status: "idle" as const };
     const form = manualModelForms[provider];
     const action = manualModelActions[provider] ?? {};
     const supportsOptions = providerSupportsManualOptions(provider);
-    const lastSuccess = lastModelRefreshSuccessAt[provider];
+    const localCatalog = modelCatalogs[provider];
+    const localUpdatedAt = localCatalog && isAuthoritativeModelCatalog(localCatalog)
+      ? localCatalog.fetchedAt
+      : null;
+    const catalogTimestamp = newestTimestamp(
+      localUpdatedAt,
+      storeCatalogState?.lastSuccessfulFetchedAt,
+    );
     const expanded = expandedModelProviders[provider] === true;
     const manualActiveCount = manual.filter((model) => manualModelIsActive(catalog, model.id)).length;
     const catalogSource = catalog
@@ -669,7 +684,7 @@ export function SettingsPane() {
               </div>
               <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-[var(--app-hint)]">
                 <span>{catalog?.models.length ?? 0} models</span>
-                <span>Last success: {formatRefreshTimestamp(lastSuccess)}</span>
+                <span>Updated: {formatRefreshTimestamp(catalogTimestamp)}</span>
                 <span className="max-w-[14rem] truncate" title={catalogSource}>
                   {catalogSource}
                 </span>
@@ -680,11 +695,12 @@ export function SettingsPane() {
             type="button"
             onClick={() => void refreshProviderModelCatalog(provider)}
             disabled={refreshState.status === "loading"}
-            className={`inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border px-2 text-xs font-medium transition-colors disabled:cursor-default disabled:opacity-70 ${refreshButtonClass}`}
+            className={`${SETTINGS_REFRESH_BUTTON_CLASS} ${refreshButtonClass}`}
             aria-label={`Refresh ${providerLabel(provider)} models`}
+            title={`Refresh ${providerLabel(provider)} models`}
           >
-            <RefreshIcon size={13} className={refreshState.status === "loading" ? "animate-spin" : ""} />
-            <span className="hidden sm:inline">Refresh</span>
+            <RefreshIcon size={14} className={refreshState.status === "loading" ? "animate-spin" : ""} />
+            <span className="hidden whitespace-nowrap sm:inline">Refresh</span>
           </button>
         </div>
 
@@ -695,7 +711,7 @@ export function SettingsPane() {
           ) : null}
 
           {expanded ? (
-            <div className="grid gap-4 border-t border-[var(--app-border)] p-3 lg:grid-cols-[minmax(0,1fr)_minmax(280px,0.9fr)]">
+            <div className="space-y-4 border-t border-[var(--app-border)] p-3">
               <div className="min-w-0">
                 <div className="flex items-center justify-between gap-3">
                   <div className="text-xs font-semibold uppercase tracking-wide text-[var(--app-hint)]">
@@ -715,34 +731,31 @@ export function SettingsPane() {
                     catalog={catalog}
                     loading={modelsLoading && !catalog}
                     readOnly
-                    showModelIds
                     emptyLabel="No models loaded."
+                    paramDisplay="responsive"
+                    hideImplicitDefaultVariant
+                    onDeleteManualModel={(modelId) => void deleteManualModel(provider, modelId)}
+                    deleteManualModelDisabled={Boolean(action.loading)}
                   />
                 </OverlayScrollArea>
               </div>
 
-              <div className="min-w-0">
+              <div className="min-w-0 border-t border-[var(--app-border)] pt-3">
                 <div className="text-xs font-semibold uppercase tracking-wide text-[var(--app-hint)]">
-                  Manual models
+                  Add manual model
                 </div>
-                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                <div className="mt-2 grid gap-2 md:grid-cols-[minmax(0,1fr)_minmax(10rem,16rem)_auto]">
                   <input
                     value={form.modelId}
                     onChange={(event) => updateManualModelForm(provider, { modelId: event.target.value })}
                     placeholder={provider === "opencode" ? "openai/gpt-5.6" : "gpt-5.6"}
                     className="min-w-0 rounded-md border border-[var(--app-border)] bg-[var(--app-bg)] px-2 py-1.5 text-xs text-[var(--app-fg)] outline-none transition-colors placeholder:text-[var(--app-hint)] focus:border-primary"
                   />
-                  <input
-                    value={form.label}
-                    onChange={(event) => updateManualModelForm(provider, { label: event.target.value })}
-                    placeholder="Label"
-                    className="min-w-0 rounded-md border border-[var(--app-border)] bg-[var(--app-bg)] px-2 py-1.5 text-xs text-[var(--app-fg)] outline-none transition-colors placeholder:text-[var(--app-hint)] focus:border-primary"
-                  />
                   {supportsOptions ? (
                     <input
                       value={form.options}
                       onChange={(event) => updateManualModelForm(provider, { options: event.target.value })}
-                      placeholder={provider === "opencode" ? "default high" : "low high"}
+                      placeholder={provider === "opencode" ? "low high max" : "low high"}
                       className="min-w-0 rounded-md border border-[var(--app-border)] bg-[var(--app-bg)] px-2 py-1.5 text-xs text-[var(--app-fg)] outline-none transition-colors placeholder:text-[var(--app-hint)] focus:border-primary"
                     />
                   ) : (
@@ -754,7 +767,7 @@ export function SettingsPane() {
                     type="button"
                     onClick={() => void addManualModel(provider)}
                     disabled={Boolean(action.loading) || !form.modelId.trim()}
-                    className="inline-flex items-center justify-center gap-1.5 rounded-md border border-[var(--app-border)] px-2 py-1.5 text-xs font-medium text-[var(--app-hint)] transition-colors hover:text-[var(--app-fg)] disabled:cursor-default disabled:opacity-50"
+                    className="inline-flex items-center justify-center gap-1.5 rounded-md border border-[var(--app-border)] px-2 py-1.5 text-xs font-medium text-[var(--app-hint)] transition-colors hover:text-[var(--app-fg)] disabled:cursor-default disabled:opacity-50 md:w-20"
                   >
                     {action.loading ? <LoaderCircle size={13} className="animate-spin" /> : <Plus size={13} />}
                     Add
@@ -763,61 +776,6 @@ export function SettingsPane() {
                 {action.error ? (
                   <div className="mt-2 text-xs text-[var(--app-danger)]">{action.error}</div>
                 ) : null}
-                <div className="mt-3 space-y-2">
-                  {manual.length === 0 ? (
-                    <div className="rounded-xl border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-3 py-2 text-xs text-[var(--app-hint)]">
-                      No manual models.
-                    </div>
-                  ) : (
-                    manual.map((model) => {
-                      const active = manualModelIsActive(catalog, model.id);
-                      return (
-                        <div
-                          key={model.id}
-                          className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-3 py-2"
-                        >
-                          <div className="min-w-0">
-                            <div className="break-words font-mono text-xs text-[var(--app-fg)] [overflow-wrap:anywhere]">
-                              {model.id}
-                            </div>
-                            <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-[var(--app-hint)]">
-                              {model.label ? <span>{model.label}</span> : null}
-                              {model.optionIds?.map((optionId) => (
-                                <button
-                                  key={optionId}
-                                  type="button"
-                                  onClick={() => void deleteManualModelOption(provider, model.id, optionId)}
-                                  disabled={Boolean(action.loading)}
-                                  className="inline-flex items-center gap-1 rounded-full border border-[var(--app-border)] bg-[var(--app-bg)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--app-hint)] transition-colors hover:text-[var(--app-danger)] disabled:cursor-default disabled:opacity-50"
-                                  aria-label={`Delete ${optionId} from ${model.id}`}
-                                >
-                                  <span>{optionId}</span>
-                                  <X size={10} />
-                                </button>
-                              ))}
-                              {active ? (
-                                <ModelSourceBadge manual />
-                              ) : (
-                                <span className="rounded-full border border-[var(--app-border)] bg-[var(--app-bg)] px-1.5 py-0.5">
-                                  native wins
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => void deleteManualModel(provider, model.id)}
-                            disabled={Boolean(action.loading)}
-                            className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-[var(--app-border)] text-[var(--app-hint)] transition-colors hover:text-[var(--app-danger)] disabled:cursor-default disabled:opacity-50"
-                            aria-label={`Delete ${model.id}`}
-                          >
-                            <Trash2 size={13} />
-                          </button>
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
               </div>
             </div>
           ) : null}
@@ -1001,10 +959,16 @@ export function SettingsPane() {
                 type="button"
                 onClick={() => MODEL_PROVIDERS.forEach((provider) => void refreshProviderModelCatalog(provider))}
                 disabled={MODEL_PROVIDERS.some((provider) => modelRefreshStates[provider]?.status === "loading")}
-                className="inline-flex items-center gap-1.5 rounded-md border border-[var(--app-border)] px-2 py-1 text-xs font-medium text-[var(--app-hint)] transition-colors hover:text-[var(--app-fg)] disabled:cursor-default disabled:opacity-60"
+                className={`${SETTINGS_REFRESH_BUTTON_CLASS} border-[var(--app-border)] text-[var(--app-hint)] hover:text-[var(--app-fg)]`}
+                aria-label="Refresh all model catalogs"
+                title="Refresh all model catalogs"
               >
-                <RefreshCw size={13} />
-                Refresh all
+                {MODEL_PROVIDERS.some((provider) => modelRefreshStates[provider]?.status === "loading") ? (
+                  <LoaderCircle size={14} className="animate-spin" />
+                ) : (
+                  <ListRestart size={14} />
+                )}
+                <span className="hidden whitespace-nowrap sm:inline">Refresh all</span>
               </button>
             </div>
 

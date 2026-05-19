@@ -1,7 +1,7 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
-import { MessageCircleMore, PanelRight, Plus, UsersRound } from "lucide-react";
+import { MessageCircleMore, Plus, UsersRound } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
-import type { CouncilSnapshot, PermissionResponseRequest, SessionConfigValue, SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
+import type { CouncilSnapshot, PermissionResponseRequest, ProviderModelCatalog, SessionConfigValue, SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
 import * as api from "./api";
 import { SessionSidebar } from "./SessionSidebar";
 import { useSessionStore } from "./useSessionStore";
@@ -15,10 +15,11 @@ import { ConfirmDialog } from "./components/workbench/dialogs/ConfirmDialog";
 import { RenameSessionDialog } from "./components/workbench/dialogs/RenameSessionDialog";
 import { WorkbenchErrorBoundary } from "./components/workbench/WorkbenchErrorBoundary";
 import { CanvasNewSessionPane } from "./components/workbench/canvas/CanvasNewSessionPane";
-import { CanvasCouncilPane } from "./components/workbench/canvas/CanvasCouncilPane";
 import { CanvasSessionPane } from "./components/workbench/canvas/CanvasSessionPane";
 import { CanvasWorkbench, type CanvasLayout } from "./components/workbench/canvas/CanvasWorkbench";
 import { CouncilPage } from "./council/CouncilPage";
+import { COUNCIL_ACCENT_ICON_CLASSNAME } from "./council/council-theme";
+import { defaultRunningCouncilId } from "./council/CouncilsBrowser";
 import { NewCouncilDialog } from "./council/NewCouncilDialog";
 import { WorkbenchEmptyPane } from "./components/workbench/panes/WorkbenchEmptyPane";
 import { WorkbenchOpeningPane } from "./components/workbench/panes/WorkbenchOpeningPane";
@@ -192,15 +193,59 @@ function readRememberedModelDrafts(): Record<ProviderChoice, ModelDraft> {
   }
 }
 
+function writeRememberedModelDrafts(drafts: Record<ProviderChoice, ModelDraft>): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(MODEL_DRAFT_STORAGE_KEY, JSON.stringify(drafts));
+  } catch {
+    // Ignore storage failures; the in-memory draft still applies for this page.
+  }
+}
+
 function rememberModelDraft(provider: ProviderChoice, draft: ModelDraft): void {
   if (typeof window === "undefined") return;
   try {
     const current = readRememberedModelDrafts();
     current[provider] = sanitizeModelDraft(draft);
-    window.localStorage.setItem(MODEL_DRAFT_STORAGE_KEY, JSON.stringify(current));
+    writeRememberedModelDrafts(current);
   } catch {
     // Ignore storage failures; the in-memory draft still applies for this page.
   }
+}
+
+function catalogHasModel(
+  catalog: ProviderModelCatalog | null | undefined,
+  modelId: string | null | undefined,
+): boolean {
+  const normalizedModelId = modelId?.trim();
+  if (!normalizedModelId || !catalog) {
+    return false;
+  }
+  return catalog.models.some((model) => model.id === normalizedModelId);
+}
+
+function pruneModelDraftForCatalog(
+  catalog: ProviderModelCatalog | null | undefined,
+  draft: ModelDraft | undefined,
+): ModelDraft | undefined {
+  if (!draft?.modelId) {
+    return draft;
+  }
+  if (!catalog || catalogHasModel(catalog, draft.modelId)) {
+    return draft;
+  }
+  return {};
+}
+
+function sameModelDraft(left: ModelDraft | undefined, right: ModelDraft | undefined): boolean {
+  return JSON.stringify(left ?? {}) === JSON.stringify(right ?? {});
+}
+
+function draftModelIdForCatalog(
+  catalog: ProviderModelCatalog | null | undefined,
+  draft: ModelDraft | undefined,
+): string | null {
+  return catalogHasModel(catalog, draft?.modelId) ? draft!.modelId! : null;
 }
 
 export function App() {
@@ -324,6 +369,14 @@ export function App() {
   );
   const [canvasPaneTargets, setCanvasPaneTargets] =
     useState<Record<CanvasPaneId, CanvasPaneTarget>>(() => createEmptyCanvasTargets());
+  const [canvasPaneRightPanelsOpen, setCanvasPaneRightPanelsOpen] = useState<
+    Record<CanvasPaneId, boolean>
+  >(() => ({
+    "canvas-1": true,
+    "canvas-2": true,
+    "canvas-3": true,
+    "canvas-4": true,
+  }));
   const [canvasNewSessionDrafts, setCanvasNewSessionDrafts] =
     useState<Record<CanvasPaneId, CanvasNewSessionDraft>>(() =>
       createEmptyCanvasNewSessionDrafts(),
@@ -466,7 +519,7 @@ export function App() {
   const {
     sanitizedPinnedSessionIdByWorkspace,
     togglePinnedSession,
-  } = useWorkbenchSidebarPreferences(workspaceSections);
+  } = useWorkbenchSidebarPreferences(workspaceSections, councils);
 
   const runtimeStatusBySessionId = useMemo(
     () =>
@@ -502,6 +555,34 @@ export function App() {
   const activeCanvasSummary = activeCanvasProjection?.summary ?? null;
   const activeCanvasCouncil = resolveCanvasCouncil(activeCanvasPaneId);
 
+  useEffect(() => {
+    if (!canvasMaximizedPaneId) {
+      return;
+    }
+    setCanvasPaneRightPanelsOpen((current) =>
+      current[canvasMaximizedPaneId]
+        ? current
+        : {
+            ...current,
+            [canvasMaximizedPaneId]: true,
+          },
+    );
+  }, [canvasMaximizedPaneId]);
+
+  const setCanvasPaneRightPanelOpen = useCallback((paneId: CanvasPaneId, open: boolean) => {
+    setCanvasPaneRightPanelsOpen((current) => ({
+      ...current,
+      [paneId]: open,
+    }));
+  }, []);
+
+  const toggleCanvasPaneRightPanel = useCallback((paneId: CanvasPaneId) => {
+    setCanvasPaneRightPanelsOpen((current) => ({
+      ...current,
+      [paneId]: !current[paneId],
+    }));
+  }, []);
+
   const setCanvasLayout = (layout: CanvasLayout) => {
     setCanvasLayoutState(layout);
     setCanvasMaximizedPaneId(null);
@@ -515,6 +596,7 @@ export function App() {
     setCanvasPaneTargets((current) =>
       applyCanvasPaneTarget(current, paneId, target, projections),
     );
+    setCanvasPaneRightPanelOpen(paneId, true);
     setActiveCanvasPaneId(paneId);
   };
 
@@ -570,6 +652,7 @@ export function App() {
   };
 
   const hideCouncilMode = () => {
+    setSelectedCouncilId(null);
     setWorkbenchMode("single");
     setRightSidebarOpen(false);
     setRightOpen(false);
@@ -690,28 +773,45 @@ export function App() {
     selectedModelId: startModelDraft?.modelId,
     selectedReasoningId: startModelDraft?.reasoningId,
     allowProviderDefault: true,
+    preserveMissingSelectedModel: false,
   });
-  const startModelId = startModelControl.model?.id ?? null;
-  const startOptionValues = startModelId
-    ? buildModelOptionValuesFromReasoning({
-        catalog: currentModelCatalogState?.catalog,
-        modelId: startModelId,
-        reasoningId: startModelControl.reasoning?.id ?? null,
-      })
-    : undefined;
+  const startDraftModelId = draftModelIdForCatalog(
+    currentModelCatalogState?.catalog,
+    startModelDraft,
+  );
+  const startModelId = startDraftModelId ?? startModelControl.model?.id ?? null;
+  const startReasoningId =
+    startDraftModelId === startModelId
+      ? startModelDraft.reasoningId ?? startModelControl.reasoning?.id ?? null
+      : startModelControl.reasoning?.id ?? null;
+  const startOptionValues =
+    startDraftModelId === startModelId && startModelDraft.optionValues !== undefined
+      ? startModelDraft.optionValues
+      : startModelId
+        ? buildModelOptionValuesFromReasoning({
+            catalog: currentModelCatalogState?.catalog,
+            modelId: startModelId,
+            reasoningId: startReasoningId,
+          })
+        : undefined;
   const selectedModelCatalogState = selectedSummary
     ? modelCatalogs[selectedSummary.session.provider as ProviderChoice]
     : undefined;
   const claimModelDraft = selectedSummary ? claimModelDrafts[selectedSummary.session.id] : undefined;
+  const claimDraftModelId = draftModelIdForCatalog(
+    selectedModelCatalogState?.catalog,
+    claimModelDraft,
+  );
   const claimModelControl = selectedSummary
     ? resolveSelectedModelDraft({
         catalog: selectedModelCatalogState?.catalog,
         selectedModelId:
-          claimModelDraft?.modelId ?? selectedSummary.session.model?.currentModelId ?? null,
+          claimDraftModelId ?? selectedSummary.session.model?.currentModelId ?? null,
         selectedReasoningId:
-          claimModelDraft?.reasoningId ??
+          (claimDraftModelId ? claimModelDraft?.reasoningId : undefined) ??
           selectedSummary.session.model?.currentReasoningId ??
           null,
+        preserveMissingSelectedModel: claimDraftModelId === null,
       })
     : null;
   const claimModeControl = selectedSummary
@@ -740,7 +840,7 @@ export function App() {
     newSessionProvider: currentProvider,
     startModeId: startModeControl.effectiveModeId,
     startModelId,
-    startReasoningId: startModelId ? startModelControl.reasoning?.id ?? null : null,
+    startReasoningId: startModelId ? startReasoningId : null,
     ...(startOptionValues !== undefined ? { startOptionValues } : {}),
     confirmCreateMissingWorkspace,
     sendInput,
@@ -803,6 +903,74 @@ export function App() {
     workbenchMode,
   ]);
 
+  useEffect(() => {
+    const pruneProviderDrafts = (
+      drafts: Record<ProviderChoice, ModelDraft>,
+    ): Record<ProviderChoice, ModelDraft> => {
+      let changed = false;
+      const next = { ...drafts };
+      for (const provider of PROVIDER_CHOICES) {
+        const catalog = modelCatalogs[provider]?.catalog;
+        if (!catalog) {
+          continue;
+        }
+        const pruned = pruneModelDraftForCatalog(catalog, next[provider]) ?? {};
+        if (!sameModelDraft(pruned, next[provider])) {
+          next[provider] = pruned;
+          changed = true;
+        }
+      }
+      return changed ? next : drafts;
+    };
+
+    setStartModelDrafts((current) => pruneProviderDrafts(current));
+    setCanvasNewSessionDrafts((current) => {
+      let changed = false;
+      const next = { ...current };
+      for (const paneId of CANVAS_PANE_IDS) {
+        const prunedModelDrafts = pruneProviderDrafts(current[paneId].modelDrafts);
+        if (prunedModelDrafts !== current[paneId].modelDrafts) {
+          next[paneId] = {
+            ...current[paneId],
+            modelDrafts: prunedModelDrafts,
+          };
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+    setClaimModelDrafts((current) => {
+      let changed = false;
+      const next = { ...current };
+      for (const [sessionId, draft] of Object.entries(current)) {
+        const provider = projections.get(sessionId)?.summary.session.provider;
+        if (!provider || provider === "custom") {
+          continue;
+        }
+        const catalog = modelCatalogs[provider as ProviderChoice]?.catalog;
+        if (!catalog) {
+          continue;
+        }
+        const pruned = pruneModelDraftForCatalog(catalog, draft) ?? {};
+        if (!sameModelDraft(pruned, draft)) {
+          if (pruned.modelId) {
+            next[sessionId] = pruned;
+          } else {
+            delete next[sessionId];
+          }
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+
+    const remembered = readRememberedModelDrafts();
+    const prunedRemembered = pruneProviderDrafts(remembered);
+    if (prunedRemembered !== remembered) {
+      writeRememberedModelDrafts(prunedRemembered);
+    }
+  }, [modelCatalogs, projections]);
+
   const handlePermissionResponse = async (
     requestId: string,
     response: PermissionResponseRequest,
@@ -863,7 +1031,7 @@ export function App() {
       selectedSummary.session.rootDir ||
       selectedSummary.session.cwd ||
       ""
-    : selectedCouncil?.workspace ?? selectedWorkspaceOnlyDir ?? "";
+    : selectedCouncil?.workspace ?? selectedWorkspaceOnlyDir ?? availableWorkspaceDir ?? "";
   const terminalCwd = selectedInspectorWorkspaceDir || "~";
   const selectedTerminalSessionId = selectedSummary?.session.id ?? null;
   const terminalOwner = useMemo(() => {
@@ -891,6 +1059,9 @@ export function App() {
       onWorkspaceSortModeChange={setWorkspaceSortMode}
       pinnedSessionIdByWorkspace={sanitizedPinnedSessionIdByWorkspace}
       onTogglePinSession={togglePinnedSession}
+      onTogglePinCouncil={(workspaceDir, councilId) =>
+        togglePinnedSession(workspaceDir, `council:${councilId}`)
+      }
       onAddWorkspace={(dir) => {
         void addWorkspace(dir);
         setLeftOpen(false);
@@ -984,7 +1155,7 @@ export function App() {
     setRightOpen(false);
   };
 
-  const inspectorContent = selectedSummary || selectedWorkspaceOnlyDir ? (
+  const inspectorContent = selectedSummary || selectedInspectorWorkspaceDir ? (
     <Suspense
       fallback={
         <div className="flex h-full items-center justify-center text-xs text-[var(--app-hint)]">
@@ -1022,6 +1193,14 @@ export function App() {
     "--workbench-callout-anchor": `calc(var(--workbench-floating-anchor) + 3.5rem)`,
   } as CSSProperties;
   const mobileCanvasEnabled = viewportWidthPx >= 700;
+  const inspectorToggleOpen = rightSidebarOpen || rightOpen;
+  const toggleInspectorFromHeader = () => {
+    if (typeof window !== "undefined" && window.matchMedia("(min-width: 768px)").matches) {
+      setRightSidebarOpen((open) => !open);
+      return;
+    }
+    setRightOpen((open) => !open);
+  };
 
   return (
     <div
@@ -1052,6 +1231,7 @@ export function App() {
             hideCouncilMode();
             return;
           }
+          setSelectedCouncilId(defaultRunningCouncilId(councils));
           setWorkbenchMode("council");
           setRightSidebarOpen(false);
           setRightOpen(false);
@@ -1285,6 +1465,7 @@ export function App() {
               selectedCouncilId={selectedCouncilId}
               onSelectedCouncilIdChange={setSelectedCouncilId}
               onCouncilsChange={setCouncils}
+              initialCouncils={councils}
               sidebarOpen={sidebarOpen}
               onExpandSidebar={() => setSidebarOpen(true)}
               onOpenLeft={() => setLeftOpen(true)}
@@ -1340,7 +1521,7 @@ export function App() {
                     {council ? (
                       <UsersRound
                         size={15}
-                        className="text-emerald-700/90 dark:text-emerald-300/90"
+                        className={COUNCIL_ACCENT_ICON_CLASSNAME}
                       />
                     ) : null}
                   </>
@@ -1351,18 +1532,35 @@ export function App() {
                 const target = canvasPaneTargets[typedPaneId];
                 const projection = resolveCanvasProjection(typedPaneId);
                 const paneExpanded = canvasMaximizedPaneId === typedPaneId;
+                const paneRightPanelOpen =
+                  paneExpanded && canvasPaneRightPanelsOpen[typedPaneId] !== false;
                 if (target.kind === "council") {
-                  const council = councils.find((candidate) => candidate.id === target.councilId) ?? null;
                   return (
-                    <CanvasCouncilPane
-                      variant={paneExpanded ? "expanded" : "compact"}
-                      council={council}
-                      onOpenFullCouncil={(councilId) => {
-                        setSelectedCouncilId(councilId);
-                        setWorkbenchMode("council");
-                        setRightSidebarOpen(false);
-                        setRightOpen(false);
+                    <CouncilPage
+                      clientId={clientId}
+                      workspaceDir={availableWorkspaceDir ?? workspaceDir ?? ""}
+                      workspaceDirs={workspaceDirs}
+                      initialCouncils={councils}
+                      selectedCouncilId={target.councilId}
+                      onSelectedCouncilIdChange={(councilId) => {
+                        if (councilId) {
+                          setCanvasPaneCouncil(typedPaneId, councilId);
+                        }
                       }}
+                      onCouncilsChange={setCouncils}
+                      sidebarOpen
+                      onExpandSidebar={() => undefined}
+                      onOpenLeft={() => undefined}
+                      onAddWorkspace={(dir) => void addWorkspace(dir)}
+                      onHide={() => clearCanvasPane(typedPaneId)}
+                      agentsPanelMode={paneRightPanelOpen ? "open" : "closed"}
+                      onAgentsPanelModeChange={(mode) =>
+                        setCanvasPaneRightPanelOpen(typedPaneId, mode === "open")
+                      }
+                      agentsToggleDisabled={!paneExpanded}
+                      showAgentsToggle
+                      showLeftSidebarControls={false}
+                      showCloseButton={false}
                     />
                   );
                 }
@@ -1382,15 +1580,29 @@ export function App() {
                       selectedModelId: paneModelDraft?.modelId,
                       selectedReasoningId: paneModelDraft?.reasoningId,
                       allowProviderDefault: true,
+                      preserveMissingSelectedModel: false,
                     });
-                    const paneStartModelId = paneModelControl.model?.id ?? null;
-                    const paneStartOptionValues = paneStartModelId
-                      ? buildModelOptionValuesFromReasoning({
-                          catalog: paneModelCatalogState?.catalog,
-                          modelId: paneStartModelId,
-                          reasoningId: paneModelControl.reasoning?.id ?? null,
-                        })
-                      : undefined;
+                    const paneDraftModelId = draftModelIdForCatalog(
+                      paneModelCatalogState?.catalog,
+                      paneModelDraft,
+                    );
+                    const paneStartModelId =
+                      paneDraftModelId ?? paneModelControl.model?.id ?? null;
+                    const paneStartReasoningId =
+                      paneDraftModelId === paneStartModelId
+                        ? paneModelDraft.reasoningId ?? paneModelControl.reasoning?.id ?? null
+                        : paneModelControl.reasoning?.id ?? null;
+                    const paneStartOptionValues =
+                      paneDraftModelId === paneStartModelId &&
+                        paneModelDraft.optionValues !== undefined
+                        ? paneModelDraft.optionValues
+                        : paneStartModelId
+                          ? buildModelOptionValuesFromReasoning({
+                              catalog: paneModelCatalogState?.catalog,
+                              modelId: paneStartModelId,
+                              reasoningId: paneStartReasoningId,
+                            })
+                          : undefined;
                     return (
                       <CanvasNewSessionPane
                         workspaceDirs={workspaceDirs}
@@ -1399,7 +1611,7 @@ export function App() {
                         modelCatalog={paneModelCatalogState?.catalog ?? null}
                         modelCatalogLoading={paneModelCatalogState?.loading ?? false}
                         selectedModelId={paneModelControl.model?.id ?? null}
-                        selectedReasoningId={paneModelControl.reasoning?.id ?? null}
+                        selectedReasoningId={paneStartReasoningId}
                         onRequestCatalogRefresh={() => {
                           void loadProviderModels(paneProvider, {
                             background: true,
@@ -1488,7 +1700,10 @@ export function App() {
                             ...current,
                             [typedPaneId]: (() => {
                               const modelId =
-                                current[typedPaneId].modelDrafts[paneProvider]?.modelId ??
+                                draftModelIdForCatalog(
+                                  paneModelCatalogState?.catalog,
+                                  current[typedPaneId].modelDrafts[paneProvider],
+                                ) ??
                                 paneModelControl.model?.id ??
                                 null;
                               const optionValues = modelId
@@ -1531,8 +1746,8 @@ export function App() {
                             ...(paneStartOptionValues !== undefined
                               ? { optionValues: paneStartOptionValues }
                               : {}),
-                            ...(paneStartModelId && paneModelControl.reasoning?.id
-                              ? { reasoningId: paneModelControl.reasoning.id }
+                            ...(paneStartModelId && paneStartReasoningId
+                              ? { reasoningId: paneStartReasoningId }
                               : {}),
                             confirmCreateMissingWorkspace,
                             onSessionCreated: (sessionId) => {
@@ -1611,6 +1826,9 @@ export function App() {
                 return (
                   <CanvasSessionPane
                     variant={paneExpanded ? "expanded" : "compact"}
+                    sidePanelOpen={paneRightPanelOpen}
+                    sidePanelToggleDisabled={!paneExpanded}
+                    onToggleSidePanel={() => toggleCanvasPaneRightPanel(typedPaneId)}
                     {...(paneExpanded
                       ? {
                           inspector: (
@@ -1761,13 +1979,17 @@ export function App() {
               onClaimHistory={() => {
                 const sessionId = selectedSummary.session.id;
                 const modelDraft = claimModelDrafts[sessionId];
+                const modelDraftId = draftModelIdForCatalog(
+                  selectedModelCatalogState?.catalog,
+                  modelDraft,
+                );
                 const optionValues =
-                  modelDraft?.optionValues ??
-                  (modelDraft?.modelId
+                  (modelDraftId ? modelDraft?.optionValues : undefined) ??
+                  (modelDraftId
                     ? buildModelOptionValuesFromReasoning({
                         catalog: selectedModelCatalogState?.catalog,
-                        modelId: modelDraft.modelId,
-                        reasoningId: modelDraft.reasoningId ?? null,
+                        modelId: modelDraftId,
+                        reasoningId: modelDraft?.reasoningId ?? null,
                       })
                     : undefined);
                 void claimHistorySession(sessionId, {
@@ -1775,9 +1997,11 @@ export function App() {
                   ...(claimModeControl?.effectiveModeId
                     ? { modeId: claimModeControl.effectiveModeId }
                     : {}),
-                  ...(modelDraft?.modelId ? { modelId: modelDraft.modelId } : {}),
+                  ...(modelDraftId ? { modelId: modelDraftId } : {}),
                   ...(optionValues !== undefined ? { optionValues } : {}),
-                  ...(modelDraft?.reasoningId ? { reasoningId: modelDraft.reasoningId } : {}),
+                  ...(modelDraftId && modelDraft?.reasoningId
+                    ? { reasoningId: modelDraft.reasoningId }
+                    : {}),
                 });
               }}
               claimAccessModes={claimModeControl?.accessModes ?? []}
@@ -1834,7 +2058,10 @@ export function App() {
               onClaimReasoningChange={(reasoningId) => {
                 const provider = selectedSummary.session.provider as ProviderChoice;
                 const modelId =
-                  claimModelDrafts[selectedSummary.session.id]?.modelId ??
+                  draftModelIdForCatalog(
+                    selectedModelCatalogState?.catalog,
+                    claimModelDrafts[selectedSummary.session.id],
+                  ) ??
                   claimModelControl?.model?.id ??
                   null;
                 const optionValues = modelId
@@ -1867,11 +2094,16 @@ export function App() {
                 const sessionId = selectedSummary.session.id;
                 const modeId = claimModeControl?.effectiveModeId ?? null;
                 const modelDraft = claimModelDrafts[sessionId];
-                const modelId = modelDraft?.modelId ?? null;
+                const modelId = draftModelIdForCatalog(
+                  selectedModelCatalogState?.catalog,
+                  modelDraft,
+                );
                 const reasoningId =
-                  modelDraft?.reasoningId ?? claimModelControl?.reasoning?.id ?? null;
+                  (modelId ? modelDraft?.reasoningId : undefined) ??
+                  claimModelControl?.reasoning?.id ??
+                  null;
                 const optionValues =
-                  modelDraft?.optionValues ??
+                  (modelId ? modelDraft?.optionValues : undefined) ??
                   (modelId
                     ? buildModelOptionValuesFromReasoning({
                         catalog: selectedModelCatalogState?.catalog,
@@ -1915,7 +2147,8 @@ export function App() {
               onExpandSidebar={() => setSidebarOpen(true)}
               onOpenRight={() => setRightOpen(true)}
               onExpandInspector={() => setRightSidebarOpen(true)}
-              onToggleInspector={() => setRightSidebarOpen((open) => !open)}
+              onToggleInspector={toggleInspectorFromHeader}
+              inspectorToggleOpen={inspectorToggleOpen}
               onFloatingAnchorOffsetChange={setFloatingAnchorOffsetPx}
               {...(!selectedIsReadOnlyReplay
                 ? {
@@ -1992,7 +2225,9 @@ export function App() {
                   ),
                 );
               }}
-              showInspectorToggle={false}
+              showInspectorToggle={!rightOpen}
+              inspectorToggleClassName="md:hidden"
+              reserveRightPanelToggleSpace={!rightSidebarOpen}
             />
           ) : primaryPaneState.kind === "opening" && activeOpeningSession ? (
             <WorkbenchOpeningPane
@@ -2003,6 +2238,11 @@ export function App() {
               onExpandSidebar={() => setSidebarOpen(true)}
               onOpenRight={() => setRightOpen(true)}
               onExpandInspector={() => setRightSidebarOpen(true)}
+              onToggleInspector={toggleInspectorFromHeader}
+              inspectorToggleOpen={inspectorToggleOpen}
+              showInspectorToggle={!rightOpen}
+              inspectorToggleClassName="md:hidden"
+              reserveRightPanelToggleSpace={!rightSidebarOpen}
             />
           ) : (
             <WorkbenchEmptyPane
@@ -2012,6 +2252,11 @@ export function App() {
               onExpandSidebar={() => setSidebarOpen(true)}
               onOpenRight={() => setRightOpen(true)}
               onExpandInspector={() => setRightSidebarOpen(true)}
+              onToggleInspector={toggleInspectorFromHeader}
+              inspectorToggleOpen={inspectorToggleOpen}
+              showInspectorToggle={!rightOpen}
+              inspectorToggleClassName="md:hidden"
+              reserveRightPanelToggleSpace={!rightSidebarOpen}
               emptyStateComposerRef={emptyStateComposerRef}
               emptyStateDraft={emptyStateDraft}
               onEmptyStateDraftChange={setEmptyStateDraft}
@@ -2033,8 +2278,8 @@ export function App() {
               onChangeProvider={(value) => setNewSessionProvider(value)}
               modelCatalog={currentModelCatalogState?.catalog ?? null}
               modelCatalogLoading={currentModelCatalogState?.loading ?? false}
-              selectedModelId={startModelControl.model?.id ?? null}
-              selectedReasoningId={startModelControl.reasoning?.id ?? null}
+              selectedModelId={startModelId}
+              selectedReasoningId={startReasoningId}
               onRequestCatalogRefresh={() => {
                 void loadProviderModels(currentProvider, {
                   background: true,
@@ -2065,7 +2310,10 @@ export function App() {
                   ...current,
                   [currentProvider]: (() => {
                     const modelId =
-                      current[currentProvider]?.modelId ??
+                      draftModelIdForCatalog(
+                        currentModelCatalogState?.catalog,
+                        current[currentProvider],
+                      ) ??
                       startModelControl.model?.id ??
                       null;
                     const optionValues = modelId
@@ -2122,33 +2370,11 @@ export function App() {
             desktopOpen={rightSidebarOpen}
             rightOpen={rightOpen}
             onRightOpenChange={setRightOpen}
+            onToggle={toggleInspectorFromHeader}
             content={inspectorContent}
           />
         ) : null}
       </WorkbenchErrorBoundary>
-
-      {workbenchMode === "single" && !settingsOpen ? (
-        <>
-          <button
-            type="button"
-            className="workbench-fixed-sidebar-toggle icon-click-feedback fixed right-[max(1rem,env(safe-area-inset-right))] top-[calc(env(safe-area-inset-top,0px)+0.75rem)] z-[25] hidden h-8 w-8 items-center justify-center rounded-md border border-[var(--app-border)] bg-[var(--app-bg)]/90 text-[var(--app-hint)] shadow-sm backdrop-blur hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] md:inline-flex"
-            onClick={() => setRightSidebarOpen((open) => !open)}
-            aria-label={rightSidebarOpen ? "Collapse inspector" : "Expand inspector"}
-            title={rightSidebarOpen ? "Collapse inspector" : "Expand inspector"}
-          >
-            <PanelRight size={16} />
-          </button>
-          <button
-            type="button"
-            className="workbench-fixed-sidebar-toggle icon-click-feedback fixed right-[max(1rem,env(safe-area-inset-right))] top-[calc(env(safe-area-inset-top,0px)+0.75rem)] z-[25] inline-flex h-8 w-8 items-center justify-center rounded-md border border-[var(--app-border)] bg-[var(--app-bg)]/90 text-[var(--app-hint)] shadow-sm backdrop-blur hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] md:hidden"
-            onClick={() => setRightOpen((open) => !open)}
-            aria-label={rightOpen ? "Close inspector" : "Open inspector"}
-            title={rightOpen ? "Close inspector" : "Open inspector"}
-          >
-            <PanelRight size={18} />
-          </button>
-        </>
-      ) : null}
 
       <GlobalWorkbenchCallout
         errorDescriptor={errorDescriptor}

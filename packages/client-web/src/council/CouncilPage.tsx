@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import {
+  Activity,
   ArrowDown,
   ArrowUp,
   Bot,
   CheckCircle2,
-  ChevronDown,
-  ChevronRight,
+  Circle,
   CirclePause,
+  CircleStop,
   Ellipsis,
   Info,
   ListTree,
@@ -20,6 +21,7 @@ import {
   Square,
   Trash2,
   Unplug,
+  UsersRound,
   X,
 } from "lucide-react";
 import type {
@@ -37,9 +39,9 @@ import {
   TerminalTabStrip,
   type TerminalTabDescriptor,
 } from "../components/terminal/TerminalSurface";
-import { Sheet } from "../components/Sheet";
 import { FileReferencePicker } from "../components/FileReferencePicker";
 import { OverlayScrollArea } from "../components/OverlayScrollArea";
+import { ConversationSidePanelShell } from "../components/workbench/shells/ConversationSidePanelShell";
 import { COMPOSER_LAYOUT } from "../composer-contract";
 import { insertTextAtSelection } from "../composer-text-insertion";
 import { ConfirmDialog } from "../components/workbench/dialogs/ConfirmDialog";
@@ -48,8 +50,11 @@ import {
   HEADER_ACTION_GROUP_CLASS,
   HEADER_ICON_BUTTON_CLASS,
   HEADER_TEXT_BUTTON_CLASS,
-  headerRightPaddingClass,
 } from "../components/workbench/header-button-styles";
+import {
+  ConversationMetaBadge,
+  type ConversationMetaTone,
+} from "../components/workbench/ConversationMetaBadge";
 import {
   councilAgentDraftToConfig,
   normalizeCouncilAgentDraftForCatalog,
@@ -84,7 +89,9 @@ import {
   CouncilsBrowser,
   defaultRunningCouncilId,
   isCouncilHistory,
+  reconcileCouncilSelection,
 } from "./CouncilsBrowser";
+import { COUNCIL_HEADER_ICON_CLASSNAME } from "./council-theme";
 
 type CouncilMessage = CouncilSnapshot["messages"][number];
 type CouncilDisplayItem =
@@ -260,6 +267,41 @@ function agentStatusClass(status: CouncilAgent["status"]): string {
   }
 }
 
+function formatCouncilLifecycleLabel(status: CouncilSnapshot["status"]): string {
+  return status === "running" ? "Running" : "Stopped";
+}
+
+function formatCouncilPhaseLabel(phase: CouncilSnapshot["phase"]): string {
+  switch (phase) {
+    case "starting":
+      return "Starting";
+    case "ready":
+      return "Ready";
+    case "working":
+      return "Working";
+    case "waiting_input":
+      return "Input";
+    case "waiting_permission":
+      return "Approval";
+    case "stopping":
+      return "Stopping";
+    case "failed":
+      return "Failed";
+    case "ended":
+      return "Ended";
+  }
+}
+
+function councilPhaseTone(phase: CouncilSnapshot["phase"]): ConversationMetaTone {
+  if (phase === "working" || phase === "starting" || phase === "stopping") {
+    return "working";
+  }
+  if (phase === "waiting_permission") {
+    return "permission";
+  }
+  return "stopped";
+}
+
 const COUNCIL_AGENT_THEMES = [
   {
     bubble: "border-blue-300/80 bg-gradient-to-br from-blue-50/95 to-white text-slate-950 shadow-sm dark:border-blue-500/25 dark:from-blue-500/10 dark:to-transparent dark:text-blue-50",
@@ -353,6 +395,7 @@ export function CouncilPage(props: {
   clientId: string;
   workspaceDir: string;
   workspaceDirs: string[];
+  initialCouncils?: readonly CouncilSnapshot[];
   selectedCouncilId?: string | null;
   onSelectedCouncilIdChange?: (councilId: string | null) => void;
   onCouncilsChange?: (councils: CouncilSnapshot[]) => void;
@@ -361,8 +404,16 @@ export function CouncilPage(props: {
   onOpenLeft: () => void;
   onAddWorkspace: (dir: string) => void;
   onHide: () => void;
+  agentsPanelMode?: "open" | "closed";
+  onAgentsPanelModeChange?: (mode: "open" | "closed") => void;
+  agentsToggleDisabled?: boolean;
+  showAgentsToggle?: boolean;
+  showLeftSidebarControls?: boolean;
+  showCloseButton?: boolean;
 }) {
-  const [councils, setCouncils] = useState<CouncilSnapshot[]>([]);
+  const [councils, setCouncils] = useState<CouncilSnapshot[]>(() => [
+    ...(props.initialCouncils ?? []),
+  ]);
   const [selectedCouncilIdState, setSelectedCouncilIdState] = useState<string | null>(
     props.selectedCouncilId ?? null,
   );
@@ -393,12 +444,11 @@ export function CouncilPage(props: {
   const [renameDialogOpen, setRenameDialogOpen] = useState(false);
   const [renamePending, setRenamePending] = useState(false);
   const [newCouncilDialogOpen, setNewCouncilDialogOpen] = useState(false);
-  const [councilSidebarOpen, setCouncilSidebarOpen] = useState(false);
+  const [localCouncilSidebarOpen, setLocalCouncilSidebarOpen] = useState(
+    () => props.agentsPanelMode === "open",
+  );
   const [isCouncilWide, setIsCouncilWide] = useState(() =>
     typeof window === "undefined" ? false : window.matchMedia("(min-width: 900px)").matches,
-  );
-  const [councilStatusCollapsed, setCouncilStatusCollapsed] = useState(() =>
-    typeof window === "undefined" ? true : !window.matchMedia("(min-width: 900px)").matches,
   );
   const [stopConfirmOpen, setStopConfirmOpen] = useState(false);
   const [pendingDeleteHistoryCouncil, setPendingDeleteHistoryCouncil] = useState<CouncilSnapshot | null>(null);
@@ -414,21 +464,23 @@ export function CouncilPage(props: {
   const preserveCouncilSidebarAfterActionRef = useRef(false);
   const preserveTerminalAfterActionRef = useRef<string | null>(null);
   const autoWarmedCouncilIdRef = useRef<string | null>(null);
+  const selectedCouncilIdRef = useRef<string | null>(props.selectedCouncilId ?? null);
   const selectedCouncilId =
     props.selectedCouncilId !== undefined ? props.selectedCouncilId : selectedCouncilIdState;
   const setSelectedCouncilId = useCallback(
     (next: string | null | ((current: string | null) => string | null)) => {
-      const current =
-        props.selectedCouncilId !== undefined ? props.selectedCouncilId : selectedCouncilIdState;
+      const current = selectedCouncilIdRef.current;
       const resolved = typeof next === "function" ? next(current) : next;
+      selectedCouncilIdRef.current = resolved;
       setSelectedCouncilIdState(resolved);
       props.onSelectedCouncilIdChange?.(resolved);
     },
-    [props.onSelectedCouncilIdChange, props.selectedCouncilId, selectedCouncilIdState],
+    [props.onSelectedCouncilIdChange],
   );
 
   useEffect(() => {
     if (props.selectedCouncilId !== undefined) {
+      selectedCouncilIdRef.current = props.selectedCouncilId;
       setSelectedCouncilIdState(props.selectedCouncilId);
     }
   }, [props.selectedCouncilId]);
@@ -436,6 +488,29 @@ export function CouncilPage(props: {
   useEffect(() => {
     props.onCouncilsChange?.(councils);
   }, [props.onCouncilsChange, councils]);
+
+  useEffect(() => {
+    if (props.agentsPanelMode === undefined) {
+      return;
+    }
+    setLocalCouncilSidebarOpen(props.agentsPanelMode === "open");
+  }, [props.agentsPanelMode]);
+
+  const councilSidebarOpen =
+    props.agentsPanelMode !== undefined
+      ? props.agentsPanelMode === "open"
+      : localCouncilSidebarOpen;
+  const setCouncilSidebarOpen = useCallback(
+    (next: boolean | ((current: boolean) => boolean)) => {
+      const resolved = typeof next === "function" ? next(councilSidebarOpen) : next;
+      if (props.agentsPanelMode !== undefined) {
+        props.onAgentsPanelModeChange?.(resolved ? "open" : "closed");
+        return;
+      }
+      setLocalCouncilSidebarOpen(resolved);
+    },
+    [councilSidebarOpen, props.agentsPanelMode, props.onAgentsPanelModeChange],
+  );
 
   const selectedCouncil = selectedCouncilId ? councils.find((council) => council.id === selectedCouncilId) ?? null : null;
   const addAgentWorkspace = selectedCouncil?.workspace ?? workspace;
@@ -510,7 +585,6 @@ export function CouncilPage(props: {
     const query = window.matchMedia("(min-width: 900px)");
     const handleChange = () => {
       setIsCouncilWide(query.matches);
-      setCouncilStatusCollapsed(!query.matches);
     };
     handleChange();
     query.addEventListener("change", handleChange);
@@ -567,7 +641,9 @@ export function CouncilPage(props: {
     });
   }, [selectedCouncil?.id, selectedCouncil?.messages.length]);
 
-  const refreshCouncils = async (options?: { silent?: boolean }): Promise<CouncilSnapshot[]> => {
+  const refreshCouncils = async (
+    options?: { silent?: boolean; allowRunningDefault?: boolean },
+  ): Promise<CouncilSnapshot[]> => {
     if (!options?.silent) {
       setLoading(true);
     }
@@ -576,10 +652,9 @@ export function CouncilPage(props: {
       const response = await api.listCouncils();
       setCouncils(response.councils);
       setSelectedCouncilId((current) => {
-        if (current && response.councils.some((council) => council.id === current)) {
-          return current;
-        }
-        return defaultRunningCouncilId(response.councils);
+        return reconcileCouncilSelection(current, response.councils, {
+          allowRunningDefault: options?.allowRunningDefault,
+        });
       });
       return response.councils;
     } catch (caught) {
@@ -593,7 +668,7 @@ export function CouncilPage(props: {
   };
 
   useEffect(() => {
-    void refreshCouncils();
+    void refreshCouncils({ allowRunningDefault: true });
   }, []);
 
   useEffect(() => {
@@ -740,10 +815,7 @@ export function CouncilPage(props: {
           setCouncils(response.councils);
           setError(null);
           setSelectedCouncilId((current) => {
-            if (current && response.councils.some((council) => council.id === current)) {
-              return current;
-            }
-            return defaultRunningCouncilId(response.councils);
+            return reconcileCouncilSelection(current, response.councils);
           });
         })
         .catch((caught) => {
@@ -1272,11 +1344,16 @@ export function CouncilPage(props: {
     selectedCouncil.status === "running",
   );
   const sendDisabled = sendPending || !councilCanReceiveMessages || !composer.trim();
+  const showAgentsToggle = props.showAgentsToggle ?? true;
+  const agentsToggleDisabled = props.agentsToggleDisabled ?? false;
+  const showLeftSidebarControls = props.showLeftSidebarControls ?? true;
+  const showCloseButton = props.showCloseButton ?? true;
 
   const chatPanelClass = "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[var(--app-bg)]";
-  const councilSidebarClass =
-    `${councilSidebarOpen ? "hidden min-[900px]:flex" : "hidden"} min-h-0 w-[clamp(20rem,28vw,28rem)] shrink-0 flex-col overflow-hidden bg-[var(--app-subtle-bg)]`;
   const councilSidebarButtonLabel = councilSidebarOpen ? "Hide agents" : "Show agents";
+  const councilSidebarButtonTitle = agentsToggleDisabled
+    ? "Maximize pane to use agents"
+    : councilSidebarButtonLabel;
   const agentsSidebarContent = (
     <div className="flex h-full min-h-0 flex-col bg-[var(--app-subtle-bg)]">
       <div className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[var(--app-border)] pl-4 pr-14">
@@ -1423,32 +1500,42 @@ export function CouncilPage(props: {
     }
     return [{ id: agent.id, terminalId, label: agent.label }];
   });
+  const selectedCouncilLifecycleLabel = selectedCouncil
+    ? formatCouncilLifecycleLabel(selectedCouncil.status)
+    : null;
+  const selectedCouncilLifecycleTone: ConversationMetaTone =
+    selectedCouncil?.status === "running" ? "running" : "stopped";
+  const selectedCouncilPhaseLabel = selectedCouncil
+    ? formatCouncilPhaseLabel(selectedCouncil.phase)
+    : null;
+  const selectedCouncilAgentCountLabel = selectedCouncil
+    ? `${selectedCouncil.agents.length} agent${selectedCouncil.agents.length === 1 ? "" : "s"}`
+    : null;
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-[var(--app-bg)]">
-      <button
-        type="button"
-        className="workbench-fixed-sidebar-toggle icon-click-feedback fixed right-[max(1rem,env(safe-area-inset-right))] top-[calc(env(safe-area-inset-top,0px)+0.75rem)] z-[25] inline-flex h-8 w-8 items-center justify-center rounded-md border border-[var(--app-border)] bg-[var(--app-bg)]/90 text-[var(--app-hint)] shadow-sm backdrop-blur hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
-        onClick={() => setCouncilSidebarOpen((open) => !open)}
-        aria-label={councilSidebarButtonLabel}
-        title={councilSidebarButtonLabel}
-      >
-        <PanelRight size={16} />
-      </button>
       <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
         <section className={chatPanelClass}>
-          <header className={`relative flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[var(--app-border)] bg-[var(--app-bg)]/85 pl-4 backdrop-blur-sm ${headerRightPaddingClass(councilSidebarOpen)}`}>
+          <header
+            className={`relative z-[80] flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[var(--app-border)] bg-[var(--app-bg)]/85 pl-4 pr-4 backdrop-blur-sm ${
+              showAgentsToggle && !councilSidebarOpen
+                ? "min-[900px]:pr-[calc(max(1rem,env(safe-area-inset-right))+2.75rem)]"
+                : ""
+            }`}
+          >
             <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
-              <button
-                type="button"
-                className="icon-click-feedback inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] md:hidden"
-                onClick={props.onOpenLeft}
-                aria-label="Open sidebar"
-                title="Open sidebar"
-              >
-                <Menu size={18} />
-              </button>
-              {!props.sidebarOpen ? (
+              {showLeftSidebarControls ? (
+                <button
+                  type="button"
+                  className="icon-click-feedback inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] md:hidden"
+                  onClick={props.onOpenLeft}
+                  aria-label="Open sidebar"
+                  title="Open sidebar"
+                >
+                  <Menu size={18} />
+                </button>
+              ) : null}
+              {showLeftSidebarControls && !props.sidebarOpen ? (
                 <button
                   type="button"
                   className="icon-click-feedback hidden h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] md:inline-flex"
@@ -1459,40 +1546,49 @@ export function CouncilPage(props: {
                   <Menu size={18} />
                 </button>
               ) : null}
-              <div className="min-w-0 flex-1 overflow-hidden">
+              <UsersRound className={COUNCIL_HEADER_ICON_CLASSNAME} />
+              <div className="min-w-0 flex-1">
                 <div
-                  className="truncate text-sm font-semibold text-[var(--app-fg)]"
+                  className="truncate text-sm font-medium text-[var(--app-fg)]"
                   title={selectedCouncil?.title ?? "Council"}
                 >
                   {selectedCouncil?.title ?? "Council"}
                 </div>
-                <div
-                  className="truncate text-xs text-[var(--app-hint)]"
-                  title={selectedCouncil ? selectedCouncil.workspace : "Workspace"}
-                >
-                  {selectedCouncil ? selectedCouncil.workspace : "Workspace"}
-                </div>
+                {selectedCouncil && selectedCouncilLifecycleLabel && selectedCouncilPhaseLabel && selectedCouncilAgentCountLabel ? (
+                  <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-1.5 text-[11px] text-[var(--app-hint)]">
+                    <ConversationMetaBadge tone={selectedCouncilLifecycleTone} width="status">
+                      {selectedCouncil.status === "running" ? (
+                        <Circle size={9} className="fill-current" />
+                      ) : (
+                        <CircleStop size={10} />
+                      )}
+                      <span>{selectedCouncilLifecycleLabel}</span>
+                    </ConversationMetaBadge>
+                    <ConversationMetaBadge tone={councilPhaseTone(selectedCouncil.phase)} width="status">
+                      <Activity size={10} />
+                      <span>{selectedCouncilPhaseLabel}</span>
+                    </ConversationMetaBadge>
+                    <ConversationMetaBadge tone="council" width="status" title="Council room">
+                      <UsersRound size={10} />
+                      <span>{selectedCouncilAgentCountLabel}</span>
+                    </ConversationMetaBadge>
+                  </div>
+                ) : null}
               </div>
             </div>
             <div className={HEADER_ACTION_GROUP_CLASS}>
-              <button
-                type="button"
-                onClick={() => setNewCouncilDialogOpen(true)}
-                className={HEADER_ICON_BUTTON_CLASS}
-                title="New Council"
-                aria-label="New Council"
-              >
-                <Plus size={15} />
-              </button>
-              <button
-                type="button"
-                onClick={() => setHistoryDialogOpen(true)}
-                className={HEADER_ICON_BUTTON_CLASS}
-                aria-label="Open Councils"
-                title="Councils"
-              >
-                <ListTree size={14} />
-              </button>
+              {selectedCouncil?.status === "running" ? (
+                <button
+                  type="button"
+                  onClick={() => setStopConfirmOpen(true)}
+                  disabled={loading}
+                  className={HEADER_ICON_BUTTON_CLASS}
+                  aria-label="Stop Council"
+                  title="Stop Council and close agent terminals"
+                >
+                  <Square size={14} className="text-rose-500/70" />
+                </button>
+              ) : null}
               <div ref={councilMenuRef} className="relative">
                 <button
                   type="button"
@@ -1507,7 +1603,7 @@ export function CouncilPage(props: {
                   <Ellipsis size={16} />
                 </button>
                 {councilMenuOpen && selectedCouncil ? (
-                  <div className="absolute right-0 top-[calc(100%+0.375rem)] z-50 min-w-[10rem] rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] p-1 shadow-xl">
+                  <div className="absolute right-0 top-[calc(100%+0.375rem)] z-[120] min-w-[10rem] rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] p-1 shadow-xl">
                     <button
                       type="button"
                       className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]"
@@ -1535,61 +1631,47 @@ export function CouncilPage(props: {
               </div>
               <button
                 type="button"
-                onClick={props.onHide}
-                className={HEADER_TEXT_BUTTON_CLASS}
-                title="Close council"
+                onClick={() => setHistoryDialogOpen(true)}
+                className={HEADER_ICON_BUTTON_CLASS}
+                aria-label="Open Councils"
+                title="Councils"
               >
-                <X size={14} className="min-[900px]:mr-1" />
-                <span className="hidden min-[900px]:inline">Close</span>
+                <ListTree size={14} />
               </button>
-            </div>
-          </header>
-          {selectedCouncil?.status === "running" ? (
-            councilStatusCollapsed ? (
               <button
                 type="button"
-                onClick={() => setCouncilStatusCollapsed(false)}
-                className="icon-click-feedback mx-3 mt-2 flex h-6 w-fit shrink-0 items-center gap-1.5 rounded-full border border-[var(--app-border)] bg-[var(--app-subtle-bg)]/35 px-2 text-[11px] font-semibold text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] sm:mx-4"
-                aria-label="Show Council status controls"
-                title="Show Council status controls"
+                onClick={() => setNewCouncilDialogOpen(true)}
+                className={HEADER_ICON_BUTTON_CLASS}
+                title="New Council"
+                aria-label="New Council"
               >
-                <ChevronDown size={12} />
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                <span className="text-emerald-600">Running</span>
+                <Plus size={15} />
               </button>
-            ) : (
-              <div className="mx-3 mt-2 flex shrink-0 items-center justify-between gap-3 rounded-lg border border-[var(--app-border)] bg-[var(--app-subtle-bg)]/25 px-2.5 py-1.5 text-xs sm:mx-4">
-                <div className="flex min-w-0 items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setCouncilStatusCollapsed(true)}
-                    className="icon-click-feedback inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)]"
-                    aria-label="Collapse Council status controls"
-                    title="Collapse Council status controls"
-                  >
-                    <ChevronRight size={13} />
-                  </button>
-                  <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-600">
-                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                    Running
-                  </span>
-                  <span className="min-w-0 truncate text-[var(--app-hint)]">
-                    {selectedCouncil.agents.length} agent{selectedCouncil.agents.length === 1 ? "" : "s"}
-                  </span>
-                </div>
+              {showCloseButton ? (
                 <button
                   type="button"
-                  onClick={() => setStopConfirmOpen(true)}
-                  disabled={loading}
-                  className="icon-click-feedback inline-flex h-6 shrink-0 items-center justify-center gap-1.5 rounded-md border border-[var(--app-border)] bg-[var(--app-bg)] px-2.5 text-[11px] font-semibold text-[var(--app-hint)] transition-colors hover:border-rose-400/30 hover:bg-rose-500/5 hover:text-[var(--app-fg)] disabled:opacity-40"
-                  title="Stop Council and close agent terminals"
+                  onClick={props.onHide}
+                  className={HEADER_TEXT_BUTTON_CLASS}
+                  title="Close council"
                 >
-                  <Square size={12} className="text-rose-500/65" />
-                  Stop
+                  <X size={14} className="min-[900px]:mr-1" />
+                  <span className="hidden min-[900px]:inline">Close</span>
                 </button>
-              </div>
-            )
-          ) : null}
+              ) : null}
+              {showAgentsToggle ? (
+                <button
+                  type="button"
+                  onClick={() => setCouncilSidebarOpen((open) => !open)}
+                  disabled={agentsToggleDisabled}
+                  className={`${HEADER_ICON_BUTTON_CLASS} min-[900px]:hidden`}
+                  aria-label={councilSidebarButtonLabel}
+                  title={councilSidebarButtonTitle}
+                >
+                  <PanelRight size={16} />
+                </button>
+              ) : null}
+            </div>
+          </header>
           {error ? (
             <div className="mx-4 mt-3 rounded-lg border border-[var(--app-danger)]/30 bg-[var(--app-danger)]/10 px-3 py-2 text-xs text-[var(--app-danger)]">
               {error}
@@ -1850,10 +1932,20 @@ export function CouncilPage(props: {
           </div>
         </section>
 
-        {councilSidebarOpen ? <div className="inspector-divider hidden min-[900px]:block" /> : null}
-        <aside className={councilSidebarClass}>
+        <ConversationSidePanelShell
+          desktopOpen={councilSidebarOpen}
+          desktopBreakpoint="wide"
+          mobileOpen={councilSidebarOpen && !isCouncilWide}
+          onMobileOpenChange={handleCouncilSidebarOpenChange}
+          mobileTitle="Agents"
+          mobileModal={false}
+          mobileFloatingCloseLabel="Hide agents"
+          toggleLabel={councilSidebarButtonTitle}
+          toggleDisabled={agentsToggleDisabled}
+          onToggle={() => setCouncilSidebarOpen((open) => !open)}
+        >
           {agentsSidebarContent}
-        </aside>
+        </ConversationSidePanelShell>
       </div>
 
       <FileReferencePicker
@@ -1862,19 +1954,6 @@ export function CouncilPage(props: {
         rootPath={councilReferenceRoot}
         onPick={insertCouncilReference}
       />
-
-      <Sheet
-        open={councilSidebarOpen && !isCouncilWide}
-        onOpenChange={handleCouncilSidebarOpenChange}
-        side="right"
-        title="Agents"
-        hideHeader
-        modal={false}
-        floatingClose="panel"
-        floatingCloseLabel="Hide agents"
-      >
-        {agentsSidebarContent}
-      </Sheet>
 
       <RenameSessionDialog
         open={renameDialogOpen}
@@ -2067,8 +2146,8 @@ export function CouncilPage(props: {
               </Dialog.Close>
             </div>
             <OverlayScrollArea
-              className="min-h-0 flex-1"
-              viewportClassName="h-full p-4"
+              className="min-h-0 flex-1 min-[900px]:flex-none"
+              viewportClassName="h-full p-4 min-[900px]:h-auto min-[900px]:max-h-[calc(min(calc(100dvh-24px),720px)-8.25rem)]"
               contentClassName="space-y-3"
               scrollAriaLabel="Add agents"
             >

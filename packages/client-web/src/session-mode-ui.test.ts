@@ -351,6 +351,27 @@ describe("session model UI defaults", () => {
     assert.equal(state.reasoning?.id, "xhigh");
   });
 
+  test("preserves explicit model drafts that are not in the catalog", () => {
+    const state = resolveSelectedModelDraft({
+      catalog: modelCatalog({}),
+      selectedModelId: "niubiwudi",
+    });
+
+    assert.equal(state.model?.id, "niubiwudi");
+    assert.equal(state.reasoning?.id, undefined);
+  });
+
+  test("falls back from stale model drafts when preservation is disabled", () => {
+    const state = resolveSelectedModelDraft({
+      catalog: modelCatalog({}),
+      selectedModelId: "deleted-manual-model",
+      preserveMissingSelectedModel: false,
+    });
+
+    assert.equal(state.model?.id, "gpt-default");
+    assert.equal(state.reasoning?.id, "high");
+  });
+
   test("uses the strongest reasoning option for a remembered model", () => {
     const state = resolveSelectedModelDraft({
       catalog: modelCatalog({}),
@@ -462,7 +483,6 @@ function modelCatalog(options: {
     models: [
       {
         id: "gpt-default",
-        label: "GPT Default",
         isDefault: true,
         defaultReasoningId: "high",
         reasoningOptions: [
@@ -472,7 +492,6 @@ function modelCatalog(options: {
       },
       {
         id: "gpt-current",
-        label: "GPT Current",
         defaultReasoningId: "low",
         reasoningOptions: [
           { id: "low", label: "Low", kind: "reasoning_effort" },
@@ -482,7 +501,6 @@ function modelCatalog(options: {
       },
       {
         id: "gpt-explicit",
-        label: "GPT Explicit",
         defaultReasoningId: "medium",
         reasoningOptions: [
           { id: "medium", label: "Medium", kind: "reasoning_effort" },
@@ -491,7 +509,6 @@ function modelCatalog(options: {
       },
       {
         id: "gpt-last",
-        label: "GPT Last",
         defaultReasoningId: "low",
         reasoningOptions: [
           { id: "low", label: "Low", kind: "reasoning_effort" },

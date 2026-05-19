@@ -1535,6 +1535,56 @@ describe("client projection", () => {
     assert.equal(current.currentRuntimeStatus, undefined);
   });
 
+  test("stores turn failure errors on the projected session diagnostics", () => {
+    let current: SessionProjection = {
+      ...projection(),
+      summary: {
+        ...baseSummary(),
+        session: {
+          ...baseSummary().session,
+          runtimeDiagnostics: {
+            lastError: "Unexpected server error. Check server logs for details.",
+          },
+        },
+      },
+    };
+
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 1,
+        turnId: "turn-1",
+        type: "turn.failed",
+        payload: {
+          error: "Model not found: niubiwudi/.",
+        },
+      }),
+    );
+
+    assert.equal(current.summary.session.runtimeState, "failed");
+    assert.equal(
+      current.summary.session.runtimeDiagnostics?.lastError,
+      "Model not found: niubiwudi/.",
+    );
+
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 2,
+        turnId: "turn-1",
+        type: "turn.failed",
+        payload: {
+          error: "Unexpected server error. Check server logs for details.",
+        },
+      }),
+    );
+
+    assert.equal(
+      current.summary.session.runtimeDiagnostics?.lastError,
+      "Model not found: niubiwudi/.",
+    );
+  });
+
   test("does not collapse adjacent user messages without shared identity", () => {
     let current = applyEventToProjection(
       projection(),

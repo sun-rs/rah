@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import type { WorkspaceSortMode, WorkspaceSection } from "../session-browser";
+import type { CouncilSnapshot } from "@rah/runtime-protocol";
+import { findOwningWorkspace, type WorkspaceSortMode, type WorkspaceSection } from "../session-browser";
 
 const WORKSPACE_SORT_MODE_KEY = "rah.workspace-sort-mode";
 const HISTORY_WORKSPACE_SORT_MODE_KEY = "rah.history-workspace-sort-mode";
@@ -50,22 +51,45 @@ function readPinnedWorkspaceSessions(): Record<string, string> {
   }
 }
 
-export function useWorkbenchSidebarPreferences(workspaceSections: WorkspaceSection[]) {
+function isPinnedWorkspaceItemAvailable(
+  workspaceSections: WorkspaceSection[],
+  councils: readonly CouncilSnapshot[],
+  workspaceDir: string,
+  itemKey: string,
+): boolean {
+  const section = workspaceSections.find((candidate) => candidate.workspace.directory === workspaceDir);
+  if (!section) {
+    return false;
+  }
+  if (itemKey.startsWith("council:")) {
+    const councilId = itemKey.slice("council:".length);
+    const workspaceDirs = workspaceSections.map((candidate) => candidate.workspace.directory);
+    return councils.some(
+      (council) =>
+        council.id === councilId &&
+        council.status === "running" &&
+        findOwningWorkspace(workspaceDirs, council.workspace) === workspaceDir,
+    );
+  }
+  const sessionId = itemKey.startsWith("session:") ? itemKey.slice("session:".length) : itemKey;
+  return section.sessions.some((session) => session.session.id === sessionId);
+}
+
+export function useWorkbenchSidebarPreferences(
+  workspaceSections: WorkspaceSection[],
+  councils: readonly CouncilSnapshot[] = [],
+) {
   const [pinnedSessionIdByWorkspace, setPinnedSessionIdByWorkspace] =
     useState<Record<string, string>>(() => readPinnedWorkspaceSessions());
 
   const sanitizedPinnedSessionIdByWorkspace = useMemo(
     () =>
       Object.fromEntries(
-        Object.entries(pinnedSessionIdByWorkspace).filter(([workspaceDir, sessionId]) =>
-          workspaceSections.some(
-            (section) =>
-              section.workspace.directory === workspaceDir &&
-              section.sessions.some((session) => session.session.id === sessionId),
-          ),
+        Object.entries(pinnedSessionIdByWorkspace).filter(([workspaceDir, itemKey]) =>
+          isPinnedWorkspaceItemAvailable(workspaceSections, councils, workspaceDir, itemKey),
         ),
       ),
-    [pinnedSessionIdByWorkspace, workspaceSections],
+    [councils, pinnedSessionIdByWorkspace, workspaceSections],
   );
 
   useEffect(() => {

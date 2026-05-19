@@ -86,7 +86,7 @@ export interface WorkspaceSection {
   sessions: SessionSummary[];
 }
 
-function findOwningWorkspace(
+export function findOwningWorkspace(
   workspaceDirs: readonly string[],
   sessionPath: string | undefined,
 ): string | null {
@@ -374,6 +374,34 @@ export function formatRelativeTime(value: string | undefined): string | null {
   const days = Math.floor(hours / 24);
   if (days < 7) {
     return `${days}d ago`;
+  }
+  return date.toLocaleDateString();
+}
+
+export function formatCompactRelativeTime(value: string | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+  const date = new Date(value);
+  const ms = date.getTime();
+  if (!Number.isFinite(ms)) {
+    return null;
+  }
+  const delta = Date.now() - ms;
+  if (delta < 60_000) {
+    return "just";
+  }
+  const minutes = Math.floor(delta / 60_000);
+  if (minutes < 60) {
+    return `${minutes}m`;
+  }
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    return `${hours}h`;
+  }
+  const days = Math.floor(hours / 24);
+  if (days < 7) {
+    return `${days}d`;
   }
   return date.toLocaleDateString();
 }

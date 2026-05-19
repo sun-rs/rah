@@ -25,7 +25,6 @@ test("council agent draft maps model reasoning into provider optionValues", () =
     models: [
       {
         id: "openai/gpt-5.5",
-        label: "GPT 5.5",
         reasoningOptions: [
           { id: "default", label: "Default", kind: "model_variant" },
           { id: "xhigh", label: "XHigh", kind: "reasoning_effort" },
@@ -94,7 +93,6 @@ test("council agent config uses visible catalog defaults when draft has not been
     models: [
       {
         id: "openai/gpt-5.5",
-        label: "GPT 5.5",
         reasoningOptions: [
           { id: "default", label: "Default", kind: "model_variant" },
           { id: "xhigh", label: "XHigh", kind: "reasoning_effort" },
@@ -150,7 +148,7 @@ test("council agent config uses visible catalog defaults when draft has not been
     },
   });
 
-  assert.equal(config.label, "GPT 5.5-XHigh");
+  assert.equal(config.label, "openai-gpt-5.5-XHigh");
   assert.equal(config.modelId, "openai/gpt-5.5");
   assert.equal(config.reasoningId, "xhigh");
   assert.deepEqual(config.optionValues, { model_reasoning_variant: "xhigh" });
@@ -202,7 +200,6 @@ test("council agent config supports Gemini selections without reasoning options"
     models: [
       {
         id: "gemini-2.5-pro",
-        label: "Gemini 2.5 Pro",
       },
     ],
     fetchedAt: new Date().toISOString(),
@@ -230,7 +227,7 @@ test("council agent config supports Gemini selections without reasoning options"
   });
 
   assert.equal(config.provider, "gemini");
-  assert.equal(config.label, "Gemini 2.5 Pro");
+  assert.equal(config.label, "gemini-2.5-pro");
   assert.equal(config.modelId, "gemini-2.5-pro");
   assert.equal(config.reasoningId, undefined);
   assert.equal(config.optionValues, undefined);
@@ -243,11 +240,9 @@ test("council model selection clears stale reasoning when selected model has no 
     models: [
       {
         id: "kimi/kimi-for-coding",
-        label: "Kimi for Coding",
       },
       {
         id: "openai/gpt-5.5",
-        label: "GPT 5.5",
         reasoningOptions: [
           { id: "medium", label: "Medium", kind: "reasoning_effort" },
           { id: "xhigh", label: "XHigh", kind: "reasoning_effort" },

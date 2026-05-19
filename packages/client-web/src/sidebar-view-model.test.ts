@@ -3,14 +3,16 @@ import assert from "node:assert/strict";
 import type { CouncilSnapshot, SessionSummary } from "@rah/runtime-protocol";
 import { conversationStateFromRuntimeState } from "@rah/runtime-protocol";
 import { deriveSidebarWorkspaceViewModels } from "./sidebar-view-model";
-import type { WorkspaceSection } from "./session-browser";
+import { formatCompactRelativeTime, type WorkspaceSection } from "./session-browser";
 
 function session(args: {
   id: string;
   runtimeState?: SessionSummary["session"]["runtimeState"];
+  phase?: SessionSummary["session"]["phase"];
   updatedAt?: string;
   origin?: SessionSummary["session"]["origin"];
 }): SessionSummary {
+  const conversationState = conversationStateFromRuntimeState(args.runtimeState ?? "running");
   return {
     session: {
       id: args.id,
@@ -19,7 +21,8 @@ function session(args: {
       launchSource: "web",
       cwd: "/workspace/rah",
       rootDir: "/workspace/rah",
-      ...conversationStateFromRuntimeState(args.runtimeState ?? "running"),
+      ...conversationState,
+      ...(args.phase ? { phase: args.phase } : {}),
       runtimeState: args.runtimeState ?? "running",
       ptyId: "pty-1",
       capabilities: {
@@ -45,11 +48,11 @@ function session(args: {
   };
 }
 
-function workspaceSection(sessions: SessionSummary[]): WorkspaceSection {
+function workspaceSection(sessions: SessionSummary[], directory = "/workspace/rah"): WorkspaceSection {
   return {
     workspace: {
-      directory: "/workspace/rah",
-      displayName: "workspace/rah",
+      directory,
+      displayName: directory,
       latestUpdatedAt: "2026-04-15T00:00:00.000Z",
       runningCount: sessions.length,
       hasRunningItem: true,
@@ -64,7 +67,9 @@ function council(args: {
   workspace?: string;
   status?: CouncilSnapshot["status"];
   phase?: CouncilSnapshot["phase"];
+  createdAt?: string;
   updatedAt?: string;
+  messages?: CouncilSnapshot["messages"];
 }): CouncilSnapshot {
   return {
     id: args.id,
@@ -72,14 +77,22 @@ function council(args: {
     workspace: args.workspace ?? "/workspace/rah",
     status: args.status ?? "running",
     phase: args.phase ?? "ready",
-    createdAt: "2026-04-15T00:00:00.000Z",
+    createdAt: args.createdAt ?? "2026-04-15T00:00:00.000Z",
     updatedAt: args.updatedAt ?? "2026-04-15T00:00:00.000Z",
     agents: [],
-    messages: [],
+    messages: args.messages ?? [],
   };
 }
 
 describe("sidebar view model", () => {
+  test("uses compact sidebar relative times", () => {
+    assert.equal(formatCompactRelativeTime(new Date().toISOString()), "just");
+    assert.equal(
+      formatCompactRelativeTime(new Date(Date.now() - 32 * 60 * 1000 - 5_000).toISOString()),
+      "32m",
+    );
+  });
+
   test("pins the configured session first inside a workspace", () => {
     const items = deriveSidebarWorkspaceViewModels({
       workspaceSections: [workspaceSection([session({ id: "a" }), session({ id: "b" })])],
@@ -166,7 +179,141 @@ describe("sidebar view model", () => {
     assert.equal(items[0]?.councils[0]?.selected, true);
     assert.deepEqual(
       items[0]?.items.map((item) => item.kind),
-      ["council", "session"],
+      ["session", "council"],
     );
+  });
+
+  test("does not duplicate nested workspace Councils or reorder on selection", () => {
+    const items = deriveSidebarWorkspaceViewModels({
+      workspaceSections: [
+        workspaceSection([], "/workspace"),
+        workspaceSection([session({ id: "agent" })], "/workspace/rah"),
+      ],
+      selectedWorkspaceDir: "/workspace/rah",
+      selectedSessionId: null,
+      selectedCouncilId: "council-1",
+      unreadSessionIds: new Set(),
+      runtimeStatusBySessionId: new Map(),
+      pinnedSessionIdByWorkspace: {},
+      councils: [
+        council({
+          id: "council-1",
+          workspace: "/workspace/rah",
+          updatedAt: "2026-04-15T00:01:00.000Z",
+        }),
+      ],
+    });
+
+    assert.deepEqual(items[0]?.councils.map((entry) => entry.id), []);
+    assert.deepEqual(items[1]?.councils.map((entry) => entry.id), ["council-1"]);
+    assert.deepEqual(
+      items[1]?.items.map((entry) => entry.id),
+      ["agent", "council-1"],
+    );
+  });
+
+  test("uses visible Council chat activity for sidebar recency", () => {
+    const items = deriveSidebarWorkspaceViewModels({
+      workspaceSections: [workspaceSection([], "/workspace/rah")],
+      selectedWorkspaceDir: "/workspace/rah",
+      selectedSessionId: null,
+      selectedCouncilId: null,
+      unreadSessionIds: new Set(),
+      runtimeStatusBySessionId: new Map(),
+      pinnedSessionIdByWorkspace: {},
+      councils: [
+        council({
+          id: "status-refresh",
+          createdAt: "2026-04-15T00:00:00.000Z",
+          updatedAt: "2026-04-15T00:10:00.000Z",
+          messages: [
+            {
+              id: 1,
+              councilId: "status-refresh",
+              actorId: "system",
+              role: "system",
+              parts: [{ kind: "text", text: "agent listening" }],
+              createdAt: "2026-04-15T00:10:00.000Z",
+            },
+          ],
+        }),
+        council({
+          id: "user-chat",
+          createdAt: "2026-04-15T00:00:00.000Z",
+          updatedAt: "2026-04-15T00:02:00.000Z",
+          messages: [
+            {
+              id: 2,
+              councilId: "user-chat",
+              actorId: "user",
+              role: "user",
+              parts: [{ kind: "text", text: "real task" }],
+              createdAt: "2026-04-15T00:02:00.000Z",
+            },
+          ],
+        }),
+      ],
+    });
+
+    assert.deepEqual(items[0]?.councils.map((entry) => entry.id), ["user-chat", "status-refresh"]);
+  });
+
+  test("pins Council rows with the same workspace pin affordance as sessions", () => {
+    const items = deriveSidebarWorkspaceViewModels({
+      workspaceSections: [workspaceSection([session({ id: "agent" })], "/workspace/rah")],
+      selectedWorkspaceDir: "/workspace/rah",
+      selectedSessionId: null,
+      selectedCouncilId: null,
+      unreadSessionIds: new Set(),
+      runtimeStatusBySessionId: new Map(),
+      pinnedSessionIdByWorkspace: {
+        "/workspace/rah": "council:council-1",
+      },
+      councils: [
+        council({
+          id: "council-1",
+          workspace: "/workspace/rah",
+          messages: [
+            {
+              id: 1,
+              councilId: "council-1",
+              actorId: "user",
+              role: "user",
+              parts: [{ kind: "text", text: "real task" }],
+              createdAt: "2026-04-15T00:02:00.000Z",
+            },
+          ],
+        }),
+      ],
+    });
+
+    assert.equal(items[0]?.councils[0]?.pinned, true);
+    assert.deepEqual(items[0]?.items.map((entry) => entry.id), ["council-1", "agent"]);
+  });
+
+  test("does not mark Council-owned sessions working for MCP listener activity", () => {
+    const items = deriveSidebarWorkspaceViewModels({
+      workspaceSections: [workspaceSection([
+        session({
+          id: "council-agent",
+          runtimeState: "running",
+          phase: "working",
+          origin: {
+            kind: "council",
+            councilId: "council-1",
+            councilTitle: "Council",
+            agentId: "agent-1",
+            agentLabel: "Agent",
+          },
+        }),
+      ])],
+      selectedWorkspaceDir: "/workspace/rah",
+      selectedSessionId: null,
+      unreadSessionIds: new Set(),
+      runtimeStatusBySessionId: new Map([["council-agent", "thinking"]]),
+      pinnedSessionIdByWorkspace: {},
+    });
+
+    assert.equal(items[0]?.sessions[0]?.status, "ready");
   });
 });

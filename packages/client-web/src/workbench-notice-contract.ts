@@ -28,7 +28,7 @@ export function deriveWorkbenchNoticeState(args: {
     : null;
   const nativeTuiStoppedMessage =
     selectedSummary?.session.nativeTui && selectedSummary.session.status === "stopped"
-      ? "Native TUI process is stopped. Reopen it from Chats to continue."
+      ? stoppedNativeTuiNoticeMessage(selectedSummary)
       : null;
   const nativeTuiQueuedInputCount =
     selectedSummary?.session.nativeTui?.queuedInputCount ?? 0;
@@ -87,4 +87,17 @@ export function deriveWorkbenchNoticeState(args: {
     historyNotice,
     errorDescriptor: error ? describeWorkbenchError(error, selectedSummary) : null,
   };
+}
+
+function stoppedNativeTuiNoticeMessage(selectedSummary: SessionSummary): string {
+  const runtimeError = selectedSummary.session.runtimeDiagnostics?.lastError?.trim();
+  if (runtimeError && !isNativeTuiLifecycleOnlyError(runtimeError)) {
+    const prefix = selectedSummary.session.phase === "failed" ? "Session failed" : "Session stopped";
+    return `${prefix}: ${runtimeError}`;
+  }
+  return "Native TUI process is stopped. Reopen it from Chats to continue.";
+}
+
+function isNativeTuiLifecycleOnlyError(message: string): boolean {
+  return /^TUI client exited(?: with code \d+)?$/.test(message);
 }

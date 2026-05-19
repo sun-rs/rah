@@ -44,7 +44,7 @@ export function ChatBrowserRow(props: {
   dataProviderSessionId?: string | undefined;
   dataSessionSource?: string | undefined;
 }) {
-  const rowClassName = `w-full rounded-lg border px-3 py-2 text-[var(--app-hint)] transition-colors ${
+  const rowClassName = `relative w-full rounded-lg border text-[var(--app-hint)] transition-colors ${
     props.selected
       ? "border-[var(--app-border)] bg-[var(--app-subtle-bg)] text-[var(--app-fg)]"
       : "border-transparent hover:border-[var(--app-border)] hover:bg-[var(--app-bg)]"
@@ -59,15 +59,18 @@ export function ChatBrowserRow(props: {
       data-provider-session-id={props.dataProviderSessionId}
       data-session-source={props.dataSessionSource}
     >
-      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
-        <button
-          type="button"
-          onClick={props.onOpen}
-          data-session-id={props.dataSessionId}
-          data-provider-session-id={props.dataProviderSessionId}
-          data-session-source={props.dataSessionSource}
-          className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-2 rounded-md text-left focus:outline-none focus:ring-1 focus:ring-[var(--ring)]"
-        >
+      <button
+        type="button"
+        onClick={props.onOpen}
+        aria-label={`Open ${props.title}`}
+        title={props.title}
+        data-session-id={props.dataSessionId}
+        data-provider-session-id={props.dataProviderSessionId}
+        data-session-source={props.dataSessionSource}
+        className="absolute inset-0 z-0 rounded-lg focus:outline-none focus:ring-1 focus:ring-[var(--ring)]"
+      />
+      <div className="pointer-events-none relative z-10 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
+        <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-2 px-3 py-2 text-left">
           <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center overflow-hidden">
             {props.leading}
           </span>
@@ -86,9 +89,9 @@ export function ChatBrowserRow(props: {
               </span>
             ) : null}
           </span>
-        </button>
+        </div>
 
-        <div className="flex shrink-0 items-center justify-end gap-2">
+        <div className="flex shrink-0 items-center justify-end gap-2 py-2 pr-3">
           {badge ? (
             <span
               className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium ${badgeClassName(badge)}`}
@@ -113,12 +116,16 @@ export function ChatBrowserRow(props: {
               {props.timeLabel}
             </span>
           ) : null}
-          {props.actions ?? null}
+          {props.actions ? (
+            <div className="pointer-events-auto">
+              {props.actions}
+            </div>
+          ) : null}
           {!props.actions && props.onInfo ? (
             <button
               type="button"
               onClick={props.onInfo}
-              className="icon-click-feedback inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-transparent text-[var(--app-hint)] transition-colors hover:border-[var(--app-border)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
+              className="icon-click-feedback pointer-events-auto inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-transparent text-[var(--app-hint)] transition-colors hover:border-[var(--app-border)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
               aria-label={props.infoLabel ?? "Show chat info"}
               title={props.infoLabel ?? "Info"}
             >
@@ -130,7 +137,7 @@ export function ChatBrowserRow(props: {
               type="button"
               disabled={props.deleteDisabled}
               onClick={props.onDelete}
-              className="icon-click-feedback inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-transparent text-[var(--app-hint)] transition-colors hover:border-[var(--app-border)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-danger)] disabled:opacity-40"
+              className="icon-click-feedback pointer-events-auto inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-transparent text-[var(--app-hint)] transition-colors hover:border-[var(--app-border)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-danger)] disabled:opacity-40"
               aria-label={props.deleteLabel ?? "Delete chat"}
               title={props.deleteLabel ?? "Delete"}
             >

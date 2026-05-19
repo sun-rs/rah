@@ -1,7 +1,10 @@
 import type { CouncilSnapshot } from "@rah/runtime-protocol";
 import { useEffect, useRef, useState } from "react";
 import { Ellipsis, Info, MessageSquareText, PencilLine, Trash2 } from "lucide-react";
+import { chooseChatListSubtitle, compactChatListText } from "../chat-list-display";
 import { ChatBrowserRow } from "../components/ChatBrowserRow";
+
+type CouncilMessage = CouncilSnapshot["messages"][number];
 
 export function isCouncilHistory(council: CouncilSnapshot): boolean {
   return council.status === "stopped";
@@ -13,9 +16,25 @@ export function councilActivityMs(council: CouncilSnapshot): number {
 }
 
 export function defaultRunningCouncilId(councils: readonly CouncilSnapshot[]): string | null {
-  return councils
-    .filter((council) => !isCouncilHistory(council))
+  const runningCouncils = councils.filter((council) => !isCouncilHistory(council));
+  const runningCouncilsWithMessages = runningCouncils.filter((council) => council.messages.length > 0);
+  const candidates = runningCouncilsWithMessages.length > 0 ? runningCouncilsWithMessages : runningCouncils;
+  return candidates
     .sort((left, right) => councilActivityMs(right) - councilActivityMs(left))[0]?.id ?? null;
+}
+
+export function reconcileCouncilSelection(
+  currentCouncilId: string | null,
+  councils: readonly CouncilSnapshot[],
+  options?: { allowRunningDefault?: boolean | undefined },
+): string | null {
+  if (currentCouncilId && councils.some((council) => council.id === currentCouncilId)) {
+    return currentCouncilId;
+  }
+  if (!currentCouncilId && options?.allowRunningDefault) {
+    return defaultRunningCouncilId(councils);
+  }
+  return null;
 }
 
 export function formatCouncilCount(value: number, unit: string): string {
@@ -36,15 +55,60 @@ export function councilLineTitle(council: CouncilSnapshot): string {
   return `${council.messages.length.toLocaleString()} Council message log lines`;
 }
 
+function actorLabel(council: CouncilSnapshot, actorId: string): string {
+  if (actorId === "user") {
+    return "You";
+  }
+  if (actorId === "system") {
+    return "System";
+  }
+  return council.agents.find((agent) => agent.id === actorId)?.label ?? actorId;
+}
+
+function textFromParts(parts: CouncilMessage["parts"]): string {
+  return parts
+    .map((part) => {
+      if (part.kind === "text") {
+        return part.text;
+      }
+      return JSON.stringify(part.data) ?? String(part.data);
+    })
+    .join("\n");
+}
+
+function firstCouncilMessageByRole(
+  council: CouncilSnapshot,
+  role: "user" | "agent",
+): CouncilMessage | null {
+  return council.messages.find(
+    (message) => message.role === role && compactChatListText(textFromParts(message.parts)),
+  ) ?? null;
+}
+
+export function councilConversationSubtitle(council: CouncilSnapshot): string | null {
+  const firstUser = firstCouncilMessageByRole(council, "user");
+  const firstAgent = firstCouncilMessageByRole(council, "agent");
+  return chooseChatListSubtitle(council.title, [
+    firstUser
+      ? { label: actorLabel(council, firstUser.actorId), text: textFromParts(firstUser.parts) }
+      : {},
+    firstAgent
+      ? { label: actorLabel(council, firstAgent.actorId), text: textFromParts(firstAgent.parts) }
+      : {},
+  ]);
+}
+
 export function councilMatchesQuery(council: CouncilSnapshot, query: string): boolean {
   const q = query.trim().toLowerCase();
   if (!q) {
     return true;
   }
+  const subtitle = councilConversationSubtitle(council);
   return (
     council.title.toLowerCase().includes(q) ||
     council.id.toLowerCase().includes(q) ||
     council.workspace.toLowerCase().includes(q) ||
+    (subtitle ?? "").toLowerCase().includes(q) ||
     council.status.toLowerCase().includes(q) ||
     (council.phase ?? "").toLowerCase().includes(q) ||
     council.agents.some((agent) =>
@@ -112,6 +176,7 @@ function CouncilRow(props: {
   return (
     <ChatBrowserRow
       title={props.council.title}
+      subtitle={councilConversationSubtitle(props.council)}
       detail={props.council.workspace}
       leading={<MessageSquareText size={17} className="text-[var(--app-hint)]" />}
       selected={props.selected}

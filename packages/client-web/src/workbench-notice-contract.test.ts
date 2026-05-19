@@ -129,6 +129,53 @@ describe("workbench notice contract", () => {
     });
   });
 
+  test("derives provider runtime error before generic stopped native TUI notice", () => {
+    const state = deriveWorkbenchNoticeState({
+      selectedSummary: summary({
+        liveBackend: "native_tui",
+        runtimeState: "failed",
+        nativeTui: {
+          terminalId: "session-1",
+          viewAvailable: true,
+        },
+        runtimeDiagnostics: {
+          lastError: "Model not found: niubiwudi/.",
+        },
+      }),
+      selectedProjection: projection(summary()),
+      error: null,
+    });
+
+    assert.deepEqual(state.interactionNotice, {
+      tone: "warning",
+      message: "Session failed: Model not found: niubiwudi/.",
+    });
+  });
+
+  test("keeps generic stopped native TUI notice for lifecycle-only exit errors", () => {
+    const state = deriveWorkbenchNoticeState({
+      selectedSummary: summary({
+        liveBackend: "native_tui",
+        runtimeState: "stopped",
+        nativeTui: {
+          terminalId: "session-1",
+          viewAvailable: true,
+        },
+        runtimeDiagnostics: {
+          lastError: "TUI client exited with code 1",
+        },
+      }),
+      selectedProjection: projection(summary()),
+      error: null,
+    });
+
+    assert.deepEqual(state.interactionNotice, {
+      tone: "warning",
+      message:
+        "Native TUI process is stopped. Reopen it from Chats to continue.",
+    });
+  });
+
   test("derives warning notice when native TUI has an unsent local draft", () => {
     const state = deriveWorkbenchNoticeState({
       selectedSummary: summary({

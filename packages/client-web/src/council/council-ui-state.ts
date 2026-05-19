@@ -69,8 +69,12 @@ export function resolveCouncilAgentModelSelection(args: {
   const catalog = args.catalog;
   const models = catalog?.models ?? [];
   const requestedModelId = args.draft.modelId?.trim() || null;
+  const exactModel = requestedModelId
+    ? models.find((entry) => entry.id === requestedModelId) ?? null
+    : null;
   const model =
-    (requestedModelId ? models.find((entry) => entry.id === requestedModelId) : null) ??
+    exactModel ??
+    (requestedModelId ? { id: requestedModelId } : null) ??
     models[0] ??
     null;
   const reasoningOptions = model?.reasoningOptions ?? [];
@@ -110,7 +114,7 @@ export function resolveCouncilAgentAutoLabel(args: {
   catalog?: ProviderModelCatalog | null;
 }): string {
   const selection = resolveCouncilAgentModelSelection(args);
-  const modelLabel = selection.model?.label ?? selection.modelId;
+  const modelLabel = selection.modelId;
   const reasoningLabel = selection.reasoning?.label ?? selection.reasoningId;
   if (modelLabel && reasoningLabel) {
     return `${modelLabel}-${reasoningLabel}`;

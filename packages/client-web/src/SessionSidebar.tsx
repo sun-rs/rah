@@ -20,6 +20,10 @@ import { ProviderLogo } from "./components/ProviderLogo";
 import { WorkspacePicker } from "./components/WorkspacePicker";
 import { SIDEBAR_LAYOUT } from "./sidebar-layout-contract";
 import { deriveSidebarWorkspaceViewModels, type SidebarWorkspaceViewModel } from "./sidebar-view-model";
+import {
+  COUNCIL_ACCENT_ICON_CLASSNAME,
+  COUNCIL_ACCENT_TITLE_CLASSNAME,
+} from "./council/council-theme";
 
 function WorkspaceSortMenu(props: {
   value: WorkspaceSortMode;
@@ -130,11 +134,16 @@ function RunningSessionRow(props: {
   onSelect: () => void;
 }) {
   const statusBadgeClassName = SIDEBAR_LAYOUT.sessionStatusBadgeClassByStatus[props.session.status];
+  const titleClassName =
+    props.session.originKind === "council"
+      ? `${SIDEBAR_LAYOUT.sessionTitleClassName} ${COUNCIL_ACCENT_TITLE_CLASSNAME}`
+      : SIDEBAR_LAYOUT.sessionTitleClassName;
   const rowClassName = `${SIDEBAR_LAYOUT.sessionRowBaseClassName} ${
     props.session.selected
       ? SIDEBAR_LAYOUT.sessionRowSelectedClassName
       : SIDEBAR_LAYOUT.sessionRowIdleClassName
   }`;
+  const selectButtonClassName = "min-w-0 flex flex-1 items-center gap-1.5 pr-6 text-left";
 
   return (
     <div
@@ -152,7 +161,7 @@ function RunningSessionRow(props: {
         <button
           type="button"
           onClick={props.onSelect}
-          className="min-w-0 flex flex-1 items-center gap-1.5 text-left"
+          className={selectButtonClassName}
         >
           <div className={SIDEBAR_LAYOUT.sessionHeaderClassName}>
             <span className={SIDEBAR_LAYOUT.sessionIconSlotClassName}>
@@ -162,23 +171,12 @@ function RunningSessionRow(props: {
                 variant="bare"
               />
             </span>
-            <span
-              className={`${SIDEBAR_LAYOUT.sessionTitleClassName} ${
-                props.session.originKind === "council"
-                  ? "text-amber-700/95 dark:text-amber-300/95"
-                  : ""
-              }`}
-            >
+            <span className={titleClassName}>
               {props.session.title}
             </span>
           </div>
           <div className={SIDEBAR_LAYOUT.sessionMetaRowClassName}>
             <div className={SIDEBAR_LAYOUT.sessionMetaLeftClassName}>
-              {props.session.originKind === "council" ? (
-                <span className="inline-flex shrink-0 items-center text-[10px] font-medium text-amber-700/85 dark:text-amber-300/85">
-                  council
-                </span>
-              ) : null}
               <span
                 className={`${SIDEBAR_LAYOUT.sessionStatusBadgeBaseClassName} ${statusBadgeClassName}`}
               >
@@ -190,21 +188,19 @@ function RunningSessionRow(props: {
             </span>
           </div>
         </button>
-        <span className={SIDEBAR_LAYOUT.sessionPinSlotClassName}>
-          <button
-            type="button"
-            onClick={props.onTogglePin}
-            className={`${SIDEBAR_LAYOUT.sessionPinButtonClassName} ${
-              props.session.pinned
-                ? SIDEBAR_LAYOUT.sessionPinActiveClassName
-                : SIDEBAR_LAYOUT.sessionPinHiddenClassName
-            }`}
-            title={props.session.pinned ? "Unpin" : "Pin"}
-            aria-label={props.session.pinned ? "Unpin session" : "Pin session"}
-          >
-            <Pin size={12} className={props.session.pinned ? "fill-current" : ""} />
-          </button>
-        </span>
+        <button
+          type="button"
+          onClick={props.onTogglePin}
+          className={`${SIDEBAR_LAYOUT.sessionPinButtonClassName} ${
+            props.session.pinned
+              ? SIDEBAR_LAYOUT.sessionPinActiveClassName
+              : SIDEBAR_LAYOUT.sessionPinHiddenClassName
+          }`}
+          title={props.session.pinned ? "Unpin" : "Pin"}
+          aria-label={props.session.pinned ? "Unpin session" : "Pin session"}
+        >
+          <Pin size={12} className={props.session.pinned ? "fill-current" : ""} />
+        </button>
       </div>
     </div>
   );
@@ -213,6 +209,7 @@ function RunningSessionRow(props: {
 function CouncilRow(props: {
   council: SidebarWorkspaceViewModel["councils"][number];
   draggable: boolean;
+  onTogglePin: () => void;
   onSelect: () => void;
 }) {
   const statusBadgeClassName =
@@ -228,6 +225,7 @@ function CouncilRow(props: {
       ? SIDEBAR_LAYOUT.sessionRowSelectedClassName
       : SIDEBAR_LAYOUT.sessionRowIdleClassName
   }`;
+  const selectButtonClassName = "min-w-0 flex flex-1 items-center gap-1.5 pr-6 text-left";
 
   return (
     <div
@@ -245,29 +243,23 @@ function CouncilRow(props: {
         <button
           type="button"
           onClick={props.onSelect}
-          className="min-w-0 flex flex-1 items-center gap-1.5 text-left"
+          className={selectButtonClassName}
         >
           <div className={SIDEBAR_LAYOUT.sessionHeaderClassName}>
             <span className={SIDEBAR_LAYOUT.sessionIconSlotClassName}>
               <UsersRound
                 size={16}
-                className="text-emerald-700/90 dark:text-emerald-300/90"
+                className={COUNCIL_ACCENT_ICON_CLASSNAME}
               />
             </span>
-            <span className={`${SIDEBAR_LAYOUT.sessionTitleClassName} text-emerald-700/95 dark:text-emerald-300/95`}>
+            <span className={`${SIDEBAR_LAYOUT.sessionTitleClassName} ${COUNCIL_ACCENT_TITLE_CLASSNAME}`}>
               {props.council.title}
             </span>
           </div>
           <div className={SIDEBAR_LAYOUT.sessionMetaRowClassName}>
             <div className={SIDEBAR_LAYOUT.sessionMetaLeftClassName}>
-              <span className="inline-flex shrink-0 items-center text-[10px] font-medium text-emerald-700/85 dark:text-emerald-300/85">
-                council
-              </span>
               <span className={`${SIDEBAR_LAYOUT.sessionStatusBadgeBaseClassName} ${statusBadgeClassName}`}>
                 {props.council.statusLabel}
-              </span>
-              <span className="hidden shrink-0 text-[10px] text-[var(--app-hint)] min-[900px]:inline">
-                {props.council.agentCount} agents
               </span>
             </div>
             <span className={SIDEBAR_LAYOUT.sessionTimeClassName}>
@@ -275,7 +267,19 @@ function CouncilRow(props: {
             </span>
           </div>
         </button>
-        <span className={SIDEBAR_LAYOUT.sessionPinSlotClassName} />
+        <button
+          type="button"
+          onClick={props.onTogglePin}
+          className={`${SIDEBAR_LAYOUT.sessionPinButtonClassName} ${
+            props.council.pinned
+              ? SIDEBAR_LAYOUT.sessionPinActiveClassName
+              : SIDEBAR_LAYOUT.sessionPinHiddenClassName
+          }`}
+          title={props.council.pinned ? "Unpin" : "Pin"}
+          aria-label={props.council.pinned ? "Unpin Council" : "Pin Council"}
+        >
+          <Pin size={12} className={props.council.pinned ? "fill-current" : ""} />
+        </button>
       </div>
     </div>
   );
@@ -287,6 +291,7 @@ function WorkspaceRow(props: {
   enableCouncilDrag: boolean;
   onRemoveWorkspace: () => void;
   onTogglePinSession: (sessionId: string) => void;
+  onTogglePinCouncil: (councilId: string) => void;
   onSelectSession: (sessionId: string) => void;
   onSelectCouncil: (councilId: string) => void;
   onSelectWorkspace: () => void;
@@ -393,6 +398,7 @@ function WorkspaceRow(props: {
                 key={`council:${item.id}`}
                 council={item}
                 draggable={props.enableCouncilDrag}
+                onTogglePin={() => props.onTogglePinCouncil(item.id)}
                 onSelect={() => props.onSelectCouncil(item.id)}
               />
             ),
@@ -409,6 +415,7 @@ export function SessionSidebar(props: {
   onWorkspaceSortModeChange: (value: WorkspaceSortMode) => void;
   pinnedSessionIdByWorkspace: Readonly<Record<string, string>>;
   onTogglePinSession: (workspaceDir: string, sessionId: string) => void;
+  onTogglePinCouncil: (workspaceDir: string, councilId: string) => void;
   onAddWorkspace: (value: string) => void;
   onRemoveWorkspace: (value: string) => void;
   selectedWorkspaceDir: string;
@@ -520,6 +527,9 @@ export function SessionSidebar(props: {
             onRemoveWorkspace={() => props.onRemoveWorkspace(workspace.directory)}
             onTogglePinSession={(sessionId) =>
               props.onTogglePinSession(workspace.directory, sessionId)
+            }
+            onTogglePinCouncil={(councilId) =>
+              props.onTogglePinCouncil(workspace.directory, councilId)
             }
             onSelectSession={(sessionId) => props.onSelectSession(workspace.directory, sessionId)}
             onSelectCouncil={(councilId) => props.onSelectCouncil?.(workspace.directory, councilId)}

@@ -37,12 +37,10 @@ function catalog(): ProviderModelCatalog {
     models: [
       {
         id: "gpt-5.5",
-        label: "GPT-5.5",
         defaultReasoningId: "medium",
       },
       {
         id: "gpt-5.4",
-        label: "GPT-5.4",
         defaultReasoningId: "high",
       },
     ],
@@ -325,7 +323,6 @@ describe("provider capability helpers", () => {
         ...catalog().models,
         {
           id: "gpt-beta",
-          label: "GPT Beta",
           defaultReasoningId: "low",
         },
       ],

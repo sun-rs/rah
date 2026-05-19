@@ -125,6 +125,7 @@ type ModelCatalogLoadState = {
   loading: boolean;
   error: string | null;
   loadedAt: number | null;
+  lastSuccessfulFetchedAt: string | null;
 };
 
 type LoadProviderModelsOptions = {
@@ -175,6 +176,10 @@ interface SessionState {
     provider: ProviderChoice,
     options?: LoadProviderModelsOptions,
   ) => Promise<void>;
+  rememberProviderModelCatalog: (
+    provider: ProviderChoice,
+    catalog: ProviderModelCatalog,
+  ) => void;
   startSession: (options?: StartSessionOptions) => Promise<string | null>;
   startScenario: (scenario: DebugScenarioDescriptor) => Promise<void>;
   activateHistorySession: (
@@ -264,6 +269,10 @@ function geminiCatalogNeedsNativeRefresh(
       catalog.optionsExact !== true ||
       catalog.freshness !== "authoritative")
   );
+}
+
+function isSuccessfulModelCatalog(catalog: ProviderModelCatalog): boolean {
+  return catalog.source === "native" && catalog.freshness === "authoritative";
 }
 
 function geminiCatalogMatchesSnapshot(
@@ -674,6 +683,26 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
   },
 
+  rememberProviderModelCatalog: (provider, catalog) => {
+    if (!MODEL_CATALOG_PROVIDERS.has(provider)) {
+      return;
+    }
+    set((state) => ({
+      modelCatalogs: {
+        ...state.modelCatalogs,
+        [provider]: {
+          catalog,
+          loading: false,
+          error: null,
+          loadedAt: Date.now(),
+          lastSuccessfulFetchedAt: isSuccessfulModelCatalog(catalog)
+            ? catalog.fetchedAt
+            : state.modelCatalogs[provider]?.lastSuccessfulFetchedAt ?? null,
+        },
+      },
+    }));
+  },
+
   loadProviderModels: async (provider, options) => {
     if (!MODEL_CATALOG_PROVIDERS.has(provider)) {
       set((state) => ({
@@ -684,6 +713,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             loading: false,
             error: null,
             loadedAt: null,
+            lastSuccessfulFetchedAt: null,
           },
         },
       }));
@@ -816,6 +846,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             loading: true,
             error: null,
             loadedAt: current?.loadedAt ?? null,
+            lastSuccessfulFetchedAt: current?.lastSuccessfulFetchedAt ?? null,
           },
         },
       }));
@@ -845,6 +876,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       }
       const catalog = await catalogRequest;
       const loadedAt = Date.now();
+      const lastSuccessfulFetchedAt = isSuccessfulModelCatalog(catalog)
+        ? catalog.fetchedAt
+        : current?.lastSuccessfulFetchedAt ?? null;
       set((state) => ({
         modelCatalogs: {
           ...state.modelCatalogs,
@@ -853,6 +887,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             loading: false,
             error: null,
             loadedAt,
+            lastSuccessfulFetchedAt,
           },
         },
       }));
@@ -892,6 +927,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
               loading: false,
               error: null,
               loadedAt: Date.now(),
+              lastSuccessfulFetchedAt: state.modelCatalogs[provider]?.lastSuccessfulFetchedAt ?? null,
             },
           },
         }));
@@ -905,6 +941,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             loading: false,
             error: readErrorMessage(error),
             loadedAt: state.modelCatalogs[provider]?.loadedAt ?? null,
+            lastSuccessfulFetchedAt: state.modelCatalogs[provider]?.lastSuccessfulFetchedAt ?? null,
           },
         },
       }));

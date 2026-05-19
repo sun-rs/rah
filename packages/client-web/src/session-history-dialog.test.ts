@@ -8,9 +8,12 @@ import {
   sessionIdentityKey,
 } from "./session-history-grouping";
 import {
+  councilConversationSubtitle,
   defaultRunningCouncilId,
+  reconcileCouncilSelection,
   splitCouncils,
 } from "./council/CouncilsBrowser";
+import { chooseChatListSubtitle } from "./chat-list-display";
 
 function storedSession(overrides: Partial<StoredSessionRef> & Pick<StoredSessionRef, "provider" | "providerSessionId">): StoredSessionRef {
   return {
@@ -35,6 +38,7 @@ function council(overrides: {
   phase?: CouncilSnapshot["phase"];
   updatedAt: string;
   messageAt?: string;
+  messages?: CouncilSnapshot["messages"];
   agentLabel?: string;
 }): CouncilSnapshot {
   return {
@@ -55,7 +59,7 @@ function council(overrides: {
         updatedAt: overrides.updatedAt,
       },
     ],
-    messages: overrides.messageAt
+    messages: overrides.messages ?? (overrides.messageAt
       ? [
           {
             id: 1,
@@ -66,7 +70,7 @@ function council(overrides: {
             createdAt: overrides.messageAt,
           },
         ]
-      : [],
+      : []),
   };
 }
 
@@ -273,6 +277,60 @@ test("splits councils for the Chats council tab", () => {
   assert.equal(defaultRunningCouncilId(councils), "new-running");
 });
 
+test("defaults Council entry to the latest running chat with messages", () => {
+  const councils = [
+    council({
+      id: "blank-running",
+      title: "Blank running",
+      workspace: "/Users/sun/Code/rah",
+      status: "running",
+      updatedAt: "2026-05-01T10:10:00.000Z",
+    }),
+    council({
+      id: "older-chat-running",
+      title: "Older chat running",
+      workspace: "/Users/sun/Code/rah",
+      status: "running",
+      updatedAt: "2026-05-01T10:00:00.000Z",
+      messageAt: "2026-05-01T10:03:00.000Z",
+    }),
+    council({
+      id: "newer-chat-running",
+      title: "Newer chat running",
+      workspace: "/Users/sun/Code/rah",
+      status: "running",
+      updatedAt: "2026-05-01T10:01:00.000Z",
+      messageAt: "2026-05-01T10:05:00.000Z",
+    }),
+  ];
+
+  assert.equal(defaultRunningCouncilId(councils), "newer-chat-running");
+});
+
+test("reconciles Council selection without replacing explicit history browsing", () => {
+  const councils = [
+    council({
+      id: "active-council",
+      title: "Active council",
+      workspace: "/Users/sun/Code/rah",
+      status: "running",
+      updatedAt: "2026-05-01T10:00:00.000Z",
+      messageAt: "2026-05-01T10:05:00.000Z",
+    }),
+    council({
+      id: "stopped-council",
+      title: "Stopped council",
+      workspace: "/Users/sun/Code/rah",
+      status: "stopped",
+      updatedAt: "2026-05-01T10:02:00.000Z",
+    }),
+  ];
+
+  assert.equal(reconcileCouncilSelection(null, councils, { allowRunningDefault: true }), "active-council");
+  assert.equal(reconcileCouncilSelection("stopped-council", councils), "stopped-council");
+  assert.equal(reconcileCouncilSelection("missing-council", councils), null);
+});
+
 test("filters councils by workspace and agent metadata", () => {
   const councils = [
     council({
@@ -300,5 +358,124 @@ test("filters councils by workspace and agent metadata", () => {
   assert.deepEqual(
     splitCouncils(councils, "architect").activeCouncils.map((council) => council.id),
     ["codex-council"],
+  );
+});
+
+test("derives council browser subtitle from stable visible messages", () => {
+  const snapshot = council({
+    id: "preview-council",
+    title: "Preview",
+    workspace: "/Users/sun/Code/rah",
+    status: "running",
+    updatedAt: "2026-05-01T10:00:00.000Z",
+    agentLabel: "Reviewer",
+    messages: [
+      {
+        id: 1,
+        councilId: "preview-council",
+        actorId: "user",
+        role: "user",
+        parts: [{ kind: "text", text: "please review" }],
+        createdAt: "2026-05-01T10:01:00.000Z",
+      },
+      {
+        id: 2,
+        councilId: "preview-council",
+        actorId: "preview-council-agent",
+        role: "system",
+        parts: [{ kind: "text", text: "preview-council-agent listening" }],
+        createdAt: "2026-05-01T10:02:00.000Z",
+      },
+      {
+        id: 3,
+        councilId: "preview-council",
+        actorId: "preview-council-agent",
+        role: "agent",
+        parts: [{ kind: "text", text: "Looks good.\nShip it." }],
+        createdAt: "2026-05-01T10:03:00.000Z",
+      },
+    ],
+  });
+
+  assert.equal(councilConversationSubtitle(snapshot), "You: please review");
+});
+
+test("uses the first council agent reply when the title already contains the user message", () => {
+  const snapshot = council({
+    id: "preview-council",
+    title: "please review",
+    workspace: "/Users/sun/Code/rah",
+    status: "running",
+    updatedAt: "2026-05-01T10:00:00.000Z",
+    agentLabel: "Reviewer",
+    messages: [
+      {
+        id: 1,
+        councilId: "preview-council",
+        actorId: "user",
+        role: "user",
+        parts: [{ kind: "text", text: "please review" }],
+        createdAt: "2026-05-01T10:01:00.000Z",
+      },
+      {
+        id: 2,
+        councilId: "preview-council",
+        actorId: "preview-council-agent",
+        role: "agent",
+        parts: [{ kind: "text", text: "Looks good.\nShip it." }],
+        createdAt: "2026-05-01T10:03:00.000Z",
+      },
+      {
+        id: 3,
+        councilId: "preview-council",
+        actorId: "preview-council-agent",
+        role: "agent",
+        parts: [{ kind: "text", text: "Later update" }],
+        createdAt: "2026-05-01T10:04:00.000Z",
+      },
+    ],
+  });
+
+  assert.equal(councilConversationSubtitle(snapshot), "Reviewer: Looks good. Ship it.");
+});
+
+test("skips duplicate chat subtitles", () => {
+  assert.equal(
+    chooseChatListSubtitle("你是谁", [{ text: " 你是谁 " }, { text: "我是 RAH。" }]),
+    "我是 RAH。",
+  );
+});
+
+test("filters councils by browser subtitle text", () => {
+  const councils = [
+    council({
+      id: "matching-council",
+      title: "Planner",
+      workspace: "/Users/sun/Code/rah",
+      status: "running",
+      updatedAt: "2026-05-01T10:00:00.000Z",
+      messages: [
+        {
+          id: 1,
+          councilId: "matching-council",
+          actorId: "user",
+          role: "user",
+          parts: [{ kind: "text", text: "handoff summary is ready" }],
+          createdAt: "2026-05-01T10:01:00.000Z",
+        },
+      ],
+    }),
+    council({
+      id: "other-council",
+      title: "Other",
+      workspace: "/Users/sun/Code/rah",
+      status: "running",
+      updatedAt: "2026-05-01T10:02:00.000Z",
+    }),
+  ];
+
+  assert.deepEqual(
+    splitCouncils(councils, "handoff").activeCouncils.map((council) => council.id),
+    ["matching-council"],
   );
 });

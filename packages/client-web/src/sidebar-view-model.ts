@@ -1,6 +1,5 @@
 import type { CouncilSnapshot, SessionSummary } from "@rah/runtime-protocol";
-import { conversationPhaseLabel } from "@rah/runtime-protocol";
-import { formatRelativeTime, matchesWorkspace, type WorkspaceSection } from "./session-browser";
+import { findOwningWorkspace, formatCompactRelativeTime, type WorkspaceSection } from "./session-browser";
 import { providerLabel } from "./types";
 
 export type SidebarSessionStatus = "ready" | "working" | "waiting_permission" | "unread";
@@ -27,7 +26,7 @@ export interface SidebarCouncilViewModel {
   statusLabel: string;
   updatedAtLabel: string;
   selected: boolean;
-  agentCount: number;
+  pinned: boolean;
   messageCount: number;
 }
 
@@ -53,7 +52,10 @@ function deriveSidebarSessionStatus(args: {
   if (args.summary.session.phase === "waiting_permission") {
     return "waiting_permission";
   }
-  if (args.runtimeStatus !== undefined || args.summary.session.phase === "working") {
+  if (args.summary.session.origin?.kind !== "council" && (
+    args.runtimeStatus !== undefined ||
+    args.summary.session.phase === "working"
+  )) {
     return "working";
   }
   if (args.unread) {
@@ -65,7 +67,7 @@ function deriveSidebarSessionStatus(args: {
 function sidebarStatusLabel(status: SidebarSessionStatus): string {
   switch (status) {
     case "waiting_permission":
-      return "waiting permission";
+      return "approval";
     case "working":
       return "working";
     case "unread":
@@ -91,7 +93,35 @@ function deriveCouncilStatus(council: CouncilSnapshot): SidebarCouncilStatus {
 }
 
 function councilStatusLabel(status: SidebarCouncilStatus): string {
-  return conversationPhaseLabel(status);
+  switch (status) {
+    case "waiting_permission":
+      return "approval";
+    case "starting":
+      return "starting";
+    case "working":
+      return "working";
+    case "ready":
+      return "ready";
+  }
+}
+
+function councilSidebarActivityAt(council: CouncilSnapshot): string {
+  const visibleMessage = [...council.messages]
+    .reverse()
+    .find((message) => message.role !== "system");
+  return visibleMessage?.createdAt ?? council.createdAt;
+}
+
+function sessionItemKey(sessionId: string): string {
+  return `session:${sessionId}`;
+}
+
+function councilItemKey(councilId: string): string {
+  return `council:${councilId}`;
+}
+
+function isPinnedSession(pinnedItemKey: string, sessionId: string): boolean {
+  return pinnedItemKey === sessionId || pinnedItemKey === sessionItemKey(sessionId);
 }
 
 export function deriveSidebarWorkspaceViewModels(args: {
@@ -107,13 +137,19 @@ export function deriveSidebarWorkspaceViewModels(args: {
   councils?: readonly CouncilSnapshot[];
   selectedCouncilId?: string | null;
 }): SidebarWorkspaceViewModel[] {
+  const workspaceDirs = args.workspaceSections.map((section) => section.workspace.directory);
+  const councilOwnerById = new Map<string, string | null>();
+  for (const council of args.councils ?? []) {
+    councilOwnerById.set(council.id, findOwningWorkspace(workspaceDirs, council.workspace));
+  }
+
   return args.workspaceSections.map((section) => {
-    const pinnedSessionId = args.pinnedSessionIdByWorkspace[section.workspace.directory];
+    const pinnedItemKey = args.pinnedSessionIdByWorkspace[section.workspace.directory];
     const orderedSessions =
-      pinnedSessionId && section.sessions.some((session) => session.session.id === pinnedSessionId)
+      pinnedItemKey && section.sessions.some((session) => isPinnedSession(pinnedItemKey, session.session.id))
         ? [
-            ...section.sessions.filter((session) => session.session.id === pinnedSessionId),
-            ...section.sessions.filter((session) => session.session.id !== pinnedSessionId),
+            ...section.sessions.filter((session) => isPinnedSession(pinnedItemKey, session.session.id)),
+            ...section.sessions.filter((session) => !isPinnedSession(pinnedItemKey, session.session.id)),
           ]
         : section.sessions;
 
@@ -132,31 +168,36 @@ export function deriveSidebarWorkspaceViewModels(args: {
         title: session.session.title ?? providerLabel(session.session.provider),
         status,
         statusLabel: sidebarStatusLabel(status),
-        updatedAtLabel: formatRelativeTime(session.session.updatedAt) ?? "",
+        updatedAtLabel: formatCompactRelativeTime(session.session.updatedAt) ?? "",
         selected: session.session.id === args.selectedSessionId,
-        pinned: pinnedSessionId === session.session.id,
+        pinned: pinnedItemKey !== undefined && isPinnedSession(pinnedItemKey, session.session.id),
       };
     });
     const councils = (args.councils ?? [])
-      .filter((council) => isRunningCouncil(council) && matchesWorkspace(council.workspace, section.workspace.directory))
-      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+      .filter(
+        (council) =>
+          isRunningCouncil(council) &&
+          councilOwnerById.get(council.id) === section.workspace.directory,
+      )
+      .sort((left, right) => councilSidebarActivityAt(right).localeCompare(councilSidebarActivityAt(left)))
       .map((council) => {
         const status = deriveCouncilStatus(council);
+        const activityAt = councilSidebarActivityAt(council);
         return {
           kind: "council" as const,
           id: council.id,
           title: council.title,
           status,
           statusLabel: councilStatusLabel(status),
-          updatedAtLabel: formatRelativeTime(council.updatedAt) ?? "",
+          updatedAtLabel: formatCompactRelativeTime(activityAt) ?? "",
           selected: council.id === args.selectedCouncilId,
-          agentCount: council.agents.length,
+          pinned: pinnedItemKey === councilItemKey(council.id),
           messageCount: council.messages.length,
         };
       });
     const items = [...sessions, ...councils].sort((left, right) => {
-      if (left.selected !== right.selected) {
-        return left.selected ? -1 : 1;
+      if (left.pinned !== right.pinned) {
+        return left.pinned ? -1 : 1;
       }
       return 0;
     });

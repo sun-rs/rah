@@ -21,8 +21,10 @@ describe("sidebar layout contract", () => {
   test("locks fixed action slots and row heights", () => {
     assert.match(SIDEBAR_LAYOUT.workspaceActionSlotClassName, /\babsolute\b/);
     assert.match(SIDEBAR_LAYOUT.workspaceActionSlotClassName, /\bright-0\b/);
-    assert.match(SIDEBAR_LAYOUT.sessionPinSlotClassName, /\bh-7\b/);
-    assert.match(SIDEBAR_LAYOUT.sessionPinSlotClassName, /\bw-7\b/);
+    assert.match(SIDEBAR_LAYOUT.sessionPinButtonClassName, /\babsolute\b/);
+    assert.match(SIDEBAR_LAYOUT.sessionPinButtonClassName, /\bright-1\b/);
+    assert.match(SIDEBAR_LAYOUT.sessionPinButtonClassName, /\bh-7\b/);
+    assert.match(SIDEBAR_LAYOUT.sessionPinButtonClassName, /\bw-7\b/);
     assert.match(SIDEBAR_LAYOUT.workspaceHeaderClassName, /\brelative\b/);
     assert.match(SIDEBAR_LAYOUT.workspaceHeaderClassName, /min-h-\[32px\]/);
     assert.match(SIDEBAR_LAYOUT.sessionRowBaseClassName, /min-h-\[32px\]/);
@@ -31,7 +33,7 @@ describe("sidebar layout contract", () => {
 
   test("locks sidebar indentation and meta width tokens", () => {
     assert.equal(SIDEBAR_LAYOUT.sessionListClassName, "space-y-0.5 pt-0.5 pl-0.5 pr-0.5");
-    assert.match(SIDEBAR_LAYOUT.sessionTimeClassName, /min-w-\[3\.5rem\]/);
+    assert.match(SIDEBAR_LAYOUT.sessionTimeClassName, /min-w-\[2\.25rem\]/);
     assert.match(SIDEBAR_LAYOUT.sessionStatusBadgeBaseClassName, /text-\[10px\]/);
   });
 

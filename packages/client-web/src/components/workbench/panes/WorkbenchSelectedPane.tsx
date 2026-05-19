@@ -1,8 +1,22 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import type { ContextUsage, PermissionResponseRequest, ProviderModelCatalog, SessionSummary } from "@rah/runtime-protocol";
-import { conversationPhaseLabel } from "@rah/runtime-protocol";
-import { ArrowUp, Ellipsis, EyeOff, Info, Menu, PencilLine, Plus, Square, Trash2, X } from "lucide-react";
-import { providerLabel } from "../../../types";
+import {
+  Activity,
+  ArrowUp,
+  Circle,
+  CircleStop,
+  Ellipsis,
+  EyeOff,
+  Info,
+  Menu,
+  PanelRight,
+  PencilLine,
+  Plus,
+  Square,
+  Trash2,
+  UsersRound,
+  X,
+} from "lucide-react";
 import type { SessionProjection } from "../../../types";
 import { TerminalPane } from "../../../TerminalPane";
 import { ChatThread } from "../../chat/ChatThread";
@@ -12,12 +26,16 @@ import { TokenizedTextarea } from "../../TokenizedTextarea";
 import { canSubmitComposerInput, COMPOSER_LAYOUT, type ComposerSurface } from "../../../composer-contract";
 import {
   HEADER_ACTION_GROUP_CLASS,
+  HEADER_DANGER_TEXT_BUTTON_CLASS,
   HEADER_ICON_BUTTON_CLASS,
   HEADER_SEGMENTED_BUTTON_BASE_CLASS,
   HEADER_SEGMENTED_CONTROL_CLASS,
   HEADER_TEXT_BUTTON_CLASS,
-  headerRightPaddingClass,
 } from "../header-button-styles";
+import {
+  ConversationMetaBadge,
+  type ConversationMetaTone,
+} from "../ConversationMetaBadge";
 import type { InlineWorkbenchNotice } from "../../../workbench-notice-contract";
 import { SessionInfoDialog } from "../dialogs/SessionInfoDialog";
 import {
@@ -32,6 +50,7 @@ import {
   shouldDetachPreviousSessionTui,
   type ActiveSessionTuiSurface,
 } from "../../../tui-surface-lifecycle";
+import { providerLabel } from "../../../types";
 
 function formatContextPercent(value: number): string {
   const clamped = Math.max(0, Math.min(100, value));
@@ -81,6 +100,31 @@ function resolveContextUsageDisplay(
     ariaLabel: `${tooltip} · ${percentRemaining}% remaining`,
     tooltip,
   };
+}
+
+function formatSessionLifecycleLabel(status: "running" | "stopped"): string {
+  return status === "running" ? "Running" : "Stopped";
+}
+
+function formatSessionPhaseLabel(phase: SessionSummary["session"]["phase"]): string {
+  switch (phase) {
+    case "starting":
+      return "Starting";
+    case "ready":
+      return "Ready";
+    case "working":
+      return "Working";
+    case "waiting_input":
+      return "Input";
+    case "waiting_permission":
+      return "Approval";
+    case "stopping":
+      return "Stopping";
+    case "failed":
+      return "Failed";
+    case "ended":
+      return "Ended";
+  }
 }
 
 type SessionViewMode = "chat" | "tui";
@@ -163,6 +207,11 @@ export function WorkbenchSelectedPane(props: {
   compactComposerPrompts?: boolean | "auto";
   compactSessionMeta?: boolean | "auto";
   showInspectorToggle?: boolean;
+  inspectorToggleOpen?: boolean;
+  inspectorToggleDisabled?: boolean;
+  inspectorToggleTitle?: string;
+  inspectorToggleClassName?: string;
+  reserveRightPanelToggleSpace?: boolean;
 }) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const composerContainerRef = useRef<HTMLDivElement | null>(null);
@@ -205,6 +254,23 @@ export function WorkbenchSelectedPane(props: {
   });
   const contextUsageDisplay = resolveContextUsageDisplay(props.selectedSummary.usage);
   const isCouncilSession = props.selectedSummary.session.origin?.kind === "council";
+  const sessionLifecycleStatus = props.selectedIsReadOnlyReplay
+    ? "stopped"
+    : props.selectedSummary.session.status;
+  const sessionLifecycleLabel = formatSessionLifecycleLabel(sessionLifecycleStatus);
+  const sessionLifecycleTone: ConversationMetaTone =
+    sessionLifecycleStatus === "running" ? "running" : "stopped";
+  const sessionPhase =
+    isCouncilSession && props.selectedSummary.session.phase === "working"
+      ? "ready"
+      : props.selectedSummary.session.phase;
+  const sessionPhaseLabel = formatSessionPhaseLabel(sessionPhase);
+  const sessionPhaseTone: ConversationMetaTone =
+    sessionPhase === "working" || sessionPhase === "starting" || sessionPhase === "stopping"
+      ? "working"
+      : sessionPhase === "waiting_permission"
+        ? "permission"
+        : "stopped";
   const effectiveSessionViewMode =
     nativeTuiAvailable && sessionViewMode === "tui" ? "tui" : "chat";
   const showComposer =
@@ -441,10 +507,16 @@ export function WorkbenchSelectedPane(props: {
     };
   }, [sessionMenuOpen]);
 
+  const inspectorToggleOpen = props.inspectorToggleOpen ?? props.rightSidebarOpen;
+
   return (
     <div ref={rootRef} className="flex h-full min-h-0 flex-col">
       <header
-        className={`relative z-20 flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[var(--app-border)] bg-[var(--app-bg)]/80 pl-4 backdrop-blur-sm ${headerRightPaddingClass(props.rightSidebarOpen)}`}
+        className={`relative z-20 flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[var(--app-border)] bg-[var(--app-bg)]/80 pl-4 pr-4 backdrop-blur-sm ${
+          props.reserveRightPanelToggleSpace
+            ? "md:pr-[calc(max(1rem,env(safe-area-inset-right))+2.75rem)]"
+            : ""
+        }`}
       >
         <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
           <button
@@ -471,85 +543,44 @@ export function WorkbenchSelectedPane(props: {
             <div className="text-sm font-medium truncate text-[var(--app-fg)]">
               {props.selectedSummary.session.title ?? props.selectedSummary.session.id}
             </div>
-            {compactSessionMeta ? (
-              <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] text-[var(--app-hint)]">
-                {isCouncilSession ? (
-                  <span className="inline-flex shrink-0 rounded-full border border-amber-500/15 bg-amber-500/8 px-1.5 py-0.5 text-[10px] font-medium text-amber-700/85 dark:text-amber-300/85">
-                    Council
-                  </span>
-                ) : null}
-                <span
-                  className={`group relative inline-flex min-w-0 shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${
-                    props.selectedIsReadOnlyReplay
-                      ? "border-[var(--app-border)] bg-[var(--app-subtle-bg)] text-[var(--app-hint)]"
-                      : "border-emerald-500/20 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-                  }`}
-                  aria-label={contextUsageDisplay?.ariaLabel}
-                  tabIndex={contextUsageDisplay ? 0 : undefined}
-                >
-                  <span className="cursor-default truncate">
-                    {props.selectedSummary.session.status}
-                    {contextUsageDisplay ? ` ${contextUsageDisplay.compactLabel}` : ""}
-                  </span>
-                  {contextUsageDisplay ? (
-                    <span
-                      role="tooltip"
-                      className="pointer-events-none absolute left-0 top-full z-50 mt-1 hidden max-w-[16rem] whitespace-nowrap rounded-md border border-[var(--app-border)] bg-[var(--app-bg)] px-2 py-1 text-[11px] text-[var(--app-fg)] shadow-lg group-hover:block group-focus:block"
-                    >
-                      {contextUsageDisplay.tooltip}
-                    </span>
-                  ) : null}
-                </span>
-              </div>
-            ) : (
-              <div className="flex items-center gap-2 text-[11px] md:text-xs text-[var(--app-hint)] mt-0.5">
-              <span className="capitalize hidden sm:inline">{providerLabel(props.selectedSummary.session.provider)}</span>
-              {isCouncilSession ? (
-                <>
-                  <span className="hidden sm:inline">·</span>
-                  <span className="inline-flex rounded-full border border-amber-500/15 bg-amber-500/8 px-1.5 py-0.5 text-[10px] font-medium text-amber-700/85 dark:text-amber-300/85">
-                    Council
-                  </span>
-                </>
-              ) : null}
-              <span className="hidden sm:inline">·</span>
-              <span>{conversationPhaseLabel(props.selectedSummary.session.phase)}</span>
-              {props.selectedIsReadOnlyReplay ? (
-                <>
-                  <span className="hidden sm:inline">·</span>
-                  <span className="inline-flex rounded-full border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--app-hint)]">
-                    stopped
-                  </span>
-                </>
-              ) : (
-                <>
-                  <span className="hidden sm:inline">·</span>
-                  <span className="inline-flex rounded-full border border-emerald-500/20 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
-                    running
-                  </span>
-                </>
-              )}
+            <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-1.5 text-[11px] text-[var(--app-hint)]">
+              <ConversationMetaBadge tone={sessionLifecycleTone} width="status">
+                {sessionLifecycleStatus === "running" ? (
+                  <Circle size={9} className="fill-current" />
+                ) : (
+                  <CircleStop size={10} />
+                )}
+                <span>{sessionLifecycleLabel}</span>
+              </ConversationMetaBadge>
+              <ConversationMetaBadge tone={sessionPhaseTone} width="status">
+                <Activity size={10} />
+                <span>{sessionPhaseLabel}</span>
+              </ConversationMetaBadge>
               {contextUsageDisplay ? (
-                <>
-                  <span className="inline">·</span>
+                <span
+                  className="group relative inline-flex shrink-0"
+                  aria-label={contextUsageDisplay.ariaLabel}
+                  tabIndex={0}
+                >
+                  <ConversationMetaBadge tone="context" width="context" title={contextUsageDisplay.tooltip}>
+                    <span>{compactSessionMeta ? contextUsageDisplay.compactLabel : contextUsageDisplay.label}</span>
+                  </ConversationMetaBadge>
                   <span
-                    className="group relative inline-flex items-center"
-                    aria-label={contextUsageDisplay.ariaLabel}
-                    tabIndex={0}
+                    role="tooltip"
+                    className="pointer-events-none absolute left-1/2 top-full z-50 mt-1.5 -translate-x-1/2 whitespace-nowrap rounded-md border border-[var(--app-border)] bg-[var(--app-bg)] px-2 py-1 text-[11px] font-medium text-[var(--app-fg)] opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100 group-focus:opacity-100"
                   >
-                    <span className="cursor-default">{contextUsageDisplay.label}</span>
-                    <span
-                      role="tooltip"
-                      className="pointer-events-none absolute left-1/2 top-full z-50 mt-1.5 -translate-x-1/2 whitespace-nowrap rounded-md border border-[var(--app-border)] bg-[var(--app-bg)] px-2 py-1 text-[11px] font-medium text-[var(--app-fg)] opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100 group-focus:opacity-100"
-                    >
-                      {contextUsageDisplay.tooltip}
-                    </span>
+                    {contextUsageDisplay.tooltip}
                   </span>
-                  </>
-                ) : null}
-              </div>
-            )}
+                </span>
+              ) : null}
+              {isCouncilSession ? (
+                <ConversationMetaBadge tone="council" width="status" title="Council agent session">
+                  <UsersRound size={10} />
+                  <span>Council</span>
+                </ConversationMetaBadge>
+              ) : null}
             </div>
+          </div>
         </div>
         <div className={HEADER_ACTION_GROUP_CLASS}>
           {nativeTuiAvailable ? (
@@ -633,7 +664,11 @@ export function WorkbenchSelectedPane(props: {
           </div>
           <button
             type="button"
-            className={HEADER_TEXT_BUTTON_CLASS}
+            className={
+              props.selectedIsReadOnlyReplay
+                ? HEADER_TEXT_BUTTON_CLASS
+                : HEADER_DANGER_TEXT_BUTTON_CLASS
+            }
             disabled={stopOrCloseDisabled}
             onClick={props.onStopOrClose}
             title={
@@ -667,6 +702,21 @@ export function WorkbenchSelectedPane(props: {
             >
               <EyeOff size={14} className="min-[900px]:mr-1" />
               <span className="hidden min-[900px]:inline">Hide</span>
+            </button>
+          ) : null}
+          {props.showInspectorToggle ? (
+            <button
+              type="button"
+              className={`${HEADER_ICON_BUTTON_CLASS} ${props.inspectorToggleClassName ?? ""}`}
+              onClick={props.onToggleInspector}
+              disabled={props.inspectorToggleDisabled || !props.onToggleInspector}
+              aria-label={inspectorToggleOpen ? "Collapse inspector" : "Expand inspector"}
+              title={
+                props.inspectorToggleTitle ??
+                (inspectorToggleOpen ? "Collapse inspector" : "Expand inspector")
+              }
+            >
+              <PanelRight size={16} />
             </button>
           ) : null}
         </div>

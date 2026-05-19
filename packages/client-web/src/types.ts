@@ -271,6 +271,53 @@ function summaryWithRuntimeState(
   };
 }
 
+function summaryWithTurnFailure(
+  current: SessionProjection,
+  error: string,
+  updatedAt: string,
+): SessionProjection["summary"] {
+  const next = summaryWithRuntimeState(current, "failed", updatedAt);
+  const previousError = current.summary.session.runtimeDiagnostics?.lastError?.trim();
+  const nextError = error.trim();
+  const lastError =
+    previousError && !isGenericRuntimeError(previousError) && isGenericRuntimeError(nextError)
+      ? previousError
+      : nextError;
+  return {
+    ...next,
+    session: {
+      ...next.session,
+      runtimeDiagnostics: {
+        ...(next.session.runtimeDiagnostics ?? {}),
+        lastError,
+      },
+    },
+  };
+}
+
+function isGenericRuntimeError(message: string): boolean {
+  return (
+    message.includes("Unexpected server error. Check server logs for details.") ||
+    /^TUI client exited(?: with code \d+)?$/.test(message)
+  );
+}
+
+function summaryWithUpdatedAt(
+  current: SessionProjection,
+  updatedAt: string,
+): SessionProjection["summary"] {
+  if (!isIsoTsAtLeast(updatedAt, current.summary.session.updatedAt)) {
+    return current.summary;
+  }
+  return {
+    ...current.summary,
+    session: {
+      ...current.summary.session,
+      updatedAt,
+    },
+  };
+}
+
 function createTimelineEntry(
   entry: Omit<Extract<FeedEntry, { kind: "timeline" }>, "turnId">,
   turnId?: string,
@@ -1959,79 +2006,81 @@ export function applyEventToProjection(
         : event.type === "turn.completed" || event.type === "turn.canceled"
           ? summaryWithRuntimeState(current, "idle", event.ts)
           : event.type === "turn.failed"
-            ? summaryWithRuntimeState(current, "failed", event.ts)
-      : event.type === "session.state.changed"
-        ? {
-            ...current.summary,
-            session: {
-              ...current.summary.session,
-              ...conversationStateFromRuntimeState(event.payload.state),
-              runtimeState: event.payload.state,
-              updatedAt: event.ts,
-            },
-          }
-      : event.type === "session.native_tui.prompt_state.changed"
-        ? {
-            ...current.summary,
-            session: {
-              ...current.summary.session,
-              updatedAt: event.ts,
-              ...(current.summary.session.nativeTui
+            ? summaryWithTurnFailure(current, event.payload.error, event.ts)
+            : event.type === "timeline.item.added" || event.type === "timeline.item.updated"
+              ? summaryWithUpdatedAt(current, event.ts)
+              : event.type === "session.state.changed"
                 ? {
-                    nativeTui: {
-                      ...current.summary.session.nativeTui,
-                      promptState: event.payload.promptState,
-                      ...(event.payload.queuedInputCount !== undefined
-                        ? { queuedInputCount: event.payload.queuedInputCount }
-                        : {}),
+                    ...current.summary,
+                    session: {
+                      ...current.summary.session,
+                      ...conversationStateFromRuntimeState(event.payload.state),
+                      runtimeState: event.payload.state,
+                      updatedAt: event.ts,
                     },
                   }
-                : {}),
-            },
-          }
-        : event.type === "permission.requested"
-          ? {
-              ...current.summary,
-              session: {
-                ...current.summary.session,
-                ...conversationStateFromRuntimeState(permissionRequestedState),
-                runtimeState: permissionRequestedState,
-                updatedAt: event.ts,
-              },
-            }
-          : event.type === "permission.resolved"
-            ? {
-                ...current.summary,
-                session: {
-                  ...current.summary.session,
-                  ...conversationStateFromRuntimeState(permissionResolvedState),
-                  runtimeState: permissionResolvedState,
-                  updatedAt: event.ts,
-                },
-              }
-        : event.type === "control.claimed"
-          ? {
-              ...current.summary,
-              controlLease: {
-                sessionId: current.summary.session.id,
-                holderClientId: event.payload.clientId,
-                holderKind: event.payload.clientKind,
-                grantedAt: event.ts,
-              },
-            }
-          : event.type === "control.released"
-            ? {
-                ...current.summary,
-                controlLease: {
-                  sessionId: current.summary.session.id,
-                },
-              }
-            : event.type === "usage.updated"
-              ? {
-                  ...current.summary,
-                  usage: event.payload.usage,
-                }
-              : current.summary;
+                : event.type === "session.native_tui.prompt_state.changed"
+                  ? {
+                      ...current.summary,
+                      session: {
+                        ...current.summary.session,
+                        updatedAt: event.ts,
+                        ...(current.summary.session.nativeTui
+                          ? {
+                              nativeTui: {
+                                ...current.summary.session.nativeTui,
+                                promptState: event.payload.promptState,
+                                ...(event.payload.queuedInputCount !== undefined
+                                  ? { queuedInputCount: event.payload.queuedInputCount }
+                                  : {}),
+                              },
+                            }
+                          : {}),
+                      },
+                    }
+                  : event.type === "permission.requested"
+                    ? {
+                        ...current.summary,
+                        session: {
+                          ...current.summary.session,
+                          ...conversationStateFromRuntimeState(permissionRequestedState),
+                          runtimeState: permissionRequestedState,
+                          updatedAt: event.ts,
+                        },
+                      }
+                    : event.type === "permission.resolved"
+                      ? {
+                          ...current.summary,
+                          session: {
+                            ...current.summary.session,
+                            ...conversationStateFromRuntimeState(permissionResolvedState),
+                            runtimeState: permissionResolvedState,
+                            updatedAt: event.ts,
+                          },
+                        }
+                      : event.type === "control.claimed"
+                        ? {
+                            ...current.summary,
+                            controlLease: {
+                              sessionId: current.summary.session.id,
+                              holderClientId: event.payload.clientId,
+                              holderKind: event.payload.clientKind,
+                              grantedAt: event.ts,
+                            },
+                          }
+                        : event.type === "control.released"
+                          ? {
+                              ...current.summary,
+                              controlLease: {
+                                sessionId: current.summary.session.id,
+                              },
+                            }
+                          : event.type === "usage.updated"
+                            ? {
+                                ...current.summary,
+                                usage: event.payload.usage,
+                              }
+                            : current.summary;
 
   let nextFeed = current.feed;
   let nextPendingInterrupt = current.pendingInterrupt;

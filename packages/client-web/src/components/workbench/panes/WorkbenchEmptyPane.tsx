@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, useState, type RefObject } from "react";
 import type { ProviderModelCatalog } from "@rah/runtime-protocol";
-import { ArrowUp, ChevronDown, Folder, FolderPlus, Menu, Plus, UsersRound } from "lucide-react";
+import { ArrowUp, ChevronDown, Folder, FolderPlus, Menu, PanelRight, Plus, UsersRound } from "lucide-react";
 import { ProviderSelector, type ProviderChoice } from "../../ProviderSelector";
 import { SessionControlPopover } from "../../SessionControlPopover";
 import { SessionModelControls } from "../../SessionModelControls";
@@ -35,6 +35,11 @@ export function WorkbenchEmptyPane(props: {
   onExpandSidebar: () => void;
   onOpenRight: () => void;
   onExpandInspector: () => void;
+  onToggleInspector: () => void;
+  inspectorToggleOpen: boolean;
+  showInspectorToggle?: boolean;
+  inspectorToggleClassName?: string;
+  reserveRightPanelToggleSpace?: boolean;
   emptyStateComposerRef: RefObject<HTMLTextAreaElement | null>;
   emptyStateDraft: string;
   onEmptyStateDraftChange: (value: string) => void;
@@ -90,7 +95,13 @@ export function WorkbenchEmptyPane(props: {
 
   return (
     <>
-      <header className="h-14 flex items-center justify-between gap-3 border-b border-[var(--app-border)] px-4 bg-[var(--app-bg)]/80 backdrop-blur-sm shrink-0">
+      <header
+        className={`h-14 flex items-center justify-between gap-3 border-b border-[var(--app-border)] px-4 bg-[var(--app-bg)]/80 backdrop-blur-sm shrink-0 ${
+          props.reserveRightPanelToggleSpace
+            ? "md:pr-[calc(max(1rem,env(safe-area-inset-right))+2.75rem)]"
+            : ""
+        }`}
+      >
         <div className="flex items-center gap-2 min-w-0">
           <button
             type="button"
@@ -118,6 +129,17 @@ export function WorkbenchEmptyPane(props: {
             </div>
           </div>
         </div>
+        {props.showInspectorToggle !== false ? (
+          <button
+            type="button"
+            className={`icon-click-feedback inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-[var(--app-border)] text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] ${props.inspectorToggleClassName ?? ""}`}
+            onClick={props.onToggleInspector}
+            aria-label={props.inspectorToggleOpen ? "Collapse inspector" : "Expand inspector"}
+            title={props.inspectorToggleOpen ? "Collapse inspector" : "Expand inspector"}
+          >
+            <PanelRight size={16} />
+          </button>
+        ) : null}
       </header>
       <div className="flex-1 flex flex-col items-center justify-center px-4 md:px-6 overflow-y-auto rah-scroll-panel rah-scroll-panel-y">
         <div className="w-full max-w-2xl -translate-y-6 space-y-5 md:-translate-y-8 md:space-y-6">

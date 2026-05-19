@@ -53,10 +53,8 @@ export const SIDEBAR_LAYOUT = {
   sessionIconSlotClassName: "inline-flex h-7 w-7 shrink-0 items-center justify-center",
   sessionIconClassName: "h-4.5 w-4.5",
   sessionTitleClassName: "min-w-0 flex-1 truncate text-[12px]",
-  sessionPinSlotClassName:
-    "ml-auto flex h-7 w-7 shrink-0 items-center justify-center",
   sessionPinButtonClassName:
-    "inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-hint)]/80 transition-all hover:text-[var(--app-fg)]",
+    "absolute right-1 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-[var(--app-hint)]/80 transition-all hover:text-[var(--app-fg)]",
   sessionPinHiddenClassName:
     "opacity-0 pointer-events-none transition-opacity group-hover/session:pointer-events-auto group-hover/session:opacity-100 group-focus-within/session:pointer-events-auto group-focus-within/session:opacity-100 coarse-pointer-action-visible",
   sessionPinActiveClassName: "opacity-100 text-[var(--app-fg)]",
@@ -72,7 +70,7 @@ export const SIDEBAR_LAYOUT = {
     ready: "text-[var(--app-hint)]",
   },
   sessionTimeClassName:
-    "min-w-[3.5rem] shrink-0 text-right text-[11px] text-[var(--app-hint)]",
+    "min-w-[2.25rem] shrink-0 text-right text-[11px] text-[var(--app-hint)]",
   labSectionClassName: "space-y-2",
   labHeaderClassName: "px-1",
   labHeaderLabelClassName: "text-xs font-medium text-[var(--app-hint)]",

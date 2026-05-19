@@ -27,6 +27,7 @@ import { isSessionAttachedToClient } from "../../../workbench-selectors";
 import type { SessionProjection } from "../../../types";
 import type { ProviderChoice } from "../../ProviderSelector";
 import { WorkbenchSelectedPane } from "../panes/WorkbenchSelectedPane";
+import { ConversationSidePanelShell } from "../shells/ConversationSidePanelShell";
 
 type ModelDraft = {
   modelId?: string | null;
@@ -39,6 +40,9 @@ export function CanvasSessionPane(props: {
   summary: SessionSummary;
   projection: SessionProjection | null;
   inspector?: ReactNode;
+  sidePanelOpen: boolean;
+  sidePanelToggleDisabled: boolean;
+  onToggleSidePanel: () => void;
   clientId: string;
   hideToolCallsInChat: boolean;
   hideOpenCodeReasoningInChat: boolean;
@@ -91,6 +95,9 @@ export function CanvasSessionPane(props: {
   ) => Promise<unknown>;
 }) {
   const provider = props.summary.session.provider as ProviderChoice;
+  const expanded = props.variant === "expanded";
+  const sidePanelAvailable = expanded && Boolean(props.inspector);
+  const inspectorOpen = expanded && props.sidePanelOpen;
   const selectedIsReadOnlyReplay = isReadOnlyReplay(props.summary);
   const isAttached = isSessionAttachedToClient(props.summary, props.clientId);
   const hasControl = props.summary.controlLease.holderClientId === props.clientId;
@@ -120,14 +127,20 @@ export function CanvasSessionPane(props: {
     summary: props.summary,
     catalog: props.modelCatalog,
   });
+  const claimDraftModelId =
+    props.claimModelDraft?.modelId &&
+    props.modelCatalog?.models.some((model) => model.id === props.claimModelDraft?.modelId)
+      ? props.claimModelDraft.modelId
+      : null;
   const modelControl = resolveSelectedModelDraft({
     catalog: props.modelCatalog,
     selectedModelId:
-      props.claimModelDraft?.modelId ?? props.summary.session.model?.currentModelId ?? null,
+      claimDraftModelId ?? props.summary.session.model?.currentModelId ?? null,
     selectedReasoningId:
-      props.claimModelDraft?.reasoningId ??
+      (claimDraftModelId ? props.claimModelDraft?.reasoningId : undefined) ??
       props.summary.session.model?.currentReasoningId ??
       null,
+    preserveMissingSelectedModel: claimDraftModelId === null,
   });
   const {
     composerRef,
@@ -168,7 +181,7 @@ export function CanvasSessionPane(props: {
       compactComposerPrompts="auto"
       compactSessionMeta="auto"
       sidebarOpen
-      rightSidebarOpen={props.variant === "expanded"}
+      rightSidebarOpen={inspectorOpen}
       isAttached={isAttached}
       interactionNotice={noticeState.interactionNotice}
       historyNotice={noticeState.historyNotice}
@@ -195,18 +208,20 @@ export function CanvasSessionPane(props: {
       onClaimHistory={() => {
         const modelDraft = props.claimModelDraft;
         const optionValues =
-          modelDraft?.optionValues ??
-          (modelDraft?.modelId
+          (claimDraftModelId ? modelDraft?.optionValues : undefined) ??
+          (claimDraftModelId
             ? buildModelOptionValuesFromReasoning({
                 catalog: props.modelCatalog,
-                modelId: modelDraft.modelId,
-                reasoningId: modelDraft.reasoningId ?? null,
+                modelId: claimDraftModelId,
+                reasoningId: modelDraft?.reasoningId ?? null,
               })
             : undefined);
         props.onClaimHistory(props.summary.session.id, {
           ...(modeControl.effectiveModeId ? { modeId: modeControl.effectiveModeId } : {}),
-          ...(modelDraft?.modelId ? { modelId: modelDraft.modelId } : {}),
-          ...(modelDraft?.reasoningId ? { reasoningId: modelDraft.reasoningId } : {}),
+          ...(claimDraftModelId ? { modelId: claimDraftModelId } : {}),
+          ...(claimDraftModelId && modelDraft?.reasoningId
+            ? { reasoningId: modelDraft.reasoningId }
+            : {}),
           ...(optionValues !== undefined ? { optionValues } : {}),
         });
       }}
@@ -235,17 +250,17 @@ export function CanvasSessionPane(props: {
         props.onClaimModelDraftChange(props.summary.session.id, next);
       }}
       onClaimReasoningChange={(reasoningId) => {
-        const modelId = props.claimModelDraft?.modelId ?? modelControl.model?.id ?? null;
+        const modelId = claimDraftModelId ?? modelControl.model?.id ?? null;
         const next = makeModelDraft(modelId, reasoningId);
         props.onRememberModelDraft(provider, next);
         props.onClaimModelDraftChange(props.summary.session.id, next);
       }}
       onClaimControl={() => {
         const modelDraft = props.claimModelDraft;
-        const modelId = modelDraft?.modelId ?? null;
+        const modelId = claimDraftModelId;
         const reasoningId = modelDraft?.reasoningId ?? modelControl.reasoning?.id ?? null;
         const optionValues =
-          modelDraft?.optionValues ??
+          (modelId ? modelDraft?.optionValues : undefined) ??
           (modelId
             ? buildModelOptionValuesFromReasoning({
                 catalog: props.modelCatalog,
@@ -280,8 +295,18 @@ export function CanvasSessionPane(props: {
       onExpandSidebar={() => undefined}
       onOpenRight={() => undefined}
       onExpandInspector={() => undefined}
-      onToggleInspector={() => undefined}
-      showInspectorToggle={false}
+      onToggleInspector={props.onToggleSidePanel}
+      showInspectorToggle={!sidePanelAvailable}
+      inspectorToggleOpen={inspectorOpen}
+      inspectorToggleDisabled={props.sidePanelToggleDisabled}
+      reserveRightPanelToggleSpace={sidePanelAvailable && !inspectorOpen}
+      inspectorToggleTitle={
+        props.sidePanelToggleDisabled
+          ? "Maximize pane to use inspector"
+          : inspectorOpen
+            ? "Collapse inspector"
+            : "Expand inspector"
+      }
       onFloatingAnchorOffsetChange={() => undefined}
       onStopOrClose={() => {
         if (selectedIsReadOnlyReplay) {
@@ -323,13 +348,20 @@ export function CanvasSessionPane(props: {
     />
   );
 
-  if (props.variant === "expanded" && props.inspector) {
+  if (sidePanelAvailable && props.inspector) {
     return (
       <div className="flex h-full min-h-0 min-w-0">
         <div className="min-w-0 flex-1">{selectedPane}</div>
-        <aside className="hidden w-[min(30rem,32vw)] shrink-0 border-l border-[var(--app-border)] bg-[var(--app-subtle-bg)] min-[900px]:flex min-[900px]:flex-col">
+        <ConversationSidePanelShell
+          desktopOpen={inspectorOpen}
+          desktopBreakpoint="wide"
+          desktopWidth="clamp(20rem, 28vw, 28rem)"
+          toggleLabel={inspectorOpen ? "Collapse inspector" : "Expand inspector"}
+          toggleDisabled={props.sidePanelToggleDisabled}
+          onToggle={props.onToggleSidePanel}
+        >
           {props.inspector}
-        </aside>
+        </ConversationSidePanelShell>
       </div>
     );
   }

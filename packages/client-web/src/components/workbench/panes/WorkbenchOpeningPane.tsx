@@ -1,5 +1,5 @@
 import type { PendingSessionTransition } from "../../../session-transition-contract";
-import { LoaderCircle, Menu } from "lucide-react";
+import { LoaderCircle, Menu, PanelRight } from "lucide-react";
 import { ProviderLogo } from "../../ProviderLogo";
 import { providerLabel } from "../../../types";
 
@@ -11,10 +11,21 @@ export function WorkbenchOpeningPane(props: {
   onExpandSidebar: () => void;
   onOpenRight: () => void;
   onExpandInspector: () => void;
+  onToggleInspector: () => void;
+  inspectorToggleOpen: boolean;
+  showInspectorToggle?: boolean;
+  inspectorToggleClassName?: string;
+  reserveRightPanelToggleSpace?: boolean;
 }) {
   return (
     <>
-      <header className="h-14 flex items-center justify-between gap-3 border-b border-[var(--app-border)] px-4 bg-[var(--app-bg)]/80 backdrop-blur-sm shrink-0">
+      <header
+        className={`h-14 flex items-center justify-between gap-3 border-b border-[var(--app-border)] px-4 bg-[var(--app-bg)]/80 backdrop-blur-sm shrink-0 ${
+          props.reserveRightPanelToggleSpace
+            ? "md:pr-[calc(max(1rem,env(safe-area-inset-right))+2.75rem)]"
+            : ""
+        }`}
+      >
         <div className="flex items-center gap-2 min-w-0">
           <button
             type="button"
@@ -48,6 +59,17 @@ export function WorkbenchOpeningPane(props: {
             </div>
           </div>
         </div>
+        {props.showInspectorToggle !== false ? (
+          <button
+            type="button"
+            className={`icon-click-feedback inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-[var(--app-border)] text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] ${props.inspectorToggleClassName ?? ""}`}
+            onClick={props.onToggleInspector}
+            aria-label={props.inspectorToggleOpen ? "Collapse inspector" : "Expand inspector"}
+            title={props.inspectorToggleOpen ? "Collapse inspector" : "Expand inspector"}
+          >
+            <PanelRight size={16} />
+          </button>
+        ) : null}
       </header>
       <div className="flex-1 overflow-y-auto rah-scroll-panel rah-scroll-panel-y">
         <div className="mx-auto flex min-h-full w-full max-w-4xl items-center justify-center px-6 py-8 md:px-10 md:py-12 xl:max-w-5xl xl:px-14 xl:py-16">

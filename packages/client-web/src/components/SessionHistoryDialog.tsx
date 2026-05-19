@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import type { CouncilSnapshot, SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
-import { conversationPhaseLabel } from "@rah/runtime-protocol";
 import * as Dialog from "@radix-ui/react-dialog";
 import { Check, ChevronDown, ChevronRight, History, ListFilter, Pencil, PlusCircle, RefreshCw, Search, Trash2, X } from "lucide-react";
 import { providerLabel } from "../types";
 import { formatRelativeTime, type WorkspaceSortMode } from "../session-browser";
+import { chooseChatListSubtitle } from "../chat-list-display";
 import { ProviderLogo } from "./ProviderLogo";
 import { ChatBrowserRow } from "./ChatBrowserRow";
 import { OverlayScrollArea } from "./OverlayScrollArea";
@@ -168,15 +168,9 @@ function HistoryFilterMenu(props: {
   );
 }
 
-function sourceBadge(session: StoredSessionRef) {
-  if (session.source === "previous_running") {
-    return {
-      label: "Stopped",
-      className: "border-[var(--app-border)] bg-[var(--app-bg)] text-[var(--app-hint)]",
-    };
-  }
+function stoppedSessionBadge() {
   return {
-    label: "History",
+    label: "Stopped",
     className: "border-[var(--app-border)] bg-[var(--app-bg)] text-[var(--app-hint)]",
   };
 }
@@ -234,6 +228,36 @@ function historyMetaTitle(session: StoredSessionRef): string | undefined {
   ].filter(Boolean).join(" · ") || undefined;
 }
 
+function sessionHistoryTimestamp(session: StoredSessionRef): string {
+  return session.lastUsedAt ?? session.updatedAt ?? "";
+}
+
+function chooseSessionHistoryRef(
+  current: StoredSessionRef | undefined,
+  candidate: StoredSessionRef,
+): StoredSessionRef {
+  if (!current) {
+    return candidate;
+  }
+  const currentHasMeta = historyMetaLabel(current) !== null;
+  const candidateHasMeta = historyMetaLabel(candidate) !== null;
+  if (candidateHasMeta !== currentHasMeta) {
+    return candidateHasMeta ? candidate : current;
+  }
+  return sessionHistoryTimestamp(candidate) > sessionHistoryTimestamp(current) ? candidate : current;
+}
+
+function runningSessionIdentityKey(summary: SessionSummary): string | null {
+  const providerSessionId = summary.session.providerSessionId;
+  if (!providerSessionId) {
+    return null;
+  }
+  return sessionIdentityKey({
+    provider: summary.session.provider,
+    providerSessionId,
+  });
+}
+
 function matchesQuery(session: StoredSessionRef, query: string): boolean {
   const q = query.trim().toLowerCase();
   if (!q) {
@@ -271,63 +295,80 @@ function runningMatchesQuery(summary: SessionSummary, query: string): boolean {
   );
 }
 
-function RunningSessionRow(props: {
-  summary: SessionSummary;
-  onActivate: (sessionId: string) => void;
+function sessionSubtitle(title: string, preview: string | null | undefined): string | null {
+  return chooseChatListSubtitle(title, [{ text: preview }]);
+}
+
+function SessionChatRow(props: {
+  session?: StoredSessionRef | undefined;
+  runningSummary?: SessionSummary | undefined;
+  onActivate: (ref: StoredSessionRef) => void;
+  onActivateRunning?: ((sessionId: string) => void) | undefined;
+  onRequestRemove: (ref: StoredSessionRef) => void;
 }) {
-  const title = runningSessionTitle(props.summary);
-  const path = runningSessionPath(props.summary);
+  const title = props.session
+    ? sessionTitle(props.session)
+    : props.runningSummary
+      ? runningSessionTitle(props.runningSummary)
+      : "";
+  const preview = props.session?.preview ?? props.runningSummary?.session.preview ?? null;
+  const provider = props.session?.provider ?? props.runningSummary?.session.provider;
+  const detail =
+    props.session?.rootDir ??
+    props.session?.cwd ??
+    (props.runningSummary ? runningSessionPath(props.runningSummary) : null);
+  const running = props.runningSummary !== undefined;
+  const metaLabel = props.session ? historyMetaLabel(props.session) : null;
+  const metaTitle = props.session ? historyMetaTitle(props.session) : undefined;
+  const timeLabel = props.session
+    ? formatRelativeTime(props.session.lastUsedAt ?? props.session.updatedAt) ?? "history"
+    : props.runningSummary
+      ? formatRelativeTime(props.runningSummary.session.updatedAt) ?? "running"
+      : null;
+  const activate = () => {
+    if (props.runningSummary && props.onActivateRunning) {
+      props.onActivateRunning(props.runningSummary.session.id);
+      return;
+    }
+    if (props.session) {
+      props.onActivate(props.session);
+    }
+  };
+  const deleteDisabled = running || !props.session;
+  const showDelete = running || props.session !== undefined;
+  const stoppedBadge = stoppedSessionBadge();
+
   return (
     <ChatBrowserRow
       title={title}
-      subtitle={props.summary.session.preview && props.summary.session.title ? props.summary.session.preview : null}
-      detail={path}
-      leading={<ProviderLogo provider={props.summary.session.provider} className="h-5 w-5" />}
-      badge={{
-        label: `${props.summary.session.status} · ${conversationPhaseLabel(props.summary.session.phase)}`,
-        tone: "running",
-      }}
-      timeLabel={formatRelativeTime(props.summary.session.updatedAt) ?? "running"}
-      onOpen={() => props.onActivate(props.summary.session.id)}
-      dataSessionId={props.summary.session.id}
-      dataSessionSource="running"
-    />
-  );
-}
-
-function SessionRow(props: {
-  session: StoredSessionRef;
-  runningSummary: SessionSummary | undefined;
-  onActivate: (ref: StoredSessionRef) => void;
-  onRequestRemove: (ref: StoredSessionRef) => void;
-}) {
-  const badge = sourceBadge(props.session);
-  const running = props.runningSummary !== undefined;
-  const metaLabel = historyMetaLabel(props.session);
-  const metaTitle = historyMetaTitle(props.session);
-  const activate = () => props.onActivate(props.session);
-
-  return (
-    <ChatBrowserRow
-      title={sessionTitle(props.session)}
-      subtitle={props.session.preview && props.session.title ? props.session.preview : null}
-      detail={props.session.rootDir ?? props.session.cwd ?? null}
-      leading={<ProviderLogo provider={props.session.provider} className="h-5 w-5" />}
+      subtitle={sessionSubtitle(title, preview)}
+      detail={detail}
+      leading={provider ? <ProviderLogo provider={provider} className="h-5 w-5" /> : null}
       badge={
         running
           ? { label: "Running", tone: "running" }
           : {
-              label: badge.label,
-              className: badge.className,
+              label: stoppedBadge.label,
+              className: stoppedBadge.className,
             }
       }
       meta={metaLabel ? { label: metaLabel, title: metaTitle } : null}
-      timeLabel={formatRelativeTime(props.session.lastUsedAt ?? props.session.updatedAt) ?? "history"}
+      timeLabel={timeLabel}
       onOpen={activate}
-      onDelete={() => props.onRequestRemove(props.session)}
-      deleteLabel="Delete session"
-      dataProviderSessionId={props.session.providerSessionId}
-      dataSessionSource={props.session.source ?? "provider_history"}
+      onDelete={
+        showDelete
+          ? () => {
+              if (props.session && !deleteDisabled) {
+                props.onRequestRemove(props.session);
+              }
+            }
+          : undefined
+      }
+      deleteDisabled={deleteDisabled}
+      deleteLabel={deleteDisabled ? "Running sessions cannot be deleted" : "Delete session"}
+      dataSessionId={props.runningSummary?.session.id}
+      dataProviderSessionId={props.session?.providerSessionId ?? props.runningSummary?.session.providerSessionId}
+      dataSessionSource={running ? "running" : props.session?.source ?? "provider_history"}
     />
   );
 }
@@ -392,6 +433,15 @@ export function SessionHistoryDialog(props: {
       ),
     [props.runningSessions],
   );
+  const historySessionByIdentity = useMemo(() => {
+    const sessions = [...props.storedSessions, ...props.recentSessions];
+    const byIdentity = new Map<string, StoredSessionRef>();
+    for (const session of sessions) {
+      const key = sessionIdentityKey(session);
+      byIdentity.set(key, chooseSessionHistoryRef(byIdentity.get(key), session));
+    }
+    return byIdentity;
+  }, [props.storedSessions, props.recentSessions]);
 
   useEffect(() => {
     if (open) {
@@ -631,16 +681,22 @@ export function SessionHistoryDialog(props: {
                   </div>
                   {runningSessions.length > 0 ? (
                     <div className="space-y-1">
-                      {runningSessions.map((summary) => (
-                        <RunningSessionRow
-                          key={summary.session.id}
-                          summary={summary}
-                          onActivate={(sessionId) => {
-                            props.onActivateRunning?.(sessionId);
-                            setOpen(false);
-                          }}
-                        />
-                      ))}
+                      {runningSessions.map((summary) => {
+                        const identityKey = runningSessionIdentityKey(summary);
+                        return (
+                          <SessionChatRow
+                            key={summary.session.id}
+                            session={identityKey ? historySessionByIdentity.get(identityKey) : undefined}
+                            runningSummary={summary}
+                            onActivate={props.onActivate}
+                            onActivateRunning={(sessionId) => {
+                              props.onActivateRunning?.(sessionId);
+                              setOpen(false);
+                            }}
+                            onRequestRemove={setPendingRemoveSession}
+                          />
+                        );
+                      })}
                     </div>
                   ) : (
                     <div className="rounded-xl border border-dashed border-[var(--app-border)] p-4 text-center text-sm text-[var(--app-hint)]">
@@ -661,14 +717,14 @@ export function SessionHistoryDialog(props: {
                   {stoppedRecentSessions.length > 0 ? (
                     <div className="space-y-1">
                       {stoppedRecentSessions.map((session) => (
-                        <SessionRow
+                        <SessionChatRow
                           key={`active:${session.provider}:${session.providerSessionId}`}
                           session={session}
-                          runningSummary={undefined}
                           onActivate={(ref) => {
                             props.onActivate(ref);
                             setOpen(false);
                           }}
+                          onActivateRunning={props.onActivateRunning}
                           onRequestRemove={setPendingRemoveSession}
                         />
                       ))}
@@ -735,12 +791,16 @@ export function SessionHistoryDialog(props: {
                       {isExpanded ? (
                         <div className="border-t border-[var(--app-border)] px-2 pb-2 pt-1 space-y-1">
                           {visibleItems.map((session) => (
-                            <SessionRow
+                            <SessionChatRow
                               key={`${session.provider}:${session.providerSessionId}`}
                               session={session}
                               runningSummary={runningByProviderSessionId.get(sessionIdentityKey(session))}
                               onActivate={(ref) => {
                                 props.onActivate(ref);
+                                setOpen(false);
+                              }}
+                              onActivateRunning={(sessionId) => {
+                                props.onActivateRunning?.(sessionId);
                                 setOpen(false);
                               }}
                               onRequestRemove={setPendingRemoveSession}

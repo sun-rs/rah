@@ -423,8 +423,8 @@ export function NewCouncilDialog(props: {
             </div>
           ) : null}
           <OverlayScrollArea
-            className="min-h-0 flex-1"
-            viewportClassName="h-full p-4"
+            className="min-h-0 flex-1 min-[900px]:flex-none"
+            viewportClassName="h-full px-4 pt-4 pb-2 min-[900px]:h-auto min-[900px]:max-h-[calc(min(calc(100dvh-24px),972px)-8.25rem)]"
             contentClassName="space-y-3"
             viewportRef={bodyRef}
             scrollAriaLabel="New Council settings"
@@ -457,7 +457,7 @@ export function NewCouncilDialog(props: {
               onToggleDraftCollapsed={toggleDraftCollapsed}
             />
           </OverlayScrollArea>
-          <div className="grid shrink-0 grid-cols-3 gap-2 p-4">
+          <div className="grid shrink-0 grid-cols-3 gap-2 px-4 pt-2 pb-4">
             <Dialog.Close asChild>
               <button
                 type="button"
