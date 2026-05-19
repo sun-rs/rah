@@ -6,9 +6,10 @@
 
 - Codex
 - Claude
+- Gemini
 - OpenCode
 
-Gemini/Kimi CLI 一等支持已移除；相关模型通过 OpenCode/API provider 承载。
+Gemini CLI 已恢复为 `tui_mux` provider，历史浏览读取 `~/.gemini/tmp/**/chats/session-*.json`。Kimi CLI 一等支持仍移除；相关模型通过 OpenCode/API provider 承载。
 
 ## 1. 前端加载模型
 
@@ -28,7 +29,7 @@ read-only history/up-scroll -> load older page -> prepend -> keep scroll anchor
 新建 live session 的首要数据源是当前 provider runtime：
 
 - Codex/OpenCode：native local-server event/client push。
-- Claude：zellij/TUI fallback + provider transcript mirror。
+- Claude/Gemini：tmux/TUI fallback + provider transcript mirror。
 
 新建 live session 不应触发可见的 older-history 加载，也不应在顶部显示 `Loading older history`。创建时 feed 可以为空，然后由 optimistic user message、provider live event、provider transcript mirror 逐步填充。
 
@@ -145,9 +146,11 @@ frozen snapshot 的目标：
 
 | Provider | 历史存储 | 首屏 tail | older page |
 | --- | --- | --- | --- |
-| Codex | `~/.codex/sessions/**/rollout-*.jsonl` 或 wrapper isolated `CODEX_HOME` | 从 rollout 尾部窗口读取并翻译 | line cursor + safe boundary + semantic recent window |
+| Codex | `~/.codex/sessions/**/rollout-*.jsonl` / `~/.codex/archived_sessions/**/rollout-*.jsonl` | 从 rollout 尾部窗口读取并翻译 | line cursor + safe boundary + semantic recent window |
 | Claude | `~/.claude/projects/**/*.jsonl` | 从 transcript 尾部窗口读取并翻译 | line cursor + user boundary + semantic recent window |
 | OpenCode | OpenCode SQLite message store | 按 message time 读取最近窗口并翻译 | `beforeTs` cursor |
+
+RAH 不再创建或扫描 provider-specific 独立 home。Codex / Claude 历史发现只读取 provider 原生 home；旧隔离目录数据需要先迁移回原生目录，才会继续出现在 RAH 历史里。
 
 ## 6. Tail First 的原因
 

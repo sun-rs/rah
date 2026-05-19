@@ -1,10 +1,10 @@
 # Native TUI 真实 CLI QA 清单
 
-日期：2026-05-09
+日期：2026-05-18
 
-目的：验证当前 `main` 的真实 provider runtime 路线。自动 smoke 能证明 RAH 的协议、daemon lifecycle、mock provider、browser recovery、Codex/OpenCode native local-server probes 和 Claude zellij launch/exit；真实 CLI QA 用来覆盖账号、额度、官方 TUI 菜单、权限弹窗、长任务、真实跨客户端同步和移动端输入这些无法稳定 mock 的部分。
+目的：验证当前 `main` 的真实 provider runtime 路线。自动 smoke 能证明 RAH 的协议、daemon lifecycle、mock provider、browser recovery、Codex/OpenCode native local-server probes 和 Claude/Gemini tmux launch/exit；真实 CLI QA 用来覆盖账号、额度、官方 TUI 菜单、权限弹窗、长任务、真实跨客户端同步和移动端输入这些无法稳定 mock 的部分。
 
-维护边界：Core live QA 只覆盖 Codex、Claude、OpenCode。Codex/OpenCode 默认走 `native_local_server`；Claude 默认走 `zellij_tui` / `tui_mux_fallback`。Gemini/Kimi CLI 一等支持已移除，不再作为 live、history-only、diagnostics 或默认 QA 对象。低频 Gemini/Kimi/Grok/DeepSeek 等 API-key 模型优先通过 OpenCode + API provider / 中转站验证。
+维护边界：Core live QA 覆盖 Codex、Claude、Gemini、OpenCode。Codex/OpenCode 默认走 `native_local_server`；Claude/Gemini 默认走 `tui_mux` / `tui_mux_fallback`。Kimi CLI 一等支持仍移除；低频 Kimi/Grok/DeepSeek 等 API-key 模型优先通过 OpenCode + API provider / 中转站验证。
 
 ## 当前本机 CLI 版本
 
@@ -14,9 +14,10 @@ Core live CLI 版本：
 |---|---|---|
 | Codex | `codex --version` | `codex-cli 0.130.0` |
 | Claude | `claude --version` | `2.1.138 (Claude Code)` |
+| Gemini | `gemini --version` | 本机安装版本，以 smoke/probe 输出为准 |
 | OpenCode | `opencode --version` | `1.14.41` |
 
-版本记录不是“兼容承诺”。`npm run test:smoke:native-cli-probe` 会在自动门槛中重新采集 core live CLI 的 `--version` 输出，并记录当前 RAH branch / commit / dirty worktree 状态；同时要求真实 CLI `--help` 探测既包含 native launch 依赖的 flag，也必须以 exit code 0 正常退出。每次升级 Codex、Claude、OpenCode 这类 core live provider CLI 后，至少重跑本文的自动门槛和对应 provider 的真实 QA。
+版本记录不是“兼容承诺”。`npm run test:smoke:native-cli-probe` 会在自动门槛中重新采集 core live CLI 的 `--version` 输出，并记录当前 RAH branch / commit / dirty worktree 状态；同时要求真实 CLI `--help` 探测既包含 native launch 依赖的 flag，也必须以 exit code 0 正常退出。每次升级 Codex、Claude、Gemini、OpenCode 这类 core live provider CLI 后，至少重跑本文的自动门槛和对应 provider 的真实 QA。
 
 需要为真实 QA 固定保存一份本机证据时，可以写入 ignored 的 `test-results`：
 
@@ -115,7 +116,7 @@ npm run test:smoke:native-browser-webkit
 
 ## 通用真实 QA
 
-Core live provider 都按同一组用例跑，只有 provider 原生能力不同。Codex/OpenCode 的普通 Chat 输入应走 provider server API，不应通过 zellij/键盘注入；Claude fallback 的 Chat 输入仍需要通过 TUI/zellij 工作现场完成。
+Core live provider 都按同一组用例跑，只有 provider 原生能力不同。Codex/OpenCode 的普通 Chat 输入应走 provider server API，不应通过 tmux/键盘注入；Claude fallback 的 Chat 输入仍需要通过 TUI/tmux 工作现场完成。
 
 1. Web new session：从 RAH Web 创建新 session，默认应启动真实官方 TUI。
 2. Chat 输入：在 Chat view 发一句短问题，TUI 应收到输入；如果 TUI 忙，第二句应排队而不是丢失。
@@ -147,9 +148,9 @@ Core live provider 都按同一组用例跑，只有 provider 原生能力不同
 
 ### Gemini / Kimi
 
-- Gemini/Kimi CLI 一等支持已移除，不再作为 live 或 history QA 项。
-- 新 Gemini/Kimi/Grok/DeepSeek 类低频模型优先通过 OpenCode + API provider / 中转站使用。
-- 移除原因见 `docs/provider-scope-codex-claude-opencode.zh-CN.md`。
+- Gemini CLI 已恢复为 `tui_mux` live provider；启动参数依赖 `--session-id` / `--resume` / `--approval-mode` / `--model`，历史 mirror 读取 `~/.gemini/tmp/**/chats/session-*.json`。
+- Gemini 不恢复 ACP/headless structured live；Web Chat 的结构化内容来自历史文件 mirror，不从 ANSI/TUI 输出反推。
+- Kimi CLI 一等支持仍移除；Kimi/Grok/DeepSeek 类低频模型优先通过 OpenCode + API provider / 中转站使用。
 
 ### OpenCode
 

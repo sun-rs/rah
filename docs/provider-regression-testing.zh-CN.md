@@ -45,9 +45,9 @@ npm run test:smoke:native-local-server
 
 - `test:smoke:browser-providers` 是 deterministic fake browser gate，不等同于真实 provider。
 - `test:smoke:native-local-server` 覆盖 Codex/OpenCode 当前主路径 provider-server event/control 能力。
-- `test:smoke:provider-flows` 会依赖本机真实 Codex / Claude / OpenCode CLI、账号登录、API quota、网络状态，不应作为所有机器的强制 gate。
+- `test:smoke:provider-flows` 会依赖本机真实 Codex / Claude / Gemini / OpenCode CLI、账号登录、API quota、网络状态，不应作为所有机器的强制 gate。
 - 真实 provider smoke 用来证明真实 agent 确实理解 plan/mode/model，真实工具调用能落到文件系统，真实权限行为符合 provider 当前版本。
-- Gemini/Kimi CLI 一等支持已移除；相关模型通过 OpenCode/API provider 验证。
+- Gemini CLI 已恢复为 `tui_mux` provider；Kimi CLI 仍通过 OpenCode/API provider 验证。
 
 ## 覆盖矩阵
 
@@ -56,7 +56,7 @@ npm run test:smoke:native-local-server
 | 1 | agent 是否进入 plan mode | Codex/OpenCode 断言 native mode 参数或 ACP；Claude 以原生 TUI 能力为准 | core provider smoke 可用 prompt 让 agent 自述当前模式 |
 | 2 | command / tool 调用可见 | Codex/OpenCode/Claude mirror parser 与 web tool rendering | browser/flow smoke 要求读写文件或执行命令并检查 tool event |
 | 3 | 用户问题与回答不重复 | canonicalItemId upsert、history/live echo 合并、Codex/Claude/OpenCode 回归 | browser smoke 统计 user event/bubble 数量 |
-| 4 | 连续追问不丢 | Codex/OpenCode 队列或 provider-server turn 回归；Claude zellij 走 TUI passthrough，不维护 RAH hidden queue | provider-flows 连续发送第一问/第二问并验证文件/marker |
+| 4 | 连续追问不丢 | Codex/OpenCode 队列或 provider-server turn 回归；Claude tmux 走 TUI passthrough，不维护 RAH hidden queue | provider-flows 连续发送第一问/第二问并验证文件/marker |
 | 5 | web session 发送后立即 Stop | adapter interrupt 单测覆盖 active/pending turn 状态；真实 provider 仍需 smoke 验证 | browser/manual smoke 应在新 session 首问后立即 stop |
 | 6 | `rah xxx` 新 session 立即 Stop | native TUI / native local-server browser smoke 覆盖当前公共路径；真实 TUI 仍需手测 | `test:native-tui` + 手动 TUI |
 | 7 | `rah xxx resume` thinking 中 web Stop 传回 TUI | native TUI / native local-server browser smoke 覆盖当前公共路径；真实 interrupt 仍需手测 | terminal-browser / `test:native-tui` |
@@ -67,8 +67,18 @@ npm run test:smoke:native-local-server
 ## 设计约束
 
 - 前端不应该靠纯文本猜重复；新事件优先按 `canonicalItemId` upsert。
-- Codex/OpenCode 连续追问必须由 provider-server / adapter 队列稳定处理；Claude zellij passthrough 由原生 TUI 接收输入，RAH 不维护隐藏队列。
+- Codex/OpenCode 连续追问必须由 provider-server / adapter 队列稳定处理；Claude tmux passthrough 由原生 TUI 接收输入，RAH 不维护隐藏队列。
 - Stop 必须清空 queued input；如果 turn 还在 start pending 阶段，adapter 要记录 pending interrupt，等拿到 native turn id 后立即取消。
 - 权限/模型/参数验证优先看 native 入参、ACP payload 或 provider TUI 可观测状态；“agent 自述”只能作为真实 smoke 佐证，不作为确定性测试主证据。
 - 真实 provider smoke 失败时先区分 RAH 回归、provider CLI 版本变化、账号/quota/网络问题。
-- Gemini/Kimi CLI 不再参与 core live release gate；相关模型回归通过 OpenCode/API provider 路径验证。
+- Gemini CLI 已恢复为 core live provider，但走 `tui_mux`，默认 gate 先覆盖 launch/history 单元与真实 CLI probe；真实长流程仍按人工 QA。Kimi CLI 不参与 core live release gate，相关模型回归通过 OpenCode/API provider 路径验证。
+
+## 清理安全约束
+
+Provider smoke / browser smoke / probe 的自清理必须遵守以下硬性规则：
+
+- 测试创建的物理 workspace、临时 provider home、临时 RAH home 只能移入系统废纸篓/回收站，不允许直接 `rm -rf`、`rmSync`、`shutil.rmtree` 或等价硬删除。
+- 只允许清理测试自己创建的隔离目录。自动清理逻辑必须通过明确的 workspace/root metadata 判定归属，不能扫描 `~/.codex/sessions`、`~/.claude`、OpenCode/Gemini history 等 provider 历史内容再按字符串命中删除文件。
+- `session history` 的删除必须走 provider adapter 的 archive/trash 语义；Codex/Claude/Gemini 这类文件型历史必须 move-to-trash，不能静默永久删除。
+- 清理脚本必须保守失败：路径不在系统临时目录的 `rah-*` root 下时，默认拒绝物理清理；需要人工检查时宁可留下临时目录。
+- 任何新增 smoke/probe 自清理入口都要复用 `scripts/safe_trash.py` 或 `scripts/safe-trash.ts`，并保持 `npm run test:smoke-cleanup` 的防回归扫描通过。

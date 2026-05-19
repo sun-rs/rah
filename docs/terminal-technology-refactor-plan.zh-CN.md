@@ -45,7 +45,7 @@ Codex/OpenCode：
 Claude：
 
 - 暂未验证存在等价的 server-side runner。
-- 继续保留 persistent real TUI runner，例如 zellij-backed Claude TUI。
+- 继续保留 persistent real TUI runner，目前统一为 tmux-backed Claude TUI。
 - Claude 的 terminal 不是纯展示，而是 runner surface；关闭 UI 只能 detach，不能 kill。
 
 技术方案：
@@ -89,7 +89,7 @@ Claude：
 RAH 当前采用一条固定策略：
 
 - Codex / OpenCode：默认 `native_local_server`。provider server 是 session runner，本地 TUI、Web TUI、PWA 都只是 client surface。
-- Claude：默认 `zellij_tui`。Claude 暂时没有等价 native local server，mux TUI 是 session runner fallback。
+- Claude / Gemini：默认 `tui_mux`。两者暂时没有 RAH 可用的等价 native local server，tmux TUI 是 session runner fallback。
 - 其它 provider：不进入 live session 主线，只能作为 stored history/custom 扩展处理。
 
 这条策略必须由协议层共享，而不是在前端、daemon、CLI、Council 各自写一遍判断。当前代码中的权威入口是 `packages/runtime-protocol/src/live-backend-policy.ts`：
@@ -146,11 +146,11 @@ Codex/OpenCode：
 - chat 历史、工具调用、reasoning、token usage 来自 provider structured events/history，不来自 terminal replay。
 - 因此 terminal 可以只显示当前 client 画面，不需要重放完整 session transcript。
 
-Claude：
+Claude/Gemini：
 
-- Claude 暂时依赖 persistent real TUI runner，建议继续由 zellij/tmux 这类成熟 multiplexer 承担长期 TUI 状态。
+- Claude/Gemini 暂时依赖 persistent real TUI runner，建议继续由 tmux 这类成熟 multiplexer 承担长期 TUI 状态。
 - Web terminal attach 时只取当前屏幕/近期 tail，不读取完整 multiplexer scrollback。
-- Claude 的 transcript 仍应从 provider history/structured parser 进入 RAH timeline，不能靠终端画面解析。
+- Claude/Gemini 的 transcript 仍应从 provider history/structured parser 进入 RAH timeline，不能靠终端画面解析。
 
 性能边界：
 
@@ -211,39 +211,36 @@ Claude：
 
 未覆盖：
 
-- 尚未把 Council Codex/OpenCode agent 切到 headless runner。
-- 尚未为 Claude 替换 zellij/tmux 抽象。
+- Council Codex/OpenCode agent 已切到 native local server runner。
+- Claude mux fallback 已收敛为 tmux-only。
 - 尚未把 PTY WebSocket 改成 browser binary frame；当前 daemon -> browser 仍是 JSON frame。
 - 尚未完成真实浏览器长输出/连续输入延迟基准测试；第一阶段不能只靠单元测试判定完成。
 
 ### 2026-05-17 第二阶段准备：Runner 策略提纯
 
-状态：策略层已集中，Council 已开始复用普通 session runner；Claude mux fallback 已具备 zellij/tmux 双 backend 能力，但生产默认仍保持 zellij，tmux 需要显式开启后继续人类验证。
+状态：策略层已集中，Council 复用普通 session runner；Claude mux fallback 已收敛为 tmux-only，旧 zellij backend 已移除。
 
 已完成：
 
-- 在 `runtime-protocol` 增加 live backend policy，统一定义 Codex/OpenCode -> `native_local_server`、Claude -> `zellij_tui`。
+- 在 `runtime-protocol` 增加 live backend policy，统一定义 Codex/OpenCode -> `native_local_server`、Claude/Gemini -> `tui_mux`。
 - 前端 new/resume 入口改用共享策略，不再本地硬编码 provider/backend 对应关系。
 - daemon runtime engine 改用共享策略验证 provider/backend 组合，避免 Claude 被误接 native local server、Codex/OpenCode 被误接 mux fallback。
-- runtime descriptor 默认值改为共享策略：缺省 backend 时，Codex/OpenCode 仍描述为 native local server，Claude 描述为 mux fallback。
+- runtime descriptor 默认值改为共享策略：缺省 backend 时，Codex/OpenCode 仍描述为 native local server，Claude/Gemini 描述为 mux fallback。
 - native local server attach 命令集中到 `native-local-server-attach.ts`，Codex/OpenCode diagnostics 与 Web TUI client 启动不再各自拼命令。
 - Council 的 Codex/OpenCode agent 已切到普通 session 的 native local server runner，不再用独立的 `startAgentPty` 路径启动 provider TUI。
 - 新增 `MuxRuntime` 的 tmux backend，实现 session/window/pane 创建、pane capture、输入、控制键、resize、关闭和诊断基础能力。
-- `zellij_tui` fallback 的底层 mux backend 允许 `zellij` 或 `tmux`。协议中 `session.mux.backend` 已扩展为 `"zellij" | "tmux"`。
-- `RAH_TUI_MUX=tmux` 可让 Claude mux fallback 新 session 使用 tmux；不设置时仍默认 zellij，避免未验证环境直接切换生产行为。
-- CLI `rah attach` / `rah claude` 可根据 `session.mux.backend` 自动使用 zellij 或 tmux attach。
+- `tui_mux` fallback 的底层 mux backend 只有 `tmux`。不再提供其它 mux backend 入口。
+- CLI `rah attach` / `rah claude` 只使用 tmux attach。
 
 仍未完成：
 
-- tmux backend 尚未成为默认 mux backend；默认翻转前需要真实 Claude/Council 人类测试。
 - `bin/rah.mjs` 仍保留 JS 侧轻量策略函数，因为 CLI 当前不直接加载 TypeScript protocol helper；后续可在构建产物稳定后消除这份重复。
-- 诊断 API 名称仍沿用 `zellij` 历史命名，内部已能返回 `backend: "tmux"`，后续可再做命名清理。
+- 内部命名已统一到 `tui_mux` / `tmux` 语义；后续只做局部命名清理，不再保留 zellij 运行入口。
 
 验证记录：
 
 - `tmux-mux-backend.test.ts` 覆盖 tmux session 名、fake shell pane、tab pane、control bytes。
-- `tmux-tui-runtime.test.ts` 覆盖 `RAH_TUI_MUX=tmux` 下 Claude `zellij_tui` fallback 的启动、输入、中断、关闭和 tmux session 清理。
-- `zellij-tui-runtime.test.ts` 仍保持全绿，说明 tmux selector 没破坏默认 zellij 路径。
+- `tmux-tui-runtime.test.ts` 覆盖 Claude `tui_mux` fallback 的启动、输入、中断、关闭和 tmux session 清理。
 
 ## 必须保证的不变量
 
@@ -259,5 +256,5 @@ Claude：
 - Codex/OpenCode headless runner 多小时 `channel_wait_new` 稳定性。
 - Codex/OpenCode server 崩溃后的 room/session 恢复策略。
 - 多 agent 同时 wait/post 的竞争与顺序一致性。
-- Claude 是否有可替代 zellij/TUI runner 的 headless 方案。
+- Claude 是否有可替代 tmux/TUI runner 的 headless 方案。
 - iPad/PWA 后台切换后 terminal attach 与后台 PTY 的状态恢复。

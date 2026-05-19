@@ -9,21 +9,21 @@ Version: `1.0.0-rc.1`.
 RAH `1.0.0-rc.1` is moving to a provider-native runtime boundary. The product
 boundary is intentionally narrow:
 
-- Codex, Claude, and OpenCode are the only first-class live provider CLIs.
+- Codex, Claude, Gemini, and OpenCode are the first-class live provider CLIs.
 - Codex and OpenCode default to provider `native_local_server` runtimes. RAH talks to the
   provider server for structured live events/control, and the local terminal uses the
   provider-native TUI attach client.
-- Claude defaults to the zellij/TUI mux fallback because Claude Code has no stable Codex/OpenCode-style
-  local app-server.
+- Claude and Gemini default to the tmux/TUI mux fallback because they have no stable Codex/OpenCode-style
+  local app-server path for RAH.
 - Web New/Claim/Resume follows provider runtime capabilities: Codex/OpenCode use native local server;
-  Claude uses the TUI mux fallback.
+  Claude/Gemini use the TUI mux fallback.
 - structured Chat uses provider server events where available and provider-native history files/DBs
   for backfill/history. It is not ANSI screen scraping.
 - Session sync has a fixed boundary: new live sessions do not show older-history loading; selecting an
   existing live session silently syncs the latest tail; only read-only replay or upward scrolling loads
   older history. See
   [`docs/history-browsing.zh-CN.md`](docs/history-browsing.zh-CN.md).
-- zellij screen output is only the native TUI view/control surface for Claude and fallback paths.
+- tmux screen output is only the native TUI view/control surface for Claude and fallback paths.
 - The Web/PWA `TUI` tab is the explicit handoff point for TUI surfaces.
 - provider adapters own launch specs, binding probes, mirror parsers, and optional capability catalogs.
 - model/permission/plan/effort controls are optional provider enhancements, not the core contract.
@@ -71,17 +71,17 @@ Important behavior:
 - `start` does not replace a daemon that is already running.
 - `restart` is the command that shuts down the old daemon and starts the updated code.
 - `restart` interrupts currently managed core live provider runtimes (`rah codex`, `rah claude`,
-  `rah opencode`) because the old daemon is stopped.
+  `rah gemini`, `rah opencode`) because the old daemon is stopped.
 - `npm install` is not needed for normal code changes.
 - daemon pid/log files live under `~/.rah/runtime-daemon`.
 - `rah codex` and `rah opencode` now default to native local-server sessions and attach the current
   terminal with the provider-native TUI client (`codex --remote ... resume ...` or
   `opencode attach ... --session ...`).
-- `rah claude` defaults to the zellij/TUI fallback.
+- `rah claude` and `rah gemini` default to the tmux/TUI fallback.
 - There is no public `--mux` CLI switch. Provider runtime selection is fixed by provider:
-  Codex/OpenCode use native local-server; Claude uses zellij/TUI fallback.
-- Core live providers are `codex`, `claude`, and `opencode`. Gemini/Kimi CLI first-class support
-  has been removed; use OpenCode + API providers for Gemini/Kimi/Grok/DeepSeek-style work. See
+  Codex/OpenCode use native local-server; Claude/Gemini use tmux/TUI fallback.
+- Core live providers are `codex`, `claude`, `gemini`, and `opencode`. Kimi CLI first-class support
+  has been removed; use OpenCode + API providers for Kimi/Grok/DeepSeek-style work. See
   [`docs/provider-scope-codex-claude-opencode.zh-CN.md`](docs/provider-scope-codex-claude-opencode.zh-CN.md).
 
 Optional: if you want the global `rah` command to point at this checkout, link it once:
@@ -123,8 +123,8 @@ npm run test:web
 npm run test:runtime
 npm run test:regression:e2e-browser
 npm run test:native-tui
-npm run test:zellij-tui-auto
-npm run test:zellij-tui
+npm run test:tui-mux-auto
+npm run test:tui-mux
 npm run test:manual-qa-status
 npm run test:smoke:native-codex-browser
 npm run test:smoke:native-provider-browser
@@ -153,14 +153,14 @@ RAH now uses four test tiers:
   - `npm run test:runtime`
 - provider contracts
   - `npm run test:provider-contracts`
-  - deterministic contract coverage for Codex, Claude, and OpenCode live paths
+  - deterministic contract coverage for Codex, Claude, Gemini, and OpenCode live paths
   - protects queued input, no duplicate live/history merge, Stop state convergence, model/mode/permission propagation, and Markdown/timeline rendering contracts on the core live path
 - native TUI gate
   - `npm run test:native-tui`
   - exercises the PTY-first lifecycle, fake native provider TUIs, browser replay/reconnect,
     WebKit browser smoke, mobile input bridge contracts, mirror diagnostics, and native-TUI-specific regression cases
   - includes `test:manual-qa-status` so the human QA evidence verifier cannot silently weaken
-  - core live provider expectations are Codex, Claude, and OpenCode
+  - core live provider expectations are Codex, Claude, Gemini, and OpenCode
 - provider smoke
   - `native-browser`
   - `native-codex-browser`
@@ -240,15 +240,15 @@ packages/
 ## Runtime layering
 
 - `RuntimeEngine` owns the shared session store, event bus, and PTY hub.
-- `MuxRuntime` / `ZellijMuxBackend` owns zellij session/pane create, attach, dump, subscribe,
+- `MuxRuntime` / `TmuxMuxBackend` owns tmux session/pane create, attach, dump, subscribe,
   raw input, interrupt, close, kill, diagnostics, and recovery.
-- `RuntimeTerminalCoordinator` is the single live TUI lifecycle coordinator for native and zellij
+- `RuntimeTerminalCoordinator` is the single live TUI lifecycle coordinator for native and tmux
   backed sessions.
 - `ProviderAdapter` is the seam where concrete providers plug into the runtime.
 - `ProviderActivity` is the adapter-facing normalization layer.
-- Codex, Claude, and OpenCode are the core live native TUI providers.
-- Gemini/Kimi CLI provider code has been removed. New Gemini/Kimi-family live work should go
-  through OpenCode/API-provider configuration.
+- Codex, Claude, Gemini, and OpenCode are the core live native TUI providers.
+- Gemini is a tmux/TUI fallback provider with Gemini JSON session history projection. Kimi CLI provider code
+  remains removed; new Kimi-family live work should go through OpenCode/API-provider configuration.
 - `DebugAdapter` remains useful for structured scenario replay and non-provider UI exercise.
 - `client-web` consumes the canonical API/events boundary and should not depend on provider-native
   event names.
@@ -267,7 +267,7 @@ Diagnostics intentionally report only:
 - version probe
 - basic runtime status
 
-Provider diagnostics are scoped to the core live providers: Codex, Claude, and OpenCode. Gemini/Kimi
+Provider diagnostics are scoped to the core live providers: Codex, Claude, Gemini, and OpenCode. Kimi
 CLI binaries are no longer probed in Settings.
 
 They intentionally do **not** claim that provider authentication is valid. Auth remains managed by
@@ -286,7 +286,7 @@ RAH keeps the live runtime boundary explicit:
 - transcript, tool calls, permissions, usage, attention, and session state are core workbench data.
 - Codex/OpenCode live Chat/control uses provider-native local server APIs when available.
 - provider-native history files/DBs remain the semantic source for history/backfill.
-- zellij/PTY output is a TUI control and viewing surface, not the semantic transcript source.
+- tmux/PTY output is a TUI control and viewing surface, not the semantic transcript source.
 - only explicit Web/PWA `TUI` view claims a TUI display surface.
 - provider-specific maintenance signals should remain adapter-owned or inspector-only.
 
@@ -297,19 +297,19 @@ RAH keeps the live runtime boundary explicit:
 - Codex native local-server WebSocket runtime is wired, and Codex 0.130.0 remote TUI cross-client
   sync has passed `scripts/native_local_server_probe.ts`.
 - OpenCode native local-server attach/cross-client sync has passed `scripts/native_local_server_probe.ts`.
-- Claude zellij/TUI mux fallback remains the production continuity path for Claude.
+- Claude tmux/TUI mux fallback remains the production continuity path for Claude.
 - Chat timeline uses canonical identity/reconciliation to avoid live/history duplicates.
 - provider runtime/capability metadata is protocolized so UI controls do not claim unsupported abilities.
-- zellij diagnostics remain for Claude/fallback paths.
+- TUI mux diagnostics remain for Claude/fallback paths.
 
 Known RC boundaries:
 
 - Codex/OpenCode real model turn interrupt/archive behavior still requires provider-version QA after
   CLI upgrades.
-- zellij remains a fallback/backend for Claude and future TUI-only providers, not the universal default.
+- tmux is the only supported mux backend for Claude, Gemini, and future TUI-only fallback providers.
 - real provider auth, quota, trust-folder prompts, and slash-command behavior remain owned by the provider TUI.
 - iOS/PWA terminal keyboard behavior is still a product QA area, not a protocol guarantee.
-- Gemini/Kimi CLI will not return as first-class providers; use OpenCode/API-provider configuration instead.
+- Kimi CLI will not return as a first-class provider unless there is a new product decision; use OpenCode/API-provider configuration instead.
 
 ## Docs
 

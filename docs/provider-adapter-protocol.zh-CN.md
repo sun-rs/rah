@@ -2,15 +2,16 @@
 
 日期：2026-05-08
 
-本文记录当前 provider runtime 主线下 provider adapter 的边界。公开 live 主路径只有 Codex/OpenCode native local server 与 Claude zellij/TUI fallback；`liveBackend: "structured"` 只作为测试注入 surface 保留。
+本文记录当前 provider runtime 主线下 provider adapter 的边界。公开 live 主路径只有 Codex/OpenCode native local server 与 Claude/Gemini tmux/TUI fallback；`liveBackend: "structured"` 只作为测试注入 surface 保留。
 
 当前 core live provider：
 
 - Codex
 - Claude
+- Gemini
 - OpenCode
 
-Gemini/Kimi CLI 一等支持已移除；相关模型通过 OpenCode/API provider 承载。
+Gemini CLI 已恢复为 `tui_mux` provider，历史解析读取当前 Gemini CLI JSON session 文件；Kimi CLI 一等支持仍移除，相关模型通过 OpenCode/API provider 承载。
 
 ## 1. 总原则
 
@@ -20,7 +21,7 @@ RAH 不把某一家 CLI 的原生概念直接暴露成前端公共逻辑。
 
 - `runtime-protocol` 定义跨 provider 的能力字段和请求/响应。
 - Codex/OpenCode 的 provider native local server event 是 live truth。
-- Claude fallback 的 zellij/TUI session 是 live surface truth，Claude 原厂 JSONL 是 structured chat truth。
+- Claude fallback 的 tmux/TUI session 是 live surface truth，Claude 原厂 JSONL 是 structured chat truth。
 - provider 原厂 jsonl/db/session history 是 backfill/audit truth。
 - `client-web` 只消费 `SessionSummary`、`ProviderModelCatalog`、`RahEvent` 和通用 API。
 - provider 原生 id 可以作为 `modeId` / `modelId` / `optionValues` 的值存在，但解释权属于 daemon/provider layer。
@@ -42,7 +43,7 @@ RAH 不把某一家 CLI 的原生概念直接暴露成前端公共逻辑。
 | --- | --- | --- |
 | runtime descriptor | `session-runtime-descriptor.ts` | 声明 runtime kind、live source、TUI role 和 feature status。 |
 | native local server runtime | Codex app-server / OpenCode serve client | Codex/OpenCode 的 create/resume/send/interrupt/event 主链路。 |
-| TUI mux fallback | `ZellijMuxBackend` / `RuntimeTerminalCoordinator` | Claude 与无 native server provider 的 TUI 工作现场接管、归还、archive。 |
+| TUI mux fallback | `TmuxMuxBackend` / `RuntimeTerminalCoordinator` | Claude 与无 native server provider 的 TUI 工作现场接管、归还、archive。 |
 | launch/resume spec | provider runtime/capability layer | 把 RAH 标准 start/resume request 翻译成 provider 启动参数或 server config。 |
 | mirror parser | provider 原厂 history/jsonl/db parser | 只读 provider 原始存储，输出 canonical provider activity，用于 backfill/audit。 |
 | minimal TUI control | runtime / provider handler | Claude fallback 的 Stop/interrupt、prompt dirty、surface lease，不复刻 provider 私有 live RPC。 |

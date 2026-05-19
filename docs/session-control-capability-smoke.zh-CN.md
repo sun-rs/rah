@@ -47,7 +47,7 @@ npm run test:smoke:session-control-capabilities -- --keep-sessions
 
 - 会启动真实 Codex / Claude / OpenCode session。
 - 会真实发送 prompt。
-- 权限行为 probe 会在系统临时目录创建隔离 workspace，并在测试后清理。
+- 权限行为 probe 会在系统临时目录创建隔离 workspace，并在测试后移入系统废纸篓/回收站；自清理不得直接 `rm -rf`，也不得扫描 provider 历史内容来删除 session 文件。
 - 会消耗 provider 额度、API key 或订阅配额。
 - 需要本机 RAH daemon 正在运行，默认地址是 `http://127.0.0.1:43111`。
 - 默认 prompt 是一个四元整数分式分类证明题，不使用简单寒暄问题，目的是让 effort/variant 差异更容易暴露。
@@ -139,7 +139,7 @@ POST /api/sessions/:id/mode
 
 ## Claude 证据
 
-测试通过 RAH API 启动 `zellij_tui` Claude session，在启动前传入 `modeId`：
+测试通过 RAH API 启动 `tui_mux` Claude session，在启动前传入 `modeId`：
 
 ```text
 default
@@ -217,6 +217,6 @@ Codex 之前出现过模型自报 `GPT-5`，但 rollout JSONL 的 `turn_context.
 
 测试不表示：
 
-- Claude zellij fallback 支持运行中 model/effort/permission 切换。
+- Claude tmux fallback 支持运行中 model/effort/permission 切换。
 - OpenCode 有普通用户级 permission mode 菜单；当前 OpenCode 验证的是 agent。
 - 所有模型的每一种 provider-specific option 都有语义差异。

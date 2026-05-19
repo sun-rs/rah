@@ -122,7 +122,7 @@ Council listening pause 只处理 Council MCP 等待循环。
 普通 session 的 Stop 仍按 provider 能力处理：
 
 - Codex / OpenCode：优先 provider native local-server cancel / interrupt。
-- Claude zellij：只能作为 TUI interrupt/escape 动作处理，不能承诺精确 turn lifecycle。
+- Claude tmux：只能作为 TUI interrupt/escape 动作处理，不能承诺精确 turn lifecycle。
 
 ## 不变量
 

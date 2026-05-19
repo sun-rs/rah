@@ -60,11 +60,13 @@ Prefer assertions such as:
 
 over hard-coding one exact reply unless that exact reply is the actual feature contract.
 
-## 3. Removed Gemini/Kimi CLI Coverage
+## 3. Gemini Restored, Kimi CLI Removed
 
-Gemini CLI and Kimi CLI first-class provider code has been removed from runtime, client, scripts,
-diagnostics, and default tests. New Gemini/Kimi-family live work should go through OpenCode/API
-provider configuration.
+Gemini CLI has been restored as a first-class `tui_mux` provider. It must reuse the same native TUI
+session/mirror boundary as Claude: tmux owns the official TUI surface, and RAH projects structured
+Chat from Gemini JSON session files. Kimi CLI first-class provider code remains removed from runtime,
+client, scripts, diagnostics, and default tests. New Kimi-family live work should go through
+OpenCode/API provider configuration.
 
 The rationale and OpenCode variant boundary are recorded in
 [`provider-scope-codex-claude-opencode.zh-CN.md`](./provider-scope-codex-claude-opencode.zh-CN.md).
@@ -76,7 +78,7 @@ Primary implementation files:
 - `packages/runtime-daemon/src/claude-session-files.ts`
 - `packages/runtime-daemon/src/claude-stored-history-adapter.ts`
 - `packages/runtime-daemon/src/native-tui-claude-provider-handler.ts`
-- `packages/runtime-daemon/src/zellij-mux-backend.ts`
+- `packages/runtime-daemon/src/tmux-mux-backend.ts`
 - `packages/runtime-daemon/src/runtime-terminal-coordinator.ts`
 
 ### Stored history
@@ -98,10 +100,10 @@ Current filtering explicitly ignores:
 
 ### Live
 
-Claude live currently uses the zellij/TUI mux fallback, not the removed SDK/headless structured
+Claude live currently uses the tmux/TUI mux fallback, not the removed SDK/headless structured
 adapter path:
 
-- RAH starts the real Claude Code TUI inside a daemon-owned zellij pane.
+- RAH starts the real Claude Code TUI inside a daemon-owned tmux pane.
 - local Terminal, Web TUI, PWA, and Canvas attach to that same TUI surface when explicitly requested.
 - structured Chat is mirrored from Claude's JSONL transcript, not from ANSI screen scraping.
 - runtime model/permission changes are not advertised after launch; users should use Claude's native
@@ -112,7 +114,7 @@ adapter path:
 
 - Claude project/session discovery must tolerate project path aliasing such as `/var/...` vs
   `/private/var/...`.
-- Claude zellij prompt injection must be guarded by observed composer readiness; blindly sending
+- Claude tmux prompt injection must be guarded by observed composer readiness; blindly sending
   `Esc` or prompt text while an MCP tool is blocking can wedge the TUI.
 - Council listening pause for Claude should use the RAH MCP soft-pause path when possible, not a
   raw keyboard interrupt.
@@ -120,8 +122,7 @@ adapter path:
 ### Verification
 
 - `claude-session-files.test.ts`
-- `claude-wrapper-home.test.ts`
-- `zellij-tui-runtime.test.ts`
+- `tmux-tui-runtime.test.ts`
 - `test:smoke:claude-flow`
 - `test:smoke:claude-browser`
 

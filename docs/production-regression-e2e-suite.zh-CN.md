@@ -8,7 +8,7 @@
 
 1. 前端只消费统一 RAH timeline。
 
-   无论后端来源是 `Codex app-server`、`OpenCode server`、`Claude zellij`、provider history file、WebSocket live stream，进入 UI 前都必须归一成 `RahEvent`。前端排序和唯一性只看统一投影账本，不按 provider 或 backend 分叉。
+   无论后端来源是 `Codex app-server`、`OpenCode server`、`Claude tmux`、provider history file、WebSocket live stream，进入 UI 前都必须归一成 `RahEvent`。前端排序和唯一性只看统一投影账本，不按 provider 或 backend 分叉。
 
 2. daemon 是 transcript ledger 的权威边界。
 
@@ -20,7 +20,11 @@
 
 4. Fake provider 是主回归，真实 provider 是 smoke。
 
-   真实 CLI 会受账号、网络、quota、provider 版本影响，不能作为唯一 CI gate。确定性回归用 fake provider/app-server/history/zellij fixture；真实 provider 只做小集合 smoke。
+   真实 CLI 会受账号、网络、quota、provider 版本影响，不能作为唯一 CI gate。确定性回归用 fake provider/app-server/history/tmux fixture；真实 provider 只做小集合 smoke。
+
+5. 测试自清理必须可恢复。
+
+   自动 smoke/probe 不允许对用户 provider 历史或 session 文件做硬删除。测试创建的临时 workspace/provider home/RAH home 必须移入系统废纸篓/回收站；清理范围必须来自测试自己创建的 root metadata，不能通过扫描 provider history 内容并按字符串匹配删除 session 文件。
 
 ## 测试分层
 
@@ -28,7 +32,7 @@
 |---|---|---|
 | Unit/contract | 锁定 projection、timeline identity、provider parser、runtime state machine | 每次改动必跑 |
 | Fake daemon/browser | 用 fake provider 驱动真实 daemon + Web UI，断言 DOM 顺序/按钮状态 | 每次 UI/runtime 改动必跑 |
-| Fake zellij/native TUI | 验证 surface lease、queued input、archive、exit、late frame | 每次 TUI/mux 改动必跑 |
+| Fake tmux/native TUI | 验证 surface lease、queued input、archive、exit、late frame | 每次 TUI/mux 改动必跑 |
 | Real provider smoke | 验证真实 Codex/Claude/OpenCode 当前版本没有协议漂移 | 发布前/手动跑 |
 | Manual mobile QA | iOS/PWA 输入法、滚动、触控、视觉布局 | 发布前/大 UI 改动后 |
 
@@ -51,12 +55,12 @@
 | `HISTORY-CLAIM-001` | history claim | replay 转 live 不重排、不重复 |
 | `CODEX-EVENT-001` | Codex 非 chat event | `thread/goal/cleared` 等不变成吓人的红色 chat Event |
 | `CLAUDE-ABORT-CONTEXT-001` | Claude aborted context | `<turn_aborted>` 不进入可见消息正文 |
-| `CLAUDE-ZELLIJ-001` | Claude zellij | Chat/TUI/local terminal surface 切换互斥且可恢复 |
+| `CLAUDE-TMUX-001` | Claude tmux | Chat/TUI/local terminal surface 切换互斥且可恢复 |
 | `OPENCODE-STOP-001` | OpenCode Stop | Stop 中断 turn，不退出 TUI，后续可继续问 |
 | `OPENCODE-MIRROR-001` | OpenCode mirror | server live 与 DB mirror 合并后不重复 |
 | `TUI-SURFACE-001` | TUI surface | 同一时刻只有一个 active display/input surface |
 | `TUI-EXIT-001` | TUI exit | provider/TUI client `/exit` 后 RAH 不保持 running，不被迟到帧复活；native-local-server provider session 可继续保留 |
-| `ARCHIVE-001` | Archive | 关闭 live clients/zellij/pty，不删除 provider history |
+| `ARCHIVE-001` | Archive | 关闭 live clients/tmux/pty，不删除 provider history |
 
 完整 case 列表可执行：
 
@@ -90,9 +94,9 @@ npm run test:regression:e2e-browser
 - `REAL-HISTORY-CLAIM-001`
 - `REAL-SECOND-TURN-001`
 
-Claude 使用 zellij/TUI passthrough 专用 case，而不是 Codex/OpenCode 的 provider-server Stop/interrupt case：
+Claude 使用 tmux/TUI passthrough 专用 case，而不是 Codex/OpenCode 的 provider-server Stop/interrupt case：
 
-- `REAL-CLAUDE-ZELLIJ-MIRROR-001`
+- `REAL-CLAUDE-TMUX-MIRROR-001`
 - `REAL-CLAUDE-PASSTHROUGH-001`
 - `REAL-CLAUDE-ESC-BEST-EFFORT-001`
 - `REAL-CLAUDE-NO-SYNTHETIC-INTERRUPT-001`
@@ -116,7 +120,7 @@ Claude 使用 zellij/TUI passthrough 专用 case，而不是 Codex/OpenCode 的 
 | `REAL-HISTORY-REPLAY-001` | real-provider covered |
 | `REAL-HISTORY-CLAIM-001` | real-provider covered |
 | `REAL-SECOND-TURN-001` | real-provider covered |
-| `REAL-CLAUDE-*` | Claude zellij passthrough covered |
+| `REAL-CLAUDE-*` | Claude tmux passthrough covered |
 
 当前 release browser gate 聚焦真实 provider 的核心痛点：Chat 气泡顺序、重复气泡、Stop 消失、重复 Stop、中断提示唯一且锚定、history replay、claim 后继续发送。P1 移动端输入法、TUI surface 视觉细节、Council UI 仍需要额外 fake/browser/manual QA。后续新增历史 bug 时，先在 manifest 增加 case，再补对应 browser 或 runtime gate。
 
@@ -135,7 +139,7 @@ runtime/TUI gate：
 
 ```bash
 npm run test:runtime
-npm run test:zellij-tui-auto
+npm run test:tmux-tui-auto
 npm run test:regression:e2e-browser
 npm run test:smoke:native-browser
 ```
@@ -171,6 +175,7 @@ npm run test:smoke:opencode-browser
 6. 打开/关闭 TUI 后 Chat 仍可发送。
 7. Archive 后 live session 从侧栏消失。
 8. 截图保存到 `test-results/browser-e2e/...`，失败时必须能复盘。
+9. 测试结束后的 workspace/provider-state 清理只移入废纸篓/回收站，不直接永久删除。
 
 ## 新 bug 进入流程
 

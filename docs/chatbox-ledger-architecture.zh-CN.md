@@ -2,7 +2,7 @@
 
 Date: 2026-05-10
 
-本文档定义 RAH Web Chat 的前后端边界。RAH 底层可以同时使用 Codex/OpenCode native local server、Claude zellij、provider history mirror 和本地历史文件分页，但 Web Chat 必须呈现为稳定的传统 chatbox：用户气泡、助手气泡、reasoning、tool、permission、Stop、interrupt/reconnect/status 提示不能重复、错位或漂移。
+本文档定义 RAH Web Chat 的前后端边界。RAH 底层可以同时使用 Codex/OpenCode native local server、Claude tmux、provider history mirror 和本地历史文件分页，但 Web Chat 必须呈现为稳定的传统 chatbox：用户气泡、助手气泡、reasoning、tool、permission、Stop、interrupt/reconnect/status 提示不能重复、错位或漂移。
 
 ## 设计目标
 

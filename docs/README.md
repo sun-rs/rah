@@ -9,14 +9,15 @@
 - [Session 入口与权限边界](./session-entry-capability-boundary.zh-CN.md)
 - [历史浏览与分页边界](./history-browsing.zh-CN.md)
 - [RAH 1.0 RC 说明](./1.0-rc-notes.zh-CN.md)
-- [Claude Zellij Native Mode 边界](./claude-zellij-native-mode.zh-CN.md)
+- [Claude Tmux Native Mode 边界](./claude-tmux-native-mode.zh-CN.md)
 - [Council Listening Control 边界](./council-listening-control.zh-CN.md)
 - [Session Controls 重构设计](./session-controls-refactor-design.zh-CN.md)
 - [Scrollbar UI 协议](./ui-scrollbar-protocol.zh-CN.md)
+- [Council MCP Session Projection](./council-mcp-projection.zh-CN.md)
 
 ## 2. Provider 与能力边界
 
-- [Provider Scope: Codex + Claude + OpenCode](./provider-scope-codex-claude-opencode.zh-CN.md)
+- [Provider Scope: Codex + Claude + Gemini + OpenCode](./provider-scope-codex-claude-opencode.zh-CN.md)
 - [Provider Capability Matrix](./provider-capability-matrix.md)
 - [Provider Adapter 协议与能力边界](./provider-adapter-protocol.zh-CN.md)
 - [Provider Adapter Maintenance](./provider-adapter-maintenance.md)

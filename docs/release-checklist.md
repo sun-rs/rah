@@ -49,13 +49,13 @@ npm run test:smoke:tool-flow
 Recommended whenever the release changes:
 
 - history/replay logic
-- claim/live upgrade logic
+- claim/running upgrade logic
 - feed rendering
 - session selection / restore behavior
 
 ### 2.2 Codex
 
-Run when Codex adapter, Codex UI, or shared replay/live semantics changed.
+Run when Codex adapter, Codex UI, or shared replay/running semantics changed.
 
 Current practical validation:
 
@@ -77,7 +77,7 @@ Run when release touches:
 - Claude adapter
 - Claude replay/history logic
 - Claude live permission bridge
-- shared replay/live-upgrade logic
+- shared replay/running-upgrade logic
 
 ### 2.4 OpenCode
 
@@ -105,9 +105,11 @@ Run when release touches:
 
 ### 2.5 Gemini / Kimi Models
 
-Gemini CLI and Kimi CLI first-class provider code has been removed. New Gemini/Kimi-family work
-should be validated through OpenCode/API-provider configuration rather than provider-specific RAH
-CLI adapters.
+Gemini CLI has been restored as a first-class `tui_mux` provider with Gemini JSON session history
+projection. Gemini release validation should cover launch args, stored history discovery, and real
+CLI smoke/manual QA. Kimi CLI remains out of the first-class provider surface; Kimi-family model
+work should be validated through OpenCode/API-provider configuration rather than a Kimi-specific RAH
+CLI adapter.
 
 ## 3. Recommended Release Order
 
@@ -130,6 +132,15 @@ npm run build:web
 
 Then selectively run only the provider smokes that match the release environment and change scope.
 
+## 3.1 Cleanup Safety Gate
+
+Smoke/probe cleanup is part of the release safety boundary:
+
+- Test cleanup must move temporary workspaces, provider homes, and RAH homes to the system Trash, not delete them with `rm -rf`, `rmSync`, `shutil.rmtree`, or equivalent hard-delete APIs.
+- Cleanup may only target roots created by that test run. It must not scan provider history contents, such as `~/.codex/sessions`, and delete files because their transcript text contains a temp path.
+- Provider session-history removal must use the provider adapter archive/trash semantics. File-backed history must be recoverable from Trash.
+- Run `npm run test:smoke-cleanup` before release whenever smoke/probe scripts changed.
+
 ## 4. Manual Product Checks
 
 Before release, verify these manually on:
@@ -149,7 +160,8 @@ Before release, verify these manually on:
 - `Claim control` upgrades the replay in place
 - old history is not replayed again after claim
 - new turns are not duplicated
-- `Close` really removes the live session
+- `Stop` / `Close` really moves the running session to stopped without deleting provider history
+- user-visible lifecycle copy uses `Running` / `Stopped`; `Live` / `Archive` only appears for provider technical names or stored-history archive/trash semantics
 
 ### 4.3 Provider presentation
 
@@ -159,13 +171,13 @@ Before release, verify these manually on:
   - header
   - new session dialog
   - inspector
-- `Live` / `History` state badges remain understandable
+- `Running` / `Stopped` state badges and phase labels remain understandable
 
 ### 4.4 Error and recovery
 
 - replay gap recovery still produces a visible error/recovery message
 - missing provider binary shows diagnostics but does not pretend auth is valid
-- read-only replay sessions do not expose live-only actions incorrectly
+- read-only replay sessions do not expose running-only actions incorrectly
 - browser smoke should validate turn counts and resulting side effects, not rely on one historical
   assistant sentence staying constant
 
@@ -175,7 +187,7 @@ RAH is safe to release when:
 
 - universal gate is green
 - all relevant provider smokes for the release environment are green
-- manual product checks show no regression in history/replay/claim/live semantics
+- manual product checks show no regression in history/replay/claim/running-stopped semantics
 
 RAH is **not** blocked by a provider smoke that cannot run on the current machine because:
 
@@ -191,7 +203,8 @@ This checklist does **not** imply:
 
 - all providers are available on all machines
 - provider authentication can be reliably preflighted by RAH
-- Gemini CLI / Kimi CLI are first-class live launch targets
+- Kimi CLI is a first-class running launch target
 
-It is specifically for the current PTY-first workbench boundary: Codex, Claude, and OpenCode are
-core live providers; Gemini/Kimi models are handled through OpenCode/API-provider configuration.
+It is specifically for the current workbench boundary: Codex and OpenCode use native local-server
+runtimes; Claude and Gemini use `tui_mux`; Kimi-family models are handled through OpenCode/API-provider
+configuration.
