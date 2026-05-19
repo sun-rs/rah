@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import pathlib
-import shutil
 import tempfile
 import time
 import traceback
@@ -27,6 +26,7 @@ from native_codex_browser_smoke import (
     write_fake_codex,
 )
 from native_smoke_process import terminate_process_tree
+from safe_trash import move_path_to_trash
 
 
 CASE_IDS = [
@@ -198,7 +198,7 @@ def main() -> int:
         close_session_quietly(base_url, session_b)
         if daemon:
             terminate_process_tree(daemon)
-        shutil.rmtree(tmp_root, ignore_errors=True)
+        move_path_to_trash(tmp_root)
 
 
 if __name__ == "__main__":

@@ -11,9 +11,6 @@ run() {
 
 run npm run typecheck
 run node --import tsx --test --test-concurrency=1 --test-force-exit \
-  packages/runtime-daemon/src/zellij-mux-backend.test.ts \
-  packages/runtime-daemon/src/zellij-tui-runtime.test.ts
-run npm run test:zellij-manual-qa-status
-run npm run test:smoke:zellij-real-tui-launch
-run npm run test:smoke:zellij-real-tui-exit
+  packages/runtime-daemon/src/tmux-mux-backend.test.ts \
+  packages/runtime-daemon/src/tmux-tui-runtime.test.ts
 run git diff --check

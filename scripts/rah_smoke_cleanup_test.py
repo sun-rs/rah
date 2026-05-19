@@ -46,14 +46,51 @@ class RahSmokeCleanupTest(unittest.TestCase):
             return {"ok": True}
 
         with mock.patch.object(rah_smoke_cleanup, "_request_json", side_effect=fake_request_json):
-            with mock.patch.object(rah_smoke_cleanup.shutil, "rmtree") as rmtree:
+            with mock.patch.object(rah_smoke_cleanup, "move_path_to_trash") as move_path_to_trash:
                 rah_smoke_cleanup.cleanup_smoke_workspace("http://127.0.0.1:43111", workspace)
 
         paths = [path for path, _payload in calls]
         self.assertIn("/api/terminal/terminal-owned/close", paths)
         self.assertNotIn("/api/terminal/terminal-other/close", paths)
         self.assertLess(paths.index("/api/terminal/terminal-owned/close"), paths.index("/api/workspaces/remove"))
-        rmtree.assert_called_once_with(workspace, ignore_errors=True)
+        move_path_to_trash.assert_called_once_with(workspace)
+
+    def test_cleanup_refuses_to_remove_non_temp_workspace(self) -> None:
+        workspace = pathlib.Path("/Users/sun/Code/repos/rah")
+
+        def fake_request_json(base_url: str, path: str, payload: dict[str, object] | None = None) -> dict[str, object]:
+            if path == "/api/sessions":
+                return {"sessions": []}
+            if path == "/api/terminal/list":
+                return {"terminals": []}
+            return {"ok": True}
+
+        with mock.patch.object(rah_smoke_cleanup, "_request_json", side_effect=fake_request_json):
+            with mock.patch.object(rah_smoke_cleanup, "move_path_to_trash") as move_path_to_trash:
+                with self.assertRaisesRegex(RuntimeError, "Refusing to remove non-temp"):
+                    rah_smoke_cleanup.cleanup_smoke_workspace("http://127.0.0.1:43111", workspace)
+        move_path_to_trash.assert_not_called()
+
+    def test_smoke_scripts_do_not_directly_delete_cleanup_paths(self) -> None:
+        scripts_dir = pathlib.Path(__file__).resolve().parent
+        excluded = {"rah_smoke_cleanup_test.py", "safe_trash.py", "safe-trash.ts"}
+        forbidden = (
+            "shutil.rmtree(",
+            "rmSync(",
+            "fs.rmSync(",
+            "unlinkSync(",
+            "rm -rf",
+            "rm -fr",
+        )
+        offenders: list[str] = []
+        for path in scripts_dir.iterdir():
+            if path.name in excluded or path.suffix not in {".py", ".ts", ".mjs", ".sh"}:
+                continue
+            text = path.read_text(encoding="utf-8")
+            for pattern in forbidden:
+                if pattern in text:
+                    offenders.append(f"{path.name}: {pattern}")
+        self.assertEqual(offenders, [])
 
 
 if __name__ == "__main__":

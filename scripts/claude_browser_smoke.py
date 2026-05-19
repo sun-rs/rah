@@ -15,7 +15,7 @@ from rah_smoke_cleanup import cleanup_smoke_workspace
 
 REAL_BROWSER_CASE_IDS = [
     "REAL-PROVIDER-001",
-    "REAL-CLAUDE-ZELLIJ-MIRROR-001",
+    "REAL-CLAUDE-TMUX-MIRROR-001",
     "REAL-CLAUDE-PASSTHROUGH-001",
     "REAL-CLAUDE-ESC-BEST-EFFORT-001",
     "REAL-CLAUDE-NO-SYNTHETIC-INTERRUPT-001",
@@ -473,7 +473,7 @@ def main() -> int:
                 {
                     "provider": "claude",
                     "cwd": str(workspace),
-                    "liveBackend": "zellij_tui",
+                    "liveBackend": "tui_mux",
                     "approvalPolicy": "never",
                     "attach": {
                         "client": {
@@ -495,7 +495,7 @@ def main() -> int:
             )
             provider_session_id = wait_for_provider_session_id(base_url, live_session_id)
             wait_for_history_text_count(base_url, live_session_id, first_marker, 2, timeout_s=240)
-            # Claude zellij is a history mirror, not an authoritative idle
+            # Claude TUI mux is a history mirror, not an authoritative idle
             # source. Give the native TUI a short settle window before closing
             # the seed session so the smoke does not manufacture a provider
             # "Conversation interrupted" history row while testing replay.
@@ -668,10 +668,10 @@ def main() -> int:
                 "caseIds": REAL_BROWSER_CASE_IDS,
                 "asserted": [
                     "real Claude provider path was used; no fake provider is created by this script",
-                    "Claude zellij Chat is treated as a history mirror, not authoritative busy state",
+                    "Claude TUI mux Chat is treated as a history mirror, not authoritative busy state",
                     "history replay shows the first real turn",
                     "claimed session accepts a second real browser chat turn",
-                    "red Stop is absent for Claude zellij; yellow Esc is available",
+                    "red Stop is absent for Claude TUI mux; yellow Esc is available",
                     "double Esc click does not close the session",
                     "Esc does not create synthetic Conversation interrupted chat notices",
                     "recovery turn after Esc reaches Claude",

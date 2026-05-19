@@ -93,7 +93,7 @@ const cases: RegressionCase[] = [
     ],
     evidence: [
       "packages/runtime-daemon/src/runtime-engine.test.ts",
-      "packages/runtime-daemon/src/zellij-tui-runtime.test.ts",
+      "packages/runtime-daemon/src/tmux-tui-runtime.test.ts",
       "packages/client-web/src/composer-contract.test.ts",
     ],
   },
@@ -110,7 +110,7 @@ const cases: RegressionCase[] = [
     ],
     evidence: [
       "packages/runtime-daemon/src/runtime-terminal-coordinator.ts",
-      "packages/runtime-daemon/src/zellij-tui-runtime.test.ts",
+      "packages/runtime-daemon/src/tmux-tui-runtime.test.ts",
       "scripts/native_provider_browser_smoke.py",
     ],
   },
@@ -127,7 +127,7 @@ const cases: RegressionCase[] = [
     ],
     evidence: [
       "packages/runtime-daemon/src/runtime-engine.test.ts",
-      "packages/runtime-daemon/src/zellij-tui-runtime.test.ts",
+      "packages/runtime-daemon/src/tmux-tui-runtime.test.ts",
       "packages/client-web/src/workbench-notice-contract.test.ts",
     ],
   },
@@ -166,19 +166,19 @@ const cases: RegressionCase[] = [
     ],
   },
   {
-    id: "REAL-CLAUDE-ZELLIJ-MIRROR-001",
+    id: "REAL-CLAUDE-TMUX-MIRROR-001",
     severity: "P0",
     providers: ["claude"],
     automation: ["real_provider"],
-    title: "Real Claude zellij Chat is a JSONL/history mirror, not authoritative busy state",
+    title: "Real Claude TUI mux Chat is a JSONL/history mirror, not authoritative busy state",
     acceptance: [
-      "The smoke creates a real Claude zellij_tui session.",
+      "The smoke creates a real Claude tui_mux session.",
       "Chat output is accepted only after the Claude history mirror contains the expected marker.",
       "The test does not wait on runtimeState=running/idle as Claude truth.",
     ],
     evidence: [
       "scripts/claude_browser_smoke.py",
-      "docs/claude-zellij-native-mode.zh-CN.md",
+      "docs/claude-tmux-native-mode.zh-CN.md",
     ],
   },
   {
@@ -186,7 +186,7 @@ const cases: RegressionCase[] = [
     severity: "P0",
     providers: ["claude"],
     automation: ["real_provider"],
-    title: "Real Claude zellij Web Chat input is forwarded to the native TUI",
+    title: "Real Claude TUI mux Web Chat input is forwarded to the native TUI",
     acceptance: [
       "A claimed Claude history session accepts a second Web Chat prompt.",
       "The second prompt marker appears once as user input and once in the assistant answer.",
@@ -194,7 +194,7 @@ const cases: RegressionCase[] = [
     ],
     evidence: [
       "scripts/claude_browser_smoke.py",
-      "packages/runtime-daemon/src/zellij-tui-runtime.test.ts",
+      "packages/runtime-daemon/src/tmux-tui-runtime.test.ts",
     ],
   },
   {
@@ -202,9 +202,9 @@ const cases: RegressionCase[] = [
     severity: "P0",
     providers: ["claude"],
     automation: ["real_provider"],
-    title: "Real Claude zellij exposes a yellow best-effort Esc control instead of red Stop",
+    title: "Real Claude TUI mux exposes a yellow best-effort Esc control instead of red Stop",
     acceptance: [
-      "The red Stop generating button is absent for Claude zellij sessions.",
+      "The red Stop generating button is absent for Claude TUI mux sessions.",
       "The yellow Send Esc to Claude TUI button is visible and enabled.",
       "Double-clicking Esc does not close the Claude session.",
     ],
@@ -218,7 +218,7 @@ const cases: RegressionCase[] = [
     severity: "P0",
     providers: ["claude"],
     automation: ["real_provider"],
-    title: "Real Claude zellij Esc does not create synthetic interrupt chat notices",
+    title: "Real Claude TUI mux Esc does not create synthetic interrupt chat notices",
     acceptance: [
       "Esc does not append Conversation interrupted to Chat.",
       "Repeated Esc actions do not create duplicate or drifting interrupt notices.",
@@ -226,7 +226,7 @@ const cases: RegressionCase[] = [
     ],
     evidence: [
       "scripts/claude_browser_smoke.py",
-      "packages/runtime-daemon/src/zellij-tui-runtime.test.ts",
+      "packages/runtime-daemon/src/tmux-tui-runtime.test.ts",
     ],
   },
   {
@@ -249,9 +249,9 @@ const cases: RegressionCase[] = [
     severity: "P0",
     providers: ["claude"],
     automation: ["real_provider"],
-    title: "Real Claude history claim resumes into zellij live mode without duplicating old turns",
+    title: "Real Claude history claim resumes into TUI mux live mode without duplicating old turns",
     acceptance: [
-      "Read-only Claude replay can be claimed into a live zellij session.",
+      "Read-only Claude replay can be claimed into a live TUI mux session.",
       "Claiming does not increase the visible count of the old first-turn marker.",
       "The claimed live session accepts a new browser turn.",
     ],
@@ -264,7 +264,7 @@ const cases: RegressionCase[] = [
     severity: "P0",
     providers: ["claude"],
     automation: ["real_provider"],
-    title: "Real Claude zellij Web Chat can send follow-up turns after previous output appears",
+    title: "Real Claude TUI mux Web Chat can send follow-up turns after previous output appears",
     acceptance: [
       "The second prompt has exactly one matching user timeline item.",
       "A recovery prompt after Esc reaches Claude and returns an answer.",
@@ -524,20 +524,20 @@ const cases: RegressionCase[] = [
     ],
   },
   {
-    id: "CLAUDE-ZELLIJ-001",
+    id: "CLAUDE-TMUX-001",
     severity: "P0",
     providers: ["claude"],
     automation: ["unit", "fake_browser", "real_provider"],
-    title: "Claude zellij fallback keeps chat, TUI surface, and local terminal synchronized",
+    title: "Claude TUI mux fallback keeps chat, TUI surface, and local terminal synchronized",
     acceptance: [
       "Opening Web chat does not detach the local terminal unless Web TUI surface is activated.",
       "Activating Web TUI claims the surface and shows the local terminal overlay.",
-      "Releasing/archive cleans up the overlay and zellij session correctly.",
+      "Releasing/archive cleans up the overlay and tmux session correctly.",
     ],
     evidence: [
-      "packages/runtime-daemon/src/zellij-tui-runtime.test.ts",
+      "packages/runtime-daemon/src/tmux-tui-runtime.test.ts",
       "packages/runtime-daemon/src/rah-cli-pty-first.test.ts",
-      "scripts/zellij_real_tui_launch_probe.ts",
+      "scripts/native_real_tui_launch_probe.ts",
     ],
   },
   {
@@ -553,7 +553,7 @@ const cases: RegressionCase[] = [
     ],
     evidence: [
       "packages/runtime-daemon/src/opencode-activity.test.ts",
-      "packages/runtime-daemon/src/zellij-tui-runtime.test.ts",
+      "packages/runtime-daemon/src/tmux-tui-runtime.test.ts",
       "scripts/opencode-browser-smoke.sh",
     ],
   },
@@ -586,7 +586,7 @@ const cases: RegressionCase[] = [
       "Closing Web TUI deactivates only that TUI client, not the live chat session.",
     ],
     evidence: [
-      "packages/runtime-daemon/src/zellij-tui-runtime.test.ts",
+      "packages/runtime-daemon/src/tmux-tui-runtime.test.ts",
       "packages/runtime-daemon/src/http-server-websocket.ts",
       "packages/client-web/src/terminal-socket-close.test.ts",
     ],
@@ -599,12 +599,12 @@ const cases: RegressionCase[] = [
     title: "Provider /exit or process exit marks the RAH live session stopped and restores terminal input mode",
     acceptance: [
       "RAH stops listing the session as active live after provider exits.",
-      "No late PTY or zellij subscription frame resurrects the session.",
+      "No late PTY or TUI mux subscription frame resurrects the session.",
       "The local terminal no longer receives raw mouse/keyboard escape garbage after detach.",
     ],
     evidence: [
-      "packages/runtime-daemon/src/zellij-tui-runtime.test.ts",
-      "scripts/zellij-real-tui-exit-smoke.sh",
+      "packages/runtime-daemon/src/tmux-tui-runtime.test.ts",
+      "scripts/native-tui-gate.sh",
     ],
   },
   {
@@ -612,15 +612,15 @@ const cases: RegressionCase[] = [
     severity: "P0",
     providers: ["codex", "claude", "opencode"],
     automation: ["unit", "fake_browser"],
-    title: "Archive closes managed clients, zellij panes, and PTY state without deleting provider history",
+    title: "Archive closes managed clients, tmux panes, and PTY state without deleting provider history",
     acceptance: [
       "Archive removes the session from live lists.",
-      "Managed native server clients or zellij sessions are closed.",
+      "Managed native server clients or tmux sessions are closed.",
       "Provider history remains available in Sessions/History.",
     ],
     evidence: [
       "packages/runtime-daemon/src/runtime-engine.test.ts",
-      "packages/runtime-daemon/src/zellij-tui-runtime.test.ts",
+      "packages/runtime-daemon/src/tmux-tui-runtime.test.ts",
     ],
   },
   {

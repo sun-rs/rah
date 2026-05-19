@@ -4,7 +4,6 @@ import json
 import os
 import pathlib
 import re
-import shutil
 import socket
 import subprocess
 import sys
@@ -18,6 +17,7 @@ from urllib import error, request
 from playwright.sync_api import expect, sync_playwright
 
 from native_smoke_process import terminate_process_tree
+from safe_trash import move_path_to_trash
 
 
 ROOT_DIR = pathlib.Path(__file__).resolve().parent.parent
@@ -1874,7 +1874,7 @@ def main() -> int:
         close_session_quietly(base_url, session_id)
         if daemon:
             terminate_process_tree(daemon)
-        shutil.rmtree(tmp_root, ignore_errors=True)
+        move_path_to_trash(tmp_root)
 
 
 if __name__ == "__main__":

@@ -9,5 +9,4 @@ run() {
   "$@"
 }
 
-run npm run test:zellij-tui-auto
-run npm run test:smoke:zellij-manual-qa-status
+run npm run test:tui-mux-auto

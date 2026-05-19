@@ -48,9 +48,9 @@ const STRUCTURED_PROVIDER_CASE_IDS = [
   "REAL-SECOND-TURN-001",
 ] as const;
 
-const CLAUDE_ZELLIJ_CASE_IDS = [
+const CLAUDE_TMUX_CASE_IDS = [
   "REAL-PROVIDER-001",
-  "REAL-CLAUDE-ZELLIJ-MIRROR-001",
+  "REAL-CLAUDE-TMUX-MIRROR-001",
   "REAL-CLAUDE-PASSTHROUGH-001",
   "REAL-CLAUDE-ESC-BEST-EFFORT-001",
   "REAL-CLAUDE-NO-SYNTHETIC-INTERRUPT-001",
@@ -126,7 +126,7 @@ function validateCoverage(results: readonly { command: SmokeCommand; result: Smo
       covered.add(id);
     }
     const required =
-      result.provider === "claude" ? CLAUDE_ZELLIJ_CASE_IDS : STRUCTURED_PROVIDER_CASE_IDS;
+      result.provider === "claude" ? CLAUDE_TMUX_CASE_IDS : STRUCTURED_PROVIDER_CASE_IDS;
     const missing = required.filter((id) => !covered.has(id));
     if (missing.length > 0) {
       throw new Error(

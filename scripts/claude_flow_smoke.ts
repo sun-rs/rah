@@ -1,7 +1,8 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { movePathToTrashIfExists } from "./safe-trash";
 
 const baseUrl = process.env.RAH_BASE_URL ?? "http://127.0.0.1:43111";
 
@@ -75,7 +76,7 @@ async function cleanupSmokeWorkspace(workdir: string) {
   } catch {
     // best effort cleanup
   }
-  await rm(workdir, { recursive: true, force: true });
+  await movePathToTrashIfExists(workdir);
 }
 
 async function cleanupLiveClaudeSessions() {

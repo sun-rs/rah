@@ -3,10 +3,11 @@ from __future__ import annotations
 import json
 import os
 import pathlib
-import shutil
 import tempfile
 from typing import Any
 from urllib import request
+
+from safe_trash import move_path_to_trash
 
 
 def _request_json(base_url: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -149,7 +150,9 @@ def cleanup_smoke_workspace(
     except Exception:
         pass
     if remove_physical:
-        shutil.rmtree(workspace_path, ignore_errors=True)
+        if not is_temp_workspace(workspace_path):
+            raise RuntimeError(f"Refusing to remove non-temp RAH smoke workspace: {workspace_path}")
+        move_path_to_trash(workspace_path)
 
 
 def list_temp_workspaces_from_rah(base_url: str) -> list[str]:

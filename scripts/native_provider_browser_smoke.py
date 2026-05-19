@@ -4,7 +4,6 @@ import json
 import os
 import pathlib
 import re
-import shutil
 import socket
 import subprocess
 import sys
@@ -19,6 +18,7 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import expect, sync_playwright
 
 from native_smoke_process import terminate_process_tree
+from safe_trash import move_path_to_trash
 
 
 ROOT_DIR = pathlib.Path(__file__).resolve().parent.parent
@@ -36,7 +36,7 @@ CASE_IDS = [
     "HISTORY-CLAIM-001",
     "CLAUDE-ABORT-CONTEXT-001",
     "CLAUDE-ERROR-001",
-    "CLAUDE-ZELLIJ-001",
+    "CLAUDE-TMUX-001",
     "OPENCODE-STOP-001",
     "OPENCODE-MIRROR-001",
     "TUI-SURFACE-001",
@@ -1558,7 +1558,7 @@ def main() -> int:
             mark_session_closed(session_base_url, session_id)
         if daemon:
             terminate_process_tree(daemon)
-        shutil.rmtree(tmp_root, ignore_errors=True)
+        move_path_to_trash(tmp_root)
 
 
 if __name__ == "__main__":

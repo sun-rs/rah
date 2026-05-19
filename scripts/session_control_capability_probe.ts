@@ -1,6 +1,7 @@
-import { mkdir, mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { movePathToTrashIfExists } from "./safe-trash";
 
 type Provider = "codex" | "claude" | "opencode";
 
@@ -919,8 +920,8 @@ async function startSession(args: {
   return { ...(await getSession(session.id)), probeClientId: clientId };
 }
 
-function liveBackendForProvider(provider: Provider): "native_local_server" | "zellij_tui" {
-  return provider === "claude" ? "zellij_tui" : "native_local_server";
+function liveBackendForProvider(provider: Provider): "native_local_server" | "tui_mux" {
+  return provider === "claude" ? "tui_mux" : "native_local_server";
 }
 
 async function getSession(sessionId: string): Promise<SessionSummary> {
@@ -1099,7 +1100,7 @@ async function cleanupProbeWorkspace(workspaceDir: string, physicalRoot = worksp
   } catch {
     // best effort cleanup
   }
-  await rm(physicalRoot, { recursive: true, force: true });
+  await movePathToTrashIfExists(physicalRoot);
 }
 
 async function readCodexEvidence(providerSessionId: string | undefined, marker: string) {

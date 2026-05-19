@@ -1,10 +1,11 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { movePathToTrashIfExists } from "./safe-trash";
 
 type JsonObject = Record<string, unknown>;
 
@@ -490,7 +491,7 @@ async function main(): Promise<void> {
     ptySocket?.close();
     eventSocket?.close();
     await stopDaemon(daemon.process);
-    await rm(tmpRoot, { force: true, recursive: true });
+    await movePathToTrashIfExists(tmpRoot);
   }
 }
 

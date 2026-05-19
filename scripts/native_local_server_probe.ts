@@ -1,10 +1,11 @@
 import { execFile, execFileSync, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path, { dirname } from "node:path";
 import readline from "node:readline";
 import { WebSocket } from "ws";
+import { movePathToTrashIfExists } from "./safe-trash";
 import { createCodexAppServerClient } from "../packages/runtime-daemon/src/codex-app-server-client";
 import { runtimeDiagnosticsForOpenCodeServer } from "../packages/runtime-daemon/src/provider-control/opencode-live-client";
 import {
@@ -1365,7 +1366,7 @@ async function probeCodex(): Promise<ProviderProbeResult> {
     };
   } finally {
     if (cwd) {
-      rmSync(cwd, { recursive: true, force: true });
+      await movePathToTrashIfExists(cwd);
     }
   }
 }
@@ -1683,7 +1684,7 @@ async function probeOpenCode(): Promise<ProviderProbeResult> {
       process.env.XDG_DATA_HOME = previousXdgDataHome;
     }
     if (cwd) {
-      rmSync(cwd, { recursive: true, force: true });
+      await movePathToTrashIfExists(cwd);
     }
   }
 }
