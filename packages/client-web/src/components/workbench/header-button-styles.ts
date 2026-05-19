@@ -1,5 +1,8 @@
 export const HEADER_ACTION_GROUP_CLASS = "flex shrink-0 items-center gap-1.5";
 
+export const HEADER_IDENTITY_SLOT_CLASS =
+  "inline-flex h-6 w-6 shrink-0 items-center justify-center";
+
 export const HEADER_ICON_BUTTON_BASE_CLASS =
   "icon-click-feedback h-8 w-8 items-center justify-center rounded-md border border-[var(--app-border)] text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] disabled:opacity-40";
 

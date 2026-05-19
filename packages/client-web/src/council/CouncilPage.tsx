@@ -48,6 +48,7 @@ import { ConfirmDialog } from "../components/workbench/dialogs/ConfirmDialog";
 import { RenameSessionDialog } from "../components/workbench/dialogs/RenameSessionDialog";
 import {
   HEADER_ACTION_GROUP_CLASS,
+  HEADER_IDENTITY_SLOT_CLASS,
   HEADER_ICON_BUTTON_CLASS,
   HEADER_TEXT_BUTTON_CLASS,
 } from "../components/workbench/header-button-styles";
@@ -1614,7 +1615,9 @@ export function CouncilPage(props: {
                   <Menu size={18} />
                 </button>
               ) : null}
-              <UsersRound className={COUNCIL_HEADER_ICON_CLASSNAME} />
+              <span className={HEADER_IDENTITY_SLOT_CLASS}>
+                <UsersRound className={COUNCIL_HEADER_ICON_CLASSNAME} />
+              </span>
               <div className="min-w-0 flex-1">
                 <div
                   className="truncate text-sm font-medium text-[var(--app-fg)]"

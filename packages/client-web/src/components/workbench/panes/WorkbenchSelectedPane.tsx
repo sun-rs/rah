@@ -27,6 +27,7 @@ import { canSubmitComposerInput, COMPOSER_LAYOUT, type ComposerSurface } from ".
 import {
   HEADER_ACTION_GROUP_CLASS,
   HEADER_DANGER_TEXT_BUTTON_CLASS,
+  HEADER_IDENTITY_SLOT_CLASS,
   HEADER_ICON_BUTTON_CLASS,
   HEADER_SEGMENTED_BUTTON_BASE_CLASS,
   HEADER_SEGMENTED_CONTROL_CLASS,
@@ -522,7 +523,9 @@ export function WorkbenchSelectedPane(props: {
               <Menu size={18} />
             </button>
           )}
-          <ProviderLogo provider={props.selectedSummary.session.provider} className="h-6 w-6 shrink-0" />
+          <span className={HEADER_IDENTITY_SLOT_CLASS}>
+            <ProviderLogo provider={props.selectedSummary.session.provider} className="h-6 w-6" />
+          </span>
           <div className="min-w-0 flex-1">
             <div className="text-sm font-medium truncate text-[var(--app-fg)]">
               {props.selectedSummary.session.title ?? props.selectedSummary.session.id}
