@@ -228,6 +228,38 @@ describe("translateOpenCodeEvent", () => {
     assert.equal(state.currentTurnId, undefined);
   });
 
+  test("uses nested OpenCode session error messages", () => {
+    const state = createOpenCodeActivityState("session-1");
+    const busy = translateOpenCodeEvent(state, {
+      type: "session.status",
+      properties: {
+        sessionID: "session-1",
+        status: { type: "busy" },
+      },
+    });
+
+    const activities = translateOpenCodeEvent(state, {
+      type: "session.error",
+      properties: {
+        sessionID: "session-1",
+        error: {
+          name: "UnknownError",
+          data: {
+            message: "Model not found: aaa/wokao.",
+          },
+        },
+      },
+    });
+
+    assert.deepEqual(activities, [
+      {
+        type: "turn_failed",
+        turnId: busy[0]?.type === "turn_started" ? busy[0].turnId : undefined,
+        error: "Model not found: aaa/wokao.",
+      },
+    ]);
+  });
+
   test("preserves assistant markdown text exactly", () => {
     const state = createOpenCodeActivityState("session-1");
     const text = [
@@ -1309,6 +1341,7 @@ describe("translateOpenCodeEvent", () => {
     if (assistant?.type === "timeline_item" && assistant.item.kind === "assistant_message") {
       assert.deepEqual(assistant.item, {
         kind: "assistant_message",
+        messageId: "council-mcp:call-post",
         text: "Live Council reply",
         runtimeModel: {
           modelId: "deepseek/deepseek-v4-pro",
@@ -1394,9 +1427,10 @@ describe("translateOpenCodeEvent", () => {
     assert.equal(assistantMessages.length, 1);
     const assistant = assistantMessages[0];
     assert.equal(assistant?.type, "timeline_item");
-    if (assistant?.type === "timeline_item" && assistant.item.kind === "assistant_message") {
-      assert.equal(assistant.item.text, "Visible Council reply");
-      assert.deepEqual(assistant.item.runtimeModel, {
+  if (assistant?.type === "timeline_item" && assistant.item.kind === "assistant_message") {
+    assert.equal(assistant.item.text, "Visible Council reply");
+    assert.equal(assistant.item.messageId, "council-mcp:call-post");
+    assert.deepEqual(assistant.item.runtimeModel, {
         modelId: "deepseek/deepseek-v4-pro",
         optionId: "low",
         optionKind: "model_variant",
@@ -1406,6 +1440,57 @@ describe("translateOpenCodeEvent", () => {
       assert.equal(assistant.identity?.providerSessionId, "session-1");
       assert.equal(assistant.identity?.sourceCursor?.providerEventId, "part-post");
       assert.equal(assistant.identity?.confidence, "derived");
+    }
+  });
+
+  test("projects Council MCP user messages from channel_wait_new output", () => {
+    const activities = translateOpenCodeHistory([
+      {
+        info: {
+          id: "msg-assistant",
+          sessionID: "session-1",
+          role: "assistant",
+          providerID: "deepseek",
+          modelID: "deepseek-v4-pro",
+          time: { created: 2, completed: 3 },
+        },
+        parts: [
+          {
+            id: "part-wait",
+            sessionID: "session-1",
+            messageID: "msg-assistant",
+            type: "tool",
+            callID: "call-wait",
+            tool: "rah_council_channel_wait_new",
+            state: {
+              status: "completed",
+              input: { council_id: "council-1", since_id: 0 },
+              output: JSON.stringify({
+                ok: true,
+                msg: {
+                  id: 42,
+                  role: "user",
+                  actor: "user",
+                  content: "Council prompt",
+                },
+              }),
+            },
+          },
+        ],
+      },
+    ]);
+
+    const user = activities.find(
+      (activity) =>
+        activity.type === "timeline_item" &&
+        activity.item.kind === "user_message",
+    );
+    assert.equal(user?.type, "timeline_item");
+    if (user?.type === "timeline_item" && user.item.kind === "user_message") {
+      assert.equal(user.item.text, "Council prompt");
+      assert.equal(user.item.messageId, "council-mcp:user:42");
+      assert.equal(user.identity?.itemKind, "user_message");
+      assert.equal(user.identity?.confidence, "derived");
     }
   });
 

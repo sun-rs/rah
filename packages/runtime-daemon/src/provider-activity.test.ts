@@ -31,7 +31,129 @@ function createSession(services: ReturnType<typeof createServices>) {
   }).session.id;
 }
 
+function createCouncilSession(services: ReturnType<typeof createServices>) {
+  return services.sessionStore.createManagedSession({
+    provider: "opencode",
+    launchSource: "web",
+    cwd: "/workspace/demo",
+    rootDir: "/workspace/demo",
+    title: "Council Agent",
+    origin: {
+      kind: "council",
+      councilId: "council-1",
+      councilTitle: "Council",
+      agentId: "agent-1",
+      agentLabel: "Agent",
+    },
+  }).session.id;
+}
+
 describe("applyProviderActivity", () => {
+  test("keeps Council managed session chat focused on channel_post projections", () => {
+    const services = createServices();
+    const sessionId = createCouncilSession(services);
+
+    assert.deepEqual(
+      applyProviderActivity(
+        services,
+        sessionId,
+        { provider: "opencode" },
+        { type: "turn_started", turnId: "turn-control" },
+      ),
+      [],
+    );
+    assert.equal(services.sessionStore.getSession(sessionId)?.activeTurnId, undefined);
+
+    assert.deepEqual(
+      applyProviderActivity(
+        services,
+        sessionId,
+        { provider: "opencode" },
+        {
+          type: "timeline_item",
+          item: {
+            kind: "assistant_message",
+            text: "Joined successfully. Entering listen loop.",
+          },
+        },
+      ),
+      [],
+    );
+
+    assert.deepEqual(
+      applyProviderActivity(
+        services,
+        sessionId,
+        { provider: "opencode" },
+        { type: "runtime_status", status: "thinking" },
+      ),
+      [],
+    );
+
+    const receivedUser = applyProviderActivity(
+      services,
+      sessionId,
+      { provider: "opencode", ts: "2099-05-19T09:59:59.000Z" },
+      {
+        type: "timeline_item",
+        item: {
+          kind: "user_message",
+          messageId: "council-mcp:user:1",
+          text: "Council prompt",
+        },
+        identity: createTimelineIdentity({
+          provider: "opencode",
+          providerSessionId: "provider-council-1",
+          turnKey: "message:user-council",
+          itemKind: "user_message",
+          itemKey: "user-1",
+          origin: "live",
+          confidence: "derived",
+        }),
+      },
+    );
+    assert.equal(receivedUser.length, 1);
+    assert.equal(receivedUser[0]?.type, "timeline.item.added");
+
+    const posted = applyProviderActivity(
+      services,
+      sessionId,
+      { provider: "opencode", ts: "2099-05-19T10:00:00.000Z" },
+      {
+        type: "timeline_item",
+        item: {
+          kind: "assistant_message",
+          messageId: "council-mcp:call-post",
+          text: "Visible Council reply",
+        },
+        identity: createTimelineIdentity({
+          provider: "opencode",
+          providerSessionId: "provider-council-1",
+          turnKey: "message:assistant-council",
+          itemKind: "assistant_message",
+          itemKey: "call-post",
+          origin: "live",
+          confidence: "derived",
+        }),
+      },
+    );
+    assert.equal(posted.length, 1);
+    assert.equal(posted[0]?.type, "timeline.item.added");
+    assert.equal(
+      services.sessionStore.getSession(sessionId)?.session.updatedAt,
+      posted[0]?.ts,
+    );
+
+    const stopped = applyProviderActivity(
+      services,
+      sessionId,
+      { provider: "opencode" },
+      { type: "session_state", state: "stopped" },
+    );
+    assert.equal(stopped.length, 1);
+    assert.equal(services.sessionStore.getSession(sessionId)?.session.runtimeState, "stopped");
+  });
+
   test("clears active turn when provider reports the session is idle", () => {
     const services = createServices();
     const sessionId = createSession(services);

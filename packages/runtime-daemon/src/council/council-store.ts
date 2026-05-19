@@ -295,10 +295,15 @@ export class CouncilStore {
   snapshot(councilId: string, options?: { sinceMessageId?: number; limit?: number }): CouncilSnapshot {
     const council = this.requireCouncil(councilId);
     const since = options?.sinceMessageId ?? 0;
-    const limit = options?.limit ?? 200;
+    const limit = options?.limit;
     const councilMessages = this.messagesForCouncil(councilId);
     const startIndex = firstMessageIndexAfter(councilMessages, since);
-    const messages = limit <= 0 ? [] : councilMessages.slice(startIndex).slice(-limit);
+    const messages =
+      limit === undefined
+        ? councilMessages.slice(startIndex)
+        : limit <= 0
+          ? []
+          : councilMessages.slice(startIndex).slice(-limit);
     return {
       ...council,
       agents: this.state.agents

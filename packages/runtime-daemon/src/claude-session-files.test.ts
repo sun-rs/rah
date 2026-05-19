@@ -258,6 +258,7 @@ describe("Claude session files", () => {
       assistantMessage.type === "timeline.item.added" &&
       assistantMessage.payload.item.kind === "assistant_message"
     ) {
+      assert.equal(assistantMessage.payload.item.messageId, "council-mcp:toolu_council_post");
       assert.deepEqual(assistantMessage.payload.item.runtimeModel, {
         modelId: "kimi-for-coding",
         source: "native",

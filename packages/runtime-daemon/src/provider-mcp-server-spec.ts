@@ -65,6 +65,12 @@ export function geminiSettingsForMcpServers(
     return undefined;
   }
   return {
+    model: {
+      // Council agents intentionally stay in a long-lived MCP wait loop.
+      // Gemini CLI's generic loop detector treats repeated wait tool calls as
+      // suspicious and opens an interactive prompt, which blocks the listener.
+      disableLoopDetection: true,
+    },
     mcpServers: Object.fromEntries(
       servers.map((server) => [
         normalizeMcpServerName(server.name),

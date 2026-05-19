@@ -329,9 +329,12 @@ function translateError(
     return [];
   }
   const error = readRecord(properties.error);
+  const errorData = readRecord(error?.data);
   const message =
     typeof error?.message === "string"
       ? error.message
+      : typeof errorData?.message === "string"
+        ? errorData.message
       : typeof properties.error === "string"
         ? properties.error
         : "OpenCode session error";
@@ -584,13 +587,14 @@ function openCodeDeltaTimelineIdentity(
 function openCodeCouncilMcpTimelineIdentity(
   state: OpenCodeActivityState,
   part: OpenCodePart,
+  itemKind: "user_message" | "assistant_message",
 ): TimelineIdentity {
   return createOpenCodeTimelineIdentity({
     providerSessionId: state.providerSessionId,
     messageId: part.messageID,
     turnMessageId: rootMessageIdForMessage(state, part.messageID),
     partId: part.id,
-    itemKind: "assistant_message",
+    itemKind,
     origin: state.origin,
     confidence: "derived",
   });
@@ -1098,10 +1102,15 @@ function translateToolPart(
         projection.activity,
         runtimeModelForMessage(activityState, part.messageID),
       );
+      const projectedItemKind =
+        projectedActivity.type === "timeline_item" &&
+        (projectedActivity.item.kind === "user_message" || projectedActivity.item.kind === "assistant_message")
+          ? projectedActivity.item.kind
+          : "assistant_message";
       return [
         {
           ...projectedActivity,
-          ...timelineIdentityProps(openCodeCouncilMcpTimelineIdentity(activityState, part)),
+          ...timelineIdentityProps(openCodeCouncilMcpTimelineIdentity(activityState, part, projectedItemKind)),
           ...(turnId ? { turnId } : {}),
         },
       ];

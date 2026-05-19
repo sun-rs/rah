@@ -25,6 +25,7 @@ import {
   reconcileTimelineActivity,
   reconcileTurnLifecycleActivity,
 } from "./timeline-reconciler";
+import { COUNCIL_MCP_TIMELINE_MESSAGE_ID_PREFIX } from "./council/council-mcp-projection";
 
 export interface ProviderActivityMeta {
   provider: ManagedSession["provider"];
@@ -295,12 +296,76 @@ function withTs<T extends object>(value: T, ts?: string): T & { ts?: string } {
   };
 }
 
+function isCouncilManagedSession(services: RuntimeServices, sessionId: string): boolean {
+  return services.sessionStore.getSession(sessionId)?.session.origin?.kind === "council";
+}
+
+export function isCouncilMcpTimelinePost(item: TimelineItem): boolean {
+  return (
+    (item.kind === "assistant_message" || item.kind === "user_message") &&
+    item.messageId?.startsWith(COUNCIL_MCP_TIMELINE_MESSAGE_ID_PREFIX) === true
+  );
+}
+
+export function shouldSuppressCouncilManagedActivity(activity: ProviderActivity): boolean {
+  switch (activity.type) {
+    case "timeline_item":
+    case "timeline_item_updated":
+      return !isCouncilMcpTimelinePost(activity.item);
+    case "runtime_status":
+      return activity.status !== "error";
+    case "session_state":
+      return activity.state !== "stopped" && activity.state !== "failed";
+    case "session_failed":
+    case "session_exited":
+    case "permission_requested":
+    case "permission_resolved":
+    case "notification":
+    case "terminal_exited":
+    case "terminal_output":
+    case "transport_changed":
+    case "host_updated":
+    case "heartbeat":
+      return false;
+    default:
+      return true;
+  }
+}
+
+export function shouldSuppressCouncilManagedHistoryEvent(event: RahEvent): boolean {
+  switch (event.type) {
+    case "timeline.item.added":
+    case "timeline.item.updated":
+      return !isCouncilMcpTimelinePost(event.payload.item);
+    case "runtime.status":
+      return event.payload.status !== "error";
+    case "session.state.changed":
+      return event.payload.state !== "stopped" && event.payload.state !== "failed";
+    case "session.failed":
+    case "session.exited":
+    case "permission.requested":
+    case "permission.resolved":
+    case "notification.emitted":
+    case "terminal.exited":
+    case "terminal.output":
+    case "transport.changed":
+    case "host.updated":
+    case "heartbeat":
+      return false;
+    default:
+      return true;
+  }
+}
+
 export function applyProviderActivity(
   services: RuntimeServices,
   sessionId: string,
   meta: ProviderActivityMeta,
   activity: ProviderActivity,
 ): RahEvent[] {
+  if (isCouncilManagedSession(services, sessionId) && shouldSuppressCouncilManagedActivity(activity)) {
+    return [];
+  }
   const source = sourceFromMeta(meta);
   const ts = meta.ts;
   const published: RahEvent[] = [];
@@ -597,6 +662,8 @@ export function applyProviderActivity(
         if (reconciled === null) {
           break;
         }
+        const activityTs = ts ?? new Date().toISOString();
+        services.sessionStore.touchSessionActivity(sessionId, activityTs);
         published.push(
           services.eventBus.publish(
             withRaw(
@@ -614,7 +681,7 @@ export function applyProviderActivity(
                       ...(reconciled.identity !== undefined ? { identity: reconciled.identity } : {}),
                     },
                   },
-                  ts,
+                  activityTs,
                 ),
                 reconciled.turnId,
               ),
@@ -640,6 +707,8 @@ export function applyProviderActivity(
         if (reconciled === null) {
           break;
         }
+        const activityTs = ts ?? new Date().toISOString();
+        services.sessionStore.touchSessionActivity(sessionId, activityTs);
         published.push(
           services.eventBus.publish(
             withRaw(
@@ -657,7 +726,7 @@ export function applyProviderActivity(
                       ...(reconciled.identity !== undefined ? { identity: reconciled.identity } : {}),
                     },
                   },
-                  ts,
+                  activityTs,
                 ),
                 reconciled.turnId,
               ),

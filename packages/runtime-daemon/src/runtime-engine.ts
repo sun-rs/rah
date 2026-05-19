@@ -152,6 +152,7 @@ import {
   deleteManualProviderModelOption,
   listManualProviderModels,
 } from "./manual-provider-models";
+import { shouldSuppressCouncilManagedHistoryEvent } from "./provider-activity";
 
 const SYSTEM_SOURCE = {
   provider: "system" as const,
@@ -162,6 +163,19 @@ const SYSTEM_SOURCE = {
 const MAX_MATERIALIZED_HISTORY_EVENTS = 5_000;
 
 type StructuredSessionOwnerProvider = StoredSessionState["session"]["provider"];
+
+function filterCouncilManagedHistoryPage(
+  session: ManagedSession | undefined,
+  page: SessionHistoryPageResponse,
+): SessionHistoryPageResponse {
+  if (session?.origin?.kind !== "council") {
+    return page;
+  }
+  return {
+    ...page,
+    events: page.events.filter((event) => !shouldSuppressCouncilManagedHistoryEvent(event)),
+  };
+}
 
 async function runShutdownStep(label: string, task: () => Promise<unknown> | unknown) {
   try {
@@ -1217,7 +1231,8 @@ export class RuntimeEngine {
     if (!adapter?.getSessionHistoryPage) {
       return { sessionId, events: [] };
     }
-    return this.historySnapshots.getPage({
+    const session = this.sessionStore.getSession(sessionId)?.session;
+    const page = this.historySnapshots.getPage({
       sessionId,
       ...(options?.cursor ? { cursor: options.cursor } : {}),
       ...(options?.limit ? { limit: options.limit } : {}),
@@ -1230,6 +1245,7 @@ export class RuntimeEngine {
             : { limit: MAX_MATERIALIZED_HISTORY_EVENTS },
         ).events,
     });
+    return filterCouncilManagedHistoryPage(session, page);
   }
 
   getContextUsage(sessionId: string) {

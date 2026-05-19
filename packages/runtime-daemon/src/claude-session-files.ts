@@ -733,13 +733,14 @@ function translateClaudeRecordsToActivities(
                   ...(pending.turnId !== undefined ? { turnId: pending.turnId } : {}),
                   item: {
                     ...projection.activity.item,
-                    messageId: pending.call.callId,
-                    ...(pending.runtimeModel ? { runtimeModel: pending.runtimeModel } : {}),
+                    ...(projection.activity.item.kind === "assistant_message" && pending.runtimeModel
+                      ? { runtimeModel: pending.runtimeModel }
+                      : {}),
                   },
                   ...timelineIdentityProps(
                     createStoredClaudeIdentity(
                       pending.sourceRecord,
-                      "assistant_message",
+                      projection.activity.item.kind === "user_message" ? "user_message" : "assistant_message",
                       options.providerSessionId,
                       pending.partIndex,
                     ),

@@ -1100,8 +1100,14 @@ export function translateCodexRolloutLine(
       if (projection.visibility === "hidden") {
         return [];
       }
+      const projectedItemKind =
+        projection.activity.type === "timeline_item" &&
+        (projection.activity.item.kind === "user_message" ||
+          projection.activity.item.kind === "assistant_message")
+          ? projection.activity.item.kind
+          : "assistant_message";
       const identity = createHistoryTimelineIdentity(state, {
-        itemKind: "assistant_message",
+        itemKind: projectedItemKind,
         providerEventId: pending.councilMcpToolCall.callId,
       });
       const projectedActivity = attachRuntimeModelToTimelineActivity(

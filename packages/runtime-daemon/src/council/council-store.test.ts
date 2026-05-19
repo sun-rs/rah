@@ -104,6 +104,43 @@ test("CouncilStore normalizes slashes in agent labels and ids", () => {
   }
 });
 
+test("CouncilStore snapshot returns the full transcript unless a limit is requested", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-store-full-snapshot-"));
+  try {
+    const store = new CouncilStore(path.join(root, "councils.json"));
+    const created = store.createCouncil({
+      workspace: root,
+      agents: [{ id: "agent-a", provider: "codex", label: "Agent A" }],
+    });
+
+    const first = store.appendMessage({
+      councilId: created.id,
+      actorId: "user",
+      role: "user",
+      text: "first message",
+    });
+    for (let index = 0; index < 220; index += 1) {
+      store.appendMessage({
+        councilId: created.id,
+        actorId: created.agents[0]!.id,
+        role: "agent",
+        text: `agent message ${index + 1}`,
+      });
+    }
+
+    const full = store.snapshot(created.id);
+    assert.equal(full.messages.length, 221);
+    assert.equal(full.messages[0]!.id, first.id);
+    assert.equal(full.messages[0]!.parts[0]?.kind === "text" ? full.messages[0]!.parts[0].text : "", "first message");
+
+    const limited = store.snapshot(created.id, { limit: 200 });
+    assert.equal(limited.messages.length, 200);
+    assert.equal(limited.messages[0]!.id, first.id + 21);
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
 test("CouncilStore marks councils and active agents failed with diagnostic detail", () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-store-fail-"));
   try {

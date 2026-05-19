@@ -1010,6 +1010,7 @@ describe("translateCodexRolloutLine", () => {
     if (projected?.type === "timeline_item") {
       assert.deepEqual(projected.item, {
         kind: "assistant_message",
+        messageId: "council-mcp:call-council-post",
         text: "[GPT-5.5-XHigh] 我也读完了。先做一个事实校准。",
         runtimeModel: {
           modelId: "gpt-5.5",

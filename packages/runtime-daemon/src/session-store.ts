@@ -599,6 +599,15 @@ export class SessionStore {
     return state;
   }
 
+  touchSessionActivity(sessionId: string, updatedAt = new Date().toISOString()): StoredSessionState {
+    const state = this.requireSession(sessionId);
+    if (updatedAt >= state.session.updatedAt) {
+      state.session.updatedAt = updatedAt;
+      this.snapshot();
+    }
+    return state;
+  }
+
   hydrate(states: readonly StoredSessionState[]): void {
     this.sessions.clear();
     this.providerSessionIndex.clear();

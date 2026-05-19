@@ -506,6 +506,9 @@ describe("Gemini stored session files", () => {
     );
 
     assert.equal(projectedReply?.payload.item.kind, "assistant_message");
+    if (projectedReply?.payload.item.kind === "assistant_message") {
+      assert.equal(projectedReply.payload.item.messageId, "council-mcp:tool-post-1");
+    }
     assert.equal(projectedReply?.payload.identity?.origin, "history");
     assert.equal(rawCouncilTools.length, 0);
   });

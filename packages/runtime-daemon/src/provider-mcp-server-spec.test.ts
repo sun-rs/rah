@@ -40,6 +40,9 @@ test("provider MCP helpers translate Council MCP servers into provider startup c
   });
 
   assert.deepEqual(geminiSettingsForMcpServers(servers), {
+    model: {
+      disableLoopDetection: true,
+    },
     mcpServers: {
       rah_council: {
         command: "/usr/bin/node",

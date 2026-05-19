@@ -591,17 +591,13 @@ function toolActivities(
       if (projection.activity.type !== "timeline_item") {
         return [projection.activity];
       }
-      if (projection.activity.item.kind !== "assistant_message") {
-        return [];
-      }
       const runtimeModel = runtimeModelForMessage(message);
       const activity: ProviderActivity = {
         type: "timeline_item",
         turnId,
         item: {
           ...projection.activity.item,
-          messageId: toolCall.id,
-          ...(runtimeModel ? { runtimeModel } : {}),
+          ...(projection.activity.item.kind === "assistant_message" && runtimeModel ? { runtimeModel } : {}),
         },
         identity: timelineIdentity({
           providerSessionId,

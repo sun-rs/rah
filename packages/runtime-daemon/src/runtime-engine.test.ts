@@ -260,7 +260,13 @@ class ShutdownTrackingAdapter extends CountingStoredSessionsAdapter {
   }
 }
 
-function historyEvent(sessionId: string, seq: number, ts: string, text: string): RahEvent {
+function historyEvent(
+  sessionId: string,
+  seq: number,
+  ts: string,
+  text: string,
+  messageId?: string,
+): RahEvent {
   return {
     id: `${sessionId}-${seq}`,
     seq,
@@ -276,6 +282,7 @@ function historyEvent(sessionId: string, seq: number, ts: string, text: string):
       item: {
         kind: "assistant_message",
         text,
+        ...(messageId !== undefined ? { messageId } : {}),
       },
     },
   };
@@ -383,8 +390,8 @@ class MutableControlsAdapter extends CountingStoredSessionsAdapter {
       model: {
         currentModelId: "alpha",
         availableModels: [
-          { id: "alpha", label: "Alpha" },
-          { id: "beta", label: "Beta" },
+          { id: "alpha" },
+          { id: "beta" },
         ],
         mutable: true,
         source: "native",
@@ -1388,6 +1395,55 @@ describe("RuntimeEngine", () => {
         return null;
       }),
       ["older"],
+    );
+
+    await engine.shutdown();
+  });
+
+  test("filters provider history noise for Council-managed agent sessions", async () => {
+    const adapter = new SnapshotPagingAdapter();
+    adapter.historyBySessionId.set("replay-1", [
+      historyEvent("replay-1", 1, "2025-07-19T22:21:01.000Z", "Joined the council."),
+      historyEvent("replay-1", 2, "2025-07-19T22:21:02.000Z", "Listening for messages."),
+      historyEvent(
+        "replay-1",
+        3,
+        "2025-07-19T22:21:03.000Z",
+        "Visible Council reply",
+        "council-mcp:call-post",
+      ),
+      historyEvent("replay-1", 4, "2025-07-19T22:21:04.000Z", "Continuing to wait."),
+    ]);
+    const engine = new RuntimeEngine([adapter]);
+
+    const managed = engine.sessionStore.createManagedSession({
+      id: "replay-1",
+      provider: "codex",
+      providerSessionId: "provider-1",
+      launchSource: "web",
+      cwd: workDir,
+      rootDir: workDir,
+      origin: {
+        kind: "council",
+        councilId: "council-1",
+        councilTitle: "Council",
+        agentId: "agent-1",
+        agentLabel: "Agent",
+      },
+    });
+
+    const page = engine.getSessionHistoryPage(managed.session.id, { limit: 20 });
+    assert.deepEqual(
+      page.events.map((event) => {
+        if (
+          event.type === "timeline.item.added" &&
+          event.payload.item.kind === "assistant_message"
+        ) {
+          return event.payload.item.text;
+        }
+        return null;
+      }),
+      ["Visible Council reply"],
     );
 
     await engine.shutdown();

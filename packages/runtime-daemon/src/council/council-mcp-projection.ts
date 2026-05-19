@@ -32,6 +32,7 @@ export type CouncilMcpProjection =
 const COUNCIL_MCP_PREFIX = "mcp__rah_council__";
 const GEMINI_COUNCIL_MCP_PREFIX = "mcp_rah_council_";
 const OPENCODE_COUNCIL_MCP_PREFIX = "rah_council_";
+export const COUNCIL_MCP_TIMELINE_MESSAGE_ID_PREFIX = "council-mcp:";
 
 const COUNCIL_MCP_TOOL_NAMES = new Set<CouncilMcpToolName>([
   "channel_join",
@@ -144,6 +145,69 @@ function callOutputSucceeded(output: unknown): boolean {
   return true;
 }
 
+function readRecordProperty(
+  record: Record<string, unknown>,
+  key: string,
+): Record<string, unknown> | null {
+  const value = record[key];
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function readStringProperty(record: Record<string, unknown>, key: string): string | null {
+  const value = record[key];
+  return typeof value === "string" ? value : null;
+}
+
+function readMessageId(record: Record<string, unknown>): string | null {
+  const value = record.id ?? record.messageId ?? record.msg_id;
+  if (typeof value === "string" && value.trim()) {
+    return value.trim();
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  return null;
+}
+
+function projectCouncilWaitNewResult(call: NormalizedCouncilMcpToolCall): CouncilMcpProjection {
+  if (call.status !== "completed") {
+    return { visibility: "hidden", reason: "polling" };
+  }
+  if (!callOutputSucceeded(call.output)) {
+    return { visibility: "hidden", reason: "failed" };
+  }
+  const parsed = parseJsonObject(call.output);
+  if (!parsed) {
+    return { visibility: "hidden", reason: "empty" };
+  }
+  const msg = readRecordProperty(parsed, "msg") ?? readRecordProperty(parsed, "message");
+  if (!msg) {
+    return { visibility: "hidden", reason: "polling" };
+  }
+  const role = readStringProperty(msg, "role");
+  if (role !== "user") {
+    return { visibility: "hidden", reason: "polling" };
+  }
+  const text = (readStringProperty(msg, "content") ?? readStringProperty(msg, "text") ?? "").trim();
+  const messageId = readMessageId(msg);
+  if (!text || !messageId) {
+    return { visibility: "hidden", reason: "empty" };
+  }
+  return {
+    visibility: "chat",
+    activity: {
+      type: "timeline_item",
+      item: {
+        kind: "user_message",
+        messageId: `${COUNCIL_MCP_TIMELINE_MESSAGE_ID_PREFIX}user:${messageId}`,
+        text,
+      },
+    },
+  };
+}
+
 function hiddenReason(toolName: CouncilMcpToolName): CouncilMcpProjection {
   if (POLLING_TOOL_NAMES.has(toolName)) {
     return { visibility: "hidden", reason: "polling" };
@@ -157,6 +221,9 @@ function hiddenReason(toolName: CouncilMcpToolName): CouncilMcpProjection {
 export function projectCouncilMcpToolCall(call: NormalizedCouncilMcpToolCall): CouncilMcpProjection {
   if (call.status === "failed") {
     return { visibility: "hidden", reason: "failed" };
+  }
+  if (call.toolName === "channel_wait_new") {
+    return projectCouncilWaitNewResult(call);
   }
   if (call.toolName !== "channel_post") {
     return hiddenReason(call.toolName);
@@ -183,6 +250,7 @@ export function projectCouncilMcpToolCall(call: NormalizedCouncilMcpToolCall): C
       type: "timeline_item",
       item: {
         kind: "assistant_message",
+        messageId: `${COUNCIL_MCP_TIMELINE_MESSAGE_ID_PREFIX}${call.callId}`,
         text,
       },
     },
