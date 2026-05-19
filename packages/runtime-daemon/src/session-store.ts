@@ -13,6 +13,7 @@ import type {
   SessionSummary,
   Workbench,
 } from "@rah/runtime-protocol";
+import { conversationStateFromRuntimeState } from "@rah/runtime-protocol";
 import { normalizeContextUsage } from "./context-usage";
 import { runtimeDescriptorForLiveBackend, withManagedSessionRuntime } from "./session-runtime-descriptor";
 
@@ -30,7 +31,7 @@ const DEFAULT_CAPABILITIES: SessionCapabilities = {
   renameSession: false,
   actions: {
     info: true,
-    archive: true,
+    stop: true,
     delete: false,
     rename: "none",
   },
@@ -151,6 +152,7 @@ export interface CreateManagedSessionArgs {
   id?: string;
   provider: ManagedSession["provider"];
   providerSessionId?: string;
+  origin?: ManagedSession["origin"];
   launchSource: ManagedSession["launchSource"];
   liveBackend?: ManagedSession["liveBackend"];
   cwd: string;
@@ -180,6 +182,7 @@ export interface AttachClientArgs {
 
 export interface PatchManagedSessionArgs {
   providerSessionId?: string;
+  origin?: ManagedSession["origin"];
   title?: string;
   preview?: string;
   cwd?: string;
@@ -245,6 +248,7 @@ export class SessionStore {
       provider: args.provider,
       launchSource: args.launchSource,
       ...(args.liveBackend !== undefined ? { liveBackend: args.liveBackend } : {}),
+      ...conversationStateFromRuntimeState("starting"),
       cwd: args.cwd,
       rootDir: args.rootDir,
       runtimeState: "starting",
@@ -266,6 +270,9 @@ export class SessionStore {
     };
     if (args.providerSessionId !== undefined) {
       session.providerSessionId = args.providerSessionId;
+    }
+    if (args.origin !== undefined) {
+      session.origin = args.origin;
     }
     if (args.title !== undefined) {
       session.title = args.title;
@@ -479,6 +486,9 @@ export class SessionStore {
     runtimeState: ManagedSession["runtimeState"],
   ): StoredSessionState {
     const state = this.requireSession(sessionId);
+    const conversationState = conversationStateFromRuntimeState(runtimeState);
+    state.session.status = conversationState.status;
+    state.session.phase = conversationState.phase;
     state.session.runtimeState = runtimeState;
     state.session.updatedAt = new Date().toISOString();
     this.snapshot();
@@ -494,6 +504,9 @@ export class SessionStore {
 
     if (patch.providerSessionId !== undefined) {
       state.session.providerSessionId = patch.providerSessionId;
+    }
+    if (patch.origin !== undefined) {
+      state.session.origin = patch.origin;
     }
     if (patch.title !== undefined) {
       state.session.title = patch.title;

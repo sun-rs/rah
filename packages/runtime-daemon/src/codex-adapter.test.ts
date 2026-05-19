@@ -184,7 +184,7 @@ rl.on('line', (line) => {
     assert.equal(resumed.session.session.capabilities.resumeByProvider, true);
     assert.equal(resumed.session.session.capabilities.listProviderSessions, true);
     assert.equal(resumed.session.session.capabilities.queuedInput, false);
-    assert.equal(resumed.session.session.capabilities.actions.archive, false);
+    assert.equal(resumed.session.session.capabilities.actions.stop, false);
     assert.equal(resumed.session.session.capabilities.modelSwitch, false);
     assert.equal(resumed.session.session.capabilities.planMode, false);
     assert.equal(resumed.session.session.capabilities.subagents, false);
@@ -1073,7 +1073,7 @@ rl.on('line', (line) => {
     assert.equal(resumed.session.session.capabilities.resumeByProvider, true);
     assert.equal(resumed.session.session.capabilities.listProviderSessions, true);
     assert.equal(resumed.session.session.capabilities.queuedInput, true);
-    assert.equal(resumed.session.session.capabilities.actions.archive, true);
+    assert.equal(resumed.session.session.capabilities.actions.stop, true);
     assert.equal(resumed.session.session.capabilities.modelSwitch, true);
     assert.equal(resumed.session.session.capabilities.planMode, false);
     assert.equal(resumed.session.session.capabilities.subagents, false);

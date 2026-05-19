@@ -154,7 +154,7 @@ export class CodexStoredHistoryAdapter implements ProviderAdapter, ProviderStore
     return (
       managed.session.capabilities.steerInput ||
       managed.session.capabilities.queuedInput ||
-      managed.session.capabilities.actions.archive
+      managed.session.capabilities.actions.stop
     );
   }
 

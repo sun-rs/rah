@@ -24,6 +24,7 @@ describe("NativeTuiProviderRuntime", () => {
     assert.deepEqual([...runtime.providers], [
       "codex",
       "claude",
+      "gemini",
       "opencode",
     ]);
     assert.equal(runtime.supports("codex"), true);
@@ -62,7 +63,7 @@ describe("NativeTuiProviderRuntime", () => {
     });
   });
 
-  test("detects Claude prompt markers from zellij viewport snapshots", () => {
+  test("detects Claude prompt markers from tmux viewport snapshots", () => {
     const runtime = new DefaultNativeTuiProviderRuntime();
     const observation = runtime.observeOutput({
       sessionId: "rah-session",
@@ -82,6 +83,17 @@ describe("NativeTuiProviderRuntime", () => {
       startupTimestampMs: Date.now(),
     }, "Welcome back!\n> partial local draft");
     assert.equal(observation.promptClean, false);
+  });
+
+  test("detects Gemini prompt markers from tmux viewport snapshots", () => {
+    const runtime = new DefaultNativeTuiProviderRuntime();
+    const observation = runtime.observeOutput({
+      sessionId: "rah-session",
+      provider: "gemini",
+      cwd: "/tmp/rah-native",
+      startupTimestampMs: Date.now(),
+    }, "\u001b[2J\u001b[HGemini CLI\n> \u001b[7m \u001b[27m Type your message or @path/to/file");
+    assert.equal(observation.promptClean, true);
   });
 
   test("detects the OpenCode input prompt before draining queued Web input", () => {

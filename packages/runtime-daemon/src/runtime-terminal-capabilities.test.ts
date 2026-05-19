@@ -8,8 +8,8 @@ import {
 import { nativeTuiInterruptDataForProvider } from "./runtime-terminal-coordinator";
 
 describe("runtime terminal capabilities", () => {
-  test("native TUI sessions expose terminal-first capabilities for core live providers", () => {
-    const providers: ProviderKind[] = ["codex", "claude", "opencode"];
+  test("native TUI sessions expose terminal-first capabilities for core running providers", () => {
+    const providers: ProviderKind[] = ["codex", "claude", "gemini", "opencode"];
 
     for (const provider of providers) {
       const capabilities = buildNativeTuiSessionCapabilities(provider);
@@ -21,7 +21,7 @@ describe("runtime terminal capabilities", () => {
       assert.equal(capabilities.livePermissions, false);
       assert.equal(capabilities.modelSwitch, false);
       assert.equal(capabilities.planMode, false);
-      assert.equal(capabilities.actions?.archive, true);
+      assert.equal(capabilities.actions?.stop, true);
       assert.equal(capabilities.actions?.rename, "none");
     }
   });
@@ -43,13 +43,14 @@ describe("runtime terminal capabilities", () => {
     assert.equal(capabilities.chatMirror, false);
     assert.equal(capabilities.steerInput, false);
     assert.equal(capabilities.queuedInput, false);
-    assert.equal(capabilities.actions?.archive, true);
+    assert.equal(capabilities.actions?.stop, true);
     assert.equal(capabilities.actions?.info, true);
   });
 
   test("native TUI interrupt keys follow provider-native stop semantics", () => {
     assert.equal(nativeTuiInterruptDataForProvider("codex"), "\u001b");
     assert.equal(nativeTuiInterruptDataForProvider("claude"), "\u001b");
+    assert.equal(nativeTuiInterruptDataForProvider("gemini"), "\u001b");
     assert.equal(nativeTuiInterruptDataForProvider("opencode"), "\u001b\u001b");
   });
 });

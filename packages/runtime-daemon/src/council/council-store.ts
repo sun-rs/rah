@@ -19,8 +19,8 @@ import type {
   CouncilMessageRole,
   CouncilRoom,
   CouncilRoomSnapshot,
-  CouncilRoomStatus,
 } from "@rah/runtime-protocol";
+import { conversationStateFromLegacyCouncilRoomStatus } from "@rah/runtime-protocol";
 
 type CouncilStoreFile = {
   rooms: CouncilRoom[];
@@ -85,8 +85,11 @@ function nextDefaultRoomTitle(rooms: CouncilRoom[]): string {
 function loadStoreFile(filePath: string): CouncilStoreFile {
   try {
     const parsed = JSON.parse(readFileSync(filePath, "utf8")) as Partial<CouncilStoreFile>;
+    const rooms = Array.isArray(parsed.rooms)
+      ? (parsed.rooms as CouncilRoom[]).map(normalizePersistedRoom)
+      : [];
     return {
-      rooms: Array.isArray(parsed.rooms) ? parsed.rooms as CouncilRoom[] : [],
+      rooms,
       agents: Array.isArray(parsed.agents) ? parsed.agents as CouncilAgent[] : [],
       messages: Array.isArray(parsed.messages) ? parsed.messages as CouncilMessage[] : [],
       claims: Array.isArray(parsed.claims) ? parsed.claims as CouncilFileClaim[] : [],
@@ -111,6 +114,24 @@ function loadStoreFile(filePath: string): CouncilStoreFile {
       nextControlId: 1,
     };
   }
+}
+
+function normalizePersistedRoom(room: CouncilRoom): CouncilRoom {
+  const rawStatus = (room as { status?: string }).status;
+  const rawPhase = (room as { phase?: CouncilRoom["phase"] }).phase;
+  if (rawStatus === "running" || rawStatus === "stopped") {
+    return {
+      ...room,
+      status: rawStatus,
+      phase: rawPhase ?? (rawStatus === "running" ? "ready" : "ended"),
+    };
+  }
+  const legacy = conversationStateFromLegacyCouncilRoomStatus(rawStatus);
+  return {
+    ...room,
+    status: legacy.status,
+    phase: rawPhase ?? legacy.phase,
+  };
 }
 
 function textPart(text: string): CouncilMessagePart {
@@ -206,7 +227,7 @@ export class CouncilStore {
     title?: string;
     workspace: string;
     agents: CouncilAgentConfig[];
-    zellijSessionName?: string;
+    muxSessionName?: string;
   }): CouncilRoomSnapshot {
     const timestamp = nowIso();
     const roomId = randomUUID();
@@ -214,8 +235,9 @@ export class CouncilStore {
       id: roomId,
       title: args.title?.trim() || nextDefaultRoomTitle(this.state.rooms),
       workspace: args.workspace,
-      status: "starting",
-      ...(args.zellijSessionName ? { zellijSessionName: args.zellijSessionName } : {}),
+      status: "running",
+      phase: "starting",
+      ...(args.muxSessionName ? { muxSessionName: args.muxSessionName } : {}),
       createdAt: timestamp,
       updatedAt: timestamp,
     };
@@ -372,7 +394,7 @@ export class CouncilStore {
     return results;
   }
 
-  updateRoom(roomId: string, patch: Partial<Pick<CouncilRoom, "status" | "zellijSessionName" | "error">>): CouncilRoomSnapshot {
+  updateRoom(roomId: string, patch: Partial<Pick<CouncilRoom, "status" | "phase" | "muxSessionName" | "error">>): CouncilRoomSnapshot {
     const room = this.requireRoom(roomId);
     Object.assign(room, patch, { updatedAt: nowIso() });
     this.persist();
@@ -382,7 +404,8 @@ export class CouncilStore {
   failRoom(roomId: string, error: string): CouncilRoomSnapshot {
     const timestamp = nowIso();
     const room = this.requireRoom(roomId);
-    room.status = "failed";
+    room.status = "stopped";
+    room.phase = "failed";
     room.error = error;
     room.updatedAt = timestamp;
     for (const agent of this.state.agents.filter((candidate) => candidate.roomId === roomId)) {
@@ -399,7 +422,7 @@ export class CouncilStore {
   updateAgent(
     roomId: string,
     agentId: string,
-    patch: Partial<Pick<CouncilAgent, "status" | "zellijPaneId" | "nativeSessionId" | "lastStatusDetail">>,
+    patch: Partial<Pick<CouncilAgent, "status" | "terminalId" | "nativeSessionId" | "lastStatusDetail">>,
   ): CouncilRoomSnapshot {
     const agent = this.requireAgent(roomId, agentId);
     Object.assign(agent, patch, { updatedAt: nowIso() });
@@ -550,6 +573,7 @@ export class CouncilStore {
     const timestamp = nowIso();
     const room = this.requireRoom(roomId);
     room.status = "stopped";
+    room.phase = "ended";
     room.updatedAt = timestamp;
     for (const agent of this.state.agents.filter((candidate) => candidate.roomId === roomId)) {
       agent.status = "stopped";

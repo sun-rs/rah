@@ -43,6 +43,7 @@ import {
 import { optionValueAsString, resolveModelOptionValues } from "../session-model-options";
 import { applyProviderActivity } from "../provider-activity";
 import { timelineRuntimeModel } from "../timeline-runtime-model";
+import { mergeManualProviderModels } from "../manual-provider-models";
 
 const CODEX_EVENT_SOURCE = {
   provider: "codex" as const,
@@ -296,10 +297,13 @@ export class CodexAdapter implements ProviderAdapter {
   }
 
   async startSession(request: StartSessionRequest): Promise<StartSessionResponse> {
+    const rawCachedModelCatalog = this.modelCatalog.getCached();
     const cachedModelCatalog =
       request.model || request.reasoningId !== undefined || request.optionValues !== undefined
-        ? await this.modelCatalog.listModels()
-        : this.modelCatalog.getCached();
+        ? mergeManualProviderModels(await this.modelCatalog.listModels())
+        : rawCachedModelCatalog
+          ? mergeManualProviderModels(rawCachedModelCatalog)
+          : null;
     return await startCodexLiveSession({
       services: this.services,
       request,
@@ -360,10 +364,13 @@ export class CodexAdapter implements ProviderAdapter {
       };
     }
 
+    const rawCachedModelCatalog = this.modelCatalog.getCached();
     const cachedModelCatalog =
       request.model || request.reasoningId !== undefined || request.optionValues !== undefined
-        ? await this.modelCatalog.listModels()
-        : this.modelCatalog.getCached();
+        ? mergeManualProviderModels(await this.modelCatalog.listModels())
+        : rawCachedModelCatalog
+          ? mergeManualProviderModels(rawCachedModelCatalog)
+          : null;
     try {
       const response = await resumeCodexLiveSession({
         services: this.services,
@@ -413,7 +420,7 @@ export class CodexAdapter implements ProviderAdapter {
 
   async listModels(options?: { cwd?: string; forceRefresh?: boolean }): Promise<ProviderModelCatalog> {
     void options?.cwd;
-    return await this.modelCatalog.listModels(options);
+    return mergeManualProviderModels(await this.modelCatalog.listModels(options));
   }
 
   async setSessionModel(
@@ -422,13 +429,13 @@ export class CodexAdapter implements ProviderAdapter {
   ): Promise<SessionSummary> {
     const live = this.liveSessions.get(sessionId);
     if (!live) {
-      throw new Error("Codex model switching is only available for live sessions.");
+      throw new Error("Codex model switching is only available for running sessions.");
     }
     const nextModelId = request.modelId.trim();
     if (!nextModelId) {
       throw new Error("Session model is required.");
     }
-    const catalog = await this.modelCatalog.listModels();
+    const catalog = mergeManualProviderModels(await this.modelCatalog.listModels());
     const model = catalog.models.find((entry) => entry.id === nextModelId);
     if (!model) {
       throw new Error(`Unsupported Codex model '${nextModelId}'.`);
@@ -472,7 +479,7 @@ export class CodexAdapter implements ProviderAdapter {
   async setSessionMode(sessionId: string, modeId: string): Promise<SessionSummary> {
     const live = this.liveSessions.get(sessionId);
     if (!live) {
-      throw new Error("Codex mode switching is only available for live sessions.");
+      throw new Error("Codex mode switching is only available for running sessions.");
     }
     const planAccessModeId = codexPlanAccessModeId(modeId);
     if (modeId === "plan" || planAccessModeId) {
@@ -637,7 +644,7 @@ export class CodexAdapter implements ProviderAdapter {
 
   onPtyInput(sessionId: string, clientId: string, data: string): void {
     if (this.liveSessions.has(sessionId)) {
-      throw new Error("Codex live sessions do not support PTY input bridging yet.");
+      throw new Error("Codex running sessions do not support PTY input bridging yet.");
     }
     void clientId;
     void data;
@@ -665,7 +672,7 @@ export class CodexAdapter implements ProviderAdapter {
     const results = await Promise.allSettled(sessions.map((live) => live.client.dispose()));
     results.forEach((result, index) => {
       if (result.status === "rejected") {
-        console.error("[rah] failed to dispose Codex live session during shutdown", {
+        console.error("[rah] failed to dispose Codex running session during shutdown", {
           sessionId: sessions[index]?.sessionId,
           error: result.reason,
         });

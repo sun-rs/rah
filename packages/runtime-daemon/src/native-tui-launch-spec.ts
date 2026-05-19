@@ -18,6 +18,7 @@ import type {
 import {
   claudeLaunchSpec,
   codexLaunchSpec,
+  geminiLaunchSpec,
   opencodeLaunchSpec,
 } from "./provider-diagnostics";
 import {
@@ -25,19 +26,16 @@ import {
   fetchOpenCodeModelCatalog,
 } from "./opencode-model-catalog";
 import {
+  geminiSettingsForMcpServers,
   normalizeMcpServerName,
   opencodeEnvForMcpServers,
   type ProviderMcpServerSpec,
 } from "./provider-mcp-server-spec";
-import { discoverCodexStoredSessions } from "./codex-stored-sessions";
-import {
-  codexHomeForRolloutPath,
-  createIsolatedCodexWrapperHome,
-} from "./codex-wrapper-home";
 import { optionValueAsString } from "./session-model-options";
 import {
   isClaudeModeId,
   isCodexPlanModeId,
+  isGeminiModeId,
   isOpenCodeModeId,
   parseCodexModeId,
 } from "./session-mode-utils";
@@ -225,6 +223,38 @@ function appendClaudeMcpArgs(args: string[], servers: readonly NativeTuiMcpServe
   args.push("--mcp-config", writeClaudeMcpConfig(mcpServers));
 }
 
+function writeGeminiSystemSettings(
+  servers: readonly NativeTuiMcpServerSpec[] | undefined,
+): string | undefined {
+  const geminiSettings = geminiSettingsForMcpServers(servers);
+  if (!geminiSettings) {
+    return undefined;
+  }
+  const baseSettings = process.env.GEMINI_CLI_SYSTEM_SETTINGS_PATH
+    ? readJsonObject(process.env.GEMINI_CLI_SYSTEM_SETTINGS_PATH)
+    : {};
+  const mergedSettings = {
+    ...baseSettings,
+    ...geminiSettings,
+    mcpServers: {
+      ...objectValue(baseSettings.mcpServers),
+      ...objectValue(geminiSettings.mcpServers),
+    },
+  };
+  const dir = path.join(resolveRahHome(), "runtime-daemon", "gemini-system-settings");
+  mkdirSync(dir, { recursive: true });
+  const filePath = path.join(dir, `settings-${process.pid}-${Date.now()}-${randomUUID()}.json`);
+  writeFileSync(filePath, `${JSON.stringify(mergedSettings, null, 2)}\n`, { mode: 0o600 });
+  return filePath;
+}
+
+function geminiEnvForMcpServers(
+  servers: readonly NativeTuiMcpServerSpec[] | undefined,
+): Record<string, string> | undefined {
+  const settingsPath = writeGeminiSystemSettings(servers);
+  return settingsPath ? { GEMINI_CLI_SYSTEM_SETTINGS_PATH: settingsPath } : undefined;
+}
+
 function resolveOptionOrReasoning(
   request: ModelRequest,
   optionId: string,
@@ -293,6 +323,12 @@ function appendInitialPrompt(args: string[], prompt: string | undefined): void {
   }
 }
 
+function appendGeminiInitialPrompt(args: string[], prompt: string | undefined): void {
+  if (prompt?.trim()) {
+    args.push("--prompt-interactive", prompt);
+  }
+}
+
 function appendClaudeArgs(
   args: string[],
   request: Pick<StartSessionRequest, "modeId"> & ModelRequest,
@@ -319,6 +355,25 @@ function appendClaudeArgs(
   if (effort) {
     args.push("--effort", effort);
   }
+  args.push(mode === "resume" ? "--resume" : "--session-id", providerSessionId);
+}
+
+function appendGeminiArgs(
+  args: string[],
+  request: Pick<StartSessionRequest, "modeId" | "model">,
+  providerSessionId: string,
+  mode: "start" | "resume",
+): void {
+  if (request.modeId) {
+    if (!isGeminiModeId(request.modeId)) {
+      throw new Error(`Unsupported Gemini launch mode '${request.modeId}'.`);
+    }
+    args.push("--approval-mode", request.modeId);
+  }
+  if (request.model) {
+    args.push("--model", request.model);
+  }
+  args.push("--skip-trust");
   args.push(mode === "resume" ? "--resume" : "--session-id", providerSessionId);
 }
 
@@ -383,7 +438,6 @@ export async function nativeTuiStartLaunchSpec(
     appendCodexModeArgs(args, request);
     appendCodexMcpArgs(args, request.extraMcpServers);
     appendInitialPrompt(args, request.initialPrompt);
-    const codexHome = createIsolatedCodexWrapperHome();
     return {
       provider: "codex",
       command,
@@ -391,7 +445,6 @@ export async function nativeTuiStartLaunchSpec(
       cwd: request.cwd,
       title: request.title ?? "Codex native TUI session",
       preview: previewCommand(command, args),
-      env: { CODEX_HOME: codexHome },
       ...launchConfigMetadata(request, "model_reasoning_effort"),
     };
   }
@@ -411,6 +464,24 @@ export async function nativeTuiStartLaunchSpec(
       preview: previewCommand(command, args),
       providerSessionId,
       ...launchConfigMetadata(request, "effort"),
+    };
+  }
+  if (request.provider === "gemini") {
+    const providerSessionId = randomUUID();
+    const { command, args } = splitLaunchArgv(await geminiLaunchSpec(), "gemini");
+    appendGeminiArgs(args, request, providerSessionId, "start");
+    appendGeminiInitialPrompt(args, request.initialPrompt);
+    const env = geminiEnvForMcpServers(request.extraMcpServers);
+    return {
+      provider: "gemini",
+      command,
+      args,
+      cwd: request.cwd,
+      title: request.title ?? "Gemini native TUI session",
+      preview: previewCommand(command, args),
+      providerSessionId,
+      ...(env ? { env } : {}),
+      ...launchConfigMetadata(request, "model_variant"),
     };
   }
   if (request.provider === "opencode") {
@@ -449,10 +520,6 @@ export async function nativeTuiResumeLaunchSpec(
     }
     appendCodexModeArgs(args, request);
     args.push(request.providerSessionId);
-    const record = discoverCodexStoredSessions().find(
-      (candidate) => candidate.ref.providerSessionId === request.providerSessionId,
-    );
-    const codexHome = record ? codexHomeForRolloutPath(record.rolloutPath) : null;
     return {
       provider: "codex",
       command,
@@ -460,7 +527,6 @@ export async function nativeTuiResumeLaunchSpec(
       cwd: request.cwd,
       title: "Codex native TUI session",
       preview: previewCommand(command, args),
-      ...(codexHome ? { env: { CODEX_HOME: codexHome } } : {}),
       ...launchConfigMetadata(request, "model_reasoning_effort"),
     };
   }
@@ -477,6 +543,20 @@ export async function nativeTuiResumeLaunchSpec(
       preview: previewCommand(command, args),
       providerSessionId: request.providerSessionId,
       ...launchConfigMetadata(request, "effort"),
+    };
+  }
+  if (request.provider === "gemini") {
+    const { command, args } = splitLaunchArgv(await geminiLaunchSpec(), "gemini");
+    appendGeminiArgs(args, request, request.providerSessionId, "resume");
+    return {
+      provider: "gemini",
+      command,
+      args,
+      cwd: request.cwd,
+      title: "Gemini native TUI session",
+      preview: previewCommand(command, args),
+      providerSessionId: request.providerSessionId,
+      ...launchConfigMetadata(request, "model_variant"),
     };
   }
   if (request.provider === "opencode") {

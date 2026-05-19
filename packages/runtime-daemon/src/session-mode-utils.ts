@@ -58,6 +58,41 @@ const OPENCODE_MODE_DESCRIPTORS: SessionModeDescriptor[] = [
   },
 ];
 
+const GEMINI_MODE_DESCRIPTORS: SessionModeDescriptor[] = [
+  {
+    id: "default",
+    role: "ask",
+    label: "Default",
+    description: "Gemini default approval mode.",
+    applyTiming: "startup_only",
+    hotSwitch: false,
+  },
+  {
+    id: "auto_edit",
+    role: "auto_edit",
+    label: "Auto Edit",
+    description: "Auto-approve edit tools while prompting for broader actions.",
+    applyTiming: "startup_only",
+    hotSwitch: false,
+  },
+  {
+    id: "plan",
+    role: "plan",
+    label: "Plan",
+    description: "Read-only planning mode.",
+    applyTiming: "startup_only",
+    hotSwitch: false,
+  },
+  {
+    id: "yolo",
+    role: "full_auto",
+    label: "YOLO",
+    description: "Auto-approve all actions.",
+    applyTiming: "startup_only",
+    hotSwitch: false,
+  },
+];
+
 const CODEX_MODE_DESCRIPTORS: SessionModeDescriptor[] = [
   {
     id: "on-request/workspace-write",
@@ -155,6 +190,20 @@ export function buildClaudeModeState(args: {
   });
 }
 
+export function buildGeminiModeState(args: {
+  currentModeId: string;
+  mutable: boolean;
+  source?: SessionModeState["source"];
+  availableModes?: readonly SessionModeDescriptor[];
+}): SessionModeState {
+  return buildModeState({
+    currentModeId: args.currentModeId,
+    availableModes: args.availableModes ?? GEMINI_MODE_DESCRIPTORS,
+    mutable: args.mutable,
+    source: args.source ?? "native",
+  });
+}
+
 export function isClaudeModeId(modeId: string): boolean {
   return CLAUDE_MODE_DESCRIPTORS.some((mode) => mode.id === modeId);
 }
@@ -166,6 +215,7 @@ const CLAUDE_PRIMARY_MODE_ORDER = [
   "bypassPermissions",
 ];
 const CLAUDE_HIDDEN_MODE_IDS = new Set(["auto", "dontAsk"]);
+const GEMINI_PRIMARY_MODE_ORDER = ["default", "auto_edit", "plan", "yolo"];
 
 export function parseClaudePermissionModeChoices(helpText: string): string[] {
   const permissionIndex = helpText.indexOf("--permission-mode");
@@ -205,6 +255,43 @@ export function buildClaudeModeDescriptorsFromHelp(helpText: string): SessionMod
     (choice) => !CLAUDE_HIDDEN_MODE_IDS.has(choice),
   );
   return buildClaudeModeDescriptorsFromChoices(choices);
+}
+
+export function parseGeminiApprovalModeChoices(helpText: string): string[] {
+  const approvalIndex = helpText.indexOf("--approval-mode");
+  if (approvalIndex < 0) {
+    return [];
+  }
+  const relevantHelp = helpText.slice(approvalIndex, approvalIndex + 800);
+  const choicesIndex = relevantHelp.toLowerCase().indexOf("choices:");
+  if (choicesIndex < 0) {
+    return [];
+  }
+  const choiceText = relevantHelp.slice(choicesIndex, choicesIndex + 400);
+  return [...choiceText.matchAll(/"([^"]+)"/g)]
+    .map((match) => match[1]?.trim())
+    .filter((choice): choice is string => Boolean(choice));
+}
+
+export function buildGeminiModeDescriptorsFromChoices(
+  choices: readonly string[],
+): SessionModeDescriptor[] {
+  const choiceSet = new Set(choices.map((choice) => choice.trim()).filter(Boolean));
+  const descriptors = GEMINI_PRIMARY_MODE_ORDER.flatMap((modeId) => {
+    if (choiceSet.size > 0 && !choiceSet.has(modeId)) {
+      return [];
+    }
+    const descriptor = GEMINI_MODE_DESCRIPTORS.find((mode) => mode.id === modeId);
+    return descriptor ? [cloneDescriptor(descriptor)] : [];
+  });
+  if (descriptors.length > 0) {
+    return descriptors;
+  }
+  return cloneDescriptors(GEMINI_MODE_DESCRIPTORS);
+}
+
+export function buildGeminiModeDescriptorsFromHelp(helpText: string): SessionModeDescriptor[] {
+  return buildGeminiModeDescriptorsFromChoices(parseGeminiApprovalModeChoices(helpText));
 }
 
 export function buildOpenCodeModeState(args: {
@@ -293,6 +380,10 @@ export function isOpenCodeModeId(
   return descriptors.some((mode) => mode.id === trimmed);
 }
 
+export function isGeminiModeId(modeId: string): boolean {
+  return GEMINI_MODE_DESCRIPTORS.some((mode) => mode.id === modeId);
+}
+
 export function codexPlanModeId(accessModeId: string): string {
   return `${CODEX_PLAN_MODE_ID_PREFIX}${accessModeId.trim()}`;
 }
@@ -317,6 +408,8 @@ export function defaultProviderModeId(provider: ProviderKind): string | null {
       return "never/danger-full-access";
     case "claude":
       return "bypassPermissions";
+    case "gemini":
+      return "yolo";
     case "opencode":
       return "build";
     case "custom":
@@ -338,6 +431,8 @@ export function providerModeDescriptors(
       }).availableModes;
     case "claude":
       return cloneDescriptors(CLAUDE_MODE_DESCRIPTORS);
+    case "gemini":
+      return cloneDescriptors(GEMINI_MODE_DESCRIPTORS);
     case "opencode":
       return cloneDescriptors(OPENCODE_MODE_DESCRIPTORS);
     case "custom":

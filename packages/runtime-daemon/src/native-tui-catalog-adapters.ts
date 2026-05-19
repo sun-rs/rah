@@ -11,6 +11,7 @@ import {
 import {
   OpenCodeModelCatalogCache,
 } from "./opencode-model-catalog";
+import { GeminiModelCatalogCache } from "./gemini-model-catalog";
 import type {
   ProviderAdapter,
   ProviderEnhancedModelAdapter,
@@ -42,6 +43,18 @@ export class ClaudeNativeTuiCatalogAdapter
   readonly id = "claude-native-tui-catalog";
   readonly providers: ProviderKind[] = ["claude"];
   private readonly catalog = new ClaudeModelCatalogCache();
+
+  async listModels(options?: ListModelsOptions): Promise<ProviderModelCatalog> {
+    return withProviderCatalogRuntime(await this.catalog.listModels(options));
+  }
+}
+
+export class GeminiNativeTuiCatalogAdapter
+  implements ProviderAdapter, ProviderEnhancedModelAdapter
+{
+  readonly id = "gemini-native-tui-catalog";
+  readonly providers: ProviderKind[] = ["gemini"];
+  private readonly catalog = new GeminiModelCatalogCache();
 
   async listModels(options?: ListModelsOptions): Promise<ProviderModelCatalog> {
     return withProviderCatalogRuntime(await this.catalog.listModels(options));

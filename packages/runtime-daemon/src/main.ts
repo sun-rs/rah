@@ -18,8 +18,9 @@ const shutdown = async (exitCode: number) => {
   }
   shuttingDown = true;
   const forceExitTimer = setTimeout(() => {
+    console.error("[rah] shutdown timed out; forcing process exit");
     process.exit(exitCode);
-  }, 2_000);
+  }, 30_000);
   forceExitTimer.unref?.();
   try {
     await daemon.close();

@@ -3,6 +3,7 @@ import { stat } from "node:fs/promises";
 import net from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
 import { resolveConfiguredBinary } from "./provider-binary-utils";
+import { rahNativeServerEnv } from "./native-local-server-orphans";
 
 const OPENCODE_HEALTHCHECK_REQUEST_TIMEOUT_MS = 1_500;
 
@@ -167,6 +168,7 @@ export async function startOpenCodeServer(params: {
     env: {
       ...process.env,
       ...(params.env ?? {}),
+      ...rahNativeServerEnv("opencode"),
     },
     detached: process.platform !== "win32",
     stdio: ["ignore", "pipe", "pipe"],

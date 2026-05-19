@@ -414,6 +414,7 @@ export async function startOpenCodeLiveSession(params: {
   const state = services.sessionStore.createManagedSession({
     provider: "opencode",
     providerSessionId: providerSession.id,
+    ...(request.origin !== undefined ? { origin: request.origin } : {}),
     launchSource: request.attach?.client.kind === "terminal" ? "terminal" : "web",
     liveBackend: "native_local_server",
     cwd: request.cwd,
@@ -443,7 +444,7 @@ export async function startOpenCodeLiveSession(params: {
       modelSwitch: true,
       actions: {
         info: true,
-        archive: true,
+        stop: true,
         delete: false,
         rename: "none",
       },
@@ -484,7 +485,7 @@ export async function startOpenCodeLiveSession(params: {
   const session = services.sessionStore.getSession(state.session.id);
   if (!session) {
     await closeOpenCodeLiveSession(liveSession);
-    throw new Error("Failed to create runtime session for OpenCode live session.");
+    throw new Error("Failed to create runtime session for OpenCode running session.");
   }
   publishSessionBootstrap(services, state.session.id, session.session);
   attachRequestedClient(services, state.session.id, request.attach);
@@ -507,6 +508,7 @@ export async function resumeOpenCodeLiveSession(params: {
   providerSessionId: string;
   cwd: string;
   attach?: StartSessionRequest["attach"];
+  origin?: StartSessionRequest["origin"];
   providerConfig?: StartSessionRequest["providerConfig"];
   modeId?: string;
   model?: string;
@@ -568,6 +570,7 @@ export async function resumeOpenCodeLiveSession(params: {
   const state = services.sessionStore.createManagedSession({
     provider: "opencode",
     providerSessionId: params.providerSessionId,
+    ...(params.origin !== undefined ? { origin: params.origin } : {}),
     launchSource: params.attach?.client.kind === "terminal" ? "terminal" : "web",
     liveBackend: "native_local_server",
     cwd: params.cwd,
@@ -596,7 +599,7 @@ export async function resumeOpenCodeLiveSession(params: {
       modelSwitch: true,
       actions: {
         info: true,
-        archive: true,
+        stop: true,
         delete: false,
         rename: "none",
       },

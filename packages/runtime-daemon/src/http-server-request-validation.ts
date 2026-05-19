@@ -1,5 +1,6 @@
 import type {
   AddCouncilAgentRequest,
+  AddManualProviderModelRequest,
   AttachClientDescriptor,
   AttachSessionRequest,
   ClaimControlRequest,
@@ -32,11 +33,15 @@ import type {
 
 type JsonRecord = Record<string, unknown>;
 
-const PROVIDERS = new Set<ProviderKind>(["codex", "claude", "opencode", "custom"]);
-const COUNCIL_PROVIDERS = new Set<ProviderKind>(["codex", "claude", "opencode"]);
+const PROVIDERS = new Set<ProviderKind>(["codex", "claude", "gemini", "opencode", "custom"]);
+const COUNCIL_PROVIDERS = new Set<ProviderKind>(["codex", "claude", "gemini", "opencode"]);
 const CLIENT_KINDS = new Set(["terminal", "web", "ios", "ipad", "api"]);
 const APPROVAL_POLICIES = new Set(["default", "on-request", "never", "auto_edit", "yolo"]);
-const PUBLIC_LIVE_BACKENDS = new Set(["native_tui", "zellij_tui", "native_local_server"]);
+const PUBLIC_LIVE_BACKENDS = new Set([
+  "native_tui",
+  "tui_mux",
+  "native_local_server",
+]);
 const COUNCIL_MCP_TOOLS = new Set<CouncilMcpToolName>([
   "channel_join",
   "channel_post",
@@ -307,6 +312,26 @@ export function parseStoredSessionRemoveRequest(body: unknown): StoredSessionRem
   };
 }
 
+export function parseAddManualProviderModelRequest(body: unknown): AddManualProviderModelRequest {
+  const record = requireObjectBody(body);
+  const request: AddManualProviderModelRequest = {
+    id: requireString(record, "id"),
+  };
+  const label = optionalString(record, "label");
+  const optionIds = optionalStringArray(record, "optionIds");
+  const cwd = optionalString(record, "cwd");
+  if (label !== undefined) {
+    request.label = label;
+  }
+  if (optionIds !== undefined) {
+    request.optionIds = optionIds;
+  }
+  if (cwd !== undefined) {
+    request.cwd = cwd;
+  }
+  return request;
+}
+
 export function parseCreateCouncilRoomRequest(body: unknown): CreateCouncilRoomRequest {
   const record = requireObjectBody(body);
   const agentsRaw = record.agents;
@@ -450,7 +475,7 @@ function parseCouncilAgentConfig(value: unknown, index: number): CouncilAgentCon
   const record = requireObject(value, `agents[${index}]`);
   const provider = requireProvider(record, "provider");
   if (!COUNCIL_PROVIDERS.has(provider)) {
-    throw badRequest("Council agent provider must be codex, claude, or opencode.");
+    throw badRequest("Council agent provider must be codex, claude, gemini, or opencode.");
   }
   const agent: CouncilAgentConfig = {
     provider: provider as CouncilAgentConfig["provider"],

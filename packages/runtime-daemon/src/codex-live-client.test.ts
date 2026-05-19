@@ -337,7 +337,7 @@ rl.on('line', (line) => {
     await adapter.shutdown?.();
   });
 
-  test("bridges exec command output into PTY frames for live sessions", async () => {
+  test("bridges exec command output into PTY frames for running sessions", async () => {
     const serverJs = path.join(tmpDir, "mock-codex-exec-server.js");
     writeFileSync(
       serverJs,

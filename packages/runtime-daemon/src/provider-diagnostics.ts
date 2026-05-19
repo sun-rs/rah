@@ -4,7 +4,7 @@ import { resolveConfiguredBinary } from "./provider-binary-utils";
 
 export type CoreLiveDiagnosticProvider = Extract<
   ProviderKind,
-  "codex" | "claude" | "opencode"
+  "codex" | "claude" | "gemini" | "opencode"
 >;
 
 type LaunchSpec = {
@@ -39,6 +39,12 @@ export async function claudeLaunchSpec(): Promise<LaunchSpec> {
   };
 }
 
+export async function geminiLaunchSpec(): Promise<LaunchSpec> {
+  return {
+    argv: [await resolveConfiguredBinary("RAH_GEMINI_BINARY", "gemini")],
+  };
+}
+
 export async function opencodeLaunchSpec(): Promise<LaunchSpec> {
   return {
     argv: [await resolveConfiguredBinary("RAH_OPENCODE_BINARY", "opencode")],
@@ -53,6 +59,8 @@ export async function launchSpecForProvider(
       return await codexLaunchSpec();
     case "claude":
       return await claudeLaunchSpec();
+    case "gemini":
+      return await geminiLaunchSpec();
     case "opencode":
       return await opencodeLaunchSpec();
     default:
@@ -240,6 +248,16 @@ async function fetchLatestVersion(
       return {
         ...(latestVersion ? { latestVersion } : {}),
         latestVersionSource: "github",
+      };
+    }
+    case "gemini": {
+      const payload = await fetchJson<{ version?: string }>(
+        "https://registry.npmjs.org/@google/gemini-cli/latest",
+      );
+      const latestVersion = payload.version ? normalizeVersion(payload.version) : undefined;
+      return {
+        ...(latestVersion ? { latestVersion } : {}),
+        latestVersionSource: "npm",
       };
     }
     case "opencode": {

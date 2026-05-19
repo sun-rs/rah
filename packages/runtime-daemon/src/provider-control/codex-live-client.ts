@@ -208,6 +208,7 @@ export async function startCodexLiveSession(params: {
 
     const state = services.sessionStore.createManagedSession({
       provider: "codex",
+      ...(request.origin !== undefined ? { origin: request.origin } : {}),
       launchSource: "terminal",
       liveBackend: "native_local_server",
       cwd: request.cwd,
@@ -247,7 +248,7 @@ export async function startCodexLiveSession(params: {
         renameSession: true,
         actions: {
           info: true,
-          archive: true,
+          stop: true,
           delete: true,
           rename: "native",
         },
@@ -260,7 +261,7 @@ export async function startCodexLiveSession(params: {
     const runtimeSession = services.sessionStore.getSession(state.session.id);
     if (!runtimeSession) {
       await client.dispose();
-      throw new Error("Failed to create runtime session for Codex terminal live session.");
+      throw new Error("Failed to create runtime session for Codex terminal running session.");
     }
     publishSessionBootstrap(services, state.session.id, runtimeSession.session);
 
@@ -354,6 +355,7 @@ export async function startCodexLiveSession(params: {
   const state = services.sessionStore.createManagedSession({
     provider: "codex",
     providerSessionId: threadId,
+    ...(request.origin !== undefined ? { origin: request.origin } : {}),
     launchSource: "web",
     liveBackend: "native_local_server",
     cwd: request.cwd,
@@ -395,7 +397,7 @@ export async function startCodexLiveSession(params: {
       renameSession: true,
       actions: {
         info: true,
-        archive: true,
+        stop: true,
         delete: true,
         rename: "native",
       },
@@ -420,7 +422,7 @@ export async function startCodexLiveSession(params: {
   const runtimeSession = services.sessionStore.getSession(state.session.id);
   if (!runtimeSession) {
     await client.dispose();
-    throw new Error("Failed to create runtime session for Codex live session.");
+    throw new Error("Failed to create runtime session for Codex running session.");
   }
   publishSessionBootstrap(services, state.session.id, runtimeSession.session);
 
@@ -559,6 +561,7 @@ export async function resumeCodexLiveSession(params: {
     const state = services.sessionStore.createManagedSession({
       provider: "codex",
       providerSessionId: threadId,
+      ...(request.origin !== undefined ? { origin: request.origin } : {}),
       launchSource: "web",
       liveBackend: "native_local_server",
       cwd,
@@ -624,7 +627,7 @@ export async function resumeCodexLiveSession(params: {
         renameSession: true,
         actions: {
           info: true,
-          archive: true,
+          stop: true,
           delete: true,
           rename: "native",
         },

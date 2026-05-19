@@ -30,6 +30,7 @@ export type CouncilMcpProjection =
   | { visibility: "chat"; activity: ProviderActivity };
 
 const COUNCIL_MCP_PREFIX = "mcp__rah_council__";
+const GEMINI_COUNCIL_MCP_PREFIX = "mcp_rah_council_";
 const OPENCODE_COUNCIL_MCP_PREFIX = "rah_council_";
 
 const COUNCIL_MCP_TOOL_NAMES = new Set<CouncilMcpToolName>([
@@ -68,6 +69,10 @@ export function normalizeCouncilMcpToolName(name: string): CouncilMcpToolName | 
     return name;
   }
   if (!name.startsWith(COUNCIL_MCP_PREFIX)) {
+    if (name.startsWith(GEMINI_COUNCIL_MCP_PREFIX)) {
+      const unprefixed = name.slice(GEMINI_COUNCIL_MCP_PREFIX.length);
+      return isCouncilMcpToolName(unprefixed) ? unprefixed : null;
+    }
     if (!name.startsWith(OPENCODE_COUNCIL_MCP_PREFIX)) {
       return null;
     }

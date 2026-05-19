@@ -7,6 +7,7 @@ import type {
   SessionRuntimeDescriptor,
 } from "@rah/runtime-protocol";
 import {
+  conversationStateFromRuntimeState,
   defaultLiveBackendForProvider,
   isNativeLocalServerProvider,
   isTuiMuxFallbackProvider,
@@ -25,7 +26,7 @@ function runtimeFeatures(overrides: Partial<RuntimeFeatureStatus>): RuntimeFeatu
     prelaunchConfig: unsupported,
     runtimeConfig: unsupported,
     interrupt: unsupported,
-    archiveLifecycle: unsupported,
+    stopLifecycle: unsupported,
     ...overrides,
   };
 }
@@ -41,7 +42,7 @@ function nativeLocalServerFeatures(provider: ProviderKind): RuntimeFeatureStatus
     prelaunchConfig: "available",
     runtimeConfig: supported ? "available" : "unverified",
     interrupt: supported ? "available" : "unverified",
-    archiveLifecycle: provider === "opencode" ? "available" : "unverified",
+    stopLifecycle: provider === "opencode" ? "available" : "unverified",
   });
 }
 
@@ -51,7 +52,7 @@ function tuiMuxFallbackFeatures(): RuntimeFeatureStatus {
     tuiClientContinuity: "available",
     prelaunchConfig: "available",
     interrupt: "available",
-    archiveLifecycle: "available",
+    stopLifecycle: "available",
   });
 }
 
@@ -63,7 +64,7 @@ function providerControlFeatures(): RuntimeFeatureStatus {
     prelaunchConfig: "available",
     runtimeConfig: "available",
     interrupt: "available",
-    archiveLifecycle: "available",
+    stopLifecycle: "available",
   });
 }
 
@@ -99,7 +100,7 @@ export function runtimeDescriptorForLiveBackend(args: {
     };
   }
 
-  if (liveBackend === "zellij_tui" || liveBackend === "native_tui") {
+  if (liveBackend === "tui_mux" || liveBackend === "native_tui") {
     return {
       kind: "tui_mux_fallback",
       protocolStability: "tui_stdio",
@@ -163,8 +164,13 @@ export function withProviderCatalogRuntime<TCatalog extends ProviderModelCatalog
 export function withManagedSessionRuntime<TSession extends ManagedSession>(
   session: TSession,
 ): TSession {
+  const conversationState =
+    session.status && session.phase
+      ? { status: session.status, phase: session.phase }
+      : conversationStateFromRuntimeState(session.runtimeState);
   return {
     ...session,
+    ...conversationState,
     runtime:
       session.runtime ??
       runtimeDescriptorForLiveBackend({

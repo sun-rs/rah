@@ -27,6 +27,11 @@ test("default adapters register native TUI model catalogs for supported provider
       canHotSwitch: false,
     },
     {
+      id: "gemini-native-tui-catalog",
+      providers: ["gemini"],
+      canHotSwitch: false,
+    },
+    {
       id: "opencode-native-tui-catalog",
       providers: ["opencode"],
       canHotSwitch: false,

@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import type { ManagedSession, StoredSessionRef } from "@rah/runtime-protocol";
+import { conversationStateFromRuntimeState } from "@rah/runtime-protocol";
 import type { StoredSessionState } from "./session-store";
 import { canonicalDirectoryKey, isReadOnlyReplaySession } from "./workbench-directory-utils";
 
@@ -22,7 +23,7 @@ interface WorkbenchStateFile {
   pendingSessionTitleOverrides?: Record<string, string>;
   sessions: StoredSessionRef[];
   recentSessions: StoredSessionRef[];
-  zellijLiveSessions?: ManagedSession[];
+  tuiMuxLiveSessions?: ManagedSession[];
 }
 
 export type WorkbenchStateSnapshot = {
@@ -34,7 +35,7 @@ export type WorkbenchStateSnapshot = {
   pendingSessionTitleOverrides: Record<string, string>;
   sessions: StoredSessionRef[];
   recentSessions: StoredSessionRef[];
-  zellijLiveSessions: ManagedSession[];
+  tuiMuxLiveSessions: ManagedSession[];
 };
 
 function normalizeDirectory(value: string | undefined): string | null {
@@ -136,7 +137,7 @@ function workbenchSessionRef(state: StoredSessionState): StoredSessionRef | null
     createdAt: state.session.createdAt,
     updatedAt: state.session.updatedAt,
     lastUsedAt: state.session.updatedAt,
-    source: "previous_live",
+    source: "previous_running",
   };
 }
 
@@ -148,17 +149,16 @@ function isRecentEligibleLiveSession(state: StoredSessionState): boolean {
   return isRememberableLiveSession(state) && state.controlLease.holderClientId !== undefined;
 }
 
-function isRecoverableZellijLiveSession(state: StoredSessionState): boolean {
+function isRecoverableTuiMuxLiveSession(state: StoredSessionState): boolean {
   return (
     isRememberableLiveSession(state) &&
-    state.session.liveBackend === "zellij_tui" &&
-    (state.session.mux?.backend === "zellij" || state.session.mux?.backend === "tmux") &&
-    state.session.runtimeState !== "stopped" &&
-    state.session.runtimeState !== "failed"
+    state.session.liveBackend === "tui_mux" &&
+    state.session.mux?.backend === "tmux" &&
+    state.session.status === "running"
   );
 }
 
-function isPersistedZellijLiveSession(value: unknown): value is ManagedSession {
+function isPersistedTuiMuxLiveSession(value: unknown): value is ManagedSession {
   if (!value || typeof value !== "object") {
     return false;
   }
@@ -167,7 +167,7 @@ function isPersistedZellijLiveSession(value: unknown): value is ManagedSession {
   return (
     typeof session.id === "string" &&
     typeof session.provider === "string" &&
-    session.liveBackend === "zellij_tui" &&
+    session.liveBackend === "tui_mux" &&
     typeof session.cwd === "string" &&
     typeof session.rootDir === "string" &&
     typeof session.ptyId === "string" &&
@@ -176,15 +176,24 @@ function isPersistedZellijLiveSession(value: unknown): value is ManagedSession {
     Boolean(session.capabilities && typeof session.capabilities === "object") &&
     Boolean(
       mux &&
-        (mux.backend === "zellij" || mux.backend === "tmux") &&
+        mux.backend === "tmux" &&
         typeof mux.sessionName === "string" &&
         mux.sessionName.trim().length > 0 &&
         typeof mux.paneId === "string" &&
-        mux.paneId.trim().length > 0 &&
-        (mux.backend !== "zellij" ||
-          (typeof mux.socketDir === "string" && mux.socketDir.trim().length > 0)),
+        mux.paneId.trim().length > 0,
     )
   );
+}
+
+function normalizePersistedManagedSession(session: ManagedSession): ManagedSession {
+  const state =
+    session.status && session.phase
+      ? { status: session.status, phase: session.phase }
+      : conversationStateFromRuntimeState(session.runtimeState);
+  return {
+    ...session,
+    ...state,
+  };
 }
 
 function isInternalBootstrapText(value: string | undefined): boolean {
@@ -201,8 +210,11 @@ function isInternalBootstrapText(value: string | undefined): boolean {
 }
 
 function sanitizeStoredSessionRef(session: StoredSessionRef): StoredSessionRef {
+  const rawSource = (session as { source?: string }).source;
+  const source = rawSource === "previous_live" ? "previous_running" : session.source;
   return {
     ...session,
+    ...(source ? { source } : {}),
     ...(isInternalBootstrapText(session.title) ? { title: session.providerSessionId } : {}),
     ...(isInternalBootstrapText(session.preview) ? { preview: session.providerSessionId } : {}),
   };
@@ -221,7 +233,7 @@ function isInternalDebugSessionKey(key: string): boolean {
 }
 
 function isRecentStoredSessionRef(session: StoredSessionRef): boolean {
-  return session.source === "previous_live";
+  return session.source === "previous_running";
 }
 
 function sessionKey(session: Pick<StoredSessionRef, "provider" | "providerSessionId">): string {
@@ -289,7 +301,7 @@ function mergeRememberedSessions(
     merged.set(sessionKey(session), {
       ...existing,
       ...normalizedSession,
-      source: "previous_live",
+      source: "previous_running",
     });
   }
   return [...merged.values()].sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""));
@@ -314,7 +326,7 @@ export class WorkbenchStateStore {
     pendingSessionTitleOverrides: Record<string, string>;
     sessions: StoredSessionRef[];
     recentSessions: StoredSessionRef[];
-    zellijLiveSessions: ManagedSession[];
+    tuiMuxLiveSessions: ManagedSession[];
   } = {
     workspaces: [],
     hiddenWorkspaces: [],
@@ -323,7 +335,7 @@ export class WorkbenchStateStore {
     pendingSessionTitleOverrides: {},
     sessions: [],
     recentSessions: [],
-    zellijLiveSessions: [],
+    tuiMuxLiveSessions: [],
   };
 
   constructor(rootDir = path.join(resolveRahHome(), "runtime-daemon")) {
@@ -342,7 +354,7 @@ export class WorkbenchStateStore {
         pendingSessionTitleOverrides: {},
         sessions: [],
         recentSessions: [],
-        zellijLiveSessions: [],
+        tuiMuxLiveSessions: [],
       };
       return this.state;
     }
@@ -357,7 +369,7 @@ export class WorkbenchStateStore {
           pendingSessionTitleOverrides: {},
           sessions: [],
           recentSessions: [],
-          zellijLiveSessions: [],
+          tuiMuxLiveSessions: [],
         };
         return this.state;
       }
@@ -385,10 +397,11 @@ export class WorkbenchStateStore {
             .filter(isRecentStoredSessionRef)
         : [];
       const sanitizedSessions = sessions.map(sanitizeStoredSessionRef);
-      const zellijLiveSessions = Array.isArray(raw.zellijLiveSessions)
-        ? raw.zellijLiveSessions
-            .filter(isPersistedZellijLiveSession)
+      const tuiMuxLiveSessions = Array.isArray(raw.tuiMuxLiveSessions)
+        ? raw.tuiMuxLiveSessions
+            .filter(isPersistedTuiMuxLiveSession)
             .filter((session) => !isInternalDebugManagedSession(session))
+            .map(normalizePersistedManagedSession)
         : [];
       const hiddenWorkspaces = Array.isArray(raw.hiddenWorkspaces)
         ? uniqueDirectoriesInOrder(raw.hiddenWorkspaces)
@@ -427,7 +440,7 @@ export class WorkbenchStateStore {
           const directory = normalizeDirectory(session.rootDir || session.cwd);
           return directory ? [directory] : [];
         }),
-        ...zellijLiveSessions.flatMap((session) => {
+        ...tuiMuxLiveSessions.flatMap((session) => {
           const directory = normalizeDirectory(session.rootDir || session.cwd);
           return directory ? [directory] : [];
         }),
@@ -452,7 +465,7 @@ export class WorkbenchStateStore {
           recentSessions.filter((session) => !hiddenSessionKeys.includes(sessionKey(session))),
           sessionTitleOverrides,
         ),
-        zellijLiveSessions,
+        tuiMuxLiveSessions,
       };
       return this.state;
     } catch {
@@ -464,7 +477,7 @@ export class WorkbenchStateStore {
         pendingSessionTitleOverrides: {},
         sessions: [],
         recentSessions: [],
-        zellijLiveSessions: [],
+        tuiMuxLiveSessions: [],
       };
       return this.state;
     }
@@ -480,8 +493,8 @@ export class WorkbenchStateStore {
     const recentSessions = recentEligibleStates
       .map(workbenchSessionRef)
       .filter((value): value is StoredSessionRef => value !== null);
-    const zellijLiveSessions = rememberableStates
-      .filter(isRecoverableZellijLiveSession)
+    const tuiMuxLiveSessions = rememberableStates
+      .filter(isRecoverableTuiMuxLiveSession)
       .map((state) => state.session);
     const liveWorkspaceDirs = rememberableStates.flatMap((state) => {
       const directory = normalizeDirectory(state.session.rootDir || state.session.cwd);
@@ -512,7 +525,7 @@ export class WorkbenchStateStore {
       pendingSessionTitleOverrides: this.state.pendingSessionTitleOverrides,
       sessions: mergeRememberedSessions(this.state.sessions, sessions),
       recentSessions: mergeRecentSessions(this.state.recentSessions, recentSessions),
-      zellijLiveSessions,
+      tuiMuxLiveSessions,
     };
     this.persistState();
   }
@@ -550,7 +563,7 @@ export class WorkbenchStateStore {
       recentSessions: isRecentEligibleLiveSession(state)
         ? mergeRecentSessions(this.state.recentSessions, [session])
         : this.state.recentSessions,
-      zellijLiveSessions: this.state.zellijLiveSessions,
+      tuiMuxLiveSessions: this.state.tuiMuxLiveSessions,
     };
     this.persistState();
   }
@@ -565,7 +578,7 @@ export class WorkbenchStateStore {
       pendingSessionTitleOverrides: { ...this.state.pendingSessionTitleOverrides },
       sessions: [...this.state.sessions],
       recentSessions: [...this.state.recentSessions],
-      zellijLiveSessions: [...this.state.zellijLiveSessions],
+      tuiMuxLiveSessions: [...this.state.tuiMuxLiveSessions],
     };
   }
 
@@ -585,7 +598,7 @@ export class WorkbenchStateStore {
       pendingSessionTitleOverrides: this.state.pendingSessionTitleOverrides,
       sessions: this.state.sessions,
       recentSessions: this.state.recentSessions,
-      zellijLiveSessions: this.state.zellijLiveSessions,
+      tuiMuxLiveSessions: this.state.tuiMuxLiveSessions,
     };
     this.persistState();
   }
@@ -610,7 +623,7 @@ export class WorkbenchStateStore {
       pendingSessionTitleOverrides: this.state.pendingSessionTitleOverrides,
       sessions: this.state.sessions,
       recentSessions: this.state.recentSessions,
-      zellijLiveSessions: this.state.zellijLiveSessions,
+      tuiMuxLiveSessions: this.state.tuiMuxLiveSessions,
     };
     this.persistState();
   }
@@ -625,7 +638,7 @@ export class WorkbenchStateStore {
       sessionTitleOverrides: nextOverrides,
       sessions: this.state.sessions.filter((entry) => sessionKey(entry) !== key),
       recentSessions: this.state.recentSessions.filter((entry) => sessionKey(entry) !== key),
-      zellijLiveSessions: this.state.zellijLiveSessions,
+      tuiMuxLiveSessions: this.state.tuiMuxLiveSessions,
     };
     this.persistState();
   }
@@ -668,7 +681,7 @@ export class WorkbenchStateStore {
       sessionTitleOverrides: nextOverrides,
       sessions: this.state.sessions.filter((entry) => !hiddenSessionKeys.has(sessionKey(entry))),
       recentSessions: this.state.recentSessions.filter((entry) => !hiddenSessionKeys.has(sessionKey(entry))),
-      zellijLiveSessions: this.state.zellijLiveSessions,
+      tuiMuxLiveSessions: this.state.tuiMuxLiveSessions,
     };
     this.persistState();
   }
@@ -694,7 +707,7 @@ export class WorkbenchStateStore {
       recentSessions: this.state.recentSessions.map((entry) =>
         sessionKey(entry) === key ? { ...entry, title: nextTitle } : entry,
       ),
-      zellijLiveSessions: this.state.zellijLiveSessions,
+      tuiMuxLiveSessions: this.state.tuiMuxLiveSessions,
     };
     this.persistState();
   }
@@ -710,7 +723,7 @@ export class WorkbenchStateStore {
         ...this.state.pendingSessionTitleOverrides,
         [sessionId]: nextTitle,
       },
-      zellijLiveSessions: this.state.zellijLiveSessions,
+      tuiMuxLiveSessions: this.state.tuiMuxLiveSessions,
     };
     this.persistState();
   }
@@ -739,7 +752,7 @@ export class WorkbenchStateStore {
       recentSessions: this.state.recentSessions.map((entry) =>
         sessionKey(entry) === key ? { ...entry, title } : entry,
       ),
-      zellijLiveSessions: this.state.zellijLiveSessions,
+      tuiMuxLiveSessions: this.state.tuiMuxLiveSessions,
     };
     this.persistState();
     return title;
@@ -757,7 +770,7 @@ export class WorkbenchStateStore {
       pendingSessionTitleOverrides: this.state.pendingSessionTitleOverrides,
       sessions: this.state.sessions,
       recentSessions: this.state.recentSessions,
-      zellijLiveSessions: this.state.zellijLiveSessions,
+      tuiMuxLiveSessions: this.state.tuiMuxLiveSessions,
     };
     this.enqueue(async () => {
       await mkdir(this.rootDir, { recursive: true });

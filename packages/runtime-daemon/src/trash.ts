@@ -1,4 +1,4 @@
-import { mkdir, rename, stat } from "node:fs/promises";
+import { cp, mkdir, rename, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -36,6 +36,39 @@ async function uniqueTrashTarget(targetPath: string): Promise<string> {
 export async function movePathToTrash(sourcePath: string): Promise<void> {
   const trashDir = resolveTrashDir();
   await mkdir(trashDir, { recursive: true });
+  let sourceStat;
+  try {
+    sourceStat = await stat(sourcePath);
+  } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      (error as { code?: unknown }).code === "ENOENT"
+    ) {
+      return;
+    }
+    throw error;
+  }
   const target = await uniqueTrashTarget(path.join(trashDir, path.basename(sourcePath)));
-  await rename(sourcePath, target);
+  try {
+    await rename(sourcePath, target);
+  } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      (error as { code?: unknown }).code === "EXDEV"
+    ) {
+      // Cross-device moves cannot be renamed; copy into Trash first, then clear the original.
+      await cp(sourcePath, target, {
+        errorOnExist: true,
+        preserveTimestamps: true,
+        recursive: sourceStat.isDirectory(),
+      });
+      await rm(sourcePath, { force: true, recursive: sourceStat.isDirectory() });
+      return;
+    }
+    throw error;
+  }
 }

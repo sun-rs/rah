@@ -478,49 +478,56 @@ export function resolveOpenCodeRuntimeCapabilityState(args: {
 }
 
 export class OpenCodeModelCatalogCache {
-  private cached: ProviderModelCatalog | null = null;
-  private inFlight: Promise<ProviderModelCatalog> | null = null;
+  private readonly cachedByKey = new Map<string, ProviderModelCatalog>();
+  private readonly inFlightByKey = new Map<string, Promise<ProviderModelCatalog>>();
 
   async listModels(options?: {
     cwd?: string;
     forceRefresh?: boolean;
   }): Promise<ProviderModelCatalog> {
+    const key = options?.cwd ?? "";
     if (options?.forceRefresh) {
-      return await this.refresh(options);
+      return await this.refresh(key, options);
     }
-    if (this.cached) {
-      const ageMs = Date.now() - Date.parse(this.cached.fetchedAt);
+    const cached = this.cachedByKey.get(key) ?? null;
+    if (cached) {
+      const ageMs = Date.now() - Date.parse(cached.fetchedAt);
       if (Number.isFinite(ageMs) && ageMs < OPENCODE_MODEL_CACHE_TTL_MS) {
-        return this.cached;
+        return cached;
       }
-      void this.refresh(options).catch(() => undefined);
-      return this.cached;
+      void this.refresh(key, options).catch(() => undefined);
+      return cached;
     }
-    return await this.refresh(options);
+    return await this.refresh(key, options);
   }
 
-  getCached(): ProviderModelCatalog | null {
-    return this.cached;
+  getCached(options?: { cwd?: string }): ProviderModelCatalog | null {
+    return this.cachedByKey.get(options?.cwd ?? "") ?? null;
   }
 
-  remember(catalog: ProviderModelCatalog): ProviderModelCatalog {
-    this.cached = catalog;
+  remember(key: string, catalog: ProviderModelCatalog): ProviderModelCatalog {
+    this.cachedByKey.set(key, catalog);
     return catalog;
   }
 
-  private async refresh(options?: { cwd?: string }): Promise<ProviderModelCatalog> {
-    if (this.inFlight) {
-      return await this.inFlight;
+  private async refresh(key: string, options?: { cwd?: string }): Promise<ProviderModelCatalog> {
+    const inFlight = this.inFlightByKey.get(key);
+    if (inFlight) {
+      return await inFlight;
     }
-    this.inFlight = (async () => {
+    let request!: Promise<ProviderModelCatalog>;
+    request = (async () => {
       try {
-        return this.remember(await fetchOpenCodeModelCatalog(options));
+        return this.remember(key, await fetchOpenCodeModelCatalog(options));
       } catch {
-        return this.remember(buildOpenCodeFallbackModelCatalog());
+        return this.remember(key, buildOpenCodeFallbackModelCatalog());
       } finally {
-        this.inFlight = null;
+        if (this.inFlightByKey.get(key) === request) {
+          this.inFlightByKey.delete(key);
+        }
       }
     })();
-    return await this.inFlight;
+    this.inFlightByKey.set(key, request);
+    return await request;
   }
 }

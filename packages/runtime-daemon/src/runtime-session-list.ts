@@ -127,7 +127,7 @@ function mergeStoredSessionRef(left: StoredSessionRef, right: StoredSessionRef):
   };
 }
 
-function liveSessionRef(state: StoredSessionState): StoredSessionRef | null {
+function runningSessionRef(state: StoredSessionState): StoredSessionRef | null {
   const providerSessionId = state.session.providerSessionId;
   if (!providerSessionId) {
     return null;
@@ -142,14 +142,14 @@ function liveSessionRef(state: StoredSessionState): StoredSessionRef | null {
     createdAt: state.session.createdAt,
     updatedAt: state.session.updatedAt,
     lastUsedAt: state.session.updatedAt,
-    source: "previous_live",
+    source: "previous_running",
   };
 }
 
 function buildGlobalRecentSessions(args: {
   storedSessions: Iterable<StoredSessionRef>;
   rememberedRecentSessions: readonly StoredSessionRef[];
-  visibleLiveStates: readonly StoredSessionState[];
+  visibleRunningStates: readonly StoredSessionState[];
   hiddenSessionKeys: ReadonlySet<string>;
   availableProviderSessionKeys: ReadonlySet<string>;
   applyTitleOverride: (session: StoredSessionRef) => StoredSessionRef;
@@ -160,7 +160,7 @@ function buildGlobalRecentSessions(args: {
     if (args.hiddenSessionKeys.has(key)) {
       return;
     }
-    if (session.source === "previous_live" && !args.availableProviderSessionKeys.has(key)) {
+    if (session.source === "previous_running" && !args.availableProviderSessionKeys.has(key)) {
       return;
     }
     const existing = recentByKey.get(key);
@@ -173,8 +173,8 @@ function buildGlobalRecentSessions(args: {
   for (const session of args.rememberedRecentSessions) {
     addCandidate(session);
   }
-  for (const state of args.visibleLiveStates) {
-    const session = liveSessionRef(state);
+  for (const state of args.visibleRunningStates) {
+    const session = runningSessionRef(state);
     if (session) {
       addCandidate(session);
     }
@@ -207,7 +207,7 @@ export function buildSessionsResponse(args: {
   const userFacingLiveStates = args.liveStates.filter(
     (state) => !isInternalNativeTuiProbeSession(state.session),
   );
-  const visibleLiveStates = userFacingLiveStates.filter(
+  const visibleRunningStates = userFacingLiveStates.filter(
     (state) => !args.isClosingSession(state.session.id),
   );
   const rememberedSessions = args.remembered.rememberedSessions.filter(
@@ -238,7 +238,7 @@ export function buildSessionsResponse(args: {
     availableProviderSessionKeys.add(key);
     discoveredByKey.set(key, stored);
   }
-  for (const state of visibleLiveStates) {
+  for (const state of visibleRunningStates) {
     if (!state.session.providerSessionId) {
       continue;
     }
@@ -256,7 +256,7 @@ export function buildSessionsResponse(args: {
       continue;
     }
     if (
-      remembered.source === "previous_live" &&
+      remembered.source === "previous_running" &&
       !availableProviderSessionKeys.has(key)
     ) {
       continue;
@@ -270,7 +270,7 @@ export function buildSessionsResponse(args: {
     storedSessions.set(sessionProviderKey(stored), stored);
   }
   return {
-    sessions: visibleLiveStates.map((state) => {
+    sessions: visibleRunningStates.map((state) => {
       const providerSessionId = state.session.providerSessionId;
       if (!providerSessionId) {
         return toSessionSummary(state);
@@ -327,7 +327,7 @@ export function buildSessionsResponse(args: {
     recentSessions: buildGlobalRecentSessions({
       storedSessions: storedSessions.values(),
       rememberedRecentSessions,
-      visibleLiveStates,
+      visibleRunningStates,
       hiddenSessionKeys,
       availableProviderSessionKeys,
       applyTitleOverride,

@@ -570,6 +570,7 @@ export function resolveClaudeRuntimeCapabilityState(args: {
 
 export class ClaudeModelCatalogCache {
   private readonly cachedByKey = new Map<string, ProviderModelCatalog>();
+  private readonly inFlightByKey = new Map<string, Promise<ProviderModelCatalog>>();
 
   getCached(options?: { cwd?: string }): ProviderModelCatalog | null {
     return this.cachedByKey.get(options?.cwd ?? "") ?? null;
@@ -584,8 +585,22 @@ export class ClaudeModelCatalogCache {
         return cached;
       }
     }
-    const nextCatalog = await buildClaudeModelCatalog(options);
-    this.cachedByKey.set(key, nextCatalog);
-    return nextCatalog;
+    const inFlight = this.inFlightByKey.get(key);
+    if (inFlight) {
+      return await inFlight;
+    }
+    let request!: Promise<ProviderModelCatalog>;
+    request = buildClaudeModelCatalog(options)
+      .then((nextCatalog) => {
+        this.cachedByKey.set(key, nextCatalog);
+        return nextCatalog;
+      })
+      .finally(() => {
+        if (this.inFlightByKey.get(key) === request) {
+          this.inFlightByKey.delete(key);
+        }
+      });
+    this.inFlightByKey.set(key, request);
+    return await request;
   }
 }

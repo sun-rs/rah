@@ -38,6 +38,7 @@ import {
   prepareProviderSessionResume,
 } from "../provider-resume";
 import { toSessionSummary } from "../session-store";
+import { mergeManualProviderModels } from "../manual-provider-models";
 
 export class OpenCodeAdapter implements ProviderAdapter {
   readonly id = "opencode";
@@ -55,8 +56,10 @@ export class OpenCodeAdapter implements ProviderAdapter {
   async startSession(request: StartSessionRequest): Promise<StartSessionResponse> {
     const modelCatalog =
       request.model || request.reasoningId !== undefined || request.optionValues !== undefined
-        ? await this.modelCatalog.listModels({ cwd: request.cwd })
-        : this.modelCatalog.getCached() ?? buildOpenCodeFallbackModelCatalog();
+        ? mergeManualProviderModels(await this.modelCatalog.listModels({ cwd: request.cwd }))
+        : mergeManualProviderModels(
+            this.modelCatalog.getCached({ cwd: request.cwd }) ?? buildOpenCodeFallbackModelCatalog(),
+          );
     void this.modelCatalog.listModels({ cwd: request.cwd }).catch(() => undefined);
     const response = await startOpenCodeLiveSession({
       services: this.services,
@@ -105,16 +108,20 @@ export class OpenCodeAdapter implements ProviderAdapter {
     }
     try {
       const resumeCwd = request.cwd ?? record?.ref.cwd ?? record?.ref.rootDir ?? process.cwd();
+      const rawCachedModelCatalog = this.modelCatalog.getCached({ cwd: resumeCwd });
       const cachedModelCatalog =
         request.model || request.reasoningId !== undefined || request.optionValues !== undefined
-          ? await this.modelCatalog.listModels({ cwd: resumeCwd })
-          : this.modelCatalog.getCached();
+          ? mergeManualProviderModels(await this.modelCatalog.listModels({ cwd: resumeCwd }))
+          : rawCachedModelCatalog
+            ? mergeManualProviderModels(rawCachedModelCatalog)
+            : null;
       void this.modelCatalog.listModels({ cwd: resumeCwd }).catch(() => undefined);
       const response = await resumeOpenCodeLiveSession({
         services: this.services,
         providerSessionId: request.providerSessionId,
         cwd: resumeCwd,
         ...(request.attach ? { attach: request.attach } : {}),
+        ...(request.origin !== undefined ? { origin: request.origin } : {}),
         ...(request.modeId ? { modeId: request.modeId } : {}),
         ...(request.model ? { model: request.model } : {}),
         ...(request.optionValues !== undefined ? { optionValues: request.optionValues } : {}),
@@ -131,7 +138,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
   }
 
   async listModels(options?: { cwd?: string; forceRefresh?: boolean }): Promise<ProviderModelCatalog> {
-    return await this.modelCatalog.listModels(options);
+    return mergeManualProviderModels(await this.modelCatalog.listModels(options));
   }
 
   async setSessionModel(
@@ -140,9 +147,9 @@ export class OpenCodeAdapter implements ProviderAdapter {
   ): Promise<SessionSummary> {
     const live = this.liveSessions.get(sessionId);
     if (!live) {
-      throw new Error("OpenCode model switching is only available for live sessions.");
+      throw new Error("OpenCode model switching is only available for running sessions.");
     }
-    const catalog = await this.modelCatalog.listModels({ cwd: live.cwd });
+    const catalog = mergeManualProviderModels(await this.modelCatalog.listModels({ cwd: live.cwd }));
     const model = catalog.models.find((entry) => entry.id === request.modelId);
     if (!model) {
       throw new Error(`Unsupported OpenCode model '${request.modelId}'.`);
@@ -186,7 +193,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
   async setSessionMode(sessionId: string, modeId: string): Promise<SessionSummary> {
     const live = this.liveSessions.get(sessionId);
     if (!live) {
-      throw new Error("OpenCode mode switching is only available for live sessions.");
+      throw new Error("OpenCode mode switching is only available for running sessions.");
     }
     return await setOpenCodeLiveSessionMode({
       services: this.services,
@@ -265,7 +272,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
   }
 
   onPtyResize(): void {
-    // OpenCode live sessions are structured API sessions, not PTY-backed sessions.
+    // OpenCode running sessions are structured API sessions, not PTY-backed sessions.
   }
 
   async getProviderDiagnostic(options?: { forceRefresh?: boolean }) {
@@ -280,7 +287,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
     );
     results.forEach((result, index) => {
       if (result.status === "rejected") {
-        console.error("[rah] failed to close OpenCode live session during shutdown", {
+        console.error("[rah] failed to close OpenCode running session during shutdown", {
           sessionId: sessions[index]?.sessionId,
           error: result.reason,
         });

@@ -122,7 +122,7 @@ export class DebugEngine {
         renameSession: false,
         actions: {
           info: true,
-          archive: true,
+          stop: true,
           delete: false,
           rename: "none",
         },
@@ -260,7 +260,7 @@ export class DebugEngine {
         renameSession: false,
         actions: {
           info: true,
-          archive: true,
+          stop: true,
           delete: false,
           rename: "none",
         },
@@ -773,7 +773,7 @@ export class DebugEngine {
         renameSession: false,
         actions: {
           info: true,
-          archive: true,
+          stop: true,
           delete: false,
           rename: "none",
         },

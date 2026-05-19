@@ -1,11 +1,13 @@
 import { ClaudeStoredHistoryAdapter } from "./claude-stored-history-adapter";
 import { CodexStoredHistoryAdapter } from "./codex-stored-history-adapter";
 import { DebugAdapter } from "./debug-adapter";
+import { GeminiStoredHistoryAdapter } from "./gemini-stored-history-adapter";
 import { CodexAdapter } from "./provider-control/codex-structured-adapter";
 import { OpenCodeAdapter } from "./provider-control/opencode-structured-adapter";
 import {
   ClaudeNativeTuiCatalogAdapter,
   CodexNativeTuiCatalogAdapter,
+  GeminiNativeTuiCatalogAdapter,
   OpenCodeNativeTuiCatalogAdapter,
 } from "./native-tui-catalog-adapters";
 import { OpenCodeStoredHistoryAdapter } from "./opencode-stored-history-adapter";
@@ -27,9 +29,11 @@ export function createDefaultProviderAdapters(
     }),
     new CodexStoredHistoryAdapter(services),
     new ClaudeStoredHistoryAdapter(services),
+    new GeminiStoredHistoryAdapter(services),
     new OpenCodeStoredHistoryAdapter(services),
     new CodexNativeTuiCatalogAdapter(),
     new ClaudeNativeTuiCatalogAdapter(),
+    new GeminiNativeTuiCatalogAdapter(),
     new OpenCodeNativeTuiCatalogAdapter(),
     new CodexAdapter(services),
     new OpenCodeAdapter(services),

@@ -13,8 +13,9 @@ import type {
   ManagedSession,
   StartSessionRequest,
   StartSessionResponse,
-  ZellijMuxSessionDiagnostic,
+  TuiMuxSessionDiagnostic,
 } from "@rah/runtime-protocol";
+import { conversationStateFromRuntimeState } from "@rah/runtime-protocol";
 import type { HistorySnapshotStore } from "./history-snapshots";
 import { PtyHub } from "./pty-hub";
 import { SessionStore, toSessionSummary, type StoredSessionState } from "./session-store";
@@ -42,7 +43,7 @@ import { nativeLocalServerAttachSpec } from "./native-local-server-attach";
 import {
   buildNativeTuiSessionCapabilities,
   buildStoppedNativeTuiSessionCapabilities,
-  buildZellijTuiSessionCapabilities,
+  buildTuiMuxSessionCapabilities,
 } from "./runtime-terminal-capabilities";
 import { PtySessionRuntime, type PtySessionRuntimeEntry } from "./pty-session-runtime";
 import {
@@ -69,11 +70,6 @@ import {
 } from "./runtime-session-events";
 import { NativeTuiMirrorRuntime } from "./native-tui-mirror-runtime";
 import {
-  createZellijSessionNameForRahSession,
-  ZellijCommandError,
-  ZellijMuxBackend,
-} from "./zellij-mux-backend";
-import {
   createTmuxSessionNameForRahSession,
   TmuxCommandError,
   TmuxMuxBackend,
@@ -92,15 +88,12 @@ type RuntimeTerminalCoordinatorDeps = {
   onSessionOwnerRemoved: (sessionId: string) => void;
 };
 
-type ZellijTuiSessionState = {
+type TuiMuxSessionState = {
   sessionId: string;
-  zellijSessionName: string;
+  muxSessionName: string;
   paneId: string;
-  muxBackendKind: "zellij" | "tmux";
+  muxBackendKind: "tmux";
   muxRuntime: MuxRuntime;
-  socketDir?: string;
-  sizingClientPtyId?: string;
-  lastSizingClientOutputAtMs?: number;
   activeSurface?: NativeTuiSurfaceState;
   subscription?: MuxPaneSubscription;
   subscriptionRestartAttempts?: number;
@@ -114,16 +107,17 @@ type ZellijTuiSessionState = {
   actionQueue?: Promise<void>;
 };
 
-const DEFAULT_ZELLIJ_TUI_COLS = 140;
-const DEFAULT_ZELLIJ_TUI_ROWS = 44;
-const ZELLIJ_TUI_EXIT_MISSING_POLL_THRESHOLD = 3;
+const TUI_MUX_EXIT_MISSING_POLL_THRESHOLD = 3;
 const NATIVE_TUI_RECENT_INPUT_PROMPT_CLEAN_GRACE_MS = 800;
 const NATIVE_TUI_RECENT_INTERRUPT_NOOP_MS = 1_200;
 
-type TuiMuxBackendKind = "zellij" | "tmux";
+type TuiMuxBackendKind = "tmux";
 
 function normalizeTuiMuxBackendKind(value: string | undefined): TuiMuxBackendKind {
-  return value === "tmux" ? "tmux" : "zellij";
+  if (value && value !== "tmux") {
+    console.warn("[rah] RAH_TUI_MUX is deprecated; tmux is the only supported TUI mux backend.");
+  }
+  return "tmux";
 }
 
 function hasRecentInjectedInput(native: NativeTuiSessionState): boolean {
@@ -151,7 +145,6 @@ function remainingRecentInjectedInputMs(native: NativeTuiSessionState): number {
     NATIVE_TUI_RECENT_INPUT_PROMPT_CLEAN_GRACE_MS - (Date.now() - native.lastInjectedInputAtMs),
   );
 }
-const ZELLIJ_TUI_SURFACE_SETTLE_MS = 350;
 const ANSI_ESCAPE_PATTERN = /\u001b\[[0-?]*[ -/]*[@-~]/g;
 
 function initialNativeTuiPromptState(provider: ProviderKind): NativeTuiPromptState {
@@ -160,16 +153,16 @@ function initialNativeTuiPromptState(provider: ProviderKind): NativeTuiPromptSta
   return provider === "opencode" ? "agent_busy" : "prompt_clean";
 }
 
-function initialZellijTuiPromptState(provider: ProviderKind): NativeTuiPromptState {
-  // zellij sessions need a sizing/attach surface before the provider prompt is
+function initialTuiMuxPromptState(provider: ProviderKind): NativeTuiPromptState {
+  // TUI mux sessions need a sizing/attach surface before the provider prompt is
   // reliable. Queue initial Web chat input until the viewport observer sees a
   // real prompt marker.
   // Claude Code can accept input while a turn is running and manages its own
   // queue inside the native TUI. RAH must not use prompt state as an
-  // authoritative send gate for Claude zellij sessions.
+  // authoritative send gate for Claude mux sessions.
   return provider === "claude"
     ? "prompt_clean"
-    : provider === "codex" || provider === "opencode"
+    : provider === "codex" || provider === "opencode" || provider === "gemini"
     ? "agent_busy"
     : "prompt_clean";
 }
@@ -180,6 +173,8 @@ function providerPrimaryModelOptionId(provider: ProviderKind): string | null {
       return "model_reasoning_effort";
     case "claude":
       return "effort";
+    case "gemini":
+      return null;
     case "opencode":
       return "model_reasoning_variant";
     case "custom":
@@ -244,7 +239,7 @@ const NATIVE_TUI_INTERRUPT_CONFIRM_TIMEOUT_MS = 5_000;
 const OPENCODE_SECOND_INTERRUPT_DELAY_MS = 120;
 const NATIVE_TUI_CLEAR_PROMPT_DATA = "\u0015\u000b";
 const NATIVE_TUI_SUBMIT_DELAY_MS = 250;
-const ZELLIJ_TUI_CLEAR_PROMPT_SETTLE_MS = 250;
+const TUI_MUX_CLEAR_PROMPT_SETTLE_MS = 250;
 const NATIVE_TUI_OUTPUT_OBSERVATION_TAIL_LIMIT = 12_000;
 
 export function nativeTuiInterruptDataForProvider(provider: ProviderKind): string {
@@ -267,6 +262,10 @@ function nativeTuiSubmitCountForProvider(provider: ProviderKind): number {
 
 function isClaudeNativeTuiPassthrough(native: NativeTuiSessionState): boolean {
   return native.provider === "claude";
+}
+
+function usesBestEffortEscNativeTuiInterrupt(native: NativeTuiSessionState): boolean {
+  return native.provider === "claude" || native.provider === "gemini";
 }
 
 function syntheticNativeTuiInterruptTurnId(sessionId: string): string {
@@ -326,7 +325,7 @@ function stripTerminalControl(value: string): string {
   return value.replace(ANSI_ESCAPE_PATTERN, "");
 }
 
-function zellijSnapshotCursorSuffix(lines: readonly string[]): string {
+function muxSnapshotCursorSuffix(lines: readonly string[]): string {
   for (let index = lines.length - 1; index >= 0; index -= 1) {
     const visible = stripTerminalControl(lines[index] ?? "").replace(/\r/g, "");
     const trimmed = visible.trimEnd();
@@ -339,21 +338,13 @@ function zellijSnapshotCursorSuffix(lines: readonly string[]): string {
   return "\u001b[?25l";
 }
 
-function renderZellijViewport(lines: readonly string[]): string {
-  return `\u001b[2J\u001b[H${lines.join("\r\n")}${zellijSnapshotCursorSuffix(lines)}`;
+function renderMuxViewport(lines: readonly string[]): string {
+  return `\u001b[2J\u001b[H${lines.join("\r\n")}${muxSnapshotCursorSuffix(lines)}`;
 }
 
-function renderZellijDump(dumped: string): string {
+function renderMuxDump(dumped: string): string {
   const lines = dumped.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
-  return `\u001b[2J\u001b[H${lines.join("\r\n")}${zellijSnapshotCursorSuffix(lines)}`;
-}
-
-function isZellijSessionMissingError(error: unknown): boolean {
-  if (!(error instanceof ZellijCommandError)) {
-    return false;
-  }
-  const detail = `${error.stdout}\n${error.stderr}\n${error.message}`;
-  return /No session named|Session:?\s*['"][^'"]+['"] not found|There is no active session|session may have exited/i.test(detail);
+  return `\u001b[2J\u001b[H${lines.join("\r\n")}${muxSnapshotCursorSuffix(lines)}`;
 }
 
 function isTmuxSessionMissingError(error: unknown): boolean {
@@ -365,10 +356,10 @@ function isTmuxSessionMissingError(error: unknown): boolean {
 }
 
 function isMuxSessionMissingError(error: unknown): boolean {
-  return isZellijSessionMissingError(error) || isTmuxSessionMissingError(error);
+  return isTmuxSessionMissingError(error);
 }
 
-function isExitedZellijPane(pane: { exited: boolean; held: boolean; exitStatus: number | null }): boolean {
+function isExitedTuiMuxPane(pane: { exited: boolean; held: boolean; exitStatus: number | null }): boolean {
   return pane.exited || pane.held || pane.exitStatus !== null;
 }
 
@@ -384,7 +375,7 @@ function normalizeIndependentTerminalOwner(
   return owner;
 }
 
-function appendCodexZellijArgs(launch: NativeTuiLaunchSpec): NativeTuiLaunchSpec {
+function appendCodexTuiMuxArgs(launch: NativeTuiLaunchSpec): NativeTuiLaunchSpec {
   if (launch.provider !== "codex" || launch.args.includes("--no-alt-screen")) {
     return launch;
   }
@@ -401,10 +392,9 @@ function appendCodexZellijArgs(launch: NativeTuiLaunchSpec): NativeTuiLaunchSpec
 
 export class RuntimeTerminalCoordinator {
   private readonly ptySessions = new PtySessionRuntime();
-  private readonly zellijMux = new ZellijMuxBackend();
   private readonly tmuxMux = new TmuxMuxBackend();
   private readonly preferredTuiMuxBackendKind = normalizeTuiMuxBackendKind(process.env.RAH_TUI_MUX);
-  private readonly zellijTuiSessions = new Map<string, ZellijTuiSessionState>();
+  private readonly tuiMuxSessions = new Map<string, TuiMuxSessionState>();
   private readonly nativeTuiSessions = new Map<string, NativeTuiSessionState>();
   private readonly nativeTuiSessionIds = new Set<string>();
   private readonly independentTerminals = new Map<string, IndependentTerminalStartResponse["terminal"]>();
@@ -431,54 +421,48 @@ export class RuntimeTerminalCoordinator {
   }
 
   private muxRuntimeForKind(kind: TuiMuxBackendKind): MuxRuntime {
-    return kind === "tmux" ? this.tmuxMux : this.zellijMux;
+    return this.tmuxMux;
   }
 
   private currentMuxRuntimeForSession(session: ManagedSession): MuxRuntime | null {
     const kind = session.mux?.backend;
-    if (kind !== "zellij" && kind !== "tmux") {
+    if (kind !== "tmux") {
       return null;
     }
     return this.muxRuntimeForKind(kind);
   }
 
   private muxSessionNameForRahSession(sessionId: string, kind: TuiMuxBackendKind): string {
-    return kind === "tmux"
-      ? createTmuxSessionNameForRahSession(sessionId)
-      : createZellijSessionNameForRahSession(sessionId);
+    return createTmuxSessionNameForRahSession(sessionId);
   }
 
   private muxSocketDirForKind(kind: TuiMuxBackendKind): string | undefined {
-    return kind === "zellij" ? this.zellijMux.getSocketDir() : undefined;
+    return undefined;
   }
 
-  async restoreZellijTuiSession(session: ManagedSession): Promise<boolean> {
+  async restoreTuiMuxSession(session: ManagedSession): Promise<boolean> {
     const mux = session.mux;
     const muxRuntime = this.currentMuxRuntimeForSession(session);
-    if (session.liveBackend !== "zellij_tui" || !mux || !muxRuntime) {
+    if (
+      session.liveBackend !== "tui_mux" ||
+      !mux ||
+      !muxRuntime
+    ) {
       return false;
     }
     if (this.deps.sessionStore.getSession(session.id)) {
       return true;
     }
-    if (mux.backend === "zellij" && mux.socketDir !== this.zellijMux.getSocketDir()) {
-      console.warn("[rah] skipped zellij session recovery for different socket dir", {
-        sessionId: session.id,
-        expectedSocketDir: this.zellijMux.getSocketDir(),
-        socketDir: mux.socketDir,
-      });
-      return false;
-    }
     const panes = await muxRuntime.listPanes(mux.sessionName).catch((error) => {
-      console.warn("[rah] failed to list zellij panes during recovery", {
+      console.warn("[rah] failed to list TUI mux panes during recovery", {
         sessionId: session.id,
-        zellijSessionName: mux.sessionName,
+        muxSessionName: mux.sessionName,
         error,
       });
       return [];
     });
     const pane = panes.find((candidate) => candidate.paneId === mux.paneId);
-    if (!pane || isExitedZellijPane(pane)) {
+    if (!pane || isExitedTuiMuxPane(pane)) {
       return false;
     }
 
@@ -486,7 +470,8 @@ export class RuntimeTerminalCoordinator {
       session.nativeTui?.promptState === "agent_busy" ? "running" : "idle";
     const restoredSession: ManagedSession = {
       ...session,
-      liveBackend: "zellij_tui",
+      liveBackend: "tui_mux",
+      ...conversationStateFromRuntimeState(restoredRuntimeState),
       runtimeState: restoredRuntimeState,
       ptyId: session.ptyId || session.id,
       nativeTui: {
@@ -498,7 +483,7 @@ export class RuntimeTerminalCoordinator {
       mux,
       capabilities: {
         ...session.capabilities,
-        ...buildZellijTuiSessionCapabilities(session.provider),
+        ...buildTuiMuxSessionCapabilities(session.provider),
       },
     };
     this.deps.sessionStore.restoreSession({
@@ -507,7 +492,7 @@ export class RuntimeTerminalCoordinator {
       controlLease: { sessionId: session.id },
     });
     this.deps.ptyHub.ensureSession(session.id);
-    this.registerZellijTuiRuntime({
+    this.registerTuiMuxRuntime({
       sessionId: session.id,
       provider: session.provider,
       cwd: session.cwd,
@@ -516,17 +501,16 @@ export class RuntimeTerminalCoordinator {
         : {}),
       promptState: restoredSession.nativeTui?.promptState ?? "prompt_clean",
       startupTimestampMs: Date.now(),
-      zellijSessionName: mux.sessionName,
+      muxSessionName: mux.sessionName,
       paneId: mux.paneId,
       muxBackendKind: mux.backend,
       muxRuntime,
-      ...(mux.socketDir !== undefined ? { socketDir: mux.socketDir } : {}),
     });
     const dumped = await muxRuntime
       .dumpScreen(mux.sessionName, mux.paneId, { ansi: true })
       .catch(() => "");
     if (dumped) {
-      const text = renderZellijDump(dumped);
+      const text = renderMuxDump(dumped);
       this.deps.ptyHub.appendOutput(session.id, text, { replaceReplay: true });
       this.observeNativeTuiOutput(session.id, text);
     }
@@ -539,31 +523,30 @@ export class RuntimeTerminalCoordinator {
     return this.nativeTuiDiagnostics.list(options);
   }
 
-  async listZellijMuxDiagnostics(): Promise<ZellijMuxSessionDiagnostic[]> {
-    const bySessionName = new Map<string, ZellijMuxSessionDiagnostic>();
+  async listTuiMuxDiagnostics(): Promise<TuiMuxSessionDiagnostic[]> {
+    const bySessionName = new Map<string, TuiMuxSessionDiagnostic>();
     const remember = (
       sessionName: string,
-      backend: TuiMuxBackendKind = "zellij",
-    ): ZellijMuxSessionDiagnostic => {
+      backend: TuiMuxBackendKind = "tmux",
+    ): TuiMuxSessionDiagnostic => {
       const existing = bySessionName.get(sessionName);
       if (existing) {
         return existing;
       }
-      const created: ZellijMuxSessionDiagnostic = {
+      const created: TuiMuxSessionDiagnostic = {
         sessionName,
         backend,
-        ...(backend === "zellij" ? { socketDir: this.zellijMux.getSocketDir() } : {}),
         panes: [],
       };
       bySessionName.set(sessionName, created);
       return created;
     };
 
-    for (const zellij of this.zellijTuiSessions.values()) {
-      const managed = this.deps.sessionStore.getSession(zellij.sessionId)?.session;
-      const entry = remember(zellij.zellijSessionName, zellij.muxBackendKind);
-      entry.managedSessionId = zellij.sessionId;
-      entry.paneId = zellij.paneId;
+    for (const tmux of this.tuiMuxSessions.values()) {
+      const managed = this.deps.sessionStore.getSession(tmux.sessionId)?.session;
+      const entry = remember(tmux.muxSessionName, tmux.muxBackendKind);
+      entry.managedSessionId = tmux.sessionId;
+      entry.paneId = tmux.paneId;
       if (managed) {
         entry.provider = managed.provider;
         entry.runtimeState = managed.runtimeState;
@@ -571,11 +554,6 @@ export class RuntimeTerminalCoordinator {
     }
 
     try {
-      for (const session of await this.zellijMux.listSessions()) {
-        if (session.sessionName.startsWith("rah-")) {
-          remember(session.sessionName, "zellij");
-        }
-      }
       for (const session of await this.tmuxMux.listSessions()) {
         if (session.sessionName.startsWith("rah-")) {
           remember(session.sessionName, "tmux");
@@ -591,7 +569,7 @@ export class RuntimeTerminalCoordinator {
     await Promise.all(
       [...bySessionName.values()].map(async (entry) => {
         try {
-          const muxRuntime = this.muxRuntimeForKind(entry.backend ?? "zellij");
+          const muxRuntime = this.muxRuntimeForKind("tmux");
           const panes = await muxRuntime.listPanes(entry.sessionName);
           entry.panes = panes.map((pane) => ({
             paneId: pane.paneId,
@@ -617,33 +595,60 @@ export class RuntimeTerminalCoordinator {
     );
   }
 
-  async closeUnmanagedZellijMuxSession(sessionName: string): Promise<void> {
+  async closeUnmanagedTuiMuxSession(sessionName: string): Promise<void> {
     const trimmedSessionName = sessionName.trim();
     if (!/^rah-[0-9a-z][0-9a-z-]*$/i.test(trimmedSessionName)) {
-      throw new Error("Only RAH-owned zellij sessions can be closed from diagnostics.");
+      throw new Error("Only RAH-owned TUI mux sessions can be closed from diagnostics.");
     }
-    const managed = [...this.zellijTuiSessions.values()].find(
-      (zellij) => zellij.zellijSessionName === trimmedSessionName,
+    const managed = [...this.tuiMuxSessions.values()].find(
+      (tmux) => tmux.muxSessionName === trimmedSessionName,
     );
     if (managed) {
-      throw new Error("This zellij session is managed by a live RAH session. Archive the live session instead.");
+      throw new Error("This TUI mux session is managed by a running RAH session. Close the running session instead.");
     }
-    const tmuxSessions = await this.tmuxMux.listSessions().catch(() => []);
-    const backend: TuiMuxBackendKind = tmuxSessions.some(
-      (session) => session.sessionName === trimmedSessionName,
-    )
-      ? "tmux"
-      : "zellij";
-    await this.removeMuxSession(trimmedSessionName, backend).catch((error) => {
+    await this.removeMuxSession(trimmedSessionName, "tmux").catch((error) => {
       if (!isMuxSessionMissingError(error)) {
         throw error;
       }
     });
   }
 
+  async cleanupUnmanagedTuiMuxSessions(): Promise<string[]> {
+    const managedSessionNames = new Set(
+      [...this.tuiMuxSessions.values()].map((session) => session.muxSessionName),
+    );
+    const closed: string[] = [];
+    let sessions: Awaited<ReturnType<TmuxMuxBackend["listSessions"]>>;
+    try {
+      sessions = await this.tmuxMux.listSessions();
+    } catch (error) {
+      console.warn("[rah] failed to list tmux sessions during RAH cleanup", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return closed;
+    }
+    for (const session of sessions) {
+      if (!session.sessionName.startsWith("rah-") || managedSessionNames.has(session.sessionName)) {
+        continue;
+      }
+      await this.removeMuxSession(session.sessionName, "tmux").then(
+        () => {
+          closed.push(session.sessionName);
+        },
+        (error) => {
+          console.warn("[rah] failed to clean unmanaged RAH tmux session", {
+            sessionName: session.sessionName,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        },
+      );
+    }
+    return closed;
+  }
+
   private async removeMuxSession(
     sessionName: string,
-    backend: TuiMuxBackendKind = "zellij",
+    backend: TuiMuxBackendKind = "tmux",
   ): Promise<void> {
     const muxRuntime = this.muxRuntimeForKind(backend);
     await muxRuntime.killSession(sessionName).catch((error) => {
@@ -662,30 +667,27 @@ export class RuntimeTerminalCoordinator {
 
   clearSessionState(sessionId: string): void {
     void this.closeNativeLocalServerTuiClient(sessionId).catch(() => undefined);
-    this.clearZellijTuiRuntimeState(sessionId);
+    this.clearTuiMuxRuntimeState(sessionId);
     this.clearNativeTuiRuntimeState(sessionId);
     this.nativeTuiSessionIds.delete(sessionId);
   }
 
-  private clearZellijTuiRuntimeState(sessionId: string): void {
-    const zellij = this.zellijTuiSessions.get(sessionId);
-    if (!zellij) {
+  private clearTuiMuxRuntimeState(sessionId: string): void {
+    const tmux = this.tuiMuxSessions.get(sessionId);
+    if (!tmux) {
       return;
     }
-    zellij.subscription?.close();
-    if (zellij.sizingClientPtyId) {
-      void this.ptySessions.close(zellij.sizingClientPtyId).catch(() => undefined);
+    tmux.subscription?.close();
+    if (tmux.dumpTimer) {
+      clearTimeout(tmux.dumpTimer);
     }
-    if (zellij.dumpTimer) {
-      clearTimeout(zellij.dumpTimer);
+    if (tmux.subscriptionRestartTimer) {
+      clearTimeout(tmux.subscriptionRestartTimer);
     }
-    if (zellij.subscriptionRestartTimer) {
-      clearTimeout(zellij.subscriptionRestartTimer);
+    if (tmux.exitPollTimer) {
+      clearInterval(tmux.exitPollTimer);
     }
-    if (zellij.exitPollTimer) {
-      clearInterval(zellij.exitPollTimer);
-    }
-    this.zellijTuiSessions.delete(sessionId);
+    this.tuiMuxSessions.delete(sessionId);
   }
 
   private clearNativeTuiRuntimeState(sessionId: string): void {
@@ -701,8 +703,8 @@ export class RuntimeTerminalCoordinator {
     text: string,
     options?: { clientMessageId?: string; clientTurnId?: string },
   ): boolean {
-    const zellij = this.zellijTuiSessions.get(sessionId);
-    if (zellij) {
+    const tmux = this.tuiMuxSessions.get(sessionId);
+    if (tmux) {
       const native = this.nativeTuiSessions.get(sessionId);
       if (!native) {
         throw new Error("Native TUI process is not running.");
@@ -724,7 +726,7 @@ export class RuntimeTerminalCoordinator {
           throw new Error("Native TUI input queue is full.");
         }
         this.updateNativeTuiPromptState(sessionId, native.promptState);
-        void this.dumpZellijTuiScreen(zellij);
+        void this.dumpTuiMuxScreen(tmux);
         return true;
       }
       this.injectNativeTuiChatInput(native, clientId, text, options);
@@ -796,30 +798,30 @@ export class RuntimeTerminalCoordinator {
     text: string,
     options?: { clearPromptBeforeSubmit?: boolean },
   ): void {
-    const zellij = this.zellijTuiSessions.get(native.sessionId);
-    if (zellij) {
-      void this.withZellijActionSurface(zellij, async () => {
+    const tmux = this.tuiMuxSessions.get(native.sessionId);
+    if (tmux) {
+      void this.withTuiMuxActionSurface(tmux, async () => {
         if (options?.clearPromptBeforeSubmit) {
-          await this.sendZellijTuiClearPrompt(zellij);
-          // zellij action send-keys returns after enqueueing synthesized keys,
+          await this.sendTuiMuxClearPrompt(tmux);
+          // tmux action send-keys returns after enqueueing synthesized keys,
           // not necessarily after the target TUI has consumed them. Give the
           // clear sequence a short deterministic settle window so the next
           // raw write is not erased by a delayed Ctrl-K/Ctrl-U.
-          await new Promise((resolve) => setTimeout(resolve, ZELLIJ_TUI_CLEAR_PROMPT_SETTLE_MS));
+          await new Promise((resolve) => setTimeout(resolve, TUI_MUX_CLEAR_PROMPT_SETTLE_MS));
         }
-        await this.writeZellijTuiText(zellij, text);
+        await this.writeTuiMuxText(tmux, text);
         for (let index = 0; index < nativeTuiSubmitCountForProvider(native.provider); index += 1) {
           await new Promise((resolve) => setTimeout(resolve, NATIVE_TUI_SUBMIT_DELAY_MS));
-          await this.writeZellijTuiInput(zellij, nativeTuiSubmitDataForProvider(native.provider));
+          await this.writeTuiMuxInput(tmux, nativeTuiSubmitDataForProvider(native.provider));
         }
       })
         .then(
           () => {
-            void this.pollZellijTuiExit(zellij.sessionId);
+            void this.pollTuiMuxExit(tmux.sessionId);
           },
           (error) => {
-            void this.pollZellijTuiExit(zellij.sessionId);
-            this.handleZellijTuiInputFailure(zellij, error);
+            void this.pollTuiMuxExit(tmux.sessionId);
+            this.handleTuiMuxInputFailure(tmux, error);
           },
         );
     } else {
@@ -847,7 +849,11 @@ export class RuntimeTerminalCoordinator {
     if (isClaudeNativeTuiPassthrough(native)) {
       return false;
     }
-    return native.promptState !== "prompt_clean" || native.promptTracker.draftText.length > 0;
+    return (
+      native.promptState !== "prompt_clean" ||
+      native.promptTracker.draftText.length > 0 ||
+      hasRecentInjectedInput(native)
+    );
   }
 
   private scheduleNativeTuiQueuedDrain(native: NativeTuiSessionState): void {
@@ -873,19 +879,19 @@ export class RuntimeTerminalCoordinator {
   }
 
   handleNativeTuiInterrupt(sessionId: string, clientId: string): boolean {
-    const zellij = this.zellijTuiSessions.get(sessionId);
-    if (zellij) {
+    const tmux = this.tuiMuxSessions.get(sessionId);
+    if (tmux) {
       const native = this.nativeTuiSessions.get(sessionId);
       this.claimWebControl(sessionId, clientId);
       const activeTurnId = this.deps.sessionStore.getSession(sessionId)?.activeTurnId;
       if (native) {
-        if (isClaudeNativeTuiPassthrough(native)) {
+        if (usesBestEffortEscNativeTuiInterrupt(native)) {
           cancelNativeTuiQueuedInputsForClient(native, clientId);
           native.promptTracker.draftText = "";
           delete native.lastInjectedInputAtMs;
           native.clearPromptBeforeNextInput = true;
-          this.sendZellijTuiInterrupt(zellij, native.provider);
-          this.scheduleClaudeNativeTuiPromptClear(native);
+          this.sendTuiMuxInterrupt(tmux, native.provider);
+          this.scheduleBestEffortEscNativeTuiPromptClear(native);
           this.updateNativeTuiPromptState(sessionId, "prompt_clean");
           return true;
         }
@@ -908,7 +914,7 @@ export class RuntimeTerminalCoordinator {
           publishSessionStateChanged(this.deps, sessionId, "running");
         }
       }
-      this.sendZellijTuiInterrupt(zellij, native?.provider ?? "codex");
+      this.sendTuiMuxInterrupt(tmux, native?.provider ?? "codex");
       this.deps.eventBus.publish({
         sessionId,
         type: "runtime.status",
@@ -927,13 +933,13 @@ export class RuntimeTerminalCoordinator {
     }
     this.claimWebControl(sessionId, clientId);
     const queuedInputCount = native.queuedInputs.length;
-    if (isClaudeNativeTuiPassthrough(native)) {
+    if (usesBestEffortEscNativeTuiInterrupt(native)) {
       cancelNativeTuiQueuedInputsForClient(native, clientId);
       this.writeNativeTuiInterrupt(native);
       native.promptTracker.draftText = "";
       delete native.lastInjectedInputAtMs;
       native.clearPromptBeforeNextInput = true;
-      this.scheduleClaudeNativeTuiPromptClear(native);
+      this.scheduleBestEffortEscNativeTuiPromptClear(native);
       this.updateNativeTuiPromptState(sessionId, "prompt_clean");
       return true;
     }
@@ -993,19 +999,19 @@ export class RuntimeTerminalCoordinator {
   private clearNativeTuiPromptInput(native: NativeTuiSessionState): void {
     native.promptTracker.draftText = "";
     delete native.clearPromptBeforeNextInput;
-    const zellij = this.zellijTuiSessions.get(native.sessionId);
-    if (zellij) {
-      void this.withZellijActionSurface(zellij, async () => {
-        await this.sendZellijTuiClearPrompt(zellij);
+    const tmux = this.tuiMuxSessions.get(native.sessionId);
+    if (tmux) {
+      void this.withTuiMuxActionSurface(tmux, async () => {
+        await this.sendTuiMuxClearPrompt(tmux);
       }).catch((error) => {
-        this.handleZellijTuiInputFailure(zellij, error);
+        this.handleTuiMuxInputFailure(tmux, error);
       });
       return;
     }
     native.process.write(NATIVE_TUI_CLEAR_PROMPT_DATA);
   }
 
-  private scheduleClaudeNativeTuiPromptClear(native: NativeTuiSessionState): void {
+  private scheduleBestEffortEscNativeTuiPromptClear(native: NativeTuiSessionState): void {
     this.cancelNativeTuiPromptClear(native);
     const scheduledAtMs = Date.now();
     native.promptClearScheduledAtMs = scheduledAtMs;
@@ -1016,7 +1022,7 @@ export class RuntimeTerminalCoordinator {
       }
       delete current.promptClearTimer;
       delete current.promptClearScheduledAtMs;
-      if (!isClaudeNativeTuiPassthrough(current)) {
+      if (!usesBestEffortEscNativeTuiInterrupt(current)) {
         return;
       }
       if (
@@ -1038,15 +1044,15 @@ export class RuntimeTerminalCoordinator {
     delete native.promptClearScheduledAtMs;
   }
 
-  private sendZellijTuiInterrupt(zellij: ZellijTuiSessionState, provider: ProviderKind): void {
+  private sendTuiMuxInterrupt(tmux: TuiMuxSessionState, provider: ProviderKind): void {
     const sendEsc = async (count = 1): Promise<void> => {
-      await zellij.muxRuntime.sendKeys(
-        zellij.zellijSessionName,
-        zellij.paneId,
+      await tmux.muxRuntime.sendKeys(
+        tmux.muxSessionName,
+        tmux.paneId,
         Array.from({ length: count }, () => "Esc"),
       );
     };
-    void this.withZellijActionSurface(zellij, async () => {
+    void this.withTuiMuxActionSurface(tmux, async () => {
       if (provider === "opencode") {
         await sendEsc(2);
         return;
@@ -1055,8 +1061,8 @@ export class RuntimeTerminalCoordinator {
       const retryDelays = [350, 900];
       for (const retryDelay of retryDelays) {
         await new Promise((resolve) => setTimeout(resolve, retryDelay));
-        const native = this.nativeTuiSessions.get(zellij.sessionId);
-        if (!this.isCurrentZellijTuiSession(zellij)) {
+        const native = this.nativeTuiSessions.get(tmux.sessionId);
+        if (!this.isCurrentTuiMuxSession(tmux)) {
           break;
         }
         if (!native?.stopPending) {
@@ -1065,14 +1071,14 @@ export class RuntimeTerminalCoordinator {
         await sendEsc();
       }
     }).catch((error) => {
-      this.handleZellijTuiInputFailure(zellij, error);
+      this.handleTuiMuxInputFailure(tmux, error);
     });
   }
 
-  private async sendZellijTuiClearPrompt(zellij: ZellijTuiSessionState): Promise<void> {
-    // zellij action write can inject control bytes as literal composer text in
-    // raw-mode TUIs. send-keys asks zellij to synthesize terminal key events.
-    await zellij.muxRuntime.sendKeys(zellij.zellijSessionName, zellij.paneId, [
+  private async sendTuiMuxClearPrompt(tmux: TuiMuxSessionState): Promise<void> {
+    // tmux action write can inject control bytes as literal composer text in
+    // raw-mode TUIs. send-keys asks tmux to synthesize terminal key events.
+    await tmux.muxRuntime.sendKeys(tmux.muxSessionName, tmux.paneId, [
       "Ctrl a",
       "Ctrl k",
       "Ctrl u",
@@ -1240,15 +1246,15 @@ export class RuntimeTerminalCoordinator {
   }
 
   getNativeTuiSurface(sessionId: string): NativeTuiSurfaceResponse {
-    return this.zellijSurfaceResponse(this.zellijTuiSessions.get(sessionId));
+    return this.tuiMuxSurfaceResponse(this.tuiMuxSessions.get(sessionId));
   }
 
   async claimNativeTuiSurface(
     sessionId: string,
     request: NativeTuiSurfaceClaimRequest,
   ): Promise<NativeTuiSurfaceResponse> {
-    const zellij = this.zellijTuiSessions.get(sessionId);
-    if (!zellij) {
+    const tmux = this.tuiMuxSessions.get(sessionId);
+    if (!tmux) {
       if (await this.ensureNativeLocalServerTuiClient(sessionId, request)) {
         return {};
       }
@@ -1262,49 +1268,32 @@ export class RuntimeTerminalCoordinator {
       ...(request.rows !== undefined ? { rows: Math.max(8, Math.floor(request.rows)) } : {}),
       attachedAt: new Date().toISOString(),
     };
-    zellij.activeSurface = surface;
-    if (zellij.muxBackendKind === "tmux") {
-      if (surface.cols !== undefined && surface.rows !== undefined) {
-        await zellij.muxRuntime.resizePane?.(
-          zellij.zellijSessionName,
-          zellij.paneId,
-          surface.cols,
-          surface.rows,
-        );
-      }
-      this.deps.ptyHub.resetSession(sessionId);
-      await this.dumpZellijTuiScreen(zellij);
-    } else if (this.shouldUseZellijSizingClient(request.clientKind)) {
-      this.deps.ptyHub.resetSession(sessionId);
-      await this.ensureZellijTuiSizingClient(
-        zellij,
-        surface.cols ?? DEFAULT_ZELLIJ_TUI_COLS,
-        surface.rows ?? DEFAULT_ZELLIJ_TUI_ROWS,
+    tmux.activeSurface = surface;
+    if (surface.cols !== undefined && surface.rows !== undefined) {
+      await tmux.muxRuntime.resizePane?.(
+        tmux.muxSessionName,
+        tmux.paneId,
+        surface.cols,
+        surface.rows,
       );
-      await new Promise((resolve) => setTimeout(resolve, ZELLIJ_TUI_SURFACE_SETTLE_MS));
-      await this.dumpZellijTuiScreen(zellij, { allowWebSizingClientFallback: true });
-    } else {
-      await this.closeZellijTuiSizingClient(zellij);
     }
-    return this.zellijSurfaceResponse(zellij);
+    this.deps.ptyHub.resetSession(sessionId);
+    await this.dumpTuiMuxScreen(tmux);
+    return this.tuiMuxSurfaceResponse(tmux);
   }
 
   async releaseNativeTuiSurface(
     sessionId: string,
     request: NativeTuiSurfaceReleaseRequest,
   ): Promise<NativeTuiSurfaceResponse> {
-    const zellij = this.zellijTuiSessions.get(sessionId);
-    if (!zellij) {
+    const tmux = this.tuiMuxSessions.get(sessionId);
+    if (!tmux) {
       return {};
     }
-    if (zellij.activeSurface?.clientId !== request.clientId) {
-      return this.zellijSurfaceResponse(zellij);
+    if (tmux.activeSurface?.clientId !== request.clientId) {
+      return this.tuiMuxSurfaceResponse(tmux);
     }
-    const releasedKind = zellij.activeSurface.clientKind;
-    delete zellij.activeSurface;
-    if (zellij.muxBackendKind === "zellij" && this.shouldUseZellijSizingClient(releasedKind)) {
-      await this.closeZellijTuiSizingClient(zellij);
-    }
+    delete tmux.activeSurface;
     return {};
   }
 
@@ -1312,8 +1301,8 @@ export class RuntimeTerminalCoordinator {
     sessionId: string,
     request: NativeTuiClientCloseRequest,
   ): Promise<NativeTuiSurfaceResponse> {
-    const zellij = this.zellijTuiSessions.get(sessionId);
-    if (zellij) {
+    const tmux = this.tuiMuxSessions.get(sessionId);
+    if (tmux) {
       return await this.releaseNativeTuiSurface(sessionId, request);
     }
     const current = this.deps.sessionStore.getSession(sessionId);
@@ -1490,18 +1479,18 @@ export class RuntimeTerminalCoordinator {
   }
 
   handlePtyInput(sessionId: string, clientId: string, data: string): boolean {
-    const zellij = this.zellijTuiSessions.get(sessionId);
-    if (zellij) {
-      this.assertZellijTuiSurface(zellij, clientId);
+    const tmux = this.tuiMuxSessions.get(sessionId);
+    if (tmux) {
+      this.assertTuiMuxSurface(tmux, clientId);
       const native = this.nativeTuiSessions.get(sessionId);
-      void this.writeZellijTuiInput(zellij, data)
+      void this.writeTuiMuxInput(tmux, data)
         .then(() => {
           if (native) {
             this.observeNativeTuiPtyInput(native, data);
           }
         })
         .catch((error) => {
-          this.handleZellijTuiInputFailure(zellij, error);
+          this.handleTuiMuxInputFailure(tmux, error);
         });
       return true;
     }
@@ -1517,98 +1506,50 @@ export class RuntimeTerminalCoordinator {
   }
 
   handlePtyResize(sessionId: string, clientId: string, cols: number, rows: number): boolean {
-    const zellij = this.zellijTuiSessions.get(sessionId);
-    if (zellij) {
-      if (!zellij.activeSurface) {
+    const tmux = this.tuiMuxSessions.get(sessionId);
+    if (tmux) {
+      if (!tmux.activeSurface) {
         void this.claimNativeTuiSurface(sessionId, {
           clientId,
           clientKind: "web",
           cols,
           rows,
-        }).catch((error) => this.handleZellijTuiInputFailure(zellij, error));
-      } else if (zellij.activeSurface.clientId === clientId) {
-        zellij.activeSurface = {
-          ...zellij.activeSurface,
+        }).catch((error) => this.handleTuiMuxInputFailure(tmux, error));
+      } else if (tmux.activeSurface.clientId === clientId) {
+        tmux.activeSurface = {
+          ...tmux.activeSurface,
           cols: Math.max(20, Math.floor(cols)),
           rows: Math.max(8, Math.floor(rows)),
         };
-        if (zellij.muxBackendKind === "tmux") {
-          void zellij.muxRuntime.resizePane?.(zellij.zellijSessionName, zellij.paneId, cols, rows)
-            .then(() => this.dumpZellijTuiScreen(zellij))
-            .catch((error) => this.handleZellijTuiInputFailure(zellij, error));
-        } else {
-          void this.ensureZellijTuiSizingClient(zellij, cols, rows).catch((error) =>
-            this.handleZellijTuiInputFailure(zellij, error),
-          );
-        }
+        void tmux.muxRuntime.resizePane?.(tmux.muxSessionName, tmux.paneId, cols, rows)
+          .then(() => this.dumpTuiMuxScreen(tmux))
+          .catch((error) => this.handleTuiMuxInputFailure(tmux, error));
       }
       return true;
     }
     return this.ptySessions.resize(sessionId, cols, rows);
   }
 
-  private async ensureZellijTuiSizingClient(
-    zellij: ZellijTuiSessionState,
-    cols: number,
-    rows: number,
-  ): Promise<void> {
-    const nextCols = Math.max(20, Math.floor(cols));
-    const nextRows = Math.max(8, Math.floor(rows));
-    if (zellij.muxBackendKind === "tmux") {
-      await zellij.muxRuntime.resizePane?.(
-        zellij.zellijSessionName,
-        zellij.paneId,
-        nextCols,
-        nextRows,
-      );
-      return;
-    }
-    if (zellij.sizingClientPtyId && this.ptySessions.resize(zellij.sizingClientPtyId, nextCols, nextRows)) {
-      return;
-    }
-    if (!zellij.socketDir) {
-      return;
-    }
-    await this.startZellijTuiSizingClient({
-      sessionId: zellij.sessionId,
-      zellijSessionName: zellij.zellijSessionName,
-      socketDir: zellij.socketDir,
-      cols: nextCols,
-      rows: nextRows,
-      createIfMissing: false,
-    });
-  }
-
-  private async closeZellijTuiSizingClient(zellij: ZellijTuiSessionState): Promise<void> {
-    const sizingClientPtyId = zellij.sizingClientPtyId;
-    if (!sizingClientPtyId) {
-      return;
-    }
-    delete zellij.sizingClientPtyId;
-    delete zellij.lastSizingClientOutputAtMs;
-    await this.ptySessions.close(sizingClientPtyId).catch(() => undefined);
-  }
-
-  private assertZellijTuiSurface(zellij: ZellijTuiSessionState, clientId: string): void {
-    if (!zellij.activeSurface) {
+  private assertTuiMuxSurface(tmux: TuiMuxSessionState, clientId: string): void {
+    if (!tmux.activeSurface) {
       throw new Error("No active TUI display surface. Open the TUI view before sending terminal input.");
     }
-    if (zellij.activeSurface.clientId !== clientId) {
+    if (tmux.activeSurface.clientId !== clientId) {
       throw new Error(
-        `TUI display is controlled by ${zellij.activeSurface.clientKind}; reclaim it before sending terminal input.`,
+        `TUI display is controlled by ${tmux.activeSurface.clientKind}; reclaim it before sending terminal input.`,
       );
     }
   }
 
-  private shouldUseZellijSizingClient(kind: ClientKind): boolean {
+  private shouldUseTuiMuxSizingClient(kind: ClientKind): boolean {
     return kind !== "terminal";
   }
 
-  private zellijSurfaceResponse(zellij?: ZellijTuiSessionState): NativeTuiSurfaceResponse {
-    if (!zellij?.activeSurface) {
+  private tuiMuxSurfaceResponse(tmux?: TuiMuxSessionState): NativeTuiSurfaceResponse {
+    if (!tmux?.activeSurface) {
       return {};
     }
-    return { surface: { ...zellij.activeSurface } };
+    return { surface: { ...tmux.activeSurface } };
   }
 
   async startIndependentTerminal(
@@ -1684,6 +1625,7 @@ export class RuntimeTerminalCoordinator {
     launch: NativeTuiLaunchSpec;
     attach?: StartSessionRequest["attach"];
     providerSessionId?: string;
+    origin?: StartSessionRequest["origin"];
   }): Promise<StartSessionResponse> {
     const sessionId = crypto.randomUUID();
     const providerSessionId = args.providerSessionId ?? args.launch.providerSessionId;
@@ -1694,6 +1636,7 @@ export class RuntimeTerminalCoordinator {
       id: sessionId,
       provider: args.launch.provider,
       ...(providerSessionId ? { providerSessionId } : {}),
+      ...(args.origin ? { origin: args.origin } : {}),
       launchSource,
       liveBackend: "native_tui",
       cwd: args.launch.cwd,
@@ -1807,33 +1750,33 @@ export class RuntimeTerminalCoordinator {
     return { session: toSessionSummary(readyState) };
   }
 
-  async startZellijTuiSession(args: {
+  async startTuiMuxSession(args: {
     launch: NativeTuiLaunchSpec;
     attach?: StartSessionRequest["attach"];
     providerSessionId?: string;
+    origin?: StartSessionRequest["origin"];
   }): Promise<StartSessionResponse> {
-    const launch = appendCodexZellijArgs(args.launch);
+    const launch = appendCodexTuiMuxArgs(args.launch);
     const sessionId = crypto.randomUUID();
     const providerSessionId = args.providerSessionId ?? launch.providerSessionId;
     const startupTimestampMs = Date.now();
     const launchSource = args.attach?.client.kind === "terminal" ? "terminal" : "web";
-    const initialPromptState = initialZellijTuiPromptState(launch.provider);
+    const initialPromptState = initialTuiMuxPromptState(launch.provider);
     const muxBackendKind = this.preferredTuiMuxBackendKind;
     const muxRuntime = this.muxRuntimeForKind(muxBackendKind);
-    const zellijSessionName = this.muxSessionNameForRahSession(sessionId, muxBackendKind);
-    const socketDir = this.muxSocketDirForKind(muxBackendKind);
+    const muxSessionName = this.muxSessionNameForRahSession(sessionId, muxBackendKind);
     const muxPatch = {
       backend: muxBackendKind,
-      sessionName: zellijSessionName,
+      sessionName: muxSessionName,
       paneId: "pending",
-      ...(socketDir !== undefined ? { socketDir } : {}),
     } satisfies ManagedSession["mux"];
     this.deps.sessionStore.createManagedSession({
       id: sessionId,
       provider: launch.provider,
       ...(providerSessionId ? { providerSessionId } : {}),
+      ...(args.origin ? { origin: args.origin } : {}),
       launchSource,
-      liveBackend: "zellij_tui",
+      liveBackend: "tui_mux",
       cwd: launch.cwd,
       rootDir: launch.cwd,
       title: launch.title,
@@ -1847,7 +1790,7 @@ export class RuntimeTerminalCoordinator {
       mux: muxPatch,
       ptyId: sessionId,
       ...nativeTuiStartupSessionPatch(launch),
-      capabilities: buildZellijTuiSessionCapabilities(launch.provider),
+      capabilities: buildTuiMuxSessionCapabilities(launch.provider),
     });
     this.deps.ptyHub.ensureSession(sessionId);
 
@@ -1864,21 +1807,10 @@ export class RuntimeTerminalCoordinator {
 
     publishSessionCreatedAndStarted(this.deps, sessionId);
 
-    let zellij: ZellijTuiSessionState | undefined;
-    let sizingClientPtyId: string | undefined;
+    let tmux: TuiMuxSessionState | undefined;
     try {
-      if (muxBackendKind === "zellij" && socketDir) {
-        sizingClientPtyId = await this.startZellijTuiSizingClient({
-          sessionId,
-          zellijSessionName,
-          socketDir,
-          cols: args.attach?.client.cols ?? DEFAULT_ZELLIJ_TUI_COLS,
-          rows: args.attach?.client.rows ?? DEFAULT_ZELLIJ_TUI_ROWS,
-          createIfMissing: true,
-        });
-      }
       const created = await muxRuntime.createSession({
-        sessionName: zellijSessionName,
+        sessionName: muxSessionName,
         cwd: launch.cwd,
         command: launch.command,
         args: launch.args,
@@ -1886,7 +1818,7 @@ export class RuntimeTerminalCoordinator {
         title: `${launch.provider}-${sessionId.slice(0, 8)}`,
         replaceDefaultPane: true,
       });
-      zellij = this.registerZellijTuiRuntime({
+      tmux = this.registerTuiMuxRuntime({
         sessionId,
         provider: launch.provider,
         cwd: launch.cwd,
@@ -1894,37 +1826,28 @@ export class RuntimeTerminalCoordinator {
         promptState: initialPromptState,
         startupTimestampMs,
         ...(launch.env ? { launchEnv: launch.env } : {}),
-        zellijSessionName,
+        muxSessionName,
         paneId: created.paneId,
         muxBackendKind,
         muxRuntime,
-        ...(socketDir !== undefined ? { socketDir } : {}),
       });
-      if (sizingClientPtyId) {
-        await this.ptySessions.close(sizingClientPtyId).catch(() => undefined);
-        sizingClientPtyId = undefined;
-      }
       this.deps.sessionStore.patchManagedSession(sessionId, {
         mux: {
           backend: muxBackendKind,
-          sessionName: zellijSessionName,
+          sessionName: muxSessionName,
           paneId: created.paneId,
-          ...(socketDir !== undefined ? { socketDir } : {}),
         },
       });
     } catch (error) {
-      this.clearZellijTuiRuntimeState(sessionId);
+      this.clearTuiMuxRuntimeState(sessionId);
       this.clearNativeTuiRuntimeState(sessionId);
       this.nativeTuiSessionIds.delete(sessionId);
       this.deps.ptyHub.removeSession(sessionId);
       this.deps.sessionStore.removeSession(sessionId);
-      if (sizingClientPtyId) {
-        await this.ptySessions.close(sizingClientPtyId).catch(() => undefined);
-      }
-      if (zellij) {
-        await this.removeMuxSession(zellij.zellijSessionName, zellij.muxBackendKind).catch(() => undefined);
+      if (tmux) {
+        await this.removeMuxSession(tmux.muxSessionName, tmux.muxBackendKind).catch(() => undefined);
       } else {
-        await this.removeMuxSession(zellijSessionName, muxBackendKind).catch(() => undefined);
+        await this.removeMuxSession(muxSessionName, muxBackendKind).catch(() => undefined);
       }
       throw error;
     }
@@ -1936,14 +1859,14 @@ export class RuntimeTerminalCoordinator {
   }
 
   async closeNativeTuiSession(sessionId: string): Promise<boolean> {
-    const zellij = this.zellijTuiSessions.get(sessionId);
-    if (zellij) {
+    const tmux = this.tuiMuxSessions.get(sessionId);
+    if (tmux) {
       this.closingNativeTuiSessionIds.add(sessionId);
-      this.clearZellijTuiRuntimeState(sessionId);
+      this.clearTuiMuxRuntimeState(sessionId);
       this.clearNativeTuiRuntimeState(sessionId);
       this.nativeTuiSessionIds.delete(sessionId);
       try {
-        await this.closeZellijTuiSession(zellij);
+        await this.closeTuiMuxSession(tmux);
       } finally {
         this.closingNativeTuiSessionIds.delete(sessionId);
       }
@@ -1963,42 +1886,38 @@ export class RuntimeTerminalCoordinator {
     return true;
   }
 
-  private registerZellijTuiRuntime(args: {
+  private registerTuiMuxRuntime(args: {
     sessionId: string;
     provider: ProviderKind;
     cwd: string;
     providerSessionId?: string;
     promptState: NativeTuiPromptState;
     startupTimestampMs: number;
-    zellijSessionName: string;
+    muxSessionName: string;
     paneId: string;
     muxBackendKind: TuiMuxBackendKind;
     muxRuntime: MuxRuntime;
-    socketDir?: string;
-    sizingClientPtyId?: string;
     launchEnv?: Record<string, string>;
-  }): ZellijTuiSessionState {
-    const zellij: ZellijTuiSessionState = {
+  }): TuiMuxSessionState {
+    const tmux: TuiMuxSessionState = {
       sessionId: args.sessionId,
-      zellijSessionName: args.zellijSessionName,
+      muxSessionName: args.muxSessionName,
       paneId: args.paneId,
       muxBackendKind: args.muxBackendKind,
       muxRuntime: args.muxRuntime,
-      ...(args.socketDir !== undefined ? { socketDir: args.socketDir } : {}),
-      ...(args.sizingClientPtyId ? { sizingClientPtyId: args.sizingClientPtyId } : {}),
     };
-    this.zellijTuiSessions.set(args.sessionId, zellij);
+    this.tuiMuxSessions.set(args.sessionId, tmux);
     const processProxy = {
       shell: args.muxBackendKind,
       cwd: args.cwd,
       write: (data: string) => {
-        void this.writeZellijTuiInput(zellij, data).catch((error) => {
-          this.handleZellijTuiInputFailure(zellij, error);
+        void this.writeTuiMuxInput(tmux, data).catch((error) => {
+          this.handleTuiMuxInputFailure(tmux, error);
         });
       },
       resize: () => undefined,
       close: async () => {
-        await this.closeZellijTuiSession(zellij);
+        await this.closeTuiMuxSession(tmux);
       },
       waitUntilReady: async () => undefined,
     } as unknown as NativeTuiSessionState["process"];
@@ -2015,207 +1934,135 @@ export class RuntimeTerminalCoordinator {
       ...(args.providerSessionId ? { providerSessionId: args.providerSessionId } : {}),
     });
     this.nativeTuiSessionIds.add(args.sessionId);
-    this.startZellijTuiSubscription(zellij);
-    zellij.exitPollTimer = setInterval(() => {
-      void this.pollZellijTuiExit(args.sessionId);
+    this.startTuiMuxSubscription(tmux);
+    tmux.exitPollTimer = setInterval(() => {
+      void this.pollTuiMuxExit(args.sessionId);
     }, 500);
-    zellij.exitPollTimer.unref?.();
+    tmux.exitPollTimer.unref?.();
     this.startNativeTuiBindingProbe(args.sessionId);
     this.mirrorRuntime.startSessionMirror(args.sessionId);
-    return zellij;
+    return tmux;
   }
 
-  private async startZellijTuiSizingClient(args: {
-    sessionId: string;
-    zellijSessionName: string;
-    socketDir: string;
-    cols: number;
-    rows: number;
-    createIfMissing: boolean;
-  }): Promise<string> {
-    const sizingClientPtyId = `zellij-sizing:${args.sessionId}`;
-    this.ptySessions.create({
-      id: sizingClientPtyId,
-      cwd: process.cwd(),
-      cols: Math.max(20, Math.floor(args.cols)),
-      rows: Math.max(8, Math.floor(args.rows)),
-      command: "zellij",
-      args: [
-        "attach",
-        ...(args.createIfMissing ? ["-c"] : []),
-        args.zellijSessionName,
-        "options",
-        "--mirror-session",
-        "true",
-        "--pane-frames",
-        "false",
-        "--show-startup-tips",
-        "false",
-      ],
-      env: {
-        ZELLIJ_SOCKET_DIR: args.socketDir,
-      },
-      onData: (_terminalId, data) => {
-        const current = this.zellijTuiSessions.get(args.sessionId);
-        if (
-          current?.sizingClientPtyId !== sizingClientPtyId ||
-          current.activeSurface?.clientKind !== "web"
-        ) {
-          return;
-        }
-        current.lastSizingClientOutputAtMs = Date.now();
-        this.observeNativeTuiOutput(args.sessionId, data);
-      },
-      onExit: () => {
-        const current = this.zellijTuiSessions.get(args.sessionId);
-        if (current?.sizingClientPtyId === sizingClientPtyId) {
-          delete current.sizingClientPtyId;
-          delete current.lastSizingClientOutputAtMs;
-        }
-      },
-    });
-    const current = this.zellijTuiSessions.get(args.sessionId);
-    if (current) {
-      current.sizingClientPtyId = sizingClientPtyId;
-    }
-
-    const deadline = Date.now() + 2_000;
-    while (Date.now() < deadline) {
-      const panes = await this.zellijMux.listPanes(args.zellijSessionName).catch(() => []);
-      if (panes.length > 0) {
-        return sizingClientPtyId;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
-    return sizingClientPtyId;
-  }
-
-  private startZellijTuiSubscription(zellij: ZellijTuiSessionState): void {
-    zellij.subscription?.close();
-    zellij.subscription = zellij.muxRuntime.subscribePane(
-      zellij.zellijSessionName,
-      zellij.paneId,
+  private startTuiMuxSubscription(tmux: TuiMuxSessionState): void {
+    tmux.subscription?.close();
+    tmux.subscription = tmux.muxRuntime.subscribePane(
+      tmux.muxSessionName,
+      tmux.paneId,
       (update) => {
-        if (!this.isCurrentZellijTuiSession(zellij)) {
+        if (!this.isCurrentTuiMuxSession(tmux)) {
           return;
         }
-        zellij.subscriptionRestartAttempts = 0;
-        const text = renderZellijViewport(update.viewport);
-        this.observeNativeTuiOutput(zellij.sessionId, text);
-        this.scheduleNativeTuiMirrorWake(zellij.sessionId);
-        if (zellij.activeSurface?.clientKind === "web") {
-          // zellij subscribe viewports can briefly use a stale mirror size when
+        tmux.subscriptionRestartAttempts = 0;
+        const text = renderMuxViewport(update.viewport);
+        this.observeNativeTuiOutput(tmux.sessionId, text);
+        this.scheduleNativeTuiMirrorWake(tmux.sessionId);
+        if (tmux.activeSurface?.clientKind === "web") {
+          // tmux subscribe viewports can briefly use a stale mirror size when
           // ownership moves between terminal and Web. Use the frame only as a
           // repaint signal; dump-screen gives xterm the canonical pane snapshot.
-          this.scheduleZellijTuiScreenDump(zellij, { allowWebSizingClientFallback: true });
+          this.scheduleTuiMuxScreenDump(tmux, { allowWebSizingClientFallback: true });
           return;
         }
-        this.deps.ptyHub.appendOutput(zellij.sessionId, text, { replaceReplay: true });
+        this.deps.ptyHub.appendOutput(tmux.sessionId, text, { replaceReplay: true });
       },
       {
         ansi: true,
         onExit: (exit) => {
-          this.handleZellijTuiSubscriptionExit(zellij.sessionId, exit);
+          this.handleTuiMuxSubscriptionExit(tmux.sessionId, exit);
         },
       },
     );
-    // `zellij subscribe --scrollback` can resend a large scrollback window on
+    // `tmux subscribe --scrollback` can resend a large scrollback window on
     // every repaint, which makes Codex/Claude feel slow through the web TUI.
     // Seed the client once, then stream viewport snapshots only.
-    void this.dumpZellijTuiScreen(zellij);
+    void this.dumpTuiMuxScreen(tmux);
   }
 
-  private scheduleZellijTuiScreenDump(
-    zellij: ZellijTuiSessionState,
+  private scheduleTuiMuxScreenDump(
+    tmux: TuiMuxSessionState,
     options: { allowWebSizingClientFallback?: boolean } = {},
   ): void {
-    if (!this.isCurrentZellijTuiSession(zellij)) {
+    if (!this.isCurrentTuiMuxSession(tmux)) {
       return;
     }
-    zellij.dumpPending = true;
+    tmux.dumpPending = true;
     if (options.allowWebSizingClientFallback === true) {
-      zellij.dumpAllowWebSizingClientFallback = true;
+      tmux.dumpAllowWebSizingClientFallback = true;
     }
-    if (zellij.dumpTimer || zellij.dumpInFlight) {
+    if (tmux.dumpTimer || tmux.dumpInFlight) {
       return;
     }
-    zellij.dumpTimer = setTimeout(() => {
-      delete zellij.dumpTimer;
-      void this.flushZellijTuiScreenDump(zellij);
+    tmux.dumpTimer = setTimeout(() => {
+      delete tmux.dumpTimer;
+      void this.flushTuiMuxScreenDump(tmux);
     }, 35);
-    zellij.dumpTimer.unref?.();
+    tmux.dumpTimer.unref?.();
   }
 
-  private async flushZellijTuiScreenDump(zellij: ZellijTuiSessionState): Promise<void> {
-    if (!this.isCurrentZellijTuiSession(zellij)) {
+  private async flushTuiMuxScreenDump(tmux: TuiMuxSessionState): Promise<void> {
+    if (!this.isCurrentTuiMuxSession(tmux)) {
       return;
     }
-    if (zellij.dumpInFlight) {
-      zellij.dumpPending = true;
+    if (tmux.dumpInFlight) {
+      tmux.dumpPending = true;
       return;
     }
-    zellij.dumpPending = false;
-    zellij.dumpInFlight = true;
-    const allowWebSizingClientFallback = zellij.dumpAllowWebSizingClientFallback === true;
-    delete zellij.dumpAllowWebSizingClientFallback;
+    tmux.dumpPending = false;
+    tmux.dumpInFlight = true;
+    const allowWebSizingClientFallback = tmux.dumpAllowWebSizingClientFallback === true;
+    delete tmux.dumpAllowWebSizingClientFallback;
     try {
-      await this.dumpZellijTuiScreen(zellij, { allowWebSizingClientFallback });
+      await this.dumpTuiMuxScreen(tmux, { allowWebSizingClientFallback });
     } finally {
-      zellij.dumpInFlight = false;
-      if (zellij.dumpPending && this.isCurrentZellijTuiSession(zellij)) {
-        zellij.dumpPending = false;
+      tmux.dumpInFlight = false;
+      if (tmux.dumpPending && this.isCurrentTuiMuxSession(tmux)) {
+        tmux.dumpPending = false;
         const pendingAllowWebSizingClientFallback =
-          zellij.dumpAllowWebSizingClientFallback === true;
-        delete zellij.dumpAllowWebSizingClientFallback;
-        this.scheduleZellijTuiScreenDump(zellij, {
+          tmux.dumpAllowWebSizingClientFallback === true;
+        delete tmux.dumpAllowWebSizingClientFallback;
+        this.scheduleTuiMuxScreenDump(tmux, {
           allowWebSizingClientFallback: pendingAllowWebSizingClientFallback,
         });
       }
     }
   }
 
-  private async dumpZellijTuiScreen(
-    zellij: ZellijTuiSessionState,
+  private async dumpTuiMuxScreen(
+    tmux: TuiMuxSessionState,
     options: { allowWebSizingClientFallback?: boolean } = {},
   ): Promise<void> {
-    if (
-      zellij.activeSurface?.clientKind === "web" &&
-      zellij.sizingClientPtyId &&
-      options.allowWebSizingClientFallback !== true
-    ) {
-      return;
-    }
-    const dumped = await zellij.muxRuntime
-      .dumpScreen(zellij.zellijSessionName, zellij.paneId, { ansi: true })
+    const dumped = await tmux.muxRuntime
+      .dumpScreen(tmux.muxSessionName, tmux.paneId, { ansi: true })
       .catch((error) => {
-        this.handleZellijTuiInputFailure(zellij, error);
+        this.handleTuiMuxInputFailure(tmux, error);
         return "";
       });
-    if (!dumped || !this.isCurrentZellijTuiSession(zellij)) {
+    if (!dumped || !this.isCurrentTuiMuxSession(tmux)) {
       return;
     }
-    const text = renderZellijDump(dumped);
-    this.deps.ptyHub.appendOutput(zellij.sessionId, text, { replaceReplay: true });
-    this.observeNativeTuiOutput(zellij.sessionId, text);
+    const text = renderMuxDump(dumped);
+    this.deps.ptyHub.appendOutput(tmux.sessionId, text, { replaceReplay: true });
+    this.observeNativeTuiOutput(tmux.sessionId, text);
   }
 
-  private isCurrentZellijTuiSession(zellij: ZellijTuiSessionState): boolean {
+  private isCurrentTuiMuxSession(tmux: TuiMuxSessionState): boolean {
     return (
-      this.zellijTuiSessions.get(zellij.sessionId) === zellij &&
-      this.deps.sessionStore.getSession(zellij.sessionId) !== undefined
+      this.tuiMuxSessions.get(tmux.sessionId) === tmux &&
+      this.deps.sessionStore.getSession(tmux.sessionId) !== undefined
     );
   }
 
-  private handleZellijTuiSubscriptionExit(
+  private handleTuiMuxSubscriptionExit(
     sessionId: string,
     exit: { code?: number | null; signal?: NodeJS.Signals | null; error?: Error },
   ): void {
-    const zellij = this.zellijTuiSessions.get(sessionId);
-    if (!zellij) {
+    const tmux = this.tuiMuxSessions.get(sessionId);
+    if (!tmux) {
       return;
     }
-    void this.pollZellijTuiExit(sessionId).then(() => {
-      const current = this.zellijTuiSessions.get(sessionId);
+    void this.pollTuiMuxExit(sessionId).then(() => {
+      const current = this.tuiMuxSessions.get(sessionId);
       if (!current || current.subscriptionRestartTimer) {
         return;
       }
@@ -2228,23 +2075,23 @@ export class RuntimeTerminalCoordinator {
           source: SYSTEM_SOURCE,
           payload: {
             status: "error",
-            detail: "zellij subscription stopped repeatedly.",
+            detail: "tmux subscription stopped repeatedly.",
           },
         });
         return;
       }
       current.subscriptionRestartTimer = setTimeout(() => {
-        const latest = this.zellijTuiSessions.get(sessionId);
+        const latest = this.tuiMuxSessions.get(sessionId);
         if (!latest) {
           return;
         }
         delete latest.subscriptionRestartTimer;
-        this.startZellijTuiSubscription(latest);
+        this.startTuiMuxSubscription(latest);
       }, 500);
       current.subscriptionRestartTimer.unref?.();
-      console.warn("[rah] zellij TUI subscription exited; scheduling reconnect", {
+      console.warn("[rah] tmux TUI subscription exited; scheduling reconnect", {
         sessionId,
-        zellijSessionName: current.zellijSessionName,
+        muxSessionName: current.muxSessionName,
         paneId: current.paneId,
         attempts,
         ...(exit.code !== undefined ? { code: exit.code } : {}),
@@ -2254,105 +2101,94 @@ export class RuntimeTerminalCoordinator {
     });
   }
 
-  private async writeZellijTuiInput(
-    zellij: ZellijTuiSessionState,
+  private async writeTuiMuxInput(
+    tmux: TuiMuxSessionState,
     data: string,
   ): Promise<void> {
-    await zellij.muxRuntime.writeBytes(zellij.zellijSessionName, zellij.paneId, data);
+    await tmux.muxRuntime.writeBytes(tmux.muxSessionName, tmux.paneId, data);
   }
 
-  private async writeZellijTuiText(
-    zellij: ZellijTuiSessionState,
+  private async writeTuiMuxText(
+    tmux: TuiMuxSessionState,
     text: string,
   ): Promise<void> {
     if (!text) {
       return;
     }
-    // Use the same pane-targeted byte channel as submit/interrupt. zellij's
+    // Use the same pane-targeted byte channel as submit/interrupt. tmux's
     // write-chars is convenient for interactive attach surfaces, but it has
     // proven less deterministic for chat-driven injection into multiple hidden
     // panes. Plain UTF-8 bytes preserve text exactly and avoid focus-sensitive
     // character synthesis.
-    await zellij.muxRuntime.writeBytes(zellij.zellijSessionName, zellij.paneId, text);
+    await tmux.muxRuntime.writeBytes(tmux.muxSessionName, tmux.paneId, text);
   }
 
-  private async withZellijActionSurface<T>(
-    zellij: ZellijTuiSessionState,
+  private async withTuiMuxActionSurface<T>(
+    tmux: TuiMuxSessionState,
     action: () => Promise<T>,
   ): Promise<T> {
-    const previousAction = zellij.actionQueue ?? Promise.resolve();
+    const previousAction = tmux.actionQueue ?? Promise.resolve();
     const queuedAction = previousAction.catch(() => undefined).then(() =>
-      this.withZellijActionSurfaceNow(zellij, action),
+      this.withTuiMuxActionSurfaceNow(tmux, action),
     );
     const actionTail = queuedAction.then(
       () => undefined,
       () => undefined,
     );
-    zellij.actionQueue = actionTail;
+    tmux.actionQueue = actionTail;
     void actionTail.finally(() => {
-      if (zellij.actionQueue === actionTail) {
-        delete zellij.actionQueue;
+      if (tmux.actionQueue === actionTail) {
+        delete tmux.actionQueue;
       }
     });
     return queuedAction;
   }
 
-  private async withZellijActionSurfaceNow<T>(
-    zellij: ZellijTuiSessionState,
+  private async withTuiMuxActionSurfaceNow<T>(
+    tmux: TuiMuxSessionState,
     action: () => Promise<T>,
   ): Promise<T> {
-    const needsSizingClient =
-      zellij.muxBackendKind === "zellij" && zellij.activeSurface?.clientKind === "web";
-    if (needsSizingClient) {
-      await this.ensureZellijTuiSizingClient(
-        zellij,
-        zellij.activeSurface?.cols ?? DEFAULT_ZELLIJ_TUI_COLS,
-        zellij.activeSurface?.rows ?? DEFAULT_ZELLIJ_TUI_ROWS,
-      );
-      await new Promise((resolve) => setTimeout(resolve, ZELLIJ_TUI_SURFACE_SETTLE_MS));
-    }
-    // Active Web TUI surfaces own the sizing client lifecycle. Chat-only
-    // actions without a visible surface should not create or close a zellij
-    // attach client; direct pane-targeted actions are more reliable and avoid
-    // stealing redraw ownership from an existing terminal attach.
+    // Chat and control actions target the tmux pane directly. They do not need
+    // an attach/sizing client, so they cannot steal redraw ownership from a
+    // visible terminal attach.
     return await action();
   }
 
-  private handleZellijTuiInputFailure(zellij: ZellijTuiSessionState, error: unknown): void {
+  private handleTuiMuxInputFailure(tmux: TuiMuxSessionState, error: unknown): void {
     if (isMuxSessionMissingError(error)) {
-      void this.pollZellijTuiExit(zellij.sessionId);
+      void this.pollTuiMuxExit(tmux.sessionId);
       return;
     }
-    console.warn("[rah] failed to write zellij TUI input", {
-      sessionId: zellij.sessionId,
-      zellijSessionName: zellij.zellijSessionName,
-      paneId: zellij.paneId,
+    console.warn("[rah] failed to write tmux TUI input", {
+      sessionId: tmux.sessionId,
+      muxSessionName: tmux.muxSessionName,
+      paneId: tmux.paneId,
       error,
     });
     this.deps.eventBus.publish({
-      sessionId: zellij.sessionId,
+      sessionId: tmux.sessionId,
       type: "runtime.status",
       source: SYSTEM_SOURCE,
       payload: {
         status: "error",
-        detail: `Failed to write input to ${zellij.muxBackendKind} TUI.`,
+        detail: `Failed to write input to ${tmux.muxBackendKind} TUI.`,
       },
     });
   }
 
-  private async pollZellijTuiExit(sessionId: string): Promise<void> {
-    const zellij = this.zellijTuiSessions.get(sessionId);
-    if (!zellij) {
+  private async pollTuiMuxExit(sessionId: string): Promise<void> {
+    const tmux = this.tuiMuxSessions.get(sessionId);
+    if (!tmux) {
       return;
     }
-    const panes = await zellij.muxRuntime.listPanes(zellij.zellijSessionName).catch((error) => {
+    const panes = await tmux.muxRuntime.listPanes(tmux.muxSessionName).catch((error) => {
       if (isMuxSessionMissingError(error)) {
         return null;
       }
-      console.warn("[rah] failed to poll zellij pane state", {
+      console.warn("[rah] failed to poll tmux pane state", {
         sessionId,
-        zellijSessionName: zellij.zellijSessionName,
-        paneId: zellij.paneId,
+        muxSessionName: tmux.muxSessionName,
+        paneId: tmux.paneId,
         error,
       });
       return undefined;
@@ -2360,23 +2196,23 @@ export class RuntimeTerminalCoordinator {
     if (panes === undefined) {
       return;
     }
-    const pane = panes?.find((candidate) => candidate.paneId === zellij.paneId);
-    if (panes && pane && !isExitedZellijPane(pane)) {
-      zellij.exitPollMisses = 0;
+    const pane = panes?.find((candidate) => candidate.paneId === tmux.paneId);
+    if (panes && pane && !isExitedTuiMuxPane(pane)) {
+      tmux.exitPollMisses = 0;
       return;
     }
-    if (panes && pane && isExitedZellijPane(pane)) {
-      zellij.exitPollMisses = 0;
+    if (panes && pane && isExitedTuiMuxPane(pane)) {
+      tmux.exitPollMisses = 0;
     } else {
-      const misses = (zellij.exitPollMisses ?? 0) + 1;
-      zellij.exitPollMisses = misses;
-      if (misses < ZELLIJ_TUI_EXIT_MISSING_POLL_THRESHOLD) {
+      const misses = (tmux.exitPollMisses ?? 0) + 1;
+      tmux.exitPollMisses = misses;
+      if (misses < TUI_MUX_EXIT_MISSING_POLL_THRESHOLD) {
         return;
       }
     }
     const native = this.nativeTuiSessions.get(sessionId);
     const expectedClose = this.closingNativeTuiSessionIds.has(sessionId);
-    this.clearZellijTuiRuntimeState(sessionId);
+    this.clearTuiMuxRuntimeState(sessionId);
     this.clearNativeTuiRuntimeState(sessionId);
     this.nativeTuiSessionIds.delete(sessionId);
     this.closingNativeTuiSessionIds.delete(sessionId);
@@ -2403,37 +2239,37 @@ export class RuntimeTerminalCoordinator {
           : {}),
       });
     }
-    await this.removeMuxSession(zellij.zellijSessionName, zellij.muxBackendKind).catch(() => undefined);
+    await this.removeMuxSession(tmux.muxSessionName, tmux.muxBackendKind).catch(() => undefined);
   }
 
-  private async closeZellijTuiSession(zellij: ZellijTuiSessionState): Promise<void> {
-    await zellij.muxRuntime.closePane(zellij.zellijSessionName, zellij.paneId).catch((error) => {
+  private async closeTuiMuxSession(tmux: TuiMuxSessionState): Promise<void> {
+    await tmux.muxRuntime.closePane(tmux.muxSessionName, tmux.paneId).catch((error) => {
       if (isMuxSessionMissingError(error)) {
         return;
       }
-      console.warn("[rah] failed to close zellij pane, falling back to kill-session", {
-        sessionId: zellij.sessionId,
-        zellijSessionName: zellij.zellijSessionName,
-        paneId: zellij.paneId,
+      console.warn("[rah] failed to close tmux pane, falling back to kill-session", {
+        sessionId: tmux.sessionId,
+        muxSessionName: tmux.muxSessionName,
+        paneId: tmux.paneId,
         error,
       });
     });
     const deadline = Date.now() + 1_500;
     while (Date.now() < deadline) {
-      const panes = await zellij.muxRuntime.listPanes(zellij.zellijSessionName).catch(() => []);
-      const pane = panes.find((candidate) => candidate.paneId === zellij.paneId);
-      if (!pane || isExitedZellijPane(pane)) {
+      const panes = await tmux.muxRuntime.listPanes(tmux.muxSessionName).catch(() => []);
+      const pane = panes.find((candidate) => candidate.paneId === tmux.paneId);
+      if (!pane || isExitedTuiMuxPane(pane)) {
         break;
       }
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
-    await this.removeMuxSession(zellij.zellijSessionName, zellij.muxBackendKind).catch((error) => {
+    await this.removeMuxSession(tmux.muxSessionName, tmux.muxBackendKind).catch((error) => {
       if (isMuxSessionMissingError(error)) {
         return;
       }
-      console.warn("[rah] failed to remove zellij session", {
-        sessionId: zellij.sessionId,
-        zellijSessionName: zellij.zellijSessionName,
+      console.warn("[rah] failed to remove tmux session", {
+        sessionId: tmux.sessionId,
+        muxSessionName: tmux.muxSessionName,
         error,
       });
     });
@@ -2568,15 +2404,27 @@ export class RuntimeTerminalCoordinator {
   }
 
   async shutdown(): Promise<void> {
-    const zellijSessions = Array.from(this.zellijTuiSessions.values());
-    for (const zellij of zellijSessions) {
-      this.clearZellijTuiRuntimeState(zellij.sessionId);
-      await this.closeZellijTuiSession(zellij).catch((error) => {
-        console.error("[rah] failed to kill zellij session during shutdown", {
-          sessionId: zellij.sessionId,
-          zellijSessionName: zellij.zellijSessionName,
-          error,
+    const tmuxSessions = Array.from(this.tuiMuxSessions.values());
+    const tmuxResults = await Promise.allSettled(
+      tmuxSessions.map(async (tmux) => {
+        this.clearTuiMuxRuntimeState(tmux.sessionId);
+        await this.closeTuiMuxSession(tmux);
+      }),
+    );
+    tmuxResults.forEach((result, index) => {
+      if (result.status === "rejected") {
+        const tmux = tmuxSessions[index];
+        console.error("[rah] failed to kill tmux session during shutdown", {
+          sessionId: tmux?.sessionId,
+          muxSessionName: tmux?.muxSessionName,
+          error: result.reason,
         });
+      }
+    });
+    const closedUnmanaged = await this.cleanupUnmanagedTuiMuxSessions();
+    if (closedUnmanaged.length > 0) {
+      console.warn("[rah] cleaned unmanaged RAH tmux sessions during shutdown", {
+        sessions: closedUnmanaged,
       });
     }
     for (const sessionId of this.nativeTuiSessions.keys()) {

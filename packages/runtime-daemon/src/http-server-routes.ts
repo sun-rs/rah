@@ -1,12 +1,12 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type {
-  CloseZellijMuxSessionResponse,
+  CloseTuiMuxSessionResponse,
   DebugReplayScript,
   IndependentTerminalListResponse,
   ListDebugScenariosResponse,
   ListNativeTuiDiagnosticsResponse,
   ListPtyStatsResponse,
-  ListZellijMuxDiagnosticsResponse,
+  ListTuiMuxDiagnosticsResponse,
   ListProvidersResponse,
   ProviderKind,
 } from "@rah/runtime-protocol";
@@ -21,6 +21,7 @@ import {
 } from "./http-server-response";
 import {
   parseAddCouncilAgentRequest,
+  parseAddManualProviderModelRequest,
   parseAttachSessionRequest,
   parseClaimControlRequest,
   parseClipboardWriteRequest,
@@ -56,6 +57,20 @@ export function createPostRoutes(
   engine: RuntimeEngine,
 ): Array<{ pattern: RegExp; handler: JsonHandler }> {
   return [
+    {
+      pattern: /^\/api\/providers\/([^/]+)\/manual-models$/,
+      handler: async (req, res, match, body) => {
+        writeJson(
+          req,
+          res,
+          200,
+          await engine.addManualProviderModel(
+            decodeURIComponent(match[1]!) as ProviderKind,
+            parseAddManualProviderModelRequest(body),
+          ),
+        );
+      },
+    },
     {
       pattern: /^\/api\/host\/clipboard$/,
       handler: async (req, res, _match, body) => {
@@ -254,10 +269,10 @@ export function createPostRoutes(
       },
     },
     {
-      pattern: /^\/api\/zellij\/sessions\/([^/]+)\/close$/,
+      pattern: /^\/api\/tui-mux\/sessions\/([^/]+)\/close$/,
       handler: async (req, res, match) => {
-        await engine.closeZellijMuxSession(decodeURIComponent(match[1]!));
-        const response: CloseZellijMuxSessionResponse = { ok: true };
+        await engine.closeTuiMuxSession(decodeURIComponent(match[1]!));
+        const response: CloseTuiMuxSessionResponse = { ok: true };
         writeJson(req, res, 200, response);
       },
     },
@@ -340,9 +355,16 @@ export function createPostRoutes(
       },
     },
     {
+      pattern: /^\/api\/council\/rooms\/([^/]+)\/stop$/,
+      handler: async (req, res, match) => {
+        await engine.stopCouncilRoom(decodeURIComponent(match[1]!));
+        writeJson(req, res, 200, { ok: true });
+      },
+    },
+    {
       pattern: /^\/api\/council\/rooms\/([^/]+)\/archive$/,
       handler: async (req, res, match) => {
-        await engine.archiveCouncilRoom(decodeURIComponent(match[1]!));
+        await engine.stopCouncilRoom(decodeURIComponent(match[1]!));
         writeJson(req, res, 200, { ok: true });
       },
     },
@@ -526,9 +548,9 @@ export async function handleHttpRequest(args: {
       return;
     }
 
-    if (req.method === "GET" && pathname === "/api/zellij/diagnostics") {
-      const response: ListZellijMuxDiagnosticsResponse = {
-        sessions: await engine.listZellijMuxDiagnostics(),
+    if (req.method === "GET" && pathname === "/api/tui-mux/diagnostics") {
+      const response: ListTuiMuxDiagnosticsResponse = {
+        sessions: await engine.listTuiMuxDiagnostics(),
       };
       writeJson(req, res, 200, response);
       return;
@@ -536,6 +558,48 @@ export async function handleHttpRequest(args: {
 
     if (req.method === "GET" && pathname === "/api/council/rooms") {
       writeJson(req, res, 200, engine.listCouncilRooms());
+      return;
+    }
+
+    const manualProviderModelsMatch = /^\/api\/providers\/([^/]+)\/manual-models$/.exec(pathname);
+    if (req.method === "GET" && manualProviderModelsMatch) {
+      writeJson(req, res, 200, {
+        models: engine.listManualProviderModels(decodeURIComponent(manualProviderModelsMatch[1]!) as ProviderKind),
+      });
+      return;
+    }
+
+    const manualProviderModelOptionMatch =
+      /^\/api\/providers\/([^/]+)\/manual-models\/([^/]+)\/options\/([^/]+)$/.exec(pathname);
+    if (req.method === "DELETE" && manualProviderModelOptionMatch) {
+      const cwd = url.searchParams.get("cwd") ?? undefined;
+      writeJson(
+        req,
+        res,
+        200,
+        await engine.deleteManualProviderModelOption(
+          decodeURIComponent(manualProviderModelOptionMatch[1]!) as ProviderKind,
+          decodeURIComponent(manualProviderModelOptionMatch[2]!),
+          decodeURIComponent(manualProviderModelOptionMatch[3]!),
+          cwd ? { cwd } : {},
+        ),
+      );
+      return;
+    }
+
+    const manualProviderModelMatch = /^\/api\/providers\/([^/]+)\/manual-models\/([^/]+)$/.exec(pathname);
+    if (req.method === "DELETE" && manualProviderModelMatch) {
+      const cwd = url.searchParams.get("cwd") ?? undefined;
+      writeJson(
+        req,
+        res,
+        200,
+        await engine.deleteManualProviderModel(
+          decodeURIComponent(manualProviderModelMatch[1]!) as ProviderKind,
+          decodeURIComponent(manualProviderModelMatch[2]!),
+          cwd ? { cwd } : {},
+        ),
+      );
       return;
     }
 

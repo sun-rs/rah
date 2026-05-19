@@ -49,7 +49,7 @@ test("CouncilStore persists rooms, agents, ordered messages, and stopped status"
 
     store.updateAgent(created.room.id, created.agents[0]!.id, {
       status: "idle",
-      zellijPaneId: "terminal_1",
+      terminalId: "terminal_1",
     });
     store.stopRoom(created.room.id);
     const persisted = JSON.parse(readFileSync(filePath, "utf8")) as { messages?: unknown[] };
@@ -60,7 +60,7 @@ test("CouncilStore persists rooms, agents, ordered messages, and stopped status"
     const snapshot = reloaded.snapshot(created.room.id);
     assert.equal(snapshot.room.status, "stopped");
     assert.equal(snapshot.agents[0]!.status, "stopped");
-    assert.equal(snapshot.agents[0]!.zellijPaneId, "terminal_1");
+    assert.equal(snapshot.agents[0]!.terminalId, "terminal_1");
     assert.equal(snapshot.messages.length, 2);
 
     reloaded.deleteRoom(created.room.id);
@@ -109,7 +109,8 @@ test("CouncilStore marks rooms and active agents failed with diagnostic detail",
 
     const failed = store.failRoom(created.room.id, "launch failed");
 
-    assert.equal(failed.room.status, "failed");
+    assert.equal(failed.room.status, "stopped");
+    assert.equal(failed.room.phase, "failed");
     assert.equal(failed.room.error, "launch failed");
     assert.equal(failed.agents[0]!.status, "failed");
     assert.equal(failed.agents[0]!.lastStatusDetail, "launch failed");

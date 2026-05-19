@@ -310,6 +310,8 @@ function sessionSummary(sessionId: string, providerSessionId: string): SessionSu
       launchSource: "web",
       cwd: workDirGlobal,
       rootDir: workDirGlobal,
+      status: "running",
+      phase: "ready",
       runtimeState: "idle",
       ptyId: `pty-${sessionId}`,
       capabilities: {
@@ -328,7 +330,7 @@ function sessionSummary(sessionId: string, providerSessionId: string): SessionSu
         renameSession: false,
         actions: {
           info: true,
-          archive: false,
+          stop: false,
           delete: true,
           rename: "none",
         },
@@ -1196,7 +1198,7 @@ describe("RuntimeEngine", () => {
           prelaunchConfig: "available",
           runtimeConfig: "unverified",
           interrupt: "unverified",
-          archiveLifecycle: "unverified",
+          stopLifecycle: "unverified",
         },
       },
     });
@@ -1418,7 +1420,7 @@ describe("RuntimeEngine", () => {
     await engine.shutdown();
   });
 
-  test("history snapshot transfers from replay to claimed live session", async () => {
+  test("history snapshot transfers from replay to claimed running session", async () => {
     const adapter = new SnapshotPagingAdapter();
     adapter.historyBySessionId.set("replay-1", [
       historyEvent("replay-1", 1, "2025-07-19T22:21:01.000Z", "older"),
@@ -1602,7 +1604,7 @@ describe("RuntimeEngine", () => {
     await engine.shutdown();
   });
 
-  test("frozen history pager transfers to claimed live session", async () => {
+  test("frozen history pager transfers to claimed running session", async () => {
     const adapter = new FrozenPagingAdapter();
     adapter.pagesBySessionId.set("replay-1", {
       boundary: { kind: "frozen", sourceRevision: "rev-1" },
@@ -2348,9 +2350,9 @@ describe("RuntimeEngine", () => {
     }
   });
 
-  test("native TUI backend ignores unrelated Codex rollout updates outside its isolated home", async () => {
+  test("native TUI backend ignores unrelated Codex rollout updates without local binding evidence", async () => {
     const engine = new RuntimeEngine([]);
-    const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-native-tui-codex-isolate-"));
+    const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-native-tui-codex-unrelated-"));
     const fakeCodex = path.join(workspace, "fake-codex.js");
     const externalProviderSessionId = "019de928-7d22-7c63-ba89-dcb25d4a8999";
     const previousCodexBinary = process.env.RAH_CODEX_BINARY;
@@ -2368,7 +2370,7 @@ describe("RuntimeEngine", () => {
         "#!/usr/bin/env node",
         "const fs = require('node:fs');",
         "const path = require('node:path');",
-        "process.stdout.write('MOCK_NATIVE_TUI_ISOLATED_CODEX_READY\\r\\n');",
+        "process.stdout.write('MOCK_NATIVE_TUI_UNRELATED_CODEX_READY\\r\\n');",
         "setTimeout(() => {",
         "  const home = process.env.MOCK_BASE_CODEX_HOME;",
         "  const rollout = path.join(home, 'sessions', 'external-rollout.jsonl');",

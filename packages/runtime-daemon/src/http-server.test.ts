@@ -224,10 +224,10 @@ describe("startRahDaemon", () => {
     });
   });
 
-  test("rejects closing non-RAH zellij mux sessions", async () => {
+  test("rejects closing non-RAH TUI mux sessions", async () => {
     const response = await requestJson({
       port,
-      path: "/api/zellij/sessions/user-session/close",
+      path: "/api/tui-mux/sessions/user-session/close",
       method: "POST",
       headers: {
         Origin: `http://127.0.0.1:${port}`,
@@ -237,7 +237,7 @@ describe("startRahDaemon", () => {
     });
     assert.equal(response.status, 400);
     assert.deepEqual(response.json, {
-      error: "Only RAH-owned zellij sessions can be closed from diagnostics.",
+      error: "Only RAH-owned TUI mux sessions can be closed from diagnostics.",
     });
   });
 
@@ -398,7 +398,7 @@ describe("startRahDaemon", () => {
     });
     assert.equal(start.status, 400);
     assert.deepEqual(start.json, {
-      error: "Provider custom is not a supported live provider. Use Codex, Claude, or OpenCode.",
+      error: "Provider custom is not a supported live provider. Use Codex, Claude, Gemini, or OpenCode.",
     });
 
     const resume = await requestJson({
@@ -417,7 +417,7 @@ describe("startRahDaemon", () => {
     });
     assert.equal(resume.status, 400);
     assert.deepEqual(resume.json, {
-      error: "Provider custom is not a supported live provider. Use Codex, Claude, or OpenCode.",
+      error: "Provider custom is not a supported live provider. Use Codex, Claude, Gemini, or OpenCode.",
     });
   });
 
@@ -438,7 +438,7 @@ describe("startRahDaemon", () => {
       403,
     );
     assert.equal(
-      requestErrorStatus(new Error("Cannot remove a workspace with active live sessions.")),
+      requestErrorStatus(new Error("Cannot remove a workspace with active running sessions.")),
       400,
     );
     assert.equal(

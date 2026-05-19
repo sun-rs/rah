@@ -1,4 +1,5 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type { StoredSessionRef } from "@rah/runtime-protocol";
 import { readLeadingLines } from "./file-snippets";
@@ -9,10 +10,6 @@ import {
   writeStoredSessionMetadataCache,
 } from "./stored-session-metadata-cache";
 import { withHistoryFileMeta } from "./stored-session-history-meta";
-import {
-  listCodexWrapperHomes,
-  resolveCodexBaseHome,
-} from "./codex-wrapper-home";
 export type { CodexStoredSessionRecord } from "./codex-stored-session-types";
 import type { CodexStoredSessionRecord } from "./codex-stored-session-types";
 export {
@@ -35,22 +32,21 @@ const MAX_SEARCH_DEPTH = 4;
 const MAX_HEAD_LINES = 64;
 const MAX_ROLLOUT_FILES = 400;
 
+function resolveCodexBaseHome(): string {
+  return process.env.CODEX_HOME ?? path.join(os.homedir(), ".codex");
+}
+
 export function resolveCodexStoredSessionWatchRoots(): string[] {
   return resolveCodexSearchRoots();
 }
 
 function resolveCodexSearchRoots(): string[] {
   const home = resolveCodexBaseHome();
-  const roots = [path.join(home, "sessions"), path.join(home, "archived_sessions")];
-  for (const wrapperHome of listCodexWrapperHomes(home)) {
-    roots.push(path.join(wrapperHome, "sessions"), path.join(wrapperHome, "archived_sessions"));
-  }
-  return roots;
+  return [path.join(home, "sessions"), path.join(home, "archived_sessions")];
 }
 
 function resolveCodexHomes(): string[] {
-  const home = resolveCodexBaseHome();
-  return [home, ...listCodexWrapperHomes(home)];
+  return [resolveCodexBaseHome()];
 }
 
 function readHeadLines(filePath: string, maxBytes = 512 * 1024): string[] {

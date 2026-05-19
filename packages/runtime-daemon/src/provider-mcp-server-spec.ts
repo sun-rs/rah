@@ -58,6 +58,29 @@ export function opencodeConfigForMcpServers(
   };
 }
 
+export function geminiSettingsForMcpServers(
+  servers: readonly ProviderMcpServerSpec[] | undefined,
+): Record<string, unknown> | undefined {
+  if (!servers || servers.length === 0) {
+    return undefined;
+  }
+  return {
+    mcpServers: Object.fromEntries(
+      servers.map((server) => [
+        normalizeMcpServerName(server.name),
+        {
+          command: server.command,
+          ...(server.args ? { args: server.args } : {}),
+          ...(server.env ? { env: server.env } : {}),
+          // Council MCP is a local RAH-owned server; Gemini should not stop on
+          // approval prompts while agents are in the wait loop.
+          trust: true,
+        },
+      ]),
+    ),
+  };
+}
+
 export function opencodeEnvForMcpServers(
   servers: readonly ProviderMcpServerSpec[] | undefined,
 ): Record<string, string> | undefined {

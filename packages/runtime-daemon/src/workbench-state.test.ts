@@ -30,7 +30,7 @@ describe("WorkbenchStateStore", () => {
     rmSync(tmpRoot, { recursive: true, force: true });
   });
 
-  test("does not surface stale previous live sessions without provider backing", async () => {
+  test("does not surface stale previous running sessions without provider backing", async () => {
     const first = new RuntimeEngine();
     first.addWorkspace("/workspace/demo");
     first.addWorkspace("/workspace/extra");
@@ -84,7 +84,7 @@ describe("WorkbenchStateStore", () => {
     await engine.shutdown();
   });
 
-  test("cannot remove a workspace with active live sessions", async () => {
+  test("cannot remove a workspace with active running sessions", async () => {
     const engine = new RuntimeEngine();
     engine.addWorkspace("/workspace/demo");
     engine.sessionStore.createManagedSession({
@@ -98,13 +98,13 @@ describe("WorkbenchStateStore", () => {
 
     assert.throws(
       () => engine.removeWorkspace("/workspace/demo"),
-      /Cannot remove a workspace with active live sessions/,
+      /Cannot remove a workspace with active running sessions/,
     );
 
     await engine.shutdown();
   });
 
-  test("surfaces visible live sessions in global recent before control is claimed", async () => {
+  test("surfaces visible running sessions in global recent before control is claimed", async () => {
     const engine = new RuntimeEngine();
     const state = engine.sessionStore.createManagedSession({
       provider: "codex",
@@ -169,7 +169,7 @@ describe("WorkbenchStateStore", () => {
     await second.shutdown();
   });
 
-  test("cannot remove a parent workspace when a descendant live session exists", async () => {
+  test("cannot remove a parent workspace when a descendant running session exists", async () => {
     const engine = new RuntimeEngine();
     engine.addWorkspace("/workspace/demo");
     engine.addWorkspace("/workspace/demo/app");
@@ -184,7 +184,7 @@ describe("WorkbenchStateStore", () => {
 
     assert.throws(
       () => engine.removeWorkspace("/workspace/demo"),
-      /Cannot remove a workspace with active live sessions/,
+      /Cannot remove a workspace with active running sessions/,
     );
 
     await engine.shutdown();
@@ -276,7 +276,7 @@ describe("WorkbenchStateStore", () => {
               rootDir: "/workspace/debug",
               title: "Refactor mobile workbench",
               updatedAt: "2026-04-23T13:26:21.939Z",
-              source: "previous_live",
+              source: "previous_running",
             },
             {
               provider: "codex",
@@ -297,7 +297,7 @@ describe("WorkbenchStateStore", () => {
               title: "Refactor mobile workbench",
               updatedAt: "2026-04-23T13:26:21.939Z",
               lastUsedAt: "2026-04-23T13:26:21.939Z",
-              source: "previous_live",
+              source: "previous_running",
             },
           ],
         },
@@ -320,7 +320,7 @@ describe("WorkbenchStateStore", () => {
     assert.ok(snapshot.recentSessions.every((session) => session.provider !== "custom"));
   });
 
-  test("closing a managed session removes it from live sessions and unblocks workspace removal", async () => {
+  test("closing a managed session removes it from running sessions and unblocks workspace removal", async () => {
     const rootDir = mkdtempSync(path.join(tmpRoot, "workspace-close-"));
     const engine = new RuntimeEngine();
     engine.addWorkspace(rootDir);
@@ -600,7 +600,7 @@ describe("WorkbenchStateStore", () => {
     assert.equal(state.controlLease.holderClientId, "web-alpha");
   });
 
-  test("removed workspace stays removed across restart even if stale previous live history still points to it", async () => {
+  test("removed workspace stays removed across restart even if stale previous running history still points to it", async () => {
     const first = new RuntimeEngine();
     first.addWorkspace("/workspace/demo");
     const state = first.sessionStore.createManagedSession({
@@ -632,7 +632,7 @@ describe("WorkbenchStateStore", () => {
     await third.shutdown();
   });
 
-  test("listing sessions prunes orphan live sessions with no attached clients", async () => {
+  test("listing sessions prunes orphan running sessions with no attached clients", async () => {
     const rootDir = mkdtempSync(path.join(tmpRoot, "workspace-orphan-"));
     const engine = new RuntimeEngine();
     try {

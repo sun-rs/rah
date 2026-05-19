@@ -3,6 +3,8 @@ import { resolve } from "node:path";
 import type {
   AddCouncilAgentRequest,
   AddCouncilAgentResponse,
+  AddManualProviderModelRequest,
+  AddManualProviderModelResponse,
   AttachSessionRequest,
   AttachSessionResponse,
   ClaimControlRequest,
@@ -18,6 +20,8 @@ import type {
   CreateCouncilRoomRequest,
   CreateCouncilRoomResponse,
   DetachSessionRequest,
+  DeleteManualProviderModelOptionResponse,
+  DeleteManualProviderModelResponse,
   DebugScenarioDescriptor,
   DebugReplayScript,
   EventSubscriptionRequest,
@@ -27,6 +31,7 @@ import type {
   IndependentTerminalStartResponse,
   InterruptSessionRequest,
   ManagedSession,
+  ManualProviderModel,
   NativeTuiSurfaceClaimRequest,
   NativeTuiClientCloseRequest,
   NativeTuiSurfaceReleaseRequest,
@@ -51,7 +56,7 @@ import type {
   StartSessionRequest,
   StartSessionResponse,
   StoredSessionRef,
-  ZellijMuxSessionDiagnostic,
+  TuiMuxSessionDiagnostic,
 } from "@rah/runtime-protocol";
 import {
   isCoreLiveProvider,
@@ -114,6 +119,7 @@ import {
 } from "./workbench-directory-utils";
 import { WorkspaceScopeAuthorizer } from "./workspace-scope-authorizer";
 import { assertExistingWorkingDirectory } from "./provider-working-directory";
+import { cleanupRahNativeServerOrphans } from "./native-local-server-orphans";
 import {
   bindActionCapability,
   bindDebugCapability,
@@ -139,6 +145,12 @@ import {
   hasWorkspaceInspectionCapability,
 } from "./provider-capability-bindings";
 import { CouncilRuntime } from "./council/council-runtime";
+import {
+  addManualProviderModel,
+  deleteManualProviderModel,
+  deleteManualProviderModelOption,
+  listManualProviderModels,
+} from "./manual-provider-models";
 
 const SYSTEM_SOURCE = {
   provider: "system" as const,
@@ -237,7 +249,6 @@ export class RuntimeEngine {
     this.nativeTuiMirrors = createDefaultNativeTuiMirrorProvider();
     this.council = new CouncilRuntime({
       eventBus: this.eventBus,
-      ptyHub: this.ptyHub,
       startSession: (request) => this.startSession(request),
       sendInput: (sessionId, request) => this.sendInput(sessionId, request),
       interruptSession: (sessionId, request) => {
@@ -344,28 +355,34 @@ export class RuntimeEngine {
     if (process.env.RAH_DISABLE_STORED_SESSION_MONITOR !== "1") {
       this.storedSessionMonitor.start();
     }
-    void this.restoreZellijLiveSessions(restored.zellijLiveSessions);
+    void this.restoreTuiMuxLiveSessions(restored.tuiMuxLiveSessions)
+      .then(() => this.runStartupOrphanJanitor())
+      .catch((error: unknown) => {
+        console.warn("[rah] startup orphan cleanup failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
   }
 
-  private async restoreZellijLiveSessions(
+  private async restoreTuiMuxLiveSessions(
     sessions: readonly ManagedSession[],
   ): Promise<void> {
     if (sessions.length === 0) {
       return;
     }
     for (const session of sessions) {
-      if (session.provider !== "claude") {
-        console.warn("[rah] skipping stale non-Claude zellij live session", {
+      if (!isTuiMuxFallbackProvider(session.provider)) {
+        console.warn("[rah] skipping stale unsupported TUI mux running session", {
           sessionId: session.id,
           provider: session.provider,
-          zellijSessionName: session.mux?.sessionName,
+          muxSessionName: session.mux?.sessionName,
         });
         continue;
       }
-      await this.terminals.restoreZellijTuiSession(session).catch((error) => {
-        console.warn("[rah] failed to recover zellij live session", {
+      await this.terminals.restoreTuiMuxSession(session).catch((error) => {
+        console.warn("[rah] failed to recover TUI mux running session", {
           sessionId: session.id,
-          zellijSessionName: session.mux?.sessionName,
+          muxSessionName: session.mux?.sessionName,
           error,
         });
         return false;
@@ -373,6 +390,22 @@ export class RuntimeEngine {
     }
     this.workbenchState.persistLiveSessions(this.sessionStore.listSessions());
     this.refreshRememberedState();
+  }
+
+  private async runStartupOrphanJanitor(): Promise<void> {
+    const closedNativeServerPids = await cleanupRahNativeServerOrphans();
+    if (closedNativeServerPids.length > 0) {
+      console.warn("[rah] cleaned RAH native local-server processes", {
+        pids: closedNativeServerPids,
+      });
+    }
+    const closedTuiMuxSessions = await this.terminals.cleanupUnmanagedTuiMuxSessions();
+    if (closedTuiMuxSessions.length > 0) {
+      console.warn("[rah] cleaned unmanaged RAH tmux sessions", {
+        sessions: closedTuiMuxSessions,
+      });
+    }
+    this.council.reconcilePersistedRuntimeState();
   }
 
   listSessions(): ListSessionsResponse {
@@ -412,12 +445,12 @@ export class RuntimeEngine {
     });
   }
 
-  async listZellijMuxDiagnostics(): Promise<ZellijMuxSessionDiagnostic[]> {
-    return await this.terminals.listZellijMuxDiagnostics();
+  async listTuiMuxDiagnostics(): Promise<TuiMuxSessionDiagnostic[]> {
+    return await this.terminals.listTuiMuxDiagnostics();
   }
 
-  async closeZellijMuxSession(sessionName: string): Promise<void> {
-    await this.terminals.closeUnmanagedZellijMuxSession(sessionName);
+  async closeTuiMuxSession(sessionName: string): Promise<void> {
+    await this.terminals.closeUnmanagedTuiMuxSession(sessionName);
   }
 
   async listProviderModels(
@@ -425,6 +458,51 @@ export class RuntimeEngine {
     options?: { cwd?: string; forceRefresh?: boolean },
   ): Promise<ProviderModelCatalog> {
     return this.structuredProviders.listProviderModels(provider, options);
+  }
+
+  listManualProviderModels(provider?: ProviderKind): ManualProviderModel[] {
+    return listManualProviderModels(provider);
+  }
+
+  async addManualProviderModel(
+    provider: ProviderKind,
+    request: AddManualProviderModelRequest,
+  ): Promise<AddManualProviderModelResponse> {
+    const trimmedModelId = request.id.trim();
+    const catalog = await this.listProviderModels(provider, request.cwd ? { cwd: request.cwd } : {});
+    if (catalog.models.some((model) => model.id === trimmedModelId)) {
+      throw new Error(`Bad Request: model '${trimmedModelId}' already exists for ${provider}.`);
+    }
+    const model = await addManualProviderModel(provider, request);
+    return {
+      model,
+      catalog: await this.listProviderModels(provider, request.cwd ? { cwd: request.cwd } : {}),
+    };
+  }
+
+  async deleteManualProviderModel(
+    provider: ProviderKind,
+    modelId: string,
+    options?: { cwd?: string },
+  ): Promise<DeleteManualProviderModelResponse> {
+    await deleteManualProviderModel(provider, modelId);
+    return {
+      ok: true,
+      catalog: await this.listProviderModels(provider, options),
+    };
+  }
+
+  async deleteManualProviderModelOption(
+    provider: ProviderKind,
+    modelId: string,
+    optionId: string,
+    options?: { cwd?: string },
+  ): Promise<DeleteManualProviderModelOptionResponse> {
+    const model = await deleteManualProviderModelOption(provider, modelId, optionId);
+    return {
+      model,
+      catalog: await this.listProviderModels(provider, options),
+    };
   }
 
   listCouncilRooms(): ListCouncilRoomsResponse {
@@ -451,8 +529,8 @@ export class RuntimeEngine {
     return this.council.postMessage(roomId, request);
   }
 
-  async archiveCouncilRoom(roomId: string): Promise<void> {
-    await this.council.archiveRoom(roomId);
+  async stopCouncilRoom(roomId: string): Promise<void> {
+    await this.council.stopRoom(roomId);
   }
 
   deleteCouncilRoom(roomId: string): void {
@@ -497,12 +575,12 @@ export class RuntimeEngine {
     if (!directory) {
       throw new Error("Workspace directory is required.");
     }
-    const hasLiveSessions = this.sessionStore.listSessions().some((state) =>
+    const hasRunningSessions = this.sessionStore.listSessions().some((state) =>
       !isReadOnlyReplaySession(state) &&
       sessionBelongsToWorkspace(state.session.rootDir || state.session.cwd, directory),
     );
-    if (hasLiveSessions) {
-      throw new Error("Cannot remove a workspace with active live sessions.");
+    if (hasRunningSessions) {
+      throw new Error("Cannot remove a workspace with active running sessions.");
     }
     this.workbenchState.removeWorkspace(directory);
     return this.currentWorkbenchSessions();
@@ -573,16 +651,17 @@ export class RuntimeEngine {
     this.assertLiveSessionProviderAllowed(request);
     this.assertStructuredLiveBackendAllowed(request);
     this.assertNativeLocalServerBackendAllowed(request);
-    this.assertZellijTuiBackendAllowed(request);
+    this.assertTuiMuxBackendAllowed(request);
     if (this.shouldUseNativeLocalServerBackend(request)) {
       return await this.structuredProviders.startSession(request);
     }
-    if (this.shouldUseZellijTuiBackend(request)) {
+    if (this.shouldUseTuiMuxBackend(request)) {
       await assertExistingWorkingDirectory(request.cwd, "Session working directory");
       this.pruneOrphanSessions();
-      return await this.terminals.startZellijTuiSession({
+      return await this.terminals.startTuiMuxSession({
         launch: await this.nativeTuiProviders.startLaunchSpec(request),
         ...(request.attach !== undefined ? { attach: request.attach } : {}),
+        ...(request.origin !== undefined ? { origin: request.origin } : {}),
       });
     }
     if (this.shouldUseNativeTuiBackend(request)) {
@@ -591,6 +670,7 @@ export class RuntimeEngine {
       return await this.terminals.startNativeTuiSession({
         launch: await this.nativeTuiProviders.startLaunchSpec(request),
         ...(request.attach !== undefined ? { attach: request.attach } : {}),
+        ...(request.origin !== undefined ? { origin: request.origin } : {}),
       });
     }
     return this.structuredProviders.startSession(request);
@@ -600,22 +680,23 @@ export class RuntimeEngine {
     this.assertLiveSessionProviderAllowed(request);
     this.assertStructuredLiveBackendAllowed(request);
     this.assertNativeLocalServerBackendAllowed(request);
-    this.assertZellijTuiBackendAllowed(request);
+    this.assertTuiMuxBackendAllowed(request);
     if (request.preferStoredReplay === true) {
       return await this.resumeStoredReplaySession(request);
     }
     if (this.shouldUseNativeLocalServerBackend(request)) {
       return await this.structuredProviders.resumeSession(request);
     }
-    if (this.shouldUseZellijTuiBackend(request)) {
+    if (this.shouldUseTuiMuxBackend(request)) {
       if (request.cwd) {
         await assertExistingWorkingDirectory(request.cwd, "Session working directory");
       }
       this.pruneOrphanSessions();
-      return await this.terminals.startZellijTuiSession({
+      return await this.terminals.startTuiMuxSession({
         launch: await this.nativeTuiProviders.resumeLaunchSpec(request),
         ...(request.attach !== undefined ? { attach: request.attach } : {}),
         providerSessionId: request.providerSessionId,
+        ...(request.origin !== undefined ? { origin: request.origin } : {}),
       });
     }
     if (this.shouldUseNativeTuiBackend(request)) {
@@ -627,6 +708,7 @@ export class RuntimeEngine {
         launch: await this.nativeTuiProviders.resumeLaunchSpec(request),
         ...(request.attach !== undefined ? { attach: request.attach } : {}),
         providerSessionId: request.providerSessionId,
+        ...(request.origin !== undefined ? { origin: request.origin } : {}),
       });
     }
     return this.structuredProviders.resumeSession(request);
@@ -666,7 +748,7 @@ export class RuntimeEngine {
       !this.structuredLiveAllowedForInjectedAdapters
     ) {
       throw new Error(
-        "Structured live backend is disabled outside injected test adapters. Use native_tui for live sessions.",
+        "Structured live backend is disabled outside injected test adapters. Use native_tui for running sessions.",
       );
     }
   }
@@ -687,18 +769,18 @@ export class RuntimeEngine {
     }
   }
 
-  private assertZellijTuiBackendAllowed(
+  private assertTuiMuxBackendAllowed(
     request: Pick<StartSessionRequest | ResumeSessionRequest, "provider" | "liveBackend">,
   ): void {
     if (
-      request.liveBackend === "zellij_tui" &&
+      request.liveBackend === "tui_mux" &&
       !liveBackendSupportedByProvider({
         provider: request.provider,
         liveBackend: request.liveBackend,
       })
     ) {
       throw new Error(
-        `Provider ${request.provider} does not support the zellij TUI backend. Use native_local_server for Codex/OpenCode live sessions.`,
+        `Provider ${request.provider} does not support the TUI mux backend. Use native_local_server for Codex/OpenCode running sessions.`,
       );
     }
   }
@@ -716,7 +798,7 @@ export class RuntimeEngine {
       return;
     }
     throw new Error(
-      `Provider ${request.provider} is not a supported live provider. Use Codex, Claude, or OpenCode.`,
+      `Provider ${request.provider} is not a supported live provider. Use Codex, Claude, Gemini, or OpenCode.`,
     );
   }
 
@@ -746,12 +828,12 @@ export class RuntimeEngine {
     return !this.structuredLiveAllowedForInjectedAdapters && isNativeLocalServerProvider(request.provider);
   }
 
-  private shouldUseZellijTuiBackend(
+  private shouldUseTuiMuxBackend(
     request: Pick<StartSessionRequest | ResumeSessionRequest, "provider" | "liveBackend"> &
       Partial<Pick<ResumeSessionRequest, "preferStoredReplay">>,
   ): boolean {
     if (request.liveBackend !== undefined) {
-      return request.liveBackend === "zellij_tui";
+      return request.liveBackend === "tui_mux";
     }
     if (request.preferStoredReplay === true) {
       return false;
@@ -817,10 +899,6 @@ export class RuntimeEngine {
   }
 
   getNativeTuiSurface(sessionId: string): NativeTuiSurfaceResponse {
-    const councilSurface = this.council.getAgentTuiSurface(sessionId);
-    if (councilSurface !== null) {
-      return councilSurface;
-    }
     return this.terminals.getNativeTuiSurface(sessionId);
   }
 
@@ -828,10 +906,6 @@ export class RuntimeEngine {
     sessionId: string,
     request: NativeTuiSurfaceClaimRequest,
   ): Promise<NativeTuiSurfaceResponse> {
-    const councilSurface = await this.council.claimAgentTuiSurface(sessionId, request);
-    if (councilSurface !== null) {
-      return councilSurface;
-    }
     return await this.terminals.claimNativeTuiSurface(sessionId, request);
   }
 
@@ -839,10 +913,6 @@ export class RuntimeEngine {
     sessionId: string,
     request: NativeTuiSurfaceReleaseRequest,
   ): Promise<NativeTuiSurfaceResponse> {
-    const councilSurface = this.council.releaseAgentTuiSurface(sessionId, request);
-    if (councilSurface !== null) {
-      return councilSurface;
-    }
     return await this.terminals.releaseNativeTuiSurface(sessionId, request);
   }
 
@@ -867,18 +937,12 @@ export class RuntimeEngine {
     if (this.terminals.handlePtyInput(sessionId, clientId, data)) {
       return;
     }
-    if (this.council.handlePtyInput(sessionId, clientId, data)) {
-      return;
-    }
     this.requireStructuredInputControlAdapter(sessionId).onPtyInput(sessionId, clientId, data);
   }
 
   onPtyResize(sessionId: string, clientId: string, cols: number, rows: number): void {
     this.assertPtyInputControl(sessionId, clientId);
     if (this.terminals.handlePtyResize(sessionId, clientId, cols, rows)) {
-      return;
-    }
-    if (this.council.handlePtyResize(sessionId, clientId, cols, rows)) {
       return;
     }
     this.requireStructuredInputControlAdapter(sessionId).onPtyResize(
@@ -1227,6 +1291,22 @@ export class RuntimeEngine {
         runShutdownStep(`provider adapter ${adapter.id}`, () => adapter.shutdown?.()),
       ),
     );
+    await runShutdownStep("native local-server cleanup", async () => {
+      const closedNativeServerPids = await cleanupRahNativeServerOrphans();
+      if (closedNativeServerPids.length > 0) {
+        console.warn("[rah] cleaned RAH native local-server processes during shutdown", {
+          pids: closedNativeServerPids,
+        });
+      }
+    });
+    await runShutdownStep("TUI mux cleanup", async () => {
+      const closedTuiMuxSessions = await this.terminals.cleanupUnmanagedTuiMuxSessions();
+      if (closedTuiMuxSessions.length > 0) {
+        console.warn("[rah] cleaned unmanaged RAH tmux sessions during shutdown", {
+          sessions: closedTuiMuxSessions,
+        });
+      }
+    });
     await runShutdownStep("workbench state flush", () => this.workbenchState.flush());
   }
 
@@ -1417,14 +1497,17 @@ export class RuntimeEngine {
     }
     this.workbenchState.rememberSession(state);
     this.refreshRememberedState();
-    await this.terminals.closeNativeLocalServerTuiClient(sessionId).catch(() => false);
-    const adapter = this.requireStructuredLifecycleAdapter(sessionId);
-    await Promise.resolve(adapter.destroySession?.(sessionId)).catch((error: unknown) => {
-      console.error(
-        `[rah] destroySession failed for council session ${sessionId}:`,
-        error instanceof Error ? error.message : String(error),
-      );
-    });
+    const closedNativeTui = await this.terminals.closeNativeTuiSession(sessionId);
+    if (!closedNativeTui) {
+      await this.terminals.closeNativeLocalServerTuiClient(sessionId).catch(() => false);
+      const adapter = this.requireStructuredLifecycleAdapter(sessionId);
+      await Promise.resolve(adapter.destroySession?.(sessionId)).catch((error: unknown) => {
+        console.error(
+          `[rah] destroySession failed for council session ${sessionId}:`,
+          error instanceof Error ? error.message : String(error),
+        );
+      });
+    }
     this.sessionStore.removeSession(sessionId);
     this.ptyHub.removeSession(sessionId);
     this.historySnapshots.clear(sessionId);

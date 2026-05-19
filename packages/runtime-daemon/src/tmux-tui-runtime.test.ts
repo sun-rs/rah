@@ -84,6 +84,37 @@ function writeFakeClaudeBinary(filePath: string): void {
   chmodSync(filePath, 0o755);
 }
 
+function writeFakeGeminiBinary(filePath: string): void {
+  writeFileSync(
+    filePath,
+    [
+      "#!/usr/bin/env node",
+      "process.stdout.write('TMUX_GEMINI_BOOTING\\r\\n');",
+      "process.stdin.setEncoding('utf8');",
+      "if (process.stdin.isTTY && process.stdin.setRawMode) process.stdin.setRawMode(true);",
+      "process.stdin.resume();",
+      "let buffer = '';",
+      "setTimeout(() => process.stdout.write('TMUX_GEMINI_READY\\r\\n>   Type your message or @path/to/file\\r\\n'), 600);",
+      "process.stdin.on('data', (chunk) => {",
+      "  if (chunk.includes('\\u001b')) {",
+      "    chunk = chunk.replace(/\\u001b/g, '');",
+      "    process.stdout.write('TMUX_GEMINI_INTERRUPTED\\r\\n>   Type your message or @path/to/file\\r\\n');",
+      "  }",
+      "  buffer += chunk;",
+      "  const parts = buffer.split(/\\r|\\n/);",
+      "  buffer = parts.pop() ?? '';",
+      "  for (const part of parts) {",
+      "    if (!part.trim()) continue;",
+      "    process.stdout.write(`TMUX_GEMINI_INPUT:${part.trim()}\\r\\n>   Type your message or @path/to/file\\r\\n`);",
+      "  }",
+      "});",
+      "setInterval(() => undefined, 1000);",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(filePath, 0o755);
+}
+
 async function assertTmuxSessionGone(sessionName: string): Promise<void> {
   const sessions = await new TmuxMuxBackend().listSessions();
   assert.equal(
@@ -92,7 +123,7 @@ async function assertTmuxSessionGone(sessionName: string): Promise<void> {
   );
 }
 
-test("zellij_tui fallback can use tmux as the managed mux backend", async (t) => {
+test("tui_mux fallback uses tmux as the managed mux backend", async (t) => {
   if (await skipIfTmuxUnavailable(t)) {
     return;
   }
@@ -107,7 +138,7 @@ test("zellij_tui fallback can use tmux as the managed mux backend", async (t) =>
     const started = await engine.startSession({
       provider: "claude",
       cwd: workspace,
-      liveBackend: "zellij_tui",
+      liveBackend: "tui_mux",
       attach: {
         client: {
           id: "web-tmux-claude",
@@ -156,6 +187,127 @@ test("zellij_tui fallback can use tmux as the managed mux backend", async (t) =>
     const muxSessionName = started.session.session.mux?.sessionName;
     assert.ok(muxSessionName);
     await engine.closeSession(sessionId, { clientId: "web-tmux-claude" });
+    await waitFor(async () => {
+      await assertTmuxSessionGone(muxSessionName);
+    });
+  } finally {
+    await engine.shutdown();
+    restoreClaude();
+    restoreMux();
+    restoreRahHome();
+    rmSync(workspace, { force: true, recursive: true });
+  }
+});
+
+test("Gemini tui_mux queues Web input until the prompt is visible", async (t) => {
+  if (await skipIfTmuxUnavailable(t)) {
+    return;
+  }
+  const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-tmux-gemini-"));
+  const fakeGemini = path.join(workspace, "fake-gemini.js");
+  writeFakeGeminiBinary(fakeGemini);
+  const restoreRahHome = setEnv("RAH_HOME", path.join(workspace, "rah-home"));
+  const restoreMux = setEnv("RAH_TUI_MUX", "tmux");
+  const restoreGemini = setEnv("RAH_GEMINI_BINARY", fakeGemini);
+  const engine = new RuntimeEngine();
+  try {
+    const started = await engine.startSession({
+      provider: "gemini",
+      cwd: workspace,
+      liveBackend: "tui_mux",
+      attach: {
+        client: {
+          id: "web-tmux-gemini",
+          kind: "web",
+          connectionId: "web-tmux-gemini",
+        },
+        mode: "interactive",
+        claimControl: true,
+      },
+    });
+    const sessionId = started.session.session.id;
+    assert.equal(started.session.session.nativeTui?.promptState, "agent_busy");
+    let transcript = "";
+    const unsubscribe = engine.ptyHub.subscribe(sessionId, (frame) => {
+      if (frame.type === "pty.replay") {
+        transcript += frame.chunks.join("");
+      } else if (frame.type === "pty.output") {
+        transcript += frame.data;
+      }
+    });
+    try {
+      engine.sendInput(sessionId, {
+        clientId: "web-tmux-gemini",
+        text: "first gemini prompt",
+      });
+      await waitFor(() => {
+        assert.equal(engine.getSessionSummary(sessionId).session.nativeTui?.queuedInputCount, 1);
+      });
+      await delay(250);
+      assert.doesNotMatch(transcript, /TMUX_GEMINI_INPUT:first gemini prompt/);
+
+      await waitFor(() => {
+        assert.match(transcript, /TMUX_GEMINI_READY/);
+        assert.match(transcript, /TMUX_GEMINI_INPUT:first gemini prompt/);
+        assert.ok(
+          transcript.indexOf("TMUX_GEMINI_INPUT:first gemini prompt") >
+            transcript.indexOf("TMUX_GEMINI_READY"),
+        );
+      });
+
+      engine.interruptSession(sessionId, { clientId: "web-tmux-gemini" });
+      await waitFor(() => {
+        assert.match(transcript, /TMUX_GEMINI_INTERRUPTED/);
+        assert.equal(engine.getSessionSummary(sessionId).session.runtimeState, "idle");
+      });
+    } finally {
+      unsubscribe();
+    }
+    await engine.closeSession(sessionId, { clientId: "web-tmux-gemini" });
+  } finally {
+    await engine.shutdown();
+    restoreGemini();
+    restoreMux();
+    restoreRahHome();
+    rmSync(workspace, { force: true, recursive: true });
+  }
+});
+
+test("Council can stop a Claude tui_mux agent without leaving tmux behind", async (t) => {
+  if (await skipIfTmuxUnavailable(t)) {
+    return;
+  }
+  const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-tmux-council-claude-"));
+  const fakeClaude = path.join(workspace, "fake-claude.js");
+  writeFakeClaudeBinary(fakeClaude);
+  const restoreRahHome = setEnv("RAH_HOME", path.join(workspace, "rah-home"));
+  const restoreMux = setEnv("RAH_TUI_MUX", "tmux");
+  const restoreClaude = setEnv("RAH_CLAUDE_BINARY", fakeClaude);
+  const engine = new RuntimeEngine();
+  try {
+    const created = await engine.createCouncilRoom({
+      workspace,
+      agents: [{ id: "claude-reviewer", provider: "claude", label: "Claude Reviewer" }],
+    });
+    const roomId = created.room.room.id;
+    const agentId = created.room.agents[0]!.id;
+    let sessionId = "";
+    await waitFor(() => {
+      const room = engine.listCouncilRooms().rooms.find((candidate) => candidate.room.id === roomId);
+      assert.ok(room);
+      sessionId = room.agents[0]?.nativeSessionId ?? "";
+      assert.ok(sessionId);
+      const state = engine.sessionStore.getSession(sessionId);
+      assert.ok(state);
+      assert.equal(state.session.liveBackend, "tui_mux");
+      assert.ok(state.session.mux?.sessionName);
+    });
+    const muxSessionName = engine.sessionStore.getSession(sessionId)?.session.mux?.sessionName;
+    assert.ok(muxSessionName);
+
+    await engine.stopCouncilAgent(roomId, agentId);
+
+    assert.equal(engine.sessionStore.getSession(sessionId), undefined);
     await waitFor(async () => {
       await assertTmuxSessionGone(muxSessionName);
     });

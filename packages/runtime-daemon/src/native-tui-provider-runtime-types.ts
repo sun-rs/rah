@@ -5,6 +5,10 @@ import type {
 } from "./claude-session-files";
 import type { CodexRolloutTranslationState } from "./codex-rollout-activity";
 import type { CodexStoredSessionRecord } from "./codex-stored-sessions";
+import type {
+  GeminiStoredActivityState,
+  GeminiStoredSessionRecord,
+} from "./gemini-session-files";
 import type { OpenCodeActivityState } from "./opencode-activity";
 import type { OpenCodeStoredSessionRecord } from "./opencode-stored-sessions";
 import type { ProviderActivity, ProviderActivityMeta } from "./provider-activity";
@@ -57,6 +61,12 @@ export type NativeTuiProviderMirror =
       providerSessionId: string;
       record: ClaudeStoredSessionRecord;
       activityState: ClaudeStoredActivityState;
+    }
+  | {
+      provider: "gemini";
+      providerSessionId: string;
+      record: GeminiStoredSessionRecord;
+      activityState: GeminiStoredActivityState;
     }
   | {
       provider: "opencode";

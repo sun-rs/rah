@@ -1,4 +1,5 @@
 import { appendFileSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type {
   AttachSessionRequest,
@@ -31,10 +32,6 @@ import {
   writeStoredSessionMetadataCache,
 } from "./stored-session-metadata-cache";
 import { withHistoryFileMeta } from "./stored-session-history-meta";
-import {
-  listClaudeWrapperHomes,
-  resolveClaudeBaseHome,
-} from "./claude-wrapper-home";
 import { runtimeDescriptorForStoredHistory } from "./session-runtime-descriptor";
 import {
   createClaudeTimelineIdentity,
@@ -63,7 +60,7 @@ const REHYDRATED_CAPABILITIES = {
   renameSession: true,
   actions: {
     info: true,
-    archive: false,
+    stop: false,
     delete: true,
     rename: "native",
   },
@@ -170,6 +167,10 @@ export type ClaudeStoredActivityBatchItem = {
   activity: ProviderActivity;
 };
 
+function resolveClaudeBaseHome(): string {
+  return process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), ".claude");
+}
+
 export function createClaudeStoredActivityState(): ClaudeStoredActivityState {
   return {
     processedRecordKeys: new Set(),
@@ -179,10 +180,7 @@ export function createClaudeStoredActivityState(): ClaudeStoredActivityState {
 
 export function resolveClaudeStoredSessionWatchRoots(): string[] {
   const baseHome = resolveClaudeBaseHome();
-  return [
-    path.join(baseHome, "projects"),
-    ...listClaudeWrapperHomes(baseHome).map((wrapperHome) => path.join(wrapperHome, "projects")),
-  ];
+  return [path.join(baseHome, "projects")];
 }
 
 function getClaudeProjectDir(cwd: string, configDir = resolveClaudeBaseHome()): string {
@@ -931,7 +929,7 @@ function translateClaudeRecordsToActivities(
       continue;
     }
 
-    // Claude zellij/native mode treats Chat as a transcript mirror. Provider
+    // Claude tmux/native mode treats Chat as a transcript mirror. Provider
     // system records such as API overload/rate-limit errors are runtime status,
     // not chat turns; rendering them as timeline notifications makes them drift
     // relative to user/assistant bubbles during history backfill.
@@ -991,10 +989,9 @@ export function readClaudeStoredSessionActivityBatch(args: {
 export function discoverClaudeStoredSessions(cwd?: string): ClaudeStoredSessionRecord[] {
   const cache = loadStoredSessionMetadataCache("claude");
   const baseHome = resolveClaudeBaseHome();
-  const configHomes = [baseHome, ...listClaudeWrapperHomes(baseHome)];
   const roots = cwd
-    ? configHomes.flatMap((configDir) => expandClaudeProjectDirs(cwd, configDir))
-    : configHomes.map((configDir) => path.join(configDir, "projects"));
+    ? expandClaudeProjectDirs(cwd, baseHome)
+    : [path.join(baseHome, "projects")];
   const files: string[] = [];
 
   for (const root of roots) {

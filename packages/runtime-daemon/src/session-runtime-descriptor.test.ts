@@ -10,7 +10,7 @@ import {
 import type { ManagedSession, ProviderModelCatalog } from "@rah/runtime-protocol";
 
 test("runtimeDescriptorForLiveBackend describes TUI mux fallback sessions", () => {
-  const runtime = runtimeDescriptorForLiveBackend({ provider: "claude", liveBackend: "zellij_tui" });
+  const runtime = runtimeDescriptorForLiveBackend({ provider: "claude", liveBackend: "tui_mux" });
   assert.equal(runtime.kind, "tui_mux_fallback");
   assert.equal(runtime.protocolStability, "tui_stdio");
   assert.equal(runtime.liveSource, "provider_history");
@@ -52,7 +52,7 @@ test("runtimeDescriptorForStoredHistory describes read-only provider history rep
   assert.equal(runtime.features?.historyBackfill, "available");
   assert.equal(runtime.features?.structuredControl, "unsupported");
   assert.equal(runtime.features?.interrupt, "unsupported");
-  assert.equal(runtime.features?.archiveLifecycle, "unsupported");
+  assert.equal(runtime.features?.stopLifecycle, "unsupported");
 });
 
 test("runtimeDescriptorForProviderCatalog advertises target provider runtime boundaries", () => {
@@ -69,7 +69,7 @@ test("runtimeDescriptorForProviderCatalog advertises target provider runtime bou
   assert.equal(codexRuntime.features?.crossClientSync, "available");
   assert.equal(codexRuntime.features?.runtimeConfig, "available");
   assert.equal(codexRuntime.features?.interrupt, "available");
-  assert.equal(codexRuntime.features?.archiveLifecycle, "unverified");
+  assert.equal(codexRuntime.features?.stopLifecycle, "unverified");
   assert.equal(openCodeRuntime.kind, "native_local_server");
   assert.equal(openCodeRuntime.structuredLiveEvents, true);
   assert.equal(openCodeRuntime.tuiContinuity, true);
@@ -78,7 +78,7 @@ test("runtimeDescriptorForProviderCatalog advertises target provider runtime bou
   assert.equal(openCodeRuntime.features?.crossClientSync, "available");
   assert.equal(openCodeRuntime.features?.runtimeConfig, "available");
   assert.equal(openCodeRuntime.features?.interrupt, "available");
-  assert.equal(openCodeRuntime.features?.archiveLifecycle, "available");
+  assert.equal(openCodeRuntime.features?.stopLifecycle, "available");
   assert.equal(runtimeDescriptorForProviderCatalog("claude").kind, "tui_mux_fallback");
   assert.equal(runtimeDescriptorForProviderCatalog("claude").features?.historyBackfill, "available");
 });
@@ -103,9 +103,11 @@ test("runtime descriptor helpers preserve explicit runtime metadata", () => {
     id: "session-1",
     provider: "claude",
     launchSource: "web",
-    liveBackend: "zellij_tui",
+    liveBackend: "tui_mux",
     cwd: "/tmp/rah",
     rootDir: "/tmp/rah",
+    status: "running",
+    phase: "ready",
     runtimeState: "idle",
     runtime,
     ptyId: "pty-1",
@@ -123,7 +125,7 @@ test("runtime descriptor helpers preserve explicit runtime metadata", () => {
       renameSession: false,
       actions: {
         info: true,
-        archive: true,
+        stop: true,
         delete: false,
         rename: "none",
       },

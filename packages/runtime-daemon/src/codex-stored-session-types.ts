@@ -21,7 +21,7 @@ export const REHYDRATED_CAPABILITIES = {
   renameSession: true,
   actions: {
     info: true,
-    archive: false,
+    stop: false,
     delete: true,
     rename: "native",
   },

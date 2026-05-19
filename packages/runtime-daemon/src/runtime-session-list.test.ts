@@ -16,6 +16,8 @@ function storedSessionState(providerSessionId: string): StoredSessionState {
       launchSource: "web",
       cwd: "/workspace/demo",
       rootDir: "/workspace/demo",
+      status: "running",
+      phase: "working",
       runtimeState: "running",
       ptyId: "pty-live-session-1",
       capabilities: {
@@ -34,7 +36,7 @@ function storedSessionState(providerSessionId: string): StoredSessionState {
         renameSession: true,
         actions: {
           info: true,
-          archive: true,
+          stop: true,
           delete: true,
           rename: "native",
         },
@@ -74,7 +76,7 @@ function storedRef(providerSessionId: string): StoredSessionRef {
 }
 
 describe("buildSessionsResponse", () => {
-  test("keeps provider-backed live sessions visible in stored history", () => {
+  test("keeps provider-backed running sessions visible in stored history", () => {
     const response = buildSessionsResponse({
       liveStates: [storedSessionState("session-1")],
       discoveredStoredSessions: [storedRef("session-1")],
@@ -137,7 +139,7 @@ describe("buildSessionsResponse", () => {
             title: "Remembered title",
             updatedAt: "2026-04-28T09:00:00.000Z",
             lastUsedAt: "2026-04-29T09:00:00.000Z",
-            source: "previous_live",
+            source: "previous_running",
           },
         ],
         rememberedWorkspaceDirs: ["/workspace/demo"],

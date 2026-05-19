@@ -4,6 +4,8 @@ import {
   buildClaudeModeState,
   buildClaudeModeDescriptorsFromHelp,
   buildCodexModeState,
+  buildGeminiModeDescriptorsFromHelp,
+  buildGeminiModeState,
   buildOpenCodeAgentModeDescriptors,
   buildOpenCodeModeState,
   codexPlanAccessModeId,
@@ -37,6 +39,15 @@ test("provider mode descriptors use provider-native labels", () => {
   })), {
     build: "Build",
     plan: "Plan",
+  });
+  assert.deepEqual(allLabels(buildGeminiModeState({
+    currentModeId: "yolo",
+    mutable: true,
+  })), {
+    default: "Default",
+    auto_edit: "Auto Edit",
+    plan: "Plan",
+    yolo: "YOLO",
   });
 });
 
@@ -76,6 +87,12 @@ test("provider mode descriptors expose adapter-owned apply timing", () => {
     build: "next_turn",
     plan: "next_turn",
   });
+  assert.deepEqual(applyTimings("gemini"), {
+    default: "startup_only",
+    auto_edit: "startup_only",
+    plan: "startup_only",
+    yolo: "startup_only",
+  });
 });
 
 test("Claude permission-mode choices are parsed from help and hidden modes are omitted", () => {
@@ -87,6 +104,18 @@ test("Claude permission-mode choices are parsed from help and hidden modes are o
     "acceptEdits",
     "plan",
     "bypassPermissions",
+  ]);
+});
+
+test("Gemini approval-mode choices are parsed from current CLI help", () => {
+  const modes = buildGeminiModeDescriptorsFromHelp(
+    '--approval-mode Set the approval mode [string] [choices: "default", "auto_edit", "yolo", "plan"]',
+  );
+  assert.deepEqual(modes.map((mode) => mode.id), [
+    "default",
+    "auto_edit",
+    "plan",
+    "yolo",
   ]);
 });
 

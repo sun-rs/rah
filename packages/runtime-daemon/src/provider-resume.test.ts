@@ -59,7 +59,7 @@ test("prepareProviderSessionResume restores a removed replay session on rollback
   );
 });
 
-test("prepareProviderSessionResume rollback does not overwrite a replacement live session", () => {
+test("prepareProviderSessionResume rollback does not overwrite a replacement running session", () => {
   const services = createServices();
   const replay = services.sessionStore.createManagedSession({
     provider: "codex",

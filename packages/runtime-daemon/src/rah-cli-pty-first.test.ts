@@ -47,7 +47,7 @@ async function closeServer(server: ReturnType<typeof createServer>, wss: WebSock
   });
 }
 
-test("rah help documents core live providers", async () => {
+test("rah help documents core running providers", async () => {
   const child = spawn(process.execPath, ["bin/rah.mjs", "--help"], {
     cwd: process.cwd(),
   });
@@ -65,7 +65,7 @@ test("rah help documents core live providers", async () => {
   });
 
   assert.equal(exitCode, 0, stderr);
-  assert.match(stdout, /codex \| claude \| opencode/);
+  assert.match(stdout, /codex \| claude \| gemini \| opencode/);
   assert.doesNotMatch(stdout, /unknown-provider/);
   assert.doesNotMatch(stdout, /approval-mode/);
   assert.doesNotMatch(stdout, /RAH_ENABLE_ARCHIVED_PROVIDER_LIVE/);
@@ -545,7 +545,7 @@ test("rah opencode defaults to native local-server and attaches the official TUI
   }
 });
 
-test("rah claude attaches local terminal through zellij when mux metadata is present", async () => {
+test("rah claude attaches local terminal through tmux when mux metadata is present", async () => {
   const startRequests: unknown[] = [];
   const detachRequests: unknown[] = [];
   const surfaceClaims: unknown[] = [];
@@ -563,24 +563,23 @@ test("rah claude attaches local terminal through zellij when mux metadata is pre
       startRequests.push(await readJsonBody(req));
       writeJson(res, 200, {
         session: sessionSummary({
-          id: "session-zellij-attach",
+          id: "session-tmux-attach",
           provider: "claude",
           launchSource: "terminal",
-          liveBackend: "zellij_tui",
+          liveBackend: "tui_mux",
           cwd: "/tmp",
           rootDir: "/tmp",
           runtimeState: "idle",
-          ptyId: "session-zellij-attach",
+          ptyId: "session-tmux-attach",
           nativeTui: {
-            terminalId: "session-zellij-attach",
+            terminalId: "session-tmux-attach",
             viewAvailable: true,
             promptState: "prompt_clean",
           },
           mux: {
-            backend: "zellij",
+            backend: "tmux",
             sessionName: "rah-attachtest",
-            paneId: "terminal_1",
-            socketDir: "/tmp/rah-zellij-attach-test",
+            paneId: "%1",
           },
           capabilities: {},
           createdAt: new Date().toISOString(),
@@ -589,11 +588,11 @@ test("rah claude attaches local terminal through zellij when mux metadata is pre
       });
       return;
     }
-    if (req.method === "POST" && req.url === "/api/sessions/session-zellij-attach/tui-surface/claim") {
+    if (req.method === "POST" && req.url === "/api/sessions/session-tmux-attach/tui-surface/claim") {
       const body = await readJsonBody(req);
       surfaceClaims.push(body);
       activeSurface = {
-        sessionId: "session-zellij-attach",
+        sessionId: "session-tmux-attach",
         clientId: (body as { clientId: string }).clientId,
         clientKind: (body as { clientKind: string }).clientKind,
         attachedAt: new Date().toISOString(),
@@ -601,28 +600,28 @@ test("rah claude attaches local terminal through zellij when mux metadata is pre
       writeJson(res, 200, { surface: activeSurface });
       return;
     }
-    if (req.method === "POST" && req.url === "/api/sessions/session-zellij-attach/tui-surface/release") {
+    if (req.method === "POST" && req.url === "/api/sessions/session-tmux-attach/tui-surface/release") {
       surfaceReleases.push(await readJsonBody(req));
       activeSurface = undefined;
       writeJson(res, 200, {});
       return;
     }
-    if (req.method === "GET" && req.url === "/api/sessions/session-zellij-attach/tui-surface") {
+    if (req.method === "GET" && req.url === "/api/sessions/session-tmux-attach/tui-surface") {
       writeJson(res, 200, activeSurface ? { surface: activeSurface } : {});
       return;
     }
-    if (req.method === "POST" && req.url === "/api/sessions/session-zellij-attach/detach") {
+    if (req.method === "POST" && req.url === "/api/sessions/session-tmux-attach/detach") {
       detachRequests.push(await readJsonBody(req));
       writeJson(res, 200, {
         session: sessionSummary({
-          id: "session-zellij-attach",
+          id: "session-tmux-attach",
           provider: "codex",
           launchSource: "terminal",
-          liveBackend: "zellij_tui",
+          liveBackend: "tui_mux",
           cwd: "/tmp",
           rootDir: "/tmp",
           runtimeState: "stopped",
-          ptyId: "session-zellij-attach",
+          ptyId: "session-tmux-attach",
           capabilities: {},
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
@@ -634,7 +633,7 @@ test("rah claude attaches local terminal through zellij when mux metadata is pre
     res.end("not found");
   });
   server.on("upgrade", (req, socket, head) => {
-    if (req.url?.startsWith("/api/pty/session-zellij-attach")) {
+    if (req.url?.startsWith("/api/pty/session-tmux-attach")) {
       ptyConnected = true;
       wss.handleUpgrade(req, socket, head, (ws) => {
         wss.emit("connection", ws, req);
@@ -645,21 +644,20 @@ test("rah claude attaches local terminal through zellij when mux metadata is pre
   });
 
   const port = await listen(server);
-  const tmpDir = mkdtempSync(path.join(os.tmpdir(), "rah-cli-zellij-attach-"));
+  const tmpDir = mkdtempSync(path.join(os.tmpdir(), "rah-cli-tmux-attach-"));
   const fakeBin = path.join(tmpDir, "bin");
-  const logPath = path.join(tmpDir, "zellij-attach.log");
-  const fakeZellij = path.join(fakeBin, "zellij");
+  const logPath = path.join(tmpDir, "tmux-attach.log");
+  const fakeTmux = path.join(fakeBin, "tmux");
   mkdirSync(fakeBin, { recursive: true });
   writeFileSync(
-    fakeZellij,
+    fakeTmux,
     [
       "#!/bin/sh",
-      "printf 'cwd=%s\\n' \"$PWD\" > \"$RAH_ZELLIJ_ATTACH_LOG\"",
-      "printf 'socket=%s\\n' \"$ZELLIJ_SOCKET_DIR\" >> \"$RAH_ZELLIJ_ATTACH_LOG\"",
-      "printf 'args=%s\\n' \"$*\" >> \"$RAH_ZELLIJ_ATTACH_LOG\"",
+      "printf 'cwd=%s\\n' \"$PWD\" > \"$RAH_TMUX_ATTACH_LOG\"",
+      "printf 'args=%s\\n' \"$*\" >> \"$RAH_TMUX_ATTACH_LOG\"",
     ].join("\n"),
   );
-  chmodSync(fakeZellij, 0o755);
+  chmodSync(fakeTmux, 0o755);
   const child = spawn(
     process.execPath,
     [
@@ -675,7 +673,7 @@ test("rah claude attaches local terminal through zellij when mux metadata is pre
       env: {
         ...process.env,
         PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? ""}`,
-        RAH_ZELLIJ_ATTACH_LOG: logPath,
+        RAH_TMUX_ATTACH_LOG: logPath,
       },
     },
   );
@@ -698,7 +696,7 @@ test("rah claude attaches local terminal through zellij when mux metadata is pre
       attach: { client: { id: string } };
     };
     assert.equal(startRequest.provider, "claude");
-    assert.equal(startRequest.liveBackend, "zellij_tui");
+    assert.equal(startRequest.liveBackend, "tui_mux");
     assert.equal(ptyConnected, false);
     assert.deepEqual(surfaceClaims, [{
       clientId: startRequest.attach.client.id,
@@ -710,8 +708,7 @@ test("rah claude attaches local terminal through zellij when mux metadata is pre
     assert.deepEqual(detachRequests, [{ clientId: startRequest.attach.client.id }]);
     const attachLog = readFileSync(logPath, "utf8");
     assert.match(attachLog, /^cwd=\/(?:private\/)?tmp$/m);
-    assert.match(attachLog, /socket=\/tmp\/rah-zellij-attach-test/);
-    assert.match(attachLog, /args=attach rah-attachtest options --mirror-session true --pane-frames false --show-startup-tips false/);
+    assert.match(attachLog, /args=attach-session -d -t rah-attachtest/);
   } finally {
     rmSync(tmpDir, { force: true, recursive: true });
   }
@@ -866,15 +863,15 @@ test("rah attach uses provider-native attach for OpenCode native local-server se
     const attachLog = readFileSync(logPath, "utf8");
     assert.match(attachLog, /^cwd=\/(?:private\/)?tmp$/m);
     assert.match(attachLog, /args=attach http:\/\/127\.0\.0\.1:49999 --session opencode-native-1/);
-    assert.match(stdout, /Terminal client detached\. RAH session is still live: session-opencode-native/);
+    assert.match(stdout, /Terminal client detached\. RAH session is still running: session-opencode-native/);
     assert.match(stdout, /Reattach: rah opencode attach opencode-native-1/);
-    assert.match(stdout, /End everywhere: rah archive session-opencode-native/);
+    assert.match(stdout, /End everywhere: rah close session-opencode-native/);
   } finally {
     rmSync(tmpDir, { force: true, recursive: true });
   }
 });
 
-test("rah archive closes a live session from CLI", async () => {
+test("rah close stops a running session from CLI", async () => {
   const attachRequests: unknown[] = [];
   const closeRequests: unknown[] = [];
   const wss = new WebSocketServer({ noServer: true });
@@ -903,7 +900,7 @@ test("rah archive closes a live session from CLI", async () => {
     process.execPath,
     [
       "bin/rah.mjs",
-      "archive",
+      "close",
       "session-to-archive",
       "--daemon-url",
       `http://127.0.0.1:${port}`,
@@ -930,10 +927,10 @@ test("rah archive closes a live session from CLI", async () => {
   const attachedClientId = (attachRequests[0] as { client: { id: string } }).client.id;
   assert.match(attachedClientId, /^terminal:/);
   assert.deepEqual(closeRequests, [{ clientId: attachedClientId }]);
-  assert.match(stdout, /archived session session-to-archive/);
+  assert.match(stdout, /stopped session session-to-archive/);
 });
 
-test("rah attach terminates the managed provider client when the live session is archived", async () => {
+test("rah attach terminates the managed provider client when the running session is stopped", async () => {
   const attachRequests: unknown[] = [];
   const detachRequests: unknown[] = [];
   const wss = new WebSocketServer({ noServer: true });
@@ -1065,7 +1062,7 @@ test("rah attach terminates the managed provider client when the live session is
   }
 });
 
-test("rah provider attach resolves a live session by provider session id", async () => {
+test("rah provider attach resolves a running session by provider session id", async () => {
   const attachRequests: unknown[] = [];
   const detachRequests: unknown[] = [];
   const wss = new WebSocketServer({ noServer: true });
@@ -1176,7 +1173,7 @@ test("rah provider attach resolves a live session by provider session id", async
   }
 });
 
-test("rah provider attach reports non-live provider sessions as resumable", async () => {
+test("rah provider attach reports non-running provider sessions as resumable", async () => {
   const wss = new WebSocketServer({ noServer: true });
   const server = createServer(async (req, res) => {
     if (req.method === "GET" && req.url === "/readyz") {

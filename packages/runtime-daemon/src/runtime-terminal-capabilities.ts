@@ -6,6 +6,7 @@ export function buildNativeTuiSessionCapabilities(
   const hasStructuredMirror =
     provider === "codex" ||
     provider === "claude" ||
+    provider === "gemini" ||
     provider === "opencode";
   return {
     liveAttach: true,
@@ -21,7 +22,7 @@ export function buildNativeTuiSessionCapabilities(
     renameSession: false,
     actions: {
       info: true,
-      archive: true,
+      stop: true,
       delete: false,
       rename: "none",
     },
@@ -47,13 +48,13 @@ export function buildStoppedNativeTuiSessionCapabilities(
   };
 }
 
-export function buildZellijTuiSessionCapabilities(
+export function buildTuiMuxSessionCapabilities(
   provider: ProviderKind,
 ): Partial<SessionCapabilities> {
   return {
     ...buildNativeTuiSessionCapabilities(provider),
     // The browser still talks through RAH's PTY websocket contract, but the
-    // actual terminal is held by zellij rather than the in-process PTY runtime.
+    // actual terminal is held by tmux rather than the in-process PTY runtime.
     rawPtyInput: false,
   };
 }

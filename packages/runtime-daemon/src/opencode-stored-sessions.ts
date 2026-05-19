@@ -64,7 +64,7 @@ const REHYDRATED_CAPABILITIES = {
   renameSession: false,
   actions: {
     info: true,
-    archive: false,
+    stop: false,
     delete: true,
     rename: "none",
   },
