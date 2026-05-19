@@ -6,13 +6,14 @@ import {
   Circle,
   CircleStop,
   Ellipsis,
-  EyeOff,
   Info,
   Menu,
+  MessageSquareText,
   PanelRight,
   PencilLine,
   Plus,
   Square,
+  SquareTerminal,
   Trash2,
   UsersRound,
   X,
@@ -26,12 +27,14 @@ import { TokenizedTextarea } from "../../TokenizedTextarea";
 import { canSubmitComposerInput, COMPOSER_LAYOUT, type ComposerSurface } from "../../../composer-contract";
 import {
   HEADER_ACTION_GROUP_CLASS,
-  HEADER_DANGER_TEXT_BUTTON_CLASS,
   HEADER_IDENTITY_SLOT_CLASS,
   HEADER_ICON_BUTTON_CLASS,
+  HEADER_MENU_DANGER_ITEM_CLASS,
+  HEADER_MENU_ITEM_CLASS,
+  HEADER_RESPONSIVE_TEXT_BUTTON_CLASS,
   HEADER_SEGMENTED_BUTTON_BASE_CLASS,
+  HEADER_SEGMENTED_CONTROL_BASE_CLASS,
   HEADER_SEGMENTED_CONTROL_CLASS,
-  HEADER_TEXT_BUTTON_CLASS,
 } from "../header-button-styles";
 import {
   ConversationMetaBadge,
@@ -49,6 +52,7 @@ import {
 } from "../../../session-mode-ui";
 import { isSessionControlLocked } from "../../../session-capabilities";
 import { closeNativeTuiClient } from "../../../api";
+import { usePwaDisplayMode } from "../../../hooks/usePwaDisplayMode";
 import {
   resolveActiveSessionTuiSurface,
   shouldDetachPreviousSessionTui,
@@ -226,12 +230,14 @@ export function WorkbenchSelectedPane(props: {
   const [openedTuiTerminalIds, setOpenedTuiTerminalIds] = useState<Set<string>>(() => new Set());
   const [closedTuiTerminalIds, setClosedTuiTerminalIds] = useState<Set<string>>(() => new Set());
   const activeSessionTuiRef = useRef<ActiveSessionTuiSurface>(null);
+  const isPwaDisplayMode = usePwaDisplayMode();
   const effectivePaneWidth = paneWidth ?? Number.POSITIVE_INFINITY;
   const sessionMetaMode = props.compactSessionMeta ?? "auto";
   const compactSessionMeta =
     sessionMetaMode === "auto"
       ? effectivePaneWidth < 720
       : sessionMetaMode === true;
+  const compactSessionViewToggle = isPwaDisplayMode;
   const compactComposerPrompts =
     props.compactComposerPrompts === "auto"
       ? effectivePaneWidth < 640
@@ -256,6 +262,14 @@ export function WorkbenchSelectedPane(props: {
     status: sessionLifecycleStatus,
     phase: sessionPhase,
   });
+  const showSessionDeleteMenuItem = props.canDeleteSession || sessionLifecycleStatus === "running";
+  const sessionDeleteDisabled = !props.canDeleteSession || sessionLifecycleStatus === "running";
+  const sessionDeleteTitle =
+    sessionLifecycleStatus === "running"
+      ? "Running sessions cannot be deleted"
+      : props.canDeleteSession
+        ? "Delete session"
+        : "This session cannot be deleted";
   const effectiveSessionViewMode =
     nativeTuiAvailable && sessionViewMode === "tui" ? "tui" : "chat";
   const showComposer =
@@ -575,29 +589,70 @@ export function WorkbenchSelectedPane(props: {
         </div>
         <div className={HEADER_ACTION_GROUP_CLASS}>
           {nativeTuiAvailable ? (
-            <div className={HEADER_SEGMENTED_CONTROL_CLASS}>
-              {(["chat", "tui"] as const).map((mode) => (
-                <button
-                  key={mode}
-                  type="button"
-                  className={`${HEADER_SEGMENTED_BUTTON_BASE_CLASS} ${
-                    effectiveSessionViewMode === mode
-                      ? "bg-[var(--app-bg)] text-[var(--app-fg)] shadow-sm"
-                      : "text-[var(--app-hint)] hover:text-[var(--app-fg)]"
-                  }`}
-                  onClick={() => {
-                    if (mode === "tui") {
-                      markCurrentTuiOpened();
-                    }
-                    setSessionViewMode(mode);
-                  }}
-                  aria-pressed={effectiveSessionViewMode === mode}
-                  title={mode === "chat" ? "Show structured chat mirror" : "Show native TUI"}
-                >
-                  {mode === "chat" ? "Chat" : "TUI"}
-                </button>
-              ))}
-            </div>
+            <>
+              <button
+                type="button"
+                className={`${HEADER_ICON_BUTTON_CLASS} ${compactSessionViewToggle ? "" : "md:hidden"}`}
+                onClick={() => {
+                  const nextMode = effectiveSessionViewMode === "chat" ? "tui" : "chat";
+                  if (nextMode === "tui") {
+                    markCurrentTuiOpened();
+                  }
+                  setSessionViewMode(nextMode);
+                }}
+                aria-label={effectiveSessionViewMode === "chat" ? "Show native TUI" : "Show chat"}
+                title={effectiveSessionViewMode === "chat" ? "Show native TUI" : "Show chat"}
+              >
+                {effectiveSessionViewMode === "chat" ? (
+                  <SquareTerminal size={15} />
+                ) : (
+                  <MessageSquareText size={15} />
+                )}
+              </button>
+              {!compactSessionViewToggle ? (
+                <div className={`${HEADER_SEGMENTED_CONTROL_BASE_CLASS} hidden md:inline-flex`}>
+                  {(["chat", "tui"] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      className={`${HEADER_SEGMENTED_BUTTON_BASE_CLASS} ${
+                        effectiveSessionViewMode === mode
+                          ? "bg-[var(--app-bg)] text-[var(--app-fg)] shadow-sm"
+                          : "text-[var(--app-hint)] hover:text-[var(--app-fg)]"
+                      }`}
+                      onClick={() => {
+                        if (mode === "tui") {
+                          markCurrentTuiOpened();
+                        }
+                        setSessionViewMode(mode);
+                      }}
+                      aria-pressed={effectiveSessionViewMode === mode}
+                      title={mode === "chat" ? "Show structured chat mirror" : "Show native TUI"}
+                    >
+                      {mode === "chat" ? "Chat" : "TUI"}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </>
+          ) : null}
+          {!props.selectedIsReadOnlyReplay ? (
+            <button
+              type="button"
+              className={HEADER_ICON_BUTTON_CLASS}
+              disabled={stopOrCloseDisabled}
+              onClick={props.onStopOrClose}
+              aria-label="Stop session"
+              title={
+                !props.isAttached
+                  ? "This client is not attached"
+                  : props.canStopSession
+                    ? "Stop this running session"
+                    : "This provider session cannot be stopped from RAH"
+              }
+            >
+              <Square size={14} className="text-rose-500/70" />
+            </button>
           ) : null}
           <div ref={sessionMenuRef} className="relative">
             <button
@@ -614,7 +669,7 @@ export function WorkbenchSelectedPane(props: {
                 {props.canShowSessionInfo ? (
                   <button
                     type="button"
-                    className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]"
+                    className={HEADER_MENU_ITEM_CLASS}
                     onClick={() => {
                       setSessionMenuOpen(false);
                       setSessionInfoOpen(true);
@@ -627,7 +682,7 @@ export function WorkbenchSelectedPane(props: {
                 {props.canRenameSession ? (
                   <button
                     type="button"
-                    className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]"
+                    className={HEADER_MENU_ITEM_CLASS}
                     onClick={() => {
                       setSessionMenuOpen(false);
                       props.onRenameSession();
@@ -637,11 +692,19 @@ export function WorkbenchSelectedPane(props: {
                     <span>Rename</span>
                   </button>
                 ) : null}
-                {props.canDeleteSession ? (
+                {showSessionDeleteMenuItem ? (
                   <button
                     type="button"
-                    className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm text-[var(--app-danger)] transition-colors hover:bg-[var(--app-subtle-bg)]"
+                    className={
+                      sessionDeleteDisabled ? HEADER_MENU_ITEM_CLASS : HEADER_MENU_DANGER_ITEM_CLASS
+                    }
+                    disabled={sessionDeleteDisabled}
+                    title={sessionDeleteTitle}
+                    aria-label={sessionDeleteTitle}
                     onClick={() => {
+                      if (sessionDeleteDisabled) {
+                        return;
+                      }
                       setSessionMenuOpen(false);
                       props.onDeleteSession();
                     }}
@@ -653,46 +716,29 @@ export function WorkbenchSelectedPane(props: {
               </div>
             ) : null}
           </div>
-          <button
-            type="button"
-            className={
-              props.selectedIsReadOnlyReplay
-                ? HEADER_TEXT_BUTTON_CLASS
-                : HEADER_DANGER_TEXT_BUTTON_CLASS
-            }
-            disabled={stopOrCloseDisabled}
-            onClick={props.onStopOrClose}
-            title={
-              !props.isAttached
-                ? "This client is not attached"
-                : props.selectedIsReadOnlyReplay
-                  ? "Close this history view"
-                  : props.canStopSession
-                    ? "Stop this running session"
-                    : "This provider session cannot be stopped from RAH"
-            }
-          >
-            {props.selectedIsReadOnlyReplay ? (
-              <>
-                <X size={14} className="min-[900px]:mr-1" />
-                <span className="hidden min-[900px]:inline">Close</span>
-              </>
-            ) : (
-              <>
-                <Square size={14} className="min-[900px]:mr-1" />
-                <span className="hidden min-[900px]:inline">Stop</span>
-              </>
-            )}
-          </button>
+          {props.selectedIsReadOnlyReplay ? (
+            <button
+              type="button"
+              className={HEADER_RESPONSIVE_TEXT_BUTTON_CLASS}
+              disabled={stopOrCloseDisabled}
+              onClick={props.onStopOrClose}
+              aria-label="Close history view"
+              title={!props.isAttached ? "This client is not attached" : "Close history view"}
+            >
+              <X size={14} className="min-[900px]:mr-1" />
+              <span className="hidden min-[900px]:inline">Close</span>
+            </button>
+          ) : null}
           {props.onHideSession && !props.selectedIsReadOnlyReplay ? (
             <button
               type="button"
-              className={HEADER_TEXT_BUTTON_CLASS}
+              className={HEADER_RESPONSIVE_TEXT_BUTTON_CLASS}
               onClick={props.onHideSession}
-              title="Hide this session without closing it"
+              aria-label="Close session view"
+              title="Close session view"
             >
-              <EyeOff size={14} className="min-[900px]:mr-1" />
-              <span className="hidden min-[900px]:inline">Hide</span>
+              <X size={14} className="min-[900px]:mr-1" />
+              <span className="hidden min-[900px]:inline">Close</span>
             </button>
           ) : null}
           {props.showInspectorToggle ? (

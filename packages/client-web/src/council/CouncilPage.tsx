@@ -50,7 +50,9 @@ import {
   HEADER_ACTION_GROUP_CLASS,
   HEADER_IDENTITY_SLOT_CLASS,
   HEADER_ICON_BUTTON_CLASS,
-  HEADER_TEXT_BUTTON_CLASS,
+  HEADER_MENU_DANGER_ITEM_CLASS,
+  HEADER_MENU_ITEM_CLASS,
+  HEADER_RESPONSIVE_TEXT_BUTTON_CLASS,
 } from "../components/workbench/header-button-styles";
 import {
   ConversationMetaBadge,
@@ -408,6 +410,7 @@ export function CouncilPage(props: {
     props.selectedCouncilId ?? null,
   );
   const [loading, setLoading] = useState(false);
+  const [councilsRefreshing, setCouncilsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [composer, setComposer] = useState("");
   const [sendPending, setSendPending] = useState(false);
@@ -440,6 +443,9 @@ export function CouncilPage(props: {
   );
   const [isCouncilWide, setIsCouncilWide] = useState(() =>
     typeof window === "undefined" ? false : window.matchMedia("(min-width: 900px)").matches,
+  );
+  const [isCouncilHeaderCompact, setIsCouncilHeaderCompact] = useState(() =>
+    typeof window === "undefined" ? false : window.matchMedia("(max-width: 520px)").matches,
   );
   const [stopConfirmOpen, setStopConfirmOpen] = useState(false);
   const [pendingDeleteHistoryCouncil, setPendingDeleteHistoryCouncil] = useState<CouncilSnapshot | null>(null);
@@ -589,6 +595,17 @@ export function CouncilPage(props: {
   }, []);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+    const query = window.matchMedia("(max-width: 520px)");
+    const handleChange = () => {
+      setIsCouncilHeaderCompact(query.matches);
+    };
+    handleChange();
+    query.addEventListener("change", handleChange);
+    return () => query.removeEventListener("change", handleChange);
+  }, []);
+
+  useEffect(() => {
     setMentionTrigger(null);
     setMentionSelectedIndex(0);
   }, [selectedCouncilId]);
@@ -706,7 +723,7 @@ export function CouncilPage(props: {
     options?: { silent?: boolean; allowRunningDefault?: boolean },
   ): Promise<CouncilSnapshot[]> => {
     if (!options?.silent) {
-      setLoading(true);
+      setCouncilsRefreshing(true);
     }
     setError(null);
     try {
@@ -723,7 +740,7 @@ export function CouncilPage(props: {
       return [];
     } finally {
       if (!options?.silent) {
-        setLoading(false);
+        setCouncilsRefreshing(false);
       }
     }
   };
@@ -1579,6 +1596,15 @@ export function CouncilPage(props: {
   const selectedCouncilAgentCountLabel = selectedCouncil
     ? `${selectedCouncil.agents.length} agent${selectedCouncil.agents.length === 1 ? "" : "s"}`
     : null;
+  const selectedCouncilDeleteDisabled =
+    !selectedCouncil || selectedCouncil.status === "running" || loading;
+  const selectedCouncilDeleteTitle =
+    selectedCouncil?.status === "running"
+      ? "Running Councils cannot be deleted"
+      : loading
+        ? "Action in progress"
+        : "Delete Council";
+  const showCouncilOverflowMenu = selectedCouncil !== null || isCouncilHeaderCompact;
   const compactCouncilMeta = !isCouncilWide;
 
   return (
@@ -1644,89 +1670,12 @@ export function CouncilPage(props: {
               </div>
             </div>
             <div className={HEADER_ACTION_GROUP_CLASS}>
-              {selectedCouncil?.status === "running" ? (
-                <button
-                  type="button"
-                  onClick={() => setStopConfirmOpen(true)}
-                  disabled={loading}
-                  className={HEADER_ICON_BUTTON_CLASS}
-                  aria-label="Stop Council"
-                  title="Stop Council and close agent terminals"
-                >
-                  <Square size={14} className="text-rose-500/70" />
-                </button>
-              ) : null}
-              <div ref={councilMenuRef} className="relative">
-                <button
-                  type="button"
-                  onClick={() => setCouncilMenuOpen((open) => !open)}
-                  className={HEADER_ICON_BUTTON_CLASS}
-                  aria-label="Council actions"
-                  aria-haspopup="menu"
-                  aria-expanded={councilMenuOpen}
-                  title="Council actions"
-                >
-                  <Ellipsis size={16} />
-                </button>
-                {councilMenuOpen ? (
-                  <div className="absolute right-0 top-[calc(100%+0.375rem)] z-[120] min-w-[10rem] rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] p-1 shadow-xl">
-                    <button
-                      type="button"
-                      className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]"
-                      onClick={() => {
-                        setCouncilMenuOpen(false);
-                        setHistoryDialogOpen(true);
-                      }}
-                    >
-                      <ListTree size={14} />
-                      <span>Councils</span>
-                    </button>
-                    <button
-                      type="button"
-                      className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]"
-                      onClick={() => {
-                        setCouncilMenuOpen(false);
-                        setNewCouncilDialogOpen(true);
-                      }}
-                    >
-                      <Plus size={14} />
-                      <span>New Council</span>
-                    </button>
-                    {selectedCouncil ? (
-                      <>
-                        <button
-                          type="button"
-                          className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]"
-                          onClick={() => {
-                            setCouncilMenuOpen(false);
-                            openCouncilInfo(selectedCouncil.id);
-                          }}
-                        >
-                          <Info size={14} />
-                          <span>Info</span>
-                        </button>
-                        <button
-                          type="button"
-                          className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]"
-                          onClick={() => {
-                            setCouncilMenuOpen(false);
-                            setRenameDialogOpen(true);
-                          }}
-                        >
-                          <PencilLine size={14} />
-                          <span>Rename</span>
-                        </button>
-                      </>
-                    ) : null}
-                  </div>
-                ) : null}
-              </div>
               <button
                 type="button"
                 onClick={() => setHistoryDialogOpen(true)}
                 className={`${HEADER_ICON_BUTTON_CLASS} max-[520px]:hidden`}
-                aria-label="Open Councils"
-                title="Councils"
+                aria-label="Chats"
+                title="Chats"
               >
                 <ListTree size={14} />
               </button>
@@ -1739,12 +1688,117 @@ export function CouncilPage(props: {
               >
                 <Plus size={15} />
               </button>
+              {selectedCouncil?.status === "running" ? (
+                <button
+                  type="button"
+                  onClick={() => setStopConfirmOpen(true)}
+                  disabled={loading}
+                  className={HEADER_ICON_BUTTON_CLASS}
+                  aria-label="Stop Council"
+                  title="Stop Council and close agent terminals"
+                >
+                  <Square size={14} className="text-rose-500/70" />
+                </button>
+              ) : null}
+              {showCouncilOverflowMenu ? (
+                <div ref={councilMenuRef} className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setCouncilMenuOpen((open) => !open)}
+                    className={HEADER_ICON_BUTTON_CLASS}
+                    aria-label="Council actions"
+                    aria-haspopup="menu"
+                    aria-expanded={councilMenuOpen}
+                    title="Council actions"
+                  >
+                    <Ellipsis size={16} />
+                  </button>
+                  {councilMenuOpen ? (
+                    <div className="absolute right-0 top-[calc(100%+0.375rem)] z-[120] min-w-[10rem] rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] p-1 shadow-xl">
+                      {isCouncilHeaderCompact ? (
+                        <>
+                          <button
+                            type="button"
+                            className={HEADER_MENU_ITEM_CLASS}
+                            onClick={() => {
+                              setCouncilMenuOpen(false);
+                              setHistoryDialogOpen(true);
+                            }}
+                          >
+                            <ListTree size={14} />
+                            <span>Chats</span>
+                          </button>
+                          <button
+                            type="button"
+                            className={HEADER_MENU_ITEM_CLASS}
+                            onClick={() => {
+                              setCouncilMenuOpen(false);
+                              setNewCouncilDialogOpen(true);
+                            }}
+                          >
+                            <Plus size={14} />
+                            <span>New Council</span>
+                          </button>
+                        </>
+                      ) : null}
+                      {selectedCouncil ? (
+                        <>
+                          <button
+                            type="button"
+                            className={HEADER_MENU_ITEM_CLASS}
+                            onClick={() => {
+                              setCouncilMenuOpen(false);
+                              openCouncilInfo(selectedCouncil.id);
+                            }}
+                          >
+                            <Info size={14} />
+                            <span>Info</span>
+                          </button>
+                          <button
+                            type="button"
+                            className={HEADER_MENU_ITEM_CLASS}
+                            onClick={() => {
+                              setCouncilMenuOpen(false);
+                              setRenameDialogOpen(true);
+                            }}
+                          >
+                            <PencilLine size={14} />
+                            <span>Rename</span>
+                          </button>
+                          <button
+                            type="button"
+                            className={
+                              selectedCouncilDeleteDisabled
+                                ? HEADER_MENU_ITEM_CLASS
+                                : HEADER_MENU_DANGER_ITEM_CLASS
+                            }
+                            disabled={selectedCouncilDeleteDisabled}
+                            title={selectedCouncilDeleteTitle}
+                            aria-label={selectedCouncilDeleteTitle}
+                            onClick={() => {
+                              if (selectedCouncilDeleteDisabled) {
+                                return;
+                              }
+                              setCouncilMenuOpen(false);
+                              setPendingDeleteHistoryCouncil(selectedCouncil);
+                            }}
+                          >
+                            <Trash2 size={14} />
+                            <span>Delete</span>
+                          </button>
+                        </>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
               {showCloseButton ? (
                 <button
                   type="button"
                   onClick={props.onHide}
-                  className={HEADER_TEXT_BUTTON_CLASS}
-                  title="Close council"
+                  className={HEADER_RESPONSIVE_TEXT_BUTTON_CLASS}
+                  aria-label="Close Council view"
+                  title="Close Council view"
                 >
                   <X size={14} className="min-[900px]:mr-1" />
                   <span className="hidden min-[900px]:inline">Close</span>
@@ -2317,7 +2371,7 @@ export function CouncilPage(props: {
                 <button
                   type="button"
                   onClick={() => void refreshCouncils()}
-                  disabled={loading}
+                  disabled={councilsRefreshing}
                   className="icon-click-feedback inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] disabled:opacity-40"
                   aria-label="Refresh Councils"
                   title="Refresh Councils"

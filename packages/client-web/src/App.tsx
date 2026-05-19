@@ -738,6 +738,10 @@ export function App() {
   const deleteTargetSummary = deleteConfirmSessionId
     ? projections.get(deleteConfirmSessionId)?.summary ?? null
     : null;
+  const deleteTargetRunning =
+    deleteTargetSummary !== null &&
+    deleteTargetSummary.session.status === "running" &&
+    !isReadOnlyReplay(deleteTargetSummary);
   const renameTargetSummary = renameDialogSessionId
     ? projections.get(renameDialogSessionId)?.summary ?? null
     : null;
@@ -1335,7 +1339,9 @@ export function App() {
             <>
               {isReadOnlyReplay(deleteTargetSummary)
                 ? "Delete this history session?"
-                : "Stop and then delete this running session?"}
+                : deleteTargetRunning
+                  ? "Stop this session before deleting it."
+                  : "Delete this stopped session?"}
               <div className="mt-2 rounded-lg border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-2.5 py-2 font-medium text-[var(--app-fg)]">
                 {deleteTargetSummary.session.title ?? deleteTargetSummary.session.id}
               </div>
@@ -1352,6 +1358,13 @@ export function App() {
         }}
         onConfirm={() => {
           if (!deleteConfirmSessionId || !deleteTargetSummary) {
+            return;
+          }
+          if (
+            deleteTargetSummary.session.status === "running" &&
+            !isReadOnlyReplay(deleteTargetSummary)
+          ) {
+            setDeleteConfirmSessionId(null);
             return;
           }
           setDeletingSessionId(deleteConfirmSessionId);

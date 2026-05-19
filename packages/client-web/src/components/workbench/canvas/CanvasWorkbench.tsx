@@ -1,6 +1,6 @@
 import { useRef } from "react";
 import type { ReactNode, PointerEvent as ReactPointerEvent } from "react";
-import { Columns2, Columns3, Eraser, EyeOff, Grid2X2, Maximize2, Menu, Minimize2, Rows2 } from "lucide-react";
+import { Columns2, Columns3, Eraser, Grid2X2, Maximize2, Menu, Minimize2, Rows2, X } from "lucide-react";
 import {
   HEADER_ACTION_GROUP_CLASS,
   HEADER_SEGMENTED_BUTTON_BASE_CLASS,
@@ -223,7 +223,7 @@ export function CanvasWorkbench(props: {
           <div className="min-w-0 flex-1">
             <div className="text-sm font-semibold text-[var(--app-fg)]">Canvas</div>
             <div className="truncate text-xs text-[var(--app-hint)]">
-              Split running sessions and Councils. Hide without stopping work.
+              Split running sessions and Councils. Close without stopping work.
             </div>
           </div>
         </div>
@@ -253,10 +253,11 @@ export function CanvasWorkbench(props: {
             type="button"
             className={HEADER_TEXT_BUTTON_CLASS}
             onClick={props.onExitCanvas}
-            title="Hide canvas"
+            aria-label="Close canvas view"
+            title="Close canvas view"
           >
-            <EyeOff size={14} className="min-[900px]:mr-1" />
-            <span className="hidden min-[900px]:inline">Hide</span>
+            <X size={14} className="min-[900px]:mr-1" />
+            <span className="hidden min-[900px]:inline">Close</span>
           </button>
         </div>
       </header>
