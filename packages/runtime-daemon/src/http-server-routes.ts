@@ -564,6 +564,25 @@ export async function handleHttpRequest(args: {
       return;
     }
 
+    const councilMessagesMatch = /^\/api\/council\/([^/]+)\/messages$/.exec(pathname);
+    if (req.method === "GET" && councilMessagesMatch) {
+      const beforeRaw = url.searchParams.get("beforeMessageId");
+      const limitRaw = url.searchParams.get("limit");
+      const beforeMessageId =
+        beforeRaw && Number.isFinite(Number.parseInt(beforeRaw, 10))
+          ? Number.parseInt(beforeRaw, 10)
+          : undefined;
+      const limit =
+        limitRaw && Number.isFinite(Number.parseInt(limitRaw, 10))
+          ? Number.parseInt(limitRaw, 10)
+          : undefined;
+      writeJson(req, res, 200, engine.readCouncilMessages(decodeURIComponent(councilMessagesMatch[1]!), {
+        ...(beforeMessageId !== undefined ? { beforeMessageId } : {}),
+        ...(limit !== undefined ? { limit } : {}),
+      }));
+      return;
+    }
+
     const manualProviderModelsMatch = /^\/api\/providers\/([^/]+)\/manual-models$/.exec(pathname);
     if (req.method === "GET" && manualProviderModelsMatch) {
       writeJson(req, res, 200, {

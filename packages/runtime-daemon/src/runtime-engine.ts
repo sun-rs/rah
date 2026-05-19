@@ -10,6 +10,7 @@ import type {
   ClaimControlRequest,
   CloseSessionRequest,
   CouncilAgentTuiResponse,
+  CouncilMessagesPageResponse,
   CouncilMcpRequest,
   CouncilMcpResponse,
   CouncilPostMessageRequest,
@@ -522,6 +523,13 @@ export class RuntimeEngine {
 
   listCouncils(): ListCouncilsResponse {
     return this.council.listCouncils();
+  }
+
+  readCouncilMessages(
+    councilId: string,
+    options?: { beforeMessageId?: number; limit?: number },
+  ): CouncilMessagesPageResponse {
+    return this.council.readCouncilMessages(councilId, options);
   }
 
   async createCouncil(request: CreateCouncilRequest): Promise<CreateCouncilResponse> {

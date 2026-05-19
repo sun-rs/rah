@@ -23,6 +23,7 @@ import type {
   AddCouncilAgentRequest,
   AddCouncilAgentResponse,
   CouncilAgentTuiResponse,
+  CouncilMessagesPageResponse,
   CouncilMcpRequest,
   CouncilMcpResponse,
   CouncilPostMessageRequest,
@@ -779,6 +780,7 @@ export interface NativeTuiSurfaceResponse {
 export interface CouncilApi {
   listCouncils(): Promise<ListCouncilsResponse>;
   createCouncil(request: CreateCouncilRequest): Promise<CreateCouncilResponse>;
+  readCouncilMessages(councilId: string, options?: { beforeMessageId?: number; limit?: number }): Promise<CouncilMessagesPageResponse>;
   renameCouncil(councilId: string, request: RenameCouncilRequest): Promise<RenameCouncilResponse>;
   addAgent(councilId: string, request: AddCouncilAgentRequest): Promise<AddCouncilAgentResponse>;
   postMessage(councilId: string, request: CouncilPostMessageRequest): Promise<CouncilPostMessageResponse>;

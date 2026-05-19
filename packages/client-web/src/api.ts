@@ -8,6 +8,7 @@ import type {
   CloseTuiMuxSessionResponse,
   CloseSessionRequest,
   CouncilAgentTuiResponse,
+  CouncilMessagesPageResponse,
   CouncilMcpRequest,
   CouncilMcpResponse,
   CouncilPostMessageRequest,
@@ -794,6 +795,23 @@ export async function readSessionHistory(
 
 export async function listCouncils(): Promise<ListCouncilsResponse> {
   return requestJson<ListCouncilsResponse>("/api/council");
+}
+
+export async function readCouncilMessages(
+  councilId: string,
+  options?: { beforeMessageId?: number; limit?: number },
+): Promise<CouncilMessagesPageResponse> {
+  const query = new URLSearchParams();
+  if (options?.beforeMessageId !== undefined) {
+    query.set("beforeMessageId", String(options.beforeMessageId));
+  }
+  if (options?.limit !== undefined) {
+    query.set("limit", String(options.limit));
+  }
+  const suffix = query.size > 0 ? `?${query.toString()}` : "";
+  return requestJson<CouncilMessagesPageResponse>(
+    `/api/council/${encodeURIComponent(councilId)}/messages${suffix}`,
+  );
 }
 
 export async function createCouncil(

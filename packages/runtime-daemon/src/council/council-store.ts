@@ -14,11 +14,13 @@ import type {
   CouncilAgent,
   CouncilAgentConfig,
   CouncilAgentStatus,
+  CouncilMessageSummary,
   CouncilMessage,
   CouncilMessagePart,
   CouncilMessageRole,
   Council,
   CouncilSnapshot,
+  CouncilMessagesPageResponse,
 } from "@rah/runtime-protocol";
 import { conversationStateFromLegacyCouncilStatus } from "@rah/runtime-protocol";
 
@@ -142,6 +144,36 @@ function cloneCouncilMessage(message: CouncilMessage): CouncilMessage {
   return { ...message, parts: [...message.parts] };
 }
 
+function councilMessageText(message: CouncilMessage): string {
+  return message.parts
+    .map((part) => part.kind === "text" ? part.text : JSON.stringify(part.data) ?? String(part.data))
+    .join("\n");
+}
+
+function messageSummary(message: CouncilMessage): CouncilMessageSummary {
+  return {
+    id: message.id,
+    role: message.role,
+    actorId: message.actorId,
+    text: councilMessageText(message),
+    createdAt: message.createdAt,
+  };
+}
+
+function firstMessageIndexAtOrAfter(messages: CouncilMessage[], messageId: number): number {
+  let low = 0;
+  let high = messages.length;
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2);
+    if (messages[mid]!.id < messageId) {
+      low = mid + 1;
+    } else {
+      high = mid;
+    }
+  }
+  return low;
+}
+
 function councilMessagesDir(filePath: string): string {
   return path.join(path.dirname(filePath), "messages");
 }
@@ -217,10 +249,15 @@ export class CouncilStore {
     }
   }
 
-  listCouncils(): CouncilSnapshot[] {
+  listCouncils(options?: { messageLimit?: number }): CouncilSnapshot[] {
     return [...this.state.councils]
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-      .map((council) => this.snapshot(council.id));
+      .map((council) =>
+        this.snapshot(
+          council.id,
+          options?.messageLimit !== undefined ? { limit: options.messageLimit } : undefined,
+        ),
+      );
   }
 
   createCouncil(args: {
@@ -297,23 +334,80 @@ export class CouncilStore {
     const since = options?.sinceMessageId ?? 0;
     const limit = options?.limit;
     const councilMessages = this.messagesForCouncil(councilId);
+    const firstUserMessage = councilMessages.find((message) => message.role === "user");
+    const firstAgentMessage = councilMessages.find((message) => message.role === "agent");
+    const lastContentMessage = [...councilMessages]
+      .reverse()
+      .find((message) => message.role === "user" || message.role === "agent");
     const startIndex = firstMessageIndexAfter(councilMessages, since);
+    const firstLoadedIndex =
+      limit === undefined
+        ? startIndex
+        : limit <= 0
+          ? councilMessages.length
+          : Math.max(startIndex, councilMessages.length - limit);
     const messages =
       limit === undefined
         ? councilMessages.slice(startIndex)
         : limit <= 0
           ? []
-          : councilMessages.slice(startIndex).slice(-limit);
+          : councilMessages.slice(firstLoadedIndex);
     return {
       ...council,
       agents: this.state.agents
         .filter((agent) => agent.councilId === councilId)
         .map((agent) => ({ ...agent })),
       messages: messages.map(cloneCouncilMessage),
+      meta: {
+        messageCount: councilMessages.length,
+        ...(firstUserMessage
+          ? { firstUserMessage: messageSummary(firstUserMessage) }
+          : {}),
+        ...(firstAgentMessage
+          ? { firstAgentMessage: messageSummary(firstAgentMessage) }
+          : {}),
+        ...(lastContentMessage
+          ? { lastContentMessage: messageSummary(lastContentMessage) }
+          : {}),
+        ...(councilMessages.at(-1) ? { lastMessage: messageSummary(councilMessages.at(-1)!) } : {}),
+      },
+      messageWindow: {
+        total: councilMessages.length,
+        loaded: messages.length,
+        hasMoreBefore: firstLoadedIndex > 0,
+        ...(firstLoadedIndex > 0 && messages[0]
+          ? { nextBeforeMessageId: messages[0].id }
+          : {}),
+      },
       storage: {
         storePath: this.filePath,
         messageLogPath: this.messageFilePath(councilId),
       },
+    };
+  }
+
+  messagePage(
+    councilId: string,
+    options?: { beforeMessageId?: number; limit?: number },
+  ): CouncilMessagesPageResponse {
+    this.requireCouncil(councilId);
+    const limit = Math.max(1, options?.limit ?? 100);
+    const councilMessages = this.messagesForCouncil(councilId);
+    const endIndex =
+      options?.beforeMessageId === undefined
+        ? councilMessages.length
+        : firstMessageIndexAtOrAfter(councilMessages, options.beforeMessageId);
+    const boundedEndIndex = Math.max(0, Math.min(endIndex, councilMessages.length));
+    const startIndex = Math.max(0, boundedEndIndex - limit);
+    const messages = councilMessages.slice(startIndex, boundedEndIndex);
+    return {
+      councilId,
+      messages: messages.map(cloneCouncilMessage),
+      total: councilMessages.length,
+      hasMoreBefore: startIndex > 0,
+      ...(startIndex > 0 && messages[0]
+        ? { nextBeforeMessageId: messages[0].id }
+        : {}),
     };
   }
 

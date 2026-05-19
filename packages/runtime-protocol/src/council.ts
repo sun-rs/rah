@@ -68,9 +68,34 @@ export interface CouncilMessage {
   createdAt: string;
 }
 
+export interface CouncilMessageSummary {
+  id: number;
+  role: CouncilMessageRole;
+  actorId: string;
+  text: string;
+  createdAt: string;
+}
+
+export interface CouncilMessageWindow {
+  total: number;
+  loaded: number;
+  hasMoreBefore: boolean;
+  nextBeforeMessageId?: number;
+}
+
+export interface CouncilMeta {
+  messageCount: number;
+  firstUserMessage?: CouncilMessageSummary;
+  firstAgentMessage?: CouncilMessageSummary;
+  lastContentMessage?: CouncilMessageSummary;
+  lastMessage?: CouncilMessageSummary;
+}
+
 export interface CouncilSnapshot extends Council {
   agents: CouncilAgent[];
   messages: CouncilMessage[];
+  meta?: CouncilMeta;
+  messageWindow?: CouncilMessageWindow;
   storage?: {
     storePath: string;
     messageLogPath: string;
@@ -106,6 +131,14 @@ export interface AddCouncilAgentResponse {
 
 export interface ListCouncilsResponse {
   councils: CouncilSnapshot[];
+}
+
+export interface CouncilMessagesPageResponse {
+  councilId: string;
+  messages: CouncilMessage[];
+  total: number;
+  hasMoreBefore: boolean;
+  nextBeforeMessageId?: number;
 }
 
 export interface CouncilPostMessageRequest {

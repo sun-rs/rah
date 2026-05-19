@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import {
   Activity,
@@ -92,6 +92,12 @@ import {
   reconcileCouncilSelection,
 } from "./CouncilsBrowser";
 import { COUNCIL_HEADER_ICON_CLASSNAME } from "./council-theme";
+import {
+  canLoadOlderCouncilMessages,
+  mergeCouncilLists,
+  mergeCouncilSnapshot,
+  prependCouncilMessagesPage,
+} from "./council-message-window";
 
 type CouncilMessage = CouncilSnapshot["messages"][number];
 type CouncilDisplayItem =
@@ -106,6 +112,8 @@ type CouncilDisplayItem =
 
 const COUNCIL_SYSTEM_NOTICE_CLASS =
   "mx-auto flex w-fit max-w-[92%] items-center gap-2 rounded-full bg-[var(--app-subtle-bg)]/35 px-2.5 py-1 text-[10.5px] leading-relaxed text-[var(--app-hint)] sm:max-w-[78%]";
+const COUNCIL_MESSAGE_PAGE_LIMIT = 100;
+const COUNCIL_TOP_HISTORY_TRIGGER_PX = 96;
 
 function isCouncilAgentTerminalAvailable(agent: CouncilAgent): boolean {
   return (
@@ -438,6 +446,7 @@ export function CouncilPage(props: {
   ]);
   const [collapsedAddAgentDraftIds, setCollapsedAddAgentDraftIds] = useState<Set<string>>(new Set());
   const [showScrollToLatest, setShowScrollToLatest] = useState(false);
+  const [loadingOlderCouncilMessages, setLoadingOlderCouncilMessages] = useState(false);
   const [historyDialogOpen, setHistoryDialogOpen] = useState(false);
   const [infoDialogOpen, setInfoDialogOpen] = useState(false);
   const [councilMenuOpen, setCouncilMenuOpen] = useState(false);
@@ -460,6 +469,12 @@ export function CouncilPage(props: {
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const councilMenuRef = useRef<HTMLDivElement | null>(null);
   const councilStickToLatestRef = useRef(true);
+  const loadingOlderCouncilMessagesRef = useRef(false);
+  const councilPrependAnchorRef = useRef<{
+    councilId: string;
+    scrollHeight: number;
+    scrollTop: number;
+  } | null>(null);
   const previousCouncilIdRef = useRef<string | null>(null);
   const preserveCouncilSidebarAfterActionRef = useRef(false);
   const preserveTerminalAfterActionRef = useRef<string | null>(null);
@@ -614,6 +629,60 @@ export function CouncilPage(props: {
     setShowScrollToLatest(!nearBottom);
   };
 
+  const loadOlderCouncilMessages = async () => {
+    const council = selectedCouncil;
+    if (
+      !council ||
+      !canLoadOlderCouncilMessages(council) ||
+      loadingOlderCouncilMessagesRef.current
+    ) {
+      return;
+    }
+    const node = chatScrollRef.current;
+    if (node) {
+      councilPrependAnchorRef.current = {
+        councilId: council.id,
+        scrollHeight: node.scrollHeight,
+        scrollTop: node.scrollTop,
+      };
+    }
+    loadingOlderCouncilMessagesRef.current = true;
+    setLoadingOlderCouncilMessages(true);
+    setError(null);
+    try {
+      const page = await api.readCouncilMessages(council.id, {
+        ...(council.messageWindow?.nextBeforeMessageId !== undefined
+          ? { beforeMessageId: council.messageWindow.nextBeforeMessageId }
+          : {}),
+        limit: COUNCIL_MESSAGE_PAGE_LIMIT,
+      });
+      setCouncils((current) =>
+        current.map((candidate) =>
+          candidate.id === council.id ? prependCouncilMessagesPage(candidate, page) : candidate,
+        ),
+      );
+    } catch (caught) {
+      councilPrependAnchorRef.current = null;
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      loadingOlderCouncilMessagesRef.current = false;
+      setLoadingOlderCouncilMessages(false);
+    }
+  };
+
+  const handleCouncilChatScroll = () => {
+    updateCouncilScrollHint();
+    const node = chatScrollRef.current;
+    if (
+      node &&
+      node.scrollTop <= COUNCIL_TOP_HISTORY_TRIGGER_PX &&
+      canLoadOlderCouncilMessages(selectedCouncil) &&
+      !loadingOlderCouncilMessagesRef.current
+    ) {
+      void loadOlderCouncilMessages();
+    }
+  };
+
   const scrollCouncilChatToBottom = (behavior: ScrollBehavior = "smooth") => {
     const node = chatScrollRef.current;
     if (!node) return;
@@ -641,6 +710,16 @@ export function CouncilPage(props: {
     });
   }, [selectedCouncil?.id, selectedCouncil?.messages.length]);
 
+  useLayoutEffect(() => {
+    const anchor = councilPrependAnchorRef.current;
+    const node = chatScrollRef.current;
+    if (!anchor || !node || anchor.councilId !== selectedCouncil?.id) {
+      return;
+    }
+    node.scrollTop = anchor.scrollTop + (node.scrollHeight - anchor.scrollHeight);
+    councilPrependAnchorRef.current = null;
+  }, [selectedCouncil?.id, selectedCouncil?.messages.length]);
+
   const refreshCouncils = async (
     options?: { silent?: boolean; allowRunningDefault?: boolean },
   ): Promise<CouncilSnapshot[]> => {
@@ -650,7 +729,7 @@ export function CouncilPage(props: {
     setError(null);
     try {
       const response = await api.listCouncils();
-      setCouncils(response.councils);
+      setCouncils((current) => mergeCouncilLists(current, response.councils));
       setSelectedCouncilId((current) => {
         return reconcileCouncilSelection(current, response.councils, {
           allowRunningDefault: options?.allowRunningDefault,
@@ -732,7 +811,7 @@ export function CouncilPage(props: {
       void api.listCouncils()
         .then((response) => {
           if (cancelled) return;
-          setCouncils(response.councils);
+          setCouncils((current) => mergeCouncilLists(current, response.councils));
         })
         .catch(() => {
           // The normal 5s polling loop owns user-visible Council refresh errors.
@@ -766,7 +845,7 @@ export function CouncilPage(props: {
               return [nextCouncil, ...current];
             }
             const next = [...current];
-            next[index] = nextCouncil;
+            next[index] = mergeCouncilSnapshot(next[index], nextCouncil);
             return next;
           });
         },
@@ -812,7 +891,7 @@ export function CouncilPage(props: {
       void api.listCouncils()
         .then((response) => {
           if (cancelled) return;
-          setCouncils(response.councils);
+          setCouncils((current) => mergeCouncilLists(current, response.councils));
           setError(null);
           setSelectedCouncilId((current) => {
             return reconcileCouncilSelection(current, response.councils);
@@ -928,7 +1007,7 @@ export function CouncilPage(props: {
       const existingIndex = current.findIndex((candidate) => candidate.id === council.id);
       if (existingIndex >= 0) {
         const next = [...current];
-        next[existingIndex] = council;
+        next[existingIndex] = mergeCouncilSnapshot(next[existingIndex], council);
         return next;
       }
       return [council, ...current];
@@ -954,7 +1033,9 @@ export function CouncilPage(props: {
     try {
       const response = await api.postCouncilMessage(selectedCouncil.id, { text });
       setCouncils((current) =>
-        current.map((council) => council.id === selectedCouncil.id ? response.council : council),
+        current.map((council) =>
+          council.id === selectedCouncil.id ? mergeCouncilSnapshot(council, response.council) : council,
+        ),
       );
       setError(null);
     } catch (caught) {
@@ -1236,7 +1317,7 @@ export function CouncilPage(props: {
       const index = current.findIndex((item) => item.id === council.id);
       if (index < 0) return [council, ...current];
       const next = [...current];
-      next[index] = council;
+      next[index] = mergeCouncilSnapshot(next[index], council);
       return next;
     });
     setSelectedCouncilId(council.id);
@@ -1685,7 +1766,7 @@ export function CouncilPage(props: {
           <div className="relative min-h-0 flex-1">
             <div
               ref={chatScrollRef}
-              onScroll={updateCouncilScrollHint}
+              onScroll={handleCouncilChatScroll}
               className="h-full space-y-3 overflow-y-auto rah-scroll-main p-3 sm:p-4"
             >
               {!selectedCouncil ? (
@@ -1700,7 +1781,16 @@ export function CouncilPage(props: {
                     New Council
                   </button>
                 </div>
-              ) : selectedCouncilDisplayItems.map((item) => {
+              ) : (
+                <>
+                  {loadingOlderCouncilMessages && canLoadOlderCouncilMessages(selectedCouncil) ? (
+                    <div className="flex justify-center">
+                      <div className="rounded-full border border-[var(--app-border)] bg-[var(--app-bg)] px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.14em] text-[var(--app-hint)]">
+                        Loading older history
+                      </div>
+                    </div>
+                  ) : null}
+                  {selectedCouncilDisplayItems.map((item) => {
                 if (item.kind === "agent-status") {
                   const agent = actorAgent(selectedCouncil, item.actorId);
                   const label = actorLabel(selectedCouncil, item.actorId);
@@ -1761,7 +1851,9 @@ export function CouncilPage(props: {
                     <CouncilMessageContent role={message.role} text={textFromParts(message.parts)} />
                   </div>
                 );
-              })}
+                  })}
+                </>
+              )}
             </div>
             {showScrollToLatest ? (
               <button

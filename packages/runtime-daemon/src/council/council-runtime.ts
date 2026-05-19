@@ -3,6 +3,7 @@ import type {
   AddCouncilAgentResponse,
   CouncilMessage,
   CouncilAgentTuiResponse,
+  CouncilMessagesPageResponse,
   CouncilMcpRequest,
   CouncilMcpResponse,
   CouncilPostMessageRequest,
@@ -27,6 +28,7 @@ import { CouncilStore } from "./council-store";
 import { handleCouncilMcpRequest, type CouncilMcpWaitNew, type CouncilMcpWaitNewResult } from "./council-mcp-shim";
 
 const DEFAULT_DAEMON_URL = "http://127.0.0.1:43111";
+const COUNCIL_CLIENT_MESSAGE_WINDOW_LIMIT = 100;
 type CouncilProvider = CouncilSnapshot["agents"][number]["provider"];
 type CouncilBootstrapPromptWriteResult = "sent" | "skipped";
 
@@ -80,7 +82,23 @@ export class CouncilRuntime {
 
   listCouncils(): ListCouncilsResponse {
     return {
-      councils: this.store.listCouncils().map((council) => this.projectRuntimeCouncilState(council)),
+      councils: this.store
+        .listCouncils({ messageLimit: COUNCIL_CLIENT_MESSAGE_WINDOW_LIMIT })
+        .map((council) => this.projectRuntimeCouncilState(council)),
+    };
+  }
+
+  readCouncilMessages(
+    councilId: string,
+    options?: { beforeMessageId?: number; limit?: number },
+  ): CouncilMessagesPageResponse {
+    const page = this.store.messagePage(councilId, {
+      ...(options?.beforeMessageId !== undefined ? { beforeMessageId: options.beforeMessageId } : {}),
+      limit: options?.limit ?? COUNCIL_CLIENT_MESSAGE_WINDOW_LIMIT,
+    });
+    return {
+      ...page,
+      messages: page.messages.filter((message) => !isFrontendHiddenCouncilMessage(message)),
     };
   }
 
@@ -106,10 +124,10 @@ export class CouncilRuntime {
     this.publishCouncilMessage(council.id, startingMessage);
     if (this.dryRun) {
       await this.launchAgents(council.id);
-      return { council: this.projectRuntimeCouncilState(this.store.snapshot(council.id)) };
+      return { council: this.clientCouncilSnapshot(council.id) };
     }
     this.scheduleCouncilAgentLaunch(council.id);
-    return { council: this.projectRuntimeCouncilState(this.store.snapshot(council.id)) };
+    return { council: this.clientCouncilSnapshot(council.id) };
   }
 
   async addAgent(councilId: string, request: AddCouncilAgentRequest): Promise<AddCouncilAgentResponse> {
@@ -132,7 +150,7 @@ export class CouncilRuntime {
       });
       this.publishCouncilMessage(councilId, failureMessage);
     }
-    const nextCouncil = this.projectRuntimeCouncilState(this.store.snapshot(councilId));
+    const nextCouncil = this.clientCouncilSnapshot(councilId);
     return {
       council: nextCouncil,
       agent: nextCouncil.agents.find((candidate) => candidate.id === agent.id) ?? agent,
@@ -156,7 +174,7 @@ export class CouncilRuntime {
     this.resolveCouncilMessageWaiters(councilId);
     return {
       message,
-      council: this.projectRuntimeCouncilState(this.store.snapshot(councilId)),
+      council: this.clientCouncilSnapshot(councilId),
     };
   }
 
@@ -165,7 +183,8 @@ export class CouncilRuntime {
     if (!nextTitle) {
       throw new Error("Council title is required.");
     }
-    return this.projectRuntimeCouncilState(this.store.updateCouncil(councilId, { title: nextTitle }));
+    this.store.updateCouncil(councilId, { title: nextTitle });
+    return this.clientCouncilSnapshot(councilId);
   }
 
   async stopCouncil(councilId: string): Promise<void> {
@@ -282,7 +301,7 @@ export class CouncilRuntime {
   reinjectAgentPrompt(councilId: string, agentId: string): CouncilReinjectAgentsResponse {
     const injected = this.reinjectAgentPrompts(councilId, [agentId]);
     return {
-      council: this.projectRuntimeCouncilState(this.store.snapshot(councilId)),
+      council: this.clientCouncilSnapshot(councilId),
       injectedAgentIds: injected.injectedAgentIds,
       skippedAgentIds: injected.skippedAgentIds,
     };
@@ -307,7 +326,7 @@ export class CouncilRuntime {
       clientId: "rah-web",
       text: `${agentId} paused council listening.`,
     });
-    return { council: this.projectRuntimeCouncilState(this.store.snapshot(councilId)) };
+    return { council: this.clientCouncilSnapshot(councilId) };
   }
 
   async stopAgentInCouncil(councilId: string, agentId: string): Promise<CouncilStopAgentResponse> {
@@ -344,7 +363,7 @@ export class CouncilRuntime {
       this.clearMcpClientStates(councilId);
       this.store.stopCouncil(councilId);
     }
-    return { council: this.projectRuntimeCouncilState(this.store.snapshot(councilId)) };
+    return { council: this.clientCouncilSnapshot(councilId) };
   }
 
   async callMcpTool(request: CouncilMcpRequest): Promise<CouncilMcpResponse> {
@@ -487,10 +506,16 @@ export class CouncilRuntime {
         authority: "authoritative",
       },
       payload: {
-        council: this.projectRuntimeCouncilState(this.store.snapshot(councilId)),
+        council: this.clientCouncilSnapshot(councilId),
         message,
       },
     });
+  }
+
+  private clientCouncilSnapshot(councilId: string): CouncilSnapshot {
+    return this.projectRuntimeCouncilState(
+      this.store.snapshot(councilId, { limit: COUNCIL_CLIENT_MESSAGE_WINDOW_LIMIT }),
+    );
   }
 
   private projectRuntimeCouncilState(snapshot: CouncilSnapshot): CouncilSnapshot {

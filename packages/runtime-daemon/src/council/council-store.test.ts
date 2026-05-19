@@ -141,6 +141,59 @@ test("CouncilStore snapshot returns the full transcript unless a limit is reques
   }
 });
 
+test("CouncilStore exposes message metadata, tail windows, and older pages", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-store-message-window-"));
+  try {
+    const store = new CouncilStore(path.join(root, "councils.json"));
+    const created = store.createCouncil({
+      title: "Windowed Council",
+      workspace: root,
+      agents: [{ id: "agent-a", provider: "codex", label: "Agent A" }],
+    });
+
+    const first = store.appendMessage({
+      councilId: created.id,
+      actorId: "user",
+      role: "user",
+      text: "first question",
+    });
+    store.appendMessage({
+      councilId: created.id,
+      actorId: created.agents[0]!.id,
+      role: "agent",
+      text: "first answer",
+    });
+    for (let index = 0; index < 8; index += 1) {
+      store.appendMessage({
+        councilId: created.id,
+        actorId: created.agents[0]!.id,
+        role: "agent",
+        text: `tail ${index + 1}`,
+      });
+    }
+
+    const [listed] = store.listCouncils({ messageLimit: 3 });
+    assert.equal(listed!.messages.length, 3);
+    assert.equal(listed!.meta?.messageCount, 10);
+    assert.equal(listed!.meta?.firstUserMessage?.id, first.id);
+    assert.equal(listed!.meta?.firstUserMessage?.text, "first question");
+    assert.equal(listed!.meta?.lastContentMessage?.text, "tail 8");
+    assert.equal(listed!.messageWindow?.hasMoreBefore, true);
+    assert.equal(listed!.messageWindow?.nextBeforeMessageId, listed!.messages[0]!.id);
+
+    const older = store.messagePage(created.id, {
+      beforeMessageId: listed!.messageWindow!.nextBeforeMessageId,
+      limit: 4,
+    });
+    assert.equal(older.messages.length, 4);
+    assert.equal(older.total, 10);
+    assert.equal(older.hasMoreBefore, true);
+    assert.equal(older.nextBeforeMessageId, older.messages[0]!.id);
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
 test("CouncilStore marks councils and active agents failed with diagnostic detail", () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-store-fail-"));
   try {
