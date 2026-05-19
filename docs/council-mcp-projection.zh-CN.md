@@ -1,6 +1,6 @@
 # Council MCP Session Projection
 
-RAH Council 通过 `rah_council` MCP server 让不同 CLI agent 进入同一个 room。这个 MCP 会产生大量工具调用事件，但普通 provider session 单独浏览时，用户真正关心的是“这个 agent 在 Council 里说了什么”，而不是 `channel_wait_new`、`channel_set_status` 这类内部同步工具。
+RAH Council 通过 `rah_council` MCP server 让不同 CLI agent 进入同一个 council。这个 MCP 会产生大量工具调用事件，但普通 provider session 单独浏览时，用户真正关心的是“这个 agent 在 Council 里说了什么”，而不是 `channel_wait_new`、`channel_set_status` 这类内部同步工具。
 
 因此 RAH 有一个从 Council 功能衍生出来的 session projection 模块：它负责把 provider session 里的 Council MCP 调用包装、解析、过滤并投影成普通 chat history 可以理解的 timeline item。
 
@@ -26,14 +26,14 @@ RAH Council 通过 `rah_council` MCP server 让不同 CLI agent 进入同一个 
 
 - 单独浏览 Council agent session 时，`channel_post` 显示为正常回答。
 - 高频内部 MCP 调用默认隐藏。
-- model/effort/variant 等 runtime metadata 只从当前 provider session 内可靠来源继承，不跨 room、跨文件或跨 session 猜测。
+- model/effort/variant 等 runtime metadata 只从当前 provider session 内可靠来源继承，不跨 council、跨文件或跨 session 猜测。
 - live replay、stored history、分页 tail loading 的输出语义保持一致。
 
 ## 投影规则
 
 默认规则：
 
-- `channel_post` 是 agent 发到 Council room 的真实发言，应投影成普通 session history 里的 `assistant_message`。
+- `channel_post` 是 agent 发到 Council 的真实发言，应投影成普通 session history 里的 `assistant_message`。
 - `channel_wait_new`、`channel_peek_control`、`channel_set_status`、`channel_join` 等轮询、控制、状态同步工具默认隐藏。
 - `channel_claim_file`、`channel_release_file`、`channel_list_claims` 属于 Council 协作状态，可给 Council 页面使用，但默认不污染普通 session chat history。
 - 非 `rah_council` MCP 工具不由本模块处理，交回各 provider adapter 的常规工具展示逻辑。
@@ -146,9 +146,9 @@ Council `channel_post` 通常没有直接的 model metadata。当前规则是：
 - Codex 使用当前 turn/response 已解析出的 runtime model。
 - Claude 使用发起 tool_use 的 assistant message model。
 - OpenCode 使用 tool part 所属 message 的 runtime model。
-- 如果找不到可靠 model metadata，不跨 Council room、`rooms.json` 或其它 session 文件补猜。
+- 如果找不到可靠 model metadata，不跨 Council、`councils.json` 或其它 session 文件补猜。
 
-这个边界很重要：用户可能在普通 CLI session 中切换模型；只有 provider session 自身的 native metadata 才能证明某条回答使用了哪个模型。Council room 里的 agent 配置只能作为启动意图，不能反向覆盖 provider history。
+这个边界很重要：用户可能在普通 CLI session 中切换模型；只有 provider session 自身的 native metadata 才能证明某条回答使用了哪个模型。Council 里的 agent 配置只能作为启动意图，不能反向覆盖 provider history。
 
 ## History Paging 边界
 
@@ -156,7 +156,7 @@ Council `channel_post` 通常没有直接的 model metadata。当前规则是：
 
 - 分页不能把 tool call 上下文切断后丢失 `channel_post`。
 - 如果 `tool_use` 在上一页、`tool_result` 在当前页，loader 应保留上下文窗口完成投影。
-- projection 后的 `assistant_message` 仍应进入普通 history timeline，而不是只在 Council room history 里可见。
+- projection 后的 `assistant_message` 仍应进入普通 history timeline，而不是只在 Council history 里可见。
 - 不允许为了补 model 信息去跨 session 读外部状态。
 
 目前 Codex 和 Claude 已有跨 page window 的回归测试；OpenCode 使用 message/part metadata 绑定 model，重点测试 live/history projection 与 tool 隐藏。

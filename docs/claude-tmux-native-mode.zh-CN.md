@@ -37,7 +37,7 @@ RAH = input forwarding + session lifecycle management
 
 ### Council MCP Listening
 
-Council 是 Claude tmux 的特殊场景：Claude agent 会通过 `rah_council.channel_wait_new` 阻塞等待 room 消息。
+Council 是 Claude tmux 的特殊场景：Claude agent 会通过 `rah_council.channel_wait_new` 阻塞等待 council 消息。
 
 这个状态下不应使用 Web Esc 暂停监听。`channel_wait_new` 是 RAH 自己定义的 MCP tool，正确暂停方式是让该 tool 正常返回 `paused: true / stop_wait_loop`，让 Claude 自己退出等待循环。
 

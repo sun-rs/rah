@@ -5,7 +5,7 @@ RAH 的 live session 和 Council 都可以打开原生 TUI 画面。这里的 TU
 ## 术语
 
 - `session`：Codex/Claude/OpenCode 的真实 live session。
-- `agent`：Council room 内的单个参与者。
+- `agent`：Council 内的单个参与者。
 - `Web TUI surface`：浏览器里的 xterm/Web TUI client。
 - `detach`：释放 Web TUI surface，不关闭 session/agent。
 - `archive/remove/stop`：真正结束 session 或 agent 进程。
@@ -30,7 +30,7 @@ Session live TUI 跟随主页面注意力。
 
 Council terminal 是多 agent 观察/控制工具，不能每次切 tab 都销毁，也不能无限保留。
 
-- 首次从 Agents 列表点击任意 agent 打开 running room 的 terminal 时，当前 live agents 会一次性进入 warm cache，方便快速扫视所有 tab 状态。
+- 首次从 Agents 列表点击任意 agent 打开 running council 的 terminal 时，当前 live agents 会一次性进入 warm cache，方便快速扫视所有 tab 状态。
 - Agents 列表点击是强 attach：即使该 agent 之前被红色 `X` 手动 detach，也会立即重新 attach。
 - Terminal tab 点击是弱切换：如果该 agent 已被手动 detach，只切到该 tab 并显示 `Activate TUI`，不会自动解除 detach。
 - `Activate TUI` 是强 attach。

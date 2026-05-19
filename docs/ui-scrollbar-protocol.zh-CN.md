@@ -22,7 +22,7 @@
 - WorkspacePicker、FileReferencePicker
 - Inspector 内容区与 Files / Changes 列表
 - Session control / model / permission 弹出菜单
-- Council agents 侧栏、New Room / Add Agents 弹窗
+- Council agents 侧栏、New Council / Add Agents 弹窗
 
 视觉规则：
 
@@ -31,7 +31,7 @@
 - 使用 `scrollbar-gutter: stable` 预留滚动条空间。
 - WebKit 目标宽度约 `5px`，默认透明，hover 时轻量显示。
 - 用于避免弹窗内容从“不溢出”变成“溢出”时，滚动条突然占位并挤压卡片宽度。
-- 面板滚动条可以出现，但不能造成 New Room / Add Agents 这类动态配置弹窗左右抖动。
+- 面板滚动条可以出现，但不能造成 New Council / Add Agents 这类动态配置弹窗左右抖动。
 
 ### `rah-scroll-main`
 
@@ -79,7 +79,7 @@
 
 - 普通弹窗 body。
 - picker / menu。
-- Council New Room / Add Agents 这类高度随内容变化的配置弹窗。
+- Council New Council / Add Agents 这类高度随内容变化的配置弹窗。
 
 ## 4. 规格分配
 
@@ -88,9 +88,9 @@
 | Session Chat | `rah-scroll-main` | 用户长时间阅读的主内容区 |
 | Council Chat | `rah-scroll-main` | 与 Session Chat 同级的主内容区 |
 | Session History | `rah-scroll-panel` | 选择列表，不应抢视觉焦点，也不能因滚动条出现挤压行宽 |
-| Council History / Rooms | `rah-scroll-panel` | 选择列表，与 Session History 保持一致 |
+| Council History / Councils | `rah-scroll-panel` | 选择列表，与 Session History 保持一致 |
 | Settings / Info / Sheet | `rah-scroll-panel` | 弹窗面板 |
-| New Room / Add Agents | `rah-scroll-panel` | 配置面板，避免滚动条挤占 agent 卡片 |
+| New Council / Add Agents | `rah-scroll-panel` | 配置面板，避免滚动条挤占 agent 卡片 |
 | Inspector Files / Changes | `rah-scroll-panel` | 右侧面板内容 |
 | Code / Diff / Artifact | `rah-scroll-code` | 技术内容，需要可发现横向滚动 |
 | Terminal tab strip | `rah-scroll-code` | 技术容器，常有横向 tab 溢出 |

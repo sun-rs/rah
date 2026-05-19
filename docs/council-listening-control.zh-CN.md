@@ -98,10 +98,10 @@ Council UI 可以展示两个明确动作：
 
 ## Mention 输入规则
 
-Council chat composer 支持 `@` mention，用于把消息明确指向某个 agent 或全体 agent。
+Council composer 支持 `@` mention，用于把消息明确指向某个 agent 或全体 agent。
 
 - `@all` 是唯一的全体广播目标，表示所有 agent 都应参与当前讨论。
-- 具体 agent 使用 `@<agent name>`，agent name 来自 room 中展示的唯一 agent 名称。
+- 具体 agent 使用 `@<agent name>`，agent name 来自 council 中展示的唯一 agent 名称。
 - 可以在同一条消息里多次 mention，例如 `@all 先看问题。 @GPT-5.5-XHigh 重点检查实现。`
 - `@` 菜单只在行首、文本开头或空白/括号/引号之后触发。
 - 普通正文内部的 `@` 不触发菜单，例如邮箱、代码片段、`foo@bar`、`正文@gpt`。
@@ -116,7 +116,7 @@ Council listening pause 只处理 Council MCP 等待循环。
 
 - provider 原生 turn cancel
 - shell/tool execution cancel
-- room archive
+- council archive
 - 终止 agent 进程
 
 普通 session 的 Stop 仍按 provider 能力处理：
@@ -130,7 +130,7 @@ Council listening pause 只处理 Council MCP 等待循环。
 - active `channel_wait_new` 是判断 Council listening 的权威 runtime fact。
 - Pause active listener 不应写入 TUI 键盘中断。
 - Send prompt 不应在 active listener 存在时执行。
-- Archive / Stop room 才负责结束 PTY 和 agent 进程。
+- Archive / Stop council 才负责结束 PTY 和 agent 进程。
 
 ## 测试要求
 

@@ -7,7 +7,7 @@ RAH 不再把所有交互都塞进同一种 terminal 生命周期。新的边界
 - terminal 是可见操作面，不等于 agent 主循环。
 - 关闭 terminal 窗口默认是 hide/detach，不是 kill。
 - 只有用户明确点击单个 terminal tab 的关闭按钮，才终结该 terminal 后台进程。
-- Council 的权威状态来自 room log/MCP，而不是 terminal transcript。
+- Council 的权威状态来自 council log/MCP，而不是 terminal transcript。
 
 ## 三个场景
 
@@ -61,11 +61,11 @@ Claude：
 
 设计语义：
 
-- Council 权威数据是 room log、agent status、task/evidence/claims，不是 terminal 内容。
+- Council 权威数据是 council log、agent status、task/evidence/claims，不是 terminal 内容。
 - Codex/OpenCode agent runner 应改为 headless server-side runner。
 - Claude agent 暂时保留 persistent TUI runner。
 - terminal 只是 optional attach/debug surface。
-- 关闭 terminal dialog 不影响 agent 继续监听 room。
+- 关闭 terminal dialog 不影响 agent 继续监听 council。
 
 技术方案：
 
@@ -115,7 +115,7 @@ Native local server 的 TUI client attach 命令也必须集中生成。当前 d
 ### 通用技术
 
 - 后端输出缓冲使用 byte/line bounded ring buffer，只保留近期可视 tail，不保存无限 terminal 历史。
-- 前端 xterm 设置明确 scrollback 上限；历史对话、room log、工具调用走结构化 timeline，不塞进 terminal scrollback。
+- 前端 xterm 设置明确 scrollback 上限；历史对话、council log、工具调用走结构化 timeline，不塞进 terminal scrollback。
 - PTY/WebSocket 输出批量写入 xterm，按 animation frame 或小时间窗合并，避免每个 chunk 触发一次渲染。
 - resize/input/control 只有当前可见 surface 可以 claim；隐藏 tab 不 claim、不抢 resize、不抢焦点。
 - tab 切换不销毁已访问过的 xterm instance；关闭 dialog 才释放前端 xterm，但不杀后台进程。
@@ -163,7 +163,7 @@ Claude/Gemini：
 
 - Codex/OpenCode Council agent 默认 headless runner；terminal 只在用户需要调试时 attach。
 - Claude Council agent 暂时 persistent TUI runner。
-- Council room 的权威输出是 room log/MCP event，不是 terminal transcript。
+- Council 的权威输出是 council log/MCP event，不是 terminal transcript。
 - terminal dialog 内访问过的 tab 保留 xterm instance；切 tab 只切可见层。
 - inactive tab 不应持续高频渲染；可以记录 dirty 状态和 bounded tail，激活时再批量补最近输出或触发当前屏幕刷新。
 
@@ -247,14 +247,14 @@ Claude/Gemini：
 - 关闭 terminal dialog 不杀进程。
 - 只有关闭单个 terminal tab 才杀对应进程。
 - agent 是否继续工作不能依赖 terminal 是否打开。
-- Web UI 的 session/room 状态来自 daemon/provider events，不来自 terminal transcript。
+- Web UI 的 session/council 状态来自 daemon/provider events，不来自 terminal transcript。
 - 对长期运行 terminal，不允许通过全量历史 replay 重建屏幕。
-- provider runner 崩溃、terminal attach 断开、room 停止必须是不同状态，不能混成一种 stopped。
+- provider runner 崩溃、terminal attach 断开、council 停止必须是不同状态，不能混成一种 stopped。
 
 ## 仍需验证
 
 - Codex/OpenCode headless runner 多小时 `channel_wait_new` 稳定性。
-- Codex/OpenCode server 崩溃后的 room/session 恢复策略。
+- Codex/OpenCode server 崩溃后的 council/session 恢复策略。
 - 多 agent 同时 wait/post 的竞争与顺序一致性。
 - Claude 是否有可替代 tmux/TUI runner 的 headless 方案。
 - iPad/PWA 后台切换后 terminal attach 与后台 PTY 的状态恢复。
