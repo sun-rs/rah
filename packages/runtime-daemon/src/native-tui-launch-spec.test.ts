@@ -369,7 +369,7 @@ describe("native TUI launch specs", () => {
     const extraMcpServers = [{
       name: "rah council",
       command: process.execPath,
-      args: ["/repo/bin/rah.mjs", "council-mcp", "--room", "room-1", "--actor", "codex-lead"],
+      args: ["/repo/bin/rah.mjs", "council-mcp", "--council", "council-1", "--actor", "codex-lead"],
     }];
     try {
       const codexStart = await nativeTuiStartLaunchSpec({
@@ -400,7 +400,7 @@ describe("native TUI launch specs", () => {
       assert.equal(claudeMcpConfig.mcpServers?.rah_council?.command, process.execPath);
       assert.deepEqual(claudeMcpConfig.mcpServers?.rah_council?.args?.slice(1, 3), [
         "council-mcp",
-        "--room",
+        "--council",
       ]);
       assert.equal(claudeStart.args.at(-1), "join council");
 
@@ -421,7 +421,7 @@ describe("native TUI launch specs", () => {
       assert.equal(geminiSystemSettings.mcpServers?.rah_council?.command, process.execPath);
       assert.deepEqual(geminiSystemSettings.mcpServers?.rah_council?.args?.slice(1, 3), [
         "council-mcp",
-        "--room",
+        "--council",
       ]);
       assert.equal(geminiSystemSettings.mcpServers?.rah_council?.trust, true);
 

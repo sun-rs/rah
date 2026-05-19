@@ -1293,7 +1293,7 @@ describe("translateOpenCodeEvent", () => {
           tool: "rah_council_channel_post",
           state: {
             status: "completed",
-            input: { room_id: "room-1", content: "Live Council reply" },
+            input: { council_id: "council-1", content: "Live Council reply" },
             output: JSON.stringify({ ok: true }),
           },
         },
@@ -1361,7 +1361,7 @@ describe("translateOpenCodeEvent", () => {
             tool: "rah_council_channel_wait_new",
             state: {
               status: "completed",
-              input: { room_id: "room-1" },
+              input: { council_id: "council-1" },
               output: JSON.stringify({ ok: true, messages: [] }),
             },
           },
@@ -1374,7 +1374,7 @@ describe("translateOpenCodeEvent", () => {
             tool: "rah_council_channel_post",
             state: {
               status: "completed",
-              input: { room_id: "room-1", content: "Visible Council reply" },
+              input: { council_id: "council-1", content: "Visible Council reply" },
               output: JSON.stringify({ ok: true }),
             },
           },

@@ -16,8 +16,8 @@ export type SessionLiveBackend =
 export type ManagedSessionOrigin =
   | {
       kind: "council";
-      roomId: string;
-      roomTitle?: string;
+      councilId: string;
+      councilTitle?: string;
       agentId: string;
       agentLabel?: string;
     };

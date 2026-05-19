@@ -2,7 +2,7 @@ import type {
   CouncilMcpRequest,
   CouncilMcpResponse,
   CouncilMessage,
-  CouncilRoomSnapshot,
+  CouncilSnapshot,
 } from "@rah/runtime-protocol";
 import { CouncilStore } from "./council-store";
 
@@ -39,8 +39,8 @@ function toChannelMessage(message: CouncilMessage): Record<string, unknown> {
   return {
     id: message.id,
     ts: Date.parse(message.createdAt) / 1000,
-    room: message.roomId,
-    roomId: message.roomId,
+    council: message.councilId,
+    councilId: message.councilId,
     actor: message.actorId,
     actorId: message.actorId,
     client_id: message.clientId ?? "",
@@ -93,7 +93,7 @@ function waitNewResultPayload(result: CouncilMcpWaitNewResult): Record<string, u
 }
 
 export type CouncilMcpWaitNew = (args: {
-  roomId: string;
+  councilId: string;
   actorId: string;
   clientId: string;
   sinceMessageId: number;
@@ -108,22 +108,22 @@ export function handleCouncilMcpRequest(
     onMessage?: (message: CouncilMessage) => void;
   } = {},
 ): CouncilMcpResponse | Promise<CouncilMcpResponse> {
-  store.requireAgent(request.roomId, request.actorId);
+  store.requireAgent(request.councilId, request.actorId);
   const args = request.arguments;
   const clientId = clientIdForRequest(request, args);
   switch (request.tool) {
     case "channel_join": {
-      const room = store.setAgentStatus(request.roomId, request.actorId, "idle", "joined");
+      const council = store.setAgentStatus(request.councilId, request.actorId, "idle", "joined");
       return {
         ok: true,
         result: {
           ok: true,
-          room: request.roomId,
-          last_msg_id: store.lastMessageId(request.roomId),
-          recent_messages: store.recentMessages(request.roomId, 50).map(toChannelMessage),
-          recent_count: store.recentMessages(request.roomId, 50).length,
+          council: request.councilId,
+          last_msg_id: store.lastMessageId(request.councilId),
+          recent_messages: store.recentMessages(request.councilId, 50).map(toChannelMessage),
+          recent_count: store.recentMessages(request.councilId, 50).length,
           is_reconnect: false,
-          snapshot: room,
+          snapshot: council,
         },
       };
     }
@@ -134,7 +134,7 @@ export function handleCouncilMcpRequest(
       }
       const replyTo = numberArg(args, "reply_to");
       const message = store.appendMessage({
-        roomId: request.roomId,
+        councilId: request.councilId,
         actorId: request.actorId,
         clientId,
         role: "agent",
@@ -155,7 +155,7 @@ export function handleCouncilMcpRequest(
     case "channel_wait_new": {
       const sinceMessageId = numberArg(args, "since_id") ?? numberArg(args, "sinceMessageId") ?? 0;
       const timeoutS = Math.min(120, positiveNumberArg(args, "timeout_s", 60));
-      const immediate = store.messagesSince(request.roomId, sinceMessageId, {
+      const immediate = store.messagesSince(request.councilId, sinceMessageId, {
         limit: 1,
         excludeClientId: clientId,
         excludeActorIdWhenClientMissing: request.actorId,
@@ -167,7 +167,7 @@ export function handleCouncilMcpRequest(
         };
       }
       return options.waitNew({
-        roomId: request.roomId,
+        councilId: request.councilId,
         actorId: request.actorId,
         clientId,
         sinceMessageId,
@@ -184,7 +184,7 @@ export function handleCouncilMcpRequest(
         ok: true,
         result: {
           ok: true,
-          messages: store.messagesSince(request.roomId, sinceMessageId ?? 0, {
+          messages: store.messagesSince(request.councilId, sinceMessageId ?? 0, {
             limit: limit ?? 50,
           }).map(toChannelMessage),
         },
@@ -197,7 +197,7 @@ export function handleCouncilMcpRequest(
         ok: true,
         result: {
           ok: true,
-          messages: store.messagesSince(request.roomId, sinceMessageId, {
+          messages: store.messagesSince(request.councilId, sinceMessageId, {
             limit,
             excludeClientId: clientId,
             excludeActorIdWhenClientMissing: request.actorId,
@@ -206,12 +206,12 @@ export function handleCouncilMcpRequest(
       };
     }
     case "channel_state": {
-      const state = store.roomState(request.roomId);
+      const state = store.councilState(request.councilId);
       return {
         ok: true,
         result: {
           ok: true,
-          room: state.room,
+          council: state.council,
           agents: state.agents,
           active_agents: state.agents.map((agent) => ({
             actor: agent.id,
@@ -237,15 +237,15 @@ export function handleCouncilMcpRequest(
       const detail = stringArg(args, "detail");
       const allowed = new Set(["starting", "waiting", "thinking", "idle", "blocked", "failed", "stopped"]);
       const status = allowed.has(phase) ? phase as Parameters<CouncilStore["setAgentStatus"]>[2] : "idle";
-      const snapshot = store.setAgentStatus(request.roomId, request.actorId, status, detail);
-      return { ok: true, result: snapshot satisfies CouncilRoomSnapshot };
+      const snapshot = store.setAgentStatus(request.councilId, request.actorId, status, detail);
+      return { ok: true, result: snapshot satisfies CouncilSnapshot };
     }
     case "channel_claim_file": {
       const filePath = stringArg(args, "path");
       if (!filePath) {
         throw new Error("channel_claim_file requires path.");
       }
-      const claim = store.claimFile(request.roomId, request.actorId, filePath);
+      const claim = store.claimFile(request.councilId, request.actorId, filePath);
       return { ok: true, result: { ok: true, path: claim.path, actor: claim.actorId, claim } };
     }
     case "channel_release_file": {
@@ -255,7 +255,7 @@ export function handleCouncilMcpRequest(
       }
       return {
         ok: true,
-        result: { ok: true, path: filePath, released: store.releaseFile(request.roomId, request.actorId, filePath) },
+        result: { ok: true, path: filePath, released: store.releaseFile(request.councilId, request.actorId, filePath) },
       };
     }
     case "channel_list_claims": {
@@ -263,7 +263,7 @@ export function handleCouncilMcpRequest(
         ok: true,
         result: {
           ok: true,
-          claims: store.listClaims(request.roomId).map((claim) => ({
+          claims: store.listClaims(request.councilId).map((claim) => ({
             path: claim.path,
             actor: claim.actorId,
             actorId: claim.actorId,
@@ -285,7 +285,7 @@ export function handleCouncilMcpRequest(
         result: {
           ok: true,
           control: store.appendControl({
-            roomId: request.roomId,
+            councilId: request.councilId,
             fromActorId: request.actorId,
             targetActorId: target,
             action,
@@ -296,7 +296,7 @@ export function handleCouncilMcpRequest(
       };
     }
     case "channel_peek_control": {
-      const controls = store.takeControls(request.roomId, request.actorId);
+      const controls = store.takeControls(request.councilId, request.actorId);
       return { ok: true, result: { ok: true, controls, count: controls.length } };
     }
     default:

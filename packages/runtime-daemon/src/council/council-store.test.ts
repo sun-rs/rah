@@ -5,12 +5,12 @@ import path from "node:path";
 import test from "node:test";
 import { CouncilStore } from "./council-store";
 
-test("CouncilStore persists rooms, agents, ordered messages, and stopped status", () => {
+test("CouncilStore persists councils, agents, ordered messages, and stopped status", () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-store-"));
-  const filePath = path.join(root, "rooms.json");
+  const filePath = path.join(root, "councils.json");
   try {
     const store = new CouncilStore(filePath);
-    const created = store.createRoom({
+    const created = store.createCouncil({
       title: "Runtime Council",
       workspace: root,
       agents: [
@@ -19,23 +19,23 @@ test("CouncilStore persists rooms, agents, ordered messages, and stopped status"
       ],
     });
 
-    assert.equal(created.room.title, "Runtime Council");
+    assert.equal(created.title, "Runtime Council");
     assert.equal(created.agents.length, 2);
     assert.deepEqual(created.agents.map((agent) => agent.id), ["Codex Lead", "Claude Reviewer"]);
     assert.deepEqual(created.agents.map((agent) => agent.label), ["Codex Lead", "Claude Reviewer"]);
     assert.deepEqual(created.storage, {
       storePath: filePath,
-      messageLogPath: path.join(root, "messages", `${encodeURIComponent(created.room.id)}.jsonl`),
+      messageLogPath: path.join(root, "messages", `${encodeURIComponent(created.id)}.jsonl`),
     });
 
     const first = store.appendMessage({
-      roomId: created.room.id,
+      councilId: created.id,
       actorId: "user",
       role: "user",
       text: "请讨论方案",
     });
     const second = store.appendMessage({
-      roomId: created.room.id,
+      councilId: created.id,
       actorId: created.agents[0]!.id,
       role: "agent",
       text: "  收到\n",
@@ -43,29 +43,35 @@ test("CouncilStore persists rooms, agents, ordered messages, and stopped status"
     assert.equal(second.id, first.id + 1);
     assert.equal(second.parts[0]?.kind === "text" ? second.parts[0].text : "", "  收到\n");
     assert.deepEqual(
-      store.snapshot(created.room.id, { sinceMessageId: first.id }).messages.map((message) => message.id),
+      store.snapshot(created.id, { sinceMessageId: first.id }).messages.map((message) => message.id),
       [second.id],
     );
 
-    store.updateAgent(created.room.id, created.agents[0]!.id, {
+    const renamedRunning = store.updateCouncil(created.id, { title: "Renamed Running Council" });
+    assert.equal(renamedRunning.title, "Renamed Running Council");
+
+    store.updateAgent(created.id, created.agents[0]!.id, {
       status: "idle",
       terminalId: "terminal_1",
     });
-    store.stopRoom(created.room.id);
+    store.stopCouncil(created.id);
+    const renamedStopped = store.updateCouncil(created.id, { title: "Renamed Stopped Council" });
+    assert.equal(renamedStopped.title, "Renamed Stopped Council");
     const persisted = JSON.parse(readFileSync(filePath, "utf8")) as { messages?: unknown[] };
     assert.deepEqual(persisted.messages, []);
-    assert.ok(existsSync(path.join(root, "messages", `${encodeURIComponent(created.room.id)}.jsonl`)));
+    assert.ok(existsSync(path.join(root, "messages", `${encodeURIComponent(created.id)}.jsonl`)));
 
     const reloaded = new CouncilStore(filePath);
-    const snapshot = reloaded.snapshot(created.room.id);
-    assert.equal(snapshot.room.status, "stopped");
+    const snapshot = reloaded.snapshot(created.id);
+    assert.equal(snapshot.title, "Renamed Stopped Council");
+    assert.equal(snapshot.status, "stopped");
     assert.equal(snapshot.agents[0]!.status, "stopped");
     assert.equal(snapshot.agents[0]!.terminalId, "terminal_1");
     assert.equal(snapshot.messages.length, 2);
 
-    reloaded.deleteRoom(created.room.id);
-    assert.equal(reloaded.listRooms().length, 0);
-    assert.throws(() => reloaded.snapshot(created.room.id), /Unknown council room/);
+    reloaded.deleteCouncil(created.id);
+    assert.equal(reloaded.listCouncils().length, 0);
+    assert.throws(() => reloaded.snapshot(created.id), /Unknown council/);
   } finally {
     rmSync(root, { force: true, recursive: true });
   }
@@ -73,10 +79,10 @@ test("CouncilStore persists rooms, agents, ordered messages, and stopped status"
 
 test("CouncilStore normalizes slashes in agent labels and ids", () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-store-label-"));
-  const filePath = path.join(root, "rooms.json");
+  const filePath = path.join(root, "councils.json");
   try {
     const store = new CouncilStore(filePath);
-    const created = store.createRoom({
+    const created = store.createCouncil({
       workspace: root,
       agents: [
         { provider: "opencode", label: "aihubmix/grok-4.3/high" },
@@ -88,7 +94,7 @@ test("CouncilStore normalizes slashes in agent labels and ids", () => {
       ["aihubmix-grok-4.3-high", "gpt-5.5-xhigh"],
     );
 
-    const added = store.addAgent(created.room.id, {
+    const added = store.addAgent(created.id, {
       provider: "claude",
       label: "default/max",
     });
@@ -98,20 +104,20 @@ test("CouncilStore normalizes slashes in agent labels and ids", () => {
   }
 });
 
-test("CouncilStore marks rooms and active agents failed with diagnostic detail", () => {
+test("CouncilStore marks councils and active agents failed with diagnostic detail", () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-store-fail-"));
   try {
-    const store = new CouncilStore(path.join(root, "rooms.json"));
-    const created = store.createRoom({
+    const store = new CouncilStore(path.join(root, "councils.json"));
+    const created = store.createCouncil({
       workspace: root,
       agents: [{ id: "agent-a", provider: "codex", label: "Agent A" }],
     });
 
-    const failed = store.failRoom(created.room.id, "launch failed");
+    const failed = store.failCouncil(created.id, "launch failed");
 
-    assert.equal(failed.room.status, "stopped");
-    assert.equal(failed.room.phase, "failed");
-    assert.equal(failed.room.error, "launch failed");
+    assert.equal(failed.status, "stopped");
+    assert.equal(failed.phase, "failed");
+    assert.equal(failed.error, "launch failed");
     assert.equal(failed.agents[0]!.status, "failed");
     assert.equal(failed.agents[0]!.lastStatusDetail, "launch failed");
   } finally {
@@ -119,28 +125,28 @@ test("CouncilStore marks rooms and active agents failed with diagnostic detail",
   }
 });
 
-test("CouncilStore assigns numbered room titles when title is omitted", () => {
+test("CouncilStore assigns numbered council titles when title is omitted", () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-store-title-"));
   try {
-    const store = new CouncilStore(path.join(root, "rooms.json"));
-    const first = store.createRoom({
+    const store = new CouncilStore(path.join(root, "councils.json"));
+    const first = store.createCouncil({
       workspace: root,
       agents: [{ provider: "codex", label: "Codex" }],
     });
-    const second = store.createRoom({
+    const second = store.createCouncil({
       title: "  ",
       workspace: root,
       agents: [{ provider: "claude", label: "Claude" }],
     });
-    const named = store.createRoom({
+    const named = store.createCouncil({
       title: "Architecture Review",
       workspace: root,
       agents: [{ provider: "opencode", label: "OpenCode" }],
     });
 
-    assert.equal(first.room.title, "Room-0001");
-    assert.equal(second.room.title, "Room-0002");
-    assert.equal(named.room.title, "Architecture Review");
+    assert.equal(first.title, "Council-0001");
+    assert.equal(second.title, "Council-0002");
+    assert.equal(named.title, "Architecture Review");
   } finally {
     rmSync(root, { force: true, recursive: true });
   }

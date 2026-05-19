@@ -285,17 +285,17 @@ test("Council can stop a Claude tui_mux agent without leaving tmux behind", asyn
   const restoreClaude = setEnv("RAH_CLAUDE_BINARY", fakeClaude);
   const engine = new RuntimeEngine();
   try {
-    const created = await engine.createCouncilRoom({
+    const created = await engine.createCouncil({
       workspace,
       agents: [{ id: "claude-reviewer", provider: "claude", label: "Claude Reviewer" }],
     });
-    const roomId = created.room.room.id;
-    const agentId = created.room.agents[0]!.id;
+    const councilId = created.council.id;
+    const agentId = created.council.agents[0]!.id;
     let sessionId = "";
     await waitFor(() => {
-      const room = engine.listCouncilRooms().rooms.find((candidate) => candidate.room.id === roomId);
-      assert.ok(room);
-      sessionId = room.agents[0]?.nativeSessionId ?? "";
+      const council = engine.listCouncils().councils.find((candidate) => candidate.id === councilId);
+      assert.ok(council);
+      sessionId = council.agents[0]?.nativeSessionId ?? "";
       assert.ok(sessionId);
       const state = engine.sessionStore.getSession(sessionId);
       assert.ok(state);
@@ -305,7 +305,7 @@ test("Council can stop a Claude tui_mux agent without leaving tmux behind", asyn
     const muxSessionName = engine.sessionStore.getSession(sessionId)?.session.mux?.sessionName;
     assert.ok(muxSessionName);
 
-    await engine.stopCouncilAgent(roomId, agentId);
+    await engine.stopCouncilAgent(councilId, agentId);
 
     assert.equal(engine.sessionStore.getSession(sessionId), undefined);
     await waitFor(async () => {

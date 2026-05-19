@@ -17,13 +17,13 @@ import type {
   CouncilMessage,
   CouncilMessagePart,
   CouncilMessageRole,
-  CouncilRoom,
-  CouncilRoomSnapshot,
+  Council,
+  CouncilSnapshot,
 } from "@rah/runtime-protocol";
-import { conversationStateFromLegacyCouncilRoomStatus } from "@rah/runtime-protocol";
+import { conversationStateFromLegacyCouncilStatus } from "@rah/runtime-protocol";
 
 type CouncilStoreFile = {
-  rooms: CouncilRoom[];
+  councils: Council[];
   agents: CouncilAgent[];
   messages: CouncilMessage[];
   claims: CouncilFileClaim[];
@@ -33,7 +33,7 @@ type CouncilStoreFile = {
 };
 
 export type CouncilFileClaim = {
-  roomId: string;
+  councilId: string;
   path: string;
   actorId: string;
   claimedAt: string;
@@ -41,7 +41,7 @@ export type CouncilFileClaim = {
 
 export type CouncilControlMessage = {
   id: number;
-  roomId: string;
+  councilId: string;
   fromActorId: string;
   targetActorId: string;
   action: string;
@@ -57,7 +57,7 @@ function resolveRahHome(): string {
 }
 
 function defaultStoreFilePath(): string {
-  return path.join(resolveRahHome(), "council", "rooms.json");
+  return path.join(resolveRahHome(), "council", "councils.json");
 }
 
 function nowIso(): string {
@@ -72,24 +72,24 @@ function normalizeCouncilActorName(value: string): string {
   return value.replace(/[\\/]+/g, "-");
 }
 
-function nextDefaultRoomTitle(rooms: CouncilRoom[]): string {
-  let maxRoomNumber = 0;
-  for (const room of rooms) {
-    const match = /^Room-(\d+)$/.exec(room.title.trim());
+function nextDefaultCouncilTitle(councils: Council[]): string {
+  let maxCouncilNumber = 0;
+  for (const council of councils) {
+    const match = /^Council-(\d+)$/.exec(council.title.trim());
     if (!match) continue;
-    maxRoomNumber = Math.max(maxRoomNumber, Number.parseInt(match[1]!, 10));
+    maxCouncilNumber = Math.max(maxCouncilNumber, Number.parseInt(match[1]!, 10));
   }
-  return `Room-${String(maxRoomNumber + 1).padStart(4, "0")}`;
+  return `Council-${String(maxCouncilNumber + 1).padStart(4, "0")}`;
 }
 
 function loadStoreFile(filePath: string): CouncilStoreFile {
   try {
     const parsed = JSON.parse(readFileSync(filePath, "utf8")) as Partial<CouncilStoreFile>;
-    const rooms = Array.isArray(parsed.rooms)
-      ? (parsed.rooms as CouncilRoom[]).map(normalizePersistedRoom)
+    const councils = Array.isArray(parsed.councils)
+      ? (parsed.councils as Council[]).map(normalizePersistedCouncil)
       : [];
     return {
-      rooms,
+      councils,
       agents: Array.isArray(parsed.agents) ? parsed.agents as CouncilAgent[] : [],
       messages: Array.isArray(parsed.messages) ? parsed.messages as CouncilMessage[] : [],
       claims: Array.isArray(parsed.claims) ? parsed.claims as CouncilFileClaim[] : [],
@@ -105,7 +105,7 @@ function loadStoreFile(filePath: string): CouncilStoreFile {
     };
   } catch {
     return {
-      rooms: [],
+      councils: [],
       agents: [],
       messages: [],
       claims: [],
@@ -116,19 +116,19 @@ function loadStoreFile(filePath: string): CouncilStoreFile {
   }
 }
 
-function normalizePersistedRoom(room: CouncilRoom): CouncilRoom {
-  const rawStatus = (room as { status?: string }).status;
-  const rawPhase = (room as { phase?: CouncilRoom["phase"] }).phase;
+function normalizePersistedCouncil(council: Council): Council {
+  const rawStatus = (council as { status?: string }).status;
+  const rawPhase = (council as { phase?: Council["phase"] }).phase;
   if (rawStatus === "running" || rawStatus === "stopped") {
     return {
-      ...room,
+      ...council,
       status: rawStatus,
       phase: rawPhase ?? (rawStatus === "running" ? "ready" : "ended"),
     };
   }
-  const legacy = conversationStateFromLegacyCouncilRoomStatus(rawStatus);
+  const legacy = conversationStateFromLegacyCouncilStatus(rawStatus);
   return {
-    ...room,
+    ...council,
     status: legacy.status,
     phase: rawPhase ?? legacy.phase,
   };
@@ -146,8 +146,8 @@ function councilMessagesDir(filePath: string): string {
   return path.join(path.dirname(filePath), "messages");
 }
 
-function councilMessageFilePath(filePath: string, roomId: string): string {
-  return path.join(councilMessagesDir(filePath), `${encodeURIComponent(roomId)}.jsonl`);
+function councilMessageFilePath(filePath: string, councilId: string): string {
+  return path.join(councilMessagesDir(filePath), `${encodeURIComponent(councilId)}.jsonl`);
 }
 
 function readCouncilMessageLog(filePath: string): CouncilMessage[] {
@@ -165,14 +165,14 @@ function readCouncilMessageLog(filePath: string): CouncilMessage[] {
       const parsed = JSON.parse(trimmed) as CouncilMessage;
       if (
         typeof parsed.id === "number" &&
-        typeof parsed.roomId === "string" &&
+        typeof parsed.councilId === "string" &&
         typeof parsed.actorId === "string" &&
         Array.isArray(parsed.parts)
       ) {
         messages.push(parsed);
       }
     } catch {
-      // Keep the room usable even if a single log line is corrupted.
+      // Keep the council usable even if a single log line is corrupted.
     }
   }
   return messages;
@@ -203,7 +203,7 @@ function firstMessageIndexAfter(messages: CouncilMessage[], messageId: number): 
 
 export class CouncilStore {
   private state: CouncilStoreFile;
-  private readonly messagesByRoom = new Map<string, CouncilMessage[]>();
+  private readonly messagesByCouncil = new Map<string, CouncilMessage[]>();
 
   constructor(private readonly filePath = defaultStoreFilePath()) {
     this.state = loadStoreFile(filePath);
@@ -217,23 +217,23 @@ export class CouncilStore {
     }
   }
 
-  listRooms(): CouncilRoomSnapshot[] {
-    return [...this.state.rooms]
+  listCouncils(): CouncilSnapshot[] {
+    return [...this.state.councils]
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-      .map((room) => this.snapshot(room.id));
+      .map((council) => this.snapshot(council.id));
   }
 
-  createRoom(args: {
+  createCouncil(args: {
     title?: string;
     workspace: string;
     agents: CouncilAgentConfig[];
     muxSessionName?: string;
-  }): CouncilRoomSnapshot {
+  }): CouncilSnapshot {
     const timestamp = nowIso();
-    const roomId = randomUUID();
-    const room: CouncilRoom = {
-      id: roomId,
-      title: args.title?.trim() || nextDefaultRoomTitle(this.state.rooms),
+    const councilId = randomUUID();
+    const council: Council = {
+      id: councilId,
+      title: args.title?.trim() || nextDefaultCouncilTitle(this.state.councils),
       workspace: args.workspace,
       status: "running",
       phase: "starting",
@@ -254,22 +254,22 @@ export class CouncilStore {
       return {
         ...agent,
         id,
-        roomId,
+        councilId,
         label: id,
         status: "starting",
         updatedAt: timestamp,
       };
     });
-    this.state.rooms.push(room);
+    this.state.councils.push(council);
     this.state.agents.push(...agents);
     this.persist();
-    return this.snapshot(roomId);
+    return this.snapshot(councilId);
   }
 
-  addAgent(roomId: string, agent: CouncilAgentConfig): CouncilAgent {
-    const room = this.requireRoom(roomId);
+  addAgent(councilId: string, agent: CouncilAgentConfig): CouncilAgent {
+    const council = this.requireCouncil(councilId);
     const timestamp = nowIso();
-    const existingAgents = this.state.agents.filter((candidate) => candidate.roomId === roomId);
+    const existingAgents = this.state.agents.filter((candidate) => candidate.councilId === councilId);
     const usedAgentIds = new Set(existingAgents.map((candidate) => candidate.id));
     const baseId = councilActorName(agent, existingAgents.length);
     let id = baseId;
@@ -281,46 +281,46 @@ export class CouncilStore {
     const nextAgent: CouncilAgent = {
       ...agent,
       id,
-      roomId,
+      councilId,
       label: id,
       status: "starting",
       updatedAt: timestamp,
     };
     this.state.agents.push(nextAgent);
-    room.updatedAt = timestamp;
+    council.updatedAt = timestamp;
     this.persist();
     return { ...nextAgent };
   }
 
-  snapshot(roomId: string, options?: { sinceMessageId?: number; limit?: number }): CouncilRoomSnapshot {
-    const room = this.requireRoom(roomId);
+  snapshot(councilId: string, options?: { sinceMessageId?: number; limit?: number }): CouncilSnapshot {
+    const council = this.requireCouncil(councilId);
     const since = options?.sinceMessageId ?? 0;
     const limit = options?.limit ?? 200;
-    const roomMessages = this.messagesForRoom(roomId);
-    const startIndex = firstMessageIndexAfter(roomMessages, since);
-    const messages = limit <= 0 ? [] : roomMessages.slice(startIndex).slice(-limit);
+    const councilMessages = this.messagesForCouncil(councilId);
+    const startIndex = firstMessageIndexAfter(councilMessages, since);
+    const messages = limit <= 0 ? [] : councilMessages.slice(startIndex).slice(-limit);
     return {
-      room: { ...room },
+      ...council,
       agents: this.state.agents
-        .filter((agent) => agent.roomId === roomId)
+        .filter((agent) => agent.councilId === councilId)
         .map((agent) => ({ ...agent })),
       messages: messages.map(cloneCouncilMessage),
       storage: {
         storePath: this.filePath,
-        messageLogPath: this.messageFilePath(roomId),
+        messageLogPath: this.messageFilePath(councilId),
       },
     };
   }
 
   appendMessage(args: {
-    roomId: string;
+    councilId: string;
     actorId: string;
     clientId?: string;
     role: CouncilMessageRole;
     text: string;
     replyTo?: number;
   }): CouncilMessage {
-    const room = this.requireRoom(args.roomId);
+    const council = this.requireCouncil(args.councilId);
     const trimmed = args.text.trim();
     if (!trimmed) {
       throw new Error("Council message text is required.");
@@ -328,7 +328,7 @@ export class CouncilStore {
     const timestamp = nowIso();
     const message: CouncilMessage = {
       id: this.state.nextMessageId,
-      roomId: room.id,
+      councilId: council.id,
       actorId: args.actorId,
       ...(args.clientId ? { clientId: args.clientId } : {}),
       role: args.role,
@@ -337,28 +337,28 @@ export class CouncilStore {
       createdAt: timestamp,
     };
     this.state.nextMessageId += 1;
-    this.messagesForRoom(message.roomId).push(message);
+    this.messagesForCouncil(message.councilId).push(message);
     this.appendMessageToLog(message);
-    room.updatedAt = timestamp;
+    council.updatedAt = timestamp;
     this.persist();
     return cloneCouncilMessage(message);
   }
 
-  lastMessageId(roomId: string): number {
-    this.requireRoom(roomId);
-    return this.messagesForRoom(roomId).at(-1)?.id ?? 0;
+  lastMessageId(councilId: string): number {
+    this.requireCouncil(councilId);
+    return this.messagesForCouncil(councilId).at(-1)?.id ?? 0;
   }
 
-  recentMessages(roomId: string, limit = 50): CouncilMessage[] {
-    this.requireRoom(roomId);
+  recentMessages(councilId: string, limit = 50): CouncilMessage[] {
+    this.requireCouncil(councilId);
     if (limit <= 0) {
       return [];
     }
-    return this.messagesForRoom(roomId).slice(-limit).map(cloneCouncilMessage);
+    return this.messagesForCouncil(councilId).slice(-limit).map(cloneCouncilMessage);
   }
 
   messagesSince(
-    roomId: string,
+    councilId: string,
     sinceMessageId: number,
     options?: {
       limit?: number;
@@ -366,16 +366,16 @@ export class CouncilStore {
       excludeActorIdWhenClientMissing?: string;
     },
   ): CouncilMessage[] {
-    this.requireRoom(roomId);
+    this.requireCouncil(councilId);
     const limit = options?.limit ?? 50;
     if (limit <= 0) {
       return [];
     }
-    const roomMessages = this.messagesForRoom(roomId);
-    const startIndex = firstMessageIndexAfter(roomMessages, sinceMessageId);
+    const councilMessages = this.messagesForCouncil(councilId);
+    const startIndex = firstMessageIndexAfter(councilMessages, sinceMessageId);
     const results: CouncilMessage[] = [];
-    for (let index = startIndex; index < roomMessages.length; index += 1) {
-      const message = roomMessages[index]!;
+    for (let index = startIndex; index < councilMessages.length; index += 1) {
+      const message = councilMessages[index]!;
       if (options?.excludeClientId && message.clientId === options.excludeClientId) {
         continue;
       }
@@ -394,21 +394,24 @@ export class CouncilStore {
     return results;
   }
 
-  updateRoom(roomId: string, patch: Partial<Pick<CouncilRoom, "status" | "phase" | "muxSessionName" | "error">>): CouncilRoomSnapshot {
-    const room = this.requireRoom(roomId);
-    Object.assign(room, patch, { updatedAt: nowIso() });
+  updateCouncil(
+    councilId: string,
+    patch: Partial<Pick<Council, "title" | "status" | "phase" | "muxSessionName" | "error">>,
+  ): CouncilSnapshot {
+    const council = this.requireCouncil(councilId);
+    Object.assign(council, patch, { updatedAt: nowIso() });
     this.persist();
-    return this.snapshot(roomId);
+    return this.snapshot(councilId);
   }
 
-  failRoom(roomId: string, error: string): CouncilRoomSnapshot {
+  failCouncil(councilId: string, error: string): CouncilSnapshot {
     const timestamp = nowIso();
-    const room = this.requireRoom(roomId);
-    room.status = "stopped";
-    room.phase = "failed";
-    room.error = error;
-    room.updatedAt = timestamp;
-    for (const agent of this.state.agents.filter((candidate) => candidate.roomId === roomId)) {
+    const council = this.requireCouncil(councilId);
+    council.status = "stopped";
+    council.phase = "failed";
+    council.error = error;
+    council.updatedAt = timestamp;
+    for (const agent of this.state.agents.filter((candidate) => candidate.councilId === councilId)) {
       if (agent.status !== "stopped") {
         agent.status = "failed";
         agent.lastStatusDetail = error;
@@ -416,72 +419,73 @@ export class CouncilStore {
       }
     }
     this.persist();
-    return this.snapshot(roomId);
+    return this.snapshot(councilId);
   }
 
   updateAgent(
-    roomId: string,
+    councilId: string,
     agentId: string,
     patch: Partial<Pick<CouncilAgent, "status" | "terminalId" | "nativeSessionId" | "lastStatusDetail">>,
-  ): CouncilRoomSnapshot {
-    const agent = this.requireAgent(roomId, agentId);
+  ): CouncilSnapshot {
+    const agent = this.requireAgent(councilId, agentId);
     Object.assign(agent, patch, { updatedAt: nowIso() });
-    this.requireRoom(roomId).updatedAt = agent.updatedAt;
+    this.requireCouncil(councilId).updatedAt = agent.updatedAt;
     this.persist();
-    return this.snapshot(roomId);
+    return this.snapshot(councilId);
   }
 
-  setAgentStatus(roomId: string, agentId: string, status: CouncilAgentStatus, detail?: string): CouncilRoomSnapshot {
-    return this.updateAgent(roomId, agentId, {
+  setAgentStatus(councilId: string, agentId: string, status: CouncilAgentStatus, detail?: string): CouncilSnapshot {
+    return this.updateAgent(councilId, agentId, {
       status,
       ...(detail !== undefined ? { lastStatusDetail: detail } : {}),
     });
   }
 
-  clearAgentRuntimeState(roomId: string, agentId: string): CouncilRoomSnapshot {
-    this.requireAgent(roomId, agentId);
+  clearAgentRuntimeState(councilId: string, agentId: string): CouncilSnapshot {
+    this.requireAgent(councilId, agentId);
     this.state.claims = this.state.claims.filter(
-      (claim) => !(claim.roomId === roomId && claim.actorId === agentId),
+      (claim) => !(claim.councilId === councilId && claim.actorId === agentId),
     );
     this.state.controls = this.state.controls.filter(
       (control) => !(
-        control.roomId === roomId &&
+        control.councilId === councilId &&
         (control.fromActorId === agentId || control.targetActorId === agentId)
       ),
     );
     this.persist();
-    return this.snapshot(roomId);
+    return this.snapshot(councilId);
   }
 
-  roomState(roomId: string): {
-    room: CouncilRoom;
+  councilState(councilId: string): {
+    council: Council;
     agents: CouncilAgent[];
     lastMessageId: number;
     claims: CouncilFileClaim[];
     controls: CouncilControlMessage[];
   } {
-    const snapshot = this.snapshot(roomId, { limit: 0 });
-    this.pruneExpiredClaims(roomId);
+    const snapshot = this.snapshot(councilId, { limit: 0 });
+    const { agents, messages, storage, ...council } = snapshot;
+    this.pruneExpiredClaims(councilId);
     return {
-      room: snapshot.room,
-      agents: snapshot.agents,
-      lastMessageId: this.lastMessageId(roomId),
-      claims: this.listClaims(roomId),
+      council,
+      agents,
+      lastMessageId: this.lastMessageId(councilId),
+      claims: this.listClaims(councilId),
       controls: this.state.controls
-        .filter((control) => control.roomId === roomId)
+        .filter((control) => control.councilId === councilId)
         .map((control) => ({ ...control })),
     };
   }
 
-  claimFile(roomId: string, actorId: string, filePath: string): CouncilFileClaim {
-    this.requireAgent(roomId, actorId);
+  claimFile(councilId: string, actorId: string, filePath: string): CouncilFileClaim {
+    this.requireAgent(councilId, actorId);
     const normalizedPath = filePath.trim();
     if (!normalizedPath) {
       throw new Error("channel_claim_file requires path.");
     }
-    this.pruneExpiredClaims(roomId);
+    this.pruneExpiredClaims(councilId);
     const existing = this.state.claims.find(
-      (claim) => claim.roomId === roomId && claim.path === normalizedPath,
+      (claim) => claim.councilId === councilId && claim.path === normalizedPath,
     );
     if (existing && existing.actorId !== actorId) {
       throw new Error(`file_conflict: ${normalizedPath} is already claimed by ${existing.actorId}.`);
@@ -493,7 +497,7 @@ export class CouncilStore {
       return { ...existing };
     }
     const claim: CouncilFileClaim = {
-      roomId,
+      councilId,
       path: normalizedPath,
       actorId,
       claimedAt: timestamp,
@@ -503,12 +507,12 @@ export class CouncilStore {
     return { ...claim };
   }
 
-  releaseFile(roomId: string, actorId: string, filePath: string): boolean {
-    this.requireAgent(roomId, actorId);
+  releaseFile(councilId: string, actorId: string, filePath: string): boolean {
+    this.requireAgent(councilId, actorId);
     const normalizedPath = filePath.trim();
     const before = this.state.claims.length;
     this.state.claims = this.state.claims.filter(
-      (claim) => !(claim.roomId === roomId && claim.path === normalizedPath && claim.actorId === actorId),
+      (claim) => !(claim.councilId === councilId && claim.path === normalizedPath && claim.actorId === actorId),
     );
     if (this.state.claims.length !== before) {
       this.persist();
@@ -517,31 +521,31 @@ export class CouncilStore {
     return false;
   }
 
-  listClaims(roomId: string): CouncilFileClaim[] {
-    this.requireRoom(roomId);
-    this.pruneExpiredClaims(roomId);
+  listClaims(councilId: string): CouncilFileClaim[] {
+    this.requireCouncil(councilId);
+    this.pruneExpiredClaims(councilId);
     return this.state.claims
-      .filter((claim) => claim.roomId === roomId)
+      .filter((claim) => claim.councilId === councilId)
       .map((claim) => ({ ...claim }));
   }
 
   appendControl(args: {
-    roomId: string;
+    councilId: string;
     fromActorId: string;
     targetActorId: string;
     action: string;
     taskId?: string;
     data?: unknown;
   }): CouncilControlMessage {
-    this.requireAgent(args.roomId, args.fromActorId);
-    this.requireAgent(args.roomId, args.targetActorId);
+    this.requireAgent(args.councilId, args.fromActorId);
+    this.requireAgent(args.councilId, args.targetActorId);
     const action = args.action.trim();
     if (!action) {
       throw new Error("channel_send_control requires action.");
     }
     const control: CouncilControlMessage = {
       id: this.state.nextControlId,
-      roomId: args.roomId,
+      councilId: args.councilId,
       fromActorId: args.fromActorId,
       targetActorId: args.targetActorId,
       action,
@@ -555,10 +559,10 @@ export class CouncilStore {
     return { ...control };
   }
 
-  takeControls(roomId: string, actorId: string): CouncilControlMessage[] {
-    this.requireAgent(roomId, actorId);
+  takeControls(councilId: string, actorId: string): CouncilControlMessage[] {
+    this.requireAgent(councilId, actorId);
     const controls = this.state.controls
-      .filter((control) => control.roomId === roomId && control.targetActorId === actorId)
+      .filter((control) => control.councilId === councilId && control.targetActorId === actorId)
       .map((control) => ({ ...control }));
     if (controls.length === 0) {
       return [];
@@ -569,36 +573,36 @@ export class CouncilStore {
     return controls;
   }
 
-  stopRoom(roomId: string): CouncilRoomSnapshot {
+  stopCouncil(councilId: string): CouncilSnapshot {
     const timestamp = nowIso();
-    const room = this.requireRoom(roomId);
-    room.status = "stopped";
-    room.phase = "ended";
-    room.updatedAt = timestamp;
-    for (const agent of this.state.agents.filter((candidate) => candidate.roomId === roomId)) {
+    const council = this.requireCouncil(councilId);
+    council.status = "stopped";
+    council.phase = "ended";
+    council.updatedAt = timestamp;
+    for (const agent of this.state.agents.filter((candidate) => candidate.councilId === councilId)) {
       agent.status = "stopped";
       agent.updatedAt = timestamp;
     }
-    this.state.claims = this.state.claims.filter((claim) => claim.roomId !== roomId);
-    this.state.controls = this.state.controls.filter((control) => control.roomId !== roomId);
+    this.state.claims = this.state.claims.filter((claim) => claim.councilId !== councilId);
+    this.state.controls = this.state.controls.filter((control) => control.councilId !== councilId);
     this.persist();
-    return this.snapshot(roomId);
+    return this.snapshot(councilId);
   }
 
-  deleteRoom(roomId: string): void {
-    this.requireRoom(roomId);
-    this.state.rooms = this.state.rooms.filter((room) => room.id !== roomId);
-    this.state.agents = this.state.agents.filter((agent) => agent.roomId !== roomId);
-    this.messagesByRoom.delete(roomId);
-    rmSync(this.messageFilePath(roomId), { force: true });
-    this.state.claims = this.state.claims.filter((claim) => claim.roomId !== roomId);
-    this.state.controls = this.state.controls.filter((control) => control.roomId !== roomId);
+  deleteCouncil(councilId: string): void {
+    this.requireCouncil(councilId);
+    this.state.councils = this.state.councils.filter((council) => council.id !== councilId);
+    this.state.agents = this.state.agents.filter((agent) => agent.councilId !== councilId);
+    this.messagesByCouncil.delete(councilId);
+    rmSync(this.messageFilePath(councilId), { force: true });
+    this.state.claims = this.state.claims.filter((claim) => claim.councilId !== councilId);
+    this.state.controls = this.state.controls.filter((control) => control.councilId !== councilId);
     this.persist();
   }
 
-  requireAgent(roomId: string, agentId: string): CouncilAgent {
+  requireAgent(councilId: string, agentId: string): CouncilAgent {
     const agent = this.state.agents.find(
-      (candidate) => candidate.roomId === roomId && candidate.id === agentId,
+      (candidate) => candidate.councilId === councilId && candidate.id === agentId,
     );
     if (!agent) {
       throw new Error(`Unknown council agent ${agentId}.`);
@@ -606,19 +610,19 @@ export class CouncilStore {
     return agent;
   }
 
-  private requireRoom(roomId: string): CouncilRoom {
-    const room = this.state.rooms.find((candidate) => candidate.id === roomId);
-    if (!room) {
-      throw new Error(`Unknown council room ${roomId}.`);
+  private requireCouncil(councilId: string): Council {
+    const council = this.state.councils.find((candidate) => candidate.id === councilId);
+    if (!council) {
+      throw new Error(`Unknown council ${councilId}.`);
     }
-    return room;
+    return council;
   }
 
-  private pruneExpiredClaims(roomId: string): void {
+  private pruneExpiredClaims(councilId: string): void {
     const now = Date.now();
     const before = this.state.claims.length;
     this.state.claims = this.state.claims.filter((claim) => {
-      if (claim.roomId !== roomId) {
+      if (claim.councilId !== councilId) {
         return true;
       }
       const claimedAt = Date.parse(claim.claimedAt);
@@ -636,36 +640,36 @@ export class CouncilStore {
     renameSync(tmpPath, this.filePath);
   }
 
-  private messagesForRoom(roomId: string): CouncilMessage[] {
-    let messages = this.messagesByRoom.get(roomId);
+  private messagesForCouncil(councilId: string): CouncilMessage[] {
+    let messages = this.messagesByCouncil.get(councilId);
     if (!messages) {
       messages = [];
-      this.messagesByRoom.set(roomId, messages);
+      this.messagesByCouncil.set(councilId, messages);
     }
     return messages;
   }
 
-  private messageFilePath(roomId: string): string {
-    return councilMessageFilePath(this.filePath, roomId);
+  private messageFilePath(councilId: string): string {
+    return councilMessageFilePath(this.filePath, councilId);
   }
 
   private loadMessageLogs(legacyMessages: CouncilMessage[]): void {
-    const knownRoomIds = new Set(this.state.rooms.map((room) => room.id));
-    for (const room of this.state.rooms) {
-      const messages = readCouncilMessageLog(this.messageFilePath(room.id));
+    const knownCouncilIds = new Set(this.state.councils.map((council) => council.id));
+    for (const council of this.state.councils) {
+      const messages = readCouncilMessageLog(this.messageFilePath(council.id));
       if (messages.length > 0) {
-        this.messagesByRoom.set(room.id, messages);
+        this.messagesByCouncil.set(council.id, messages);
       }
     }
     for (const message of legacyMessages) {
-      if (!knownRoomIds.has(message.roomId)) {
+      if (!knownCouncilIds.has(message.councilId)) {
         continue;
       }
-      upsertMessageById(this.messagesForRoom(message.roomId), message);
+      upsertMessageById(this.messagesForCouncil(message.councilId), message);
     }
-    for (const [roomId, messages] of this.messagesByRoom) {
-      if (!knownRoomIds.has(roomId)) {
-        this.messagesByRoom.delete(roomId);
+    for (const [councilId, messages] of this.messagesByCouncil) {
+      if (!knownCouncilIds.has(councilId)) {
+        this.messagesByCouncil.delete(councilId);
         continue;
       }
       messages.sort((a, b) => a.id - b.id);
@@ -674,22 +678,22 @@ export class CouncilStore {
 
   private writeAllMessageLogs(): void {
     mkdirSync(councilMessagesDir(this.filePath), { recursive: true });
-    for (const [roomId, messages] of this.messagesByRoom) {
-      const tmpPath = `${this.messageFilePath(roomId)}.${process.pid}.${Date.now()}.tmp`;
+    for (const [councilId, messages] of this.messagesByCouncil) {
+      const tmpPath = `${this.messageFilePath(councilId)}.${process.pid}.${Date.now()}.tmp`;
       const body = messages.map((message) => JSON.stringify(message)).join("\n");
       writeFileSync(tmpPath, body ? `${body}\n` : "", "utf8");
-      renameSync(tmpPath, this.messageFilePath(roomId));
+      renameSync(tmpPath, this.messageFilePath(councilId));
     }
   }
 
   private appendMessageToLog(message: CouncilMessage): void {
     mkdirSync(councilMessagesDir(this.filePath), { recursive: true });
-    appendFileSync(this.messageFilePath(message.roomId), `${JSON.stringify(message)}\n`, "utf8");
+    appendFileSync(this.messageFilePath(message.councilId), `${JSON.stringify(message)}\n`, "utf8");
   }
 
   private maxMessageId(): number {
     let max = 0;
-    for (const messages of this.messagesByRoom.values()) {
+    for (const messages of this.messagesByCouncil.values()) {
       max = Math.max(max, messages.at(-1)?.id ?? 0);
     }
     return max;

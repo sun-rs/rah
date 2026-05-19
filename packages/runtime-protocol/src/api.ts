@@ -20,6 +20,8 @@ import type {
   Workbench,
 } from "./session";
 import type {
+  AddCouncilAgentRequest,
+  AddCouncilAgentResponse,
   CouncilAgentTuiResponse,
   CouncilMcpRequest,
   CouncilMcpResponse,
@@ -28,9 +30,11 @@ import type {
   CouncilReinjectAgentsResponse,
   CouncilRemoveAgentResponse,
   CouncilStopAgentResponse,
-  CreateCouncilRoomRequest,
-  CreateCouncilRoomResponse,
-  ListCouncilRoomsResponse,
+  CreateCouncilRequest,
+  CreateCouncilResponse,
+  ListCouncilsResponse,
+  RenameCouncilRequest,
+  RenameCouncilResponse,
 } from "./council";
 import type { ContextUsage, EventEnvelope, JsonObject, RahEvent, RahEventType } from "./events";
 
@@ -775,15 +779,17 @@ export interface NativeTuiSurfaceResponse {
 }
 
 export interface CouncilApi {
-  listRooms(): Promise<ListCouncilRoomsResponse>;
-  createRoom(request: CreateCouncilRoomRequest): Promise<CreateCouncilRoomResponse>;
-  postMessage(roomId: string, request: CouncilPostMessageRequest): Promise<CouncilPostMessageResponse>;
-  stopRoom(roomId: string): Promise<{ ok: true }>;
-  deleteRoom(roomId: string): Promise<{ ok: true }>;
-  getAgentTui(roomId: string, agentId: string): Promise<CouncilAgentTuiResponse>;
-  reinjectAgent(roomId: string, agentId: string): Promise<CouncilReinjectAgentsResponse>;
-  removeAgent(roomId: string, agentId: string): Promise<CouncilRemoveAgentResponse>;
-  stopAgent(roomId: string, agentId: string): Promise<CouncilStopAgentResponse>;
+  listCouncils(): Promise<ListCouncilsResponse>;
+  createCouncil(request: CreateCouncilRequest): Promise<CreateCouncilResponse>;
+  renameCouncil(councilId: string, request: RenameCouncilRequest): Promise<RenameCouncilResponse>;
+  addAgent(councilId: string, request: AddCouncilAgentRequest): Promise<AddCouncilAgentResponse>;
+  postMessage(councilId: string, request: CouncilPostMessageRequest): Promise<CouncilPostMessageResponse>;
+  stopCouncil(councilId: string): Promise<{ ok: true }>;
+  deleteCouncil(councilId: string): Promise<{ ok: true }>;
+  getAgentTui(councilId: string, agentId: string): Promise<CouncilAgentTuiResponse>;
+  reinjectAgent(councilId: string, agentId: string): Promise<CouncilReinjectAgentsResponse>;
+  removeAgent(councilId: string, agentId: string): Promise<CouncilRemoveAgentResponse>;
+  stopAgent(councilId: string, agentId: string): Promise<CouncilStopAgentResponse>;
   callMcpTool(request: CouncilMcpRequest): Promise<CouncilMcpResponse>;
 }
 

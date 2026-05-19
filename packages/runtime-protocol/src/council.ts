@@ -6,8 +6,8 @@ import type {
 
 export type CouncilAgentProvider = Extract<ProviderKind, "codex" | "claude" | "gemini" | "opencode">;
 
-export type CouncilRoomStatus = ConversationStatus;
-export type CouncilRoomPhase = ConversationPhase;
+export type CouncilStatus = ConversationStatus;
+export type CouncilPhase = ConversationPhase;
 
 export type CouncilAgentStatus =
   | "starting"
@@ -37,7 +37,7 @@ export interface CouncilAgentConfig {
 
 export interface CouncilAgent extends CouncilAgentConfig {
   id: string;
-  roomId: string;
+  councilId: string;
   status: CouncilAgentStatus;
   terminalId?: string;
   nativeSessionId?: string;
@@ -45,12 +45,12 @@ export interface CouncilAgent extends CouncilAgentConfig {
   updatedAt: string;
 }
 
-export interface CouncilRoom {
+export interface Council {
   id: string;
   title: string;
   workspace: string;
-  status: CouncilRoomStatus;
-  phase: CouncilRoomPhase;
+  status: CouncilStatus;
+  phase: CouncilPhase;
   muxSessionName?: string;
   error?: string;
   createdAt: string;
@@ -59,7 +59,7 @@ export interface CouncilRoom {
 
 export interface CouncilMessage {
   id: number;
-  roomId: string;
+  councilId: string;
   actorId: string;
   clientId?: string;
   role: CouncilMessageRole;
@@ -68,8 +68,7 @@ export interface CouncilMessage {
   createdAt: string;
 }
 
-export interface CouncilRoomSnapshot {
-  room: CouncilRoom;
+export interface CouncilSnapshot extends Council {
   agents: CouncilAgent[];
   messages: CouncilMessage[];
   storage?: {
@@ -78,14 +77,22 @@ export interface CouncilRoomSnapshot {
   };
 }
 
-export interface CreateCouncilRoomRequest {
+export interface CreateCouncilRequest {
   title?: string;
   workspace: string;
   agents: CouncilAgentConfig[];
 }
 
-export interface CreateCouncilRoomResponse {
-  room: CouncilRoomSnapshot;
+export interface CreateCouncilResponse {
+  council: CouncilSnapshot;
+}
+
+export interface RenameCouncilRequest {
+  title: string;
+}
+
+export interface RenameCouncilResponse {
+  council: CouncilSnapshot;
 }
 
 export interface AddCouncilAgentRequest {
@@ -93,12 +100,12 @@ export interface AddCouncilAgentRequest {
 }
 
 export interface AddCouncilAgentResponse {
-  room: CouncilRoomSnapshot;
+  council: CouncilSnapshot;
   agent: CouncilAgent;
 }
 
-export interface ListCouncilRoomsResponse {
-  rooms: CouncilRoomSnapshot[];
+export interface ListCouncilsResponse {
+  councils: CouncilSnapshot[];
 }
 
 export interface CouncilPostMessageRequest {
@@ -110,11 +117,11 @@ export interface CouncilPostMessageRequest {
 
 export interface CouncilPostMessageResponse {
   message: CouncilMessage;
-  room: CouncilRoomSnapshot;
+  council: CouncilSnapshot;
 }
 
 export interface CouncilAgentTuiResponse {
-  roomId: string;
+  councilId: string;
   agentId: string;
   muxSessionName?: string;
   paneId?: string;
@@ -123,17 +130,17 @@ export interface CouncilAgentTuiResponse {
 }
 
 export interface CouncilReinjectAgentsResponse {
-  room: CouncilRoomSnapshot;
+  council: CouncilSnapshot;
   injectedAgentIds: string[];
   skippedAgentIds: string[];
 }
 
 export interface CouncilRemoveAgentResponse {
-  room: CouncilRoomSnapshot;
+  council: CouncilSnapshot;
 }
 
 export interface CouncilStopAgentResponse {
-  room: CouncilRoomSnapshot;
+  council: CouncilSnapshot;
 }
 
 export type CouncilMcpToolName =
@@ -151,7 +158,7 @@ export type CouncilMcpToolName =
   | "channel_peek_control";
 
 export interface CouncilMcpRequest {
-  roomId: string;
+  councilId: string;
   actorId: string;
   clientId?: string;
   tool: CouncilMcpToolName;

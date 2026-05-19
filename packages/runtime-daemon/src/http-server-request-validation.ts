@@ -9,7 +9,7 @@ import type {
   CouncilMcpRequest,
   CouncilMcpToolName,
   CouncilPostMessageRequest,
-  CreateCouncilRoomRequest,
+  CreateCouncilRequest,
   DetachSessionRequest,
   GitFileActionRequest,
   GitHunkActionRequest,
@@ -230,10 +230,18 @@ export function parseCloseSessionRequest(body: unknown): CloseSessionRequest {
 }
 
 export function parseRenameSessionRequest(body: unknown): { title: string } {
+  return parseRenameTitleRequest(body, "Session");
+}
+
+export function parseRenameCouncilRequest(body: unknown): { title: string } {
+  return parseRenameTitleRequest(body, "Council");
+}
+
+function parseRenameTitleRequest(body: unknown, subject: string): { title: string } {
   const record = requireObjectBody(body);
   const title = requireString(record, "title").trim();
   if (!title) {
-    throw badRequest("Session title is required.");
+    throw badRequest(`${subject} title is required.`);
   }
   return { title };
 }
@@ -332,13 +340,13 @@ export function parseAddManualProviderModelRequest(body: unknown): AddManualProv
   return request;
 }
 
-export function parseCreateCouncilRoomRequest(body: unknown): CreateCouncilRoomRequest {
+export function parseCreateCouncilRequest(body: unknown): CreateCouncilRequest {
   const record = requireObjectBody(body);
   const agentsRaw = record.agents;
   if (!Array.isArray(agentsRaw) || agentsRaw.length === 0) {
     throw badRequest("agents must be a non-empty array.");
   }
-  const request: CreateCouncilRoomRequest = {
+  const request: CreateCouncilRequest = {
     workspace: requireString(record, "workspace"),
     agents: agentsRaw.map((agent, index) => parseCouncilAgentConfig(agent, index)),
   };
@@ -383,7 +391,7 @@ export function parseCouncilMcpRequest(body: unknown): CouncilMcpRequest {
     throw badRequest("tool is invalid.");
   }
   const request: CouncilMcpRequest = {
-    roomId: requireString(record, "roomId"),
+    councilId: requireString(record, "councilId"),
     actorId: requireString(record, "actorId"),
     tool: tool as CouncilMcpToolName,
   };

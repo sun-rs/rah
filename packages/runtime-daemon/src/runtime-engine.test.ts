@@ -505,6 +505,39 @@ class NativeLocalServerRoutingAdapter implements ProviderAdapter {
   }
 }
 
+class CouncilManagedSessionAdapter extends CountingStoredSessionsAdapter {
+  engine: RuntimeEngine | undefined;
+  readonly startedSessionIds: string[] = [];
+
+  constructor() {
+    super([]);
+  }
+
+  override startSession(request: StartSessionRequest): StartSessionResponse {
+    if (!this.engine) {
+      throw new Error("engine missing");
+    }
+    const sessionId = `council-agent-${this.startedSessionIds.length + 1}`;
+    const state = this.engine.sessionStore.createManagedSession({
+      id: sessionId,
+      provider: request.provider,
+      providerSessionId: sessionId,
+      launchSource: "web",
+      liveBackend: request.liveBackend,
+      cwd: request.cwd,
+      rootDir: request.cwd,
+      ...(request.origin !== undefined ? { origin: request.origin } : {}),
+      ...(request.title !== undefined ? { title: request.title } : {}),
+    });
+    this.startedSessionIds.push(sessionId);
+    return { session: toSessionSummary(state) };
+  }
+
+  override sendInput(_sessionId: string, _request: SessionInputRequest): void {
+    // Council bootstrap input is not relevant to this origin metadata test.
+  }
+}
+
 let workDirGlobal = "";
 
 class SnapshotPagingAdapter implements ProviderAdapter {
@@ -866,6 +899,34 @@ describe("RuntimeEngine", () => {
     });
     assert.equal(replay.session.session.id, "replay-1");
 
+    await engine.shutdown();
+  });
+
+  test("renaming a running Council updates managed agent session origin metadata", async () => {
+    const adapter = new CouncilManagedSessionAdapter();
+    const engine = new RuntimeEngine([adapter]);
+    adapter.engine = engine;
+
+    const created = await engine.createCouncil({
+      title: "Original Council",
+      workspace: workDir,
+      agents: [{ provider: "codex", label: "Codex Agent" }],
+    });
+    await waitFor(() => assert.equal(adapter.startedSessionIds.length, 1));
+    const sessionId = adapter.startedSessionIds[0]!;
+
+    assert.equal(
+      engine.sessionStore.getSession(sessionId)?.session.origin?.councilTitle,
+      "Original Council",
+    );
+
+    const renamed = engine.renameCouncil(created.council.id, "Renamed Council");
+
+    assert.equal(renamed.title, "Renamed Council");
+    assert.equal(
+      engine.sessionStore.getSession(sessionId)?.session.origin?.councilTitle,
+      "Renamed Council",
+    );
     await engine.shutdown();
   });
 

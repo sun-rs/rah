@@ -2603,27 +2603,26 @@ function validatePayload(event: RahEvent, sink: IssueSink) {
     case "terminal.exited":
       break;
     case "council.message.created":
-      if (!isRecord(payload.room) || !isRecord(payload.message)) {
+      if (!isRecord(payload.council) || !isRecord(payload.message)) {
         addIssue(
           sink,
           "error",
           "council.message_created.invalid",
-          "council message created payload requires room and message objects",
+          "council message created payload requires council and message objects",
           "payload",
         );
       } else {
-        const roomPayload = payload.room;
+        const councilPayload = payload.council;
         const messagePayload = payload.message;
-        const innerRoom = isRecord(roomPayload.room) ? roomPayload.room : {};
-        if (!isNonEmptyString(innerRoom.id)) {
-          addIssue(sink, "error", "council.room.id.invalid", "council room id must be non-empty", "payload.room.room.id");
+        if (!isNonEmptyString(councilPayload.id)) {
+          addIssue(sink, "error", "council.id.invalid", "council id must be non-empty", "payload.id");
         }
-        if (!isNonEmptyString(messagePayload.actorId) || !isNonEmptyString(messagePayload.roomId)) {
+        if (!isNonEmptyString(messagePayload.actorId) || !isNonEmptyString(messagePayload.councilId)) {
           addIssue(
             sink,
             "error",
             "council.message.identity.invalid",
-            "council message roomId and actorId must be non-empty",
+            "council message councilId and actorId must be non-empty",
             "payload.message",
           );
         }

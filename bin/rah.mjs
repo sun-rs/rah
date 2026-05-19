@@ -67,7 +67,7 @@ function printUsage() {
       "  rah logs [--follow]",
       "  rah attach <rahSessionId>",
       "  rah close <rahSessionId>",
-      "  rah council-mcp --room <roomId> --actor <actorId>",
+      "  rah council-mcp --council <councilId> --actor <actorId>",
       "  rah <provider>",
       "  rah <provider> attach <providerSessionId>",
       "  rah <provider> resume <providerSessionId>",
@@ -149,7 +149,7 @@ function parseManagementArgs(command, argv) {
 
 function parseCouncilMcpArgs(argv) {
   let daemonUrl = DEFAULT_DAEMON_URL;
-  let roomId;
+  let councilId;
   let actorId;
   const rest = [...argv];
   while (rest.length > 0) {
@@ -158,8 +158,8 @@ function parseCouncilMcpArgs(argv) {
       daemonUrl = rest.shift() ?? daemonUrl;
       continue;
     }
-    if (option === "--room") {
-      roomId = rest.shift();
+    if (option === "--council") {
+      councilId = rest.shift();
       continue;
     }
     if (option === "--actor") {
@@ -168,14 +168,14 @@ function parseCouncilMcpArgs(argv) {
     }
     throw new Error(`Unknown argument: ${option}`);
   }
-  if (!roomId || !actorId) {
-    throw new Error("rah council-mcp requires --room and --actor.");
+  if (!councilId || !actorId) {
+    throw new Error("rah council-mcp requires --council and --actor.");
   }
   return {
     help: false,
     command: "council-mcp",
     daemonUrl,
-    roomId,
+    councilId,
     actorId,
     clientId: `mcp:${actorId}:${randomUUID()}`,
   };
@@ -725,7 +725,7 @@ function councilMcpTools() {
     {
       name: "channel_join",
       description: [
-        "Join the RAH council room as this actor. Must be called before posting or waiting.",
+        "Join the RAH council as this actor. Must be called before posting or waiting.",
         "Read recent_messages as private catch-up context, then enter the listening loop with channel_wait_new.",
       ].join(" "),
       inputSchema: { type: "object", additionalProperties: true },
@@ -733,7 +733,7 @@ function councilMcpTools() {
     {
       name: "channel_post",
       description: [
-        "Post a text message to the RAH council room.",
+        "Post a text message to the RAH council.",
         "After posting a reply, immediately call channel_wait_new again; do not stop listening after a reply.",
       ].join(" "),
       inputSchema: {
@@ -748,7 +748,7 @@ function councilMcpTools() {
         "Block until a newer message from another participant arrives, or until a heartbeat timeout.",
         "Use this proactively in an infinite listening loop: wait, process message if any, post if needed, then wait again.",
         "If the result has timed_out=true, this is NOT completion and NOT a reason to summarize; immediately call channel_wait_new again.",
-        "The loop exits only when the user interrupts you, the room stops, or the tool returns ok=false/error.",
+        "The loop exits only when the user interrupts you, the council stops, or the tool returns ok=false/error.",
       ].join(" "),
       inputSchema: {
         type: "object",
@@ -762,7 +762,7 @@ function councilMcpTools() {
     },
     {
       name: "channel_history",
-      description: "Read recent council room messages.",
+      description: "Read recent council messages.",
       inputSchema: {
         type: "object",
         properties: { since_id: { type: "number" }, limit: { type: "number" } },
@@ -771,7 +771,7 @@ function councilMcpTools() {
     },
     {
       name: "channel_state",
-      description: "Get council room state, agents, last message id, claims, and pending controls.",
+      description: "Get council state, agents, last message id, claims, and pending controls.",
       inputSchema: { type: "object", additionalProperties: true },
     },
     {
@@ -814,7 +814,7 @@ function councilMcpTools() {
     },
     {
       name: "channel_list_claims",
-      description: "List active file claims in the council room.",
+      description: "List active file claims in the council.",
       inputSchema: { type: "object", additionalProperties: true },
     },
     {
@@ -916,7 +916,7 @@ async function handleCouncilMcpLine(parsed, line) {
     }
     const params = request.params ?? {};
     const response = await postJson(parsed.daemonUrl, "/api/council/mcp", {
-      roomId: parsed.roomId,
+      councilId: parsed.councilId,
       actorId: parsed.actorId,
       clientId: parsed.clientId,
       tool: params.name,

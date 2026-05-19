@@ -64,8 +64,8 @@ test("rah council-mcp speaks minimal MCP JSON-RPC over stdio", async () => {
   const child = spawn(process.execPath, [
     path.join(repoRoot(), "bin/rah.mjs"),
     "council-mcp",
-    "--room",
-    "room-1",
+    "--council",
+    "council-1",
     "--actor",
     "agent-1",
     "--daemon-url",
@@ -104,7 +104,7 @@ test("rah council-mcp speaks minimal MCP JSON-RPC over stdio", async () => {
     assert.deepEqual(responses[3]!.result?.prompts, []);
     assert.equal(responses[4]!.result?.content?.[0]?.type, "text");
     assert.deepEqual(responses[4]!.result?.structuredContent, { echoedTool: "channel_post" });
-    assert.equal((received[0] as { roomId?: string }).roomId, "room-1");
+    assert.equal((received[0] as { councilId?: string }).councilId, "council-1");
   } finally {
     child.kill("SIGTERM");
     await new Promise<void>((resolve) => server.close(() => resolve()));

@@ -28,7 +28,7 @@ import {
   parseCloseSessionRequest,
   parseCouncilMcpRequest,
   parseCouncilPostMessageRequest,
-  parseCreateCouncilRoomRequest,
+  parseCreateCouncilRequest,
   parseDetachSessionRequest,
   parseGitFileActionRequest,
   parseGitHunkActionRequest,
@@ -39,6 +39,7 @@ import {
   parseNativeTuiSurfaceReleaseRequest,
   parsePermissionResponseRequest,
   parseReleaseControlRequest,
+  parseRenameCouncilRequest,
   parseRenameSessionRequest,
   parseResumeSessionRequest,
   parseSessionInputRequest,
@@ -324,13 +325,13 @@ export function createPostRoutes(
       },
     },
     {
-      pattern: /^\/api\/council\/rooms$/,
+      pattern: /^\/api\/council$/,
       handler: async (req, res, _match, body) => {
-        writeJson(req, res, 200, await engine.createCouncilRoom(parseCreateCouncilRoomRequest(body)));
+        writeJson(req, res, 200, await engine.createCouncil(parseCreateCouncilRequest(body)));
       },
     },
     {
-      pattern: /^\/api\/council\/rooms\/([^/]+)\/agents$/,
+      pattern: /^\/api\/council\/([^/]+)\/agents$/,
       handler: async (req, res, match, body) => {
         writeJson(
           req,
@@ -344,7 +345,7 @@ export function createPostRoutes(
       },
     },
     {
-      pattern: /^\/api\/council\/rooms\/([^/]+)\/messages$/,
+      pattern: /^\/api\/council\/([^/]+)\/messages$/,
       handler: async (req, res, match, body) => {
         writeJson(
           req,
@@ -355,28 +356,37 @@ export function createPostRoutes(
       },
     },
     {
-      pattern: /^\/api\/council\/rooms\/([^/]+)\/stop$/,
+      pattern: /^\/api\/council\/([^/]+)\/rename$/,
+      handler: async (req, res, match, body) => {
+        const request = parseRenameCouncilRequest(body);
+        writeJson(req, res, 200, {
+          council: engine.renameCouncil(decodeURIComponent(match[1]!), request.title),
+        });
+      },
+    },
+    {
+      pattern: /^\/api\/council\/([^/]+)\/stop$/,
       handler: async (req, res, match) => {
-        await engine.stopCouncilRoom(decodeURIComponent(match[1]!));
+        await engine.stopCouncil(decodeURIComponent(match[1]!));
         writeJson(req, res, 200, { ok: true });
       },
     },
     {
-      pattern: /^\/api\/council\/rooms\/([^/]+)\/archive$/,
+      pattern: /^\/api\/council\/([^/]+)\/archive$/,
       handler: async (req, res, match) => {
-        await engine.stopCouncilRoom(decodeURIComponent(match[1]!));
+        await engine.stopCouncil(decodeURIComponent(match[1]!));
         writeJson(req, res, 200, { ok: true });
       },
     },
     {
-      pattern: /^\/api\/council\/rooms\/([^/]+)\/delete$/,
+      pattern: /^\/api\/council\/([^/]+)\/delete$/,
       handler: async (req, res, match) => {
-        engine.deleteCouncilRoom(decodeURIComponent(match[1]!));
+        engine.deleteCouncil(decodeURIComponent(match[1]!));
         writeJson(req, res, 200, { ok: true });
       },
     },
     {
-      pattern: /^\/api\/council\/rooms\/([^/]+)\/agents\/([^/]+)\/reinject$/,
+      pattern: /^\/api\/council\/([^/]+)\/agents\/([^/]+)\/reinject$/,
       handler: async (req, res, match) => {
         writeJson(
           req,
@@ -390,7 +400,7 @@ export function createPostRoutes(
       },
     },
     {
-      pattern: /^\/api\/council\/rooms\/([^/]+)\/agents\/([^/]+)\/remove$/,
+      pattern: /^\/api\/council\/([^/]+)\/agents\/([^/]+)\/remove$/,
       handler: async (req, res, match) => {
         writeJson(
           req,
@@ -404,7 +414,7 @@ export function createPostRoutes(
       },
     },
     {
-      pattern: /^\/api\/council\/rooms\/([^/]+)\/agents\/([^/]+)\/stop$/,
+      pattern: /^\/api\/council\/([^/]+)\/agents\/([^/]+)\/stop$/,
       handler: async (req, res, match) => {
         writeJson(
           req,
@@ -556,8 +566,8 @@ export async function handleHttpRequest(args: {
       return;
     }
 
-    if (req.method === "GET" && pathname === "/api/council/rooms") {
-      writeJson(req, res, 200, engine.listCouncilRooms());
+    if (req.method === "GET" && pathname === "/api/council") {
+      writeJson(req, res, 200, engine.listCouncils());
       return;
     }
 
@@ -603,7 +613,8 @@ export async function handleHttpRequest(args: {
       return;
     }
 
-    const councilAgentTuiMatch = /^\/api\/council\/rooms\/([^/]+)\/agents\/([^/]+)\/tui$/.exec(pathname);
+    const councilAgentTuiMatch =
+      /^\/api\/council\/([^/]+)\/agents\/([^/]+)\/tui$/.exec(pathname);
     if (req.method === "GET" && councilAgentTuiMatch) {
       writeJson(
         req,

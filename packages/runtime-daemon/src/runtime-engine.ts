@@ -16,9 +16,10 @@ import type {
   CouncilPostMessageResponse,
   CouncilReinjectAgentsResponse,
   CouncilRemoveAgentResponse,
+  CouncilSnapshot,
   CouncilStopAgentResponse,
-  CreateCouncilRoomRequest,
-  CreateCouncilRoomResponse,
+  CreateCouncilRequest,
+  CreateCouncilResponse,
   DetachSessionRequest,
   DeleteManualProviderModelOptionResponse,
   DeleteManualProviderModelResponse,
@@ -38,7 +39,7 @@ import type {
   NativeTuiSurfaceResponse,
   NativeTuiDiagnostic,
   ListSessionsResponse,
-  ListCouncilRoomsResponse,
+  ListCouncilsResponse,
   ProviderDiagnostic,
   ProviderKind,
   ProviderModelCatalog,
@@ -505,55 +506,76 @@ export class RuntimeEngine {
     };
   }
 
-  listCouncilRooms(): ListCouncilRoomsResponse {
-    return this.council.listRooms();
+  listCouncils(): ListCouncilsResponse {
+    return this.council.listCouncils();
   }
 
-  async createCouncilRoom(request: CreateCouncilRoomRequest): Promise<CreateCouncilRoomResponse> {
+  async createCouncil(request: CreateCouncilRequest): Promise<CreateCouncilResponse> {
     await assertExistingWorkingDirectory(request.workspace, "Council workspace");
-    return await this.council.createRoom(request);
+    return await this.council.createCouncil(request);
   }
 
-  async addCouncilAgent(roomId: string, request: AddCouncilAgentRequest): Promise<AddCouncilAgentResponse> {
-    const snapshot = this.council.listRooms().rooms.find((room) => room.room.id === roomId);
+  async addCouncilAgent(councilId: string, request: AddCouncilAgentRequest): Promise<AddCouncilAgentResponse> {
+    const snapshot = this.council.listCouncils().councils.find((council) => council.id === councilId);
     if (snapshot) {
-      await assertExistingWorkingDirectory(snapshot.room.workspace, "Council workspace");
+      await assertExistingWorkingDirectory(snapshot.workspace, "Council workspace");
     }
-    return await this.council.addAgent(roomId, request);
+    return await this.council.addAgent(councilId, request);
   }
 
   postCouncilMessage(
-    roomId: string,
+    councilId: string,
     request: CouncilPostMessageRequest,
   ): CouncilPostMessageResponse {
-    return this.council.postMessage(roomId, request);
+    return this.council.postMessage(councilId, request);
   }
 
-  async stopCouncilRoom(roomId: string): Promise<void> {
-    await this.council.stopRoom(roomId);
+  renameCouncil(councilId: string, title: string): CouncilSnapshot {
+    const council = this.council.renameCouncil(councilId, title);
+    for (const agent of council.agents) {
+      const sessionId = agent.nativeSessionId ?? agent.terminalId;
+      if (!sessionId) {
+        continue;
+      }
+      const session = this.sessionStore.getSession(sessionId)?.session;
+      if (session?.origin?.kind !== "council" || session.origin.councilId !== councilId) {
+        continue;
+      }
+      this.sessionStore.patchManagedSession(sessionId, {
+        origin: {
+          ...session.origin,
+          councilTitle: council.title,
+        },
+      });
+    }
+    return council;
   }
 
-  deleteCouncilRoom(roomId: string): void {
-    this.council.deleteRoom(roomId);
+  async stopCouncil(councilId: string): Promise<void> {
+    await this.council.stopCouncil(councilId);
+  }
+
+  deleteCouncil(councilId: string): void {
+    this.council.deleteCouncil(councilId);
   }
 
   async getCouncilAgentTui(
-    roomId: string,
+    councilId: string,
     agentId: string,
   ): Promise<CouncilAgentTuiResponse> {
-    return await this.council.getAgentTui(roomId, agentId);
+    return await this.council.getAgentTui(councilId, agentId);
   }
 
-  reinjectCouncilAgentPrompt(roomId: string, agentId: string): CouncilReinjectAgentsResponse {
-    return this.council.reinjectAgentPrompt(roomId, agentId);
+  reinjectCouncilAgentPrompt(councilId: string, agentId: string): CouncilReinjectAgentsResponse {
+    return this.council.reinjectAgentPrompt(councilId, agentId);
   }
 
-  removeCouncilAgent(roomId: string, agentId: string): CouncilRemoveAgentResponse {
-    return this.council.removeAgentFromRoom(roomId, agentId);
+  removeCouncilAgent(councilId: string, agentId: string): CouncilRemoveAgentResponse {
+    return this.council.removeAgentFromCouncil(councilId, agentId);
   }
 
-  async stopCouncilAgent(roomId: string, agentId: string): Promise<CouncilStopAgentResponse> {
-    return await this.council.stopAgentInRoom(roomId, agentId);
+  async stopCouncilAgent(councilId: string, agentId: string): Promise<CouncilStopAgentResponse> {
+    return await this.council.stopAgentInCouncil(councilId, agentId);
   }
 
   async callCouncilMcpTool(request: CouncilMcpRequest): Promise<CouncilMcpResponse> {

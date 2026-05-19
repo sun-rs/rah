@@ -35,7 +35,7 @@ export function conversationStateFromRuntimeState(runtimeState: string | undefin
   }
 }
 
-export function conversationStateFromLegacyCouncilRoomStatus(status: string | undefined): ConversationState {
+export function conversationStateFromLegacyCouncilStatus(status: string | undefined): ConversationState {
   switch (status) {
     case "starting":
       return { status: "running", phase: "starting" };

@@ -457,8 +457,8 @@ describe("Gemini stored session files", () => {
           id: "msg-user-1",
           timestamp: "2026-05-18T00:00:01.000Z",
           type: "user",
-          content: [{ text: "Join the room" }],
-          displayContent: [{ text: "Join the room" }],
+          content: [{ text: "Join the council" }],
+          displayContent: [{ text: "Join the council" }],
         },
         {
           id: "msg-gemini-1",
@@ -470,7 +470,7 @@ describe("Gemini stored session files", () => {
             {
               id: "tool-wait-1",
               name: "mcp_rah_council_channel_wait_new",
-              args: { room: "room-1", timeout_s: 60 },
+              args: { council: "council-1", timeout_s: 60 },
               result: { ok: true, timed_out: true },
               status: "success",
             },

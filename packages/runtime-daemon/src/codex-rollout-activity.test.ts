@@ -814,7 +814,7 @@ describe("translateCodexRolloutLine", () => {
           invocation: {
             server: "rah_council",
             tool: "channel_wait_new",
-            arguments: { room: "room-1", timeout_s: 60 },
+            arguments: { council: "council-1", timeout_s: 60 },
           },
           result: { Ok: { content: [] } },
         },
@@ -905,7 +905,7 @@ describe("translateCodexRolloutLine", () => {
         payload: {
           type: "function_call",
           name: "channel_wait_new",
-          arguments: '{"room":"room-1","since_id":975,"timeout_s":60}',
+          arguments: '{"council":"council-1","since_id":975,"timeout_s":60}',
           call_id: "call-council-wait",
         },
       },
@@ -921,7 +921,7 @@ describe("translateCodexRolloutLine", () => {
           invocation: {
             server: "rah_council",
             tool: "channel_wait_new",
-            arguments: { room: "room-1", since_id: 975, timeout_s: 60 },
+            arguments: { council: "council-1", since_id: 975, timeout_s: 60 },
           },
           result: {
             Ok: {
@@ -982,7 +982,7 @@ describe("translateCodexRolloutLine", () => {
           type: "function_call",
           name: "channel_post",
           arguments: JSON.stringify({
-            room: "room-1",
+            council: "council-1",
             content: "[GPT-5.5-XHigh] 我也读完了。先做一个事实校准。",
           }),
           call_id: "call-council-post",
@@ -1032,7 +1032,7 @@ describe("translateCodexRolloutLine", () => {
           type: "function_call",
           name: "mcp__rah_council__channel_post",
           arguments: JSON.stringify({
-            room: "room-1",
+            council: "council-1",
             content: "这条失败 post 不应该进入 session history。",
           }),
           call_id: "call-council-post-failed",
@@ -1047,7 +1047,7 @@ describe("translateCodexRolloutLine", () => {
         payload: {
           type: "function_call_output",
           call_id: "call-council-post-failed",
-          output: '{"ok":false,"error":"room closed"}',
+          output: '{"ok":false,"error":"council closed"}',
         },
       },
       state,
