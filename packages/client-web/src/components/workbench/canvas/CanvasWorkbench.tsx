@@ -43,7 +43,7 @@ export function CanvasWorkbench(props: {
   onClearPane: (paneId: string) => void;
   onExitCanvas: () => void;
   onDropSession: (paneId: string, sessionId: string) => void;
-  onDropCouncilRoom: (paneId: string, roomId: string) => void;
+  onDropCouncil: (paneId: string, councilId: string) => void;
   renderPaneToolbar: (paneId: string) => ReactNode;
   renderPane: (paneId: string) => ReactNode;
 }) {
@@ -151,9 +151,9 @@ export function CanvasWorkbench(props: {
           props.onDropSession(pane.id, sessionId);
           return;
         }
-        const roomId = event.dataTransfer.getData("application/x-rah-council-room-id");
-        if (roomId) {
-          props.onDropCouncilRoom(pane.id, roomId);
+        const councilId = event.dataTransfer.getData("application/x-rah-council-id");
+        if (councilId) {
+          props.onDropCouncil(pane.id, councilId);
         }
       }}
     >
@@ -223,7 +223,7 @@ export function CanvasWorkbench(props: {
           <div className="min-w-0 flex-1">
             <div className="text-sm font-semibold text-[var(--app-fg)]">Canvas</div>
             <div className="truncate text-xs text-[var(--app-hint)]">
-              Split running sessions and rooms. Hide without stopping work.
+              Split running sessions and Councils. Hide without stopping work.
             </div>
           </div>
         </div>

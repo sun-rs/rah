@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { CouncilRoomSnapshot, DebugScenarioDescriptor } from "@rah/runtime-protocol";
+import type { CouncilSnapshot, DebugScenarioDescriptor } from "@rah/runtime-protocol";
 import type { WorkspaceSection, WorkspaceSortMode } from "./session-browser";
 import {
   Check,
@@ -210,21 +210,21 @@ function RunningSessionRow(props: {
   );
 }
 
-function CouncilRoomRow(props: {
-  room: SidebarWorkspaceViewModel["councilRooms"][number];
+function CouncilRow(props: {
+  council: SidebarWorkspaceViewModel["councils"][number];
   draggable: boolean;
   onSelect: () => void;
 }) {
   const statusBadgeClassName =
-    props.room.status === "starting"
+    props.council.status === "starting"
       ? "text-sky-600/90 dark:text-sky-400/90"
-      : props.room.status === "working"
+      : props.council.status === "working"
         ? "text-sky-600/90 dark:text-sky-400/90"
-        : props.room.status === "waiting_permission"
+        : props.council.status === "waiting_permission"
           ? "text-orange-700/90 dark:text-orange-400/90"
           : "text-[var(--app-hint)]";
   const rowClassName = `${SIDEBAR_LAYOUT.sessionRowBaseClassName} ${
-    props.room.selected
+    props.council.selected
       ? SIDEBAR_LAYOUT.sessionRowSelectedClassName
       : SIDEBAR_LAYOUT.sessionRowIdleClassName
   }`;
@@ -237,7 +237,7 @@ function CouncilRoomRow(props: {
         if (!props.draggable) {
           return;
         }
-        event.dataTransfer.setData("application/x-rah-council-room-id", props.room.id);
+        event.dataTransfer.setData("application/x-rah-council-id", props.council.id);
         event.dataTransfer.effectAllowed = "move";
       }}
     >
@@ -255,23 +255,23 @@ function CouncilRoomRow(props: {
               />
             </span>
             <span className={`${SIDEBAR_LAYOUT.sessionTitleClassName} text-emerald-700/95 dark:text-emerald-300/95`}>
-              {props.room.title}
+              {props.council.title}
             </span>
           </div>
           <div className={SIDEBAR_LAYOUT.sessionMetaRowClassName}>
             <div className={SIDEBAR_LAYOUT.sessionMetaLeftClassName}>
               <span className="inline-flex shrink-0 items-center text-[10px] font-medium text-emerald-700/85 dark:text-emerald-300/85">
-                room
+                council
               </span>
               <span className={`${SIDEBAR_LAYOUT.sessionStatusBadgeBaseClassName} ${statusBadgeClassName}`}>
-                {props.room.statusLabel}
+                {props.council.statusLabel}
               </span>
               <span className="hidden shrink-0 text-[10px] text-[var(--app-hint)] min-[900px]:inline">
-                {props.room.agentCount} agents
+                {props.council.agentCount} agents
               </span>
             </div>
             <span className={SIDEBAR_LAYOUT.sessionTimeClassName}>
-              {props.room.updatedAtLabel}
+              {props.council.updatedAtLabel}
             </span>
           </div>
         </button>
@@ -284,11 +284,11 @@ function CouncilRoomRow(props: {
 function WorkspaceRow(props: {
   workspace: SidebarWorkspaceViewModel;
   enableSessionDrag: boolean;
-  enableCouncilRoomDrag: boolean;
+  enableCouncilDrag: boolean;
   onRemoveWorkspace: () => void;
   onTogglePinSession: (sessionId: string) => void;
   onSelectSession: (sessionId: string) => void;
-  onSelectCouncilRoom: (roomId: string) => void;
+  onSelectCouncil: (councilId: string) => void;
   onSelectWorkspace: () => void;
   expandAllKey: number;
   expandAllValue: boolean;
@@ -389,11 +389,11 @@ function WorkspaceRow(props: {
                 onSelect={() => props.onSelectSession(item.id)}
               />
             ) : (
-              <CouncilRoomRow
-                key={`council-room:${item.id}`}
-                room={item}
-                draggable={props.enableCouncilRoomDrag}
-                onSelect={() => props.onSelectCouncilRoom(item.id)}
+              <CouncilRow
+                key={`council:${item.id}`}
+                council={item}
+                draggable={props.enableCouncilDrag}
+                onSelect={() => props.onSelectCouncil(item.id)}
               />
             ),
           )}
@@ -413,18 +413,18 @@ export function SessionSidebar(props: {
   onRemoveWorkspace: (value: string) => void;
   selectedWorkspaceDir: string;
   selectedSessionId: string | null;
-  selectedCouncilRoomId?: string | null;
+  selectedCouncilId?: string | null;
   unreadSessionIds: ReadonlySet<string>;
   runtimeStatusBySessionId: ReadonlyMap<
     string,
     "thinking" | "streaming" | "stopping" | "retrying" | undefined
   >;
   onSelectSession: (workspaceDir: string, sessionId: string) => void;
-  onSelectCouncilRoom?: (workspaceDir: string, roomId: string) => void;
+  onSelectCouncil?: (workspaceDir: string, councilId: string) => void;
   onSelectWorkspace: (workspaceDir: string) => void;
   enableSessionDrag?: boolean;
-  enableCouncilRoomDrag?: boolean;
-  councilRooms?: readonly CouncilRoomSnapshot[];
+  enableCouncilDrag?: boolean;
+  councils?: readonly CouncilSnapshot[];
   debugScenarios: DebugScenarioDescriptor[];
   onStartScenario: (scenario: DebugScenarioDescriptor) => void;
 }) {
@@ -439,14 +439,14 @@ export function SessionSidebar(props: {
         unreadSessionIds: props.unreadSessionIds,
         runtimeStatusBySessionId: props.runtimeStatusBySessionId,
         pinnedSessionIdByWorkspace: props.pinnedSessionIdByWorkspace,
-        ...(props.councilRooms !== undefined ? { councilRooms: props.councilRooms } : {}),
-        selectedCouncilRoomId: props.selectedCouncilRoomId ?? null,
+        ...(props.councils !== undefined ? { councils: props.councils } : {}),
+        selectedCouncilId: props.selectedCouncilId ?? null,
       }),
     [
-      props.councilRooms,
+      props.councils,
       props.pinnedSessionIdByWorkspace,
       props.runtimeStatusBySessionId,
-      props.selectedCouncilRoomId,
+      props.selectedCouncilId,
       props.selectedSessionId,
       props.selectedWorkspaceDir,
       props.unreadSessionIds,
@@ -458,8 +458,8 @@ export function SessionSidebar(props: {
     (count, workspace) => count + workspace.sessions.length,
     0,
   );
-  const runningCouncilRoomCount = workspaceViewModels.reduce(
-    (count, workspace) => count + workspace.councilRooms.length,
+  const runningCouncilCount = workspaceViewModels.reduce(
+    (count, workspace) => count + workspace.councils.length,
     0,
   );
 
@@ -487,9 +487,9 @@ export function SessionSidebar(props: {
           </span>
           <span
             className={SIDEBAR_LAYOUT.toolbarCountBadgeClassName}
-            title={`${runningSessionCount + runningCouncilRoomCount} running workspace items`}
+            title={`${runningSessionCount + runningCouncilCount} running workspace items`}
           >
-            {runningSessionCount + runningCouncilRoomCount}
+            {runningSessionCount + runningCouncilCount}
           </span>
         </div>
         <div className={SIDEBAR_LAYOUT.toolbarActionsClassName}>
@@ -516,13 +516,13 @@ export function SessionSidebar(props: {
             key={workspace.directory}
             workspace={workspace}
             enableSessionDrag={props.enableSessionDrag === true}
-            enableCouncilRoomDrag={props.enableCouncilRoomDrag === true}
+            enableCouncilDrag={props.enableCouncilDrag === true}
             onRemoveWorkspace={() => props.onRemoveWorkspace(workspace.directory)}
             onTogglePinSession={(sessionId) =>
               props.onTogglePinSession(workspace.directory, sessionId)
             }
             onSelectSession={(sessionId) => props.onSelectSession(workspace.directory, sessionId)}
-            onSelectCouncilRoom={(roomId) => props.onSelectCouncilRoom?.(workspace.directory, roomId)}
+            onSelectCouncil={(councilId) => props.onSelectCouncil?.(workspace.directory, councilId)}
             onSelectWorkspace={() => props.onSelectWorkspace(workspace.directory)}
             expandAllKey={expandAllKey}
             expandAllValue={expandAllValue}

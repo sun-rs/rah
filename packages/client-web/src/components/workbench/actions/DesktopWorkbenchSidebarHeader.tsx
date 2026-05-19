@@ -1,4 +1,4 @@
-import type { CouncilRoomSnapshot, SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
+import type { CouncilSnapshot, SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
 import { Columns3, Menu, MessageCircleMore, Settings, UsersRound } from "lucide-react";
 import { SessionHistoryDialog } from "../../SessionHistoryDialog";
 import type { WorkspaceSortMode } from "../../../session-browser";
@@ -11,8 +11,8 @@ export function DesktopWorkbenchSidebarHeader(props: {
   storedSessions: StoredSessionRef[];
   recentSessions: StoredSessionRef[];
   runningSessions: SessionSummary[];
-  councilRooms: readonly CouncilRoomSnapshot[];
-  selectedCouncilRoomId?: string | null | undefined;
+  councils: readonly CouncilSnapshot[];
+  selectedCouncilId?: string | null | undefined;
   workspaceSortMode: WorkspaceSortMode;
   onWorkspaceSortModeChange: (value: WorkspaceSortMode) => void;
   canvasActive: boolean;
@@ -21,9 +21,10 @@ export function DesktopWorkbenchSidebarHeader(props: {
   onToggleCanvas: () => void;
   onActivateHistory: (ref: StoredSessionRef) => void;
   onActivateRunning: (sessionId: string) => void;
-  onActivateCouncilRoom: (roomId: string) => void;
-  onRefreshCouncilRooms: () => void | Promise<void>;
-  onRemoveCouncilRoom: (roomId: string) => void | Promise<void>;
+  onActivateCouncil: (councilId: string) => void;
+  onRefreshCouncils: () => void | Promise<void>;
+  onRenameCouncil: (council: CouncilSnapshot) => void;
+  onRemoveCouncil: (councilId: string) => void | Promise<void>;
   onRemoveHistorySession: (session: Pick<StoredSessionRef, "provider" | "providerSessionId">) => void;
   onRemoveHistoryWorkspace: (workspaceDir: string) => void;
   onHome: () => void;
@@ -72,15 +73,16 @@ export function DesktopWorkbenchSidebarHeader(props: {
           storedSessions={props.storedSessions}
           recentSessions={props.recentSessions}
           runningSessions={props.runningSessions}
-          councilRooms={props.councilRooms}
-          selectedCouncilRoomId={props.selectedCouncilRoomId}
+          councils={props.councils}
+          selectedCouncilId={props.selectedCouncilId}
           workspaceSortMode={props.workspaceSortMode}
           onWorkspaceSortModeChange={props.onWorkspaceSortModeChange}
           onActivate={props.onActivateHistory}
           onActivateRunning={props.onActivateRunning}
-          onActivateCouncilRoom={props.onActivateCouncilRoom}
-          onRefreshCouncilRooms={props.onRefreshCouncilRooms}
-          onRemoveCouncilRoom={props.onRemoveCouncilRoom}
+          onActivateCouncil={props.onActivateCouncil}
+          onRefreshCouncils={props.onRefreshCouncils}
+          onRenameCouncil={props.onRenameCouncil}
+          onRemoveCouncil={props.onRemoveCouncil}
           onRemoveSession={props.onRemoveHistorySession}
           onRemoveWorkspace={props.onRemoveHistoryWorkspace}
         >

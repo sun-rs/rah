@@ -62,7 +62,7 @@ export function WorkbenchEmptyPane(props: {
   planModeEnabled: boolean;
   onAccessModeChange: (modeId: string) => void;
   onPlanModeToggle: (enabled: boolean) => void;
-  onOpenNewCouncilRoom: () => void;
+  onOpenNewCouncil: () => void;
 }) {
   const controlsRowRef = useRef<HTMLDivElement | null>(null);
   const [controlsRowWidth, setControlsRowWidth] = useState<number | null>(null);
@@ -295,13 +295,13 @@ export function WorkbenchEmptyPane(props: {
           <div className="flex w-full justify-center pt-1">
             <button
               type="button"
-              onClick={props.onOpenNewCouncilRoom}
+              onClick={props.onOpenNewCouncil}
               className="icon-click-feedback inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-transparent px-3 text-xs font-medium text-[var(--app-hint)] transition-colors hover:border-[var(--app-border)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
-              aria-label="Start a council room"
-              title="Start a council room"
+              aria-label="Start a Council"
+              title="Start a Council"
             >
               <UsersRound size={14} />
-              New council
+              New Council
             </button>
           </div>
         </div>

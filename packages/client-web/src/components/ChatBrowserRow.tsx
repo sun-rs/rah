@@ -39,6 +39,7 @@ export function ChatBrowserRow(props: {
   onDelete?: (() => void) | undefined;
   deleteLabel?: string | undefined;
   deleteDisabled?: boolean | undefined;
+  actions?: ReactNode | undefined;
   dataSessionId?: string | undefined;
   dataProviderSessionId?: string | undefined;
   dataSessionSource?: string | undefined;
@@ -112,7 +113,8 @@ export function ChatBrowserRow(props: {
               {props.timeLabel}
             </span>
           ) : null}
-          {props.onInfo ? (
+          {props.actions ?? null}
+          {!props.actions && props.onInfo ? (
             <button
               type="button"
               onClick={props.onInfo}
@@ -123,7 +125,7 @@ export function ChatBrowserRow(props: {
               <Info size={14} />
             </button>
           ) : null}
-          {props.onDelete ? (
+          {!props.actions && props.onDelete ? (
             <button
               type="button"
               disabled={props.deleteDisabled}

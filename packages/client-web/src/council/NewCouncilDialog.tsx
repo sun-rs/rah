@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { ChevronDown, ChevronRight, Plus, Trash2, X } from "lucide-react";
-import type { CouncilRoomSnapshot, ProviderModelCatalog } from "@rah/runtime-protocol";
+import type { CouncilSnapshot, ProviderModelCatalog } from "@rah/runtime-protocol";
 import * as api from "../api";
 import { ProviderLogo } from "../components/ProviderLogo";
 import { PROVIDER_OPTIONS, type ProviderChoice } from "../components/ProviderSelector";
@@ -215,14 +215,14 @@ export function CouncilAgentDraftEditor(props: {
   );
 }
 
-export function NewCouncilRoomDialog(props: {
+export function NewCouncilDialog(props: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   workspaceDir: string;
   workspaceDirs: string[];
-  rooms: readonly CouncilRoomSnapshot[];
+  councils: readonly CouncilSnapshot[];
   onAddWorkspace: (dir: string) => void;
-  onCreated: (room: CouncilRoomSnapshot) => void | Promise<void>;
+  onCreated: (council: CouncilSnapshot) => void | Promise<void>;
 }) {
   const [title, setTitle] = useState("");
   const [workspace, setWorkspace] = useState(props.workspaceDir || "");
@@ -238,15 +238,15 @@ export function NewCouncilRoomDialog(props: {
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const wasOpenRef = useRef(false);
 
-  const nextRoomTitle = useMemo(() => {
-    let maxRoomNumber = 0;
-    for (const room of props.rooms) {
-      const match = /^Room-(\d+)$/.exec(room.room.title.trim());
+  const nextCouncilTitle = useMemo(() => {
+    let maxCouncilNumber = 0;
+    for (const council of props.councils) {
+      const match = /^(?:Council|Council)-(\d+)$/.exec(council.title.trim());
       if (!match) continue;
-      maxRoomNumber = Math.max(maxRoomNumber, Number.parseInt(match[1]!, 10));
+      maxCouncilNumber = Math.max(maxCouncilNumber, Number.parseInt(match[1]!, 10));
     }
-    return `Room-${String(maxRoomNumber + 1).padStart(4, "0")}`;
-  }, [props.rooms]);
+    return `Council-${String(maxCouncilNumber + 1).padStart(4, "0")}`;
+  }, [props.councils]);
 
   useEffect(() => {
     if (props.open && !wasOpenRef.current) {
@@ -330,7 +330,7 @@ export function NewCouncilRoomDialog(props: {
     });
   };
 
-  const addNewRoomAgentDraft = () => {
+  const addNewCouncilAgentDraft = () => {
     const draft = createAdditionalCouncilAgentDraft();
     setAgentDrafts((current) => [...current, draft]);
     setCollapsedAgentDraftIds((current) => {
@@ -360,7 +360,7 @@ export function NewCouncilRoomDialog(props: {
     setCollapsedAgentDraftIds(new Set());
   };
 
-  const startRoom = async () => {
+  const startCouncil = async () => {
     const cwd = workspace.trim();
     if (!cwd || loading) {
       return;
@@ -368,7 +368,7 @@ export function NewCouncilRoomDialog(props: {
     setLoading(true);
     setError(null);
     try {
-      const response = await api.createCouncilRoom({
+      const response = await api.createCouncil({
         ...(title.trim() ? { title: title.trim() } : {}),
         workspace: cwd,
         agents: agentDrafts.map((draft) =>
@@ -378,7 +378,7 @@ export function NewCouncilRoomDialog(props: {
           }),
         ),
       });
-      await props.onCreated(response.room);
+      await props.onCreated(response.council);
       resetDrafts();
       props.onOpenChange(false);
     } catch (caught) {
@@ -400,17 +400,17 @@ export function NewCouncilRoomDialog(props: {
           <div className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[var(--app-border)] px-4">
             <div className="min-w-0">
               <Dialog.Title className="text-sm font-semibold text-[var(--app-fg)]">
-                New room
+                New Council
               </Dialog.Title>
               <div className="truncate text-xs text-[var(--app-hint)]">
-                Configure agents before launching the council.
+                Configure agents before starting the Council.
               </div>
             </div>
             <Dialog.Close asChild>
               <button
                 type="button"
                 className="icon-click-feedback inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
-                aria-label="Close new council room"
+                aria-label="Close new Council"
                 title="Close"
               >
                 <X size={16} />
@@ -427,7 +427,7 @@ export function NewCouncilRoomDialog(props: {
             viewportClassName="h-full p-4"
             contentClassName="space-y-3"
             viewportRef={bodyRef}
-            scrollAriaLabel="New room settings"
+            scrollAriaLabel="New Council settings"
           >
             <label className="block text-xs font-medium text-[var(--app-hint)]">
               Title
@@ -435,7 +435,7 @@ export function NewCouncilRoomDialog(props: {
                 value={title}
                 onChange={(event) => setTitle(event.target.value)}
                 className="mt-1 h-11 w-full rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] px-3 text-sm text-[var(--app-fg)]"
-                placeholder={nextRoomTitle}
+                placeholder={nextCouncilTitle}
               />
             </label>
             <div className="block text-xs font-medium text-[var(--app-hint)]">
@@ -468,7 +468,7 @@ export function NewCouncilRoomDialog(props: {
             </Dialog.Close>
             <button
               type="button"
-              onClick={addNewRoomAgentDraft}
+              onClick={addNewCouncilAgentDraft}
               className="icon-click-feedback inline-flex h-11 min-w-0 items-center justify-center gap-2 rounded-lg border border-[var(--app-border)] text-xs font-semibold text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)]"
             >
               <Plus size={14} />
@@ -477,7 +477,7 @@ export function NewCouncilRoomDialog(props: {
             <button
               type="button"
               disabled={loading || !workspace.trim()}
-              onClick={() => void startRoom()}
+              onClick={() => void startCouncil()}
               className="icon-click-feedback inline-flex h-11 min-w-0 items-center justify-center gap-2 rounded-lg bg-[var(--app-fg)] px-3 text-xs font-semibold text-[var(--app-bg)] disabled:opacity-40"
             >
               Start

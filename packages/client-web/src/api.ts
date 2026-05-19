@@ -15,8 +15,8 @@ import type {
   CouncilReinjectAgentsResponse,
   CouncilRemoveAgentResponse,
   CouncilStopAgentResponse,
-  CreateCouncilRoomRequest,
-  CreateCouncilRoomResponse,
+  CreateCouncilRequest,
+  CreateCouncilResponse,
   DeleteManualProviderModelOptionResponse,
   DeleteManualProviderModelResponse,
   DebugScenarioDescriptor,
@@ -40,7 +40,7 @@ import type {
   ListPtyStatsResponse,
   ListProviderModelsResponse,
   ListProvidersResponse,
-  ListCouncilRoomsResponse,
+  ListCouncilsResponse,
   ListTuiMuxDiagnosticsResponse,
   NativeTuiDiagnostic,
   NativeTuiSurfaceResponse,
@@ -55,6 +55,8 @@ import type {
   TuiMuxSessionDiagnostic,
   PtyServerMessage,
   PermissionResponseRequest,
+  RenameCouncilRequest,
+  RenameCouncilResponse,
   RenameSessionRequest,
   ResumeSessionRequest,
   ResumeSessionResponse,
@@ -790,25 +792,38 @@ export async function readSessionHistory(
   );
 }
 
-export async function listCouncilRooms(): Promise<ListCouncilRoomsResponse> {
-  return requestJson<ListCouncilRoomsResponse>("/api/council/rooms");
+export async function listCouncils(): Promise<ListCouncilsResponse> {
+  return requestJson<ListCouncilsResponse>("/api/council");
 }
 
-export async function createCouncilRoom(
-  request: CreateCouncilRoomRequest,
-): Promise<CreateCouncilRoomResponse> {
-  return requestJson<CreateCouncilRoomResponse>("/api/council/rooms", {
+export async function createCouncil(
+  request: CreateCouncilRequest,
+): Promise<CreateCouncilResponse> {
+  return requestJson<CreateCouncilResponse>("/api/council", {
     method: "POST",
     body: JSON.stringify(request),
   });
 }
 
+export async function renameCouncil(
+  councilId: string,
+  request: RenameCouncilRequest,
+): Promise<RenameCouncilResponse> {
+  return requestJson<RenameCouncilResponse>(
+    `/api/council/${encodeURIComponent(councilId)}/rename`,
+    {
+      method: "POST",
+      body: JSON.stringify(request),
+    },
+  );
+}
+
 export async function addCouncilAgent(
-  roomId: string,
+  councilId: string,
   request: AddCouncilAgentRequest,
 ): Promise<AddCouncilAgentResponse> {
   return requestJson<AddCouncilAgentResponse>(
-    `/api/council/rooms/${encodeURIComponent(roomId)}/agents`,
+    `/api/council/${encodeURIComponent(councilId)}/agents`,
     {
       method: "POST",
       body: JSON.stringify(request),
@@ -817,11 +832,11 @@ export async function addCouncilAgent(
 }
 
 export async function postCouncilMessage(
-  roomId: string,
+  councilId: string,
   request: CouncilPostMessageRequest,
 ): Promise<CouncilPostMessageResponse> {
   return requestJson<CouncilPostMessageResponse>(
-    `/api/council/rooms/${encodeURIComponent(roomId)}/messages`,
+    `/api/council/${encodeURIComponent(councilId)}/messages`,
     {
       method: "POST",
       body: JSON.stringify(request),
@@ -829,55 +844,55 @@ export async function postCouncilMessage(
   );
 }
 
-export async function stopCouncilRoom(roomId: string): Promise<{ ok: true }> {
+export async function stopCouncil(councilId: string): Promise<{ ok: true }> {
   return requestJson<{ ok: true }>(
-    `/api/council/rooms/${encodeURIComponent(roomId)}/stop`,
+    `/api/council/${encodeURIComponent(councilId)}/stop`,
     { method: "POST", body: JSON.stringify({}) },
   );
 }
 
-export async function deleteCouncilRoom(roomId: string): Promise<{ ok: true }> {
+export async function deleteCouncil(councilId: string): Promise<{ ok: true }> {
   return requestJson<{ ok: true }>(
-    `/api/council/rooms/${encodeURIComponent(roomId)}/delete`,
+    `/api/council/${encodeURIComponent(councilId)}/delete`,
     { method: "POST", body: JSON.stringify({}) },
   );
 }
 
 export async function getCouncilAgentTui(
-  roomId: string,
+  councilId: string,
   agentId: string,
 ): Promise<CouncilAgentTuiResponse> {
   return requestJson<CouncilAgentTuiResponse>(
-    `/api/council/rooms/${encodeURIComponent(roomId)}/agents/${encodeURIComponent(agentId)}/tui`,
+    `/api/council/${encodeURIComponent(councilId)}/agents/${encodeURIComponent(agentId)}/tui`,
   );
 }
 
 export async function reinjectCouncilAgentPrompt(
-  roomId: string,
+  councilId: string,
   agentId: string,
 ): Promise<CouncilReinjectAgentsResponse> {
   return requestJson<CouncilReinjectAgentsResponse>(
-    `/api/council/rooms/${encodeURIComponent(roomId)}/agents/${encodeURIComponent(agentId)}/reinject`,
+    `/api/council/${encodeURIComponent(councilId)}/agents/${encodeURIComponent(agentId)}/reinject`,
     { method: "POST", body: JSON.stringify({}) },
   );
 }
 
 export async function removeCouncilAgent(
-  roomId: string,
+  councilId: string,
   agentId: string,
 ): Promise<CouncilRemoveAgentResponse> {
   return requestJson<CouncilRemoveAgentResponse>(
-    `/api/council/rooms/${encodeURIComponent(roomId)}/agents/${encodeURIComponent(agentId)}/remove`,
+    `/api/council/${encodeURIComponent(councilId)}/agents/${encodeURIComponent(agentId)}/remove`,
     { method: "POST", body: JSON.stringify({}) },
   );
 }
 
 export async function stopCouncilAgent(
-  roomId: string,
+  councilId: string,
   agentId: string,
 ): Promise<CouncilStopAgentResponse> {
   return requestJson<CouncilStopAgentResponse>(
-    `/api/council/rooms/${encodeURIComponent(roomId)}/agents/${encodeURIComponent(agentId)}/stop`,
+    `/api/council/${encodeURIComponent(councilId)}/agents/${encodeURIComponent(agentId)}/stop`,
     { method: "POST", body: JSON.stringify({}) },
   );
 }

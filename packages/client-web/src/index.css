@@ -268,7 +268,7 @@
    * RAH scrollbar protocol:
    * - rah-scroll-overlay-area: hidden native scrollbar for utility panels, sidebars,
    *   history/info panes, and picker/list popovers rendered through OverlayScrollArea.
-   * - rah-scroll-main: primary reading surfaces such as session/council chat.
+   * - rah-scroll-main: primary reading surfaces such as session or Council messages.
    * - rah-scroll-code: code, diff, artifact, terminal-tab and technical panes.
    * - rah-scroll-panel / rah-scroll-panel-y: native fallback for mobile sheets,
    *   full-canvas placeholder panes, form inputs, and legacy panel surfaces.

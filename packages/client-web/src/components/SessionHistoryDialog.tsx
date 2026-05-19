@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { CouncilRoomSnapshot, SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
+import type { CouncilSnapshot, SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
 import { conversationPhaseLabel } from "@rah/runtime-protocol";
 import * as Dialog from "@radix-ui/react-dialog";
 import { Check, ChevronDown, ChevronRight, History, ListFilter, Pencil, PlusCircle, RefreshCw, Search, Trash2, X } from "lucide-react";
@@ -8,7 +8,7 @@ import { formatRelativeTime, type WorkspaceSortMode } from "../session-browser";
 import { ProviderLogo } from "./ProviderLogo";
 import { ChatBrowserRow } from "./ChatBrowserRow";
 import { OverlayScrollArea } from "./OverlayScrollArea";
-import { CouncilRoomsBrowser } from "../council/CouncilRoomsBrowser";
+import { CouncilsBrowser } from "../council/CouncilsBrowser";
 import {
   dedupeStoredSessionsByIdentity,
   filterStoppedRecentSessions,
@@ -336,15 +336,16 @@ export function SessionHistoryDialog(props: {
   storedSessions: StoredSessionRef[];
   recentSessions: StoredSessionRef[];
   runningSessions: SessionSummary[];
-  councilRooms?: readonly CouncilRoomSnapshot[] | undefined;
-  selectedCouncilRoomId?: string | null | undefined;
+  councils?: readonly CouncilSnapshot[] | undefined;
+  selectedCouncilId?: string | null | undefined;
   workspaceSortMode: WorkspaceSortMode;
   onWorkspaceSortModeChange: (value: WorkspaceSortMode) => void;
   onActivate: (ref: StoredSessionRef) => void;
   onActivateRunning?: (sessionId: string) => void;
-  onActivateCouncilRoom?: ((roomId: string) => void) | undefined;
-  onRefreshCouncilRooms?: (() => void | Promise<void>) | undefined;
-  onRemoveCouncilRoom?: ((roomId: string) => void | Promise<void>) | undefined;
+  onActivateCouncil?: ((councilId: string) => void) | undefined;
+  onRefreshCouncils?: (() => void | Promise<void>) | undefined;
+  onRenameCouncil?: ((council: CouncilSnapshot) => void) | undefined;
+  onRemoveCouncil?: ((councilId: string) => void | Promise<void>) | undefined;
   onRemoveSession: (ref: Pick<StoredSessionRef, "provider" | "providerSessionId">) => void;
   onRemoveWorkspace: (workspaceDir: string) => void;
   defaultTab?: ChatTab;
@@ -357,7 +358,7 @@ export function SessionHistoryDialog(props: {
   const [visibleItemCounts, setVisibleItemCounts] = useState<Map<string, number>>(new Map());
   const [pendingRemoveSession, setPendingRemoveSession] = useState<StoredSessionRef | null>(null);
   const [pendingRemoveWorkspaceDir, setPendingRemoveWorkspaceDir] = useState<string | null>(null);
-  const [pendingRemoveCouncilRoom, setPendingRemoveCouncilRoom] = useState<CouncilRoomSnapshot | null>(null);
+  const [pendingRemoveCouncil, setPendingRemoveCouncil] = useState<CouncilSnapshot | null>(null);
   const [selectedProviders, setSelectedProviders] = useState<Set<HistoryProviderFilter>>(
     () => new Set(HISTORY_PROVIDER_OPTIONS),
   );
@@ -581,11 +582,11 @@ export function SessionHistoryDialog(props: {
               {tab === "council" ? (
                 <button
                   type="button"
-                  onClick={() => void props.onRefreshCouncilRooms?.()}
-                  disabled={!props.onRefreshCouncilRooms}
+                  onClick={() => void props.onRefreshCouncils?.()}
+                  disabled={!props.onRefreshCouncils}
                   className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-[var(--app-border)] text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] disabled:opacity-40"
-                  aria-label="Refresh council rooms"
-                  title="Refresh council rooms"
+                  aria-label="Refresh Councils"
+                  title="Refresh Councils"
                 >
                   <RefreshCw size={14} />
                 </button>
@@ -604,17 +605,18 @@ export function SessionHistoryDialog(props: {
 
           <OverlayScrollArea className="min-h-0 flex-1" viewportClassName="h-full p-4">
             {tab === "council" ? (
-              <CouncilRoomsBrowser
-                rooms={props.councilRooms ?? []}
-                selectedRoomId={props.selectedCouncilRoomId ?? null}
+              <CouncilsBrowser
+                councils={props.councils ?? []}
+                selectedCouncilId={props.selectedCouncilId ?? null}
                 query={query}
-                onOpenRoom={(room) => {
-                  props.onActivateCouncilRoom?.(room.room.id);
+                onOpenCouncil={(council) => {
+                  props.onActivateCouncil?.(council.id);
                   setOpen(false);
                 }}
-                onRequestDeleteRoom={
-                  props.onRemoveCouncilRoom ? setPendingRemoveCouncilRoom : undefined
+                onRequestDeleteCouncil={
+                  props.onRemoveCouncil ? setPendingRemoveCouncil : undefined
                 }
+                onRenameCouncil={props.onRenameCouncil}
               />
             ) : tab === "active" ? (
               <div className="space-y-4">
@@ -912,10 +914,10 @@ export function SessionHistoryDialog(props: {
       </Dialog.Root>
 
       <Dialog.Root
-        open={pendingRemoveCouncilRoom !== null}
+        open={pendingRemoveCouncil !== null}
         onOpenChange={(nextOpen) => {
           if (!nextOpen) {
-            setPendingRemoveCouncilRoom(null);
+            setPendingRemoveCouncil(null);
           }
         }}
       >
@@ -924,13 +926,13 @@ export function SessionHistoryDialog(props: {
           <Dialog.Content className="fixed left-1/2 top-1/2 w-[90vw] max-w-sm -translate-x-1/2 -translate-y-1/2 rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-0 shadow-xl focus:outline-none z-[70] flex flex-col">
             <div className="flex items-center justify-between border-b border-[var(--app-border)] px-4 py-3 shrink-0">
               <Dialog.Title className="text-sm font-semibold text-[var(--app-fg)]">
-                Delete council room?
+                Delete Council?
               </Dialog.Title>
               <button
                 type="button"
                 onClick={(event) => {
                   event.stopPropagation();
-                  setPendingRemoveCouncilRoom(null);
+                  setPendingRemoveCouncil(null);
                 }}
                 className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] transition-colors"
                 aria-label="Close"
@@ -939,11 +941,11 @@ export function SessionHistoryDialog(props: {
               </button>
             </div>
             <div className="px-4 py-4 text-sm text-[var(--app-hint)]">
-              {pendingRemoveCouncilRoom ? (
+              {pendingRemoveCouncil ? (
                 <>
                   Delete{" "}
                   <span className="font-medium text-[var(--app-fg)]">
-                    {pendingRemoveCouncilRoom.room.title}
+                    {pendingRemoveCouncil.title}
                   </span>{" "}
                   from Council history?
                 </>
@@ -954,7 +956,7 @@ export function SessionHistoryDialog(props: {
                 type="button"
                 onClick={(event) => {
                   event.stopPropagation();
-                  setPendingRemoveCouncilRoom(null);
+                  setPendingRemoveCouncil(null);
                 }}
                 className="rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] px-3 py-2 text-xs font-medium text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)] transition-colors"
               >
@@ -963,11 +965,11 @@ export function SessionHistoryDialog(props: {
               <button
                 type="button"
                 onClick={() => {
-                  if (!pendingRemoveCouncilRoom) {
+                  if (!pendingRemoveCouncil) {
                     return;
                   }
-                  void props.onRemoveCouncilRoom?.(pendingRemoveCouncilRoom.room.id);
-                  setPendingRemoveCouncilRoom(null);
+                  void props.onRemoveCouncil?.(pendingRemoveCouncil.id);
+                  setPendingRemoveCouncil(null);
                   window.setTimeout(() => setOpen(true), 0);
                 }}
                 className="rounded-lg bg-[var(--app-danger)] px-3 py-2 text-xs font-medium text-white hover:opacity-90 transition-colors"

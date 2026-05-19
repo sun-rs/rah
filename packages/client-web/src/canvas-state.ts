@@ -8,7 +8,7 @@ export type CanvasPaneId = "canvas-1" | "canvas-2" | "canvas-3" | "canvas-4";
 export type CanvasPaneTarget =
   | { kind: "empty" }
   | { kind: "new" }
-  | { kind: "council_room"; roomId: string }
+  | { kind: "council"; councilId: string }
   | { kind: "session"; sessionId: string }
   | { kind: "stored"; ref: StoredSessionRef };
 
@@ -68,7 +68,7 @@ export function resolveCanvasRunningUniquenessKey(
     return projection && isReadOnlyReplay(projection.summary) ? null : target.sessionId;
   }
   if (target.kind !== "stored") {
-    return target.kind === "council_room" ? `council_room:${target.roomId}` : null;
+    return target.kind === "council" ? `council:${target.councilId}` : null;
   }
   const projection = resolveCanvasTargetProjection(target, projections);
   if (!projection || isReadOnlyReplay(projection.summary)) {

@@ -1,6 +1,6 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import type { CouncilRoomSnapshot, SessionSummary } from "@rah/runtime-protocol";
+import type { CouncilSnapshot, SessionSummary } from "@rah/runtime-protocol";
 import { conversationStateFromRuntimeState } from "@rah/runtime-protocol";
 import { deriveSidebarWorkspaceViewModels } from "./sidebar-view-model";
 import type { WorkspaceSection } from "./session-browser";
@@ -59,23 +59,21 @@ function workspaceSection(sessions: SessionSummary[]): WorkspaceSection {
   };
 }
 
-function councilRoom(args: {
+function council(args: {
   id: string;
   workspace?: string;
-  status?: CouncilRoomSnapshot["room"]["status"];
-  phase?: CouncilRoomSnapshot["room"]["phase"];
+  status?: CouncilSnapshot["status"];
+  phase?: CouncilSnapshot["phase"];
   updatedAt?: string;
-}): CouncilRoomSnapshot {
+}): CouncilSnapshot {
   return {
-    room: {
-      id: args.id,
-      title: args.id,
-      workspace: args.workspace ?? "/workspace/rah",
-      status: args.status ?? "running",
-      phase: args.phase ?? "ready",
-      createdAt: "2026-04-15T00:00:00.000Z",
-      updatedAt: args.updatedAt ?? "2026-04-15T00:00:00.000Z",
-    },
+    id: args.id,
+    title: args.id,
+    workspace: args.workspace ?? "/workspace/rah",
+    status: args.status ?? "running",
+    phase: args.phase ?? "ready",
+    createdAt: "2026-04-15T00:00:00.000Z",
+    updatedAt: args.updatedAt ?? "2026-04-15T00:00:00.000Z",
     agents: [],
     messages: [],
   };
@@ -130,8 +128,8 @@ describe("sidebar view model", () => {
           id: "council-agent",
           origin: {
             kind: "council",
-            roomId: "room-1",
-            roomTitle: "Room",
+            councilId: "council-1",
+            councilTitle: "Council",
             agentId: "agent-1",
             agentLabel: "Agent",
           },
@@ -147,28 +145,28 @@ describe("sidebar view model", () => {
     assert.equal(items[0]?.sessions[0]?.originKind, "council");
   });
 
-  test("projects live council rooms into their owning workspace", () => {
+  test("projects live Councils into their owning workspace", () => {
     const items = deriveSidebarWorkspaceViewModels({
       workspaceSections: [workspaceSection([session({ id: "session-1" })])],
       selectedWorkspaceDir: "/workspace/rah",
       selectedSessionId: null,
-      selectedCouncilRoomId: "room-1",
+      selectedCouncilId: "council-1",
       unreadSessionIds: new Set(),
       runtimeStatusBySessionId: new Map(),
       pinnedSessionIdByWorkspace: {},
-      councilRooms: [
-        councilRoom({ id: "room-1", status: "running", phase: "ready" }),
-        councilRoom({ id: "archived-room", status: "stopped" }),
-        councilRoom({ id: "other-room", workspace: "/workspace/other" }),
+      councils: [
+        council({ id: "council-1", status: "running", phase: "ready" }),
+        council({ id: "archived-council", status: "stopped" }),
+        council({ id: "other-council", workspace: "/workspace/other" }),
       ],
     });
 
-    assert.deepEqual(items[0]?.councilRooms.map((room) => room.id), ["room-1"]);
-    assert.equal(items[0]?.councilRooms[0]?.statusLabel, "ready");
-    assert.equal(items[0]?.councilRooms[0]?.selected, true);
+    assert.deepEqual(items[0]?.councils.map((council) => council.id), ["council-1"]);
+    assert.equal(items[0]?.councils[0]?.statusLabel, "ready");
+    assert.equal(items[0]?.councils[0]?.selected, true);
     assert.deepEqual(
       items[0]?.items.map((item) => item.kind),
-      ["council_room", "session"],
+      ["council", "session"],
     );
   });
 });

@@ -680,7 +680,7 @@ const cases: RegressionCase[] = [
     severity: "P2",
     providers: ["codex", "claude", "opencode"],
     automation: ["unit", "manual"],
-    title: "Council room configuration and member TUI views remain usable on small screens",
+    title: "Council configuration and member TUI views remain usable on small screens",
     acceptance: [
       "Council setup uses the same provider/model/mode selection contracts as new session.",
       "Model option controls update when the selected model has no parameters.",

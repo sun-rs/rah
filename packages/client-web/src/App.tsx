@@ -1,7 +1,7 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { MessageCircleMore, PanelRight, Plus, UsersRound } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
-import type { CouncilRoomSnapshot, PermissionResponseRequest, SessionConfigValue, SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
+import type { CouncilSnapshot, PermissionResponseRequest, SessionConfigValue, SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
 import * as api from "./api";
 import { SessionSidebar } from "./SessionSidebar";
 import { useSessionStore } from "./useSessionStore";
@@ -15,11 +15,11 @@ import { ConfirmDialog } from "./components/workbench/dialogs/ConfirmDialog";
 import { RenameSessionDialog } from "./components/workbench/dialogs/RenameSessionDialog";
 import { WorkbenchErrorBoundary } from "./components/workbench/WorkbenchErrorBoundary";
 import { CanvasNewSessionPane } from "./components/workbench/canvas/CanvasNewSessionPane";
-import { CanvasCouncilRoomPane } from "./components/workbench/canvas/CanvasCouncilRoomPane";
+import { CanvasCouncilPane } from "./components/workbench/canvas/CanvasCouncilPane";
 import { CanvasSessionPane } from "./components/workbench/canvas/CanvasSessionPane";
 import { CanvasWorkbench, type CanvasLayout } from "./components/workbench/canvas/CanvasWorkbench";
 import { CouncilPage } from "./council/CouncilPage";
-import { NewCouncilRoomDialog } from "./council/NewCouncilRoomDialog";
+import { NewCouncilDialog } from "./council/NewCouncilDialog";
 import { WorkbenchEmptyPane } from "./components/workbench/panes/WorkbenchEmptyPane";
 import { WorkbenchOpeningPane } from "./components/workbench/panes/WorkbenchOpeningPane";
 import { WorkbenchSelectedPane } from "./components/workbench/panes/WorkbenchSelectedPane";
@@ -299,6 +299,8 @@ export function App() {
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
   const [renameDialogSessionId, setRenameDialogSessionId] = useState<string | null>(null);
   const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
+  const [renameDialogCouncilId, setRenameDialogCouncilId] = useState<string | null>(null);
+  const [renamingCouncilId, setRenamingCouncilId] = useState<string | null>(null);
   const [modeChangeSessionId, setModeChangeSessionId] = useState<string | null>(null);
   const [modelChangeSessionId, setModelChangeSessionId] = useState<string | null>(null);
   const [startModelDrafts, setStartModelDrafts] = useState<Record<ProviderChoice, ModelDraft>>(
@@ -311,8 +313,8 @@ export function App() {
   const [missingWorkspaceConfirmDir, setMissingWorkspaceConfirmDir] = useState<string | null>(null);
   const [floatingAnchorOffsetPx, setFloatingAnchorOffsetPx] = useState(96);
   const [workbenchMode, setWorkbenchMode] = useState<WorkbenchMode>("single");
-  const [councilRooms, setCouncilRooms] = useState<CouncilRoomSnapshot[]>([]);
-  const [selectedCouncilRoomId, setSelectedCouncilRoomId] = useState<string | null>(null);
+  const [councils, setCouncils] = useState<CouncilSnapshot[]>([]);
+  const [selectedCouncilId, setSelectedCouncilId] = useState<string | null>(null);
   const [homeNewCouncilDialogOpen, setHomeNewCouncilDialogOpen] = useState(false);
   const [canvasLayout, setCanvasLayoutState] = useState<CanvasLayout>("two-horizontal");
   const [canvasMaximizedPaneId, setCanvasMaximizedPaneId] = useState<CanvasPaneId | null>(null);
@@ -376,54 +378,67 @@ export function App() {
     void init();
   }, [init]);
 
-  const refreshCouncilRooms = useCallback(async () => {
+  const refreshCouncils = useCallback(async () => {
     try {
-      const response = await api.listCouncilRooms();
-      setCouncilRooms(response.rooms);
-      setSelectedCouncilRoomId((current) => {
-        if (!current || response.rooms.some((room) => room.room.id === current)) {
+      const response = await api.listCouncils();
+      setCouncils(response.councils);
+      setSelectedCouncilId((current) => {
+        if (!current || response.councils.some((council) => council.id === current)) {
           return current;
         }
         return null;
       });
     } catch {
-      // The full Council page owns user-visible room loading errors.
+      // The full Council page owns user-visible council loading errors.
     }
   }, []);
 
-  const removeCouncilRoomFromChats = useCallback(async (roomId: string) => {
-    await api.deleteCouncilRoom(roomId);
-    await refreshCouncilRooms();
-  }, [refreshCouncilRooms]);
+  const removeCouncilFromChats = useCallback(async (councilId: string) => {
+    await api.deleteCouncil(councilId);
+    await refreshCouncils();
+  }, [refreshCouncils]);
 
-  const openCreatedCouncilRoom = useCallback((room: CouncilRoomSnapshot) => {
-    setCouncilRooms((current) => {
-      const existingIndex = current.findIndex((candidate) => candidate.room.id === room.room.id);
+  const renameCouncilFromChats = useCallback(async (councilId: string, title: string) => {
+    const response = await api.renameCouncil(councilId, { title });
+    setCouncils((current) => {
+      const existingIndex = current.findIndex((candidate) => candidate.id === response.council.id);
       if (existingIndex >= 0) {
         const next = [...current];
-        next[existingIndex] = room;
+        next[existingIndex] = response.council;
         return next;
       }
-      return [room, ...current];
+      return [response.council, ...current];
+    });
+  }, []);
+
+  const openCreatedCouncil = useCallback((council: CouncilSnapshot) => {
+    setCouncils((current) => {
+      const existingIndex = current.findIndex((candidate) => candidate.id === council.id);
+      if (existingIndex >= 0) {
+        const next = [...current];
+        next[existingIndex] = council;
+        return next;
+      }
+      return [council, ...current];
     });
     setSelectedSessionId(null);
     setSelectedWorkspaceOnlyDir(null);
-    setWorkspaceDir(room.room.workspace);
-    setSelectedCouncilRoomId(room.room.id);
+    setWorkspaceDir(council.workspace);
+    setSelectedCouncilId(council.id);
     setWorkbenchMode("council");
     setRightSidebarOpen(false);
     setRightOpen(false);
     setLeftOpen(false);
-    void refreshCouncilRooms();
-  }, [refreshCouncilRooms, setSelectedSessionId, setWorkspaceDir]);
+    void refreshCouncils();
+  }, [refreshCouncils, setSelectedSessionId, setWorkspaceDir]);
 
   useEffect(() => {
-    void refreshCouncilRooms();
+    void refreshCouncils();
     const timer = window.setInterval(() => {
-      void refreshCouncilRooms();
+      void refreshCouncils();
     }, 5_000);
     return () => window.clearInterval(timer);
-  }, [refreshCouncilRooms]);
+  }, [refreshCouncils]);
 
   useEffect(() => {
     const preloadSettingsDialog = window.setTimeout(() => {
@@ -476,16 +491,16 @@ export function App() {
     const target = canvasPaneTargets[paneId];
     return resolveCanvasTargetProjectionFromState(target, projections);
   };
-  const resolveCanvasCouncilRoom = (paneId: CanvasPaneId) => {
+  const resolveCanvasCouncil = (paneId: CanvasPaneId) => {
     const target = canvasPaneTargets[paneId];
-    if (target.kind !== "council_room") {
+    if (target.kind !== "council") {
       return null;
     }
-    return councilRooms.find((room) => room.room.id === target.roomId) ?? null;
+    return councils.find((council) => council.id === target.councilId) ?? null;
   };
   const activeCanvasProjection = resolveCanvasProjection(activeCanvasPaneId);
   const activeCanvasSummary = activeCanvasProjection?.summary ?? null;
-  const activeCanvasCouncilRoom = resolveCanvasCouncilRoom(activeCanvasPaneId);
+  const activeCanvasCouncil = resolveCanvasCouncil(activeCanvasPaneId);
 
   const setCanvasLayout = (layout: CanvasLayout) => {
     setCanvasLayoutState(layout);
@@ -513,20 +528,20 @@ export function App() {
     void activateHistorySession(ref, { confirmCreateMissingWorkspace });
   };
 
-  const setCanvasPaneCouncilRoom = (paneId: CanvasPaneId, roomId: string) => {
-    setCanvasPaneTarget(paneId, { kind: "council_room", roomId });
-    setSelectedCouncilRoomId(roomId);
+  const setCanvasPaneCouncil = (paneId: CanvasPaneId, councilId: string) => {
+    setCanvasPaneTarget(paneId, { kind: "council", councilId });
+    setSelectedCouncilId(councilId);
   };
 
   const clearCanvasPane = (paneId: CanvasPaneId) => {
     const projection = resolveCanvasProjection(paneId);
-    const room = resolveCanvasCouncilRoom(paneId);
+    const council = resolveCanvasCouncil(paneId);
     setCanvasPaneTarget(paneId, { kind: "empty" });
     if (projection?.summary.session.id && selectedSessionId === projection.summary.session.id) {
       setSelectedSessionId(null);
     }
-    if (room?.room.id && selectedCouncilRoomId === room.room.id) {
-      setSelectedCouncilRoomId(null);
+    if (council?.id && selectedCouncilId === council.id) {
+      setSelectedCouncilId(null);
     }
   };
 
@@ -548,8 +563,8 @@ export function App() {
     if (activeCanvasSummary) {
       setSelectedSessionId(activeCanvasSummary.session.id);
     }
-    if (activeCanvasCouncilRoom) {
-      setSelectedCouncilRoomId(activeCanvasCouncilRoom.room.id);
+    if (activeCanvasCouncil) {
+      setSelectedCouncilId(activeCanvasCouncil.id);
     }
     setWorkbenchMode("single");
   };
@@ -565,7 +580,7 @@ export function App() {
     setWorkbenchMode("single");
     setSelectedWorkspaceOnlyDir(null);
     setSelectedSessionId(null);
-    setSelectedCouncilRoomId(null);
+    setSelectedCouncilId(null);
     setRightSidebarOpen(false);
     setRightOpen(false);
     setLeftOpen(false);
@@ -640,6 +655,9 @@ export function App() {
     : null;
   const renameTargetSummary = renameDialogSessionId
     ? projections.get(renameDialogSessionId)?.summary ?? null
+    : null;
+  const renameTargetCouncil = renameDialogCouncilId
+    ? councils.find((council) => council.id === renameDialogCouncilId) ?? null
     : null;
   const [missingWorkspaceResolver, setMissingWorkspaceResolver] =
     useState<((confirmed: boolean) => void) | null>(null);
@@ -836,16 +854,16 @@ export function App() {
   }, [primaryPaneState.kind, selectedSummary]);
 
   const availableWorkspaceDir = workspaceDirs.length > 0 ? workspaceDir : "";
-  const selectedCouncilRoom =
-    selectedCouncilRoomId
-      ? councilRooms.find((room) => room.room.id === selectedCouncilRoomId) ?? null
+  const selectedCouncil =
+    selectedCouncilId
+      ? councils.find((council) => council.id === selectedCouncilId) ?? null
       : null;
   const selectedInspectorWorkspaceDir = selectedSummary
     ? availableWorkspaceDir ||
       selectedSummary.session.rootDir ||
       selectedSummary.session.cwd ||
       ""
-    : selectedCouncilRoom?.room.workspace ?? selectedWorkspaceOnlyDir ?? "";
+    : selectedCouncil?.workspace ?? selectedWorkspaceOnlyDir ?? "";
   const terminalCwd = selectedInspectorWorkspaceDir || "~";
   const selectedTerminalSessionId = selectedSummary?.session.id ?? null;
   const terminalOwner = useMemo(() => {
@@ -882,16 +900,16 @@ export function App() {
       selectedSessionId={
         workbenchMode === "canvas" ? activeCanvasSummary?.session.id ?? null : selectedSessionId
       }
-      selectedCouncilRoomId={
+      selectedCouncilId={
         workbenchMode === "canvas"
-          ? activeCanvasCouncilRoom?.room.id ?? null
+          ? activeCanvasCouncil?.id ?? null
           : workbenchMode === "council"
-            ? selectedCouncilRoomId
+            ? selectedCouncilId
             : null
       }
       unreadSessionIds={unreadSessionIds}
       runtimeStatusBySessionId={runtimeStatusBySessionId}
-      councilRooms={councilRooms}
+      councils={councils}
       onSelectSession={(workspaceDir, id) => {
         if (workbenchMode !== "single") {
           setWorkbenchMode("single");
@@ -901,11 +919,11 @@ export function App() {
         setSelectedSessionId(id);
         setLeftOpen(false);
       }}
-      onSelectCouncilRoom={(workspaceDir, roomId) => {
+      onSelectCouncil={(workspaceDir, councilId) => {
         setSelectedWorkspaceOnlyDir(null);
         setWorkspaceDir(workspaceDir);
         setSelectedSessionId(null);
-        setSelectedCouncilRoomId(roomId);
+        setSelectedCouncilId(councilId);
         setWorkbenchMode("council");
         setRightSidebarOpen(false);
         setRightOpen(false);
@@ -921,7 +939,7 @@ export function App() {
         setLeftOpen(false);
       }}
       enableSessionDrag={workbenchMode === "canvas"}
-      enableCouncilRoomDrag={workbenchMode === "canvas"}
+      enableCouncilDrag={workbenchMode === "canvas"}
       debugScenarios={debugScenarios}
       onStartScenario={(scenario) => {
         void startScenario(scenario);
@@ -952,15 +970,15 @@ export function App() {
     setSelectedSessionId(sessionId);
   };
 
-  const handleActivateCouncilRoom = (roomId: string) => {
+  const handleActivateCouncil = (councilId: string) => {
     setLeftOpen(false);
-    const room = councilRooms.find((candidate) => candidate.room.id === roomId) ?? null;
-    if (room) {
+    const council = councils.find((candidate) => candidate.id === councilId) ?? null;
+    if (council) {
       setSelectedWorkspaceOnlyDir(null);
-      setWorkspaceDir(room.room.workspace);
+      setWorkspaceDir(council.workspace);
     }
     setSelectedSessionId(null);
-    setSelectedCouncilRoomId(roomId);
+    setSelectedCouncilId(councilId);
     setWorkbenchMode("council");
     setRightSidebarOpen(false);
     setRightOpen(false);
@@ -1023,8 +1041,8 @@ export function App() {
         storedSessions={storedSessions}
         recentSessions={recentSessions}
         runningSessions={runningSessionEntries.map((entry) => entry.summary)}
-        councilRooms={councilRooms}
-        selectedCouncilRoomId={selectedCouncilRoomId}
+        councils={councils}
+        selectedCouncilId={selectedCouncilId}
         workspaceSortMode={historyWorkspaceSortMode}
         onWorkspaceSortModeChange={setHistoryWorkspaceSortMode}
         canvasActive={workbenchMode === "canvas"}
@@ -1060,9 +1078,10 @@ export function App() {
         mobileCanvasEnabled={mobileCanvasEnabled}
         onActivateHistory={handleActivateHistorySession}
         onActivateRunning={handleActivateRunningSession}
-        onActivateCouncilRoom={handleActivateCouncilRoom}
-        onRefreshCouncilRooms={refreshCouncilRooms}
-        onRemoveCouncilRoom={removeCouncilRoomFromChats}
+        onActivateCouncil={handleActivateCouncil}
+        onRefreshCouncils={refreshCouncils}
+        onRenameCouncil={(council) => setRenameDialogCouncilId(council.id)}
+        onRemoveCouncil={removeCouncilFromChats}
         onRemoveHistorySession={(session) => void removeHistorySession(session)}
         onRemoveHistoryWorkspace={(workspaceDir) => void removeHistoryWorkspaceSessions(workspaceDir)}
         onHome={goHome}
@@ -1187,6 +1206,28 @@ export function App() {
             .finally(() => setRenamingSessionId(null));
         }}
       />
+      <RenameSessionDialog
+        open={renameDialogCouncilId !== null}
+        pending={renamingCouncilId !== null}
+        initialTitle={renameTargetCouncil?.title ?? ""}
+        title="Rename Council"
+        fieldLabel="Council title"
+        placeholder="Enter a Council title"
+        onOpenChange={(open) => {
+          if (!open && renamingCouncilId === null) {
+            setRenameDialogCouncilId(null);
+          }
+        }}
+        onConfirm={(title) => {
+          if (!renameDialogCouncilId) {
+            return;
+          }
+          setRenamingCouncilId(renameDialogCouncilId);
+          void renameCouncilFromChats(renameDialogCouncilId, title)
+            .then(() => setRenameDialogCouncilId(null))
+            .finally(() => setRenamingCouncilId(null));
+        }}
+      />
       <ConfirmDialog
         open={missingWorkspaceConfirmDir !== null}
         title="Workspace is missing"
@@ -1223,14 +1264,14 @@ export function App() {
         />
       ) : null}
 
-      <NewCouncilRoomDialog
+      <NewCouncilDialog
         open={homeNewCouncilDialogOpen}
         onOpenChange={setHomeNewCouncilDialogOpen}
         workspaceDir={availableWorkspaceDir ?? workspaceDir ?? ""}
         workspaceDirs={workspaceDirs}
-        rooms={councilRooms}
+        councils={councils}
         onAddWorkspace={(dir) => void addWorkspace(dir)}
-        onCreated={openCreatedCouncilRoom}
+        onCreated={openCreatedCouncil}
       />
 
       <WorkbenchErrorBoundary resetKey={`${workbenchMode}:${selectedSessionId ?? primaryPaneState.kind}`}>
@@ -1241,9 +1282,9 @@ export function App() {
               clientId={clientId}
               workspaceDir={availableWorkspaceDir ?? workspaceDir ?? ""}
               workspaceDirs={workspaceDirs}
-              selectedRoomId={selectedCouncilRoomId}
-              onSelectedRoomIdChange={setSelectedCouncilRoomId}
-              onRoomsChange={setCouncilRooms}
+              selectedCouncilId={selectedCouncilId}
+              onSelectedCouncilIdChange={setSelectedCouncilId}
+              onCouncilsChange={setCouncils}
               sidebarOpen={sidebarOpen}
               onExpandSidebar={() => setSidebarOpen(true)}
               onOpenLeft={() => setLeftOpen(true)}
@@ -1254,13 +1295,13 @@ export function App() {
             <CanvasWorkbench
               panes={visibleCanvasPaneIds.map((paneId, index) => {
                 const projection = resolveCanvasProjection(paneId);
-                const room = resolveCanvasCouncilRoom(paneId);
+                const council = resolveCanvasCouncil(paneId);
                 const target = canvasPaneTargets[paneId];
                 return {
                   id: paneId,
                   label:
                     projection?.summary.session.title ??
-                    room?.room.title ??
+                    council?.title ??
                     `Pane ${index + 1}`,
                   active: paneId === activeCanvasPaneId,
                   clearable: target.kind !== "empty",
@@ -1280,13 +1321,13 @@ export function App() {
               onDropSession={(paneId, sessionId) =>
                 setCanvasPaneSession(paneId as CanvasPaneId, sessionId)
               }
-              onDropCouncilRoom={(paneId, roomId) =>
-                setCanvasPaneCouncilRoom(paneId as CanvasPaneId, roomId)
+              onDropCouncil={(paneId, councilId) =>
+                setCanvasPaneCouncil(paneId as CanvasPaneId, councilId)
               }
               renderPaneToolbar={(paneId) => {
                 const typedPaneId = paneId as CanvasPaneId;
                 const projection = resolveCanvasProjection(typedPaneId);
-                const room = resolveCanvasCouncilRoom(typedPaneId);
+                const council = resolveCanvasCouncil(typedPaneId);
                 return (
                   <>
                     {projection ? (
@@ -1296,7 +1337,7 @@ export function App() {
                         variant="bare"
                       />
                     ) : null}
-                    {room ? (
+                    {council ? (
                       <UsersRound
                         size={15}
                         className="text-emerald-700/90 dark:text-emerald-300/90"
@@ -1310,14 +1351,14 @@ export function App() {
                 const target = canvasPaneTargets[typedPaneId];
                 const projection = resolveCanvasProjection(typedPaneId);
                 const paneExpanded = canvasMaximizedPaneId === typedPaneId;
-                if (target.kind === "council_room") {
-                  const room = councilRooms.find((candidate) => candidate.room.id === target.roomId) ?? null;
+                if (target.kind === "council") {
+                  const council = councils.find((candidate) => candidate.id === target.councilId) ?? null;
                   return (
-                    <CanvasCouncilRoomPane
+                    <CanvasCouncilPane
                       variant={paneExpanded ? "expanded" : "compact"}
-                      room={room}
-                      onOpenFullRoom={(roomId) => {
-                        setSelectedCouncilRoomId(roomId);
+                      council={council}
+                      onOpenFullCouncil={(councilId) => {
+                        setSelectedCouncilId(councilId);
                         setWorkbenchMode("council");
                         setRightSidebarOpen(false);
                         setRightOpen(false);
@@ -1510,7 +1551,7 @@ export function App() {
                       <div className="space-y-1">
                         <div className="text-sm font-medium text-[var(--app-fg)]">Empty pane</div>
                         <div className="text-xs text-[var(--app-hint)]">
-                          Drop a running session or council room here, choose a session, or create a new one.
+                          Drop a running session or Council here, choose a session, or create a new one.
                         </div>
                       </div>
                       <div className="grid w-full max-w-[17rem] grid-cols-2 gap-2">
@@ -1518,15 +1559,16 @@ export function App() {
                           storedSessions={storedSessions}
                           recentSessions={recentSessions}
                           runningSessions={runningSessionEntries.map((entry) => entry.summary)}
-                          councilRooms={councilRooms}
-                          selectedCouncilRoomId={selectedCouncilRoomId}
+                          councils={councils}
+                          selectedCouncilId={selectedCouncilId}
                           workspaceSortMode={historyWorkspaceSortMode}
                           onWorkspaceSortModeChange={setHistoryWorkspaceSortMode}
                           onActivate={(ref) => setCanvasPaneStoredRef(typedPaneId, ref)}
                           onActivateRunning={(sessionId) => setCanvasPaneSession(typedPaneId, sessionId)}
-                          onActivateCouncilRoom={(roomId) => setCanvasPaneCouncilRoom(typedPaneId, roomId)}
-                          onRefreshCouncilRooms={refreshCouncilRooms}
-                          onRemoveCouncilRoom={removeCouncilRoomFromChats}
+                          onActivateCouncil={(councilId) => setCanvasPaneCouncil(typedPaneId, councilId)}
+                          onRefreshCouncils={refreshCouncils}
+                          onRenameCouncil={(council) => setRenameDialogCouncilId(council.id)}
+                          onRemoveCouncil={removeCouncilFromChats}
                           onRemoveSession={(session) => void removeHistorySession(session)}
                           onRemoveWorkspace={(workspaceDir) =>
                             void removeHistoryWorkspaceSessions(workspaceDir)
@@ -2069,7 +2111,7 @@ export function App() {
                   },
                 }));
               }}
-              onOpenNewCouncilRoom={() => setHomeNewCouncilDialogOpen(true)}
+              onOpenNewCouncil={() => setHomeNewCouncilDialogOpen(true)}
             />
           )}
         </main>

@@ -44,7 +44,7 @@ function formatSessionOrigin(session: SessionSummary["session"] | undefined): Re
     <div className="grid min-w-0 gap-1">
       <div className="font-medium text-[var(--app-fg)]">Council agent session</div>
       <div className="text-[12px] text-[var(--app-muted)]">
-        Room: {origin.roomTitle ?? origin.roomId}
+        Council: {origin.councilTitle ?? origin.councilId}
       </div>
       <div className="text-[12px] text-[var(--app-muted)]">
         Agent: {origin.agentLabel ?? origin.agentId}

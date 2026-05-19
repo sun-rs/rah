@@ -6,6 +6,9 @@ export function RenameSessionDialog(props: {
   open: boolean;
   initialTitle: string;
   pending?: boolean;
+  title?: string;
+  fieldLabel?: string;
+  placeholder?: string;
   onOpenChange: (open: boolean) => void;
   onConfirm: (title: string) => void;
 }) {
@@ -26,7 +29,7 @@ export function RenameSessionDialog(props: {
         <Dialog.Content className="fixed left-1/2 top-1/2 z-50 flex w-[90vw] max-w-sm -translate-x-1/2 -translate-y-1/2 flex-col rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-0 shadow-xl focus:outline-none max-md:max-w-[calc(100vw-2rem)]">
           <div className="flex items-center justify-between border-b border-[var(--app-border)] px-4 py-3 shrink-0">
             <Dialog.Title className="text-sm font-semibold text-[var(--app-fg)]">
-              Rename session
+              {props.title ?? "Rename session"}
             </Dialog.Title>
             <Dialog.Close asChild>
               <button
@@ -54,7 +57,7 @@ export function RenameSessionDialog(props: {
                 htmlFor="rename-session-title"
                 className="mb-2 block text-xs font-medium text-[var(--app-hint)]"
               >
-                Session title
+                {props.fieldLabel ?? "Session title"}
               </label>
               <input
                 id="rename-session-title"
@@ -63,7 +66,7 @@ export function RenameSessionDialog(props: {
                 value={draft}
                 disabled={props.pending}
                 onChange={(event) => setDraft(event.target.value)}
-                placeholder="Enter a session title"
+                placeholder={props.placeholder ?? "Enter a session title"}
                 className="w-full rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] px-3 py-2 text-sm text-[var(--app-fg)] outline-none transition-colors placeholder:text-[var(--app-hint)] focus:border-primary disabled:opacity-60"
               />
             </div>

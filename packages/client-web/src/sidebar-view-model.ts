@@ -1,10 +1,10 @@
-import type { CouncilRoomSnapshot, SessionSummary } from "@rah/runtime-protocol";
+import type { CouncilSnapshot, SessionSummary } from "@rah/runtime-protocol";
 import { conversationPhaseLabel } from "@rah/runtime-protocol";
 import { formatRelativeTime, matchesWorkspace, type WorkspaceSection } from "./session-browser";
 import { providerLabel } from "./types";
 
 export type SidebarSessionStatus = "ready" | "working" | "waiting_permission" | "unread";
-export type SidebarCouncilRoomStatus = "starting" | "ready" | "working" | "waiting_permission";
+export type SidebarCouncilStatus = "starting" | "ready" | "working" | "waiting_permission";
 
 export interface SidebarSessionViewModel {
   kind: "session";
@@ -19,11 +19,11 @@ export interface SidebarSessionViewModel {
   pinned: boolean;
 }
 
-export interface SidebarCouncilRoomViewModel {
-  kind: "council_room";
+export interface SidebarCouncilViewModel {
+  kind: "council";
   id: string;
   title: string;
-  status: SidebarCouncilRoomStatus;
+  status: SidebarCouncilStatus;
   statusLabel: string;
   updatedAtLabel: string;
   selected: boolean;
@@ -33,7 +33,7 @@ export interface SidebarCouncilRoomViewModel {
 
 export type SidebarWorkspaceItemViewModel =
   | SidebarSessionViewModel
-  | SidebarCouncilRoomViewModel;
+  | SidebarCouncilViewModel;
 
 export interface SidebarWorkspaceViewModel {
   directory: string;
@@ -41,7 +41,7 @@ export interface SidebarWorkspaceViewModel {
   hasBlockingRunningSessions: boolean;
   selected: boolean;
   sessions: SidebarSessionViewModel[];
-  councilRooms: SidebarCouncilRoomViewModel[];
+  councils: SidebarCouncilViewModel[];
   items: SidebarWorkspaceItemViewModel[];
 }
 
@@ -75,22 +75,22 @@ function sidebarStatusLabel(status: SidebarSessionStatus): string {
   }
 }
 
-function isRunningCouncilRoom(room: CouncilRoomSnapshot): boolean {
-  return room.room.status === "running";
+function isRunningCouncil(council: CouncilSnapshot): boolean {
+  return council.status === "running";
 }
 
-function deriveCouncilRoomStatus(room: CouncilRoomSnapshot): SidebarCouncilRoomStatus {
+function deriveCouncilStatus(council: CouncilSnapshot): SidebarCouncilStatus {
   if (
-    room.room.phase === "starting" ||
-    room.room.phase === "working" ||
-    room.room.phase === "waiting_permission"
+    council.phase === "starting" ||
+    council.phase === "working" ||
+    council.phase === "waiting_permission"
   ) {
-    return room.room.phase;
+    return council.phase;
   }
   return "ready";
 }
 
-function councilRoomStatusLabel(status: SidebarCouncilRoomStatus): string {
+function councilStatusLabel(status: SidebarCouncilStatus): string {
   return conversationPhaseLabel(status);
 }
 
@@ -104,8 +104,8 @@ export function deriveSidebarWorkspaceViewModels(args: {
     "thinking" | "streaming" | "stopping" | "retrying" | undefined
   >;
   pinnedSessionIdByWorkspace: Readonly<Record<string, string>>;
-  councilRooms?: readonly CouncilRoomSnapshot[];
-  selectedCouncilRoomId?: string | null;
+  councils?: readonly CouncilSnapshot[];
+  selectedCouncilId?: string | null;
 }): SidebarWorkspaceViewModel[] {
   return args.workspaceSections.map((section) => {
     const pinnedSessionId = args.pinnedSessionIdByWorkspace[section.workspace.directory];
@@ -137,24 +137,24 @@ export function deriveSidebarWorkspaceViewModels(args: {
         pinned: pinnedSessionId === session.session.id,
       };
     });
-    const councilRooms = (args.councilRooms ?? [])
-      .filter((room) => isRunningCouncilRoom(room) && matchesWorkspace(room.room.workspace, section.workspace.directory))
-      .sort((left, right) => right.room.updatedAt.localeCompare(left.room.updatedAt))
-      .map((room) => {
-        const status = deriveCouncilRoomStatus(room);
+    const councils = (args.councils ?? [])
+      .filter((council) => isRunningCouncil(council) && matchesWorkspace(council.workspace, section.workspace.directory))
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+      .map((council) => {
+        const status = deriveCouncilStatus(council);
         return {
-          kind: "council_room" as const,
-          id: room.room.id,
-          title: room.room.title,
+          kind: "council" as const,
+          id: council.id,
+          title: council.title,
           status,
-          statusLabel: councilRoomStatusLabel(status),
-          updatedAtLabel: formatRelativeTime(room.room.updatedAt) ?? "",
-          selected: room.room.id === args.selectedCouncilRoomId,
-          agentCount: room.agents.length,
-          messageCount: room.messages.length,
+          statusLabel: councilStatusLabel(status),
+          updatedAtLabel: formatRelativeTime(council.updatedAt) ?? "",
+          selected: council.id === args.selectedCouncilId,
+          agentCount: council.agents.length,
+          messageCount: council.messages.length,
         };
       });
-    const items = [...sessions, ...councilRooms].sort((left, right) => {
+    const items = [...sessions, ...councils].sort((left, right) => {
       if (left.selected !== right.selected) {
         return left.selected ? -1 : 1;
       }
@@ -167,7 +167,7 @@ export function deriveSidebarWorkspaceViewModels(args: {
       hasBlockingRunningSessions: section.workspace.hasBlockingRunningSessions,
       selected: section.workspace.directory === args.selectedWorkspaceDir,
       sessions,
-      councilRooms,
+      councils,
       items,
     };
   });

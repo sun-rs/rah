@@ -8,9 +8,12 @@ import {
   ChevronDown,
   ChevronRight,
   CirclePause,
+  Ellipsis,
+  Info,
   ListTree,
   Menu,
   PanelRight,
+  PencilLine,
   Plus,
   RefreshCw,
   Send,
@@ -21,7 +24,7 @@ import {
 } from "lucide-react";
 import type {
   CouncilAgent,
-  CouncilRoomSnapshot,
+  CouncilSnapshot,
   ProviderModelCatalog,
 } from "@rah/runtime-protocol";
 import * as api from "../api";
@@ -40,6 +43,7 @@ import { OverlayScrollArea } from "../components/OverlayScrollArea";
 import { COMPOSER_LAYOUT } from "../composer-contract";
 import { insertTextAtSelection } from "../composer-text-insertion";
 import { ConfirmDialog } from "../components/workbench/dialogs/ConfirmDialog";
+import { RenameSessionDialog } from "../components/workbench/dialogs/RenameSessionDialog";
 import {
   HEADER_ACTION_GROUP_CLASS,
   HEADER_ICON_BUTTON_CLASS,
@@ -57,8 +61,8 @@ import {
   createAdditionalCouncilAgentDraft,
   isCouncilCatalogFresh,
   keepModelPanelInsideCouncilDialog,
-  NewCouncilRoomDialog,
-} from "./NewCouncilRoomDialog";
+  NewCouncilDialog,
+} from "./NewCouncilDialog";
 import {
   applyCouncilMention,
   buildCouncilMentionOptions,
@@ -77,12 +81,12 @@ import {
   type CouncilTuiCacheState,
 } from "../tui-surface-lifecycle";
 import {
-  CouncilRoomsBrowser,
-  defaultRunningCouncilRoomId,
-  isCouncilHistoryRoom,
-} from "./CouncilRoomsBrowser";
+  CouncilsBrowser,
+  defaultRunningCouncilId,
+  isCouncilHistory,
+} from "./CouncilsBrowser";
 
-type CouncilMessage = CouncilRoomSnapshot["messages"][number];
+type CouncilMessage = CouncilSnapshot["messages"][number];
 type CouncilDisplayItem =
   | { kind: "message"; message: CouncilMessage }
   | {
@@ -104,21 +108,21 @@ function isCouncilAgentTerminalAvailable(agent: CouncilAgent): boolean {
   );
 }
 
-function canOpenCouncilAgentTerminal(room: CouncilRoomSnapshot, agent: CouncilAgent): boolean {
-  return room.room.status === "running" && isCouncilAgentTerminalAvailable(agent);
+function canOpenCouncilAgentTerminal(council: CouncilSnapshot, agent: CouncilAgent): boolean {
+  return council.status === "running" && isCouncilAgentTerminalAvailable(agent);
 }
 
-function actorAgent(room: CouncilRoomSnapshot, actorId: string): CouncilAgent | null {
-  return room.agents.find((agent) => agent.id === actorId) ?? null;
+function actorAgent(council: CouncilSnapshot, actorId: string): CouncilAgent | null {
+  return council.agents.find((agent) => agent.id === actorId) ?? null;
 }
 
-function actorLabel(room: CouncilRoomSnapshot, actorId: string): string {
+function actorLabel(council: CouncilSnapshot, actorId: string): string {
   if (actorId === "user") return "You";
   if (actorId === "system") return "System";
-  return actorAgent(room, actorId)?.label ?? actorId;
+  return actorAgent(council, actorId)?.label ?? actorId;
 }
 
-function textFromParts(parts: CouncilRoomSnapshot["messages"][number]["parts"]): string {
+function textFromParts(parts: CouncilSnapshot["messages"][number]["parts"]): string {
   return parts
     .map((part) => part.kind === "text" ? part.text : JSON.stringify(part.data))
     .join("\n");
@@ -178,10 +182,10 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function councilSystemText(room: CouncilRoomSnapshot, text: string): string {
+function councilSystemText(council: CouncilSnapshot, text: string): string {
   let cleaned = text.replace(/^\[system]\s*/i, "").trim();
-  if (room.room.id) {
-    cleaned = cleaned.replace(new RegExp(`\\s+${escapeRegExp(room.room.id)}\\b`, "g"), "");
+  if (council.id) {
+    cleaned = cleaned.replace(new RegExp(`\\s+${escapeRegExp(council.id)}\\b`, "g"), "");
   }
   return cleaned.trim();
 }
@@ -207,10 +211,10 @@ function councilAgentSystemStatus(message: CouncilMessage): "sent" | "joined" | 
   return null;
 }
 
-function councilDisplayItems(room: CouncilRoomSnapshot): CouncilDisplayItem[] {
+function councilDisplayItems(council: CouncilSnapshot): CouncilDisplayItem[] {
   const items: CouncilDisplayItem[] = [];
   const statusIndexByActor = new Map<string, number>();
-  for (const message of room.messages) {
+  for (const message of council.messages) {
     if (message.role === "system" && isCouncilSystemNoise(textFromParts(message.parts))) {
       continue;
     }
@@ -284,8 +288,8 @@ const COUNCIL_AGENT_THEMES = [
   },
 ];
 
-function councilAgentTheme(room: CouncilRoomSnapshot, agentId: string) {
-  const index = Math.max(0, room.agents.findIndex((agent) => agent.id === agentId));
+function councilAgentTheme(council: CouncilSnapshot, agentId: string) {
+  const index = Math.max(0, council.agents.findIndex((agent) => agent.id === agentId));
   return COUNCIL_AGENT_THEMES[index % COUNCIL_AGENT_THEMES.length]!;
 }
 
@@ -349,18 +353,18 @@ export function CouncilPage(props: {
   clientId: string;
   workspaceDir: string;
   workspaceDirs: string[];
-  selectedRoomId?: string | null;
-  onSelectedRoomIdChange?: (roomId: string | null) => void;
-  onRoomsChange?: (rooms: CouncilRoomSnapshot[]) => void;
+  selectedCouncilId?: string | null;
+  onSelectedCouncilIdChange?: (councilId: string | null) => void;
+  onCouncilsChange?: (councils: CouncilSnapshot[]) => void;
   sidebarOpen: boolean;
   onExpandSidebar: () => void;
   onOpenLeft: () => void;
   onAddWorkspace: (dir: string) => void;
   onHide: () => void;
 }) {
-  const [rooms, setRooms] = useState<CouncilRoomSnapshot[]>([]);
-  const [selectedRoomIdState, setSelectedRoomIdState] = useState<string | null>(
-    props.selectedRoomId ?? null,
+  const [councils, setCouncils] = useState<CouncilSnapshot[]>([]);
+  const [selectedCouncilIdState, setSelectedCouncilIdState] = useState<string | null>(
+    props.selectedCouncilId ?? null,
   );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -385,92 +389,128 @@ export function CouncilPage(props: {
   const [showScrollToLatest, setShowScrollToLatest] = useState(false);
   const [historyDialogOpen, setHistoryDialogOpen] = useState(false);
   const [infoDialogOpen, setInfoDialogOpen] = useState(false);
-  const [newRoomDialogOpen, setNewRoomDialogOpen] = useState(false);
+  const [councilMenuOpen, setCouncilMenuOpen] = useState(false);
+  const [renameDialogOpen, setRenameDialogOpen] = useState(false);
+  const [renamePending, setRenamePending] = useState(false);
+  const [newCouncilDialogOpen, setNewCouncilDialogOpen] = useState(false);
   const [councilSidebarOpen, setCouncilSidebarOpen] = useState(false);
   const [isCouncilWide, setIsCouncilWide] = useState(() =>
     typeof window === "undefined" ? false : window.matchMedia("(min-width: 900px)").matches,
   );
-  const [roomStatusCollapsed, setRoomStatusCollapsed] = useState(() =>
+  const [councilStatusCollapsed, setCouncilStatusCollapsed] = useState(() =>
     typeof window === "undefined" ? true : !window.matchMedia("(min-width: 900px)").matches,
   );
   const [stopConfirmOpen, setStopConfirmOpen] = useState(false);
-  const [pendingDeleteHistoryRoom, setPendingDeleteHistoryRoom] = useState<CouncilRoomSnapshot | null>(null);
+  const [pendingDeleteHistoryCouncil, setPendingDeleteHistoryCouncil] = useState<CouncilSnapshot | null>(null);
   const [pendingPromptAgentId, setPendingPromptAgentId] = useState<string | null>(null);
   const [pendingPauseAgentId, setPendingPauseAgentId] = useState<string | null>(null);
   const [pendingStopAgentId, setPendingStopAgentId] = useState<string | null>(null);
   const [agentActionUiLocked, setAgentActionUiLocked] = useState(false);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
+  const councilMenuRef = useRef<HTMLDivElement | null>(null);
   const councilStickToLatestRef = useRef(true);
-  const previousCouncilRoomIdRef = useRef<string | null>(null);
+  const previousCouncilIdRef = useRef<string | null>(null);
   const preserveCouncilSidebarAfterActionRef = useRef(false);
   const preserveTerminalAfterActionRef = useRef<string | null>(null);
-  const autoWarmedCouncilRoomIdRef = useRef<string | null>(null);
-  const selectedRoomId =
-    props.selectedRoomId !== undefined ? props.selectedRoomId : selectedRoomIdState;
-  const setSelectedRoomId = useCallback(
+  const autoWarmedCouncilIdRef = useRef<string | null>(null);
+  const selectedCouncilId =
+    props.selectedCouncilId !== undefined ? props.selectedCouncilId : selectedCouncilIdState;
+  const setSelectedCouncilId = useCallback(
     (next: string | null | ((current: string | null) => string | null)) => {
       const current =
-        props.selectedRoomId !== undefined ? props.selectedRoomId : selectedRoomIdState;
+        props.selectedCouncilId !== undefined ? props.selectedCouncilId : selectedCouncilIdState;
       const resolved = typeof next === "function" ? next(current) : next;
-      setSelectedRoomIdState(resolved);
-      props.onSelectedRoomIdChange?.(resolved);
+      setSelectedCouncilIdState(resolved);
+      props.onSelectedCouncilIdChange?.(resolved);
     },
-    [props.onSelectedRoomIdChange, props.selectedRoomId, selectedRoomIdState],
+    [props.onSelectedCouncilIdChange, props.selectedCouncilId, selectedCouncilIdState],
   );
 
   useEffect(() => {
-    if (props.selectedRoomId !== undefined) {
-      setSelectedRoomIdState(props.selectedRoomId);
+    if (props.selectedCouncilId !== undefined) {
+      setSelectedCouncilIdState(props.selectedCouncilId);
     }
-  }, [props.selectedRoomId]);
+  }, [props.selectedCouncilId]);
 
   useEffect(() => {
-    props.onRoomsChange?.(rooms);
-  }, [props.onRoomsChange, rooms]);
+    props.onCouncilsChange?.(councils);
+  }, [props.onCouncilsChange, councils]);
 
-  const selectedRoom = selectedRoomId ? rooms.find((room) => room.room.id === selectedRoomId) ?? null : null;
-  const addAgentWorkspace = selectedRoom?.room.workspace ?? workspace;
-  const selectedRoomDisplayItems = useMemo(
-    () => selectedRoom ? councilDisplayItems(selectedRoom) : [],
-    [selectedRoom],
+  const selectedCouncil = selectedCouncilId ? councils.find((council) => council.id === selectedCouncilId) ?? null : null;
+  const addAgentWorkspace = selectedCouncil?.workspace ?? workspace;
+
+  useEffect(() => {
+    if (!councilMenuOpen) {
+      return;
+    }
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (target && councilMenuRef.current?.contains(target)) {
+        return;
+      }
+      setCouncilMenuOpen(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setCouncilMenuOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [councilMenuOpen]);
+
+  useEffect(() => {
+    if (!selectedCouncil) {
+      setCouncilMenuOpen(false);
+      setRenameDialogOpen(false);
+    }
+  }, [selectedCouncil]);
+
+  const selectedCouncilDisplayItems = useMemo(
+    () => selectedCouncil ? councilDisplayItems(selectedCouncil) : [],
+    [selectedCouncil],
   );
   const liveTerminalAgents = useMemo(
-    () => selectedRoom?.agents.filter(isCouncilAgentTerminalAvailable) ?? [],
-    [selectedRoom],
+    () => selectedCouncil?.agents.filter(isCouncilAgentTerminalAvailable) ?? [],
+    [selectedCouncil],
   );
   const liveTerminalAgentIds = useMemo(
     () => liveTerminalAgents.map((agent) => agent.id),
     [liveTerminalAgents],
   );
-  const terminalDialogOpen = Boolean(selectedRoom && selectedTerminalAgentId);
-  const activeTerminalAgent = selectedRoom?.agents.find((agent) => agent.id === selectedTerminalAgentId) ?? null;
+  const terminalDialogOpen = Boolean(selectedCouncil && selectedTerminalAgentId);
+  const activeTerminalAgent = selectedCouncil?.agents.find((agent) => agent.id === selectedTerminalAgentId) ?? null;
   const visitedRunningTerminalAgents = useMemo(
     () => liveTerminalAgents.filter((agent) => councilTuiCache.visitedAgentIds.has(agent.id)),
     [councilTuiCache.visitedAgentIds, liveTerminalAgents],
   );
-  const pendingPromptAgent = selectedRoom?.agents.find((agent) => agent.id === pendingPromptAgentId) ?? null;
-  const pendingPauseAgent = selectedRoom?.agents.find((agent) => agent.id === pendingPauseAgentId) ?? null;
-  const pendingStopAgent = selectedRoom?.agents.find((agent) => agent.id === pendingStopAgentId) ?? null;
+  const pendingPromptAgent = selectedCouncil?.agents.find((agent) => agent.id === pendingPromptAgentId) ?? null;
+  const pendingPauseAgent = selectedCouncil?.agents.find((agent) => agent.id === pendingPauseAgentId) ?? null;
+  const pendingStopAgent = selectedCouncil?.agents.find((agent) => agent.id === pendingStopAgentId) ?? null;
   const agentActionDialogOpen =
     pendingPromptAgent !== null || pendingPauseAgent !== null || pendingStopAgent !== null;
   const blockCouncilParentClose = agentActionDialogOpen || agentActionUiLocked;
   const mentionOptions = useMemo(() => {
-    if (!selectedRoom || !mentionTrigger) {
+    if (!selectedCouncil || !mentionTrigger) {
       return [];
     }
     return filterCouncilMentionOptions(
-      buildCouncilMentionOptions(selectedRoom.agents),
+      buildCouncilMentionOptions(selectedCouncil.agents),
       mentionTrigger.query,
     ).slice(0, 8);
-  }, [mentionTrigger, selectedRoom]);
+  }, [mentionTrigger, selectedCouncil]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
     const query = window.matchMedia("(min-width: 900px)");
     const handleChange = () => {
       setIsCouncilWide(query.matches);
-      setRoomStatusCollapsed(!query.matches);
+      setCouncilStatusCollapsed(!query.matches);
     };
     handleChange();
     query.addEventListener("change", handleChange);
@@ -480,7 +520,7 @@ export function CouncilPage(props: {
   useEffect(() => {
     setMentionTrigger(null);
     setMentionSelectedIndex(0);
-  }, [selectedRoomId]);
+  }, [selectedCouncilId]);
 
   useEffect(() => {
     setMentionSelectedIndex((index) =>
@@ -509,15 +549,15 @@ export function CouncilPage(props: {
   };
 
   useEffect(() => {
-    const roomId = selectedRoom?.room.id ?? null;
-    const roomChanged = previousCouncilRoomIdRef.current !== roomId;
-    previousCouncilRoomIdRef.current = roomId;
-    if (!roomId) {
+    const councilId = selectedCouncil?.id ?? null;
+    const councilChanged = previousCouncilIdRef.current !== councilId;
+    previousCouncilIdRef.current = councilId;
+    if (!councilId) {
       setShowScrollToLatest(false);
       councilStickToLatestRef.current = true;
       return;
     }
-    const shouldStick = roomChanged || councilStickToLatestRef.current;
+    const shouldStick = councilChanged || councilStickToLatestRef.current;
     window.requestAnimationFrame(() => {
       if (shouldStick) {
         scrollCouncilChatToBottom("auto");
@@ -525,23 +565,23 @@ export function CouncilPage(props: {
         updateCouncilScrollHint();
       }
     });
-  }, [selectedRoom?.room.id, selectedRoom?.messages.length]);
+  }, [selectedCouncil?.id, selectedCouncil?.messages.length]);
 
-  const refreshRooms = async (options?: { silent?: boolean }): Promise<CouncilRoomSnapshot[]> => {
+  const refreshCouncils = async (options?: { silent?: boolean }): Promise<CouncilSnapshot[]> => {
     if (!options?.silent) {
       setLoading(true);
     }
     setError(null);
     try {
-      const response = await api.listCouncilRooms();
-      setRooms(response.rooms);
-      setSelectedRoomId((current) => {
-        if (current && response.rooms.some((room) => room.room.id === current)) {
+      const response = await api.listCouncils();
+      setCouncils(response.councils);
+      setSelectedCouncilId((current) => {
+        if (current && response.councils.some((council) => council.id === current)) {
           return current;
         }
-        return defaultRunningCouncilRoomId(response.rooms);
+        return defaultRunningCouncilId(response.councils);
       });
-      return response.rooms;
+      return response.councils;
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
       return [];
@@ -553,7 +593,7 @@ export function CouncilPage(props: {
   };
 
   useEffect(() => {
-    void refreshRooms();
+    void refreshCouncils();
   }, []);
 
   useEffect(() => {
@@ -561,19 +601,19 @@ export function CouncilPage(props: {
       return;
     }
     if (
-      !selectedRoom ||
-      selectedRoom.room.status !== "running" ||
+      !selectedCouncil ||
+      selectedCouncil.status !== "running" ||
       !liveTerminalAgents.some((agent) => agent.id === selectedTerminalAgentId)
     ) {
       setSelectedTerminalAgentId(null);
     }
-  }, [liveTerminalAgents, selectedRoom, selectedTerminalAgentId]);
+  }, [liveTerminalAgents, selectedCouncil, selectedTerminalAgentId]);
 
   useEffect(() => {
-    autoWarmedCouncilRoomIdRef.current = null;
+    autoWarmedCouncilIdRef.current = null;
     setCouncilTuiCache(resetCouncilTuiCache());
     setSelectedTerminalAgentId(null);
-  }, [selectedRoom?.room.id]);
+  }, [selectedCouncil?.id]);
 
   useEffect(() => {
     setCouncilTuiCache((current) =>
@@ -601,7 +641,7 @@ export function CouncilPage(props: {
   }, [liveTerminalAgentIds, selectedTerminalAgentId]);
 
   useEffect(() => {
-    if (!selectedRoomId) return;
+    if (!selectedCouncilId) return;
     let cancelled = false;
     let socket: WebSocket | null = null;
     let reconnectTimer: number | null = null;
@@ -614,10 +654,10 @@ export function CouncilPage(props: {
     };
 
     const refreshAfterSocketLoss = () => {
-      void api.listCouncilRooms()
+      void api.listCouncils()
         .then((response) => {
           if (cancelled) return;
-          setRooms(response.rooms);
+          setCouncils(response.councils);
         })
         .catch(() => {
           // The normal 5s polling loop owns user-visible Council refresh errors.
@@ -636,7 +676,7 @@ export function CouncilPage(props: {
       if (cancelled) return;
       socket = api.createEventsSocket(
         {
-          sessionIds: [selectedRoomId],
+          sessionIds: [selectedCouncilId],
           eventTypes: ["council.message.created"],
         },
         (batch) => {
@@ -644,14 +684,14 @@ export function CouncilPage(props: {
             .filter((event) => event.type === "council.message.created")
             .at(-1);
           if (!latest) return;
-          setRooms((current) => {
-            const nextRoom = latest.payload.room;
-            const index = current.findIndex((room) => room.room.id === nextRoom.room.id);
+          setCouncils((current) => {
+            const nextCouncil = latest.payload.council;
+            const index = current.findIndex((council) => council.id === nextCouncil.id);
             if (index < 0) {
-              return [nextRoom, ...current];
+              return [nextCouncil, ...current];
             }
             const next = [...current];
-            next[index] = nextRoom;
+            next[index] = nextCouncil;
             return next;
           });
         },
@@ -689,21 +729,21 @@ export function CouncilPage(props: {
         socket.close();
       }
     };
-  }, [selectedRoomId]);
+  }, [selectedCouncilId]);
 
   useEffect(() => {
     let cancelled = false;
     const intervalId = window.setInterval(() => {
-      void api.listCouncilRooms()
+      void api.listCouncils()
         .then((response) => {
           if (cancelled) return;
-          setRooms(response.rooms);
+          setCouncils(response.councils);
           setError(null);
-          setSelectedRoomId((current) => {
-            if (current && response.rooms.some((room) => room.room.id === current)) {
+          setSelectedCouncilId((current) => {
+            if (current && response.councils.some((council) => council.id === current)) {
               return current;
             }
-            return defaultRunningCouncilRoomId(response.rooms);
+            return defaultRunningCouncilId(response.councils);
           });
         })
         .catch((caught) => {
@@ -811,38 +851,38 @@ export function CouncilPage(props: {
     setAddAgentDialogOpen(true);
   };
 
-  const handleNewRoomCreated = (room: CouncilRoomSnapshot) => {
-    setRooms((current) => {
-      const existingIndex = current.findIndex((candidate) => candidate.room.id === room.room.id);
+  const handleNewCouncilCreated = (council: CouncilSnapshot) => {
+    setCouncils((current) => {
+      const existingIndex = current.findIndex((candidate) => candidate.id === council.id);
       if (existingIndex >= 0) {
         const next = [...current];
-        next[existingIndex] = room;
+        next[existingIndex] = council;
         return next;
       }
-      return [room, ...current];
+      return [council, ...current];
     });
-    setSelectedRoomId(room.room.id);
+    setSelectedCouncilId(council.id);
     setCouncilSidebarOpen(false);
-    void refreshRooms({ silent: true });
+    void refreshCouncils({ silent: true });
   };
 
   const sendMessage = async () => {
     if (sendPending || !composer.trim()) return;
-    if (!selectedRoom) {
-      setError("No council room selected.");
+    if (!selectedCouncil) {
+      setError("No Council selected.");
       return;
     }
-    if (selectedRoom.room.status === "stopped") {
-      setError("Council room is stopped and cannot receive messages.");
+    if (selectedCouncil.status === "stopped") {
+      setError("Council is stopped and cannot receive messages.");
       return;
     }
     const text = composer;
     setComposer("");
     setSendPending(true);
     try {
-      const response = await api.postCouncilMessage(selectedRoom.room.id, { text });
-      setRooms((current) =>
-        current.map((room) => room.room.id === selectedRoom.room.id ? response.room : room),
+      const response = await api.postCouncilMessage(selectedCouncil.id, { text });
+      setCouncils((current) =>
+        current.map((council) => council.id === selectedCouncil.id ? response.council : council),
       );
       setError(null);
     } catch (caught) {
@@ -895,15 +935,15 @@ export function CouncilPage(props: {
     });
   };
 
-  const stopRoom = async () => {
-    if (!selectedRoom || selectedRoom.room.status === "stopped") return;
+  const stopCouncil = async () => {
+    if (!selectedCouncil || selectedCouncil.status === "stopped") return;
     setLoading(true);
     try {
-      await api.stopCouncilRoom(selectedRoom.room.id);
+      await api.stopCouncil(selectedCouncil.id);
       setStopConfirmOpen(false);
       setSelectedTerminalAgentId(null);
-      const nextRooms = await refreshRooms();
-      setSelectedRoomId(defaultRunningCouncilRoomId(nextRooms));
+      const nextCouncils = await refreshCouncils();
+      setSelectedCouncilId(defaultRunningCouncilId(nextCouncils));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -911,33 +951,33 @@ export function CouncilPage(props: {
     }
   };
 
-  const addAgentToRoom = async () => {
-    if (!selectedRoom) {
-      setError("No council room selected.");
+  const addAgentToCouncil = async () => {
+    if (!selectedCouncil) {
+      setError("No Council selected.");
       return;
     }
-    if (selectedRoom.room.status !== "running") {
-      setError("Agents can only be added to a running council room.");
+    if (selectedCouncil.status !== "running") {
+      setError("Agents can only be added to a live Council.");
       return;
     }
     setLoading(true);
     setError(null);
     const successfulDraftIds = new Set<string>();
     try {
-      let latestRoom: CouncilRoomSnapshot | null = null;
+      let latestCouncil: CouncilSnapshot | null = null;
       for (const draft of addAgentDrafts) {
-        const response = await api.addCouncilAgent(selectedRoom.room.id, {
+        const response = await api.addCouncilAgent(selectedCouncil.id, {
           agent: councilAgentDraftToConfig({
             draft,
             catalog: catalogs[catalogKey(draft.provider, addAgentWorkspace)] ?? null,
           }),
         });
         successfulDraftIds.add(draft.id);
-        latestRoom = response.room;
-        replaceRoom(response.room);
+        latestCouncil = response.council;
+        replaceCouncil(response.council);
       }
-      if (latestRoom) {
-        replaceRoom(latestRoom);
+      if (latestCouncil) {
+        replaceCouncil(latestCouncil);
       }
       setAddAgentDialogOpen(false);
       resetAddAgentDrafts();
@@ -965,13 +1005,13 @@ export function CouncilPage(props: {
     }
   };
 
-  const deleteHistoryRoom = async (roomId: string) => {
+  const deleteHistoryCouncil = async (councilId: string) => {
     setLoading(true);
     setError(null);
     try {
-      await api.deleteCouncilRoom(roomId);
-      setPendingDeleteHistoryRoom(null);
-      await refreshRooms();
+      await api.deleteCouncil(councilId);
+      setPendingDeleteHistoryCouncil(null);
+      await refreshCouncils();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -979,29 +1019,35 @@ export function CouncilPage(props: {
     }
   };
 
-  const openRoomInfo = (roomId: string) => {
-    setSelectedRoomId(roomId);
+  const openCouncilInfo = (councilId: string) => {
+    setSelectedCouncilId(councilId);
     setHistoryDialogOpen(false);
     setInfoDialogOpen(true);
+  };
+
+  const openCouncilRename = (council: CouncilSnapshot) => {
+    setSelectedCouncilId(council.id);
+    setHistoryDialogOpen(false);
+    setRenameDialogOpen(true);
   };
 
   const selectCouncilTuiAgent = (
     agent: CouncilAgent,
     options?: { attach?: boolean; warmAll?: boolean; validateTerminal?: boolean },
   ) => {
-    if (!selectedRoom) {
+    if (!selectedCouncil) {
       return;
     }
-    if (!canOpenCouncilAgentTerminal(selectedRoom, agent)) {
+    if (!canOpenCouncilAgentTerminal(selectedCouncil, agent)) {
       return;
     }
     setError(null);
     const now = Date.now();
     const previousAgentId = selectedTerminalAgentId;
-    const roomId = selectedRoom.room.id;
-    const shouldWarmAll = Boolean(options?.warmAll) && autoWarmedCouncilRoomIdRef.current !== roomId;
+    const councilId = selectedCouncil.id;
+    const shouldWarmAll = Boolean(options?.warmAll) && autoWarmedCouncilIdRef.current !== councilId;
     if (shouldWarmAll) {
-      autoWarmedCouncilRoomIdRef.current = roomId;
+      autoWarmedCouncilIdRef.current = councilId;
     }
     setCouncilTuiCache((current) => {
       let next = current;
@@ -1040,12 +1086,12 @@ export function CouncilPage(props: {
     });
     setSelectedTerminalAgentId(agent.id);
     if (options?.validateTerminal) {
-      void api.getCouncilAgentTui(selectedRoom.room.id, agent.id)
+      void api.getCouncilAgentTui(selectedCouncil.id, agent.id)
         .then((response) => {
           if (!response.terminalId) {
             setError(response.screen || "This council agent terminal is not running anymore.");
             setSelectedTerminalAgentId((current) => current === agent.id ? null : current);
-            void refreshRooms();
+            void refreshCouncils();
           }
         })
         .catch((caught) => {
@@ -1113,19 +1159,33 @@ export function CouncilPage(props: {
     }
   };
 
-  const replaceRoom = (room: CouncilRoomSnapshot) => {
-    setRooms((current) => {
-      const index = current.findIndex((item) => item.room.id === room.room.id);
-      if (index < 0) return [room, ...current];
+  const replaceCouncil = (council: CouncilSnapshot) => {
+    setCouncils((current) => {
+      const index = current.findIndex((item) => item.id === council.id);
+      if (index < 0) return [council, ...current];
       const next = [...current];
-      next[index] = room;
+      next[index] = council;
       return next;
     });
-    setSelectedRoomId(room.room.id);
+    setSelectedCouncilId(council.id);
+  };
+
+  const renameCouncil = async (councilId: string, title: string) => {
+    setRenamePending(true);
+    setError(null);
+    try {
+      const response = await api.renameCouncil(councilId, { title });
+      replaceCouncil(response.council);
+      setRenameDialogOpen(false);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setRenamePending(false);
+    }
   };
 
   const reinjectAgent = async (agentId: string) => {
-    if (!selectedRoom) {
+    if (!selectedCouncil) {
       setAgentActionUiLocked(false);
       return;
     }
@@ -1133,8 +1193,8 @@ export function CouncilPage(props: {
     setLoading(true);
     setError(null);
     try {
-      const response = await api.reinjectCouncilAgentPrompt(selectedRoom.room.id, agentId);
-      replaceRoom(response.room);
+      const response = await api.reinjectCouncilAgentPrompt(selectedCouncil.id, agentId);
+      replaceCouncil(response.council);
       if (response.injectedAgentIds.length === 0) {
         setError(`No running terminal was available for ${agentId}.`);
       }
@@ -1148,7 +1208,7 @@ export function CouncilPage(props: {
   };
 
   const pauseAgentCouncilListening = async (agentId: string) => {
-    if (!selectedRoom) {
+    if (!selectedCouncil) {
       setAgentActionUiLocked(false);
       return;
     }
@@ -1156,8 +1216,8 @@ export function CouncilPage(props: {
     setLoading(true);
     setError(null);
     try {
-      const response = await api.removeCouncilAgent(selectedRoom.room.id, agentId);
-      replaceRoom(response.room);
+      const response = await api.removeCouncilAgent(selectedCouncil.id, agentId);
+      replaceCouncil(response.council);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -1168,7 +1228,7 @@ export function CouncilPage(props: {
   };
 
   const stopCouncilAgent = async (agentId: string) => {
-    if (!selectedRoom) {
+    if (!selectedCouncil) {
       setAgentActionUiLocked(false);
       return;
     }
@@ -1176,8 +1236,8 @@ export function CouncilPage(props: {
     setLoading(true);
     setError(null);
     try {
-      const response = await api.stopCouncilAgent(selectedRoom.room.id, agentId);
-      replaceRoom(response.room);
+      const response = await api.stopCouncilAgent(selectedCouncil.id, agentId);
+      replaceCouncil(response.council);
       if (selectedTerminalAgentId === agentId) {
         setSelectedTerminalAgentId(null);
       }
@@ -1206,12 +1266,12 @@ export function CouncilPage(props: {
     setPendingStopAgentId(agentId);
   };
 
-  const councilReferenceRoot = selectedRoom?.room.workspace || workspace || props.workspaceDir || "/";
-  const roomCanReceiveMessages = Boolean(
-    selectedRoom &&
-    selectedRoom.room.status === "running",
+  const councilReferenceRoot = selectedCouncil?.workspace || workspace || props.workspaceDir || "/";
+  const councilCanReceiveMessages = Boolean(
+    selectedCouncil &&
+    selectedCouncil.status === "running",
   );
-  const sendDisabled = sendPending || !roomCanReceiveMessages || !composer.trim();
+  const sendDisabled = sendPending || !councilCanReceiveMessages || !composer.trim();
 
   const chatPanelClass = "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[var(--app-bg)]";
   const councilSidebarClass =
@@ -1223,9 +1283,9 @@ export function CouncilPage(props: {
         <div className="min-w-0">
           <div className="text-sm font-medium text-[var(--app-fg)]">Agents</div>
           <div className="truncate text-xs text-[var(--app-hint)]">
-            {selectedRoom
-              ? `${selectedRoom.agents.length} agent${selectedRoom.agents.length === 1 ? "" : "s"}`
-              : "No running room selected"}
+            {selectedCouncil
+              ? `${selectedCouncil.agents.length} agent${selectedCouncil.agents.length === 1 ? "" : "s"}`
+              : "No live Council selected"}
           </div>
         </div>
       </div>
@@ -1234,13 +1294,13 @@ export function CouncilPage(props: {
         viewportClassName="h-full p-3"
         scrollAriaLabel="Council agents"
       >
-        {!selectedRoom ? (
+        {!selectedCouncil ? (
           <div className="h-full" />
         ) : (
           <div className="space-y-3">
-            {selectedRoom.agents.map((agent) => {
-              const terminalEnabled = canOpenCouncilAgentTerminal(selectedRoom, agent);
-              const theme = councilAgentTheme(selectedRoom, agent.id);
+            {selectedCouncil.agents.map((agent) => {
+              const terminalEnabled = canOpenCouncilAgentTerminal(selectedCouncil, agent);
+              const theme = councilAgentTheme(selectedCouncil, agent.id);
               const optionsLabel = councilAgentOptionsLabel(agent);
               const agentMeta = [
                 agent.modelId ?? "default model",
@@ -1306,8 +1366,8 @@ export function CouncilPage(props: {
                         onClick={() => requestStopCouncilAgent(agent.id)}
                         disabled={loading || !terminalEnabled || agent.status === "stopped"}
                         className="icon-click-feedback inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-[var(--app-border)] text-[var(--app-hint)] transition-colors hover:border-rose-400/60 hover:bg-rose-500/10 hover:text-rose-600 disabled:opacity-40"
-                        title="Remove agent from room"
-                        aria-label={`Remove ${agent.label} from room`}
+                        title="Remove agent from Council"
+                        aria-label={`Remove ${agent.label} from Council`}
                       >
                         <Unplug size={12} />
                       </button>
@@ -1316,7 +1376,7 @@ export function CouncilPage(props: {
                 </div>
               );
             })}
-            {selectedRoom.room.status === "running" ? (
+            {selectedCouncil.status === "running" ? (
               <div className="flex justify-center">
                 <button
                   type="button"
@@ -1333,9 +1393,9 @@ export function CouncilPage(props: {
       </OverlayScrollArea>
     </div>
   );
-  const councilTerminalTabs: TerminalTabDescriptor[] = selectedRoom
+  const councilTerminalTabs: TerminalTabDescriptor[] = selectedCouncil
     ? liveTerminalAgents.map((agent) => {
-      const theme = councilAgentTheme(selectedRoom, agent.id);
+      const theme = councilAgentTheme(selectedCouncil, agent.id);
       return {
         id: agent.id,
         title: agent.label,
@@ -1402,25 +1462,25 @@ export function CouncilPage(props: {
               <div className="min-w-0 flex-1 overflow-hidden">
                 <div
                   className="truncate text-sm font-semibold text-[var(--app-fg)]"
-                  title={selectedRoom?.room.title ?? "Council"}
+                  title={selectedCouncil?.title ?? "Council"}
                 >
-                  {selectedRoom?.room.title ?? "Council"}
+                  {selectedCouncil?.title ?? "Council"}
                 </div>
                 <div
                   className="truncate text-xs text-[var(--app-hint)]"
-                  title={selectedRoom ? selectedRoom.room.workspace : "Workspace"}
+                  title={selectedCouncil ? selectedCouncil.workspace : "Workspace"}
                 >
-                  {selectedRoom ? selectedRoom.room.workspace : "Workspace"}
+                  {selectedCouncil ? selectedCouncil.workspace : "Workspace"}
                 </div>
               </div>
             </div>
             <div className={HEADER_ACTION_GROUP_CLASS}>
               <button
                 type="button"
-                onClick={() => setNewRoomDialogOpen(true)}
+                onClick={() => setNewCouncilDialogOpen(true)}
                 className={HEADER_ICON_BUTTON_CLASS}
-                title="New council room"
-                aria-label="New council room"
+                title="New Council"
+                aria-label="New Council"
               >
                 <Plus size={15} />
               </button>
@@ -1428,11 +1488,51 @@ export function CouncilPage(props: {
                 type="button"
                 onClick={() => setHistoryDialogOpen(true)}
                 className={HEADER_ICON_BUTTON_CLASS}
-                aria-label="Open council rooms"
-                title="Council rooms"
+                aria-label="Open Councils"
+                title="Councils"
               >
                 <ListTree size={14} />
               </button>
+              <div ref={councilMenuRef} className="relative">
+                <button
+                  type="button"
+                  onClick={() => setCouncilMenuOpen((open) => !open)}
+                  disabled={!selectedCouncil}
+                  className={HEADER_ICON_BUTTON_CLASS}
+                  aria-label="Council actions"
+                  aria-haspopup="menu"
+                  aria-expanded={councilMenuOpen}
+                  title="Council actions"
+                >
+                  <Ellipsis size={16} />
+                </button>
+                {councilMenuOpen && selectedCouncil ? (
+                  <div className="absolute right-0 top-[calc(100%+0.375rem)] z-50 min-w-[10rem] rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] p-1 shadow-xl">
+                    <button
+                      type="button"
+                      className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]"
+                      onClick={() => {
+                        setCouncilMenuOpen(false);
+                        openCouncilInfo(selectedCouncil.id);
+                      }}
+                    >
+                      <Info size={14} />
+                      <span>Info</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]"
+                      onClick={() => {
+                        setCouncilMenuOpen(false);
+                        setRenameDialogOpen(true);
+                      }}
+                    >
+                      <PencilLine size={14} />
+                      <span>Rename</span>
+                    </button>
+                  </div>
+                ) : null}
+              </div>
               <button
                 type="button"
                 onClick={props.onHide}
@@ -1444,14 +1544,14 @@ export function CouncilPage(props: {
               </button>
             </div>
           </header>
-          {selectedRoom?.room.status === "running" ? (
-            roomStatusCollapsed ? (
+          {selectedCouncil?.status === "running" ? (
+            councilStatusCollapsed ? (
               <button
                 type="button"
-                onClick={() => setRoomStatusCollapsed(false)}
+                onClick={() => setCouncilStatusCollapsed(false)}
                 className="icon-click-feedback mx-3 mt-2 flex h-6 w-fit shrink-0 items-center gap-1.5 rounded-full border border-[var(--app-border)] bg-[var(--app-subtle-bg)]/35 px-2 text-[11px] font-semibold text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] sm:mx-4"
-                aria-label="Show room status controls"
-                title="Show room status controls"
+                aria-label="Show Council status controls"
+                title="Show Council status controls"
               >
                 <ChevronDown size={12} />
                 <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
@@ -1462,10 +1562,10 @@ export function CouncilPage(props: {
                 <div className="flex min-w-0 items-center gap-2">
                   <button
                     type="button"
-                    onClick={() => setRoomStatusCollapsed(true)}
+                    onClick={() => setCouncilStatusCollapsed(true)}
                     className="icon-click-feedback inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)]"
-                    aria-label="Collapse room status controls"
-                    title="Collapse room status controls"
+                    aria-label="Collapse Council status controls"
+                    title="Collapse Council status controls"
                   >
                     <ChevronRight size={13} />
                   </button>
@@ -1474,7 +1574,7 @@ export function CouncilPage(props: {
                     Running
                   </span>
                   <span className="min-w-0 truncate text-[var(--app-hint)]">
-                    {selectedRoom.agents.length} agent{selectedRoom.agents.length === 1 ? "" : "s"}
+                    {selectedCouncil.agents.length} agent{selectedCouncil.agents.length === 1 ? "" : "s"}
                   </span>
                 </div>
                 <button
@@ -1482,7 +1582,7 @@ export function CouncilPage(props: {
                   onClick={() => setStopConfirmOpen(true)}
                   disabled={loading}
                   className="icon-click-feedback inline-flex h-6 shrink-0 items-center justify-center gap-1.5 rounded-md border border-[var(--app-border)] bg-[var(--app-bg)] px-2.5 text-[11px] font-semibold text-[var(--app-hint)] transition-colors hover:border-rose-400/30 hover:bg-rose-500/5 hover:text-[var(--app-fg)] disabled:opacity-40"
-                  title="Stop room and close agent terminals"
+                  title="Stop Council and close agent terminals"
                 >
                   <Square size={12} className="text-rose-500/65" />
                   Stop
@@ -1495,9 +1595,9 @@ export function CouncilPage(props: {
               {error}
             </div>
           ) : null}
-          {selectedRoom?.room.error ? (
+          {selectedCouncil?.error ? (
             <div className="mx-4 mt-3 rounded-lg border border-[var(--app-danger)]/30 bg-[var(--app-danger)]/10 px-3 py-2 text-xs text-[var(--app-danger)]">
-              {selectedRoom.room.error}
+              {selectedCouncil.error}
             </div>
           ) : null}
           <div className="relative min-h-0 flex-1">
@@ -1506,22 +1606,22 @@ export function CouncilPage(props: {
               onScroll={updateCouncilScrollHint}
               className="h-full space-y-3 overflow-y-auto rah-scroll-main p-3 sm:p-4"
             >
-              {!selectedRoom ? (
+              {!selectedCouncil ? (
                 <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-sm text-[var(--app-hint)]">
-                  <span>Start a new room or choose a running room.</span>
+                  <span>Start a new Council or choose a live Council.</span>
                   <button
                     type="button"
-                    onClick={() => setNewRoomDialogOpen(true)}
+                    onClick={() => setNewCouncilDialogOpen(true)}
                     className="icon-click-feedback inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-[var(--app-border)] px-3 text-xs font-semibold text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)]"
                   >
                     <Plus size={14} />
-                    New room
+                    New Council
                   </button>
                 </div>
-              ) : selectedRoomDisplayItems.map((item) => {
+              ) : selectedCouncilDisplayItems.map((item) => {
                 if (item.kind === "agent-status") {
-                  const agent = actorAgent(selectedRoom, item.actorId);
-                  const label = actorLabel(selectedRoom, item.actorId);
+                  const agent = actorAgent(selectedCouncil, item.actorId);
+                  const label = actorLabel(selectedCouncil, item.actorId);
                   const isListening = item.status === "listening";
                   const isJoined = item.status === "joined";
                   return (
@@ -1545,7 +1645,7 @@ export function CouncilPage(props: {
                   );
                 }
                 const message = item.message;
-                const agent = actorAgent(selectedRoom, message.actorId);
+                const agent = actorAgent(selectedCouncil, message.actorId);
                 if (message.role === "system") {
                   return (
                     <div
@@ -1554,12 +1654,12 @@ export function CouncilPage(props: {
                     >
                       <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--app-hint)]/50" />
                       <span className="whitespace-pre-wrap">
-                        {councilSystemText(selectedRoom, textFromParts(message.parts))}
+                        {councilSystemText(selectedCouncil, textFromParts(message.parts))}
                       </span>
                     </div>
                   );
                 }
-                const theme = agent ? councilAgentTheme(selectedRoom, agent.id) : null;
+                const theme = agent ? councilAgentTheme(selectedCouncil, agent.id) : null;
                 return (
                   <div
                     key={message.id}
@@ -1574,7 +1674,7 @@ export function CouncilPage(props: {
                       {agent ? (
                         <ProviderLogo provider={agent.provider} className="h-3.5 w-3.5 shrink-0" variant="bare" />
                       ) : null}
-                      <span className="min-w-0 truncate">{actorLabel(selectedRoom, message.actorId)}</span>
+                      <span className="min-w-0 truncate">{actorLabel(selectedCouncil, message.actorId)}</span>
                     </div>
                     <CouncilMessageContent role={message.role} text={textFromParts(message.parts)} />
                   </div>
@@ -1605,7 +1705,7 @@ export function CouncilPage(props: {
                 <button
                   type="button"
                   onClick={() => setFileReferenceOpen(true)}
-                  disabled={!roomCanReceiveMessages}
+                  disabled={!councilCanReceiveMessages}
                   className={COMPOSER_LAYOUT.attachButtonClassName}
                   title="Insert file or folder reference"
                   aria-label="Insert file or folder reference"
@@ -1613,7 +1713,7 @@ export function CouncilPage(props: {
                   <Plus size={18} />
                 </button>
                 <div className="relative min-w-0">
-                  {mentionTrigger && selectedRoom && mentionOptions.length > 0 ? (
+                  {mentionTrigger && selectedCouncil && mentionOptions.length > 0 ? (
                     <div
                       role="listbox"
                       aria-label="Council mentions"
@@ -1627,7 +1727,7 @@ export function CouncilPage(props: {
                       >
                         {mentionOptions.map((option, index) => {
                           const selected = index === mentionSelectedIndex;
-                          const optionTheme = option.agent ? councilAgentTheme(selectedRoom, option.agent.id) : null;
+                          const optionTheme = option.agent ? councilAgentTheme(selectedCouncil, option.agent.id) : null;
                           return (
                             <button
                               key={option.id}
@@ -1682,7 +1782,7 @@ export function CouncilPage(props: {
                     contentClassName={COMPOSER_LAYOUT.textareaContentClassName}
                     value={composer}
                     ariaLabel="Council message composer"
-                    disabled={!roomCanReceiveMessages}
+                    disabled={!councilCanReceiveMessages}
                     onChange={(value) => {
                       setComposer(value);
                       updateCouncilMentionTrigger(value);
@@ -1776,40 +1876,60 @@ export function CouncilPage(props: {
         {agentsSidebarContent}
       </Sheet>
 
-      <ConfirmDialog
-        open={stopConfirmOpen}
-        title="Stop council room?"
-        description={
-          selectedRoom
-            ? `Stop "${selectedRoom.room.title}" and close all running agent terminals in this room. The room will remain available in stopped rooms.`
-            : "Stop this council room and close all running agent terminals."
-        }
-        confirmLabel={loading ? "Stopping…" : "Stop room"}
-        confirmTone="danger"
-        pending={loading}
-        onOpenChange={setStopConfirmOpen}
-        onConfirm={() => void stopRoom()}
+      <RenameSessionDialog
+        open={renameDialogOpen}
+        initialTitle={selectedCouncil?.title ?? ""}
+        pending={renamePending}
+        title="Rename Council"
+        fieldLabel="Council title"
+        placeholder="Enter a Council title"
+        onOpenChange={(open) => {
+          if (!open && renamePending) {
+            return;
+          }
+          setRenameDialogOpen(open);
+        }}
+        onConfirm={(title) => {
+          if (selectedCouncil) {
+            void renameCouncil(selectedCouncil.id, title);
+          }
+        }}
       />
 
       <ConfirmDialog
-        open={pendingDeleteHistoryRoom !== null}
-        title="Delete council room?"
+        open={stopConfirmOpen}
+        title="Stop Council?"
         description={
-          pendingDeleteHistoryRoom
-            ? `Delete "${pendingDeleteHistoryRoom.room.title}" from Council History? This removes the persisted room, agents, and room messages.`
-            : "Delete this council room from history?"
+          selectedCouncil
+            ? `Stop "${selectedCouncil.title}" and close all running agent terminals in this Council. It will remain available in stopped Councils.`
+            : "Stop this Council and close all running agent terminals."
+        }
+        confirmLabel={loading ? "Stopping…" : "Stop Council"}
+        confirmTone="danger"
+        pending={loading}
+        onOpenChange={setStopConfirmOpen}
+        onConfirm={() => void stopCouncil()}
+      />
+
+      <ConfirmDialog
+        open={pendingDeleteHistoryCouncil !== null}
+        title="Delete Council?"
+        description={
+          pendingDeleteHistoryCouncil
+            ? `Delete "${pendingDeleteHistoryCouncil.title}" from Council history? This removes the saved Council, agents, and messages.`
+            : "Delete this Council from history?"
         }
         confirmLabel={loading ? "Deleting…" : "Delete"}
         confirmTone="danger"
         pending={loading}
         onOpenChange={(open) => {
           if (!open) {
-            setPendingDeleteHistoryRoom(null);
+            setPendingDeleteHistoryCouncil(null);
           }
         }}
         onConfirm={() => {
-          if (pendingDeleteHistoryRoom) {
-            void deleteHistoryRoom(pendingDeleteHistoryRoom.room.id);
+          if (pendingDeleteHistoryCouncil) {
+            void deleteHistoryCouncil(pendingDeleteHistoryCouncil.id);
           }
         }}
       />
@@ -1872,11 +1992,11 @@ export function CouncilPage(props: {
 
       <ConfirmDialog
         open={pendingStopAgent !== null}
-        title="Remove agent from room?"
+        title="Remove agent from Council?"
         description={
           pendingStopAgent
-            ? `Remove "${pendingStopAgent.label}" from this room and close only this agent TUI process? Other agents and the room stay running.`
-            : "Remove this agent from the room? Other agents and the room stay running."
+            ? `Remove "${pendingStopAgent.label}" from this Council and close only this agent TUI process? Other agents and the Council stay running.`
+            : "Remove this agent from the Council? Other agents and the Council stay running."
         }
         confirmLabel={loading ? "Removing…" : "Remove agent"}
         confirmTone="danger"
@@ -1899,14 +2019,14 @@ export function CouncilPage(props: {
         }}
       />
 
-      <NewCouncilRoomDialog
-        open={newRoomDialogOpen}
-        onOpenChange={setNewRoomDialogOpen}
+      <NewCouncilDialog
+        open={newCouncilDialogOpen}
+        onOpenChange={setNewCouncilDialogOpen}
         workspaceDir={workspace || props.workspaceDir || ""}
         workspaceDirs={props.workspaceDirs}
-        rooms={rooms}
+        councils={councils}
         onAddWorkspace={props.onAddWorkspace}
-        onCreated={handleNewRoomCreated}
+        onCreated={handleNewCouncilCreated}
       />
 
       <Dialog.Root
@@ -1932,7 +2052,7 @@ export function CouncilPage(props: {
                   Add agents
                 </Dialog.Title>
                 <div className="truncate text-xs text-[var(--app-hint)]">
-                  {selectedRoom ? `Add to ${selectedRoom.room.title}` : "Select a running room first."}
+                  {selectedCouncil ? `Add to ${selectedCouncil.title}` : "Select a live Council first."}
                 </div>
               </div>
               <Dialog.Close asChild>
@@ -1982,11 +2102,11 @@ export function CouncilPage(props: {
               </button>
               <button
                 type="button"
-                disabled={loading || !selectedRoom || selectedRoom.room.status !== "running" || !addAgentWorkspace.trim() || addAgentDrafts.length === 0}
-                onClick={() => void addAgentToRoom()}
+                disabled={loading || !selectedCouncil || selectedCouncil.status !== "running" || !addAgentWorkspace.trim() || addAgentDrafts.length === 0}
+                onClick={() => void addAgentToCouncil()}
                 className="icon-click-feedback inline-flex h-11 min-w-0 items-center justify-center gap-2 rounded-lg bg-[var(--app-fg)] px-3 text-xs font-semibold text-[var(--app-bg)] disabled:opacity-40"
               >
-                Add {addAgentDrafts.length > 1 ? `${addAgentDrafts.length} agents` : "to room"}
+                Add {addAgentDrafts.length > 1 ? `${addAgentDrafts.length} agents` : "to chat"}
               </button>
             </div>
           </Dialog.Content>
@@ -2005,20 +2125,20 @@ export function CouncilPage(props: {
             <div className="flex items-center justify-between gap-3 border-b border-[var(--app-border)] px-4 py-3">
               <div className="min-w-0">
                 <Dialog.Title className="text-sm font-semibold text-[var(--app-fg)]">
-                  Council Rooms
+                  Council Chats
                 </Dialog.Title>
                 <div className="text-xs text-[var(--app-hint)]">
-                  Running rooms can receive messages; stopped rooms are read-only transcripts.
+                  Running Councils can receive messages; stopped Councils are read-only transcripts.
                 </div>
               </div>
               <div className="flex shrink-0 items-center gap-1">
                 <button
                   type="button"
-                  onClick={() => void refreshRooms()}
+                  onClick={() => void refreshCouncils()}
                   disabled={loading}
                   className="icon-click-feedback inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] disabled:opacity-40"
-                  aria-label="Refresh council rooms"
-                  title="Refresh rooms"
+                  aria-label="Refresh Councils"
+                  title="Refresh Councils"
                 >
                   <RefreshCw size={14} />
                 </button>
@@ -2026,8 +2146,8 @@ export function CouncilPage(props: {
                   <button
                     type="button"
                     className="icon-click-feedback inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
-                    aria-label="Close council rooms"
-                    title="Close rooms"
+                    aria-label="Close Councils"
+                    title="Close Councils"
                   >
                     <X size={16} />
                   </button>
@@ -2037,18 +2157,19 @@ export function CouncilPage(props: {
             <OverlayScrollArea
               className="max-h-[calc(84vh-4.5rem)]"
               viewportClassName="max-h-[calc(84vh-4.5rem)] p-3"
-              scrollAriaLabel="Council rooms"
+              scrollAriaLabel="Councils"
             >
-              <CouncilRoomsBrowser
-                rooms={rooms}
-                selectedRoomId={selectedRoom?.room.id ?? null}
+              <CouncilsBrowser
+                councils={councils}
+                selectedCouncilId={selectedCouncil?.id ?? null}
                 loading={loading}
-                onOpenRoom={(room) => {
-                  setSelectedRoomId(room.room.id);
+                onOpenCouncil={(council) => {
+                  setSelectedCouncilId(council.id);
                   setHistoryDialogOpen(false);
                 }}
-                onShowRoomInfo={(room) => openRoomInfo(room.room.id)}
-                onRequestDeleteRoom={setPendingDeleteHistoryRoom}
+                onShowCouncilInfo={(council) => openCouncilInfo(council.id)}
+                onRenameCouncil={openCouncilRename}
+                onRequestDeleteCouncil={setPendingDeleteHistoryCouncil}
               />
             </OverlayScrollArea>
           </Dialog.Content>
@@ -2062,7 +2183,7 @@ export function CouncilPage(props: {
             <div className="flex items-center justify-between gap-3 border-b border-[var(--app-border)] px-4 py-3">
               <div className="min-w-0">
                 <Dialog.Title className="text-sm font-semibold text-[var(--app-fg)]">
-                  Room Info
+                  Council Chat Info
                 </Dialog.Title>
                 <div className="truncate text-xs text-[var(--app-hint)]">
                   Internal identifiers and agent startup configuration.
@@ -2072,14 +2193,14 @@ export function CouncilPage(props: {
                 <button
                   type="button"
                   className="icon-click-feedback inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
-                  aria-label="Close council room info"
+                  aria-label="Close Council info"
                   title="Close info"
                 >
                   <X size={16} />
                 </button>
               </Dialog.Close>
             </div>
-            {selectedRoom ? (
+            {selectedCouncil ? (
               <OverlayScrollArea
                 className="max-h-[calc(84vh-4.5rem)]"
                 viewportClassName="max-h-[calc(84vh-4.5rem)] p-4"
@@ -2088,46 +2209,46 @@ export function CouncilPage(props: {
                 <div className="grid gap-2 rounded-xl border border-[var(--app-border)] bg-[var(--app-subtle-bg)]/40 p-3 text-xs">
                   <div className="flex items-start justify-between gap-3">
                     <span className="shrink-0 font-semibold text-[var(--app-hint)]">Title</span>
-                    <span className="min-w-0 break-words text-right text-[var(--app-fg)]">{selectedRoom.room.title}</span>
+                    <span className="min-w-0 break-words text-right text-[var(--app-fg)]">{selectedCouncil.title}</span>
                   </div>
                   <div className="flex items-start justify-between gap-3">
-                    <span className="shrink-0 font-semibold text-[var(--app-hint)]">Room ID</span>
+                    <span className="shrink-0 font-semibold text-[var(--app-hint)]">Council ID</span>
                     <code className="min-w-0 break-all rounded bg-[var(--app-bg)] px-1.5 py-0.5 text-right text-[11px] text-[var(--app-fg)]">
-                      {selectedRoom.room.id}
+                      {selectedCouncil.id}
                     </code>
                   </div>
                   <div className="flex items-start justify-between gap-3">
                     <span className="shrink-0 font-semibold text-[var(--app-hint)]">Workspace</span>
                     <code className="min-w-0 break-all rounded bg-[var(--app-bg)] px-1.5 py-0.5 text-right text-[11px] text-[var(--app-fg)]">
-                      {selectedRoom.room.workspace}
+                      {selectedCouncil.workspace}
                     </code>
                   </div>
                   <div className="flex items-start justify-between gap-3">
                     <span className="shrink-0 font-semibold text-[var(--app-hint)]">Status</span>
                     <span className="text-[var(--app-fg)]">
-                      {selectedRoom.room.status} · {selectedRoom.room.phase}
+                      {selectedCouncil.status} · {selectedCouncil.phase}
                     </span>
                   </div>
                   <div className="flex items-start justify-between gap-3">
                     <span className="shrink-0 font-semibold text-[var(--app-hint)]">Created</span>
-                    <span className="text-right text-[var(--app-fg)]">{selectedRoom.room.createdAt}</span>
+                    <span className="text-right text-[var(--app-fg)]">{selectedCouncil.createdAt}</span>
                   </div>
                   <div className="flex items-start justify-between gap-3">
                     <span className="shrink-0 font-semibold text-[var(--app-hint)]">Updated</span>
-                    <span className="text-right text-[var(--app-fg)]">{selectedRoom.room.updatedAt}</span>
+                    <span className="text-right text-[var(--app-fg)]">{selectedCouncil.updatedAt}</span>
                   </div>
-                  {selectedRoom.storage ? (
+                  {selectedCouncil.storage ? (
                     <>
                       <div className="flex items-start justify-between gap-3">
                         <span className="shrink-0 font-semibold text-[var(--app-hint)]">Store File</span>
                         <code className="min-w-0 break-all rounded bg-[var(--app-bg)] px-1.5 py-0.5 text-right text-[11px] text-[var(--app-fg)]">
-                          {selectedRoom.storage.storePath}
+                          {selectedCouncil.storage.storePath}
                         </code>
                       </div>
                       <div className="flex items-start justify-between gap-3">
                         <span className="shrink-0 font-semibold text-[var(--app-hint)]">Message Log</span>
                         <code className="min-w-0 break-all rounded bg-[var(--app-bg)] px-1.5 py-0.5 text-right text-[11px] text-[var(--app-fg)]">
-                          {selectedRoom.storage.messageLogPath}
+                          {selectedCouncil.storage.messageLogPath}
                         </code>
                       </div>
                     </>
@@ -2138,8 +2259,8 @@ export function CouncilPage(props: {
                   <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--app-hint)]">
                     Agents
                   </div>
-                  {selectedRoom.agents.map((agent) => {
-                    const theme = councilAgentTheme(selectedRoom, agent.id);
+                  {selectedCouncil.agents.map((agent) => {
+                    const theme = councilAgentTheme(selectedCouncil, agent.id);
                     return (
                       <div
                         key={agent.id}
@@ -2201,7 +2322,7 @@ export function CouncilPage(props: {
                 </div>
               </OverlayScrollArea>
             ) : (
-              <div className="p-4 text-sm text-[var(--app-hint)]">No council room selected.</div>
+              <div className="p-4 text-sm text-[var(--app-hint)]">No Council selected.</div>
             )}
           </Dialog.Content>
         </Dialog.Portal>
@@ -2210,7 +2331,7 @@ export function CouncilPage(props: {
       <TerminalDialogFrame
         open={terminalDialogOpen}
         onOpenChange={handleTerminalDialogOpenChange}
-        title={selectedRoom?.room.title ?? "Council terminals"}
+        title={selectedCouncil?.title ?? "Council terminals"}
         subtitle={activeTerminalAgent?.label ?? "Select an agent"}
         leading={<Bot size={15} className="shrink-0 text-[var(--app-hint)]" />}
         overlayClassName="fixed inset-0 z-[65] bg-black/45"
@@ -2220,7 +2341,7 @@ export function CouncilPage(props: {
         closeText="Close"
         forceMount
         headerActions={
-          selectedRoom?.room.status === "running" && activeTerminalAgent ? (
+          selectedCouncil?.status === "running" && activeTerminalAgent ? (
             <>
               <button
                 type="button"
@@ -2247,8 +2368,8 @@ export function CouncilPage(props: {
                 onClick={() => requestStopCouncilAgent(activeTerminalAgent.id)}
                 disabled={loading || !isCouncilAgentTerminalAvailable(activeTerminalAgent)}
                 className="icon-click-feedback inline-flex h-8 w-8 items-center justify-center rounded-md border border-[var(--app-border)] text-[var(--app-hint)] transition-colors hover:border-rose-400/60 hover:bg-rose-500/10 hover:text-rose-600 disabled:opacity-40"
-                title={`Remove ${activeTerminalAgent.label} from room`}
-                aria-label={`Remove ${activeTerminalAgent.label} from room`}
+                title={`Remove ${activeTerminalAgent.label} from council`}
+                aria-label={`Remove ${activeTerminalAgent.label} from council`}
               >
                 <Unplug size={14} />
               </button>
@@ -2271,7 +2392,7 @@ export function CouncilPage(props: {
             </div>
           }
           terminalProps={(tab, active) => {
-            const tabAgent = selectedRoom?.agents.find((agent) => agent.id === tab.id) ?? null;
+            const tabAgent = selectedCouncil?.agents.find((agent) => agent.id === tab.id) ?? null;
             const terminalVisible = terminalDialogOpen && active;
             return {
               hasControl: terminalVisible,

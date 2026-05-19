@@ -142,22 +142,22 @@ test("canvas read-only history replay can appear in multiple panes", () => {
   );
 });
 
-test("canvas keeps a council room unique across panes", () => {
+test("canvas keeps a council unique across panes", () => {
   const current = createEmptyCanvasTargets();
-  current["canvas-1"] = { kind: "council_room", roomId: "room-1" };
+  current["canvas-1"] = { kind: "council", councilId: "council-1" };
 
   const next = applyCanvasPaneTarget(
     current,
     "canvas-2",
-    { kind: "council_room", roomId: "room-1" },
+    { kind: "council", councilId: "council-1" },
     projections(),
   );
 
   assert.deepEqual(next["canvas-1"], { kind: "empty" });
-  assert.deepEqual(next["canvas-2"], { kind: "council_room", roomId: "room-1" });
+  assert.deepEqual(next["canvas-2"], { kind: "council", councilId: "council-1" });
   assert.equal(
-    resolveCanvasRunningUniquenessKey({ kind: "council_room", roomId: "room-1" }, projections()),
-    "council_room:room-1",
+    resolveCanvasRunningUniquenessKey({ kind: "council", councilId: "council-1" }, projections()),
+    "council:council-1",
   );
 });
 

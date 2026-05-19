@@ -58,10 +58,10 @@ describe("overlay scroll area contract", () => {
     }
 
     const councilSource = readSource("./council/CouncilPage.tsx");
-    const newCouncilRoomSource = readSource("./council/NewCouncilRoomDialog.tsx");
+    const newCouncilSource = readSource("./council/NewCouncilDialog.tsx");
     assert.match(councilSource, /scrollAriaLabel="Council agents"/);
-    assert.match(newCouncilRoomSource, /scrollAriaLabel="New room settings"/);
-    assert.match(newCouncilRoomSource, /viewportRef=\{bodyRef\}/);
+    assert.match(newCouncilSource, /scrollAriaLabel="New Council settings"/);
+    assert.match(newCouncilSource, /viewportRef=\{bodyRef\}/);
     assert.match(councilSource, /scrollAriaLabel="Add agents"/);
     assert.match(councilSource, /scrollAriaLabel="Council mentions"/);
     assert.match(
