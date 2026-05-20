@@ -285,7 +285,9 @@ function parseArgs(argv) {
 
 async function daemonReady(daemonUrl) {
   try {
-    const response = await fetch(`${daemonUrl}/readyz`);
+    const response = await fetch(new URL("/readyz", daemonUrl).toString(), {
+      signal: AbortSignal.timeout(1_500),
+    });
     if (!response.ok) {
       return false;
     }
@@ -312,6 +314,7 @@ function managedDaemonPaths(daemonUrl) {
     root,
     port,
     pidPath: join(root, `daemon-${port}.pid`),
+    lockPath: join(root, `daemon-${port}.lock`),
     logPath: join(root, `daemon-${port}.log`),
   };
 }
@@ -320,14 +323,64 @@ function clientBundleExists() {
   return existsSync(CLIENT_INDEX_PATH);
 }
 
-function readManagedPid(daemonUrl) {
+function readManagedRecord(daemonUrl) {
   const { pidPath } = managedDaemonPaths(daemonUrl);
   try {
-    const pid = Number.parseInt(readFileSync(pidPath, "utf8").trim(), 10);
-    return Number.isFinite(pid) && pid > 0 ? pid : null;
+    const raw = readFileSync(pidPath, "utf8").trim();
+    if (!raw) {
+      return null;
+    }
+    if (raw.startsWith("{")) {
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return null;
+      }
+      const pid = Number.parseInt(String(parsed.pid ?? ""), 10);
+      if (!Number.isFinite(pid) || pid <= 0) {
+        return null;
+      }
+      return {
+        ...parsed,
+        pid,
+        legacy: false,
+      };
+    }
+    const pid = Number.parseInt(raw, 10);
+    return Number.isFinite(pid) && pid > 0 ? { pid, legacy: true } : null;
   } catch {
     return null;
   }
+}
+
+function readManagedPid(daemonUrl) {
+  return readManagedRecord(daemonUrl)?.pid ?? null;
+}
+
+function writeManagedRecord(daemonUrl, record) {
+  const { root, pidPath, port } = managedDaemonPaths(daemonUrl);
+  mkdirSync(root, { recursive: true });
+  const payload = {
+    schemaVersion: 1,
+    name: "rah",
+    port: Number.parseInt(port, 10),
+    daemonUrl,
+    rootDir: ROOT_DIR,
+    updatedAt: new Date().toISOString(),
+    ...record,
+  };
+  writeFileSync(pidPath, `${JSON.stringify(payload, null, 2)}\n`);
+}
+
+function writeManagedIdentity(daemonUrl, identity) {
+  writeManagedRecord(daemonUrl, {
+    pid: identity.pid,
+    runtimeId: identity.runtimeId,
+    startedAt: identity.startedAt,
+    rootDir: identity.rootDir,
+    ...(identity.version ? { version: identity.version } : {}),
+    ...(identity.sourceRevision ? { sourceRevision: identity.sourceRevision } : {}),
+    ...(typeof identity.sourceDirty === "boolean" ? { sourceDirty: identity.sourceDirty } : {}),
+  });
 }
 
 function processAlive(pid) {
@@ -354,8 +407,30 @@ async function processCommand(pid) {
   }
 }
 
+async function processCwd(pid) {
+  if (!Number.isInteger(pid) || pid <= 0 || process.platform === "win32") {
+    return null;
+  }
+  try {
+    const { stdout } = await execFileAsync("lsof", ["-a", "-p", String(pid), "-d", "cwd", "-Fn"], {
+      maxBuffer: 1024 * 1024,
+    });
+    const line = stdout
+      .split("\n")
+      .find((entry) => entry.startsWith("n/"));
+    return line ? line.slice(1) : null;
+  } catch {
+    return null;
+  }
+}
+
 async function isRahDaemonPid(pid) {
-  return isRahDaemonCommand(await processCommand(pid));
+  const command = await processCommand(pid);
+  if (!isRahDaemonCommand(command)) {
+    return false;
+  }
+  const cwd = await processCwd(pid);
+  return cwd === ROOT_DIR;
 }
 
 function isRahDaemonCommand(command) {
@@ -391,17 +466,75 @@ async function discoverListeningRahDaemonPids(daemonUrl) {
   ];
   const rahPids = [];
   for (const pid of candidates) {
-    const command = await processCommand(pid);
-    if (isRahDaemonCommand(command)) {
+    if (await isRahDaemonPid(pid)) {
       rahPids.push(pid);
     }
   }
   return rahPids;
 }
 
+function isRuntimeIdentity(value) {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      value.name === "rah" &&
+      typeof value.runtimeId === "string" &&
+      typeof value.pid === "number" &&
+      Number.isInteger(value.pid) &&
+      value.pid > 0 &&
+      typeof value.port === "number" &&
+      Number.isInteger(value.port) &&
+      typeof value.startedAt === "string" &&
+      typeof value.rootDir === "string",
+  );
+}
+
+function runtimeIdentityMatchesThisRah(identity, daemonUrl) {
+  return (
+    isRuntimeIdentity(identity) &&
+    identity.rootDir === ROOT_DIR &&
+    String(identity.port) === daemonPort(daemonUrl)
+  );
+}
+
+async function fetchRuntimeIdentity(daemonUrl) {
+  try {
+    const response = await fetch(new URL("/api/runtime", daemonUrl).toString(), {
+      signal: AbortSignal.timeout(1_500),
+    });
+    if (!response.ok) {
+      return null;
+    }
+    const identity = await response.json();
+    return isRuntimeIdentity(identity) ? identity : null;
+  } catch {
+    return null;
+  }
+}
+
+async function currentRuntimeIdentity(daemonUrl) {
+  const identity = await fetchRuntimeIdentity(daemonUrl);
+  if (!identity) {
+    return null;
+  }
+  if (!runtimeIdentityMatchesThisRah(identity, daemonUrl)) {
+    throw new Error(
+      `Port ${daemonPort(daemonUrl)} is occupied by a different RAH daemon at ${identity.rootDir}.`,
+    );
+  }
+  writeManagedIdentity(daemonUrl, identity);
+  return identity;
+}
+
 async function syncManagedPidFromListeningDaemon(daemonUrl) {
   const { pidPath } = managedDaemonPaths(daemonUrl);
-  const pid = readManagedPid(daemonUrl);
+  const identity = await currentRuntimeIdentity(daemonUrl);
+  if (identity) {
+    return identity.pid;
+  }
+  const record = readManagedRecord(daemonUrl);
+  const pid = record?.pid ?? null;
   const managedPid =
     pid && processAlive(pid) && (await isRahDaemonPid(pid)) ? pid : null;
   if (pid && !managedPid) {
@@ -413,13 +546,83 @@ async function syncManagedPidFromListeningDaemon(daemonUrl) {
   }
   const discovered = await discoverListeningRahDaemonPids(daemonUrl);
   if (managedPid && discovered.includes(managedPid)) {
+    if (record?.legacy !== false) {
+      writeManagedRecord(daemonUrl, {
+        pid: managedPid,
+        source: "process-scan",
+      });
+    }
     return managedPid;
   }
   if (discovered.length !== 1) {
     return managedPid;
   }
-  writeFileSync(pidPath, `${discovered[0]}\n`);
+  writeManagedRecord(daemonUrl, {
+    pid: discovered[0],
+    source: "process-scan",
+  });
   return discovered[0];
+}
+
+async function withDaemonStartLock(daemonUrl, task) {
+  const { root, lockPath } = managedDaemonPaths(daemonUrl);
+  mkdirSync(root, { recursive: true });
+  const deadline = Date.now() + 15_000;
+  let lockFd = null;
+  while (Date.now() < deadline) {
+    try {
+      lockFd = openSync(lockPath, "wx");
+      writeFileSync(
+        lockFd,
+        JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }),
+      );
+      break;
+    } catch (error) {
+      if (error?.code !== "EEXIST") {
+        throw error;
+      }
+      try {
+        const raw = readFileSync(lockPath, "utf8");
+        const lock = JSON.parse(raw);
+        const lockPid = Number.parseInt(String(lock.pid ?? ""), 10);
+        const createdMs = Date.parse(String(lock.createdAt ?? ""));
+        const stale =
+          !Number.isInteger(lockPid) ||
+          !processAlive(lockPid) ||
+          !Number.isFinite(createdMs) ||
+          Date.now() - createdMs > 60_000;
+        if (stale) {
+          unlinkSync(lockPath);
+          continue;
+        }
+      } catch {
+        try {
+          unlinkSync(lockPath);
+          continue;
+        } catch {
+          // keep waiting if another process won the race
+        }
+      }
+      await delay(100);
+    }
+  }
+  if (lockFd === null) {
+    throw new Error("Timed out waiting for RAH daemon start lock.");
+  }
+  try {
+    return await task();
+  } finally {
+    try {
+      closeSync(lockFd);
+    } catch {
+      // ignore lock fd cleanup failures
+    }
+    try {
+      unlinkSync(lockPath);
+    } catch {
+      // ignore lock cleanup failures
+    }
+  }
 }
 
 async function runCommand(command, args, options = {}) {
@@ -450,7 +653,7 @@ async function buildWebClient() {
 }
 
 function startDaemonDetached(daemonUrl) {
-  const { root, port, pidPath, logPath } = managedDaemonPaths(daemonUrl);
+  const { root, port, logPath } = managedDaemonPaths(daemonUrl);
   mkdirSync(root, { recursive: true });
   const logFd = openSync(logPath, "a");
   const daemonCommand = [
@@ -468,7 +671,11 @@ function startDaemonDetached(daemonUrl) {
       stdio: ["ignore", logFd, logFd],
       detached: true,
     });
-    writeFileSync(pidPath, `${child.pid}\n`);
+    writeManagedRecord(daemonUrl, {
+      pid: child.pid,
+      status: "starting",
+      launchedAt: new Date().toISOString(),
+    });
     child.unref();
     return child;
   } finally {
@@ -480,40 +687,74 @@ async function ensureDaemon(daemonUrl, options = {}) {
   if (options.build === true || (options.build === "missing" && !clientBundleExists())) {
     await buildWebClient();
   }
+  const currentIdentity = await currentRuntimeIdentity(daemonUrl);
+  if (currentIdentity) {
+    if (options.verbose) {
+      process.stdout.write(`[rah] daemon already running at ${daemonUrl}\n`);
+    }
+    return;
+  }
   if (await daemonReady(daemonUrl)) {
-    await syncManagedPidFromListeningDaemon(daemonUrl);
+    const pid = await syncManagedPidFromListeningDaemon(daemonUrl);
+    if (!pid) {
+      throw new Error(`Port ${daemonPort(daemonUrl)} is occupied by a daemon that RAH cannot identify.`);
+    }
     if (options.verbose) {
       process.stdout.write(`[rah] daemon already running at ${daemonUrl}\n`);
     }
     return;
   }
 
-  const { logPath } = managedDaemonPaths(daemonUrl);
-  const child = startDaemonDetached(daemonUrl);
-  let earlyExit = null;
-  child.once("exit", (code, signal) => {
-    earlyExit = { code, signal };
-  });
-
-  const deadline = Date.now() + 30_000;
-  while (Date.now() < deadline) {
-    if (await daemonReady(daemonUrl)) {
-      process.stdout.write(`[rah] daemon ready at ${daemonUrl}\n`);
+  await withDaemonStartLock(daemonUrl, async () => {
+    const lockedIdentity = await currentRuntimeIdentity(daemonUrl);
+    if (lockedIdentity) {
+      if (options.verbose) {
+        process.stdout.write(`[rah] daemon already running at ${daemonUrl}\n`);
+      }
       return;
     }
-    if (earlyExit) {
-      throw new Error(
-        `RAH daemon exited before becoming ready (code ${earlyExit.code ?? "null"}, signal ${
-          earlyExit.signal ?? "null"
-        }). Check ${logPath}.`,
-      );
+    if (await daemonReady(daemonUrl)) {
+      const pid = await syncManagedPidFromListeningDaemon(daemonUrl);
+      if (!pid) {
+        throw new Error(`Port ${daemonPort(daemonUrl)} is occupied by a daemon that RAH cannot identify.`);
+      }
+      if (options.verbose) {
+        process.stdout.write(`[rah] daemon already running at ${daemonUrl}\n`);
+      }
+      return;
     }
-    await delay(250);
-  }
 
-  throw new Error(
-    `Timed out waiting for daemon at ${daemonUrl}. Check ${logPath} for logs.`,
-  );
+    const { logPath } = managedDaemonPaths(daemonUrl);
+    const child = startDaemonDetached(daemonUrl);
+    let earlyExit = null;
+    child.once("exit", (code, signal) => {
+      earlyExit = { code, signal };
+    });
+
+    const deadline = Date.now() + 30_000;
+    while (Date.now() < deadline) {
+      const identity = await currentRuntimeIdentity(daemonUrl);
+      if (identity || (await daemonReady(daemonUrl))) {
+        if (!identity) {
+          await syncManagedPidFromListeningDaemon(daemonUrl);
+        }
+        process.stdout.write(`[rah] daemon ready at ${daemonUrl}\n`);
+        return;
+      }
+      if (earlyExit) {
+        throw new Error(
+          `RAH daemon exited before becoming ready (code ${earlyExit.code ?? "null"}, signal ${
+            earlyExit.signal ?? "null"
+          }). Check ${logPath}.`,
+        );
+      }
+      await delay(250);
+    }
+
+    throw new Error(
+      `Timed out waiting for daemon at ${daemonUrl}. Check ${logPath} for logs.`,
+    );
+  });
 }
 
 function localNetworkUrls(daemonUrl) {
@@ -540,13 +781,21 @@ function isPrivateLanIpv4(address) {
 
 async function printStatus(daemonUrl) {
   const ready = await daemonReady(daemonUrl);
-  const pid = await syncManagedPidFromListeningDaemon(daemonUrl);
+  const identity = await currentRuntimeIdentity(daemonUrl);
+  const pid = identity?.pid ?? (await syncManagedPidFromListeningDaemon(daemonUrl));
   const { pidPath, logPath } = managedDaemonPaths(daemonUrl);
   const bundle = clientBundleExists() ? statSync(CLIENT_INDEX_PATH) : null;
   process.stdout.write(
     [
       `Daemon: ${ready ? "running" : "not running"} (${daemonUrl})`,
       `Managed pid: ${pid ? `${pid}${processAlive(pid) ? "" : " (stale)"}` : "none"}`,
+      ...(identity
+        ? [
+            `Runtime id: ${identity.runtimeId}`,
+            `Runtime root: ${identity.rootDir}`,
+            `Runtime source: ${identity.sourceRevision ?? "unknown"}${identity.sourceDirty ? " (dirty)" : ""}`,
+          ]
+        : []),
       `Pid file: ${pidPath}`,
       `Log file: ${logPath}`,
       `Web build: ${bundle ? `${CLIENT_INDEX_PATH} (${bundle.mtime.toISOString()})` : "missing"}`,
@@ -574,6 +823,12 @@ async function terminateDaemonPid(pid) {
 }
 
 async function stopManagedDaemon(daemonUrl) {
+  const identity = await currentRuntimeIdentity(daemonUrl);
+  if (identity) {
+    await stopDaemonPids(daemonUrl, [identity.pid]);
+    return;
+  }
+
   const pid = readManagedPid(daemonUrl);
   const { pidPath } = managedDaemonPaths(daemonUrl);
   if (pid && (!processAlive(pid) || !(await isRahDaemonPid(pid)))) {
@@ -599,11 +854,20 @@ async function stopManagedDaemon(daemonUrl) {
     return;
   }
 
+  await stopDaemonPids(daemonUrl, targetPids);
+}
+
+async function stopDaemonPids(daemonUrl, targetPids) {
+  const { pidPath } = managedDaemonPaths(daemonUrl);
   const stoppedPids = [];
   for (const targetPid of targetPids) {
     if (await terminateDaemonPid(targetPid)) {
       stoppedPids.push(targetPid);
     }
+  }
+  if (stoppedPids.length === 0) {
+    process.stdout.write("[rah] daemon is not running\n");
+    return;
   }
   await waitForDaemonStopped(daemonUrl, stoppedPids);
   for (const stoppedPid of stoppedPids) {

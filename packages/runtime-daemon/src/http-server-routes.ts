@@ -9,6 +9,7 @@ import type {
   ListTuiMuxDiagnosticsResponse,
   ListProvidersResponse,
   ProviderKind,
+  RuntimeIdentityResponse,
 } from "@rah/runtime-protocol";
 import { RuntimeEngine } from "./runtime-engine";
 import { applyCorsHeaders, validateApiRequest } from "./http-server-cors";
@@ -447,8 +448,9 @@ export async function handleHttpRequest(args: {
   postRoutes: Array<{ pattern: RegExp; handler: JsonHandler }>;
   req: IncomingMessage;
   res: ServerResponse;
+  runtimeIdentity?: RuntimeIdentityResponse | undefined;
 }): Promise<void> {
-  const { engine, postRoutes, req, res } = args;
+  const { engine, postRoutes, req, res, runtimeIdentity } = args;
   try {
     if (!req.url || !req.method) {
       writeText(req, res, 400, "Bad Request");
@@ -473,6 +475,15 @@ export async function handleHttpRequest(args: {
 
     if (req.method === "GET" && pathname === "/readyz") {
       writeText(req, res, 200, "ok");
+      return;
+    }
+
+    if (req.method === "GET" && pathname === "/api/runtime") {
+      if (!runtimeIdentity) {
+        writeJson(req, res, 503, { error: "Runtime identity is not ready." });
+        return;
+      }
+      writeJson(req, res, 200, runtimeIdentity);
       return;
     }
 

@@ -39,6 +39,18 @@ import type {
 } from "./council";
 import type { ContextUsage, EventEnvelope, JsonObject, RahEvent, RahEventType } from "./events";
 
+export interface RuntimeIdentityResponse {
+  name: "rah";
+  runtimeId: string;
+  pid: number;
+  port: number;
+  startedAt: string;
+  rootDir: string;
+  version?: string;
+  sourceRevision?: string;
+  sourceDirty?: boolean;
+}
+
 export interface AttachClientDescriptor {
   id: string;
   kind: ClientKind;

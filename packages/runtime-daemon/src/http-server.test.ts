@@ -189,6 +189,25 @@ describe("startRahDaemon", () => {
     assert.equal(typeof response.json, "object");
   });
 
+  test("serves runtime identity", async () => {
+    const response = await requestJson({
+      port,
+      path: "/api/runtime",
+      headers: { Origin: `http://127.0.0.1:${port}` },
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(typeof response.json, "object");
+    assert.ok(response.json && !Array.isArray(response.json));
+    const identity = response.json as Record<string, unknown>;
+    assert.equal(identity.name, "rah");
+    assert.equal(identity.pid, process.pid);
+    assert.equal(identity.port, port);
+    assert.equal(identity.rootDir, process.cwd());
+    assert.equal(typeof identity.runtimeId, "string");
+    assert.equal(typeof identity.startedAt, "string");
+  });
+
   test("serves native TUI diagnostics", async () => {
     const response = await requestJson({
       port,
