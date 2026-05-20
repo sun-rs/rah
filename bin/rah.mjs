@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   closeSync,
@@ -18,7 +18,10 @@ import process from "node:process";
 import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
+import { promisify } from "node:util";
 import WebSocket from "ws";
+
+const execFileAsync = promisify(execFile);
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_DAEMON_URL = "http://127.0.0.1:43111";
@@ -336,6 +339,89 @@ function processAlive(pid) {
   }
 }
 
+async function processCommand(pid) {
+  if (!Number.isInteger(pid) || pid <= 0 || process.platform === "win32") {
+    return null;
+  }
+  try {
+    const { stdout } = await execFileAsync("ps", ["-p", String(pid), "-o", "command="], {
+      maxBuffer: 1024 * 1024,
+    });
+    const command = stdout.trim();
+    return command || null;
+  } catch {
+    return null;
+  }
+}
+
+async function isRahDaemonPid(pid) {
+  return isRahDaemonCommand(await processCommand(pid));
+}
+
+function isRahDaemonCommand(command) {
+  return Boolean(
+    command &&
+      command.includes("node") &&
+      command.includes("packages/runtime-daemon/src/main.ts"),
+  );
+}
+
+async function discoverListeningRahDaemonPids(daemonUrl) {
+  if (process.platform === "win32") {
+    return [];
+  }
+  const port = daemonPort(daemonUrl);
+  let stdout = "";
+  try {
+    ({ stdout } = await execFileAsync(
+      "lsof",
+      ["-nP", `-tiTCP:${port}`, "-sTCP:LISTEN"],
+      { maxBuffer: 1024 * 1024 },
+    ));
+  } catch {
+    return [];
+  }
+  const candidates = [
+    ...new Set(
+      stdout
+        .split(/\s+/)
+        .map((value) => Number.parseInt(value, 10))
+        .filter((value) => Number.isInteger(value) && value > 0),
+    ),
+  ];
+  const rahPids = [];
+  for (const pid of candidates) {
+    const command = await processCommand(pid);
+    if (isRahDaemonCommand(command)) {
+      rahPids.push(pid);
+    }
+  }
+  return rahPids;
+}
+
+async function syncManagedPidFromListeningDaemon(daemonUrl) {
+  const { pidPath } = managedDaemonPaths(daemonUrl);
+  const pid = readManagedPid(daemonUrl);
+  const managedPid =
+    pid && processAlive(pid) && (await isRahDaemonPid(pid)) ? pid : null;
+  if (pid && !managedPid) {
+    try {
+      unlinkSync(pidPath);
+    } catch {
+      // ignore stale pid cleanup failures
+    }
+  }
+  const discovered = await discoverListeningRahDaemonPids(daemonUrl);
+  if (managedPid && discovered.includes(managedPid)) {
+    return managedPid;
+  }
+  if (discovered.length !== 1) {
+    return managedPid;
+  }
+  writeFileSync(pidPath, `${discovered[0]}\n`);
+  return discovered[0];
+}
+
 async function runCommand(command, args, options = {}) {
   await new Promise((resolvePromise, reject) => {
     const child = spawn(command, args, {
@@ -395,6 +481,7 @@ async function ensureDaemon(daemonUrl, options = {}) {
     await buildWebClient();
   }
   if (await daemonReady(daemonUrl)) {
+    await syncManagedPidFromListeningDaemon(daemonUrl);
     if (options.verbose) {
       process.stdout.write(`[rah] daemon already running at ${daemonUrl}\n`);
     }
@@ -453,7 +540,7 @@ function isPrivateLanIpv4(address) {
 
 async function printStatus(daemonUrl) {
   const ready = await daemonReady(daemonUrl);
-  const pid = readManagedPid(daemonUrl);
+  const pid = await syncManagedPidFromListeningDaemon(daemonUrl);
   const { pidPath, logPath } = managedDaemonPaths(daemonUrl);
   const bundle = clientBundleExists() ? statSync(CLIENT_INDEX_PATH) : null;
   process.stdout.write(
@@ -467,42 +554,69 @@ async function printStatus(daemonUrl) {
   );
 }
 
+async function waitForDaemonStopped(daemonUrl, pids) {
+  const deadline = Date.now() + 35_000;
+  while (Date.now() < deadline) {
+    const anyAlive = pids.some((pid) => processAlive(pid));
+    if (!anyAlive && !(await daemonReady(daemonUrl))) {
+      return;
+    }
+    await delay(150);
+  }
+}
+
+async function terminateDaemonPid(pid) {
+  if (!processAlive(pid)) {
+    return false;
+  }
+  process.kill(pid, "SIGTERM");
+  return true;
+}
+
 async function stopManagedDaemon(daemonUrl) {
   const pid = readManagedPid(daemonUrl);
   const { pidPath } = managedDaemonPaths(daemonUrl);
-  if (!pid) {
-    if (await daemonReady(daemonUrl)) {
-      throw new Error("Daemon is running but has no RAH-managed pid file. Stop the process that started it.");
-    }
-    process.stdout.write("[rah] daemon is not running\n");
-    return;
-  }
-  if (!processAlive(pid)) {
+  if (pid && (!processAlive(pid) || !(await isRahDaemonPid(pid)))) {
     try {
       unlinkSync(pidPath);
     } catch {
       // ignore stale pid cleanup failures
     }
     process.stdout.write(`[rah] removed stale daemon pid ${pid}\n`);
+  }
+
+  const discovered = await discoverListeningRahDaemonPids(daemonUrl);
+  const managedPid =
+    pid && processAlive(pid) && (await isRahDaemonPid(pid)) ? pid : null;
+  const targetPids = [
+    ...new Set(discovered.length > 0 ? discovered : managedPid ? [managedPid] : []),
+  ];
+  if (targetPids.length === 0) {
+    if (await daemonReady(daemonUrl)) {
+      throw new Error("Daemon is running but no RAH daemon process could be stopped.");
+    }
+    process.stdout.write("[rah] daemon is not running\n");
     return;
   }
-  process.kill(pid, "SIGTERM");
-  const deadline = Date.now() + 35_000;
-  while (Date.now() < deadline) {
-    if (!processAlive(pid) && !(await daemonReady(daemonUrl))) {
-      break;
+
+  const stoppedPids = [];
+  for (const targetPid of targetPids) {
+    if (await terminateDaemonPid(targetPid)) {
+      stoppedPids.push(targetPid);
     }
-    await delay(150);
   }
-  if (processAlive(pid)) {
-    process.kill(pid, "SIGKILL");
+  await waitForDaemonStopped(daemonUrl, stoppedPids);
+  for (const stoppedPid of stoppedPids) {
+    if (processAlive(stoppedPid)) {
+      process.kill(stoppedPid, "SIGKILL");
+    }
   }
   try {
     unlinkSync(pidPath);
   } catch {
     // ignore cleanup failures
   }
-  process.stdout.write(`[rah] stopped daemon ${pid}\n`);
+  process.stdout.write(`[rah] stopped daemon ${stoppedPids.join(", ")}\n`);
 }
 
 function openWorkbench(daemonUrl) {
