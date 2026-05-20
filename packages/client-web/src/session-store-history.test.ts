@@ -607,6 +607,59 @@ test("mergeLatestHistoryPage appends newly persisted assistant tail without show
   assert.equal(next.history.authoritativeApplied, true);
 });
 
+test("mergeLatestHistoryPage keeps older loaded entries before refreshed latest tail", () => {
+  const current = replayEventsIntoProjection(summary(), [
+    timelineEvent({
+      seq: 1,
+      turnId: "old-turn",
+      kind: "assistant_message",
+      text: "older council reply",
+      canonicalItemId: "canonical-old-assistant",
+      ts: "2026-04-15T00:00:01.000Z",
+    }),
+    timelineEvent({
+      seq: 10,
+      turnId: "live-turn",
+      text: "continue",
+      canonicalItemId: "canonical-live-user",
+      ts: "2026-04-15T00:10:00.000Z",
+    }),
+    timelineEvent({
+      seq: 11,
+      turnId: "live-turn",
+      kind: "assistant_message",
+      text: "new assistant reply",
+      canonicalItemId: "canonical-live-assistant",
+      ts: "2026-04-15T00:10:05.000Z",
+    }),
+  ]);
+
+  const next = mergeLatestHistoryPage(current, [
+    timelineEvent({
+      seq: 100,
+      turnId: "history:session-1:turn-2",
+      text: "continue",
+      canonicalItemId: "canonical-live-user",
+      ts: "2026-04-15T00:10:00.000Z",
+    }),
+    timelineEvent({
+      seq: 101,
+      turnId: "history:session-1:turn-2",
+      kind: "assistant_message",
+      text: "new assistant reply",
+      canonicalItemId: "canonical-live-assistant",
+      ts: "2026-04-15T00:10:05.000Z",
+    }),
+  ]);
+
+  assert.deepEqual(
+    next.feed.map((entry) =>
+      entry.kind === "timeline" && "text" in entry.item ? entry.item.text : null,
+    ),
+    ["older council reply", "continue", "new assistant reply"],
+  );
+});
+
 test("mergeLatestHistoryPage dedupes live interrupt notices against persisted anchored cancels", () => {
   let current = appendOptimisticUserMessage(
     replayEventsIntoProjection(summary(), []),

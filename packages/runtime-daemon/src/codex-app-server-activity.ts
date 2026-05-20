@@ -15,6 +15,7 @@ import type {
 import { classifyCodexCommand } from "./codex-command-classifier";
 import { normalizeContextUsage } from "./context-usage";
 import {
+  createCodexLiveEphemeralTimelineIdentity,
   createCodexTimelineIdentity,
   createCodexTimelineTurnIdentity,
 } from "./codex-timeline-identity";
@@ -161,7 +162,6 @@ export const CODEX_APP_SERVER_IGNORED_NOTIFICATION_METHODS = [
   "turn/diff/updated",
   "rawResponseItem/completed",
   "command/exec/outputDelta",
-  "item/commandExecution/terminalInteraction",
   "serverRequest/resolved",
   "mcpServer/oauthLogin/completed",
   "mcpServer/startupStatus/updated",
@@ -445,6 +445,29 @@ function createLiveTimelineIdentityFromNotification(
     turnId,
     itemKind: params.itemKind,
     providerItemKey: params.providerItemKey,
+    ...(params.providerEventId !== undefined ? { providerEventId: params.providerEventId } : {}),
+    ...(params.providerMessageId !== undefined ? { providerMessageId: params.providerMessageId } : {}),
+  });
+}
+
+function createLiveEphemeralTimelineIdentity(
+  params: {
+    providerSessionId?: string | undefined;
+    turnId: string;
+    itemKind: "plan" | "compaction";
+    providerItemKey: string;
+    providerEventId?: string;
+    providerMessageId?: string;
+  },
+): TimelineIdentity | undefined {
+  if (!params.providerSessionId) {
+    return undefined;
+  }
+  return createCodexLiveEphemeralTimelineIdentity({
+    providerSessionId: params.providerSessionId,
+    turnId: params.turnId,
+    itemKind: params.itemKind,
+    itemKey: params.providerItemKey,
     ...(params.providerEventId !== undefined ? { providerEventId: params.providerEventId } : {}),
     ...(params.providerMessageId !== undefined ? { providerMessageId: params.providerMessageId } : {}),
   });
@@ -1257,7 +1280,7 @@ function mapThreadItem(
     case "plan": {
       const text = stringField(item, "text") ?? "";
       const identity = text
-        ? createLiveTimelineIdentity(state, {
+        ? createLiveEphemeralTimelineIdentity({
             providerSessionId,
             turnId,
             itemKind: "plan",
@@ -2016,7 +2039,7 @@ export function translateCodexAppServerNotification(
       const params = paramsRecord(notification);
       const turnId = params ? turnIdFromParams(params) : undefined;
       const identity = turnId
-        ? createLiveTimelineIdentity(state, {
+        ? createLiveEphemeralTimelineIdentity({
             providerSessionId: providerSessionIdFromParams(params),
             turnId,
             itemKind: "plan",
@@ -2223,21 +2246,16 @@ export function translateCodexAppServerNotification(
         return invalidStreamActivities(notification, "terminal interaction payload was not recognized");
       }
       const itemId = stringField(params, "itemId")!;
+      const stdin = stringField(params, "stdin") ?? "";
+      if (!stdin) {
+        return [];
+      }
       return [
         translated(notification, {
-          type: "observation_completed",
-          observation: {
-            id: `obs-terminal-interaction-${itemId}-${Date.now().toString(36)}`,
-            kind: "terminal.interaction",
-            status: "completed",
-            title: "Terminal input",
-            subject: {
-              providerCallId: itemId,
-              ...(stringField(params, "processId") ? { providerToolName: stringField(params, "processId")! } : {}),
-            },
-            detail: {
-              artifacts: [{ kind: "text", label: "stdin", text: stringField(params, "stdin") ?? "" }],
-            },
+          type: "tool_call_delta",
+          toolCallId: itemId,
+          detail: {
+            artifacts: [{ kind: "text", label: "stdin", text: stdin }],
           },
         }),
       ];

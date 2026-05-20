@@ -100,4 +100,16 @@ describe("overlay scroll area contract", () => {
     assert.match(readSource("./components/chat/ChatThread.tsx"), /\brah-scroll-main\b/);
     assert.match(readSource("./components/terminal/TerminalSurface.tsx"), /\brah-scroll-code\b/);
   });
+
+  test("chat thread restores sticky-bottom position after a background tab resumes", () => {
+    const source = readSource("./components/chat/ChatThread.tsx");
+
+    assert.match(source, /returnToBottomOnVisibleRef/);
+    assert.match(source, /pendingVisibleBottomRestoreRef/);
+    assert.match(source, /restoreBottomAfterForeground/);
+    assert.match(source, /visibilitychange/);
+    assert.match(source, /pageshow/);
+    assert.match(source, /window\.addEventListener\("focus"/);
+    assert.match(source, /isDocumentHidden\(\)/);
+  });
 });

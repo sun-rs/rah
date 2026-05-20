@@ -232,6 +232,272 @@ describe("translateCodexRolloutLine", () => {
     }
   });
 
+  test("merges write_stdin polling output into the running exec_command tool call", () => {
+    const state = createCodexRolloutTranslationState();
+
+    translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-14T18:00:02.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "exec_command",
+          arguments: '{"cmd":"npm test","workdir":"/workspace/demo"}',
+          call_id: "call-exec",
+        },
+      },
+      state,
+    );
+    const running = translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-14T18:00:03.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "call-exec",
+          output: "Chunk ID: abc\nWall time: 0.1 seconds\nProcess running with session ID 7144",
+        },
+      },
+      state,
+    );
+
+    assert.deepEqual(
+      running.map((item) => item.activity.type),
+      ["observation_updated", "tool_call_started"],
+    );
+    const runningTool = running.find((item) => item.activity.type === "tool_call_started")?.activity;
+    assert.equal(runningTool?.type, "tool_call_started");
+    if (runningTool?.type === "tool_call_started") {
+      assert.equal(runningTool.toolCall.id, "call-exec");
+      assert.deepEqual(runningTool.toolCall.result, { sessionId: 7144 });
+      assert.equal(runningTool.toolCall.summary, "Process running with session ID 7144.");
+    }
+
+    const pollStarted = translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-14T18:00:04.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "write_stdin",
+          arguments: '{"session_id":"7144","chars":"","yield_time_ms":1000}',
+          call_id: "call-poll",
+        },
+      },
+      state,
+    );
+    const pollOutput = translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-14T18:00:05.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "call-poll",
+          output: "Chunk ID: def\nWall time: 1.0 seconds\nOutput:\nfirst chunk",
+        },
+      },
+      state,
+    );
+
+    assert.deepEqual(pollStarted, []);
+    assert.deepEqual(
+      pollOutput.map((item) => item.activity.type),
+      ["tool_call_delta"],
+    );
+    const delta = pollOutput[0]?.activity;
+    assert.equal(delta?.type, "tool_call_delta");
+    if (delta?.type === "tool_call_delta") {
+      assert.equal(delta.toolCallId, "call-exec");
+      assert.deepEqual(delta.detail.artifacts, [
+        { kind: "text", label: "stdout", text: "first chunk" },
+      ]);
+    }
+  });
+
+  test("completes write_stdin terminal polling on the original exec_command tool id", () => {
+    const state = createCodexRolloutTranslationState();
+
+    translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-14T18:00:02.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "exec_command",
+          arguments: '{"cmd":"npm test","workdir":"/workspace/demo"}',
+          call_id: "call-exec",
+        },
+      },
+      state,
+    );
+    translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-14T18:00:03.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "call-exec",
+          output: "Chunk ID: abc\nWall time: 0.1 seconds\nProcess running with session ID 7144",
+        },
+      },
+      state,
+    );
+    translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-14T18:00:04.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "write_stdin",
+          arguments: '{"session_id":7144,"chars":"","yield_time_ms":1000}',
+          call_id: "call-poll-1",
+        },
+      },
+      state,
+    );
+    translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-14T18:00:05.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "call-poll-1",
+          output: "Chunk ID: def\nWall time: 1.0 seconds\nOutput:\nfirst chunk",
+        },
+      },
+      state,
+    );
+    translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-14T18:00:06.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "write_stdin",
+          arguments: '{"session_id":7144,"chars":"","yield_time_ms":1000}',
+          call_id: "call-poll-2",
+        },
+      },
+      state,
+    );
+    const completed = translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-14T18:00:07.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "call-poll-2",
+          output: "Chunk ID: ghi\nWall time: 1.0 seconds\nProcess exited with code 0\nOutput:\nsecond chunk",
+        },
+      },
+      state,
+    );
+
+    assert.deepEqual(
+      completed.map((item) => item.activity.type),
+      ["observation_completed", "tool_call_completed"],
+    );
+    const tool = completed.find((item) => item.activity.type === "tool_call_completed")?.activity;
+    assert.equal(tool?.type, "tool_call_completed");
+    if (tool?.type === "tool_call_completed") {
+      assert.equal(tool.toolCall.id, "call-exec");
+      assert.deepEqual(tool.toolCall.result, { sessionId: 7144, exitCode: 0 });
+      assert.deepEqual(
+        tool.toolCall.detail?.artifacts.filter((artifact) => artifact.kind === "text"),
+        [{ kind: "text", label: "stdout", text: "first chunksecond chunk" }],
+      );
+    }
+  });
+
+  test("falls back to a terminal session tool id when write_stdin history starts mid-process", () => {
+    const state = createCodexRolloutTranslationState();
+
+    const pollStarted = translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-14T18:00:04.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "write_stdin",
+          arguments: '{"session_id":7144,"chars":"","yield_time_ms":1000}',
+          call_id: "call-poll",
+        },
+      },
+      state,
+    );
+    const pollOutput = translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-14T18:00:05.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "call-poll",
+          output: "Chunk ID: def\nWall time: 1.0 seconds\nOutput:\npartial output",
+        },
+      },
+      state,
+    );
+
+    assert.deepEqual(pollStarted, []);
+    assert.deepEqual(
+      pollOutput.map((item) => item.activity.type),
+      ["tool_call_started", "tool_call_delta"],
+    );
+    const started = pollOutput[0]?.activity;
+    const delta = pollOutput[1]?.activity;
+    assert.equal(started?.type, "tool_call_started");
+    assert.equal(delta?.type, "tool_call_delta");
+    if (started?.type === "tool_call_started" && delta?.type === "tool_call_delta") {
+      assert.equal(started.toolCall.id, "terminal-session-7144");
+      assert.equal(started.toolCall.title, "Terminal session");
+      assert.equal(delta.toolCallId, "terminal-session-7144");
+    }
+  });
+
+  test("fails a still-running terminal session when persisted history ends", () => {
+    const state = createCodexRolloutTranslationState();
+
+    translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-14T18:00:02.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "exec_command",
+          arguments: '{"cmd":"npm test","workdir":"/workspace/demo"}',
+          call_id: "call-exec",
+        },
+      },
+      state,
+    );
+    translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-14T18:00:03.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "call-exec",
+          output: "Chunk ID: abc\nWall time: 0.1 seconds\nProcess running with session ID 7144",
+        },
+      },
+      state,
+    );
+
+    const finalized = finalizeCodexRolloutTranslationState(state, {
+      timestamp: "2026-04-14T18:00:04.000Z",
+    });
+
+    assert.deepEqual(
+      finalized.map((item) => item.activity.type),
+      ["observation_failed", "tool_call_failed", "timeline_item"],
+    );
+    const failed = finalized.find((item) => item.activity.type === "tool_call_failed")?.activity;
+    assert.equal(failed?.type, "tool_call_failed");
+    if (failed?.type === "tool_call_failed") {
+      assert.equal(failed.toolCallId, "call-exec");
+    }
+  });
+
   test("marks pending shell tools failed when a persisted Codex turn is interrupted", () => {
     const state = createCodexRolloutTranslationState();
 

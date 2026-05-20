@@ -1721,6 +1721,71 @@ describe("client projection", () => {
     }
   });
 
+  test("merges completed tool payloads with previously streamed detail", () => {
+    let current = projection();
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 1,
+        turnId: "turn-1",
+        type: "tool.call.started",
+        payload: {
+          toolCall: {
+            id: "tool-1",
+            family: "shell",
+            providerToolName: "exec_command",
+            title: "Run command",
+            detail: {
+              artifacts: [{ kind: "command", command: "npm test" }],
+            },
+          },
+        },
+      }),
+    );
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 2,
+        turnId: "turn-1",
+        type: "tool.call.delta",
+        payload: {
+          toolCallId: "tool-1",
+          detail: {
+            artifacts: [{ kind: "text", label: "stdout", text: "running" }],
+          },
+        },
+      }),
+    );
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 3,
+        turnId: "turn-1",
+        type: "tool.call.completed",
+        payload: {
+          toolCall: {
+            id: "tool-1",
+            family: "shell",
+            providerToolName: "exec_command",
+            title: "Run command",
+            result: { exitCode: 0 },
+          },
+        },
+      }),
+    );
+
+    const tool = current.feed[0];
+    assert.equal(tool?.kind, "tool_call");
+    if (tool?.kind === "tool_call") {
+      assert.equal(tool.status, "completed");
+      assert.deepEqual(tool.toolCall.result, { exitCode: 0 });
+      assert.deepEqual(tool.toolCall.detail?.artifacts, [
+        { kind: "command", command: "npm test" },
+        { kind: "text", label: "stdout", text: "running" },
+      ]);
+    }
+  });
+
   test("keeps standalone completed tool calls when started event was not projected", () => {
     const current = applyEventToProjection(
       projection(),

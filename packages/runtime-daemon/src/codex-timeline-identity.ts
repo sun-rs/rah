@@ -32,6 +32,30 @@ export function createCodexTimelineIdentity(args: {
   });
 }
 
+export function createCodexLiveEphemeralTimelineIdentity(args: {
+  providerSessionId?: string | undefined;
+  turnId: string;
+  itemKind: CodexTimelineItemKind;
+  itemKey: string;
+  providerEventId?: string;
+  providerMessageId?: string;
+  confidence?: TimelineIdentity["confidence"];
+}): TimelineIdentity {
+  return createTimelineIdentity({
+    provider: "codex",
+    ...(args.providerSessionId !== undefined ? { providerSessionId: args.providerSessionId } : {}),
+    turnKey: `turn:${args.turnId}`,
+    itemKind: args.itemKind,
+    itemKey: `live:${args.itemKind}:${args.itemKey}`,
+    origin: "live",
+    confidence: args.confidence ?? "derived",
+    sourceCursor: {
+      ...(args.providerEventId !== undefined ? { providerEventId: args.providerEventId } : {}),
+      ...(args.providerMessageId !== undefined ? { providerMessageId: args.providerMessageId } : {}),
+    },
+  });
+}
+
 export function createCodexTimelineTurnIdentity(args: {
   providerSessionId?: string | undefined;
   turnId: string;

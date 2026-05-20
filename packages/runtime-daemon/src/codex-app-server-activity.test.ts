@@ -198,6 +198,51 @@ describe("translateCodexAppServerNotification", () => {
     });
   });
 
+  test("merges terminal interactions into the command tool call lifecycle", () => {
+    const state = createCodexAppServerTranslationState();
+
+    translateCodexAppServerNotification(
+      {
+        method: "item/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "commandExecution",
+            id: "cmd-1",
+            command: "npm test",
+            cwd: "/workspace/demo",
+            status: "inProgress",
+          },
+        },
+      },
+      state,
+    );
+    const interaction = translateCodexAppServerNotification(
+      {
+        method: "item/commandExecution/terminalInteraction",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "cmd-1",
+          processId: "proc-1",
+          stdin: "y\n",
+        },
+      },
+      state,
+    );
+
+    assert.deepEqual(interaction.map((item) => item.activity.type), ["tool_call_delta"]);
+    const delta = interaction[0]?.activity;
+    assert.equal(delta?.type, "tool_call_delta");
+    if (delta?.type === "tool_call_delta") {
+      assert.equal(delta.toolCallId, "cmd-1");
+      assert.deepEqual(delta.detail.artifacts, [
+        { kind: "text", label: "stdin", text: "y\n" },
+      ]);
+    }
+  });
+
   test("falls back to aggregated output when command delta chunks are unavailable", () => {
     const state = createCodexAppServerTranslationState();
 
@@ -764,6 +809,95 @@ describe("translateCodexAppServerNotification", () => {
           itemIndex: 1,
           origin: "history",
           providerMessageId: "assistant-1",
+        }).canonicalItemId,
+      );
+    }
+  });
+
+  test("does not let live-only plan updates shift persisted assistant identities", () => {
+    const state = createCodexAppServerTranslationState();
+
+    translateCodexAppServerNotification(
+      {
+        method: "item/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "userMessage",
+            id: "user-1",
+            content: [{ type: "input_text", text: "build it" }],
+          },
+        },
+      },
+      state,
+    );
+    const firstAssistant = translateCodexAppServerNotification(
+      {
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "assistant-1",
+          delta: "first",
+        },
+      },
+      state,
+    ).find((item) => item.activity.type === "timeline_item")?.activity;
+    const plan = translateCodexAppServerNotification(
+      {
+        method: "turn/plan/updated",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          plan: [{ step: "Inspect files" }],
+        },
+      },
+      state,
+    ).find((item) => item.activity.type === "timeline_item")?.activity;
+    const secondAssistant = translateCodexAppServerNotification(
+      {
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "assistant-2",
+          delta: "second",
+        },
+      },
+      state,
+    ).find((item) => item.activity.type === "timeline_item")?.activity;
+
+    assert.equal(firstAssistant?.type, "timeline_item");
+    assert.equal(plan?.type, "timeline_item");
+    assert.equal(secondAssistant?.type, "timeline_item");
+    if (
+      firstAssistant?.type === "timeline_item" &&
+      plan?.type === "timeline_item" &&
+      secondAssistant?.type === "timeline_item"
+    ) {
+      assert.equal(
+        firstAssistant.identity?.canonicalItemId,
+        createCodexTimelineIdentity({
+          providerSessionId: "thread-1",
+          turnId: "turn-1",
+          itemKind: "assistant_message",
+          itemIndex: 1,
+          origin: "history",
+          providerMessageId: "assistant-1",
+        }).canonicalItemId,
+      );
+      assert.equal(plan.identity?.sourceCursor?.itemIndex, undefined);
+      assert.equal(plan.identity?.itemKey, "live:plan:turn-plan");
+      assert.equal(
+        secondAssistant.identity?.canonicalItemId,
+        createCodexTimelineIdentity({
+          providerSessionId: "thread-1",
+          turnId: "turn-1",
+          itemKind: "assistant_message",
+          itemIndex: 2,
+          origin: "history",
+          providerMessageId: "assistant-2",
         }).canonicalItemId,
       );
     }

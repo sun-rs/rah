@@ -34,13 +34,28 @@ type PendingToolCall = {
   observation?: WorkbenchObservation;
   hidden?: boolean;
   councilMcpToolCall?: NormalizedCouncilMcpToolCall;
+  terminalInteraction?: PendingTerminalInteraction;
 };
 
 const CODEX_INTERRUPTED_PENDING_TOOL_ERROR =
   "Conversation interrupted before this tool completed.";
 
+interface PendingTerminalInteraction {
+  sessionId: number;
+  chars: string;
+}
+
+interface CodexTerminalSessionToolState {
+  sessionId: number;
+  toolCallId: string;
+  toolCall: ToolCall;
+  observation?: WorkbenchObservation;
+  started: boolean;
+}
+
 export interface CodexRolloutTranslationState {
   pendingToolCalls: Map<string, PendingToolCall>;
+  terminalSessions: Map<number, CodexTerminalSessionToolState>;
   lastTimelineTextSignature: string | null;
   providerSessionId?: string | undefined;
   currentTurnId?: string | undefined;
@@ -53,6 +68,7 @@ export function createCodexRolloutTranslationState(
 ): CodexRolloutTranslationState {
   const state: CodexRolloutTranslationState = {
     pendingToolCalls: new Map(),
+    terminalSessions: new Map(),
     lastTimelineTextSignature: null,
     nextTimelineItemIndex: 0,
   };
@@ -407,6 +423,91 @@ function shellCommandFromArgs(
   return null;
 }
 
+function terminalInteractionFromArgs(
+  name: string,
+  args: Record<string, unknown>,
+): { sessionId: number; chars: string } | null {
+  if (name !== "write_stdin") {
+    return null;
+  }
+  const rawSessionId = args.session_id;
+  const sessionId =
+    typeof rawSessionId === "number" && Number.isInteger(rawSessionId)
+      ? rawSessionId
+      : typeof rawSessionId === "string" && /^\d+$/.test(rawSessionId)
+        ? Number.parseInt(rawSessionId, 10)
+        : undefined;
+  if (sessionId === undefined) {
+    return null;
+  }
+  const chars = typeof args.chars === "string" ? args.chars : "";
+  return { sessionId, chars };
+}
+
+function fallbackTerminalSessionToolCallId(sessionId: number): string {
+  return `terminal-session-${sessionId}`;
+}
+
+function makeTerminalSessionToolCall(sessionId: number): ToolCall {
+  return {
+    id: fallbackTerminalSessionToolCallId(sessionId),
+    family: "shell",
+    providerToolName: "write_stdin",
+    title: "Terminal session",
+    result: { sessionId },
+  };
+}
+
+function mergeTextArtifact(
+  current: Extract<ToolCallArtifact, { kind: "text" }>,
+  incoming: Extract<ToolCallArtifact, { kind: "text" }>,
+): Extract<ToolCallArtifact, { kind: "text" }> {
+  if (incoming.text.startsWith(current.text)) {
+    return incoming;
+  }
+  if (current.text.endsWith(incoming.text)) {
+    return current;
+  }
+  return {
+    ...current,
+    text: `${current.text}${incoming.text}`,
+  };
+}
+
+function appendToolTextArtifact(toolCall: ToolCall, label: string, text: string): ToolCall {
+  if (!text) {
+    return toolCall;
+  }
+  const artifacts = [...(toolCall.detail?.artifacts ?? [])];
+  const incoming: Extract<ToolCallArtifact, { kind: "text" }> = { kind: "text", label, text };
+  const existingIndex = artifacts.findIndex(
+    (artifact) => artifact.kind === "text" && artifact.label === label,
+  );
+  if (existingIndex < 0) {
+    artifacts.push(incoming);
+  } else {
+    const existing = artifacts[existingIndex];
+    if (existing?.kind === "text") {
+      artifacts[existingIndex] = mergeTextArtifact(existing, incoming);
+    }
+  }
+  return {
+    ...toolCall,
+    detail: { artifacts },
+  };
+}
+
+function runningTerminalToolCall(toolCall: ToolCall, sessionId: number): ToolCall {
+  return {
+    ...toolCall,
+    result: {
+      ...(toolCall.result ?? {}),
+      sessionId,
+    },
+    summary: `Process running with session ID ${sessionId}.`,
+  };
+}
+
 function makeCommandObservation(
   callId: string,
   command: string,
@@ -474,6 +575,23 @@ function completeObservation(
     ...(params.exitCode !== undefined
       ? { summary: `Process exited with code ${params.exitCode}.` }
       : {}),
+    detail: { artifacts },
+  };
+}
+
+function runningTerminalObservation(
+  observation: WorkbenchObservation,
+  sessionId: number,
+  output?: string,
+): WorkbenchObservation {
+  const artifacts = [...(observation.detail?.artifacts ?? [])];
+  if (output) {
+    artifacts.push({ kind: "text", label: "output", text: output });
+  }
+  return {
+    ...observation,
+    status: "running",
+    summary: `Process running with session ID ${sessionId}.`,
     detail: { artifacts },
   };
 }
@@ -608,11 +726,12 @@ function interruptedPendingToolActivities(
   line: Record<string, unknown>,
   options: { includeTimelineStatus: boolean },
 ): CodexTranslatedActivity[] {
-  if (state.pendingToolCalls.size === 0) {
+  if (state.pendingToolCalls.size === 0 && state.terminalSessions.size === 0) {
     return [];
   }
 
   const result: CodexTranslatedActivity[] = [];
+  const failedToolCallIds = new Set<string>();
   for (const [callId, pending] of state.pendingToolCalls) {
     if (pending.hidden) {
       continue;
@@ -633,6 +752,7 @@ function interruptedPendingToolActivities(
           "derived",
         ),
       );
+      failedToolCallIds.add(callId);
     }
     result.push(
       persistedActivity(
@@ -645,8 +765,45 @@ function interruptedPendingToolActivities(
         "derived",
       ),
     );
+    failedToolCallIds.add(callId);
   }
   state.pendingToolCalls.clear();
+
+  for (const terminalSession of state.terminalSessions.values()) {
+    if (failedToolCallIds.has(terminalSession.toolCallId)) {
+      continue;
+    }
+    if (terminalSession.observation) {
+      result.push(
+        persistedActivity(
+          line,
+          {
+            type: "observation_failed",
+            observation: {
+              ...terminalSession.observation,
+              status: "failed",
+              summary: CODEX_INTERRUPTED_PENDING_TOOL_ERROR,
+            },
+            error: CODEX_INTERRUPTED_PENDING_TOOL_ERROR,
+          },
+          "derived",
+        ),
+      );
+    }
+    result.push(
+      persistedActivity(
+        line,
+        {
+          type: "tool_call_failed",
+          toolCallId: terminalSession.toolCallId,
+          error: CODEX_INTERRUPTED_PENDING_TOOL_ERROR,
+        },
+        "derived",
+      ),
+    );
+    failedToolCallIds.add(terminalSession.toolCallId);
+  }
+  state.terminalSessions.clear();
 
   if (options.includeTimelineStatus && result.length > 0) {
     result.push(
@@ -991,6 +1148,63 @@ export function translateCodexRolloutLine(
       });
       return [];
     }
+    const terminalInteraction = args ? terminalInteractionFromArgs(payload.name, args) : null;
+    if (terminalInteraction) {
+      let terminalSession = state.terminalSessions.get(terminalInteraction.sessionId);
+      if (!terminalSession) {
+        const toolCall = makeTerminalSessionToolCall(terminalInteraction.sessionId);
+        terminalSession = {
+          sessionId: terminalInteraction.sessionId,
+          toolCallId: toolCall.id,
+          toolCall,
+          started: false,
+        };
+        state.terminalSessions.set(terminalInteraction.sessionId, terminalSession);
+      }
+      state.pendingToolCalls.set(callId, {
+        toolCall: mapGenericToolCall(
+          payload.name,
+          terminalSession.toolCallId,
+          args ?? payload.arguments,
+        ),
+        hidden: true,
+        terminalInteraction,
+      });
+      if (!terminalInteraction.chars) {
+        return [];
+      }
+      terminalSession.toolCall = appendToolTextArtifact(
+        terminalSession.toolCall,
+        "stdin",
+        terminalInteraction.chars,
+      );
+      if (!terminalSession.started) {
+        terminalSession.started = true;
+        return [
+          persistedActivity(
+            record,
+            {
+              type: "tool_call_started",
+              toolCall: terminalSession.toolCall,
+            },
+            "derived",
+          ),
+        ];
+      }
+      return [
+        persistedActivity(
+          record,
+          {
+            type: "tool_call_delta",
+            toolCallId: terminalSession.toolCallId,
+            detail: {
+              artifacts: [{ kind: "text", label: "stdin", text: terminalInteraction.chars }],
+            },
+          },
+          "derived",
+        ),
+      ];
+    }
     const shell = args ? shellCommandFromArgs(payload.name, args) : null;
     if (!shell) {
       const toolCall = mapGenericToolCall(payload.name, callId, args ?? payload.arguments);
@@ -1087,6 +1301,119 @@ export function translateCodexRolloutLine(
     if (!pending || typeof payload.output !== "string") {
       return invalidRolloutActivity(record, "function_call_output had no pending call or string output");
     }
+    if (pending.terminalInteraction) {
+      state.pendingToolCalls.delete(payload.call_id);
+      let terminalSession = state.terminalSessions.get(pending.terminalInteraction.sessionId);
+      if (!terminalSession) {
+        return [];
+      }
+      const parsedOutput = parseFunctionCallOutput(payload.output);
+      const prefixActivities: CodexTranslatedActivity[] = [];
+      if (!terminalSession.started) {
+        terminalSession.started = true;
+        prefixActivities.push(
+          persistedActivity(
+            record,
+            {
+              type: "tool_call_started",
+              toolCall: terminalSession.toolCall,
+            },
+            "derived",
+          ),
+        );
+      }
+      const outputText = parsedOutput.textOutput;
+      if (outputText) {
+        terminalSession.toolCall = appendToolTextArtifact(
+          terminalSession.toolCall,
+          "stdout",
+          outputText,
+        );
+      }
+      if (parsedOutput.runningSessionId !== undefined && parsedOutput.exitCode === undefined) {
+        terminalSession = {
+          ...terminalSession,
+          sessionId: parsedOutput.runningSessionId,
+          toolCall: runningTerminalToolCall(
+            terminalSession.toolCall,
+            parsedOutput.runningSessionId,
+          ),
+        };
+        state.terminalSessions.set(parsedOutput.runningSessionId, terminalSession);
+        if (parsedOutput.runningSessionId !== pending.terminalInteraction.sessionId) {
+          state.terminalSessions.delete(pending.terminalInteraction.sessionId);
+        }
+      }
+      if (parsedOutput.exitCode !== undefined) {
+        const completedToolCall: ToolCall = {
+          ...terminalSession.toolCall,
+          result: {
+            ...(terminalSession.toolCall.result ?? {}),
+            sessionId: terminalSession.sessionId,
+            exitCode: parsedOutput.exitCode,
+          },
+          summary: `Process exited with code ${parsedOutput.exitCode}.`,
+        };
+        state.terminalSessions.delete(pending.terminalInteraction.sessionId);
+        state.terminalSessions.delete(terminalSession.sessionId);
+        if (parsedOutput.runningSessionId !== undefined) {
+          state.terminalSessions.delete(parsedOutput.runningSessionId);
+        }
+        const completedObservation = terminalSession.observation
+          ? completeObservation(terminalSession.observation, {
+              status: parsedOutput.exitCode !== 0 ? "failed" : "completed",
+              ...(outputText !== undefined ? { output: outputText } : {}),
+              exitCode: parsedOutput.exitCode,
+            })
+          : null;
+        return [
+          ...prefixActivities,
+          ...(completedObservation
+            ? [
+                persistedActivity(
+                  record,
+                  completedObservation.status === "failed"
+                    ? {
+                        type: "observation_failed",
+                        observation: completedObservation,
+                        ...(outputText !== undefined ? { error: outputText } : {}),
+                      }
+                    : {
+                        type: "observation_completed",
+                        observation: completedObservation,
+                      },
+                  "derived",
+                ),
+              ]
+            : []),
+          persistedActivity(
+            record,
+            {
+              type: "tool_call_completed",
+              toolCall: completedToolCall,
+            },
+            "derived",
+          ),
+        ];
+      }
+      if (!outputText) {
+        return prefixActivities;
+      }
+      return [
+        ...prefixActivities,
+        persistedActivity(
+          record,
+          {
+            type: "tool_call_delta",
+            toolCallId: terminalSession.toolCallId,
+            detail: {
+              artifacts: [{ kind: "text", label: "stdout", text: outputText }],
+            },
+          },
+          "derived",
+        ),
+      ];
+    }
     if (pending.hidden) {
       state.pendingToolCalls.delete(payload.call_id);
       if (!pending.councilMcpToolCall) {
@@ -1127,14 +1454,63 @@ export function translateCodexRolloutLine(
     }
 
     const parsedOutput = parseFunctionCallOutput(payload.output);
+    const isContinuingTerminalSession =
+      parsedOutput.runningSessionId !== undefined && parsedOutput.exitCode === undefined;
     const artifacts = [...(pending.toolCall.detail?.artifacts ?? [])];
-    const outputText = parsedOutput.textOutput ?? payload.output.trimEnd();
+    const outputText =
+      parsedOutput.textOutput ??
+      (isContinuingTerminalSession ? undefined : payload.output.trimEnd());
     if (outputText) {
       artifacts.push({
         kind: "text",
         label: "stdout",
         text: outputText,
       });
+    }
+
+    if (isContinuingTerminalSession) {
+      const runningSessionId = parsedOutput.runningSessionId!;
+      const runningToolCall = runningTerminalToolCall(
+        {
+          ...pending.toolCall,
+          ...(artifacts.length > 0 ? { detail: { artifacts } } : {}),
+        },
+        runningSessionId,
+      );
+      state.terminalSessions.set(runningSessionId, {
+        sessionId: runningSessionId,
+        toolCallId: runningToolCall.id,
+        toolCall: runningToolCall,
+        started: true,
+        ...(pending.observation ? { observation: pending.observation } : {}),
+      });
+      state.pendingToolCalls.delete(payload.call_id);
+      return [
+        ...(pending.observation
+          ? [
+              persistedActivity(
+                record,
+                {
+                  type: "observation_updated",
+                  observation: runningTerminalObservation(
+                    pending.observation,
+                    runningSessionId,
+                    outputText,
+                  ),
+                },
+                "derived",
+              ),
+            ]
+          : []),
+        persistedActivity(
+          record,
+          {
+            type: "tool_call_started",
+            toolCall: runningToolCall,
+          },
+          "derived",
+        ),
+      ];
     }
 
     const result: Record<string, unknown> = {};

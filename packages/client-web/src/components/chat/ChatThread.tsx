@@ -35,6 +35,14 @@ const BOTTOM_STICK_THRESHOLD_PX = 120;
 const TOP_HISTORY_TRIGGER_PX = 96;
 const TOP_HISTORY_REARM_PX = 220;
 
+function isDocumentHidden(): boolean {
+  return typeof document !== "undefined" && document.visibilityState === "hidden";
+}
+
+function isScrollNearBottom(node: HTMLElement): boolean {
+  return node.scrollHeight - node.clientHeight - node.scrollTop <= BOTTOM_STICK_THRESHOLD_PX;
+}
+
 function TimelineCard(props: {
   icon: React.ReactNode;
   title: string;
@@ -324,12 +332,15 @@ export function ChatThread(props: {
   const loadingOlderRef = useRef(false);
   const stickToBottomRef = useRef(true);
   const sessionSwitchBottomLockRef = useRef(true);
+  const returnToBottomOnVisibleRef = useRef(true);
+  const pendingVisibleBottomRestoreRef = useRef(false);
   const prependAnchorRef = useRef<PrependAnchor | null>(null);
   const lastScrollTopRef = useRef(0);
   const topHistoryAutoLoadArmedRef = useRef(true);
   const measuredHeightsRef = useRef<Map<string, number>>(new Map());
   const scrollRafRef = useRef<number | null>(null);
   const measuredHeightsRafRef = useRef<number | null>(null);
+  const visibilityRestoreRafRef = useRef<number | null>(null);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [measuredHeightsVersion, setMeasuredHeightsVersion] = useState(0);
   const [viewport, setViewport] = useState({ scrollTop: 0, height: 0 });
@@ -407,6 +418,38 @@ export function ChatThread(props: {
     });
   }, []);
 
+  const scrollToBottomNow = useCallback(() => {
+    const node = containerRef.current;
+    if (!node) {
+      return;
+    }
+    node.scrollTop = node.scrollHeight;
+    lastScrollTopRef.current = node.scrollTop;
+    stickToBottomRef.current = true;
+    returnToBottomOnVisibleRef.current = true;
+    pendingVisibleBottomRestoreRef.current = false;
+    setShowScrollToBottom(false);
+    syncViewport();
+  }, [syncViewport]);
+
+  const restoreBottomAfterForeground = useCallback(() => {
+    if (
+      !returnToBottomOnVisibleRef.current &&
+      !pendingVisibleBottomRestoreRef.current &&
+      !sessionSwitchBottomLockRef.current
+    ) {
+      return;
+    }
+    scrollToBottomNow();
+    if (visibilityRestoreRafRef.current !== null) {
+      cancelAnimationFrame(visibilityRestoreRafRef.current);
+    }
+    visibilityRestoreRafRef.current = requestAnimationFrame(() => {
+      visibilityRestoreRafRef.current = null;
+      scrollToBottomNow();
+    });
+  }, [scrollToBottomNow]);
+
   const captureVisiblePrependAnchor = useCallback((): PrependAnchor | null => {
     const node = containerRef.current;
     if (!node) {
@@ -446,6 +489,10 @@ export function ChatThread(props: {
       cancelAnimationFrame(measuredHeightsRafRef.current);
       measuredHeightsRafRef.current = null;
     }
+    if (visibilityRestoreRafRef.current !== null) {
+      cancelAnimationFrame(visibilityRestoreRafRef.current);
+      visibilityRestoreRafRef.current = null;
+    }
     setMeasuredHeightsVersion(0);
     setViewport({ scrollTop: 0, height: 0 });
     setShowScrollToBottom(false);
@@ -461,6 +508,10 @@ export function ChatThread(props: {
         cancelAnimationFrame(measuredHeightsRafRef.current);
         measuredHeightsRafRef.current = null;
       }
+      if (visibilityRestoreRafRef.current !== null) {
+        cancelAnimationFrame(visibilityRestoreRafRef.current);
+        visibilityRestoreRafRef.current = null;
+      }
     };
   }, []);
 
@@ -471,12 +522,13 @@ export function ChatThread(props: {
     }
 
     const updateStickiness = () => {
-      const distanceToBottom =
-        node.scrollHeight - node.clientHeight - node.scrollTop;
-      const isAtBottom = distanceToBottom <= BOTTOM_STICK_THRESHOLD_PX;
+      const isAtBottom = isScrollNearBottom(node);
       const contentNeedsMoreHistory =
         node.scrollHeight <= node.clientHeight + TOP_HISTORY_TRIGGER_PX;
       stickToBottomRef.current = isAtBottom;
+      if (!isDocumentHidden()) {
+        returnToBottomOnVisibleRef.current = isAtBottom || sessionSwitchBottomLockRef.current;
+      }
       if (!isAtBottom) {
         sessionSwitchBottomLockRef.current = false;
       }
@@ -527,6 +579,42 @@ export function ChatThread(props: {
   ]);
 
   useEffect(() => {
+    const rememberHiddenStickiness = () => {
+      const node = containerRef.current;
+      if (!node) {
+        return;
+      }
+      returnToBottomOnVisibleRef.current =
+        sessionSwitchBottomLockRef.current ||
+        stickToBottomRef.current ||
+        isScrollNearBottom(node);
+    };
+
+    const handleVisibilityChange = () => {
+      if (isDocumentHidden()) {
+        rememberHiddenStickiness();
+        return;
+      }
+      restoreBottomAfterForeground();
+    };
+
+    const handleForeground = () => {
+      if (!isDocumentHidden()) {
+        restoreBottomAfterForeground();
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("focus", handleForeground);
+    window.addEventListener("pageshow", handleForeground);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("focus", handleForeground);
+      window.removeEventListener("pageshow", handleForeground);
+    };
+  }, [restoreBottomAfterForeground]);
+
+  useEffect(() => {
     const node = containerRef.current;
     if (!node || typeof ResizeObserver === "undefined") {
       return;
@@ -553,9 +641,14 @@ export function ChatThread(props: {
       if (!stickToBottomRef.current && !sessionSwitchBottomLockRef.current) {
         return;
       }
+      if (isDocumentHidden()) {
+        pendingVisibleBottomRestoreRef.current = true;
+        return;
+      }
       node.scrollTop = node.scrollHeight;
       lastScrollTopRef.current = node.scrollTop;
       stickToBottomRef.current = true;
+      returnToBottomOnVisibleRef.current = true;
       setShowScrollToBottom(false);
       if (!props.historyLoading) {
         sessionSwitchBottomLockRef.current = false;
@@ -617,14 +710,25 @@ export function ChatThread(props: {
 
     const shouldForceBottom = sessionSwitchBottomLockRef.current;
     if (shouldForceBottom) {
+      if (isDocumentHidden()) {
+        pendingVisibleBottomRestoreRef.current = true;
+        previousEntryCountRef.current = entries.length;
+        return;
+      }
       node.scrollTop = node.scrollHeight;
       lastScrollTopRef.current = node.scrollTop;
       stickToBottomRef.current = true;
+      returnToBottomOnVisibleRef.current = true;
       setShowScrollToBottom(false);
       if (!props.historyLoading) {
         sessionSwitchBottomLockRef.current = false;
       }
     } else if (entries.length > previousEntryCountRef.current && stickToBottomRef.current) {
+      if (isDocumentHidden()) {
+        pendingVisibleBottomRestoreRef.current = true;
+        previousEntryCountRef.current = entries.length;
+        return;
+      }
       bottomRef.current?.scrollIntoView({ behavior: "smooth" });
     }
     previousEntryCountRef.current = entries.length;

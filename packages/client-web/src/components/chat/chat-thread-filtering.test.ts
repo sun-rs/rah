@@ -28,6 +28,44 @@ function assistantEntry(key: string, sourceProvider?: Extract<FeedEntry, { kind:
   };
 }
 
+function toolEntry(
+  key: string,
+  status: Extract<FeedEntry, { kind: "tool_call" }>["status"],
+): FeedEntry {
+  return {
+    key,
+    kind: "tool_call",
+    status,
+    ts: TS,
+    toolCall: {
+      id: key.replace(/^tool:/, ""),
+      family: "shell",
+      providerToolName: "exec_command",
+      title: "Run command",
+    },
+  };
+}
+
+function observationEntry(
+  key: string,
+  providerCallId: string,
+  status: Extract<FeedEntry, { kind: "observation" }>["status"] = "completed",
+): FeedEntry {
+  return {
+    key,
+    kind: "observation",
+    status,
+    ts: TS,
+    observation: {
+      id: key.replace(/^obs:/, ""),
+      kind: "command.run",
+      status,
+      title: "Run command",
+      subject: { providerCallId },
+    },
+  };
+}
+
 describe("chat thread filtering", () => {
   test("hides OpenCode reasoning when its chat preference is enabled", () => {
     const entries = visibleFeedEntries(
@@ -94,5 +132,49 @@ describe("chat thread filtering", () => {
     const entries = visibleFeedEntries([reasoningEntry("opencode-reasoning", "opencode")], false);
 
     assert.deepEqual(entries.map((entry) => entry.key), ["opencode-reasoning"]);
+  });
+
+  test("hides only completed tool calls when the tool preference is enabled", () => {
+    const entries = visibleFeedEntries(
+      [
+        toolEntry("tool:done", "completed"),
+        toolEntry("tool:running", "running"),
+        toolEntry("tool:failed", "failed"),
+      ],
+      true,
+    );
+
+    assert.deepEqual(entries.map((entry) => entry.key), [
+      "tool:running",
+      "tool:failed",
+    ]);
+  });
+
+  test("hides completed tool-backed observations while preserving active ones", () => {
+    const entries = visibleFeedEntries(
+      [
+        observationEntry("obs:done", "done", "completed"),
+        observationEntry("obs:running", "running", "running"),
+        observationEntry("obs:failed", "failed", "failed"),
+      ],
+      true,
+    );
+
+    assert.deepEqual(entries.map((entry) => entry.key), [
+      "obs:running",
+      "obs:failed",
+    ]);
+  });
+
+  test("hides tool-backed observations when their tool card is present", () => {
+    const entries = visibleFeedEntries(
+      [
+        toolEntry("tool:cmd-1", "running"),
+        observationEntry("obs:cmd-1", "cmd-1", "running"),
+      ],
+      false,
+    );
+
+    assert.deepEqual(entries.map((entry) => entry.key), ["tool:cmd-1"]);
   });
 });

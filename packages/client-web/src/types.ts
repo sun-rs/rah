@@ -1289,7 +1289,17 @@ function applyToolCallEvent(
   }
   const nextToolCall =
     event.type === "tool.call.completed"
-      ? event.payload.toolCall
+      ? (() => {
+          const mergedDetail = mergeToolCallDetail(
+            current.toolCall.detail,
+            event.payload.toolCall.detail,
+          );
+          return {
+            ...current.toolCall,
+            ...event.payload.toolCall,
+            ...(mergedDetail !== undefined ? { detail: mergedDetail } : {}),
+          };
+        })()
       : withMergedToolDetail(current.toolCall, event.payload.detail);
   const nextEntry = createToolCallEntry(
     {

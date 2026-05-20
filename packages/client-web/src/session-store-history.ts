@@ -398,7 +398,7 @@ function mergeLatestHistoryFeed(
   currentFeed: FeedEntry[],
   historyFeed: FeedEntry[],
 ): FeedEntry[] {
-  const nextFeed = [...historyFeed];
+  let nextFeed = [...historyFeed];
   const currentKeyIndex = new Map(
     nextFeed.map((entry, index) => [entry.key, index] as const),
   );
@@ -433,10 +433,25 @@ function mergeLatestHistoryFeed(
     if (compositeCoveredOptimisticKeys.has(current.key)) {
       continue;
     }
-    nextFeed.push(current);
+    nextFeed = insertFeedEntryByTimestamp(nextFeed, current);
   }
 
   return nextFeed;
+}
+
+function insertFeedEntryByTimestamp(feed: FeedEntry[], entry: FeedEntry): FeedEntry[] {
+  const entryMs = Date.parse(entry.ts);
+  if (!Number.isFinite(entryMs)) {
+    return [...feed, entry];
+  }
+  const insertIndex = feed.findIndex((candidate) => {
+    const candidateMs = Date.parse(candidate.ts);
+    return Number.isFinite(candidateMs) && candidateMs > entryMs;
+  });
+  if (insertIndex < 0) {
+    return [...feed, entry];
+  }
+  return [...feed.slice(0, insertIndex), entry, ...feed.slice(insertIndex)];
 }
 
 function findCompositeCoveredOptimisticKeys(
