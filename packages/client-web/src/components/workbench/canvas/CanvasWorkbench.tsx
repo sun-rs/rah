@@ -3,7 +3,9 @@ import type { ReactNode, PointerEvent as ReactPointerEvent } from "react";
 import { Columns2, Columns3, Eraser, Grid2X2, Maximize2, Menu, Minimize2, Rows2, X } from "lucide-react";
 import {
   HEADER_ACTION_GROUP_CLASS,
+  HEADER_SEGMENTED_BUTTON_ACTIVE_CLASS,
   HEADER_SEGMENTED_BUTTON_BASE_CLASS,
+  HEADER_SEGMENTED_BUTTON_INACTIVE_CLASS,
   HEADER_SEGMENTED_CONTROL_CLASS,
   HEADER_TEXT_BUTTON_CLASS,
 } from "../header-button-styles";
@@ -237,8 +239,8 @@ export function CanvasWorkbench(props: {
                 type="button"
                 className={`${HEADER_SEGMENTED_BUTTON_BASE_CLASS} gap-1 ${
                   props.layout === layout.id && !props.maximizedPaneId
-                    ? "bg-[var(--app-bg)] text-[var(--app-fg)] shadow-sm"
-                    : "text-[var(--app-hint)] hover:text-[var(--app-fg)]"
+                    ? HEADER_SEGMENTED_BUTTON_ACTIVE_CLASS
+                    : HEADER_SEGMENTED_BUTTON_INACTIVE_CLASS
                 }`}
                 onClick={() => props.onLayoutChange(layout.id)}
                 title={layout.title}

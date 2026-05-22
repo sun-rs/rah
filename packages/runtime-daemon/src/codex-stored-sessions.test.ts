@@ -644,4 +644,82 @@ describe("codex stored session path resolution", () => {
       ),
     );
   });
+
+  test("stored Codex history does not mark running terminal sessions as interrupted at EOF", () => {
+    const rolloutPath = path.join(repoRoot, "rollout-running-terminal.jsonl");
+    writeFileSync(
+      rolloutPath,
+      `${[
+        {
+          type: "response_item",
+          timestamp: "2025-07-19T22:00:00.000Z",
+          payload: {
+            type: "function_call",
+            name: "exec_command",
+            arguments: JSON.stringify({ cmd: "npm run long-task", workdir: repoRoot }),
+            call_id: "call-running",
+          },
+        },
+        {
+          type: "response_item",
+          timestamp: "2025-07-19T22:00:01.000Z",
+          payload: {
+            type: "function_call_output",
+            call_id: "call-running",
+            output: "Chunk ID: abc\nWall time: 1.0 seconds\nProcess running with session ID 7144",
+          },
+        },
+      ].map((line) => JSON.stringify(line)).join("\n")}\n`,
+      "utf8",
+    );
+    const record: CodexStoredSessionRecord = {
+      ref: {
+        provider: "codex",
+        providerSessionId: "provider-running-terminal",
+        cwd: repoRoot,
+        rootDir: repoRoot,
+        title: "running terminal",
+        preview: "running terminal",
+        updatedAt: "2025-07-19T22:00:01.000Z",
+        source: "provider_history",
+      },
+      rolloutPath,
+    };
+
+    const page = getCodexStoredSessionHistoryPage({
+      sessionId: "replay-running-terminal",
+      record,
+      limit: 100,
+      finalizeUnterminatedTools: true,
+    });
+    assert.equal(
+      page.events.some(
+        (event) =>
+          event.type === "tool.call.failed" ||
+          event.type === "observation.failed" ||
+          (event.type === "timeline.item.added" &&
+            event.payload.item.kind === "system" &&
+            /interrupted/i.test(event.payload.item.text)),
+      ),
+      false,
+    );
+
+    const finalizedLoader = createCodexStoredSessionFrozenHistoryPageLoader({
+      sessionId: "replay-running-terminal",
+      record,
+      finalizeUnterminatedTools: true,
+    });
+    const frozenPage = finalizedLoader.loadInitialPage(100);
+    assert.equal(
+      frozenPage.events.some(
+        (event) =>
+          event.type === "tool.call.failed" ||
+          event.type === "observation.failed" ||
+          (event.type === "timeline.item.added" &&
+            event.payload.item.kind === "system" &&
+            /interrupted/i.test(event.payload.item.text)),
+      ),
+      false,
+    );
+  });
 });

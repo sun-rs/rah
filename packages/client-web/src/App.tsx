@@ -48,6 +48,7 @@ import {
   canSessionShowInfo,
   isSessionGenerationActive,
   isReadOnlyReplay,
+  shouldPollSessionHistoryTail,
 } from "./session-capabilities";
 import {
   createDefaultModeDraft,
@@ -253,6 +254,7 @@ export function App() {
   const {
     init,
     refreshWorkbenchState,
+    loadStoredSessionsCatalog,
     recoverTransport,
     projections,
     unreadSessionIds,
@@ -297,6 +299,7 @@ export function App() {
     useShallow((state) => ({
       init: state.init,
       refreshWorkbenchState: state.refreshWorkbenchState,
+      loadStoredSessionsCatalog: state.loadStoredSessionsCatalog,
       recoverTransport: state.recoverTransport,
       projections: state.projections,
       unreadSessionIds: state.unreadSessionIds,
@@ -620,12 +623,17 @@ export function App() {
   const clearCanvasPane = (paneId: CanvasPaneId) => {
     const projection = resolveCanvasProjection(paneId);
     const council = resolveCanvasCouncil(paneId);
+    const sessionId = projection?.summary.session.id;
+    const shouldCloseReadOnlyReplay = projection ? isReadOnlyReplay(projection.summary) : false;
     setCanvasPaneTarget(paneId, { kind: "empty" });
-    if (projection?.summary.session.id && selectedSessionId === projection.summary.session.id) {
+    if (sessionId && selectedSessionId === sessionId) {
       setSelectedSessionId(null);
     }
     if (council?.id && selectedCouncilId === council.id) {
       setSelectedCouncilId(null);
+    }
+    if (sessionId && shouldCloseReadOnlyReplay) {
+      void closeSession(sessionId);
     }
   };
 
@@ -682,12 +690,9 @@ export function App() {
     ? canSessionRespondToPermissions(selectedSummary)
     : false;
   const selectedIsReadOnlyReplay = selectedSummary ? isReadOnlyReplay(selectedSummary) : false;
-  const shouldSyncSelectedHistoryTail =
-    Boolean(selectedSummary?.session.providerSessionId) &&
-    !selectedIsReadOnlyReplay &&
-    (selectedSummary?.session.liveBackend === "native_local_server" ||
-      selectedSummary?.session.liveBackend === "tui_mux" ||
-      selectedSummary?.session.liveBackend === "native_tui");
+  const shouldSyncSelectedHistoryTail = selectedSummary
+    ? shouldPollSessionHistoryTail(selectedSummary)
+    : false;
 
   useEffect(() => {
     if (!selectedSessionId || !shouldSyncSelectedHistoryTail) {
@@ -1267,6 +1272,7 @@ export function App() {
         onActivateHistory={handleActivateHistorySession}
         onActivateRunning={handleActivateRunningSession}
         onActivateCouncil={handleActivateCouncil}
+        onLoadStoredSessions={loadStoredSessionsCatalog}
         onRefreshCouncils={refreshCouncils}
         onRenameCouncil={(council) => setRenameDialogCouncilId(council.id)}
         onRemoveCouncil={removeCouncilFromChats}
@@ -1773,6 +1779,7 @@ export function App() {
                           })
                             .catch(() => undefined);
                         }}
+                        onOpenNewCouncil={() => setHomeNewCouncilDialogOpen(true)}
                         onBack={() => setCanvasPaneTarget(typedPaneId, { kind: "empty" })}
                         onCancel={() => setCanvasPaneTarget(typedPaneId, { kind: "empty" })}
                       />
@@ -1799,6 +1806,7 @@ export function App() {
                           onActivate={(ref) => setCanvasPaneStoredRef(typedPaneId, ref)}
                           onActivateRunning={(sessionId) => setCanvasPaneSession(typedPaneId, sessionId)}
                           onActivateCouncil={(councilId) => setCanvasPaneCouncil(typedPaneId, councilId)}
+                          onLoadStoredSessions={loadStoredSessionsCatalog}
                           onRefreshCouncils={refreshCouncils}
                           onRenameCouncil={(council) => setRenameDialogCouncilId(council.id)}
                           onRemoveCouncil={removeCouncilFromChats}

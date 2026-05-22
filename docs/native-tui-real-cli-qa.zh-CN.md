@@ -12,7 +12,7 @@ Core live CLI 版本：
 
 | Provider | 命令 | 当前输出 |
 |---|---|---|
-| Codex | `codex --version` | `codex-cli 0.130.0` |
+| Codex | `codex --version` | 推荐 `codex-cli >= 0.132.0`；本机安装版本以 smoke/probe 输出为准 |
 | Claude | `claude --version` | `2.1.138 (Claude Code)` |
 | Gemini | `gemini --version` | 本机安装版本，以 smoke/probe 输出为准 |
 | OpenCode | `opencode --version` | `1.14.41` |

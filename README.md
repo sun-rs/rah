@@ -266,12 +266,15 @@ Diagnostics intentionally report only:
 - launch command
 - version probe
 - basic runtime status
+- Codex `doctor --json` summary when available
 
 Provider diagnostics are scoped to the core live providers: Codex, Claude, Gemini, and OpenCode. Kimi
 CLI binaries are no longer probed in Settings.
 
-They intentionally do **not** claim that provider authentication is valid. Auth remains managed by
-the provider CLI itself.
+They intentionally do **not** claim that provider authentication is valid. Codex diagnostics may show
+whether Codex reports configured ChatGPT/API-key credentials, app-server status, and reachability via
+`codex doctor --json`, but auth, quota, account entitlement, and token refresh remain managed by the
+provider CLI itself.
 
 Current statuses are:
 
@@ -295,7 +298,9 @@ RAH keeps the live runtime boundary explicit:
 `1.0.0-rc.1` is considered feature-complete enough for the current runtime scope:
 
 - Codex native local-server WebSocket runtime is wired, and Codex 0.130.0 remote TUI cross-client
-  sync has passed `scripts/native_local_server_probe.ts`.
+  sync has passed `scripts/native_local_server_probe.ts`. Codex `>=0.132.0` is now recommended for
+  RAH because it includes stronger MCP replay/elicitation routing, faster TUI startup, and
+  machine-readable `codex doctor --json` diagnostics.
 - OpenCode native local-server attach/cross-client sync has passed `scripts/native_local_server_probe.ts`.
 - Claude tmux/TUI mux fallback remains the production continuity path for Claude.
 - Chat timeline uses canonical identity/reconciliation to avoid live/history duplicates.

@@ -506,6 +506,74 @@ rl.on('line', (line) => {
     await adapter.shutdown?.();
   });
 
+  test("unexpected Codex app-server exit marks the live session failed", async () => {
+    const serverJs = path.join(tmpDir, "mock-codex-exit-server.js");
+    writeFileSync(
+      serverJs,
+      `
+const readline = require('node:readline');
+const rl = readline.createInterface({ input: process.stdin });
+function send(msg) { process.stdout.write(JSON.stringify(msg) + "\\n"); }
+rl.on('line', (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method === 'initialize') {
+    send({ id: msg.id, result: {} });
+    return;
+  }
+  if (msg.method === 'thread/start') {
+    send({ id: msg.id, result: { thread: { id: 'thread-unexpected-exit' } } });
+    setTimeout(() => process.exit(2), 20);
+    return;
+  }
+  send({ id: msg.id, result: {} });
+});
+`,
+    );
+    const wrapper = path.join(tmpDir, "mock-codex");
+    writeFileSync(
+      wrapper,
+      `#!/bin/sh\nexec node "${serverJs}" "$@"\n`,
+    );
+    chmodSync(wrapper, 0o755);
+    process.env.RAH_CODEX_BINARY = wrapper;
+
+    const services = {
+      eventBus: new EventBus(),
+      ptyHub: new PtyHub(),
+      sessionStore: new SessionStore(),
+    };
+    const adapter = new CodexAdapter(services);
+
+    const started = await adapter.startSession({
+      provider: "codex",
+      cwd: tmpDir,
+      title: "live exit test",
+      attach: {
+        client: {
+          id: "test-client",
+          kind: "web",
+          connectionId: "test-client",
+        },
+        mode: "interactive",
+        claimControl: true,
+      },
+    });
+
+    await waitFor(() => {
+      const state = services.sessionStore.getSession(started.session.session.id);
+      return (
+        state?.session.runtimeState === "failed" &&
+        state.session.runtimeDiagnostics?.attachState === "failed"
+      );
+    });
+
+    assert.equal(
+      services.sessionStore.getSession(started.session.session.id)?.session.status,
+      "stopped",
+    );
+    await adapter.shutdown?.();
+  });
+
   test("queues consecutive Codex inputs instead of dropping the second turn", async () => {
     const serverJs = path.join(tmpDir, "mock-codex-queue-server.js");
     writeFileSync(

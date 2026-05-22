@@ -488,7 +488,9 @@ export async function handleHttpRequest(args: {
     }
 
     if (req.method === "GET" && pathname === "/api/sessions") {
-      writeJson(req, res, 200, engine.listSessions());
+      const storedSessionsMode =
+        url.searchParams.get("storedSessions") === "recent" ? "recent" : "all";
+      writeJson(req, res, 200, engine.listSessions({ storedSessionsMode }));
       return;
     }
 

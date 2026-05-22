@@ -454,7 +454,7 @@ describe("translateCodexRolloutLine", () => {
     }
   });
 
-  test("fails a still-running terminal session when persisted history ends", () => {
+  test("does not fail still-running terminal sessions at persisted history EOF", () => {
     const state = createCodexRolloutTranslationState();
 
     translateCodexRolloutLine(
@@ -487,15 +487,8 @@ describe("translateCodexRolloutLine", () => {
       timestamp: "2026-04-14T18:00:04.000Z",
     });
 
-    assert.deepEqual(
-      finalized.map((item) => item.activity.type),
-      ["observation_failed", "tool_call_failed", "timeline_item"],
-    );
-    const failed = finalized.find((item) => item.activity.type === "tool_call_failed")?.activity;
-    assert.equal(failed?.type, "tool_call_failed");
-    if (failed?.type === "tool_call_failed") {
-      assert.equal(failed.toolCallId, "call-exec");
-    }
+    assert.deepEqual(finalized, []);
+    assert.equal(state.terminalSessions.size, 0);
   });
 
   test("marks pending shell tools failed when a persisted Codex turn is interrupted", () => {
@@ -1356,6 +1349,193 @@ describe("translateCodexRolloutLine", () => {
         body: "Objective: 让我们做一个简单测试,你执行sleep 5秒即可",
       },
     ]);
+  });
+
+  test("maps persisted Codex thread goal updates into semantic notifications", () => {
+    const state = createCodexRolloutTranslationState();
+    const active = translateCodexRolloutLine(
+      {
+        timestamp: "2026-05-20T18:10:33.603Z",
+        type: "event_msg",
+        payload: {
+          type: "thread_goal_updated",
+          threadId: "thread-1",
+          turnId: "turn-1",
+          goal: {
+            threadId: "thread-1",
+            objective: "Implement the harmless test goal.",
+            status: "active",
+            tokensUsed: 0,
+            timeUsedSeconds: 0,
+            createdAt: 1779300633,
+            updatedAt: 1779300633,
+          },
+        },
+      },
+      state,
+    );
+    const accountingOnly = translateCodexRolloutLine(
+      {
+        timestamp: "2026-05-20T18:10:38.328Z",
+        type: "event_msg",
+        payload: {
+          type: "thread_goal_updated",
+          threadId: "thread-1",
+          turnId: "turn-1",
+          goal: {
+            threadId: "thread-1",
+            objective: "Implement the harmless test goal.",
+            status: "active",
+            tokensUsed: 3067,
+            timeUsedSeconds: 4,
+            createdAt: 1779300633,
+            updatedAt: 1779300638,
+          },
+        },
+      },
+      state,
+    );
+    const complete = translateCodexRolloutLine(
+      {
+        timestamp: "2026-05-20T18:11:38.328Z",
+        type: "event_msg",
+        payload: {
+          type: "thread_goal_updated",
+          threadId: "thread-1",
+          turnId: "turn-1",
+          goal: {
+            threadId: "thread-1",
+            objective: "Implement the harmless test goal.",
+            status: "complete",
+            tokensUsed: 4096,
+            timeUsedSeconds: 65,
+            createdAt: 1779300633,
+            updatedAt: 1779300698,
+          },
+        },
+      },
+      state,
+    );
+
+    assert.deepEqual(active.map((item) => item.activity), [
+      {
+        type: "notification",
+        level: "info",
+        title: "Goal active",
+        body: "Objective: Implement the harmless test goal.",
+        turnId: "turn-1",
+      },
+    ]);
+    assert.deepEqual(accountingOnly, []);
+    assert.deepEqual(complete.map((item) => item.activity), [
+      {
+        type: "notification",
+        level: "info",
+        title: "Goal complete",
+        body: "Objective: Implement the harmless test goal.\nUsage: 4096 tokens, 1m 5s",
+        turnId: "turn-1",
+      },
+    ]);
+  });
+
+  test("folds Codex goal context prompts out of the visible user transcript", () => {
+    const contextText = [
+      "<goal_context>",
+      "Continue working toward the active thread goal.",
+      "",
+      "<objective>",
+      "Keep making harmless progress.",
+      "</objective>",
+      "",
+      "Budget:",
+      "- Tokens used: 3067",
+      "</goal_context>",
+    ].join("\n");
+    const contextOnlyState = createCodexRolloutTranslationState({ providerSessionId: "thread-1" });
+
+    assert.deepEqual(
+      translateCodexRolloutLine(
+        {
+          timestamp: "2026-05-20T18:10:38.347Z",
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: contextText }],
+          },
+        },
+        contextOnlyState,
+      ).map((item) => item.activity),
+      [
+        {
+          type: "notification",
+          level: "info",
+          title: "Goal active",
+          body: "Objective: Keep making harmless progress.",
+        },
+      ],
+    );
+
+    const dedupedState = createCodexRolloutTranslationState({ providerSessionId: "thread-1" });
+    translateCodexRolloutLine(
+      {
+        timestamp: "2026-05-20T18:10:33.603Z",
+        type: "event_msg",
+        payload: {
+          type: "thread_goal_updated",
+          threadId: "thread-1",
+          turnId: "turn-1",
+          goal: {
+            threadId: "thread-1",
+            objective: "Keep making harmless progress.",
+            status: "active",
+            tokensUsed: 0,
+            timeUsedSeconds: 0,
+            createdAt: 1779300633,
+            updatedAt: 1779300633,
+          },
+        },
+      },
+      dedupedState,
+    );
+
+    assert.deepEqual(
+      translateCodexRolloutLine(
+        {
+          timestamp: "2026-05-20T18:10:38.347Z",
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: contextText }],
+          },
+        },
+        dedupedState,
+      ),
+      [],
+    );
+  });
+
+  test("maps Codex goal cleared events without repeating them", () => {
+    const state = createCodexRolloutTranslationState();
+    const line = {
+      timestamp: "2026-05-20T18:12:00.000Z",
+      type: "event_msg",
+      payload: {
+        type: "thread_goal_cleared",
+        threadId: "thread-1",
+      },
+    };
+
+    assert.deepEqual(translateCodexRolloutLine(line, state).map((item) => item.activity), [
+      {
+        type: "notification",
+        level: "info",
+        title: "Goal cleared",
+        body: "The active goal was cleared.",
+      },
+    ]);
+    assert.deepEqual(translateCodexRolloutLine(line, state), []);
   });
 
   test("ignores bootstrap user prompts that carry internal instructions and environment context", () => {

@@ -10,9 +10,15 @@ const RAH_NATIVE_SERVER_DAEMON_PID_KEY = "RAH_NATIVE_SERVER_DAEMON_PID";
 
 type RahNativeServerProvider = "codex" | "opencode";
 
-type ProcessEntry = {
+export type ProcessEntry = {
   pid: number;
   command: string;
+};
+
+type CleanupSelectionOptions = {
+  includeCurrentDaemon?: boolean;
+  currentPid?: number;
+  isProcessAlive?: (pid: number) => boolean;
 };
 
 export function rahNativeServerEnv(provider: RahNativeServerProvider): Record<string, string> {
@@ -45,14 +51,28 @@ async function listProcesses(): Promise<ProcessEntry[]> {
     .filter((entry): entry is ProcessEntry => Boolean(entry && Number.isFinite(entry.pid)));
 }
 
-function isRahNativeServer(entry: ProcessEntry): boolean {
-  if (entry.pid === process.pid || !entry.command.includes(`${RAH_NATIVE_SERVER_OWNER_KEY}=${RAH_NATIVE_SERVER_OWNER}`)) {
+function readEnvValue(command: string, key: string): string | undefined {
+  const match = command.match(new RegExp(`(?:^|\\s)${key}=([^\\s]+)`));
+  return match?.[1];
+}
+
+function isMarkedRahNativeServer(entry: ProcessEntry): boolean {
+  if (!entry.command.includes(`${RAH_NATIVE_SERVER_OWNER_KEY}=${RAH_NATIVE_SERVER_OWNER}`)) {
     return false;
   }
   return (
     entry.command.includes(`${RAH_NATIVE_SERVER_PROVIDER_KEY}=codex`) ||
     entry.command.includes(`${RAH_NATIVE_SERVER_PROVIDER_KEY}=opencode`)
   );
+}
+
+function readOwnerDaemonPid(entry: ProcessEntry): number | null {
+  const raw = readEnvValue(entry.command, RAH_NATIVE_SERVER_DAEMON_PID_KEY);
+  if (!raw) {
+    return null;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
 function isProcessAlive(pid: number): boolean {
@@ -62,6 +82,27 @@ function isProcessAlive(pid: number): boolean {
   } catch {
     return false;
   }
+}
+
+export function selectRahNativeServerCleanupTargets(
+  entries: readonly ProcessEntry[],
+  options: CleanupSelectionOptions = {},
+): ProcessEntry[] {
+  const currentPid = options.currentPid ?? process.pid;
+  const processAlive = options.isProcessAlive ?? isProcessAlive;
+  return entries.filter((entry) => {
+    if (entry.pid === currentPid || !isMarkedRahNativeServer(entry)) {
+      return false;
+    }
+    const ownerDaemonPid = readOwnerDaemonPid(entry);
+    if (ownerDaemonPid === currentPid) {
+      return options.includeCurrentDaemon === true;
+    }
+    if (ownerDaemonPid && processAlive(ownerDaemonPid)) {
+      return false;
+    }
+    return true;
+  });
 }
 
 async function terminateProcess(entry: ProcessEntry): Promise<void> {
@@ -93,7 +134,9 @@ async function terminateProcess(entry: ProcessEntry): Promise<void> {
   }
 }
 
-export async function cleanupRahNativeServerOrphans(): Promise<number[]> {
+export async function cleanupRahNativeServerOrphans(
+  options: CleanupSelectionOptions = {},
+): Promise<number[]> {
   let entries: ProcessEntry[];
   try {
     entries = await listProcesses();
@@ -104,7 +147,7 @@ export async function cleanupRahNativeServerOrphans(): Promise<number[]> {
     return [];
   }
   const closed: number[] = [];
-  for (const entry of entries.filter(isRahNativeServer)) {
+  for (const entry of selectRahNativeServerCleanupTargets(entries, options)) {
     await terminateProcess(entry).then(
       () => {
         closed.push(entry.pid);

@@ -139,6 +139,10 @@ type LoadProviderModelsOptions = {
   reason?: string;
 };
 
+type RefreshWorkbenchStateOptions = {
+  storedSessions?: "all" | "recent";
+};
+
 interface SessionState {
   clientId: string;
   connectionId: string;
@@ -146,6 +150,7 @@ interface SessionState {
   unreadSessionIds: Set<string>;
   storedSessions: StoredSessionRef[];
   recentSessions: StoredSessionRef[];
+  storedSessionsCatalogLoaded: boolean;
   workspaceDirs: string[];
   hiddenWorkspaceDirs: Set<string>;
   workspaceVisibilityVersion: number;
@@ -166,7 +171,8 @@ interface SessionState {
 
   init: () => Promise<void>;
   clearError: () => void;
-  refreshWorkbenchState: () => Promise<void>;
+  refreshWorkbenchState: (options?: RefreshWorkbenchStateOptions) => Promise<void>;
+  loadStoredSessionsCatalog: () => Promise<void>;
   recoverTransport: () => Promise<void>;
   setWorkspaceDir: (dir: string) => void;
   addWorkspace: (dir: string) => Promise<void>;
@@ -226,7 +232,8 @@ interface SessionState {
 }
 
 let lastEventSeq = 0;
-const HISTORY_PAGE_LIMIT = 250;
+let storedSessionsCatalogLoadInFlight: Promise<void> | null = null;
+const HISTORY_PAGE_LIMIT = 60;
 const MODEL_CATALOG_PROVIDERS = new Set<ProviderChoice>([
   "codex",
   "claude",
@@ -534,6 +541,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   unreadSessionIds: new Set(),
   storedSessions: [],
   recentSessions: [],
+  storedSessionsCatalogLoaded: false,
   workspaceDirs: [],
   hiddenWorkspaceDirs: new Set(),
   workspaceVisibilityVersion: 0,
@@ -970,17 +978,21 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
   },
 
-  refreshWorkbenchState: async () => {
+  refreshWorkbenchState: async (options = {}) => {
     try {
       const workspaceVisibilityVersionAtRequest = get().workspaceVisibilityVersion;
+      const storedSessionsMode =
+        options.storedSessions ?? (get().storedSessionsCatalogLoaded ? "all" : "recent");
       const [sessionsResponse, debugScenarios] = await Promise.all([
-        api.listSessions(),
+        api.listSessions({ storedSessions: storedSessionsMode }),
         isLabModeEnabled() ? api.listDebugScenarios() : Promise.resolve([]),
       ]);
       set((state) => ({
         ...applySessionsResponse(state, sessionsResponse, {
           workspaceVisibilityVersionAtRequest,
         }),
+        storedSessionsCatalogLoaded:
+          storedSessionsMode === "all" ? true : state.storedSessionsCatalogLoaded,
         debugScenarios,
         error: null,
       }));
@@ -991,12 +1003,26 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
   },
 
+  loadStoredSessionsCatalog: async () => {
+    if (get().storedSessionsCatalogLoaded) {
+      return;
+    }
+    if (!storedSessionsCatalogLoadInFlight) {
+      storedSessionsCatalogLoadInFlight = get()
+        .refreshWorkbenchState({ storedSessions: "all" })
+        .finally(() => {
+          storedSessionsCatalogLoadInFlight = null;
+        });
+    }
+    await storedSessionsCatalogLoadInFlight;
+  },
+
   init: async () => {
     if (!beginSessionStoreInit()) {
       return;
     }
     try {
-      await get().refreshWorkbenchState();
+      await get().refreshWorkbenchState({ storedSessions: "recent" });
       set({ isInitialLoaded: true });
       connectStoreTransport();
       prewarmProviderModelCatalogs(get, "startup");

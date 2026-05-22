@@ -9,16 +9,12 @@ import {
   Circle,
   CirclePause,
   CircleStop,
-  Ellipsis,
   Info,
   ListTree,
-  Menu,
-  PanelRight,
   PencilLine,
   Plus,
   RefreshCw,
   Send,
-  Square,
   Trash2,
   Unplug,
   UsersRound,
@@ -42,17 +38,21 @@ import {
 import { FileReferencePicker } from "../components/FileReferencePicker";
 import { OverlayScrollArea } from "../components/OverlayScrollArea";
 import { ConversationSidePanelShell } from "../components/workbench/shells/ConversationSidePanelShell";
+import {
+  ConversationHeader,
+  ConversationHeaderIconButton,
+  ConversationHeaderMoreButton,
+  ConversationHeaderPanelToggleButton,
+  ConversationHeaderStopButton,
+} from "../components/workbench/shells/ConversationHeader";
+import { ConversationPageShell } from "../components/workbench/shells/ConversationPageShell";
 import { COMPOSER_LAYOUT } from "../composer-contract";
 import { insertTextAtSelection } from "../composer-text-insertion";
 import { ConfirmDialog } from "../components/workbench/dialogs/ConfirmDialog";
 import { RenameSessionDialog } from "../components/workbench/dialogs/RenameSessionDialog";
 import {
-  HEADER_ACTION_GROUP_CLASS,
-  HEADER_IDENTITY_SLOT_CLASS,
-  HEADER_ICON_BUTTON_CLASS,
   HEADER_MENU_DANGER_ITEM_CLASS,
   HEADER_MENU_ITEM_CLASS,
-  HEADER_RESPONSIVE_TEXT_BUTTON_CLASS,
 } from "../components/workbench/header-button-styles";
 import {
   ConversationMetaBadge,
@@ -1610,49 +1610,21 @@ export function CouncilPage(props: {
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-[var(--app-bg)]">
       <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
-        <section className={chatPanelClass}>
-          <header
-            className={`relative z-20 flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[var(--app-border)] bg-[var(--app-bg)]/85 pl-4 pr-4 backdrop-blur-sm ${
-              showAgentsToggle && !councilSidebarOpen
-                ? "min-[900px]:pr-[calc(max(1rem,env(safe-area-inset-right))+2.75rem)]"
-                : ""
-            }`}
-          >
-            <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
-              {showLeftSidebarControls ? (
-                <button
-                  type="button"
-                  className="icon-click-feedback inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] md:hidden"
-                  onClick={props.onOpenLeft}
-                  aria-label="Open sidebar"
-                  title="Open sidebar"
-                >
-                  <Menu size={18} />
-                </button>
-              ) : null}
-              {showLeftSidebarControls && !props.sidebarOpen ? (
-                <button
-                  type="button"
-                  className="icon-click-feedback hidden h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] md:inline-flex"
-                  onClick={props.onExpandSidebar}
-                  aria-label="Expand sidebar"
-                  title="Expand sidebar"
-                >
-                  <Menu size={18} />
-                </button>
-              ) : null}
-              <span className={HEADER_IDENTITY_SLOT_CLASS}>
-                <UsersRound className={COUNCIL_HEADER_ICON_CLASSNAME} />
-              </span>
-              <div className="min-w-0 flex-1">
-                <div
-                  className="truncate text-sm font-medium text-[var(--app-fg)]"
-                  title={selectedCouncil?.title ?? "Council"}
-                >
-                  {selectedCouncil?.title ?? "Council"}
-                </div>
-                {selectedCouncil && selectedCouncilHeaderState && selectedCouncilAgentCountLabel ? (
-                  <div className="mt-0.5 flex min-w-0 items-center gap-1.5 overflow-hidden text-[11px] text-[var(--app-hint)]">
+        <ConversationPageShell as="section" className={chatPanelClass}>
+          <ConversationHeader
+            sidebarOpen={props.sidebarOpen}
+            showLeftSidebarControls={showLeftSidebarControls}
+            onOpenLeft={props.onOpenLeft}
+            onExpandSidebar={props.onExpandSidebar}
+            reserveRightPanelToggleSpace={showAgentsToggle && !councilSidebarOpen}
+            reserveRightPanelBreakpoint="wide"
+            backgroundClassName="bg-[var(--app-bg)]/85"
+            identity={<UsersRound className={COUNCIL_HEADER_ICON_CLASSNAME} />}
+            title={selectedCouncil?.title ?? "Council"}
+            titleText={selectedCouncil?.title ?? "Council"}
+            meta={
+              selectedCouncil && selectedCouncilHeaderState && selectedCouncilAgentCountLabel ? (
+                <>
                     <ConversationMetaBadge
                       tone={selectedCouncilHeaderState.tone}
                       title={selectedCouncilHeaderState.title}
@@ -1665,54 +1637,43 @@ export function CouncilPage(props: {
                       <UsersRound size={10} className="max-[420px]:hidden" />
                       <span>{compactCouncilMeta ? selectedCouncil.agents.length : selectedCouncilAgentCountLabel}</span>
                     </ConversationMetaBadge>
-                  </div>
-                ) : null}
-              </div>
-            </div>
-            <div className={HEADER_ACTION_GROUP_CLASS}>
-              <button
-                type="button"
+                </>
+              ) : null
+            }
+            actions={
+              <>
+              <ConversationHeaderIconButton
                 onClick={() => setHistoryDialogOpen(true)}
-                className={`${HEADER_ICON_BUTTON_CLASS} max-[520px]:hidden`}
+                className="max-[520px]:hidden"
                 aria-label="Chats"
                 title="Chats"
               >
                 <ListTree size={14} />
-              </button>
-              <button
-                type="button"
+              </ConversationHeaderIconButton>
+              <ConversationHeaderIconButton
                 onClick={() => setNewCouncilDialogOpen(true)}
-                className={`${HEADER_ICON_BUTTON_CLASS} max-[520px]:hidden`}
+                className="max-[520px]:hidden"
                 title="New Council"
                 aria-label="New Council"
               >
                 <Plus size={15} />
-              </button>
+              </ConversationHeaderIconButton>
               {selectedCouncil?.status === "running" ? (
-                <button
-                  type="button"
+                <ConversationHeaderStopButton
                   onClick={() => setStopConfirmOpen(true)}
                   disabled={loading}
-                  className={HEADER_ICON_BUTTON_CLASS}
-                  aria-label="Stop Council"
+                  ariaLabel="Stop Council"
                   title="Stop Council and close agent terminals"
-                >
-                  <Square size={14} className="text-rose-500/70" />
-                </button>
+                />
               ) : null}
               {showCouncilOverflowMenu ? (
                 <div ref={councilMenuRef} className="relative">
-                  <button
-                    type="button"
+                  <ConversationHeaderMoreButton
                     onClick={() => setCouncilMenuOpen((open) => !open)}
-                    className={HEADER_ICON_BUTTON_CLASS}
-                    aria-label="Council actions"
-                    aria-haspopup="menu"
-                    aria-expanded={councilMenuOpen}
+                    open={councilMenuOpen}
+                    ariaLabel="Council actions"
                     title="Council actions"
-                  >
-                    <Ellipsis size={16} />
-                  </button>
+                  />
                   {councilMenuOpen ? (
                     <div className="absolute right-0 top-[calc(100%+0.375rem)] z-[120] min-w-[10rem] rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] p-1 shadow-xl">
                       {isCouncilHeaderCompact ? (
@@ -1792,32 +1753,30 @@ export function CouncilPage(props: {
                   ) : null}
                 </div>
               ) : null}
-              {showCloseButton ? (
-                <button
-                  type="button"
-                  onClick={props.onHide}
-                  className={HEADER_RESPONSIVE_TEXT_BUTTON_CLASS}
-                  aria-label="Close Council view"
-                  title="Close Council view"
-                >
-                  <X size={14} className="min-[900px]:mr-1" />
-                  <span className="hidden min-[900px]:inline">Close</span>
-                </button>
-              ) : null}
-              {showAgentsToggle ? (
-                <button
-                  type="button"
+              </>
+            }
+            closeAction={
+              showCloseButton
+                ? {
+                    ariaLabel: "Close Council view",
+                    title: "Close Council view",
+                    onClick: props.onHide,
+                  }
+                : null
+            }
+            trailingActions={
+              showAgentsToggle ? (
+                <ConversationHeaderPanelToggleButton
                   onClick={() => setCouncilSidebarOpen((open) => !open)}
                   disabled={agentsToggleDisabled}
-                  className={`${HEADER_ICON_BUTTON_CLASS} min-[900px]:hidden`}
-                  aria-label={councilSidebarButtonLabel}
+                  className="min-[900px]:hidden"
+                  ariaLabel={councilSidebarButtonLabel}
+                  open={councilSidebarOpen}
                   title={councilSidebarButtonTitle}
-                >
-                  <PanelRight size={16} />
-                </button>
-              ) : null}
-            </div>
-          </header>
+                />
+              ) : null
+            }
+          />
           {error ? (
             <div className="mx-4 mt-3 rounded-lg border border-[var(--app-danger)]/30 bg-[var(--app-danger)]/10 px-3 py-2 text-xs text-[var(--app-danger)]">
               {error}
@@ -2087,7 +2046,7 @@ export function CouncilPage(props: {
               </div>
             </div>
           </div>
-        </section>
+        </ConversationPageShell>
 
         <ConversationSidePanelShell
           desktopOpen={councilSidebarOpen}

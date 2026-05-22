@@ -81,6 +81,20 @@ export function isReadOnlyReplay(summary: SessionSummary): boolean {
   );
 }
 
+export function shouldPollSessionHistoryTail(summary: SessionSummary): boolean {
+  if (!summary.session.providerSessionId || isReadOnlyReplay(summary)) {
+    return false;
+  }
+  if (summary.session.runtime?.structuredLiveEvents === true) {
+    return false;
+  }
+  return (
+    summary.session.liveBackend === "native_local_server" ||
+    summary.session.liveBackend === "tui_mux" ||
+    summary.session.liveBackend === "native_tui"
+  );
+}
+
 export function sessionInteractionMode(summary: SessionSummary): SessionInteractionMode {
   if (isReadOnlyReplay(summary)) {
     return "read_only_replay";

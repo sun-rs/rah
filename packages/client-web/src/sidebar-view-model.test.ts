@@ -122,6 +122,37 @@ describe("sidebar view model", () => {
     assert.equal(items[0]?.selected, true);
   });
 
+  test("uses session summary updates when loaded feed activity is stale", () => {
+    const freshUpdatedAt = new Date(Date.now() - 5 * 60_000).toISOString();
+    const staleFeedActivityAt = new Date(Date.now() - 9 * 60 * 60_000).toISOString();
+    const staleFeed = session({
+      id: "stale-feed",
+      updatedAt: freshUpdatedAt,
+    });
+    const older = session({
+      id: "older",
+      updatedAt: new Date(Date.now() - 20 * 60_000).toISOString(),
+    });
+
+    const items = deriveSidebarWorkspaceViewModels({
+      workspaceSections: [workspaceSection([older, staleFeed])],
+      selectedWorkspaceDir: "/workspace/rah",
+      selectedSessionId: null,
+      unreadSessionIds: new Set(),
+      runtimeStatusBySessionId: new Map(),
+      pinnedSessionIdByWorkspace: {},
+      runningSessionActivityAtById: new Map([
+        ["stale-feed", staleFeedActivityAt],
+        ["older", new Date(Date.now() - 20 * 60_000).toISOString()],
+      ]),
+    });
+
+    assert.equal(
+      items[0]?.sessions.find((entry) => entry.id === "stale-feed")?.updatedAtLabel,
+      "5m",
+    );
+  });
+
   test("uses waiting permission > working > unread > ready precedence", () => {
     const approval = session({ id: "approval", runtimeState: "waiting_permission" });
     const thinking = session({ id: "thinking", runtimeState: "idle" });

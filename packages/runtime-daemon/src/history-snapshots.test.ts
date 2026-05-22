@@ -388,3 +388,96 @@ test("history snapshots only expose older history markers when an older page exi
   assert.equal(pagedInitialPage.nextCursor, "older");
   assert.equal(pagedInitialPage.nextBeforeTs, "2026-05-03T00:00:01.000Z");
 });
+
+test("frozen history snapshots honor smaller limits after a wider page was cached", () => {
+  const store = new HistorySnapshotStore();
+  const boundary: FrozenHistoryBoundary = {
+    kind: "frozen",
+    sourceRevision: "limit-sensitive-frozen-revision",
+  };
+  const initialEvents = [
+    timelineEvent({
+      id: "initial-one",
+      seq: 1,
+      ts: "2026-05-03T00:00:00.000Z",
+      canonicalItemId: "initial-one",
+      text: "Initial one",
+    }),
+    timelineEvent({
+      id: "initial-two",
+      seq: 2,
+      ts: "2026-05-03T00:00:01.000Z",
+      canonicalItemId: "initial-two",
+      text: "Initial two",
+    }),
+    timelineEvent({
+      id: "initial-three",
+      seq: 3,
+      ts: "2026-05-03T00:00:02.000Z",
+      canonicalItemId: "initial-three",
+      text: "Initial three",
+    }),
+  ];
+  const olderEvents = [
+    timelineEvent({
+      id: "older-one",
+      seq: 4,
+      ts: "2026-05-02T00:00:00.000Z",
+      canonicalItemId: "older-one",
+      text: "Older one",
+    }),
+    timelineEvent({
+      id: "older-two",
+      seq: 5,
+      ts: "2026-05-02T00:00:01.000Z",
+      canonicalItemId: "older-two",
+      text: "Older two",
+    }),
+  ];
+  const loader: FrozenHistoryPageLoader = {
+    loadInitialPage: (limit) => ({
+      boundary,
+      events: initialEvents.slice(-limit),
+      nextCursor: "older",
+    }),
+    loadOlderPage: (_cursor, limit) => ({
+      boundary,
+      events: olderEvents.slice(-limit),
+    }),
+  };
+
+  const wideInitialPage = store.getPage({
+    sessionId: "target-session",
+    limit: 3,
+    loadEvents: () => [],
+    loadFrozenPage: () => loader,
+  });
+  const narrowInitialPage = store.getPage({
+    sessionId: "target-session",
+    limit: 1,
+    loadEvents: () => [],
+    loadFrozenPage: () => loader,
+  });
+  const wideOlderPage = store.getPage({
+    sessionId: "target-session",
+    cursor: "older",
+    limit: 2,
+    loadEvents: () => [],
+    loadFrozenPage: () => loader,
+  });
+  const narrowOlderPage = store.getPage({
+    sessionId: "target-session",
+    cursor: "older",
+    limit: 1,
+    loadEvents: () => [],
+    loadFrozenPage: () => loader,
+  });
+
+  assert.deepEqual(
+    wideInitialPage.events.map(timelineText),
+    ["Initial one", "Initial two", "Initial three"],
+  );
+  assert.deepEqual(narrowInitialPage.events.map(timelineText), ["Initial three"]);
+  assert.deepEqual(wideOlderPage.events.map(timelineText), ["Older one", "Older two"]);
+  assert.deepEqual(narrowOlderPage.events.map(timelineText), ["Older two"]);
+});

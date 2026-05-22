@@ -100,6 +100,7 @@ import {
   buildSessionsResponse as buildRuntimeSessionsResponse,
   discoverStoredSessions as discoverRuntimeStoredSessions,
   sameStoredSessionRefs,
+  type StoredSessionsResponseMode,
 } from "./runtime-session-list";
 import { StoredSessionMonitor } from "./stored-session-monitor";
 import { RuntimeTerminalCoordinator } from "./runtime-terminal-coordinator";
@@ -271,6 +272,7 @@ export class RuntimeEngine {
   private readonly historyMirrorAdapters: ProviderStoredHistoryAdapter[] = [];
   private readonly nativeTuiRehydratedSessionIds = new Set<string>();
   private readonly structuredLiveAllowedForInjectedAdapters: boolean;
+  private readonly startupMaintenance: Promise<void>;
 
   constructor(adapters?: ProviderAdapter[]) {
     this.structuredLiveAllowedForInjectedAdapters = adapters !== undefined;
@@ -388,13 +390,17 @@ export class RuntimeEngine {
     if (process.env.RAH_DISABLE_STORED_SESSION_MONITOR !== "1") {
       this.storedSessionMonitor.start();
     }
-    void this.restoreTuiMuxLiveSessions(restored.tuiMuxLiveSessions)
+    this.startupMaintenance = this.restoreTuiMuxLiveSessions(restored.tuiMuxLiveSessions)
       .then(() => this.runStartupOrphanJanitor())
       .catch((error: unknown) => {
         console.warn("[rah] startup orphan cleanup failed", {
           error: error instanceof Error ? error.message : String(error),
         });
       });
+  }
+
+  private async waitForStartupMaintenance(): Promise<void> {
+    await this.startupMaintenance;
   }
 
   private async restoreTuiMuxLiveSessions(
@@ -441,10 +447,10 @@ export class RuntimeEngine {
     this.council.reconcilePersistedRuntimeState();
   }
 
-  listSessions(): ListSessionsResponse {
+  listSessions(options?: { storedSessionsMode?: StoredSessionsResponseMode }): ListSessionsResponse {
     this.pruneOrphanSessions();
     const liveStates = this.sessionStore.listSessions();
-    return this.buildSessionsResponse(liveStates, this.lastDiscoveredStoredSessions);
+    return this.buildSessionsResponse(liveStates, this.lastDiscoveredStoredSessions, options);
   }
 
   async listProviderDiagnostics(options?: { forceRefresh?: boolean }): Promise<ProviderDiagnostic[]> {
@@ -712,6 +718,7 @@ export class RuntimeEngine {
   }
 
   async startSession(request: StartSessionRequest): Promise<StartSessionResponse> {
+    await this.waitForStartupMaintenance();
     this.assertLiveSessionProviderAllowed(request);
     this.assertStructuredLiveBackendAllowed(request);
     this.assertNativeLocalServerBackendAllowed(request);
@@ -741,6 +748,7 @@ export class RuntimeEngine {
   }
 
   async resumeSession(request: ResumeSessionRequest): Promise<ResumeSessionResponse> {
+    await this.waitForStartupMaintenance();
     this.assertLiveSessionProviderAllowed(request);
     this.assertStructuredLiveBackendAllowed(request);
     this.assertNativeLocalServerBackendAllowed(request);
@@ -1384,7 +1392,9 @@ export class RuntimeEngine {
       ),
     );
     await runShutdownStep("native local-server cleanup", async () => {
-      const closedNativeServerPids = await cleanupRahNativeServerOrphans();
+      const closedNativeServerPids = await cleanupRahNativeServerOrphans({
+        includeCurrentDaemon: true,
+      });
       if (closedNativeServerPids.length > 0) {
         console.warn("[rah] cleaned RAH native local-server processes during shutdown", {
           pids: closedNativeServerPids,
@@ -1524,6 +1534,7 @@ export class RuntimeEngine {
   private buildSessionsResponse(
     liveStates: readonly StoredSessionState[],
     discoveredStoredSessions: readonly StoredSessionRef[],
+    options?: { storedSessionsMode?: StoredSessionsResponseMode },
   ): ListSessionsResponse {
     return buildRuntimeSessionsResponse({
       liveStates,
@@ -1540,6 +1551,7 @@ export class RuntimeEngine {
         rememberedSessionTitleOverrides: this.rememberedSessionTitleOverrides,
       },
       isClosingSession: () => false,
+      ...(options?.storedSessionsMode ? { storedSessionsMode: options.storedSessionsMode } : {}),
     });
   }
 

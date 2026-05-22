@@ -44,6 +44,7 @@ import { optionValueAsString, resolveModelOptionValues } from "../session-model-
 import { applyProviderActivity } from "../provider-activity";
 import { timelineRuntimeModel } from "../timeline-runtime-model";
 import { mergeManualProviderModels } from "../manual-provider-models";
+import { publishSessionStateChanged } from "../runtime-session-events";
 
 const CODEX_EVENT_SOURCE = {
   provider: "codex" as const,
@@ -152,7 +153,49 @@ export class CodexAdapter implements ProviderAdapter {
 
   private registerLiveSession(liveSession: LiveCodexSession): void {
     liveSession.drainQueuedInput = () => this.drainQueuedInput(liveSession);
+    liveSession.client.setCloseHandler((error) => {
+      this.handleLiveClientClosed(liveSession, error);
+    });
     this.liveSessions.set(liveSession.sessionId, liveSession);
+  }
+
+  private handleLiveClientClosed(liveSession: LiveCodexSession, error: Error): void {
+    if (this.liveSessions.get(liveSession.sessionId) !== liveSession) {
+      return;
+    }
+    this.liveSessions.delete(liveSession.sessionId);
+    this.clearInterruptFallback(liveSession);
+    const state = this.services.sessionStore.getSession(liveSession.sessionId);
+    if (!state) {
+      return;
+    }
+    const detail = error.message || "Codex app-server closed";
+    this.services.sessionStore.patchManagedSession(liveSession.sessionId, {
+      ...(state.session.nativeTui
+        ? {
+            nativeTui: {
+              ...state.session.nativeTui,
+              viewAvailable: false,
+            },
+          }
+        : {}),
+      runtimeDiagnostics: {
+        ...(state.session.runtimeDiagnostics ?? {}),
+        attachState: "failed",
+        lastError: detail,
+      },
+    });
+    this.services.eventBus.publish({
+      sessionId: liveSession.sessionId,
+      type: "runtime.status",
+      source: CODEX_EVENT_SOURCE,
+      payload: {
+        status: "error",
+        detail,
+      },
+    });
+    this.services.sessionStore.setRuntimeState(liveSession.sessionId, "failed");
+    publishSessionStateChanged(this.services, liveSession.sessionId, "failed");
   }
 
   private drainQueuedInput(live: LiveCodexSession): void {

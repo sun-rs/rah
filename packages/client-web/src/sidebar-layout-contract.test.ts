@@ -1,7 +1,17 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { OVERLAY_SCROLL_AREA_LAYOUT } from "./components/OverlayScrollArea";
 import { SIDEBAR_LAYOUT } from "./sidebar-layout-contract";
+import {
+  HEADER_SEGMENTED_BUTTON_ACTIVE_CLASS,
+  HEADER_SEGMENTED_BUTTON_INACTIVE_CLASS,
+  HEADER_SEGMENTED_CONTROL_BASE_CLASS,
+} from "./components/workbench/header-button-styles";
+
+function readSource(relativePath: string): string {
+  return readFileSync(new URL(relativePath, import.meta.url), "utf8");
+}
 
 describe("sidebar layout contract", () => {
   test("uses overlay scrollbars for the desktop sidebar content", () => {
@@ -70,5 +80,36 @@ describe("sidebar layout contract", () => {
     assert.match(SIDEBAR_LAYOUT.workspaceActionHiddenClassName, /coarse-pointer-action-visible/);
     assert.match(SIDEBAR_LAYOUT.sessionPinHiddenClassName, /group-focus-within\/session:opacity-100/);
     assert.match(SIDEBAR_LAYOUT.sessionPinHiddenClassName, /coarse-pointer-action-visible/);
+  });
+
+  test("routes session and council pages through shared conversation chrome", () => {
+    const sessionSource = readSource("./components/workbench/panes/WorkbenchSelectedPane.tsx");
+    const councilSource = readSource("./council/CouncilPage.tsx");
+    const headerSource = readSource("./components/workbench/shells/ConversationHeader.tsx");
+
+    assert.match(sessionSource, /ConversationHeader/);
+    assert.match(sessionSource, /ConversationPageShell/);
+    assert.match(councilSource, /ConversationHeader/);
+    assert.match(councilSource, /ConversationPageShell/);
+    assert.match(headerSource, /closeAction/);
+    assert.match(headerSource, /reserveRightPanelBreakpoint/);
+    assert.match(headerSource, /ConversationHeaderIconButton/);
+    assert.match(headerSource, /ConversationHeaderStopButton/);
+    assert.match(headerSource, /ConversationHeaderMoreButton/);
+    assert.match(headerSource, /ConversationHeaderPanelToggleButton/);
+    assert.doesNotMatch(sessionSource, /HEADER_ICON_BUTTON_CLASS/);
+    assert.doesNotMatch(councilSource, /HEADER_ICON_BUTTON_CLASS/);
+  });
+
+  test("uses a flat shared segmented control selected state", () => {
+    const sessionSource = readSource("./components/workbench/panes/WorkbenchSelectedPane.tsx");
+    const canvasSource = readSource("./components/workbench/canvas/CanvasWorkbench.tsx");
+
+    assert.match(HEADER_SEGMENTED_CONTROL_BASE_CLASS, /color-mix\(in_oklab,var\(--app-border\)_78%/);
+    assert.match(HEADER_SEGMENTED_BUTTON_ACTIVE_CLASS, /shadow-none/);
+    assert.doesNotMatch(HEADER_SEGMENTED_BUTTON_ACTIVE_CLASS, /shadow-sm/);
+    assert.match(HEADER_SEGMENTED_BUTTON_INACTIVE_CLASS, /hover:bg-/);
+    assert.match(sessionSource, /HEADER_SEGMENTED_BUTTON_ACTIVE_CLASS/);
+    assert.match(canvasSource, /HEADER_SEGMENTED_BUTTON_ACTIVE_CLASS/);
   });
 });

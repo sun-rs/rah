@@ -57,6 +57,7 @@ export interface CodexRolloutTranslationState {
   pendingToolCalls: Map<string, PendingToolCall>;
   terminalSessions: Map<number, CodexTerminalSessionToolState>;
   lastTimelineTextSignature: string | null;
+  lastGoalEventSignatureByThread: Map<string, string>;
   providerSessionId?: string | undefined;
   currentTurnId?: string | undefined;
   currentRuntimeModel?: TimelineRuntimeModel | undefined;
@@ -70,6 +71,7 @@ export function createCodexRolloutTranslationState(
     pendingToolCalls: new Map(),
     terminalSessions: new Map(),
     lastTimelineTextSignature: null,
+    lastGoalEventSignatureByThread: new Map(),
     nextTimelineItemIndex: 0,
   };
   if (options.providerSessionId !== undefined) {
@@ -190,9 +192,202 @@ function extractCodexGoalObjective(text: string): string | null {
   if (!text.includes("Continue working toward the active thread goal.")) {
     return null;
   }
-  const match = /<untrusted_objective>\s*([\s\S]*?)\s*<\/untrusted_objective>/i.exec(text);
+  const match = /<(?:untrusted_)?objective>\s*([\s\S]*?)\s*<\/(?:untrusted_)?objective>/i.exec(text);
   const objective = match?.[1]?.trim();
   return objective || null;
+}
+
+function translateCodexGoalContextNotification(
+  record: Record<string, unknown>,
+  state: CodexRolloutTranslationState,
+  objective: string,
+): CodexTranslatedActivity[] {
+  const threadId = state.providerSessionId ?? "unscoped";
+  const signature = ["active", objective, ""].join("\u0000");
+  const lastSignature = state.lastGoalEventSignatureByThread.get(threadId);
+  if (lastSignature === signature || lastSignature?.startsWith(`active\u0000${objective}\u0000`)) {
+    return [];
+  }
+  state.lastGoalEventSignatureByThread.set(threadId, signature);
+  return [
+    persistedActivity(
+      record,
+      {
+        type: "notification",
+        level: "info",
+        title: "Goal active",
+        body: `Objective: ${truncateNotificationText(objective)}`,
+      },
+      "authoritative",
+    ),
+  ];
+}
+
+function stringField(record: Record<string, unknown>, ...keys: string[]): string | null {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
+  return null;
+}
+
+function numberField(record: Record<string, unknown>, ...keys: string[]): number | null {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function truncateNotificationText(text: string, maxLength = 480): string {
+  if (text.length <= maxLength) {
+    return text;
+  }
+  return `${text.slice(0, maxLength - 3).trimEnd()}...`;
+}
+
+function normalizeCodexGoalStatus(status: string): string {
+  switch (status) {
+    case "usage_limited":
+      return "usageLimited";
+    case "budget_limited":
+      return "budgetLimited";
+    default:
+      return status;
+  }
+}
+
+function codexGoalStatusLabel(status: string): string {
+  switch (status) {
+    case "active":
+      return "active";
+    case "paused":
+      return "paused";
+    case "blocked":
+      return "blocked";
+    case "usageLimited":
+      return "usage limited";
+    case "budgetLimited":
+      return "budget limited";
+    case "complete":
+      return "complete";
+    default:
+      return status
+        .replace(/_/g, " ")
+        .replace(/([a-z])([A-Z])/g, "$1 $2")
+        .toLowerCase();
+  }
+}
+
+function codexGoalNotificationLevel(status: string): "info" | "warning" {
+  return status === "blocked" || status === "usageLimited" || status === "budgetLimited"
+    ? "warning"
+    : "info";
+}
+
+function codexGoalDuration(seconds: number | null): string | null {
+  if (seconds === null || seconds <= 0) {
+    return null;
+  }
+  const rounded = Math.round(seconds);
+  if (rounded < 60) {
+    return `${rounded}s`;
+  }
+  const minutes = Math.floor(rounded / 60);
+  const remainder = rounded % 60;
+  return remainder > 0 ? `${minutes}m ${remainder}s` : `${minutes}m`;
+}
+
+function translateCodexGoalUpdatedEvent(
+  record: Record<string, unknown>,
+  payload: Record<string, unknown>,
+  state: CodexRolloutTranslationState,
+): CodexTranslatedActivity[] {
+  if (!payload.goal || typeof payload.goal !== "object" || Array.isArray(payload.goal)) {
+    return invalidRolloutActivity(record, "thread_goal_updated did not include goal");
+  }
+  const goal = payload.goal as Record<string, unknown>;
+  const objective = stringField(goal, "objective") ?? "";
+  const rawStatus = stringField(goal, "status");
+  if (!rawStatus) {
+    return invalidRolloutActivity(record, "thread_goal_updated goal did not include status");
+  }
+  const status = normalizeCodexGoalStatus(rawStatus);
+  const threadId =
+    stringField(goal, "threadId", "thread_id") ??
+    stringField(payload, "threadId", "thread_id") ??
+    state.providerSessionId ??
+    "unscoped";
+  const tokenBudget = numberField(goal, "tokenBudget", "token_budget");
+  const signature = [status, objective, tokenBudget ?? ""].join("\u0000");
+  if (state.lastGoalEventSignatureByThread.get(threadId) === signature) {
+    return [];
+  }
+  state.lastGoalEventSignatureByThread.set(threadId, signature);
+
+  const bodyParts: string[] = [];
+  if (objective) {
+    bodyParts.push(`Objective: ${truncateNotificationText(objective)}`);
+  }
+  if (tokenBudget !== null) {
+    bodyParts.push(`Token budget: ${tokenBudget}`);
+  }
+  const tokensUsed = numberField(goal, "tokensUsed", "tokens_used");
+  const elapsed = codexGoalDuration(numberField(goal, "timeUsedSeconds", "time_used_seconds"));
+  if (status !== "active" && (tokensUsed !== null || elapsed !== null)) {
+    const usageParts = [
+      ...(tokensUsed !== null ? [`${tokensUsed} tokens`] : []),
+      ...(elapsed !== null ? [elapsed] : []),
+    ];
+    bodyParts.push(`Usage: ${usageParts.join(", ")}`);
+  }
+
+  const turnId = stringField(payload, "turnId", "turn_id");
+  return [
+    persistedActivity(
+      record,
+      {
+        type: "notification",
+        level: codexGoalNotificationLevel(status),
+        title: `Goal ${codexGoalStatusLabel(status)}`,
+        body: bodyParts.join("\n") || `Status: ${codexGoalStatusLabel(status)}`,
+        ...(turnId !== null ? { turnId } : {}),
+      },
+      "authoritative",
+    ),
+  ];
+}
+
+function translateCodexGoalClearedEvent(
+  record: Record<string, unknown>,
+  payload: Record<string, unknown>,
+  state: CodexRolloutTranslationState,
+): CodexTranslatedActivity[] {
+  const threadId =
+    stringField(payload, "threadId", "thread_id") ??
+    state.providerSessionId ??
+    "unscoped";
+  const signature = "cleared";
+  if (state.lastGoalEventSignatureByThread.get(threadId) === signature) {
+    return [];
+  }
+  state.lastGoalEventSignatureByThread.set(threadId, signature);
+  return [
+    persistedActivity(
+      record,
+      {
+        type: "notification",
+        level: "info",
+        title: "Goal cleared",
+        body: "The active goal was cleared.",
+      },
+      "authoritative",
+    ),
+  ];
 }
 
 function isCodexBootstrapUserMessage(text: string): boolean {
@@ -724,7 +919,7 @@ function invalidRolloutActivity(
 function interruptedPendingToolActivities(
   state: CodexRolloutTranslationState,
   line: Record<string, unknown>,
-  options: { includeTimelineStatus: boolean },
+  options: { includeTimelineStatus: boolean; includeTerminalSessions?: boolean },
 ): CodexTranslatedActivity[] {
   if (state.pendingToolCalls.size === 0 && state.terminalSessions.size === 0) {
     return [];
@@ -769,39 +964,41 @@ function interruptedPendingToolActivities(
   }
   state.pendingToolCalls.clear();
 
-  for (const terminalSession of state.terminalSessions.values()) {
-    if (failedToolCallIds.has(terminalSession.toolCallId)) {
-      continue;
-    }
-    if (terminalSession.observation) {
+  if (options.includeTerminalSessions !== false) {
+    for (const terminalSession of state.terminalSessions.values()) {
+      if (failedToolCallIds.has(terminalSession.toolCallId)) {
+        continue;
+      }
+      if (terminalSession.observation) {
+        result.push(
+          persistedActivity(
+            line,
+            {
+              type: "observation_failed",
+              observation: {
+                ...terminalSession.observation,
+                status: "failed",
+                summary: CODEX_INTERRUPTED_PENDING_TOOL_ERROR,
+              },
+              error: CODEX_INTERRUPTED_PENDING_TOOL_ERROR,
+            },
+            "derived",
+          ),
+        );
+      }
       result.push(
         persistedActivity(
           line,
           {
-            type: "observation_failed",
-            observation: {
-              ...terminalSession.observation,
-              status: "failed",
-              summary: CODEX_INTERRUPTED_PENDING_TOOL_ERROR,
-            },
+            type: "tool_call_failed",
+            toolCallId: terminalSession.toolCallId,
             error: CODEX_INTERRUPTED_PENDING_TOOL_ERROR,
           },
           "derived",
         ),
       );
+      failedToolCallIds.add(terminalSession.toolCallId);
     }
-    result.push(
-      persistedActivity(
-        line,
-        {
-          type: "tool_call_failed",
-          toolCallId: terminalSession.toolCallId,
-          error: CODEX_INTERRUPTED_PENDING_TOOL_ERROR,
-        },
-        "derived",
-      ),
-    );
-    failedToolCallIds.add(terminalSession.toolCallId);
   }
   state.terminalSessions.clear();
 
@@ -838,7 +1035,7 @@ export function finalizeCodexRolloutTranslationState(
         reason: "history_eof",
       },
     },
-    { includeTimelineStatus: true },
+    { includeTimelineStatus: true, includeTerminalSessions: false },
   );
 }
 
@@ -857,6 +1054,12 @@ export function translateCodexRolloutLine(
     const payload = payloadRecord(record);
     if (!payload) {
       return [];
+    }
+    if (payload.type === "thread_goal_updated") {
+      return translateCodexGoalUpdatedEvent(record, payload, state);
+    }
+    if (payload.type === "thread_goal_cleared") {
+      return translateCodexGoalClearedEvent(record, payload, state);
     }
     if (payload.type === "agent_reasoning" && typeof payload.text === "string") {
       if (shouldSkipDuplicateTimelineText(state, record, "reasoning", payload.text)) {
@@ -1007,18 +1210,7 @@ export function translateCodexRolloutLine(
       const rawText = textFromContentItems(payload.content, "input_text");
       const goalObjective = rawText ? extractCodexGoalObjective(rawText) : null;
       if (goalObjective) {
-        return [
-          persistedActivity(
-            record,
-            {
-              type: "notification",
-              level: "info",
-              title: "Goal active",
-              body: `Objective: ${goalObjective}`,
-            },
-            "authoritative",
-          ),
-        ];
+        return translateCodexGoalContextNotification(record, state, goalObjective);
       }
       return [];
     }
@@ -1026,6 +1218,10 @@ export function translateCodexRolloutLine(
       const rawText = textFromContentItems(payload.content, "input_text");
       if (rawText === null) {
         return [];
+      }
+      const goalObjective = extractCodexGoalObjective(rawText);
+      if (goalObjective) {
+        return translateCodexGoalContextNotification(record, state, goalObjective);
       }
       if (isCodexBootstrapUserMessage(rawText)) {
         return [];

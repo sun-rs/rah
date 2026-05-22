@@ -70,6 +70,7 @@ function feedEntriesShareStableIdentity(
 ): boolean {
   return (
     feedEntriesShareTimelineIdentity(left, right) ||
+    feedEntriesShareCodexLiveHistoryEquivalent(left, right) ||
     feedEntriesShareInterruptNoticeIdentity(left, right, context)
   );
 }
@@ -118,6 +119,36 @@ function feedEntriesShareTimelineIdentity(left: FeedEntry, right: FeedEntry): bo
     return true;
   }
   return false;
+}
+
+function feedEntriesShareCodexLiveHistoryEquivalent(left: FeedEntry, right: FeedEntry): boolean {
+  if (left.kind !== "timeline" || right.kind !== "timeline") {
+    return false;
+  }
+  if (left.sourceProvider !== "codex" || right.sourceProvider !== "codex") {
+    return false;
+  }
+  if (
+    left.item.kind !== "assistant_message" &&
+    left.item.kind !== "reasoning"
+  ) {
+    return false;
+  }
+  if (right.item.kind !== left.item.kind) {
+    return false;
+  }
+  if (left.canonicalTurnId === undefined || left.canonicalTurnId !== right.canonicalTurnId) {
+    return false;
+  }
+  if (left.item.text !== right.item.text) {
+    return false;
+  }
+  const leftMessageId = readTimelineMessageId(left.item);
+  const rightMessageId = readTimelineMessageId(right.item);
+  if (leftMessageId !== undefined && rightMessageId !== undefined) {
+    return leftMessageId === rightMessageId;
+  }
+  return true;
 }
 
 function feedEntriesShareInterruptNoticeIdentity(
@@ -425,6 +456,13 @@ function mergeLatestHistoryFeed(
     );
     if (identityIndex >= 0) {
       matchedHistoryIndexes.add(identityIndex);
+      continue;
+    }
+    if (
+      nextFeed.some((historyEntry) =>
+        feedEntriesShareCodexLiveHistoryEquivalent(historyEntry, current),
+      )
+    ) {
       continue;
     }
     if (isOptimisticPlaceholderCoveredByHistory(current, nextFeed, latestHistoryMs)) {

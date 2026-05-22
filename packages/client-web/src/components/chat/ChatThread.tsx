@@ -331,14 +331,17 @@ export function ChatThread(props: {
   const previousEntryCountRef = useRef(0);
   const loadingOlderRef = useRef(false);
   const stickToBottomRef = useRef(true);
+  const userDetachedFromBottomRef = useRef(false);
   const sessionSwitchBottomLockRef = useRef(true);
   const returnToBottomOnVisibleRef = useRef(true);
   const pendingVisibleBottomRestoreRef = useRef(false);
   const prependAnchorRef = useRef<PrependAnchor | null>(null);
   const lastScrollTopRef = useRef(0);
+  const touchScrollYRef = useRef<number | null>(null);
   const topHistoryAutoLoadArmedRef = useRef(true);
   const measuredHeightsRef = useRef<Map<string, number>>(new Map());
   const scrollRafRef = useRef<number | null>(null);
+  const bottomFollowRafRef = useRef<number | null>(null);
   const measuredHeightsRafRef = useRef<number | null>(null);
   const visibilityRestoreRafRef = useRef<number | null>(null);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
@@ -426,11 +429,38 @@ export function ChatThread(props: {
     node.scrollTop = node.scrollHeight;
     lastScrollTopRef.current = node.scrollTop;
     stickToBottomRef.current = true;
+    userDetachedFromBottomRef.current = false;
     returnToBottomOnVisibleRef.current = true;
     pendingVisibleBottomRestoreRef.current = false;
     setShowScrollToBottom(false);
     syncViewport();
   }, [syncViewport]);
+
+  const scheduleScrollToBottom = useCallback(() => {
+    if (bottomFollowRafRef.current !== null) {
+      return;
+    }
+    bottomFollowRafRef.current = requestAnimationFrame(() => {
+      bottomFollowRafRef.current = null;
+      scrollToBottomNow();
+    });
+  }, [scrollToBottomNow]);
+
+  const detachBottomFollowing = useCallback(() => {
+    const node = containerRef.current;
+    stickToBottomRef.current = false;
+    userDetachedFromBottomRef.current = true;
+    sessionSwitchBottomLockRef.current = false;
+    returnToBottomOnVisibleRef.current = false;
+    pendingVisibleBottomRestoreRef.current = false;
+    if (bottomFollowRafRef.current !== null) {
+      cancelAnimationFrame(bottomFollowRafRef.current);
+      bottomFollowRafRef.current = null;
+    }
+    if (node && node.scrollHeight > node.clientHeight) {
+      setShowScrollToBottom(true);
+    }
+  }, []);
 
   const restoreBottomAfterForeground = useCallback(() => {
     if (
@@ -476,14 +506,20 @@ export function ChatThread(props: {
     previousEntryCountRef.current = 0;
     loadingOlderRef.current = false;
     stickToBottomRef.current = true;
+    userDetachedFromBottomRef.current = false;
     sessionSwitchBottomLockRef.current = true;
     prependAnchorRef.current = null;
     lastScrollTopRef.current = 0;
+    touchScrollYRef.current = null;
     topHistoryAutoLoadArmedRef.current = true;
     measuredHeightsRef.current = new Map();
     if (scrollRafRef.current !== null) {
       cancelAnimationFrame(scrollRafRef.current);
       scrollRafRef.current = null;
+    }
+    if (bottomFollowRafRef.current !== null) {
+      cancelAnimationFrame(bottomFollowRafRef.current);
+      bottomFollowRafRef.current = null;
     }
     if (measuredHeightsRafRef.current !== null) {
       cancelAnimationFrame(measuredHeightsRafRef.current);
@@ -504,6 +540,10 @@ export function ChatThread(props: {
         cancelAnimationFrame(scrollRafRef.current);
         scrollRafRef.current = null;
       }
+      if (bottomFollowRafRef.current !== null) {
+        cancelAnimationFrame(bottomFollowRafRef.current);
+        bottomFollowRafRef.current = null;
+      }
       if (measuredHeightsRafRef.current !== null) {
         cancelAnimationFrame(measuredHeightsRafRef.current);
         measuredHeightsRafRef.current = null;
@@ -522,19 +562,28 @@ export function ChatThread(props: {
     }
 
     const updateStickiness = () => {
+      const scrollingUp = node.scrollTop < lastScrollTopRef.current;
       const isAtBottom = isScrollNearBottom(node);
+      const isExactlyAtBottom =
+        node.scrollHeight - node.clientHeight - node.scrollTop <= 2;
+      if (isExactlyAtBottom && !scrollingUp) {
+        userDetachedFromBottomRef.current = false;
+      }
+      const shouldStickToBottom = isAtBottom && !userDetachedFromBottomRef.current;
       const contentNeedsMoreHistory =
         node.scrollHeight <= node.clientHeight + TOP_HISTORY_TRIGGER_PX;
-      stickToBottomRef.current = isAtBottom;
+      stickToBottomRef.current = shouldStickToBottom;
       if (!isDocumentHidden()) {
-        returnToBottomOnVisibleRef.current = isAtBottom || sessionSwitchBottomLockRef.current;
+        returnToBottomOnVisibleRef.current =
+          shouldStickToBottom || sessionSwitchBottomLockRef.current;
       }
-      if (!isAtBottom) {
+      if (!shouldStickToBottom) {
         sessionSwitchBottomLockRef.current = false;
       }
-      setShowScrollToBottom(!isAtBottom && node.scrollHeight > node.clientHeight);
+      setShowScrollToBottom(
+        !shouldStickToBottom && node.scrollHeight > node.clientHeight,
+      );
 
-      const scrollingUp = node.scrollTop < lastScrollTopRef.current;
       if (node.scrollTop > TOP_HISTORY_REARM_PX || contentNeedsMoreHistory) {
         topHistoryAutoLoadArmedRef.current = true;
       }
@@ -579,6 +628,45 @@ export function ChatThread(props: {
   ]);
 
   useEffect(() => {
+    const node = containerRef.current;
+    if (!node) {
+      return;
+    }
+    const handleWheel = (event: WheelEvent) => {
+      if (event.deltaY < 0) {
+        detachBottomFollowing();
+      }
+    };
+    const handleTouchStart = (event: TouchEvent) => {
+      touchScrollYRef.current = event.touches[0]?.clientY ?? null;
+    };
+    const handleTouchMove = (event: TouchEvent) => {
+      const nextY = event.touches[0]?.clientY ?? null;
+      const previousY = touchScrollYRef.current;
+      if (nextY !== null && previousY !== null && nextY - previousY > 2) {
+        detachBottomFollowing();
+      }
+      touchScrollYRef.current = nextY;
+    };
+    const handleTouchEnd = () => {
+      touchScrollYRef.current = null;
+    };
+
+    node.addEventListener("wheel", handleWheel, { passive: true });
+    node.addEventListener("touchstart", handleTouchStart, { passive: true });
+    node.addEventListener("touchmove", handleTouchMove, { passive: true });
+    node.addEventListener("touchend", handleTouchEnd, { passive: true });
+    node.addEventListener("touchcancel", handleTouchEnd, { passive: true });
+    return () => {
+      node.removeEventListener("wheel", handleWheel);
+      node.removeEventListener("touchstart", handleTouchStart);
+      node.removeEventListener("touchmove", handleTouchMove);
+      node.removeEventListener("touchend", handleTouchEnd);
+      node.removeEventListener("touchcancel", handleTouchEnd);
+    };
+  }, [detachBottomFollowing]);
+
+  useEffect(() => {
     const rememberHiddenStickiness = () => {
       const node = containerRef.current;
       if (!node) {
@@ -587,7 +675,7 @@ export function ChatThread(props: {
       returnToBottomOnVisibleRef.current =
         sessionSwitchBottomLockRef.current ||
         stickToBottomRef.current ||
-        isScrollNearBottom(node);
+        (!userDetachedFromBottomRef.current && isScrollNearBottom(node));
     };
 
     const handleVisibilityChange = () => {
@@ -638,6 +726,9 @@ export function ChatThread(props: {
       if (prependAnchorRef.current) {
         return;
       }
+      if (userDetachedFromBottomRef.current) {
+        return;
+      }
       if (!stickToBottomRef.current && !sessionSwitchBottomLockRef.current) {
         return;
       }
@@ -645,18 +736,14 @@ export function ChatThread(props: {
         pendingVisibleBottomRestoreRef.current = true;
         return;
       }
-      node.scrollTop = node.scrollHeight;
-      lastScrollTopRef.current = node.scrollTop;
-      stickToBottomRef.current = true;
-      returnToBottomOnVisibleRef.current = true;
-      setShowScrollToBottom(false);
+      scheduleScrollToBottom();
       if (!props.historyLoading) {
         sessionSwitchBottomLockRef.current = false;
       }
     });
     observer.observe(content);
     return () => observer.disconnect();
-  }, [props.historyLoading, props.sessionId]);
+  }, [props.historyLoading, props.sessionId, scheduleScrollToBottom]);
 
   useLayoutEffect(() => {
     const node = containerRef.current;
@@ -718,6 +805,7 @@ export function ChatThread(props: {
       node.scrollTop = node.scrollHeight;
       lastScrollTopRef.current = node.scrollTop;
       stickToBottomRef.current = true;
+      userDetachedFromBottomRef.current = false;
       returnToBottomOnVisibleRef.current = true;
       setShowScrollToBottom(false);
       if (!props.historyLoading) {
@@ -729,12 +817,21 @@ export function ChatThread(props: {
         previousEntryCountRef.current = entries.length;
         return;
       }
-      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+      scrollToBottomNow();
     }
     previousEntryCountRef.current = entries.length;
-  }, [entries, measuredHeightsVersion, props.historyLoading, props.sessionId]);
+  }, [
+    entries,
+    measuredHeightsVersion,
+    props.historyLoading,
+    props.sessionId,
+    scrollToBottomNow,
+  ]);
 
   const handleScrollToBottom = () => {
+    stickToBottomRef.current = true;
+    userDetachedFromBottomRef.current = false;
+    returnToBottomOnVisibleRef.current = true;
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   };
 
@@ -743,7 +840,7 @@ export function ChatThread(props: {
       <div
         ref={containerRef}
         data-testid="chat-thread-scroll-container"
-        className="h-full overflow-y-scroll overflow-x-hidden rah-scroll-main scrollbar-stable px-4 py-5"
+        className="h-full overflow-y-scroll overflow-x-hidden rah-scroll-main scrollbar-stable px-4 py-5 [overflow-anchor:none]"
       >
         <div ref={contentRef} className="mx-auto w-full min-w-0 max-w-3xl space-y-5">
         {props.historyLoading && props.canLoadOlderHistory ? (

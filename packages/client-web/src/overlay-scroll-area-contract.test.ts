@@ -84,18 +84,23 @@ describe("overlay scroll area contract", () => {
       councilSource,
       /rah-popover-panel rah-scroll-panel rah-scroll-panel-y absolute bottom-full/,
     );
-    for (const relativePath of [
-      "./components/workbench/panes/WorkbenchEmptyPane.tsx",
-      "./components/workbench/canvas/CanvasNewSessionPane.tsx",
-    ]) {
-      const source = readSource(relativePath);
-      assert.match(source, /OverlayScrollArea/);
-      assert.match(source, /scrollAriaLabel="Workspaces"/);
-      assert.doesNotMatch(
-        source,
-        /rah-popover-panel rah-scroll-panel rah-scroll-panel-y absolute bottom-full/,
-      );
-    }
+    const newSessionComposerSource = readSource(
+      "./components/workbench/panes/NewSessionComposer.tsx",
+    );
+    assert.match(newSessionComposerSource, /OverlayScrollArea/);
+    assert.match(newSessionComposerSource, /scrollAriaLabel="Workspaces"/);
+    assert.doesNotMatch(
+      newSessionComposerSource,
+      /rah-popover-panel rah-scroll-panel rah-scroll-panel-y absolute bottom-full/,
+    );
+    assert.match(
+      readSource("./components/workbench/panes/WorkbenchEmptyPane.tsx"),
+      /NewSessionComposer/,
+    );
+    assert.match(
+      readSource("./components/workbench/canvas/CanvasNewSessionPane.tsx"),
+      /NewSessionComposer/,
+    );
     assert.match(councilSource, /\brah-scroll-main\b/);
     assert.match(readSource("./components/chat/ChatThread.tsx"), /\brah-scroll-main\b/);
     assert.match(readSource("./components/terminal/TerminalSurface.tsx"), /\brah-scroll-code\b/);
@@ -111,5 +116,16 @@ describe("overlay scroll area contract", () => {
     assert.match(source, /pageshow/);
     assert.match(source, /window\.addEventListener\("focus"/);
     assert.match(source, /isDocumentHidden\(\)/);
+  });
+
+  test("chat thread lets intentional upward scrolling break live bottom follow", () => {
+    const source = readSource("./components/chat/ChatThread.tsx");
+
+    assert.match(source, /userDetachedFromBottomRef/);
+    assert.match(source, /detachBottomFollowing/);
+    assert.match(source, /event\.deltaY < 0/);
+    assert.match(source, /touchmove/);
+    assert.match(source, /bottomFollowRafRef/);
+    assert.match(source, /\[overflow-anchor:none\]/);
   });
 });

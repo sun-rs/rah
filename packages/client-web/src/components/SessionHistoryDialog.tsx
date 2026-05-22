@@ -413,6 +413,7 @@ export function SessionHistoryDialog(props: {
   onActivate: (ref: StoredSessionRef) => void;
   onActivateRunning?: (sessionId: string) => void;
   onActivateCouncil?: ((councilId: string) => void) | undefined;
+  onLoadStoredSessions?: (() => void | Promise<void>) | undefined;
   onRefreshCouncils?: (() => void | Promise<void>) | undefined;
   onRenameCouncil?: ((council: CouncilSnapshot) => void) | undefined;
   onRemoveCouncil?: ((councilId: string) => void | Promise<void>) | undefined;
@@ -477,8 +478,9 @@ export function SessionHistoryDialog(props: {
   useEffect(() => {
     if (open) {
       setTab(props.defaultTab ?? "active");
+      void props.onLoadStoredSessions?.();
     }
-  }, [open, props.defaultTab]);
+  }, [open, props.defaultTab, props.onLoadStoredSessions]);
 
   const groups = useMemo(
     () =>

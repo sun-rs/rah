@@ -108,6 +108,7 @@ function printUsage() {
 
 function parseManagementArgs(command, argv) {
   let daemonUrl = DEFAULT_DAEMON_URL;
+  let daemonUrlExplicit = false;
   let build = command === "start" || command === "restart";
   let open = command === "start";
   let follow = false;
@@ -123,6 +124,7 @@ function parseManagementArgs(command, argv) {
     const option = rest.shift();
     if (option === "--daemon-url" || option === "--daemon") {
       daemonUrl = rest.shift() ?? daemonUrl;
+      daemonUrlExplicit = true;
       continue;
     }
     if (option === "--build") {
@@ -147,11 +149,20 @@ function parseManagementArgs(command, argv) {
     }
     throw new Error(`Unknown argument: ${option}`);
   }
-  return { command, daemonUrl, build, open, follow, ...(sessionId ? { sessionId } : {}) };
+  return {
+    command,
+    daemonUrl,
+    daemonUrlExplicit,
+    build,
+    open,
+    follow,
+    ...(sessionId ? { sessionId } : {}),
+  };
 }
 
 function parseCouncilMcpArgs(argv) {
   let daemonUrl = DEFAULT_DAEMON_URL;
+  let daemonUrlExplicit = false;
   let councilId;
   let actorId;
   const rest = [...argv];
@@ -159,6 +170,7 @@ function parseCouncilMcpArgs(argv) {
     const option = rest.shift();
     if (option === "--daemon-url") {
       daemonUrl = rest.shift() ?? daemonUrl;
+      daemonUrlExplicit = true;
       continue;
     }
     if (option === "--council") {
@@ -178,6 +190,7 @@ function parseCouncilMcpArgs(argv) {
     help: false,
     command: "council-mcp",
     daemonUrl,
+    daemonUrlExplicit,
     councilId,
     actorId,
     clientId: `mcp:${actorId}:${randomUUID()}`,
@@ -186,6 +199,7 @@ function parseCouncilMcpArgs(argv) {
 
 function parseProviderAttachArgs(provider, argv) {
   let daemonUrl = DEFAULT_DAEMON_URL;
+  let daemonUrlExplicit = false;
   const rest = [...argv];
   const providerSessionId = rest.shift();
   if (!providerSessionId) {
@@ -195,6 +209,7 @@ function parseProviderAttachArgs(provider, argv) {
     const option = rest.shift();
     if (option === "--daemon-url" || option === "--daemon") {
       daemonUrl = rest.shift() ?? daemonUrl;
+      daemonUrlExplicit = true;
       continue;
     }
     throw new Error(`Unknown argument: ${option}`);
@@ -205,6 +220,7 @@ function parseProviderAttachArgs(provider, argv) {
     provider,
     providerSessionId,
     daemonUrl,
+    daemonUrlExplicit,
   };
 }
 
@@ -231,6 +247,7 @@ function parseArgs(argv) {
   let resumeProviderSessionId;
   let cwd = process.cwd();
   let daemonUrl = DEFAULT_DAEMON_URL;
+  let daemonUrlExplicit = false;
   let claudePermissionMode;
 
   const rest = [...argv.slice(1)];
@@ -254,6 +271,7 @@ function parseArgs(argv) {
     }
     if (option === "--daemon-url") {
       daemonUrl = rest.shift() ?? daemonUrl;
+      daemonUrlExplicit = true;
       continue;
     }
     if (option === "--permission-mode") {
@@ -278,6 +296,7 @@ function parseArgs(argv) {
     provider,
     cwd: resolve(cwd),
     daemonUrl,
+    daemonUrlExplicit,
     ...(resumeProviderSessionId ? { resumeProviderSessionId } : {}),
     ...(claudePermissionMode ? { claudePermissionMode } : {}),
   };
@@ -684,6 +703,7 @@ function startDaemonDetached(daemonUrl) {
 }
 
 async function ensureDaemon(daemonUrl, options = {}) {
+  const allowUnidentifiedReady = options.allowUnidentifiedReady === true;
   if (options.build === true || (options.build === "missing" && !clientBundleExists())) {
     await buildWebClient();
   }
@@ -695,8 +715,8 @@ async function ensureDaemon(daemonUrl, options = {}) {
     return;
   }
   if (await daemonReady(daemonUrl)) {
-    const pid = await syncManagedPidFromListeningDaemon(daemonUrl);
-    if (!pid) {
+    const pid = allowUnidentifiedReady ? null : await syncManagedPidFromListeningDaemon(daemonUrl);
+    if (!pid && !allowUnidentifiedReady) {
       throw new Error(`Port ${daemonPort(daemonUrl)} is occupied by a daemon that RAH cannot identify.`);
     }
     if (options.verbose) {
@@ -714,8 +734,8 @@ async function ensureDaemon(daemonUrl, options = {}) {
       return;
     }
     if (await daemonReady(daemonUrl)) {
-      const pid = await syncManagedPidFromListeningDaemon(daemonUrl);
-      if (!pid) {
+      const pid = allowUnidentifiedReady ? null : await syncManagedPidFromListeningDaemon(daemonUrl);
+      if (!pid && !allowUnidentifiedReady) {
         throw new Error(`Port ${daemonPort(daemonUrl)} is occupied by a daemon that RAH cannot identify.`);
       }
       if (options.verbose) {
@@ -735,7 +755,7 @@ async function ensureDaemon(daemonUrl, options = {}) {
     while (Date.now() < deadline) {
       const identity = await currentRuntimeIdentity(daemonUrl);
       if (identity || (await daemonReady(daemonUrl))) {
-        if (!identity) {
+        if (!identity && !allowUnidentifiedReady) {
           await syncManagedPidFromListeningDaemon(daemonUrl);
         }
         process.stdout.write(`[rah] daemon ready at ${daemonUrl}\n`);
@@ -1746,7 +1766,9 @@ async function attachLocalTerminalToNativeLocalServer(daemonUrl, session, client
 }
 
 async function attachExistingRahSession(parsed) {
-  await ensureDaemon(parsed.daemonUrl);
+  await ensureDaemon(parsed.daemonUrl, {
+    allowUnidentifiedReady: parsed.daemonUrlExplicit === true,
+  });
   const summary = parsed.provider && parsed.providerSessionId
     ? await findRunningProviderSessionSummary(
         parsed.daemonUrl,
@@ -1779,7 +1801,9 @@ async function attachExistingRahSession(parsed) {
 }
 
 async function runPtyFirstProviderCommand(parsed) {
-  await ensureDaemon(parsed.daemonUrl);
+  await ensureDaemon(parsed.daemonUrl, {
+    allowUnidentifiedReady: parsed.daemonUrlExplicit === true,
+  });
   const client = terminalClientDescriptor();
   const summary = await startOrResumePtyFirstSession(parsed, client);
   const session = managedSessionFromSummary(summary);

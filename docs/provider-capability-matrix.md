@@ -100,5 +100,7 @@ Settings behavior:
 
 - Provider capability drift must not break native runtime startup.
 - Unsupported model/permission/plan controls should disappear or degrade to diagnostics, not fail the session.
+- Codex `>=0.132.0` is recommended for RAH. Settings may surface the read-only `codex doctor --json`
+  summary, but RAH does not own Codex account tokens, quota, or subscription entitlement checks.
 - If a provider adds a new slash command, RAH does not need immediate Web UI support; users can access it directly in the official TUI view.
 - `thread/loaded/list`-style loaded-session discovery is diagnostic/fallback only. It is not the default Codex binding strategy because shared servers can have concurrent clients.

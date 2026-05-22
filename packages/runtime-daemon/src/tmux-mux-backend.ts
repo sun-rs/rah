@@ -119,7 +119,9 @@ function isMissingServerOrSession(error: unknown): boolean {
     return false;
   }
   const text = `${error.stdout}\n${error.stderr}\n${error.message}`;
-  return /no server running|can't find session|session not found/i.test(text);
+  return /no server running|can't find session|session not found|error connecting to .*no such file/i.test(
+    text,
+  );
 }
 
 function parsePaneLine(line: string): MuxPaneState | null {

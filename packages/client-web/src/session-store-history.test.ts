@@ -660,6 +660,95 @@ test("mergeLatestHistoryPage keeps older loaded entries before refreshed latest 
   );
 });
 
+test("mergeLatestHistoryPage consumes duplicate Codex live assistant echoes once persisted history arrives", () => {
+  const canonicalTurnId = "codex-turn-1";
+  const current = replayEventsIntoProjection(summary(), [
+    timelineEvent({
+      seq: 10,
+      turnId: "live-turn",
+      kind: "assistant_message",
+      text: "自适应加码门的第一版跑完了。",
+      canonicalItemId: "live-assistant-1",
+      canonicalTurnId,
+    }),
+    timelineEvent({
+      seq: 11,
+      turnId: "live-turn",
+      kind: "assistant_message",
+      text: "自适应加码门的第一版跑完了。",
+      canonicalItemId: "live-assistant-2",
+      canonicalTurnId,
+    }),
+  ]);
+
+  const next = mergeLatestHistoryPage(current, [
+    timelineEvent({
+      seq: 100,
+      turnId: "history:session-1:turn-1",
+      kind: "assistant_message",
+      text: "自适应加码门的第一版跑完了。",
+      canonicalItemId: "history-assistant-1",
+      canonicalTurnId,
+    }),
+  ]);
+
+  const messages = next.feed.filter(
+    (entry) => entry.kind === "timeline" && entry.item.kind === "assistant_message",
+  );
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0]?.kind === "timeline" ? messages[0].canonicalItemId : null, "history-assistant-1");
+});
+
+test("mergeLatestHistoryPage preserves repeated Codex history assistant messages in the same turn", () => {
+  const canonicalTurnId = "codex-turn-1";
+  const current = replayEventsIntoProjection(summary(), [
+    timelineEvent({
+      seq: 10,
+      turnId: "live-turn",
+      kind: "assistant_message",
+      text: "还在执行合约级回测。",
+      canonicalItemId: "live-assistant-1",
+      canonicalTurnId,
+    }),
+    timelineEvent({
+      seq: 11,
+      turnId: "live-turn",
+      kind: "assistant_message",
+      text: "还在执行合约级回测。",
+      canonicalItemId: "live-assistant-2",
+      canonicalTurnId,
+    }),
+  ]);
+
+  const next = mergeLatestHistoryPage(current, [
+    timelineEvent({
+      seq: 100,
+      turnId: "history:session-1:turn-1",
+      kind: "assistant_message",
+      text: "还在执行合约级回测。",
+      canonicalItemId: "history-assistant-1",
+      canonicalTurnId,
+    }),
+    timelineEvent({
+      seq: 101,
+      turnId: "history:session-1:turn-1",
+      kind: "assistant_message",
+      text: "还在执行合约级回测。",
+      canonicalItemId: "history-assistant-2",
+      canonicalTurnId,
+    }),
+  ]);
+
+  const messages = next.feed.filter(
+    (entry) => entry.kind === "timeline" && entry.item.kind === "assistant_message",
+  );
+  assert.equal(messages.length, 2);
+  assert.deepEqual(
+    messages.map((entry) => (entry.kind === "timeline" ? entry.canonicalItemId : null)),
+    ["history-assistant-1", "history-assistant-2"],
+  );
+});
+
 test("mergeLatestHistoryPage dedupes live interrupt notices against persisted anchored cancels", () => {
   let current = appendOptimisticUserMessage(
     replayEventsIntoProjection(summary(), []),

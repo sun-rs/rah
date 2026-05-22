@@ -180,6 +180,7 @@ export function CanvasSessionPane(props: {
       selectedIsReadOnlyReplay={selectedIsReadOnlyReplay}
       compactComposerPrompts="auto"
       compactSessionMeta="auto"
+      showViewCloseButton={false}
       sidebarOpen
       rightSidebarOpen={inspectorOpen}
       isAttached={isAttached}

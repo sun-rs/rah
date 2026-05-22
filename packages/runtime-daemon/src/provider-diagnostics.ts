@@ -1,5 +1,9 @@
 import { spawn } from "node:child_process";
-import type { ProviderDiagnostic, ProviderKind } from "@rah/runtime-protocol";
+import type {
+  ProviderDiagnostic,
+  ProviderKind,
+  ProviderRuntimeHealthDiagnostic,
+} from "@rah/runtime-protocol";
 import { resolveConfiguredBinary } from "./provider-binary-utils";
 
 export type CoreLiveDiagnosticProvider = Extract<
@@ -18,12 +22,18 @@ type LatestVersionResult = {
 };
 
 const LATEST_VERSION_CACHE_TTL_MS = 30 * 60 * 1_000;
+const CODEX_DOCTOR_CACHE_TTL_MS = 30 * 1_000;
+const CODEX_DOCTOR_TIMEOUT_MS = 10_000;
 
 const latestVersionCache = new Map<
   ProviderKind,
   { expiresAt: number; value: LatestVersionResult }
 >();
 const latestVersionInFlight = new Map<ProviderKind, Promise<LatestVersionResult>>();
+let codexDoctorCache:
+  | { expiresAt: number; value: ProviderRuntimeHealthDiagnostic }
+  | undefined;
+let codexDoctorInFlight: Promise<ProviderRuntimeHealthDiagnostic> | undefined;
 
 const VERSION_PATTERN = /\bv?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?\b/;
 
@@ -174,6 +184,8 @@ export function compareVersions(
 export function resetProviderDiagnosticsCacheForTests(): void {
   latestVersionCache.clear();
   latestVersionInFlight.clear();
+  codexDoctorCache = undefined;
+  codexDoctorInFlight = undefined;
 }
 
 function buildProviderDiagnostic(params: {
@@ -184,6 +196,7 @@ function buildProviderDiagnostic(params: {
   installedVersion?: string;
   versionStatus?: ProviderDiagnostic["versionStatus"];
   detail?: string;
+  providerHealth?: ProviderRuntimeHealthDiagnostic;
 }): ProviderDiagnostic {
   const diagnostic: ProviderDiagnostic = {
     provider: params.provider,
@@ -209,7 +222,241 @@ function buildProviderDiagnostic(params: {
   if (params.detail) {
     diagnostic.detail = params.detail;
   }
+  if (params.providerHealth) {
+    diagnostic.providerHealth = params.providerHealth;
+  }
   return diagnostic;
+}
+
+type CodexDoctorCheck = {
+  status?: unknown;
+  summary?: unknown;
+  details?: unknown;
+};
+
+type CodexDoctorReport = {
+  generatedAt?: unknown;
+  overallStatus?: unknown;
+  checks?: unknown;
+};
+
+function asString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function asDoctorCheck(value: unknown): CodexDoctorCheck | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as CodexDoctorCheck
+    : undefined;
+}
+
+function doctorDetails(check: CodexDoctorCheck | undefined): Record<string, unknown> {
+  return check?.details && typeof check.details === "object" && !Array.isArray(check.details)
+    ? check.details as Record<string, unknown>
+    : {};
+}
+
+function boolString(value: unknown): boolean | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  if (value === "true") {
+    return true;
+  }
+  if (value === "false") {
+    return false;
+  }
+  return undefined;
+}
+
+function healthStatus(value: unknown): ProviderRuntimeHealthDiagnostic["status"] {
+  switch (value) {
+    case "ok":
+      return "ok";
+    case "warning":
+      return "warning";
+    case "error":
+      return "error";
+    default:
+      return "unknown";
+  }
+}
+
+function checkStatus(value: unknown): "ok" | "warning" | "error" | "unknown" {
+  return healthStatus(value);
+}
+
+export function summarizeCodexDoctorReport(
+  report: CodexDoctorReport,
+): ProviderRuntimeHealthDiagnostic {
+  const checks =
+    report.checks && typeof report.checks === "object" && !Array.isArray(report.checks)
+      ? report.checks as Record<string, unknown>
+      : {};
+  const authCheck = asDoctorCheck(checks["auth.credentials"]);
+  const appServerCheck = asDoctorCheck(checks["app_server.status"]);
+  const networkCheck = asDoctorCheck(checks["network.provider_reachability"]);
+  const authDetails = doctorDetails(authCheck);
+  const appServerDetails = doctorDetails(appServerCheck);
+
+  const storedApiKey = boolString(authDetails["stored API key"]);
+  const storedChatGptTokens = boolString(authDetails["stored ChatGPT tokens"]);
+  const generatedAt = asString(report.generatedAt);
+  const authMode = asString(authDetails["stored auth mode"]);
+  const authSummary = asString(authCheck?.summary);
+  const appServerStatus = asString(appServerDetails["status"]);
+  const appServerMode = asString(appServerDetails["mode"]);
+  const appServerSummary = asString(appServerCheck?.summary);
+  const networkSummary = asString(networkCheck?.summary);
+  const authConfigured =
+    storedApiKey === true || storedChatGptTokens === true
+      ? "configured"
+      : authCheck
+        ? checkStatus(authCheck.status) === "ok"
+          ? "configured"
+          : "missing"
+        : "unknown";
+
+  return {
+    source: "codex_doctor",
+    status: healthStatus(report.overallStatus),
+    ...(generatedAt ? { generatedAt } : {}),
+    ...(authCheck
+      ? {
+          auth: {
+            status: authConfigured,
+            ...(authMode ? { mode: authMode } : {}),
+            ...(storedApiKey !== undefined ? { storedApiKey } : {}),
+            ...(storedChatGptTokens !== undefined ? { storedChatGptTokens } : {}),
+            ...(authSummary ? { summary: authSummary } : {}),
+          },
+        }
+      : {}),
+    ...(appServerCheck
+      ? {
+          appServer: {
+            ...(appServerStatus ? { status: appServerStatus } : {}),
+            ...(appServerMode ? { mode: appServerMode } : {}),
+            ...(appServerSummary ? { summary: appServerSummary } : {}),
+          },
+        }
+      : {}),
+    ...(networkCheck
+      ? {
+          network: {
+            status: checkStatus(networkCheck.status),
+            ...(networkSummary ? { summary: networkSummary } : {}),
+          },
+        }
+      : {}),
+  };
+}
+
+async function runCodexDoctor(
+  launchSpec: LaunchSpec,
+): Promise<ProviderRuntimeHealthDiagnostic> {
+  const [command, ...baseArgs] = launchSpec.argv;
+  if (!command) {
+    return {
+      source: "codex_doctor",
+      status: "unknown",
+      error: "No Codex launch command configured.",
+    };
+  }
+  return await new Promise((resolve) => {
+    const child = spawn(command, [...baseArgs, "doctor", "--json", "--summary", "--no-color", "--ascii"], {
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    let settled = false;
+    const timeout = setTimeout(() => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      child.kill("SIGTERM");
+      resolve({
+        source: "codex_doctor",
+        status: "unknown",
+        error: "Timed out while running codex doctor.",
+      });
+    }, CODEX_DOCTOR_TIMEOUT_MS);
+    child.stdout.on("data", (chunk) => {
+      stdout.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    });
+    child.once("error", (error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      resolve({
+        source: "codex_doctor",
+        status: "unknown",
+        error: error.message,
+      });
+    });
+    child.once("close", (code) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      const stdoutText = Buffer.concat(stdout).toString("utf8").trim();
+      const stderrText = Buffer.concat(stderr).toString("utf8").trim();
+      if (code !== 0) {
+        resolve({
+          source: "codex_doctor",
+          status: "unknown",
+          error: stderrText || `codex doctor exited with code ${code ?? 0}.`,
+        });
+        return;
+      }
+      try {
+        const parsed = JSON.parse(stdoutText) as CodexDoctorReport;
+        resolve(summarizeCodexDoctorReport(parsed));
+      } catch (error) {
+        resolve({
+          source: "codex_doctor",
+          status: "unknown",
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    });
+  });
+}
+
+async function getCodexDoctorDiagnostic(
+  launchSpec: LaunchSpec,
+  options?: { forceRefresh?: boolean },
+): Promise<ProviderRuntimeHealthDiagnostic> {
+  if (options?.forceRefresh) {
+    codexDoctorCache = undefined;
+  }
+  if (!options?.forceRefresh && codexDoctorCache && Date.now() < codexDoctorCache.expiresAt) {
+    return codexDoctorCache.value;
+  }
+  if (!options?.forceRefresh && codexDoctorInFlight) {
+    return await codexDoctorInFlight;
+  }
+  const request = runCodexDoctor(launchSpec).then((value) => {
+    codexDoctorCache = {
+      expiresAt: Date.now() + CODEX_DOCTOR_CACHE_TTL_MS,
+      value,
+    };
+    return value;
+  }).finally(() => {
+    if (codexDoctorInFlight === request) {
+      codexDoctorInFlight = undefined;
+    }
+  });
+  codexDoctorInFlight = request;
+  return await request;
 }
 
 async function fetchJson<T>(url: string): Promise<T> {
@@ -331,6 +578,10 @@ export async function probeProviderDiagnostic(
   const latest = await getLatestVersionResult(provider, options);
   const launchCommand = launchSpec.argv.join(" ");
   const [command, ...baseArgs] = launchSpec.argv;
+  const providerHealth =
+    provider === "codex"
+      ? await getCodexDoctorDiagnostic(launchSpec, options)
+      : undefined;
   if (!command) {
     return buildProviderDiagnostic({
       provider,
@@ -339,6 +590,7 @@ export async function probeProviderDiagnostic(
       latest,
       versionStatus: "unknown",
       detail: "No launch command configured.",
+      ...(providerHealth ? { providerHealth } : {}),
     });
   }
 
@@ -364,6 +616,7 @@ export async function probeProviderDiagnostic(
         latest,
         versionStatus: "unknown",
         detail: "Timed out while probing provider version.",
+        ...(providerHealth ? { providerHealth } : {}),
       }));
     }, 5_000);
 
@@ -387,6 +640,7 @@ export async function probeProviderDiagnostic(
         latest,
         versionStatus: "unknown",
         detail: error.message,
+        ...(providerHealth ? { providerHealth } : {}),
       }));
     });
 
@@ -407,6 +661,7 @@ export async function probeProviderDiagnostic(
           latest,
           ...(installedVersion ? { installedVersion } : {}),
           versionStatus: compareVersions(installedVersion, latest.latestVersion),
+          ...(providerHealth ? { providerHealth } : {}),
         }));
         return;
       }
@@ -418,6 +673,7 @@ export async function probeProviderDiagnostic(
         ...(installedVersion ? { installedVersion } : {}),
         versionStatus: compareVersions(installedVersion, latest.latestVersion),
         detail: stderrText || `Exited with code ${code ?? 0}.`,
+        ...(providerHealth ? { providerHealth } : {}),
       }));
     });
   });

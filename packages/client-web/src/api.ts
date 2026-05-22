@@ -176,8 +176,15 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
-export async function listSessions(): Promise<ListSessionsResponse> {
-  return requestJson<ListSessionsResponse>("/api/sessions");
+export async function listSessions(options?: {
+  storedSessions?: "all" | "recent";
+}): Promise<ListSessionsResponse> {
+  const query = new URLSearchParams();
+  if (options?.storedSessions) {
+    query.set("storedSessions", options.storedSessions);
+  }
+  const suffix = query.size > 0 ? `?${query.toString()}` : "";
+  return requestJson<ListSessionsResponse>(`/api/sessions${suffix}`);
 }
 
 export async function getNativeTuiSurface(

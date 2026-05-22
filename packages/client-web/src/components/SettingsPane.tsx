@@ -60,6 +60,7 @@ type ModelRefreshState = {
   status: ModelRefreshStatus;
   error?: string;
 };
+type ProviderHealthStatus = NonNullable<ProviderDiagnostic["providerHealth"]>["status"];
 type ManualModelFormState = {
   modelId: string;
   options: string;
@@ -179,6 +180,43 @@ function manualModelIsActive(catalog: ProviderModelCatalog | undefined, modelId:
 
 function providerSupportsManualOptions(provider: ProviderChoice): boolean {
   return provider !== "gemini";
+}
+
+function providerHealthLabel(status: ProviderHealthStatus): string {
+  switch (status) {
+    case "ok":
+      return "OK";
+    case "warning":
+      return "Warning";
+    case "error":
+      return "Error";
+    default:
+      return "Unknown";
+  }
+}
+
+function providerHealthBadgeClass(status: ProviderHealthStatus): string {
+  switch (status) {
+    case "ok":
+      return "border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400";
+    case "warning":
+      return "border-[var(--app-warning)]/20 bg-[var(--app-warning-bg)] text-[var(--app-warning)]";
+    case "error":
+      return "border-[var(--app-danger)]/20 bg-[var(--app-danger-bg)] text-[var(--app-danger)]";
+    default:
+      return "border-[var(--app-border)] bg-[var(--app-subtle-bg)] text-[var(--app-hint)]";
+  }
+}
+
+function formatProviderAuthSummary(diagnostic: ProviderDiagnostic): string | null {
+  const auth = diagnostic.providerHealth?.auth;
+  if (!auth) {
+    return null;
+  }
+  if (auth.mode) {
+    return auth.mode === "chatgpt" ? "ChatGPT" : auth.mode;
+  }
+  return auth.status === "configured" ? "Configured" : auth.status === "missing" ? "Missing" : "Unknown";
 }
 
 export function SettingsPane() {
@@ -1093,6 +1131,57 @@ export function SettingsPane() {
                                 </div>
                               </div>
                             </div>
+                            {diagnostic.providerHealth ? (
+                              <div className="rounded-xl border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-3 py-2">
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <div className="text-xs font-medium uppercase tracking-wide text-[var(--app-hint)]">
+                                    Codex doctor
+                                  </div>
+                                  <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${providerHealthBadgeClass(diagnostic.providerHealth.status)}`}>
+                                    {providerHealthLabel(diagnostic.providerHealth.status)}
+                                  </span>
+                                </div>
+                                {diagnostic.providerHealth.error ? (
+                                  <div className="mt-2 break-words text-xs text-[var(--app-danger)] [overflow-wrap:anywhere]">
+                                    {diagnostic.providerHealth.error}
+                                  </div>
+                                ) : (
+                                  <div className="mt-2 grid gap-2 text-xs sm:grid-cols-3">
+                                    <div>
+                                      <div className="text-[10px] font-medium uppercase tracking-wide text-[var(--app-hint)]">
+                                        Auth
+                                      </div>
+                                      <div className="mt-0.5 text-[var(--app-fg)]">
+                                        {formatProviderAuthSummary(diagnostic) ?? "Unknown"}
+                                      </div>
+                                    </div>
+                                    <div>
+                                      <div className="text-[10px] font-medium uppercase tracking-wide text-[var(--app-hint)]">
+                                        App server
+                                      </div>
+                                      <div className="mt-0.5 text-[var(--app-fg)]">
+                                        {diagnostic.providerHealth.appServer?.status ??
+                                          diagnostic.providerHealth.appServer?.summary ??
+                                          "Unknown"}
+                                      </div>
+                                    </div>
+                                    <div>
+                                      <div className="text-[10px] font-medium uppercase tracking-wide text-[var(--app-hint)]">
+                                        Network
+                                      </div>
+                                      <div
+                                        className="mt-0.5 truncate text-[var(--app-fg)]"
+                                        title={diagnostic.providerHealth.network?.summary}
+                                      >
+                                        {diagnostic.providerHealth.network?.status
+                                          ? providerHealthLabel(diagnostic.providerHealth.network.status)
+                                          : "Unknown"}
+                                      </div>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            ) : null}
                           </div>
                         </div>
                         {diagnostic.latestVersionError ? (

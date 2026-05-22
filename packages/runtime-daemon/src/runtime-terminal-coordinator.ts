@@ -379,7 +379,9 @@ function isTmuxSessionMissingError(error: unknown): boolean {
     return false;
   }
   const detail = `${error.stdout}\n${error.stderr}\n${error.message}`;
-  return /no server running|can't find session|can't find pane|session not found/i.test(detail);
+  return /no server running|can't find session|can't find pane|session not found|error connecting to .*no such file/i.test(
+    detail,
+  );
 }
 
 function isMuxSessionMissingError(error: unknown): boolean {

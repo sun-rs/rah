@@ -521,6 +521,30 @@ export interface ProviderDiagnostic {
   versionStatus?: "up_to_date" | "update_available" | "unknown";
   detail?: string;
   auth: "provider_managed";
+  providerHealth?: ProviderRuntimeHealthDiagnostic;
+}
+
+export interface ProviderRuntimeHealthDiagnostic {
+  source: "codex_doctor";
+  status: "ok" | "warning" | "error" | "unknown";
+  generatedAt?: string;
+  auth?: {
+    status: "configured" | "missing" | "unknown";
+    mode?: string;
+    storedApiKey?: boolean;
+    storedChatGptTokens?: boolean;
+    summary?: string;
+  };
+  appServer?: {
+    status?: string;
+    mode?: string;
+    summary?: string;
+  };
+  network?: {
+    status?: "ok" | "warning" | "error" | "unknown";
+    summary?: string;
+  };
+  error?: string;
 }
 
 export interface ListProvidersResponse {

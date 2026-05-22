@@ -10,6 +10,7 @@ import {
   launchSpecForProvider,
   probeProviderDiagnostic,
   resetProviderDiagnosticsCacheForTests,
+  summarizeCodexDoctorReport,
 } from "./provider-diagnostics";
 import { resolveConfiguredBinary } from "./provider-binary-utils";
 
@@ -34,6 +35,122 @@ describe("provider diagnostics version helpers", () => {
   test("compareVersions falls back to unknown for unparsable values", () => {
     assert.equal(compareVersions("codex 0.23.1", "0.23.1"), "unknown");
     assert.equal(compareVersions(undefined, "0.23.1"), "unknown");
+  });
+
+  test("summarizes Codex doctor auth and app-server status without raw paths", () => {
+    const summary = summarizeCodexDoctorReport({
+      generatedAt: "1779371923s since unix epoch",
+      overallStatus: "ok",
+      checks: {
+        "auth.credentials": {
+          status: "ok",
+          summary: "auth is configured",
+          details: {
+            "auth file": "/Users/example/.codex/auth.json",
+            "stored API key": "false",
+            "stored ChatGPT tokens": "true",
+            "stored auth mode": "chatgpt",
+          },
+        },
+        "app_server.status": {
+          status: "ok",
+          summary: "background server is not running",
+          details: {
+            status: "not running",
+            mode: "ephemeral",
+            "control socket": "/Users/example/.codex/app-server.sock",
+          },
+        },
+        "network.provider_reachability": {
+          status: "ok",
+          summary: "active provider endpoints are reachable over HTTP",
+          details: {},
+        },
+      },
+    });
+
+    assert.deepEqual(summary, {
+      source: "codex_doctor",
+      status: "ok",
+      generatedAt: "1779371923s since unix epoch",
+      auth: {
+        status: "configured",
+        mode: "chatgpt",
+        storedApiKey: false,
+        storedChatGptTokens: true,
+        summary: "auth is configured",
+      },
+      appServer: {
+        status: "not running",
+        mode: "ephemeral",
+        summary: "background server is not running",
+      },
+      network: {
+        status: "ok",
+        summary: "active provider endpoints are reachable over HTTP",
+      },
+    });
+  });
+
+  test("adds Codex doctor summary to provider diagnostics using a fake binary", async () => {
+    resetProviderDiagnosticsCacheForTests();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(JSON.stringify({ tag_name: "v0.132.0" }), {
+      status: 200,
+      headers: {
+        "content-type": "application/json",
+      },
+    })) as typeof globalThis.fetch;
+
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "rah-codex-doctor-"));
+    const binaryPath = path.join(tempDir, "codex");
+    try {
+      writeFileSync(
+        binaryPath,
+        `#!/usr/bin/env ${path.basename(process.execPath)}
+if (process.argv.includes("doctor")) {
+  console.log(JSON.stringify({
+    generatedAt: "now",
+    overallStatus: "ok",
+    checks: {
+      "auth.credentials": {
+        status: "ok",
+        summary: "auth is configured",
+        details: {
+          "stored auth mode": "chatgpt",
+          "stored API key": "false",
+          "stored ChatGPT tokens": "true"
+        }
+      },
+      "app_server.status": {
+        status: "ok",
+        summary: "background server is not running",
+        details: { status: "not running", mode: "ephemeral" }
+      }
+    }
+  }));
+} else if (process.argv.includes("--version")) {
+  console.log("codex-cli 0.132.0");
+} else {
+  process.exit(2);
+}
+`,
+      );
+      chmodSync(binaryPath, 0o755);
+
+      const diagnostic = await probeProviderDiagnostic("codex", { argv: [binaryPath] }, { forceRefresh: true });
+
+      assert.equal(diagnostic.status, "ready");
+      assert.equal(diagnostic.installedVersion, "0.132.0");
+      assert.equal(diagnostic.providerHealth?.source, "codex_doctor");
+      assert.equal(diagnostic.providerHealth?.auth?.mode, "chatgpt");
+      assert.equal(diagnostic.providerHealth?.auth?.storedChatGptTokens, true);
+      assert.equal(diagnostic.providerHealth?.appServer?.status, "not running");
+    } finally {
+      globalThis.fetch = originalFetch;
+      resetProviderDiagnosticsCacheForTests();
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   test("force refresh bypasses the cached latest-version probe", async () => {

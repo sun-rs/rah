@@ -158,6 +158,35 @@ describe("buildSessionsResponse", () => {
     assert.equal(response.recentSessions[1]?.lastUsedAt, "2026-04-29T09:00:00.000Z");
   });
 
+  test("can return only recent stored sessions for lightweight app bootstrap", () => {
+    const storedSessions = Array.from({ length: 20 }, (_, index) => ({
+      ...storedRef(`session-${index}`),
+      updatedAt: `2026-04-${String(index + 1).padStart(2, "0")}T10:00:00.000Z`,
+    }));
+
+    const response = buildSessionsResponse({
+      liveStates: [],
+      discoveredStoredSessions: storedSessions,
+      remembered: {
+        rememberedSessions: [],
+        rememberedRecentSessions: [],
+        rememberedWorkspaceDirs: ["/workspace/demo"],
+        rememberedHiddenWorkspaces: [],
+        rememberedHiddenSessionKeys: [],
+        rememberedSessionTitleOverrides: {},
+      },
+      isClosingSession: () => false,
+      storedSessionsMode: "recent",
+    });
+
+    assert.equal(response.recentSessions.length, 15);
+    assert.deepEqual(response.storedSessions, response.recentSessions);
+    assert.deepEqual(
+      response.storedSessions.map((session) => session.providerSessionId),
+      Array.from({ length: 15 }, (_, index) => `session-${19 - index}`),
+    );
+  });
+
   test("uses running session conversation activity for recent timestamps", () => {
     const liveState = storedSessionState("live-activity");
     liveState.session.updatedAt = "2026-05-19T10:30:00.000Z";

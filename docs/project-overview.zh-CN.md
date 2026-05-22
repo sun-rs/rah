@@ -300,9 +300,10 @@ RAH 现在提供轻量 provider diagnostics，用于帮助用户理解：
 - 这个 provider 的启动命令是什么
 - 二进制是否存在
 - `--version` 是否能成功
+- Codex 是否能提供 `codex doctor --json` 的只读健康摘要
 
-但 diagnostics **不判断账号认证是否可用**。  
-认证、配额、账号权限仍由 provider CLI 自己负责。
+但 diagnostics **不接管账号认证，也不承诺账号认证一定可用于真实模型请求**。
+Codex 的 `doctor` 摘要可以显示本机是否配置了 ChatGPT/API-key 凭据、app-server 是否在运行、网络可达性等只读信号；认证、配额、账号权限、token refresh 仍由 provider CLI 自己负责。
 
 这条边界是刻意保持克制的，和 hapi / paseo 的经验一致：
 

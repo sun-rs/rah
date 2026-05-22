@@ -5,18 +5,13 @@ import {
   ArrowUp,
   Circle,
   CircleStop,
-  Ellipsis,
   Info,
-  Menu,
   MessageSquareText,
-  PanelRight,
   PencilLine,
   Plus,
-  Square,
   SquareTerminal,
   Trash2,
   UsersRound,
-  X,
 } from "lucide-react";
 import type { SessionProjection } from "../../../types";
 import { TerminalPane } from "../../../TerminalPane";
@@ -26,16 +21,22 @@ import { SessionControlPopover } from "../../SessionControlPopover";
 import { TokenizedTextarea } from "../../TokenizedTextarea";
 import { canSubmitComposerInput, COMPOSER_LAYOUT, type ComposerSurface } from "../../../composer-contract";
 import {
-  HEADER_ACTION_GROUP_CLASS,
-  HEADER_IDENTITY_SLOT_CLASS,
-  HEADER_ICON_BUTTON_CLASS,
   HEADER_MENU_DANGER_ITEM_CLASS,
   HEADER_MENU_ITEM_CLASS,
-  HEADER_RESPONSIVE_TEXT_BUTTON_CLASS,
+  HEADER_SEGMENTED_BUTTON_ACTIVE_CLASS,
   HEADER_SEGMENTED_BUTTON_BASE_CLASS,
+  HEADER_SEGMENTED_BUTTON_INACTIVE_CLASS,
   HEADER_SEGMENTED_CONTROL_BASE_CLASS,
   HEADER_SEGMENTED_CONTROL_CLASS,
 } from "../header-button-styles";
+import {
+  ConversationHeader,
+  ConversationHeaderIconButton,
+  ConversationHeaderMoreButton,
+  ConversationHeaderPanelToggleButton,
+  ConversationHeaderStopButton,
+} from "../shells/ConversationHeader";
+import { ConversationPageShell } from "../shells/ConversationPageShell";
 import {
   ConversationMetaBadge,
 } from "../ConversationMetaBadge";
@@ -201,6 +202,7 @@ export function WorkbenchSelectedPane(props: {
   onSetSessionModel: (modelId: string, reasoningId?: string | null) => void;
   compactComposerPrompts?: boolean | "auto";
   compactSessionMeta?: boolean | "auto";
+  showViewCloseButton?: boolean;
   showInspectorToggle?: boolean;
   inspectorToggleOpen?: boolean;
   inspectorToggleDisabled?: boolean;
@@ -238,6 +240,7 @@ export function WorkbenchSelectedPane(props: {
       ? effectivePaneWidth < 720
       : sessionMetaMode === true;
   const compactSessionViewToggle = isPwaDisplayMode;
+  const showViewCloseButton = props.showViewCloseButton ?? true;
   const compactComposerPrompts =
     props.compactComposerPrompts === "auto"
       ? effectivePaneWidth < 640
@@ -509,42 +512,19 @@ export function WorkbenchSelectedPane(props: {
   const inspectorToggleOpen = props.inspectorToggleOpen ?? props.rightSidebarOpen;
 
   return (
-    <div ref={rootRef} className="flex h-full min-h-0 flex-col">
-      <header
-        className={`relative z-20 flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[var(--app-border)] bg-[var(--app-bg)]/80 pl-4 pr-4 backdrop-blur-sm ${
-          props.reserveRightPanelToggleSpace
-            ? "md:pr-[calc(max(1rem,env(safe-area-inset-right))+2.75rem)]"
-            : ""
-        }`}
-      >
-        <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
-          <button
-            type="button"
-            className="icon-click-feedback inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] md:hidden"
-            onClick={props.onOpenLeft}
-            aria-label="Open sidebar"
-          >
-            <Menu size={18} />
-          </button>
-          {!props.sidebarOpen && (
-            <button
-              type="button"
-              className="icon-click-feedback hidden h-8 w-8 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] md:inline-flex"
-              onClick={props.onExpandSidebar}
-              aria-label="Expand sidebar"
-              title="Expand sidebar"
-            >
-              <Menu size={18} />
-            </button>
-          )}
-          <span className={HEADER_IDENTITY_SLOT_CLASS}>
-            <ProviderLogo provider={props.selectedSummary.session.provider} className="h-6 w-6" />
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className="text-sm font-medium truncate text-[var(--app-fg)]">
-              {props.selectedSummary.session.title ?? props.selectedSummary.session.id}
-            </div>
-            <div className="mt-0.5 flex min-w-0 items-center gap-1.5 overflow-hidden text-[11px] text-[var(--app-hint)]">
+    <ConversationPageShell rootRef={rootRef}>
+      <ConversationHeader
+        sidebarOpen={props.sidebarOpen}
+        onOpenLeft={props.onOpenLeft}
+        onExpandSidebar={props.onExpandSidebar}
+        reserveRightPanelToggleSpace={Boolean(props.reserveRightPanelToggleSpace)}
+        identity={
+          <ProviderLogo provider={props.selectedSummary.session.provider} className="h-6 w-6" />
+        }
+        title={props.selectedSummary.session.title ?? props.selectedSummary.session.id}
+        titleText={props.selectedSummary.session.title ?? props.selectedSummary.session.id}
+        meta={
+          <>
               <ConversationMetaBadge
                 tone={sessionHeaderState.tone}
                 title={sessionHeaderState.title}
@@ -584,15 +564,14 @@ export function WorkbenchSelectedPane(props: {
                   <span className={compactSessionMeta ? "sr-only" : ""}>Council</span>
                 </ConversationMetaBadge>
               ) : null}
-            </div>
-          </div>
-        </div>
-        <div className={HEADER_ACTION_GROUP_CLASS}>
+          </>
+        }
+        actions={
+          <>
           {nativeTuiAvailable ? (
             <>
-              <button
-                type="button"
-                className={`${HEADER_ICON_BUTTON_CLASS} ${compactSessionViewToggle ? "" : "md:hidden"}`}
+              <ConversationHeaderIconButton
+                className={compactSessionViewToggle ? "" : "md:hidden"}
                 onClick={() => {
                   const nextMode = effectiveSessionViewMode === "chat" ? "tui" : "chat";
                   if (nextMode === "tui") {
@@ -608,7 +587,7 @@ export function WorkbenchSelectedPane(props: {
                 ) : (
                   <MessageSquareText size={15} />
                 )}
-              </button>
+              </ConversationHeaderIconButton>
               {!compactSessionViewToggle ? (
                 <div className={`${HEADER_SEGMENTED_CONTROL_BASE_CLASS} hidden md:inline-flex`}>
                   {(["chat", "tui"] as const).map((mode) => (
@@ -617,8 +596,8 @@ export function WorkbenchSelectedPane(props: {
                       type="button"
                       className={`${HEADER_SEGMENTED_BUTTON_BASE_CLASS} ${
                         effectiveSessionViewMode === mode
-                          ? "bg-[var(--app-bg)] text-[var(--app-fg)] shadow-sm"
-                          : "text-[var(--app-hint)] hover:text-[var(--app-fg)]"
+                          ? HEADER_SEGMENTED_BUTTON_ACTIVE_CLASS
+                          : HEADER_SEGMENTED_BUTTON_INACTIVE_CLASS
                       }`}
                       onClick={() => {
                         if (mode === "tui") {
@@ -637,12 +616,10 @@ export function WorkbenchSelectedPane(props: {
             </>
           ) : null}
           {!props.selectedIsReadOnlyReplay ? (
-            <button
-              type="button"
-              className={HEADER_ICON_BUTTON_CLASS}
+            <ConversationHeaderStopButton
               disabled={stopOrCloseDisabled}
               onClick={props.onStopOrClose}
-              aria-label="Stop session"
+              ariaLabel="Stop session"
               title={
                 !props.isAttached
                   ? "This client is not attached"
@@ -650,20 +627,15 @@ export function WorkbenchSelectedPane(props: {
                     ? "Stop this running session"
                     : "This provider session cannot be stopped from RAH"
               }
-            >
-              <Square size={14} className="text-rose-500/70" />
-            </button>
+            />
           ) : null}
           <div ref={sessionMenuRef} className="relative">
-            <button
-              type="button"
-              className={HEADER_ICON_BUTTON_CLASS}
+            <ConversationHeaderMoreButton
               onClick={() => setSessionMenuOpen((open) => !open)}
-              aria-label="Session actions"
+              open={sessionMenuOpen}
+              ariaLabel="Session actions"
               title="Session actions"
-            >
-              <Ellipsis size={16} />
-            </button>
+            />
             {sessionMenuOpen ? (
               <div className="absolute right-0 top-[calc(100%+0.375rem)] z-50 min-w-[10rem] rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] p-1 shadow-xl">
                 {props.canShowSessionInfo ? (
@@ -716,48 +688,40 @@ export function WorkbenchSelectedPane(props: {
               </div>
             ) : null}
           </div>
-          {props.selectedIsReadOnlyReplay ? (
-            <button
-              type="button"
-              className={HEADER_RESPONSIVE_TEXT_BUTTON_CLASS}
-              disabled={stopOrCloseDisabled}
-              onClick={props.onStopOrClose}
-              aria-label="Close history view"
-              title={!props.isAttached ? "This client is not attached" : "Close history view"}
-            >
-              <X size={14} className="min-[900px]:mr-1" />
-              <span className="hidden min-[900px]:inline">Close</span>
-            </button>
-          ) : null}
-          {props.onHideSession && !props.selectedIsReadOnlyReplay ? (
-            <button
-              type="button"
-              className={HEADER_RESPONSIVE_TEXT_BUTTON_CLASS}
-              onClick={props.onHideSession}
-              aria-label="Close session view"
-              title="Close session view"
-            >
-              <X size={14} className="min-[900px]:mr-1" />
-              <span className="hidden min-[900px]:inline">Close</span>
-            </button>
-          ) : null}
-          {props.showInspectorToggle ? (
-            <button
-              type="button"
-              className={`${HEADER_ICON_BUTTON_CLASS} ${props.inspectorToggleClassName ?? ""}`}
+          </>
+        }
+        closeAction={
+          showViewCloseButton && props.selectedIsReadOnlyReplay
+            ? {
+                ariaLabel: "Close history view",
+                title: !props.isAttached ? "This client is not attached" : "Close history view",
+                disabled: stopOrCloseDisabled,
+                onClick: props.onStopOrClose,
+              }
+            : showViewCloseButton && props.onHideSession && !props.selectedIsReadOnlyReplay
+              ? {
+                  ariaLabel: "Close session view",
+                  title: "Close session view",
+                  onClick: props.onHideSession,
+                }
+              : null
+        }
+        trailingActions={
+          props.showInspectorToggle ? (
+            <ConversationHeaderPanelToggleButton
               onClick={props.onToggleInspector}
               disabled={props.inspectorToggleDisabled || !props.onToggleInspector}
-              aria-label={inspectorToggleOpen ? "Collapse inspector" : "Expand inspector"}
+              ariaLabel={inspectorToggleOpen ? "Collapse inspector" : "Expand inspector"}
+              open={inspectorToggleOpen}
+              className={props.inspectorToggleClassName ?? ""}
               title={
                 props.inspectorToggleTitle ??
                 (inspectorToggleOpen ? "Collapse inspector" : "Expand inspector")
               }
-            >
-              <PanelRight size={16} />
-            </button>
-          ) : null}
-        </div>
-      </header>
+            />
+          ) : null
+        }
+      />
 
       {shouldRenderInteractionNotice(props.interactionNotice) ? (
         <div
@@ -996,6 +960,6 @@ export function WorkbenchSelectedPane(props: {
         projection={props.selectedProjection}
         onOpenChange={setSessionInfoOpen}
       />
-    </div>
+    </ConversationPageShell>
   );
 }

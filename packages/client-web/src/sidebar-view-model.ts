@@ -106,11 +106,24 @@ function councilStatusLabel(status: SidebarCouncilStatus): string {
   }
 }
 
-function sessionSidebarActivityAt(
+function sessionSidebarSortActivityAt(
   session: SessionSummary,
   activityAtById: ReadonlyMap<string, string> | undefined,
 ): string {
   return activityAtById?.get(session.session.id) ?? session.session.updatedAt;
+}
+
+function sessionSidebarDisplayActivityAt(
+  session: SessionSummary,
+  activityAtById: ReadonlyMap<string, string> | undefined,
+): string {
+  const activityAt = activityAtById?.get(session.session.id);
+  if (!activityAt) {
+    return session.session.updatedAt;
+  }
+  return activityAt.localeCompare(session.session.updatedAt) >= 0
+    ? activityAt
+    : session.session.updatedAt;
 }
 
 function sessionItemKey(sessionId: string): string {
@@ -148,8 +161,8 @@ export function deriveSidebarWorkspaceViewModels(args: {
   return args.workspaceSections.map((section) => {
     const pinnedItemKey = args.pinnedSessionIdByWorkspace[section.workspace.directory];
     const sortedSessions = [...section.sessions].sort((left, right) =>
-      sessionSidebarActivityAt(right, args.runningSessionActivityAtById).localeCompare(
-        sessionSidebarActivityAt(left, args.runningSessionActivityAtById),
+      sessionSidebarSortActivityAt(right, args.runningSessionActivityAtById).localeCompare(
+        sessionSidebarSortActivityAt(left, args.runningSessionActivityAtById),
       ),
     );
     const orderedSessions =
@@ -177,7 +190,7 @@ export function deriveSidebarWorkspaceViewModels(args: {
         statusLabel: sidebarStatusLabel(status),
         updatedAtLabel:
           formatCompactRelativeTime(
-            sessionSidebarActivityAt(session, args.runningSessionActivityAtById),
+            sessionSidebarDisplayActivityAt(session, args.runningSessionActivityAtById),
           ) ?? "",
         selected: session.session.id === args.selectedSessionId,
         pinned: pinnedItemKey !== undefined && isPinnedSession(pinnedItemKey, session.session.id),

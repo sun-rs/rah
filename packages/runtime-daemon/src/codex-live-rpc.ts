@@ -24,6 +24,7 @@ export interface CodexAppServerRpcClient {
   readonly endpoint?: string | undefined;
   setNotificationHandler(handler: (notification: JsonRpcNotification) => void): void;
   setRequestHandler(handler: (request: JsonRpcRequest) => Promise<unknown> | unknown): void;
+  setCloseHandler(handler: (error: Error) => void): void;
   request(method: string, params?: unknown, timeoutMs?: number): Promise<unknown>;
   notify(method: string, params?: unknown): void;
   dispose(): Promise<void>;
@@ -37,6 +38,8 @@ export class CodexJsonRpcClient implements CodexAppServerRpcClient {
   private requestHandler:
     | ((request: JsonRpcRequest) => Promise<unknown> | unknown)
     | null = null;
+  private closeHandler: ((error: Error) => void) | null = null;
+  private closeNotified = false;
   private disposed = false;
 
   constructor(private readonly child: ChildProcessWithoutNullStreams) {
@@ -66,6 +69,10 @@ export class CodexJsonRpcClient implements CodexAppServerRpcClient {
 
   setRequestHandler(handler: (request: JsonRpcRequest) => Promise<unknown> | unknown) {
     this.requestHandler = handler;
+  }
+
+  setCloseHandler(handler: (error: Error) => void) {
+    this.closeHandler = handler;
   }
 
   request(method: string, params?: unknown, timeoutMs = JSON_RPC_TIMEOUT_MS): Promise<unknown> {
@@ -156,6 +163,10 @@ export class CodexJsonRpcClient implements CodexAppServerRpcClient {
       pending.reject(error);
     }
     this.pending.clear();
+    if (!this.closeNotified) {
+      this.closeNotified = true;
+      this.closeHandler?.(error);
+    }
     this.disposed = true;
   }
 
@@ -235,6 +246,8 @@ export class CodexWebSocketRpcClient implements CodexAppServerRpcClient {
   private requestHandler:
     | ((request: JsonRpcRequest) => Promise<unknown> | unknown)
     | null = null;
+  private closeHandler: ((error: Error) => void) | null = null;
+  private closeNotified = false;
   private disposed = false;
 
   constructor(
@@ -269,6 +282,10 @@ export class CodexWebSocketRpcClient implements CodexAppServerRpcClient {
 
   setRequestHandler(handler: (request: JsonRpcRequest) => Promise<unknown> | unknown) {
     this.requestHandler = handler;
+  }
+
+  setCloseHandler(handler: (error: Error) => void) {
+    this.closeHandler = handler;
   }
 
   request(method: string, params?: unknown, timeoutMs = JSON_RPC_TIMEOUT_MS): Promise<unknown> {
@@ -365,6 +382,11 @@ export class CodexWebSocketRpcClient implements CodexAppServerRpcClient {
       pending.reject(error);
     }
     this.pending.clear();
+    if (!this.closeNotified) {
+      this.closeNotified = true;
+      this.closeHandler?.(error);
+    }
+    this.disposed = true;
   }
 
   private rejectPending(key: string, error: Error): void {

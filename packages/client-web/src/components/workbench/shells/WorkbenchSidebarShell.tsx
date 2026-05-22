@@ -32,6 +32,7 @@ export function WorkbenchSidebarShell(props: {
   onActivateHistory: (ref: StoredSessionRef) => void;
   onActivateRunning: (sessionId: string) => void;
   onActivateCouncil: (councilId: string) => void;
+  onLoadStoredSessions: () => void | Promise<void>;
   onRefreshCouncils: () => void | Promise<void>;
   onRenameCouncil: (council: CouncilSnapshot) => void;
   onRemoveCouncil: (councilId: string) => void | Promise<void>;
@@ -65,6 +66,7 @@ export function WorkbenchSidebarShell(props: {
               onActivateHistory={props.onActivateHistory}
               onActivateRunning={props.onActivateRunning}
               onActivateCouncil={props.onActivateCouncil}
+              onLoadStoredSessions={props.onLoadStoredSessions}
               onRefreshCouncils={props.onRefreshCouncils}
               onRenameCouncil={props.onRenameCouncil}
               onRemoveCouncil={props.onRemoveCouncil}
@@ -126,6 +128,7 @@ export function WorkbenchSidebarShell(props: {
             onActivateHistory={props.onActivateHistory}
             onActivateRunning={props.onActivateRunning}
             onActivateCouncil={props.onActivateCouncil}
+            onLoadStoredSessions={props.onLoadStoredSessions}
             onRefreshCouncils={props.onRefreshCouncils}
             onRenameCouncil={props.onRenameCouncil}
             onRemoveCouncil={props.onRemoveCouncil}

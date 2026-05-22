@@ -13,6 +13,8 @@ const RECENT_SESSION_LIMIT = 15;
 const INTERNAL_NATIVE_TUI_PROBE_WORKSPACE_SEGMENT =
   "/test-results/native-real-tui-workspaces/";
 
+export type StoredSessionsResponseMode = "all" | "recent";
+
 export type RememberedWorkbenchSessionState = {
   rememberedSessions: readonly StoredSessionRef[];
   rememberedRecentSessions: readonly StoredSessionRef[];
@@ -191,6 +193,7 @@ export function buildSessionsResponse(args: {
   discoveredStoredSessions: readonly StoredSessionRef[];
   remembered: RememberedWorkbenchSessionState;
   isClosingSession: (sessionId: string) => boolean;
+  storedSessionsMode?: StoredSessionsResponseMode;
 }): ListSessionsResponse {
   const applyTitleOverride = (session: StoredSessionRef): StoredSessionRef => {
     const key = `${session.provider}:${session.providerSessionId}`;
@@ -269,6 +272,18 @@ export function buildSessionsResponse(args: {
     }
     storedSessions.set(sessionProviderKey(stored), stored);
   }
+  const allStoredSessions = [...storedSessions.values()].map(applyTitleOverride);
+  const recentSessions = buildGlobalRecentSessions({
+    storedSessions: storedSessions.values(),
+    rememberedRecentSessions,
+    visibleRunningStates,
+    hiddenSessionKeys,
+    availableProviderSessionKeys,
+    applyTitleOverride,
+  });
+  const responseStoredSessions =
+    args.storedSessionsMode === "recent" ? recentSessions : allStoredSessions;
+
   return {
     sessions: visibleRunningStates.map((state) => {
       const providerSessionId = state.session.providerSessionId;
@@ -323,15 +338,8 @@ export function buildSessionsResponse(args: {
         },
       };
     }),
-    storedSessions: [...storedSessions.values()].map(applyTitleOverride),
-    recentSessions: buildGlobalRecentSessions({
-      storedSessions: storedSessions.values(),
-      rememberedRecentSessions,
-      visibleRunningStates,
-      hiddenSessionKeys,
-      availableProviderSessionKeys,
-      applyTitleOverride,
-    }),
+    storedSessions: responseStoredSessions,
+    recentSessions,
     workspaceDirs: workspaceDirsFromState(
       rememberedWorkspaceDirs,
       userFacingLiveStates,

@@ -39,6 +39,7 @@ type MaterializedHistorySnapshot = {
 
 type CachedFrozenPage = {
   requestCursor: string | null;
+  limit: number;
   response: SessionHistoryPageResponse;
 };
 
@@ -84,6 +85,10 @@ function paginationTimestamp(nextCursor: string | undefined, events: readonly Ra
   return events[0]?.ts;
 }
 
+function normalizeHistoryPageLimit(limitValue: number | undefined): number {
+  return Math.max(1, limitValue ?? 1000);
+}
+
 export class HistorySnapshotStore {
   private readonly snapshots = new Map<string, HistorySnapshot>();
 
@@ -97,6 +102,8 @@ export class HistorySnapshotStore {
     const existing = this.snapshots.get(args.sessionId);
     if (existing?.mode === "frozen_paged") {
       if (!args.cursor) {
+        const requestedLimit = normalizeHistoryPageLimit(args.limit);
+        const cachedInitial = existing.pagesByRequestCursor.get(null);
         const refreshed = this.createFrozenPagedSnapshot(
           args.sessionId,
           args.limit,
@@ -104,7 +111,8 @@ export class HistorySnapshotStore {
         );
         if (
           refreshed &&
-          refreshed.boundary.sourceRevision !== existing.boundary.sourceRevision
+          (refreshed.boundary.sourceRevision !== existing.boundary.sourceRevision ||
+            cachedInitial?.limit !== requestedLimit)
         ) {
           this.snapshots.set(args.sessionId, refreshed);
           return refreshed.pagesByRequestCursor.get(null)!.response;
@@ -167,7 +175,7 @@ export class HistorySnapshotStore {
     if (!frozenLoader) {
       return null;
     }
-    const limit = Math.max(1, limitValue ?? 1000);
+    const limit = normalizeHistoryPageLimit(limitValue);
     const initial = frozenLoader.loadInitialPage(limit);
     const initialEvents = normalizeTranscriptEvents(initial.events);
     const initialNextBeforeTs = paginationTimestamp(initial.nextCursor, initialEvents);
@@ -180,6 +188,7 @@ export class HistorySnapshotStore {
           null,
           {
             requestCursor: null,
+            limit,
             response: {
               sessionId,
               events: initialEvents,
@@ -198,7 +207,7 @@ export class HistorySnapshotStore {
     limitValue?: number,
     cursor?: string,
   ): SessionHistoryPageResponse {
-    const limit = Math.max(1, limitValue ?? 1000);
+    const limit = normalizeHistoryPageLimit(limitValue);
     const endExclusive = cursor ? decodeOffsetCursor(cursor) : snapshot.events.length;
     const boundedEndExclusive = Math.max(0, Math.min(endExclusive, snapshot.events.length));
     const start = Math.max(0, boundedEndExclusive - limit);
@@ -220,28 +229,30 @@ export class HistorySnapshotStore {
     cursor: string | undefined,
     _loadFrozenPage: (() => FrozenHistoryPageLoader | undefined) | undefined,
   ): SessionHistoryPageResponse {
-    const cached = snapshot.pagesByRequestCursor.get(cursor ?? null);
-    if (cached) {
+    const requestCursor = cursor ?? null;
+    const limit = normalizeHistoryPageLimit(limitValue);
+    const cached = snapshot.pagesByRequestCursor.get(requestCursor);
+    if (cached && cached.limit === limit) {
       return cached.response;
     }
-    if (!cursor) {
-      throw new Error("Missing initial history page for frozen snapshot.");
-    }
-    const limit = Math.max(1, limitValue ?? 1000);
-    const older = snapshot.loader.loadOlderPage(cursor, limit, snapshot.boundary);
-    if (older.boundary.sourceRevision !== snapshot.boundary.sourceRevision) {
+    const page =
+      cursor !== undefined
+        ? snapshot.loader.loadOlderPage(cursor, limit, snapshot.boundary)
+        : snapshot.loader.loadInitialPage(limit);
+    if (page.boundary.sourceRevision !== snapshot.boundary.sourceRevision) {
       throw new Error("Frozen history source revision changed while paging older history.");
     }
-    const events = normalizeTranscriptEvents(older.events);
-    const nextBeforeTs = paginationTimestamp(older.nextCursor, events);
+    const events = normalizeTranscriptEvents(page.events);
+    const nextBeforeTs = paginationTimestamp(page.nextCursor, events);
     const response: SessionHistoryPageResponse = {
       sessionId,
       events,
-      ...(older.nextCursor ? { nextCursor: older.nextCursor } : {}),
+      ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
       ...(nextBeforeTs ? { nextBeforeTs } : {}),
     };
-    snapshot.pagesByRequestCursor.set(cursor, {
-      requestCursor: cursor,
+    snapshot.pagesByRequestCursor.set(requestCursor, {
+      requestCursor,
+      limit,
       response,
     });
     return response;
