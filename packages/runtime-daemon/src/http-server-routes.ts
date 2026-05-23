@@ -68,6 +68,14 @@ function parseQueryLimit(raw: string | null, fallback?: number): number | undefi
   return Math.min(parsed, MAX_QUERY_LIMIT);
 }
 
+function parseStoredSessionsModeFromUrl(url: URL): "all" | "recent" {
+  return url.searchParams.get("storedSessions") === "recent" ? "recent" : "all";
+}
+
+function parseStoredSessionsModeFromRequest(req: IncomingMessage): "all" | "recent" {
+  return parseStoredSessionsModeFromUrl(new URL(req.url ?? "", "http://127.0.0.1"));
+}
+
 export function createPostRoutes(
   engine: RuntimeEngine,
 ): Array<{ pattern: RegExp; handler: JsonHandler }> {
@@ -294,7 +302,14 @@ export function createPostRoutes(
     {
       pattern: /^\/api\/workspaces\/add$/,
       handler: async (req, res, _match, body) => {
-        writeJson(req, res, 200, engine.addWorkspace(parseWorkspaceDirectoryRequest(body).dir));
+        writeJson(
+          req,
+          res,
+          200,
+          engine.addWorkspace(parseWorkspaceDirectoryRequest(body).dir, {
+            storedSessionsMode: parseStoredSessionsModeFromRequest(req),
+          }),
+        );
       },
     },
     {
@@ -304,7 +319,9 @@ export function createPostRoutes(
           req,
           res,
           200,
-          engine.selectWorkspace(parseWorkspaceDirectoryRequest(body).dir),
+          engine.selectWorkspace(parseWorkspaceDirectoryRequest(body).dir, {
+            storedSessionsMode: parseStoredSessionsModeFromRequest(req),
+          }),
         );
       },
     },
@@ -315,7 +332,9 @@ export function createPostRoutes(
           req,
           res,
           200,
-          engine.removeWorkspace(parseWorkspaceDirectoryRequest(body).dir),
+          engine.removeWorkspace(parseWorkspaceDirectoryRequest(body).dir, {
+            storedSessionsMode: parseStoredSessionsModeFromRequest(req),
+          }),
         );
       },
     },
@@ -488,8 +507,7 @@ export async function handleHttpRequest(args: {
     }
 
     if (req.method === "GET" && pathname === "/api/sessions") {
-      const storedSessionsMode =
-        url.searchParams.get("storedSessions") === "recent" ? "recent" : "all";
+      const storedSessionsMode = parseStoredSessionsModeFromUrl(url);
       writeJson(req, res, 200, engine.listSessions({ storedSessionsMode }));
       return;
     }

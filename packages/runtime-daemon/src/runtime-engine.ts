@@ -630,17 +630,26 @@ export class RuntimeEngine {
     return await this.council.callMcpTool(request);
   }
 
-  addWorkspace(rawDir: string): ListSessionsResponse {
+  addWorkspace(
+    rawDir: string,
+    options?: { storedSessionsMode?: StoredSessionsResponseMode },
+  ): ListSessionsResponse {
     this.workbenchState.selectWorkspace(rawDir);
-    return this.currentWorkbenchSessions();
+    return this.currentWorkbenchSessions(options);
   }
 
-  selectWorkspace(rawDir: string): ListSessionsResponse {
+  selectWorkspace(
+    rawDir: string,
+    options?: { storedSessionsMode?: StoredSessionsResponseMode },
+  ): ListSessionsResponse {
     this.workbenchState.selectWorkspace(rawDir);
-    return this.currentWorkbenchSessions();
+    return this.currentWorkbenchSessions(options);
   }
 
-  removeWorkspace(rawDir: string): ListSessionsResponse {
+  removeWorkspace(
+    rawDir: string,
+    options?: { storedSessionsMode?: StoredSessionsResponseMode },
+  ): ListSessionsResponse {
     const directory = normalizeDirectory(rawDir);
     if (!directory) {
       throw new Error("Workspace directory is required.");
@@ -653,7 +662,7 @@ export class RuntimeEngine {
       throw new Error("Cannot remove a workspace with active running sessions.");
     }
     this.workbenchState.removeWorkspace(directory);
-    return this.currentWorkbenchSessions();
+    return this.currentWorkbenchSessions(options);
   }
 
   async removeStoredSession(
@@ -1493,9 +1502,11 @@ export class RuntimeEngine {
     this.structuredSessionOwners.set(sessionId, provider);
   }
 
-  private currentWorkbenchSessions(): ListSessionsResponse {
+  private currentWorkbenchSessions(
+    options?: { storedSessionsMode?: StoredSessionsResponseMode },
+  ): ListSessionsResponse {
     this.refreshRememberedState();
-    return this.listSessions();
+    return this.listSessions(options);
   }
 
   private discoverStoredSessions(): StoredSessionRef[] {

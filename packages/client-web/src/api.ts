@@ -78,6 +78,7 @@ import type {
 } from "@rah/runtime-protocol";
 
 const DEFAULT_DAEMON_PORT = 43111;
+type StoredSessionsMode = "all" | "recent";
 
 function computeDefaultBaseUrl(): string {
   if (typeof window === "undefined") {
@@ -177,7 +178,7 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export async function listSessions(options?: {
-  storedSessions?: "all" | "recent";
+  storedSessions?: StoredSessionsMode;
 }): Promise<ListSessionsResponse> {
   const query = new URLSearchParams();
   if (options?.storedSessions) {
@@ -185,6 +186,15 @@ export async function listSessions(options?: {
   }
   const suffix = query.size > 0 ? `?${query.toString()}` : "";
   return requestJson<ListSessionsResponse>(`/api/sessions${suffix}`);
+}
+
+function storedSessionsQuerySuffix(options?: { storedSessions?: StoredSessionsMode }): string {
+  if (!options?.storedSessions) {
+    return "";
+  }
+  const query = new URLSearchParams();
+  query.set("storedSessions", options.storedSessions);
+  return `?${query.toString()}`;
 }
 
 export async function getNativeTuiSurface(
@@ -217,8 +227,9 @@ export async function writeHostClipboard(text: string): Promise<{ ok: true }> {
 
 export async function addWorkspace(
   request: WorkspaceDirectoryRequest,
+  options?: { storedSessions?: StoredSessionsMode },
 ): Promise<ListSessionsResponse> {
-  return requestJson<ListSessionsResponse>("/api/workspaces/add", {
+  return requestJson<ListSessionsResponse>(`/api/workspaces/add${storedSessionsQuerySuffix(options)}`, {
     method: "POST",
     body: JSON.stringify(request),
   });
@@ -226,8 +237,9 @@ export async function addWorkspace(
 
 export async function selectWorkspace(
   request: WorkspaceDirectoryRequest,
+  options?: { storedSessions?: StoredSessionsMode },
 ): Promise<ListSessionsResponse> {
-  return requestJson<ListSessionsResponse>("/api/workspaces/select", {
+  return requestJson<ListSessionsResponse>(`/api/workspaces/select${storedSessionsQuerySuffix(options)}`, {
     method: "POST",
     body: JSON.stringify(request),
   });
@@ -235,8 +247,9 @@ export async function selectWorkspace(
 
 export async function removeWorkspace(
   request: WorkspaceDirectoryRequest,
+  options?: { storedSessions?: StoredSessionsMode },
 ): Promise<ListSessionsResponse> {
-  return requestJson<ListSessionsResponse>("/api/workspaces/remove", {
+  return requestJson<ListSessionsResponse>(`/api/workspaces/remove${storedSessionsQuerySuffix(options)}`, {
     method: "POST",
     body: JSON.stringify(request),
   });

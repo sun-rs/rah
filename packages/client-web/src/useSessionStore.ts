@@ -98,6 +98,7 @@ export {
 } from "./session-store-workspace";
 
 type ProviderChoice = "codex" | "claude" | "gemini" | "opencode";
+type StoredSessionsMode = "all" | "recent";
 
 interface StartSessionOptions {
   provider?: ProviderChoice;
@@ -140,7 +141,7 @@ type LoadProviderModelsOptions = {
 };
 
 type RefreshWorkbenchStateOptions = {
-  storedSessions?: "all" | "recent";
+  storedSessions?: StoredSessionsMode;
 };
 
 interface SessionState {
@@ -445,6 +446,12 @@ function syncLastHistorySelectionFromState(
   return syncHistorySelectionFromState(state);
 }
 
+function storedSessionsModeForState(
+  state: Pick<SessionState, "storedSessionsCatalogLoaded">,
+): StoredSessionsMode {
+  return state.storedSessionsCatalogLoaded ? "all" : "recent";
+}
+
 function updateSessionSummary(session: SessionSummary) {
   useSessionStore.setState((state) => {
     return {
@@ -582,8 +589,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         workspaceDirs,
       };
     });
+    const storedSessionsMode = storedSessionsModeForState(get());
     void api
-      .selectWorkspace({ dir })
+      .selectWorkspace({ dir }, { storedSessions: storedSessionsMode })
       .then((sessionsResponse) =>
         set((state) => ({
           ...applySessionsResponse(state, sessionsResponse, {
@@ -598,7 +606,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
   addWorkspace: async (dir) => {
     try {
-      const sessionsResponse = await api.addWorkspace({ dir });
+      const storedSessionsMode = storedSessionsModeForState(get());
+      const sessionsResponse = await api.addWorkspace(
+        { dir },
+        { storedSessions: storedSessionsMode },
+      );
       set((state) => {
         const workspaceVisibilityVersion = state.workspaceVisibilityVersion + 1;
         return {
@@ -633,7 +645,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         error: null,
       }));
       const workspaceVisibilityVersionAtRequest = get().workspaceVisibilityVersion;
-      const sessionsResponse = await api.removeWorkspace({ dir });
+      const storedSessionsMode = storedSessionsModeForState(get());
+      const sessionsResponse = await api.removeWorkspace(
+        { dir },
+        { storedSessions: storedSessionsMode },
+      );
       set((state) => ({
         ...applySessionsResponse(
           {
@@ -653,7 +669,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           workspaceVisibilityVersion: state.workspaceVisibilityVersion + 1,
         }));
         const workspaceVisibilityVersionAtRequest = get().workspaceVisibilityVersion;
-        const sessionsResponse = await api.listSessions();
+        const sessionsResponse = await api.listSessions({
+          storedSessions: storedSessionsModeForState(get()),
+        });
         set((state) => ({
           ...applySessionsResponse(state, sessionsResponse, {
             workspaceVisibilityVersionAtRequest,

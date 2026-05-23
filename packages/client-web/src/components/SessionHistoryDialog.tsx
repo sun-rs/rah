@@ -8,6 +8,7 @@ import { chooseChatListSubtitle } from "../chat-list-display";
 import { ProviderLogo } from "./ProviderLogo";
 import { ChatBrowserRow } from "./ChatBrowserRow";
 import { OverlayScrollArea } from "./OverlayScrollArea";
+import { SegmentedButton, SegmentedButtonLabel, SegmentedControl } from "./SegmentedControl";
 import { CouncilsBrowser } from "../council/CouncilsBrowser";
 import { runningSessionActivityAt } from "../session-conversation-activity";
 import { usePwaDisplayMode } from "../hooks/usePwaDisplayMode";
@@ -645,41 +646,40 @@ export function SessionHistoryDialog(props: {
           </div>
 
           <div className="px-4 pt-3 pb-2 shrink-0">
-            <div className="grid grid-cols-3 gap-2 rounded-lg bg-[var(--app-subtle-bg)] p-1">
-              <button
-                type="button"
+            <SegmentedControl
+              size="dialog"
+              className="grid grid-cols-3 gap-1"
+              role="tablist"
+              ariaLabel="Chat sections"
+            >
+              <SegmentedButton
+                size="dialog"
+                selected={tab === "active"}
                 onClick={() => setTab("active")}
-                className={`rounded-md px-3 py-2 text-sm font-medium transition-colors ${
-                  tab === "active"
-                    ? "bg-[var(--app-bg)] text-[var(--app-fg)] shadow-sm"
-                    : "text-[var(--app-hint)] hover:text-[var(--app-fg)]"
-                }`}
+                role="tab"
+                aria-selected={tab === "active"}
               >
-                Active
-              </button>
-              <button
-                type="button"
+                <SegmentedButtonLabel size="dialog">Active</SegmentedButtonLabel>
+              </SegmentedButton>
+              <SegmentedButton
+                size="dialog"
+                selected={tab === "all"}
                 onClick={() => setTab("all")}
-                className={`rounded-md px-3 py-2 text-sm font-medium transition-colors ${
-                  tab === "all"
-                    ? "bg-[var(--app-bg)] text-[var(--app-fg)] shadow-sm"
-                    : "text-[var(--app-hint)] hover:text-[var(--app-fg)]"
-                }`}
+                role="tab"
+                aria-selected={tab === "all"}
               >
-                All
-              </button>
-              <button
-                type="button"
+                <SegmentedButtonLabel size="dialog">All</SegmentedButtonLabel>
+              </SegmentedButton>
+              <SegmentedButton
+                size="dialog"
+                selected={tab === "council"}
                 onClick={() => setTab("council")}
-                className={`rounded-md px-3 py-2 text-sm font-medium transition-colors ${
-                  tab === "council"
-                    ? "bg-[var(--app-bg)] text-[var(--app-fg)] shadow-sm"
-                    : "text-[var(--app-hint)] hover:text-[var(--app-fg)]"
-                }`}
+                role="tab"
+                aria-selected={tab === "council"}
               >
-                Council
-              </button>
-            </div>
+                <SegmentedButtonLabel size="dialog">Council</SegmentedButtonLabel>
+              </SegmentedButton>
+            </SegmentedControl>
           </div>
 
           <div className="px-4 pt-1 pb-2 shrink-0">

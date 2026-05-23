@@ -58,7 +58,7 @@ export function ConversationSidePanelShell(props: {
               ...props.desktopStyle,
             }}
           >
-            {props.onToggle ? (
+            {props.onToggle && props.desktopOpen ? (
               <button
                 type="button"
                 className={`${HEADER_ICON_BUTTON_CLASS} absolute right-4 top-3 z-20 bg-[var(--app-bg)]/90 shadow-sm backdrop-blur`}

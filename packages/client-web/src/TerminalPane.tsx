@@ -146,6 +146,7 @@ export function TerminalPane(props: TerminalPaneProps) {
   const socketRef = useRef<WebSocket | null>(null);
   const sendDataRef = useRef<(data: string, options?: { focusTerminal?: boolean }) => void>(() => undefined);
   const scheduleTerminalFitRef = useRef<(options?: { force?: boolean }) => void>(() => undefined);
+  const fitTerminalImmediatelyRef = useRef<(options?: { force?: boolean }) => void>(() => undefined);
   const hasControlRef = useRef(props.hasControl);
   const claimSurfaceRef = useRef(props.claimSurface !== false);
   const nativeSurfaceControlRef = useRef(props.nativeSurfaceControl !== false);
@@ -207,6 +208,7 @@ export function TerminalPane(props: TerminalPaneProps) {
     if (!socket || !terminal) {
       return;
     }
+    fitTerminalImmediatelyRef.current();
     sendPtyMessage(socket, {
       type: "pty.surface.attach",
       sessionId: props.terminalId,
@@ -251,6 +253,7 @@ export function TerminalPane(props: TerminalPaneProps) {
       return;
     }
     if (claimSurfaceRef.current) {
+      fitTerminalImmediatelyRef.current();
       flushPausedOutputRef.current();
       scheduleTerminalFitRef.current({ force: true });
       terminalRef.current?.refresh(0, Math.max(0, terminalRef.current.rows - 1));
@@ -272,6 +275,7 @@ export function TerminalPane(props: TerminalPaneProps) {
     const wasRendering = renderOutputRef.current;
     renderOutputRef.current = props.renderOutput !== false;
     if (!wasRendering && renderOutputRef.current) {
+      fitTerminalImmediatelyRef.current();
       flushPausedOutputRef.current();
       scheduleTerminalFitRef.current({ force: true });
     }
@@ -399,9 +403,9 @@ export function TerminalPane(props: TerminalPaneProps) {
     terminalRef.current = terminal;
     fitAddonRef.current = fitAddon;
 
-    const fitAndNotifyResize = () => {
+    const fitAndNotifyResize = (options?: { force?: boolean }) => {
       fitFrame = null;
-      const forceResize = forceNextResize;
+      const forceResize = forceNextResize || options?.force === true;
       forceNextResize = false;
       const previousCols = terminal.cols;
       const previousRows = terminal.rows;
@@ -434,6 +438,14 @@ export function TerminalPane(props: TerminalPaneProps) {
       });
     };
 
+    const fitImmediatelyAndNotifyResize = (options?: { force?: boolean }) => {
+      if (fitFrame !== null) {
+        window.cancelAnimationFrame(fitFrame);
+        fitFrame = null;
+      }
+      fitAndNotifyResize(options);
+    };
+
     const scheduleFitAndResize = (options?: { force?: boolean }) => {
       if (options?.force) {
         forceNextResize = true;
@@ -441,9 +453,10 @@ export function TerminalPane(props: TerminalPaneProps) {
       if (fitFrame !== null) {
         window.cancelAnimationFrame(fitFrame);
       }
-      fitFrame = window.requestAnimationFrame(fitAndNotifyResize);
+      fitFrame = window.requestAnimationFrame(() => fitAndNotifyResize());
     };
     scheduleTerminalFitRef.current = scheduleFitAndResize;
+    fitTerminalImmediatelyRef.current = fitImmediatelyAndNotifyResize;
 
     const settleTerminalLayout = () => {
       scheduleFitAndResize({ force: true });
@@ -500,6 +513,9 @@ export function TerminalPane(props: TerminalPaneProps) {
           writeScheduled = false;
           if (disposed || writeInFlight || (pendingReplace === null && pendingWrite.length === 0)) {
             return;
+          }
+          if (pendingReplace !== null) {
+            fitImmediatelyAndNotifyResize();
           }
           let chunk: string;
           if (pendingReplace !== null) {
@@ -661,7 +677,7 @@ export function TerminalPane(props: TerminalPaneProps) {
       socketRef.current = socket;
       socket.addEventListener("open", () => {
         reconnectAttempt = 0;
-        fitAddon.fit();
+        fitImmediatelyAndNotifyResize();
         claimCurrentSurface();
         settleTerminalLayout();
       });
@@ -829,6 +845,7 @@ export function TerminalPane(props: TerminalPaneProps) {
       fitAddonRef.current = null;
       sendDataRef.current = () => undefined;
       scheduleTerminalFitRef.current = () => undefined;
+      fitTerminalImmediatelyRef.current = () => undefined;
     };
   }, [props.terminalId, props.nativeSurfaceControl, showIosInputBridge, tuiClientActive]);
 

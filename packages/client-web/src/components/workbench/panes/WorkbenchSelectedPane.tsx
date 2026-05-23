@@ -1,10 +1,7 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import type { ContextUsage, PermissionResponseRequest, ProviderModelCatalog, SessionSummary } from "@rah/runtime-protocol";
 import {
-  Activity,
   ArrowUp,
-  Circle,
-  CircleStop,
   Info,
   MessageSquareText,
   PencilLine,
@@ -28,6 +25,7 @@ import {
   HEADER_SEGMENTED_BUTTON_INACTIVE_CLASS,
   HEADER_SEGMENTED_CONTROL_BASE_CLASS,
   HEADER_SEGMENTED_CONTROL_CLASS,
+  HEADER_SEGMENTED_LABEL_CLASS,
 } from "../header-button-styles";
 import {
   ConversationHeader,
@@ -38,11 +36,17 @@ import {
 } from "../shells/ConversationHeader";
 import { ConversationPageShell } from "../shells/ConversationPageShell";
 import {
+  ConversationHeaderMetaList,
   ConversationMetaBadge,
+  CONVERSATION_META_BADGE_PADDING_CLASS,
+  CONVERSATION_META_BADGE_PWA_ICON_CLASS,
+  CONVERSATION_META_BADGE_PWA_LABEL_CLASS,
+  CONVERSATION_META_BADGE_TRAILING_SPACE_PADDING_CLASS,
+  ConversationStateMetaBadge,
+  type ConversationHeaderMetaItem,
 } from "../ConversationMetaBadge";
 import {
   resolveConversationHeaderState,
-  type ConversationHeaderStateIcon,
 } from "../conversation-header-meta";
 import type { InlineWorkbenchNotice } from "../../../workbench-notice-contract";
 import { SessionInfoDialog } from "../dialogs/SessionInfoDialog";
@@ -67,6 +71,14 @@ function formatContextPercent(value: number): string {
   return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
 }
 
+function formatCompactContextPercent(value: number): string {
+  const clamped = Math.max(0, Math.min(100, value));
+  if (clamped > 0 && clamped < 1) {
+    return "<1";
+  }
+  return String(Math.round(clamped));
+}
+
 function formatFullTokens(value: number): string {
   return Math.max(0, Math.round(value)).toLocaleString("en-US");
 }
@@ -80,8 +92,8 @@ function resolveContextUsageDisplay(
 
   const percentRemainingValue = usage.percentRemaining ?? 100 - usage.percentUsed!;
   const percentRemaining = formatContextPercent(percentRemainingValue);
-  const label = `${percentRemaining}% context`;
-  const compactLabel = `${percentRemaining}%`;
+  const compactPercentRemaining = formatCompactContextPercent(percentRemainingValue);
+  const label = `${compactPercentRemaining}%`;
   const usedTokens = usage.usedTokens;
   const contextWindow = usage.contextWindow;
 
@@ -93,9 +105,9 @@ function resolveContextUsageDisplay(
   ) {
     return {
       label,
-      compactLabel,
+      compactLabel: label,
       ariaLabel: `Context remaining: ${percentRemaining}%`,
-      tooltip: `Remaining ${percentRemaining}%`,
+      tooltip: `Context remaining: ${percentRemaining}%`,
     };
   }
 
@@ -105,25 +117,13 @@ function resolveContextUsageDisplay(
   )} tokens`;
   return {
     label,
-    compactLabel,
+    compactLabel: label,
     ariaLabel: `${tooltip} · ${percentRemaining}% remaining`,
     tooltip,
   };
 }
 
 type SessionViewMode = "chat" | "tui";
-
-function ConversationHeaderStateIconView(props: { icon: ConversationHeaderStateIcon }) {
-  switch (props.icon) {
-    case "running":
-      return <Circle size={9} className="fill-current" />;
-    case "activity":
-      return <Activity size={10} />;
-    case "stopped":
-      return <CircleStop size={10} />;
-  }
-  return null;
-}
 
 function shouldRenderInteractionNotice(notice: InlineWorkbenchNotice | null): notice is InlineWorkbenchNotice {
   if (!notice) {
@@ -265,6 +265,70 @@ export function WorkbenchSelectedPane(props: {
     status: sessionLifecycleStatus,
     phase: sessionPhase,
   });
+  const sessionMetaIconClassName = isPwaDisplayMode
+    ? CONVERSATION_META_BADGE_PWA_ICON_CLASS
+    : undefined;
+  const sessionMetaLabelClassName = isPwaDisplayMode
+    ? CONVERSATION_META_BADGE_PWA_LABEL_CLASS
+    : undefined;
+  const sessionHeaderMetaItems: ConversationHeaderMetaItem[] = [
+    {
+      slot: "status",
+      node: (
+        <ConversationStateMetaBadge
+          state={sessionHeaderState}
+          {...(sessionMetaIconClassName ? { iconClassName: sessionMetaIconClassName } : {})}
+          {...(sessionMetaLabelClassName ? { labelClassName: sessionMetaLabelClassName } : {})}
+        />
+      ),
+    },
+  ];
+  if (contextUsageDisplay) {
+    sessionHeaderMetaItems.push({
+      slot: "context",
+      node: (
+        <span
+          className="group relative inline-flex shrink-0"
+          aria-label={contextUsageDisplay.ariaLabel}
+          tabIndex={0}
+        >
+          <ConversationMetaBadge
+            tone="context"
+            title={contextUsageDisplay.tooltip}
+            label={compactSessionMeta ? contextUsageDisplay.compactLabel : contextUsageDisplay.label}
+            {...(sessionMetaLabelClassName ? { labelClassName: sessionMetaLabelClassName } : {})}
+          />
+          <span
+            role="tooltip"
+            className="pointer-events-none absolute left-1/2 top-full z-50 mt-1.5 -translate-x-1/2 whitespace-nowrap rounded-md border border-[var(--app-border)] bg-[var(--app-bg)] px-2 py-1 text-[11px] font-medium text-[var(--app-fg)] opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100 group-focus:opacity-100"
+          >
+            {contextUsageDisplay.tooltip}
+          </span>
+        </span>
+      ),
+    });
+  }
+  if (isCouncilSession) {
+    sessionHeaderMetaItems.push({
+      slot: "source",
+      node: (
+        <ConversationMetaBadge
+          tone="council"
+          title="Council agent session"
+          ariaLabel="Council agent session"
+          icon={<UsersRound size={10} />}
+          label={compactSessionMeta ? undefined : "Council"}
+          paddingClassName={
+            compactSessionMeta
+              ? CONVERSATION_META_BADGE_PADDING_CLASS
+              : CONVERSATION_META_BADGE_TRAILING_SPACE_PADDING_CLASS
+          }
+          {...(sessionMetaIconClassName ? { iconClassName: sessionMetaIconClassName } : {})}
+          {...(sessionMetaLabelClassName ? { labelClassName: sessionMetaLabelClassName } : {})}
+        />
+      ),
+    });
+  }
   const showSessionDeleteMenuItem = props.canDeleteSession || sessionLifecycleStatus === "running";
   const sessionDeleteDisabled = !props.canDeleteSession || sessionLifecycleStatus === "running";
   const sessionDeleteTitle =
@@ -518,54 +582,13 @@ export function WorkbenchSelectedPane(props: {
         onOpenLeft={props.onOpenLeft}
         onExpandSidebar={props.onExpandSidebar}
         reserveRightPanelToggleSpace={Boolean(props.reserveRightPanelToggleSpace)}
+        compactCloseAction={isPwaDisplayMode}
         identity={
           <ProviderLogo provider={props.selectedSummary.session.provider} className="h-6 w-6" />
         }
         title={props.selectedSummary.session.title ?? props.selectedSummary.session.id}
         titleText={props.selectedSummary.session.title ?? props.selectedSummary.session.id}
-        meta={
-          <>
-              <ConversationMetaBadge
-                tone={sessionHeaderState.tone}
-                title={sessionHeaderState.title}
-                ariaLabel={sessionHeaderState.title}
-              >
-                <ConversationHeaderStateIconView icon={sessionHeaderState.icon} />
-                <span>{sessionHeaderState.label}</span>
-              </ConversationMetaBadge>
-              {contextUsageDisplay ? (
-                <span
-                  className="group relative inline-flex shrink-0"
-                  aria-label={contextUsageDisplay.ariaLabel}
-                  tabIndex={0}
-                >
-                  <ConversationMetaBadge
-                    tone="context"
-                    title={contextUsageDisplay.tooltip}
-                    {...(compactSessionMeta ? {} : { width: "context" as const })}
-                  >
-                    <span>{compactSessionMeta ? contextUsageDisplay.compactLabel : contextUsageDisplay.label}</span>
-                  </ConversationMetaBadge>
-                  <span
-                    role="tooltip"
-                    className="pointer-events-none absolute left-1/2 top-full z-50 mt-1.5 -translate-x-1/2 whitespace-nowrap rounded-md border border-[var(--app-border)] bg-[var(--app-bg)] px-2 py-1 text-[11px] font-medium text-[var(--app-fg)] opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100 group-focus:opacity-100"
-                  >
-                    {contextUsageDisplay.tooltip}
-                  </span>
-                </span>
-              ) : null}
-              {isCouncilSession ? (
-                <ConversationMetaBadge
-                  tone="council"
-                  title="Council agent session"
-                  ariaLabel="Council agent session"
-                >
-                  <UsersRound size={10} />
-                  <span className={compactSessionMeta ? "sr-only" : ""}>Council</span>
-                </ConversationMetaBadge>
-              ) : null}
-          </>
-        }
+        meta={<ConversationHeaderMetaList items={sessionHeaderMetaItems} />}
         actions={
           <>
           {nativeTuiAvailable ? (
@@ -608,7 +631,9 @@ export function WorkbenchSelectedPane(props: {
                       aria-pressed={effectiveSessionViewMode === mode}
                       title={mode === "chat" ? "Show structured chat mirror" : "Show native TUI"}
                     >
-                      {mode === "chat" ? "Chat" : "TUI"}
+                      <span className={HEADER_SEGMENTED_LABEL_CLASS}>
+                        {mode === "chat" ? "Chat" : "TUI"}
+                      </span>
                     </button>
                   ))}
                 </div>

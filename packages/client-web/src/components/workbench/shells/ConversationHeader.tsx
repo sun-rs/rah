@@ -35,6 +35,7 @@ export function ConversationHeader(props: {
   onExpandSidebar: () => void;
   reserveRightPanelToggleSpace?: boolean;
   reserveRightPanelBreakpoint?: ReserveBreakpoint;
+  compactCloseAction?: boolean;
   backgroundClassName?: string;
   className?: string;
 }) {
@@ -90,16 +91,22 @@ export function ConversationHeader(props: {
           {props.closeAction ? (
             <button
               type="button"
-              className={HEADER_RESPONSIVE_TEXT_BUTTON_CLASS}
+              className={
+                props.compactCloseAction
+                  ? HEADER_ICON_BUTTON_CLASS
+                  : HEADER_RESPONSIVE_TEXT_BUTTON_CLASS
+              }
               disabled={props.closeAction.disabled}
               onClick={props.closeAction.onClick}
               aria-label={props.closeAction.ariaLabel}
               title={props.closeAction.title}
             >
-              <X size={14} className="min-[900px]:mr-1" />
-              <span className="hidden min-[900px]:inline">
-                {props.closeAction.label ?? "Close"}
-              </span>
+              <X size={14} className={props.compactCloseAction ? "" : "min-[900px]:mr-1"} />
+              {props.compactCloseAction ? null : (
+                <span className="hidden min-[900px]:inline">
+                  {props.closeAction.label ?? "Close"}
+                </span>
+              )}
             </button>
           ) : null}
           {props.trailingActions}

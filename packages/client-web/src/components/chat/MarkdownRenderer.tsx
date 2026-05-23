@@ -12,10 +12,11 @@ import type { Components } from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { Check, Copy } from "lucide-react";
+import { importWithStaleReload } from "../../lazy-module-reload";
 import { splitMarkdownBlocks } from "./markdown-blocks";
 
 const ReactMarkdown = lazy(async () => ({
-  default: (await import("react-markdown")).default,
+  default: (await importWithStaleReload(() => import("react-markdown"))).default,
 }));
 
 function textFromNode(node: ReactNode): string {

@@ -1,4 +1,5 @@
 import { SquareTerminal } from "lucide-react";
+import { SegmentedButton, SegmentedButtonLabel, SegmentedControl } from "../components/SegmentedControl";
 import type { InspectorTab } from "./shared";
 
 export function InspectorHeader(props: {
@@ -31,30 +32,35 @@ export function InspectorHeader(props: {
       </div>
       <div className="shrink-0 px-3 py-2">
         <div className="overflow-x-auto rah-scroll-panel scrollbar-stable">
-          <div className="grid min-w-full grid-cols-2 gap-2 rounded-lg bg-[var(--app-subtle-bg)] p-1">
-            <button
-              type="button"
-              className={`min-w-[5.5rem] overflow-hidden rounded-md px-3 py-2 text-sm font-medium text-ellipsis whitespace-nowrap transition-colors ${
-                props.activeTab === "changes"
-                  ? "bg-[var(--app-bg)] text-[var(--app-fg)] shadow-sm"
-                  : "text-[var(--app-hint)] hover:text-[var(--app-fg)]"
-              }`}
+          <SegmentedControl
+            size="panel"
+            className="grid min-w-full grid-cols-2 gap-1"
+            role="tablist"
+            ariaLabel="Inspector sections"
+          >
+            <SegmentedButton
+              size="panel"
+              selected={props.activeTab === "changes"}
+              className="min-w-[5.5rem] overflow-hidden text-ellipsis whitespace-nowrap"
               onClick={() => props.onTabChange("changes")}
+              role="tab"
+              aria-selected={props.activeTab === "changes"}
             >
-              Changes {props.changeCount > 0 ? `(${props.changeCount})` : ""}
-            </button>
-            <button
-              type="button"
-              className={`min-w-[5.5rem] overflow-hidden rounded-md px-3 py-2 text-sm font-medium text-ellipsis whitespace-nowrap transition-colors ${
-                props.activeTab === "files"
-                  ? "bg-[var(--app-bg)] text-[var(--app-fg)] shadow-sm"
-                  : "text-[var(--app-hint)] hover:text-[var(--app-fg)]"
-              }`}
+              <SegmentedButtonLabel size="panel">
+                Changes {props.changeCount > 0 ? `(${props.changeCount})` : ""}
+              </SegmentedButtonLabel>
+            </SegmentedButton>
+            <SegmentedButton
+              size="panel"
+              selected={props.activeTab === "files"}
+              className="min-w-[5.5rem] overflow-hidden text-ellipsis whitespace-nowrap"
               onClick={() => props.onTabChange("files")}
+              role="tab"
+              aria-selected={props.activeTab === "files"}
             >
-              Files
-            </button>
-          </div>
+              <SegmentedButtonLabel size="panel">Files</SegmentedButtonLabel>
+            </SegmentedButton>
+          </SegmentedControl>
         </div>
       </div>
     </>

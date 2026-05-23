@@ -1,6 +1,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import type { RahEvent, SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
+import * as api from "./api";
 import {
   coerceSelectedSessionId,
   computeUnreadSessionIds,
@@ -17,6 +18,9 @@ import {
   updateSessionSummaryInProjectionMap,
 } from "./session-store-projections";
 import { initialHistorySyncState, type SessionProjection } from "./types";
+
+const originalFetch = globalThis.fetch;
+const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window;
 
 function sessionSummary(rootDir: string): SessionSummary {
   return {
@@ -87,6 +91,44 @@ function liveStoredSessionRef(rootDir: string): StoredSessionRef {
 }
 
 describe("workspace response reconciliation", () => {
+  test("workspace mutation APIs preserve the requested stored session catalog mode", async () => {
+    const urls: string[] = [];
+    (globalThis as typeof globalThis & { window?: unknown }).window = undefined;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      urls.push(String(input));
+      return new Response(
+        JSON.stringify({
+          sessions: [],
+          storedSessions: [],
+          recentSessions: [],
+          workspaceDirs: [],
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    }) as typeof fetch;
+
+    try {
+      await api.selectWorkspace({ dir: "/workspace/a" }, { storedSessions: "recent" });
+      await api.addWorkspace({ dir: "/workspace/b" }, { storedSessions: "all" });
+      await api.removeWorkspace({ dir: "/workspace/c" }, { storedSessions: "recent" });
+    } finally {
+      globalThis.fetch = originalFetch;
+      (globalThis as typeof globalThis & { window?: unknown }).window = originalWindow;
+    }
+
+    assert.deepEqual(
+      urls.map((url) => new URL(url).pathname + new URL(url).search),
+      [
+        "/api/workspaces/select?storedSessions=recent",
+        "/api/workspaces/add?storedSessions=all",
+        "/api/workspaces/remove?storedSessions=recent",
+      ],
+    );
+  });
+
   test("clears stale runtime status when a refreshed session summary is idle", () => {
     const running = projection("/workspace/rah");
     const current = new Map([

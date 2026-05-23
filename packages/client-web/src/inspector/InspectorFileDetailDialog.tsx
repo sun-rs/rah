@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { LoaderCircle, X } from "lucide-react";
 import { applyGitFileAction, readGitDiff, readSessionFile, readWorkspaceFile, readWorkspaceGitDiff } from "../api";
+import { SegmentedButton, SegmentedButtonLabel, SegmentedControl } from "../components/SegmentedControl";
 import type { FileDetailSelection } from "./shared";
 import { DiffDisplay, FileContentDisplay } from "./InspectorPreviewDisplays";
 import {
@@ -207,30 +208,28 @@ export function InspectorFileDetailDialog(props: {
           {hasDiff && shouldShowFileTab ? (
             <div className="border-b border-[var(--app-border)] px-3 py-2 md:px-5 md:py-3">
               <div className="flex flex-col gap-2 md:flex-row md:items-center md:gap-3">
-                <div className="flex w-full items-center gap-1 rounded-lg bg-[var(--app-subtle-bg)] p-1 md:flex-1">
-                  <button
-                    type="button"
+                <SegmentedControl size="compact" className="flex w-full gap-1 md:flex-1" role="tablist" ariaLabel="File detail view">
+                  <SegmentedButton
+                    size="compact"
+                    selected={displayMode === "diff"}
                     onClick={() => setDisplayMode("diff")}
-                    className={`flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
-                      displayMode === "diff"
-                        ? "bg-[var(--app-bg)] text-[var(--app-fg)] shadow-sm"
-                        : "text-[var(--app-hint)] hover:text-[var(--app-fg)]"
-                    }`}
+                    className="flex-1"
+                    role="tab"
+                    aria-selected={displayMode === "diff"}
                   >
-                    Diff
-                  </button>
-                  <button
-                    type="button"
+                    <SegmentedButtonLabel size="compact">Diff</SegmentedButtonLabel>
+                  </SegmentedButton>
+                  <SegmentedButton
+                    size="compact"
+                    selected={displayMode === "file"}
                     onClick={() => setDisplayMode("file")}
-                    className={`flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
-                      displayMode === "file"
-                        ? "bg-[var(--app-bg)] text-[var(--app-fg)] shadow-sm"
-                        : "text-[var(--app-hint)] hover:text-[var(--app-fg)]"
-                    }`}
+                    className="flex-1"
+                    role="tab"
+                    aria-selected={displayMode === "file"}
                   >
-                    File
-                  </button>
-                </div>
+                    <SegmentedButtonLabel size="compact">File</SegmentedButtonLabel>
+                  </SegmentedButton>
+                </SegmentedControl>
                 <div className="flex flex-wrap items-center gap-1 md:shrink-0 md:justify-end">
                   {props.selection.source === "changes" && canApplyGitFileAction ? (
                     <button

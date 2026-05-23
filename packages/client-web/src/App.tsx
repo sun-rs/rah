@@ -64,6 +64,7 @@ import {
 } from "./workbench-selectors";
 import { deriveWorkbenchNoticeState } from "./workbench-notice-contract";
 import { buildModelOptionValuesFromReasoning } from "./provider-capabilities";
+import { importWithStaleReload } from "./lazy-module-reload";
 import {
   applyCanvasPaneTarget,
   CANVAS_LAYOUT_PANE_COUNT,
@@ -75,16 +76,19 @@ import {
   type CanvasPaneTarget,
 } from "./canvas-state";
 
-const loadSettingsDialog = () => import("./components/workbench/dialogs/SettingsDialog");
+const loadSettingsDialog = () =>
+  importWithStaleReload(() => import("./components/workbench/dialogs/SettingsDialog"));
 const SettingsDialog = lazy(async () => ({
   default: (await loadSettingsDialog()).SettingsDialog,
 }));
+const loadWorkbenchTerminalDialog = () =>
+  importWithStaleReload(() => import("./components/workbench/dialogs/WorkbenchTerminalDialog"));
 const WorkbenchTerminalDialog = lazy(async () => ({
-  default: (await import("./components/workbench/dialogs/WorkbenchTerminalDialog"))
-    .WorkbenchTerminalDialog,
+  default: (await loadWorkbenchTerminalDialog()).WorkbenchTerminalDialog,
 }));
+const loadInspectorPane = () => importWithStaleReload(() => import("./InspectorPane"));
 const InspectorPane = lazy(async () => ({
-  default: (await import("./InspectorPane")).InspectorPane,
+  default: (await loadInspectorPane()).InspectorPane,
 }));
 
 type ModelDraft = {
@@ -1168,23 +1172,28 @@ export function App() {
   };
 
   const inspectorContent = selectedSummary || selectedInspectorWorkspaceDir ? (
-    <Suspense
-      fallback={
-        <div className="flex h-full items-center justify-center text-xs text-[var(--app-hint)]">
-          Loading inspector…
-        </div>
-      }
+    <WorkbenchErrorBoundary
+      resetKey={`inspector:${selectedSummary?.session.id ?? selectedInspectorWorkspaceDir ?? "none"}`}
+      title="Inspector crashed"
     >
-      <InspectorPane
-        sessionId={selectedSummary?.session.id ?? null}
-        workspaceRoot={selectedInspectorWorkspaceDir}
-        events={selectedProjection?.events ?? []}
-        onOpenTerminal={() => {
-          setTerminalDialogMounted(true);
-          setTerminalOpen(true);
-        }}
-      />
-    </Suspense>
+      <Suspense
+        fallback={
+          <div className="flex h-full items-center justify-center text-xs text-[var(--app-hint)]">
+            Loading inspector…
+          </div>
+        }
+      >
+        <InspectorPane
+          sessionId={selectedSummary?.session.id ?? null}
+          workspaceRoot={selectedInspectorWorkspaceDir}
+          events={selectedProjection?.events ?? []}
+          onOpenTerminal={() => {
+            setTerminalDialogMounted(true);
+            setTerminalOpen(true);
+          }}
+        />
+      </Suspense>
+    </WorkbenchErrorBoundary>
   ) : (
       <div className="flex h-full flex-col">
       <div className="h-14 px-4 pr-12 flex items-center justify-between shrink-0">
@@ -1857,29 +1866,34 @@ export function App() {
                     onToggleSidePanel={() => toggleCanvasPaneRightPanel(typedPaneId)}
                     {...(paneExpanded
                       ? {
-                          inspector: (
-                            <Suspense
-                              fallback={
-                                <div className="flex h-full items-center justify-center text-xs text-[var(--app-hint)]">
-                                  Loading inspector...
-                                </div>
-                              }
+                        inspector: (
+                            <WorkbenchErrorBoundary
+                              resetKey={`canvas-inspector:${summary.session.id}`}
+                              title="Inspector crashed"
                             >
-                              <InspectorPane
-                                sessionId={summary.session.id}
-                                workspaceRoot={
-                                  summary.session.rootDir ||
-                                  summary.session.cwd ||
-                                  availableWorkspaceDir ||
-                                  ""
+                              <Suspense
+                                fallback={
+                                  <div className="flex h-full items-center justify-center text-xs text-[var(--app-hint)]">
+                                    Loading inspector...
+                                  </div>
                                 }
-                                events={projection.events ?? []}
-                                onOpenTerminal={() => {
-                                  setTerminalDialogMounted(true);
-                                  setTerminalOpen(true);
-                                }}
-                              />
-                            </Suspense>
+                              >
+                                <InspectorPane
+                                  sessionId={summary.session.id}
+                                  workspaceRoot={
+                                    summary.session.rootDir ||
+                                    summary.session.cwd ||
+                                    availableWorkspaceDir ||
+                                    ""
+                                  }
+                                  events={projection.events ?? []}
+                                  onOpenTerminal={() => {
+                                    setTerminalDialogMounted(true);
+                                    setTerminalOpen(true);
+                                  }}
+                                />
+                              </Suspense>
+                            </WorkbenchErrorBoundary>
                           ),
                         }
                       : {})}
@@ -2251,9 +2265,7 @@ export function App() {
                   ),
                 );
               }}
-              showInspectorToggle={!rightOpen}
-              inspectorToggleClassName="md:hidden"
-              reserveRightPanelToggleSpace={!rightSidebarOpen}
+              showInspectorToggle={!rightOpen && !rightSidebarOpen}
             />
           ) : primaryPaneState.kind === "opening" && activeOpeningSession ? (
             <WorkbenchOpeningPane
@@ -2266,9 +2278,7 @@ export function App() {
               onExpandInspector={() => setRightSidebarOpen(true)}
               onToggleInspector={toggleInspectorFromHeader}
               inspectorToggleOpen={inspectorToggleOpen}
-              showInspectorToggle={!rightOpen}
-              inspectorToggleClassName="md:hidden"
-              reserveRightPanelToggleSpace={!rightSidebarOpen}
+              showInspectorToggle={!rightOpen && !rightSidebarOpen}
             />
           ) : (
             <WorkbenchEmptyPane
@@ -2280,9 +2290,7 @@ export function App() {
               onExpandInspector={() => setRightSidebarOpen(true)}
               onToggleInspector={toggleInspectorFromHeader}
               inspectorToggleOpen={inspectorToggleOpen}
-              showInspectorToggle={!rightOpen}
-              inspectorToggleClassName="md:hidden"
-              reserveRightPanelToggleSpace={!rightSidebarOpen}
+              showInspectorToggle={!rightOpen && !rightSidebarOpen}
               emptyStateComposerRef={emptyStateComposerRef}
               emptyStateDraft={emptyStateDraft}
               onEmptyStateDraftChange={setEmptyStateDraft}

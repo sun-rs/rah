@@ -297,10 +297,9 @@ export function CanvasSessionPane(props: {
       onOpenRight={() => undefined}
       onExpandInspector={() => undefined}
       onToggleInspector={props.onToggleSidePanel}
-      showInspectorToggle={!sidePanelAvailable}
+      showInspectorToggle={!inspectorOpen}
       inspectorToggleOpen={inspectorOpen}
       inspectorToggleDisabled={props.sidePanelToggleDisabled}
-      reserveRightPanelToggleSpace={sidePanelAvailable && !inspectorOpen}
       inspectorToggleTitle={
         props.sidePanelToggleDisabled
           ? "Maximize pane to use inspector"

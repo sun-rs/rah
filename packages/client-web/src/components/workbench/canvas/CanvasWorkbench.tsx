@@ -7,6 +7,7 @@ import {
   HEADER_SEGMENTED_BUTTON_BASE_CLASS,
   HEADER_SEGMENTED_BUTTON_INACTIVE_CLASS,
   HEADER_SEGMENTED_CONTROL_CLASS,
+  HEADER_SEGMENTED_LABEL_CLASS,
   HEADER_TEXT_BUTTON_CLASS,
 } from "../header-button-styles";
 
@@ -246,7 +247,7 @@ export function CanvasWorkbench(props: {
                 title={layout.title}
               >
                 <Icon size={14} />
-                <span>{layout.label}</span>
+                <span className={HEADER_SEGMENTED_LABEL_CLASS}>{layout.label}</span>
               </button>
               );
             })}

@@ -1,14 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import {
-  Activity,
   ArrowDown,
   ArrowUp,
   Bot,
   CheckCircle2,
-  Circle,
   CirclePause,
-  CircleStop,
   Info,
   ListTree,
   PencilLine,
@@ -55,11 +52,16 @@ import {
   HEADER_MENU_ITEM_CLASS,
 } from "../components/workbench/header-button-styles";
 import {
+  ConversationHeaderMetaList,
   ConversationMetaBadge,
+  CONVERSATION_META_BADGE_PWA_ICON_CLASS,
+  CONVERSATION_META_BADGE_PWA_LABEL_CLASS,
+  CONVERSATION_META_BADGE_TRAILING_SPACE_PADDING_CLASS,
+  ConversationStateMetaBadge,
+  type ConversationHeaderMetaItem,
 } from "../components/workbench/ConversationMetaBadge";
 import {
   resolveConversationHeaderState,
-  type ConversationHeaderStateIcon,
 } from "../components/workbench/conversation-header-meta";
 import {
   councilAgentDraftToConfig,
@@ -105,6 +107,7 @@ import {
   mergeCouncilSnapshot,
   prependCouncilMessagesPage,
 } from "./council-message-window";
+import { usePwaDisplayMode } from "../hooks/usePwaDisplayMode";
 
 type CouncilMessage = CouncilSnapshot["messages"][number];
 type CouncilDisplayItem =
@@ -282,18 +285,6 @@ function agentStatusClass(status: CouncilAgent["status"]): string {
   }
 }
 
-function ConversationHeaderStateIconView(props: { icon: ConversationHeaderStateIcon }) {
-  switch (props.icon) {
-    case "running":
-      return <Circle size={9} className="fill-current" />;
-    case "activity":
-      return <Activity size={10} />;
-    case "stopped":
-      return <CircleStop size={10} />;
-  }
-  return null;
-}
-
 const COUNCIL_AGENT_THEMES = [
   {
     bubble: "border-blue-300/80 bg-gradient-to-br from-blue-50/95 to-white text-slate-950 shadow-sm dark:border-blue-500/25 dark:from-blue-500/10 dark:to-transparent dark:text-blue-50",
@@ -447,6 +438,7 @@ export function CouncilPage(props: {
   const [isCouncilHeaderCompact, setIsCouncilHeaderCompact] = useState(() =>
     typeof window === "undefined" ? false : window.matchMedia("(max-width: 520px)").matches,
   );
+  const isPwaDisplayMode = usePwaDisplayMode();
   const [stopConfirmOpen, setStopConfirmOpen] = useState(false);
   const [pendingDeleteHistoryCouncil, setPendingDeleteHistoryCouncil] = useState<CouncilSnapshot | null>(null);
   const [pendingPromptAgentId, setPendingPromptAgentId] = useState<string | null>(null);
@@ -1596,6 +1588,43 @@ export function CouncilPage(props: {
   const selectedCouncilAgentCountLabel = selectedCouncil
     ? `${selectedCouncil.agents.length} agent${selectedCouncil.agents.length === 1 ? "" : "s"}`
     : null;
+  const compactCouncilMeta = isPwaDisplayMode || !isCouncilWide;
+  const councilMetaIconClassName = isPwaDisplayMode
+    ? CONVERSATION_META_BADGE_PWA_ICON_CLASS
+    : undefined;
+  const councilMetaLabelClassName = isPwaDisplayMode
+    ? CONVERSATION_META_BADGE_PWA_LABEL_CLASS
+    : undefined;
+  const selectedCouncilHeaderMetaItems: ConversationHeaderMetaItem[] =
+    selectedCouncil && selectedCouncilHeaderState && selectedCouncilAgentCountLabel
+      ? [
+          {
+            slot: "status",
+            node: (
+              <ConversationStateMetaBadge
+                state={selectedCouncilHeaderState}
+                {...(councilMetaIconClassName ? { iconClassName: councilMetaIconClassName } : {})}
+                {...(councilMetaLabelClassName ? { labelClassName: councilMetaLabelClassName } : {})}
+              />
+            ),
+          },
+          {
+            slot: "count",
+            node: (
+              <ConversationMetaBadge
+                tone="council"
+                title={selectedCouncilAgentCountLabel}
+                ariaLabel={selectedCouncilAgentCountLabel}
+                icon={<UsersRound size={10} />}
+                label={compactCouncilMeta ? selectedCouncil.agents.length : selectedCouncilAgentCountLabel}
+                paddingClassName={CONVERSATION_META_BADGE_TRAILING_SPACE_PADDING_CLASS}
+                {...(councilMetaIconClassName ? { iconClassName: councilMetaIconClassName } : {})}
+                {...(councilMetaLabelClassName ? { labelClassName: councilMetaLabelClassName } : {})}
+              />
+            ),
+          },
+        ]
+      : [];
   const selectedCouncilDeleteDisabled =
     !selectedCouncil || selectedCouncil.status === "running" || loading;
   const selectedCouncilDeleteTitle =
@@ -1605,7 +1634,6 @@ export function CouncilPage(props: {
         ? "Action in progress"
         : "Delete Council";
   const showCouncilOverflowMenu = selectedCouncil !== null || isCouncilHeaderCompact;
-  const compactCouncilMeta = !isCouncilWide;
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-[var(--app-bg)]">
@@ -1616,30 +1644,12 @@ export function CouncilPage(props: {
             showLeftSidebarControls={showLeftSidebarControls}
             onOpenLeft={props.onOpenLeft}
             onExpandSidebar={props.onExpandSidebar}
-            reserveRightPanelToggleSpace={showAgentsToggle && !councilSidebarOpen}
-            reserveRightPanelBreakpoint="wide"
+            compactCloseAction={isPwaDisplayMode}
             backgroundClassName="bg-[var(--app-bg)]/85"
             identity={<UsersRound className={COUNCIL_HEADER_ICON_CLASSNAME} />}
             title={selectedCouncil?.title ?? "Council"}
             titleText={selectedCouncil?.title ?? "Council"}
-            meta={
-              selectedCouncil && selectedCouncilHeaderState && selectedCouncilAgentCountLabel ? (
-                <>
-                    <ConversationMetaBadge
-                      tone={selectedCouncilHeaderState.tone}
-                      title={selectedCouncilHeaderState.title}
-                      ariaLabel={selectedCouncilHeaderState.title}
-                    >
-                      <ConversationHeaderStateIconView icon={selectedCouncilHeaderState.icon} />
-                      <span>{selectedCouncilHeaderState.label}</span>
-                    </ConversationMetaBadge>
-                    <ConversationMetaBadge tone="council" title={selectedCouncilAgentCountLabel}>
-                      <UsersRound size={10} className="max-[420px]:hidden" />
-                      <span>{compactCouncilMeta ? selectedCouncil.agents.length : selectedCouncilAgentCountLabel}</span>
-                    </ConversationMetaBadge>
-                </>
-              ) : null
-            }
+            meta={<ConversationHeaderMetaList items={selectedCouncilHeaderMetaItems} />}
             actions={
               <>
               <ConversationHeaderIconButton
@@ -1765,11 +1775,10 @@ export function CouncilPage(props: {
                 : null
             }
             trailingActions={
-              showAgentsToggle ? (
+              showAgentsToggle && (!isCouncilWide || !councilSidebarOpen) ? (
                 <ConversationHeaderPanelToggleButton
                   onClick={() => setCouncilSidebarOpen((open) => !open)}
                   disabled={agentsToggleDisabled}
-                  className="min-[900px]:hidden"
                   ariaLabel={councilSidebarButtonLabel}
                   open={councilSidebarOpen}
                   title={councilSidebarButtonTitle}
