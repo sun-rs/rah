@@ -21,6 +21,7 @@ type CreateLineFrozenHistoryPageLoaderArgs = {
   snapshotEndOffset: number;
   readWindow(args: { endOffset: number; lineBudget: number }): LineHistoryWindow;
   selectPage?(events: readonly RahEvent[], limit: number): RahEvent[];
+  isPageStable?(events: readonly RahEvent[]): boolean;
   initialLineBudget?: number;
   maxLineBudget?: number;
 };
@@ -98,13 +99,14 @@ export function createLineFrozenHistoryPageLoader(
       });
       const combined = [...window.events, ...state.carryEvents];
       const pageEvents = selectPage(combined, safeLimit);
+      const pageStable = args.isPageStable?.(pageEvents) ?? true;
       const prefixLength = Math.max(0, combined.length - pageEvents.length);
       const nextState: LineHistoryCursorState = {
         endOffset: window.startOffset,
         carryEvents: combined.slice(0, prefixLength),
       };
       if (
-        pageEvents.length >= safeLimit ||
+        (pageEvents.length >= safeLimit && pageStable) ||
         window.startOffset <= 0 ||
         window.startOffset === state.endOffset ||
         lineBudget >= maxLineBudget

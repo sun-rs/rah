@@ -127,7 +127,7 @@ export function deriveWorkbenchSessionCollections(args: {
     runningSessionSummaries,
     args.storedSessions,
     runningSessionSummaries,
-    { sessionActivityAtById },
+    { sessionActivityAtById, includeStoredSessionActivity: false },
   );
   const sortedWorkspaceInfos = sortWorkspaceInfos(workspaceInfos, args.workspaceSortMode);
   const workspaceSections = deriveWorkspaceSections(

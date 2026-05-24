@@ -51,14 +51,27 @@ function makeCodexFrozenHistoryBoundary(
   };
 }
 
-function isCodexUserBoundaryLine(line: string): boolean {
+function isCodexTranslationSafeBoundaryLine(line: string): boolean {
   try {
     const parsed = JSON.parse(line) as Record<string, unknown>;
     const payload =
       parsed.payload && typeof parsed.payload === "object" && !Array.isArray(parsed.payload)
         ? (parsed.payload as Record<string, unknown>)
         : null;
-    return payload?.type === "message" && payload.role === "user";
+    if (!payload) {
+      return false;
+    }
+    if (parsed.type === "session_meta" && typeof payload.id === "string") {
+      return true;
+    }
+    if (parsed.type === "turn_context" && typeof payload.turn_id === "string") {
+      return true;
+    }
+    return (
+      parsed.type === "event_msg" &&
+      payload.type === "task_started" &&
+      typeof payload.turn_id === "string"
+    );
   } catch {
     return false;
   }
@@ -159,6 +172,19 @@ function collapseDuplicateTimelineEvents(events: RahEvent[]): RahEvent[] {
     next.push(event);
   }
   return next;
+}
+
+function codexHistoryPageHasStableTimelineIdentities(events: readonly RahEvent[]): boolean {
+  return !events.some((event) => {
+    if (event.type !== "timeline.item.added" && event.type !== "timeline.item.updated") {
+      return false;
+    }
+    const kind = event.payload.item.kind;
+    if (kind !== "user_message" && kind !== "assistant_message" && kind !== "reasoning") {
+      return false;
+    }
+    return typeof event.payload.identity?.canonicalItemId !== "string";
+  });
 }
 
 function translateCodexRolloutWindowToHistoryEvents(args: {
@@ -466,7 +492,7 @@ export function createCodexStoredSessionFrozenHistoryPageLoader(args: {
   );
   const translateWindow = createLineHistoryWindowTranslator({
     sessionId: args.sessionId,
-    findSafeBoundaryIndex: (lines) => lines.findIndex(isCodexUserBoundaryLine),
+    findSafeBoundaryIndex: (lines) => lines.findIndex(isCodexTranslationSafeBoundaryLine),
     translateLines: (lines, context) =>
       translateCodexRolloutWindowToHistoryEvents({
         sessionId: args.sessionId,
@@ -494,5 +520,6 @@ export function createCodexStoredSessionFrozenHistoryPageLoader(args: {
       };
     },
     selectPage: selectSemanticRecentWindow,
+    isPageStable: codexHistoryPageHasStableTimelineIdentities,
   });
 }

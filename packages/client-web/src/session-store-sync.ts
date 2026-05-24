@@ -126,6 +126,7 @@ export function connectStoreSyncTransport(args: {
   getReplayFromSeq: () => number | undefined;
   isInitialLoaded: () => boolean;
   set: SessionSyncSetState;
+  getNotificationProjections: () => ReadonlyMap<string, SessionProjection>;
   applyEventsToMap: (
     current: Map<string, SessionProjection>,
     events: RahEvent[],
@@ -135,26 +136,40 @@ export function connectStoreSyncTransport(args: {
     selectedSessionId: string | null,
     events: readonly RahEvent[],
   ) => Set<string>;
+  notifyUnreadEvents?: (args: {
+    projections: ReadonlyMap<string, SessionProjection>;
+    events: readonly RahEvent[];
+  }) => void;
   recoverFromReplayGap: (batch: EventBatch) => Promise<void>;
   refreshWorkbenchState: () => Promise<void>;
 }) {
   let pendingProjectionEvents: RahEvent[] = [];
   let pendingUnreadEvents: RahEvent[] = [];
-  let pendingFlushFrame: number | null = null;
+  let pendingFlush: { kind: "frame" | "timer"; id: number } | null = null;
 
   const flushPendingEvents = () => {
-    if (pendingFlushFrame !== null) {
-      window.cancelAnimationFrame(pendingFlushFrame);
-      pendingFlushFrame = null;
+    if (pendingFlush !== null) {
+      if (pendingFlush.kind === "frame") {
+        window.cancelAnimationFrame(pendingFlush.id);
+      } else {
+        window.clearTimeout(pendingFlush.id);
+      }
+      pendingFlush = null;
     }
     if (pendingProjectionEvents.length === 0) {
       pendingUnreadEvents = [];
       return;
     }
     const projectionEvents = coalesceProjectionEvents(pendingProjectionEvents);
-    const unreadEvents = pendingUnreadEvents;
+    const unreadEvents = coalesceProjectionEvents(pendingUnreadEvents);
     pendingProjectionEvents = [];
     pendingUnreadEvents = [];
+    if (unreadEvents.length > 0) {
+      args.notifyUnreadEvents?.({
+        projections: args.getNotificationProjections(),
+        events: unreadEvents,
+      });
+    }
     args.set((state) => ({
       projections: args.applyEventsToMap(state.projections, projectionEvents),
       unreadSessionIds:
@@ -170,14 +185,41 @@ export function connectStoreSyncTransport(args: {
   };
 
   const schedulePendingEventFlush = () => {
-    if (pendingFlushFrame !== null) {
+    if (pendingFlush !== null) {
       return;
     }
-    pendingFlushFrame = window.requestAnimationFrame(() => {
-      pendingFlushFrame = null;
+    const runFlush = () => {
+      pendingFlush = null;
       flushPendingEvents();
-    });
+    };
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+      pendingFlush = { kind: "timer", id: window.setTimeout(runFlush, 0) };
+      return;
+    }
+    pendingFlush = { kind: "frame", id: window.requestAnimationFrame(runFlush) };
   };
+
+  const promotePendingFlushToBackgroundTimer = () => {
+    if (
+      pendingFlush?.kind !== "frame" ||
+      typeof document === "undefined" ||
+      document.visibilityState !== "hidden"
+    ) {
+      return;
+    }
+    window.cancelAnimationFrame(pendingFlush.id);
+    pendingFlush = {
+      kind: "timer",
+      id: window.setTimeout(() => {
+        pendingFlush = null;
+        flushPendingEvents();
+      }, 0),
+    };
+  };
+
+  if (typeof document !== "undefined") {
+    document.addEventListener("visibilitychange", promotePendingFlushToBackgroundTimer);
+  }
 
   connectSessionStoreTransport({
     getReplayFromSeq: args.getReplayFromSeq,

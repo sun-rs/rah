@@ -389,6 +389,103 @@ describe("codex stored session path resolution", () => {
     assert.deepEqual(timelineTexts(initialAgain.events), ["user 400", "assistant 400"]);
   });
 
+  test("frozen Codex history loader expands partial turn tails before accepting timeline identities", () => {
+    const rolloutPath = path.join(repoRoot, "rollout-partial-turn-tail.jsonl");
+    const noise = (index: number) => ({
+      type: "event_msg",
+      timestamp: `2025-07-19T22:00:${String(index).padStart(2, "0")}.000Z`,
+      payload: {
+        type: "token_count",
+        info: null,
+      },
+    });
+    writeFileSync(
+      rolloutPath,
+      `${[
+        {
+          type: "event_msg",
+          timestamp: "2025-07-19T22:00:00.000Z",
+          payload: {
+            type: "task_started",
+            turn_id: "turn-stable-tail",
+          },
+        },
+        noise(1),
+        noise(2),
+        noise(3),
+        noise(4),
+        noise(5),
+        noise(6),
+        {
+          type: "response_item",
+          timestamp: "2025-07-19T22:00:07.000Z",
+          payload: {
+            type: "message",
+            role: "user",
+            id: "user-stable-tail",
+            content: [{ type: "input_text", text: "ask stable tail" }],
+          },
+        },
+        noise(8),
+        {
+          type: "event_msg",
+          timestamp: "2025-07-19T22:00:09.000Z",
+          payload: {
+            type: "agent_message",
+            message: "stable tail answer",
+          },
+        },
+        noise(10),
+        noise(11),
+      ].map((line) => JSON.stringify(line)).join("\n")}\n`,
+      "utf8",
+    );
+    const record: CodexStoredSessionRecord = {
+      ref: {
+        provider: "codex",
+        providerSessionId: "provider-partial-turn-tail",
+        cwd: repoRoot,
+        rootDir: repoRoot,
+        title: "partial turn tail",
+        preview: "partial turn tail",
+        updatedAt: "2025-07-19T22:00:11.000Z",
+        source: "provider_history",
+      },
+      rolloutPath,
+    };
+
+    const loader = createCodexStoredSessionFrozenHistoryPageLoader({
+      sessionId: "replay-partial-turn-tail",
+      record,
+    });
+    const page = loader.loadInitialPage(1);
+    const messages = page.events.filter(
+      (event) =>
+        event.type === "timeline.item.added" &&
+        (event.payload.item.kind === "user_message" || event.payload.item.kind === "assistant_message"),
+    );
+
+    assert.deepEqual(
+      messages.map((event) => {
+        if (
+          event.type === "timeline.item.added" &&
+          (event.payload.item.kind === "user_message" || event.payload.item.kind === "assistant_message")
+        ) {
+          return event.payload.item.text;
+        }
+        return "";
+      }),
+      ["ask stable tail", "stable tail answer"],
+    );
+    assert.ok(
+      messages.every(
+        (event) =>
+          event.type === "timeline.item.added" &&
+          typeof event.payload.identity?.canonicalItemId === "string",
+      ),
+    );
+  });
+
   test("frozen Codex history loader preserves Council posts when tool context crosses page windows", () => {
     const rolloutPath = path.join(repoRoot, "rollout-council-window.jsonl");
     const hiddenToolNoise = Array.from({ length: 32 }, (_, index) => ({

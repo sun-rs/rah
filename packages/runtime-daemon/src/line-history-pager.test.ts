@@ -25,6 +25,23 @@ function historyEvent(text: string, seq: number): RahEvent {
   };
 }
 
+function identifiedHistoryEvent(text: string, seq: number): RahEvent {
+  const event = historyEvent(text, seq);
+  if (event.type !== "timeline.item.added") {
+    return event;
+  }
+  return {
+    ...event,
+    payload: {
+      ...event.payload,
+      identity: {
+        canonicalItemId: `item-${seq}`,
+        canonicalTurnId: "turn-1",
+      } as never,
+    },
+  };
+}
+
 describe("line history pager", () => {
   test("preserves excluded semantic-rewind prefix for the next older page", () => {
     const loader = createLineFrozenHistoryPageLoader({
@@ -125,5 +142,60 @@ describe("line history pager", () => {
       ["a"],
     );
     assert.deepEqual(seenEndOffsets, [30]);
+  });
+
+  test("expands a full recent window until the selected page is stable", () => {
+    const seenLineBudgets: number[] = [];
+    const loader = createLineFrozenHistoryPageLoader({
+      boundary: {
+        kind: "frozen",
+        sourceRevision: "rev-1",
+      },
+      snapshotEndOffset: 40,
+      initialLineBudget: 1,
+      maxLineBudget: 8,
+      readWindow: ({ lineBudget }) => {
+        seenLineBudgets.push(lineBudget);
+        if (lineBudget < 4) {
+          return {
+            startOffset: 20,
+            events: ["assistant-a", "assistant-b", "assistant-c"].map((text, index) =>
+              historyEvent(text, index + 1),
+            ),
+          };
+        }
+        return {
+          startOffset: 0,
+          events: ["user", "assistant-a", "assistant-b", "assistant-c"].map((text, index) =>
+            identifiedHistoryEvent(text, index + 1),
+          ),
+        };
+      },
+      isPageStable: (events) =>
+        events.every(
+          (event) =>
+            event.type !== "timeline.item.added" ||
+            typeof event.payload.identity?.canonicalItemId === "string",
+        ),
+    });
+
+    const initial = loader.loadInitialPage(2);
+
+    assert.deepEqual(seenLineBudgets, [1, 2, 4]);
+    assert.deepEqual(
+      initial.events.map((event) =>
+        event.type === "timeline.item.added" && event.payload.item.kind === "assistant_message"
+          ? event.payload.item.text
+          : null,
+      ),
+      ["assistant-b", "assistant-c"],
+    );
+    assert.ok(
+      initial.events.every(
+        (event) =>
+          event.type !== "timeline.item.added" ||
+          typeof event.payload.identity?.canonicalItemId === "string",
+      ),
+    );
   });
 });

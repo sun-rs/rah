@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
-import type { ProviderChoice } from "../components/ProviderSelector";
 
 const HIDE_TOOL_CALLS_KEY = "rah-hide-tool-calls-in-chat";
 const HIDE_OPENCODE_REASONING_KEY = "rah-hide-opencode-reasoning-in-chat";
 const HIDE_GEMINI_REASONING_KEY = "rah-hide-gemini-reasoning-in-chat";
-const SHOW_MODEL_INFO_KEY_PREFIX = "rah-show-model-info-in-chat:";
+const SHOW_MODEL_INFO_KEY = "rah-show-model-info-in-chat";
+const LEGACY_SHOW_MODEL_INFO_KEY_PREFIX = "rah-show-model-info-in-chat:";
 const CHAT_PREFERENCES_EVENT = "rah:chat-preferences-updated";
-const MODEL_INFO_PROVIDERS: ProviderChoice[] = ["codex", "claude", "gemini", "opencode"];
+const LEGACY_MODEL_INFO_PROVIDERS = ["codex", "claude", "gemini", "opencode"];
 
 function isBrowser(): boolean {
   return typeof window !== "undefined";
@@ -32,6 +32,22 @@ function writeBoolean(key: string, value: boolean): void {
   }
 }
 
+export function readShowModelInfoPreference(): boolean {
+  return readBoolean(SHOW_MODEL_INFO_KEY, true);
+}
+
+export function writeShowModelInfoPreference(value: boolean): void {
+  writeBoolean(SHOW_MODEL_INFO_KEY, value);
+  if (!isBrowser()) return;
+  try {
+    for (const provider of LEGACY_MODEL_INFO_PROVIDERS) {
+      localStorage.removeItem(`${LEGACY_SHOW_MODEL_INFO_KEY_PREFIX}${provider}`);
+    }
+  } catch {
+    // ignore
+  }
+}
+
 export function useChatPreferences(): {
   hideToolCallsInChat: boolean;
   setHideToolCallsInChat: (value: boolean) => void;
@@ -39,8 +55,8 @@ export function useChatPreferences(): {
   setHideOpenCodeReasoningInChat: (value: boolean) => void;
   hideGeminiReasoningInChat: boolean;
   setHideGeminiReasoningInChat: (value: boolean) => void;
-  showModelInfoInChat: Record<ProviderChoice, boolean>;
-  setShowModelInfoInChat: (provider: ProviderChoice, value: boolean) => void;
+  showModelInfoInChat: boolean;
+  setShowModelInfoInChat: (value: boolean) => void;
 } {
   const [hideToolCallsInChat, setHideToolCallsInChatState] = useState<boolean>(() =>
     readBoolean(HIDE_TOOL_CALLS_KEY, true),
@@ -51,8 +67,9 @@ export function useChatPreferences(): {
   const [hideGeminiReasoningInChat, setHideGeminiReasoningInChatState] = useState<boolean>(() =>
     readBoolean(HIDE_GEMINI_REASONING_KEY, true),
   );
-  const [showModelInfoInChat, setShowModelInfoInChatState] =
-    useState<Record<ProviderChoice, boolean>>(() => readShowModelInfoPreferences());
+  const [showModelInfoInChat, setShowModelInfoInChatState] = useState<boolean>(() =>
+    readShowModelInfoPreference(),
+  );
 
   useEffect(() => {
     if (!isBrowser()) return;
@@ -60,14 +77,15 @@ export function useChatPreferences(): {
       setHideToolCallsInChatState(readBoolean(HIDE_TOOL_CALLS_KEY, true));
       setHideOpenCodeReasoningInChatState(readBoolean(HIDE_OPENCODE_REASONING_KEY, true));
       setHideGeminiReasoningInChatState(readBoolean(HIDE_GEMINI_REASONING_KEY, true));
-      setShowModelInfoInChatState(readShowModelInfoPreferences());
+      setShowModelInfoInChatState(readShowModelInfoPreference());
     };
     const onStorage = (event: StorageEvent) => {
       if (
         event.key !== HIDE_TOOL_CALLS_KEY &&
         event.key !== HIDE_OPENCODE_REASONING_KEY &&
         event.key !== HIDE_GEMINI_REASONING_KEY &&
-        !event.key?.startsWith(SHOW_MODEL_INFO_KEY_PREFIX)
+        event.key !== SHOW_MODEL_INFO_KEY &&
+        !event.key?.startsWith(LEGACY_SHOW_MODEL_INFO_KEY_PREFIX)
       ) {
         return;
       }
@@ -108,9 +126,9 @@ export function useChatPreferences(): {
     }
   }, []);
 
-  const setShowModelInfoInChat = useCallback((provider: ProviderChoice, value: boolean) => {
-    setShowModelInfoInChatState((current) => ({ ...current, [provider]: value }));
-    writeBoolean(`${SHOW_MODEL_INFO_KEY_PREFIX}${provider}`, value);
+  const setShowModelInfoInChat = useCallback((value: boolean) => {
+    setShowModelInfoInChatState(value);
+    writeShowModelInfoPreference(value);
     if (isBrowser()) {
       window.dispatchEvent(new Event(CHAT_PREFERENCES_EVENT));
     }
@@ -126,14 +144,4 @@ export function useChatPreferences(): {
     showModelInfoInChat,
     setShowModelInfoInChat,
   };
-}
-
-function readShowModelInfoPreferences(): Record<ProviderChoice, boolean> {
-  return MODEL_INFO_PROVIDERS.reduce(
-    (acc, provider) => {
-      acc[provider] = readBoolean(`${SHOW_MODEL_INFO_KEY_PREFIX}${provider}`, true);
-      return acc;
-    },
-    {} as Record<ProviderChoice, boolean>,
-  );
 }

@@ -34,6 +34,7 @@ import { ModelCatalogList, ModelSourceBadge } from "./SessionModelControls";
 import { ThemeToggle } from "./ThemeToggle";
 import { OverlayScrollArea } from "./OverlayScrollArea";
 import { useChatPreferences } from "../hooks/useChatPreferences";
+import { useBrowserNotificationSettings } from "../browser-notifications";
 import type { ProviderChoice } from "./ProviderSelector";
 import { useSessionStore } from "../useSessionStore";
 
@@ -60,7 +61,6 @@ type ModelRefreshState = {
   status: ModelRefreshStatus;
   error?: string;
 };
-type ProviderHealthStatus = NonNullable<ProviderDiagnostic["providerHealth"]>["status"];
 type ManualModelFormState = {
   modelId: string;
   options: string;
@@ -182,43 +182,6 @@ function providerSupportsManualOptions(provider: ProviderChoice): boolean {
   return provider !== "gemini";
 }
 
-function providerHealthLabel(status: ProviderHealthStatus): string {
-  switch (status) {
-    case "ok":
-      return "OK";
-    case "warning":
-      return "Warning";
-    case "error":
-      return "Error";
-    default:
-      return "Unknown";
-  }
-}
-
-function providerHealthBadgeClass(status: ProviderHealthStatus): string {
-  switch (status) {
-    case "ok":
-      return "border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400";
-    case "warning":
-      return "border-[var(--app-warning)]/20 bg-[var(--app-warning-bg)] text-[var(--app-warning)]";
-    case "error":
-      return "border-[var(--app-danger)]/20 bg-[var(--app-danger-bg)] text-[var(--app-danger)]";
-    default:
-      return "border-[var(--app-border)] bg-[var(--app-subtle-bg)] text-[var(--app-hint)]";
-  }
-}
-
-function formatProviderAuthSummary(diagnostic: ProviderDiagnostic): string | null {
-  const auth = diagnostic.providerHealth?.auth;
-  if (!auth) {
-    return null;
-  }
-  if (auth.mode) {
-    return auth.mode === "chatgpt" ? "ChatGPT" : auth.mode;
-  }
-  return auth.status === "configured" ? "Configured" : auth.status === "missing" ? "Missing" : "Unknown";
-}
-
 export function SettingsPane() {
   const [activeTab, setActiveTab] = useState<SettingsTab>("chat");
   const workspaceDir = useSessionStore((state) => state.workspaceDir);
@@ -234,6 +197,7 @@ export function SettingsPane() {
     showModelInfoInChat,
     setShowModelInfoInChat,
   } = useChatPreferences();
+  const browserNotifications = useBrowserNotificationSettings();
   const [providerDiagnostics, setProviderDiagnostics] = useState<ProviderDiagnostic[]>([]);
   const [modelCatalogs, setModelCatalogs] = useState<Partial<Record<ProviderChoice, ProviderModelCatalog>>>({});
   const storeModelCatalogs = useSessionStore((state) => state.modelCatalogs);
@@ -949,38 +913,62 @@ export function SettingsPane() {
               </div>
             </div>
             <div className="rounded-2xl border border-[var(--app-border)] bg-[var(--app-bg)] p-4 md:p-5">
-              <div>
-                <div className="text-sm font-medium text-[var(--app-fg)]">Show model on assistant replies</div>
-                <div className="mt-1 text-xs text-[var(--app-hint)]">
-                  Display a subtle model / effort label when the provider exposes it for a reply.
-                </div>
-              </div>
-              <div className="mt-4 space-y-3">
-                {(["codex", "claude", "gemini", "opencode"] as ProviderChoice[]).map((provider) => (
-                  <div key={provider} className="flex items-center justify-between gap-4">
-                    <div className="flex min-w-0 items-center gap-2 text-sm text-[var(--app-fg)]">
-                      <ProviderLogo provider={provider} className="h-4 w-4" />
-                      <span>{providerLabel(provider)}</span>
-                    </div>
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={showModelInfoInChat[provider]}
-                      onClick={() => setShowModelInfoInChat(provider, !showModelInfoInChat[provider])}
-                      className={`relative inline-flex h-6 w-11 shrink-0 rounded-full border transition-colors ${
-                        showModelInfoInChat[provider]
-                          ? "border-primary bg-primary"
-                          : "border-[var(--app-border)] bg-[var(--app-subtle-bg)]"
-                      }`}
-                    >
-                      <span
-                        className={`absolute top-0.5 h-4.5 w-4.5 rounded-full bg-white shadow-sm transition-transform ${
-                          showModelInfoInChat[provider] ? "translate-x-5" : "translate-x-0.5"
-                        }`}
-                      />
-                    </button>
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <div className="text-sm font-medium text-[var(--app-fg)]">Notify on unread replies</div>
+                  <div className="mt-1 text-xs text-[var(--app-hint)]">
+                    Show a system notification when a session or Council gets a new reply while RAH is hidden or unfocused.
                   </div>
-                ))}
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={browserNotifications.enabled}
+                  disabled={
+                    browserNotifications.pending ||
+                    !browserNotifications.supported ||
+                    browserNotifications.permission === "denied"
+                  }
+                  onClick={() => void browserNotifications.toggle()}
+                  className={`relative inline-flex h-6 w-11 shrink-0 rounded-full border transition-colors disabled:cursor-default disabled:opacity-60 ${
+                    browserNotifications.enabled
+                      ? "border-primary bg-primary"
+                      : "border-[var(--app-border)] bg-[var(--app-subtle-bg)]"
+                  }`}
+                >
+                  <span
+                    className={`absolute top-0.5 h-4.5 w-4.5 rounded-full bg-white shadow-sm transition-transform ${
+                      browserNotifications.enabled ? "translate-x-5" : "translate-x-0.5"
+                    }`}
+                  />
+                </button>
+              </div>
+            </div>
+            <div className="rounded-2xl border border-[var(--app-border)] bg-[var(--app-bg)] p-4 md:p-5">
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <div className="text-sm font-medium text-[var(--app-fg)]">Show model on assistant replies</div>
+                  <div className="mt-1 text-xs text-[var(--app-hint)]">
+                    Display a subtle model / effort label on replies for every provider when the provider exposes it.
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={showModelInfoInChat}
+                  onClick={() => setShowModelInfoInChat(!showModelInfoInChat)}
+                  className={`relative inline-flex h-6 w-11 shrink-0 rounded-full border transition-colors ${
+                    showModelInfoInChat
+                      ? "border-primary bg-primary"
+                      : "border-[var(--app-border)] bg-[var(--app-subtle-bg)]"
+                  }`}
+                >
+                  <span
+                    className={`absolute top-0.5 h-4.5 w-4.5 rounded-full bg-white shadow-sm transition-transform ${
+                      showModelInfoInChat ? "translate-x-5" : "translate-x-0.5"
+                    }`}
+                  />
+                </button>
               </div>
             </div>
           </div>
@@ -1131,57 +1119,6 @@ export function SettingsPane() {
                                 </div>
                               </div>
                             </div>
-                            {diagnostic.providerHealth ? (
-                              <div className="rounded-xl border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-3 py-2">
-                                <div className="flex flex-wrap items-center justify-between gap-2">
-                                  <div className="text-xs font-medium uppercase tracking-wide text-[var(--app-hint)]">
-                                    Codex doctor
-                                  </div>
-                                  <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${providerHealthBadgeClass(diagnostic.providerHealth.status)}`}>
-                                    {providerHealthLabel(diagnostic.providerHealth.status)}
-                                  </span>
-                                </div>
-                                {diagnostic.providerHealth.error ? (
-                                  <div className="mt-2 break-words text-xs text-[var(--app-danger)] [overflow-wrap:anywhere]">
-                                    {diagnostic.providerHealth.error}
-                                  </div>
-                                ) : (
-                                  <div className="mt-2 grid gap-2 text-xs sm:grid-cols-3">
-                                    <div>
-                                      <div className="text-[10px] font-medium uppercase tracking-wide text-[var(--app-hint)]">
-                                        Auth
-                                      </div>
-                                      <div className="mt-0.5 text-[var(--app-fg)]">
-                                        {formatProviderAuthSummary(diagnostic) ?? "Unknown"}
-                                      </div>
-                                    </div>
-                                    <div>
-                                      <div className="text-[10px] font-medium uppercase tracking-wide text-[var(--app-hint)]">
-                                        App server
-                                      </div>
-                                      <div className="mt-0.5 text-[var(--app-fg)]">
-                                        {diagnostic.providerHealth.appServer?.status ??
-                                          diagnostic.providerHealth.appServer?.summary ??
-                                          "Unknown"}
-                                      </div>
-                                    </div>
-                                    <div>
-                                      <div className="text-[10px] font-medium uppercase tracking-wide text-[var(--app-hint)]">
-                                        Network
-                                      </div>
-                                      <div
-                                        className="mt-0.5 truncate text-[var(--app-fg)]"
-                                        title={diagnostic.providerHealth.network?.summary}
-                                      >
-                                        {diagnostic.providerHealth.network?.status
-                                          ? providerHealthLabel(diagnostic.providerHealth.network.status)
-                                          : "Unknown"}
-                                      </div>
-                                    </div>
-                                  </div>
-                                )}
-                              </div>
-                            ) : null}
                           </div>
                         </div>
                         {diagnostic.latestVersionError ? (

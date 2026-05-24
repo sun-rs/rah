@@ -47,6 +47,7 @@ import {
   startScenarioCommand,
   startSessionCommand,
 } from "./session-store-session-startup";
+import { notifyForRahEvents } from "./browser-notifications";
 import {
   clearHistoryBootstrapBuffers,
   clearHistoryBootstrapBuffersForSession,
@@ -534,8 +535,10 @@ function connectStoreTransport() {
     getReplayFromSeq: () => (lastEventSeq > 0 ? lastEventSeq + 1 : undefined),
     isInitialLoaded: () => useSessionStore.getState().isInitialLoaded,
     set: useSessionStore.setState as never,
+    getNotificationProjections: () => useSessionStore.getState().projections,
     applyEventsToMap,
     computeUnreadSessionIds: computeUnreadSessionIdsImpl,
+    notifyUnreadEvents: notifyForRahEvents,
     recoverFromReplayGap,
     refreshWorkbenchState: () => useSessionStore.getState().refreshWorkbenchState(),
   });

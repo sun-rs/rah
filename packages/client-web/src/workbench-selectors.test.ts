@@ -1,6 +1,6 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import type { SessionSummary } from "@rah/runtime-protocol";
+import type { SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
 import { initialHistorySyncState, type FeedEntry, type SessionProjection } from "./types";
 import {
   derivePrimaryPaneState,
@@ -271,6 +271,52 @@ describe("workbench selectors", () => {
         section.sessions.map((session) => session.session.id),
       ),
       ["human-activity", "background-refresh"],
+    );
+  });
+
+  test("ignores stored history activity when sorting live sidebar workspaces", () => {
+    const clientId = "web-current";
+    const liveValar = controlledSummary({
+      id: "live-valar",
+      clientId,
+      rootDir: "/workspace/repos/valar",
+      updatedAt: "2026-05-01T10:10:00.000Z",
+    });
+    const newerStoredCodeSession: StoredSessionRef = {
+      provider: "codex",
+      providerSessionId: "stored-code",
+      cwd: "/workspace/code",
+      rootDir: "/workspace/code",
+      title: "newer archived session",
+      updatedAt: "2026-05-01T10:59:00.000Z",
+      lastUsedAt: "2026-05-01T10:59:00.000Z",
+      source: "provider_history",
+    };
+
+    const collections = deriveWorkbenchSessionCollections({
+      projections: new Map([
+        [
+          liveValar.session.id,
+          projection(liveValar, [
+            messageEntry(
+              liveValar.session.id,
+              "assistant_message",
+              "live reply",
+              "2026-05-01T10:10:00.000Z",
+            ),
+          ]),
+        ],
+      ]),
+      clientId,
+      workspaceDirs: ["/workspace/code", "/workspace/repos/valar"],
+      storedSessions: [newerStoredCodeSession],
+      workspaceDir: "/workspace/repos/valar",
+      workspaceSortMode: "updated",
+    });
+
+    assert.deepEqual(
+      collections.sortedWorkspaceInfos.map((workspace) => workspace.directory),
+      ["/workspace/repos/valar", "/workspace/code"],
     );
   });
 

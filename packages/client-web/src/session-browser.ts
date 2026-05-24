@@ -88,6 +88,7 @@ export interface WorkspaceSection {
 
 type SessionActivityOptions = {
   sessionActivityAtById?: ReadonlyMap<string, string> | undefined;
+  includeStoredSessionActivity?: boolean | undefined;
 };
 
 function sessionActivityAt(
@@ -184,16 +185,18 @@ export function deriveWorkspaceInfos(
     }
   }
 
-  for (const stored of storedSessions) {
-    const owner = findOwningWorkspace(workspaceDirs, stored.rootDir || stored.cwd);
-    if (!owner) continue;
-    const updatedAt = stored.updatedAt ?? "";
-    const workspace = map.get(owner);
-    if (!workspace) {
-      continue;
-    }
-    if (updatedAt > workspace.latestUpdatedAt) {
-      workspace.latestUpdatedAt = updatedAt;
+  if (options?.includeStoredSessionActivity !== false) {
+    for (const stored of storedSessions) {
+      const owner = findOwningWorkspace(workspaceDirs, stored.rootDir || stored.cwd);
+      if (!owner) continue;
+      const updatedAt = stored.updatedAt ?? "";
+      const workspace = map.get(owner);
+      if (!workspace) {
+        continue;
+      }
+      if (updatedAt > workspace.latestUpdatedAt) {
+        workspace.latestUpdatedAt = updatedAt;
+      }
     }
   }
 

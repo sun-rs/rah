@@ -58,6 +58,10 @@ import {
 import { resolveSelectedModelDraft } from "./components/SessionModelControls";
 import { deriveComposerSurface } from "./composer-contract";
 import {
+  setVisibleNotificationTargets,
+  type NotificationTarget,
+} from "./browser-notifications";
+import {
   derivePrimaryPaneState,
   deriveWorkbenchSessionCollections,
   isSessionAttachedToClient,
@@ -563,6 +567,46 @@ export function App() {
   const activeCanvasProjection = resolveCanvasProjection(activeCanvasPaneId);
   const activeCanvasSummary = activeCanvasProjection?.summary ?? null;
   const activeCanvasCouncil = resolveCanvasCouncil(activeCanvasPaneId);
+  const visibleCanvasPaneKey = visibleCanvasPaneIds.join(":");
+  const visibleNotificationTargets = useMemo<NotificationTarget[]>(() => {
+    const targets: NotificationTarget[] = [];
+    const seen = new Set<string>();
+    const addTarget = (target: NotificationTarget) => {
+      const key = `${target.kind}:${target.id}`;
+      if (seen.has(key)) {
+        return;
+      }
+      seen.add(key);
+      targets.push(target);
+    };
+
+    if (workbenchMode === "canvas") {
+      for (const paneId of visibleCanvasPaneIds) {
+        const target = canvasPaneTargets[paneId];
+        if (target.kind === "session") {
+          addTarget({ kind: "session", id: target.sessionId });
+        } else if (target.kind === "council") {
+          addTarget({ kind: "council", id: target.councilId });
+        }
+      }
+      return targets;
+    }
+
+    if (workbenchMode === "council" && selectedCouncilId) {
+      addTarget({ kind: "council", id: selectedCouncilId });
+      return targets;
+    }
+
+    if (selectedSessionId) {
+      addTarget({ kind: "session", id: selectedSessionId });
+    }
+    return targets;
+  }, [canvasPaneTargets, selectedCouncilId, selectedSessionId, visibleCanvasPaneKey, workbenchMode]);
+
+  useEffect(() => {
+    setVisibleNotificationTargets(visibleNotificationTargets);
+    return () => setVisibleNotificationTargets([]);
+  }, [visibleNotificationTargets]);
 
   useEffect(() => {
     if (!canvasMaximizedPaneId) {
@@ -1903,7 +1947,7 @@ export function App() {
                     hideToolCallsInChat={hideToolCallsInChat}
                     hideOpenCodeReasoningInChat={hideOpenCodeReasoningInChat}
                     hideGeminiReasoningInChat={hideGeminiReasoningInChat}
-                    showModelInfoInChat={showModelInfoInChat[provider] ?? true}
+                    showModelInfoInChat={showModelInfoInChat}
                     pendingSessionAction={
                       pendingSessionAction?.sessionId === summary.session.id
                         ? pendingSessionAction
@@ -1998,9 +2042,7 @@ export function App() {
               hideToolCallsInChat={hideToolCallsInChat}
               hideOpenCodeReasoningInChat={hideOpenCodeReasoningInChat}
               hideGeminiReasoningInChat={hideGeminiReasoningInChat}
-              showModelInfoInChat={
-                selectedSummary ? (showModelInfoInChat[selectedSummary.session.provider as ProviderChoice] ?? true) : true
-              }
+              showModelInfoInChat={showModelInfoInChat}
               canLoadOlderHistory={Boolean(
                 selectedSummary.session.providerSessionId &&
                   selectedProjection?.history.authoritativeApplied &&
