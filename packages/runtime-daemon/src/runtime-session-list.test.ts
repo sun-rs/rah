@@ -108,6 +108,28 @@ describe("buildSessionsResponse", () => {
     );
   });
 
+  test("uses user title overrides for running sessions even when provider history is stale", () => {
+    const response = buildSessionsResponse({
+      liveStates: [storedSessionState("session-renamed")],
+      discoveredStoredSessions: [storedRef("session-renamed")],
+      remembered: {
+        rememberedSessions: [],
+        rememberedRecentSessions: [],
+        rememberedWorkspaceDirs: ["/workspace/demo"],
+        rememberedHiddenWorkspaces: [],
+        rememberedHiddenSessionKeys: [],
+        rememberedSessionTitleOverrides: {
+          "codex:session-renamed": "Manual rename",
+        },
+      },
+      isClosingSession: () => false,
+    });
+
+    assert.equal(response.sessions[0]?.session.title, "Manual rename");
+    assert.equal(response.storedSessions[0]?.title, "Manual rename");
+    assert.equal(response.recentSessions[0]?.title, "Manual rename");
+  });
+
   test("builds recent sessions from the global provider history order", () => {
     const response = buildSessionsResponse({
       liveStates: [],

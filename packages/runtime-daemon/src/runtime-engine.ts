@@ -110,6 +110,10 @@ import {
   type NativeTuiProviderRuntime,
 } from "./native-tui-provider-runtime";
 import {
+  applyCanonicalTitleToSessionSummary,
+  resolveCanonicalSessionTitle,
+} from "./session-title-resolver";
+import {
   createDefaultNativeTuiMirrorProvider,
   type NativeTuiMirrorProvider,
 } from "./native-tui-mirror-provider";
@@ -333,6 +337,9 @@ export class RuntimeEngine {
       terminals: this.terminals,
       rememberSession: (state) => {
         this.workbenchState.rememberSession(state);
+      },
+      setSessionTitleOverride: (session, title) => {
+        this.workbenchState.setSessionTitleOverride(session, title);
       },
       refreshRememberedState: () => {
         this.refreshRememberedState();
@@ -723,7 +730,7 @@ export class RuntimeEngine {
     if (!state) {
       throw new Error(`Unknown session ${sessionId}`);
     }
-    return toSessionSummary(state);
+    return this.applyCanonicalSessionTitle(toSessionSummary(state));
   }
 
   async startSession(request: StartSessionRequest): Promise<StartSessionResponse> {
@@ -733,27 +740,35 @@ export class RuntimeEngine {
     this.assertNativeLocalServerBackendAllowed(request);
     this.assertTuiMuxBackendAllowed(request);
     if (this.shouldUseNativeLocalServerBackend(request)) {
-      return await this.structuredProviders.startSession(request);
+      return this.applyCanonicalSessionTitleToResponse(
+        await this.structuredProviders.startSession(request),
+      );
     }
     if (this.shouldUseTuiMuxBackend(request)) {
       await assertExistingWorkingDirectory(request.cwd, "Session working directory");
       this.pruneOrphanSessions();
-      return await this.terminals.startTuiMuxSession({
-        launch: await this.nativeTuiProviders.startLaunchSpec(request),
-        ...(request.attach !== undefined ? { attach: request.attach } : {}),
-        ...(request.origin !== undefined ? { origin: request.origin } : {}),
-      });
+      return this.applyCanonicalSessionTitleToResponse(
+        await this.terminals.startTuiMuxSession({
+          launch: await this.nativeTuiProviders.startLaunchSpec(request),
+          ...(request.attach !== undefined ? { attach: request.attach } : {}),
+          ...(request.origin !== undefined ? { origin: request.origin } : {}),
+        }),
+      );
     }
     if (this.shouldUseNativeTuiBackend(request)) {
       await assertExistingWorkingDirectory(request.cwd, "Session working directory");
       this.pruneOrphanSessions();
-      return await this.terminals.startNativeTuiSession({
-        launch: await this.nativeTuiProviders.startLaunchSpec(request),
-        ...(request.attach !== undefined ? { attach: request.attach } : {}),
-        ...(request.origin !== undefined ? { origin: request.origin } : {}),
-      });
+      return this.applyCanonicalSessionTitleToResponse(
+        await this.terminals.startNativeTuiSession({
+          launch: await this.nativeTuiProviders.startLaunchSpec(request),
+          ...(request.attach !== undefined ? { attach: request.attach } : {}),
+          ...(request.origin !== undefined ? { origin: request.origin } : {}),
+        }),
+      );
     }
-    return this.structuredProviders.startSession(request);
+    return this.applyCanonicalSessionTitleToResponse(
+      await this.structuredProviders.startSession(request),
+    );
   }
 
   async resumeSession(request: ResumeSessionRequest): Promise<ResumeSessionResponse> {
@@ -763,10 +778,14 @@ export class RuntimeEngine {
     this.assertNativeLocalServerBackendAllowed(request);
     this.assertTuiMuxBackendAllowed(request);
     if (request.preferStoredReplay === true) {
-      return await this.resumeStoredReplaySession(request);
+      return this.applyCanonicalSessionTitleToResponse(
+        await this.resumeStoredReplaySession(request),
+      );
     }
     if (this.shouldUseNativeLocalServerBackend(request)) {
-      return await this.structuredProviders.resumeSession(request);
+      return this.applyCanonicalSessionTitleToResponse(
+        await this.structuredProviders.resumeSession(request),
+      );
     }
     if (this.shouldUseTuiMuxBackend(request)) {
       if (request.cwd) {
@@ -782,12 +801,14 @@ export class RuntimeEngine {
         rehydratedSessionIds: this.nativeTuiRehydratedSessionIds,
       });
       try {
-        return await this.terminals.startTuiMuxSession({
-          launch: await this.nativeTuiProviders.resumeLaunchSpec(request),
-          ...(request.attach !== undefined ? { attach: request.attach } : {}),
-          providerSessionId: request.providerSessionId,
-          ...(request.origin !== undefined ? { origin: request.origin } : {}),
-        });
+        return this.applyCanonicalSessionTitleToResponse(
+          await this.terminals.startTuiMuxSession({
+            launch: await this.nativeTuiProviders.resumeLaunchSpec(request),
+            ...(request.attach !== undefined ? { attach: request.attach } : {}),
+            providerSessionId: request.providerSessionId,
+            ...(request.origin !== undefined ? { origin: request.origin } : {}),
+          }),
+        );
       } catch (error) {
         preparedResume.rollback();
         throw error;
@@ -807,18 +828,22 @@ export class RuntimeEngine {
         rehydratedSessionIds: this.nativeTuiRehydratedSessionIds,
       });
       try {
-        return await this.terminals.startNativeTuiSession({
-          launch: await this.nativeTuiProviders.resumeLaunchSpec(request),
-          ...(request.attach !== undefined ? { attach: request.attach } : {}),
-          providerSessionId: request.providerSessionId,
-          ...(request.origin !== undefined ? { origin: request.origin } : {}),
-        });
+        return this.applyCanonicalSessionTitleToResponse(
+          await this.terminals.startNativeTuiSession({
+            launch: await this.nativeTuiProviders.resumeLaunchSpec(request),
+            ...(request.attach !== undefined ? { attach: request.attach } : {}),
+            providerSessionId: request.providerSessionId,
+            ...(request.origin !== undefined ? { origin: request.origin } : {}),
+          }),
+        );
       } catch (error) {
         preparedResume.rollback();
         throw error;
       }
     }
-    return this.structuredProviders.resumeSession(request);
+    return this.applyCanonicalSessionTitleToResponse(
+      await this.structuredProviders.resumeSession(request),
+    );
   }
 
   private async resumeStoredReplaySession(
@@ -949,30 +974,44 @@ export class RuntimeEngine {
   }
 
   attachSession(sessionId: string, request: AttachSessionRequest): AttachSessionResponse {
-    return this.sessionLifecycle.attachSession(sessionId, request);
+    const response = this.sessionLifecycle.attachSession(sessionId, request);
+    return {
+      ...response,
+      session: this.applyCanonicalSessionTitle(response.session),
+    };
   }
 
   claimControl(sessionId: string, request: ClaimControlRequest): SessionSummary {
-    return this.sessionLifecycle.claimControl(sessionId, request);
+    return this.applyCanonicalSessionTitle(
+      this.sessionLifecycle.claimControl(sessionId, request),
+    );
   }
 
   releaseControl(sessionId: string, request: ReleaseControlRequest): SessionSummary {
-    return this.sessionLifecycle.releaseControl(sessionId, request);
+    return this.applyCanonicalSessionTitle(
+      this.sessionLifecycle.releaseControl(sessionId, request),
+    );
   }
 
   async renameSession(sessionId: string, title: string): Promise<SessionSummary> {
-    return this.sessionLifecycle.renameSession(sessionId, title);
+    return this.applyCanonicalSessionTitle(
+      await this.sessionLifecycle.renameSession(sessionId, title),
+    );
   }
 
   async setSessionMode(sessionId: string, modeId: string): Promise<SessionSummary> {
-    return this.sessionLifecycle.setSessionMode(sessionId, modeId);
+    return this.applyCanonicalSessionTitle(
+      await this.sessionLifecycle.setSessionMode(sessionId, modeId),
+    );
   }
 
   async setSessionModel(
     sessionId: string,
     request: SetSessionModelRequest,
   ): Promise<SessionSummary> {
-    return this.sessionLifecycle.setSessionModel(sessionId, request);
+    return this.applyCanonicalSessionTitle(
+      await this.sessionLifecycle.setSessionModel(sessionId, request),
+    );
   }
 
   sendInput(sessionId: string, request: SessionInputRequest): void {
@@ -994,7 +1033,9 @@ export class RuntimeEngine {
     if (this.terminals.handleNativeTuiInterrupt(sessionId, request.clientId)) {
       return this.getSessionSummary(sessionId);
     }
-    return this.requireStructuredInputControlAdapter(sessionId).interruptSession(sessionId, request);
+    return this.applyCanonicalSessionTitle(
+      this.requireStructuredInputControlAdapter(sessionId).interruptSession(sessionId, request),
+    );
   }
 
   async closeSession(sessionId: string, request: CloseSessionRequest): Promise<void> {
@@ -1002,7 +1043,9 @@ export class RuntimeEngine {
   }
 
   detachSession(sessionId: string, request: DetachSessionRequest): SessionSummary {
-    return this.sessionLifecycle.detachSession(sessionId, request);
+    return this.applyCanonicalSessionTitle(
+      this.sessionLifecycle.detachSession(sessionId, request),
+    );
   }
 
   getNativeTuiSurface(sessionId: string): NativeTuiSurfaceResponse {
@@ -1540,6 +1583,41 @@ export class RuntimeEngine {
         version: ++this.storedSessionDiscoveryVersion,
       },
     });
+  }
+
+  private applyCanonicalSessionTitle(summary: SessionSummary): SessionSummary {
+    const title = resolveCanonicalSessionTitle(summary.session, {
+      titleOverrides: this.rememberedSessionTitleOverrides,
+      discoveredStoredSessions: this.lastDiscoveredStoredSessions,
+    });
+    if (!title || title === summary.session.title) {
+      return summary;
+    }
+
+    const current = this.sessionStore.getSession(summary.session.id);
+    if (
+      current &&
+      current.session.provider === summary.session.provider &&
+      current.session.providerSessionId === summary.session.providerSessionId
+    ) {
+      return toSessionSummary(
+        this.sessionStore.patchManagedSession(summary.session.id, { title }),
+      );
+    }
+
+    return applyCanonicalTitleToSessionSummary(summary, {
+      titleOverrides: this.rememberedSessionTitleOverrides,
+      discoveredStoredSessions: this.lastDiscoveredStoredSessions,
+    });
+  }
+
+  private applyCanonicalSessionTitleToResponse<T extends { session: SessionSummary }>(
+    response: T,
+  ): T {
+    return {
+      ...response,
+      session: this.applyCanonicalSessionTitle(response.session),
+    };
   }
 
   private buildSessionsResponse(

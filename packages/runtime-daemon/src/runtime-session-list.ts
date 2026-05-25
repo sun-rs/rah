@@ -7,6 +7,10 @@ import {
   toSessionSummary,
   type StoredSessionState,
 } from "./session-store";
+import {
+  applyCanonicalTitleToSessionSummary,
+  applyCanonicalTitleToStoredSession,
+} from "./session-title-resolver";
 import { workspaceDirsFromState } from "./workbench-directory-utils";
 
 const RECENT_SESSION_LIMIT = 15;
@@ -195,18 +199,6 @@ export function buildSessionsResponse(args: {
   isClosingSession: (sessionId: string) => boolean;
   storedSessionsMode?: StoredSessionsResponseMode;
 }): ListSessionsResponse {
-  const applyTitleOverride = (session: StoredSessionRef): StoredSessionRef => {
-    const key = `${session.provider}:${session.providerSessionId}`;
-    const title = args.remembered.rememberedSessionTitleOverrides[key];
-    if (!title || title === session.title) {
-      return session;
-    }
-    return {
-      ...session,
-      title,
-    };
-  };
-
   const userFacingLiveStates = args.liveStates.filter(
     (state) => !isInternalNativeTuiProbeSession(state.session),
   );
@@ -222,6 +214,12 @@ export function buildSessionsResponse(args: {
   const discoveredStoredSessions = args.discoveredStoredSessions.filter(
     (session) => !isInternalNativeTuiProbeSession(session),
   );
+  const titleContext = {
+    titleOverrides: args.remembered.rememberedSessionTitleOverrides,
+    discoveredStoredSessions,
+  };
+  const applyCanonicalTitle = (session: StoredSessionRef): StoredSessionRef =>
+    applyCanonicalTitleToStoredSession(session, titleContext);
   const rememberedWorkspaceDirs = args.remembered.rememberedWorkspaceDirs.filter(
     (workspace) => !isInternalNativeTuiProbeWorkspace(workspace),
   );
@@ -272,14 +270,14 @@ export function buildSessionsResponse(args: {
     }
     storedSessions.set(sessionProviderKey(stored), stored);
   }
-  const allStoredSessions = [...storedSessions.values()].map(applyTitleOverride);
+  const allStoredSessions = [...storedSessions.values()].map(applyCanonicalTitle);
   const recentSessions = buildGlobalRecentSessions({
     storedSessions: storedSessions.values(),
     rememberedRecentSessions,
     visibleRunningStates,
     hiddenSessionKeys,
     availableProviderSessionKeys,
-    applyTitleOverride,
+    applyTitleOverride: applyCanonicalTitle,
   });
   const responseStoredSessions =
     args.storedSessionsMode === "recent" ? recentSessions : allStoredSessions;
@@ -295,23 +293,7 @@ export function buildSessionsResponse(args: {
         providerSessionId,
       }));
       if (!discovered) {
-        const summary = toSessionSummary(state);
-        const override = args.remembered.rememberedSessionTitleOverrides[
-          sessionProviderKey({
-            provider: summary.session.provider,
-            providerSessionId,
-          })
-        ];
-        if (!override || override === summary.session.title) {
-          return summary;
-        }
-        return {
-          ...summary,
-          session: {
-            ...summary.session,
-            title: override,
-          },
-        };
+        return applyCanonicalTitleToSessionSummary(toSessionSummary(state), titleContext);
       }
       const summary = toSessionSummary({
         ...state,
@@ -321,22 +303,7 @@ export function buildSessionsResponse(args: {
           ...(discovered.preview !== undefined ? { preview: discovered.preview } : {}),
         },
       });
-      const override = args.remembered.rememberedSessionTitleOverrides[
-        sessionProviderKey({
-          provider: summary.session.provider,
-          providerSessionId,
-        })
-      ];
-      if (!override || override === summary.session.title) {
-        return summary;
-      }
-      return {
-        ...summary,
-        session: {
-          ...summary.session,
-          title: override,
-        },
-      };
+      return applyCanonicalTitleToSessionSummary(summary, titleContext);
     }),
     storedSessions: responseStoredSessions,
     recentSessions,

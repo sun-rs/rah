@@ -45,6 +45,7 @@ import {
   codexConfigOverridesForMcpServers,
   extraMcpServersFromRequest,
 } from "../provider-mcp-server-spec";
+import { resolveSessionTitleAndPreview } from "../session-title-resolver";
 
 export type { LiveCodexSession } from "../codex-live-types";
 
@@ -555,6 +556,30 @@ export async function resumeCodexLiveSession(params: {
       resumeResponse.reasoning_effort ??
       params.initialModelCatalog?.currentReasoningId ??
       null;
+    const threadName =
+      thread &&
+      typeof thread.name === "string" &&
+      thread.name.trim() &&
+      !isCodexInternalThreadMetadataText(thread.name)
+        ? thread.name.trim()
+        : null;
+    const threadPreview =
+      thread &&
+      typeof thread.preview === "string" &&
+      thread.preview.trim() &&
+      !isCodexInternalThreadMetadataText(thread.preview)
+        ? thread.preview.trim()
+        : null;
+    const recordTitle =
+      record?.ref.title && record.ref.title.trim() ? record.ref.title.trim() : null;
+    const recordPreview =
+      record?.ref.preview && record.ref.preview.trim() ? record.ref.preview.trim() : null;
+    const sessionLabels = resolveSessionTitleAndPreview({
+      canonicalTitle: recordTitle,
+      providerTitle: threadName,
+      providerPreview: threadPreview,
+      fallbackPreview: recordPreview,
+    });
     if (resumedMode.activeModeId === "plan" && !planCollaborationMode) {
       throw new Error("Codex plan mode is not available for this session.");
     }
@@ -574,32 +599,7 @@ export async function resumeCodexLiveSession(params: {
         attachState: client.endpoint ? "ready" : "unavailable",
         lastEventCursor: `thread:${threadId}`,
       }),
-      ...(thread &&
-      typeof thread.preview === "string" &&
-      thread.preview.trim() &&
-      !isCodexInternalThreadMetadataText(thread.preview)
-        ? { title: thread.preview }
-        : record?.ref.title !== undefined
-          ? { title: record.ref.title }
-          : thread &&
-              typeof thread.name === "string" &&
-              thread.name.trim() &&
-              !isCodexInternalThreadMetadataText(thread.name)
-            ? { title: thread.name }
-            : {}),
-      ...(thread &&
-      typeof thread.preview === "string" &&
-      thread.preview.trim() &&
-      !isCodexInternalThreadMetadataText(thread.preview)
-        ? { preview: thread.preview }
-        : record?.ref.preview !== undefined
-          ? { preview: record.ref.preview }
-          : thread &&
-              typeof thread.name === "string" &&
-              thread.name.trim() &&
-              !isCodexInternalThreadMetadataText(thread.name)
-            ? { preview: thread.name }
-          : {}),
+      ...sessionLabels,
       mode: buildCodexModeState({
         currentModeId: resumedMode.activeModeId,
         mutable: true,

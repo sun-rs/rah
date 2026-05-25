@@ -1066,6 +1066,106 @@ describe("RuntimeEngine", () => {
     }
   });
 
+  test("applies remembered title overrides to resumed live session responses", async () => {
+    const providerSessionId = "thread-renamed";
+    mkdirSync(path.join(tmpRahHome, "runtime-daemon"), { recursive: true });
+    writeFileSync(
+      path.join(tmpRahHome, "runtime-daemon", "workbench-state.json"),
+      JSON.stringify({
+        version: 2,
+        updatedAt: "2026-05-25T00:00:00.000Z",
+        workspaces: [workDir],
+        hiddenWorkspaces: [],
+        hiddenSessionKeys: [],
+        sessionTitleOverrides: {
+          [`codex:${providerSessionId}`]: "Renamed session",
+        },
+        sessions: [],
+        recentSessions: [
+          {
+            provider: "codex",
+            providerSessionId,
+            cwd: workDir,
+            rootDir: workDir,
+            title: "Renamed session",
+            updatedAt: "2026-05-25T00:00:00.000Z",
+          },
+        ],
+      }),
+    );
+
+    const adapter = new NativeLocalServerRoutingAdapter();
+    const engine = new RuntimeEngine([adapter]);
+    adapter.engine = engine;
+    try {
+      const resumed = await engine.resumeSession({
+        provider: "codex",
+        providerSessionId,
+        cwd: workDir,
+        liveBackend: "native_local_server",
+      });
+
+      assert.equal(resumed.session.session.title, "Renamed session");
+      assert.equal(
+        engine.getSessionSummary(resumed.session.session.id).session.title,
+        "Renamed session",
+      );
+      assert.equal(
+        engine.claimControl(resumed.session.session.id, {
+          client: {
+            id: "web-client",
+            kind: "web",
+            connectionId: "web-client",
+          },
+        }).session.title,
+        "Renamed session",
+      );
+    } finally {
+      await engine.shutdown();
+    }
+  });
+
+  test("applies discovered provider history titles to resumed live session responses", async () => {
+    const providerSessionId = "thread-provider-title";
+    const history = new CountingStoredSessionsAdapter([
+      {
+        provider: "codex",
+        providerSessionId,
+        cwd: workDir,
+        rootDir: workDir,
+        title: "Provider history title",
+        preview: "Old first prompt preview",
+        updatedAt: "2026-05-25T00:00:00.000Z",
+        source: "provider_history",
+      },
+    ]);
+    const adapter = new NativeLocalServerRoutingAdapter();
+    const engine = new RuntimeEngine([history, adapter]);
+    adapter.engine = engine;
+    try {
+      const resumed = await engine.resumeSession({
+        provider: "codex",
+        providerSessionId,
+        cwd: workDir,
+        liveBackend: "native_local_server",
+      });
+
+      assert.equal(resumed.session.session.title, "Provider history title");
+      assert.equal(
+        engine.claimControl(resumed.session.session.id, {
+          client: {
+            id: "web-client",
+            kind: "web",
+            connectionId: "web-client",
+          },
+        }).session.title,
+        "Provider history title",
+      );
+    } finally {
+      await engine.shutdown();
+    }
+  });
+
   test("native local-server sessions expose an on-demand Web TUI client", async () => {
     const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-native-local-web-tui-"));
     const fakeCodex = path.join(workspace, "fake-codex.js");

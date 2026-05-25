@@ -35,6 +35,10 @@ type RuntimeSessionLifecycleDeps = {
   historySnapshots: HistorySnapshotStore;
   terminals: RuntimeTerminalCoordinator;
   rememberSession: (state: StoredSessionState) => void;
+  setSessionTitleOverride: (
+    session: { provider: StoredSessionState["session"]["provider"]; providerSessionId: string },
+    title: string,
+  ) => void;
   refreshRememberedState: () => void;
   publishStoredSessionDiscovery: () => void;
   removeStructuredSessionOwner: (sessionId: string) => void;
@@ -128,15 +132,24 @@ export class RuntimeSessionLifecycle {
     if (!adapter.renameSession) {
       throw new Error(`Provider ${state.session.provider} does not support rename.`);
     }
-    const summary = await adapter.renameSession(sessionId, nextTitle);
+    await adapter.renameSession(sessionId, nextTitle);
     const nextState = this.deps.sessionStore.getSession(sessionId);
     if (!nextState) {
       throw new Error(`Unknown session ${sessionId}`);
     }
+    if (nextState.session.providerSessionId) {
+      this.deps.setSessionTitleOverride(
+        {
+          provider: nextState.session.provider,
+          providerSessionId: nextState.session.providerSessionId,
+        },
+        nextTitle,
+      );
+    }
     this.deps.rememberSession(nextState);
     this.deps.refreshRememberedState();
     this.deps.publishStoredSessionDiscovery();
-    return summary;
+    return toSessionSummary(nextState);
   }
 
   async setSessionMode(sessionId: string, modeId: string): Promise<SessionSummary> {
