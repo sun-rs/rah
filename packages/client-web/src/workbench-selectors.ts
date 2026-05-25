@@ -40,6 +40,21 @@ function sortSessionEntries(projections: Map<string, SessionProjection>): Sessio
   );
 }
 
+function storedSessionActivityAt(ref: StoredSessionRef | undefined): string | undefined {
+  return ref?.lastUsedAt ?? ref?.updatedAt ?? ref?.createdAt;
+}
+
+function runningStoredSessionKey(session: SessionSummary["session"]): string | null {
+  if (!session.providerSessionId) {
+    return null;
+  }
+  return `${session.provider}:${session.providerSessionId}`;
+}
+
+function storedSessionKey(ref: StoredSessionRef): string {
+  return `${ref.provider}:${ref.providerSessionId}`;
+}
+
 export function isSessionAttachedToClient(summary: SessionSummary, clientId: string): boolean {
   return summary.attachedClients.some((client) => client.id === clientId);
 }
@@ -87,11 +102,18 @@ export function deriveWorkbenchSessionCollections(args: {
   workspaceSortMode: WorkspaceSortMode;
 }): WorkbenchSessionCollections {
   const sessionEntries = sortSessionEntries(args.projections);
+  const storedSessionByKey = new Map(
+    args.storedSessions.map((ref) => [storedSessionKey(ref), ref] as const),
+  );
   const sessionActivityAtById = new Map(
-    sessionEntries.map((entry) => [
-      entry.summary.session.id,
-      deriveSessionConversationActivityAt(entry),
-    ] as const),
+    sessionEntries.map((entry) => {
+      const key = runningStoredSessionKey(entry.summary.session);
+      const storedActivityAt = key ? storedSessionActivityAt(storedSessionByKey.get(key)) : undefined;
+      return [
+        entry.summary.session.id,
+        deriveSessionConversationActivityAt(entry, { fallbackActivityAt: storedActivityAt }),
+      ] as const;
+    }),
   );
   const runningSessionEntries = sessionEntries.filter(
     (entry) => !isReadOnlyReplay(entry.summary) && !isEndedNativeTuiSession(entry.summary),

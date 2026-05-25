@@ -320,6 +320,130 @@ describe("workbench selectors", () => {
     );
   });
 
+  test("seeds live workspace ordering from matching stored history before feed loads", () => {
+    const clientId = "web-current";
+    const liveValar = controlledSummary({
+      id: "live-valar",
+      clientId,
+      rootDir: "/workspace/repos/valar",
+      updatedAt: "2026-05-01T10:01:00.000Z",
+    });
+    liveValar.session.provider = "codex";
+    liveValar.session.providerSessionId = "codex-valar";
+    const liveSolars = controlledSummary({
+      id: "live-solars",
+      clientId,
+      rootDir: "/workspace/code/solars",
+      updatedAt: "2026-05-01T10:20:00.000Z",
+    });
+    liveSolars.session.provider = "codex";
+    liveSolars.session.providerSessionId = "codex-solars";
+
+    const storedValar: StoredSessionRef = {
+      provider: "codex",
+      providerSessionId: "codex-valar",
+      cwd: "/workspace/repos/valar",
+      rootDir: "/workspace/repos/valar",
+      title: "valar",
+      updatedAt: "2026-05-01T10:15:00.000Z",
+      source: "provider_history",
+    };
+    const storedSolars: StoredSessionRef = {
+      provider: "codex",
+      providerSessionId: "codex-solars",
+      cwd: "/workspace/code/solars",
+      rootDir: "/workspace/code/solars",
+      title: "solars",
+      updatedAt: "2026-05-01T10:05:00.000Z",
+      source: "provider_history",
+    };
+
+    const initial = deriveWorkbenchSessionCollections({
+      projections: new Map([
+        [liveValar.session.id, projection(liveValar)],
+        [liveSolars.session.id, projection(liveSolars)],
+      ]),
+      clientId,
+      workspaceDirs: ["/workspace/repos/valar", "/workspace/code/solars"],
+      storedSessions: [storedSolars, storedValar],
+      workspaceDir: "/workspace/code/solars",
+      workspaceSortMode: "updated",
+    });
+
+    assert.deepEqual(
+      initial.sortedWorkspaceInfos.map((workspace) => workspace.directory),
+      ["/workspace/repos/valar", "/workspace/code/solars"],
+    );
+    assert.equal(
+      initial.runningSessionActivityAtById.get("live-valar"),
+      "2026-05-01T10:15:00.000Z",
+    );
+
+    const afterHistoryTailLoads = deriveWorkbenchSessionCollections({
+      projections: new Map([
+        [
+          liveValar.session.id,
+          projection(liveValar, [
+            messageEntry(
+              liveValar.session.id,
+              "assistant_message",
+              "latest valar reply",
+              "2026-05-01T10:15:00.000Z",
+            ),
+          ]),
+        ],
+        [
+          liveSolars.session.id,
+          projection(liveSolars, [
+            messageEntry(
+              liveSolars.session.id,
+              "assistant_message",
+              "latest solars reply",
+              "2026-05-01T10:05:00.000Z",
+            ),
+          ]),
+        ],
+      ]),
+      clientId,
+      workspaceDirs: ["/workspace/repos/valar", "/workspace/code/solars"],
+      storedSessions: [storedSolars, storedValar],
+      workspaceDir: "/workspace/code/solars",
+      workspaceSortMode: "updated",
+    });
+
+    assert.deepEqual(
+      afterHistoryTailLoads.sortedWorkspaceInfos.map((workspace) => workspace.directory),
+      initial.sortedWorkspaceInfos.map((workspace) => workspace.directory),
+    );
+
+    const withNewLiveMessage = deriveWorkbenchSessionCollections({
+      projections: new Map([
+        [
+          liveValar.session.id,
+          projection(liveValar, [
+            messageEntry(
+              liveValar.session.id,
+              "assistant_message",
+              "new live valar reply",
+              "2026-05-01T10:25:00.000Z",
+            ),
+          ]),
+        ],
+        [liveSolars.session.id, projection(liveSolars)],
+      ]),
+      clientId,
+      workspaceDirs: ["/workspace/repos/valar", "/workspace/code/solars"],
+      storedSessions: [storedSolars, storedValar],
+      workspaceDir: "/workspace/code/solars",
+      workspaceSortMode: "updated",
+    });
+
+    assert.equal(
+      withNewLiveMessage.runningSessionActivityAtById.get("live-valar"),
+      "2026-05-01T10:25:00.000Z",
+    );
+  });
+
   test("excludes exited native TUI sessions from running collections", () => {
     const clientId = "web-current";
     const stopped = controlledSummary({

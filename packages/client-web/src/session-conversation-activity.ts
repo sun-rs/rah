@@ -12,14 +12,22 @@ function isConversationTimelineEntry(entry: FeedEntry): entry is TimelineFeedEnt
 
 export function deriveSessionConversationActivityAt(
   projection: Pick<SessionProjection, "summary" | "feed">,
+  options?: { fallbackActivityAt?: string | undefined },
 ): string {
+  let latestFeedActivityAt: string | undefined;
   for (let index = projection.feed.length - 1; index >= 0; index -= 1) {
     const entry = projection.feed[index];
     if (entry && isConversationTimelineEntry(entry)) {
-      return entry.ts;
+      latestFeedActivityAt = entry.ts;
+      break;
     }
   }
-  return projection.summary.session.createdAt;
+  if (latestFeedActivityAt && options?.fallbackActivityAt) {
+    return latestFeedActivityAt.localeCompare(options.fallbackActivityAt) >= 0
+      ? latestFeedActivityAt
+      : options.fallbackActivityAt;
+  }
+  return latestFeedActivityAt ?? options?.fallbackActivityAt ?? projection.summary.session.createdAt;
 }
 
 export function runningSessionActivityAt(
