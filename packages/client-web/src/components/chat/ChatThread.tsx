@@ -34,6 +34,7 @@ import { visibleFeedEntries } from "./chat-feed-filtering";
 const BOTTOM_STICK_THRESHOLD_PX = 120;
 const TOP_HISTORY_TRIGGER_PX = 96;
 const TOP_HISTORY_REARM_PX = 220;
+const VIEWPORT_RESIZE_EPSILON_PX = 4;
 
 function isDocumentHidden(): boolean {
   return typeof document !== "undefined" && document.visibilityState === "hidden";
@@ -337,6 +338,7 @@ export function ChatThread(props: {
   const pendingVisibleBottomRestoreRef = useRef(false);
   const prependAnchorRef = useRef<PrependAnchor | null>(null);
   const lastScrollTopRef = useRef(0);
+  const lastClientHeightRef = useRef(0);
   const touchScrollYRef = useRef<number | null>(null);
   const topHistoryAutoLoadArmedRef = useRef(true);
   const measuredHeightsRef = useRef<Map<string, number>>(new Map());
@@ -446,6 +448,17 @@ export function ChatThread(props: {
     });
   }, [scrollToBottomNow]);
 
+  const settleScrollToBottomAfterResize = useCallback(() => {
+    scrollToBottomNow();
+    if (bottomFollowRafRef.current !== null) {
+      cancelAnimationFrame(bottomFollowRafRef.current);
+    }
+    bottomFollowRafRef.current = requestAnimationFrame(() => {
+      bottomFollowRafRef.current = null;
+      scrollToBottomNow();
+    });
+  }, [scrollToBottomNow]);
+
   const detachBottomFollowing = useCallback(() => {
     const node = containerRef.current;
     stickToBottomRef.current = false;
@@ -510,6 +523,7 @@ export function ChatThread(props: {
     sessionSwitchBottomLockRef.current = true;
     prependAnchorRef.current = null;
     lastScrollTopRef.current = 0;
+    lastClientHeightRef.current = 0;
     touchScrollYRef.current = null;
     topHistoryAutoLoadArmedRef.current = true;
     measuredHeightsRef.current = new Map();
@@ -562,7 +576,23 @@ export function ChatThread(props: {
     }
 
     const updateStickiness = () => {
+      const previousStickToBottom = stickToBottomRef.current;
+      const previousReturnToBottom = returnToBottomOnVisibleRef.current;
       const scrollingUp = node.scrollTop < lastScrollTopRef.current;
+      const previousClientHeight = lastClientHeightRef.current;
+      const clientHeightChanged =
+        previousClientHeight > 0 &&
+        Math.abs(node.clientHeight - previousClientHeight) > VIEWPORT_RESIZE_EPSILON_PX;
+      lastClientHeightRef.current = node.clientHeight;
+      if (
+        clientHeightChanged &&
+        !scrollingUp &&
+        !userDetachedFromBottomRef.current &&
+        (previousStickToBottom || previousReturnToBottom || sessionSwitchBottomLockRef.current)
+      ) {
+        settleScrollToBottomAfterResize();
+        return;
+      }
       const isAtBottom = isScrollNearBottom(node);
       const isExactlyAtBottom =
         node.scrollHeight - node.clientHeight - node.scrollTop <= 2;
@@ -624,6 +654,7 @@ export function ChatThread(props: {
     props.historyLoading,
     props.onLoadOlderHistory,
     props.sessionId,
+    settleScrollToBottomAfterResize,
     syncViewport,
   ]);
 
@@ -708,12 +739,35 @@ export function ChatThread(props: {
       return;
     }
     const observer = new ResizeObserver(() => {
-      syncViewport();
+      const previousClientHeight = lastClientHeightRef.current;
+      const clientHeightChanged =
+        previousClientHeight <= 0 ||
+        Math.abs(node.clientHeight - previousClientHeight) > VIEWPORT_RESIZE_EPSILON_PX;
+      lastClientHeightRef.current = node.clientHeight;
+      if (!clientHeightChanged) {
+        syncViewport();
+        return;
+      }
+      const shouldFollowBottom =
+        !userDetachedFromBottomRef.current &&
+        (stickToBottomRef.current ||
+          returnToBottomOnVisibleRef.current ||
+          sessionSwitchBottomLockRef.current);
+      if (!shouldFollowBottom) {
+        syncViewport();
+        return;
+      }
+      if (isDocumentHidden()) {
+        pendingVisibleBottomRestoreRef.current = true;
+        syncViewport();
+        return;
+      }
+      settleScrollToBottomAfterResize();
     });
     observer.observe(node);
     syncViewport();
     return () => observer.disconnect();
-  }, [props.sessionId, syncViewport]);
+  }, [props.sessionId, settleScrollToBottomAfterResize, syncViewport]);
 
   useEffect(() => {
     const node = containerRef.current;

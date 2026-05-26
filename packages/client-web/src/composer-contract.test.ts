@@ -1,5 +1,6 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import type { SessionSummary } from "@rah/runtime-protocol";
 import {
   COMPOSER_LAYOUT,
@@ -9,6 +10,10 @@ import {
   deriveComposerSurface,
   shouldCompactEmptyStateSessionControls,
 } from "./composer-contract";
+
+function readSource(relativePath: string): string {
+  return readFileSync(new URL(relativePath, import.meta.url), "utf8");
+}
 
 function summary(args?: Partial<SessionSummary["session"]>): SessionSummary {
   return {
@@ -320,6 +325,19 @@ describe("composer contract", () => {
       COMPOSER_LAYOUT.bottomPaddingStyle.paddingRight,
       "max(0.75rem, env(safe-area-inset-right))",
     );
+  });
+
+  test("resizes the message composer before paint without live height churn", () => {
+    const source = readSource("./components/TokenizedTextarea.tsx");
+
+    assert.match(source, /useLayoutEffect/);
+    assert.match(source, /measurementRef/);
+    assert.match(source, /measureRequiredContentHeight/);
+    assert.match(source, /measurement\.style\.height = "auto"/);
+    assert.match(source, /HEIGHT_CHANGE_EPSILON_PX/);
+    assert.doesNotMatch(source, /queueMicrotask\(adjustHeight\)/);
+    assert.doesNotMatch(source, /el\.style\.height = "auto"/);
+    assert.doesNotMatch(source, /el\.style\.height = `\\$\\{collapsedHeight\\}px`/);
   });
 
   test("compacts empty-state session controls based on actual composer width", () => {

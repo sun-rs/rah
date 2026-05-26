@@ -1,7 +1,8 @@
 import {
   forwardRef,
-  useEffect,
+  useCallback,
   useImperativeHandle,
+  useLayoutEffect,
   useRef,
   type KeyboardEventHandler,
   type TextareaHTMLAttributes,
@@ -9,6 +10,7 @@ import {
 
 const TEXTAREA_TEXT_LAYOUT_CLASS_NAME =
   "whitespace-pre-wrap break-words";
+const HEIGHT_CHANGE_EPSILON_PX = 4;
 
 export const TokenizedTextarea = forwardRef<
   HTMLTextAreaElement,
@@ -25,11 +27,40 @@ export const TokenizedTextarea = forwardRef<
 } & Pick<TextareaHTMLAttributes<HTMLTextAreaElement>, "spellCheck">
 >(function TokenizedTextarea(props, forwardedRef) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const measurementRef = useRef<HTMLTextAreaElement | null>(null);
 
   useImperativeHandle(forwardedRef, () => textareaRef.current as HTMLTextAreaElement, []);
 
-  // Auto-resize on iOS and other browsers
-  const adjustHeight = () => {
+  const measureRequiredContentHeight = useCallback((el: HTMLTextAreaElement) => {
+    let measurement = measurementRef.current;
+    if (!measurement) {
+      measurement = document.createElement("textarea");
+      measurement.setAttribute("aria-hidden", "true");
+      measurement.setAttribute("tabindex", "-1");
+      measurement.readOnly = true;
+      measurement.style.position = "fixed";
+      measurement.style.left = "-10000px";
+      measurement.style.top = "0";
+      measurement.style.visibility = "hidden";
+      measurement.style.pointerEvents = "none";
+      measurement.style.overflow = "hidden";
+      measurement.style.zIndex = "-1";
+      document.body.appendChild(measurement);
+      measurementRef.current = measurement;
+    }
+
+    const rect = el.getBoundingClientRect();
+    measurement.className = el.className;
+    measurement.rows = el.rows;
+    measurement.value = el.value;
+    measurement.style.width = `${Math.ceil(rect.width)}px`;
+    measurement.style.height = "auto";
+    return Math.ceil(measurement.scrollHeight);
+  }, []);
+
+  // Auto-resize on iOS and other browsers. Measure before paint so the chat
+  // viewport never sees a transient one-line composer during IME updates.
+  const adjustHeight = useCallback(() => {
     const el = textareaRef.current;
     if (!el) return;
     const computed = window.getComputedStyle(el);
@@ -39,12 +70,8 @@ export const TokenizedTextarea = forwardRef<
       (Number.parseFloat(computed.borderTopWidth) || 0) +
       (Number.parseFloat(computed.borderBottomWidth) || 0);
 
-    // Lock the collapsed state to the same fixed height as the round controls.
-    // Only grow once the content truly exceeds the single-line box.
     const collapsedHeight = Math.ceil(minHeight);
-    el.style.height = `${collapsedHeight}px`;
-
-    const requiredContentHeight = Math.ceil(el.scrollHeight);
+    const requiredContentHeight = measureRequiredContentHeight(el);
     const collapsedContentHeight = Math.max(0, collapsedHeight - borderHeight);
     const shouldGrow = requiredContentHeight > collapsedContentHeight + 1;
     const expandedHeight = requiredContentHeight + borderHeight;
@@ -52,12 +79,24 @@ export const TokenizedTextarea = forwardRef<
       ? Math.max(collapsedHeight, Math.min(maxHeight, expandedHeight))
       : collapsedHeight;
 
-    el.style.height = `${nextHeight}px`;
-  };
+    const currentHeight = Math.ceil(el.getBoundingClientRect().height);
+    const stableHeight =
+      currentHeight > 0 && Math.abs(currentHeight - nextHeight) <= HEIGHT_CHANGE_EPSILON_PX
+        ? currentHeight
+        : nextHeight;
+    el.style.height = `${stableHeight}px`;
+  }, [measureRequiredContentHeight]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     adjustHeight();
-  }, [props.value]);
+  }, [adjustHeight, props.value]);
+
+  useLayoutEffect(() => {
+    return () => {
+      measurementRef.current?.remove();
+      measurementRef.current = null;
+    };
+  }, []);
 
   return (
     <div className="relative flex-1 min-w-0">
@@ -69,7 +108,6 @@ export const TokenizedTextarea = forwardRef<
         placeholder={props.placeholder}
         onChange={(event) => {
           props.onChange(event.currentTarget.value);
-          queueMicrotask(adjustHeight);
         }}
         onKeyDown={props.onKeyDown}
         disabled={props.disabled}

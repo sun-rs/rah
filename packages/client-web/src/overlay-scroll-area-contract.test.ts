@@ -128,4 +128,15 @@ describe("overlay scroll area contract", () => {
     assert.match(source, /bottomFollowRafRef/);
     assert.match(source, /\[overflow-anchor:none\]/);
   });
+
+  test("chat thread keeps bottom-follow stable when the viewport resizes", () => {
+    const source = readSource("./components/chat/ChatThread.tsx");
+
+    assert.match(source, /lastClientHeightRef/);
+    assert.match(source, /VIEWPORT_RESIZE_EPSILON_PX/);
+    assert.match(source, /settleScrollToBottomAfterResize/);
+    assert.match(source, /const shouldFollowBottom =/);
+    assert.match(source, /returnToBottomOnVisibleRef\.current/);
+    assert.match(source, /scrollToBottomNow\(\)/);
+  });
 });
