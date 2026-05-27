@@ -110,7 +110,7 @@ export function WorkbenchEmptyPane(props: {
         onAddWorkspace={props.onAddWorkspace}
         provider={props.newSessionProvider}
         onChangeProvider={props.onChangeProvider}
-        providerSelectorMode="grid"
+        providerSelectorMode="auto"
         modelCatalog={props.modelCatalog}
         modelCatalogLoading={props.modelCatalogLoading}
         selectedModelId={props.selectedModelId}

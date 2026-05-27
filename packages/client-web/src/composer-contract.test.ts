@@ -6,9 +6,13 @@ import {
   COMPOSER_LAYOUT,
   EMPTY_STATE_COMPOSER_LAYOUT,
   EMPTY_STATE_EXPANDED_CONTROLS_MIN_WIDTH_PX,
+  EMPTY_STATE_HIDE_SESSION_CONTROL_MIN_WIDTH_PX,
+  EMPTY_STATE_ICON_WORKSPACE_MIN_WIDTH_PX,
   canSubmitComposerInput,
   deriveComposerSurface,
   shouldCompactEmptyStateSessionControls,
+  shouldHideEmptyStateSessionControl,
+  shouldUseIconOnlyEmptyStateWorkspace,
 } from "./composer-contract";
 
 function readSource(relativePath: string): string {
@@ -306,10 +310,17 @@ describe("composer contract", () => {
     assert.match(COMPOSER_LAYOUT.stopButtonClassName, /inset-\[3px\]/);
     assert.match(COMPOSER_LAYOUT.stopWarningButtonClassName, /amber/);
     assert.match(COMPOSER_LAYOUT.textareaClassName, /\bblock\b/);
+    assert.match(COMPOSER_LAYOUT.textareaClassName, /\bmin-w-0\b/);
+    assert.match(COMPOSER_LAYOUT.textareaClassName, /\bmax-w-full\b/);
+    assert.match(COMPOSER_LAYOUT.textareaClassName, /\boverflow-x-hidden\b/);
+    assert.match(COMPOSER_LAYOUT.textareaClassName, /\brah-scroll-textarea\b/);
+    assert.doesNotMatch(COMPOSER_LAYOUT.textareaClassName, /\brah-scroll-panel-y\b/);
     assert.match(COMPOSER_LAYOUT.textareaClassName, /min-h-10/);
     assert.match(EMPTY_STATE_COMPOSER_LAYOUT.attachButtonClassName, /h-10/);
     assert.match(EMPTY_STATE_COMPOSER_LAYOUT.sendButtonClassName, /h-10/);
     assert.match(EMPTY_STATE_COMPOSER_LAYOUT.leftControlsClassName, /\bgap-1\b/);
+    assert.match(EMPTY_STATE_COMPOSER_LAYOUT.leftControlsClassName, /\boverflow-visible\b/);
+    assert.equal(EMPTY_STATE_COMPOSER_LAYOUT.textareaWrapperClassName, "max-w-full");
     assert.match(EMPTY_STATE_COMPOSER_LAYOUT.textareaClassName, /min-h-\[7\.5rem\]/);
     assert.match(EMPTY_STATE_COMPOSER_LAYOUT.controlsRowClassName, /bottom-3/);
     assert.match(EMPTY_STATE_COMPOSER_LAYOUT.configRowClassName, /\bgap-2\b/);
@@ -335,12 +346,26 @@ describe("composer contract", () => {
     assert.match(source, /measureRequiredContentHeight/);
     assert.match(source, /measurement\.style\.height = "auto"/);
     assert.match(source, /HEIGHT_CHANGE_EPSILON_PX/);
+    assert.match(source, /wrapperClassName/);
     assert.doesNotMatch(source, /queueMicrotask\(adjustHeight\)/);
     assert.doesNotMatch(source, /el\.style\.height = "auto"/);
     assert.doesNotMatch(source, /el\.style\.height = `\\$\\{collapsedHeight\\}px`/);
   });
 
   test("compacts empty-state session controls based on actual composer width", () => {
+    assert.ok(
+      EMPTY_STATE_HIDE_SESSION_CONTROL_MIN_WIDTH_PX < EMPTY_STATE_ICON_WORKSPACE_MIN_WIDTH_PX,
+    );
+    assert.ok(
+      EMPTY_STATE_HIDE_SESSION_CONTROL_MIN_WIDTH_PX >= 176,
+    );
+    assert.ok(
+      EMPTY_STATE_HIDE_SESSION_CONTROL_MIN_WIDTH_PX <= 200,
+    );
+    assert.ok(
+      EMPTY_STATE_ICON_WORKSPACE_MIN_WIDTH_PX < EMPTY_STATE_EXPANDED_CONTROLS_MIN_WIDTH_PX,
+    );
+
     assert.equal(shouldCompactEmptyStateSessionControls(null), true);
     assert.equal(
       shouldCompactEmptyStateSessionControls(EMPTY_STATE_EXPANDED_CONTROLS_MIN_WIDTH_PX - 1),
@@ -348,6 +373,26 @@ describe("composer contract", () => {
     );
     assert.equal(
       shouldCompactEmptyStateSessionControls(EMPTY_STATE_EXPANDED_CONTROLS_MIN_WIDTH_PX),
+      false,
+    );
+
+    assert.equal(shouldUseIconOnlyEmptyStateWorkspace(null), false);
+    assert.equal(
+      shouldUseIconOnlyEmptyStateWorkspace(EMPTY_STATE_ICON_WORKSPACE_MIN_WIDTH_PX - 1),
+      true,
+    );
+    assert.equal(
+      shouldUseIconOnlyEmptyStateWorkspace(EMPTY_STATE_ICON_WORKSPACE_MIN_WIDTH_PX),
+      false,
+    );
+
+    assert.equal(shouldHideEmptyStateSessionControl(null), false);
+    assert.equal(
+      shouldHideEmptyStateSessionControl(EMPTY_STATE_HIDE_SESSION_CONTROL_MIN_WIDTH_PX - 1),
+      true,
+    );
+    assert.equal(
+      shouldHideEmptyStateSessionControl(EMPTY_STATE_HIDE_SESSION_CONTROL_MIN_WIDTH_PX),
       false,
     );
   });

@@ -433,7 +433,7 @@ export function CouncilPage(props: {
     () => props.agentsPanelMode === "open",
   );
   const [isCouncilWide, setIsCouncilWide] = useState(() =>
-    typeof window === "undefined" ? false : window.matchMedia("(min-width: 900px)").matches,
+    typeof window === "undefined" ? false : window.matchMedia("(min-width: 768px)").matches,
   );
   const [isCouncilHeaderCompact, setIsCouncilHeaderCompact] = useState(() =>
     typeof window === "undefined" ? false : window.matchMedia("(max-width: 520px)").matches,
@@ -577,7 +577,7 @@ export function CouncilPage(props: {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const query = window.matchMedia("(min-width: 900px)");
+    const query = window.matchMedia("(min-width: 768px)");
     const handleChange = () => {
       setIsCouncilWide(query.matches);
     };
@@ -2059,7 +2059,7 @@ export function CouncilPage(props: {
 
         <ConversationSidePanelShell
           desktopOpen={councilSidebarOpen}
-          desktopBreakpoint="wide"
+          desktopBreakpoint="md"
           mobileOpen={councilSidebarOpen && !isCouncilWide}
           onMobileOpenChange={handleCouncilSidebarOpenChange}
           mobileTitle="Agents"

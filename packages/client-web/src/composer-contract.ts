@@ -23,7 +23,7 @@ const ROUNDED = "rounded-xl";
 
 /* ── Base textarea ── */
 const TEXTAREA_BASE =
-  `block w-full resize-none overflow-y-auto rah-scroll-panel rah-scroll-panel-y box-border bg-[var(--app-subtle-bg)] border border-[var(--app-border)] text-base leading-5 focus:outline-none focus:ring-1 focus:ring-[var(--ring)]`;
+  `block w-full min-w-0 max-w-full resize-none overflow-x-hidden overflow-y-auto rah-scroll-textarea box-border bg-[var(--app-subtle-bg)] border border-[var(--app-border)] text-base leading-5 focus:outline-none focus:ring-1 focus:ring-[var(--ring)]`;
 
 export const COMPOSER_LAYOUT = {
   bottomPaddingStyle: {
@@ -68,6 +68,9 @@ export const COMPOSER_LAYOUT = {
 } as const;
 
 export const EMPTY_STATE_COMPOSER_LAYOUT = {
+  textareaWrapperClassName:
+    "max-w-full",
+
   /* Landing textarea — generous bottom padding so the inline controls never overlap typed text */
   textareaClassName:
     `${TEXTAREA_BASE} rounded-2xl px-4 pt-3.5 pb-20 md:px-5 md:pt-4 md:pb-20 min-h-[7.5rem] md:min-h-[8rem] max-h-[50vh]`,
@@ -99,9 +102,21 @@ export const EMPTY_STATE_COMPOSER_LAYOUT = {
 } as const;
 
 export const EMPTY_STATE_EXPANDED_CONTROLS_MIN_WIDTH_PX = 620;
+export const EMPTY_STATE_ICON_WORKSPACE_MIN_WIDTH_PX = 380;
+// Last-resort collapse: once the workspace picker is already icon-only, the
+// mobile row can still fit + / workspace / session-control / send at about 176px.
+export const EMPTY_STATE_HIDE_SESSION_CONTROL_MIN_WIDTH_PX = 184;
 
 export function shouldCompactEmptyStateSessionControls(widthPx: number | null): boolean {
   return widthPx === null || widthPx < EMPTY_STATE_EXPANDED_CONTROLS_MIN_WIDTH_PX;
+}
+
+export function shouldUseIconOnlyEmptyStateWorkspace(widthPx: number | null): boolean {
+  return widthPx !== null && widthPx < EMPTY_STATE_ICON_WORKSPACE_MIN_WIDTH_PX;
+}
+
+export function shouldHideEmptyStateSessionControl(widthPx: number | null): boolean {
+  return widthPx !== null && widthPx < EMPTY_STATE_HIDE_SESSION_CONTROL_MIN_WIDTH_PX;
 }
 
 function bestEffortEscTuiProviderLabel(provider: string): string | undefined {

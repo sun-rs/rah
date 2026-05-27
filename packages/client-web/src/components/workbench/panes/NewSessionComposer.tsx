@@ -17,6 +17,8 @@ import { WorkspacePicker } from "../../WorkspacePicker";
 import {
   EMPTY_STATE_COMPOSER_LAYOUT,
   shouldCompactEmptyStateSessionControls,
+  shouldHideEmptyStateSessionControl,
+  shouldUseIconOnlyEmptyStateWorkspace,
 } from "../../../composer-contract";
 import type { SessionModeChoice } from "../../../session-mode-ui";
 
@@ -79,6 +81,8 @@ export function NewSessionComposer(props: {
     : "Workspace";
   const workspaceShouldMarquee = workspaceLabel.length > 6;
   const compactSessionControls = shouldCompactEmptyStateSessionControls(controlsRowWidth);
+  const iconOnlyWorkspace = shouldUseIconOnlyEmptyStateWorkspace(controlsRowWidth);
+  const hideSessionControl = shouldHideEmptyStateSessionControl(controlsRowWidth);
   const providerSelectorMode =
     props.providerSelectorMode === "auto"
       ? surfaceWidth !== null && surfaceWidth < 560
@@ -136,7 +140,7 @@ export function NewSessionComposer(props: {
         ref={surfaceRef}
         className={
           props.surfaceClassName ??
-          "w-full max-w-2xl -translate-y-6 space-y-5 md:-translate-y-8 md:space-y-6"
+          "w-full min-w-0 max-w-[min(42rem,100%)] -translate-y-6 space-y-5 md:-translate-y-8 md:space-y-6"
         }
       >
         <div className="text-center">
@@ -148,6 +152,7 @@ export function NewSessionComposer(props: {
         <div className="relative">
           <TokenizedTextarea
             ref={props.composerRef}
+            wrapperClassName={EMPTY_STATE_COMPOSER_LAYOUT.textareaWrapperClassName}
             textareaClassName={EMPTY_STATE_COMPOSER_LAYOUT.textareaClassName}
             contentClassName={EMPTY_STATE_COMPOSER_LAYOUT.textareaContentClassName}
             placeholder="Message…"
@@ -184,25 +189,39 @@ export function NewSessionComposer(props: {
               {props.workspaceDirs.length === 0 ? (
                 <WorkspacePicker
                   currentDir=""
-                  triggerLabel="Workspace"
-                  triggerIcon={<FolderPlus size={12} />}
-                  triggerClassName={EMPTY_STATE_COMPOSER_LAYOUT.pillClassName}
+                  triggerLabel={iconOnlyWorkspace ? "" : "Workspace"}
+                  triggerIcon={<FolderPlus size={iconOnlyWorkspace ? 18 : 12} />}
+                  triggerAriaLabel="Select workspace"
+                  triggerClassName={
+                    iconOnlyWorkspace
+                      ? EMPTY_STATE_COMPOSER_LAYOUT.attachButtonClassName
+                      : EMPTY_STATE_COMPOSER_LAYOUT.pillClassName
+                  }
                   onSelect={props.onAddWorkspace}
                 />
               ) : (
-                <div className="relative" ref={props.workspacePickerRef}>
+                <div className="relative shrink-0" ref={props.workspacePickerRef}>
                   <button
                     type="button"
                     onClick={props.onToggleWorkspacePicker}
-                    className={EMPTY_STATE_COMPOSER_LAYOUT.pillClassName}
+                    aria-label="Select workspace"
+                    className={
+                      iconOnlyWorkspace
+                        ? EMPTY_STATE_COMPOSER_LAYOUT.attachButtonClassName
+                        : EMPTY_STATE_COMPOSER_LAYOUT.pillClassName
+                    }
                     title={props.availableWorkspaceDir || "Workspace"}
                   >
-                    <Folder size={12} />
-                    <MarqueeText text={workspaceLabel} enabled={workspaceShouldMarquee} />
-                    <ChevronDown
-                      size={11}
-                      className={`shrink-0 transition-transform ${props.workspacePickerOpen ? "rotate-180" : ""}`}
-                    />
+                    <Folder size={iconOnlyWorkspace ? 18 : 12} />
+                    {iconOnlyWorkspace ? null : (
+                      <>
+                        <MarqueeText text={workspaceLabel} enabled={workspaceShouldMarquee} />
+                        <ChevronDown
+                          size={11}
+                          className={`shrink-0 transition-transform ${props.workspacePickerOpen ? "rotate-180" : ""}`}
+                        />
+                      </>
+                    )}
                   </button>
                   {props.workspaceDirs.length > 0 && props.workspacePickerOpen ? (
                     <div className="rah-popover-panel absolute bottom-full left-0 z-50 mb-1.5 max-h-[min(18rem,calc(100dvh-12rem))] w-[min(34rem,calc(100vw-2rem))] overflow-hidden rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] shadow-lg">
@@ -249,7 +268,7 @@ export function NewSessionComposer(props: {
                 allowProviderDefault
                 showModel
                 buttonClassName={`${EMPTY_STATE_COMPOSER_LAYOUT.attachButtonClassName} ${
-                  compactSessionControls ? "" : "hidden"
+                  compactSessionControls && !hideSessionControl ? "" : "hidden"
                 }`}
                 onOpen={props.onRequestCatalogRefresh}
                 onAccessModeChange={props.onAccessModeChange}

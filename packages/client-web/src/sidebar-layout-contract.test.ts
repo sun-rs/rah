@@ -96,6 +96,24 @@ describe("sidebar layout contract", () => {
     );
   });
 
+  test("overlays the sidebar resize target on the boundary without a visible gutter", () => {
+    const cssSource = readSource("./index.css");
+
+    assert.match(cssSource, /\.resize-handle\s*\{[^}]*margin-left:\s*-6px/s);
+    assert.match(cssSource, /\.resize-handle\s*\{[^}]*margin-right:\s*-6px/s);
+    assert.match(cssSource, /\.resize-handle\s*\{[^}]*z-index:\s*20/s);
+  });
+
+  test("overlays shared right side panel dividers without a visible gutter", () => {
+    const cssSource = readSource("./index.css");
+    const sidePanelSource = readSource("./components/workbench/shells/ConversationSidePanelShell.tsx");
+
+    assert.match(sidePanelSource, /inspector-divider/);
+    assert.match(cssSource, /\.inspector-divider\s*\{[^}]*margin-left:\s*-6px/s);
+    assert.match(cssSource, /\.inspector-divider\s*\{[^}]*margin-right:\s*-6px/s);
+    assert.match(cssSource, /\.inspector-divider\s*\{[^}]*z-index:\s*20/s);
+  });
+
   test("locks sidebar indentation and meta width tokens", () => {
     assert.equal(SIDEBAR_LAYOUT.sessionListClassName, "space-y-0.5 pt-0.5 pl-0.5 pr-0.5");
     assert.match(SIDEBAR_LAYOUT.sessionTimeClassName, /min-w-\[2\.25rem\]/);
@@ -224,6 +242,18 @@ describe("sidebar layout contract", () => {
     assert.match(appSource, /importWithStaleReload/);
     assert.match(appSource, /title="Inspector crashed"/);
     assert.match(boundarySource, /isLikelyStaleDynamicImportError/);
+  });
+
+  test("keeps constrained desktop home and council layouts responsive", () => {
+    const emptyPaneSource = readSource("./components/workbench/panes/WorkbenchEmptyPane.tsx");
+    const newComposerSource = readSource("./components/workbench/panes/NewSessionComposer.tsx");
+    const councilSource = readSource("./council/CouncilPage.tsx");
+
+    assert.match(emptyPaneSource, /providerSelectorMode="auto"/);
+    assert.match(newComposerSource, /max-w-\[min\(42rem,100%\)\]/);
+    assert.match(councilSource, /matchMedia\("\(min-width: 768px\)"\)/);
+    assert.match(councilSource, /desktopBreakpoint="md"/);
+    assert.match(councilSource, /mobileOpen=\{councilSidebarOpen && !isCouncilWide\}/);
   });
 
   test("routes session and council title pills through shared meta badge structure", () => {

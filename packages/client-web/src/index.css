@@ -354,6 +354,44 @@
     overflow-y: scroll;
   }
 
+  .rah-scroll-textarea {
+    scrollbar-gutter: auto;
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+  }
+
+  .rah-scroll-textarea:hover {
+    scrollbar-color: rgba(128, 128, 128, 0.32) transparent;
+  }
+
+  .rah-scroll-textarea::-webkit-scrollbar {
+    width: 5px;
+    height: 5px;
+  }
+
+  .rah-scroll-textarea::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .rah-scroll-textarea::-webkit-scrollbar-thumb {
+    background-color: transparent;
+    border-radius: 9999px;
+    border: 1px solid transparent;
+    background-clip: padding-box;
+  }
+
+  .rah-scroll-textarea:hover::-webkit-scrollbar-thumb {
+    background-color: rgba(128, 128, 128, 0.28);
+  }
+
+  .rah-scroll-textarea:hover::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(128, 128, 128, 0.46);
+  }
+
+  .rah-scroll-textarea::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
   .rah-scroll-overlay-area {
     scrollbar-gutter: auto;
     scrollbar-width: none;
@@ -438,7 +476,10 @@
     cursor: col-resize;
     position: relative;
     flex-shrink: 0;
+    margin-left: -6px;
+    margin-right: -6px;
     touch-action: none;
+    z-index: 20;
   }
   .resize-handle::after {
     content: '';
@@ -461,7 +502,10 @@
     min-width: 12px;
     position: relative;
     flex-shrink: 0;
+    margin-left: -6px;
+    margin-right: -6px;
     pointer-events: none;
+    z-index: 20;
   }
 
   .inspector-divider::after {

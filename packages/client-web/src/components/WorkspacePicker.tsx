@@ -19,6 +19,7 @@ export function WorkspacePicker(props: {
   triggerLabel?: string;
   triggerIcon?: ReactNode;
   triggerClassName?: string;
+  triggerAriaLabel?: string;
   onSelect: (dir: string) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -80,6 +81,7 @@ export function WorkspacePicker(props: {
       <Dialog.Trigger asChild>
         <button
           type="button"
+          aria-label={props.triggerAriaLabel}
           className={props.triggerClassName ?? "w-full text-left rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] px-3 py-2 text-sm text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)] transition-colors"}
         >
           <div className="flex items-center gap-2">

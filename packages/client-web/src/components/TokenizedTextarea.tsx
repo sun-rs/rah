@@ -24,7 +24,8 @@ export const TokenizedTextarea = forwardRef<
     ariaLabel?: string;
     textareaClassName: string;
     contentClassName: string;
-} & Pick<TextareaHTMLAttributes<HTMLTextAreaElement>, "spellCheck">
+    wrapperClassName?: string;
+  } & Pick<TextareaHTMLAttributes<HTMLTextAreaElement>, "spellCheck">
 >(function TokenizedTextarea(props, forwardedRef) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const measurementRef = useRef<HTMLTextAreaElement | null>(null);
@@ -99,7 +100,7 @@ export const TokenizedTextarea = forwardRef<
   }, []);
 
   return (
-    <div className="relative flex-1 min-w-0">
+    <div className={`relative flex-1 min-w-0 ${props.wrapperClassName ?? ""}`}>
       <textarea
         ref={textareaRef}
         className={`${props.textareaClassName} ${TEXTAREA_TEXT_LAYOUT_CLASS_NAME} text-[var(--app-fg)] caret-[var(--app-fg)] selection:bg-primary/20`}
