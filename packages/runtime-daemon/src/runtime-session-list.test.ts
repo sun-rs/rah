@@ -283,6 +283,56 @@ describe("buildSessionsResponse", () => {
     assert.deepEqual(response.sessions, []);
   });
 
+  test("filters empty Gemini provider history stubs from stored and recent lists", () => {
+    const emptyGeminiStub: StoredSessionRef = {
+      provider: "gemini",
+      providerSessionId: "empty-gemini",
+      cwd: "/workspace/demo",
+      rootDir: "/workspace/demo",
+      title: "Gemini session",
+      updatedAt: "2026-05-26T15:40:58.865Z",
+      source: "provider_history",
+      historyMeta: {
+        bytes: 228,
+        lines: 1,
+        messages: 0,
+      },
+    };
+    const realGeminiSession: StoredSessionRef = {
+      ...emptyGeminiStub,
+      providerSessionId: "real-gemini",
+      preview: "hello",
+      historyMeta: {
+        bytes: 900,
+        lines: 3,
+        messages: 1,
+      },
+    };
+
+    const response = buildSessionsResponse({
+      liveStates: [],
+      discoveredStoredSessions: [emptyGeminiStub, realGeminiSession],
+      remembered: {
+        rememberedSessions: [emptyGeminiStub],
+        rememberedRecentSessions: [emptyGeminiStub],
+        rememberedWorkspaceDirs: ["/workspace/demo"],
+        rememberedHiddenWorkspaces: [],
+        rememberedHiddenSessionKeys: [],
+        rememberedSessionTitleOverrides: {},
+      },
+      isClosingSession: () => false,
+    });
+
+    assert.deepEqual(
+      response.storedSessions.map((session) => session.providerSessionId),
+      ["real-gemini"],
+    );
+    assert.deepEqual(
+      response.recentSessions.map((session) => session.providerSessionId),
+      ["real-gemini"],
+    );
+  });
+
   test("dedupes workspace dirs by resolved symlink path even when the child directory is gone", () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "rah-workspace-symlink-"));
     try {

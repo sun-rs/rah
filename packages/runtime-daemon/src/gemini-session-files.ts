@@ -811,6 +811,9 @@ function recordFromFile(filePath: string, projectIndex: GeminiProjectIndex): Gem
   if (!conversation) {
     return null;
   }
+  if (conversation.messages.length === 0) {
+    return null;
+  }
   const rootDir =
     projectIndex.hashToRoot.get(conversation.projectHash) ??
     readGeminiProjectRootForSessionFile(filePath) ??

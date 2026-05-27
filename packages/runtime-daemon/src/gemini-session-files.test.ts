@@ -278,6 +278,25 @@ describe("Gemini stored session files", () => {
     assert.deepEqual(assistantTexts, ["我是 Gemini CLI。"]);
   });
 
+  test("ignores empty Gemini JSONL session stubs", () => {
+    writeGeminiJsonlSession({
+      geminiHome,
+      cwd,
+      slug: "rah-1",
+      lines: [
+        {
+          sessionId,
+          projectHash: projectHash(cwd),
+          startTime: "2026-05-18T00:00:00.000Z",
+          lastUpdated: "2026-05-18T00:00:00.000Z",
+          kind: "main",
+        },
+      ],
+    });
+
+    assert.deepEqual(discoverGeminiStoredSessions(cwd), []);
+  });
+
   test("materializes user, assistant, reasoning, tool, model, and stable identities", () => {
     writeGeminiSession({ geminiHome, cwd });
     const record = findGeminiStoredSessionRecord(sessionId, cwd);

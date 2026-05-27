@@ -93,6 +93,15 @@ function isInternalNativeTuiProbeSession(session: Pick<StoredSessionRef, "cwd" |
   );
 }
 
+function isEmptyGeminiProviderHistorySession(session: StoredSessionRef): boolean {
+  return (
+    session.provider === "gemini" &&
+    session.source === "provider_history" &&
+    (session.historyMeta?.messages ?? 0) === 0 &&
+    !session.preview
+  );
+}
+
 function isInternalNativeTuiProbeWorkspace(directory: string): boolean {
   return isInternalNativeTuiProbeSession({ cwd: directory, rootDir: directory });
 }
@@ -206,13 +215,19 @@ export function buildSessionsResponse(args: {
     (state) => !args.isClosingSession(state.session.id),
   );
   const rememberedSessions = args.remembered.rememberedSessions.filter(
-    (session) => !isInternalNativeTuiProbeSession(session),
+    (session) =>
+      !isInternalNativeTuiProbeSession(session) &&
+      !isEmptyGeminiProviderHistorySession(session),
   );
   const rememberedRecentSessions = args.remembered.rememberedRecentSessions.filter(
-    (session) => !isInternalNativeTuiProbeSession(session),
+    (session) =>
+      !isInternalNativeTuiProbeSession(session) &&
+      !isEmptyGeminiProviderHistorySession(session),
   );
   const discoveredStoredSessions = args.discoveredStoredSessions.filter(
-    (session) => !isInternalNativeTuiProbeSession(session),
+    (session) =>
+      !isInternalNativeTuiProbeSession(session) &&
+      !isEmptyGeminiProviderHistorySession(session),
   );
   const titleContext = {
     titleOverrides: args.remembered.rememberedSessionTitleOverrides,
