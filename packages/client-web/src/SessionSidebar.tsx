@@ -488,7 +488,10 @@ export function SessionSidebar(props: {
       {/* Toolbar */}
       <div className={SIDEBAR_LAYOUT.toolbarClassName}>
         <div className="flex min-w-0 items-center gap-1.5">
-          <span className={SIDEBAR_LAYOUT.toolbarLabelClassName}>Workspaces</span>
+          <span className={SIDEBAR_LAYOUT.toolbarLabelClassName} title="Workspaces">
+            <span className={SIDEBAR_LAYOUT.toolbarLabelFullClassName}>Workspaces</span>
+            <span className={SIDEBAR_LAYOUT.toolbarLabelShortClassName}>WS</span>
+          </span>
           <span
             className={SIDEBAR_LAYOUT.toolbarCountBadgeClassName}
             title={`${workspaceCount} workspaces`}

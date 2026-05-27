@@ -61,6 +61,41 @@ describe("sidebar layout contract", () => {
     assert.match(SIDEBAR_LAYOUT.sessionRowBaseClassName, /\bborder\b/);
   });
 
+  test("lets narrow sidebars give action buttons priority over labels", () => {
+    const cssSource = readSource("./index.css");
+    const shellSource = readSource("./components/workbench/shells/WorkbenchSidebarShell.tsx");
+    const desktopHeaderSource = readSource("./components/workbench/actions/DesktopWorkbenchSidebarHeader.tsx");
+    const sidebarSource = readSource("./SessionSidebar.tsx");
+
+    assert.match(shellSource, /rah-sidebar-header/);
+    assert.match(desktopHeaderSource, /rah-sidebar-header-brand/);
+    assert.match(desktopHeaderSource, /rah-sidebar-header-actions/);
+    assert.match(SIDEBAR_LAYOUT.rootClassName, /rah-sidebar-content/);
+    assert.match(sidebarSource, /toolbarLabelFullClassName/);
+    assert.match(sidebarSource, /toolbarLabelShortClassName/);
+    assert.match(cssSource, /@container rah-sidebar-header \(max-width: 232px\)/);
+    assert.match(cssSource, /\.rah-sidebar-header-brand/);
+    assert.match(cssSource, /display: none/);
+    assert.match(cssSource, /@container rah-sidebar-content \(max-width: 212px\)/);
+    assert.match(cssSource, /\.rah-sidebar-workspaces-label-full/);
+    assert.match(cssSource, /\.rah-sidebar-workspaces-label-short/);
+  });
+
+  test("keeps sidebar resizing out of the React render hot path", () => {
+    const shellSource = readSource("./components/workbench/shells/WorkbenchSidebarShell.tsx");
+    const chromeStateSource = readSource("./hooks/useWorkbenchChromeState.ts");
+
+    assert.match(shellSource, /var\(--rah-sidebar-width/);
+    assert.match(shellSource, /props\.isResizing \? "duration-0" : "duration-200"/);
+    assert.match(chromeStateSource, /SIDEBAR_WIDTH_CSS_VAR = "--rah-sidebar-width"/);
+    assert.match(chromeStateSource, /requestAnimationFrame/);
+    assert.match(chromeStateSource, /applySidebarWidthCss\(nextWidth\)|pendingSidebarWidthRef/);
+    assert.doesNotMatch(
+      chromeStateSource,
+      /setSidebarWidth\(Math\.max\(200,\s*Math\.min\(480,\s*event\.clientX\)\)\)/,
+    );
+  });
+
   test("locks sidebar indentation and meta width tokens", () => {
     assert.equal(SIDEBAR_LAYOUT.sessionListClassName, "space-y-0.5 pt-0.5 pl-0.5 pr-0.5");
     assert.match(SIDEBAR_LAYOUT.sessionTimeClassName, /min-w-\[2\.25rem\]/);

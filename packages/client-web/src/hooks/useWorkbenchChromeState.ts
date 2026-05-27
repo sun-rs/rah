@@ -35,6 +35,22 @@ function readViewportWidth(): number {
   return typeof window === "undefined" ? 1024 : window.innerWidth;
 }
 
+const SIDEBAR_MIN_WIDTH = 200;
+const SIDEBAR_MAX_WIDTH = 480;
+const SIDEBAR_DEFAULT_WIDTH = 288;
+const SIDEBAR_WIDTH_CSS_VAR = "--rah-sidebar-width";
+
+function clampSidebarWidth(value: number): number {
+  return Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, value));
+}
+
+function applySidebarWidthCss(width: number): void {
+  if (typeof document === "undefined") {
+    return;
+  }
+  document.documentElement.style.setProperty(SIDEBAR_WIDTH_CSS_VAR, `${width}px`);
+}
+
 export function useWorkbenchChromeState() {
   const [leftOpen, setLeftOpen] = useState(false);
   const [rightOpen, setRightOpen] = useState(false);
@@ -47,8 +63,8 @@ export function useWorkbenchChromeState() {
   const [rightSidebarOpen, setRightSidebarOpen] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(() =>
     typeof window === "undefined"
-      ? 288
-      : Math.max(200, Math.min(480, readNumberPreference("rah-sidebar-width", 288))),
+      ? SIDEBAR_DEFAULT_WIDTH
+      : clampSidebarWidth(readNumberPreference("rah-sidebar-width", SIDEBAR_DEFAULT_WIDTH)),
   );
   const [visualViewportBottomInsetPx, setVisualViewportBottomInsetPx] = useState(() =>
     typeof window === "undefined" ? 0 : readVisualViewportBottomInset(),
@@ -56,11 +72,31 @@ export function useWorkbenchChromeState() {
   const [viewportWidthPx, setViewportWidthPx] = useState(() => readViewportWidth());
   const [isResizing, setIsResizing] = useState(false);
   const sidebarWidthRef = useRef(sidebarWidth);
+  const pendingSidebarWidthRef = useRef(sidebarWidth);
+  const sidebarResizeFrameRef = useRef<number | null>(null);
   const activePointerIdRef = useRef<number | null>(null);
 
-  sidebarWidthRef.current = sidebarWidth;
+  useEffect(() => {
+    if (isResizing) {
+      return;
+    }
+    sidebarWidthRef.current = sidebarWidth;
+    pendingSidebarWidthRef.current = sidebarWidth;
+    applySidebarWidthCss(sidebarWidth);
+  }, [isResizing, sidebarWidth]);
 
   useEffect(() => {
+    const flushPendingSidebarWidth = () => {
+      sidebarResizeFrameRef.current = null;
+      applySidebarWidthCss(pendingSidebarWidthRef.current);
+    };
+    const scheduleSidebarWidthFlush = () => {
+      if (sidebarResizeFrameRef.current !== null) {
+        return;
+      }
+      sidebarResizeFrameRef.current = window.requestAnimationFrame(flushPendingSidebarWidth);
+    };
+
     const onMove = (event: PointerEvent) => {
       if (!isResizing) {
         return;
@@ -68,7 +104,10 @@ export function useWorkbenchChromeState() {
       if (activePointerIdRef.current !== null && event.pointerId !== activePointerIdRef.current) {
         return;
       }
-      setSidebarWidth(Math.max(200, Math.min(480, event.clientX)));
+      const nextWidth = clampSidebarWidth(event.clientX);
+      sidebarWidthRef.current = nextWidth;
+      pendingSidebarWidthRef.current = nextWidth;
+      scheduleSidebarWidthFlush();
     };
 
     const onUp = (event: PointerEvent) => {
@@ -78,12 +117,22 @@ export function useWorkbenchChromeState() {
       if (activePointerIdRef.current !== null && event.pointerId !== activePointerIdRef.current) {
         return;
       }
+      const finalWidth =
+        event.type === "pointerup" ? clampSidebarWidth(event.clientX) : sidebarWidthRef.current;
       activePointerIdRef.current = null;
+      sidebarWidthRef.current = finalWidth;
+      pendingSidebarWidthRef.current = finalWidth;
+      if (sidebarResizeFrameRef.current !== null) {
+        window.cancelAnimationFrame(sidebarResizeFrameRef.current);
+        sidebarResizeFrameRef.current = null;
+      }
+      applySidebarWidthCss(finalWidth);
+      setSidebarWidth(finalWidth);
       setIsResizing(false);
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
       try {
-        window.localStorage.setItem("rah-sidebar-width", String(sidebarWidthRef.current));
+        window.localStorage.setItem("rah-sidebar-width", String(finalWidth));
       } catch {
         // ignore
       }
@@ -96,6 +145,10 @@ export function useWorkbenchChromeState() {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onUp);
+      if (sidebarResizeFrameRef.current !== null) {
+        window.cancelAnimationFrame(sidebarResizeFrameRef.current);
+        sidebarResizeFrameRef.current = null;
+      }
     };
   }, [isResizing]);
 

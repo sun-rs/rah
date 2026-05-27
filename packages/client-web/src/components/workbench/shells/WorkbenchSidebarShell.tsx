@@ -45,10 +45,14 @@ export function WorkbenchSidebarShell(props: {
   return (
     <>
       <aside
-        className="hidden md:flex flex-col bg-[var(--app-subtle-bg)] shrink-0 transition-[width] duration-200 overflow-hidden"
-        style={{ width: props.sidebarOpen ? props.sidebarWidth : 0 }}
+        className={`hidden md:flex flex-col bg-[var(--app-subtle-bg)] shrink-0 transition-[width] ${
+          props.isResizing ? "duration-0" : "duration-200"
+        } overflow-hidden`}
+        style={{
+          width: props.sidebarOpen ? `var(--rah-sidebar-width, ${props.sidebarWidth}px)` : 0,
+        }}
       >
-        <div className="h-14 pl-4 pr-2 flex items-center gap-4 shrink-0">
+        <div className="rah-sidebar-header h-14 pl-4 pr-2 flex min-w-0 items-center gap-4 shrink-0">
           {props.sidebarOpen ? (
             <DesktopWorkbenchSidebarHeader
               storedSessions={props.storedSessions}

@@ -38,13 +38,13 @@ export function DesktopWorkbenchSidebarHeader(props: {
       <button
         type="button"
         onClick={props.onHome}
-        className="icon-click-feedback shrink-0 rounded-md px-1 text-lg font-semibold tracking-tight text-[var(--app-fg)] transition-colors hover:bg-[var(--app-bg)]"
+        className="rah-sidebar-header-brand icon-click-feedback min-w-0 overflow-hidden whitespace-nowrap rounded-md px-1 text-lg font-semibold tracking-tight text-[var(--app-fg)] transition-colors hover:bg-[var(--app-bg)]"
         aria-label="Home"
         title="Home"
       >
         RAH
       </button>
-      <div className="ml-auto flex shrink-0 items-center gap-0.5">
+      <div className="rah-sidebar-header-actions ml-auto flex shrink-0 items-center gap-0.5">
         <button
           type="button"
           className={`${headerButtonClassName} ${

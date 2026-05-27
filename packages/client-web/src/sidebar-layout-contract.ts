@@ -1,5 +1,5 @@
 export const SIDEBAR_LAYOUT = {
-  rootClassName: "space-y-3",
+  rootClassName: "rah-sidebar-content space-y-3",
   sidebarScrollShellClassName: "flex-1",
   sidebarScrollClassName:
     "h-full py-3 pl-3 pr-0.5",
@@ -10,6 +10,8 @@ export const SIDEBAR_LAYOUT = {
   sidebarSheetContentClassName: "py-3 pl-3 pr-0.5",
   toolbarClassName: "flex items-center justify-between px-1",
   toolbarLabelClassName: "text-xs font-medium text-[var(--app-hint)]",
+  toolbarLabelFullClassName: "rah-sidebar-workspaces-label-full",
+  toolbarLabelShortClassName: "rah-sidebar-workspaces-label-short hidden",
   toolbarCountBadgeClassName:
     "relative top-px inline-flex h-5 min-w-5 items-center justify-center rounded-md border border-[var(--app-border)] bg-[var(--app-bg)] px-1.5 text-[10px] font-semibold tabular-nums text-[var(--app-hint)]",
   toolbarActionsClassName: "flex items-center gap-0.5",
