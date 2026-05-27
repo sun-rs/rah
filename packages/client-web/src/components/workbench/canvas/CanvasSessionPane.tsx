@@ -70,6 +70,7 @@ export function CanvasSessionPane(props: {
     requestId: string,
     response: PermissionResponseRequest,
   ) => Promise<void>;
+  onOpenLocalFile?: (sessionId: string, path: string) => void;
   onClaimHistory: (
     sessionId: string,
     request: {
@@ -200,6 +201,12 @@ export function CanvasSessionPane(props: {
       onPermissionRespond={(requestId, response) => {
         void props.onRespondToPermission(props.summary.session.id, requestId, response);
       }}
+      {...(props.onOpenLocalFile
+        ? {
+            onOpenLocalFile: (path: string) =>
+              props.onOpenLocalFile?.(props.summary.session.id, path),
+          }
+        : {})}
       composerSurface={composerSurface}
       composerRef={composerRef}
       draft={draft}

@@ -14,6 +14,7 @@ import remarkGfm from "remark-gfm";
 import { Check, Copy } from "lucide-react";
 import { importWithStaleReload } from "../../lazy-module-reload";
 import { splitMarkdownBlocks } from "./markdown-blocks";
+import { resolveLocalFileLinkPath } from "./local-file-link";
 
 const ReactMarkdown = lazy(async () => ({
   default: (await importWithStaleReload(() => import("react-markdown"))).default,
@@ -78,27 +79,56 @@ function MarkdownPre({
   );
 }
 
-const markdownComponents: Components = {
-  a({ node: _node, ...anchorProps }) {
-    return <a {...anchorProps} target="_blank" rel="noreferrer" />;
-  },
-  pre: MarkdownPre,
-  table({ node: _node, ...tableProps }) {
-    return (
-      <div className="prose-chat-table-wrapper">
-        <table {...tableProps} />
-      </div>
-    );
-  },
-};
+function createMarkdownComponents(
+  onOpenLocalFile: ((path: string) => void) | undefined,
+): Components {
+  return {
+    a({ node: _node, href, children, ...anchorProps }) {
+      const localFilePath = resolveLocalFileLinkPath(href);
+      if (localFilePath) {
+        if (!onOpenLocalFile) {
+          return (
+            <span title={localFilePath} className="text-[var(--app-fg)]">
+              {children}
+            </span>
+          );
+        }
+        return (
+          <button
+            type="button"
+            className="inline cursor-pointer border-0 bg-transparent p-0 text-left text-[var(--app-link)] underline underline-offset-2 hover:opacity-80"
+            title={`Open in Inspector: ${localFilePath}`}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              onOpenLocalFile(localFilePath);
+            }}
+          >
+            {children}
+          </button>
+        );
+      }
+      return <a {...anchorProps} href={href} target="_blank" rel="noreferrer" />;
+    },
+    pre: MarkdownPre,
+    table({ node: _node, ...tableProps }) {
+      return (
+        <div className="prose-chat-table-wrapper">
+          <table {...tableProps} />
+        </div>
+      );
+    },
+  };
+}
 
 const remarkPlugins = [remarkGfm, remarkBreaks];
 
 const MemoizedMarkdownBlock = memo(function MemoizedMarkdownBlock(props: {
   content: string;
+  components: Components;
 }) {
   return (
-    <ReactMarkdown remarkPlugins={remarkPlugins} components={markdownComponents}>
+    <ReactMarkdown remarkPlugins={remarkPlugins} components={props.components}>
       {props.content}
     </ReactMarkdown>
   );
@@ -127,10 +157,15 @@ export function MarkdownRenderer(props: {
   className?: string;
   content: string;
   fallbackClassName?: string;
+  onOpenLocalFile?: (path: string) => void;
 }) {
   const blocks = useMemo(
     () => splitMarkdownBlocks(props.content),
     [props.content],
+  );
+  const components = useMemo(
+    () => createMarkdownComponents(props.onOpenLocalFile),
+    [props.onOpenLocalFile],
   );
   return (
     <Suspense
@@ -150,7 +185,7 @@ export function MarkdownRenderer(props: {
             key={`${index}:${block.length}`}
             className={index < blocks.length - 1 ? "prose-chat-block" : undefined}
           >
-            <MemoizedMarkdownBlock content={block} />
+            <MemoizedMarkdownBlock content={block} components={components} />
           </div>
         ))}
       </div>

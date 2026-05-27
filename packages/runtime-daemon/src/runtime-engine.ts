@@ -73,6 +73,7 @@ import {
   getWorkspaceGitDiffAsync,
   getWorkspaceGitStatusAsync,
   getWorkspaceSnapshot,
+  readHostFileDataAsync,
   readWorkspaceFileFromDirectoryAsync,
   searchWorkspaceFilesInDirectoryAsync,
 } from "./workspace-utils";
@@ -1297,6 +1298,13 @@ export class RuntimeEngine {
     return await readWorkspaceFileFromDirectoryAsync(workspaceDir, path, {
       scopeRoot: workspaceDir,
     });
+  }
+
+  async readHostFile(path: string) {
+    return {
+      sessionId: "",
+      ...(await readHostFileDataAsync(path)),
+    };
   }
 
   async searchSessionFiles(

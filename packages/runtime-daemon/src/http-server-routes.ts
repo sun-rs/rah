@@ -860,6 +860,16 @@ export async function handleHttpRequest(args: {
       return;
     }
 
+    if (req.method === "GET" && pathname === "/api/host/file") {
+      const filePath = url.searchParams.get("path");
+      if (!filePath) {
+        writeJson(req, res, 400, { error: "File path is required." });
+        return;
+      }
+      writeJson(req, res, 200, await engine.readHostFile(filePath));
+      return;
+    }
+
     if (req.method === "GET" && pathname === "/api/workspace/file-search") {
       const dir = url.searchParams.get("dir");
       const query = url.searchParams.get("query") ?? "";

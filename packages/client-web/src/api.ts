@@ -765,6 +765,11 @@ export async function readWorkspaceFile(
   return requestJson<SessionFileResponse>(`/api/workspace/file?${query.toString()}`);
 }
 
+export async function readHostFile(path: string): Promise<SessionFileResponse> {
+  const query = new URLSearchParams({ path });
+  return requestJson<SessionFileResponse>(`/api/host/file?${query.toString()}`);
+}
+
 export async function searchSessionFiles(
   sessionId: string,
   queryText: string,

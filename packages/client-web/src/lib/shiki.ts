@@ -81,12 +81,39 @@ export async function ensureHighlighterLanguage(language: string): Promise<boole
   return true;
 }
 
-function extractHighlightedLines(html: string): string[] {
-  const matches = Array.from(
-    html.matchAll(/<span class="line">([\s\S]*?)<\/span>/g),
-    (match) => match[1] || " ",
-  );
-  return matches;
+function hasLineClass(spanTag: string): boolean {
+  const classMatch = /\sclass=(["'])(.*?)\1/.exec(spanTag);
+  if (!classMatch) {
+    return false;
+  }
+  return classMatch[2]!.split(/\s+/).includes("line");
+}
+
+export function extractHighlightedLines(html: string): string[] {
+  const lines: string[] = [];
+  const spanTagPattern = /<\/?span\b[^>]*>/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = spanTagPattern.exec(html))) {
+    const tag = match[0];
+    if (tag.startsWith("</") || !hasLineClass(tag)) {
+      continue;
+    }
+
+    const contentStart = spanTagPattern.lastIndex;
+    let depth = 1;
+    let nestedMatch: RegExpExecArray | null;
+    while ((nestedMatch = spanTagPattern.exec(html))) {
+      const nestedTag = nestedMatch[0];
+      depth += nestedTag.startsWith("</") ? -1 : 1;
+      if (depth === 0) {
+        lines.push(html.slice(contentStart, nestedMatch.index) || " ");
+        break;
+      }
+    }
+  }
+
+  return lines;
 }
 
 export function highlight(code: string, lang: string, theme: ShikiThemeName = "dark-plus") {

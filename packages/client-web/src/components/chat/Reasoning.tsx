@@ -2,7 +2,13 @@ import { useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 
-export function Reasoning({ text }: { text: string }) {
+export function Reasoning({
+  text,
+  onOpenLocalFile,
+}: {
+  text: string;
+  onOpenLocalFile?: (path: string) => void;
+}) {
   const [open, setOpen] = useState(false);
   return (
     <div className="flex justify-start">
@@ -21,6 +27,7 @@ export function Reasoning({ text }: { text: string }) {
               className="prose-chat max-w-none"
               content={text}
               fallbackClassName="whitespace-pre-wrap break-words [overflow-wrap:anywhere]"
+              {...(onOpenLocalFile ? { onOpenLocalFile } : {})}
             />
           </div>
         ) : null}

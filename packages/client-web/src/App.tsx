@@ -94,6 +94,11 @@ const loadInspectorPane = () => importWithStaleReload(() => import("./InspectorP
 const InspectorPane = lazy(async () => ({
   default: (await loadInspectorPane()).InspectorPane,
 }));
+const loadInspectorFileDetailDialog = () =>
+  importWithStaleReload(() => import("./inspector/InspectorFileDetailDialog"));
+const InspectorFileDetailDialog = lazy(async () => ({
+  default: (await loadInspectorFileDetailDialog()).InspectorFileDetailDialog,
+}));
 
 type ModelDraft = {
   modelId?: string | null;
@@ -393,6 +398,7 @@ export function App() {
     useState<Record<CanvasPaneId, CanvasNewSessionDraft>>(() =>
       createEmptyCanvasNewSessionDrafts(),
     );
+  const [linkedFilePreviewPath, setLinkedFilePreviewPath] = useState<string | null>(null);
   const [settingsDialogMounted, setSettingsDialogMounted] = useState(false);
   const [terminalDialogMounted, setTerminalDialogMounted] = useState(false);
   const {
@@ -627,6 +633,10 @@ export function App() {
       ...current,
       [paneId]: open,
     }));
+  }, []);
+
+  const openLinkedFilePreview = useCallback((path: string) => {
+    setLinkedFilePreviewPath(path);
   }, []);
 
   const toggleCanvasPaneRightPanel = useCallback((paneId: CanvasPaneId) => {
@@ -1991,6 +2001,7 @@ export function App() {
                     onRespondToPermission={(sessionId, requestId, response) =>
                       respondToPermission(sessionId, requestId, response)
                     }
+                    onOpenLocalFile={(_sessionId, path) => openLinkedFilePreview(path)}
                     onClaimHistory={(sessionId, request) => {
                       void claimHistorySession(sessionId, {
                         confirmCreateMissingWorkspace,
@@ -2052,6 +2063,7 @@ export function App() {
               historyLoading={selectedProjection?.history.phase === "loading"}
               canRespondToPermission={canRespondToPermission}
               onPermissionRespond={handlePermissionResponse}
+              onOpenLocalFile={openLinkedFilePreview}
               composerSurface={composerSurface}
               composerRef={composerRef}
               draft={draft}
@@ -2451,6 +2463,21 @@ export function App() {
           />
         ) : null}
       </WorkbenchErrorBoundary>
+
+      {linkedFilePreviewPath ? (
+        <Suspense fallback={null}>
+          <InspectorFileDetailDialog
+            sessionId={selectedSummary?.session.id ?? null}
+            workspaceRoot={selectedInspectorWorkspaceDir}
+            selection={{
+              path: linkedFilePreviewPath,
+              source: "local",
+            }}
+            onRefreshChanges={() => undefined}
+            onClose={() => setLinkedFilePreviewPath(null)}
+          />
+        </Suspense>
+      ) : null}
 
       <GlobalWorkbenchCallout
         errorDescriptor={errorDescriptor}

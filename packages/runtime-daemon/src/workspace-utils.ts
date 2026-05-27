@@ -1,5 +1,6 @@
 export {
   getWorkspaceSnapshot,
+  readHostFileDataAsync,
   readWorkspaceFileDataAsync,
   readWorkspaceFileFromDirectoryAsync,
   resolveWorkspacePathAsync,

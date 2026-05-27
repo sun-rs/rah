@@ -76,14 +76,25 @@ function TimelineCard(props: {
 
 function renderTimelineItem(item: TimelineItem, options: {
   entryKey?: string;
+  onOpenLocalFile?: (path: string) => void;
 } = {}) {
   switch (item.kind) {
     case "user_message":
       return <UserMessage content={item.text} entryKey={options.entryKey} />;
     case "assistant_message":
-      return <AssistantMessage content={item.text} />;
+      return (
+        <AssistantMessage
+          content={item.text}
+          {...(options.onOpenLocalFile ? { onOpenLocalFile: options.onOpenLocalFile } : {})}
+        />
+      );
     case "reasoning":
-      return <Reasoning text={item.text} />;
+      return (
+        <Reasoning
+          text={item.text}
+          {...(options.onOpenLocalFile ? { onOpenLocalFile: options.onOpenLocalFile } : {})}
+        />
+      );
     case "plan":
       return (
         <TimelineCard
@@ -94,6 +105,7 @@ function renderTimelineItem(item: TimelineItem, options: {
             className="prose-chat text-sm leading-relaxed"
             content={item.text}
             fallbackClassName="whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-sm leading-relaxed"
+            {...(options.onOpenLocalFile ? { onOpenLocalFile: options.onOpenLocalFile } : {})}
           />
         </TimelineCard>
       );
@@ -212,11 +224,13 @@ function renderEntry(
   entry: FeedEntry,
   canRespondToPermission: boolean | undefined,
   onPermissionRespond: (requestId: string, response: PermissionResponseRequest) => void,
+  onOpenLocalFile: ((path: string) => void) | undefined,
 ) {
   switch (entry.kind) {
     case "timeline":
       return renderTimelineItem(entry.item, {
         entryKey: entry.key,
+        ...(onOpenLocalFile ? { onOpenLocalFile } : {}),
       });
     case "tool_call":
       return (
@@ -318,6 +332,7 @@ export function ChatThread(props: {
   onLoadOlderHistory?: () => void | Promise<void>;
   canRespondToPermission?: boolean;
   onPermissionRespond: (requestId: string, response: PermissionResponseRequest) => void;
+  onOpenLocalFile?: (path: string) => void;
 }) {
   type PrependAnchor = {
     scrollHeight: number;
@@ -931,6 +946,7 @@ export function ChatThread(props: {
                 entry,
                 props.canRespondToPermission,
                 props.onPermissionRespond,
+                props.onOpenLocalFile,
               )}
             </MeasuredFeedEntry>
           );

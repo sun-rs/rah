@@ -470,7 +470,25 @@ export interface SessionFileResponse {
   path: string;
   content: string;
   binary: boolean;
+  mimeType?: string;
+  sizeBytes?: number;
+  contentBase64?: string;
   truncated?: boolean;
+  notebookPreview?: NotebookPreviewData;
+}
+
+export interface NotebookPreviewCell {
+  type: string;
+  source: string;
+  executionCount?: number | null;
+  outputSummary?: string;
+}
+
+export interface NotebookPreviewData {
+  cells: NotebookPreviewCell[];
+  truncated: boolean;
+  language?: string;
+  omittedOutputs?: boolean;
 }
 
 export interface SessionFileSearchItem {

@@ -11,7 +11,13 @@ import { InspectorChangesPane } from "./inspector/InspectorChangesPane";
 import { InspectorFileDetailDialog } from "./inspector/InspectorFileDetailDialog";
 import { InspectorFilesPane } from "./inspector/InspectorFilesPane";
 import { InspectorHeader } from "./inspector/InspectorHeader";
-import type { DirectoryEntry, FileDetailSelection, InspectorGitStatus, InspectorTab } from "./inspector/shared";
+import type {
+  DirectoryEntry,
+  FileDetailSelection,
+  InspectorGitStatus,
+  InspectorOpenFileRequest,
+  InspectorTab,
+} from "./inspector/shared";
 import { OverlayScrollArea } from "./components/OverlayScrollArea";
 
 export function InspectorPane(props: {
@@ -19,6 +25,7 @@ export function InspectorPane(props: {
   workspaceRoot: string;
   events: RahEvent[];
   onOpenTerminal?: () => void;
+  openFileRequest?: InspectorOpenFileRequest | null;
 }) {
   const [activeTab, setActiveTab] = useState<InspectorTab>("changes");
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
@@ -128,6 +135,18 @@ export function InspectorPane(props: {
   useEffect(() => {
     void loadGitStatus();
   }, [props.sessionId, props.workspaceRoot]);
+
+  useEffect(() => {
+    const request = props.openFileRequest;
+    if (!request?.path) {
+      return;
+    }
+    setActiveTab("files");
+    setSelectedFile({
+      path: request.path,
+      source: "local",
+    });
+  }, [props.openFileRequest?.id]);
 
   useEffect(() => {
     if (!fileSearchQuery.trim()) {

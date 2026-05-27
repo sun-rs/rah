@@ -5,12 +5,17 @@ export type FileDetailMode = "file" | "diff";
 
 export type FileDetailSelection = {
   path: string;
-  source: "files" | "changes";
+  source: "files" | "changes" | "local";
   staged?: boolean;
   pureAddition?: boolean;
   binary?: boolean;
   oldPath?: string;
   status?: GitChangedFile["status"];
+};
+
+export type InspectorOpenFileRequest = {
+  id: number;
+  path: string;
 };
 
 export type DirectoryEntry = {
@@ -149,7 +154,7 @@ export function resolveCodeLanguage(path: string): string | null {
   if (lower.endsWith(".ts")) return "typescript";
   if (lower.endsWith(".tsx")) return "tsx";
   if (lower.endsWith(".js") || lower.endsWith(".mjs") || lower.endsWith(".cjs")) return "javascript";
-  if (lower.endsWith(".json")) return "json";
+  if (lower.endsWith(".json") || lower.endsWith(".ipynb")) return "json";
   if (lower.endsWith(".rs")) return "rust";
   if (lower.endsWith(".toml")) return "toml";
   if (lower.endsWith(".md")) return "markdown";

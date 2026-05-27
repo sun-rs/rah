@@ -2,11 +2,15 @@ import { execFile, spawn } from "node:child_process";
 import { promises as fs, readdirSync } from "node:fs";
 import path from "node:path";
 import type {
+  NotebookPreviewData,
   SessionFileResponse,
   SessionFileSearchItem,
 } from "@rah/runtime-protocol";
 
-const MAX_READABLE_FILE_BYTES = 1_000_000;
+const DEFAULT_MAX_READABLE_FILE_BYTES = 1_000_000;
+const NOTEBOOK_MAX_READABLE_FILE_BYTES = 8_000_000;
+const MAX_NOTEBOOK_PREVIEW_CELLS = 80;
+const MAX_NOTEBOOK_OUTPUT_CHARS = 2000;
 const MAX_WORKSPACE_FILE_SEARCH_RESULTS = 500;
 const WORKSPACE_FILE_SEARCH_TIMEOUT_MS = 10_000;
 
@@ -143,20 +147,229 @@ export async function readWorkspaceFileDataAsync(
   options?: { scopeRoot?: string },
 ): Promise<WorkspaceFileData> {
   const resolvedPath = await resolveWorkspacePathAsync(options?.scopeRoot ?? cwd, targetPath);
+  return await readFileDataAtResolvedPathAsync(resolvedPath);
+}
+
+export async function readHostFileDataAsync(targetPath: string): Promise<WorkspaceFileData> {
+  if (!path.isAbsolute(targetPath)) {
+    throw new Error("Host file path must be absolute.");
+  }
+  return await readFileDataAtResolvedPathAsync(path.resolve(targetPath));
+}
+
+async function readFileDataAtResolvedPathAsync(resolvedPath: string): Promise<WorkspaceFileData> {
   const stats = await fs.stat(resolvedPath);
   if (!stats.isFile()) {
     throw new Error("Path is not a file.");
   }
   const buffer = await fs.readFile(resolvedPath);
-  const truncated = buffer.byteLength > MAX_READABLE_FILE_BYTES;
-  const contentBuffer = truncated ? buffer.subarray(0, MAX_READABLE_FILE_BYTES) : buffer;
-  const binary = isLikelyBinary(contentBuffer);
+  const maxReadableBytes = maxReadableFileBytes(resolvedPath);
+  const truncated = buffer.byteLength > maxReadableBytes;
+  const mimeType = resolvePreviewMimeType(resolvedPath);
+  const notebookPreview =
+    mimeType === "application/x-ipynb+json"
+      ? parseNotebookPreviewData(buffer.toString("utf8"))
+      : undefined;
+  const contentOverride =
+    truncated && notebookPreview ? compactNotebookPreviewContent(notebookPreview) : undefined;
+  const contentBuffer = truncated && !contentOverride ? buffer.subarray(0, maxReadableBytes) : buffer;
+  const binary = contentOverride ? false : isLikelyBinary(contentBuffer);
+  const includeBinaryContent =
+    !contentOverride && binary && !truncated && Boolean(mimeType?.startsWith("image/"));
   return {
     path: resolvedPath,
-    content: binary ? "" : contentBuffer.toString("utf8"),
+    content: binary ? "" : (contentOverride ?? contentBuffer.toString("utf8")),
     binary,
+    sizeBytes: stats.size,
+    ...(mimeType ? { mimeType } : {}),
+    ...(includeBinaryContent ? { contentBase64: contentBuffer.toString("base64") } : {}),
     ...(truncated ? { truncated: true } : {}),
+    ...(notebookPreview ? { notebookPreview } : {}),
   };
+}
+
+function parseNotebookPreviewData(content: string): NotebookPreviewData | undefined {
+  try {
+    const parsed = JSON.parse(content) as {
+      cells?: Array<{
+        cell_type?: unknown;
+        execution_count?: unknown;
+        source?: unknown;
+        outputs?: unknown;
+      }>;
+      metadata?: unknown;
+    };
+    const rawCells = Array.isArray(parsed.cells) ? parsed.cells : [];
+    let omittedOutputs = false;
+    const language = resolveNotebookLanguage(parsed.metadata);
+    const cells = rawCells.slice(0, MAX_NOTEBOOK_PREVIEW_CELLS).map((cell) => {
+      const executionCount =
+        typeof cell.execution_count === "number" || cell.execution_count === null
+          ? cell.execution_count
+          : undefined;
+      const outputSummary = summarizeNotebookOutputs(cell.outputs);
+      if (hasNotebookOutputs(cell.outputs) && !outputSummary) {
+        omittedOutputs = true;
+      }
+      return {
+        type: typeof cell.cell_type === "string" ? cell.cell_type : "cell",
+        source: normalizeNotebookText(cell.source),
+        ...(executionCount !== undefined ? { executionCount } : {}),
+        ...(outputSummary ? { outputSummary } : {}),
+      };
+    });
+    return {
+      cells,
+      truncated: rawCells.length > cells.length,
+      ...(language ? { language } : {}),
+      ...(omittedOutputs ? { omittedOutputs: true } : {}),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function compactNotebookPreviewContent(preview: NotebookPreviewData): string {
+  return JSON.stringify(
+    {
+      cells: preview.cells.map((cell) => ({
+        cell_type: cell.type,
+        source: cell.source,
+        ...(cell.executionCount !== undefined ? { execution_count: cell.executionCount } : {}),
+        outputs: cell.outputSummary
+          ? [{ output_type: "stream", name: "stdout", text: cell.outputSummary }]
+          : [],
+      })),
+      metadata: preview.language ? { language_info: { name: preview.language } } : {},
+      nbformat: 4,
+      nbformat_minor: 5,
+    },
+    null,
+    2,
+  );
+}
+
+function normalizeNotebookText(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => (typeof entry === "string" ? entry : "")).join("");
+  }
+  return "";
+}
+
+function resolveNotebookLanguage(metadata: unknown): string | undefined {
+  if (!metadata || typeof metadata !== "object") {
+    return undefined;
+  }
+  const record = metadata as Record<string, unknown>;
+  const languageInfo =
+    record.language_info && typeof record.language_info === "object"
+      ? (record.language_info as Record<string, unknown>)
+      : undefined;
+  const kernelspec =
+    record.kernelspec && typeof record.kernelspec === "object"
+      ? (record.kernelspec as Record<string, unknown>)
+      : undefined;
+  return normalizeNotebookLanguageName(languageInfo?.name ?? kernelspec?.language);
+}
+
+function normalizeNotebookLanguageName(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  if (normalized.startsWith("python")) return "python";
+  if (["js", "javascript", "node", "nodejs"].includes(normalized)) return "javascript";
+  if (["ts", "typescript"].includes(normalized)) return "typescript";
+  if (["bash", "sh", "shell", "zsh"].includes(normalized)) return "bash";
+  if (["json", "markdown", "rust", "toml", "yaml", "html", "css", "sql"].includes(normalized)) {
+    return normalized;
+  }
+  if (normalized === "yml") return "yaml";
+  return undefined;
+}
+
+function hasNotebookOutputs(value: unknown): boolean {
+  return Array.isArray(value) && value.length > 0;
+}
+
+function summarizeNotebookOutputs(value: unknown): string | undefined {
+  if (!Array.isArray(value) || value.length === 0) {
+    return undefined;
+  }
+  const chunks: string[] = [];
+  for (const output of value) {
+    if (!output || typeof output !== "object") {
+      continue;
+    }
+    const record = output as Record<string, unknown>;
+    const streamText = normalizeNotebookText(record.text);
+    if (streamText) {
+      chunks.push(streamText);
+      continue;
+    }
+    const traceback = normalizeNotebookText(record.traceback);
+    if (traceback) {
+      chunks.push(traceback);
+      continue;
+    }
+    const data = record.data;
+    if (data && typeof data === "object") {
+      const plainText = normalizeNotebookText(
+        (data as Record<string, unknown>)["text/plain"],
+      );
+      if (plainText) {
+        chunks.push(plainText);
+      }
+    }
+  }
+  const summary = chunks.join("\n").trim();
+  if (!summary) {
+    return undefined;
+  }
+  return summary.length > MAX_NOTEBOOK_OUTPUT_CHARS
+    ? `${summary.slice(0, MAX_NOTEBOOK_OUTPUT_CHARS)}\n...`
+    : summary;
+}
+
+function maxReadableFileBytes(filePath: string): number {
+  return path.extname(filePath).toLowerCase() === ".ipynb"
+    ? NOTEBOOK_MAX_READABLE_FILE_BYTES
+    : DEFAULT_MAX_READABLE_FILE_BYTES;
+}
+
+function resolvePreviewMimeType(filePath: string): string | undefined {
+  const extension = path.extname(filePath).toLowerCase();
+  switch (extension) {
+    case ".png":
+      return "image/png";
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".gif":
+      return "image/gif";
+    case ".webp":
+      return "image/webp";
+    case ".svg":
+      return "image/svg+xml";
+    case ".csv":
+      return "text/csv";
+    case ".tsv":
+      return "text/tab-separated-values";
+    case ".ipynb":
+      return "application/x-ipynb+json";
+    case ".json":
+      return "application/json";
+    case ".md":
+      return "text/markdown";
+    default:
+      return undefined;
+  }
 }
 
 export async function readWorkspaceFileFromDirectoryAsync(

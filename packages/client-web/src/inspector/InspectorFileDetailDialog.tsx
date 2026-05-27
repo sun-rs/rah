@@ -1,10 +1,26 @@
 import { useEffect, useMemo, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { LoaderCircle, X } from "lucide-react";
-import { applyGitFileAction, readGitDiff, readSessionFile, readWorkspaceFile, readWorkspaceGitDiff } from "../api";
+import type { NotebookPreviewData } from "@rah/runtime-protocol";
+import {
+  applyGitFileAction,
+  readGitDiff,
+  readHostFile,
+  readSessionFile,
+  readWorkspaceFile,
+  readWorkspaceGitDiff,
+} from "../api";
 import { SegmentedButton, SegmentedButtonLabel, SegmentedControl } from "../components/SegmentedControl";
 import type { FileDetailSelection } from "./shared";
-import { DiffDisplay, FileContentDisplay } from "./InspectorPreviewDisplays";
+import {
+  DelimitedTablePreview,
+  DiffDisplay,
+  FileContentDisplay,
+  ImageFilePreview,
+  MarkdownFilePreview,
+  NotebookPreview,
+} from "./InspectorPreviewDisplays";
+import { resolveFilePreviewKind } from "./file-preview-utils";
 import {
   buildDiffRows,
   getChangeScopeLabel,
@@ -30,6 +46,9 @@ export function InspectorFileDetailDialog(props: {
   const [fileError, setFileError] = useState<string | null>(null);
   const [binary, setBinary] = useState(false);
   const [truncated, setTruncated] = useState(false);
+  const [mimeType, setMimeType] = useState<string | undefined>(undefined);
+  const [contentBase64, setContentBase64] = useState<string | undefined>(undefined);
+  const [notebookPreview, setNotebookPreview] = useState<NotebookPreviewData | undefined>(undefined);
   const [reloadToken, setReloadToken] = useState(0);
   const [fileActionPending, setFileActionPending] = useState<"stage" | "unstage" | null>(null);
   const [stagedOverride, setStagedOverride] = useState<boolean | undefined>(undefined);
@@ -38,6 +57,7 @@ export function InspectorFileDetailDialog(props: {
   );
   const [wrapLines, setWrapLines] = useState(() => readDiffPreferences().wrapLines);
   const [hideWhitespace, setHideWhitespace] = useState(() => readDiffPreferences().hideWhitespace);
+  const isLocalLinkedFile = props.selection.source === "local";
 
   useEffect(() => {
     setDisplayMode(props.selection.source === "changes" ? "diff" : "file");
@@ -58,50 +78,64 @@ export function InspectorFileDetailDialog(props: {
 
   useEffect(() => {
     let cancelled = false;
-    setDiffLoading(true);
-    setDiffError(null);
-    const diffPromise = props.sessionId
-      ? readGitDiff(props.sessionId, props.selection.path, {
-          ...(effectiveStaged !== undefined ? { staged: effectiveStaged } : {}),
-          ignoreWhitespace: hideWhitespace,
-          ...(props.workspaceRoot ? { scopeRoot: props.workspaceRoot } : {}),
+    if (isLocalLinkedFile) {
+      setDiffContent("");
+      setDiffLoading(false);
+      setDiffError(null);
+    } else {
+      setDiffLoading(true);
+      setDiffError(null);
+      const diffPromise = props.sessionId
+        ? readGitDiff(props.sessionId, props.selection.path, {
+            ...(effectiveStaged !== undefined ? { staged: effectiveStaged } : {}),
+            ignoreWhitespace: hideWhitespace,
+            ...(props.workspaceRoot ? { scopeRoot: props.workspaceRoot } : {}),
+          })
+        : readWorkspaceGitDiff(props.workspaceRoot, props.selection.path, {
+            ...(effectiveStaged !== undefined ? { staged: effectiveStaged } : {}),
+            ignoreWhitespace: hideWhitespace,
+          });
+      diffPromise
+        .then((response) => {
+          if (!cancelled) {
+            setDiffContent(response.diff);
+          }
         })
-      : readWorkspaceGitDiff(props.workspaceRoot, props.selection.path, {
-          ...(effectiveStaged !== undefined ? { staged: effectiveStaged } : {}),
-          ignoreWhitespace: hideWhitespace,
+        .catch((error) => {
+          if (!cancelled) {
+            setDiffError(error instanceof Error ? error.message : String(error));
+          }
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setDiffLoading(false);
+          }
         });
-    diffPromise
-      .then((response) => {
-        if (!cancelled) {
-          setDiffContent(response.diff);
-        }
-      })
-      .catch((error) => {
-        if (!cancelled) {
-          setDiffError(error instanceof Error ? error.message : String(error));
-        }
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setDiffLoading(false);
-        }
-      });
+    }
 
     setFileLoading(true);
     setFileError(null);
     setBinary(false);
     setTruncated(false);
-    const filePromise = props.sessionId
-      ? readSessionFile(props.sessionId, props.selection.path, {
-          ...(props.workspaceRoot ? { scopeRoot: props.workspaceRoot } : {}),
-        })
-      : readWorkspaceFile(props.workspaceRoot, props.selection.path);
+    setMimeType(undefined);
+    setContentBase64(undefined);
+    setNotebookPreview(undefined);
+    const filePromise = isLocalLinkedFile
+      ? readHostFile(props.selection.path)
+      : props.sessionId
+        ? readSessionFile(props.sessionId, props.selection.path, {
+            ...(props.workspaceRoot ? { scopeRoot: props.workspaceRoot } : {}),
+          })
+        : readWorkspaceFile(props.workspaceRoot, props.selection.path);
     filePromise
       .then((response) => {
         if (!cancelled) {
           setFileContent(response.content);
           setBinary(response.binary);
           setTruncated(Boolean(response.truncated));
+          setMimeType(response.mimeType);
+          setContentBase64(response.contentBase64);
+          setNotebookPreview(response.notebookPreview);
         }
       })
       .catch((error) => {
@@ -121,6 +155,7 @@ export function InspectorFileDetailDialog(props: {
   }, [
     effectiveStaged,
     hideWhitespace,
+    isLocalLinkedFile,
     props.selection.path,
     props.sessionId,
     props.workspaceRoot,
@@ -130,13 +165,17 @@ export function InspectorFileDetailDialog(props: {
   const diffRows = useMemo(() => buildDiffRows(diffContent), [diffContent]);
   const diffSummary = useMemo(() => summarizeDiffRows(diffRows), [diffRows]);
   const hasDiff = diffRows.length > 0;
-  const shouldShowFileTab = props.selection.source === "files" || !diffSummary.isPureAddition;
-  const displayPath = getDisplayPath(props.selection.path, props.workspaceRoot);
+  const shouldShowFileTab =
+    props.selection.source === "files" || isLocalLinkedFile || !diffSummary.isPureAddition;
+  const displayPath = isLocalLinkedFile
+    ? props.selection.path
+    : getDisplayPath(props.selection.path, props.workspaceRoot);
   const fileName = props.selection.path.split("/").pop() || props.selection.path;
+  const filePreviewKind = resolveFilePreviewKind(props.selection.path, mimeType);
   const selectionScopeLabel = getChangeScopeLabel(effectiveStaged);
   const isBinaryChange = props.selection.source === "changes" && props.selection.binary === true;
   const showDiffUnavailable = isBinaryChange && !hasDiff && !diffLoading && !diffError;
-  const canApplyGitFileAction = Boolean(props.sessionId);
+  const canApplyGitFileAction = Boolean(props.sessionId) && props.selection.source === "changes";
 
   const handleApplyFileAction = async (action: "stage" | "unstage") => {
     if (!props.sessionId) {
@@ -334,8 +373,36 @@ export function InspectorFileDetailDialog(props: {
               <div className="rounded-lg border border-[var(--app-border)] bg-[var(--app-warning-bg)] p-3 text-xs text-[var(--app-hint)]">
                 Failed to read file: {fileError}
               </div>
+            ) : filePreviewKind === "image" ? (
+              <ImageFilePreview
+                path={props.selection.path}
+                content={fileContent}
+                {...(contentBase64 ? { contentBase64 } : {})}
+                {...(mimeType ? { mimeType } : {})}
+                truncated={truncated}
+              />
             ) : binary ? (
               <div className="text-sm text-[var(--app-hint)]">This file looks binary and cannot be previewed.</div>
+            ) : filePreviewKind === "table" ? (
+              <DelimitedTablePreview
+                path={props.selection.path}
+                content={fileContent}
+                truncated={truncated}
+              />
+            ) : filePreviewKind === "notebook" ? (
+              <NotebookPreview
+                path={props.selection.path}
+                content={fileContent}
+                truncated={truncated}
+                {...(notebookPreview ? { notebookPreview } : {})}
+              />
+            ) : filePreviewKind === "markdown" ? (
+              <MarkdownFilePreview
+                path={props.selection.path}
+                content={fileContent}
+                truncated={truncated}
+                wrapLines={wrapLines}
+              />
             ) : (
               <div className="space-y-2">
                 {truncated ? (

@@ -154,6 +154,7 @@ export function WorkbenchSelectedPane(props: {
   historyLoading: boolean;
   canRespondToPermission: boolean;
   onPermissionRespond: (requestId: string, response: PermissionResponseRequest) => void;
+  onOpenLocalFile?: (path: string) => void;
   composerSurface: ComposerSurface;
   composerRef: RefObject<HTMLTextAreaElement | null>;
   draft: string;
@@ -794,6 +795,7 @@ export function WorkbenchSelectedPane(props: {
           onLoadOlderHistory={props.onLoadOlderHistory}
           canRespondToPermission={props.canRespondToPermission}
           onPermissionRespond={props.onPermissionRespond}
+          {...(props.onOpenLocalFile ? { onOpenLocalFile: props.onOpenLocalFile } : {})}
         />
       )}
 
