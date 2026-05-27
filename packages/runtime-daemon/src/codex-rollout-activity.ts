@@ -834,6 +834,26 @@ function parseCustomToolCallOutput(output: unknown): {
       };
     } catch {
       const trimmed = output.trim();
+      const processOutput = parseFunctionCallOutput(trimmed);
+      if (processOutput.exitCode !== undefined) {
+        const text = processOutput.textOutput ?? trimmed;
+        return processOutput.exitCode === 0
+          ? {
+              successText: text,
+              exitCode: processOutput.exitCode,
+              fileRefs: extractUpdatedFiles(text),
+            }
+          : {
+              failedText: text || trimmed,
+              exitCode: processOutput.exitCode,
+            };
+      }
+      if (/^Success\./.test(trimmed)) {
+        return {
+          successText: trimmed,
+          fileRefs: extractUpdatedFiles(trimmed),
+        };
+      }
       return {
         ...(trimmed ? { failedText: trimmed } : {}),
       };
@@ -1805,6 +1825,9 @@ export function translateCodexRolloutLine(
                     ...pending.observation,
                     status: "failed",
                     summary: "Patch apply failed.",
+                    ...(parsedOutput.exitCode !== undefined
+                      ? { exitCode: parsedOutput.exitCode }
+                      : {}),
                     detail: {
                       artifacts: [
                         ...(pending.observation.detail?.artifacts ?? []),
@@ -1844,7 +1867,12 @@ export function translateCodexRolloutLine(
                 observation: {
                   ...pending.observation,
                   status: "completed",
-                  ...(parsedOutput.successText ? { summary: parsedOutput.successText.split(/\r?\n/)[0] } : {}),
+                  ...(parsedOutput.successText
+                    ? { summary: parsedOutput.successText.split(/\r?\n/)[0] }
+                    : {}),
+                  ...(parsedOutput.exitCode !== undefined
+                    ? { exitCode: parsedOutput.exitCode }
+                    : {}),
                   detail: {
                     artifacts,
                   },

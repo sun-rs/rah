@@ -710,6 +710,110 @@ describe("translateCodexRolloutLine", () => {
     }
   });
 
+  test("maps raw apply_patch process success outputs into completed calls", () => {
+    const state = createCodexRolloutTranslationState();
+    translateCodexRolloutLine(
+      {
+        timestamp: "2026-05-27T09:00:05.000Z",
+        type: "response_item",
+        payload: {
+          type: "custom_tool_call",
+          status: "completed",
+          call_id: "patch-raw-success",
+          name: "apply_patch",
+          input:
+            "*** Begin Patch\n*** Update File: /tmp/repo/docs/demo.md\n@@\n-old\n+new\n*** End Patch",
+        },
+      },
+      state,
+    );
+
+    const completed = translateCodexRolloutLine(
+      {
+        timestamp: "2026-05-27T09:00:06.000Z",
+        type: "response_item",
+        payload: {
+          type: "custom_tool_call_output",
+          call_id: "patch-raw-success",
+          output:
+            "Exit code: 0\nWall time: 0 seconds\nOutput:\nSuccess. Updated the following files:\nM /tmp/repo/docs/demo.md\n",
+        },
+      },
+      state,
+    );
+
+    assert.equal(completed[0]?.activity.type, "observation_completed");
+    if (completed[0]?.activity.type === "observation_completed") {
+      assert.equal(completed[0].activity.observation.kind, "patch.apply");
+      assert.equal(completed[0].activity.observation.status, "completed");
+      assert.equal(completed[0].activity.observation.exitCode, 0);
+      assert.ok(
+        completed[0].activity.observation.detail?.artifacts.some(
+          (artifact) =>
+            artifact.kind === "text" &&
+            artifact.label === "stdout" &&
+            artifact.text.includes("Success. Updated the following files:"),
+        ),
+      );
+    }
+
+    assert.equal(completed[1]?.activity.type, "tool_call_completed");
+    if (completed[1]?.activity.type === "tool_call_completed") {
+      assert.equal(completed[1].activity.toolCall.family, "patch");
+      assert.deepEqual(completed[1].activity.toolCall.result, { exitCode: 0 });
+      assert.ok(
+        completed[1].activity.toolCall.detail?.artifacts.some(
+          (artifact) =>
+            artifact.kind === "file_refs" &&
+            artifact.files.includes("/tmp/repo/docs/demo.md"),
+        ),
+      );
+    }
+  });
+
+  test("maps raw apply_patch process failures into failed calls", () => {
+    const state = createCodexRolloutTranslationState();
+    translateCodexRolloutLine(
+      {
+        timestamp: "2026-05-27T09:01:05.000Z",
+        type: "response_item",
+        payload: {
+          type: "custom_tool_call",
+          status: "completed",
+          call_id: "patch-raw-fail",
+          name: "apply_patch",
+          input: "*** Begin Patch\n*** Update File: /tmp/repo/src/demo.ts\n*** End Patch",
+        },
+      },
+      state,
+    );
+
+    const failed = translateCodexRolloutLine(
+      {
+        timestamp: "2026-05-27T09:01:06.000Z",
+        type: "response_item",
+        payload: {
+          type: "custom_tool_call_output",
+          call_id: "patch-raw-fail",
+          output:
+            "Exit code: 1\nWall time: 0 seconds\nOutput:\napply_patch verification failed: bad hunk\n",
+        },
+      },
+      state,
+    );
+
+    assert.equal(failed[0]?.activity.type, "observation_failed");
+    if (failed[0]?.activity.type === "observation_failed") {
+      assert.equal(failed[0].activity.observation.kind, "patch.apply");
+      assert.equal(failed[0].activity.error, "apply_patch verification failed: bad hunk");
+    }
+    assert.equal(failed[1]?.activity.type, "tool_call_failed");
+    if (failed[1]?.activity.type === "tool_call_failed") {
+      assert.equal(failed[1].activity.toolCallId, "patch-raw-fail");
+      assert.equal(failed[1].activity.error, "apply_patch verification failed: bad hunk");
+    }
+  });
+
   test("maps failed custom tool outputs into tool_call_failed", () => {
     const state = createCodexRolloutTranslationState();
     translateCodexRolloutLine(
