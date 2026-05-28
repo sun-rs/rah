@@ -232,6 +232,97 @@ describe("translateCodexRolloutLine", () => {
     }
   });
 
+  test("maps nonzero exec_command exits as failed observations without duplicating output as error", () => {
+    const state = createCodexRolloutTranslationState();
+
+    translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-14T18:00:02.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "exec_command",
+          arguments: '{"cmd":"cargo test","workdir":"/workspace/demo"}',
+          call_id: "call-fail",
+        },
+      },
+      state,
+    );
+
+    const completed = translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-14T18:00:03.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "call-fail",
+          output: "Chunk ID: abc\nWall time: 0.1 seconds\nProcess exited with code 101\nOutput:\ntest failed",
+        },
+      },
+      state,
+    );
+
+    assert.equal(completed[0]?.activity.type, "observation_failed");
+    if (completed[0]?.activity.type === "observation_failed") {
+      assert.equal(completed[0].activity.observation.status, "failed");
+      assert.equal(completed[0].activity.observation.exitCode, 101);
+      assert.equal(completed[0].activity.error, undefined);
+    }
+    assert.equal(completed[1]?.activity.type, "tool_call_completed");
+    if (completed[1]?.activity.type === "tool_call_completed") {
+      assert.deepEqual(completed[1].activity.toolCall.result, { exitCode: 101 });
+    }
+  });
+
+  test("treats empty search exit 1 as no matches in persisted rollout history", () => {
+    const state = createCodexRolloutTranslationState();
+
+    translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-14T18:00:02.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "exec_command",
+          arguments: '{"cmd":"rg \\"missing-symbol\\" src -n","workdir":"/workspace/demo"}',
+          call_id: "call-search-empty",
+        },
+      },
+      state,
+    );
+
+    const completed = translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-14T18:00:03.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "call-search-empty",
+          output:
+            "Chunk ID: abc\nWall time: 0.1 seconds\nProcess exited with code 1\nOriginal token count: 0\nOutput:\n",
+        },
+      },
+      state,
+    );
+
+    assert.equal(completed[0]?.activity.type, "observation_completed");
+    if (completed[0]?.activity.type === "observation_completed") {
+      assert.equal(completed[0].activity.observation.status, "completed");
+      assert.equal(completed[0].activity.observation.kind, "file.search");
+      assert.equal(completed[0].activity.observation.summary, "No matches.");
+      assert.equal(completed[0].activity.observation.exitCode, undefined);
+      assert.deepEqual(completed[0].activity.observation.metrics, {
+        rawExitCode: 1,
+        semanticStatus: "search_no_matches",
+      });
+    }
+    assert.equal(completed[1]?.activity.type, "tool_call_completed");
+    if (completed[1]?.activity.type === "tool_call_completed") {
+      assert.deepEqual(completed[1].activity.toolCall.result, { exitCode: 1 });
+      assert.equal(completed[1].activity.toolCall.summary, "No matches.");
+    }
+  });
+
   test("merges write_stdin polling output into the running exec_command tool call", () => {
     const state = createCodexRolloutTranslationState();
 

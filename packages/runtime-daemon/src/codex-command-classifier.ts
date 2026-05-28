@@ -16,14 +16,65 @@ function unique(values: string[]): string[] {
   return [...new Set(values)];
 }
 
+function shellWords(value: string): string[] {
+  return (value.match(/"[^"]*"|'[^']*'|\S+/g) ?? []).map(stripQuotes);
+}
+
+function looksLikeSedScript(value: string): boolean {
+  return (
+    /^\d*(?:,\d*)?[a-zA-Z]$/.test(value) ||
+    /^\/.+\/[a-zA-Z]*$/.test(value) ||
+    /^s(.).*\1.*\1[a-zA-Z]*$/.test(value)
+  );
+}
+
+function isDynamicShellPath(value: string): boolean {
+  return value.startsWith("$") || value.includes("*") || value === "{" || value === "}";
+}
+
+function extractSedReadFiles(command: string): string[] {
+  const refs: string[] = [];
+  for (const match of command.matchAll(/(?:^|[\s;&|{])sed\s+(?<args>[^;&|}]+)/g)) {
+    const words = shellWords(match.groups?.args ?? "");
+    let sawScript = false;
+    let skipNextScript = false;
+    for (const word of words) {
+      if (word === "-e" || word === "--expression" || word === "-f" || word === "--file") {
+        skipNextScript = true;
+        continue;
+      }
+      if (word.startsWith("-e") && word.length > 2) {
+        sawScript = true;
+        continue;
+      }
+      if (word.startsWith("-")) {
+        continue;
+      }
+      if (skipNextScript) {
+        skipNextScript = false;
+        sawScript = true;
+        continue;
+      }
+      if (!sawScript && looksLikeSedScript(word)) {
+        sawScript = true;
+        continue;
+      }
+      if (!isDynamicShellPath(word)) {
+        refs.push(word);
+      }
+    }
+  }
+  return refs;
+}
+
 function extractReadFiles(command: string): string[] {
-  return unique(
-    [...command.matchAll(/(?:^|\s)(?:cat|less|head|tail|sed|nl)\s+(?:-[^\s]+\s+)*(?<path>[^\s|;&]+)/g)]
+  const directReadFiles =
+    [...command.matchAll(/(?:^|\s)(?:cat|less|head|tail|nl)\s+(?:-[^\s]+\s+)*(?<path>[^\s|;&]+)/g)]
       .map((match) => match.groups?.path)
       .filter((value): value is string => Boolean(value))
       .map(stripQuotes)
-      .filter((value) => !value.startsWith("-")),
-  );
+      .filter((value) => !value.startsWith("-") && !isDynamicShellPath(value));
+  return unique([...directReadFiles, ...extractSedReadFiles(command)]);
 }
 
 function extractListFiles(command: string): string[] {

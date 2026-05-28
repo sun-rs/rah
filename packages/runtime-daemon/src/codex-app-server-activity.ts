@@ -13,6 +13,7 @@ import type {
   WorkbenchObservation,
 } from "@rah/runtime-protocol";
 import { classifyCodexCommand } from "./codex-command-classifier";
+import { classifyCodexCommandResult } from "./codex-command-result";
 import { normalizeContextUsage } from "./context-usage";
 import {
   createCodexLiveEphemeralTimelineIdentity,
@@ -722,6 +723,11 @@ function makeCommandToolCall(
   exitCode?: number,
 ): ToolCall {
   const classified = classifyCodexCommand(command);
+  const resultDisposition = classifyCodexCommandResult({
+    kind: classified.kind,
+    ...(exitCode !== undefined ? { exitCode } : {}),
+    ...(output !== undefined ? { output } : {}),
+  });
   const artifacts: ToolCallArtifact[] = [
     {
       kind: "command",
@@ -740,7 +746,7 @@ function makeCommandToolCall(
     input: { command },
     ...(exitCode !== undefined ? { result: { exitCode } } : {}),
     ...(artifacts.length > 0 ? { detail: { artifacts } } : {}),
-    ...(exitCode !== undefined ? { summary: `Process exited with code ${exitCode}.` } : {}),
+    ...(resultDisposition.summary !== undefined ? { summary: resultDisposition.summary } : {}),
   };
 }
 
@@ -772,19 +778,29 @@ function makeCommandObservation(callId: string, command: string, cwd?: string): 
 
 function completeObservation(
   observation: WorkbenchObservation,
-  params: { output?: string; exitCode?: number },
+  params: { output?: string; stderr?: string; exitCode?: number },
 ): WorkbenchObservation {
+  const resultDisposition = classifyCodexCommandResult({
+    kind: observation.kind,
+    ...(params.exitCode !== undefined ? { exitCode: params.exitCode } : {}),
+    ...(params.output !== undefined ? { output: params.output } : {}),
+    ...(params.stderr !== undefined ? { stderr: params.stderr } : {}),
+  });
   const artifacts = [...(observation.detail?.artifacts ?? [])];
   if (params.output) {
     artifacts.push({ kind: "text", label: "output", text: params.output });
   }
+  if (params.stderr) {
+    artifacts.push({ kind: "text", label: "stderr", text: params.stderr });
+  }
   return {
     ...observation,
-    status: params.exitCode !== undefined && params.exitCode !== 0 ? "failed" : "completed",
-    ...(params.exitCode !== undefined ? { exitCode: params.exitCode } : {}),
-    ...(params.exitCode !== undefined
-      ? { summary: `Process exited with code ${params.exitCode}.` }
+    status: resultDisposition.status,
+    ...(resultDisposition.includeExitCode && params.exitCode !== undefined
+      ? { exitCode: params.exitCode }
       : {}),
+    ...(resultDisposition.summary !== undefined ? { summary: resultDisposition.summary } : {}),
+    ...(resultDisposition.metrics !== undefined ? { metrics: resultDisposition.metrics } : {}),
     detail: { artifacts },
   };
 }
@@ -998,6 +1014,19 @@ function commandStatusToObservationStatus(status: string | null | undefined): "r
 
 function statusIsTerminal(status: string | null | undefined): boolean {
   return status === "completed" || status === "failed" || status === "declined";
+}
+
+function itemPhaseToObservationStatus(
+  phase: "started" | "completed",
+  status: string | null | undefined,
+): "running" | "completed" | "failed" {
+  if (status === "failed" || status === "declined") {
+    return "failed";
+  }
+  if (phase === "completed" || status === "completed") {
+    return "completed";
+  }
+  return "running";
 }
 
 type FileChangeEntry = {
@@ -1352,32 +1381,42 @@ function mapThreadItem(
       const cwd = optionalStringField(item, "cwd");
       const exitCode = numberField(item, "exitCode");
       const output = optionalStringField(item, "aggregatedOutput");
+      const stderr = optionalStringField(item, "stderr");
       const toolCall = makeCommandToolCall(id, command, cwd, output, exitCode);
-      const observation = completeObservation(makeCommandObservation(id, command, cwd), {
+      const status = stringField(item, "status");
+      const phaseStatus = itemPhaseToObservationStatus(phase, status);
+      const completedObservation = completeObservation(makeCommandObservation(id, command, cwd), {
         ...(output !== undefined ? { output } : {}),
+        ...(stderr !== undefined ? { stderr } : {}),
         ...(exitCode !== undefined ? { exitCode } : {}),
       });
-      const status = stringField(item, "status");
-      if (phase === "started" || !statusIsTerminal(status)) {
+      const isSemanticSuccess = completedObservation.metrics?.semanticStatus === "search_no_matches";
+      const observation =
+        phaseStatus === "failed" && completedObservation.status !== "failed" && !isSemanticSuccess
+          ? {
+              ...completedObservation,
+              status: "failed" as const,
+              summary: completedObservation.summary ?? "Command failed.",
+            }
+          : completedObservation;
+      if (phaseStatus === "running") {
         return [
           { type: "observation_started", turnId, observation: makeCommandObservation(id, command, cwd) },
           { type: "tool_call_started", turnId, toolCall },
         ];
       }
-      return observation.status === "failed"
-        ? [
-            { type: "observation_failed", turnId, observation, error: output ?? "Command failed" },
-            { type: "tool_call_failed", turnId, toolCallId: id, error: output ?? "Command failed" },
-          ]
-        : [
-            { type: "observation_completed", turnId, observation },
-            { type: "tool_call_completed", turnId, toolCall },
-          ];
+      return [
+        observation.status === "failed"
+          ? { type: "observation_failed", turnId, observation }
+          : { type: "observation_completed", turnId, observation },
+        { type: "tool_call_completed", turnId, toolCall },
+      ];
     }
     case "fileChange": {
       const toolCall = makeFileChangeToolCall(item);
-      const observation = makeFileChangeObservation(item);
-      if (phase === "started" || observation.status === "running") {
+      const phaseStatus = itemPhaseToObservationStatus(phase, stringField(item, "status"));
+      const observation = { ...makeFileChangeObservation(item), status: phaseStatus };
+      if (phaseStatus === "running") {
         return [
           { type: "observation_started", turnId, observation: { ...observation, status: "running" } },
           { type: "tool_call_started", turnId, toolCall },
@@ -1396,13 +1435,14 @@ function mapThreadItem(
     case "mcpToolCall": {
       const toolCall = makeMcpToolCall(item);
       const status = stringField(item, "status");
+      const phaseStatus = itemPhaseToObservationStatus(phase, status);
       const observation = makeGenericObservation(
         item,
         "mcp.call",
         toolCall.title ?? "MCP tool call",
-        status === "completed" ? "completed" : status === "failed" ? "failed" : "running",
+        phaseStatus,
       );
-      if (phase === "started" || observation.status === "running") {
+      if (phaseStatus === "running") {
         return [
           { type: "observation_started", turnId, observation },
           { type: "tool_call_started", turnId, toolCall },
@@ -1441,14 +1481,15 @@ function mapThreadItem(
       ];
     case "collabAgentToolCall": {
       const status = stringField(item, "status");
+      const phaseStatus = itemPhaseToObservationStatus(phase, status);
       const observation = makeGenericObservation(
         item,
         "subagent.lifecycle",
         stringField(item, "tool") ?? "Subagent activity",
-        status === "completed" ? "completed" : status === "failed" ? "failed" : "running",
+        phaseStatus,
       );
       return [
-        phase === "started" || observation.status === "running"
+        phaseStatus === "running"
           ? { type: "observation_started", turnId, observation }
           : observation.status === "failed"
             ? { type: "observation_failed", turnId, observation, error: "Subagent activity failed" }
@@ -2186,17 +2227,45 @@ export function translateCodexAppServerNotification(
       state.pendingToolCalls.delete(parsed.callId);
       state.lastCommandOutputDeltaByCallId.delete(parsed.callId);
       const output = parsed.output ?? deltaOutput;
+      const resultDisposition = pendingObservation
+        ? classifyCodexCommandResult({
+            kind: pendingObservation.kind,
+            ...(parsed.exitCode !== undefined ? { exitCode: parsed.exitCode } : {}),
+            ...(output !== undefined ? { output } : {}),
+            ...(parsed.stderr !== undefined ? { stderr: parsed.stderr } : {}),
+          })
+        : classifyCodexCommandResult({
+            kind: "command.run",
+            ...(parsed.exitCode !== undefined ? { exitCode: parsed.exitCode } : {}),
+            ...(output !== undefined ? { output } : {}),
+            ...(parsed.stderr !== undefined ? { stderr: parsed.stderr } : {}),
+          });
       const toolCall = pending?.toolCall
         ? {
             ...pending.toolCall,
-            ...(output ? { detail: { artifacts: [...(pending.toolCall.detail?.artifacts ?? []), { kind: "text", label: "stdout", text: output } as ToolCallArtifact] } } : {}),
+            ...(output || parsed.stderr
+              ? {
+                  detail: {
+                    artifacts: [
+                      ...(pending.toolCall.detail?.artifacts ?? []),
+                      ...(output
+                        ? [{ kind: "text", label: "stdout", text: output } as ToolCallArtifact]
+                        : []),
+                      ...(parsed.stderr
+                        ? [{ kind: "text", label: "stderr", text: parsed.stderr } as ToolCallArtifact]
+                        : []),
+                    ],
+                  },
+                }
+              : {}),
             ...(parsed.exitCode !== undefined ? { result: { exitCode: parsed.exitCode } } : {}),
-            ...(parsed.exitCode !== undefined ? { summary: `Process exited with code ${parsed.exitCode}.` } : {}),
+            ...(resultDisposition.summary !== undefined ? { summary: resultDisposition.summary } : {}),
           }
         : makeCommandToolCall(parsed.callId, "unknown", undefined, output, parsed.exitCode);
       const completedObservation = pendingObservation
         ? completeObservation(pendingObservation, {
             ...(output !== undefined ? { output } : {}),
+            ...(parsed.stderr !== undefined ? { stderr: parsed.stderr } : {}),
             ...(parsed.exitCode !== undefined ? { exitCode: parsed.exitCode } : {}),
           })
         : null;
@@ -2209,7 +2278,6 @@ export function translateCodexAppServerNotification(
                   ? {
                       type: "observation_failed",
                       observation: completedObservation,
-                      ...(output !== undefined ? { error: output } : {}),
                     }
                   : {
                       type: "observation_completed",

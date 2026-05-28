@@ -9,6 +9,7 @@ import type {
   WorkbenchObservation,
 } from "@rah/runtime-protocol";
 import { classifyCodexCommand } from "./codex-command-classifier";
+import { classifyCodexCommandResult } from "./codex-command-result";
 import {
   createCodexTimelineIdentity,
   createCodexTimelineTurnIdentity,
@@ -756,20 +757,31 @@ function completeObservation(
   params: {
     status: "completed" | "failed";
     output?: string;
+    stderr?: string;
     exitCode?: number;
   },
 ): WorkbenchObservation {
+  const resultDisposition = classifyCodexCommandResult({
+    kind: observation.kind,
+    ...(params.exitCode !== undefined ? { exitCode: params.exitCode } : {}),
+    ...(params.output !== undefined ? { output: params.output } : {}),
+    ...(params.stderr !== undefined ? { stderr: params.stderr } : {}),
+  });
   const artifacts = [...(observation.detail?.artifacts ?? [])];
   if (params.output) {
     artifacts.push({ kind: "text", label: "output", text: params.output });
   }
+  if (params.stderr) {
+    artifacts.push({ kind: "text", label: "stderr", text: params.stderr });
+  }
   return {
     ...observation,
-    status: params.status,
-    ...(params.exitCode !== undefined ? { exitCode: params.exitCode } : {}),
-    ...(params.exitCode !== undefined
-      ? { summary: `Process exited with code ${params.exitCode}.` }
+    status: resultDisposition.status,
+    ...(resultDisposition.includeExitCode && params.exitCode !== undefined
+      ? { exitCode: params.exitCode }
       : {}),
+    ...(resultDisposition.summary !== undefined ? { summary: resultDisposition.summary } : {}),
+    ...(resultDisposition.metrics !== undefined ? { metrics: resultDisposition.metrics } : {}),
     detail: { artifacts },
   };
 }
@@ -800,14 +812,14 @@ function parseFunctionCallOutput(output: string): {
     /Process exited with code (\d+)/.exec(output) ?? /Exit code:\s*(\d+)/.exec(output);
   const runningSessionMatch = /Process running with session ID (\d+)/.exec(output);
   const outputMatch = /\nOutput:\n([\s\S]*)$/.exec(output);
-  const textOutput = outputMatch?.[1]?.trimEnd();
+  const textOutput = outputMatch ? outputMatch[1]?.trimEnd() ?? "" : undefined;
 
   return {
     ...(exitMatch ? { exitCode: Number.parseInt(exitMatch[1]!, 10) } : {}),
     ...(runningSessionMatch
       ? { runningSessionId: Number.parseInt(runningSessionMatch[1]!, 10) }
       : {}),
-    ...(textOutput ? { textOutput } : {}),
+    ...(textOutput !== undefined ? { textOutput } : {}),
   };
 }
 
@@ -1561,6 +1573,11 @@ export function translateCodexRolloutLine(
         }
       }
       if (parsedOutput.exitCode !== undefined) {
+        const resultDisposition = classifyCodexCommandResult({
+          kind: terminalSession.observation?.kind ?? "command.run",
+          exitCode: parsedOutput.exitCode,
+          ...(outputText !== undefined ? { output: outputText } : {}),
+        });
         const completedToolCall: ToolCall = {
           ...terminalSession.toolCall,
           result: {
@@ -1568,7 +1585,7 @@ export function translateCodexRolloutLine(
             sessionId: terminalSession.sessionId,
             exitCode: parsedOutput.exitCode,
           },
-          summary: `Process exited with code ${parsedOutput.exitCode}.`,
+          ...(resultDisposition.summary !== undefined ? { summary: resultDisposition.summary } : {}),
         };
         state.terminalSessions.delete(pending.terminalInteraction.sessionId);
         state.terminalSessions.delete(terminalSession.sessionId);
@@ -1592,7 +1609,6 @@ export function translateCodexRolloutLine(
                     ? {
                         type: "observation_failed",
                         observation: completedObservation,
-                        ...(outputText !== undefined ? { error: outputText } : {}),
                       }
                     : {
                         type: "observation_completed",
@@ -1737,12 +1753,22 @@ export function translateCodexRolloutLine(
       result.sessionId = parsedOutput.runningSessionId;
     }
 
+    const resultDisposition =
+      parsedOutput.exitCode !== undefined
+        ? classifyCodexCommandResult({
+            kind: pending.observation?.kind ?? "command.run",
+            exitCode: parsedOutput.exitCode,
+            ...(outputText !== undefined ? { output: outputText } : {}),
+          })
+        : null;
     const completedToolCall: ToolCall = {
       ...pending.toolCall,
       ...(Object.keys(result).length > 0 ? { result } : {}),
       ...(artifacts.length > 0 ? { detail: { artifacts } } : {}),
       ...(parsedOutput.exitCode !== undefined
-        ? { summary: `Process exited with code ${parsedOutput.exitCode}.` }
+        ? resultDisposition?.summary !== undefined
+          ? { summary: resultDisposition.summary }
+          : {}
         : parsedOutput.runningSessionId !== undefined
           ? { summary: `Process running with session ID ${parsedOutput.runningSessionId}.` }
           : {}),
@@ -1768,9 +1794,6 @@ export function translateCodexRolloutLine(
                 ? {
                     type: "observation_failed",
                     observation: completedObservation,
-                    ...(outputText !== undefined
-                      ? { error: outputText }
-                      : {}),
                   }
                 : {
                     type: "observation_completed",

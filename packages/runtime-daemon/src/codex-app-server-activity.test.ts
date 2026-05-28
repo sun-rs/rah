@@ -198,6 +198,182 @@ describe("translateCodexAppServerNotification", () => {
     });
   });
 
+  test("maps nonzero command exits as failed observations and completed tool calls", () => {
+    const state = createCodexAppServerTranslationState();
+
+    translateCodexAppServerNotification(
+      {
+        method: "item/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "commandExecution",
+            id: "cmd-failed-test",
+            command: "cargo test",
+            cwd: "/workspace/demo",
+            status: "inProgress",
+          },
+        },
+      },
+      state,
+    );
+    const completed = translateCodexAppServerNotification(
+      {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "commandExecution",
+            id: "cmd-failed-test",
+            command: "cargo test",
+            cwd: "/workspace/demo",
+            status: "failed",
+            aggregatedOutput: "test failed",
+            exitCode: 101,
+          },
+        },
+      },
+      state,
+    );
+
+    assert.deepEqual(completed.map((item) => item.activity.type), [
+      "observation_failed",
+      "tool_call_completed",
+    ]);
+    const observation = completed[0]?.activity;
+    assert.equal(observation?.type, "observation_failed");
+    if (observation?.type === "observation_failed") {
+      assert.equal(observation.observation.status, "failed");
+      assert.equal(observation.observation.exitCode, 101);
+      assert.equal(observation.error, undefined);
+    }
+    const tool = completed[1]?.activity;
+    assert.equal(tool?.type, "tool_call_completed");
+    if (tool?.type === "tool_call_completed") {
+      assert.deepEqual(tool.toolCall.result, { exitCode: 101 });
+    }
+  });
+
+  test("treats empty search exit 1 as no matches instead of a failed command", () => {
+    const state = createCodexAppServerTranslationState();
+
+    translateCodexAppServerNotification(
+      {
+        method: "item/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "commandExecution",
+            id: "cmd-search-empty",
+            command: 'rg "missing-symbol" src -n',
+            cwd: "/workspace/demo",
+            status: "inProgress",
+          },
+        },
+      },
+      state,
+    );
+    const completed = translateCodexAppServerNotification(
+      {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "commandExecution",
+            id: "cmd-search-empty",
+            command: 'rg "missing-symbol" src -n',
+            cwd: "/workspace/demo",
+            status: "failed",
+            aggregatedOutput: "",
+            exitCode: 1,
+          },
+        },
+      },
+      state,
+    );
+
+    assert.deepEqual(completed.map((item) => item.activity.type), [
+      "observation_completed",
+      "tool_call_completed",
+    ]);
+    const observation = completed[0]?.activity;
+    assert.equal(observation?.type, "observation_completed");
+    if (observation?.type === "observation_completed") {
+      assert.equal(observation.observation.status, "completed");
+      assert.equal(observation.observation.kind, "file.search");
+      assert.equal(observation.observation.summary, "No matches.");
+      assert.equal(observation.observation.exitCode, undefined);
+      assert.deepEqual(observation.observation.metrics, {
+        rawExitCode: 1,
+        semanticStatus: "search_no_matches",
+      });
+    }
+    const tool = completed[1]?.activity;
+    assert.equal(tool?.type, "tool_call_completed");
+    if (tool?.type === "tool_call_completed") {
+      assert.deepEqual(tool.toolCall.result, { exitCode: 1 });
+      assert.equal(tool.toolCall.summary, "No matches.");
+    }
+  });
+
+  test("treats completed command items without status as completed live tools", () => {
+    const state = createCodexAppServerTranslationState();
+
+    const started = translateCodexAppServerNotification(
+      {
+        method: "item/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "commandExecution",
+            id: "cmd-read",
+            command: "sed -n '1,180p' README.md",
+            cwd: "/workspace/demo",
+          },
+        },
+      },
+      state,
+    );
+    const completed = translateCodexAppServerNotification(
+      {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "commandExecution",
+            id: "cmd-read",
+            command: "sed -n '1,180p' README.md",
+            cwd: "/workspace/demo",
+            aggregatedOutput: "hello",
+            exitCode: 0,
+          },
+        },
+      },
+      state,
+    );
+
+    assert.deepEqual(started.map((item) => item.activity.type), [
+      "observation_started",
+      "tool_call_started",
+    ]);
+    assert.deepEqual(completed.map((item) => item.activity.type), [
+      "observation_completed",
+      "tool_call_completed",
+    ]);
+    const observation = completed[0]?.activity;
+    assert.equal(observation?.type, "observation_completed");
+    if (observation?.type === "observation_completed") {
+      assert.equal(observation.observation.status, "completed");
+      assert.equal(observation.observation.exitCode, 0);
+    }
+  });
+
   test("merges terminal interactions into the command tool call lifecycle", () => {
     const state = createCodexAppServerTranslationState();
 
