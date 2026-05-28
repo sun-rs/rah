@@ -177,4 +177,28 @@ describe("chat thread filtering", () => {
 
     assert.deepEqual(entries.map((entry) => entry.key), ["tool:cmd-1"]);
   });
+
+  test("preserves failed result observations when their tool call completed", () => {
+    const entries = visibleFeedEntries(
+      [
+        toolEntry("tool:cmd-1", "completed"),
+        observationEntry("obs:cmd-1", "cmd-1", "failed"),
+      ],
+      true,
+    );
+
+    assert.deepEqual(entries.map((entry) => entry.key), ["obs:cmd-1"]);
+  });
+
+  test("lets true tool failures own their matching failed observation", () => {
+    const entries = visibleFeedEntries(
+      [
+        toolEntry("tool:cmd-1", "failed"),
+        observationEntry("obs:cmd-1", "cmd-1", "failed"),
+      ],
+      false,
+    );
+
+    assert.deepEqual(entries.map((entry) => entry.key), ["tool:cmd-1"]);
+  });
 });

@@ -840,7 +840,7 @@ export function SettingsPane() {
                 <div className="min-w-0">
                   <div className="text-sm font-medium text-[var(--app-fg)]">Hide completed tool calls</div>
                   <div className="mt-1 text-xs text-[var(--app-hint)]">
-                    Completed tool cards disappear from the thread as soon as the call finishes. Running and failed tools stay visible.
+                    Completed tool cards disappear from the thread. Failed command or test results stay visible as result events.
                   </div>
                 </div>
                 <button

@@ -27,7 +27,7 @@ function statusBadge(status: "running" | "completed" | "failed") {
       };
     case "failed":
       return {
-        label: "Failed",
+        label: "Tool failed",
         className: "bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/20",
         icon: <XCircle size={12} />,
       };

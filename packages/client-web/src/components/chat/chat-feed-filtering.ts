@@ -28,9 +28,9 @@ export function visibleFeedEntries(
   hideGeminiReasoning = false,
   provider?: ProviderKind,
 ): FeedEntry[] {
-  const toolIds = new Set(
+  const toolStatusById = new Map(
     feed.flatMap((entry) =>
-      entry.kind === "tool_call" ? [entry.toolCall.id] : [],
+      entry.kind === "tool_call" ? [[entry.toolCall.id, entry.status] as const] : [],
     ),
   );
 
@@ -67,6 +67,10 @@ export function visibleFeedEntries(
     if (!TOOL_BACKED_OBSERVATION_KINDS.has(entry.observation.kind)) {
       return true;
     }
-    return !toolIds.has(providerCallId);
+    const toolStatus = toolStatusById.get(providerCallId);
+    if (entry.status === "failed" && toolStatus !== "failed") {
+      return true;
+    }
+    return toolStatus === undefined;
   });
 }
