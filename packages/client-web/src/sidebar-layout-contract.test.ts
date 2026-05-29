@@ -73,7 +73,9 @@ describe("sidebar layout contract", () => {
     assert.match(SIDEBAR_LAYOUT.rootClassName, /rah-sidebar-content/);
     assert.match(sidebarSource, /toolbarLabelFullClassName/);
     assert.match(sidebarSource, /toolbarLabelShortClassName/);
-    assert.match(cssSource, /@container rah-sidebar-header \(max-width: 232px\)/);
+    assert.match(shellSource, /gap-2/);
+    assert.match(desktopHeaderSource, /rah-sidebar-header-brand[^"]*shrink-0/);
+    assert.match(cssSource, /@container rah-sidebar-header \(max-width: 224px\)/);
     assert.match(cssSource, /\.rah-sidebar-header-brand/);
     assert.match(cssSource, /display: none/);
     assert.match(cssSource, /@container rah-sidebar-content \(max-width: 212px\)/);

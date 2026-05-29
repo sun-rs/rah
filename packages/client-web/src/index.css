@@ -268,7 +268,7 @@
     container: rah-sidebar-content / inline-size;
   }
 
-  @container rah-sidebar-header (max-width: 232px) {
+  @container rah-sidebar-header (max-width: 224px) {
     .rah-sidebar-header-brand {
       display: none;
     }

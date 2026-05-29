@@ -38,7 +38,7 @@ export function DesktopWorkbenchSidebarHeader(props: {
       <button
         type="button"
         onClick={props.onHome}
-        className="rah-sidebar-header-brand icon-click-feedback min-w-0 overflow-hidden whitespace-nowrap rounded-md px-1 text-lg font-semibold tracking-tight text-[var(--app-fg)] transition-colors hover:bg-[var(--app-bg)]"
+        className="rah-sidebar-header-brand icon-click-feedback shrink-0 overflow-hidden whitespace-nowrap rounded-md px-1 text-lg font-semibold tracking-tight text-[var(--app-fg)] transition-colors hover:bg-[var(--app-bg)]"
         aria-label="Home"
         title="Home"
       >

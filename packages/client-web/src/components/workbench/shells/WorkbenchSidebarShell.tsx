@@ -52,7 +52,7 @@ export function WorkbenchSidebarShell(props: {
           width: props.sidebarOpen ? `var(--rah-sidebar-width, ${props.sidebarWidth}px)` : 0,
         }}
       >
-        <div className="rah-sidebar-header h-14 pl-4 pr-2 flex min-w-0 items-center gap-4 shrink-0">
+        <div className="rah-sidebar-header h-14 pl-4 pr-2 flex min-w-0 items-center gap-2 shrink-0">
           {props.sidebarOpen ? (
             <DesktopWorkbenchSidebarHeader
               storedSessions={props.storedSessions}
