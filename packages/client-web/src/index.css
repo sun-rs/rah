@@ -529,6 +529,28 @@
   }
 }
 
+.rah-stable-border {
+  position: relative;
+  border-color: transparent;
+  background-clip: padding-box;
+}
+
+.rah-stable-border::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px var(--rah-stable-border-color, var(--app-border));
+  pointer-events: none;
+  transition:
+    box-shadow 100ms ease,
+    opacity 100ms ease;
+}
+
+.rah-stable-border:disabled::after {
+  opacity: 0.65;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
