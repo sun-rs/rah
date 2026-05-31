@@ -3,6 +3,7 @@ import type { DebugScenarioDescriptor, StoredSessionRef } from "@rah/runtime-pro
 export interface PendingSessionTransition {
   kind: "new" | "history" | "claim_history";
   provider: StoredSessionRef["provider"];
+  providerSessionId?: string;
   title?: string;
   cwd?: string;
 }
@@ -37,6 +38,7 @@ export function createPendingStoredSessionTransition(
   return {
     kind,
     provider: ref.provider,
+    providerSessionId: ref.providerSessionId,
     title: ref.title ?? ref.preview ?? ref.providerSessionId,
     ...(ref.rootDir ?? ref.cwd ? { cwd: ref.rootDir ?? ref.cwd } : {}),
   };

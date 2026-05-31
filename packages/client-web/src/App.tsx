@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { MessageCircleMore, Plus, UsersRound } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import type { CouncilSnapshot, PermissionResponseRequest, ProviderModelCatalog, SessionConfigValue, SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
@@ -70,12 +70,22 @@ import { deriveWorkbenchNoticeState } from "./workbench-notice-contract";
 import { buildModelOptionValuesFromReasoning } from "./provider-capabilities";
 import { importWithStaleReload } from "./lazy-module-reload";
 import {
+  createPendingStoredSessionTransition,
+  type PendingSessionTransition,
+} from "./session-transition-contract";
+import {
   applyCanvasPaneTarget,
   CANVAS_LAYOUT_PANE_COUNT,
   CANVAS_PANE_IDS,
+  clearCanvasTargetsForStoredSession,
   createCanvasLayoutRatios,
+  createDefaultCanvasRightPanelsOpen,
   createEmptyCanvasTargets,
+  readRememberedCanvasState,
+  rememberCanvasState,
+  replaceCanvasSessionTargetWithStoredRef,
   resolveCanvasTargetProjection as resolveCanvasTargetProjectionFromState,
+  shouldInitializeCanvasPaneFromSelection,
   type CanvasPaneId,
   type CanvasPaneTarget,
 } from "./canvas-state";
@@ -263,6 +273,56 @@ function draftModelIdForCatalog(
   return catalogHasModel(catalog, draft?.modelId) ? draft!.modelId! : null;
 }
 
+function storedRefFromSessionSummary(summary: SessionSummary): StoredSessionRef | null {
+  const providerSessionId = summary.session.providerSessionId;
+  if (!providerSessionId) {
+    return null;
+  }
+  return {
+    provider: summary.session.provider,
+    providerSessionId,
+    ...(summary.session.cwd ? { cwd: summary.session.cwd } : {}),
+    ...(summary.session.rootDir ? { rootDir: summary.session.rootDir } : {}),
+    ...(summary.session.title ? { title: summary.session.title } : {}),
+    ...(summary.session.preview ? { preview: summary.session.preview } : {}),
+    createdAt: summary.session.createdAt,
+    updatedAt: summary.session.updatedAt,
+    lastUsedAt: summary.session.updatedAt,
+    source: "previous_running",
+  };
+}
+
+function canvasOpeningTransitionForTarget(
+  target: CanvasPaneTarget,
+  pendingSessionAction:
+    | {
+        kind: "attach_session" | "claim_control" | "claim_history";
+        sessionId: string;
+      }
+    | null,
+  pendingSessionTransition: PendingSessionTransition | null,
+): PendingSessionTransition | null {
+  if (!pendingSessionTransition) {
+    return null;
+  }
+  if (
+    target.kind === "session" &&
+    pendingSessionTransition.kind === "claim_history" &&
+    pendingSessionAction?.kind === "claim_history" &&
+    pendingSessionAction.sessionId === target.sessionId
+  ) {
+    return pendingSessionTransition;
+  }
+  if (
+    target.kind === "stored" &&
+    pendingSessionTransition.provider === target.ref.provider &&
+    pendingSessionTransition.providerSessionId === target.ref.providerSessionId
+  ) {
+    return pendingSessionTransition;
+  }
+  return null;
+}
+
 export function App() {
   const {
     init,
@@ -305,6 +365,7 @@ export function App() {
     claimControl,
     interruptSession,
     sendInput,
+    ensureSessionHistoryLoaded,
     refreshLatestHistory,
     loadOlderHistory,
     respondToPermission,
@@ -350,10 +411,18 @@ export function App() {
       claimControl: state.claimControl,
       interruptSession: state.interruptSession,
       sendInput: state.sendInput,
+      ensureSessionHistoryLoaded: state.ensureSessionHistoryLoaded,
       refreshLatestHistory: state.refreshLatestHistory,
       loadOlderHistory: state.loadOlderHistory,
       respondToPermission: state.respondToPermission,
     })),
+  );
+  const rememberedCanvasState = useMemo(
+    () =>
+      typeof window === "undefined"
+        ? null
+        : readRememberedCanvasState(window.localStorage),
+    [],
   );
   const [stopConfirmSessionId, setStopConfirmSessionId] = useState<string | null>(null);
   const [stoppingSessionId, setStoppingSessionId] = useState<string | null>(null);
@@ -378,22 +447,28 @@ export function App() {
   const [councils, setCouncils] = useState<CouncilSnapshot[]>([]);
   const [selectedCouncilId, setSelectedCouncilId] = useState<string | null>(null);
   const [homeNewCouncilDialogOpen, setHomeNewCouncilDialogOpen] = useState(false);
-  const [canvasLayout, setCanvasLayoutState] = useState<CanvasLayout>("two-horizontal");
+  const [canvasLayout, setCanvasLayoutState] = useState<CanvasLayout>(
+    () => rememberedCanvasState?.layout ?? "two-horizontal",
+  );
   const [canvasMaximizedPaneId, setCanvasMaximizedPaneId] = useState<CanvasPaneId | null>(null);
-  const [activeCanvasPaneId, setActiveCanvasPaneId] = useState<CanvasPaneId>("canvas-1");
+  const [activeCanvasPaneId, setActiveCanvasPaneId] = useState<CanvasPaneId>(
+    () => rememberedCanvasState?.activePaneId ?? "canvas-1",
+  );
   const [canvasRatios, setCanvasRatios] = useState<number[]>(() =>
-    createCanvasLayoutRatios("two-horizontal"),
+    rememberedCanvasState?.ratios ??
+    createCanvasLayoutRatios(rememberedCanvasState?.layout ?? "two-horizontal"),
   );
   const [canvasPaneTargets, setCanvasPaneTargets] =
-    useState<Record<CanvasPaneId, CanvasPaneTarget>>(() => createEmptyCanvasTargets());
+    useState<Record<CanvasPaneId, CanvasPaneTarget>>(
+      () => rememberedCanvasState?.targets ?? createEmptyCanvasTargets(),
+    );
   const [canvasPaneRightPanelsOpen, setCanvasPaneRightPanelsOpen] = useState<
     Record<CanvasPaneId, boolean>
-  >(() => ({
-    "canvas-1": true,
-    "canvas-2": true,
-    "canvas-3": true,
-    "canvas-4": true,
-  }));
+  >(() => rememberedCanvasState?.rightPanelsOpen ?? createDefaultCanvasRightPanelsOpen());
+  const [canvasPaneOpeningTransitions, setCanvasPaneOpeningTransitions] = useState<
+    Partial<Record<CanvasPaneId, PendingSessionTransition>>
+  >({});
+  const canvasStoredActivationInFlightRef = useRef<Set<string>>(new Set());
   const [canvasNewSessionDrafts, setCanvasNewSessionDrafts] =
     useState<Record<CanvasPaneId, CanvasNewSessionDraft>>(() =>
       createEmptyCanvasNewSessionDrafts(),
@@ -448,6 +523,25 @@ export function App() {
     initializeTheme();
     void init();
   }, [init]);
+
+  useEffect(() => {
+    rememberCanvasState(
+      typeof window === "undefined" ? undefined : window.localStorage,
+      {
+        layout: canvasLayout,
+        activePaneId: activeCanvasPaneId,
+        ratios: canvasRatios,
+        targets: canvasPaneTargets,
+        rightPanelsOpen: canvasPaneRightPanelsOpen,
+      },
+    );
+  }, [
+    activeCanvasPaneId,
+    canvasLayout,
+    canvasPaneRightPanelsOpen,
+    canvasPaneTargets,
+    canvasRatios,
+  ]);
 
   const refreshCouncils = useCallback(async () => {
     try {
@@ -684,6 +778,14 @@ export function App() {
     const sessionId = projection?.summary.session.id;
     const shouldCloseReadOnlyReplay = projection ? isReadOnlyReplay(projection.summary) : false;
     setCanvasPaneTarget(paneId, { kind: "empty" });
+    setCanvasPaneOpeningTransitions((current) => {
+      if (current[paneId] === undefined) {
+        return current;
+      }
+      const next = { ...current };
+      delete next[paneId];
+      return next;
+    });
     if (sessionId && selectedSessionId === sessionId) {
       setSelectedSessionId(null);
     }
@@ -695,13 +797,91 @@ export function App() {
     }
   };
 
+  const clearAllCanvasPanes = () => {
+    const readOnlySessionIds = new Set<string>();
+    const clearedSessionIds = new Set<string>();
+    const clearedCouncilIds = new Set<string>();
+    for (const paneId of CANVAS_PANE_IDS) {
+      const projection = resolveCanvasProjection(paneId);
+      const council = resolveCanvasCouncil(paneId);
+      if (projection) {
+        clearedSessionIds.add(projection.summary.session.id);
+        if (isReadOnlyReplay(projection.summary)) {
+          readOnlySessionIds.add(projection.summary.session.id);
+        }
+      }
+      if (council) {
+        clearedCouncilIds.add(council.id);
+      }
+    }
+    setCanvasPaneTargets(createEmptyCanvasTargets());
+    setCanvasPaneOpeningTransitions({});
+    setCanvasMaximizedPaneId(null);
+    if (selectedSessionId && clearedSessionIds.has(selectedSessionId)) {
+      setSelectedSessionId(null);
+    }
+    if (selectedCouncilId && clearedCouncilIds.has(selectedCouncilId)) {
+      setSelectedCouncilId(null);
+    }
+    for (const sessionId of readOnlySessionIds) {
+      void closeSession(sessionId);
+    }
+  };
+
+  const removeHistorySessionAndClearCanvasTargets = async (
+    session: Pick<StoredSessionRef, "provider" | "providerSessionId">,
+    options?: { sessionId?: string | null },
+  ) => {
+    await removeHistorySession(session);
+    setCanvasPaneTargets((current) =>
+      clearCanvasTargetsForStoredSession(current, session, options),
+    );
+  };
+
+  const stopSessionAndKeepCanvasHistory = async (
+    sessionId: string,
+    summary: SessionSummary | null,
+  ) => {
+    const ref = summary ? storedRefFromSessionSummary(summary) : null;
+    const affectsCanvasPane = CANVAS_PANE_IDS.some((paneId) => {
+      const target = canvasPaneTargets[paneId];
+      return target.kind === "session" && target.sessionId === sessionId;
+    });
+    await closeSession(sessionId);
+    if (!affectsCanvasPane) {
+      return;
+    }
+    if (!ref) {
+      setCanvasPaneTargets((current) => {
+        let changed = false;
+        const next = { ...current };
+        for (const paneId of CANVAS_PANE_IDS) {
+          const target = current[paneId];
+          if (target.kind === "session" && target.sessionId === sessionId) {
+            next[paneId] = { kind: "empty" };
+            changed = true;
+          }
+        }
+        return changed ? next : current;
+      });
+      return;
+    }
+    setCanvasPaneTargets((current) =>
+      replaceCanvasSessionTargetWithStoredRef(current, sessionId, ref),
+    );
+    await activateHistorySession(ref, { confirmCreateMissingWorkspace });
+  };
+
   const toggleCanvasPaneMaximize = (paneId: CanvasPaneId) => {
     setActiveCanvasPaneId(paneId);
     setCanvasMaximizedPaneId((current) => (current === paneId ? null : paneId));
   };
 
   const enterCanvasMode = () => {
-    if (selectedSessionId) {
+    if (
+      selectedSessionId &&
+      shouldInitializeCanvasPaneFromSelection(canvasPaneTargets[activeCanvasPaneId])
+    ) {
       setCanvasPaneTarget(activeCanvasPaneId, { kind: "session", sessionId: selectedSessionId });
     }
     setWorkbenchMode("canvas");
@@ -824,6 +1004,44 @@ export function App() {
     setMissingWorkspaceResolver(null);
     setMissingWorkspaceConfirmDir(null);
   };
+
+  useEffect(() => {
+    if (workbenchMode !== "canvas") {
+      return;
+    }
+    for (const paneId of visibleCanvasPaneIds) {
+      const target = canvasPaneTargets[paneId];
+      const projection = resolveCanvasProjection(paneId);
+      if (target.kind === "stored" && !projection) {
+        const activationKey = `${target.ref.provider}:${target.ref.providerSessionId}`;
+        if (!canvasStoredActivationInFlightRef.current.has(activationKey)) {
+          canvasStoredActivationInFlightRef.current.add(activationKey);
+          void activateHistorySession(target.ref, { confirmCreateMissingWorkspace })
+            .catch(() => undefined)
+            .finally(() => {
+              canvasStoredActivationInFlightRef.current.delete(activationKey);
+            });
+        }
+        continue;
+      }
+      if (
+        projection &&
+        projection.summary.session.providerSessionId &&
+        !projection.history.authoritativeApplied &&
+        projection.history.phase !== "loading"
+      ) {
+        void ensureSessionHistoryLoaded(projection.summary.session.id).catch(() => undefined);
+      }
+    }
+  }, [
+    activateHistorySession,
+    canvasPaneTargets,
+    ensureSessionHistoryLoaded,
+    projections,
+    visibleCanvasPaneKey,
+    workbenchMode,
+  ]);
+
   const primaryPaneState = derivePrimaryPaneState({
     selectedSummary,
     pendingSessionTransition,
@@ -1339,7 +1557,7 @@ export function App() {
         onRefreshCouncils={refreshCouncils}
         onRenameCouncil={(council) => setRenameDialogCouncilId(council.id)}
         onRemoveCouncil={removeCouncilFromChats}
-        onRemoveHistorySession={(session) => void removeHistorySession(session)}
+        onRemoveHistorySession={(session) => void removeHistorySessionAndClearCanvasTargets(session)}
         onRemoveHistoryWorkspace={(workspaceDir) => void removeHistoryWorkspaceSessions(workspaceDir)}
         onHome={goHome}
         onOpenSettings={() => {
@@ -1393,7 +1611,7 @@ export function App() {
             return;
           }
           setStoppingSessionId(stopConfirmSessionId);
-          void closeSession(stopConfirmSessionId)
+          void stopSessionAndKeepCanvasHistory(stopConfirmSessionId, stopTargetSummary)
             .then(() => setStopConfirmSessionId(null))
             .finally(() => setStoppingSessionId(null));
         }}
@@ -1446,7 +1664,9 @@ export function App() {
           void closeSession(deleteConfirmSessionId)
             .then(async () => {
               if (storedRef) {
-                await removeHistorySession(storedRef);
+                await removeHistorySessionAndClearCanvasTargets(storedRef, {
+                  sessionId: deleteConfirmSessionId,
+                });
               }
               setDeleteConfirmSessionId(null);
             })
@@ -1564,11 +1784,17 @@ export function App() {
                 const projection = resolveCanvasProjection(paneId);
                 const council = resolveCanvasCouncil(paneId);
                 const target = canvasPaneTargets[paneId];
+                const openingTransition = canvasOpeningTransitionForTarget(
+                  target,
+                  pendingSessionAction,
+                  pendingSessionTransition,
+                ) ?? canvasPaneOpeningTransitions[paneId] ?? null;
                 return {
                   id: paneId,
                   label:
                     projection?.summary.session.title ??
                     council?.title ??
+                    openingTransition?.title ??
                     `Pane ${index + 1}`,
                   active: paneId === activeCanvasPaneId,
                   clearable: target.kind !== "empty",
@@ -1584,6 +1810,10 @@ export function App() {
               onActivatePane={(paneId) => setActiveCanvasPaneId(paneId as CanvasPaneId)}
               onToggleMaximize={(paneId) => toggleCanvasPaneMaximize(paneId as CanvasPaneId)}
               onClearPane={(paneId) => clearCanvasPane(paneId as CanvasPaneId)}
+              onClearAllPanes={clearAllCanvasPanes}
+              clearAllPanesDisabled={visibleCanvasPaneIds.every(
+                (paneId) => canvasPaneTargets[paneId].kind === "empty",
+              )}
               onExitCanvas={exitCanvasMode}
               onDropSession={(paneId, sessionId) =>
                 setCanvasPaneSession(paneId as CanvasPaneId, sessionId)
@@ -1617,6 +1847,11 @@ export function App() {
                 const typedPaneId = paneId as CanvasPaneId;
                 const target = canvasPaneTargets[typedPaneId];
                 const projection = resolveCanvasProjection(typedPaneId);
+                const openingTransition = canvasOpeningTransitionForTarget(
+                  target,
+                  pendingSessionAction,
+                  pendingSessionTransition,
+                ) ?? canvasPaneOpeningTransitions[typedPaneId] ?? null;
                 const paneExpanded = canvasMaximizedPaneId === typedPaneId;
                 const paneRightPanelOpen =
                   paneExpanded && canvasPaneRightPanelsOpen[typedPaneId] !== false;
@@ -1651,6 +1886,24 @@ export function App() {
                   );
                 }
                 if (!projection) {
+                  if (openingTransition) {
+                    return (
+                      <div className="flex h-full min-h-0 flex-col">
+                        <WorkbenchOpeningPane
+                          openingSession={openingTransition}
+                          sidebarOpen
+                          rightSidebarOpen={false}
+                          onOpenLeft={() => undefined}
+                          onExpandSidebar={() => undefined}
+                          onOpenRight={() => undefined}
+                          onExpandInspector={() => undefined}
+                          onToggleInspector={() => undefined}
+                          inspectorToggleOpen={false}
+                          showInspectorToggle={false}
+                        />
+                      </div>
+                    );
+                  }
                   if (target.kind === "new") {
                     const paneDraft = canvasNewSessionDrafts[typedPaneId];
                     const paneProvider = paneDraft.provider;
@@ -1873,7 +2126,9 @@ export function App() {
                           onRefreshCouncils={refreshCouncils}
                           onRenameCouncil={(council) => setRenameDialogCouncilId(council.id)}
                           onRemoveCouncil={removeCouncilFromChats}
-                          onRemoveSession={(session) => void removeHistorySession(session)}
+                          onRemoveSession={(session) =>
+                            void removeHistorySessionAndClearCanvasTargets(session)
+                          }
                           onRemoveWorkspace={(workspaceDir) =>
                             void removeHistoryWorkspaceSessions(workspaceDir)
                           }
@@ -2003,16 +2258,44 @@ export function App() {
                     }
                     onOpenLocalFile={(_sessionId, path) => openLinkedFilePreview(path)}
                     onClaimHistory={(sessionId, request) => {
+                      const ref = storedRefFromSessionSummary(summary);
+                      if (ref) {
+                        const openingTransition = createPendingStoredSessionTransition(
+                          ref,
+                          "claim_history",
+                        );
+                        setCanvasPaneOpeningTransitions((current) => ({
+                          ...current,
+                          [typedPaneId]: openingTransition,
+                        }));
+                      }
                       void claimHistorySession(sessionId, {
                         confirmCreateMissingWorkspace,
                         ...request,
+                      }).then((claimedSessionId) => {
+                        if (claimedSessionId) {
+                          setCanvasPaneSession(typedPaneId, claimedSessionId);
+                        }
+                      }).catch(() => undefined).finally(() => {
+                        setCanvasPaneOpeningTransitions((current) => {
+                          if (current[typedPaneId] === undefined) {
+                            return current;
+                          }
+                          const next = { ...current };
+                          delete next[typedPaneId];
+                          return next;
+                        });
                       });
                     }}
-                    onClaimControl={(sessionId) => claimControl(sessionId)}
+                    onClaimControl={(sessionId) =>
+                      claimControl(sessionId).then(() => {
+                        setCanvasPaneSession(typedPaneId, sessionId);
+                      })
+                    }
                     onInterrupt={(sessionId) => void interruptSession(sessionId)}
                     onLoadOlderHistory={(sessionId) => loadOlderHistory(sessionId)}
                     onStop={(sessionId) => setStopConfirmSessionId(sessionId)}
-                    onCloseHistory={(sessionId) => void closeSession(sessionId)}
+                    onCloseHistory={() => clearCanvasPane(typedPaneId)}
                     onDelete={(sessionId) => setDeleteConfirmSessionId(sessionId)}
                     onRename={(sessionId) => setRenameDialogSessionId(sessionId)}
                     onSetSessionMode={async (sessionId, modeId) => {

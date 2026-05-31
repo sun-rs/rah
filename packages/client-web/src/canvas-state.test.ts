@@ -3,10 +3,17 @@ import { test } from "node:test";
 import type { SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
 import {
   applyCanvasPaneTarget,
+  clearCanvasTargetsForStoredSession,
   createCanvasLayoutRatios,
+  createDefaultCanvasRightPanelsOpen,
   createEmptyCanvasTargets,
+  normalizeRememberedCanvasState,
+  readRememberedCanvasState,
+  rememberCanvasState,
+  replaceCanvasSessionTargetWithStoredRef,
   resolveCanvasRunningUniquenessKey,
   resolveCanvasTargetProjection,
+  shouldInitializeCanvasPaneFromSelection,
   type CanvasPaneTarget,
 } from "./canvas-state";
 import { createEmptySessionProjection } from "./session-store-session-lifecycle";
@@ -74,11 +81,97 @@ function projections(...summaries: SessionSummary[]) {
   );
 }
 
+function memoryStorage(): Storage {
+  const values = new Map<string, string>();
+  return {
+    get length() {
+      return values.size;
+    },
+    clear: () => values.clear(),
+    getItem: (key: string) => values.get(key) ?? null,
+    key: (index: number) => [...values.keys()][index] ?? null,
+    removeItem: (key: string) => values.delete(key),
+    setItem: (key: string, value: string) => {
+      values.set(key, value);
+    },
+  };
+}
+
 test("canvas layout ratios match visible pane count", () => {
   assert.deepEqual(createCanvasLayoutRatios("two-horizontal"), [1, 1]);
   assert.deepEqual(createCanvasLayoutRatios("two-vertical"), [1, 1]);
   assert.deepEqual(createCanvasLayoutRatios("three-horizontal"), [1, 1, 1]);
   assert.deepEqual(createCanvasLayoutRatios("four-grid"), [1, 1, 1, 1]);
+});
+
+test("canvas entry only initializes empty panes from the global selection", () => {
+  assert.equal(shouldInitializeCanvasPaneFromSelection({ kind: "empty" }), true);
+  assert.equal(
+    shouldInitializeCanvasPaneFromSelection({ kind: "session", sessionId: "live-1" }),
+    false,
+  );
+  assert.equal(
+    shouldInitializeCanvasPaneFromSelection({ kind: "stored", ref: ref("codex", "history-1") }),
+    false,
+  );
+  assert.equal(
+    shouldInitializeCanvasPaneFromSelection({ kind: "council", councilId: "council-1" }),
+    false,
+  );
+  assert.equal(shouldInitializeCanvasPaneFromSelection({ kind: "new" }), false);
+});
+
+test("canvas state persistence stores only pane targets and layout chrome", () => {
+  const storage = memoryStorage();
+  const state = normalizeRememberedCanvasState({
+    layout: "three-horizontal",
+    activePaneId: "canvas-3",
+    ratios: [1, 2, 1],
+    targets: {
+      "canvas-1": { kind: "session", sessionId: "live-1" },
+      "canvas-2": { kind: "stored", ref: ref("codex", "history-1") },
+      "canvas-3": { kind: "council", councilId: "council-1" },
+      "canvas-4": { kind: "new" },
+    },
+    rightPanelsOpen: {
+      "canvas-1": false,
+      "canvas-2": true,
+      "canvas-3": false,
+      "canvas-4": true,
+    },
+  });
+
+  rememberCanvasState(storage, state);
+
+  assert.deepEqual(readRememberedCanvasState(storage), state);
+});
+
+test("canvas state persistence sanitizes invalid saved values", () => {
+  assert.deepEqual(
+    normalizeRememberedCanvasState({
+      layout: "unknown",
+      activePaneId: "canvas-4",
+      ratios: [1],
+      targets: {
+        "canvas-1": { kind: "session" },
+        "canvas-2": { kind: "session", sessionId: "live-2" },
+      },
+      rightPanelsOpen: { "canvas-1": false, "canvas-3": true },
+    }),
+    {
+      layout: "two-horizontal",
+      activePaneId: "canvas-1",
+      ratios: [1, 1],
+      targets: {
+        ...createEmptyCanvasTargets(),
+        "canvas-2": { kind: "session", sessionId: "live-2" },
+      },
+      rightPanelsOpen: {
+        ...createDefaultCanvasRightPanelsOpen(),
+        "canvas-1": false,
+      },
+    },
+  );
 });
 
 test("canvas panes keep a running session unique across panes", () => {
@@ -169,4 +262,33 @@ test("canvas stored refs resolve to existing projections by provider identity", 
   );
 
   assert.equal(resolved?.summary.session.id, "live-1");
+});
+
+test("stopping a canvas session converts its pane target to stored history", () => {
+  const current = createEmptyCanvasTargets();
+  current["canvas-1"] = { kind: "session", sessionId: "live-1" };
+  current["canvas-2"] = { kind: "session", sessionId: "live-2" };
+  const stoppedRef = ref("codex", "provider-1");
+
+  const next = replaceCanvasSessionTargetWithStoredRef(current, "live-1", stoppedRef);
+
+  assert.deepEqual(next["canvas-1"], { kind: "stored", ref: stoppedRef });
+  assert.deepEqual(next["canvas-2"], { kind: "session", sessionId: "live-2" });
+});
+
+test("deleting a stored session clears matching canvas targets", () => {
+  const current = createEmptyCanvasTargets();
+  current["canvas-1"] = { kind: "stored", ref: ref("codex", "provider-1") };
+  current["canvas-2"] = { kind: "session", sessionId: "live-1" };
+  current["canvas-3"] = { kind: "stored", ref: ref("opencode", "provider-2") };
+
+  const next = clearCanvasTargetsForStoredSession(
+    current,
+    { provider: "codex", providerSessionId: "provider-1" },
+    { sessionId: "live-1" },
+  );
+
+  assert.deepEqual(next["canvas-1"], { kind: "empty" });
+  assert.deepEqual(next["canvas-2"], { kind: "empty" });
+  assert.deepEqual(next["canvas-3"], { kind: "stored", ref: ref("opencode", "provider-2") });
 });

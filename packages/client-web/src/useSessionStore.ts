@@ -216,7 +216,7 @@ interface SessionState {
   claimHistorySession: (
     sessionId: string,
     options?: ClaimHistorySessionOptions,
-  ) => Promise<void>;
+  ) => Promise<string | null>;
   removeHistorySession: (session: Pick<StoredSessionRef, "provider" | "providerSessionId">) => Promise<void>;
   removeHistoryWorkspaceSessions: (workspaceDir: string) => Promise<void>;
   claimControl: (sessionId: string) => Promise<void>;
@@ -1077,7 +1077,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   claimHistorySession: async (sessionId, options) => {
-    await claimHistorySessionCommand(
+    return claimHistorySessionCommand(
       createStartupDeps(get, set, options),
       sessionId,
       {

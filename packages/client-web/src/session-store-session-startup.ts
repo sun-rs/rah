@@ -34,6 +34,7 @@ import {
   findDaemonRunningSessionForStoredRef,
   resolveHistoryActivationMode,
 } from "./session-store-workspace";
+import { updateSessionSummaryInProjectionMap } from "./session-store-projections";
 import { providerLabel, type SessionProjection } from "./types";
 
 type ProviderChoice = CoreLiveProvider;
@@ -406,7 +407,7 @@ export async function claimHistorySessionCommand(
     optionValues?: Record<string, SessionConfigValue>;
     reasoningId?: string | null;
   },
-) {
+): Promise<string | null> {
   const state = deps.get();
   const projection = state.projections.get(sessionId);
   const summary = projection?.summary;
@@ -433,10 +434,66 @@ export async function claimHistorySessionCommand(
     ...projection,
     summary,
   };
+  const applyClaimedSession = (claimedSession: SessionSummary) => {
+    deps.set((current) => {
+      const next = new Map(current.projections);
+      if (next.has(sessionId)) {
+        const claimedState = applyClaimedHistorySessionState(
+          current,
+          claimedSession,
+          sessionId,
+          preservedProjection,
+          ref,
+          next,
+        );
+        return {
+          ...claimedState,
+          projections: deps.applyEventsToMap(
+            claimedState.projections ?? next,
+            deps.takePendingEventsForSessions(new Set([claimedSession.session.id])),
+          ),
+        };
+      }
+      const existingProjection = next.get(claimedSession.session.id);
+      next.set(claimedSession.session.id, {
+        ...(existingProjection ?? preservedProjection),
+        summary: claimedSession,
+      });
+      return {
+        projections: deps.applyEventsToMap(
+          next,
+          deps.takePendingEventsForSessions(new Set([claimedSession.session.id])),
+        ),
+        unreadSessionIds: new Set(
+          [...current.unreadSessionIds].filter(
+            (sessionIdValue) =>
+              sessionIdValue !== sessionId &&
+              sessionIdValue !== claimedSession.session.id,
+          ),
+        ),
+        selectedSessionId: claimedSession.session.id,
+        pendingSessionAction: null,
+        pendingSessionTransition: null,
+        error: null,
+      };
+    });
+  };
+  const updateClaimedSessionSummary = (claimedSession: SessionSummary) => {
+    deps.set((current) => ({
+      projections: deps.applyEventsToMap(
+        updateSessionSummaryInProjectionMap(current.projections, claimedSession),
+        deps.takePendingEventsForSessions(new Set([claimedSession.session.id])),
+      ),
+      selectedSessionId: claimedSession.session.id,
+      pendingSessionAction: null,
+      pendingSessionTransition: null,
+      error: null,
+    }));
+  };
 
   const targetDir = ref.cwd ?? ref.rootDir ?? null;
   if (!(await ensureLaunchWorkspaceAvailable(deps, targetDir))) {
-    return;
+    return null;
   }
 
   try {
@@ -471,45 +528,39 @@ export async function claimHistorySessionCommand(
     }
     const response = await api.resumeSession(request);
     let session = response.session;
-    if (
-      options?.modeId &&
-      session.session.mode?.mutable &&
-      session.session.mode.currentModeId !== options.modeId
-    ) {
-      session = await api.setSessionMode(session.session.id, { modeId: options.modeId });
-    }
-    if (
-      options?.modelId &&
-      session.session.model?.mutable &&
-      (session.session.model.currentModelId !== options.modelId ||
-        options.optionValues !== undefined ||
-        (options.reasoningId !== undefined &&
-          session.session.model.currentReasoningId !== options.reasoningId))
-    ) {
-      session = await api.setSessionModel(session.session.id, {
-        modelId: options.modelId,
-        ...(options.optionValues !== undefined ? { optionValues: options.optionValues } : {}),
-        ...(options.reasoningId !== undefined ? { reasoningId: options.reasoningId } : {}),
+    applyClaimedSession(session);
+    try {
+      if (
+        options?.modeId &&
+        session.session.mode?.mutable &&
+        session.session.mode.currentModeId !== options.modeId
+      ) {
+        session = await api.setSessionMode(session.session.id, { modeId: options.modeId });
+        updateClaimedSessionSummary(session);
+      }
+      if (
+        options?.modelId &&
+        session.session.model?.mutable &&
+        (session.session.model.currentModelId !== options.modelId ||
+          options.optionValues !== undefined ||
+          (options.reasoningId !== undefined &&
+            session.session.model.currentReasoningId !== options.reasoningId))
+      ) {
+        session = await api.setSessionModel(session.session.id, {
+          modelId: options.modelId,
+          ...(options.optionValues !== undefined ? { optionValues: options.optionValues } : {}),
+          ...(options.reasoningId !== undefined ? { reasoningId: options.reasoningId } : {}),
+        });
+        updateClaimedSessionSummary(session);
+      }
+    } catch (configurationError) {
+      deps.set({
+        pendingSessionAction: null,
+        pendingSessionTransition: null,
+        error: `Session was claimed, but updating session controls failed: ${readErrorMessage(configurationError)}`,
       });
     }
-    deps.set((current) => {
-      const next = new Map(current.projections);
-      const claimedState = applyClaimedHistorySessionState(
-        current,
-        session,
-        sessionId,
-        preservedProjection,
-        ref,
-        next,
-      );
-      return {
-        ...claimedState,
-        projections: deps.applyEventsToMap(
-          claimedState.projections ?? next,
-          deps.takePendingEventsForSessions(new Set([session.session.id])),
-        ),
-      };
-    });
+    return session.session.id;
   } catch (error) {
     const message = readErrorMessage(error);
     if (message.includes("attach instead of resume")) {
@@ -540,7 +591,7 @@ export async function claimHistorySessionCommand(
         });
         await deps.attachSession(running);
         deps.set({ pendingSessionAction: null, pendingSessionTransition: null, error: null });
-        return;
+        return running.session.id;
       }
     }
     deps.set({

@@ -501,6 +501,70 @@ describe("session startup model and mode requests", () => {
     });
   });
 
+  test("claim history keeps the claimed session when post-claim control update fails", async () => {
+    const history = summary({
+      id: "history",
+      provider: "codex",
+      providerSessionId: "thread-1",
+      cwd: "/tmp/rah",
+    });
+    const projections = new Map([["history", createEmptySessionProjection(history)]]);
+    installWebApiMocks((request) => {
+      if (request.url.includes("/api/fs/list")) {
+        return { path: "/tmp/rah", entries: [] };
+      }
+      if (request.url.endsWith("/api/sessions/resume")) {
+        return {
+          session: summary({
+            id: "claimed",
+            provider: "codex",
+            providerSessionId: "thread-1",
+            cwd: "/tmp/rah",
+            modelId: "gpt-5.5",
+            reasoningId: "xhigh",
+          }),
+        };
+      }
+      if (request.url.endsWith("/api/sessions/claimed/model")) {
+        return new Response(JSON.stringify({ error: "model update failed" }), {
+          status: 500,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      throw new Error(`Unexpected request ${request.url}`);
+    });
+    const deps = startupDeps({
+      projections,
+      storedSessions: [
+        {
+          provider: "codex",
+          providerSessionId: "thread-1",
+          cwd: "/tmp/rah",
+          rootDir: "/tmp/rah",
+          createdAt: "2026-04-29T00:00:00.000Z",
+        },
+      ],
+      recentSessions: [],
+    });
+
+    const claimedId = await claimHistorySessionCommand(
+      deps,
+      "history",
+      {
+        modelId: "gpt-5.5",
+        reasoningId: "xhigh",
+        optionValues: { model_reasoning_effort: "xhigh" },
+      },
+    );
+    const state = (deps as { get: () => { projections: Map<string, unknown>; selectedSessionId: string | null; error: string | null } }).get();
+
+    assert.equal(claimedId, "claimed");
+    assert.equal(state.selectedSessionId, "claimed");
+    assert.equal(state.projections.has("claimed"), true);
+    assert.equal(state.projections.has("history"), false);
+    assert.match(state.error ?? "", /Session was claimed/);
+  });
+
   test("claim history selects native local-server backend for providers that support it", async () => {
     const requests = installWebApiMocks((request) => {
       if (request.url.includes("/api/fs/list")) {

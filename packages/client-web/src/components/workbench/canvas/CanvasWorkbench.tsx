@@ -3,6 +3,7 @@ import type { ReactNode, PointerEvent as ReactPointerEvent } from "react";
 import { Columns2, Columns3, Eraser, Grid2X2, Maximize2, Menu, Minimize2, Rows2, X } from "lucide-react";
 import {
   HEADER_ACTION_GROUP_CLASS,
+  HEADER_ICON_BUTTON_CLASS,
   HEADER_SEGMENTED_BUTTON_ACTIVE_CLASS,
   HEADER_SEGMENTED_BUTTON_BASE_CLASS,
   HEADER_SEGMENTED_BUTTON_INACTIVE_CLASS,
@@ -44,6 +45,8 @@ export function CanvasWorkbench(props: {
   onActivatePane: (paneId: string) => void;
   onToggleMaximize: (paneId: string) => void;
   onClearPane: (paneId: string) => void;
+  onClearAllPanes: () => void;
+  clearAllPanesDisabled: boolean;
   onExitCanvas: () => void;
   onDropSession: (paneId: string, sessionId: string) => void;
   onDropCouncil: (paneId: string, councilId: string) => void;
@@ -252,6 +255,16 @@ export function CanvasWorkbench(props: {
               );
             })}
           </div>
+          <button
+            type="button"
+            className={HEADER_ICON_BUTTON_CLASS}
+            onClick={props.onClearAllPanes}
+            disabled={props.clearAllPanesDisabled}
+            aria-label="Clear all canvas panes"
+            title="Clear all panes"
+          >
+            <Eraser size={14} />
+          </button>
           <button
             type="button"
             className={HEADER_TEXT_BUTTON_CLASS}
