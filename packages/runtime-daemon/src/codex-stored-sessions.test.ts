@@ -800,6 +800,14 @@ describe("codex stored session path resolution", () => {
       ),
       false,
     );
+    assert.ok(
+      page.events.some(
+        (event) =>
+          event.type === "tool.call.completed" &&
+          event.payload.toolCall.id === "call-running" &&
+          event.payload.toolCall.result?.sessionId === 7144,
+      ),
+    );
 
     const finalizedLoader = createCodexStoredSessionFrozenHistoryPageLoader({
       sessionId: "replay-running-terminal",
@@ -817,6 +825,14 @@ describe("codex stored session path resolution", () => {
             /interrupted/i.test(event.payload.item.text)),
       ),
       false,
+    );
+    assert.ok(
+      frozenPage.events.some(
+        (event) =>
+          event.type === "tool.call.completed" &&
+          event.payload.toolCall.id === "call-running" &&
+          event.payload.toolCall.result?.sessionId === 7144,
+      ),
     );
   });
 });

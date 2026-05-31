@@ -57,6 +57,7 @@ interface CodexTerminalSessionToolState {
 export interface CodexRolloutTranslationState {
   pendingToolCalls: Map<string, PendingToolCall>;
   terminalSessions: Map<number, CodexTerminalSessionToolState>;
+  completedToolCallIds: Set<string>;
   lastTimelineTextSignature: string | null;
   lastGoalEventSignatureByThread: Map<string, string>;
   providerSessionId?: string | undefined;
@@ -71,6 +72,7 @@ export function createCodexRolloutTranslationState(
   const state: CodexRolloutTranslationState = {
     pendingToolCalls: new Map(),
     terminalSessions: new Map(),
+    completedToolCallIds: new Set(),
     lastTimelineTextSignature: null,
     lastGoalEventSignatureByThread: new Map(),
     nextTimelineItemIndex: 0,
@@ -734,6 +736,84 @@ function makeCommandObservation(
   };
 }
 
+function webSearchActionRecord(action: unknown): Record<string, unknown> | null {
+  if (!action || typeof action !== "object" || Array.isArray(action)) {
+    return null;
+  }
+  return action as Record<string, unknown>;
+}
+
+function webSearchActionType(action: Record<string, unknown> | null): string | null {
+  if (typeof action?.type !== "string") {
+    return null;
+  }
+  switch (action.type) {
+    case "openPage":
+      return "open_page";
+    case "findInPage":
+      return "find_in_page";
+    default:
+      return action.type;
+  }
+}
+
+function makeWebSearchObservation(
+  payload: Record<string, unknown>,
+  status: "running" | "completed",
+): WorkbenchObservation {
+  const callId = typeof payload.call_id === "string" ? payload.call_id : "web-search";
+  const action = webSearchActionRecord(payload.action);
+  const actionType = webSearchActionType(action);
+  const query =
+    stringField(payload, "query") ??
+    (actionType === "search" ? stringField(action ?? {}, "query") : null);
+  const queries =
+    actionType === "search" && Array.isArray(action?.queries)
+      ? action.queries.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+      : [];
+  const url =
+    actionType === "open_page" || actionType === "find_in_page"
+      ? stringField(action ?? {}, "url")
+      : null;
+  const pattern = actionType === "find_in_page" ? stringField(action ?? {}, "pattern") : null;
+  const effectiveQueries = query ? [query] : queries;
+  const title =
+    actionType === "open_page"
+      ? "Open page"
+      : actionType === "find_in_page"
+        ? "Find in page"
+        : "Web search";
+  const summary =
+    actionType === "open_page"
+      ? url ?? undefined
+      : actionType === "find_in_page"
+        ? [pattern, url].filter(Boolean).join(" in ") || undefined
+        : effectiveQueries.length > 0
+          ? effectiveQueries.join(", ")
+          : undefined;
+  const artifacts: ToolCallArtifact[] = [];
+  if (url) {
+    artifacts.push({ kind: "urls", urls: [url] });
+  }
+  if (action) {
+    artifacts.push({ kind: "json", label: "action", value: action });
+  }
+  return {
+    id: `obs-${callId}`,
+    kind: actionType === "open_page" || actionType === "find_in_page" ? "web.fetch" : "web.search",
+    status,
+    title,
+    ...(summary !== undefined ? { summary } : {}),
+    subject: {
+      providerToolName: typeof payload.type === "string" ? payload.type : "web_search",
+      providerCallId: callId,
+      ...(effectiveQueries.length > 0 ? { query: effectiveQueries.join(", ") } : {}),
+      ...(url ? { urls: [url] } : {}),
+    },
+    ...(artifacts.length > 0 ? { detail: { artifacts } } : {}),
+  };
+}
+
 function makePatchObservation(callId: string, toolCall: ToolCall): WorkbenchObservation {
   const fileRefs = toolCall.detail?.artifacts.flatMap((artifact) =>
     artifact.kind === "file_refs" ? artifact.files : [],
@@ -800,6 +880,21 @@ function runningTerminalObservation(
     status: "running",
     summary: `Process running with session ID ${sessionId}.`,
     detail: { artifacts },
+  };
+}
+
+function completedRunningTerminalObservation(
+  observation: WorkbenchObservation,
+  sessionId: number,
+  output?: string,
+): WorkbenchObservation {
+  return {
+    ...completeObservation(observation, {
+      status: "completed",
+      ...(output !== undefined ? { output } : {}),
+    }),
+    status: "completed",
+    summary: `Process running with session ID ${sessionId}.`,
   };
 }
 
@@ -1092,6 +1187,106 @@ export function translateCodexRolloutLine(
     }
     if (payload.type === "thread_goal_cleared") {
       return translateCodexGoalClearedEvent(record, payload, state);
+    }
+    if (payload.type === "patch_apply_end" && typeof payload.call_id === "string") {
+      const pending = state.pendingToolCalls.get(payload.call_id);
+      if (!pending || pending.hidden) {
+        return [];
+      }
+      const success = payload.success !== false && payload.status !== "failed";
+      const stdout = typeof payload.stdout === "string" ? payload.stdout : undefined;
+      const stderr = typeof payload.stderr === "string" ? payload.stderr : undefined;
+      const artifacts = [...(pending.toolCall.detail?.artifacts ?? [])];
+      if (stdout) {
+        artifacts.push({ kind: "text", label: "stdout", text: stdout });
+      }
+      if (stderr) {
+        artifacts.push({ kind: "text", label: "stderr", text: stderr });
+      }
+      if (
+        payload.changes &&
+        typeof payload.changes === "object" &&
+        !Array.isArray(payload.changes)
+      ) {
+        const files = Object.keys(payload.changes);
+        if (files.length > 0) {
+          artifacts.push({ kind: "file_refs", files });
+        }
+      }
+      state.pendingToolCalls.delete(payload.call_id);
+      state.completedToolCallIds.add(payload.call_id);
+      const toolCall: ToolCall = {
+        ...pending.toolCall,
+        ...(artifacts.length > 0 ? { detail: { artifacts } } : {}),
+        result: { success },
+        summary: success ? "Patch applied." : "Patch apply failed.",
+      };
+      const completedObservation = pending.observation
+        ? {
+            ...pending.observation,
+            status: success ? "completed" as const : "failed" as const,
+            summary: success ? "Patch applied." : "Patch apply failed.",
+            detail: { artifacts },
+          }
+        : null;
+      return [
+        ...(completedObservation
+          ? [
+              persistedActivity(
+                record,
+                success
+                  ? {
+                      type: "observation_completed" as const,
+                      observation: completedObservation,
+                    }
+                  : {
+                      type: "observation_failed" as const,
+                      observation: completedObservation,
+                      error: stderr || "Patch apply failed.",
+                    },
+                "derived" as const,
+              ),
+            ]
+          : []),
+        persistedActivity(
+          record,
+          success
+            ? {
+                type: "tool_call_completed" as const,
+                toolCall,
+              }
+            : {
+                type: "tool_call_failed" as const,
+                toolCallId: payload.call_id,
+                error: stderr || "Patch apply failed.",
+              },
+          "derived" as const,
+        ),
+      ];
+    }
+    if (payload.type === "web_search_begin" && typeof payload.call_id === "string") {
+      return [
+        persistedActivity(
+          record,
+          {
+            type: "observation_started",
+            observation: makeWebSearchObservation(payload, "running"),
+          },
+          "authoritative",
+        ),
+      ];
+    }
+    if (payload.type === "web_search_end" && typeof payload.call_id === "string") {
+      return [
+        persistedActivity(
+          record,
+          {
+            type: "observation_completed",
+            observation: makeWebSearchObservation(payload, "completed"),
+          },
+          "authoritative",
+        ),
+      ];
     }
     if (payload.type === "agent_reasoning" && typeof payload.text === "string") {
       if (shouldSkipDuplicateTimelineText(state, record, "reasoning", payload.text)) {
@@ -1526,8 +1721,31 @@ export function translateCodexRolloutLine(
 
   if (payload.type === "function_call_output" && typeof payload.call_id === "string") {
     const pending = state.pendingToolCalls.get(payload.call_id);
-    if (!pending || typeof payload.output !== "string") {
-      return invalidRolloutActivity(record, "function_call_output had no pending call or string output");
+    if (!pending) {
+      if (state.completedToolCallIds.has(payload.call_id)) {
+        return [];
+      }
+      return invalidRolloutActivity(record, "function_call_output had no pending call");
+    }
+    if (typeof payload.output !== "string") {
+      state.pendingToolCalls.delete(payload.call_id);
+      state.completedToolCallIds.add(payload.call_id);
+      if (pending.hidden) {
+        return [];
+      }
+      return [
+        persistedActivity(
+          record,
+          {
+            type: "tool_call_completed",
+            toolCall: {
+              ...pending.toolCall,
+              summary: "Tool returned non-text output.",
+            },
+          },
+          "derived",
+        ),
+      ];
     }
     if (pending.terminalInteraction) {
       state.pendingToolCalls.delete(payload.call_id);
@@ -1572,6 +1790,35 @@ export function translateCodexRolloutLine(
           state.terminalSessions.delete(pending.terminalInteraction.sessionId);
         }
       }
+      const runningCompletionActivities: CodexTranslatedActivity[] =
+        parsedOutput.runningSessionId !== undefined && parsedOutput.exitCode === undefined
+          ? [
+              ...(terminalSession.observation
+                ? [
+                    persistedActivity(
+                      record,
+                      {
+                        type: "observation_completed" as const,
+                        observation: completedRunningTerminalObservation(
+                          terminalSession.observation,
+                          terminalSession.sessionId,
+                          outputText,
+                        ),
+                      },
+                      "derived" as const,
+                    ),
+                  ]
+                : []),
+              persistedActivity(
+                record,
+                {
+                  type: "tool_call_completed" as const,
+                  toolCall: terminalSession.toolCall,
+                },
+                "derived" as const,
+              ),
+            ]
+          : [];
       if (parsedOutput.exitCode !== undefined) {
         const resultDisposition = classifyCodexCommandResult({
           kind: terminalSession.observation?.kind ?? "command.run",
@@ -1629,7 +1876,7 @@ export function translateCodexRolloutLine(
         ];
       }
       if (!outputText) {
-        return prefixActivities;
+        return [...prefixActivities, ...runningCompletionActivities];
       }
       return [
         ...prefixActivities,
@@ -1644,6 +1891,7 @@ export function translateCodexRolloutLine(
           },
           "derived",
         ),
+        ...runningCompletionActivities,
       ];
     }
     if (pending.hidden) {
@@ -1709,26 +1957,25 @@ export function translateCodexRolloutLine(
         },
         runningSessionId,
       );
+      const completedObservation = pending.observation
+        ? completedRunningTerminalObservation(pending.observation, runningSessionId, outputText)
+        : undefined;
       state.terminalSessions.set(runningSessionId, {
         sessionId: runningSessionId,
         toolCallId: runningToolCall.id,
         toolCall: runningToolCall,
         started: true,
-        ...(pending.observation ? { observation: pending.observation } : {}),
+        ...(completedObservation ? { observation: completedObservation } : {}),
       });
       state.pendingToolCalls.delete(payload.call_id);
       return [
-        ...(pending.observation
+        ...(completedObservation
           ? [
               persistedActivity(
                 record,
                 {
-                  type: "observation_updated",
-                  observation: runningTerminalObservation(
-                    pending.observation,
-                    runningSessionId,
-                    outputText,
-                  ),
+                  type: "observation_completed",
+                  observation: completedObservation,
                 },
                 "derived",
               ),
@@ -1737,7 +1984,7 @@ export function translateCodexRolloutLine(
         persistedActivity(
           record,
           {
-            type: "tool_call_started",
+            type: "tool_call_completed",
             toolCall: runningToolCall,
           },
           "derived",
@@ -1817,6 +2064,9 @@ export function translateCodexRolloutLine(
   if (payload.type === "custom_tool_call_output" && typeof payload.call_id === "string") {
     const pending = state.pendingToolCalls.get(payload.call_id);
     if (!pending) {
+      if (state.completedToolCallIds.has(payload.call_id)) {
+        return [];
+      }
       return invalidRolloutActivity(record, "custom_tool_call_output had no pending call");
     }
     const parsedOutput = parseCustomToolCallOutput(payload.output);

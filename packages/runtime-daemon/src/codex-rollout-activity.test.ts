@@ -354,11 +354,11 @@ describe("translateCodexRolloutLine", () => {
 
     assert.deepEqual(
       running.map((item) => item.activity.type),
-      ["observation_updated", "tool_call_started"],
+      ["observation_completed", "tool_call_completed"],
     );
-    const runningTool = running.find((item) => item.activity.type === "tool_call_started")?.activity;
-    assert.equal(runningTool?.type, "tool_call_started");
-    if (runningTool?.type === "tool_call_started") {
+    const runningTool = running.find((item) => item.activity.type === "tool_call_completed")?.activity;
+    assert.equal(runningTool?.type, "tool_call_completed");
+    if (runningTool?.type === "tool_call_completed") {
       assert.equal(runningTool.toolCall.id, "call-exec");
       assert.deepEqual(runningTool.toolCall.result, { sessionId: 7144 });
       assert.equal(runningTool.toolCall.summary, "Process running with session ID 7144.");
@@ -545,6 +545,44 @@ describe("translateCodexRolloutLine", () => {
     }
   });
 
+  test("completes generic tools that return non-text output", () => {
+    const state = createCodexRolloutTranslationState();
+
+    translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-14T18:00:02.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "view_image",
+          arguments: '{"path":"/tmp/screenshot.png"}',
+          call_id: "call-image",
+        },
+      },
+      state,
+    );
+    const completed = translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-14T18:00:03.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "call-image",
+          output: [{ type: "input_image", image_url: "data:image/png;base64,abc" }],
+        },
+      },
+      state,
+    );
+
+    assert.deepEqual(completed.map((item) => item.activity.type), ["tool_call_completed"]);
+    const tool = completed[0]?.activity;
+    assert.equal(tool?.type, "tool_call_completed");
+    if (tool?.type === "tool_call_completed") {
+      assert.equal(tool.toolCall.id, "call-image");
+      assert.equal(tool.toolCall.summary, "Tool returned non-text output.");
+    }
+  });
+
   test("does not fail still-running terminal sessions at persisted history EOF", () => {
     const state = createCodexRolloutTranslationState();
 
@@ -561,7 +599,7 @@ describe("translateCodexRolloutLine", () => {
       },
       state,
     );
-    translateCodexRolloutLine(
+    const completed = translateCodexRolloutLine(
       {
         timestamp: "2026-04-14T18:00:03.000Z",
         type: "response_item",
@@ -573,6 +611,18 @@ describe("translateCodexRolloutLine", () => {
       },
       state,
     );
+
+    assert.deepEqual(completed.map((item) => item.activity.type), [
+      "observation_completed",
+      "tool_call_completed",
+    ]);
+    const completedTool = completed.find((item) => item.activity.type === "tool_call_completed");
+    assert.ok(completedTool);
+    if (completedTool.activity.type === "tool_call_completed") {
+      assert.equal(completedTool.activity.toolCall.id, "call-exec");
+      assert.deepEqual(completedTool.activity.toolCall.result, { sessionId: 7144 });
+      assert.match(completedTool.activity.toolCall.summary ?? "", /Process running/);
+    }
 
     const finalized = finalizeCodexRolloutTranslationState(state, {
       timestamp: "2026-04-14T18:00:04.000Z",
@@ -799,6 +849,59 @@ describe("translateCodexRolloutLine", () => {
         ),
       );
     }
+  });
+
+  test("maps patch_apply_end event messages into completed patch tools", () => {
+    const state = createCodexRolloutTranslationState();
+
+    translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-14T18:00:02.000Z",
+        type: "response_item",
+        payload: {
+          type: "custom_tool_call",
+          name: "apply_patch",
+          call_id: "call-patch-end",
+          input: "*** Begin Patch\n*** Update File: /workspace/demo.txt\n@@\n-old\n+new\n*** End Patch\n",
+        },
+      },
+      state,
+    );
+    const completed = translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-14T18:00:03.000Z",
+        type: "event_msg",
+        payload: {
+          type: "patch_apply_end",
+          call_id: "call-patch-end",
+          success: true,
+          stdout: "Success. Updated the following files:\nM /workspace/demo.txt\n",
+          stderr: "",
+          changes: {
+            "/workspace/demo.txt": { type: "update" },
+          },
+        },
+      },
+      state,
+    );
+    const duplicateOutput = translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-14T18:00:04.000Z",
+        type: "response_item",
+        payload: {
+          type: "custom_tool_call_output",
+          call_id: "call-patch-end",
+          output: "Exit code: 0\nWall time: 0 seconds\nOutput:\nSuccess.",
+        },
+      },
+      state,
+    );
+
+    assert.deepEqual(completed.map((item) => item.activity.type), [
+      "observation_completed",
+      "tool_call_completed",
+    ]);
+    assert.deepEqual(duplicateOutput, []);
   });
 
   test("maps raw apply_patch process success outputs into completed calls", () => {
@@ -1196,6 +1299,51 @@ describe("translateCodexRolloutLine", () => {
 
     assert.equal(first.length, 1);
     assert.equal(second.length, 1);
+  });
+
+  test("maps persisted Codex web search events into observations", () => {
+    const state = createCodexRolloutTranslationState();
+
+    const started = translateCodexRolloutLine(
+      {
+        timestamp: "2026-05-31T00:00:01.000Z",
+        type: "event_msg",
+        payload: {
+          type: "web_search_begin",
+          call_id: "search-1",
+        },
+      },
+      state,
+    );
+    const completed = translateCodexRolloutLine(
+      {
+        timestamp: "2026-05-31T00:00:02.000Z",
+        type: "event_msg",
+        payload: {
+          type: "web_search_end",
+          call_id: "search-1",
+          query: "codex web search events",
+          action: {
+            type: "search",
+            query: "codex web search events",
+            queries: null,
+          },
+        },
+      },
+      state,
+    );
+
+    assert.equal(started.length, 1);
+    assert.equal(started[0]?.activity.type, "observation_started");
+    assert.equal(started[0]?.activity.observation.kind, "web.search");
+    assert.equal(started[0]?.activity.observation.status, "running");
+    assert.equal(started[0]?.activity.observation.title, "Web search");
+    assert.equal(completed.length, 1);
+    assert.equal(completed[0]?.activity.type, "observation_completed");
+    assert.equal(completed[0]?.activity.observation.id, "obs-search-1");
+    assert.equal(completed[0]?.activity.observation.kind, "web.search");
+    assert.equal(completed[0]?.activity.observation.status, "completed");
+    assert.equal(completed[0]?.activity.observation.summary, "codex web search events");
   });
 
   test("ignores persisted noise events that should not surface in history feed", () => {
