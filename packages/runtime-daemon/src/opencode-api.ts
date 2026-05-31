@@ -254,16 +254,44 @@ function signalOpenCodeServer(handle: OpenCodeServerHandle, signal: NodeJS.Signa
   if (!pid) {
     return;
   }
+  if (process.platform === "win32") {
+    trySignalOpenCodeChild(handle, signal);
+    return;
+  }
   try {
-    if (process.platform === "win32") {
-      handle.child.kill(signal);
-      return;
-    }
     process.kill(-pid, signal);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
-      throw error;
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ESRCH") {
+      return;
     }
+    if (trySignalOpenCodeChild(handle, signal)) {
+      return;
+    }
+    console.warn("[rah] failed to signal OpenCode server process group", {
+      pid,
+      signal,
+      code,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+function trySignalOpenCodeChild(handle: OpenCodeServerHandle, signal: NodeJS.Signals): boolean {
+  try {
+    return handle.child.kill(signal);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ESRCH") {
+      return true;
+    }
+    console.warn("[rah] failed to signal OpenCode child process", {
+      pid: handle.child.pid,
+      signal,
+      code,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return false;
   }
 }
 

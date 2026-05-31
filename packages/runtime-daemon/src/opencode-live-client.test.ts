@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import type { ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -10,6 +12,7 @@ import {
   promptOpenCodeSession,
   promptOpenCodeSessionAsync,
   startOpenCodeServer,
+  stopOpenCodeServer,
 } from "./opencode-api";
 import {
   interruptOpenCodeLiveSession,
@@ -141,6 +144,40 @@ test("startOpenCodeServer rejects missing working directories before spawn", asy
       process.env.RAH_OPENCODE_BINARY = previousBinary;
     }
   }
+});
+
+test("stopOpenCodeServer tolerates process group permission errors", async () => {
+  const previousKill = process.kill;
+  const signals: Array<{ pid: number; signal: NodeJS.Signals | 0 | undefined }> = [];
+  const child = new EventEmitter() as EventEmitter & {
+    pid: number;
+    exitCode: number | null;
+    signalCode: NodeJS.Signals | null;
+    kill: (signal?: NodeJS.Signals | number) => boolean;
+  };
+  child.pid = 123456;
+  child.exitCode = null;
+  child.signalCode = null;
+  child.kill = () => false;
+  process.kill = ((pid: number, signal?: NodeJS.Signals | 0) => {
+    signals.push({ pid, signal });
+    const error = new Error("kill EPERM") as NodeJS.ErrnoException;
+    error.code = "EPERM";
+    throw error;
+  }) as typeof process.kill;
+  try {
+    await stopOpenCodeServer({
+      baseUrl: "http://127.0.0.1:9",
+      cwd: os.tmpdir(),
+      child: child as unknown as ChildProcess,
+    });
+  } finally {
+    process.kill = previousKill;
+  }
+  assert.deepEqual(signals, [
+    { pid: -123456, signal: "SIGTERM" },
+    { pid: -123456, signal: "SIGKILL" },
+  ]);
 });
 
 test("runtimeDiagnosticsForOpenCodeServer exposes safe attach diagnostics", () => {
