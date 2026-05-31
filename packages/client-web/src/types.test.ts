@@ -1863,6 +1863,102 @@ describe("client projection", () => {
     }
   });
 
+  test("does not reopen completed tool calls when late deltas add detail", () => {
+    let current = projection();
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 1,
+        turnId: "turn-1",
+        type: "tool.call.completed",
+        payload: {
+          toolCall: {
+            id: "tool-1",
+            family: "shell",
+            providerToolName: "exec_command",
+            title: "Run command",
+            result: { sessionId: 7144 },
+          },
+        },
+      }),
+    );
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 2,
+        turnId: "turn-1",
+        type: "tool.call.delta",
+        payload: {
+          toolCallId: "tool-1",
+          detail: {
+            artifacts: [{ kind: "text", label: "stdout", text: "still running" }],
+          },
+        },
+      }),
+    );
+
+    const tool = current.feed[0];
+    assert.equal(tool?.kind, "tool_call");
+    if (tool?.kind === "tool_call") {
+      assert.equal(tool.status, "completed");
+      assert.deepEqual(tool.toolCall.detail?.artifacts, [
+        { kind: "text", label: "stdout", text: "still running" },
+      ]);
+    }
+  });
+
+  test("does not reopen completed observations when duplicate starts arrive later", () => {
+    let current = projection();
+    const startedObservation = {
+      observation: {
+        id: "obs-1",
+        kind: "test.run" as const,
+        status: "running" as const,
+        title: "Run tests",
+      },
+    };
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 1,
+        turnId: "turn-1",
+        type: "observation.started",
+        payload: startedObservation,
+      }),
+    );
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 2,
+        turnId: "turn-1",
+        type: "observation.completed",
+        payload: {
+          observation: {
+            ...startedObservation.observation,
+            status: "completed",
+            exitCode: 0,
+          },
+        },
+      }),
+    );
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 3,
+        turnId: "turn-1",
+        type: "observation.started",
+        payload: startedObservation,
+      }),
+    );
+
+    const observation = current.feed.find((entry) => entry.kind === "observation");
+    assert.equal(observation?.kind, "observation");
+    if (observation?.kind === "observation") {
+      assert.equal(observation.status, "completed");
+      assert.equal(observation.observation.exitCode, 0);
+    }
+  });
+
   test("projects turn step events into a single visible timeline step", () => {
     let current = projection();
     current = applyEventToProjection(

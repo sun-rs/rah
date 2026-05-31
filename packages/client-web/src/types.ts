@@ -1231,7 +1231,10 @@ function applyToolCallEvent(
       {
         ...current,
         toolCall: withMergedToolDetail(current.toolCall, event.payload.detail),
-        status: "running",
+        status:
+          current.status === "completed" || current.status === "failed"
+            ? current.status
+            : "running",
         ts: event.ts,
       },
       current.turnId,
@@ -1542,6 +1545,14 @@ function applyObservationEvent(
   );
   if (index < 0) {
     return [...feed, nextEntry];
+  }
+  const current = feed[index];
+  if (
+    current?.kind === "observation" &&
+    (current.status === "completed" || current.status === "failed") &&
+    status === "running"
+  ) {
+    return feed;
   }
   const next = [...feed];
   next[index] = nextEntry;

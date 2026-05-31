@@ -314,6 +314,36 @@ function timelineTimestampsWithinMs(leftTs: string, rightTs: string, maxMs: numb
   return Math.abs(leftMs - rightMs) <= maxMs;
 }
 
+function isTerminalToolOrObservationEntry(entry: FeedEntry): boolean {
+  return (
+    (entry.kind === "tool_call" || entry.kind === "observation") &&
+    (entry.status === "completed" || entry.status === "failed")
+  );
+}
+
+function isRunningToolOrObservationEntry(entry: FeedEntry): boolean {
+  return (
+    (entry.kind === "tool_call" || entry.kind === "observation") &&
+    entry.status === "running"
+  );
+}
+
+function mergeSameIdentityHistoryEntry(
+  incoming: FeedEntry,
+  existing: FeedEntry,
+): FeedEntry {
+  if (incoming.kind !== existing.kind) {
+    return incoming;
+  }
+  if (isRunningToolOrObservationEntry(incoming) && isTerminalToolOrObservationEntry(existing)) {
+    return existing;
+  }
+  if (isTerminalToolOrObservationEntry(incoming) && isRunningToolOrObservationEntry(existing)) {
+    return incoming;
+  }
+  return incoming;
+}
+
 export function prependHistoryPage(
   projection: SessionProjection,
   events: RahEvent[],
@@ -357,7 +387,10 @@ export function prependHistoryPage(
   const prepend = historyProjection.feed.filter((entry) => {
     const existingIndex = currentKeyIndex.get(entry.key);
     if (existingIndex !== undefined) {
-      nextFeed[existingIndex] = entry;
+      nextFeed[existingIndex] = mergeSameIdentityHistoryEntry(
+        entry,
+        nextFeed[existingIndex]!,
+      );
       matchedCurrentIndexes.add(existingIndex);
       return false;
     }
@@ -370,7 +403,10 @@ export function prependHistoryPage(
         }),
     );
     if (identityIndex >= 0) {
-      nextFeed[identityIndex] = entry;
+      nextFeed[identityIndex] = mergeSameIdentityHistoryEntry(
+        entry,
+        nextFeed[identityIndex]!,
+      );
       matchedCurrentIndexes.add(identityIndex);
       return false;
     }
@@ -443,6 +479,10 @@ function mergeLatestHistoryFeed(
   for (const current of currentFeed) {
     const existingIndex = currentKeyIndex.get(current.key);
     if (existingIndex !== undefined) {
+      nextFeed[existingIndex] = mergeSameIdentityHistoryEntry(
+        nextFeed[existingIndex]!,
+        current,
+      );
       matchedHistoryIndexes.add(existingIndex);
       continue;
     }
@@ -455,6 +495,10 @@ function mergeLatestHistoryFeed(
         }),
     );
     if (identityIndex >= 0) {
+      nextFeed[identityIndex] = mergeSameIdentityHistoryEntry(
+        nextFeed[identityIndex]!,
+        current,
+      );
       matchedHistoryIndexes.add(identityIndex);
       continue;
     }

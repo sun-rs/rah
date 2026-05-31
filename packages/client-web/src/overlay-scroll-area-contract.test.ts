@@ -139,4 +139,14 @@ describe("overlay scroll area contract", () => {
     assert.match(source, /returnToBottomOnVisibleRef\.current/);
     assert.match(source, /scrollToBottomNow\(\)/);
   });
+
+  test("chat thread can continue top history paging without a down-scroll rearm", () => {
+    const source = readSource("./components/chat/ChatThread.tsx");
+
+    assert.match(source, /requestOlderHistoryLoad/);
+    assert.match(source, /scheduleTopHistoryLoad/);
+    assert.match(source, /isInTopHistoryLoadZone/);
+    assert.doesNotMatch(source, /scrollingUp && node\.scrollTop <= TOP_HISTORY_TRIGGER_PX/);
+    assert.match(source, /topHistoryAutoLoadArmedRef\.current = true;\n\s+scheduleTopHistoryLoad\(\)/);
+  });
 });

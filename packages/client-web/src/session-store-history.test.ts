@@ -96,6 +96,89 @@ function timelineEvent(args: {
   } as RahEvent;
 }
 
+function toolCallEvent(args: {
+  seq: number;
+  status: "started" | "completed" | "failed";
+  id?: string;
+  title?: string;
+  ts?: string;
+}): RahEvent {
+  const id = args.id ?? "tool-1";
+  const base = {
+    id: `event-${args.seq}`,
+    seq: args.seq,
+    ts: args.ts ?? `2026-04-15T00:00:${String(args.seq).padStart(2, "0")}.000Z`,
+    sessionId: "session-1",
+    source: {
+      provider: "codex",
+      channel: "structured_persisted",
+      authority: "authoritative",
+    },
+  } as const;
+  if (args.status === "failed") {
+    return {
+      ...base,
+      type: "tool.call.failed",
+      payload: {
+        toolCallId: id,
+        error: "failed",
+      },
+    } as RahEvent;
+  }
+  return {
+    ...base,
+    type: args.status === "started" ? "tool.call.started" : "tool.call.completed",
+    payload: {
+      toolCall: {
+        id,
+        family: "test",
+        providerToolName: "exec_command",
+        title: args.title ?? "Run tests",
+      },
+    },
+  } as RahEvent;
+}
+
+function observationEvent(args: {
+  seq: number;
+  status: "started" | "completed" | "failed";
+  id?: string;
+  title?: string;
+  exitCode?: number;
+  ts?: string;
+}): RahEvent {
+  const id = args.id ?? "obs-1";
+  const status =
+    args.status === "started" ? "running" : args.status === "completed" ? "completed" : "failed";
+  return {
+    id: `event-${args.seq}`,
+    seq: args.seq,
+    ts: args.ts ?? `2026-04-15T00:00:${String(args.seq).padStart(2, "0")}.000Z`,
+    sessionId: "session-1",
+    source: {
+      provider: "codex",
+      channel: "structured_persisted",
+      authority: "authoritative",
+    },
+    type:
+      args.status === "started"
+        ? "observation.started"
+        : args.status === "completed"
+          ? "observation.completed"
+          : "observation.failed",
+    payload: {
+      observation: {
+        id,
+        kind: "test.run",
+        status,
+        title: args.title ?? "Run tests",
+        ...(args.exitCode !== undefined ? { exitCode: args.exitCode } : {}),
+      },
+      ...(args.status === "failed" ? { error: "failed" } : {}),
+    },
+  } as RahEvent;
+}
+
 function turnCanceledEvent(args: {
   seq: number;
   turnId?: string;
@@ -657,6 +740,45 @@ test("mergeLatestHistoryPage keeps older loaded entries before refreshed latest 
       entry.kind === "timeline" && "text" in entry.item ? entry.item.text : null,
     ),
     ["older council reply", "continue", "new assistant reply"],
+  );
+});
+
+test("prependHistoryPage does not reopen completed tool calls from older started events", () => {
+  const current = replayEventsIntoProjection(summary(), [
+    toolCallEvent({ seq: 10, status: "started", id: "tool-run-tests" }),
+    toolCallEvent({ seq: 11, status: "completed", id: "tool-run-tests" }),
+  ]);
+
+  const next = prependHistoryPage(current, [
+    toolCallEvent({ seq: 1, status: "started", id: "tool-run-tests" }),
+  ]);
+
+  const tool = next.feed.find((entry) => entry.kind === "tool_call");
+  assert.equal(tool?.kind, "tool_call");
+  assert.equal(tool?.kind === "tool_call" ? tool.status : null, "completed");
+});
+
+test("mergeLatestHistoryPage preserves terminal observations over stale running history entries", () => {
+  const current = replayEventsIntoProjection(summary(), [
+    observationEvent({ seq: 10, status: "started", id: "obs-run-tests" }),
+    observationEvent({
+      seq: 11,
+      status: "failed",
+      id: "obs-run-tests",
+      exitCode: 101,
+    }),
+  ]);
+
+  const next = mergeLatestHistoryPage(current, [
+    observationEvent({ seq: 1, status: "started", id: "obs-run-tests" }),
+  ]);
+
+  const observation = next.feed.find((entry) => entry.kind === "observation");
+  assert.equal(observation?.kind, "observation");
+  assert.equal(observation?.kind === "observation" ? observation.status : null, "failed");
+  assert.equal(
+    observation?.kind === "observation" ? observation.observation.exitCode : null,
+    101,
   );
 });
 

@@ -35,6 +35,9 @@ const BOTTOM_STICK_THRESHOLD_PX = 120;
 const TOP_HISTORY_TRIGGER_PX = 96;
 const TOP_HISTORY_REARM_PX = 220;
 const VIEWPORT_RESIZE_EPSILON_PX = 4;
+const BOTTOM_RESIZE_SETTLE_FRAMES = 2;
+const BOTTOM_FOREGROUND_SETTLE_FRAMES = 4;
+const BOTTOM_USER_JUMP_SETTLE_FRAMES = 8;
 
 function isDocumentHidden(): boolean {
   return typeof document !== "undefined" && document.visibilityState === "hidden";
@@ -360,7 +363,7 @@ export function ChatThread(props: {
   const scrollRafRef = useRef<number | null>(null);
   const bottomFollowRafRef = useRef<number | null>(null);
   const measuredHeightsRafRef = useRef<number | null>(null);
-  const visibilityRestoreRafRef = useRef<number | null>(null);
+  const topHistoryLoadRafRef = useRef<number | null>(null);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [measuredHeightsVersion, setMeasuredHeightsVersion] = useState(0);
   const [viewport, setViewport] = useState({ scrollTop: 0, height: 0 });
@@ -463,16 +466,29 @@ export function ChatThread(props: {
     });
   }, [scrollToBottomNow]);
 
-  const settleScrollToBottomAfterResize = useCallback(() => {
+  const settleScrollToBottomOverFrames = useCallback((frames: number) => {
     scrollToBottomNow();
     if (bottomFollowRafRef.current !== null) {
       cancelAnimationFrame(bottomFollowRafRef.current);
+      bottomFollowRafRef.current = null;
     }
-    bottomFollowRafRef.current = requestAnimationFrame(() => {
+    let remainingFrames = Math.max(0, frames);
+    const runSettlePass = () => {
       bottomFollowRafRef.current = null;
       scrollToBottomNow();
-    });
+      remainingFrames -= 1;
+      if (remainingFrames > 0) {
+        bottomFollowRafRef.current = requestAnimationFrame(runSettlePass);
+      }
+    };
+    if (remainingFrames > 0) {
+      bottomFollowRafRef.current = requestAnimationFrame(runSettlePass);
+    }
   }, [scrollToBottomNow]);
+
+  const settleScrollToBottomAfterResize = useCallback(() => {
+    settleScrollToBottomOverFrames(BOTTOM_RESIZE_SETTLE_FRAMES);
+  }, [settleScrollToBottomOverFrames]);
 
   const detachBottomFollowing = useCallback(() => {
     const node = containerRef.current;
@@ -498,15 +514,8 @@ export function ChatThread(props: {
     ) {
       return;
     }
-    scrollToBottomNow();
-    if (visibilityRestoreRafRef.current !== null) {
-      cancelAnimationFrame(visibilityRestoreRafRef.current);
-    }
-    visibilityRestoreRafRef.current = requestAnimationFrame(() => {
-      visibilityRestoreRafRef.current = null;
-      scrollToBottomNow();
-    });
-  }, [scrollToBottomNow]);
+    settleScrollToBottomOverFrames(BOTTOM_FOREGROUND_SETTLE_FRAMES);
+  }, [settleScrollToBottomOverFrames]);
 
   const captureVisiblePrependAnchor = useCallback((): PrependAnchor | null => {
     const node = containerRef.current;
@@ -529,6 +538,56 @@ export function ChatThread(props: {
       settlePassesRemaining: 3,
     };
   }, []);
+
+  const isInTopHistoryLoadZone = useCallback((node: HTMLElement): boolean => {
+    return (
+      node.scrollTop <= TOP_HISTORY_TRIGGER_PX ||
+      node.scrollHeight <= node.clientHeight + TOP_HISTORY_TRIGGER_PX
+    );
+  }, []);
+
+  const hasTooLittleHistoryContent = useCallback((node: HTMLElement): boolean => {
+    return node.scrollHeight <= node.clientHeight + TOP_HISTORY_TRIGGER_PX;
+  }, []);
+
+  const requestOlderHistoryLoad = useCallback((): boolean => {
+    const node = containerRef.current;
+    if (
+      !node ||
+      !props.canLoadOlderHistory ||
+      !props.onLoadOlderHistory ||
+      props.historyLoading ||
+      loadingOlderRef.current ||
+      !topHistoryAutoLoadArmedRef.current ||
+      !isInTopHistoryLoadZone(node)
+    ) {
+      return false;
+    }
+    topHistoryAutoLoadArmedRef.current = false;
+    loadingOlderRef.current = true;
+    prependAnchorRef.current = captureVisiblePrependAnchor();
+    const loadResult = props.onLoadOlderHistory();
+    void Promise.resolve(loadResult).finally(() => {
+      loadingOlderRef.current = false;
+    });
+    return true;
+  }, [
+    captureVisiblePrependAnchor,
+    isInTopHistoryLoadZone,
+    props.canLoadOlderHistory,
+    props.historyLoading,
+    props.onLoadOlderHistory,
+  ]);
+
+  const scheduleTopHistoryLoad = useCallback(() => {
+    if (topHistoryLoadRafRef.current !== null) {
+      return;
+    }
+    topHistoryLoadRafRef.current = requestAnimationFrame(() => {
+      topHistoryLoadRafRef.current = null;
+      requestOlderHistoryLoad();
+    });
+  }, [requestOlderHistoryLoad]);
 
   useEffect(() => {
     previousEntryCountRef.current = 0;
@@ -554,9 +613,9 @@ export function ChatThread(props: {
       cancelAnimationFrame(measuredHeightsRafRef.current);
       measuredHeightsRafRef.current = null;
     }
-    if (visibilityRestoreRafRef.current !== null) {
-      cancelAnimationFrame(visibilityRestoreRafRef.current);
-      visibilityRestoreRafRef.current = null;
+    if (topHistoryLoadRafRef.current !== null) {
+      cancelAnimationFrame(topHistoryLoadRafRef.current);
+      topHistoryLoadRafRef.current = null;
     }
     setMeasuredHeightsVersion(0);
     setViewport({ scrollTop: 0, height: 0 });
@@ -577,9 +636,9 @@ export function ChatThread(props: {
         cancelAnimationFrame(measuredHeightsRafRef.current);
         measuredHeightsRafRef.current = null;
       }
-      if (visibilityRestoreRafRef.current !== null) {
-        cancelAnimationFrame(visibilityRestoreRafRef.current);
-        visibilityRestoreRafRef.current = null;
+      if (topHistoryLoadRafRef.current !== null) {
+        cancelAnimationFrame(topHistoryLoadRafRef.current);
+        topHistoryLoadRafRef.current = null;
       }
     };
   }, []);
@@ -615,8 +674,7 @@ export function ChatThread(props: {
         userDetachedFromBottomRef.current = false;
       }
       const shouldStickToBottom = isAtBottom && !userDetachedFromBottomRef.current;
-      const contentNeedsMoreHistory =
-        node.scrollHeight <= node.clientHeight + TOP_HISTORY_TRIGGER_PX;
+      const contentNeedsMoreHistory = hasTooLittleHistoryContent(node);
       stickToBottomRef.current = shouldStickToBottom;
       if (!isDocumentHidden()) {
         returnToBottomOnVisibleRef.current =
@@ -633,20 +691,10 @@ export function ChatThread(props: {
         topHistoryAutoLoadArmedRef.current = true;
       }
       if (
-        props.canLoadOlderHistory &&
-        props.onLoadOlderHistory &&
-        !props.historyLoading &&
-        !loadingOlderRef.current &&
         topHistoryAutoLoadArmedRef.current &&
-        ((scrollingUp && node.scrollTop <= TOP_HISTORY_TRIGGER_PX) || contentNeedsMoreHistory)
+        isInTopHistoryLoadZone(node)
       ) {
-        topHistoryAutoLoadArmedRef.current = false;
-        loadingOlderRef.current = true;
-        prependAnchorRef.current = captureVisiblePrependAnchor();
-        const loadResult = props.onLoadOlderHistory();
-        void Promise.resolve(loadResult).finally(() => {
-          loadingOlderRef.current = false;
-        });
+        requestOlderHistoryLoad();
       }
       lastScrollTopRef.current = node.scrollTop;
       if (scrollRafRef.current !== null) {
@@ -664,10 +712,12 @@ export function ChatThread(props: {
       node.removeEventListener("scroll", updateStickiness);
     };
   }, [
-    captureVisiblePrependAnchor,
     props.canLoadOlderHistory,
     props.historyLoading,
     props.onLoadOlderHistory,
+    hasTooLittleHistoryContent,
+    isInTopHistoryLoadZone,
+    requestOlderHistoryLoad,
     props.sessionId,
     settleScrollToBottomAfterResize,
     syncViewport,
@@ -839,9 +889,21 @@ export function ChatThread(props: {
       lastScrollTopRef.current = node.scrollTop;
       if (
         node.scrollTop > TOP_HISTORY_REARM_PX ||
-        node.scrollHeight <= node.clientHeight + TOP_HISTORY_TRIGGER_PX
+        hasTooLittleHistoryContent(node)
       ) {
         topHistoryAutoLoadArmedRef.current = true;
+      }
+      if (!props.historyLoading) {
+        topHistoryAutoLoadArmedRef.current = true;
+      }
+      if (
+        !props.historyLoading &&
+        props.canLoadOlderHistory &&
+        props.onLoadOlderHistory &&
+        isInTopHistoryLoadZone(node)
+      ) {
+        topHistoryAutoLoadArmedRef.current = true;
+        scheduleTopHistoryLoad();
       }
       const nextSettlePassesRemaining = props.historyLoading
         ? anchor.settlePassesRemaining
@@ -891,17 +953,26 @@ export function ChatThread(props: {
     previousEntryCountRef.current = entries.length;
   }, [
     entries,
+    hasTooLittleHistoryContent,
+    isInTopHistoryLoadZone,
     measuredHeightsVersion,
+    props.canLoadOlderHistory,
     props.historyLoading,
+    props.onLoadOlderHistory,
     props.sessionId,
     scrollToBottomNow,
+    scheduleTopHistoryLoad,
   ]);
 
   const handleScrollToBottom = () => {
     stickToBottomRef.current = true;
     userDetachedFromBottomRef.current = false;
+    sessionSwitchBottomLockRef.current = false;
     returnToBottomOnVisibleRef.current = true;
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    pendingVisibleBottomRestoreRef.current = false;
+    prependAnchorRef.current = null;
+    topHistoryAutoLoadArmedRef.current = false;
+    settleScrollToBottomOverFrames(BOTTOM_USER_JUMP_SETTLE_FRAMES);
   };
 
   return (
