@@ -7,6 +7,8 @@ import {
   createCanvasLayoutRatios,
   createDefaultCanvasRightPanelsOpen,
   createEmptyCanvasTargets,
+  getCanvasVisiblePaneIds,
+  hasAnyCanvasPaneTarget,
   normalizeRememberedCanvasState,
   readRememberedCanvasState,
   rememberCanvasState,
@@ -102,6 +104,31 @@ test("canvas layout ratios match visible pane count", () => {
   assert.deepEqual(createCanvasLayoutRatios("two-vertical"), [1, 1]);
   assert.deepEqual(createCanvasLayoutRatios("three-horizontal"), [1, 1, 1]);
   assert.deepEqual(createCanvasLayoutRatios("four-grid"), [1, 1, 1, 1]);
+});
+
+test("canvas layouts reveal fixed ordered pane slots without clearing hidden targets", () => {
+  assert.deepEqual(getCanvasVisiblePaneIds("two-horizontal"), ["canvas-1", "canvas-2"]);
+  assert.deepEqual(getCanvasVisiblePaneIds("two-vertical"), ["canvas-1", "canvas-2"]);
+  assert.deepEqual(getCanvasVisiblePaneIds("three-horizontal"), [
+    "canvas-1",
+    "canvas-2",
+    "canvas-3",
+  ]);
+  assert.deepEqual(getCanvasVisiblePaneIds("four-grid"), [
+    "canvas-1",
+    "canvas-2",
+    "canvas-3",
+    "canvas-4",
+  ]);
+  assert.deepEqual(getCanvasVisiblePaneIds("two-horizontal", "canvas-4"), ["canvas-4"]);
+});
+
+test("canvas clear all availability is based on all fixed pane slots", () => {
+  const targets = createEmptyCanvasTargets();
+  assert.equal(hasAnyCanvasPaneTarget(targets), false);
+
+  targets["canvas-3"] = { kind: "stored", ref: ref("codex", "hidden-history") };
+  assert.equal(hasAnyCanvasPaneTarget(targets), true);
 });
 
 test("canvas entry only initializes empty panes from the global selection", () => {

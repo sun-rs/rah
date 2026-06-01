@@ -58,6 +58,21 @@ export function createCanvasLayoutRatios(layout: CanvasLayout): number[] {
   return Array.from({ length: CANVAS_LAYOUT_PANE_COUNT[layout] }, () => 1);
 }
 
+export function getCanvasVisiblePaneIds(
+  layout: CanvasLayout,
+  maximizedPaneId?: CanvasPaneId | null,
+): CanvasPaneId[] {
+  return maximizedPaneId
+    ? [maximizedPaneId]
+    : CANVAS_PANE_IDS.slice(0, CANVAS_LAYOUT_PANE_COUNT[layout]);
+}
+
+export function hasAnyCanvasPaneTarget(
+  targets: Record<CanvasPaneId, CanvasPaneTarget>,
+): boolean {
+  return CANVAS_PANE_IDS.some((paneId) => targets[paneId].kind !== "empty");
+}
+
 function isCanvasLayout(value: unknown): value is CanvasLayout {
   return (
     value === "two-horizontal" ||

@@ -75,12 +75,13 @@ import {
 } from "./session-transition-contract";
 import {
   applyCanvasPaneTarget,
-  CANVAS_LAYOUT_PANE_COUNT,
   CANVAS_PANE_IDS,
   clearCanvasTargetsForStoredSession,
   createCanvasLayoutRatios,
   createDefaultCanvasRightPanelsOpen,
   createEmptyCanvasTargets,
+  getCanvasVisiblePaneIds,
+  hasAnyCanvasPaneTarget,
   readRememberedCanvasState,
   rememberCanvasState,
   replaceCanvasSessionTargetWithStoredRef,
@@ -650,9 +651,7 @@ export function App() {
     [projections],
   );
 
-  const visibleCanvasPaneIds = canvasMaximizedPaneId
-    ? [canvasMaximizedPaneId]
-    : CANVAS_PANE_IDS.slice(0, CANVAS_LAYOUT_PANE_COUNT[canvasLayout]);
+  const visibleCanvasPaneIds = getCanvasVisiblePaneIds(canvasLayout, canvasMaximizedPaneId);
   const resolveCanvasProjection = (paneId: CanvasPaneId) => {
     const target = canvasPaneTargets[paneId];
     return resolveCanvasTargetProjectionFromState(target, projections);
@@ -744,7 +743,7 @@ export function App() {
     setCanvasLayoutState(layout);
     setCanvasMaximizedPaneId(null);
     setCanvasRatios(createCanvasLayoutRatios(layout));
-    if (!CANVAS_PANE_IDS.slice(0, CANVAS_LAYOUT_PANE_COUNT[layout]).includes(activeCanvasPaneId)) {
+    if (!getCanvasVisiblePaneIds(layout).includes(activeCanvasPaneId)) {
       setActiveCanvasPaneId("canvas-1");
     }
   };
@@ -1811,9 +1810,7 @@ export function App() {
               onToggleMaximize={(paneId) => toggleCanvasPaneMaximize(paneId as CanvasPaneId)}
               onClearPane={(paneId) => clearCanvasPane(paneId as CanvasPaneId)}
               onClearAllPanes={clearAllCanvasPanes}
-              clearAllPanesDisabled={visibleCanvasPaneIds.every(
-                (paneId) => canvasPaneTargets[paneId].kind === "empty",
-              )}
+              clearAllPanesDisabled={!hasAnyCanvasPaneTarget(canvasPaneTargets)}
               onExitCanvas={exitCanvasMode}
               onDropSession={(paneId, sessionId) =>
                 setCanvasPaneSession(paneId as CanvasPaneId, sessionId)
