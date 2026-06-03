@@ -1,5 +1,5 @@
 import { execFile, spawn } from "node:child_process";
-import { promises as fs, readdirSync } from "node:fs";
+import { promises as fs, readdirSync, type Stats } from "node:fs";
 import path from "node:path";
 import type {
   NotebookPreviewData,
@@ -158,14 +158,16 @@ export async function readHostFileDataAsync(targetPath: string): Promise<Workspa
 }
 
 async function readFileDataAtResolvedPathAsync(resolvedPath: string): Promise<WorkspaceFileData> {
-  const stats = await fs.stat(resolvedPath);
+  const resolved = await resolveFileLocationPathAsync(resolvedPath);
+  const stats = resolved.stats;
+  const filePath = resolved.path;
   if (!stats.isFile()) {
     throw new Error("Path is not a file.");
   }
-  const buffer = await fs.readFile(resolvedPath);
-  const maxReadableBytes = maxReadableFileBytes(resolvedPath);
+  const buffer = await fs.readFile(filePath);
+  const maxReadableBytes = maxReadableFileBytes(filePath);
   const truncated = buffer.byteLength > maxReadableBytes;
-  const mimeType = resolvePreviewMimeType(resolvedPath);
+  const mimeType = resolvePreviewMimeType(filePath);
   const notebookPreview =
     mimeType === "application/x-ipynb+json"
       ? parseNotebookPreviewData(buffer.toString("utf8"))
@@ -177,7 +179,7 @@ async function readFileDataAtResolvedPathAsync(resolvedPath: string): Promise<Wo
   const includeBinaryContent =
     !contentOverride && binary && !truncated && Boolean(mimeType?.startsWith("image/"));
   return {
-    path: resolvedPath,
+    path: filePath,
     content: binary ? "" : (contentOverride ?? contentBuffer.toString("utf8")),
     binary,
     sizeBytes: stats.size,
@@ -186,6 +188,37 @@ async function readFileDataAtResolvedPathAsync(resolvedPath: string): Promise<Wo
     ...(truncated ? { truncated: true } : {}),
     ...(notebookPreview ? { notebookPreview } : {}),
   };
+}
+
+async function resolveFileLocationPathAsync(
+  resolvedPath: string,
+): Promise<{ path: string; stats: Stats }> {
+  try {
+    return { path: resolvedPath, stats: await fs.stat(resolvedPath) };
+  } catch (error) {
+    if (!isFileNotFoundError(error)) {
+      throw error;
+    }
+    const strippedPath = stripFileLocationSuffix(resolvedPath);
+    if (!strippedPath || strippedPath === resolvedPath) {
+      throw error;
+    }
+    return { path: strippedPath, stats: await fs.stat(strippedPath) };
+  }
+}
+
+function stripFileLocationSuffix(value: string): string | null {
+  const match = /^(.*?):\d+(?::\d+)?$/.exec(value);
+  return match?.[1] || null;
+}
+
+function isFileNotFoundError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "ENOENT"
+  );
 }
 
 function parseNotebookPreviewData(content: string): NotebookPreviewData | undefined {

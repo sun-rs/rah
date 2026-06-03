@@ -63,6 +63,41 @@ describe("host file reads", () => {
     }
   });
 
+  test("reads absolute local file references with line and column suffixes", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "rah-host-file-location-"));
+    try {
+      const target = path.join(dir, "README.md");
+      await writeFile(target, "# Title\n\nBody", "utf8");
+
+      const lineFile = await readHostFileDataAsync(`${target}:1`);
+      const columnFile = await readHostFileDataAsync(`${target}:1:3`);
+
+      assert.equal(lineFile.path, target);
+      assert.equal(lineFile.content, "# Title\n\nBody");
+      assert.equal(columnFile.path, target);
+      assert.equal(columnFile.content, "# Title\n\nBody");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("prefers an exact host file path before stripping a line suffix", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "rah-host-file-colon-"));
+    try {
+      const baseTarget = path.join(dir, "README.md");
+      const exactTarget = `${baseTarget}:1`;
+      await writeFile(baseTarget, "base", "utf8");
+      await writeFile(exactTarget, "exact", "utf8");
+
+      const file = await readHostFileDataAsync(exactTarget);
+
+      assert.equal(file.path, exactTarget);
+      assert.equal(file.content, "exact");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("keeps medium notebooks intact for parsed previews", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "rah-host-file-notebook-"));
     try {

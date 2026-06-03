@@ -19,9 +19,28 @@ describe("local file links", () => {
     );
   });
 
+  test("strips editor-style line and column suffixes from local file links", () => {
+    assert.equal(
+      resolveLocalFileLinkPath("/Users/sun/Code/repos/rah/README.md:1"),
+      "/Users/sun/Code/repos/rah/README.md",
+    );
+    assert.equal(
+      resolveLocalFileLinkPath("/Users/sun/Code/repos/rah/src/App.tsx:120:8"),
+      "/Users/sun/Code/repos/rah/src/App.tsx",
+    );
+    assert.equal(
+      resolveLocalFileLinkPath("http://127.0.0.1:43111/Users/sun/Code/repos/rah/README.md:1"),
+      "/Users/sun/Code/repos/rah/README.md",
+    );
+  });
+
   test("resolves file URLs", () => {
     assert.equal(
       resolveLocalFileLinkPath("file:///Users/sun/Code/repos/rah/README.md"),
+      "/Users/sun/Code/repos/rah/README.md",
+    );
+    assert.equal(
+      resolveLocalFileLinkPath("file:///Users/sun/Code/repos/rah/README.md:1"),
       "/Users/sun/Code/repos/rah/README.md",
     );
   });

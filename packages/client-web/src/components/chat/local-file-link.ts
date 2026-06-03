@@ -22,6 +22,10 @@ function stripQueryAndHash(value: string): string {
   return indexes.length === 0 ? value : value.slice(0, Math.min(...indexes));
 }
 
+function stripFileLocationSuffix(value: string): string {
+  return value.replace(/:\d+(?::\d+)?$/, "");
+}
+
 function isLikelyLocalAbsolutePath(pathname: string): boolean {
   return LOCAL_ABSOLUTE_PATH_PREFIXES.some((prefix) => pathname.startsWith(prefix));
 }
@@ -39,7 +43,7 @@ export function resolveLocalFileLinkPath(href: string | undefined): string | nul
   if (rawHref.startsWith("file://")) {
     try {
       const url = new URL(rawHref);
-      const pathname = decodePathname(url.pathname);
+      const pathname = stripFileLocationSuffix(decodePathname(url.pathname));
       return isLikelyLocalAbsolutePath(pathname) ? pathname : null;
     } catch {
       return null;
@@ -55,7 +59,7 @@ export function resolveLocalFileLinkPath(href: string | undefined): string | nul
       if (!sameRahOrigin && !isLocalhostUrl(url)) {
         return null;
       }
-      const pathname = decodePathname(url.pathname);
+      const pathname = stripFileLocationSuffix(decodePathname(url.pathname));
       return isLikelyLocalAbsolutePath(pathname) ? pathname : null;
     } catch {
       return null;
@@ -66,6 +70,6 @@ export function resolveLocalFileLinkPath(href: string | undefined): string | nul
     return null;
   }
 
-  const pathname = decodePathname(stripQueryAndHash(rawHref));
+  const pathname = stripFileLocationSuffix(decodePathname(stripQueryAndHash(rawHref)));
   return isLikelyLocalAbsolutePath(pathname) ? pathname : null;
 }
