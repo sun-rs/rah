@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type {
   EventAuthority,
   EventChannel,
@@ -757,11 +758,25 @@ function webSearchActionType(action: Record<string, unknown> | null): string | n
   }
 }
 
+function stableShortHash(value: unknown): string {
+  return createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16);
+}
+
+function fallbackWebSearchCallId(record: Record<string, unknown>, payload: Record<string, unknown>): string {
+  return `web-search-${stableShortHash({
+    timestamp: typeof record.timestamp === "string" ? record.timestamp : null,
+    status: payload.status,
+    action: payload.action,
+  })}`;
+}
+
 function makeWebSearchObservation(
   payload: Record<string, unknown>,
-  status: "running" | "completed",
+  status: "running" | "completed" | "failed",
+  fallbackCallId = "web-search",
 ): WorkbenchObservation {
-  const callId = typeof payload.call_id === "string" ? payload.call_id : "web-search";
+  const callId =
+    stringField(payload, "call_id", "id") ?? fallbackCallId;
   const action = webSearchActionRecord(payload.action);
   const actionType = webSearchActionType(action);
   const query =
@@ -812,6 +827,59 @@ function makeWebSearchObservation(
     },
     ...(artifacts.length > 0 ? { detail: { artifacts } } : {}),
   };
+}
+
+function translateWebSearchResponseItem(
+  record: Record<string, unknown>,
+  payload: Record<string, unknown>,
+): CodexTranslatedActivity[] {
+  const rawStatus = stringField(payload, "status");
+  const status =
+    rawStatus === "in_progress" || rawStatus === "running"
+      ? "running"
+      : rawStatus === "failed"
+        ? "failed"
+        : "completed";
+  const observation = makeWebSearchObservation(
+    payload,
+    status,
+    fallbackWebSearchCallId(record, payload),
+  );
+  if (status === "running") {
+    return [
+      persistedActivity(
+        record,
+        {
+          type: "observation_started",
+          observation,
+        },
+        "authoritative",
+      ),
+    ];
+  }
+  if (status === "failed") {
+    return [
+      persistedActivity(
+        record,
+        {
+          type: "observation_failed",
+          observation,
+          error: observation.summary ?? "Web search failed.",
+        },
+        "authoritative",
+      ),
+    ];
+  }
+  return [
+    persistedActivity(
+      record,
+      {
+        type: "observation_completed",
+        observation,
+      },
+      "authoritative",
+    ),
+  ];
 }
 
 function makePatchObservation(callId: string, toolCall: ToolCall): WorkbenchObservation {
@@ -1547,6 +1615,10 @@ export function translateCodexRolloutLine(
       ];
     }
     return invalidRolloutActivity(record, `message role ${payload.role} is not mapped`);
+  }
+
+  if (payload.type === "web_search_call") {
+    return translateWebSearchResponseItem(record, payload);
   }
 
   if (payload.type === "function_call" && typeof payload.name === "string") {

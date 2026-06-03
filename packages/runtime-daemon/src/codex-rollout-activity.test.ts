@@ -1346,6 +1346,84 @@ describe("translateCodexRolloutLine", () => {
     assert.equal(completed[0]?.activity.observation.summary, "codex web search events");
   });
 
+  test("maps persisted Codex web_search_call response items into observations", () => {
+    const state = createCodexRolloutTranslationState();
+
+    const search = translateCodexRolloutLine(
+      {
+        timestamp: "2026-06-02T14:19:49.581Z",
+        type: "response_item",
+        payload: {
+          type: "web_search_call",
+          status: "completed",
+          action: {
+            type: "search",
+            query: "Sharpe ratio excess return risk free rate definition official",
+            queries: [
+              "Sharpe ratio excess return risk free rate definition official",
+              "CFA Institute Sharpe ratio excess return risk free rate",
+            ],
+          },
+        },
+      },
+      state,
+    );
+    const openPage = translateCodexRolloutLine(
+      {
+        timestamp: "2026-06-02T14:19:50.581Z",
+        type: "response_item",
+        payload: {
+          type: "web_search_call",
+          status: "completed",
+          action: {
+            type: "open_page",
+            url: "https://example.com/reference",
+          },
+        },
+      },
+      state,
+    );
+    const failed = translateCodexRolloutLine(
+      {
+        timestamp: "2026-06-02T14:19:51.581Z",
+        type: "response_item",
+        payload: {
+          type: "web_search_call",
+          status: "failed",
+          action: {
+            type: "find_in_page",
+            url: "https://example.com/reference",
+            pattern: "Sharpe",
+          },
+        },
+      },
+      state,
+    );
+
+    assert.equal(search.length, 1);
+    assert.equal(search[0]?.activity.type, "observation_completed");
+    assert.equal(search[0]?.activity.observation.kind, "web.search");
+    assert.equal(search[0]?.activity.observation.status, "completed");
+    assert.equal(
+      search[0]?.activity.observation.summary,
+      "Sharpe ratio excess return risk free rate definition official",
+    );
+    assert.match(search[0]?.activity.observation.id ?? "", /^obs-web-search-[a-f0-9]{16}$/);
+
+    assert.equal(openPage.length, 1);
+    assert.equal(openPage[0]?.activity.type, "observation_completed");
+    assert.equal(openPage[0]?.activity.observation.kind, "web.fetch");
+    assert.equal(openPage[0]?.activity.observation.title, "Open page");
+    assert.equal(openPage[0]?.activity.observation.summary, "https://example.com/reference");
+
+    assert.equal(failed.length, 1);
+    assert.equal(failed[0]?.activity.type, "observation_failed");
+    assert.equal(failed[0]?.activity.observation.kind, "web.fetch");
+    assert.equal(failed[0]?.activity.observation.status, "failed");
+    assert.equal(failed[0]?.activity.observation.title, "Find in page");
+    assert.equal(failed[0]?.activity.observation.summary, "Sharpe in https://example.com/reference");
+  });
+
   test("ignores persisted noise events that should not surface in history feed", () => {
     const state = createCodexRolloutTranslationState();
 
