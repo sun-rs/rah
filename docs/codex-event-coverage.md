@@ -3,8 +3,8 @@
 This document tracks the Codex reference adapter against the local Codex app-server v2 protocol.
 The source of truth is:
 
-- `/Users/sun/lab/crates/ai/codex/codex-rs/app-server-protocol/src/protocol/common.rs`
-- `/Users/sun/lab/crates/ai/codex/codex-rs/app-server-protocol/src/protocol/v2.rs`
+- `/Users/sun/Library/Mobile Documents/com~apple~CloudDocs/Lab/crates/AI/codex/codex-rs/app-server-protocol/src/protocol/common.rs`
+- `/Users/sun/Library/Mobile Documents/com~apple~CloudDocs/Lab/crates/AI/codex/codex-rs/app-server-protocol/src/protocol/v2`
 
 The goal is not to mirror Codex method names into RAH. The goal is to prove each known Codex
 method maps into an existing RAH family or an explicit fallback without changing the protocol.
@@ -24,6 +24,29 @@ method maps into an existing RAH family or an explicit fallback without changing
 - When a Codex tool or permission lifecycle has both start and terminal events with `turnId`, the
   `turnId` must remain stable across that lifecycle.
 
+## Codex App-Server Compatibility
+
+RAH treats the Codex app-server protocol as provider-owned and version-drifting. Current compatibility
+rules:
+
+- `codex app-server --stdio` is the default transport. `RAH_CODEX_APP_SERVER_TRANSPORT=websocket`
+  remains an explicit override for older/debug flows.
+- `thread/start` only sends current app-server params. RAH no longer sends legacy
+  `experimentalRawEvents`, `persistExtendedHistory`, or `name`; requested titles are applied with
+  `thread/name/set` after the thread id is returned.
+- `thread/resume` no longer sends `excludeTurns`. Live history replay suppression is owned by RAH's
+  replay/live-upgrade path, not an old Codex request field.
+- Codex `sessions` and `archived_sessions` are both scanned. Entries under `archived_sessions` are
+  marked as `StoredSessionRef.providerState.archived`.
+- Live resume of an archived Codex entry first attempts `thread/unarchive`, then performs
+  `thread/resume`. If unarchive is rejected, the normal resume error/fallback path remains the
+  authority.
+- `ThreadStartResponse` / `ThreadResumeResponse` fields are normalized across old and new shapes:
+  `approval_policy` or `approvalPolicy`, string `sandbox` or object `SandboxPolicy`.
+- Codex `--profile` is treated as a config-file selector, not as RAH's session mode primitive.
+  RAH structured sessions continue to send app-server `approvalPolicy` / `sandbox`, and native TUI
+  launch still uses the Codex CLI compatibility flags while the current CLI accepts them.
+
 ## Server Notifications
 
 Covered in `CODEX_APP_SERVER_NOTIFICATION_METHODS` and
@@ -39,6 +62,9 @@ Covered in `CODEX_APP_SERVER_NOTIFICATION_METHODS` and
 | `thread/closed` | `session.exited` |
 | `skills/changed` | ignored by design |
 | `thread/name/updated` | ignored by design |
+| `thread/goal/updated` | ignored by design |
+| `thread/goal/cleared` | ignored by design |
+| `thread/settings/updated` | ignored by design |
 | `thread/tokenUsage/updated` | `usage.updated` + `context.updated` |
 | `turn/started` | `turn.started` |
 | `turn/completed` | `turn.completed`, `turn.failed`, or `turn.canceled` |
@@ -56,10 +82,13 @@ Covered in `CODEX_APP_SERVER_NOTIFICATION_METHODS` and
 | `item/reasoning/summaryTextDelta` | `message.part.delta: reasoning` + `timeline.item.added: reasoning` |
 | `item/reasoning/summaryPartAdded` | `message.part.added: reasoning` |
 | `item/reasoning/textDelta` | `message.part.delta: reasoning` + `timeline.item.added: reasoning` |
+| `process/outputDelta` | ignored by design |
+| `process/exited` | ignored by design |
 | `item/commandExecution/outputDelta` | `observation.updated` + `tool.call.delta` + `terminal.output` |
 | `command/exec/outputDelta` | ignored by design |
 | `item/commandExecution/terminalInteraction` | ignored by design |
 | `item/fileChange/outputDelta` | `observation.updated: patch.apply` + `tool.call.delta` |
+| `item/fileChange/patchUpdated` | ignored by design |
 | `serverRequest/resolved` | ignored by design |
 | `item/mcpToolCall/progress` | `observation.updated: mcp.call` + `tool.call.delta` |
 | `mcpServer/oauthLogin/completed` | ignored by design |
@@ -68,9 +97,14 @@ Covered in `CODEX_APP_SERVER_NOTIFICATION_METHODS` and
 | `account/rateLimits/updated` | ignored by design |
 | `account/login/completed` | ignored by design |
 | `app/list/updated` | ignored by design |
+| `remoteControl/status/changed` | ignored by design |
+| `externalAgentConfig/import/completed` | ignored by design |
 | `fs/changed` | ignored by design |
 | `thread/compacted` | `timeline.item.added: compaction` |
 | `model/rerouted` | ignored by design |
+| `model/verification` | ignored by design |
+| `warning` | `notification.emitted: warning` |
+| `guardianWarning` | `notification.emitted: warning` |
 | `deprecationNotice` | ignored by design |
 | `configWarning` | ignored by design |
 | `fuzzyFileSearch/sessionUpdated` | ignored by design |
@@ -106,6 +140,8 @@ Covered in `CODEX_APP_SERVER_REQUEST_METHODS` and `handleCodexLiveRequest`.
 
 - `codex-app-server-activity.test.ts` asserts every known notification method either maps or is
   deliberately ignored without `runtime.invalid_stream`.
+- `codex-adapter.test.ts` asserts archived Codex sessions are unarchived before live resume, and
+  new threads are started without legacy app-server params.
 - `codex-live-client.test.ts` asserts request/response round trips for user input, MCP
   elicitation, and dynamic client tool requests.
 - `rah-event-contract.test.ts` asserts translated Codex events pass `validateRahEventSequence`.

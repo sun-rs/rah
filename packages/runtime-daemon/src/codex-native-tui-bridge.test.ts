@@ -21,6 +21,7 @@ describe("codex native TUI bridge helpers", () => {
             updatedAt: "2026-04-23T12:00:00.000Z",
           },
           rolloutPath: "/tmp/1.jsonl",
+          archived: false,
         },
         {
           ref: {
@@ -31,6 +32,7 @@ describe("codex native TUI bridge helpers", () => {
             updatedAt: "2026-04-23T12:01:00.000Z",
           },
           rolloutPath: "/tmp/2.jsonl",
+          archived: false,
         },
       ],
       cwd: "/repo",
@@ -53,6 +55,7 @@ describe("codex native TUI bridge helpers", () => {
             updatedAt: "2026-04-23T11:20:00.000Z",
           },
           rolloutPath: "/tmp/old.jsonl",
+          archived: false,
         },
         {
           ref: {
@@ -63,6 +66,7 @@ describe("codex native TUI bridge helpers", () => {
             updatedAt: "2026-04-23T12:01:00.000Z",
           },
           rolloutPath: "/tmp/new.jsonl",
+          archived: false,
         },
       ],
       cwd: "/repo",
@@ -84,6 +88,7 @@ describe("codex native TUI bridge helpers", () => {
             updatedAt: "2026-04-23T12:01:00.000Z",
           },
           rolloutPath: "/tmp/old.jsonl",
+          archived: false,
         },
         {
           ref: {
@@ -94,6 +99,7 @@ describe("codex native TUI bridge helpers", () => {
             updatedAt: "2026-04-23T12:03:00.000Z",
           },
           rolloutPath: "/tmp/fresh.jsonl",
+          archived: false,
         },
       ],
       cwd: "/repo",
@@ -116,6 +122,7 @@ describe("codex native TUI bridge helpers", () => {
             updatedAt: "2026-04-23T12:01:00.000Z",
           },
           rolloutPath: "/tmp/old.jsonl",
+          archived: false,
         },
       ],
       cwd: "/repo",
@@ -138,6 +145,7 @@ describe("codex native TUI bridge helpers", () => {
             updatedAt: "2026-04-23T12:01:00.000Z",
           },
           rolloutPath: "/tmp/private.jsonl",
+          archived: false,
         },
       ],
       cwd: "/tmp/project",

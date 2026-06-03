@@ -139,6 +139,91 @@ function codexAccessModeIdForConfig(args: {
   });
 }
 
+function codexString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function codexRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function codexApprovalPolicyFromResponse(response: {
+  approvalPolicy?: unknown;
+  approval_policy?: unknown;
+}): string | undefined {
+  return codexString(response.approvalPolicy) ?? codexString(response.approval_policy);
+}
+
+function codexSandboxModeFromResponse(sandbox: unknown): string | undefined {
+  const direct = codexString(sandbox);
+  if (direct) {
+    return direct;
+  }
+  const record = codexRecord(sandbox);
+  if (!record) {
+    return undefined;
+  }
+  const type = codexString(record.type);
+  switch (type) {
+    case "dangerFullAccess":
+      return "danger-full-access";
+    case "readOnly":
+      return "read-only";
+    case "workspaceWrite":
+      return "workspace-write";
+    case "externalSandbox":
+      return "external-sandbox";
+    default:
+      return type;
+  }
+}
+
+function codexApprovalsReviewerFromResponse(
+  value: unknown,
+): "user" | "auto_review" | undefined {
+  if (value === "user" || value === "auto_review") {
+    return value;
+  }
+  if (value === "guardian_subagent") {
+    return "auto_review";
+  }
+  return undefined;
+}
+
+async function setCodexThreadNameIfRequested(
+  client: CodexAppServerRpcClient,
+  threadId: string,
+  title?: string,
+): Promise<void> {
+  const name = title?.trim();
+  if (!name) {
+    return;
+  }
+  try {
+    await client.request("thread/name/set", { threadId, name }, TURN_START_TIMEOUT_MS);
+  } catch {
+    // Naming is advisory for RAH; a failed native rename should not strand a live session.
+  }
+}
+
+async function unarchiveCodexThreadIfNeeded(args: {
+  client: CodexAppServerRpcClient;
+  threadId: string;
+  record?: CodexStoredSessionRecord;
+}): Promise<void> {
+  if (args.record?.archived !== true && args.record?.ref.providerState?.archived !== true) {
+    return;
+  }
+  try {
+    await args.client.request("thread/unarchive", { threadId: args.threadId }, TURN_START_TIMEOUT_MS);
+  } catch {
+    // Resume remains the authority. If the thread was already restored or the
+    // server rejects unarchive, the normal resume error path will decide.
+  }
+}
+
 export async function loadCodexPlanCollaborationMode(client: CodexAppServerRpcClient): Promise<LiveCodexSession["planCollaborationMode"]> {
   const response = (await client.request("collaborationMode/list", {})) as {
     data?: Array<{
@@ -313,10 +398,7 @@ export async function startCodexLiveSession(params: {
       ? { approvalsReviewer: initialMode.approvalsReviewer }
       : {}),
     ...(request.model ? { model: request.model } : {}),
-    experimentalRawEvents: false,
-    persistExtendedHistory: true,
     ...(configOverrides ? { config: configOverrides } : {}),
-    ...(request.title ? { name: request.title } : {}),
   })) as {
     thread?: { id?: string };
     model?: string;
@@ -328,6 +410,7 @@ export async function startCodexLiveSession(params: {
     await client.dispose();
     throw new Error("Codex app-server did not return a thread id.");
   }
+  await setCodexThreadNameIfRequested(client, threadId, request.title);
   const currentModelId =
     request.model ?? threadStart.model ?? params.initialModelCatalog?.currentModelId ?? null;
   const currentModel = currentModelId
@@ -477,11 +560,15 @@ export async function resumeCodexLiveSession(params: {
     const resumeModeOverride = request.modeId
       ? resolveCodexStartupMode({ modeId: request.modeId })
       : null;
+    await unarchiveCodexThreadIfNeeded({
+      client,
+      threadId: request.providerSessionId,
+      ...(record ? { record } : {}),
+    });
     const resumeResponse = (await client.request(
       "thread/resume",
       {
         threadId: request.providerSessionId,
-        excludeTurns: true,
         ...(resumeModeOverride
           ? {
               approvalPolicy: resumeModeOverride.approvalPolicy,
@@ -502,9 +589,10 @@ export async function resumeCodexLiveSession(params: {
         status?: unknown;
       };
       cwd?: string;
+      approvalPolicy?: unknown;
       approval_policy?: string;
-      sandbox?: string;
-      approvalsReviewer?: "user" | "auto_review";
+      sandbox?: unknown;
+      approvalsReviewer?: unknown;
       model?: string;
       reasoningEffort?: string | null;
       reasoning_effort?: string | null;
@@ -520,15 +608,11 @@ export async function resumeCodexLiveSession(params: {
       process.cwd();
     const resumedMode = resolveCodexStartupMode({
       modeId: request.modeId,
-      fallbackApprovalPolicy:
-        typeof resumeResponse.approval_policy === "string"
-          ? resumeResponse.approval_policy
-          : undefined,
-      fallbackSandboxMode:
-        typeof resumeResponse.sandbox === "string"
-          ? resumeResponse.sandbox
-        : undefined,
-      fallbackApprovalsReviewer: resumeResponse.approvalsReviewer,
+      fallbackApprovalPolicy: codexApprovalPolicyFromResponse(resumeResponse),
+      fallbackSandboxMode: codexSandboxModeFromResponse(resumeResponse.sandbox),
+      fallbackApprovalsReviewer: codexApprovalsReviewerFromResponse(
+        resumeResponse.approvalsReviewer,
+      ),
     });
     const currentModelId =
       request.model ??

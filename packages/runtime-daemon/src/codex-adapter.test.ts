@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, mkdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { validateProviderModelCatalog } from "@rah/runtime-protocol";
@@ -74,8 +74,14 @@ describe("CodexAdapter", () => {
     rmSync(tmpHome, { recursive: true, force: true });
   });
 
-  function writeRollout(sessionId: string, cwd: string): string {
-    const dir = path.join(tmpHome, "sessions", "2026", "04", "15");
+  function writeRollout(sessionId: string, cwd: string, options?: { archived?: boolean }): string {
+    const dir = path.join(
+      tmpHome,
+      options?.archived ? "archived_sessions" : "sessions",
+      "2026",
+      "04",
+      "15",
+    );
     mkdirSync(dir, { recursive: true });
     const rolloutPath = path.join(
       dir,
@@ -218,6 +224,144 @@ rl.on('line', (line) => {
           text: "Continue",
         }),
       /read-only/,
+    );
+
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
+  test("unarchives archived Codex sessions before live resume", async () => {
+    const cwd = mkdtempSync(path.join(os.tmpdir(), "rah-codex-archived-cwd-"));
+    const sessionId = "019e3333-aaaa-7bbb-8ccc-ddddeeeeffff";
+    const methodLog = path.join(tmpHome, "method-log.txt");
+    writeRollout(sessionId, cwd, { archived: true });
+    writeMockCodexServer(`
+const fs = require('node:fs');
+const readline = require('node:readline');
+const logPath = ${JSON.stringify(methodLog)};
+const rl = readline.createInterface({ input: process.stdin });
+let unarchived = false;
+function send(msg) { process.stdout.write(JSON.stringify(msg) + "\\n"); }
+function log(method) { fs.appendFileSync(logPath, method + "\\n"); }
+rl.on('line', (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method) log(msg.method);
+  if (msg.method === 'initialize') {
+    send({ id: msg.id, result: {} });
+    return;
+  }
+  if (msg.method === 'thread/unarchive') {
+    unarchived = true;
+    send({ id: msg.id, result: { thread: { id: msg.params.threadId } } });
+    return;
+  }
+  if (msg.method === 'thread/resume') {
+    if (!unarchived) {
+      send({ id: msg.id, error: { message: 'thread is archived' } });
+      return;
+    }
+    send({
+      id: msg.id,
+      result: {
+        thread: {
+          id: msg.params.threadId,
+          cwd: ${JSON.stringify(cwd)},
+          name: 'Archived restored',
+          status: { type: 'idle' }
+        },
+        approvalPolicy: 'on-request',
+        approvalsReviewer: 'auto_review',
+        sandbox: { type: 'workspaceWrite' },
+        model: 'gpt-test',
+        reasoningEffort: 'low'
+      }
+    });
+    return;
+  }
+  send({ id: msg.id, result: {} });
+});
+`);
+
+    const services = {
+      eventBus: new EventBus(),
+      ptyHub: new PtyHub(),
+      sessionStore: new SessionStore(),
+    };
+    const adapter = new CodexAdapter(services);
+
+    const resumed = await adapter.resumeSession({
+      provider: "codex",
+      providerSessionId: sessionId,
+    });
+
+    assert.equal(resumed.session.session.providerSessionId, sessionId);
+    assert.equal(resumed.session.session.title, "Fix the resume bug");
+    assert.equal(resumed.session.session.mode?.currentModeId, "auto-review/workspace-write");
+    assert.equal(resumed.session.session.runtime?.kind, "native_local_server");
+    const methods = readFileSync(methodLog, "utf8").trim().split("\n");
+    assert.ok(methods.indexOf("thread/unarchive") > -1);
+    assert.ok(methods.indexOf("thread/resume") > methods.indexOf("thread/unarchive"));
+
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
+  test("starts Codex threads without legacy params and sets title through native rename", async () => {
+    const cwd = mkdtempSync(path.join(os.tmpdir(), "rah-codex-start-params-cwd-"));
+    const paramsLog = path.join(tmpHome, "start-params.jsonl");
+    writeMockCodexServer(`
+const fs = require('node:fs');
+const readline = require('node:readline');
+const logPath = ${JSON.stringify(paramsLog)};
+const rl = readline.createInterface({ input: process.stdin });
+function send(msg) { process.stdout.write(JSON.stringify(msg) + "\\n"); }
+function log(entry) { fs.appendFileSync(logPath, JSON.stringify(entry) + "\\n"); }
+rl.on('line', (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method === 'initialize') {
+    send({ id: msg.id, result: {} });
+    return;
+  }
+  if (msg.method === 'collaborationMode/list') {
+    send({ id: msg.id, result: { data: [] } });
+    return;
+  }
+  if (msg.method === 'thread/start') {
+    log({ method: msg.method, params: msg.params });
+    send({ id: msg.id, result: { thread: { id: 'thread-start-params-1' }, model: 'gpt-test' } });
+    return;
+  }
+  if (msg.method === 'thread/name/set') {
+    log({ method: msg.method, params: msg.params });
+    send({ id: msg.id, result: { thread: { id: msg.params.threadId, name: msg.params.name } } });
+    return;
+  }
+  send({ id: msg.id, result: {} });
+});
+`);
+
+    const services = {
+      eventBus: new EventBus(),
+      ptyHub: new PtyHub(),
+      sessionStore: new SessionStore(),
+    };
+    const adapter = new CodexAdapter(services);
+    await adapter.startSession({
+      provider: "codex",
+      cwd,
+      title: "Native title",
+    });
+
+    const entries = readFileSync(paramsLog, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { method: string; params: Record<string, unknown> });
+    const startParams = entries.find((entry) => entry.method === "thread/start")?.params;
+    assert.ok(startParams);
+    assert.equal(Object.prototype.hasOwnProperty.call(startParams, "name"), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(startParams, "experimentalRawEvents"), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(startParams, "persistExtendedHistory"), false);
+    assert.deepEqual(
+      entries.find((entry) => entry.method === "thread/name/set")?.params,
+      { threadId: "thread-start-params-1", name: "Native title" },
     );
 
     rmSync(cwd, { recursive: true, force: true });

@@ -49,6 +49,45 @@ function resolveCodexHomes(): string[] {
   return [resolveCodexBaseHome()];
 }
 
+function isPathInsideDirectory(candidatePath: string, directory: string): boolean {
+  const relative = path.relative(path.resolve(directory), path.resolve(candidatePath));
+  return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
+}
+
+export function isCodexStoredSessionArchivedPath(filePath: string): boolean {
+  return resolveCodexHomes().some((home) =>
+    isPathInsideDirectory(filePath, path.join(home, "archived_sessions")),
+  );
+}
+
+function withCodexArchivedProviderState(ref: StoredSessionRef, archived: boolean): StoredSessionRef {
+  const current = ref.providerState ?? {};
+  if (archived) {
+    if (current.archived === true) {
+      return ref;
+    }
+    return {
+      ...ref,
+      providerState: {
+        ...current,
+        archived: true,
+      },
+    };
+  }
+  if (current.archived !== true) {
+    return ref;
+  }
+  const { archived: _archived, archivedAt: _archivedAt, ...rest } = current;
+  void _archived;
+  void _archivedAt;
+  const { providerState: _providerState, ...withoutProviderState } = ref;
+  void _providerState;
+  return {
+    ...withoutProviderState,
+    ...(Object.keys(rest).length > 0 ? { providerState: rest } : {}),
+  };
+}
+
 function readHeadLines(filePath: string, maxBytes = 512 * 1024): string[] {
   return readLeadingLines(filePath, { maxBytes, maxLines: MAX_HEAD_LINES });
 }
@@ -179,6 +218,7 @@ function parseStoredSessionRecord(filePath: string): CodexStoredSessionRecord | 
   }
 
   const stat = statSync(filePath);
+  const archived = isCodexStoredSessionArchivedPath(filePath);
   const preview = firstUserMessage ? truncateText(firstUserMessage) : path.basename(filePath);
   return {
     ref: {
@@ -190,9 +230,11 @@ function parseStoredSessionRecord(filePath: string): CodexStoredSessionRecord | 
       preview,
       ...(createdAt ? { createdAt } : {}),
       updatedAt: stat.mtime.toISOString(),
+      ...(archived ? { providerState: { archived: true } } : {}),
       source: "provider_history",
     },
     rolloutPath: filePath,
+    archived,
   };
 }
 
@@ -239,6 +281,34 @@ function loadCodexThreadTitleIndex(): Map<string, string> {
   return titles;
 }
 
+function preferCodexStoredSessionRecord(
+  current: CodexStoredSessionRecord | undefined,
+  next: CodexStoredSessionRecord,
+): CodexStoredSessionRecord {
+  if (!current) {
+    return next;
+  }
+  if (current.archived !== next.archived) {
+    return next.archived ? current : next;
+  }
+  const currentUpdatedAt = Date.parse(current.ref.updatedAt ?? "");
+  const nextUpdatedAt = Date.parse(next.ref.updatedAt ?? "");
+  if (Number.isFinite(currentUpdatedAt) && Number.isFinite(nextUpdatedAt)) {
+    return nextUpdatedAt > currentUpdatedAt ? next : current;
+  }
+  return (next.ref.updatedAt ?? "").localeCompare(current.ref.updatedAt ?? "") > 0 ? next : current;
+}
+
+function setPreferredCodexStoredSessionRecord(
+  records: Map<string, CodexStoredSessionRecord>,
+  record: CodexStoredSessionRecord,
+): void {
+  records.set(
+    record.ref.providerSessionId,
+    preferCodexStoredSessionRecord(records.get(record.ref.providerSessionId), record),
+  );
+}
+
 export function discoverCodexStoredSessions(): CodexStoredSessionRecord[] {
   const cache = loadStoredSessionMetadataCache("codex");
   const renamedTitles = loadCodexThreadTitleIndex();
@@ -246,6 +316,7 @@ export function discoverCodexStoredSessions(): CodexStoredSessionRecord[] {
   for (const root of resolveCodexSearchRoots()) {
     for (const file of listRolloutFiles(root)) {
       const stats = statSync(file);
+      const archived = isCodexStoredSessionArchivedPath(file);
       const cachedRef = getCachedStoredSessionRef({
         cache,
         filePath: file,
@@ -255,7 +326,7 @@ export function discoverCodexStoredSessions(): CodexStoredSessionRecord[] {
       if (cachedRef && !shouldInvalidateCachedCodexTitle(cachedRef, file)) {
         const createdAtRecord = !cachedRef.createdAt ? parseStoredSessionRecord(file) : null;
         const renamedTitle = renamedTitles.get(cachedRef.providerSessionId);
-        const nextRef = withHistoryFileMeta(
+        const refWithHistoryMeta = withHistoryFileMeta(
           renamedTitle && renamedTitle !== cachedRef.title
             ? {
                 ...cachedRef,
@@ -273,6 +344,7 @@ export function discoverCodexStoredSessions(): CodexStoredSessionRecord[] {
           file,
           stats,
         );
+        const nextRef = withCodexArchivedProviderState(refWithHistoryMeta, archived);
         if (nextRef !== cachedRef) {
           setCachedStoredSessionRef({
             cache,
@@ -282,9 +354,10 @@ export function discoverCodexStoredSessions(): CodexStoredSessionRecord[] {
             ref: nextRef,
           });
         }
-        records.set(cachedRef.providerSessionId, {
+        setPreferredCodexStoredSessionRecord(records, {
           ref: nextRef,
           rolloutPath: file,
+          archived,
         });
         continue;
       }
@@ -307,7 +380,7 @@ export function discoverCodexStoredSessions(): CodexStoredSessionRecord[] {
         mtimeMs: stats.mtimeMs,
         ref: parsed.ref,
       });
-      records.set(parsed.ref.providerSessionId, parsed);
+      setPreferredCodexStoredSessionRecord(records, parsed);
     }
   }
   writeStoredSessionMetadataCache(

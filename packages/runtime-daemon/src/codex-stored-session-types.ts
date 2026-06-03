@@ -3,6 +3,7 @@ import type { StoredSessionRef } from "@rah/runtime-protocol";
 export interface CodexStoredSessionRecord {
   ref: StoredSessionRef;
   rolloutPath: string;
+  archived: boolean;
 }
 
 export const REHYDRATED_CAPABILITIES = {

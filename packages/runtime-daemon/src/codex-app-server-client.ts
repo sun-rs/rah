@@ -149,7 +149,7 @@ function shouldUseCodexWebSocketTransport(): boolean {
   if (configured === "websocket" || configured === "ws") {
     return true;
   }
-  return true;
+  return false;
 }
 
 export async function createCodexAppServerClient(): Promise<CodexAppServerRpcClient> {

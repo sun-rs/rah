@@ -319,6 +319,15 @@ export interface StoredSessionHistoryMeta {
   messages?: number;
 }
 
+export interface StoredSessionProviderState {
+  /**
+   * Provider-native archive/trash state. This is not a RAH running/stopped
+   * lifecycle flag; it only describes the provider-owned stored history entry.
+   */
+  archived?: boolean;
+  archivedAt?: string;
+}
+
 /**
  * A provider-owned persisted session reference that is known to the system but
  * is not currently running under runtime control.
@@ -334,6 +343,7 @@ export interface StoredSessionRef {
   updatedAt?: string;
   lastUsedAt?: string;
   historyMeta?: StoredSessionHistoryMeta;
+  providerState?: StoredSessionProviderState;
   source?: "provider_history" | "previous_running";
 }
 

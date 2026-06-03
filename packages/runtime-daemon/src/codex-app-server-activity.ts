@@ -104,6 +104,7 @@ export const CODEX_APP_SERVER_NOTIFICATION_METHODS = [
   "thread/name/updated",
   "thread/goal/updated",
   "thread/goal/cleared",
+  "thread/settings/updated",
   "thread/tokenUsage/updated",
   "turn/started",
   "hook/started",
@@ -119,9 +120,12 @@ export const CODEX_APP_SERVER_NOTIFICATION_METHODS = [
   "item/agentMessage/delta",
   "item/plan/delta",
   "command/exec/outputDelta",
+  "process/outputDelta",
+  "process/exited",
   "item/commandExecution/outputDelta",
   "item/commandExecution/terminalInteraction",
   "item/fileChange/outputDelta",
+  "item/fileChange/patchUpdated",
   "serverRequest/resolved",
   "item/mcpToolCall/progress",
   "mcpServer/oauthLogin/completed",
@@ -130,12 +134,16 @@ export const CODEX_APP_SERVER_NOTIFICATION_METHODS = [
   "account/rateLimits/updated",
   "account/login/completed",
   "app/list/updated",
+  "externalAgentConfig/import/completed",
   "fs/changed",
   "item/reasoning/summaryTextDelta",
   "item/reasoning/summaryPartAdded",
   "item/reasoning/textDelta",
   "thread/compacted",
   "model/rerouted",
+  "model/verification",
+  "warning",
+  "guardianWarning",
   "deprecationNotice",
   "configWarning",
   "fuzzyFileSearch/sessionUpdated",
@@ -160,9 +168,13 @@ export const CODEX_APP_SERVER_IGNORED_NOTIFICATION_METHODS = [
   "thread/name/updated",
   "thread/goal/updated",
   "thread/goal/cleared",
+  "thread/settings/updated",
   "turn/diff/updated",
   "rawResponseItem/completed",
   "command/exec/outputDelta",
+  "process/outputDelta",
+  "process/exited",
+  "item/fileChange/patchUpdated",
   "serverRequest/resolved",
   "mcpServer/oauthLogin/completed",
   "mcpServer/startupStatus/updated",
@@ -170,8 +182,10 @@ export const CODEX_APP_SERVER_IGNORED_NOTIFICATION_METHODS = [
   "account/rateLimits/updated",
   "account/login/completed",
   "app/list/updated",
+  "externalAgentConfig/import/completed",
   "fs/changed",
   "model/rerouted",
+  "model/verification",
   "deprecationNotice",
   "configWarning",
   "fuzzyFileSearch/sessionUpdated",
@@ -2535,6 +2549,19 @@ export function translateCodexAppServerNotification(
           ...(turnId !== undefined ? { turnId } : {}),
           status: "streaming",
           detail: `Model rerouted from ${String(params?.fromModel ?? "unknown")} to ${String(params?.toModel ?? "unknown")}`,
+        }),
+      ];
+    }
+    case "warning":
+    case "guardianWarning": {
+      const params = paramsRecord(notification);
+      const message = stringField(params ?? {}, "message") ?? JSON.stringify(notification.params ?? {});
+      return [
+        translated(notification, {
+          type: "notification",
+          level: "warning",
+          title: notification.method === "guardianWarning" ? "Codex guardian warning" : "Codex warning",
+          body: message,
         }),
       ];
     }

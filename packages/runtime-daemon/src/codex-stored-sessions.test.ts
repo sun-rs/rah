@@ -8,6 +8,7 @@ import {
   applyCodexGitFileAction,
   applyCodexGitHunkAction,
   createCodexStoredSessionFrozenHistoryPageLoader,
+  discoverCodexStoredSessions,
   getCodexGitDiff,
   getCodexGitStatus,
   getCodexStoredSessionHistoryPage,
@@ -32,6 +33,120 @@ function timelineTexts(
     return [];
   });
 }
+
+describe("codex stored session discovery", () => {
+  let tmpHome: string;
+  let previousCodexHome: string | undefined;
+  let previousRahHome: string | undefined;
+
+  beforeEach(() => {
+    tmpHome = mkdtempSync(path.join(os.tmpdir(), "rah-codex-discovery-"));
+    previousCodexHome = process.env.CODEX_HOME;
+    previousRahHome = process.env.RAH_HOME;
+    process.env.CODEX_HOME = tmpHome;
+    process.env.RAH_HOME = path.join(tmpHome, "rah-home");
+  });
+
+  afterEach(() => {
+    if (previousCodexHome === undefined) {
+      delete process.env.CODEX_HOME;
+    } else {
+      process.env.CODEX_HOME = previousCodexHome;
+    }
+    if (previousRahHome === undefined) {
+      delete process.env.RAH_HOME;
+    } else {
+      process.env.RAH_HOME = previousRahHome;
+    }
+    rmSync(tmpHome, { recursive: true, force: true });
+  });
+
+  function writeDiscoveryRollout(args: {
+    rootName: "sessions" | "archived_sessions";
+    sessionId: string;
+    cwd: string;
+    timestamp: string;
+    text: string;
+  }): string {
+    const dir = path.join(tmpHome, args.rootName, "2026", "06", "02");
+    mkdirSync(dir, { recursive: true });
+    mkdirSync(args.cwd, { recursive: true });
+    const rolloutPath = path.join(
+      dir,
+      `rollout-2026-06-02T00-00-00-${args.sessionId}.jsonl`,
+    );
+    writeFileSync(
+      rolloutPath,
+      [
+        JSON.stringify({
+          timestamp: args.timestamp,
+          type: "session_meta",
+          payload: {
+            id: args.sessionId,
+            timestamp: args.timestamp,
+            cwd: args.cwd,
+            source: "cli",
+          },
+        }),
+        JSON.stringify({
+          timestamp: args.timestamp,
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: args.text }],
+          },
+        }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+    return rolloutPath;
+  }
+
+  test("marks Codex rollout refs discovered from archived_sessions", () => {
+    const sessionId = "019e2222-aaaa-7bbb-8ccc-ddddeeeeffff";
+    const cwd = path.join(tmpHome, "workspace");
+    writeDiscoveryRollout({
+      rootName: "archived_sessions",
+      sessionId,
+      cwd,
+      timestamp: "2026-06-02T00:00:00.000Z",
+      text: "Review archived behavior",
+    });
+
+    const records = discoverCodexStoredSessions();
+    assert.equal(records.length, 1);
+    assert.equal(records[0]?.ref.providerSessionId, sessionId);
+    assert.equal(records[0]?.archived, true);
+    assert.equal(records[0]?.ref.providerState?.archived, true);
+  });
+
+  test("prefers active Codex rollout refs when archived duplicates exist", () => {
+    const sessionId = "019e2222-bbbb-7ccc-8ddd-eeeeffff0000";
+    const cwd = path.join(tmpHome, "workspace");
+    writeDiscoveryRollout({
+      rootName: "sessions",
+      sessionId,
+      cwd,
+      timestamp: "2026-06-02T00:00:00.000Z",
+      text: "Active copy",
+    });
+    writeDiscoveryRollout({
+      rootName: "archived_sessions",
+      sessionId,
+      cwd,
+      timestamp: "2026-06-02T00:01:00.000Z",
+      text: "Archived duplicate",
+    });
+
+    const records = discoverCodexStoredSessions();
+    assert.equal(records.length, 1);
+    assert.equal(records[0]?.ref.providerSessionId, sessionId);
+    assert.equal(records[0]?.archived, false);
+    assert.equal(records[0]?.ref.providerState?.archived, undefined);
+    assert.equal(records[0]?.ref.preview, "Active copy");
+  });
+});
 
 describe("codex stored session path resolution", () => {
   let repoRoot: string;
@@ -329,6 +444,7 @@ describe("codex stored session path resolution", () => {
         source: "provider_history",
       },
       rolloutPath,
+      archived: false,
     };
 
     const loader = createCodexStoredSessionFrozenHistoryPageLoader({
@@ -452,6 +568,7 @@ describe("codex stored session path resolution", () => {
         source: "provider_history",
       },
       rolloutPath,
+      archived: false,
     };
 
     const loader = createCodexStoredSessionFrozenHistoryPageLoader({
@@ -586,6 +703,7 @@ describe("codex stored session path resolution", () => {
         source: "provider_history",
       },
       rolloutPath,
+      archived: false,
     };
 
     const loader = createCodexStoredSessionFrozenHistoryPageLoader({
@@ -669,6 +787,7 @@ describe("codex stored session path resolution", () => {
         source: "provider_history",
       },
       rolloutPath,
+      archived: false,
     };
 
     const openPage = getCodexStoredSessionHistoryPage({
@@ -781,6 +900,7 @@ describe("codex stored session path resolution", () => {
         source: "provider_history",
       },
       rolloutPath,
+      archived: false,
     };
 
     const page = getCodexStoredSessionHistoryPage({

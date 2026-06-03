@@ -299,7 +299,7 @@ function subscribeExternalCodexThreadForMirror(
         try {
           const response = await liveSession.client.request(
             "thread/resume",
-            { threadId: liveSession.threadId, excludeTurns: true },
+            { threadId: liveSession.threadId },
             30_000,
           );
           liveSession.externalThreadMirrorSubscribed = true;
