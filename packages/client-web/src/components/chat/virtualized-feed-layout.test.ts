@@ -4,6 +4,7 @@ import type { FeedEntry } from "../../types";
 import {
   buildVirtualFeedLayout,
   resolveVirtualFeedWindow,
+  VIRTUAL_FEED_ROW_GAP_PX,
 } from "./virtualized-feed-layout";
 
 function messageEntry(key: string, text: string): FeedEntry {
@@ -19,7 +20,7 @@ function messageEntry(key: string, text: string): FeedEntry {
 }
 
 describe("virtualized feed layout", () => {
-  test("prefers measured heights while preserving cumulative offsets", () => {
+  test("prefers measured content heights while preserving cumulative offsets with row gaps", () => {
     const entries = [
       messageEntry("a", "short"),
       messageEntry("b", "short"),
@@ -36,9 +37,17 @@ describe("virtualized feed layout", () => {
     assert.deepEqual(
       layout.rows.map((row) => ({ key: row.key, height: row.height, offsetTop: row.offsetTop })),
       [
-        { key: "a", height: 80, offsetTop: 0 },
-        { key: "b", height: 120, offsetTop: 80 },
-        { key: "c", height: layout.rows[2]!.height, offsetTop: 200 },
+        { key: "a", height: 80 + VIRTUAL_FEED_ROW_GAP_PX, offsetTop: 0 },
+        {
+          key: "b",
+          height: 120 + VIRTUAL_FEED_ROW_GAP_PX,
+          offsetTop: 80 + VIRTUAL_FEED_ROW_GAP_PX,
+        },
+        {
+          key: "c",
+          height: layout.rows[2]!.height,
+          offsetTop: 200 + VIRTUAL_FEED_ROW_GAP_PX * 2,
+        },
       ],
     );
     assert.equal(layout.totalHeight, layout.rows[2]!.offsetTop + layout.rows[2]!.height);
@@ -59,10 +68,10 @@ describe("virtualized feed layout", () => {
     });
 
     assert.deepEqual(window, {
-      startIndex: 2,
-      endIndex: 10,
-      topSpacerHeight: 200,
-      bottomSpacerHeight: 1000,
+      startIndex: 1,
+      endIndex: 9,
+      topSpacerHeight: 120,
+      bottomSpacerHeight: 1300,
     });
   });
 });

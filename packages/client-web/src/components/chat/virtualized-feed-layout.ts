@@ -1,6 +1,7 @@
 import type { FeedEntry } from "../../types";
 
 export const VIRTUAL_FEED_OVERSCAN = 6;
+export const VIRTUAL_FEED_ROW_GAP_PX = 20;
 
 type VirtualFeedRowLayout = {
   key: string;
@@ -69,8 +70,9 @@ export function buildVirtualFeedLayout(
   measuredHeights: ReadonlyMap<string, number>,
 ): VirtualFeedLayout {
   let offsetTop = 0;
-  const rows = entries.map((entry) => {
-    const height = measuredHeights.get(entry.key) ?? estimateFeedEntryHeight(entry);
+  const rows = entries.map((entry, index) => {
+    const rowGap = index < entries.length - 1 ? VIRTUAL_FEED_ROW_GAP_PX : 0;
+    const height = (measuredHeights.get(entry.key) ?? estimateFeedEntryHeight(entry)) + rowGap;
     const row = {
       key: entry.key,
       height,

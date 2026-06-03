@@ -28,6 +28,7 @@ import { buildAssistantTurnHeaders } from "./assistant-turn-headers";
 import {
   buildVirtualFeedLayout,
   resolveVirtualFeedWindow,
+  VIRTUAL_FEED_ROW_GAP_PX,
 } from "./virtualized-feed-layout";
 import { visibleFeedEntries } from "./chat-feed-filtering";
 
@@ -286,13 +287,15 @@ function renderEntry(
 
 function MeasuredFeedEntry(props: {
   entryKey: string;
+  isLastEntry: boolean;
   onHeightChange: (entryKey: string, height: number) => void;
   children: React.ReactNode;
 }) {
   const rowRef = useRef<HTMLDivElement | null>(null);
+  const contentRef = useRef<HTMLDivElement | null>(null);
 
   useLayoutEffect(() => {
-    const node = rowRef.current;
+    const node = contentRef.current;
     if (!node) {
       return;
     }
@@ -316,8 +319,13 @@ function MeasuredFeedEntry(props: {
       ref={rowRef}
       data-feed-entry-key={props.entryKey}
       className="min-w-0 max-w-full"
+      style={
+        props.isLastEntry ? undefined : { paddingBottom: `${VIRTUAL_FEED_ROW_GAP_PX}px` }
+      }
     >
-      {props.children}
+      <div ref={contentRef} className="min-w-0 max-w-full">
+        {props.children}
+      </div>
     </div>
   );
 }
@@ -982,53 +990,55 @@ export function ChatThread(props: {
         data-testid="chat-thread-scroll-container"
         className="h-full overflow-y-scroll overflow-x-hidden rah-scroll-main scrollbar-stable px-4 py-5 [overflow-anchor:none]"
       >
-        <div ref={contentRef} className="mx-auto w-full min-w-0 max-w-3xl space-y-5">
-        {props.historyLoading && props.canLoadOlderHistory ? (
-          <div className="flex justify-center">
-            <div className="rounded-full border border-[var(--app-border)] bg-[var(--app-bg)] px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.14em] text-[var(--app-hint)]">
-              Loading older history
+        <div ref={contentRef} className="mx-auto w-full min-w-0 max-w-3xl">
+          {props.historyLoading && props.canLoadOlderHistory ? (
+            <div className="flex justify-center pb-5">
+              <div className="rounded-full border border-[var(--app-border)] bg-[var(--app-bg)] px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.14em] text-[var(--app-hint)]">
+                Loading older history
+              </div>
             </div>
-          </div>
-        ) : null}
-        {virtualWindow.topSpacerHeight > 0 ? (
-          <div
-            aria-hidden="true"
-            style={{ height: `${virtualWindow.topSpacerHeight}px` }}
-          />
-        ) : null}
-        {visibleEntriesWindow.map((entry) => {
-          const showAssistantTurnHeader =
-            Boolean(props.showModelInfo && props.provider) &&
-            assistantTurnHeaders.has(entry.key);
-          const runtimeModel = assistantTurnHeaders.get(entry.key);
-          return (
-            <MeasuredFeedEntry
-              key={entry.key}
-              entryKey={entry.key}
-              onHeightChange={handleEntryHeightChange}
-            >
-              {showAssistantTurnHeader && props.provider ? (
-                <AssistantTurnHeader
-                  provider={props.provider}
-                  {...(runtimeModel ? { runtimeModel } : {})}
-                />
-              ) : null}
-              {renderEntry(
-                entry,
-                props.canRespondToPermission,
-                props.onPermissionRespond,
-                props.onOpenLocalFile,
-              )}
-            </MeasuredFeedEntry>
-          );
-        })}
-        {virtualWindow.bottomSpacerHeight > 0 ? (
-          <div
-            aria-hidden="true"
-            style={{ height: `${virtualWindow.bottomSpacerHeight}px` }}
-          />
-        ) : null}
-        <div ref={bottomRef} />
+          ) : null}
+          {virtualWindow.topSpacerHeight > 0 ? (
+            <div
+              aria-hidden="true"
+              style={{ height: `${virtualWindow.topSpacerHeight}px` }}
+            />
+          ) : null}
+          {visibleEntriesWindow.map((entry, windowIndex) => {
+            const absoluteEntryIndex = virtualWindow.startIndex + windowIndex;
+            const showAssistantTurnHeader =
+              Boolean(props.showModelInfo && props.provider) &&
+              assistantTurnHeaders.has(entry.key);
+            const runtimeModel = assistantTurnHeaders.get(entry.key);
+            return (
+              <MeasuredFeedEntry
+                key={entry.key}
+                entryKey={entry.key}
+                isLastEntry={absoluteEntryIndex >= entries.length - 1}
+                onHeightChange={handleEntryHeightChange}
+              >
+                {showAssistantTurnHeader && props.provider ? (
+                  <AssistantTurnHeader
+                    provider={props.provider}
+                    {...(runtimeModel ? { runtimeModel } : {})}
+                  />
+                ) : null}
+                {renderEntry(
+                  entry,
+                  props.canRespondToPermission,
+                  props.onPermissionRespond,
+                  props.onOpenLocalFile,
+                )}
+              </MeasuredFeedEntry>
+            );
+          })}
+          {virtualWindow.bottomSpacerHeight > 0 ? (
+            <div
+              aria-hidden="true"
+              style={{ height: `${virtualWindow.bottomSpacerHeight}px` }}
+            />
+          ) : null}
+          <div ref={bottomRef} />
         </div>
       </div>
 

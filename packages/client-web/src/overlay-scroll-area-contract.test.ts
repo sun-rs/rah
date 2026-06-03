@@ -140,6 +140,14 @@ describe("overlay scroll area contract", () => {
     assert.match(source, /scrollToBottomNow\(\)/);
   });
 
+  test("chat thread virtual rows own their spacing so spacer math matches the DOM", () => {
+    const source = readSource("./components/chat/ChatThread.tsx");
+
+    assert.match(source, /VIRTUAL_FEED_ROW_GAP_PX/);
+    assert.match(source, /paddingBottom: `\$\{VIRTUAL_FEED_ROW_GAP_PX\}px`/);
+    assert.doesNotMatch(source, /space-y-5/);
+  });
+
   test("chat thread can continue top history paging without a down-scroll rearm", () => {
     const source = readSource("./components/chat/ChatThread.tsx");
 
