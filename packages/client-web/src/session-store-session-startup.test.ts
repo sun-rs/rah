@@ -893,7 +893,7 @@ describe("session startup model and mode requests", () => {
     assert.equal((requests[0]?.body as { liveBackend?: string }).liveBackend, undefined);
   });
 
-  test("claiming history attaches to already-running provider session instead of surfacing resume failure", async () => {
+  test("claiming history claims control when the provider session is already running", async () => {
     const historySummary = summary({
       id: "history",
       provider: "codex",
@@ -906,8 +906,27 @@ describe("session startup model and mode requests", () => {
       providerSessionId: "thread-running",
       cwd: "/tmp/rah",
     });
+    const attachedSummary: SessionSummary = {
+      ...runningSummary,
+      attachedClients: [
+        {
+          id: "web-client",
+          kind: "web",
+          sessionId: "live",
+          connectionId: "web-connection",
+          attachMode: "interactive",
+          focus: true,
+          lastSeenAt: "2026-04-29T00:00:00.000Z",
+        },
+      ],
+      controlLease: {
+        sessionId: "live",
+        holderClientId: "web-client",
+        holderKind: "web",
+        grantedAt: "2026-04-29T00:00:00.000Z",
+      },
+    };
     const projection = createEmptySessionProjection(historySummary);
-    const attached: string[] = [];
     const requests = installWebApiMocks((request) => {
       if (request.url.includes("/api/fs/list")) {
         return { path: "/tmp/rah", entries: [] };
@@ -930,37 +949,59 @@ describe("session startup model and mode requests", () => {
           hiddenWorkspaceDirs: [],
         };
       }
+      if (request.url.endsWith("/api/sessions/live/attach")) {
+        return { session: attachedSummary };
+      }
       throw new Error(`Unexpected request ${request.url}`);
     });
+    const deps = startupDeps(
+      {
+        selectedSessionId: "history",
+        projections: new Map([["history", projection]]),
+        recentSessions: [
+          {
+            provider: "codex",
+            providerSessionId: "thread-running",
+            cwd: "/tmp/rah",
+            rootDir: "/tmp/rah",
+            createdAt: "2026-04-29T00:00:00.000Z",
+          },
+        ],
+      },
+    );
 
     await claimHistorySessionCommand(
-      startupDeps(
-        {
-          selectedSessionId: "history",
-          projections: new Map([["history", projection]]),
-          recentSessions: [
-            {
-              provider: "codex",
-              providerSessionId: "thread-running",
-              cwd: "/tmp/rah",
-              rootDir: "/tmp/rah",
-              createdAt: "2026-04-29T00:00:00.000Z",
-            },
-          ],
-        },
-        {
-          attachSession: async (next: SessionSummary) => {
-            attached.push(next.session.id);
-          },
-        },
-      ),
+      deps,
       "history",
     );
 
     assert.deepEqual(
       requests.map((request) => request.url.replace(/^http:\/\/127\.0\.0\.1:43111/, "")),
-      ["/api/fs/list?path=%2Ftmp%2Frah", "/api/sessions/resume", "/api/sessions"],
+      [
+        "/api/fs/list?path=%2Ftmp%2Frah",
+        "/api/sessions/resume",
+        "/api/sessions",
+        "/api/sessions/live/attach",
+      ],
     );
-    assert.deepEqual(attached, ["live"]);
+    const attachRequest = requests.find((request) =>
+      request.url.endsWith("/api/sessions/live/attach"),
+    );
+    assert.deepEqual(attachRequest?.body, {
+      client: {
+        id: "web-client",
+        kind: "web",
+        connectionId: "web-connection",
+      },
+      mode: "interactive",
+      claimControl: true,
+    });
+    const state = (deps as { get: () => {
+      projections: Map<string, ReturnType<typeof createEmptySessionProjection>>;
+      selectedSessionId: string | null;
+    } }).get();
+    assert.equal(state.selectedSessionId, "live");
+    assert.equal(state.projections.has("history"), false);
+    assert.equal(state.projections.get("live")?.summary.controlLease.holderClientId, "web-client");
   });
 });

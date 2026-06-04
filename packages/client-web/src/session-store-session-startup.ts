@@ -572,6 +572,21 @@ export async function claimHistorySessionCommand(
           candidate.session.providerSessionId === ref.providerSessionId,
       );
       if (running) {
+        let attached: SessionSummary;
+        try {
+          const attachResponse = await api.attachSession(
+            running.session.id,
+            createInteractiveAttachRequest(deps.get().clientId, deps.get().connectionId),
+          );
+          attached = attachResponse.session;
+        } catch (attachError) {
+          deps.set({
+            pendingSessionAction: null,
+            pendingSessionTransition: null,
+            error: readErrorMessage(attachError),
+          });
+          throw attachError;
+        }
         deps.set((current) => {
           const next = deps.applySessionsResponse(current, sessionsResponse, {
             workspaceVisibilityVersionAtRequest,
@@ -589,9 +604,8 @@ export async function claimHistorySessionCommand(
             error: null,
           };
         });
-        await deps.attachSession(running);
-        deps.set({ pendingSessionAction: null, pendingSessionTransition: null, error: null });
-        return running.session.id;
+        applyClaimedSession(attached);
+        return attached.session.id;
       }
     }
     deps.set({
