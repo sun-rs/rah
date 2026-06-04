@@ -4,6 +4,7 @@ import { EventBus } from "./event-bus";
 import { prepareProviderSessionResume } from "./provider-resume";
 import { PtyHub } from "./pty-hub";
 import { SessionStore } from "./session-store";
+import { runtimeDescriptorForStoredHistory } from "./session-runtime-descriptor";
 
 function createServices() {
   return {
@@ -156,6 +157,38 @@ test("prepareProviderSessionResume replaces explicit history source replay even 
     providerSessionId: "provider-1",
     preferStoredReplay: false,
     historySourceSessionId: replay.session.id,
+    rehydratedSessionIds,
+  });
+
+  assert.equal(services.sessionStore.getSession(replay.session.id), undefined);
+  assert.equal(
+    services.sessionStore.findManagedByProviderSession("codex", "provider-1"),
+    undefined,
+  );
+});
+
+test("prepareProviderSessionResume replaces stored-history replay even when adapter markers differ", () => {
+  const services = createServices();
+  const replay = services.sessionStore.createManagedSession({
+    provider: "codex",
+    providerSessionId: "provider-1",
+    launchSource: "web",
+    cwd: "/tmp/rah-provider-resume",
+    rootDir: "/tmp/rah-provider-resume",
+    runtime: runtimeDescriptorForStoredHistory(),
+    capabilities: {
+      steerInput: false,
+      livePermissions: false,
+    },
+  });
+  const rehydratedSessionIds = new Set<string>();
+
+  prepareProviderSessionResume({
+    services,
+    provider: "codex",
+    providerSessionId: "provider-1",
+    preferStoredReplay: false,
+    historySourceSessionId: "different-replay-id",
     rehydratedSessionIds,
   });
 

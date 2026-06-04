@@ -630,6 +630,31 @@ class SnapshotPagingAdapter implements ProviderAdapter {
   }
 }
 
+class StoredReplayDuringLiveResumeAdapter extends SnapshotPagingAdapter {
+  engine: RuntimeEngine | undefined;
+  probedStoredReplay = false;
+
+  override async resumeSession(request: ResumeSessionRequest): Promise<ResumeSessionResponse> {
+    if (!request.preferStoredReplay) {
+      if (!this.engine) {
+        throw new Error("engine missing");
+      }
+      this.probedStoredReplay = true;
+      await assert.rejects(
+        () =>
+          this.engine!.resumeSession({
+            provider: request.provider,
+            providerSessionId: request.providerSessionId,
+            preferStoredReplay: true,
+          }),
+        /being claimed; wait for live resume to finish/,
+      );
+      return { session: sessionSummary("live-1", request.providerSessionId) };
+    }
+    return { session: sessionSummary("replay-1", request.providerSessionId) };
+  }
+}
+
 class FrozenPagingAdapter implements ProviderAdapter {
   readonly id = "frozen-paging";
   readonly providers: Array<"codex"> = ["codex"];
@@ -902,6 +927,30 @@ describe("RuntimeEngine", () => {
       provider: "codex",
       providerSessionId: "thread-missing-cwd",
       cwd: missingDir,
+      preferStoredReplay: true,
+    });
+    assert.equal(replay.session.session.id, "replay-1");
+
+    await engine.shutdown();
+  });
+
+  test("live resume reservation blocks concurrent stored replay rehydrate", async () => {
+    const adapter = new StoredReplayDuringLiveResumeAdapter();
+    const engine = new RuntimeEngine([adapter]);
+    adapter.engine = engine;
+
+    const live = await engine.resumeSession({
+      provider: "codex",
+      providerSessionId: "thread-claim",
+      cwd: workDir,
+      preferStoredReplay: false,
+    });
+    assert.equal(adapter.probedStoredReplay, true);
+    assert.equal(live.session.session.id, "live-1");
+
+    const replay = await engine.resumeSession({
+      provider: "codex",
+      providerSessionId: "thread-claim",
       preferStoredReplay: true,
     });
     assert.equal(replay.session.session.id, "replay-1");

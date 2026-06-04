@@ -9,10 +9,12 @@ import {
   createEmptyCanvasTargets,
   getCanvasVisiblePaneIds,
   hasAnyCanvasPaneTarget,
+  isCanvasStoredTargetClaimPending,
   normalizeRememberedCanvasState,
   readRememberedCanvasState,
   rememberCanvasState,
   replaceCanvasSessionTargetWithStoredRef,
+  resolveCanvasClaimedSessionId,
   resolveCanvasRunningUniquenessKey,
   resolveCanvasTargetProjection,
   shouldInitializeCanvasPaneFromSelection,
@@ -289,6 +291,102 @@ test("canvas stored refs resolve to existing projections by provider identity", 
   );
 
   assert.equal(resolved?.summary.session.id, "live-1");
+});
+
+test("canvas stored refs prefer live projections over read-only history replays", () => {
+  const history = summary({
+    id: "history-1",
+    provider: "codex",
+    providerSessionId: "provider-1",
+    readOnlyReplay: true,
+  });
+  const live = summary({ id: "live-1", provider: "codex", providerSessionId: "provider-1" });
+  const resolved = resolveCanvasTargetProjection(
+    { kind: "stored", ref: ref("codex", "provider-1") },
+    projections(history, live),
+  );
+
+  assert.equal(resolved?.summary.session.id, "live-1");
+});
+
+test("canvas claim resolution prefers a live projection over a read-only history id", () => {
+  const history = summary({
+    id: "history-1",
+    provider: "codex",
+    providerSessionId: "provider-1",
+    readOnlyReplay: true,
+  });
+  const live = summary({ id: "live-1", provider: "codex", providerSessionId: "provider-1" });
+  const resolved = resolveCanvasClaimedSessionId(
+    projections(history, live),
+    "history-1",
+    ref("codex", "provider-1"),
+  );
+
+  assert.equal(resolved, "live-1");
+});
+
+test("canvas claim resolution can recover a live projection when the claim return is empty", () => {
+  const live = summary({ id: "live-1", provider: "opencode", providerSessionId: "provider-1" });
+  const resolved = resolveCanvasClaimedSessionId(
+    projections(live),
+    null,
+    ref("opencode", "provider-1"),
+  );
+
+  assert.equal(resolved, "live-1");
+});
+
+test("canvas claim resolution prefers provider-matched live projection over unknown claim id", () => {
+  const live = summary({ id: "live-1", provider: "codex", providerSessionId: "provider-1" });
+  const resolved = resolveCanvasClaimedSessionId(
+    projections(live),
+    "history-1",
+    ref("codex", "provider-1"),
+  );
+
+  assert.equal(resolved, "live-1");
+});
+
+test("canvas claim resolution does not rebind to an explicit read-only history projection", () => {
+  const history = summary({
+    id: "history-1",
+    provider: "codex",
+    providerSessionId: "provider-1",
+    readOnlyReplay: true,
+  });
+  const resolved = resolveCanvasClaimedSessionId(
+    projections(history),
+    "history-1",
+    ref("codex", "provider-1"),
+  );
+
+  assert.equal(resolved, null);
+});
+
+test("canvas stored target claim detection matches only the claimed provider session", () => {
+  const target: CanvasPaneTarget = { kind: "stored", ref: ref("codex", "provider-1") };
+
+  assert.equal(
+    isCanvasStoredTargetClaimPending(target, [
+      { kind: "claim_history", provider: "codex", providerSessionId: "provider-1" },
+    ]),
+    true,
+  );
+  assert.equal(
+    isCanvasStoredTargetClaimPending(target, [
+      { kind: "history", provider: "codex", providerSessionId: "provider-1" },
+      { kind: "claim_history", provider: "opencode", providerSessionId: "provider-1" },
+      { kind: "claim_history", provider: "codex", providerSessionId: "provider-2" },
+    ]),
+    false,
+  );
+  assert.equal(
+    isCanvasStoredTargetClaimPending({ kind: "session", sessionId: "history-1" }, [
+      { kind: "claim_history", provider: "codex", providerSessionId: "provider-1" },
+    ]),
+    false,
+  );
 });
 
 test("stopping a canvas session converts its pane target to stored history", () => {

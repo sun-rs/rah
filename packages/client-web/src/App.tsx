@@ -82,9 +82,11 @@ import {
   createEmptyCanvasTargets,
   getCanvasVisiblePaneIds,
   hasAnyCanvasPaneTarget,
+  isCanvasStoredTargetClaimPending,
   readRememberedCanvasState,
   rememberCanvasState,
   replaceCanvasSessionTargetWithStoredRef,
+  resolveCanvasClaimedSessionId,
   resolveCanvasTargetProjection as resolveCanvasTargetProjectionFromState,
   shouldInitializeCanvasPaneFromSelection,
   type CanvasPaneId,
@@ -750,7 +752,7 @@ export function App() {
 
   const setCanvasPaneTarget = (paneId: CanvasPaneId, target: CanvasPaneTarget) => {
     setCanvasPaneTargets((current) =>
-      applyCanvasPaneTarget(current, paneId, target, projections),
+      applyCanvasPaneTarget(current, paneId, target, useSessionStore.getState().projections),
     );
     setCanvasPaneRightPanelOpen(paneId, true);
     setActiveCanvasPaneId(paneId);
@@ -1012,6 +1014,19 @@ export function App() {
       const target = canvasPaneTargets[paneId];
       const projection = resolveCanvasProjection(paneId);
       if (target.kind === "stored" && !projection) {
+        const globalOpeningTransition = canvasOpeningTransitionForTarget(
+          target,
+          pendingSessionAction,
+          pendingSessionTransition,
+        );
+        if (
+          isCanvasStoredTargetClaimPending(target, [
+            globalOpeningTransition,
+            canvasPaneOpeningTransitions[paneId],
+          ])
+        ) {
+          continue;
+        }
         const activationKey = `${target.ref.provider}:${target.ref.providerSessionId}`;
         if (!canvasStoredActivationInFlightRef.current.has(activationKey)) {
           canvasStoredActivationInFlightRef.current.add(activationKey);
@@ -1034,8 +1049,11 @@ export function App() {
     }
   }, [
     activateHistorySession,
+    canvasPaneOpeningTransitions,
     canvasPaneTargets,
     ensureSessionHistoryLoaded,
+    pendingSessionAction,
+    pendingSessionTransition,
     projections,
     visibleCanvasPaneKey,
     workbenchMode,
@@ -2266,23 +2284,48 @@ export function App() {
                           [typedPaneId]: openingTransition,
                         }));
                       }
-                      void claimHistorySession(sessionId, {
-                        confirmCreateMissingWorkspace,
-                        ...request,
-                      }).then((claimedSessionId) => {
-                        if (claimedSessionId) {
-                          setCanvasPaneSession(typedPaneId, claimedSessionId);
-                        }
-                      }).catch(() => undefined).finally(() => {
-                        setCanvasPaneOpeningTransitions((current) => {
-                          if (current[typedPaneId] === undefined) {
-                            return current;
+                      void (async () => {
+                        let claimedSessionId: string | null = null;
+                        try {
+                          claimedSessionId = await claimHistorySession(sessionId, {
+                            confirmCreateMissingWorkspace,
+                            ...request,
+                          });
+                          const resolvedSessionId = resolveCanvasClaimedSessionId(
+                            useSessionStore.getState().projections,
+                            claimedSessionId,
+                            ref,
+                          );
+                          if (resolvedSessionId) {
+                            setCanvasPaneSession(typedPaneId, resolvedSessionId);
                           }
-                          const next = { ...current };
-                          delete next[typedPaneId];
-                          return next;
-                        });
-                      });
+                        } catch {
+                          const latestProjections = useSessionStore.getState().projections;
+                          const resolvedSessionId = resolveCanvasClaimedSessionId(
+                            latestProjections,
+                            null,
+                            ref,
+                          );
+                          const resolvedProjection = resolvedSessionId
+                            ? latestProjections.get(resolvedSessionId) ?? null
+                            : null;
+                          if (
+                            resolvedSessionId &&
+                            resolvedProjection?.summary.controlLease.holderClientId === clientId
+                          ) {
+                            setCanvasPaneSession(typedPaneId, resolvedSessionId);
+                          }
+                        } finally {
+                          setCanvasPaneOpeningTransitions((current) => {
+                            if (current[typedPaneId] === undefined) {
+                              return current;
+                            }
+                            const next = { ...current };
+                            delete next[typedPaneId];
+                            return next;
+                          });
+                        }
+                      })();
                     }}
                     onClaimControl={(sessionId) =>
                       claimControl(sessionId).then(() => {

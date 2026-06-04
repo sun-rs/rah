@@ -276,6 +276,7 @@ export class RuntimeEngine {
   private readonly structuredSessionOwners = new Map<string, StructuredSessionOwnerProvider>();
   private readonly historyMirrorAdapters: ProviderStoredHistoryAdapter[] = [];
   private readonly nativeTuiRehydratedSessionIds = new Set<string>();
+  private readonly liveProviderSessionResumeReservations = new Map<string, number>();
   private readonly structuredLiveAllowedForInjectedAdapters: boolean;
   private readonly startupMaintenance: Promise<void>;
 
@@ -783,73 +784,117 @@ export class RuntimeEngine {
         await this.resumeStoredReplaySession(request),
       );
     }
-    if (this.shouldUseNativeLocalServerBackend(request)) {
+    const releaseReservation = this.reserveLiveProviderSessionResume(request);
+    try {
+      if (this.shouldUseNativeLocalServerBackend(request)) {
+        return this.applyCanonicalSessionTitleToResponse(
+          await this.structuredProviders.resumeSession(request),
+        );
+      }
+      if (this.shouldUseTuiMuxBackend(request)) {
+        if (request.cwd) {
+          await assertExistingWorkingDirectory(request.cwd, "Session working directory");
+        }
+        this.pruneOrphanSessions();
+        const preparedResume = prepareProviderSessionResume({
+          services: this,
+          provider: request.provider,
+          providerSessionId: request.providerSessionId,
+          preferStoredReplay: request.preferStoredReplay,
+          ...(request.historySourceSessionId ? { historySourceSessionId: request.historySourceSessionId } : {}),
+          rehydratedSessionIds: this.nativeTuiRehydratedSessionIds,
+        });
+        try {
+          return this.applyCanonicalSessionTitleToResponse(
+            await this.terminals.startTuiMuxSession({
+              launch: await this.nativeTuiProviders.resumeLaunchSpec(request),
+              ...(request.attach !== undefined ? { attach: request.attach } : {}),
+              providerSessionId: request.providerSessionId,
+              ...(request.origin !== undefined ? { origin: request.origin } : {}),
+            }),
+          );
+        } catch (error) {
+          preparedResume.rollback();
+          throw error;
+        }
+      }
+      if (this.shouldUseNativeTuiBackend(request)) {
+        if (request.cwd) {
+          await assertExistingWorkingDirectory(request.cwd, "Session working directory");
+        }
+        this.pruneOrphanSessions();
+        const preparedResume = prepareProviderSessionResume({
+          services: this,
+          provider: request.provider,
+          providerSessionId: request.providerSessionId,
+          preferStoredReplay: request.preferStoredReplay,
+          ...(request.historySourceSessionId ? { historySourceSessionId: request.historySourceSessionId } : {}),
+          rehydratedSessionIds: this.nativeTuiRehydratedSessionIds,
+        });
+        try {
+          return this.applyCanonicalSessionTitleToResponse(
+            await this.terminals.startNativeTuiSession({
+              launch: await this.nativeTuiProviders.resumeLaunchSpec(request),
+              ...(request.attach !== undefined ? { attach: request.attach } : {}),
+              providerSessionId: request.providerSessionId,
+              ...(request.origin !== undefined ? { origin: request.origin } : {}),
+            }),
+          );
+        } catch (error) {
+          preparedResume.rollback();
+          throw error;
+        }
+      }
       return this.applyCanonicalSessionTitleToResponse(
         await this.structuredProviders.resumeSession(request),
       );
+    } finally {
+      releaseReservation();
     }
-    if (this.shouldUseTuiMuxBackend(request)) {
-      if (request.cwd) {
-        await assertExistingWorkingDirectory(request.cwd, "Session working directory");
-      }
-      this.pruneOrphanSessions();
-      const preparedResume = prepareProviderSessionResume({
-        services: this,
-        provider: request.provider,
-        providerSessionId: request.providerSessionId,
-        preferStoredReplay: request.preferStoredReplay,
-        ...(request.historySourceSessionId ? { historySourceSessionId: request.historySourceSessionId } : {}),
-        rehydratedSessionIds: this.nativeTuiRehydratedSessionIds,
-      });
-      try {
-        return this.applyCanonicalSessionTitleToResponse(
-          await this.terminals.startTuiMuxSession({
-            launch: await this.nativeTuiProviders.resumeLaunchSpec(request),
-            ...(request.attach !== undefined ? { attach: request.attach } : {}),
-            providerSessionId: request.providerSessionId,
-            ...(request.origin !== undefined ? { origin: request.origin } : {}),
-          }),
-        );
-      } catch (error) {
-        preparedResume.rollback();
-        throw error;
-      }
+  }
+
+  private providerSessionResumeKey(
+    provider: string,
+    providerSessionId: string,
+  ): string {
+    return `${provider}:${providerSessionId}`;
+  }
+
+  private reserveLiveProviderSessionResume(request: ResumeSessionRequest): () => void {
+    if (request.preferStoredReplay === true || !request.providerSessionId) {
+      return () => undefined;
     }
-    if (this.shouldUseNativeTuiBackend(request)) {
-      if (request.cwd) {
-        await assertExistingWorkingDirectory(request.cwd, "Session working directory");
-      }
-      this.pruneOrphanSessions();
-      const preparedResume = prepareProviderSessionResume({
-        services: this,
-        provider: request.provider,
-        providerSessionId: request.providerSessionId,
-        preferStoredReplay: request.preferStoredReplay,
-        ...(request.historySourceSessionId ? { historySourceSessionId: request.historySourceSessionId } : {}),
-        rehydratedSessionIds: this.nativeTuiRehydratedSessionIds,
-      });
-      try {
-        return this.applyCanonicalSessionTitleToResponse(
-          await this.terminals.startNativeTuiSession({
-            launch: await this.nativeTuiProviders.resumeLaunchSpec(request),
-            ...(request.attach !== undefined ? { attach: request.attach } : {}),
-            providerSessionId: request.providerSessionId,
-            ...(request.origin !== undefined ? { origin: request.origin } : {}),
-          }),
-        );
-      } catch (error) {
-        preparedResume.rollback();
-        throw error;
-      }
-    }
-    return this.applyCanonicalSessionTitleToResponse(
-      await this.structuredProviders.resumeSession(request),
+    const key = this.providerSessionResumeKey(request.provider, request.providerSessionId);
+    this.liveProviderSessionResumeReservations.set(
+      key,
+      (this.liveProviderSessionResumeReservations.get(key) ?? 0) + 1,
     );
+    return () => {
+      const count = this.liveProviderSessionResumeReservations.get(key) ?? 0;
+      if (count <= 1) {
+        this.liveProviderSessionResumeReservations.delete(key);
+      } else {
+        this.liveProviderSessionResumeReservations.set(key, count - 1);
+      }
+    };
+  }
+
+  private assertProviderSessionNotBeingLiveResumed(request: ResumeSessionRequest): void {
+    if (!request.providerSessionId) {
+      return;
+    }
+    const key = this.providerSessionResumeKey(request.provider, request.providerSessionId);
+    if ((this.liveProviderSessionResumeReservations.get(key) ?? 0) > 0) {
+      throw new Error(
+        `Provider session ${key} is being claimed; wait for live resume to finish.`,
+      );
+    }
   }
 
   private async resumeStoredReplaySession(
     request: ResumeSessionRequest,
   ): Promise<ResumeSessionResponse> {
+    this.assertProviderSessionNotBeingLiveResumed(request);
     this.pruneOrphanSessions();
     const adapter = this.storedHistoryAdaptersByProvider.get(request.provider);
     if (!adapter?.resumeStoredSession && this.structuredLiveAllowedForInjectedAdapters) {

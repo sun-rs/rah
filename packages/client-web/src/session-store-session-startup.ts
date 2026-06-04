@@ -12,6 +12,7 @@ import {
   isCoreLiveProvider,
 } from "@rah/runtime-protocol";
 import * as api from "./api";
+import { isReadOnlyReplay } from "./session-capabilities";
 import { readErrorMessage } from "./session-store-bootstrap";
 import {
   applyClaimedHistorySessionState,
@@ -133,6 +134,26 @@ type SessionStartupDeps = {
 function historyOnlyRunningMessage(provider: string): string {
   const label = isCoreLiveProvider(provider) ? providerLabel(provider) : provider;
   return `${label} is not a supported running provider. Use Codex, Claude, Gemini, or OpenCode.`;
+}
+
+function pruneReadOnlyReplaysForClaimedProviderSession(
+  projections: Map<string, SessionProjection>,
+  claimedSession: SessionSummary,
+): void {
+  const providerSessionId = claimedSession.session.providerSessionId;
+  if (!providerSessionId) {
+    return;
+  }
+  for (const [sessionId, projection] of projections) {
+    if (
+      sessionId !== claimedSession.session.id &&
+      projection.summary.session.provider === claimedSession.session.provider &&
+      projection.summary.session.providerSessionId === providerSessionId &&
+      isReadOnlyReplay(projection.summary)
+    ) {
+      projections.delete(sessionId);
+    }
+  }
 }
 
 export async function startSessionCommand(
@@ -297,6 +318,7 @@ export async function resumeStoredSessionCommand(
       const sessionsResponse = await api.listSessions();
       const running = sessionsResponse.sessions.find(
         (summary) =>
+          !isReadOnlyReplay(summary) &&
           summary.session.provider === ref.provider &&
           summary.session.providerSessionId === ref.providerSessionId,
       );
@@ -446,6 +468,10 @@ export async function claimHistorySessionCommand(
           ref,
           next,
         );
+        pruneReadOnlyReplaysForClaimedProviderSession(
+          claimedState.projections ?? next,
+          claimedSession,
+        );
         return {
           ...claimedState,
           projections: deps.applyEventsToMap(
@@ -459,6 +485,7 @@ export async function claimHistorySessionCommand(
         ...(existingProjection ?? preservedProjection),
         summary: claimedSession,
       });
+      pruneReadOnlyReplaysForClaimedProviderSession(next, claimedSession);
       return {
         projections: deps.applyEventsToMap(
           next,
@@ -568,6 +595,7 @@ export async function claimHistorySessionCommand(
       const sessionsResponse = await api.listSessions();
       const running = sessionsResponse.sessions.find(
         (candidate) =>
+          !isReadOnlyReplay(candidate) &&
           candidate.session.provider === ref.provider &&
           candidate.session.providerSessionId === ref.providerSessionId,
       );

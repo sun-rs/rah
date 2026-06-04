@@ -1,6 +1,7 @@
 import type { StoredSessionRef } from "@rah/runtime-protocol";
 import { isReadOnlyReplay } from "./session-capabilities";
 import type { CanvasLayout } from "./components/workbench/canvas/CanvasWorkbench";
+import type { PendingSessionTransition } from "./session-transition-contract";
 import type { SessionProjection } from "./types";
 
 export type CanvasPaneId = "canvas-1" | "canvas-2" | "canvas-3" | "canvas-4";
@@ -205,16 +206,78 @@ export function resolveCanvasTargetProjection(
     return projections.get(target.sessionId) ?? null;
   }
   if (target.kind === "stored") {
-    for (const projection of projections.values()) {
-      if (
-        projection.summary.session.provider === target.ref.provider &&
-        projection.summary.session.providerSessionId === target.ref.providerSessionId
-      ) {
-        return projection;
-      }
-    }
+    return resolveCanvasStoredTargetProjection(projections, target.ref);
   }
   return null;
+}
+
+function canvasProjectionMatchesStoredRef(
+  projection: SessionProjection,
+  ref: Pick<StoredSessionRef, "provider" | "providerSessionId">,
+): boolean {
+  return (
+    projection.summary.session.provider === ref.provider &&
+    projection.summary.session.providerSessionId === ref.providerSessionId
+  );
+}
+
+export function resolveCanvasStoredTargetProjection(
+  projections: Map<string, SessionProjection>,
+  ref: Pick<StoredSessionRef, "provider" | "providerSessionId">,
+): SessionProjection | null {
+  let replayProjection: SessionProjection | null = null;
+  for (const projection of projections.values()) {
+    if (!canvasProjectionMatchesStoredRef(projection, ref)) {
+      continue;
+    }
+    if (!isReadOnlyReplay(projection.summary)) {
+      return projection;
+    }
+    replayProjection ??= projection;
+  }
+  return replayProjection;
+}
+
+export function resolveCanvasLiveSessionIdForStoredRef(
+  projections: Map<string, SessionProjection>,
+  ref: Pick<StoredSessionRef, "provider" | "providerSessionId"> | null | undefined,
+): string | null {
+  if (!ref) {
+    return null;
+  }
+  const projection = resolveCanvasStoredTargetProjection(projections, ref);
+  return projection && !isReadOnlyReplay(projection.summary) ? projection.summary.session.id : null;
+}
+
+export function resolveCanvasClaimedSessionId(
+  projections: Map<string, SessionProjection>,
+  claimedSessionId: string | null | undefined,
+  ref: Pick<StoredSessionRef, "provider" | "providerSessionId"> | null | undefined,
+): string | null {
+  const liveSessionId = resolveCanvasLiveSessionIdForStoredRef(projections, ref);
+  if (liveSessionId) {
+    return liveSessionId;
+  }
+  if (!claimedSessionId) {
+    return null;
+  }
+  const claimedProjection = projections.get(claimedSessionId);
+  return claimedProjection && isReadOnlyReplay(claimedProjection.summary) ? null : claimedSessionId;
+}
+
+export function isCanvasStoredTargetClaimPending(
+  target: CanvasPaneTarget,
+  transitions: Array<PendingSessionTransition | null | undefined>,
+): boolean {
+  if (target.kind !== "stored") {
+    return false;
+  }
+  return transitions.some(
+    (transition) =>
+      transition?.kind === "claim_history" &&
+      transition.provider === target.ref.provider &&
+      transition.providerSessionId === target.ref.providerSessionId,
+  );
 }
 
 export function resolveCanvasRunningUniquenessKey(

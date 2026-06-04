@@ -65,8 +65,10 @@ function summary(args: {
   modeId?: string;
   modelId?: string | null;
   reasoningId?: string | null;
+  readOnlyReplay?: boolean;
 }): SessionSummary {
   const cwd = args.cwd ?? "/tmp/rah";
+  const readOnlyReplay = args.readOnlyReplay === true;
   return {
     session: {
       id: args.id,
@@ -84,13 +86,13 @@ function summary(args: {
         rawPtyInput: false,
         chatMirror: false,
         structuredControl: true,
-        livePermissions: true,
+        livePermissions: !readOnlyReplay,
         contextUsage: false,
         resumeByProvider: true,
         listProviderSessions: true,
         renameSession: true,
         actions: { info: true, stop: true, delete: true, rename: "native" },
-        steerInput: true,
+        steerInput: !readOnlyReplay,
         queuedInput: false,
         modelSwitch: true,
         planMode: true,
@@ -499,6 +501,56 @@ describe("session startup model and mode requests", () => {
       optionValues: { model_reasoning_effort: "xhigh" },
       reasoningId: "xhigh",
     });
+  });
+
+  test("claim history removes the read-only replay projection for the same provider session", async () => {
+    const history = summary({
+      id: "history",
+      provider: "codex",
+      providerSessionId: "thread-1",
+      cwd: "/tmp/rah",
+      readOnlyReplay: true,
+    });
+    const projections = new Map([["history", createEmptySessionProjection(history)]]);
+    installWebApiMocks((request) => {
+      if (request.url.includes("/api/fs/list")) {
+        return { path: "/tmp/rah", entries: [] };
+      }
+      if (request.url.endsWith("/api/sessions/resume")) {
+        return {
+          session: summary({
+            id: "claimed",
+            provider: "codex",
+            providerSessionId: "thread-1",
+            cwd: "/tmp/rah",
+          }),
+        };
+      }
+      throw new Error(`Unexpected request ${request.url}`);
+    });
+    const deps = startupDeps({
+      projections,
+      storedSessions: [
+        {
+          provider: "codex",
+          providerSessionId: "thread-1",
+          cwd: "/tmp/rah",
+          rootDir: "/tmp/rah",
+          createdAt: "2026-04-29T00:00:00.000Z",
+        },
+      ],
+      recentSessions: [],
+    });
+
+    await claimHistorySessionCommand(deps, "history");
+
+    const state = (deps as { get: () => {
+      projections: Map<string, ReturnType<typeof createEmptySessionProjection>>;
+      selectedSessionId: string | null;
+    } }).get();
+    assert.equal(state.projections.has("history"), false);
+    assert.equal(state.projections.has("claimed"), true);
+    assert.equal(state.selectedSessionId, "claimed");
   });
 
   test("claim history keeps the claimed session when post-claim control update fails", async () => {
@@ -1003,5 +1055,74 @@ describe("session startup model and mode requests", () => {
     assert.equal(state.selectedSessionId, "live");
     assert.equal(state.projections.has("history"), false);
     assert.equal(state.projections.get("live")?.summary.controlLease.holderClientId, "web-client");
+  });
+
+  test("claiming history does not attach a read-only replay after an already-running response", async () => {
+    const historySummary = summary({
+      id: "history",
+      provider: "codex",
+      providerSessionId: "thread-running",
+      cwd: "/tmp/rah",
+      readOnlyReplay: true,
+    });
+    const replaySummary = summary({
+      id: "replay",
+      provider: "codex",
+      providerSessionId: "thread-running",
+      cwd: "/tmp/rah",
+      readOnlyReplay: true,
+    });
+    const projection = createEmptySessionProjection(historySummary);
+    const requests = installWebApiMocks((request) => {
+      if (request.url.includes("/api/fs/list")) {
+        return { path: "/tmp/rah", entries: [] };
+      }
+      if (request.url.endsWith("/api/sessions/resume")) {
+        return new Response(
+          JSON.stringify({
+            error:
+              "Provider session codex:thread-running is already running; attach instead of resume.",
+          }),
+          { status: 500, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (request.url.endsWith("/api/sessions")) {
+        return {
+          sessions: [replaySummary],
+          storedSessions: [],
+          recentSessions: [],
+          workspaceDirs: ["/tmp/rah"],
+          hiddenWorkspaceDirs: [],
+        };
+      }
+      throw new Error(`Unexpected request ${request.url}`);
+    });
+    const deps = startupDeps({
+      selectedSessionId: "history",
+      projections: new Map([["history", projection]]),
+      recentSessions: [
+        {
+          provider: "codex",
+          providerSessionId: "thread-running",
+          cwd: "/tmp/rah",
+          rootDir: "/tmp/rah",
+          createdAt: "2026-04-29T00:00:00.000Z",
+        },
+      ],
+    });
+
+    await assert.rejects(
+      claimHistorySessionCommand(deps, "history"),
+      /attach instead of resume/,
+    );
+
+    assert.deepEqual(
+      requests.map((request) => request.url.replace(/^http:\/\/127\.0\.0\.1:43111/, "")),
+      [
+        "/api/fs/list?path=%2Ftmp%2Frah",
+        "/api/sessions/resume",
+        "/api/sessions",
+      ],
+    );
   });
 });

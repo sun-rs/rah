@@ -27,9 +27,16 @@ export function prepareProviderSessionResume(args: {
     !args.preferStoredReplay &&
     args.historySourceSessionId === existing.session.id &&
     existing.session.capabilities.steerInput === false;
+  const isReplaceableStoredHistory =
+    !args.preferStoredReplay &&
+    existing.session.runtime?.kind === "stored_history";
   if (
     !args.preferStoredReplay &&
-    (args.rehydratedSessionIds.has(existing.session.id) || isReplaceableHistorySource)
+    (
+      args.rehydratedSessionIds.has(existing.session.id) ||
+      isReplaceableHistorySource ||
+      isReplaceableStoredHistory
+    )
   ) {
     const removed = existing;
     args.rehydratedSessionIds.delete(existing.session.id);
