@@ -530,6 +530,7 @@ export async function claimHistorySessionCommand(
         kind: "claim_history",
         sessionId,
       },
+      pendingSessionTransition: createPendingStoredSessionTransition(ref, "claim_history"),
       error: null,
     });
     const request: ResumeSessionRequest = {

@@ -554,7 +554,7 @@ describe("session startup model and mode requests", () => {
     assert.equal(state.selectedSessionId, "claimed");
   });
 
-  test("claim history does not replace an already visible transcript with an opening transition", async () => {
+  test("claim history keeps a transition fallback without clearing the visible transcript", async () => {
     const history = summary({
       id: "history",
       provider: "codex",
@@ -570,13 +570,18 @@ describe("session startup model and mode requests", () => {
       if (request.url.endsWith("/api/sessions/resume")) {
         const state = deps.get() as {
           pendingSessionAction: { kind: string; sessionId: string } | null;
-          pendingSessionTransition: unknown;
+          pendingSessionTransition: { kind?: string; providerSessionId?: string } | null;
+          projections: Map<string, unknown>;
+          selectedSessionId: string | null;
         };
         assert.deepEqual(state.pendingSessionAction, {
           kind: "claim_history",
           sessionId: "history",
         });
-        assert.equal(state.pendingSessionTransition, null);
+        assert.equal(state.pendingSessionTransition?.kind, "claim_history");
+        assert.equal(state.pendingSessionTransition?.providerSessionId, "thread-1");
+        assert.equal(state.selectedSessionId, "history");
+        assert.equal(state.projections.has("history"), true);
         return {
           session: summary({
             id: "claimed",
@@ -589,6 +594,7 @@ describe("session startup model and mode requests", () => {
       throw new Error(`Unexpected request ${request.url}`);
     });
     deps = startupDeps({
+      selectedSessionId: "history",
       projections,
       storedSessions: [
         {
