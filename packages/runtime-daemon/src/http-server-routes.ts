@@ -889,12 +889,36 @@ export async function handleHttpRequest(args: {
       const cursor = url.searchParams.get("cursor") ?? undefined;
       const limitRaw = url.searchParams.get("limit");
       const limit = parseQueryLimit(limitRaw);
+      const detailParam = url.searchParams.get("detail");
+      const detail: "full" | "summary" = detailParam === "full" ? "full" : "summary";
       const options = {
         ...(beforeTs !== undefined ? { beforeTs } : {}),
         ...(cursor !== undefined ? { cursor } : {}),
         ...(limit !== undefined ? { limit } : {}),
+        detail,
       };
       writeJson(req, res, 200, engine.getSessionHistoryPage(historyMatch[1]!, options));
+      return;
+    }
+
+    const historyDetailMatch = /^\/api\/sessions\/([^/]+)\/history\/detail$/.exec(pathname);
+    if (req.method === "GET" && historyDetailMatch) {
+      const kind = url.searchParams.get("kind");
+      const itemId = url.searchParams.get("itemId");
+      if (kind !== "tool_call" && kind !== "observation") {
+        writeJson(req, res, 400, { error: "History detail kind must be tool_call or observation." });
+        return;
+      }
+      if (!itemId) {
+        writeJson(req, res, 400, { error: "History detail itemId is required." });
+        return;
+      }
+      const detail = engine.getSessionHistoryItemDetail(historyDetailMatch[1]!, { kind, itemId });
+      if (detail.events.length === 0) {
+        writeJson(req, res, 404, { error: "History detail is not available for this item." });
+        return;
+      }
+      writeJson(req, res, 200, detail);
       return;
     }
 

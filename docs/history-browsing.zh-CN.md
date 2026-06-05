@@ -22,7 +22,7 @@ read-only history/up-scroll -> load older page -> prepend -> keep scroll anchor
 
 前端页大小：
 
-- `HISTORY_PAGE_LIMIT = 250`
+- `HISTORY_PAGE_LIMIT = 60`
 
 ### 1.1 新建 live session
 
@@ -109,9 +109,11 @@ older-history paging 使用 `loadOlderHistory`：
 前端通过：
 
 ```text
-GET /api/sessions/:sessionId/history?limit=250
-GET /api/sessions/:sessionId/history?cursor=...&limit=250
-GET /api/sessions/:sessionId/history?beforeTs=...&limit=250
+GET /api/sessions/:sessionId/history?limit=60
+GET /api/sessions/:sessionId/history?cursor=...&limit=60
+GET /api/sessions/:sessionId/history?beforeTs=...&limit=60
+GET /api/sessions/:sessionId/history/detail?kind=tool_call&itemId=...
+GET /api/sessions/:sessionId/history/detail?kind=observation&itemId=...
 ```
 
 后端返回：
@@ -119,6 +121,8 @@ GET /api/sessions/:sessionId/history?beforeTs=...&limit=250
 - `events`
 - `nextCursor`
 - `nextBeforeTs`
+- `detailMode`
+- `approximateBytes`
 
 语义：
 
@@ -126,6 +130,9 @@ GET /api/sessions/:sessionId/history?beforeTs=...&limit=250
 - 有 `nextCursor`：下一次优先用 cursor。
 - 只有 `nextBeforeTs`：provider 使用 timestamp 边界加载更老内容。
 - 没有 `nextCursor` 且没有 `nextBeforeTs`：已经到达最早历史。
+- `history` 默认返回 `detailMode = summary`，用于 Chat 首屏和 older-page 浏览；summary 事件必须剥离 provider `raw`、大 `toolCall.detail`、大 `toolCall.input/result`、大 `observation.detail`。
+- summary 中的 `ToolCall` / `WorkbenchObservation` 可以带 `detailAvailable` 和 `detailSizeBytes`。用户展开工具卡片时，前端再调用 `/history/detail` 拉取该 tool / observation 的完整 cached events，并合并回当前 projection。
+- `/history?detail=full` 只保留给调试或内部验证；普通 Chat UI 不应使用 full history 首屏。
 
 ## 4. 后端 Snapshot 模型
 
@@ -135,6 +142,7 @@ GET /api/sessions/:sessionId/history?beforeTs=...&limit=250
 - 如果 provider 提供 frozen loader，则使用 provider-owned frozen paging。
 - 如果 provider 没有 frozen loader，则 materialize 当前 events 后用 offset cursor 分页。
 - 后续 cursor 在同一 snapshot 内解析，避免文件增长时分页漂移。
+- Snapshot cache 保存 full events；HTTP history 响应在返回前投影成 summary。这样首屏 payload 足够小，但 `/history/detail` 仍能从 cache 中找回完整工具输出。
 
 frozen snapshot 的目标：
 

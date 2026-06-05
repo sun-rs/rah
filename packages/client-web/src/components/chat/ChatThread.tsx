@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { FeedEntry } from "../../types";
-import type { PermissionResponseRequest, ProviderKind, TimelineItem } from "@rah/runtime-protocol";
+import type {
+  PermissionResponseRequest,
+  ProviderKind,
+  SessionHistoryItemDetailKind,
+  TimelineItem,
+} from "@rah/runtime-protocol";
 import {
   AlertCircle,
   ArrowDown,
@@ -229,6 +234,9 @@ function renderEntry(
   canRespondToPermission: boolean | undefined,
   onPermissionRespond: (requestId: string, response: PermissionResponseRequest) => void,
   onOpenLocalFile: ((path: string) => void) | undefined,
+  onLoadHistoryItemDetail:
+    | ((kind: SessionHistoryItemDetailKind, itemId: string) => Promise<void> | void)
+    | undefined,
 ) {
   switch (entry.kind) {
     case "timeline":
@@ -242,6 +250,12 @@ function renderEntry(
           toolCall={entry.toolCall}
           status={entry.status}
           {...(entry.error !== undefined ? { error: entry.error } : {})}
+          {...(onLoadHistoryItemDetail
+            ? {
+                onLoadDetail: () =>
+                  onLoadHistoryItemDetail("tool_call", entry.toolCall.id),
+              }
+            : {})}
         />
       );
     case "permission":
@@ -259,6 +273,12 @@ function renderEntry(
           observation={entry.observation}
           status={entry.status}
           {...(entry.error !== undefined ? { error: entry.error } : {})}
+          {...(onLoadHistoryItemDetail
+            ? {
+                onLoadDetail: () =>
+                  onLoadHistoryItemDetail("observation", entry.observation.id),
+              }
+            : {})}
         />
       );
     case "operation":
@@ -341,6 +361,10 @@ export function ChatThread(props: {
   canLoadOlderHistory?: boolean;
   historyLoading?: boolean;
   onLoadOlderHistory?: () => void | Promise<void>;
+  onLoadHistoryItemDetail?: (
+    kind: SessionHistoryItemDetailKind,
+    itemId: string,
+  ) => Promise<void> | void;
   canRespondToPermission?: boolean;
   onPermissionRespond: (requestId: string, response: PermissionResponseRequest) => void;
   onOpenLocalFile?: (path: string) => void;
@@ -1028,6 +1052,7 @@ export function ChatThread(props: {
                   props.canRespondToPermission,
                   props.onPermissionRespond,
                   props.onOpenLocalFile,
+                  props.onLoadHistoryItemDetail,
                 )}
               </MeasuredFeedEntry>
             );

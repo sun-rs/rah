@@ -6,6 +6,7 @@ import type {
   ProviderModelCatalog,
   RahEvent,
   SessionConfigValue,
+  SessionHistoryItemDetailKind,
   SessionSummary,
   StoredSessionRef,
 } from "@rah/runtime-protocol";
@@ -23,6 +24,7 @@ import { isLabModeEnabled } from "./lab-mode";
 import { type PendingSessionTransition } from "./session-transition-contract";
 import {
   adoptExistingProjectionForProviderSession as adoptExistingProjectionForProviderSessionImpl,
+  applyEventBatchToProjection,
   applyEventsToProjectionMap as applyEventsToProjectionMapImpl,
   applySessionsResponse as applySessionsResponseImpl,
   computeUnreadSessionIds as computeUnreadSessionIdsImpl,
@@ -226,6 +228,11 @@ interface SessionState {
   ensureSessionHistoryLoaded: (sessionId: string) => Promise<void>;
   refreshLatestHistory: (sessionId: string) => Promise<void>;
   loadOlderHistory: (sessionId: string) => Promise<void>;
+  loadHistoryItemDetail: (
+    sessionId: string,
+    kind: SessionHistoryItemDetailKind,
+    itemId: string,
+  ) => Promise<void>;
   respondToPermission: (
     sessionId: string,
     requestId: string,
@@ -1206,6 +1213,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       set,
       sessionId,
       historyPageLimit: HISTORY_PAGE_LIMIT,
+    });
+  },
+
+  loadHistoryItemDetail: async (sessionId, kind, itemId) => {
+    const response = await api.readSessionHistoryItemDetail(sessionId, { kind, itemId });
+    set((state) => {
+      const current = state.projections.get(sessionId);
+      if (!current) {
+        return state;
+      }
+      const next = new Map(state.projections);
+      next.set(sessionId, applyEventBatchToProjection(current, response.events));
+      return { projections: next };
     });
   },
 

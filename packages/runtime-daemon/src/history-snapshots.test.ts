@@ -481,3 +481,62 @@ test("frozen history snapshots honor smaller limits after a wider page was cache
   assert.deepEqual(wideOlderPage.events.map(timelineText), ["Older one", "Older two"]);
   assert.deepEqual(narrowOlderPage.events.map(timelineText), ["Older two"]);
 });
+
+test("frozen history pages reanchor provider-local event ids across cursors", () => {
+  const store = new HistorySnapshotStore();
+  const boundary: FrozenHistoryBoundary = {
+    kind: "frozen",
+    sourceRevision: "rev-1",
+  };
+  const initialEvent = timelineEvent({
+    id: "history:source:1000000001",
+    seq: 1_000_000_001,
+    ts: "2026-05-03T00:02:00.000Z",
+    canonicalItemId: "initial-item",
+    text: "Initial item",
+  });
+  const olderEvent = timelineEvent({
+    id: "history:source:1000000001",
+    seq: 1_000_000_001,
+    ts: "2026-05-03T00:01:00.000Z",
+    canonicalItemId: "older-item",
+    text: "Older item",
+  });
+  const repeatedInitial = timelineEvent({
+    id: "history:source:1000000001",
+    seq: 1_000_000_001,
+    ts: "2026-05-03T00:02:00.000Z",
+    canonicalItemId: "initial-item",
+    text: "Initial item",
+  });
+  const loader: FrozenHistoryPageLoader = {
+    loadInitialPage: () => ({
+      boundary,
+      events: [initialEvent],
+      nextCursor: "older",
+    }),
+    loadOlderPage: () => ({
+      boundary,
+      events: [olderEvent, repeatedInitial],
+    }),
+  };
+
+  const initialPage = store.getPage({
+    sessionId: "target-session",
+    limit: 10,
+    loadEvents: () => [],
+    loadFrozenPage: () => loader,
+  });
+  const olderPage = store.getPage({
+    sessionId: "target-session",
+    cursor: "older",
+    limit: 10,
+    loadEvents: () => [],
+    loadFrozenPage: () => loader,
+  });
+
+  const ids = [...initialPage.events, ...olderPage.events].map((event) => event.id);
+  assert.equal(new Set(ids).size, 2);
+  assert.equal(initialPage.events[0]?.id, olderPage.events[1]?.id);
+  assert.notEqual(initialPage.events[0]?.id, olderPage.events[0]?.id);
+});

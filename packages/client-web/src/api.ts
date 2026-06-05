@@ -65,6 +65,8 @@ import type {
   SetSessionModelRequest,
   SessionFileResponse,
   SessionInputRequest,
+  SessionHistoryItemDetailKind,
+  SessionHistoryItemDetailResponse,
   SessionHistoryPageResponse,
   SessionSummary,
   StartDebugScenarioRequest,
@@ -805,7 +807,7 @@ export async function searchWorkspaceFilesByDirectory(
 
 export async function readSessionHistory(
   sessionId: string,
-  options?: { beforeTs?: string; cursor?: string; limit?: number },
+  options?: { beforeTs?: string; cursor?: string; limit?: number; detail?: "summary" | "full" },
 ): Promise<SessionHistoryPageResponse> {
   const query = new URLSearchParams();
   if (options?.beforeTs) {
@@ -817,9 +819,24 @@ export async function readSessionHistory(
   if (options?.limit !== undefined) {
     query.set("limit", String(options.limit));
   }
+  if (options?.detail) {
+    query.set("detail", options.detail);
+  }
   const suffix = query.size > 0 ? `?${query.toString()}` : "";
   return requestJson<SessionHistoryPageResponse>(
     `/api/sessions/${sessionId}/history${suffix}`,
+  );
+}
+
+export async function readSessionHistoryItemDetail(
+  sessionId: string,
+  options: { kind: SessionHistoryItemDetailKind; itemId: string },
+): Promise<SessionHistoryItemDetailResponse> {
+  const query = new URLSearchParams();
+  query.set("kind", options.kind);
+  query.set("itemId", options.itemId);
+  return requestJson<SessionHistoryItemDetailResponse>(
+    `/api/sessions/${sessionId}/history/detail?${query.toString()}`,
   );
 }
 

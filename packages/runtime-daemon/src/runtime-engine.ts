@@ -79,6 +79,11 @@ import {
 } from "./workspace-utils";
 import { EventBus } from "./event-bus";
 import { HistorySnapshotStore } from "./history-snapshots";
+import {
+  fullHistoryPage,
+  historyEventMatchesItem,
+  summarizeHistoryPage,
+} from "./history-event-projection";
 import type {
   ProviderActionCapabilityAdapter,
   ProviderAdapter,
@@ -1384,7 +1389,7 @@ export class RuntimeEngine {
 
   getSessionHistoryPage(
     sessionId: string,
-    options?: { beforeTs?: string; cursor?: string; limit?: number },
+    options?: { beforeTs?: string; cursor?: string; limit?: number; detail?: "summary" | "full" },
   ): SessionHistoryPageResponse {
     const ownerProvider = this.structuredSessionOwners.get(sessionId);
     const adapter = ownerProvider
@@ -1412,7 +1417,22 @@ export class RuntimeEngine {
             : { limit: MAX_MATERIALIZED_HISTORY_EVENTS },
         ).events,
     });
-    return filterCouncilManagedHistoryPage(session, page);
+    const filtered = filterCouncilManagedHistoryPage(session, page);
+    return options?.detail === "full" ? fullHistoryPage(filtered) : summarizeHistoryPage(filtered);
+  }
+
+  getSessionHistoryItemDetail(
+    sessionId: string,
+    options: { kind: "tool_call" | "observation"; itemId: string },
+  ) {
+    return {
+      sessionId,
+      kind: options.kind,
+      itemId: options.itemId,
+      events: this.historySnapshots.findCachedEvents(sessionId, (event) =>
+        historyEventMatchesItem(event, options.kind, options.itemId),
+      ),
+    };
   }
 
   getContextUsage(sessionId: string) {
