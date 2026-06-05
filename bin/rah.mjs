@@ -25,6 +25,7 @@ const execFileAsync = promisify(execFile);
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_DAEMON_URL = "http://127.0.0.1:43111";
+const DEFAULT_DAEMON_HOST = process.env.RAH_HOST?.trim() || "127.0.0.1";
 const CORE_RUNNING_PROVIDERS = new Set(["codex", "claude", "gemini", "opencode"]);
 const SUPPORTED_PROVIDERS = CORE_RUNNING_PROVIDERS;
 const MANAGEMENT_COMMANDS = new Set(["start", "status", "stop", "restart", "logs", "attach", "close", "archive"]);
@@ -101,6 +102,7 @@ function printUsage() {
       "Source workflow:",
       "  `rah start` builds the web client, starts the daemon in the background,",
       "  and writes pid/log files under ~/.rah/runtime-daemon.",
+      "  Set RAH_HOST=0.0.0.0 only when direct LAN exposure is intended.",
       "",
     ].join("\n"),
   );
@@ -685,6 +687,7 @@ function startDaemonDetached(daemonUrl) {
       cwd: ROOT_DIR,
       env: {
         ...process.env,
+        RAH_HOST: DEFAULT_DAEMON_HOST,
         RAH_PORT: port,
       },
       stdio: ["ignore", logFd, logFd],
@@ -777,7 +780,15 @@ async function ensureDaemon(daemonUrl, options = {}) {
   });
 }
 
-function localNetworkUrls(daemonUrl) {
+function localNetworkUrls(daemonUrl, host = DEFAULT_DAEMON_HOST) {
+  const normalizedHost = host.toLowerCase();
+  if (
+    normalizedHost === "localhost" ||
+    normalizedHost === "::1" ||
+    normalizedHost.startsWith("127.")
+  ) {
+    return [];
+  }
   const port = daemonPort(daemonUrl);
   const urls = [];
   for (const entries of Object.values(networkInterfaces())) {

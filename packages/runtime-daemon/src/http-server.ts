@@ -9,6 +9,7 @@ import { createPostRoutes, handleHttpRequest } from "./http-server-routes";
 import { attachWebSocketHandlers } from "./http-server-websocket";
 
 export interface RahDaemon {
+  host: string;
   port: number;
   close(): Promise<void>;
 }
@@ -67,9 +68,11 @@ function createRuntimeIdentity(port: number): RuntimeIdentityResponse {
 }
 
 export async function startRahDaemon(options?: {
+  host?: string;
   port?: number;
   engine?: RuntimeEngine;
 }): Promise<RahDaemon> {
+  const host = options?.host ?? "0.0.0.0";
   const port = options?.port ?? 43111;
   const engine = options?.engine ?? new RuntimeEngine();
   const postRoutes = createPostRoutes(engine);
@@ -81,13 +84,14 @@ export async function startRahDaemon(options?: {
   const websockets = attachWebSocketHandlers(server, engine);
 
   await new Promise<void>((resolve) => {
-    server.listen(port, "0.0.0.0", () => resolve());
+    server.listen(port, host, () => resolve());
   });
   const address = server.address();
   const actualPort = typeof address === "object" && address ? address.port : port;
   runtimeIdentity = createRuntimeIdentity(actualPort);
 
   return {
+    host,
     port: actualPort,
     async close() {
       try {

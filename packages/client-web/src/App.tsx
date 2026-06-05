@@ -371,6 +371,7 @@ export function App() {
     ensureSessionHistoryLoaded,
     refreshLatestHistory,
     loadOlderHistory,
+    loadHistoryItemDetail,
     respondToPermission,
   } = useSessionStore(
     useShallow((state) => ({
@@ -417,6 +418,7 @@ export function App() {
       ensureSessionHistoryLoaded: state.ensureSessionHistoryLoaded,
       refreshLatestHistory: state.refreshLatestHistory,
       loadOlderHistory: state.loadOlderHistory,
+      loadHistoryItemDetail: state.loadHistoryItemDetail,
       respondToPermission: state.respondToPermission,
     })),
   );
@@ -2261,6 +2263,9 @@ export function App() {
                       respondToPermission(sessionId, requestId, response)
                     }
                     onOpenLocalFile={(_sessionId, path) => openLinkedFilePreview(path)}
+                    onLoadHistoryItemDetail={(sessionId, kind, itemId) =>
+                      loadHistoryItemDetail(sessionId, kind, itemId)
+                    }
                     onClaimHistory={(sessionId, request) => {
                       const ref = storedRefFromSessionSummary(summary);
                       if (ref) {
@@ -2376,6 +2381,9 @@ export function App() {
               canRespondToPermission={canRespondToPermission}
               onPermissionRespond={handlePermissionResponse}
               onOpenLocalFile={openLinkedFilePreview}
+              onLoadHistoryItemDetail={(kind, itemId) =>
+                loadHistoryItemDetail(selectedSummary.session.id, kind, itemId)
+              }
               composerSurface={composerSurface}
               composerRef={composerRef}
               draft={draft}

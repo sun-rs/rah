@@ -508,6 +508,17 @@ export interface SessionHistoryPageResponse {
   events: RahEvent[];
   nextCursor?: string;
   nextBeforeTs?: string;
+  detailMode?: "full" | "summary";
+  approximateBytes?: number;
+}
+
+export type SessionHistoryItemDetailKind = "tool_call" | "observation";
+
+export interface SessionHistoryItemDetailResponse {
+  sessionId: string;
+  kind: SessionHistoryItemDetailKind;
+  itemId: string;
+  events: RahEvent[];
 }
 
 export interface EventSubscriptionRequest {

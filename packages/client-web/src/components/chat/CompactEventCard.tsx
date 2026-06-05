@@ -11,6 +11,7 @@ export function CompactEventCard(props: {
   hideLabel?: boolean;
   defaultOpen?: boolean;
   footer?: React.ReactNode;
+  onExpand?: () => void;
   children?: React.ReactNode;
 }) {
   const [open, setOpen] = useState(props.defaultOpen ?? false);
@@ -31,7 +32,13 @@ export function CompactEventCard(props: {
           disabled={!expandable}
           onClick={() => {
             if (expandable) {
-              setOpen((value) => !value);
+              setOpen((value) => {
+                const next = !value;
+                if (next) {
+                  props.onExpand?.();
+                }
+                return next;
+              });
             }
           }}
           className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left disabled:cursor-default"

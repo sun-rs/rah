@@ -78,6 +78,84 @@ function normalizeSnapshotEvents(events: readonly RahEvent[]): RahEvent[] {
   return normalizeTranscriptEvents([...events].sort((left, right) => left.seq - right.seq));
 }
 
+function stableFrozenEventIdentity(event: RahEvent): string | undefined {
+  switch (event.type) {
+    case "timeline.item.added":
+    case "timeline.item.updated": {
+      const identity = event.payload.identity;
+      if (identity?.canonicalItemId) {
+        return `${event.type}:timeline:${identity.canonicalItemId}`;
+      }
+      const item = event.payload.item;
+      const messageId =
+        "messageId" in item && typeof item.messageId === "string"
+          ? item.messageId
+          : undefined;
+      if (messageId) {
+        return `${event.type}:timeline-message:${item.kind}:${messageId}`;
+      }
+      return undefined;
+    }
+    case "tool.call.started":
+    case "tool.call.completed":
+      return `${event.type}:tool:${event.payload.toolCall.id}`;
+    case "tool.call.delta":
+    case "tool.call.failed":
+      return `${event.type}:tool:${event.payload.toolCallId}`;
+    case "observation.started":
+    case "observation.updated":
+    case "observation.completed":
+    case "observation.failed":
+      return `${event.type}:observation:${event.payload.observation.id}`;
+    case "permission.requested":
+      return `${event.type}:permission:${event.payload.request.id}`;
+    case "permission.resolved":
+      return `${event.type}:permission:${event.payload.resolution.requestId}`;
+    case "operation.started":
+    case "operation.resolved":
+    case "operation.requested":
+      return `${event.type}:operation:${event.payload.operation.id}`;
+    case "message.part.added":
+    case "message.part.updated":
+    case "message.part.delta":
+      return `${event.type}:message-part:${event.payload.part.messageId}:${event.payload.part.partId}`;
+    case "message.part.removed":
+      return `${event.type}:message-part:${event.payload.messageId}:${event.payload.partId}`;
+    case "turn.completed":
+    case "turn.failed":
+    case "turn.canceled": {
+      const identity = event.payload.identity?.canonicalTurnId ?? event.turnId;
+      return identity ? `${event.type}:turn:${identity}` : undefined;
+    }
+    default:
+      return undefined;
+  }
+}
+
+function encodeStableIdPart(value: string): string {
+  return Buffer.from(value, "utf8").toString("base64url");
+}
+
+function reanchorFrozenPageEvents(args: {
+  sessionId: string;
+  requestCursor: string | null;
+  events: readonly RahEvent[];
+}): RahEvent[] {
+  const pageScope = args.requestCursor ?? "initial";
+  return args.events.map((event, index) => {
+    const stableIdentity = stableFrozenEventIdentity(event);
+    const identity =
+      stableIdentity
+        ? `${stableIdentity}:ts:${event.ts}`
+        : `page:${pageScope}:index:${index}:type:${event.type}:source:${event.id}`;
+    return {
+      ...event,
+      id: `history:${args.sessionId}:${encodeStableIdPart(identity)}`,
+      sessionId: args.sessionId,
+    };
+  });
+}
+
 function paginationTimestamp(nextCursor: string | undefined, events: readonly RahEvent[]): string | undefined {
   if (!nextCursor) {
     return undefined;
@@ -166,6 +244,32 @@ export class HistorySnapshotStore {
     this.snapshots.delete(sessionId);
   }
 
+  findCachedEvents(
+    sessionId: string,
+    predicate: (event: RahEvent) => boolean,
+  ): RahEvent[] {
+    const snapshot = this.snapshots.get(sessionId);
+    if (!snapshot) {
+      return [];
+    }
+    const matches = new Map<string, RahEvent>();
+    const collect = (events: readonly RahEvent[]) => {
+      for (const event of events) {
+        if (predicate(event)) {
+          matches.set(event.id, event);
+        }
+      }
+    };
+    if (snapshot.mode === "materialized") {
+      collect(snapshot.events);
+    } else {
+      for (const cachedPage of snapshot.pagesByRequestCursor.values()) {
+        collect(cachedPage.response.events);
+      }
+    }
+    return [...matches.values()].sort((left, right) => left.ts.localeCompare(right.ts) || left.seq - right.seq);
+  }
+
   private createFrozenPagedSnapshot(
     sessionId: string,
     limitValue: number | undefined,
@@ -177,7 +281,13 @@ export class HistorySnapshotStore {
     }
     const limit = normalizeHistoryPageLimit(limitValue);
     const initial = frozenLoader.loadInitialPage(limit);
-    const initialEvents = normalizeTranscriptEvents(initial.events);
+    const initialEvents = normalizeTranscriptEvents(
+      reanchorFrozenPageEvents({
+        sessionId,
+        requestCursor: null,
+        events: initial.events,
+      }),
+    );
     const initialNextBeforeTs = paginationTimestamp(initial.nextCursor, initialEvents);
     return {
       mode: "frozen_paged",
@@ -242,7 +352,13 @@ export class HistorySnapshotStore {
     if (page.boundary.sourceRevision !== snapshot.boundary.sourceRevision) {
       throw new Error("Frozen history source revision changed while paging older history.");
     }
-    const events = normalizeTranscriptEvents(page.events);
+    const events = normalizeTranscriptEvents(
+      reanchorFrozenPageEvents({
+        sessionId,
+        requestCursor,
+        events: page.events,
+      }),
+    );
     const nextBeforeTs = paginationTimestamp(page.nextCursor, events);
     const response: SessionHistoryPageResponse = {
       sessionId,

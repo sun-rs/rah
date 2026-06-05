@@ -1,5 +1,5 @@
 import type { ToolCall, ToolCallArtifact } from "@rah/runtime-protocol";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   CheckCircle2,
   ChevronDown,
@@ -63,12 +63,20 @@ export function ToolCallCard(props: {
   toolCall: ToolCall;
   status: "running" | "completed" | "failed";
   error?: string;
+  onLoadDetail?: () => Promise<void> | void;
 }) {
   const [open, setOpen] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
+  const detailRequestedRef = useRef(false);
   const badge = statusBadge(props.status);
   const artifacts = fallbackArtifacts(props.toolCall);
+  const needsHydration = Boolean(
+    props.toolCall.detailAvailable && !props.toolCall.detail?.artifacts?.length,
+  );
   const expandable =
     artifacts.length > 0 ||
+    needsHydration ||
     Boolean(props.toolCall.summary) ||
     Boolean(props.error) ||
     Boolean(props.toolCall.result && Object.keys(props.toolCall.result).length > 0);
@@ -80,6 +88,20 @@ export function ToolCallCard(props: {
     props.status === "failed"
       ? "border-[var(--app-danger)] bg-[var(--app-danger-bg)]"
       : "border-[var(--app-border)] bg-[var(--app-subtle-bg)]";
+  const loadDetail = () => {
+    if (!needsHydration || detailRequestedRef.current || !props.onLoadDetail) {
+      return;
+    }
+    detailRequestedRef.current = true;
+    setDetailLoading(true);
+    setDetailError(null);
+    void Promise.resolve(props.onLoadDetail())
+      .catch((error) => {
+        detailRequestedRef.current = false;
+        setDetailError(error instanceof Error ? error.message : "Failed to load detail.");
+      })
+      .finally(() => setDetailLoading(false));
+  };
 
   return (
     <div className={`w-full rounded-lg border ${toneClassName}`}>
@@ -88,7 +110,13 @@ export function ToolCallCard(props: {
         disabled={!expandable}
         onClick={() => {
           if (expandable) {
-            setOpen((value) => !value);
+            setOpen((value) => {
+              const next = !value;
+              if (next) {
+                loadDetail();
+              }
+              return next;
+            });
           }
         }}
         className="flex w-full items-center gap-3 px-3 py-2 text-left disabled:cursor-default"
@@ -121,6 +149,14 @@ export function ToolCallCard(props: {
       {expandable && open ? (
         <div className="border-t border-[var(--app-border)] px-3 py-2.5">
           <div className="space-y-2">
+            {detailLoading ? (
+              <div className="text-xs text-[var(--app-hint)]">Loading detail…</div>
+            ) : null}
+            {detailError ? (
+              <div className="rounded-lg border border-[var(--app-warning)] bg-[var(--app-warning-bg)] px-3 py-2 text-xs text-[var(--app-fg)]">
+                {detailError}
+              </div>
+            ) : null}
             {props.toolCall.summary && props.toolCall.summary !== detailText ? (
               <div className="text-xs text-[var(--app-hint)]">{props.toolCall.summary}</div>
             ) : null}

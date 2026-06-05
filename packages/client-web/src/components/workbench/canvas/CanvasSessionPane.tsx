@@ -1,5 +1,11 @@
 import type { ReactNode } from "react";
-import type { PermissionResponseRequest, ProviderModelCatalog, SessionConfigValue, SessionSummary } from "@rah/runtime-protocol";
+import type {
+  PermissionResponseRequest,
+  ProviderModelCatalog,
+  SessionConfigValue,
+  SessionHistoryItemDetailKind,
+  SessionSummary,
+} from "@rah/runtime-protocol";
 import type { ObjectPaneVariant } from "../../../object-pane-variant";
 import { useWorkbenchComposerState } from "../../../hooks/useWorkbenchComposerState";
 import { useNativeTuiDiagnostics } from "../../../hooks/useNativeTuiDiagnostics";
@@ -71,6 +77,11 @@ export function CanvasSessionPane(props: {
     response: PermissionResponseRequest,
   ) => Promise<void>;
   onOpenLocalFile?: (sessionId: string, path: string) => void;
+  onLoadHistoryItemDetail?: (
+    sessionId: string,
+    kind: SessionHistoryItemDetailKind,
+    itemId: string,
+  ) => Promise<void> | void;
   onClaimHistory: (
     sessionId: string,
     request: {
@@ -201,6 +212,9 @@ export function CanvasSessionPane(props: {
       onPermissionRespond={(requestId, response) => {
         void props.onRespondToPermission(props.summary.session.id, requestId, response);
       }}
+      onLoadHistoryItemDetail={(kind, itemId) =>
+        props.onLoadHistoryItemDetail?.(props.summary.session.id, kind, itemId)
+      }
       {...(props.onOpenLocalFile
         ? {
             onOpenLocalFile: (path: string) =>

@@ -1,5 +1,11 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
-import type { ContextUsage, PermissionResponseRequest, ProviderModelCatalog, SessionSummary } from "@rah/runtime-protocol";
+import type {
+  ContextUsage,
+  PermissionResponseRequest,
+  ProviderModelCatalog,
+  SessionHistoryItemDetailKind,
+  SessionSummary,
+} from "@rah/runtime-protocol";
 import {
   ArrowUp,
   Info,
@@ -153,6 +159,10 @@ export function WorkbenchSelectedPane(props: {
   canRespondToPermission: boolean;
   onPermissionRespond: (requestId: string, response: PermissionResponseRequest) => void;
   onOpenLocalFile?: (path: string) => void;
+  onLoadHistoryItemDetail?: (
+    kind: SessionHistoryItemDetailKind,
+    itemId: string,
+  ) => Promise<void> | void;
   composerSurface: ComposerSurface;
   composerRef: RefObject<HTMLTextAreaElement | null>;
   draft: string;
@@ -776,6 +786,9 @@ export function WorkbenchSelectedPane(props: {
           canLoadOlderHistory={props.canLoadOlderHistory}
           historyLoading={props.historyLoading}
           onLoadOlderHistory={props.onLoadOlderHistory}
+          {...(props.onLoadHistoryItemDetail
+            ? { onLoadHistoryItemDetail: props.onLoadHistoryItemDetail }
+            : {})}
           canRespondToPermission={props.canRespondToPermission}
           onPermissionRespond={props.onPermissionRespond}
           {...(props.onOpenLocalFile ? { onOpenLocalFile: props.onOpenLocalFile } : {})}

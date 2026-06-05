@@ -156,6 +156,8 @@ export interface ToolCall {
   input?: Record<string, unknown>;
   result?: Record<string, unknown>;
   detail?: ToolCallDetail;
+  detailAvailable?: boolean;
+  detailSizeBytes?: number;
 }
 
 export interface PermissionAction {
@@ -267,6 +269,8 @@ export interface WorkbenchObservation {
   durationMs?: number;
   metrics?: JsonObject;
   detail?: ToolCallDetail;
+  detailAvailable?: boolean;
+  detailSizeBytes?: number;
 }
 
 export type MessagePartKind =

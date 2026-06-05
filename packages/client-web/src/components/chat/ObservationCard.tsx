@@ -1,4 +1,5 @@
 import type { WorkbenchObservation } from "@rah/runtime-protocol";
+import { useRef, useState } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -142,7 +143,11 @@ export function ObservationCard(props: {
   observation: WorkbenchObservation;
   status: "running" | "completed" | "failed";
   error?: string;
+  onLoadDetail?: () => Promise<void> | void;
 }) {
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
+  const detailRequestedRef = useRef(false);
   const status = statusMeta(props.status, props.observation);
   const subtitle = compactSubtitle(props.observation);
   const metaSummary = expandedMetaSummary(props.observation);
@@ -151,6 +156,22 @@ export function ObservationCard(props: {
       ? `${status.label} · exit ${props.observation.exitCode}`
       : status.label;
   const showError = shouldShowErrorBlock(props.observation, props.error);
+  const hasArtifacts = Boolean(props.observation.detail?.artifacts?.length);
+  const needsHydration = Boolean(props.observation.detailAvailable && !hasArtifacts);
+  const loadDetail = () => {
+    if (!needsHydration || detailRequestedRef.current || !props.onLoadDetail) {
+      return;
+    }
+    detailRequestedRef.current = true;
+    setDetailLoading(true);
+    setDetailError(null);
+    void Promise.resolve(props.onLoadDetail())
+      .catch((error) => {
+        detailRequestedRef.current = false;
+        setDetailError(error instanceof Error ? error.message : "Failed to load detail.");
+      })
+      .finally(() => setDetailLoading(false));
+  };
 
   return (
     <CompactEventCard
@@ -168,8 +189,17 @@ export function ObservationCard(props: {
         </span>
       }
       tone={props.status === "failed" ? "warning" : "default"}
+      onExpand={loadDetail}
     >
       <div className="space-y-2">
+        {detailLoading ? (
+          <div className="text-xs text-[var(--app-hint)]">Loading detail…</div>
+        ) : null}
+        {detailError ? (
+          <div className="rounded-lg border border-[var(--app-warning)] bg-[var(--app-warning-bg)] px-3 py-2 text-xs text-[var(--app-fg)]">
+            {detailError}
+          </div>
+        ) : null}
         <div className="flex items-center gap-2 text-[11px] font-medium text-[var(--app-hint)]">
           <Activity size={13} className="text-[var(--app-hint)]" />
           <span>{props.observation.kind}</span>
