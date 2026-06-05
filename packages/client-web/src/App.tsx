@@ -69,10 +69,7 @@ import {
 import { deriveWorkbenchNoticeState } from "./workbench-notice-contract";
 import { buildModelOptionValuesFromReasoning } from "./provider-capabilities";
 import { importWithStaleReload } from "./lazy-module-reload";
-import {
-  createPendingStoredSessionTransition,
-  type PendingSessionTransition,
-} from "./session-transition-contract";
+import type { PendingSessionTransition } from "./session-transition-contract";
 import {
   applyCanvasPaneTarget,
   CANVAS_PANE_IDS,
@@ -82,7 +79,6 @@ import {
   createEmptyCanvasTargets,
   getCanvasVisiblePaneIds,
   hasAnyCanvasPaneTarget,
-  isCanvasStoredTargetClaimPending,
   readRememberedCanvasState,
   rememberCanvasState,
   replaceCanvasSessionTargetWithStoredRef,
@@ -470,9 +466,6 @@ export function App() {
   const [canvasPaneRightPanelsOpen, setCanvasPaneRightPanelsOpen] = useState<
     Record<CanvasPaneId, boolean>
   >(() => rememberedCanvasState?.rightPanelsOpen ?? createDefaultCanvasRightPanelsOpen());
-  const [canvasPaneOpeningTransitions, setCanvasPaneOpeningTransitions] = useState<
-    Partial<Record<CanvasPaneId, PendingSessionTransition>>
-  >({});
   const canvasStoredActivationInFlightRef = useRef<Set<string>>(new Set());
   const [canvasNewSessionDrafts, setCanvasNewSessionDrafts] =
     useState<Record<CanvasPaneId, CanvasNewSessionDraft>>(() =>
@@ -781,14 +774,6 @@ export function App() {
     const sessionId = projection?.summary.session.id;
     const shouldCloseReadOnlyReplay = projection ? isReadOnlyReplay(projection.summary) : false;
     setCanvasPaneTarget(paneId, { kind: "empty" });
-    setCanvasPaneOpeningTransitions((current) => {
-      if (current[paneId] === undefined) {
-        return current;
-      }
-      const next = { ...current };
-      delete next[paneId];
-      return next;
-    });
     if (sessionId && selectedSessionId === sessionId) {
       setSelectedSessionId(null);
     }
@@ -818,7 +803,6 @@ export function App() {
       }
     }
     setCanvasPaneTargets(createEmptyCanvasTargets());
-    setCanvasPaneOpeningTransitions({});
     setCanvasMaximizedPaneId(null);
     if (selectedSessionId && clearedSessionIds.has(selectedSessionId)) {
       setSelectedSessionId(null);
@@ -1021,12 +1005,7 @@ export function App() {
           pendingSessionAction,
           pendingSessionTransition,
         );
-        if (
-          isCanvasStoredTargetClaimPending(target, [
-            globalOpeningTransition,
-            canvasPaneOpeningTransitions[paneId],
-          ])
-        ) {
+        if (globalOpeningTransition?.kind === "claim_history") {
           continue;
         }
         const activationKey = `${target.ref.provider}:${target.ref.providerSessionId}`;
@@ -1051,7 +1030,6 @@ export function App() {
     }
   }, [
     activateHistorySession,
-    canvasPaneOpeningTransitions,
     canvasPaneTargets,
     ensureSessionHistoryLoaded,
     pendingSessionAction,
@@ -1857,7 +1835,7 @@ export function App() {
                   target,
                   pendingSessionAction,
                   pendingSessionTransition,
-                ) ?? canvasPaneOpeningTransitions[typedPaneId] ?? null;
+                );
                 const paneExpanded = canvasMaximizedPaneId === typedPaneId;
                 const paneRightPanelOpen =
                   paneExpanded && canvasPaneRightPanelsOpen[typedPaneId] !== false;
@@ -2268,16 +2246,6 @@ export function App() {
                     }
                     onClaimHistory={(sessionId, request) => {
                       const ref = storedRefFromSessionSummary(summary);
-                      if (ref) {
-                        const openingTransition = createPendingStoredSessionTransition(
-                          ref,
-                          "claim_history",
-                        );
-                        setCanvasPaneOpeningTransitions((current) => ({
-                          ...current,
-                          [typedPaneId]: openingTransition,
-                        }));
-                      }
                       void (async () => {
                         let claimedSessionId: string | null = null;
                         try {
@@ -2309,15 +2277,6 @@ export function App() {
                           ) {
                             setCanvasPaneSession(typedPaneId, resolvedSessionId);
                           }
-                        } finally {
-                          setCanvasPaneOpeningTransitions((current) => {
-                            if (current[typedPaneId] === undefined) {
-                              return current;
-                            }
-                            const next = { ...current };
-                            delete next[typedPaneId];
-                            return next;
-                          });
                         }
                       })();
                     }}

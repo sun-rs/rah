@@ -8,6 +8,7 @@ import {
   startSessionCommand,
 } from "./session-store-session-startup";
 import { createEmptySessionProjection } from "./session-store-session-lifecycle";
+import type { FeedEntry } from "./types";
 
 type CapturedRequest = {
   url: string;
@@ -553,6 +554,57 @@ describe("session startup model and mode requests", () => {
     assert.equal(state.selectedSessionId, "claimed");
   });
 
+  test("claim history does not replace an already visible transcript with an opening transition", async () => {
+    const history = summary({
+      id: "history",
+      provider: "codex",
+      providerSessionId: "thread-1",
+      cwd: "/tmp/rah",
+    });
+    const projections = new Map([["history", createEmptySessionProjection(history)]]);
+    let deps!: ReturnType<typeof startupDeps>;
+    installWebApiMocks((request) => {
+      if (request.url.includes("/api/fs/list")) {
+        return { path: "/tmp/rah", entries: [] };
+      }
+      if (request.url.endsWith("/api/sessions/resume")) {
+        const state = deps.get() as {
+          pendingSessionAction: { kind: string; sessionId: string } | null;
+          pendingSessionTransition: unknown;
+        };
+        assert.deepEqual(state.pendingSessionAction, {
+          kind: "claim_history",
+          sessionId: "history",
+        });
+        assert.equal(state.pendingSessionTransition, null);
+        return {
+          session: summary({
+            id: "claimed",
+            provider: "codex",
+            providerSessionId: "thread-1",
+            cwd: "/tmp/rah",
+          }),
+        };
+      }
+      throw new Error(`Unexpected request ${request.url}`);
+    });
+    deps = startupDeps({
+      projections,
+      storedSessions: [
+        {
+          provider: "codex",
+          providerSessionId: "thread-1",
+          cwd: "/tmp/rah",
+          rootDir: "/tmp/rah",
+          createdAt: "2026-04-29T00:00:00.000Z",
+        },
+      ],
+      recentSessions: [],
+    });
+
+    await claimHistorySessionCommand(deps, "history");
+  });
+
   test("claim history keeps the claimed session when post-claim control update fails", async () => {
     const history = summary({
       id: "history",
@@ -1054,6 +1106,119 @@ describe("session startup model and mode requests", () => {
     } }).get();
     assert.equal(state.selectedSessionId, "live");
     assert.equal(state.projections.has("history"), false);
+    assert.equal(state.projections.get("live")?.summary.controlLease.holderClientId, "web-client");
+  });
+
+  test("claiming already-running history preserves the visible replay feed", async () => {
+    const historySummary = summary({
+      id: "history",
+      provider: "codex",
+      providerSessionId: "thread-running",
+      cwd: "/tmp/rah",
+    });
+    const runningSummary = summary({
+      id: "live",
+      provider: "codex",
+      providerSessionId: "thread-running",
+      cwd: "/tmp/rah",
+    });
+    const attachedSummary: SessionSummary = {
+      ...runningSummary,
+      attachedClients: [
+        {
+          id: "web-client",
+          kind: "web",
+          sessionId: "live",
+          connectionId: "web-connection",
+          attachMode: "interactive",
+          focus: true,
+          lastSeenAt: "2026-04-29T00:00:00.000Z",
+        },
+      ],
+      controlLease: {
+        sessionId: "live",
+        holderClientId: "web-client",
+        holderKind: "web",
+        grantedAt: "2026-04-29T00:00:00.000Z",
+      },
+    };
+    const historyProjection = createEmptySessionProjection(historySummary);
+    historyProjection.feed = [
+      {
+        key: "assistant:history-answer",
+        kind: "timeline",
+        item: { kind: "assistant_message", text: "visible history answer" },
+        ts: "2026-04-29T00:01:00.000Z",
+      } as FeedEntry,
+    ];
+    installWebApiMocks((request) => {
+      if (request.url.includes("/api/fs/list")) {
+        return { path: "/tmp/rah", entries: [] };
+      }
+      if (request.url.endsWith("/api/sessions/resume")) {
+        return new Response(
+          JSON.stringify({
+            error:
+              "Provider session codex:thread-running is already running; attach instead of resume.",
+          }),
+          { status: 500, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (request.url.endsWith("/api/sessions")) {
+        return {
+          sessions: [runningSummary],
+          storedSessions: [],
+          recentSessions: [],
+          workspaceDirs: ["/tmp/rah"],
+          hiddenWorkspaceDirs: [],
+        };
+      }
+      if (request.url.endsWith("/api/sessions/live/attach")) {
+        return { session: attachedSummary };
+      }
+      throw new Error(`Unexpected request ${request.url}`);
+    });
+    const deps = startupDeps(
+      {
+        selectedSessionId: "history",
+        projections: new Map([["history", historyProjection]]),
+        recentSessions: [
+          {
+            provider: "codex",
+            providerSessionId: "thread-running",
+            cwd: "/tmp/rah",
+            rootDir: "/tmp/rah",
+            createdAt: "2026-04-29T00:00:00.000Z",
+          },
+        ],
+      },
+      {
+        applySessionsResponse: (current: {
+          projections: Map<string, ReturnType<typeof createEmptySessionProjection>>;
+        }) => ({
+          ...current,
+          projections: new Map([["live", createEmptySessionProjection(runningSummary)]]),
+          storedSessions: [],
+          recentSessions: [],
+          workspaceDirs: ["/tmp/rah"],
+          hiddenWorkspaceDirs: new Set<string>(),
+          workspaceDir: "/tmp/rah",
+        }),
+      },
+    );
+
+    await claimHistorySessionCommand(deps, "history");
+
+    const state = (deps as { get: () => {
+      projections: Map<string, ReturnType<typeof createEmptySessionProjection>>;
+      selectedSessionId: string | null;
+    } }).get();
+    assert.equal(state.selectedSessionId, "live");
+    assert.equal(state.projections.has("history"), false);
+    assert.deepEqual(
+      state.projections.get("live")?.feed.map((entry) => entry.key),
+      ["assistant:history-answer"],
+    );
     assert.equal(state.projections.get("live")?.summary.controlLease.holderClientId, "web-client");
   });
 

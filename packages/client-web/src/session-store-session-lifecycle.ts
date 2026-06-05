@@ -137,6 +137,29 @@ export function applyResumedStoredSessionState(
   };
 }
 
+export function mergeClaimedHistoryProjection(
+  responseSession: SessionSummary,
+  preservedProjection: SessionProjection,
+  liveProjection?: SessionProjection,
+): SessionProjection {
+  return {
+    ...(liveProjection ?? preservedProjection),
+    feed: preservedProjection.feed,
+    events: preservedProjection.events,
+    lastSeq: Math.max(liveProjection?.lastSeq ?? 0, preservedProjection.lastSeq),
+    history: preservedProjection.history,
+    ...(preservedProjection.pendingInterrupt
+      ? { pendingInterrupt: preservedProjection.pendingInterrupt }
+      : {}),
+    ...(liveProjection?.currentRuntimeStatus
+      ? { currentRuntimeStatus: liveProjection.currentRuntimeStatus }
+      : preservedProjection.currentRuntimeStatus
+        ? { currentRuntimeStatus: preservedProjection.currentRuntimeStatus }
+        : {}),
+    summary: responseSession,
+  };
+}
+
 export function applyClaimedHistorySessionState(
   current: LifecycleState,
   responseSession: SessionSummary,
@@ -152,10 +175,14 @@ export function applyClaimedHistorySessionState(
   );
   const workspaceVisibilityVersion = current.workspaceVisibilityVersion + 1;
   projections.delete(sessionId);
-  projections.set(responseSession.session.id, {
-    ...preservedProjection,
-    summary: responseSession,
-  });
+  projections.set(
+    responseSession.session.id,
+    mergeClaimedHistoryProjection(
+      responseSession,
+      preservedProjection,
+      projections.get(responseSession.session.id),
+    ),
+  );
   return {
     projections,
     unreadSessionIds: new Set(

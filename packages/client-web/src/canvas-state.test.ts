@@ -9,7 +9,6 @@ import {
   createEmptyCanvasTargets,
   getCanvasVisiblePaneIds,
   hasAnyCanvasPaneTarget,
-  isCanvasStoredTargetClaimPending,
   normalizeRememberedCanvasState,
   readRememberedCanvasState,
   rememberCanvasState,
@@ -362,31 +361,6 @@ test("canvas claim resolution does not rebind to an explicit read-only history p
   );
 
   assert.equal(resolved, null);
-});
-
-test("canvas stored target claim detection matches only the claimed provider session", () => {
-  const target: CanvasPaneTarget = { kind: "stored", ref: ref("codex", "provider-1") };
-
-  assert.equal(
-    isCanvasStoredTargetClaimPending(target, [
-      { kind: "claim_history", provider: "codex", providerSessionId: "provider-1" },
-    ]),
-    true,
-  );
-  assert.equal(
-    isCanvasStoredTargetClaimPending(target, [
-      { kind: "history", provider: "codex", providerSessionId: "provider-1" },
-      { kind: "claim_history", provider: "opencode", providerSessionId: "provider-1" },
-      { kind: "claim_history", provider: "codex", providerSessionId: "provider-2" },
-    ]),
-    false,
-  );
-  assert.equal(
-    isCanvasStoredTargetClaimPending({ kind: "session", sessionId: "history-1" }, [
-      { kind: "claim_history", provider: "codex", providerSessionId: "provider-1" },
-    ]),
-    false,
-  );
 });
 
 test("stopping a canvas session converts its pane target to stored history", () => {

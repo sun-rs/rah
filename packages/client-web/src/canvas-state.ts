@@ -1,7 +1,6 @@
 import type { StoredSessionRef } from "@rah/runtime-protocol";
 import { isReadOnlyReplay } from "./session-capabilities";
 import type { CanvasLayout } from "./components/workbench/canvas/CanvasWorkbench";
-import type { PendingSessionTransition } from "./session-transition-contract";
 import type { SessionProjection } from "./types";
 
 export type CanvasPaneId = "canvas-1" | "canvas-2" | "canvas-3" | "canvas-4";
@@ -263,21 +262,6 @@ export function resolveCanvasClaimedSessionId(
   }
   const claimedProjection = projections.get(claimedSessionId);
   return claimedProjection && isReadOnlyReplay(claimedProjection.summary) ? null : claimedSessionId;
-}
-
-export function isCanvasStoredTargetClaimPending(
-  target: CanvasPaneTarget,
-  transitions: Array<PendingSessionTransition | null | undefined>,
-): boolean {
-  if (target.kind !== "stored") {
-    return false;
-  }
-  return transitions.some(
-    (transition) =>
-      transition?.kind === "claim_history" &&
-      transition.provider === target.ref.provider &&
-      transition.providerSessionId === target.ref.providerSessionId,
-  );
 }
 
 export function resolveCanvasRunningUniquenessKey(

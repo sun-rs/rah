@@ -20,6 +20,7 @@ import {
   applyStartedSessionState,
   buildFallbackStoredSessionRef,
   createEmptySessionProjection,
+  mergeClaimedHistoryProjection,
 } from "./session-store-session-lifecycle";
 import {
   createInteractiveAttachRequest,
@@ -481,10 +482,10 @@ export async function claimHistorySessionCommand(
         };
       }
       const existingProjection = next.get(claimedSession.session.id);
-      next.set(claimedSession.session.id, {
-        ...(existingProjection ?? preservedProjection),
-        summary: claimedSession,
-      });
+      next.set(
+        claimedSession.session.id,
+        mergeClaimedHistoryProjection(claimedSession, preservedProjection, existingProjection),
+      );
       pruneReadOnlyReplaysForClaimedProviderSession(next, claimedSession);
       return {
         projections: deps.applyEventsToMap(
@@ -529,7 +530,6 @@ export async function claimHistorySessionCommand(
         kind: "claim_history",
         sessionId,
       },
-      pendingSessionTransition: createPendingStoredSessionTransition(ref, "claim_history"),
       error: null,
     });
     const request: ResumeSessionRequest = {

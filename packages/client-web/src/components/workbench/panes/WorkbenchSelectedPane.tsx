@@ -140,6 +140,13 @@ function shouldRenderInteractionNotice(notice: InlineWorkbenchNotice | null): no
     notice.message !== "Observe only.";
 }
 
+function chatThreadKeyForSession(summary: SessionSummary): string {
+  const providerSessionId = summary.session.providerSessionId?.trim();
+  return providerSessionId
+    ? `${summary.session.provider}:${providerSessionId}`
+    : summary.session.id;
+}
+
 export function WorkbenchSelectedPane(props: {
   selectedSummary: SessionSummary;
   clientId: string;
@@ -262,6 +269,7 @@ export function WorkbenchSelectedPane(props: {
     catalog: props.modelCatalog,
   });
   const contextUsageDisplay = resolveContextUsageDisplay(props.selectedSummary.usage);
+  const chatThreadKey = chatThreadKeyForSession(props.selectedSummary);
   const isCouncilSession = props.selectedSummary.session.origin?.kind === "council";
   const sessionLifecycleStatus = props.selectedIsReadOnlyReplay
     ? "stopped"
@@ -775,7 +783,7 @@ export function WorkbenchSelectedPane(props: {
         </div>
       ) : (
         <ChatThread
-          key={props.selectedSummary.session.id}
+          key={chatThreadKey}
           sessionId={props.selectedSummary.session.id}
           feed={props.selectedProjection?.feed ?? []}
           hideToolCalls={props.hideToolCallsInChat}
