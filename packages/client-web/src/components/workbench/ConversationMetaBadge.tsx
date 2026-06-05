@@ -34,19 +34,15 @@ export function conversationMetaToneClassName(tone: ConversationMetaTone): strin
 }
 
 export const CONVERSATION_META_BADGE_BASE_CLASS =
-  "inline-flex h-5 min-w-0 shrink-0 items-center justify-center gap-1 overflow-hidden rounded-md border text-[10px] font-medium leading-[1.2]";
+  "conversation-meta-badge inline-flex h-[22px] min-w-0 shrink-0 items-center justify-center gap-1 overflow-hidden rounded-md border text-[11px] font-medium leading-none";
 export const CONVERSATION_META_BADGE_PADDING_CLASS = "px-1.5";
 export const CONVERSATION_META_BADGE_TRAILING_SPACE_PADDING_CLASS = "pl-1.5 pr-2.5";
 export const CONVERSATION_META_BADGE_CLASS =
   `${CONVERSATION_META_BADGE_BASE_CLASS} ${CONVERSATION_META_BADGE_PADDING_CLASS}`;
 export const CONVERSATION_META_BADGE_ICON_CLASS =
-  "inline-flex h-3 w-3 shrink-0 items-center justify-center leading-none [&>svg]:block";
+  "conversation-meta-badge-icon inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center leading-none [&>svg]:block";
 export const CONVERSATION_META_BADGE_LABEL_CLASS =
-  "relative -top-[0.75px] block min-w-0 truncate leading-[12px]";
-export const CONVERSATION_META_BADGE_PWA_ICON_CLASS =
-  `${CONVERSATION_META_BADGE_ICON_CLASS} relative top-[0.75px]`;
-export const CONVERSATION_META_BADGE_PWA_LABEL_CLASS =
-  "relative top-[0.75px] block min-w-0 truncate leading-[12px]";
+  "conversation-meta-badge-label block min-w-0 truncate leading-[14px]";
 export const CONVERSATION_STATE_META_BADGE_CLASS = "";
 export const CONVERSATION_STATE_META_BADGE_ICON_CLASS = CONVERSATION_META_BADGE_ICON_CLASS;
 export const CONVERSATION_STATE_META_BADGE_LABEL_CLASS = CONVERSATION_META_BADGE_LABEL_CLASS;

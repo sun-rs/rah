@@ -201,6 +201,25 @@
     overflow-y: hidden;
   }
 
+  .conversation-meta-badge {
+    /* Shared title-badge type scale: keep compact badges on native UI fonts instead of app display fonts. */
+    --conversation-meta-label-optical-y: 0px;
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .conversation-meta-badge {
+      --conversation-meta-label-optical-y: -0.5px;
+    }
+  }
+
+  .conversation-meta-badge-label {
+    line-height: 14px;
+    transform: translateY(var(--conversation-meta-label-optical-y));
+  }
+
   :focus-visible {
     outline: 2px solid var(--ring);
     outline-offset: 2px;

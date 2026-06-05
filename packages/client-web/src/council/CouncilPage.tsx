@@ -54,8 +54,6 @@ import {
 import {
   ConversationHeaderMetaList,
   ConversationMetaBadge,
-  CONVERSATION_META_BADGE_PWA_ICON_CLASS,
-  CONVERSATION_META_BADGE_PWA_LABEL_CLASS,
   CONVERSATION_META_BADGE_TRAILING_SPACE_PADDING_CLASS,
   ConversationStateMetaBadge,
   type ConversationHeaderMetaItem,
@@ -1589,12 +1587,6 @@ export function CouncilPage(props: {
     ? `${selectedCouncil.agents.length} agent${selectedCouncil.agents.length === 1 ? "" : "s"}`
     : null;
   const compactCouncilMeta = isPwaDisplayMode || !isCouncilWide;
-  const councilMetaIconClassName = isPwaDisplayMode
-    ? CONVERSATION_META_BADGE_PWA_ICON_CLASS
-    : undefined;
-  const councilMetaLabelClassName = isPwaDisplayMode
-    ? CONVERSATION_META_BADGE_PWA_LABEL_CLASS
-    : undefined;
   const selectedCouncilHeaderMetaItems: ConversationHeaderMetaItem[] =
     selectedCouncil && selectedCouncilHeaderState && selectedCouncilAgentCountLabel
       ? [
@@ -1603,8 +1595,6 @@ export function CouncilPage(props: {
             node: (
               <ConversationStateMetaBadge
                 state={selectedCouncilHeaderState}
-                {...(councilMetaIconClassName ? { iconClassName: councilMetaIconClassName } : {})}
-                {...(councilMetaLabelClassName ? { labelClassName: councilMetaLabelClassName } : {})}
               />
             ),
           },
@@ -1618,8 +1608,6 @@ export function CouncilPage(props: {
                 icon={<UsersRound size={10} />}
                 label={compactCouncilMeta ? selectedCouncil.agents.length : selectedCouncilAgentCountLabel}
                 paddingClassName={CONVERSATION_META_BADGE_TRAILING_SPACE_PADDING_CLASS}
-                {...(councilMetaIconClassName ? { iconClassName: councilMetaIconClassName } : {})}
-                {...(councilMetaLabelClassName ? { labelClassName: councilMetaLabelClassName } : {})}
               />
             ),
           },

@@ -17,11 +17,10 @@ import {
 } from "./components/workbench/header-button-styles";
 import {
   CONVERSATION_HEADER_META_ORDER,
+  CONVERSATION_META_BADGE_BASE_CLASS,
   CONVERSATION_META_BADGE_ICON_CLASS,
   CONVERSATION_META_BADGE_LABEL_CLASS,
   CONVERSATION_META_BADGE_PADDING_CLASS,
-  CONVERSATION_META_BADGE_PWA_ICON_CLASS,
-  CONVERSATION_META_BADGE_PWA_LABEL_CLASS,
   CONVERSATION_META_BADGE_TRAILING_SPACE_PADDING_CLASS,
   CONVERSATION_STATE_META_BADGE_ICON_CLASS,
   CONVERSATION_STATE_META_BADGE_LABEL_CLASS,
@@ -262,6 +261,7 @@ describe("sidebar layout contract", () => {
     const sessionSource = readSource("./components/workbench/panes/WorkbenchSelectedPane.tsx");
     const councilSource = readSource("./council/CouncilPage.tsx");
     const metaSource = readSource("./components/workbench/ConversationMetaBadge.tsx");
+    const cssSource = readSource("./index.css");
 
     assert.deepEqual(CONVERSATION_HEADER_META_ORDER, ["status", "context", "count", "source"]);
     assert.deepEqual(
@@ -273,14 +273,40 @@ describe("sidebar layout contract", () => {
       ]).map((item) => item.slot),
       ["status", "context", "count", "source"],
     );
+    assert.match(CONVERSATION_META_BADGE_BASE_CLASS, /conversation-meta-badge/);
+    assert.match(CONVERSATION_META_BADGE_BASE_CLASS, /h-\[22px\]/);
+    assert.match(CONVERSATION_META_BADGE_BASE_CLASS, /text-\[11px\]/);
+    assert.match(CONVERSATION_META_BADGE_BASE_CLASS, /leading-none/);
+    assert.match(cssSource, /\.conversation-meta-badge/);
+    assert.doesNotMatch(cssSource, /\.conversation-meta-badge-pwa/);
+    assert.doesNotMatch(cssSource, /--conversation-meta-label-y/);
+    assert.match(cssSource, /--conversation-meta-label-optical-y:\s*0px/);
+    assert.match(
+      cssSource,
+      /@media\s*\(hover:\s*hover\)\s*and\s*\(pointer:\s*fine\)\s*\{[^}]*\.conversation-meta-badge\s*\{[^}]*--conversation-meta-label-optical-y:\s*-0\.5px/s,
+    );
+    assert.match(cssSource, /translateY\(var\(--conversation-meta-label-optical-y\)\)/);
+    assert.match(cssSource, /\.conversation-meta-badge-label/);
+    assert.match(cssSource, /text-size-adjust:\s*100%/);
+    assert.match(
+      cssSource,
+      /\.conversation-meta-badge\s*\{[^}]*font-family:\s*system-ui,\s*-apple-system,\s*BlinkMacSystemFont/s,
+    );
+    assert.doesNotMatch(
+      cssSource,
+      /\.conversation-meta-badge\s*\{[^}]*font-family:\s*var\(--font-sans\)/s,
+    );
     assert.match(CONVERSATION_META_BADGE_ICON_CLASS, /items-center/);
     assert.match(CONVERSATION_META_BADGE_ICON_CLASS, /\[\&>svg\]:block/);
-    assert.match(CONVERSATION_META_BADGE_LABEL_CLASS, /leading-\[12px\]/);
-    assert.match(CONVERSATION_META_BADGE_LABEL_CLASS, /-top-\[0\.75px\]/);
-    assert.doesNotMatch(CONVERSATION_META_BADGE_LABEL_CLASS, /-top-px/);
-    assert.match(CONVERSATION_META_BADGE_PWA_ICON_CLASS, /top-\[0\.75px\]/);
-    assert.match(CONVERSATION_META_BADGE_PWA_LABEL_CLASS, /top-\[0\.75px\]/);
-    assert.doesNotMatch(CONVERSATION_META_BADGE_PWA_LABEL_CLASS, /-top/);
+    assert.match(CONVERSATION_META_BADGE_ICON_CLASS, /h-3\.5/);
+    assert.match(CONVERSATION_META_BADGE_ICON_CLASS, /w-3\.5/);
+    assert.doesNotMatch(CONVERSATION_META_BADGE_ICON_CLASS, /\btop-/);
+    assert.doesNotMatch(CONVERSATION_META_BADGE_ICON_CLASS, /-top-/);
+    assert.match(CONVERSATION_META_BADGE_LABEL_CLASS, /conversation-meta-badge-label/);
+    assert.match(CONVERSATION_META_BADGE_LABEL_CLASS, /block/);
+    assert.match(CONVERSATION_META_BADGE_LABEL_CLASS, /leading-\[14px\]/);
+    assert.doesNotMatch(CONVERSATION_META_BADGE_LABEL_CLASS, /\btop-/);
+    assert.doesNotMatch(CONVERSATION_META_BADGE_LABEL_CLASS, /-top-/);
     assert.equal(CONVERSATION_META_BADGE_PADDING_CLASS, "px-1.5");
     assert.equal(CONVERSATION_META_BADGE_TRAILING_SPACE_PADDING_CLASS, "pl-1.5 pr-2.5");
     assert.match(
@@ -298,15 +324,15 @@ describe("sidebar layout contract", () => {
     assert.doesNotMatch(CONVERSATION_STATE_META_BADGE_LABEL_CLASS, /text-center/);
     assert.match(sessionSource, /ConversationHeaderMetaList/);
     assert.match(sessionSource, /CONVERSATION_META_BADGE_PADDING_CLASS/);
-    assert.match(sessionSource, /CONVERSATION_META_BADGE_PWA_ICON_CLASS/);
-    assert.match(sessionSource, /CONVERSATION_META_BADGE_PWA_LABEL_CLASS/);
+    assert.doesNotMatch(sessionSource, /CONVERSATION_META_BADGE_PWA_CLASS/);
+    assert.doesNotMatch(sessionSource, /sessionMetaBadgeClassName/);
     assert.match(
       sessionSource,
       /compactSessionMeta\s+\?\s+CONVERSATION_META_BADGE_PADDING_CLASS\s+:\s+CONVERSATION_META_BADGE_TRAILING_SPACE_PADDING_CLASS/,
     );
     assert.match(councilSource, /ConversationHeaderMetaList/);
-    assert.match(councilSource, /CONVERSATION_META_BADGE_PWA_ICON_CLASS/);
-    assert.match(councilSource, /CONVERSATION_META_BADGE_PWA_LABEL_CLASS/);
+    assert.doesNotMatch(councilSource, /CONVERSATION_META_BADGE_PWA_CLASS/);
+    assert.doesNotMatch(councilSource, /councilMetaBadgeClassName/);
     assert.match(councilSource, /CONVERSATION_META_BADGE_TRAILING_SPACE_PADDING_CLASS/);
     assert.match(councilSource, /const compactCouncilMeta = isPwaDisplayMode \|\| !isCouncilWide;/);
     assert.match(councilSource, /icon=\{<UsersRound size=\{10\} \/>\}/);

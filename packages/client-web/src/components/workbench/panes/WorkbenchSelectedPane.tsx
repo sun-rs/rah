@@ -39,8 +39,6 @@ import {
   ConversationHeaderMetaList,
   ConversationMetaBadge,
   CONVERSATION_META_BADGE_PADDING_CLASS,
-  CONVERSATION_META_BADGE_PWA_ICON_CLASS,
-  CONVERSATION_META_BADGE_PWA_LABEL_CLASS,
   CONVERSATION_META_BADGE_TRAILING_SPACE_PADDING_CLASS,
   ConversationStateMetaBadge,
   type ConversationHeaderMetaItem,
@@ -266,22 +264,10 @@ export function WorkbenchSelectedPane(props: {
     status: sessionLifecycleStatus,
     phase: sessionPhase,
   });
-  const sessionMetaIconClassName = isPwaDisplayMode
-    ? CONVERSATION_META_BADGE_PWA_ICON_CLASS
-    : undefined;
-  const sessionMetaLabelClassName = isPwaDisplayMode
-    ? CONVERSATION_META_BADGE_PWA_LABEL_CLASS
-    : undefined;
   const sessionHeaderMetaItems: ConversationHeaderMetaItem[] = [
     {
       slot: "status",
-      node: (
-        <ConversationStateMetaBadge
-          state={sessionHeaderState}
-          {...(sessionMetaIconClassName ? { iconClassName: sessionMetaIconClassName } : {})}
-          {...(sessionMetaLabelClassName ? { labelClassName: sessionMetaLabelClassName } : {})}
-        />
-      ),
+      node: <ConversationStateMetaBadge state={sessionHeaderState} />,
     },
   ];
   if (contextUsageDisplay) {
@@ -297,7 +283,6 @@ export function WorkbenchSelectedPane(props: {
             tone="context"
             title={contextUsageDisplay.tooltip}
             label={compactSessionMeta ? contextUsageDisplay.compactLabel : contextUsageDisplay.label}
-            {...(sessionMetaLabelClassName ? { labelClassName: sessionMetaLabelClassName } : {})}
           />
           <span
             role="tooltip"
@@ -324,8 +309,6 @@ export function WorkbenchSelectedPane(props: {
               ? CONVERSATION_META_BADGE_PADDING_CLASS
               : CONVERSATION_META_BADGE_TRAILING_SPACE_PADDING_CLASS
           }
-          {...(sessionMetaIconClassName ? { iconClassName: sessionMetaIconClassName } : {})}
-          {...(sessionMetaLabelClassName ? { labelClassName: sessionMetaLabelClassName } : {})}
         />
       ),
     });
