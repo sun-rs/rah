@@ -46,6 +46,7 @@ packages/
 - 开发前端：`http://127.0.0.1:43112/`
 - daemon 默认端口：`43111`
 - daemon 当前有意监听 `0.0.0.0`，用于支持手机/平板在同一局域网访问；是否能访问还取决于宿主机防火墙和网络环境。
+- 离开局域网后的推荐访问方式是 Tailscale Serve / MagicDNS；方案边界和 Surge 共存经验见 [远程访问：Tailscale、Cloudflare 与 Surge 共存](./remote-access-tailscale-cloudflare.zh-CN.md)。
 
 ## 3. Runtime 分层
 
