@@ -1798,21 +1798,10 @@ export function App() {
           ) : workbenchMode === "canvas" ? (
             <CanvasWorkbench
               panes={visibleCanvasPaneIds.map((paneId, index) => {
-                const projection = resolveCanvasProjection(paneId);
-                const council = resolveCanvasCouncil(paneId);
                 const target = canvasPaneTargets[paneId];
-                const openingTransition = canvasOpeningTransitionForTarget(
-                  target,
-                  pendingSessionAction,
-                  pendingSessionTransition,
-                ) ?? canvasPaneOpeningTransitions[paneId] ?? null;
                 return {
                   id: paneId,
-                  label:
-                    projection?.summary.session.title ??
-                    council?.title ??
-                    openingTransition?.title ??
-                    `Pane ${index + 1}`,
+                  label: `Pane ${index + 1}`,
                   active: paneId === activeCanvasPaneId,
                   clearable: target.kind !== "empty",
                 };
