@@ -395,6 +395,7 @@ export function CouncilPage(props: {
   const [councils, setCouncils] = useState<CouncilSnapshot[]>(() => [
     ...(props.initialCouncils ?? []),
   ]);
+  const councilsRef = useRef<CouncilSnapshot[]>([...(props.initialCouncils ?? [])]);
   const [selectedCouncilIdState, setSelectedCouncilIdState] = useState<string | null>(
     props.selectedCouncilId ?? null,
   );
@@ -480,6 +481,7 @@ export function CouncilPage(props: {
   }, [props.selectedCouncilId]);
 
   useEffect(() => {
+    councilsRef.current = councils;
     props.onCouncilsChange?.(councils);
   }, [props.onCouncilsChange, councils]);
 
@@ -758,21 +760,26 @@ export function CouncilPage(props: {
   }, [selectedCouncil?.id, selectedCouncil?.messages.length]);
 
   const refreshCouncils = async (
-    options?: { silent?: boolean; allowRunningDefault?: boolean },
+    options?: { silent?: boolean; allowRunningDefault?: boolean; scope?: "active" | "all" },
   ): Promise<CouncilSnapshot[]> => {
+    const scope = options?.scope ?? "active";
     if (!options?.silent) {
       setCouncilsRefreshing(true);
     }
     setError(null);
     try {
-      const response = await api.listCouncils();
-      setCouncils((current) => mergeCouncilLists(current, response.councils));
+      const response = await api.listCouncils({ scope });
+      const nextCouncils = mergeCouncilLists(councilsRef.current, response.councils, {
+        preserveMissing: scope === "active",
+      });
+      councilsRef.current = nextCouncils;
+      setCouncils(nextCouncils);
       setSelectedCouncilId((current) => {
-        return reconcileCouncilSelection(current, response.councils, {
+        return reconcileCouncilSelection(current, nextCouncils, {
           allowRunningDefault: options?.allowRunningDefault,
         });
       });
-      return response.councils;
+      return nextCouncils;
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
       return [];
@@ -786,6 +793,12 @@ export function CouncilPage(props: {
   useEffect(() => {
     void refreshCouncils({ allowRunningDefault: true });
   }, []);
+
+  useEffect(() => {
+    if (historyDialogOpen) {
+      void refreshCouncils({ scope: "all" });
+    }
+  }, [historyDialogOpen]);
 
   useEffect(() => {
     if (!selectedTerminalAgentId) {
@@ -846,10 +859,14 @@ export function CouncilPage(props: {
     };
 
     const refreshAfterSocketLoss = () => {
-      void api.listCouncils()
+      void api.listCouncils({ scope: "active" })
         .then((response) => {
           if (cancelled) return;
-          setCouncils((current) => mergeCouncilLists(current, response.councils));
+          const nextCouncils = mergeCouncilLists(councilsRef.current, response.councils, {
+            preserveMissing: true,
+          });
+          councilsRef.current = nextCouncils;
+          setCouncils(nextCouncils);
         })
         .catch(() => {
           // The normal 5s polling loop owns user-visible Council refresh errors.
@@ -932,13 +949,17 @@ export function CouncilPage(props: {
   useEffect(() => {
     let cancelled = false;
     const intervalId = window.setInterval(() => {
-      void api.listCouncils()
+      void api.listCouncils({ scope: "active" })
         .then((response) => {
           if (cancelled) return;
-          setCouncils((current) => mergeCouncilLists(current, response.councils));
+          const nextCouncils = mergeCouncilLists(councilsRef.current, response.councils, {
+            preserveMissing: true,
+          });
+          councilsRef.current = nextCouncils;
+          setCouncils(nextCouncils);
           setError(null);
           setSelectedCouncilId((current) => {
-            return reconcileCouncilSelection(current, response.councils);
+            return reconcileCouncilSelection(current, nextCouncils);
           });
         })
         .catch((caught) => {
@@ -1058,7 +1079,7 @@ export function CouncilPage(props: {
     });
     setSelectedCouncilId(council.id);
     setCouncilSidebarOpen(false);
-    void refreshCouncils({ silent: true });
+    void refreshCouncils({ silent: true, scope: "active" });
   };
 
   const sendMessage = async () => {
@@ -1139,7 +1160,7 @@ export function CouncilPage(props: {
       await api.stopCouncil(selectedCouncil.id);
       setStopConfirmOpen(false);
       setSelectedTerminalAgentId(null);
-      const nextCouncils = await refreshCouncils();
+      const nextCouncils = await refreshCouncils({ scope: "active" });
       setSelectedCouncilId(defaultRunningCouncilId(nextCouncils));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -1208,7 +1229,7 @@ export function CouncilPage(props: {
     try {
       await api.deleteCouncil(councilId);
       setPendingDeleteHistoryCouncil(null);
-      await refreshCouncils();
+      await refreshCouncils({ scope: "all" });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -1288,7 +1309,7 @@ export function CouncilPage(props: {
           if (!response.terminalId) {
             setError(response.screen || "This council agent terminal is not running anymore.");
             setSelectedTerminalAgentId((current) => current === agent.id ? null : current);
-            void refreshCouncils();
+            void refreshCouncils({ scope: "active" });
           }
         })
         .catch((caught) => {
@@ -2374,7 +2395,7 @@ export function CouncilPage(props: {
               <div className="flex shrink-0 items-center gap-1">
                 <button
                   type="button"
-                  onClick={() => void refreshCouncils()}
+                  onClick={() => void refreshCouncils({ scope: "all" })}
                   disabled={councilsRefreshing}
                   className="icon-click-feedback inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] disabled:opacity-40"
                   aria-label="Refresh Councils"

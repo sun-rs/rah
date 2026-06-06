@@ -12,7 +12,11 @@ import { SegmentedButton, SegmentedButtonLabel, SegmentedControl } from "./Segme
 import { CouncilsBrowser } from "../council/CouncilsBrowser";
 import { runningSessionActivityAt } from "../session-conversation-activity";
 import { usePwaDisplayMode } from "../hooks/usePwaDisplayMode";
-import { shouldLoadAllStoredSessionsForDialog, type ChatTab } from "../session-history-dialog-model";
+import {
+  shouldLoadAllStoredSessionsForDialog,
+  shouldLoadCouncilsForDialog,
+  type ChatTab,
+} from "../session-history-dialog-model";
 import {
   dedupeStoredSessionsByIdentity,
   filterStoppedRecentSessions,
@@ -487,6 +491,26 @@ export function SessionHistoryDialog(props: {
       void props.onLoadStoredSessions?.();
     }
   }, [open, tab, props.onLoadStoredSessions]);
+
+  useEffect(() => {
+    if (!shouldLoadCouncilsForDialog(open, tab) || !props.onRefreshCouncils) {
+      return;
+    }
+    let cancelled = false;
+    setCouncilRefreshPending(true);
+    void Promise.resolve(props.onRefreshCouncils())
+      .catch(() => {
+        // The parent page owns visible Council loading errors.
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setCouncilRefreshPending(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, tab, props.onRefreshCouncils]);
 
   const groups = useMemo(
     () =>

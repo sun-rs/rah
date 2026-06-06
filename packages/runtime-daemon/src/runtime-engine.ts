@@ -561,7 +561,7 @@ export class RuntimeEngine {
     };
   }
 
-  listCouncils(options?: { messageLimit?: number }): ListCouncilsResponse {
+  listCouncils(options?: { messageLimit?: number; scope?: "active" | "all" }): ListCouncilsResponse {
     return this.council.listCouncils(options);
   }
 

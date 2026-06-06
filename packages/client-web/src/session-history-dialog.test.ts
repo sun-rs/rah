@@ -14,9 +14,12 @@ import {
   reconcileCouncilSelection,
   splitCouncils,
 } from "./council/CouncilsBrowser";
-import { mergeCouncilSnapshot } from "./council/council-message-window";
+import { mergeCouncilLists, mergeCouncilSnapshot } from "./council/council-message-window";
 import { chooseChatListSubtitle } from "./chat-list-display";
-import { shouldLoadAllStoredSessionsForDialog } from "./session-history-dialog-model";
+import {
+  shouldLoadAllStoredSessionsForDialog,
+  shouldLoadCouncilsForDialog,
+} from "./session-history-dialog-model";
 
 function storedSession(overrides: Partial<StoredSessionRef> & Pick<StoredSessionRef, "provider" | "providerSessionId">): StoredSessionRef {
   return {
@@ -253,6 +256,39 @@ test("Chats dialog only loads the full history catalog from the All tab", () => 
   assert.equal(shouldLoadAllStoredSessionsForDialog(true, "active"), false);
   assert.equal(shouldLoadAllStoredSessionsForDialog(true, "council"), false);
   assert.equal(shouldLoadAllStoredSessionsForDialog(true, "all"), true);
+});
+
+test("Chats dialog only loads Council catalog from the Council tab", () => {
+  assert.equal(shouldLoadCouncilsForDialog(false, "council"), false);
+  assert.equal(shouldLoadCouncilsForDialog(true, "active"), false);
+  assert.equal(shouldLoadCouncilsForDialog(true, "all"), false);
+  assert.equal(shouldLoadCouncilsForDialog(true, "council"), true);
+});
+
+test("active Council refresh preserves already loaded history Councils", () => {
+  const active = council({
+    id: "running-council",
+    title: "Running council",
+    workspace: "/Users/sun/Code/rah",
+    status: "running",
+    updatedAt: "2026-05-01T10:10:00.000Z",
+  });
+  const history = council({
+    id: "stopped-council",
+    title: "Stopped council",
+    workspace: "/Users/sun/Code/rah",
+    status: "stopped",
+    updatedAt: "2026-05-01T09:10:00.000Z",
+  });
+
+  assert.deepEqual(
+    mergeCouncilLists([history], [active], { preserveMissing: true }).map((entry) => entry.id),
+    ["running-council", "stopped-council"],
+  );
+  assert.deepEqual(
+    mergeCouncilLists([history], [active]).map((entry) => entry.id),
+    ["running-council"],
+  );
 });
 
 test("splits councils for the Chats council tab", () => {

@@ -19,7 +19,6 @@ import { CanvasSessionPane } from "./components/workbench/canvas/CanvasSessionPa
 import { CanvasWorkbench, type CanvasLayout } from "./components/workbench/canvas/CanvasWorkbench";
 import { CouncilPage } from "./council/CouncilPage";
 import { COUNCIL_ACCENT_ICON_CLASSNAME } from "./council/council-theme";
-import { defaultRunningCouncilId } from "./council/CouncilsBrowser";
 import { mergeCouncilLists, mergeCouncilSnapshot } from "./council/council-message-window";
 import { NewCouncilDialog } from "./council/NewCouncilDialog";
 import { WorkbenchEmptyPane } from "./components/workbench/panes/WorkbenchEmptyPane";
@@ -548,25 +547,40 @@ export function App() {
     canvasRatios,
   ]);
 
-  const refreshCouncils = useCallback(async () => {
+  const refreshCouncils = useCallback(async (scope: "active" | "all" = "all") => {
     try {
-      const response = await api.listCouncils();
-      setCouncils((current) => mergeCouncilLists(current, response.councils));
+      const response = await api.listCouncils({ scope });
+      setCouncils((current) =>
+        mergeCouncilLists(current, response.councils, {
+          preserveMissing: scope === "active",
+        }),
+      );
       setSelectedCouncilId((current) => {
+        if (scope === "active") {
+          return current;
+        }
         if (!current || response.councils.some((council) => council.id === current)) {
           return current;
         }
         return null;
       });
+      return response.councils;
     } catch {
       // The full Council page owns user-visible council loading errors.
+      return [];
     }
   }, []);
+  const refreshAllCouncils = useCallback(async () => {
+    await refreshCouncils("all");
+  }, [refreshCouncils]);
+  const refreshActiveCouncils = useCallback(async () => {
+    await refreshCouncils("active");
+  }, [refreshCouncils]);
 
   const removeCouncilFromChats = useCallback(async (councilId: string) => {
     await api.deleteCouncil(councilId);
-    await refreshCouncils();
-  }, [refreshCouncils]);
+    await refreshAllCouncils();
+  }, [refreshAllCouncils]);
 
   const renameCouncilFromChats = useCallback(async (councilId: string, title: string) => {
     const response = await api.renameCouncil(councilId, { title });
@@ -599,16 +613,8 @@ export function App() {
     setRightSidebarOpen(false);
     setRightOpen(false);
     setLeftOpen(false);
-    void refreshCouncils();
-  }, [refreshCouncils, setSelectedSessionId, setWorkspaceDir]);
-
-  useEffect(() => {
-    void refreshCouncils();
-    const timer = window.setInterval(() => {
-      void refreshCouncils();
-    }, 5_000);
-    return () => window.clearInterval(timer);
-  }, [refreshCouncils]);
+    void refreshActiveCouncils();
+  }, [refreshActiveCouncils, setSelectedSessionId, setWorkspaceDir]);
 
   useEffect(() => {
     const preloadSettingsDialog = window.setTimeout(() => {
@@ -1544,7 +1550,7 @@ export function App() {
             hideCouncilMode();
             return;
           }
-          setSelectedCouncilId(defaultRunningCouncilId(councils));
+          setSelectedCouncilId(null);
           setWorkbenchMode("council");
           setRightSidebarOpen(false);
           setRightOpen(false);
@@ -1573,7 +1579,7 @@ export function App() {
         onActivateRunning={handleActivateRunningSession}
         onActivateCouncil={handleActivateCouncil}
         onLoadStoredSessions={loadStoredSessionsCatalog}
-        onRefreshCouncils={refreshCouncils}
+        onRefreshCouncils={refreshAllCouncils}
         onRenameCouncil={(council) => setRenameDialogCouncilId(council.id)}
         onRemoveCouncil={removeCouncilFromChats}
         onRemoveHistorySession={(session) => void removeHistorySessionAndClearCanvasTargets(session)}
@@ -2129,7 +2135,7 @@ export function App() {
                           onActivateRunning={(sessionId) => setCanvasPaneSession(typedPaneId, sessionId)}
                           onActivateCouncil={(councilId) => setCanvasPaneCouncil(typedPaneId, councilId)}
                           onLoadStoredSessions={loadStoredSessionsCatalog}
-                          onRefreshCouncils={refreshCouncils}
+                          onRefreshCouncils={refreshAllCouncils}
                           onRenameCouncil={(council) => setRenameDialogCouncilId(council.id)}
                           onRemoveCouncil={removeCouncilFromChats}
                           onRemoveSession={(session) =>

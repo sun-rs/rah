@@ -33,6 +33,7 @@ type CouncilProvider = CouncilSnapshot["agents"][number]["provider"];
 type CouncilBootstrapPromptWriteResult = "sent" | "skipped";
 type CouncilListOptions = {
   messageLimit?: number;
+  scope?: "active" | "all";
 };
 
 export type CouncilRuntimeOptions = {
@@ -84,13 +85,17 @@ export class CouncilRuntime {
   }
 
   listCouncils(options: CouncilListOptions = {}): ListCouncilsResponse {
+    const councils = this.store
+      .listCouncils({
+        messageLimit: options.messageLimit ?? COUNCIL_CLIENT_MESSAGE_WINDOW_LIMIT,
+        messageFilter: isFrontendVisibleCouncilMessage,
+      })
+      .map((council) => this.projectRuntimeCouncilState(council));
+
     return {
-      councils: this.store
-        .listCouncils({
-          messageLimit: options.messageLimit ?? COUNCIL_CLIENT_MESSAGE_WINDOW_LIMIT,
-          messageFilter: isFrontendVisibleCouncilMessage,
-        })
-        .map((council) => this.projectRuntimeCouncilState(council)),
+      councils: options.scope === "active"
+        ? councils.filter((council) => council.status !== "stopped")
+        : councils,
     };
   }
 

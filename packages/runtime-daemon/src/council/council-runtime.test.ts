@@ -311,6 +311,7 @@ test("CouncilRuntime launches managed agent sessions with provider launch specs 
     await runtime.stopCouncil(response.council.id);
     assert.deepEqual(managed.closed, ["managed:codex:1", "managed:claude:2", "managed:gemini:3", "managed:opencode:4"]);
     assert.equal(runtime.listCouncils().councils[0]!.status, "stopped");
+    assert.equal(runtime.listCouncils({ scope: "active" }).councils.length, 0);
   } finally {
     if (previousCodex === undefined) delete process.env.RAH_CODEX_BINARY;
     else process.env.RAH_CODEX_BINARY = previousCodex;

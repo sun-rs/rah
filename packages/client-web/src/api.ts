@@ -840,8 +840,15 @@ export async function readSessionHistoryItemDetail(
   );
 }
 
-export async function listCouncils(): Promise<ListCouncilsResponse> {
-  return requestJson<ListCouncilsResponse>("/api/council");
+export async function listCouncils(
+  options?: { scope?: "active" | "all" },
+): Promise<ListCouncilsResponse> {
+  const query = new URLSearchParams();
+  if (options?.scope) {
+    query.set("scope", options.scope);
+  }
+  const suffix = query.size > 0 ? `?${query.toString()}` : "";
+  return requestJson<ListCouncilsResponse>(`/api/council${suffix}`);
 }
 
 export async function readCouncilMessages(

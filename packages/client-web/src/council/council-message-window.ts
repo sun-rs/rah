@@ -63,9 +63,18 @@ export function mergeCouncilSnapshot(
 export function mergeCouncilLists(
   current: readonly CouncilSnapshot[],
   incoming: readonly CouncilSnapshot[],
+  options?: { preserveMissing?: boolean },
 ): CouncilSnapshot[] {
   const currentById = new Map(current.map((council) => [council.id, council]));
-  return incoming.map((council) => mergeCouncilSnapshot(currentById.get(council.id), council));
+  const merged = incoming.map((council) => mergeCouncilSnapshot(currentById.get(council.id), council));
+  if (!options?.preserveMissing) {
+    return merged;
+  }
+  const incomingIds = new Set(incoming.map((council) => council.id));
+  return [
+    ...merged,
+    ...current.filter((council) => !incomingIds.has(council.id)),
+  ];
 }
 
 export function prependCouncilMessagesPage(

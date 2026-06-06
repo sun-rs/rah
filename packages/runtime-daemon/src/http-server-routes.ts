@@ -76,6 +76,10 @@ function parseStoredSessionsModeFromRequest(req: IncomingMessage): "all" | "rece
   return parseStoredSessionsModeFromUrl(new URL(req.url ?? "", "http://127.0.0.1"));
 }
 
+function parseCouncilListScopeFromUrl(url: URL): "active" | "all" {
+  return url.searchParams.get("scope") === "active" ? "active" : "all";
+}
+
 export function createPostRoutes(
   engine: RuntimeEngine,
 ): Array<{ pattern: RegExp; handler: JsonHandler }> {
@@ -604,7 +608,10 @@ export async function handleHttpRequest(args: {
     }
 
     if (req.method === "GET" && pathname === "/api/council") {
-      writeJson(req, res, 200, engine.listCouncils({ messageLimit: 0 }));
+      writeJson(req, res, 200, engine.listCouncils({
+        messageLimit: 0,
+        scope: parseCouncilListScopeFromUrl(url),
+      }));
       return;
     }
 
