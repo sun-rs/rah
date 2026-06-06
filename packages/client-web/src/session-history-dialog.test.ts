@@ -15,6 +15,7 @@ import {
   splitCouncils,
 } from "./council/CouncilsBrowser";
 import { chooseChatListSubtitle } from "./chat-list-display";
+import { shouldLoadAllStoredSessionsForDialog } from "./session-history-dialog-model";
 
 function storedSession(overrides: Partial<StoredSessionRef> & Pick<StoredSessionRef, "provider" | "providerSessionId">): StoredSessionRef {
   return {
@@ -244,6 +245,13 @@ test("recent chats are stopped and omit current running identities", () => {
     ).map((session) => session.providerSessionId),
     ["recent-1"],
   );
+});
+
+test("Chats dialog only loads the full history catalog from the All tab", () => {
+  assert.equal(shouldLoadAllStoredSessionsForDialog(false, "all"), false);
+  assert.equal(shouldLoadAllStoredSessionsForDialog(true, "active"), false);
+  assert.equal(shouldLoadAllStoredSessionsForDialog(true, "council"), false);
+  assert.equal(shouldLoadAllStoredSessionsForDialog(true, "all"), true);
 });
 
 test("splits councils for the Chats council tab", () => {

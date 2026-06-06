@@ -12,6 +12,7 @@ import { SegmentedButton, SegmentedButtonLabel, SegmentedControl } from "./Segme
 import { CouncilsBrowser } from "../council/CouncilsBrowser";
 import { runningSessionActivityAt } from "../session-conversation-activity";
 import { usePwaDisplayMode } from "../hooks/usePwaDisplayMode";
+import { shouldLoadAllStoredSessionsForDialog, type ChatTab } from "../session-history-dialog-model";
 import {
   dedupeStoredSessionsByIdentity,
   filterStoppedRecentSessions,
@@ -23,7 +24,6 @@ const DEFAULT_GROUP_ITEM_LIMIT = 10;
 const GROUP_ITEM_INCREMENT = 20;
 const HISTORY_PROVIDER_OPTIONS = ["codex", "claude", "gemini", "opencode"] as const;
 
-type ChatTab = "active" | "all" | "council";
 type HistoryProviderFilter = (typeof HISTORY_PROVIDER_OPTIONS)[number];
 
 function isHistoryProviderFilter(provider: StoredSessionRef["provider"]): provider is HistoryProviderFilter {
@@ -479,9 +479,14 @@ export function SessionHistoryDialog(props: {
   useEffect(() => {
     if (open) {
       setTab(props.defaultTab ?? "active");
+    }
+  }, [open, props.defaultTab]);
+
+  useEffect(() => {
+    if (shouldLoadAllStoredSessionsForDialog(open, tab)) {
       void props.onLoadStoredSessions?.();
     }
-  }, [open, props.defaultTab, props.onLoadStoredSessions]);
+  }, [open, tab, props.onLoadStoredSessions]);
 
   const groups = useMemo(
     () =>
