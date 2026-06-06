@@ -1,6 +1,6 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import type { ToolCall } from "@rah/runtime-protocol";
+import type { ManagedSession, ToolCall } from "@rah/runtime-protocol";
 import { EventBus } from "./event-bus";
 import { PtyHub } from "./pty-hub";
 import { applyProviderActivity } from "./provider-activity";
@@ -21,10 +21,14 @@ function createServices() {
   };
 }
 
-function createSession(services: ReturnType<typeof createServices>) {
+function createSession(
+  services: ReturnType<typeof createServices>,
+  options: { liveBackend?: ManagedSession["liveBackend"] } = {},
+) {
   return services.sessionStore.createManagedSession({
     provider: "codex",
     launchSource: "web",
+    ...(options.liveBackend !== undefined ? { liveBackend: options.liveBackend } : {}),
     cwd: "/workspace/demo",
     rootDir: "/workspace/demo",
     title: "demo",
@@ -533,7 +537,7 @@ describe("applyProviderActivity", () => {
 
   test("mirrors terminal output into both PTY replay and canonical terminal events", () => {
     const services = createServices();
-    const sessionId = createSession(services);
+    const sessionId = createSession(services, { liveBackend: "tui_mux" });
     const frames: unknown[] = [];
     const unsubscribe = services.ptyHub.subscribe(sessionId, (frame) => {
       frames.push(frame);
@@ -585,6 +589,47 @@ describe("applyProviderActivity", () => {
       "terminal.output",
       "terminal.exited",
     ]);
+  });
+
+  test("does not mirror structured provider terminal output into client-view TUI replay", () => {
+    const services = createServices();
+    const sessionId = createSession(services, { liveBackend: "native_local_server" });
+    const frames: unknown[] = [];
+    const unsubscribe = services.ptyHub.subscribe(sessionId, (frame) => {
+      frames.push(frame);
+    });
+
+    applyProviderActivity(
+      services,
+      sessionId,
+      { provider: "codex" },
+      {
+        type: "terminal_output",
+        data: "structured command stdout that belongs in chat, not the TUI\r\n",
+      },
+    );
+    applyProviderActivity(
+      services,
+      sessionId,
+      { provider: "codex" },
+      {
+        type: "terminal_exited",
+        exitCode: 0,
+      },
+    );
+    unsubscribe();
+
+    assert.equal(
+      frames.some((frame) => {
+        const type = (frame as { type?: string }).type;
+        return type === "pty.output" || type === "pty.exited";
+      }),
+      false,
+    );
+    assert.deepEqual(
+      services.eventBus.list({ sessionIds: [sessionId] }).map((event) => event.type),
+      ["terminal.output", "terminal.exited"],
+    );
   });
 
   test("warns once when a high-value timeline item is missing identity", () => {

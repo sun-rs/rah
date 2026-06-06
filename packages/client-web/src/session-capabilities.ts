@@ -95,6 +95,13 @@ export function shouldPollSessionHistoryTail(summary: SessionSummary): boolean {
   );
 }
 
+export function shouldRequestInitialTuiReplay(summary: SessionSummary): boolean {
+  if (summary.session.liveBackend !== "native_local_server") {
+    return true;
+  }
+  return summary.session.runtimeDiagnostics?.attachState === "ready";
+}
+
 export function sessionInteractionMode(summary: SessionSummary): SessionInteractionMode {
   if (isReadOnlyReplay(summary)) {
     return "read_only_replay";
