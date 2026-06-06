@@ -222,6 +222,15 @@ test("CouncilStore exposes message metadata, tail windows, and older pages", () 
     assert.equal(older.total, 10);
     assert.equal(older.hasMoreBefore, true);
     assert.equal(older.nextBeforeMessageId, older.messages[0]!.id);
+
+    const [summary] = store.listCouncils({ messageLimit: 0 });
+    assert.equal(summary!.messages.length, 0);
+    assert.equal(summary!.meta?.messageCount, 10);
+    assert.equal(summary!.meta?.firstUserMessage?.text, "first question");
+    assert.equal(summary!.meta?.lastContentMessage?.text, "tail 8");
+    assert.equal(summary!.messageWindow?.total, 10);
+    assert.equal(summary!.messageWindow?.loaded, 0);
+    assert.equal(summary!.messageWindow?.hasMoreBefore, true);
   } finally {
     rmSync(root, { force: true, recursive: true });
   }

@@ -26,13 +26,19 @@ export function mergeCouncilSnapshot(
     return incoming;
   }
 
-  const messages = mergeCouncilMessages(current.messages, incoming.messages);
+  const incomingIsSummaryOnly = incoming.messages.length === 0 && current.messages.length > 0;
+  const messages = incomingIsSummaryOnly
+    ? current.messages
+    : mergeCouncilMessages(current.messages, incoming.messages);
   const currentFirstId = current.messages[0]?.id;
   const incomingFirstId = incoming.messages[0]?.id;
   const preservesOlderWindow =
-    currentFirstId !== undefined &&
-    incomingFirstId !== undefined &&
-    currentFirstId < incomingFirstId;
+    incomingIsSummaryOnly ||
+    (
+      currentFirstId !== undefined &&
+      incomingFirstId !== undefined &&
+      currentFirstId < incomingFirstId
+    );
   const total = incoming.messageWindow?.total ?? incoming.meta?.messageCount ?? messageCount(current);
   const hasMoreBefore = preservesOlderWindow
     ? Boolean(current.messageWindow?.hasMoreBefore)

@@ -561,8 +561,8 @@ export class RuntimeEngine {
     };
   }
 
-  listCouncils(): ListCouncilsResponse {
-    return this.council.listCouncils();
+  listCouncils(options?: { messageLimit?: number }): ListCouncilsResponse {
+    return this.council.listCouncils(options);
   }
 
   readCouncilMessages(

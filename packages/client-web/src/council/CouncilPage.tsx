@@ -448,6 +448,7 @@ export function CouncilPage(props: {
   const councilMenuRef = useRef<HTMLDivElement | null>(null);
   const councilStickToLatestRef = useRef(true);
   const loadingOlderCouncilMessagesRef = useRef(false);
+  const initialCouncilMessageLoadsRef = useRef<Set<string>>(new Set());
   const councilPrependAnchorRef = useRef<{
     councilId: string;
     scrollHeight: number;
@@ -507,6 +508,53 @@ export function CouncilPage(props: {
 
   const selectedCouncil = selectedCouncilId ? councils.find((council) => council.id === selectedCouncilId) ?? null : null;
   const addAgentWorkspace = selectedCouncil?.workspace ?? workspace;
+
+  useEffect(() => {
+    if (!selectedCouncil) {
+      return;
+    }
+    const totalMessages =
+      selectedCouncil.meta?.messageCount ??
+      selectedCouncil.messageWindow?.total ??
+      selectedCouncil.messages.length;
+    if (totalMessages <= 0 || selectedCouncil.messages.length > 0) {
+      return;
+    }
+    if (initialCouncilMessageLoadsRef.current.has(selectedCouncil.id)) {
+      return;
+    }
+
+    let cancelled = false;
+    initialCouncilMessageLoadsRef.current.add(selectedCouncil.id);
+    void api.readCouncilMessages(selectedCouncil.id, { limit: COUNCIL_MESSAGE_PAGE_LIMIT })
+      .then((page) => {
+        if (cancelled) {
+          return;
+        }
+        setCouncils((current) =>
+          current.map((candidate) =>
+            candidate.id === selectedCouncil.id ? prependCouncilMessagesPage(candidate, page) : candidate,
+          ),
+        );
+      })
+      .catch((caught) => {
+        if (!cancelled) {
+          setError(caught instanceof Error ? caught.message : String(caught));
+        }
+      })
+      .finally(() => {
+        initialCouncilMessageLoadsRef.current.delete(selectedCouncil.id);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    selectedCouncil?.id,
+    selectedCouncil?.messages.length,
+    selectedCouncil?.meta?.messageCount,
+    selectedCouncil?.messageWindow?.total,
+  ]);
 
   useEffect(() => {
     if (!councilMenuOpen) {

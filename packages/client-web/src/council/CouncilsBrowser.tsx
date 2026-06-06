@@ -12,9 +12,13 @@ export function isCouncilHistory(council: CouncilSnapshot): boolean {
   return council.status === "stopped";
 }
 
+function councilVisibleMessageCount(council: CouncilSnapshot): number {
+  return council.meta?.messageCount ?? council.messageWindow?.total ?? council.messages.length;
+}
+
 export function defaultRunningCouncilId(councils: readonly CouncilSnapshot[]): string | null {
   const runningCouncils = councils.filter((council) => !isCouncilHistory(council));
-  const runningCouncilsWithMessages = runningCouncils.filter((council) => council.messages.length > 0);
+  const runningCouncilsWithMessages = runningCouncils.filter((council) => councilVisibleMessageCount(council) > 0);
   const candidates = runningCouncilsWithMessages.length > 0 ? runningCouncilsWithMessages : runningCouncils;
   return candidates
     .sort((left, right) => councilActivityMs(right) - councilActivityMs(left))[0]?.id ?? null;

@@ -31,6 +31,9 @@ const DEFAULT_DAEMON_URL = "http://127.0.0.1:43111";
 const COUNCIL_CLIENT_MESSAGE_WINDOW_LIMIT = 100;
 type CouncilProvider = CouncilSnapshot["agents"][number]["provider"];
 type CouncilBootstrapPromptWriteResult = "sent" | "skipped";
+type CouncilListOptions = {
+  messageLimit?: number;
+};
 
 export type CouncilRuntimeOptions = {
   store?: CouncilStore;
@@ -80,11 +83,11 @@ export class CouncilRuntime {
     this.hasSession = options.hasSession;
   }
 
-  listCouncils(): ListCouncilsResponse {
+  listCouncils(options: CouncilListOptions = {}): ListCouncilsResponse {
     return {
       councils: this.store
         .listCouncils({
-          messageLimit: COUNCIL_CLIENT_MESSAGE_WINDOW_LIMIT,
+          messageLimit: options.messageLimit ?? COUNCIL_CLIENT_MESSAGE_WINDOW_LIMIT,
           messageFilter: isFrontendVisibleCouncilMessage,
         })
         .map((council) => this.projectRuntimeCouncilState(council)),

@@ -14,6 +14,7 @@ import {
   reconcileCouncilSelection,
   splitCouncils,
 } from "./council/CouncilsBrowser";
+import { mergeCouncilSnapshot } from "./council/council-message-window";
 import { chooseChatListSubtitle } from "./chat-list-display";
 import { shouldLoadAllStoredSessionsForDialog } from "./session-history-dialog-model";
 
@@ -314,6 +315,98 @@ test("defaults Council entry to the latest running chat with messages", () => {
   ];
 
   assert.equal(defaultRunningCouncilId(councils), "newer-chat-running");
+});
+
+test("defaults Council entry from summary metadata when messages are not hydrated", () => {
+  const councils = [
+    council({
+      id: "blank-running",
+      title: "Blank running",
+      workspace: "/Users/sun/Code/rah",
+      status: "running",
+      updatedAt: "2026-05-01T10:10:00.000Z",
+    }),
+    {
+      ...council({
+        id: "summary-running",
+        title: "Summary running",
+        workspace: "/Users/sun/Code/rah",
+        status: "running",
+        updatedAt: "2026-05-01T10:01:00.000Z",
+      }),
+      meta: {
+        messageCount: 4,
+        lastContentMessage: {
+          id: 4,
+          role: "agent" as const,
+          actorId: "summary-running-agent",
+          text: "latest summary reply",
+          createdAt: "2026-05-01T10:20:00.000Z",
+        },
+      },
+      messageWindow: {
+        total: 4,
+        loaded: 0,
+        hasMoreBefore: true,
+      },
+    },
+  ];
+
+  assert.equal(defaultRunningCouncilId(councils), "summary-running");
+});
+
+test("summary-only Council refresh preserves hydrated messages and older cursor", () => {
+  const hydrated = {
+    ...council({
+      id: "hydrated",
+      title: "Hydrated",
+      workspace: "/Users/sun/Code/rah",
+      status: "running",
+      updatedAt: "2026-05-01T10:00:00.000Z",
+      messages: [
+        {
+          id: 5,
+          councilId: "hydrated",
+          actorId: "user",
+          role: "user" as const,
+          parts: [{ kind: "text" as const, text: "loaded" }],
+          createdAt: "2026-05-01T10:01:00.000Z",
+        },
+      ],
+    }),
+    messageWindow: {
+      total: 8,
+      loaded: 1,
+      hasMoreBefore: true,
+      nextBeforeMessageId: 5,
+    },
+  };
+  const summary = {
+    ...hydrated,
+    messages: [],
+    meta: {
+      messageCount: 9,
+      lastContentMessage: {
+        id: 9,
+        role: "agent" as const,
+        actorId: "hydrated-agent",
+        text: "new summary",
+        createdAt: "2026-05-01T10:02:00.000Z",
+      },
+    },
+    messageWindow: {
+      total: 9,
+      loaded: 0,
+      hasMoreBefore: true,
+    },
+  };
+
+  const merged = mergeCouncilSnapshot(hydrated, summary);
+  assert.equal(merged.messages.length, 1);
+  assert.equal(merged.messageWindow?.total, 9);
+  assert.equal(merged.messageWindow?.loaded, 1);
+  assert.equal(merged.messageWindow?.hasMoreBefore, true);
+  assert.equal(merged.messageWindow?.nextBeforeMessageId, 5);
 });
 
 test("reconciles Council selection without replacing explicit history browsing", () => {

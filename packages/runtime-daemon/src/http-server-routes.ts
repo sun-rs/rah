@@ -604,7 +604,7 @@ export async function handleHttpRequest(args: {
     }
 
     if (req.method === "GET" && pathname === "/api/council") {
-      writeJson(req, res, 200, engine.listCouncils());
+      writeJson(req, res, 200, engine.listCouncils({ messageLimit: 0 }));
       return;
     }
 
