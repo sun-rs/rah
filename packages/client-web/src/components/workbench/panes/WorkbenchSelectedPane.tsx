@@ -59,7 +59,10 @@ import {
   resolveSessionModeControlState,
   type SessionModeChoice,
 } from "../../../session-mode-ui";
-import { isSessionControlLocked } from "../../../session-capabilities";
+import {
+  isSessionControlLocked,
+  shouldRequestInitialTuiReplay,
+} from "../../../session-capabilities";
 import { closeNativeTuiClient } from "../../../api";
 import { usePwaDisplayMode } from "../../../hooks/usePwaDisplayMode";
 import {
@@ -340,6 +343,7 @@ export function WorkbenchSelectedPane(props: {
   const terminalTuiClientActive = nativeTui
     ? !closedTuiTerminalIds.has(nativeTui.terminalId)
     : true;
+  const terminalInitialReplay = shouldRequestInitialTuiReplay(props.selectedSummary);
   const markCurrentTuiOpened = () => {
     if (!nativeTui) {
       return;
@@ -768,6 +772,7 @@ export function WorkbenchSelectedPane(props: {
             tuiClientCloseEnabled
             tuiClientActive={terminalTuiClientActive}
             onTuiClientActiveChange={setTerminalTuiClientActive}
+            initialReplay={terminalInitialReplay}
             scrollback={600}
             replayTailBytes={512 * 1024}
             maxWriteBatchChars={128 * 1024}

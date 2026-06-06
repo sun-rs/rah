@@ -26,6 +26,7 @@ import {
   reconcileTurnLifecycleActivity,
 } from "./timeline-reconciler";
 import { COUNCIL_MCP_TIMELINE_MESSAGE_ID_PREFIX } from "./council/council-mcp-projection";
+import type { StoredSessionState } from "./session-store";
 
 export interface ProviderActivityMeta {
   provider: ManagedSession["provider"];
@@ -33,6 +34,19 @@ export interface ProviderActivityMeta {
   authority?: EventAuthority;
   raw?: unknown;
   ts?: string;
+}
+
+function shouldMirrorProviderTerminalOutputToPty(
+  state: StoredSessionState | undefined,
+): boolean {
+  if (!state) {
+    return true;
+  }
+  const { session } = state;
+  if (session.runtime?.tuiRole === "session_owner") {
+    return true;
+  }
+  return session.liveBackend === "native_tui" || session.liveBackend === "tui_mux";
 }
 
 export type ProviderActivity =
@@ -1275,7 +1289,9 @@ export function applyProviderActivity(
       );
       break;
     case "terminal_output":
-      services.ptyHub.appendOutput(sessionId, activity.data);
+      if (shouldMirrorProviderTerminalOutputToPty(services.sessionStore.getSession(sessionId))) {
+        services.ptyHub.appendOutput(sessionId, activity.data);
+      }
       published.push(
         services.eventBus.publish(
           withRaw(
@@ -1298,7 +1314,9 @@ export function applyProviderActivity(
       );
       break;
     case "terminal_exited":
-      services.ptyHub.emitExit(sessionId, activity.exitCode, activity.signal);
+      if (shouldMirrorProviderTerminalOutputToPty(services.sessionStore.getSession(sessionId))) {
+        services.ptyHub.emitExit(sessionId, activity.exitCode, activity.signal);
+      }
       published.push(
         services.eventBus.publish(
           withRaw(
