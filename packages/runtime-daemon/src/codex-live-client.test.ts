@@ -337,7 +337,7 @@ rl.on('line', (line) => {
     await adapter.shutdown?.();
   });
 
-  test("bridges exec command output into PTY frames for running sessions", async () => {
+  test("keeps Codex exec command output structured without polluting native TUI replay", async () => {
     const serverJs = path.join(tmpDir, "mock-codex-exec-server.js");
     writeFileSync(
       serverJs,
@@ -431,11 +431,21 @@ rl.on('line', (line) => {
       text: "Run a command",
     });
 
-    await waitFor(() =>
-      frames.some((chunk) => chunk.includes("$ echo hello")) &&
-      frames.some((chunk) => chunk.includes("hello")) &&
-      frames.some((chunk) => chunk.includes("[exit 0]")),
-    );
+    await waitFor(() => {
+      const events = services.eventBus.list({ sessionIds: [started.session.session.id] });
+      const output = events
+        .filter((event) => event.type === "terminal.output")
+        .map((event) => event.payload.data)
+        .join("");
+      return (
+        output.includes("$ echo hello") &&
+        output.includes("hello") &&
+        output.includes("[exit 0]") &&
+        events.some((event) => event.type === "tool.call.started") &&
+        events.some((event) => event.type === "tool.call.completed")
+      );
+    });
+    assert.deepEqual(frames, []);
 
     unsubscribe();
     await adapter.shutdown?.();
