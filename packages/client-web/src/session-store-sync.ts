@@ -2,6 +2,13 @@ import type { EventBatch, RahEvent } from "@rah/runtime-protocol";
 import * as api from "./api";
 import { readErrorMessage } from "./session-store-bootstrap";
 import { connectSessionStoreTransport } from "./session-store-transport";
+import {
+  connectedTransportStatus,
+  nextReconnectTransportStatus,
+  offlineTransportStatus,
+  syncingTransportStatus,
+  type TransportStatus,
+} from "./transport-status";
 import type { SessionProjection } from "./types";
 
 let recoverTransportInFlight: Promise<void> | null = null;
@@ -12,6 +19,7 @@ type SessionSyncState = {
   selectedSessionId: string | null;
   workspaceVisibilityVersion: number;
   error: string | null;
+  transportStatus: TransportStatus;
 };
 
 type SessionSyncSetState = (
@@ -181,6 +189,7 @@ export function connectStoreSyncTransport(args: {
               unreadEvents,
             ),
       error: state.error === "Events socket failed" ? null : state.error,
+      transportStatus: connectedTransportStatus(),
     }));
   };
 
@@ -237,11 +246,19 @@ export function connectStoreSyncTransport(args: {
       schedulePendingEventFlush();
     },
     onError: (error) => {
-      args.set({ error: error.message });
+      args.set((state) => ({
+        transportStatus: nextReconnectTransportStatus(state.transportStatus, error.message),
+      }));
     },
     onOpen: () => {
       args.set((state) => ({
         error: state.error === "Events socket failed" ? null : state.error,
+        transportStatus: connectedTransportStatus(),
+      }));
+    },
+    onReconnectScheduled: () => {
+      args.set((state) => ({
+        transportStatus: nextReconnectTransportStatus(state.transportStatus),
       }));
     },
     onReplayGap: (batch) => {
@@ -328,6 +345,10 @@ async function recoverTransportCommandInner(args: {
   listSessions?: typeof api.listSessions;
 }) {
   try {
+    args.set((state) => ({
+      error: state.error === "Events socket failed" ? null : state.error,
+      transportStatus: syncingTransportStatus(),
+    }));
     const workspaceVisibilityVersionAtRequest = args.get().workspaceVisibilityVersion;
     const sessionsResponse = await (args.listSessions ?? api.listSessions)();
     args.set((state) => ({
@@ -335,11 +356,15 @@ async function recoverTransportCommandInner(args: {
         workspaceVisibilityVersionAtRequest,
       }),
       error: null,
+      transportStatus: connectedTransportStatus(),
     }));
     args.restartTransport();
     await args.maybeRestoreLastHistorySelection(sessionsResponse);
   } catch (error) {
-    args.set({ error: readErrorMessage(error) });
+    const message = readErrorMessage(error);
+    args.set((state) => ({
+      transportStatus: offlineTransportStatus(state.transportStatus, message),
+    }));
     throw error;
   }
 }

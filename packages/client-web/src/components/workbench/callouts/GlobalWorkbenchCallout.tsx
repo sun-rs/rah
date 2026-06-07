@@ -1,17 +1,45 @@
+import { useEffect, useState } from "react";
 import type { SessionSummary } from "@rah/runtime-protocol";
 import type { ErrorRecoveryDescriptor } from "../../../error-recovery";
+import { describeTransportStatus, type TransportStatus } from "../../../transport-status";
 import { StatusCallout } from "../../StatusCallout";
+import { RefreshCcw } from "lucide-react";
 
 export function GlobalWorkbenchCallout(props: {
   errorDescriptor: ErrorRecoveryDescriptor | null;
+  transportStatus: TransportStatus;
   selectedSummary: SessionSummary | null;
   onRefresh: () => void;
   onClaimControl: (sessionId: string) => void;
   onDismiss: () => void;
 }) {
-  if (!props.errorDescriptor) {
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (props.transportStatus.phase === "connected") {
+      return;
+    }
+    setNow(Date.now());
+    const interval = window.setInterval(() => {
+      setNow(Date.now());
+    }, 250);
+    return () => window.clearInterval(interval);
+  }, [props.transportStatus]);
+
+  const transportDescriptor = describeTransportStatus(props.transportStatus, now, {
+    selectedSession: Boolean(props.selectedSummary),
+  });
+  const descriptor = props.errorDescriptor ?? transportDescriptor;
+
+  if (!descriptor) {
     return null;
   }
+  const transportIsSyncing =
+    !props.errorDescriptor &&
+    transportDescriptor?.title === "Syncing" &&
+    props.transportStatus.phase !== "connected";
+  const tone = props.errorDescriptor ? "warning" : transportDescriptor?.tone ?? "warning";
+  const secondaryLabel = props.errorDescriptor ? "Dismiss" : transportDescriptor?.secondaryLabel;
 
   return (
     <div
@@ -19,22 +47,31 @@ export function GlobalWorkbenchCallout(props: {
       style={{ bottom: "var(--workbench-callout-anchor, calc(env(safe-area-inset-bottom, 0px) + 9.5rem))" }}
     >
       <StatusCallout
-        tone="warning"
-        title={props.errorDescriptor.title}
-        body={props.errorDescriptor.body}
-        {...(props.errorDescriptor.primaryAction === "refresh"
+        tone={tone}
+        title={descriptor.title}
+        body={descriptor.body}
+        {...(transportIsSyncing
           ? {
-              primaryLabel: props.errorDescriptor.primaryLabel ?? "Refresh sessions",
+              icon: <RefreshCcw size={16} className="animate-spin text-[var(--app-hint)]" />,
+            }
+          : {})}
+        {...(descriptor.primaryAction === "refresh"
+          ? {
+              primaryLabel: descriptor.primaryLabel ?? "Refresh sessions",
               onPrimary: props.onRefresh,
             }
-          : props.errorDescriptor.primaryAction === "claim_control" && props.selectedSummary
+          : descriptor.primaryAction === "claim_control" && props.selectedSummary
             ? {
-                primaryLabel: props.errorDescriptor.primaryLabel ?? "Claim control",
+                primaryLabel: descriptor.primaryLabel ?? "Claim control",
                 onPrimary: () => props.onClaimControl(props.selectedSummary!.session.id),
               }
             : {})}
-        secondaryLabel="Dismiss"
-        onSecondary={props.onDismiss}
+        {...(!transportIsSyncing && secondaryLabel !== undefined
+          ? {
+              secondaryLabel,
+              onSecondary: props.onDismiss,
+            }
+          : {})}
       />
     </div>
   );

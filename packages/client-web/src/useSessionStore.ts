@@ -76,6 +76,10 @@ import {
   restartSessionStoreTransport,
 } from "./session-store-transport";
 import {
+  connectedTransportStatus,
+  type TransportStatus,
+} from "./transport-status";
+import {
   appendVisibleWorkspaceDir,
   hideWorkspace,
   isHiddenWorkspace,
@@ -172,9 +176,11 @@ interface SessionState {
     | null;
   isInitialLoaded: boolean;
   error: string | null;
+  transportStatus: TransportStatus;
 
   init: () => Promise<void>;
   clearError: () => void;
+  clearTransportStatus: () => void;
   refreshWorkbenchState: (options?: RefreshWorkbenchStateOptions) => Promise<void>;
   loadStoredSessionsCatalog: () => Promise<void>;
   recoverTransport: () => Promise<void>;
@@ -571,8 +577,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   pendingSessionAction: null,
   isInitialLoaded: false,
   error: null,
+  transportStatus: connectedTransportStatus(),
 
   clearError: () => set({ error: null }),
+  clearTransportStatus: () => set({ transportStatus: connectedTransportStatus() }),
   recoverTransport: async () => {
     await recoverTransportCommand({
       get: get as never,

@@ -346,7 +346,9 @@ export function App() {
     clientId,
     isInitialLoaded,
     error,
+    transportStatus,
     clearError,
+    clearTransportStatus,
     setWorkspaceDir,
     addWorkspace,
     removeWorkspace,
@@ -393,7 +395,9 @@ export function App() {
       clientId: state.clientId,
       isInitialLoaded: state.isInitialLoaded,
       error: state.error,
+      transportStatus: state.transportStatus,
       clearError: state.clearError,
+      clearTransportStatus: state.clearTransportStatus,
       setWorkspaceDir: state.setWorkspaceDir,
       addWorkspace: state.addWorkspace,
       removeWorkspace: state.removeWorkspace,
@@ -975,6 +979,8 @@ export function App() {
   const interactionNotice = noticeState.interactionNotice;
   const historyNotice = noticeState.historyNotice;
   const errorDescriptor = noticeState.errorDescriptor;
+  const shouldRecoverTransport =
+    errorDescriptor?.title === "Connection issue" || transportStatus.phase !== "connected";
   const isGenerating = selectedSummary
     ? isSessionGenerationActive(selectedSummary, selectedProjection?.currentRuntimeStatus)
     : false;
@@ -2807,14 +2813,14 @@ export function App() {
 
       <GlobalWorkbenchCallout
         errorDescriptor={errorDescriptor}
+        transportStatus={transportStatus}
         selectedSummary={workbenchMode === "canvas" ? activeCanvasSummary : selectedSummary}
-        onRefresh={() =>
-          void (errorDescriptor?.title === "Connection issue"
-            ? recoverTransport()
-            : refreshWorkbenchState())
-        }
+        onRefresh={() => void (shouldRecoverTransport ? recoverTransport() : refreshWorkbenchState())}
         onClaimControl={(sessionId) => void claimControl(sessionId)}
-        onDismiss={clearError}
+        onDismiss={() => {
+          clearError();
+          clearTransportStatus();
+        }}
       />
     </div>
   );

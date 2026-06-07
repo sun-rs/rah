@@ -7,6 +7,7 @@ type SessionStoreTransportCallbacks = {
   onBatch: (batch: EventBatch) => void;
   onError: (error: Error) => void;
   onOpen: () => void;
+  onReconnectScheduled: (delayMs: number) => void;
   onReplayGap: (batch: EventBatch) => void;
   onStoredSessionsRefresh: () => void;
 };
@@ -90,6 +91,7 @@ export function connectSessionStoreTransport(
         clearReconnectTimer();
         if (shouldReconnect && callbacks) {
           const delayMs = nextReconnectDelayMs();
+          callbacks.onReconnectScheduled(delayMs);
           reconnectTimer = window.setTimeout(() => {
             reconnectTimer = null;
             if (callbacks) {

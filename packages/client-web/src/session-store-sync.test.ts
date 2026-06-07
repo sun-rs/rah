@@ -2,6 +2,7 @@ import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import type { ListSessionsResponse, RahEvent } from "@rah/runtime-protocol";
 import { coalesceProjectionEvents, recoverTransportCommand } from "./session-store-sync";
+import { connectedTransportStatus } from "./transport-status";
 import type { SessionProjection } from "./types";
 
 type RecoverArgs = Parameters<typeof recoverTransportCommand>[0];
@@ -47,6 +48,7 @@ function createRecoverHarness(listSessions: NonNullable<RecoverArgs["listSession
     selectedSessionId: null,
     workspaceVisibilityVersion: 0,
     error: null,
+    transportStatus: connectedTransportStatus(),
     workspaceDir: "",
     hiddenWorkspaceDirs: new Set<string>(),
   };
@@ -84,6 +86,7 @@ function createRecoverHarness(listSessions: NonNullable<RecoverArgs["listSession
 
   return {
     args,
+    getState: () => state,
     getApplyCalls: () => applyCalls,
     getRestartCalls: () => restartCalls,
     getRestoreCalls: () => restoreCalls,
@@ -168,6 +171,7 @@ describe("session store recovery", () => {
     assert.equal(harness.getApplyCalls(), 1);
     assert.equal(harness.getRestartCalls(), 1);
     assert.equal(harness.getRestoreCalls(), 1);
+    assert.equal(harness.getState().transportStatus.phase, "connected");
   });
 
   test("allows another foreground recovery after the previous one settles", async () => {
@@ -184,5 +188,16 @@ describe("session store recovery", () => {
     assert.equal(harness.getApplyCalls(), 2);
     assert.equal(harness.getRestartCalls(), 2);
     assert.equal(harness.getRestoreCalls(), 2);
+  });
+
+  test("foreground transport recovery records offline status without global error", async () => {
+    const harness = createRecoverHarness(async () => {
+      throw new Error("network unavailable");
+    });
+
+    await assert.rejects(() => recoverTransportCommand(harness.args), /network unavailable/);
+
+    assert.equal(harness.getState().error, null);
+    assert.equal(harness.getState().transportStatus.phase, "offline");
   });
 });
