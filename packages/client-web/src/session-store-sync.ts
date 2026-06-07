@@ -303,6 +303,7 @@ export async function recoverTransportCommand(args: {
   ) => Promise<void>;
   listSessions?: typeof api.listSessions;
 }) {
+  markTransportRecoveryStarted(args.set);
   if (recoverTransportInFlight) {
     return recoverTransportInFlight;
   }
@@ -310,6 +311,13 @@ export async function recoverTransportCommand(args: {
     recoverTransportInFlight = null;
   });
   return recoverTransportInFlight;
+}
+
+function markTransportRecoveryStarted(set: SessionSyncSetState): void {
+  set((state) => ({
+    error: state.error === "Events socket failed" ? null : state.error,
+    transportStatus: syncingTransportStatus(),
+  }));
 }
 
 async function recoverTransportCommandInner(args: {
@@ -345,10 +353,6 @@ async function recoverTransportCommandInner(args: {
   listSessions?: typeof api.listSessions;
 }) {
   try {
-    args.set((state) => ({
-      error: state.error === "Events socket failed" ? null : state.error,
-      transportStatus: syncingTransportStatus(),
-    }));
     const workspaceVisibilityVersionAtRequest = args.get().workspaceVisibilityVersion;
     const sessionsResponse = await (args.listSessions ?? api.listSessions)();
     args.set((state) => ({

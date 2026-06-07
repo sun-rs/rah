@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  TRANSPORT_OFFLINE_ESCALATE_MS,
+  TRANSPORT_CONNECTION_ISSUE_VISIBLE_DELAY_MS,
   TRANSPORT_SYNC_VISIBLE_DELAY_MS,
   connectedTransportStatus,
   describeTransportStatus,
@@ -33,9 +33,21 @@ test("transport status shows a non-actionable syncing notice before escalating",
   assert.match(descriptor?.body ?? "", /missed session output/);
 });
 
+test("transport status keeps ordinary weak-network reconnects as syncing", () => {
+  const status = syncingTransportStatus(1_000);
+  const descriptor = describeTransportStatus(status, 9_000, { selectedSession: true });
+
+  assert.equal(descriptor?.title, "Syncing");
+  assert.equal(descriptor?.tone, "info");
+  assert.equal(descriptor?.primaryAction, undefined);
+});
+
 test("transport status escalates long reconnects to a connection issue", () => {
   const status = offlineTransportStatus(syncingTransportStatus(1_000), "offline", 1_100);
-  const descriptor = describeTransportStatus(status, 1_000 + TRANSPORT_OFFLINE_ESCALATE_MS);
+  const descriptor = describeTransportStatus(
+    status,
+    1_000 + TRANSPORT_CONNECTION_ISSUE_VISIBLE_DELAY_MS,
+  );
 
   assert.equal(descriptor?.title, "Connection issue");
   assert.equal(descriptor?.tone, "warning");

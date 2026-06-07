@@ -174,6 +174,35 @@ describe("session store recovery", () => {
     assert.equal(harness.getState().transportStatus.phase, "connected");
   });
 
+  test("refreshes syncing start when foreground recovery joins an in-flight request", async () => {
+    const originalDateNow = Date.now;
+    const pendingListSessions = deferred<ListSessionsResponse>();
+    const harness = createRecoverHarness(() => pendingListSessions.promise);
+
+    try {
+      Date.now = () => 1_000;
+      const firstRecovery = recoverTransportCommand(harness.args);
+
+      assert.equal(harness.getState().transportStatus.phase, "syncing");
+      if (harness.getState().transportStatus.phase === "syncing") {
+        assert.equal(harness.getState().transportStatus.since, 1_000);
+      }
+
+      Date.now = () => 20_000;
+      const secondRecovery = recoverTransportCommand(harness.args);
+
+      assert.equal(harness.getState().transportStatus.phase, "syncing");
+      if (harness.getState().transportStatus.phase === "syncing") {
+        assert.equal(harness.getState().transportStatus.since, 20_000);
+      }
+
+      pendingListSessions.resolve(emptySessionsResponse());
+      await Promise.all([firstRecovery, secondRecovery]);
+    } finally {
+      Date.now = originalDateNow;
+    }
+  });
+
   test("allows another foreground recovery after the previous one settles", async () => {
     let listCalls = 0;
     const harness = createRecoverHarness(async () => {

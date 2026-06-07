@@ -1,5 +1,5 @@
 export const TRANSPORT_SYNC_VISIBLE_DELAY_MS = 700;
-export const TRANSPORT_OFFLINE_ESCALATE_MS = 8_000;
+export const TRANSPORT_CONNECTION_ISSUE_VISIBLE_DELAY_MS = 60_000;
 
 export type TransportStatus =
   | { phase: "connected" }
@@ -61,12 +61,12 @@ export function describeTransportStatus(
   if (elapsedMs < TRANSPORT_SYNC_VISIBLE_DELAY_MS) {
     return null;
   }
-  if (elapsedMs >= TRANSPORT_OFFLINE_ESCALATE_MS) {
+  if (elapsedMs >= TRANSPORT_CONNECTION_ISSUE_VISIBLE_DELAY_MS) {
     return {
       tone: "warning",
       title: "Connection issue",
       body:
-        "The workbench is still trying to reconnect to RAH. Reconnect now; if the problem continues, reload the page.",
+        "The workbench has been trying to reconnect to RAH for a while. Reconnect now; if the problem continues, reload the page.",
       primaryAction: "refresh",
       primaryLabel: "Reconnect",
       secondaryLabel: "Dismiss",
