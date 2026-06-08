@@ -1,7 +1,7 @@
 import type { CouncilSnapshot, StoredSessionRef, SessionSummary } from "@rah/runtime-protocol";
-import { Columns3, MessageCircleMore, Settings, UsersRound } from "lucide-react";
-import { SessionHistoryDialog } from "../../SessionHistoryDialog";
+import { Columns3, Settings, UsersRound } from "lucide-react";
 import type { WorkspaceSortMode } from "../../../session-browser";
+import { SessionHistoryDialogButton } from "./SessionHistoryDialogButton";
 
 const headerButtonClassName =
   "icon-click-feedback inline-flex h-9 w-9 items-center justify-center rounded-md active:bg-[var(--app-bg)]";
@@ -61,7 +61,7 @@ export function MobileWorkbenchHeaderActions(props: {
       >
         <Columns3 size={headerIconSize} />
       </button>
-      <SessionHistoryDialog
+      <SessionHistoryDialogButton
         storedSessions={props.storedSessions}
         recentSessions={props.recentSessions}
         runningSessions={props.runningSessions}
@@ -79,16 +79,9 @@ export function MobileWorkbenchHeaderActions(props: {
         onRemoveCouncil={props.onRemoveCouncil}
         onRemoveSession={props.onRemoveHistorySession}
         onRemoveWorkspace={props.onRemoveHistoryWorkspace}
-      >
-        <button
-          type="button"
-          className={`${headerButtonClassName} text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)]`}
-          aria-label="Chats"
-          title="Chats"
-        >
-          <MessageCircleMore size={headerIconSize} />
-        </button>
-      </SessionHistoryDialog>
+        buttonClassName={`${headerButtonClassName} text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)]`}
+        iconSize={headerIconSize}
+      />
       <button
         type="button"
         className={`${headerButtonClassName} text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)]`}

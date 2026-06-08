@@ -26,8 +26,14 @@ export function GlobalWorkbenchCallout(props: {
     return () => window.clearInterval(interval);
   }, [props.transportStatus]);
 
+  const selectedLiveSession = Boolean(
+    props.selectedSummary &&
+      props.selectedSummary.session.status === "running" &&
+      (props.selectedSummary.session.capabilities.steerInput ||
+        props.selectedSummary.session.capabilities.livePermissions),
+  );
   const transportDescriptor = describeTransportStatus(props.transportStatus, now, {
-    selectedSession: Boolean(props.selectedSummary),
+    selectedLiveSession,
   });
   const descriptor = props.errorDescriptor ?? transportDescriptor;
 

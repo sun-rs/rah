@@ -23,7 +23,7 @@ test("transport status shows a non-actionable syncing notice after a brief delay
   const descriptor = describeTransportStatus(
     status,
     1_000 + TRANSPORT_SYNC_VISIBLE_DELAY_MS,
-    { selectedSession: true },
+    { selectedLiveSession: true },
   );
 
   assert.equal(descriptor?.title, "Syncing");
@@ -34,11 +34,33 @@ test("transport status shows a non-actionable syncing notice after a brief delay
 
 test("transport status keeps long unconfirmed reconnects as syncing", () => {
   const status = syncingTransportStatus(1_000);
-  const descriptor = describeTransportStatus(status, 301_000, { selectedSession: true });
+  const descriptor = describeTransportStatus(status, 301_000, { selectedLiveSession: true });
 
   assert.equal(descriptor?.title, "Syncing");
   assert.equal(descriptor?.tone, "info");
   assert.equal(descriptor?.primaryAction, undefined);
+});
+
+test("transport status does not claim missed output for non-live selections", () => {
+  const status = syncingTransportStatus(1_000);
+  const descriptor = describeTransportStatus(status, 1_000 + TRANSPORT_SYNC_VISIBLE_DELAY_MS, {
+    selectedLiveSession: false,
+  });
+
+  assert.equal(descriptor?.title, "Syncing");
+  assert.doesNotMatch(descriptor?.body ?? "", /missed session output/);
+  assert.match(descriptor?.body ?? "", /session updates/);
+});
+
+test("transport status hides passive socket reconnects from the global syncing callout", () => {
+  const status = nextReconnectTransportStatus(connectedTransportStatus(), "socket closed", 1_000);
+
+  assert.equal(
+    describeTransportStatus(status, 1_000 + TRANSPORT_SYNC_VISIBLE_DELAY_MS, {
+      selectedLiveSession: true,
+    }),
+    null,
+  );
 });
 
 test("transport status shows connection issue only after confirmed recovery failure", () => {

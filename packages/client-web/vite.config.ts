@@ -15,9 +15,23 @@ function shikiLanguageChunkName(id: string): string | null {
   return `vendor-shiki-lang-${match[1].replace(/[^a-z0-9_-]/gi, "-")}`;
 }
 
+function nonBlockingInitialStyles() {
+  return {
+    name: "rah-non-blocking-initial-styles",
+    enforce: "post" as const,
+    transformIndexHtml(html: string) {
+      return html.replace(
+        /<link rel="stylesheet" crossorigin href="([^"]+)">/g,
+        (_match, href: string) =>
+          `<link rel="preload" crossorigin href="${href}" as="style" onload="this.onload=null;this.rel='stylesheet'"><noscript><link rel="stylesheet" crossorigin href="${href}"></noscript>`,
+      );
+    },
+  };
+}
+
 // https://vitejs.dev/config/
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), nonBlockingInitialStyles()],
   build: {
     rollupOptions: {
       output: {

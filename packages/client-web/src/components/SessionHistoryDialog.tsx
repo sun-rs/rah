@@ -406,7 +406,7 @@ function SessionChatRow(props: {
   );
 }
 
-export function SessionHistoryDialog(props: {
+export type SessionHistoryDialogProps = {
   storedSessions: StoredSessionRef[];
   recentSessions: StoredSessionRef[];
   runningSessions: SessionSummary[];
@@ -425,9 +425,15 @@ export function SessionHistoryDialog(props: {
   onRemoveSession: (ref: Pick<StoredSessionRef, "provider" | "providerSessionId">) => void;
   onRemoveWorkspace: (workspaceDir: string) => void;
   defaultTab?: ChatTab;
-  children: React.ReactNode;
-}) {
-  const [open, setOpen] = useState(false);
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  children?: React.ReactNode;
+};
+
+export function SessionHistoryDialog(props: SessionHistoryDialogProps) {
+  const [internalOpen, setInternalOpen] = useState(false);
+  const open = props.open ?? internalOpen;
+  const setOpen = props.onOpenChange ?? setInternalOpen;
   const [tab, setTab] = useState<ChatTab>(props.defaultTab ?? "active");
   const [query, setQuery] = useState("");
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
@@ -655,7 +661,7 @@ export function SessionHistoryDialog(props: {
   return (
     <>
       <Dialog.Root open={open} onOpenChange={setOpen}>
-        <Dialog.Trigger asChild>{props.children}</Dialog.Trigger>
+        {props.children ? <Dialog.Trigger asChild>{props.children}</Dialog.Trigger> : null}
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 bg-black/40 z-40" />
           <Dialog.Content className="fixed left-1/2 top-1/2 z-50 flex h-[90dvh] max-h-[56rem] w-[92vw] max-w-3xl -translate-x-1/2 -translate-y-1/2 flex-col rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-0 shadow-xl focus:outline-none max-[699px]:inset-0 max-[699px]:h-[100dvh] max-[699px]:max-h-[100dvh] max-[699px]:w-screen max-[699px]:max-w-none max-[699px]:translate-x-0 max-[699px]:translate-y-0 max-[699px]:rounded-none max-[699px]:border-0 max-[699px]:pt-[env(safe-area-inset-top)] max-[699px]:pb-[env(safe-area-inset-bottom)]">

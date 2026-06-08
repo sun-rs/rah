@@ -5,6 +5,7 @@ export type TransportStatus =
   | {
       phase: "syncing" | "offline";
       since: number;
+      source?: "foreground_recovery" | "socket_reconnect" | undefined;
       message?: string | undefined;
     };
 
@@ -22,7 +23,7 @@ export function connectedTransportStatus(): TransportStatus {
 }
 
 export function syncingTransportStatus(now = Date.now()): TransportStatus {
-  return { phase: "syncing", since: now };
+  return { phase: "syncing", since: now, source: "foreground_recovery" };
 }
 
 export function nextReconnectTransportStatus(
@@ -31,9 +32,19 @@ export function nextReconnectTransportStatus(
   now = Date.now(),
 ): TransportStatus {
   if (current.phase === "connected") {
-    return { phase: "syncing", since: now, ...(message ? { message } : {}) };
+    return {
+      phase: "syncing",
+      since: now,
+      source: "socket_reconnect",
+      ...(message ? { message } : {}),
+    };
   }
-  return { phase: "syncing", since: current.since, ...(message ? { message } : {}) };
+  return {
+    phase: "syncing",
+    since: current.since,
+    source: current.source ?? "socket_reconnect",
+    ...(message ? { message } : {}),
+  };
 }
 
 export function offlineTransportStatus(
@@ -51,7 +62,7 @@ export function offlineTransportStatus(
 export function describeTransportStatus(
   status: TransportStatus,
   now: number,
-  options?: { selectedSession?: boolean },
+  options?: { selectedLiveSession?: boolean },
 ): TransportCalloutDescriptor | null {
   if (status.phase === "connected") {
     return null;
@@ -67,6 +78,9 @@ export function describeTransportStatus(
       secondaryLabel: "Dismiss",
     };
   }
+  if (status.source === "socket_reconnect") {
+    return null;
+  }
   const elapsedMs = Math.max(0, now - status.since);
   if (elapsedMs < TRANSPORT_SYNC_VISIBLE_DELAY_MS) {
     return null;
@@ -74,7 +88,7 @@ export function describeTransportStatus(
   return {
     tone: "info",
     title: "Syncing",
-    body: options?.selectedSession
+    body: options?.selectedLiveSession
       ? "Reconnecting to RAH and catching up missed session output..."
       : "Reconnecting to RAH and catching up session updates...",
   };
