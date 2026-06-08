@@ -8,6 +8,7 @@ import {
   startSessionCommand,
 } from "./session-store-session-startup";
 import { createEmptySessionProjection } from "./session-store-session-lifecycle";
+import { adoptExistingProjectionForProviderSession } from "./session-store-projections";
 
 type CapturedRequest = {
   url: string;
@@ -18,7 +19,9 @@ type CapturedRequest = {
 const originalFetch = globalThis.fetch;
 const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window;
 
-function installWebApiMocks(handler: (request: CapturedRequest) => unknown): CapturedRequest[] {
+function installWebApiMocks(
+  handler: (request: CapturedRequest) => unknown | Promise<unknown>,
+): CapturedRequest[] {
   const requests: CapturedRequest[] = [];
   (globalThis as typeof globalThis & { window?: unknown }).window = {
     localStorage: {
@@ -40,7 +43,7 @@ function installWebApiMocks(handler: (request: CapturedRequest) => unknown): Cap
       body: init?.body ? JSON.parse(String(init.body)) : null,
     };
     requests.push(request);
-    const result = handler(request);
+    const result = await handler(request);
     if (result instanceof Response) {
       return result;
     }
@@ -503,6 +506,69 @@ describe("session startup model and mode requests", () => {
     });
   });
 
+  test("claim history shows button pending without replacing the replay with an opening pane", async () => {
+    const history = summary({
+      id: "history",
+      provider: "codex",
+      providerSessionId: "thread-1",
+      cwd: "/tmp/rah",
+    });
+    const projections = new Map([["history", createEmptySessionProjection(history)]]);
+    installWebApiMocks((request) => {
+      if (request.url.includes("/api/fs/list")) {
+        return { path: "/tmp/rah", entries: [] };
+      }
+      if (request.url.endsWith("/api/sessions/resume")) {
+        return {
+          session: summary({
+            id: "claimed",
+            provider: "codex",
+            providerSessionId: "thread-1",
+            cwd: "/tmp/rah",
+          }),
+        };
+      }
+      throw new Error(`Unexpected request ${request.url}`);
+    });
+    const deps = startupDeps({
+      projections,
+      storedSessions: [
+        {
+          provider: "codex",
+          providerSessionId: "thread-1",
+          cwd: "/tmp/rah",
+          rootDir: "/tmp/rah",
+          createdAt: "2026-04-29T00:00:00.000Z",
+        },
+      ],
+      recentSessions: [],
+    });
+    const observed: Array<{
+      actionKind?: string;
+      transitionKind?: string;
+    }> = [];
+    const mutableDeps = deps as {
+      get: () => { pendingSessionAction: { kind: string } | null; pendingSessionTransition: { kind: string } | null };
+      set: (partial: unknown) => void;
+    };
+    const originalSet = mutableDeps.set;
+    mutableDeps.set = (partial: unknown) => {
+      originalSet(partial);
+      const state = mutableDeps.get();
+      observed.push({
+        ...(state.pendingSessionAction?.kind ? { actionKind: state.pendingSessionAction.kind } : {}),
+        ...(state.pendingSessionTransition?.kind
+          ? { transitionKind: state.pendingSessionTransition.kind }
+          : {}),
+      });
+    };
+
+    await claimHistorySessionCommand(deps, "history");
+
+    assert.equal(observed.some((entry) => entry.actionKind === "claim_history"), true);
+    assert.equal(observed.some((entry) => entry.transitionKind === "claim_history"), false);
+  });
+
   test("claim history removes the read-only replay projection for the same provider session", async () => {
     const history = summary({
       id: "history",
@@ -945,6 +1011,69 @@ describe("session startup model and mode requests", () => {
     assert.equal((requests[0]?.body as { liveBackend?: string }).liveBackend, undefined);
   });
 
+  test("history replay opens a local read-only shell before resume returns", async () => {
+    let releaseResume!: () => void;
+    const resumeStarted = new Promise<void>((resolve) => {
+      installWebApiMocks(async (request) => {
+        if (request.url.endsWith("/api/sessions/resume")) {
+          resolve();
+          await new Promise<void>((release) => {
+            releaseResume = release;
+          });
+          const body = request.body as {
+            provider: "codex";
+            providerSessionId: string;
+            cwd?: string;
+          };
+          return {
+            session: summary({
+              id: "resumed",
+              provider: body.provider,
+              providerSessionId: body.providerSessionId,
+              cwd: body.cwd,
+              readOnlyReplay: true,
+            }),
+          };
+        }
+        throw new Error(`Unexpected request ${request.url}`);
+      });
+    });
+    const deps = startupDeps(
+      {},
+      {
+        adoptExistingProjectionForProviderSession,
+      },
+    );
+    const state = deps.get();
+
+    const openPromise = resumeStoredSessionCommand(
+      deps,
+      {
+        provider: "codex",
+        providerSessionId: "thread-1",
+        title: "Thread one",
+        cwd: "/tmp/missing",
+        rootDir: "/tmp/missing",
+        createdAt: "2026-04-29T00:00:00.000Z",
+      },
+      { preferStoredReplay: true },
+    );
+
+    await resumeStarted;
+    assert.equal(state.pendingSessionTransition, null);
+    assert.equal(state.selectedSessionId, "history:codex:thread-1");
+    const shell = state.projections.get("history:codex:thread-1");
+    assert.equal(shell?.summary.session.title, "Thread one");
+    assert.equal(shell?.summary.session.capabilities.steerInput, false);
+    assert.equal(shell?.history.phase, "idle");
+
+    releaseResume();
+    await openPromise;
+    assert.equal(state.selectedSessionId, "resumed");
+    assert.equal(state.projections.has("history:codex:thread-1"), false);
+    assert.equal(state.projections.get("resumed")?.summary.session.providerSessionId, "thread-1");
+  });
+
   test("claiming history claims control when the provider session is already running", async () => {
     const historySummary = summary({
       id: "history",
@@ -992,7 +1121,7 @@ describe("session startup model and mode requests", () => {
           { status: 500, headers: { "content-type": "application/json" } },
         );
       }
-      if (request.url.endsWith("/api/sessions")) {
+      if (request.url.endsWith("/api/sessions?storedSessions=recent")) {
         return {
           sessions: [runningSummary],
           storedSessions: [],
@@ -1020,7 +1149,41 @@ describe("session startup model and mode requests", () => {
           },
         ],
       },
+      {
+        applySessionsResponse: () => ({
+          projections: new Map(),
+          storedSessions: [],
+          recentSessions: [],
+          workspaceDirs: ["/tmp/rah"],
+          hiddenWorkspaceDirs: new Set<string>(),
+          workspaceVisibilityVersion: 1,
+          workspaceDir: "/tmp/rah",
+          selectedSessionId: null,
+        }),
+      },
     );
+    const observed: Array<{
+      selectedSessionId: string | null;
+      selectedProjectionExists: boolean;
+    }> = [];
+    const mutableDeps = deps as {
+      get: () => {
+        projections: Map<string, ReturnType<typeof createEmptySessionProjection>>;
+        selectedSessionId: string | null;
+      };
+      set: (partial: unknown) => void;
+    };
+    const originalSet = mutableDeps.set;
+    mutableDeps.set = (partial: unknown) => {
+      originalSet(partial);
+      const nextState = mutableDeps.get();
+      observed.push({
+        selectedSessionId: nextState.selectedSessionId,
+        selectedProjectionExists: nextState.selectedSessionId
+          ? nextState.projections.has(nextState.selectedSessionId)
+          : false,
+      });
+    };
 
     await claimHistorySessionCommand(
       deps,
@@ -1032,7 +1195,7 @@ describe("session startup model and mode requests", () => {
       [
         "/api/fs/list?path=%2Ftmp%2Frah",
         "/api/sessions/resume",
-        "/api/sessions",
+        "/api/sessions?storedSessions=recent",
         "/api/sessions/live/attach",
       ],
     );
@@ -1052,6 +1215,12 @@ describe("session startup model and mode requests", () => {
       projections: Map<string, ReturnType<typeof createEmptySessionProjection>>;
       selectedSessionId: string | null;
     } }).get();
+    assert.equal(
+      observed.some(
+        (entry) => entry.selectedSessionId === null || !entry.selectedProjectionExists,
+      ),
+      false,
+    );
     assert.equal(state.selectedSessionId, "live");
     assert.equal(state.projections.has("history"), false);
     assert.equal(state.projections.get("live")?.summary.controlLease.holderClientId, "web-client");
@@ -1086,7 +1255,7 @@ describe("session startup model and mode requests", () => {
           { status: 500, headers: { "content-type": "application/json" } },
         );
       }
-      if (request.url.endsWith("/api/sessions")) {
+      if (request.url.endsWith("/api/sessions?storedSessions=recent")) {
         return {
           sessions: [replaySummary],
           storedSessions: [],
@@ -1121,7 +1290,7 @@ describe("session startup model and mode requests", () => {
       [
         "/api/fs/list?path=%2Ftmp%2Frah",
         "/api/sessions/resume",
-        "/api/sessions",
+        "/api/sessions?storedSessions=recent",
       ],
     );
   });

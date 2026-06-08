@@ -40,6 +40,82 @@ export function createEmptySessionProjection(summary: SessionSummary): SessionPr
   };
 }
 
+export function storedHistoryReplaySessionId(
+  ref: Pick<StoredSessionRef, "provider" | "providerSessionId">,
+): string {
+  return `history:${ref.provider}:${ref.providerSessionId}`;
+}
+
+export function createStoredHistoryReplayProjection(ref: StoredSessionRef): SessionProjection {
+  const sessionId = storedHistoryReplaySessionId(ref);
+  const updatedAt =
+    ref.lastUsedAt ??
+    ref.updatedAt ??
+    ref.createdAt ??
+    "1970-01-01T00:00:00.000Z";
+  const createdAt = ref.createdAt ?? updatedAt;
+  const cwd = ref.cwd ?? ref.rootDir ?? "";
+  const rootDir = ref.rootDir ?? ref.cwd ?? cwd;
+  return createEmptySessionProjection({
+    session: {
+      id: sessionId,
+      provider: ref.provider,
+      providerSessionId: ref.providerSessionId,
+      launchSource: "web",
+      status: "stopped",
+      phase: "ended",
+      cwd,
+      rootDir,
+      runtimeState: "stopped",
+      runtime: {
+        kind: "stored_history",
+        protocolStability: "project_native",
+        liveSource: "provider_history",
+        tuiRole: "none",
+        structuredLiveEvents: false,
+        tuiContinuity: false,
+        features: {
+          structuredLiveEvents: "unsupported",
+          structuredControl: "unsupported",
+          historyBackfill: "available",
+          tuiClientContinuity: "unsupported",
+          crossClientSync: "unsupported",
+          prelaunchConfig: "unsupported",
+          runtimeConfig: "unsupported",
+          interrupt: "unsupported",
+          stopLifecycle: "unsupported",
+        },
+      },
+      ptyId: sessionId,
+      ...(ref.title ? { title: ref.title } : {}),
+      ...(ref.preview ? { preview: ref.preview } : {}),
+      capabilities: {
+        liveAttach: false,
+        structuredTimeline: false,
+        nativeTui: false,
+        rawPtyInput: false,
+        chatMirror: false,
+        structuredControl: false,
+        livePermissions: false,
+        contextUsage: false,
+        resumeByProvider: true,
+        listProviderSessions: true,
+        renameSession: false,
+        actions: { info: true, stop: false, delete: false, rename: "none" },
+        steerInput: false,
+        queuedInput: false,
+        modelSwitch: false,
+        planMode: false,
+        subagents: false,
+      },
+      createdAt,
+      updatedAt,
+    },
+    attachedClients: [],
+    controlLease: { sessionId },
+  });
+}
+
 export function applyStartedSessionState(
   current: LifecycleState,
   responseSession: SessionSummary,

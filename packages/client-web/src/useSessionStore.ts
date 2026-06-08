@@ -89,6 +89,7 @@ import {
 import {
   type SessionProjection,
 } from "./types";
+import { isReadOnlyReplay } from "./session-capabilities";
 
 export {
   computeUnreadSessionIds,
@@ -379,6 +380,18 @@ function createProjectionReplayHandling() {
     queuePendingEvent,
     shouldDeferEvent: shouldDeferEventForHistoryBootstrap,
     queueDeferredEvent: queueDeferredBootstrapEvent,
+    shouldPreserveClosedSession: (
+      event: Extract<RahEvent, { type: "session.closed" }>,
+      projection: SessionProjection | undefined,
+    ) => {
+      const pending = useSessionStore.getState().pendingSessionAction;
+      return (
+        pending?.kind === "claim_history" &&
+        pending.sessionId === event.sessionId &&
+        projection !== undefined &&
+        isReadOnlyReplay(projection.summary)
+      );
+    },
   };
 }
 
@@ -417,6 +430,7 @@ function applySessionsResponse(
 function replaceSessionsResponse(
   state: Pick<
     SessionState,
+    | "projections"
     | "workspaceDir"
     | "selectedSessionId"
     | "hiddenWorkspaceDirs"
@@ -1057,9 +1071,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     if (!beginSessionStoreInit()) {
       return;
     }
+    set({ isInitialLoaded: true });
     try {
       await get().refreshWorkbenchState({ storedSessions: "recent" });
-      set({ isInitialLoaded: true });
       connectStoreTransport();
       prewarmProviderModelCatalogs(get, "startup");
       scheduleModelCatalogBackgroundRefresh(get);

@@ -8,16 +8,13 @@ import { useSessionStore } from "./useSessionStore";
 import { FileReferencePicker } from "./components/FileReferencePicker";
 import type { ProviderChoice } from "./components/ProviderSelector";
 import { ProviderLogo } from "./components/ProviderLogo";
-import { SessionHistoryDialog } from "./components/SessionHistoryDialog";
 import { GlobalWorkbenchCallout } from "./components/workbench/callouts/GlobalWorkbenchCallout";
 import { StopSessionDialog } from "./components/workbench/dialogs/StopSessionDialog";
 import { ConfirmDialog } from "./components/workbench/dialogs/ConfirmDialog";
 import { RenameSessionDialog } from "./components/workbench/dialogs/RenameSessionDialog";
 import { WorkbenchErrorBoundary } from "./components/workbench/WorkbenchErrorBoundary";
 import { CanvasNewSessionPane } from "./components/workbench/canvas/CanvasNewSessionPane";
-import { CanvasSessionPane } from "./components/workbench/canvas/CanvasSessionPane";
 import { CanvasWorkbench, type CanvasLayout } from "./components/workbench/canvas/CanvasWorkbench";
-import { CouncilPage } from "./council/CouncilPage";
 import { COUNCIL_ACCENT_ICON_CLASSNAME } from "./council/council-theme";
 import { mergeCouncilLists, mergeCouncilSnapshot } from "./council/council-message-window";
 import { NewCouncilDialog } from "./council/NewCouncilDialog";
@@ -69,7 +66,6 @@ import { deriveWorkbenchNoticeState } from "./workbench-notice-contract";
 import { buildModelOptionValuesFromReasoning } from "./provider-capabilities";
 import { importWithStaleReload } from "./lazy-module-reload";
 import {
-  createPendingStoredSessionTransition,
   type PendingSessionTransition,
 } from "./session-transition-contract";
 import {
@@ -110,6 +106,20 @@ const loadInspectorFileDetailDialog = () =>
   importWithStaleReload(() => import("./inspector/InspectorFileDetailDialog"));
 const InspectorFileDetailDialog = lazy(async () => ({
   default: (await loadInspectorFileDetailDialog()).InspectorFileDetailDialog,
+}));
+const loadCouncilPage = () => importWithStaleReload(() => import("./council/CouncilPage"));
+const CouncilPage = lazy(async () => ({
+  default: (await loadCouncilPage()).CouncilPage,
+}));
+const loadSessionHistoryDialog = () =>
+  importWithStaleReload(() => import("./components/SessionHistoryDialog"));
+const SessionHistoryDialog = lazy(async () => ({
+  default: (await loadSessionHistoryDialog()).SessionHistoryDialog,
+}));
+const loadCanvasSessionPane = () =>
+  importWithStaleReload(() => import("./components/workbench/canvas/CanvasSessionPane"));
+const CanvasSessionPane = lazy(async () => ({
+  default: (await loadCanvasSessionPane()).CanvasSessionPane,
 }));
 
 type ModelDraft = {
@@ -1361,10 +1371,11 @@ export function App() {
 
   if (!isInitialLoaded) {
     return (
-      <div className="h-[100dvh] min-h-[100dvh] flex items-center justify-center bg-background text-foreground">
-        <div className="text-center space-y-3 px-6">
-          <div className="text-2xl font-semibold tracking-tight">RAH</div>
-          <div className="text-[var(--app-hint)]">Initializing workbench…</div>
+      <div className="rah-boot-shell">
+        <div className="rah-boot-card" aria-label="Initializing RAH">
+          <div className="rah-boot-spinner" aria-hidden="true" />
+          <div className="rah-boot-mark">RAH</div>
+          <div className="rah-boot-status">Initializing...</div>
         </div>
       </div>
     );
@@ -1794,6 +1805,11 @@ export function App() {
       <WorkbenchErrorBoundary resetKey={`${workbenchMode}:${selectedSessionId ?? primaryPaneState.kind}`}>
         {/* Center chat */}
         <main className="flex-1 flex flex-col min-w-0 overflow-x-hidden overflow-y-hidden">
+          <Suspense
+            fallback={
+              <div className="h-full min-h-0 flex-1 bg-[var(--app-bg)]" />
+            }
+          >
           {workbenchMode === "council" ? (
             <CouncilPage
               clientId={clientId}
@@ -1865,11 +1881,13 @@ export function App() {
                 const typedPaneId = paneId as CanvasPaneId;
                 const target = canvasPaneTargets[typedPaneId];
                 const projection = resolveCanvasProjection(typedPaneId);
-                const openingTransition = canvasOpeningTransitionForTarget(
+                const candidateOpeningTransition = canvasOpeningTransitionForTarget(
                   target,
                   pendingSessionAction,
                   pendingSessionTransition,
                 ) ?? canvasPaneOpeningTransitions[typedPaneId] ?? null;
+                const openingTransition =
+                  candidateOpeningTransition?.kind === "new" ? candidateOpeningTransition : null;
                 const paneExpanded = canvasMaximizedPaneId === typedPaneId;
                 const paneRightPanelOpen =
                   paneExpanded && canvasPaneRightPanelsOpen[typedPaneId] !== false;
@@ -2280,16 +2298,6 @@ export function App() {
                     }
                     onClaimHistory={(sessionId, request) => {
                       const ref = storedRefFromSessionSummary(summary);
-                      if (ref) {
-                        const openingTransition = createPendingStoredSessionTransition(
-                          ref,
-                          "claim_history",
-                        );
-                        setCanvasPaneOpeningTransitions((current) => ({
-                          ...current,
-                          [typedPaneId]: openingTransition,
-                        }));
-                      }
                       void (async () => {
                         let claimedSessionId: string | null = null;
                         try {
@@ -2321,15 +2329,6 @@ export function App() {
                           ) {
                             setCanvasPaneSession(typedPaneId, resolvedSessionId);
                           }
-                        } finally {
-                          setCanvasPaneOpeningTransitions((current) => {
-                            if (current[typedPaneId] === undefined) {
-                              return current;
-                            }
-                            const next = { ...current };
-                            delete next[typedPaneId];
-                            return next;
-                          });
                         }
                       })();
                     }}
@@ -2782,6 +2781,7 @@ export function App() {
               onOpenNewCouncil={() => setHomeNewCouncilDialogOpen(true)}
             />
           )}
+          </Suspense>
         </main>
 
         {workbenchMode === "single" ? (

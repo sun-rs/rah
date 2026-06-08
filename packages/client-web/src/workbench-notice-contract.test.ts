@@ -83,7 +83,7 @@ describe("workbench notice contract", () => {
 
     assert.deepEqual(state.interactionNotice, {
       tone: "info",
-        message: "History only. Claim running control for input and approvals.",
+      message: "History only. Resume to continue here.",
     });
   });
 

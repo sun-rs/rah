@@ -81,7 +81,7 @@ export function derivePrimaryPaneState(args: {
     return { kind: "active", openingSession: null };
   }
   const openingSession = args.pendingSessionTransition;
-  if (openingSession) {
+  if (openingSession?.kind === "new") {
     return {
       kind: "opening",
       openingSession,

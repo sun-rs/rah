@@ -69,7 +69,7 @@ describe("composer contract", () => {
 
     assert.deepEqual(surface, {
       kind: "history_claim",
-      actionLabel: "Claim control",
+      actionLabel: "Resume",
       actionPending: false,
     });
   });
@@ -282,7 +282,7 @@ describe("composer contract", () => {
       }),
       {
         kind: "history_claim",
-        actionLabel: "Claiming…",
+        actionLabel: "Resuming…",
         actionPending: true,
       },
     );
@@ -292,6 +292,11 @@ describe("composer contract", () => {
     assert.match(COMPOSER_LAYOUT.attachButtonClassName, /h-10/);
     assert.match(COMPOSER_LAYOUT.settingsButtonClassName, /h-10/);
     assert.match(COMPOSER_LAYOUT.sendButtonClassName, /h-10/);
+    assert.match(COMPOSER_LAYOUT.claimRowClassName, /h-10/);
+    assert.match(COMPOSER_LAYOUT.claimRowClassName, /md:h-9/);
+    assert.match(COMPOSER_LAYOUT.claimRowClassName, /lg:h-8/);
+    assert.doesNotMatch(COMPOSER_LAYOUT.claimRowClassName, /\bpy-/);
+    assert.match(COMPOSER_LAYOUT.claimButtonClassName, /w-\[6\.5rem\]/);
     assert.match(
       COMPOSER_LAYOUT.composeGridWithoutStopClassName,
       /grid-cols-\[auto_auto_1fr_auto\]/,

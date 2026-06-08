@@ -11,6 +11,7 @@ import {
   type SessionProjection,
   type SessionsResponse,
 } from "./types";
+import { isReadOnlyReplay } from "./session-capabilities";
 
 function sessionSummaryIsActivelyRunning(summary: SessionProjection["summary"]): boolean {
   return summary.session.status === "running" && [
@@ -45,6 +46,10 @@ type ProjectionEventHandling = {
   queuePendingEvent: (event: RahEvent) => void;
   shouldDeferEvent: (projection: SessionProjection, event: RahEvent) => boolean;
   queueDeferredEvent: (event: RahEvent) => void;
+  shouldPreserveClosedSession?: (
+    event: Extract<RahEvent, { type: "session.closed" }>,
+    projection: SessionProjection | undefined,
+  ) => boolean;
 };
 
 type ProjectionReplay = {
@@ -172,6 +177,9 @@ export function applyEventsToProjectionMap(
   for (const event of [...events].sort((a, b) => a.seq - b.seq)) {
     handling.updateLastSeq(event.seq);
     if (event.type === "session.closed") {
+      if (handling.shouldPreserveClosedSession?.(event, next.get(event.sessionId))) {
+        continue;
+      }
       next.delete(event.sessionId);
       handling.clearBufferedSession(event.sessionId);
       continue;
@@ -208,6 +216,10 @@ export function mergeSessionsIntoProjections(
     const fresh = next.get(sessionId);
     if (fresh) {
       next.set(sessionId, projectionWithFreshSummary(existing, fresh.summary));
+      continue;
+    }
+    if (isReadOnlyReplay(existing.summary)) {
+      next.set(sessionId, existing);
     }
   }
   return applyEventsToProjectionMap(
@@ -267,6 +279,7 @@ export function applySessionsResponse(
 export function replaceSessionsResponse(
   state: Pick<
     ProjectionStateSlice,
+    | "projections"
     | "workspaceDir"
     | "selectedSessionId"
     | "hiddenWorkspaceDirs"
@@ -304,14 +317,20 @@ export function replaceSessionsResponse(
     hiddenWorkspaceDirs,
   });
   const sessionMap = createSessionMap(sessionsResponse);
+  const projections = new Map(sessionMap.sessions);
+  for (const [sessionId, projection] of state.projections) {
+    if (!projections.has(sessionId) && isReadOnlyReplay(projection.summary)) {
+      projections.set(sessionId, projection);
+    }
+  }
   return {
-    projections: sessionMap.sessions,
+    projections,
     storedSessions: sessionsResponse.storedSessions,
     recentSessions: sessionsResponse.recentSessions,
     workspaceDirs: workspace.workspaceDirs,
     hiddenWorkspaceDirs,
     workspaceVisibilityVersion: state.workspaceVisibilityVersion,
     workspaceDir: workspace.workspaceDir,
-    selectedSessionId: coerceSelectedSessionId(sessionMap.sessions, state.selectedSessionId),
+    selectedSessionId: coerceSelectedSessionId(projections, state.selectedSessionId),
   };
 }

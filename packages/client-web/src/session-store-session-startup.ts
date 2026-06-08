@@ -20,6 +20,7 @@ import {
   applyStartedSessionState,
   buildFallbackStoredSessionRef,
   createEmptySessionProjection,
+  createStoredHistoryReplayProjection,
 } from "./session-store-session-lifecycle";
 import {
   createInteractiveAttachRequest,
@@ -29,7 +30,6 @@ import type { PendingSessionTransition } from "./session-transition-contract";
 import {
   createPendingScenarioTransition,
   createPendingStartTransition,
-  createPendingStoredSessionTransition,
 } from "./session-transition-contract";
 import {
   findDaemonRunningSessionForStoredRef,
@@ -309,13 +309,43 @@ export async function resumeStoredSessionCommand(
     if (!preferStoredReplay && !(await ensureLaunchWorkspaceAvailable(deps, targetDir))) {
       return;
     }
-    deps.set({
-      pendingSessionTransition: createPendingStoredSessionTransition(ref, "history"),
-      error: null,
-    });
+    if (preferStoredReplay) {
+      deps.set((current) => {
+        let projections = new Map(current.projections);
+        const shellProjection = createStoredHistoryReplayProjection(ref);
+        let replayProjection = projections.get(shellProjection.summary.session.id);
+        if (!replayProjection) {
+          projections = deps.adoptExistingProjectionForProviderSession(
+            projections,
+            shellProjection.summary,
+          );
+          replayProjection =
+            projections.get(shellProjection.summary.session.id) ?? shellProjection;
+        }
+        const openedState = applyResumedStoredSessionState(
+          current,
+          shellProjection.summary,
+          ref,
+          {
+            projections,
+            replayProjection,
+          },
+        );
+        return {
+          ...openedState,
+          pendingSessionTransition: null,
+          error: null,
+        };
+      });
+    } else {
+      deps.set({
+        pendingSessionTransition: null,
+        error: null,
+      });
+    }
     if (ref.source === "previous_running") {
       const workspaceVisibilityVersionAtRequest = deps.get().workspaceVisibilityVersion;
-      const sessionsResponse = await api.listSessions();
+      const sessionsResponse = await api.listSessions({ storedSessions: "recent" });
       const running = sessionsResponse.sessions.find(
         (summary) =>
           !isReadOnlyReplay(summary) &&
@@ -366,13 +396,15 @@ export async function resumeStoredSessionCommand(
         new Map(current.projections),
         response.session,
       );
+      const replayProjection =
+        next.get(response.session.session.id) ?? createEmptySessionProjection(response.session);
       const resumedState = applyResumedStoredSessionState(
         current,
         response.session,
         ref,
         {
           projections: next,
-          replayProjection: createEmptySessionProjection(response.session),
+          replayProjection,
         },
       );
       return {
@@ -388,7 +420,7 @@ export async function resumeStoredSessionCommand(
     const message = readErrorMessage(error);
     if (message.includes("attach instead of resume")) {
       const workspaceVisibilityVersionAtRequest = deps.get().workspaceVisibilityVersion;
-      const sessionsResponse = await api.listSessions();
+      const sessionsResponse = await api.listSessions({ storedSessions: "recent" });
       const running = sessionsResponse.sessions.find(
         (summary) =>
           summary.session.provider === ref.provider &&
@@ -529,7 +561,6 @@ export async function claimHistorySessionCommand(
         kind: "claim_history",
         sessionId,
       },
-      pendingSessionTransition: createPendingStoredSessionTransition(ref, "claim_history"),
       error: null,
     });
     const request: ResumeSessionRequest = {
@@ -591,8 +622,7 @@ export async function claimHistorySessionCommand(
   } catch (error) {
     const message = readErrorMessage(error);
     if (message.includes("attach instead of resume")) {
-      const workspaceVisibilityVersionAtRequest = deps.get().workspaceVisibilityVersion;
-      const sessionsResponse = await api.listSessions();
+      const sessionsResponse = await api.listSessions({ storedSessions: "recent" });
       const running = sessionsResponse.sessions.find(
         (candidate) =>
           !isReadOnlyReplay(candidate) &&
@@ -615,23 +645,6 @@ export async function claimHistorySessionCommand(
           });
           throw attachError;
         }
-        deps.set((current) => {
-          const next = deps.applySessionsResponse(current, sessionsResponse, {
-            workspaceVisibilityVersionAtRequest,
-          });
-          return {
-            ...next,
-            workspaceDir:
-              ref.rootDir ??
-              ref.cwd ??
-              running.session.rootDir ??
-              running.session.cwd ??
-              next.workspaceDir,
-            pendingSessionAction: null,
-            pendingSessionTransition: null,
-            error: null,
-          };
-        });
         applyClaimedSession(attached);
         return attached.session.id;
       }

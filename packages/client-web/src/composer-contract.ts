@@ -35,6 +35,12 @@ export const COMPOSER_LAYOUT = {
   rowClassName: `flex items-end ${GAP}`,
   controlsGapClassName: GAP,
 
+  claimRowClassName:
+    `flex h-10 w-full items-center justify-between gap-2 overflow-hidden rounded-xl border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-2 md:h-9 lg:h-8`,
+
+  claimButtonClassName:
+    "inline-flex h-8 w-[6.5rem] shrink-0 items-center justify-center rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground transition-colors hover:opacity-90 disabled:opacity-50",
+
   /* Grid: [attach] [settings] [textarea] [stop?] [send] */
   composeGridWithoutStopClassName:
     `grid items-end grid-cols-[auto_auto_1fr_auto] ${GAP}`,
@@ -174,7 +180,7 @@ export function deriveComposerSurface(args: {
     return isReadOnlyReplay(selectedSummary) && selectedSummary.session.providerSessionId
       ? {
           kind: "history_claim",
-          actionLabel: isClaimingHistory ? "Claiming…" : "Claim control",
+          actionLabel: isClaimingHistory ? "Resuming…" : "Resume",
           actionPending: isClaimingHistory,
         }
       : { kind: "unavailable" };

@@ -15,6 +15,7 @@ import {
 import { activateHistorySessionCommand } from "./session-store-session-startup";
 import {
   applyEventsToProjectionMap,
+  applySessionsResponse,
   updateSessionSummaryInProjectionMap,
 } from "./session-store-projections";
 import { initialHistorySyncState, type SessionProjection } from "./types";
@@ -77,6 +78,30 @@ function projection(rootDir: string): SessionProjection {
     events: [],
     lastSeq: 0,
     history: initialHistorySyncState(),
+  };
+}
+
+function readOnlyHistoryProjection(rootDir: string): SessionProjection {
+  const current = projection(rootDir);
+  const { ptyId: _ptyId, ...sessionWithoutPty } = current.summary.session;
+  return {
+    ...current,
+    summary: {
+      ...current.summary,
+      session: {
+        ...sessionWithoutPty,
+        status: "stopped",
+        phase: "ended",
+        runtimeState: "stopped",
+        capabilities: {
+          ...current.summary.session.capabilities,
+          steerInput: false,
+          livePermissions: false,
+        },
+      },
+      attachedClients: [],
+      controlLease: { sessionId: current.summary.session.id },
+    },
   };
 }
 
@@ -229,6 +254,41 @@ describe("workspace response reconciliation", () => {
     assert.equal(coerceSelectedSessionId(projections, "session:/workspace/missing"), null);
   });
 
+  test("preserves selected read-only history projections across live session refreshes", () => {
+    const history = readOnlyHistoryProjection("/workspace/history");
+    const live = projection("/workspace/live");
+    const state = {
+      projections: new Map<string, SessionProjection>([
+        [history.summary.session.id, history],
+        [live.summary.session.id, live],
+      ]),
+      workspaceDir: "/workspace/history",
+      selectedSessionId: history.summary.session.id,
+      hiddenWorkspaceDirs: new Set<string>(),
+      workspaceVisibilityVersion: 0,
+    };
+    const next = applySessionsResponse(
+      state,
+      {
+        sessions: [live.summary],
+        storedSessions: [],
+        recentSessions: [],
+        workspaceDirs: ["/workspace/live"],
+      },
+      {
+        updateLastSeq: () => undefined,
+        clearBufferedSession: () => undefined,
+        queuePendingEvent: () => undefined,
+        shouldDeferEvent: () => false,
+        queueDeferredEvent: () => undefined,
+        takePendingEventsForSessions: () => [],
+      },
+    );
+
+    assert.equal(next.selectedSessionId, history.summary.session.id);
+    assert.equal(next.projections.get(history.summary.session.id), history);
+  });
+
   test("finds an existing daemon running session for a stored history entry", () => {
     const projections = new Map<string, SessionProjection>([
       ["session:/workspace/a", projection("/workspace/a")],
@@ -274,6 +334,25 @@ describe("workspace response reconciliation", () => {
     );
 
     assert.equal(next.get("session:new-live")?.summary.session.rootDir, "/workspace/new-live");
+  });
+
+  test("can preserve a read-only history projection while claim replaces it", () => {
+    const history = readOnlyHistoryProjection("/workspace/history");
+    const current = new Map([[history.summary.session.id, history]]);
+    const next = applyEventsToProjectionMap(
+      current,
+      [event("session.closed", history.summary.session.id)],
+      {
+        updateLastSeq: () => undefined,
+        clearBufferedSession: () => undefined,
+        queuePendingEvent: () => undefined,
+        shouldDeferEvent: () => false,
+        queueDeferredEvent: () => undefined,
+        shouldPreserveClosedSession: (_event, projection) => projection === history,
+      },
+    );
+
+    assert.equal(next.get(history.summary.session.id), history);
   });
 
   test("resolves history activation as select, attach, or resume", () => {

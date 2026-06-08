@@ -16,6 +16,7 @@ import {
   Info,
   Link2,
   ListChecks,
+  LoaderCircle,
   Sparkles,
 } from "lucide-react";
 import { AssistantMessage } from "./AssistantMessage";
@@ -360,6 +361,7 @@ export function ChatThread(props: {
   provider?: ProviderKind;
   canLoadOlderHistory?: boolean;
   historyLoading?: boolean;
+  initialLoading?: boolean;
   onLoadOlderHistory?: () => void | Promise<void>;
   onLoadHistoryItemDetail?: (
     kind: SessionHistoryItemDetailKind,
@@ -420,6 +422,8 @@ export function ChatThread(props: {
     () => buildAssistantTurnHeaders(entries),
     [entries],
   );
+  const isInitialHistoryLoading =
+    entries.length === 0 && Boolean(props.historyLoading || props.initialLoading);
   const virtualLayout = useMemo(
     () => buildVirtualFeedLayout(entries, measuredHeightsRef.current),
     [entries, measuredHeightsVersion],
@@ -1014,8 +1018,19 @@ export function ChatThread(props: {
         data-testid="chat-thread-scroll-container"
         className="h-full overflow-y-scroll overflow-x-hidden rah-scroll-main scrollbar-stable px-4 py-5 [overflow-anchor:none]"
       >
-        <div ref={contentRef} className="mx-auto w-full min-w-0 max-w-3xl">
-          {props.historyLoading && props.canLoadOlderHistory ? (
+        <div
+          ref={contentRef}
+          className={`mx-auto w-full min-w-0 max-w-3xl ${
+            isInitialHistoryLoading ? "flex min-h-full items-center justify-center" : ""
+          }`}
+        >
+          {isInitialHistoryLoading ? (
+            <div className="inline-flex items-center gap-2 rounded-full border border-[var(--app-border)] bg-[var(--app-bg)] px-3 py-1.5 text-xs font-medium text-[var(--app-hint)] shadow-sm">
+              <LoaderCircle size={14} className="animate-spin" />
+              <span>Syncing messages...</span>
+            </div>
+          ) : null}
+          {props.historyLoading && props.canLoadOlderHistory && !isInitialHistoryLoading ? (
             <div className="flex justify-center pb-5">
               <div className="rounded-full border border-[var(--app-border)] bg-[var(--app-bg)] px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.14em] text-[var(--app-hint)]">
                 Loading older history
