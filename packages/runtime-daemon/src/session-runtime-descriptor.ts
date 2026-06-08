@@ -37,7 +37,7 @@ function nativeLocalServerFeatures(provider: ProviderKind): RuntimeFeatureStatus
     structuredLiveEvents: "available",
     structuredControl: "available",
     historyBackfill: "available",
-    tuiClientContinuity: supported ? "available" : "unsupported",
+    tuiClientContinuity: "unsupported",
     crossClientSync: supported ? "available" : "unsupported",
     prelaunchConfig: "available",
     runtimeConfig: supported ? "available" : "unverified",
@@ -88,14 +88,13 @@ export function runtimeDescriptorForLiveBackend(args: {
 }): SessionRuntimeDescriptor {
   const liveBackend = args.liveBackend ?? defaultLiveBackendForProvider(args.provider);
   if (liveBackend === "native_local_server") {
-    const providerTuiClientAvailable = isNativeLocalServerProvider(args.provider);
     return {
       kind: "native_local_server",
       protocolStability: "project_native",
       liveSource: "provider_server",
-      tuiRole: providerTuiClientAvailable ? "client_view" : "none",
+      tuiRole: "none",
       structuredLiveEvents: true,
-      tuiContinuity: providerTuiClientAvailable,
+      tuiContinuity: false,
       features: nativeLocalServerFeatures(args.provider),
     };
   }
@@ -138,14 +137,13 @@ export function runtimeDescriptorForProviderCatalog(
     };
   }
   if (isNativeLocalServerProvider(provider)) {
-    const providerTuiClientAvailable = isNativeLocalServerProvider(provider);
     return {
       kind: "native_local_server",
       protocolStability: "project_native",
       liveSource: "provider_server",
-      tuiRole: providerTuiClientAvailable ? "client_view" : "none",
+      tuiRole: "none",
       structuredLiveEvents: true,
-      tuiContinuity: providerTuiClientAvailable,
+      tuiContinuity: false,
       features: nativeLocalServerFeatures(provider),
     };
   }

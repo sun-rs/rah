@@ -468,18 +468,6 @@ export async function startOpenCodeLiveSession(params: {
       },
     },
   });
-  services.sessionStore.patchManagedSession(state.session.id, {
-    nativeTui: {
-      terminalId: state.session.id,
-      viewAvailable: true,
-      promptState: "prompt_clean",
-      queuedInputCount: 0,
-    },
-    capabilities: {
-      nativeTui: true,
-      rawPtyInput: true,
-    },
-  });
   const liveSession: LiveOpenCodeSession = {
     sessionId: state.session.id,
     providerSessionId: providerSession.id,
@@ -622,18 +610,6 @@ export async function resumeOpenCodeLiveSession(params: {
         delete: false,
         rename: "none",
       },
-    },
-  });
-  services.sessionStore.patchManagedSession(state.session.id, {
-    nativeTui: {
-      terminalId: state.session.id,
-      viewAvailable: true,
-      promptState: "prompt_clean",
-      queuedInputCount: 0,
-    },
-    capabilities: {
-      nativeTui: true,
-      rawPtyInput: true,
     },
   });
   const liveSession: LiveOpenCodeSession = {

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { Suspense, lazy, useEffect, useRef, useState, type RefObject } from "react";
 import type {
   ContextUsage,
   PermissionResponseRequest,
@@ -17,11 +17,11 @@ import {
   UsersRound,
 } from "lucide-react";
 import type { SessionProjection } from "../../../types";
-import { TerminalPane } from "../../../TerminalPane";
 import { ChatThread } from "../../chat/ChatThread";
 import { ProviderLogo } from "../../ProviderLogo";
 import { SessionControlPopover } from "../../SessionControlPopover";
 import { TokenizedTextarea } from "../../TokenizedTextarea";
+import { importWithStaleReload } from "../../../lazy-module-reload";
 import { canSubmitComposerInput, COMPOSER_LAYOUT, type ComposerSurface } from "../../../composer-contract";
 import {
   HEADER_MENU_DANGER_ITEM_CLASS,
@@ -61,6 +61,7 @@ import {
 } from "../../../session-mode-ui";
 import {
   isSessionControlLocked,
+  sessionTuiTerminalId,
   shouldRequestInitialTuiReplay,
 } from "../../../session-capabilities";
 import { closeNativeTuiClient } from "../../../api";
@@ -71,6 +72,11 @@ import {
   type ActiveSessionTuiSurface,
 } from "../../../tui-surface-lifecycle";
 import { providerLabel } from "../../../types";
+
+const TerminalPane = lazy(async () => ({
+  default: (await importWithStaleReload(() => import("../../../TerminalPane"))).TerminalPane,
+}));
+const SESSION_TUI_REPLAY_TAIL_BYTES = 96 * 1024;
 
 function formatContextPercent(value: number): string {
   const clamped = Math.max(0, Math.min(100, value));
@@ -139,7 +145,7 @@ function shouldRenderInteractionNotice(notice: InlineWorkbenchNotice | null): no
   // Generic read-only/observe states are already expressed by the composer
   // surface. Keep this banner for actionable native-TUI diagnostics, queued
   // input, stopped TUI, and warning states.
-  return notice.message !== "History only. Claim running control for input and approvals." &&
+  return notice.message !== "History only. Resume to continue here." &&
     notice.message !== "Observe only.";
 }
 
@@ -227,14 +233,15 @@ export function WorkbenchSelectedPane(props: {
   const sessionMenuRef = useRef<HTMLDivElement | null>(null);
   const lastFloatingAnchorOffsetRef = useRef<number | null>(null);
   const nativeTui = props.selectedSummary.session.nativeTui;
-  const nativeTuiAvailable = Boolean(nativeTui?.viewAvailable);
-  const nativeChatMirrorAvailable =
-    nativeTuiAvailable && props.selectedSummary.session.capabilities.chatMirror === true;
+  const tuiTerminalId = sessionTuiTerminalId(props.selectedSummary);
+  const sessionTuiAvailable = Boolean(tuiTerminalId);
+  const sessionChatMirrorAvailable =
+    sessionTuiAvailable && props.selectedSummary.session.capabilities.chatMirror === true;
   const preferredSessionViewMode: SessionViewMode = "chat";
   const sessionViewResetKey = [
     props.selectedSummary.session.id,
-    nativeTuiAvailable ? "native" : "chat",
-    nativeChatMirrorAvailable ? "mirror" : "no-mirror",
+    sessionTuiAvailable ? "tui" : "chat",
+    sessionChatMirrorAvailable ? "mirror" : "no-mirror",
   ].join(":");
   const sessionViewResetKeyRef = useRef(sessionViewResetKey);
   const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
@@ -245,13 +252,18 @@ export function WorkbenchSelectedPane(props: {
   const [closedTuiTerminalIds, setClosedTuiTerminalIds] = useState<Set<string>>(() => new Set());
   const activeSessionTuiRef = useRef<ActiveSessionTuiSurface>(null);
   const isPwaDisplayMode = usePwaDisplayMode();
+  const selectedFeed = props.selectedProjection?.feed ?? [];
+  const initialChatLoading =
+    props.selectedIsReadOnlyReplay &&
+    selectedFeed.length === 0 &&
+    props.selectedProjection?.history.authoritativeApplied !== true;
   const effectivePaneWidth = paneWidth ?? Number.POSITIVE_INFINITY;
   const sessionMetaMode = props.compactSessionMeta ?? "auto";
   const compactSessionMeta =
     sessionMetaMode === "auto"
       ? effectivePaneWidth < 720
       : sessionMetaMode === true;
-  const compactSessionViewToggle = isPwaDisplayMode;
+  const compactSessionViewToggle = isPwaDisplayMode || effectivePaneWidth < 760;
   const showViewCloseButton = props.showViewCloseButton ?? true;
   const compactComposerPrompts =
     props.compactComposerPrompts === "auto"
@@ -335,20 +347,20 @@ export function WorkbenchSelectedPane(props: {
         ? "Delete session"
         : "This session cannot be deleted";
   const effectiveSessionViewMode =
-    nativeTuiAvailable && sessionViewMode === "tui" ? "tui" : "chat";
+    sessionTuiAvailable && sessionViewMode === "tui" ? "tui" : "chat";
   const showComposer =
     effectiveSessionViewMode === "chat" || props.composerSurface.kind !== "compose";
   const terminalHasControl =
     props.isAttached && props.selectedSummary.controlLease.holderClientId === props.clientId;
-  const terminalTuiClientActive = nativeTui
-    ? !closedTuiTerminalIds.has(nativeTui.terminalId)
+  const terminalTuiClientActive = tuiTerminalId
+    ? !closedTuiTerminalIds.has(tuiTerminalId)
     : true;
   const terminalInitialReplay = shouldRequestInitialTuiReplay(props.selectedSummary);
   const markCurrentTuiOpened = () => {
-    if (!nativeTui) {
+    if (!tuiTerminalId) {
       return;
     }
-    const terminalId = nativeTui.terminalId;
+    const terminalId = tuiTerminalId;
     setOpenedTuiTerminalIds((current) => {
       if (current.has(terminalId)) {
         return current;
@@ -359,10 +371,10 @@ export function WorkbenchSelectedPane(props: {
     });
   };
   const setTerminalTuiClientActive = (active: boolean) => {
-    if (!nativeTui) {
+    if (!tuiTerminalId) {
       return;
     }
-    const terminalId = nativeTui.terminalId;
+    const terminalId = tuiTerminalId;
     if (active) {
       setOpenedTuiTerminalIds((current) => {
         if (current.has(terminalId)) {
@@ -420,53 +432,52 @@ export function WorkbenchSelectedPane(props: {
     sendPending: props.sendPending,
     nativeTuiPromptState: nativeTui?.promptState,
   });
-  const claimComposerButtonClassName =
-    "inline-flex h-8 shrink-0 items-center justify-center rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground transition-colors hover:opacity-90 disabled:opacity-50";
   const renderClaimComposer = (args: {
     title: string;
+    description: string;
     actionLabel: string;
     actionPending: boolean;
     onClaim: () => void;
   }) => (
-    <div className="flex min-h-10 w-full items-center justify-between gap-2 rounded-xl border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-2 py-1 md:min-h-9 lg:min-h-8">
+    <div className={COMPOSER_LAYOUT.claimRowClassName}>
       <div className="min-w-0 flex-1 truncate px-1">
         <span className="text-sm font-medium text-[var(--app-fg)]">{args.title}</span>
         {!compactComposerPrompts ? (
           <span className="ml-2 text-xs text-[var(--app-hint)]">
-            Claim control to continue here.
+            {args.description}
           </span>
         ) : null}
       </div>
       <div className="flex shrink-0 items-center gap-2.5">
-      <SessionControlPopover
-        accessModes={props.claimAccessModes}
-        selectedAccessModeId={props.selectedClaimAccessModeId}
-        planModeAvailable={props.claimPlanModeAvailable}
-        planModeEnabled={props.claimPlanModeEnabled}
-        modeDisabled={props.claimModePending || args.actionPending}
-        modelCatalog={props.modelCatalog}
-        modelCatalogLoading={props.modelCatalogLoading}
-        selectedModelId={props.selectedClaimModelId}
-        selectedReasoningId={props.selectedClaimReasoningId}
-        modelDisabled={props.modelChangePending || args.actionPending}
-        disabled={claimSessionControlDisabled}
-        showModel
-        align="right"
-        buttonClassName={COMPOSER_LAYOUT.settingsButtonClassName}
-        onOpen={props.onRequestModelCatalogRefresh}
-        onAccessModeChange={props.onClaimAccessModeChange}
-        onPlanModeToggle={props.onClaimPlanModeToggle}
-        onModelChange={props.onClaimModelChange}
-        onReasoningChange={props.onClaimReasoningChange}
-      />
-      <button
-        type="button"
-        disabled={args.actionPending}
-        onClick={args.onClaim}
-        className={claimComposerButtonClassName}
-      >
-        {args.actionLabel}
-      </button>
+        <SessionControlPopover
+          accessModes={props.claimAccessModes}
+          selectedAccessModeId={props.selectedClaimAccessModeId}
+          planModeAvailable={props.claimPlanModeAvailable}
+          planModeEnabled={props.claimPlanModeEnabled}
+          modeDisabled={props.claimModePending || args.actionPending}
+          modelCatalog={props.modelCatalog}
+          modelCatalogLoading={props.modelCatalogLoading}
+          selectedModelId={props.selectedClaimModelId}
+          selectedReasoningId={props.selectedClaimReasoningId}
+          modelDisabled={props.modelChangePending || args.actionPending}
+          disabled={claimSessionControlDisabled}
+          showModel
+          align="right"
+          buttonClassName={COMPOSER_LAYOUT.settingsButtonClassName}
+          onOpen={props.onRequestModelCatalogRefresh}
+          onAccessModeChange={props.onClaimAccessModeChange}
+          onPlanModeToggle={props.onClaimPlanModeToggle}
+          onModelChange={props.onClaimModelChange}
+          onReasoningChange={props.onClaimReasoningChange}
+        />
+        <button
+          type="button"
+          disabled={args.actionPending}
+          onClick={args.onClaim}
+          className={COMPOSER_LAYOUT.claimButtonClassName}
+        >
+          {args.actionLabel}
+        </button>
       </div>
     </div>
   );
@@ -478,16 +489,16 @@ export function WorkbenchSelectedPane(props: {
     sessionViewResetKeyRef.current = sessionViewResetKey;
     setSessionViewMode(preferredSessionViewMode);
   }, [
-    nativeChatMirrorAvailable,
-    nativeTuiAvailable,
     preferredSessionViewMode,
     props.selectedSummary.session.id,
+    sessionChatMirrorAvailable,
     sessionViewResetKey,
+    sessionTuiAvailable,
   ]);
 
   useEffect(() => {
     const current = resolveActiveSessionTuiSurface({
-      terminalId: nativeTui?.terminalId ?? null,
+      terminalId: tuiTerminalId,
       clientId: props.clientId,
       openedTerminalIds: openedTuiTerminalIds,
       closedTerminalIds: closedTuiTerminalIds,
@@ -497,7 +508,7 @@ export function WorkbenchSelectedPane(props: {
       void closeNativeTuiClient(previous.terminalId, { clientId: previous.clientId }).catch(() => undefined);
     }
     activeSessionTuiRef.current = current;
-  }, [closedTuiTerminalIds, nativeTui, openedTuiTerminalIds, props.clientId, terminalTuiClientActive]);
+  }, [closedTuiTerminalIds, openedTuiTerminalIds, props.clientId, terminalTuiClientActive, tuiTerminalId]);
 
   useEffect(() => {
     return () => {
@@ -589,7 +600,7 @@ export function WorkbenchSelectedPane(props: {
         meta={<ConversationHeaderMetaList items={sessionHeaderMetaItems} />}
         actions={
           <>
-          {nativeTuiAvailable ? (
+          {sessionTuiAvailable ? (
             <>
               <ConversationHeaderIconButton
                 className={compactSessionViewToggle ? "" : "md:hidden"}
@@ -762,27 +773,35 @@ export function WorkbenchSelectedPane(props: {
         </div>
       ) : null}
 
-      {effectiveSessionViewMode === "tui" && nativeTui ? (
+      {effectiveSessionViewMode === "tui" && tuiTerminalId ? (
         <div className="min-h-0 flex-1 bg-[var(--app-bg)] p-2 md:p-3">
-          <TerminalPane
-            key={nativeTui.terminalId}
-            terminalId={nativeTui.terminalId}
-            clientId={props.clientId}
-            hasControl={terminalHasControl}
-            tuiClientCloseEnabled
-            tuiClientActive={terminalTuiClientActive}
-            onTuiClientActiveChange={setTerminalTuiClientActive}
-            initialReplay={terminalInitialReplay}
-            scrollback={600}
-            replayTailBytes={512 * 1024}
-            maxWriteBatchChars={128 * 1024}
-          />
+          <Suspense
+            fallback={
+              <div className="flex h-full min-h-0 items-center justify-center rounded-xl border border-[var(--app-border)] bg-[var(--app-subtle-bg)] text-xs text-[var(--app-hint)]">
+                Preparing TUI...
+              </div>
+            }
+          >
+            <TerminalPane
+              key={tuiTerminalId}
+              terminalId={tuiTerminalId}
+              clientId={props.clientId}
+              hasControl={terminalHasControl}
+              tuiClientCloseEnabled
+              tuiClientActive={terminalTuiClientActive}
+              onTuiClientActiveChange={setTerminalTuiClientActive}
+              initialReplay={terminalInitialReplay}
+              scrollback={600}
+              replayTailBytes={SESSION_TUI_REPLAY_TAIL_BYTES}
+              maxWriteBatchChars={128 * 1024}
+            />
+          </Suspense>
         </div>
       ) : (
         <ChatThread
           key={props.selectedSummary.session.id}
           sessionId={props.selectedSummary.session.id}
-          feed={props.selectedProjection?.feed ?? []}
+          feed={selectedFeed}
           hideToolCalls={props.hideToolCallsInChat}
           hideOpenCodeReasoning={props.hideOpenCodeReasoningInChat}
           hideGeminiReasoning={props.hideGeminiReasoningInChat}
@@ -790,6 +809,7 @@ export function WorkbenchSelectedPane(props: {
           provider={props.selectedSummary.session.provider}
           canLoadOlderHistory={props.canLoadOlderHistory}
           historyLoading={props.historyLoading}
+          initialLoading={initialChatLoading}
           onLoadOlderHistory={props.onLoadOlderHistory}
           {...(props.onLoadHistoryItemDetail
             ? { onLoadHistoryItemDetail: props.onLoadHistoryItemDetail }
@@ -810,6 +830,7 @@ export function WorkbenchSelectedPane(props: {
           {props.composerSurface.kind === "history_claim" ? (
             renderClaimComposer({
               title: "History only",
+              description: "Resume to continue here.",
               actionLabel: props.composerSurface.actionLabel,
               actionPending: props.composerSurface.actionPending,
               onClaim: props.onClaimHistory,
@@ -821,6 +842,7 @@ export function WorkbenchSelectedPane(props: {
           ) : props.composerSurface.kind === "claim_control" ? (
             renderClaimComposer({
               title: "Claim control",
+              description: "Claim control to continue here.",
               actionLabel: props.composerSurface.actionLabel,
               actionPending: props.composerSurface.actionPending,
               onClaim: props.onClaimControl,

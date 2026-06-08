@@ -95,11 +95,31 @@ export function shouldPollSessionHistoryTail(summary: SessionSummary): boolean {
   );
 }
 
-export function shouldRequestInitialTuiReplay(summary: SessionSummary): boolean {
-  if (summary.session.liveBackend !== "native_local_server") {
-    return true;
+export function shouldRequestInitialTuiReplay(_summary: SessionSummary): boolean {
+  // PTY replay is a display concern. Native local-server attachState describes
+  // whether an external provider CLI can attach to the server, which is not the
+  // same thing as whether the web terminal has replayable output.
+  return true;
+}
+
+export function sessionTuiTerminalId(summary: SessionSummary): string | null {
+  const nativeTui = summary.session.nativeTui;
+  if (nativeTui?.viewAvailable && nativeTui.terminalId) {
+    return nativeTui.terminalId;
   }
-  return summary.session.runtimeDiagnostics?.attachState === "ready";
+  if (summary.session.liveBackend !== "native_local_server") {
+    return null;
+  }
+  if (isReadOnlyReplay(summary)) {
+    return null;
+  }
+  if (!summary.session.providerSessionId) {
+    return null;
+  }
+  if (!summary.session.runtimeDiagnostics?.attachCommand) {
+    return null;
+  }
+  return summary.session.id;
 }
 
 export function sessionInteractionMode(summary: SessionSummary): SessionInteractionMode {
@@ -139,7 +159,7 @@ export function sessionCapabilityTags(summary: SessionSummary): string[] {
 
 export function sessionInteractionNotice(summary: SessionSummary): string | null {
   if (isReadOnlyReplay(summary)) {
-    return "History only. Claim running control for input and approvals.";
+    return "History only. Resume to continue here.";
   }
   if (!canSessionSendInput(summary)) {
     return "Observe only.";

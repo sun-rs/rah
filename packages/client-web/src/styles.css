@@ -570,6 +570,25 @@ html.dark .provider-choice-rail {
   background: var(--terminal-bg, var(--app-code-bg));
 }
 
+.terminal-replay-notice {
+  position: absolute;
+  top: 0.65rem;
+  right: 2.75rem;
+  z-index: 7;
+  pointer-events: none;
+  border: 1px solid color-mix(in oklab, var(--terminal-fg, var(--app-fg)) 14%, transparent);
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--terminal-bg, var(--app-code-bg)) 72%, transparent);
+  padding: 0.32rem 0.55rem;
+  color: color-mix(in oklab, var(--terminal-fg, var(--app-fg)) 76%, transparent);
+  font-size: 0.68rem;
+  font-weight: 750;
+  line-height: 1;
+  box-shadow: 0 10px 22px color-mix(in oklab, black 12%, transparent);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+}
+
 .terminal-client-close-button {
   position: absolute;
   top: 0.55rem;

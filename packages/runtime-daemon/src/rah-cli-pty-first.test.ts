@@ -71,7 +71,7 @@ test("rah help documents core running providers", async () => {
   assert.doesNotMatch(stdout, /RAH_ENABLE_ARCHIVED_PROVIDER_LIVE/);
 });
 
-test("rah codex defaults to native local-server and attaches the official remote TUI client", async () => {
+test("rah codex defaults to native local-server and attaches the provider server", async () => {
   const startRequests: unknown[] = [];
   const attachRequests: unknown[] = [];
   const detachRequests: unknown[] = [];
@@ -97,9 +97,9 @@ test("rah codex defaults to native local-server and attaches the official remote
             kind: "native_local_server",
             protocolStability: "project_native",
             liveSource: "provider_server",
-            tuiRole: "client_view",
+            tuiRole: "none",
             structuredLiveEvents: true,
-            tuiContinuity: true,
+            tuiContinuity: false,
           },
           runtimeDiagnostics: {
             serverEndpoint: "ws://127.0.0.1:59999",
@@ -228,7 +228,7 @@ test("rah codex defaults to native local-server and attaches the official remote
   }
 });
 
-test("rah codex resume defaults to native local-server and attaches the official remote TUI client", async () => {
+test("rah codex resume defaults to native local-server and attaches the provider server", async () => {
   const resumeRequests: unknown[] = [];
   const attachRequests: unknown[] = [];
   const detachRequests: unknown[] = [];
@@ -255,9 +255,9 @@ test("rah codex resume defaults to native local-server and attaches the official
             kind: "native_local_server",
             protocolStability: "project_native",
             liveSource: "provider_server",
-            tuiRole: "client_view",
+            tuiRole: "none",
             structuredLiveEvents: true,
-            tuiContinuity: true,
+            tuiContinuity: false,
           },
           runtimeDiagnostics: {
             serverEndpoint: "ws://127.0.0.1:59998",
@@ -390,7 +390,7 @@ test("rah codex resume defaults to native local-server and attaches the official
   }
 });
 
-test("rah opencode defaults to native local-server and attaches the official TUI client", async () => {
+test("rah opencode defaults to native local-server and attaches the provider server", async () => {
   const startRequests: unknown[] = [];
   const attachRequests: unknown[] = [];
   const detachRequests: unknown[] = [];
@@ -417,9 +417,9 @@ test("rah opencode defaults to native local-server and attaches the official TUI
             kind: "native_local_server",
             protocolStability: "project_native",
             liveSource: "provider_server",
-            tuiRole: "client_view",
+            tuiRole: "none",
             structuredLiveEvents: true,
-            tuiContinuity: true,
+            tuiContinuity: false,
           },
           runtimeDiagnostics: {
             serverEndpoint: "http://127.0.0.1:59997",
@@ -740,9 +740,9 @@ test("rah attach uses provider-native attach for OpenCode native local-server se
               kind: "native_local_server",
               protocolStability: "project_native",
               liveSource: "provider_server",
-              tuiRole: "client_view",
+              tuiRole: "none",
               structuredLiveEvents: true,
-              tuiContinuity: true,
+              tuiContinuity: false,
             },
             runtimeDiagnostics: {
               serverEndpoint: "http://127.0.0.1:49999",
@@ -947,9 +947,9 @@ test("rah attach terminates the managed provider client when the running session
       kind: "native_local_server",
       protocolStability: "project_native",
       liveSource: "provider_server",
-      tuiRole: "client_view",
+      tuiRole: "none",
       structuredLiveEvents: true,
-      tuiContinuity: true,
+      tuiContinuity: false,
     },
     runtimeDiagnostics: {
       serverEndpoint: "http://127.0.0.1:49998",

@@ -1062,8 +1062,8 @@ describe("RuntimeEngine", () => {
       assert.equal(started.session.session.runtime?.kind, "native_local_server");
       assert.equal(started.session.session.runtime?.liveSource, "provider_server");
       assert.equal(started.session.session.runtime?.structuredLiveEvents, true);
-      assert.equal(started.session.session.runtime?.tuiRole, "client_view");
-      assert.equal(started.session.session.runtime?.tuiContinuity, true);
+      assert.equal(started.session.session.runtime?.tuiRole, "none");
+      assert.equal(started.session.session.runtime?.tuiContinuity, false);
       engine.claimControl(sessionId, {
         client: {
           id: "terminal-client",
@@ -1107,8 +1107,8 @@ describe("RuntimeEngine", () => {
       assert.equal(resumed.session.session.runtime?.kind, "native_local_server");
       assert.equal(resumed.session.session.runtime?.liveSource, "provider_server");
       assert.equal(resumed.session.session.runtime?.structuredLiveEvents, true);
-      assert.equal(resumed.session.session.runtime?.tuiRole, "client_view");
-      assert.equal(resumed.session.session.runtime?.tuiContinuity, true);
+      assert.equal(resumed.session.session.runtime?.tuiRole, "none");
+      assert.equal(resumed.session.session.runtime?.tuiContinuity, false);
     } finally {
       await engine.shutdown();
       rmSync(workspace, { recursive: true, force: true });
@@ -1215,7 +1215,7 @@ describe("RuntimeEngine", () => {
     }
   });
 
-  test("native local-server sessions expose an on-demand Web TUI client", async () => {
+  test("native local-server sessions expose structured web control without a TUI surface", async () => {
     const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-native-local-web-tui-"));
     const fakeCodex = path.join(workspace, "fake-codex.js");
     const previousCodexBinary = process.env.RAH_CODEX_BINARY;

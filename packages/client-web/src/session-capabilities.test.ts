@@ -8,6 +8,7 @@ import {
   canSessionSwitchModes,
   isSessionControlLocked,
   isSessionGenerationActive,
+  sessionTuiTerminalId,
   shouldPollSessionHistoryTail,
   shouldRequestInitialTuiReplay,
 } from "./session-capabilities";
@@ -237,14 +238,14 @@ test("history tail polling is disabled for structured live sessions", () => {
       kind: "native_local_server",
       protocolStability: "project_native",
       liveSource: "provider_server",
-      tuiRole: "client_view",
+      tuiRole: "none",
       structuredLiveEvents: true,
-      tuiContinuity: true,
+      tuiContinuity: false,
       features: {
         structuredLiveEvents: "available",
         structuredControl: "available",
         historyBackfill: "available",
-        tuiClientContinuity: "available",
+        tuiClientContinuity: "unsupported",
         crossClientSync: "available",
         prelaunchConfig: "available",
         runtimeConfig: "available",
@@ -307,7 +308,7 @@ test("history tail polling requires provider history and an interactive projecti
   );
 });
 
-test("initial TUI replay waits for native local-server client readiness", () => {
+test("initial TUI replay is independent from native local-server attach readiness", () => {
   assert.equal(
     shouldRequestInitialTuiReplay(
       summaryWithSession({
@@ -315,7 +316,7 @@ test("initial TUI replay waits for native local-server client readiness", () => 
         runtimeDiagnostics: { attachState: "unavailable" },
       }),
     ),
-    false,
+    true,
   );
   assert.equal(
     shouldRequestInitialTuiReplay(
@@ -324,7 +325,7 @@ test("initial TUI replay waits for native local-server client readiness", () => 
         runtimeDiagnostics: { attachState: "unverified" },
       }),
     ),
-    false,
+    true,
   );
   assert.equal(
     shouldRequestInitialTuiReplay(
@@ -342,5 +343,90 @@ test("initial TUI replay stays enabled for terminal-owned sessions", () => {
   assert.equal(
     shouldRequestInitialTuiReplay(summaryWithSession({ liveBackend: "native_tui" })),
     true,
+  );
+});
+
+test("session TUI terminal id follows the shared surface protocol", () => {
+  assert.equal(
+    sessionTuiTerminalId(
+      summaryWithSession({
+        provider: "codex",
+        providerSessionId: "codex-thread-1",
+        liveBackend: "native_local_server",
+        runtimeDiagnostics: {
+          serverEndpoint: "ws://127.0.0.1:12345/",
+          attachCommand: "codex --remote ws://127.0.0.1:12345/ resume codex-thread-1",
+          attachState: "ready",
+          lastEventCursor: "thread:codex-thread-1",
+        },
+      }),
+    ),
+    "session-1",
+  );
+  assert.equal(
+    sessionTuiTerminalId(
+      summaryWithSession({
+        provider: "opencode",
+        providerSessionId: "opencode-session-1",
+        liveBackend: "native_local_server",
+        runtimeDiagnostics: {
+          serverEndpoint: "http://127.0.0.1:4096",
+          attachCommand: "opencode attach http://127.0.0.1:4096 --session opencode-session-1",
+          attachState: "ready",
+          lastEventCursor: "opencode:opencode-session-1",
+        },
+      }),
+    ),
+    "session-1",
+  );
+  assert.equal(
+    sessionTuiTerminalId(
+      summaryWithSession({
+        provider: "claude",
+        providerSessionId: "claude-session-1",
+        liveBackend: "tui_mux",
+        nativeTui: {
+          terminalId: "tmux-terminal-1",
+          viewAvailable: true,
+          promptState: "prompt_clean",
+        },
+      }),
+    ),
+    "tmux-terminal-1",
+  );
+});
+
+test("session TUI terminal id is hidden for stored read-only history", () => {
+  assert.equal(
+    sessionTuiTerminalId(
+      summaryWithSession({
+        providerSessionId: "codex-thread-1",
+        liveBackend: "native_local_server",
+        capabilities: {
+          ...summaryWithSession().session.capabilities,
+          steerInput: false,
+          livePermissions: false,
+        },
+      }),
+    ),
+    null,
+  );
+});
+
+test("session TUI terminal id is hidden for native local-server sessions without an attach command", () => {
+  assert.equal(
+    sessionTuiTerminalId(
+      summaryWithSession({
+        provider: "codex",
+        providerSessionId: "codex-thread-1",
+        liveBackend: "native_local_server",
+        runtimeDiagnostics: {
+          serverEndpoint: "stdio:codex app-server",
+          attachState: "unavailable",
+          lastEventCursor: "thread:codex-thread-1",
+        },
+      }),
+    ),
+    null,
   );
 });

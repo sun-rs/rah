@@ -8,6 +8,7 @@ import {
 } from "react";
 import { Terminal, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import "@xterm/xterm/css/xterm.css";
 import { closeNativeTuiClient, createPtySocket, getNativeTuiSurface, sendPtyMessage } from "./api";
 import {
   mobileBridgeFocusOptionsForSource,
@@ -51,6 +52,7 @@ type TerminalCssVar =
 const DEFAULT_MAX_TERMINAL_WRITE_BATCH_CHARS = 128 * 1024;
 const MAX_PAUSED_TERMINAL_OUTPUT_TAIL_CHARS = 256 * 1024;
 const TERMINAL_INPUT_FLUSH_DELAY_MS = 2;
+const TERMINAL_REPLAY_NOTICE_MIN_CHARS = 8 * 1024;
 
 function shouldShowMobileInputBridge(): boolean {
   if (typeof navigator === "undefined" || typeof window === "undefined") {
@@ -171,6 +173,7 @@ export function TerminalPane(props: TerminalPaneProps) {
   const [surfaceOwnerKind, setSurfaceOwnerKind] = useState<string | null>(null);
   const [localTuiClientActive, setLocalTuiClientActive] = useState(true);
   const [tuiClientClosing, setTuiClientClosing] = useState(false);
+  const [terminalReplaying, setTerminalReplaying] = useState(false);
   const tuiClientCloseEnabled = props.tuiClientCloseEnabled === true;
   const tuiClientActive = tuiClientCloseEnabled
     ? props.tuiClientActive ?? localTuiClientActive
@@ -306,6 +309,7 @@ export function TerminalPane(props: TerminalPaneProps) {
     }
     setTuiClientClosing(false);
     setSurfaceOwnerKind(null);
+    setTerminalReplaying(false);
     nextReplaySeqRef.current = 0;
   }, [props.terminalId, props.tuiClientActive]);
 
@@ -374,6 +378,9 @@ export function TerminalPane(props: TerminalPaneProps) {
     let pendingWrite = "";
     let pendingReplace: string | null = null;
     let pendingReplaceSoft = false;
+    let pendingReplaceStarted = false;
+    let pendingReplaceIsReplay = false;
+    let replaceGeneration = 0;
     let pendingInput = "";
     let inputFlushTimer: ReturnType<typeof setTimeout> | null = null;
     const nativeSurfaceControlEnabled = props.nativeSurfaceControl !== false;
@@ -501,6 +508,11 @@ export function TerminalPane(props: TerminalPaneProps) {
     });
 
     const connect = (fromSeq?: number) => {
+      const maxWriteBatchChars = () => Math.max(
+        16 * 1024,
+        props.maxWriteBatchChars ?? DEFAULT_MAX_TERMINAL_WRITE_BATCH_CHARS,
+      );
+
       const scheduleTerminalWrite = () => {
         if (writeInFlight) {
           return;
@@ -518,31 +530,59 @@ export function TerminalPane(props: TerminalPaneProps) {
             fitImmediatelyAndNotifyResize();
           }
           let chunk: string;
+          let wroteFinalReplaceChunk = false;
+          let wroteReplayReplaceChunk = false;
+          let writeReplaceGeneration = replaceGeneration;
           if (pendingReplace !== null) {
-            if (pendingReplaceSoft) {
+            let prefix = "";
+            if (!pendingReplaceStarted) {
               // tmux snapshot streams replace the visible terminal frequently while
               // Claude/Gemini are animating. A full xterm reset on every snapshot
               // visibly flashes; a soft screen replacement keeps terminal state
               // stable while still presenting the latest captured frame.
-              chunk = `\u001b[H\u001b[2J${pendingReplace}`;
-            } else {
-              chunk = pendingReplace;
-              terminal.reset();
+              if (pendingReplaceSoft) {
+                prefix = "\u001b[H\u001b[2J";
+              } else {
+                terminal.reset();
+              }
+              pendingReplaceStarted = true;
             }
-            pendingReplace = null;
-            pendingReplaceSoft = false;
-            pendingWrite = "";
+            const replaceChunk = pendingReplace.slice(0, maxWriteBatchChars());
+            pendingReplace = pendingReplace.slice(replaceChunk.length);
+            chunk = `${prefix}${replaceChunk}`;
+            wroteReplayReplaceChunk = pendingReplaceIsReplay;
+            writeReplaceGeneration = replaceGeneration;
+            if (pendingReplace.length === 0) {
+              wroteFinalReplaceChunk = true;
+              pendingReplace = null;
+              pendingReplaceSoft = false;
+              pendingReplaceStarted = false;
+              pendingReplaceIsReplay = false;
+            }
           } else {
-            const maxWriteBatchChars = Math.max(
-              16 * 1024,
-              props.maxWriteBatchChars ?? DEFAULT_MAX_TERMINAL_WRITE_BATCH_CHARS,
-            );
-            chunk = pendingWrite.slice(0, maxWriteBatchChars);
+            chunk = pendingWrite.slice(0, maxWriteBatchChars());
             pendingWrite = pendingWrite.slice(chunk.length);
+          }
+          if (!chunk) {
+            if (wroteFinalReplaceChunk && wroteReplayReplaceChunk) {
+              setTerminalReplaying(false);
+            }
+            if (!disposed && (pendingReplace !== null || pendingWrite.length > 0)) {
+              scheduleTerminalWrite();
+            }
+            return;
           }
           writeInFlight = true;
           terminal.write(chunk, () => {
             writeInFlight = false;
+            if (
+              wroteFinalReplaceChunk &&
+              wroteReplayReplaceChunk &&
+              replaceGeneration === writeReplaceGeneration &&
+              pendingReplace === null
+            ) {
+              setTerminalReplaying(false);
+            }
             if (!disposed && (pendingReplace !== null || pendingWrite.length > 0)) {
               scheduleTerminalWrite();
             }
@@ -560,7 +600,7 @@ export function TerminalPane(props: TerminalPaneProps) {
 
       const storePausedTerminalOutput = (
         data: string,
-        options?: { replace?: boolean; softReplace?: boolean },
+        options?: { replace?: boolean; softReplace?: boolean; replay?: boolean },
       ) => {
         if (!data) {
           return;
@@ -580,24 +620,33 @@ export function TerminalPane(props: TerminalPaneProps) {
         pendingWrite = "";
         pendingReplace = null;
         pendingReplaceSoft = false;
+        pendingReplaceStarted = false;
+        pendingReplaceIsReplay = false;
       };
 
-      const replaceTerminalContents = (data: string, options?: { soft?: boolean }) => {
+      const replaceTerminalContents = (data: string, options?: { soft?: boolean; replay?: boolean }) => {
         clearPendingTerminalWrite();
+        replaceGeneration += 1;
         pendingReplace = data;
         pendingReplaceSoft = options?.soft === true;
+        pendingReplaceIsReplay =
+          options?.replay === true && data.length >= TERMINAL_REPLAY_NOTICE_MIN_CHARS;
+        setTerminalReplaying(pendingReplaceIsReplay);
         scheduleTerminalWrite();
       };
 
       const enqueueVisibleTerminalWrite = (
         data: string,
-        options?: { replace?: boolean; softReplace?: boolean },
+        options?: { replace?: boolean; softReplace?: boolean; replay?: boolean },
       ) => {
         if (renderOutputRef.current) {
           if (options?.replace) {
             replaceTerminalContents(
               data,
-              options.softReplace === undefined ? undefined : { soft: options.softReplace },
+              {
+                ...(options.softReplace === undefined ? {} : { soft: options.softReplace }),
+                ...(options.replay === undefined ? {} : { replay: options.replay }),
+              },
             );
           } else {
             enqueueTerminalWrite(data);
@@ -629,7 +678,7 @@ export function TerminalPane(props: TerminalPaneProps) {
         (message) => {
         if (message.type === "pty.replay") {
           if (fromSeq === undefined || message.droppedBeforeSeq !== undefined) {
-            enqueueVisibleTerminalWrite(message.chunks.join(""), { replace: true });
+            enqueueVisibleTerminalWrite(message.chunks.join(""), { replace: true, replay: true });
           } else {
             enqueueVisibleTerminalWrite(message.chunks.join(""));
           }
@@ -1110,6 +1159,11 @@ export function TerminalPane(props: TerminalPaneProps) {
               : undefined
           }
         />
+        {terminalReplaying && tuiClientActive ? (
+          <div className="terminal-replay-notice" data-testid="terminal-replay-notice">
+            Replaying terminal...
+          </div>
+        ) : null}
         {tuiClientCloseEnabled && !tuiClientActive ? (
           <div className="terminal-surface-overlay" data-testid="terminal-client-inactive-overlay">
             <div className="terminal-surface-overlay-card">
