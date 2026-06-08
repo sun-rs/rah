@@ -101,9 +101,13 @@ import {
 import { COUNCIL_HEADER_ICON_CLASSNAME } from "./council-theme";
 import {
   canLoadOlderCouncilMessages,
+  latestKnownCouncilMessageId,
+  latestLoadedCouncilMessageId,
+  mergeCouncilLatestMessagesPage,
   mergeCouncilLists,
   mergeCouncilSnapshot,
   prependCouncilMessagesPage,
+  shouldHydrateLatestCouncilMessages,
 } from "./council-message-window";
 import { usePwaDisplayMode } from "../hooks/usePwaDisplayMode";
 
@@ -449,7 +453,7 @@ export function CouncilPage(props: {
   const councilMenuRef = useRef<HTMLDivElement | null>(null);
   const councilStickToLatestRef = useRef(true);
   const loadingOlderCouncilMessagesRef = useRef(false);
-  const initialCouncilMessageLoadsRef = useRef<Set<string>>(new Set());
+  const latestCouncilMessageLoadsRef = useRef<Set<string>>(new Set());
   const councilPrependAnchorRef = useRef<{
     councilId: string;
     scrollHeight: number;
@@ -515,19 +519,16 @@ export function CouncilPage(props: {
     if (!selectedCouncil) {
       return;
     }
-    const totalMessages =
-      selectedCouncil.meta?.messageCount ??
-      selectedCouncil.messageWindow?.total ??
-      selectedCouncil.messages.length;
-    if (totalMessages <= 0 || selectedCouncil.messages.length > 0) {
+    if (!shouldHydrateLatestCouncilMessages(selectedCouncil)) {
       return;
     }
-    if (initialCouncilMessageLoadsRef.current.has(selectedCouncil.id)) {
+    if (latestCouncilMessageLoadsRef.current.has(selectedCouncil.id)) {
       return;
     }
 
     let cancelled = false;
-    initialCouncilMessageLoadsRef.current.add(selectedCouncil.id);
+    const councilId = selectedCouncil.id;
+    latestCouncilMessageLoadsRef.current.add(councilId);
     void api.readCouncilMessages(selectedCouncil.id, { limit: COUNCIL_MESSAGE_PAGE_LIMIT })
       .then((page) => {
         if (cancelled) {
@@ -535,7 +536,7 @@ export function CouncilPage(props: {
         }
         setCouncils((current) =>
           current.map((candidate) =>
-            candidate.id === selectedCouncil.id ? prependCouncilMessagesPage(candidate, page) : candidate,
+            candidate.id === councilId ? mergeCouncilLatestMessagesPage(candidate, page) : candidate,
           ),
         );
       })
@@ -545,7 +546,7 @@ export function CouncilPage(props: {
         }
       })
       .finally(() => {
-        initialCouncilMessageLoadsRef.current.delete(selectedCouncil.id);
+        latestCouncilMessageLoadsRef.current.delete(councilId);
       });
 
     return () => {
@@ -553,9 +554,8 @@ export function CouncilPage(props: {
     };
   }, [
     selectedCouncil?.id,
-    selectedCouncil?.messages.length,
-    selectedCouncil?.meta?.messageCount,
-    selectedCouncil?.messageWindow?.total,
+    selectedCouncil ? latestKnownCouncilMessageId(selectedCouncil) : undefined,
+    selectedCouncil ? latestLoadedCouncilMessageId(selectedCouncil) : undefined,
   ]);
 
   useEffect(() => {
@@ -760,7 +760,12 @@ export function CouncilPage(props: {
   }, [selectedCouncil?.id, selectedCouncil?.messages.length]);
 
   const refreshCouncils = async (
-    options?: { silent?: boolean; allowRunningDefault?: boolean; scope?: "active" | "all" },
+    options?: {
+      silent?: boolean;
+      allowRunningDefault?: boolean;
+      scope?: "active" | "all";
+      preserveMissing?: boolean;
+    },
   ): Promise<CouncilSnapshot[]> => {
     const scope = options?.scope ?? "active";
     if (!options?.silent) {
@@ -770,7 +775,7 @@ export function CouncilPage(props: {
     try {
       const response = await api.listCouncils({ scope });
       const nextCouncils = mergeCouncilLists(councilsRef.current, response.councils, {
-        preserveMissing: scope === "active",
+        preserveMissing: options?.preserveMissing ?? scope === "active",
       });
       councilsRef.current = nextCouncils;
       setCouncils(nextCouncils);
@@ -1160,7 +1165,7 @@ export function CouncilPage(props: {
       await api.stopCouncil(selectedCouncil.id);
       setStopConfirmOpen(false);
       setSelectedTerminalAgentId(null);
-      const nextCouncils = await refreshCouncils({ scope: "active" });
+      const nextCouncils = await refreshCouncils({ scope: "active", preserveMissing: false });
       setSelectedCouncilId(defaultRunningCouncilId(nextCouncils));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));

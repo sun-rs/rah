@@ -14,7 +14,12 @@ import {
   reconcileCouncilSelection,
   splitCouncils,
 } from "./council/CouncilsBrowser";
-import { mergeCouncilLists, mergeCouncilSnapshot } from "./council/council-message-window";
+import {
+  mergeCouncilLatestMessagesPage,
+  mergeCouncilLists,
+  mergeCouncilSnapshot,
+  shouldHydrateLatestCouncilMessages,
+} from "./council/council-message-window";
 import { chooseChatListSubtitle } from "./chat-list-display";
 import {
   shouldLoadAllStoredSessionsForDialog,
@@ -443,6 +448,84 @@ test("summary-only Council refresh preserves hydrated messages and older cursor"
   assert.equal(merged.messageWindow?.loaded, 1);
   assert.equal(merged.messageWindow?.hasMoreBefore, true);
   assert.equal(merged.messageWindow?.nextBeforeMessageId, 5);
+  assert.equal(shouldHydrateLatestCouncilMessages(merged), true);
+});
+
+test("Council latest message hydration appends missed foreground messages without resetting older cursor", () => {
+  const hydrated = {
+    ...council({
+      id: "hydrated",
+      title: "Hydrated",
+      workspace: "/Users/sun/Code/rah",
+      status: "running",
+      updatedAt: "2026-05-01T10:00:00.000Z",
+      messages: [
+        {
+          id: 1,
+          councilId: "hydrated",
+          actorId: "user",
+          role: "user" as const,
+          parts: [{ kind: "text" as const, text: "old loaded" }],
+          createdAt: "2026-05-01T10:01:00.000Z",
+        },
+        {
+          id: 2,
+          councilId: "hydrated",
+          actorId: "hydrated-agent",
+          role: "agent" as const,
+          parts: [{ kind: "text" as const, text: "old reply" }],
+          createdAt: "2026-05-01T10:02:00.000Z",
+        },
+      ],
+    }),
+    meta: {
+      messageCount: 4,
+      lastMessage: {
+        id: 4,
+        role: "agent" as const,
+        actorId: "hydrated-agent",
+        text: "missed reply",
+        createdAt: "2026-05-01T10:04:00.000Z",
+      },
+    },
+    messageWindow: {
+      total: 4,
+      loaded: 2,
+      hasMoreBefore: false,
+    },
+  };
+
+  assert.equal(shouldHydrateLatestCouncilMessages(hydrated), true);
+  const merged = mergeCouncilLatestMessagesPage(hydrated, {
+    councilId: "hydrated",
+    total: 4,
+    hasMoreBefore: true,
+    nextBeforeMessageId: 3,
+    messages: [
+      {
+        id: 3,
+        councilId: "hydrated",
+        actorId: "hydrated-agent",
+        role: "system" as const,
+        parts: [{ kind: "text" as const, text: "hydrated-agent sent" }],
+        createdAt: "2026-05-01T10:03:00.000Z",
+      },
+      {
+        id: 4,
+        councilId: "hydrated",
+        actorId: "hydrated-agent",
+        role: "agent" as const,
+        parts: [{ kind: "text" as const, text: "missed reply" }],
+        createdAt: "2026-05-01T10:04:00.000Z",
+      },
+    ],
+  });
+
+  assert.deepEqual(merged.messages.map((message) => message.id), [1, 2, 3, 4]);
+  assert.equal(merged.messageWindow?.total, 4);
+  assert.equal(merged.messageWindow?.loaded, 4);
+  assert.equal(merged.messageWindow?.hasMoreBefore, false);
+  assert.equal(shouldHydrateLatestCouncilMessages(merged), false);
 });
 
 test("reconciles Council selection without replacing explicit history browsing", () => {

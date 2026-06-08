@@ -18,6 +18,18 @@ function messageCount(council: CouncilSnapshot): number {
   return council.meta?.messageCount ?? council.messageWindow?.total ?? council.messages.length;
 }
 
+export function latestLoadedCouncilMessageId(council: CouncilSnapshot): number {
+  return council.messages.at(-1)?.id ?? 0;
+}
+
+export function latestKnownCouncilMessageId(council: CouncilSnapshot): number {
+  return council.meta?.lastMessage?.id ?? council.meta?.lastContentMessage?.id ?? latestLoadedCouncilMessageId(council);
+}
+
+export function shouldHydrateLatestCouncilMessages(council: CouncilSnapshot): boolean {
+  return latestKnownCouncilMessageId(council) > latestLoadedCouncilMessageId(council);
+}
+
 export function mergeCouncilSnapshot(
   current: CouncilSnapshot | undefined,
   incoming: CouncilSnapshot,
@@ -95,6 +107,42 @@ export function prependCouncilMessagesPage(
       hasMoreBefore: page.hasMoreBefore,
       ...(page.nextBeforeMessageId !== undefined
         ? { nextBeforeMessageId: page.nextBeforeMessageId }
+        : {}),
+    },
+  };
+}
+
+export function mergeCouncilLatestMessagesPage(
+  council: CouncilSnapshot,
+  page: CouncilMessagesPageResponse,
+): CouncilSnapshot {
+  const messages = mergeCouncilMessages(council.messages, page.messages);
+  const pageFirstId = page.messages[0]?.id;
+  const loadedFirstId = messages[0]?.id;
+  const preservesOlderWindow =
+    loadedFirstId !== undefined &&
+    pageFirstId !== undefined &&
+    loadedFirstId < pageFirstId;
+  const hasMoreBefore = preservesOlderWindow
+    ? Boolean(council.messageWindow?.hasMoreBefore)
+    : page.hasMoreBefore;
+  const nextBeforeMessageId = preservesOlderWindow
+    ? council.messageWindow?.nextBeforeMessageId
+    : page.nextBeforeMessageId;
+
+  return {
+    ...council,
+    messages,
+    meta: {
+      ...council.meta,
+      messageCount: page.total,
+    },
+    messageWindow: {
+      total: page.total,
+      loaded: messages.length,
+      hasMoreBefore,
+      ...(hasMoreBefore && nextBeforeMessageId !== undefined
+        ? { nextBeforeMessageId }
         : {}),
     },
   };

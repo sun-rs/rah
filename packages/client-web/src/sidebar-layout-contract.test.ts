@@ -178,6 +178,42 @@ describe("sidebar layout contract", () => {
     assert.doesNotMatch(councilSource, /HEADER_ICON_BUTTON_CLASS/);
   });
 
+  test("keeps session resume and TUI header controls stable in compact layouts", () => {
+    const sessionSource = readSource("./components/workbench/panes/WorkbenchSelectedPane.tsx");
+    const capabilitiesSource = readSource("./session-capabilities.ts");
+
+    assert.match(sessionSource, /compactSessionViewToggle = isPwaDisplayMode \|\| effectivePaneWidth < 760/);
+    assert.match(sessionSource, /sessionTuiAvailable \?/);
+    assert.match(sessionSource, /sessionTuiTerminalId\(props\.selectedSummary\)/);
+    assert.match(sessionSource, /const SESSION_TUI_REPLAY_TAIL_BYTES = 96 \* 1024/);
+    assert.match(sessionSource, /replayTailBytes=\{SESSION_TUI_REPLAY_TAIL_BYTES\}/);
+    assert.doesNotMatch(sessionSource, /replayTailBytes=\{512 \* 1024\}/);
+    assert.match(capabilitiesSource, /summary\.session\.liveBackend !== "native_local_server"/);
+    assert.match(capabilitiesSource, /runtimeDiagnostics\?\.attachCommand/);
+    assert.match(capabilitiesSource, /return summary\.session\.id/);
+  });
+
+  test("keeps terminal replay bounded and visible instead of doing a single large replace", () => {
+    const terminalSource = readSource("./TerminalPane.tsx");
+    const cssSource = readSource("./styles.css");
+
+    assert.match(terminalSource, /TERMINAL_REPLAY_NOTICE_MIN_CHARS/);
+    assert.match(terminalSource, /pendingReplaceStarted/);
+    assert.match(terminalSource, /maxWriteBatchChars\(\)/);
+    assert.match(terminalSource, /data-testid="terminal-replay-notice"/);
+    assert.match(cssSource, /\.terminal-replay-notice/);
+    assert.match(cssSource, /\.terminal-replay-notice\s*\{[^}]*pointer-events:\s*none/s);
+    assert.doesNotMatch(terminalSource, /chunk\s*=\s*pendingReplace;\s*terminal\.reset/s);
+  });
+
+  test("stopping a Council does not preserve the stopped chat as the current page", () => {
+    const councilSource = readSource("./council/CouncilPage.tsx");
+
+    assert.match(councilSource, /preserveMissing\?: boolean/);
+    assert.match(councilSource, /refreshCouncils\(\{ scope: "active", preserveMissing: false \}\)/);
+    assert.match(councilSource, /setSelectedCouncilId\(defaultRunningCouncilId\(nextCouncils\)\)/);
+  });
+
   test("uses a clear non-raised shared segmented control selected state", () => {
     const sessionSource = readSource("./components/workbench/panes/WorkbenchSelectedPane.tsx");
     const canvasSource = readSource("./components/workbench/canvas/CanvasWorkbench.tsx");
