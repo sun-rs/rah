@@ -37,16 +37,22 @@ Cloudflare Tunnel 作为备选：
 
 ## 3. 当前本机实践
 
-当前实践是使用 Tailscale Serve，把 tailnet 内的 `43111` 转发到 Mac 本机的 `localhost:43111`。
+当前实践是让 RAH daemon 直接监听 `0.0.0.0:43111`：
 
-检查当前 Serve 配置：
+- 家里局域网设备访问 `http://<mac-lan-ip>:43111/`。
+- Tailnet 设备访问 `http://<mac-tailscale-ip>:43111/` 或 `http://<mac-magicdns-name>:43111/`。
+- CLI 管理命令仍默认连本机 `http://127.0.0.1:43111`，所以本机使用方式不变。
+
+不要同时使用 Tailscale Serve 占用 `43111`。例如 `43111 -> localhost:43111` 的 Serve 配置会让 Tailscale 先监听 tailnet 的 `43111`，从而导致 RAH 绑定 `0.0.0.0:43111` 时出现 `EADDRINUSE`。
+
+检查 Serve 是否已经清空：
 
 ```bash
 tailscale serve status
 tailscale serve status --json
 ```
 
-本机当前有效配置形态：
+健康状态应该是没有 `43111` 的 Serve 转发。如果看到下面这种配置，应当清空：
 
 ```json
 {
@@ -58,17 +64,17 @@ tailscale serve status --json
 }
 ```
 
-这意味着：
+清空命令：
 
-- iPhone/iPad 在同一 tailnet 内访问 `http://<mac-magicdns-name>:43111/`。
-- 或访问 `http://<mac-tailscale-ip>:43111/`。
-- Tailscale 只把 tailnet 侧的 `43111` 转发到本机 loopback 服务。
-- 不需要让 RAH 自己理解 Tailscale，也不需要 provider runtime 绑定公网地址。
+```bash
+tailscale serve reset
+```
 
 本机验证命令：
 
 ```bash
 curl -fsS http://127.0.0.1:43111/ | head
+curl -fsS http://<mac-lan-ip>:43111/ | head
 curl -fsS http://<mac-tailscale-ip>:43111/ | head
 curl -fsS http://<mac-magicdns-name>:43111/ | head
 ```
@@ -78,8 +84,8 @@ curl -fsS http://<mac-magicdns-name>:43111/ | head
 - `tailscale status --json` 显示 Tailscale `BackendState` 为 `Running`。
 - MagicDNS 已启用。
 - iPhone peer 在线。
-- `tailscale serve status --json` 显示 `43111 -> localhost:43111`。
-- Mac 本机通过 Tailscale IP 和 MagicDNS 都能访问到 RAH 首页。
+- RAH daemon 监听 `0.0.0.0:43111`。
+- Mac 本机通过 localhost、LAN IP、Tailscale IP 和 MagicDNS 都能访问到 RAH 首页。
 
 不要把真实 tailnet 域名、Tailscale node key、用户邮箱或 auth key 写入仓库。
 
@@ -87,13 +93,19 @@ curl -fsS http://<mac-magicdns-name>:43111/ | head
 
 ### 4.1 RAH 端
 
-RAH daemon 当前默认监听 `43111`。先确认本机可访问：
+RAH daemon 当前默认监听 `0.0.0.0:43111`。先确认本机可访问：
 
 ```bash
 curl -fsS http://127.0.0.1:43111/ | head
 ```
 
 如果本机都不能访问，先修 RAH daemon，不要先排查 Tailscale。
+
+如果只想允许本机访问，可以显式启动：
+
+```bash
+RAH_HOST=127.0.0.1 rah restart
+```
 
 ### 4.2 Tailscale 端
 
@@ -105,25 +117,7 @@ tailscale ip -6
 tailscale status
 ```
 
-暴露 RAH 给 tailnet：
-
-```bash
-tailscale serve --bg --tcp 43111 localhost:43111
-```
-
-不同 Tailscale CLI 版本的 `serve` 语法可能略有差异。以当前机器的 `tailscale serve --help` 为准。关键目标是让 `tailscale serve status --json` 出现：
-
-```json
-"TCPForward": "localhost:43111"
-```
-
-如果只是暴露一个普通 HTTP 服务，新版 Tailscale 也支持简写：
-
-```bash
-tailscale serve --bg 43111
-```
-
-但对 RAH 这类本地 WebSocket/HTTP 混合服务，明确 TCP forward 更容易理解和排障。
+RAH 直接监听 `0.0.0.0:43111` 时，不需要配置 Tailscale Serve。Tailnet 内设备直接访问 Mac 的 Tailscale IP 或 MagicDNS 即可。
 
 清空 Serve 配置：
 
@@ -131,12 +125,7 @@ tailscale serve --bg 43111
 tailscale serve reset
 ```
 
-新增多个固定端口时，按同一模式逐个映射：
-
-```bash
-tailscale serve --bg --tcp <tailnet-port> localhost:<local-port>
-tailscale serve status
-```
+新增多个固定端口时，优先让对应服务直接监听 `0.0.0.0` 或指定 LAN/Tailscale 可达地址。只有当某个服务必须保持 loopback-only，且不需要和通配绑定共用同一端口时，才考虑 Tailscale Serve 做转发。
 
 默认不要使用 `tailscale funnel`。`funnel` 是公网入口，不是 tailnet 私有入口。
 

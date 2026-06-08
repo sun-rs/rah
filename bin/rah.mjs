@@ -25,7 +25,7 @@ const execFileAsync = promisify(execFile);
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_DAEMON_URL = "http://127.0.0.1:43111";
-const DEFAULT_DAEMON_HOST = process.env.RAH_HOST?.trim() || "127.0.0.1";
+const DEFAULT_DAEMON_HOST = process.env.RAH_HOST?.trim() || "0.0.0.0";
 const CORE_RUNNING_PROVIDERS = new Set(["codex", "claude", "gemini", "opencode"]);
 const SUPPORTED_PROVIDERS = CORE_RUNNING_PROVIDERS;
 const MANAGEMENT_COMMANDS = new Set(["start", "status", "stop", "restart", "logs", "attach", "close", "archive"]);
@@ -102,7 +102,8 @@ function printUsage() {
       "Source workflow:",
       "  `rah start` builds the web client, starts the daemon in the background,",
       "  and writes pid/log files under ~/.rah/runtime-daemon.",
-      "  Set RAH_HOST=0.0.0.0 only when direct LAN exposure is intended.",
+      "  RAH listens on 0.0.0.0 by default for LAN/Tailnet access.",
+      "  Set RAH_HOST=127.0.0.1 for loopback-only access.",
       "",
     ].join("\n"),
   );

@@ -5,7 +5,7 @@ const port =
   requestedPort && Number.isFinite(Number.parseInt(requestedPort, 10))
     ? Number.parseInt(requestedPort, 10)
     : 43111;
-const host = process.env.RAH_HOST?.trim() || "127.0.0.1";
+const host = process.env.RAH_HOST?.trim() || "0.0.0.0";
 
 const daemon = await startRahDaemon({ host, port });
 
