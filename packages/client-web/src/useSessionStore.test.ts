@@ -14,6 +14,7 @@ import {
 } from "./useSessionStore";
 import { activateHistorySessionCommand } from "./session-store-session-startup";
 import {
+  adoptExistingProjectionForProviderSession,
   applyEventsToProjectionMap,
   applySessionsResponse,
   updateSessionSummaryInProjectionMap,
@@ -353,6 +354,67 @@ describe("workspace response reconciliation", () => {
     );
 
     assert.equal(next.get(history.summary.session.id), history);
+  });
+
+  test("resets read-only history event cursor when adopting a live session", () => {
+    const history = {
+      ...readOnlyHistoryProjection("/workspace/history"),
+      lastSeq: 1_000_000_111,
+    };
+    const liveSummary: SessionSummary = {
+      ...sessionSummary("/workspace/live"),
+      session: {
+        ...sessionSummary("/workspace/live").session,
+        providerSessionId: history.summary.session.providerSessionId,
+      },
+    };
+    const adopted = adoptExistingProjectionForProviderSession(
+      new Map([[history.summary.session.id, history]]),
+      liveSummary,
+    );
+    const liveEvent: RahEvent = {
+      id: "live-assistant-update",
+      seq: 2,
+      ts: "2026-04-21T00:00:02.000Z",
+      sessionId: liveSummary.session.id,
+      type: "timeline.item.updated",
+      source: {
+        provider: "codex",
+        channel: "structured_live",
+        authority: "derived",
+      },
+      payload: {
+        item: {
+          kind: "assistant_message",
+          text: "live reply",
+        },
+        identity: {
+          canonicalItemId: "live-assistant-1",
+          provider: "codex",
+          origin: "live",
+          confidence: "derived",
+        },
+      },
+    };
+
+    const next = applyEventsToProjectionMap(adopted, [liveEvent], {
+      updateLastSeq: () => undefined,
+      clearBufferedSession: () => undefined,
+      queuePendingEvent: () => undefined,
+      shouldDeferEvent: () => false,
+      queueDeferredEvent: () => undefined,
+    });
+
+    assert.equal(adopted.get(liveSummary.session.id)?.lastSeq, 0);
+    assert.equal(
+      next.get(liveSummary.session.id)?.feed.some(
+        (entry) =>
+          entry.kind === "timeline" &&
+          entry.item.kind === "assistant_message" &&
+          entry.item.text === "live reply",
+      ),
+      true,
+    );
   });
 
   test("resolves history activation as select, attach, or resume", () => {

@@ -144,11 +144,19 @@ export function adoptExistingProjectionForProviderSession(
     return projections;
   }
   const [existingSessionId, existingProjection] = existingEntry;
+  const rebindingReadOnlyReplay =
+    isReadOnlyReplay(existingProjection.summary) && !isReadOnlyReplay(summary);
   const next = new Map(projections);
   next.delete(existingSessionId);
   next.set(summary.session.id, {
     ...existingProjection,
     summary,
+    ...(rebindingReadOnlyReplay
+      ? {
+          events: [],
+          lastSeq: 0,
+        }
+      : {}),
   });
   return next;
 }
