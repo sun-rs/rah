@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
+import { providerChildEnv } from "./provider-child-env";
 
 const HOST_FRAME_READY = 1;
 const HOST_FRAME_OUTPUT = 2;
@@ -32,12 +33,7 @@ function cleanEnv(args: {
   commandArgs?: string[];
   extraEnv?: Record<string, string>;
 }): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (value !== undefined) {
-      env[key] = value;
-    }
-  }
+  const env = providerChildEnv();
   for (const [key, value] of Object.entries(args.extraEnv ?? {})) {
     env[key] = value;
   }

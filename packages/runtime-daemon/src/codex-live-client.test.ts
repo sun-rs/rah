@@ -150,7 +150,7 @@ rl.on('line', (line) => {
     assert.equal(started.session.session.capabilities.subagents, false);
     assert.equal(started.session.session.runtime?.kind, "native_local_server");
     assert.equal(started.session.session.runtime?.structuredLiveEvents, true);
-    assert.equal(started.session.session.runtime?.tuiContinuity, true);
+    assert.equal(started.session.session.runtime?.tuiContinuity, false);
     assert.equal(started.session.session.runtimeDiagnostics?.serverEndpoint, "stdio:codex app-server");
     assert.equal(started.session.session.runtimeDiagnostics?.attachState, "unavailable");
     assert.equal(started.session.session.runtimeDiagnostics?.lastEventCursor, "thread:thread-live-1");

@@ -58,6 +58,8 @@ export type LiveCodexSession = {
   interruptFallbackTurnId?: string;
   turnStartInFlight: boolean;
   interruptWhenTurnStarts: boolean;
+  interruptExternalTurnWhenStarts: boolean;
+  requestTurnInterrupt?: (turnId: string) => void;
   queuedInputs: SessionInputRequest[];
   drainQueuedInput?: () => void;
   externalThreadMirrorSubscribeInFlight: boolean;

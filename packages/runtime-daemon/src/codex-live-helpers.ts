@@ -232,6 +232,14 @@ function applyCodexLiveTranslatedItems(
     for (const event of events) {
       if (event.type === "turn.started") {
         liveSession.currentTurnId = event.turnId ?? null;
+        if (
+          event.turnId &&
+          liveSession.interruptExternalTurnWhenStarts &&
+          !liveSession.turnStartInFlight
+        ) {
+          liveSession.interruptExternalTurnWhenStarts = false;
+          liveSession.requestTurnInterrupt?.(event.turnId);
+        }
       } else if (
         event.type === "turn.completed" ||
         event.type === "turn.failed" ||

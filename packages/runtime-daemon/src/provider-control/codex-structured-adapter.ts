@@ -153,6 +153,7 @@ export class CodexAdapter implements ProviderAdapter {
 
   private registerLiveSession(liveSession: LiveCodexSession): void {
     liveSession.drainQueuedInput = () => this.drainQueuedInput(liveSession);
+    liveSession.requestTurnInterrupt = (turnId) => this.requestLiveTurnInterrupt(liveSession, turnId);
     liveSession.client.setCloseHandler((error) => {
       this.handleLiveClientClosed(liveSession, error);
     });
@@ -244,11 +245,33 @@ export class CodexAdapter implements ProviderAdapter {
     live.interruptFallbackTimer.unref?.();
   }
 
+  private requestLiveTurnInterrupt(live: LiveCodexSession, turnId: string): void {
+    if (live.interruptingTurnIds.has(turnId)) {
+      return;
+    }
+    live.interruptingTurnIds.add(turnId);
+    void live.client
+      .request("turn/interrupt", {
+        threadId: live.threadId,
+        turnId,
+      })
+      .then(() => {
+        this.scheduleInterruptFallback(live, turnId);
+      })
+      .catch((error) => {
+        this.reportAsyncLiveError(
+          live.sessionId,
+          error instanceof Error ? error.message : String(error),
+        );
+      });
+  }
+
   private startLiveTurn(live: LiveCodexSession, request: SessionInputRequest): void {
     if (!live.threadId) {
       live.queuedInputs.push(request);
       return;
     }
+    live.interruptExternalTurnWhenStarts = false;
     const collaborationMode = codexCollaborationModeForTurn(live);
     const requestRuntimeModel = timelineRuntimeModel({
       modelId: live.modelId,
@@ -307,23 +330,7 @@ export class CodexAdapter implements ProviderAdapter {
       if (typeof turn?.id === "string" && live.interruptWhenTurnStarts) {
         const turnId = turn.id;
         live.interruptWhenTurnStarts = false;
-        if (!live.interruptingTurnIds.has(turnId)) {
-          live.interruptingTurnIds.add(turnId);
-          void live.client
-            .request("turn/interrupt", {
-              threadId: live.threadId,
-              turnId,
-            })
-            .then(() => {
-              this.scheduleInterruptFallback(live, turnId);
-            })
-            .catch((error) => {
-              this.reportAsyncLiveError(
-                live.sessionId,
-                error instanceof Error ? error.message : String(error),
-              );
-            });
-        }
+        this.requestLiveTurnInterrupt(live, turnId);
       }
     }).catch((error) => {
       this.reportAsyncLiveError(
@@ -638,24 +645,7 @@ export class CodexAdapter implements ProviderAdapter {
       const turnId = live.currentTurnId;
       live.queuedInputs.length = 0;
       if (turnId) {
-        if (live.interruptingTurnIds.has(turnId)) {
-          return toSessionSummary(state);
-        }
-        live.interruptingTurnIds.add(turnId);
-        void live.client
-          .request("turn/interrupt", {
-            threadId: live.threadId,
-            turnId,
-          })
-          .then(() => {
-            this.scheduleInterruptFallback(live, turnId);
-          })
-          .catch((error) => {
-            this.reportAsyncLiveError(
-              sessionId,
-              error instanceof Error ? error.message : String(error),
-            );
-          });
+        this.requestLiveTurnInterrupt(live, turnId);
       } else if (live.turnStartInFlight && !live.interruptWhenTurnStarts) {
         live.interruptWhenTurnStarts = true;
       }

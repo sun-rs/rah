@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { validateProviderModelCatalog } from "@rah/runtime-protocol";
@@ -140,6 +140,10 @@ describe("CodexAdapter", () => {
   function writeRolloutLines(rolloutPath: string, lines: string[]): string {
     writeFileSync(rolloutPath, lines.join("\n") + "\n");
     return rolloutPath;
+  }
+
+  function appendRolloutLines(rolloutPath: string, lines: string[]): void {
+    appendFileSync(rolloutPath, lines.join("\n") + "\n");
   }
 
   function writeMockCodexServer(source: string): string {
@@ -301,6 +305,191 @@ rl.on('line', (line) => {
     assert.ok(methods.indexOf("thread/unarchive") > -1);
     assert.ok(methods.indexOf("thread/resume") > methods.indexOf("thread/unarchive"));
 
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
+  test("interrupts Codex goal auto-continuation after live resume", async () => {
+    const cwd = mkdtempSync(path.join(os.tmpdir(), "rah-codex-goal-resume-cwd-"));
+    const sessionId = "019e4444-aaaa-7bbb-8ccc-ddddeeeeffff";
+    const methodLog = path.join(tmpHome, "goal-resume-methods.jsonl");
+    const rolloutPath = writeRollout(sessionId, cwd);
+    appendRolloutLines(rolloutPath, [
+      JSON.stringify({
+        timestamp: "2026-04-15T00:00:04.000Z",
+        type: "event_msg",
+        payload: {
+          type: "thread_goal_updated",
+          threadId: sessionId,
+          turnId: "turn-goal-previous",
+          goal: {
+            threadId: sessionId,
+            objective: "Keep working",
+            status: "active",
+          },
+        },
+      }),
+      JSON.stringify({
+        timestamp: "2026-04-15T00:00:05.000Z",
+        type: "event_msg",
+        payload: {
+          type: "turn_aborted",
+          turn_id: "turn-goal-previous",
+          reason: "interrupted",
+        },
+      }),
+    ]);
+    writeMockCodexServer(`
+const fs = require('node:fs');
+const readline = require('node:readline');
+const logPath = ${JSON.stringify(methodLog)};
+const sessionId = ${JSON.stringify(sessionId)};
+const cwd = ${JSON.stringify(cwd)};
+const rl = readline.createInterface({ input: process.stdin });
+function send(msg) { process.stdout.write(JSON.stringify(msg) + "\\n"); }
+function log(entry) { fs.appendFileSync(logPath, JSON.stringify(entry) + "\\n"); }
+rl.on('line', (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method === 'initialize') {
+    send({ id: msg.id, result: {} });
+    return;
+  }
+  if (msg.method === 'thread/resume') {
+    log({ method: msg.method });
+    send({ id: msg.id, result: { thread: { id: sessionId, cwd, status: { type: 'idle' } }, cwd } });
+    setTimeout(() => send({ method: 'turn/started', params: { threadId: sessionId, turn: { id: 'turn-auto-goal-1' } } }), 5);
+    return;
+  }
+  if (msg.method === 'turn/interrupt') {
+    log({ method: msg.method, params: msg.params });
+    send({ id: msg.id, result: {} });
+    send({ method: 'turn/completed', params: { threadId: sessionId, turn: { id: msg.params.turnId, status: 'interrupted' } } });
+    return;
+  }
+  log({ method: msg.method });
+  send({ id: msg.id, result: {} });
+});
+`);
+
+    const services = {
+      eventBus: new EventBus(),
+      ptyHub: new PtyHub(),
+      sessionStore: new SessionStore(),
+    };
+    const adapter = new CodexAdapter(services);
+
+    const resumed = await adapter.resumeSession({
+      provider: "codex",
+      providerSessionId: sessionId,
+    });
+
+    await waitFor(() => {
+      try {
+        return readFileSync(methodLog, "utf8").includes("turn/interrupt");
+      } catch {
+        return false;
+      }
+    });
+    const methods = readFileSync(methodLog, "utf8")
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { method: string; params?: { turnId?: string } });
+    const interrupt = methods.find((entry) => entry.method === "turn/interrupt");
+    assert.equal(interrupt?.params?.turnId, "turn-auto-goal-1");
+
+    await adapter.destroySession(resumed.session.session.id);
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
+  test("does not interrupt user input when an active goal resume has no auto turn", async () => {
+    const cwd = mkdtempSync(path.join(os.tmpdir(), "rah-codex-goal-user-input-cwd-"));
+    const sessionId = "019e4444-bbbb-7bbb-8ccc-ddddeeeeffff";
+    const methodLog = path.join(tmpHome, "goal-user-input-methods.jsonl");
+    const rolloutPath = writeRollout(sessionId, cwd);
+    appendRolloutLines(rolloutPath, [
+      JSON.stringify({
+        timestamp: "2026-04-15T00:00:04.000Z",
+        type: "event_msg",
+        payload: {
+          type: "thread_goal_updated",
+          threadId: sessionId,
+          goal: {
+            threadId: sessionId,
+            objective: "Keep working",
+            status: "active",
+          },
+        },
+      }),
+    ]);
+    writeMockCodexServer(`
+const fs = require('node:fs');
+const readline = require('node:readline');
+const logPath = ${JSON.stringify(methodLog)};
+const sessionId = ${JSON.stringify(sessionId)};
+const cwd = ${JSON.stringify(cwd)};
+const rl = readline.createInterface({ input: process.stdin });
+function send(msg) { process.stdout.write(JSON.stringify(msg) + "\\n"); }
+function log(entry) { fs.appendFileSync(logPath, JSON.stringify(entry) + "\\n"); }
+rl.on('line', (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method === 'initialize') {
+    send({ id: msg.id, result: {} });
+    return;
+  }
+  if (msg.method === 'thread/resume') {
+    log({ method: msg.method });
+    send({ id: msg.id, result: { thread: { id: sessionId, cwd, status: { type: 'idle' } }, cwd } });
+    return;
+  }
+  if (msg.method === 'turn/start') {
+    log({ method: msg.method, params: msg.params });
+    send({ id: msg.id, result: { turn: { id: 'turn-user-1' } } });
+    send({ method: 'turn/started', params: { threadId: sessionId, turn: { id: 'turn-user-1' } } });
+    send({ method: 'turn/completed', params: { threadId: sessionId, turn: { id: 'turn-user-1', status: 'completed' } } });
+    return;
+  }
+  if (msg.method === 'turn/interrupt') {
+    log({ method: msg.method, params: msg.params });
+    send({ id: msg.id, result: {} });
+    return;
+  }
+  log({ method: msg.method });
+  send({ id: msg.id, result: {} });
+});
+`);
+
+    const services = {
+      eventBus: new EventBus(),
+      ptyHub: new PtyHub(),
+      sessionStore: new SessionStore(),
+    };
+    const adapter = new CodexAdapter(services);
+
+    const resumed = await adapter.resumeSession({
+      provider: "codex",
+      providerSessionId: sessionId,
+    });
+    adapter.sendInput(resumed.session.session.id, {
+      clientId: "web-client",
+      text: "User controlled continuation",
+    });
+
+    await waitFor(() => {
+      try {
+        return readFileSync(methodLog, "utf8").includes("turn/start");
+      } catch {
+        return false;
+      }
+    });
+    const methods = readFileSync(methodLog, "utf8")
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { method: string });
+    assert.ok(methods.some((entry) => entry.method === "turn/start"));
+    assert.equal(methods.some((entry) => entry.method === "turn/interrupt"), false);
+
+    await adapter.destroySession(resumed.session.session.id);
     rmSync(cwd, { recursive: true, force: true });
   });
 

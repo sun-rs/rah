@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { providerChildEnv } from "./provider-child-env";
 
 const execFileAsync = promisify(execFile);
 
@@ -22,10 +23,7 @@ export class NativeTerminalProcess {
     this.closeTimeoutMs = options.closeTimeoutMs ?? 2_000;
     this.child = spawn(options.command, options.args ?? [], {
       cwd: options.cwd,
-      env: {
-        ...process.env,
-        ...(options.env ?? {}),
-      },
+      env: providerChildEnv(options.env),
       stdio: "inherit",
       shell: false,
     });
