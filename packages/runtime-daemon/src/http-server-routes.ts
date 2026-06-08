@@ -57,6 +57,12 @@ import { writeHostClipboard } from "./host-clipboard";
 
 const MAX_QUERY_LIMIT = 500;
 
+type RuntimeEngineHandle = () => Promise<RuntimeEngine>;
+
+async function resolveRuntimeEngine(engine: RuntimeEngineHandle): Promise<RuntimeEngine> {
+  return await engine();
+}
+
 function parseQueryLimit(raw: string | null, fallback?: number): number | undefined {
   if (!raw) {
     return fallback;
@@ -69,7 +75,7 @@ function parseQueryLimit(raw: string | null, fallback?: number): number | undefi
 }
 
 function parseStoredSessionsModeFromUrl(url: URL): "all" | "recent" {
-  return url.searchParams.get("storedSessions") === "recent" ? "recent" : "all";
+  return url.searchParams.get("storedSessions") === "all" ? "all" : "recent";
 }
 
 function parseStoredSessionsModeFromRequest(req: IncomingMessage): "all" | "recent" {
@@ -467,13 +473,13 @@ export function createPostRoutes(
 }
 
 export async function handleHttpRequest(args: {
-  engine: RuntimeEngine;
-  postRoutes: Array<{ pattern: RegExp; handler: JsonHandler }>;
+  engine: RuntimeEngineHandle;
+  postRoutes: () => Promise<Array<{ pattern: RegExp; handler: JsonHandler }>>;
   req: IncomingMessage;
   res: ServerResponse;
   runtimeIdentity?: RuntimeIdentityResponse | undefined;
 }): Promise<void> {
-  const { engine, postRoutes, req, res, runtimeIdentity } = args;
+  const { req, res, runtimeIdentity } = args;
   try {
     if (!req.url || !req.method) {
       writeText(req, res, 400, "Bad Request");
@@ -501,6 +507,14 @@ export async function handleHttpRequest(args: {
       return;
     }
 
+    if (req.method === "GET" && !pathname.startsWith("/api/")) {
+      if (await serveClientApp(pathname, req, res)) {
+        return;
+      }
+      writeText(req, res, 404, "Not Found");
+      return;
+    }
+
     if (req.method === "GET" && pathname === "/api/runtime") {
       if (!runtimeIdentity) {
         writeJson(req, res, 503, { error: "Runtime identity is not ready." });
@@ -509,6 +523,8 @@ export async function handleHttpRequest(args: {
       writeJson(req, res, 200, runtimeIdentity);
       return;
     }
+
+    const engine = await resolveRuntimeEngine(args.engine);
 
     if (req.method === "GET" && pathname === "/api/sessions") {
       const storedSessionsMode = parseStoredSessionsModeFromUrl(url);
@@ -898,11 +914,15 @@ export async function handleHttpRequest(args: {
       const limit = parseQueryLimit(limitRaw);
       const detailParam = url.searchParams.get("detail");
       const detail: "full" | "summary" = detailParam === "full" ? "full" : "summary";
+      const scopeParam = url.searchParams.get("scope");
+      const scope: "all" | "conversation" =
+        scopeParam === "conversation" ? "conversation" : "all";
       const options = {
         ...(beforeTs !== undefined ? { beforeTs } : {}),
         ...(cursor !== undefined ? { cursor } : {}),
         ...(limit !== undefined ? { limit } : {}),
         detail,
+        scope,
       };
       writeJson(req, res, 200, engine.getSessionHistoryPage(historyMatch[1]!, options));
       return;
@@ -945,12 +965,6 @@ export async function handleHttpRequest(args: {
       return;
     }
 
-    if (req.method === "GET" && !pathname.startsWith("/api/")) {
-      if (await serveClientApp(pathname, req, res)) {
-        return;
-      }
-    }
-
     if (req.method === "POST") {
       if (pathname === "/api/debug/scenarios/start") {
         const body = await readJsonBody(req);
@@ -959,6 +973,7 @@ export async function handleHttpRequest(args: {
         writeJson(req, res, 200, result);
         return;
       }
+      const postRoutes = await args.postRoutes();
       const route = postRoutes.find(({ pattern }) => pattern.test(pathname));
       if (!route) {
         writeText(req, res, 404, "Not Found");

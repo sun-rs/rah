@@ -61,6 +61,7 @@ export async function refreshLatestHistoryCommand(args: {
   try {
     const page = await api.readSessionHistory(args.sessionId, {
       limit: args.historyPageLimit,
+      scope: "conversation",
     });
     args.set((state) => {
       const current = state.projections.get(args.sessionId);
@@ -144,6 +145,7 @@ export async function loadOlderHistoryCommand(args: {
       ...(cursor ? { cursor } : {}),
       ...(beforeTs ? { beforeTs } : {}),
       limit: args.historyPageLimit,
+      scope: "conversation",
     });
     args.set((state) => {
       const current = state.projections.get(args.sessionId);

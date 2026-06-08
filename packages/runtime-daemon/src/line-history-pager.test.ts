@@ -42,6 +42,29 @@ function identifiedHistoryEvent(text: string, seq: number): RahEvent {
   };
 }
 
+function toolEvent(seq: number): RahEvent {
+  return {
+    id: `tool-${seq}`,
+    seq,
+    ts: `2025-07-19T22:22:${String((seq % 60) + 1).padStart(2, "0")}.000Z`,
+    sessionId: "session-1",
+    type: "tool.call.completed",
+    source: {
+      provider: "codex",
+      channel: "structured_persisted",
+      authority: "authoritative",
+    },
+    payload: {
+      toolCall: {
+        id: `tool-${seq}`,
+        family: "shell",
+        providerToolName: "exec_command",
+        title: "Run command",
+      },
+    },
+  };
+}
+
 describe("line history pager", () => {
   test("preserves excluded semantic-rewind prefix for the next older page", () => {
     const loader = createLineFrozenHistoryPageLoader({
@@ -196,6 +219,62 @@ describe("line history pager", () => {
           event.type !== "timeline.item.added" ||
           typeof event.payload.identity?.canonicalItemId === "string",
       ),
+    );
+  });
+
+  test("filters before paging so tool-heavy windows still return a full conversation page", () => {
+    const loader = createLineFrozenHistoryPageLoader({
+      boundary: {
+        kind: "frozen",
+        sourceRevision: "rev-1",
+      },
+      snapshotEndOffset: 40,
+      initialLineBudget: 5,
+      maxLineBudget: 20,
+      readWindow: ({ endOffset }) => {
+        if (endOffset === 40) {
+          return {
+            startOffset: 20,
+            events: [
+              historyEvent("one", 1),
+              toolEvent(2),
+              toolEvent(3),
+              historyEvent("two", 4),
+              toolEvent(5),
+              historyEvent("three", 6),
+            ],
+          };
+        }
+        return {
+          startOffset: 0,
+          events: [historyEvent("zero", 0)],
+        };
+      },
+    });
+
+    const initial = loader.loadInitialPage(2, {
+      eventFilter: (event) => event.type.startsWith("timeline."),
+    });
+    assert.deepEqual(
+      initial.events.map((event) =>
+        event.type === "timeline.item.added" && event.payload.item.kind === "assistant_message"
+          ? event.payload.item.text
+          : null,
+      ),
+      ["two", "three"],
+    );
+    assert.ok(initial.nextCursor);
+
+    const older = loader.loadOlderPage(initial.nextCursor!, 2, initial.boundary, {
+      eventFilter: (event) => event.type.startsWith("timeline."),
+    });
+    assert.deepEqual(
+      older.events.map((event) =>
+        event.type === "timeline.item.added" && event.payload.item.kind === "assistant_message"
+          ? event.payload.item.text
+          : null,
+      ),
+      ["zero", "one"],
     );
   });
 });

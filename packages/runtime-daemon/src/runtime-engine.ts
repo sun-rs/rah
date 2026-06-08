@@ -81,6 +81,7 @@ import { EventBus } from "./event-bus";
 import { HistorySnapshotStore } from "./history-snapshots";
 import {
   fullHistoryPage,
+  matchesSessionHistoryScope,
   historyEventMatchesItem,
   summarizeHistoryPage,
 } from "./history-event-projection";
@@ -1389,7 +1390,13 @@ export class RuntimeEngine {
 
   getSessionHistoryPage(
     sessionId: string,
-    options?: { beforeTs?: string; cursor?: string; limit?: number; detail?: "summary" | "full" },
+    options?: {
+      beforeTs?: string;
+      cursor?: string;
+      limit?: number;
+      detail?: "summary" | "full";
+      scope?: "all" | "conversation";
+    },
   ): SessionHistoryPageResponse {
     const ownerProvider = this.structuredSessionOwners.get(sessionId);
     const adapter = ownerProvider
@@ -1404,10 +1411,15 @@ export class RuntimeEngine {
       return { sessionId, events: [] };
     }
     const session = this.sessionStore.getSession(sessionId)?.session;
+    const scope = options?.scope ?? "all";
     const page = this.historySnapshots.getPage({
       sessionId,
       ...(options?.cursor ? { cursor: options.cursor } : {}),
       ...(options?.limit ? { limit: options.limit } : {}),
+      filterKey: scope,
+      ...(scope === "conversation"
+        ? { eventFilter: (event) => matchesSessionHistoryScope(event, scope) }
+        : {}),
       loadFrozenPage: () => adapter.createFrozenHistoryPageLoader?.(sessionId),
       loadEvents: () =>
         adapter.getSessionHistoryPage!(

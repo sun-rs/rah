@@ -13,6 +13,12 @@ export type FrozenHistoryPage = {
   nextBeforeTs?: string;
 };
 
+export type HistoryEventFilter = (event: RahEvent) => boolean;
+
+export type HistoryPageFilterOptions = {
+  eventFilter?: HistoryEventFilter;
+};
+
 /**
  * Provider-owned history pager for sessions whose transcript should remain
  * frozen while the user browses older history, even if the underlying source
@@ -24,11 +30,12 @@ export type FrozenHistoryPage = {
  * - reject or avoid mixing newer file content into older-page reads
  */
 export interface FrozenHistoryPageLoader {
-  loadInitialPage(limit: number): FrozenHistoryPage;
+  loadInitialPage(limit: number, options?: HistoryPageFilterOptions): FrozenHistoryPage;
   loadOlderPage(
     cursor: string,
     limit: number,
     boundary: FrozenHistoryBoundary,
+    options?: HistoryPageFilterOptions,
   ): FrozenHistoryPage;
 }
 
@@ -40,6 +47,7 @@ type MaterializedHistorySnapshot = {
 type CachedFrozenPage = {
   requestCursor: string | null;
   limit: number;
+  filterKey: string;
   response: SessionHistoryPageResponse;
 };
 
@@ -47,7 +55,7 @@ type FrozenPagedHistorySnapshot = {
   mode: "frozen_paged";
   boundary: FrozenHistoryBoundary;
   loader: FrozenHistoryPageLoader;
-  pagesByRequestCursor: Map<string | null, CachedFrozenPage>;
+  pagesByRequestKey: Map<string, CachedFrozenPage>;
 };
 
 type HistorySnapshot = MaterializedHistorySnapshot | FrozenPagedHistorySnapshot;
@@ -167,6 +175,18 @@ function normalizeHistoryPageLimit(limitValue: number | undefined): number {
   return Math.max(1, limitValue ?? 1000);
 }
 
+function normalizeHistoryFilterKey(filterKey: string | undefined): string {
+  return filterKey && filterKey.trim() ? filterKey : "all";
+}
+
+function frozenPageCacheKey(args: {
+  requestCursor: string | null;
+  limit: number;
+  filterKey: string;
+}): string {
+  return `${args.filterKey}\u0000${args.limit}\u0000${args.requestCursor ?? ""}`;
+}
+
 export class HistorySnapshotStore {
   private readonly snapshots = new Map<string, HistorySnapshot>();
 
@@ -174,53 +194,75 @@ export class HistorySnapshotStore {
     sessionId: string;
     limit?: number;
     cursor?: string;
+    filterKey?: string;
+    eventFilter?: HistoryEventFilter;
     loadEvents: () => RahEvent[];
     loadFrozenPage?: () => FrozenHistoryPageLoader | undefined;
   }): SessionHistoryPageResponse {
+    const filterKey = normalizeHistoryFilterKey(args.filterKey);
     const existing = this.snapshots.get(args.sessionId);
     if (existing?.mode === "frozen_paged") {
       if (!args.cursor) {
-        const requestedLimit = normalizeHistoryPageLimit(args.limit);
-        const cachedInitial = existing.pagesByRequestCursor.get(null);
         const refreshed = this.createFrozenPagedSnapshot(
           args.sessionId,
           args.limit,
+          filterKey,
+          args.eventFilter,
           args.loadFrozenPage,
         );
-        if (
-          refreshed &&
-          (refreshed.boundary.sourceRevision !== existing.boundary.sourceRevision ||
-            cachedInitial?.limit !== requestedLimit)
-        ) {
-          this.snapshots.set(args.sessionId, refreshed);
-          return refreshed.pagesByRequestCursor.get(null)!.response;
+        if (refreshed) {
+          const refreshedInitial = refreshed.pagesByRequestKey.values().next().value as
+            | CachedFrozenPage
+            | undefined;
+          if (refreshed.boundary.sourceRevision !== existing.boundary.sourceRevision) {
+            this.snapshots.set(args.sessionId, refreshed);
+            return refreshedInitial!.response;
+          }
         }
       }
-      return this.getFrozenPagedPage(existing, args.sessionId, args.limit, args.cursor, args.loadFrozenPage);
+      return this.getFrozenPagedPage(
+        existing,
+        args.sessionId,
+        args.limit,
+        args.cursor,
+        filterKey,
+        args.eventFilter,
+        args.loadFrozenPage,
+      );
     }
     if (existing?.mode === "materialized") {
       if (!args.cursor) {
         const upgraded = this.createFrozenPagedSnapshot(
           args.sessionId,
           args.limit,
+          filterKey,
+          args.eventFilter,
           args.loadFrozenPage,
         );
         if (upgraded) {
           this.snapshots.set(args.sessionId, upgraded);
-          return upgraded.pagesByRequestCursor.get(null)!.response;
+          return upgraded.pagesByRequestKey.values().next().value!.response;
         }
       }
-      return this.getMaterializedPage(existing, args.sessionId, args.limit, args.cursor);
+      return this.getMaterializedPage(
+        existing,
+        args.sessionId,
+        args.limit,
+        args.cursor,
+        args.eventFilter,
+      );
     }
 
     const created = this.createFrozenPagedSnapshot(
       args.sessionId,
       args.limit,
+      filterKey,
+      args.eventFilter,
       args.loadFrozenPage,
     );
     if (created) {
       this.snapshots.set(args.sessionId, created);
-      return created.pagesByRequestCursor.get(null)!.response;
+      return created.pagesByRequestKey.values().next().value!.response;
     }
 
     const materialized: MaterializedHistorySnapshot = {
@@ -228,7 +270,13 @@ export class HistorySnapshotStore {
       events: normalizeSnapshotEvents(args.loadEvents()),
     };
     this.snapshots.set(args.sessionId, materialized);
-    return this.getMaterializedPage(materialized, args.sessionId, args.limit, args.cursor);
+    return this.getMaterializedPage(
+      materialized,
+      args.sessionId,
+      args.limit,
+      args.cursor,
+      args.eventFilter,
+    );
   }
 
   transfer(sourceSessionId: string, targetSessionId: string): void {
@@ -263,7 +311,7 @@ export class HistorySnapshotStore {
     if (snapshot.mode === "materialized") {
       collect(snapshot.events);
     } else {
-      for (const cachedPage of snapshot.pagesByRequestCursor.values()) {
+      for (const cachedPage of snapshot.pagesByRequestKey.values()) {
         collect(cachedPage.response.events);
       }
     }
@@ -273,6 +321,8 @@ export class HistorySnapshotStore {
   private createFrozenPagedSnapshot(
     sessionId: string,
     limitValue: number | undefined,
+    filterKey: string,
+    eventFilter: HistoryEventFilter | undefined,
     loadFrozenPage: (() => FrozenHistoryPageLoader | undefined) | undefined,
   ): FrozenPagedHistorySnapshot | null {
     const frozenLoader = loadFrozenPage?.();
@@ -280,7 +330,7 @@ export class HistorySnapshotStore {
       return null;
     }
     const limit = normalizeHistoryPageLimit(limitValue);
-    const initial = frozenLoader.loadInitialPage(limit);
+    const initial = frozenLoader.loadInitialPage(limit, eventFilter ? { eventFilter } : undefined);
     const initialEvents = normalizeTranscriptEvents(
       reanchorFrozenPageEvents({
         sessionId,
@@ -293,12 +343,13 @@ export class HistorySnapshotStore {
       mode: "frozen_paged",
       boundary: initial.boundary,
       loader: frozenLoader,
-      pagesByRequestCursor: new Map([
+      pagesByRequestKey: new Map([
         [
-          null,
+          frozenPageCacheKey({ requestCursor: null, limit, filterKey }),
           {
             requestCursor: null,
             limit,
+            filterKey,
             response: {
               sessionId,
               events: initialEvents,
@@ -316,12 +367,14 @@ export class HistorySnapshotStore {
     sessionId: string,
     limitValue?: number,
     cursor?: string,
+    eventFilter?: HistoryEventFilter,
   ): SessionHistoryPageResponse {
     const limit = normalizeHistoryPageLimit(limitValue);
-    const endExclusive = cursor ? decodeOffsetCursor(cursor) : snapshot.events.length;
-    const boundedEndExclusive = Math.max(0, Math.min(endExclusive, snapshot.events.length));
+    const eventsForScope = eventFilter ? snapshot.events.filter(eventFilter) : snapshot.events;
+    const endExclusive = cursor ? decodeOffsetCursor(cursor) : eventsForScope.length;
+    const boundedEndExclusive = Math.max(0, Math.min(endExclusive, eventsForScope.length));
     const start = Math.max(0, boundedEndExclusive - limit);
-    const events = snapshot.events.slice(start, boundedEndExclusive);
+    const events = eventsForScope.slice(start, boundedEndExclusive);
     const nextCursor = start > 0 ? encodeOffsetCursor(start) : undefined;
     const nextBeforeTs = paginationTimestamp(nextCursor, events);
     return {
@@ -337,18 +390,26 @@ export class HistorySnapshotStore {
     sessionId: string,
     limitValue: number | undefined,
     cursor: string | undefined,
+    filterKey: string,
+    eventFilter: HistoryEventFilter | undefined,
     _loadFrozenPage: (() => FrozenHistoryPageLoader | undefined) | undefined,
   ): SessionHistoryPageResponse {
     const requestCursor = cursor ?? null;
     const limit = normalizeHistoryPageLimit(limitValue);
-    const cached = snapshot.pagesByRequestCursor.get(requestCursor);
-    if (cached && cached.limit === limit) {
+    const cacheKey = frozenPageCacheKey({ requestCursor, limit, filterKey });
+    const cached = snapshot.pagesByRequestKey.get(cacheKey);
+    if (cached) {
       return cached.response;
     }
     const page =
       cursor !== undefined
-        ? snapshot.loader.loadOlderPage(cursor, limit, snapshot.boundary)
-        : snapshot.loader.loadInitialPage(limit);
+        ? snapshot.loader.loadOlderPage(
+            cursor,
+            limit,
+            snapshot.boundary,
+            eventFilter ? { eventFilter } : undefined,
+          )
+        : snapshot.loader.loadInitialPage(limit, eventFilter ? { eventFilter } : undefined);
     if (page.boundary.sourceRevision !== snapshot.boundary.sourceRevision) {
       throw new Error("Frozen history source revision changed while paging older history.");
     }
@@ -366,9 +427,10 @@ export class HistorySnapshotStore {
       ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
       ...(nextBeforeTs ? { nextBeforeTs } : {}),
     };
-    snapshot.pagesByRequestCursor.set(requestCursor, {
+    snapshot.pagesByRequestKey.set(cacheKey, {
       requestCursor,
       limit,
+      filterKey,
       response,
     });
     return response;

@@ -2,6 +2,7 @@ import type {
   RahEvent,
   SessionHistoryItemDetailKind,
   SessionHistoryPageResponse,
+  SessionHistoryScope,
   ToolCall,
   ToolCallDetail,
   WorkbenchObservation,
@@ -93,6 +94,26 @@ function compactObservation(observation: WorkbenchObservation): WorkbenchObserva
 function withoutRaw<T extends RahEvent>(event: T): T {
   const { raw: _raw, ...rest } = event;
   return rest as T;
+}
+
+export function matchesSessionHistoryScope(
+  event: RahEvent,
+  scope: SessionHistoryScope,
+): boolean {
+  if (scope === "all") {
+    return true;
+  }
+  switch (event.type) {
+    case "tool.call.started":
+    case "tool.call.delta":
+    case "tool.call.completed":
+    case "observation.started":
+    case "observation.updated":
+    case "observation.completed":
+      return false;
+    default:
+      return true;
+  }
 }
 
 export function summarizeHistoryEvent(event: RahEvent): RahEvent {

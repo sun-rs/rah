@@ -4,6 +4,8 @@ import type {
   FrozenHistoryBoundary,
   FrozenHistoryPage,
   FrozenHistoryPageLoader,
+  HistoryEventFilter,
+  HistoryPageFilterOptions,
 } from "./history-snapshots";
 
 type LineHistoryWindow = {
@@ -28,6 +30,39 @@ type CreateLineFrozenHistoryPageLoaderArgs = {
 
 function defaultSelectPage(events: readonly RahEvent[], limit: number): RahEvent[] {
   return [...events].slice(Math.max(0, events.length - limit));
+}
+
+function countPageCandidates(
+  events: readonly RahEvent[],
+  eventFilter: HistoryEventFilter | undefined,
+): number {
+  return eventFilter ? events.filter(eventFilter).length : events.length;
+}
+
+function selectPageFromCombined(args: {
+  combined: RahEvent[];
+  limit: number;
+  eventFilter: HistoryEventFilter | undefined;
+  selectPage: (events: readonly RahEvent[], limit: number) => RahEvent[];
+}): { pageEvents: RahEvent[]; prefixEvents: RahEvent[] } {
+  const candidates = args.eventFilter
+    ? args.combined.filter(args.eventFilter)
+    : args.combined;
+  const pageEvents = args.eventFilter
+    ? defaultSelectPage(candidates, args.limit)
+    : args.selectPage(candidates, args.limit);
+  const firstPageEvent = pageEvents[0];
+  if (!firstPageEvent) {
+    return {
+      pageEvents: [],
+      prefixEvents: [],
+    };
+  }
+  const firstPageIndex = args.combined.indexOf(firstPageEvent);
+  return {
+    pageEvents,
+    prefixEvents: args.combined.slice(0, Math.max(0, firstPageIndex)),
+  };
 }
 
 /**
@@ -71,24 +106,39 @@ export function createLineFrozenHistoryPageLoader(
     };
   }
 
-  function pageFromCarry(state: LineHistoryCursorState, limit: number): FrozenHistoryPage {
-    if (state.carryEvents.length === 0) {
+  function pageFromCarry(
+    state: LineHistoryCursorState,
+    limit: number,
+    options: HistoryPageFilterOptions | undefined,
+  ): FrozenHistoryPage {
+    const eventFilter = options?.eventFilter;
+    if (countPageCandidates(state.carryEvents, eventFilter) === 0) {
       return finalizePage([], {
         endOffset: state.endOffset,
         carryEvents: [],
       });
     }
-    const splitIndex = Math.max(0, state.carryEvents.length - limit);
-    return finalizePage(state.carryEvents.slice(splitIndex), {
+    const { pageEvents, prefixEvents } = selectPageFromCombined({
+      combined: state.carryEvents,
+      limit,
+      eventFilter,
+      selectPage,
+    });
+    return finalizePage(pageEvents, {
       endOffset: state.endOffset,
-      carryEvents: state.carryEvents.slice(0, splitIndex),
+      carryEvents: prefixEvents,
     });
   }
 
-  function buildPage(state: LineHistoryCursorState, limit: number): FrozenHistoryPage {
+  function buildPage(
+    state: LineHistoryCursorState,
+    limit: number,
+    options: HistoryPageFilterOptions | undefined,
+  ): FrozenHistoryPage {
     const safeLimit = Math.max(1, limit);
-    if (state.carryEvents.length >= safeLimit || state.endOffset <= 0) {
-      return pageFromCarry(state, safeLimit);
+    const eventFilter = options?.eventFilter;
+    if (countPageCandidates(state.carryEvents, eventFilter) >= safeLimit || state.endOffset <= 0) {
+      return pageFromCarry(state, safeLimit, options);
     }
 
     let lineBudget = Math.max(args.initialLineBudget ?? safeLimit * 4, 1);
@@ -98,12 +148,16 @@ export function createLineFrozenHistoryPageLoader(
         lineBudget,
       });
       const combined = [...window.events, ...state.carryEvents];
-      const pageEvents = selectPage(combined, safeLimit);
+      const { pageEvents, prefixEvents } = selectPageFromCombined({
+        combined,
+        limit: safeLimit,
+        eventFilter,
+        selectPage,
+      });
       const pageStable = args.isPageStable?.(pageEvents) ?? true;
-      const prefixLength = Math.max(0, combined.length - pageEvents.length);
       const nextState: LineHistoryCursorState = {
         endOffset: window.startOffset,
-        carryEvents: combined.slice(0, prefixLength),
+        carryEvents: prefixEvents,
       };
       if (
         (pageEvents.length >= safeLimit && pageStable) ||
@@ -118,15 +172,16 @@ export function createLineFrozenHistoryPageLoader(
   }
 
   return {
-    loadInitialPage: (limit) =>
+    loadInitialPage: (limit, options) =>
       buildPage(
         {
           endOffset: args.snapshotEndOffset,
           carryEvents: [],
         },
         limit,
+        options,
       ),
-    loadOlderPage: (cursor, limit, boundary) => {
+    loadOlderPage: (cursor, limit, boundary, options) => {
       if (boundary.sourceRevision !== args.boundary.sourceRevision) {
         throw new Error("Frozen line history boundary changed while paging.");
       }
@@ -134,7 +189,7 @@ export function createLineFrozenHistoryPageLoader(
       if (!state) {
         throw new Error(`Unknown frozen line history cursor ${cursor}`);
       }
-      return buildPage(state, limit);
+      return buildPage(state, limit, options);
     },
   };
 }

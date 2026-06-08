@@ -6,6 +6,7 @@ import {
   type FrozenHistoryPageLoader,
   HistorySnapshotStore,
 } from "./history-snapshots";
+import { createLineFrozenHistoryPageLoader } from "./line-history-pager";
 
 const source = {
   provider: "codex" as const,
@@ -71,6 +72,25 @@ function timelineText(event: RahEvent): string | null {
   }
   const item = event.payload.item;
   return "text" in item ? item.text : null;
+}
+
+function toolCompletedEvent(args: { id: string; seq: number; ts: string }): RahEvent {
+  return {
+    id: args.id,
+    seq: args.seq,
+    ts: args.ts,
+    sessionId: "source-session",
+    type: "tool.call.completed",
+    source,
+    payload: {
+      toolCall: {
+        id: args.id,
+        family: "shell",
+        providerToolName: "exec_command",
+        title: "Run command",
+      },
+    },
+  };
 }
 
 test("history snapshots keep provider sequence order instead of timestamp sorting", () => {
@@ -250,6 +270,178 @@ test("history snapshots dedupe frozen initial and older pages by canonical timel
     olderPage.events.map(timelineText),
     ["Older copy"],
   );
+});
+
+test("history snapshots page filtered frozen history without skipping matching events", () => {
+  const store = new HistorySnapshotStore();
+  const boundary: FrozenHistoryBoundary = {
+    kind: "frozen",
+    sourceRevision: "revision-one",
+  };
+  const events = [
+    timelineEvent({
+      id: "msg-1",
+      seq: 1,
+      ts: "2026-05-03T00:00:01.000Z",
+      canonicalItemId: "msg-1",
+      text: "one",
+    }),
+    toolCompletedEvent({
+      id: "tool-1",
+      seq: 2,
+      ts: "2026-05-03T00:00:02.000Z",
+    }),
+    timelineEvent({
+      id: "msg-2",
+      seq: 3,
+      ts: "2026-05-03T00:00:03.000Z",
+      canonicalItemId: "msg-2",
+      text: "two",
+    }),
+    toolCompletedEvent({
+      id: "tool-2",
+      seq: 4,
+      ts: "2026-05-03T00:00:04.000Z",
+    }),
+    timelineEvent({
+      id: "msg-3",
+      seq: 5,
+      ts: "2026-05-03T00:00:05.000Z",
+      canonicalItemId: "msg-3",
+      text: "three",
+    }),
+  ];
+  const loader = {
+    loadInitialPage(limit: number, options?: { eventFilter?: (event: RahEvent) => boolean }) {
+      const candidates = options?.eventFilter ? events.filter(options.eventFilter) : events;
+      return {
+        boundary,
+        events: candidates.slice(Math.max(0, candidates.length - limit)),
+        nextCursor: "older",
+      };
+    },
+    loadOlderPage(
+      cursor: string,
+      limit: number,
+      _boundary: FrozenHistoryBoundary,
+      options?: { eventFilter?: (event: RahEvent) => boolean },
+    ) {
+      assert.equal(cursor, "older");
+      const older = events.slice(0, 1);
+      const candidates = options?.eventFilter ? older.filter(options.eventFilter) : older;
+      return {
+        boundary,
+        events: candidates.slice(Math.max(0, candidates.length - limit)),
+      };
+    },
+  } satisfies FrozenHistoryPageLoader;
+
+  const firstPage = store.getPage({
+    sessionId: "target-session",
+    limit: 2,
+    filterKey: "conversation",
+    eventFilter: (event) => event.type.startsWith("timeline."),
+    loadEvents: () => [],
+    loadFrozenPage: () => loader,
+  });
+  assert.ok(firstPage.nextCursor);
+  const secondPage = store.getPage({
+    sessionId: "target-session",
+    ...(firstPage.nextCursor ? { cursor: firstPage.nextCursor } : {}),
+    limit: 2,
+    filterKey: "conversation",
+    eventFilter: (event) => event.type.startsWith("timeline."),
+    loadEvents: () => [],
+    loadFrozenPage: () => loader,
+  });
+
+  assert.deepEqual(firstPage.events.map(timelineText), ["two", "three"]);
+  assert.deepEqual(secondPage.events.map(timelineText), ["one"]);
+});
+
+test("history snapshots keep filtered frozen cursors bound to the cached loader", () => {
+  const store = new HistorySnapshotStore();
+  const boundary: FrozenHistoryBoundary = {
+    kind: "frozen",
+    sourceRevision: "revision-one",
+  };
+  const events = [
+    timelineEvent({
+      id: "msg-1",
+      seq: 1,
+      ts: "2026-05-03T00:00:01.000Z",
+      canonicalItemId: "msg-1",
+      text: "one",
+    }),
+    toolCompletedEvent({
+      id: "tool-1",
+      seq: 2,
+      ts: "2026-05-03T00:00:02.000Z",
+    }),
+    timelineEvent({
+      id: "msg-2",
+      seq: 3,
+      ts: "2026-05-03T00:00:03.000Z",
+      canonicalItemId: "msg-2",
+      text: "two",
+    }),
+    timelineEvent({
+      id: "msg-3",
+      seq: 4,
+      ts: "2026-05-03T00:00:04.000Z",
+      canonicalItemId: "msg-3",
+      text: "three",
+    }),
+  ];
+  let loaderCreations = 0;
+  const createLoader = () => {
+    loaderCreations += 1;
+    return createLineFrozenHistoryPageLoader({
+      boundary,
+      snapshotEndOffset: 40,
+      readWindow: ({ endOffset }) => {
+        if (endOffset === 40) {
+          return {
+            startOffset: 20,
+            events,
+          };
+        }
+        return {
+          startOffset: 0,
+          events: [],
+        };
+      },
+    });
+  };
+
+  store.getPage({
+    sessionId: "target-session",
+    limit: 2,
+    loadEvents: () => [],
+    loadFrozenPage: createLoader,
+  });
+  const filteredInitial = store.getPage({
+    sessionId: "target-session",
+    limit: 2,
+    filterKey: "conversation",
+    eventFilter: (event) => event.type.startsWith("timeline."),
+    loadEvents: () => [],
+    loadFrozenPage: createLoader,
+  });
+  assert.ok(filteredInitial.nextCursor);
+  const filteredOlder = store.getPage({
+    sessionId: "target-session",
+    ...(filteredInitial.nextCursor ? { cursor: filteredInitial.nextCursor } : {}),
+    limit: 2,
+    filterKey: "conversation",
+    eventFilter: (event) => event.type.startsWith("timeline."),
+    loadEvents: () => [],
+    loadFrozenPage: createLoader,
+  });
+
+  assert.equal(loaderCreations, 2);
+  assert.deepEqual(filteredInitial.events.map(timelineText), ["two", "three"]);
+  assert.deepEqual(filteredOlder.events.map(timelineText), ["one"]);
 });
 
 test("history snapshots upgrade an early empty materialized page once provider frozen history appears", () => {

@@ -74,14 +74,38 @@ export async function startRahDaemon(options?: {
 }): Promise<RahDaemon> {
   const host = options?.host ?? "0.0.0.0";
   const port = options?.port ?? 43111;
-  const engine = options?.engine ?? new RuntimeEngine();
-  const postRoutes = createPostRoutes(engine);
+  let resolvedEngine: RuntimeEngine | undefined = options?.engine;
+  let enginePromise: Promise<RuntimeEngine> | null = options?.engine
+    ? Promise.resolve(options.engine)
+    : null;
+  const getEngine = () => {
+    if (!enginePromise) {
+      enginePromise = Promise.resolve().then(() => {
+        resolvedEngine = new RuntimeEngine();
+        return resolvedEngine;
+      });
+    }
+    return enginePromise;
+  };
+  let postRoutesPromise: Promise<ReturnType<typeof createPostRoutes>> | null = null;
+  const getPostRoutes = () => {
+    if (!postRoutesPromise) {
+      postRoutesPromise = getEngine().then((runtimeEngine) => createPostRoutes(runtimeEngine));
+    }
+    return postRoutesPromise;
+  };
   let runtimeIdentity: RuntimeIdentityResponse | undefined;
 
   const server = createServer(async (req, res) => {
-    await handleHttpRequest({ engine, postRoutes, req, res, runtimeIdentity });
+    await handleHttpRequest({
+      engine: getEngine,
+      postRoutes: getPostRoutes,
+      req,
+      res,
+      runtimeIdentity,
+    });
   });
-  const websockets = attachWebSocketHandlers(server, engine);
+  const websockets = attachWebSocketHandlers(server, getEngine);
 
   await new Promise<void>((resolve) => {
     server.listen(port, host, () => resolve());
@@ -95,7 +119,9 @@ export async function startRahDaemon(options?: {
     port: actualPort,
     async close() {
       try {
-        await engine.shutdown();
+        const runtimeEngine =
+          resolvedEngine ?? (enginePromise ? await enginePromise.catch(() => undefined) : undefined);
+        await runtimeEngine?.shutdown();
       } catch (error) {
         console.error("[rah] engine shutdown failed", error);
       }

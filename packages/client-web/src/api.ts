@@ -183,9 +183,7 @@ export async function listSessions(options?: {
   storedSessions?: StoredSessionsMode;
 }): Promise<ListSessionsResponse> {
   const query = new URLSearchParams();
-  if (options?.storedSessions) {
-    query.set("storedSessions", options.storedSessions);
-  }
+  query.set("storedSessions", options?.storedSessions ?? "recent");
   const suffix = query.size > 0 ? `?${query.toString()}` : "";
   return requestJson<ListSessionsResponse>(`/api/sessions${suffix}`);
 }
@@ -807,7 +805,13 @@ export async function searchWorkspaceFilesByDirectory(
 
 export async function readSessionHistory(
   sessionId: string,
-  options?: { beforeTs?: string; cursor?: string; limit?: number; detail?: "summary" | "full" },
+  options?: {
+    beforeTs?: string;
+    cursor?: string;
+    limit?: number;
+    detail?: "summary" | "full";
+    scope?: "all" | "conversation";
+  },
 ): Promise<SessionHistoryPageResponse> {
   const query = new URLSearchParams();
   if (options?.beforeTs) {
@@ -821,6 +825,9 @@ export async function readSessionHistory(
   }
   if (options?.detail) {
     query.set("detail", options.detail);
+  }
+  if (options?.scope) {
+    query.set("scope", options.scope);
   }
   const suffix = query.size > 0 ? `?${query.toString()}` : "";
   return requestJson<SessionHistoryPageResponse>(

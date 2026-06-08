@@ -111,7 +111,7 @@ export async function recoverFromReplayGapCommand(args: {
     args.updateLastSeq(args.batch.replayGap.newestAvailableSeq);
   }
   const workspaceVisibilityVersionAtRequest = args.get().workspaceVisibilityVersion;
-  const sessionsResponse = await api.listSessions();
+  const sessionsResponse = await api.listSessions({ storedSessions: "recent" });
   args.set((state) => {
     const nextState = args.replaceSessionsResponse(state as never, sessionsResponse, {
       workspaceVisibilityVersionAtRequest,
@@ -354,7 +354,9 @@ async function recoverTransportCommandInner(args: {
 }) {
   try {
     const workspaceVisibilityVersionAtRequest = args.get().workspaceVisibilityVersion;
-    const sessionsResponse = await (args.listSessions ?? api.listSessions)();
+    const sessionsResponse = await (args.listSessions ?? api.listSessions)({
+      storedSessions: "recent",
+    });
     args.set((state) => ({
       ...args.applySessionsResponse(state as never, sessionsResponse, {
         workspaceVisibilityVersionAtRequest,

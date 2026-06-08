@@ -503,6 +503,8 @@ export interface SessionFileSearchResponse {
   files: SessionFileSearchItem[];
 }
 
+export type SessionHistoryScope = "all" | "conversation";
+
 export interface SessionHistoryPageResponse {
   sessionId: string;
   events: RahEvent[];
