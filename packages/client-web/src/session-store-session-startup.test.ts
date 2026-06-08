@@ -401,7 +401,19 @@ describe("session startup model and mode requests", () => {
       providerSessionId: "thread-1",
       cwd: "/tmp/rah",
     });
-    const projections = new Map([["history", createEmptySessionProjection(history)]]);
+    const historyProjection = {
+      ...createEmptySessionProjection(history),
+      lastSeq: 1_000_000_123,
+      history: {
+        phase: "ready" as const,
+        nextCursor: "cursor-from-read-only-history",
+        nextBeforeTs: "2026-04-28T00:00:00.000Z",
+        generation: 4,
+        authoritativeApplied: true,
+        lastError: null,
+      },
+    };
+    const projections = new Map([["history", historyProjection]]);
     const requests = installWebApiMocks((request) => {
       if (request.url.includes("/api/fs/list")) {
         return { path: "/tmp/rah", entries: [] };
@@ -617,6 +629,15 @@ describe("session startup model and mode requests", () => {
     assert.equal(state.projections.has("history"), false);
     assert.equal(state.projections.has("claimed"), true);
     assert.equal(state.selectedSessionId, "claimed");
+    assert.equal(state.projections.get("claimed")?.lastSeq, 0);
+    assert.deepEqual(state.projections.get("claimed")?.history, {
+      phase: "idle",
+      nextCursor: null,
+      nextBeforeTs: null,
+      generation: 0,
+      authoritativeApplied: false,
+      lastError: null,
+    });
   });
 
   test("claim history keeps the claimed session when post-claim control update fails", async () => {

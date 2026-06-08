@@ -32,6 +32,22 @@ function projectionWithFreshSummary(
   return next;
 }
 
+export function rebindReadOnlyProjectionToLiveSession(
+  projection: SessionProjection,
+  summary: SessionProjection["summary"],
+): SessionProjection {
+  const next: SessionProjection = {
+    ...projection,
+    summary,
+    events: [],
+    lastSeq: 0,
+    history: initialHistorySyncState(),
+  };
+  delete next.currentRuntimeStatus;
+  delete next.pendingInterrupt;
+  return next;
+}
+
 type ProjectionStateSlice = {
   projections: Map<string, SessionProjection>;
   workspaceDir: string;
@@ -148,16 +164,15 @@ export function adoptExistingProjectionForProviderSession(
     isReadOnlyReplay(existingProjection.summary) && !isReadOnlyReplay(summary);
   const next = new Map(projections);
   next.delete(existingSessionId);
-  next.set(summary.session.id, {
-    ...existingProjection,
-    summary,
-    ...(rebindingReadOnlyReplay
-      ? {
-          events: [],
-          lastSeq: 0,
-        }
-      : {}),
-  });
+  next.set(
+    summary.session.id,
+    rebindingReadOnlyReplay
+      ? rebindReadOnlyProjectionToLiveSession(existingProjection, summary)
+      : {
+          ...existingProjection,
+          summary,
+        },
+  );
   return next;
 }
 

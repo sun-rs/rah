@@ -998,6 +998,12 @@ export function createEventsSocket(
   if (subscription.replayFromSeq !== undefined) {
     url.searchParams.set("replayFromSeq", String(subscription.replayFromSeq));
   }
+  for (const sessionId of subscription.sessionIds ?? []) {
+    url.searchParams.append("sessionId", sessionId);
+  }
+  for (const eventType of subscription.eventTypes ?? []) {
+    url.searchParams.append("eventType", eventType);
+  }
   const socket = new WebSocket(url);
   socket.addEventListener("open", () => {
     options?.onOpen?.();

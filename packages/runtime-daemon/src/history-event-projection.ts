@@ -110,6 +110,8 @@ export function matchesSessionHistoryScope(
     case "observation.started":
     case "observation.updated":
     case "observation.completed":
+    case "tool.call.failed":
+    case "observation.failed":
       return false;
     default:
       return true;
@@ -144,6 +146,8 @@ export function summarizeHistoryEvent(event: RahEvent): RahEvent {
         payload: {
           toolCallId: event.payload.toolCallId,
           error: event.payload.error,
+          detailAvailable: true,
+          detailSizeBytes: detailSize(event.payload.detail),
         },
       };
     case "observation.started":

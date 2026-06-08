@@ -21,6 +21,7 @@ import type {
   CouncilAgent,
   CouncilSnapshot,
   ProviderModelCatalog,
+  RahEvent,
 } from "@rah/runtime-protocol";
 import * as api from "../api";
 import { ProviderLogo } from "../components/ProviderLogo";
@@ -426,6 +427,7 @@ export function CouncilPage(props: {
   const [collapsedAddAgentDraftIds, setCollapsedAddAgentDraftIds] = useState<Set<string>>(new Set());
   const [showScrollToLatest, setShowScrollToLatest] = useState(false);
   const [loadingOlderCouncilMessages, setLoadingOlderCouncilMessages] = useState(false);
+  const [latestCouncilHydrationRetryKey, setLatestCouncilHydrationRetryKey] = useState(0);
   const [historyDialogOpen, setHistoryDialogOpen] = useState(false);
   const [infoDialogOpen, setInfoDialogOpen] = useState(false);
   const [councilMenuOpen, setCouncilMenuOpen] = useState(false);
@@ -454,6 +456,7 @@ export function CouncilPage(props: {
   const councilStickToLatestRef = useRef(true);
   const loadingOlderCouncilMessagesRef = useRef(false);
   const latestCouncilMessageLoadsRef = useRef<Set<string>>(new Set());
+  const latestCouncilMessageRetryAttemptsRef = useRef<Map<string, number>>(new Map());
   const councilPrependAnchorRef = useRef<{
     councilId: string;
     scrollHeight: number;
@@ -527,6 +530,7 @@ export function CouncilPage(props: {
     }
 
     let cancelled = false;
+    let retryTimer: number | null = null;
     const councilId = selectedCouncil.id;
     latestCouncilMessageLoadsRef.current.add(councilId);
     void api.readCouncilMessages(selectedCouncil.id, { limit: COUNCIL_MESSAGE_PAGE_LIMIT })
@@ -534,6 +538,7 @@ export function CouncilPage(props: {
         if (cancelled) {
           return;
         }
+        latestCouncilMessageRetryAttemptsRef.current.delete(councilId);
         setCouncils((current) =>
           current.map((candidate) =>
             candidate.id === councilId ? mergeCouncilLatestMessagesPage(candidate, page) : candidate,
@@ -543,6 +548,15 @@ export function CouncilPage(props: {
       .catch((caught) => {
         if (!cancelled) {
           setError(caught instanceof Error ? caught.message : String(caught));
+          const attempt = (latestCouncilMessageRetryAttemptsRef.current.get(councilId) ?? 0) + 1;
+          latestCouncilMessageRetryAttemptsRef.current.set(councilId, attempt);
+          const delayMs = Math.min(10_000, 500 * 2 ** (attempt - 1));
+          retryTimer = window.setTimeout(() => {
+            retryTimer = null;
+            if (!cancelled && selectedCouncilIdRef.current === councilId) {
+              setLatestCouncilHydrationRetryKey((current) => current + 1);
+            }
+          }, delayMs);
         }
       })
       .finally(() => {
@@ -551,11 +565,15 @@ export function CouncilPage(props: {
 
     return () => {
       cancelled = true;
+      if (retryTimer !== null) {
+        window.clearTimeout(retryTimer);
+      }
     };
   }, [
     selectedCouncil?.id,
     selectedCouncil ? latestKnownCouncilMessageId(selectedCouncil) : undefined,
     selectedCouncil ? latestLoadedCouncilMessageId(selectedCouncil) : undefined,
+    latestCouncilHydrationRetryKey,
   ]);
 
   useEffect(() => {
@@ -898,7 +916,11 @@ export function CouncilPage(props: {
         },
         (batch) => {
           const latest = batch.events
-            .filter((event) => event.type === "council.message.created")
+            .filter(
+              (event): event is Extract<RahEvent, { type: "council.message.created" }> =>
+                event.type === "council.message.created" &&
+                event.sessionId === selectedCouncilId,
+            )
             .at(-1);
           if (!latest) return;
           setCouncils((current) => {

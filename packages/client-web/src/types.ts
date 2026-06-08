@@ -1277,6 +1277,12 @@ function applyToolCallEvent(
             providerToolName: "unknown",
             title: "Tool failed",
             ...(event.payload.detail !== undefined ? { detail: event.payload.detail } : {}),
+            ...(event.payload.detailAvailable !== undefined
+              ? { detailAvailable: event.payload.detailAvailable }
+              : {}),
+            ...(event.payload.detailSizeBytes !== undefined
+              ? { detailSizeBytes: event.payload.detailSizeBytes }
+              : {}),
           },
           status: "failed",
           ts: event.ts,
@@ -1303,7 +1309,15 @@ function applyToolCallEvent(
             ...(mergedDetail !== undefined ? { detail: mergedDetail } : {}),
           };
         })()
-      : withMergedToolDetail(current.toolCall, event.payload.detail);
+      : {
+          ...withMergedToolDetail(current.toolCall, event.payload.detail),
+          ...(event.payload.detailAvailable !== undefined
+            ? { detailAvailable: event.payload.detailAvailable }
+            : {}),
+          ...(event.payload.detailSizeBytes !== undefined
+            ? { detailSizeBytes: event.payload.detailSizeBytes }
+            : {}),
+        };
   const nextEntry = createToolCallEntry(
     {
       key: current.key,
@@ -2184,6 +2198,35 @@ export function applyEventToProjection(
     history: current.history,
     ...(nextPendingInterrupt !== undefined ? { pendingInterrupt: nextPendingInterrupt } : {}),
   };
+}
+
+export function mergeHistoryItemDetailIntoProjection(
+  current: SessionProjection,
+  events: RahEvent[],
+): SessionProjection {
+  if (events.length === 0) {
+    return current;
+  }
+  let nextFeed = current.feed;
+  for (const event of [...events].sort((a, b) => a.seq - b.seq)) {
+    switch (event.type) {
+      case "tool.call.started":
+      case "tool.call.delta":
+      case "tool.call.completed":
+      case "tool.call.failed":
+        nextFeed = applyToolCallEvent(nextFeed, event);
+        break;
+      case "observation.started":
+      case "observation.updated":
+      case "observation.completed":
+      case "observation.failed":
+        nextFeed = applyObservationEvent(nextFeed, event);
+        break;
+      default:
+        break;
+    }
+  }
+  return nextFeed === current.feed ? current : { ...current, feed: nextFeed };
 }
 
 export function sortFeed(feed: FeedEntry[]): FeedEntry[] {

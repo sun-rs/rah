@@ -4,6 +4,7 @@ import type {
   EventSubscriptionRequest,
   PtyClientMessage,
   PtyServerMessage,
+  RahEventType,
   ReplayGapNotice,
 } from "@rah/runtime-protocol";
 import { RuntimeEngine } from "./runtime-engine";
@@ -140,6 +141,36 @@ function parsePtyReplaySeq(raw: string | null): number | undefined {
   return Math.max(0, Math.floor(parsed));
 }
 
+function parseReplayFromSeq(url: URL): number | undefined {
+  const raw = url.searchParams.get("replayFromSeq");
+  if (!raw) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function parseRepeatedQueryValues(url: URL, repeatedName: string, legacyName: string): string[] {
+  const repeated = url.searchParams.getAll(repeatedName);
+  const legacy = url.searchParams
+    .getAll(legacyName)
+    .flatMap((value) => value.split(","))
+    .map((value) => value.trim())
+    .filter(Boolean);
+  return [...repeated, ...legacy];
+}
+
+function eventSubscriptionFromUrl(url: URL): EventSubscriptionRequest {
+  const sessionIds = parseRepeatedQueryValues(url, "sessionId", "sessionIds");
+  const eventTypes = parseRepeatedQueryValues(url, "eventType", "eventTypes");
+  const replayFromSeq = parseReplayFromSeq(url);
+  return {
+    ...(sessionIds.length > 0 ? { sessionIds } : {}),
+    ...(eventTypes.length > 0 ? { eventTypes: eventTypes as RahEventType[] } : {}),
+    ...(replayFromSeq !== undefined ? { replayFromSeq } : {}),
+  };
+}
+
 function decodePathSegment(value: string): string {
   try {
     return decodeURIComponent(value);
@@ -159,68 +190,99 @@ export function attachWebSocketHandlers(
   const stopHeartbeat = installWebSocketHeartbeat([wssEvents, wssPty]);
 
   wssEvents.on("connection", (socket, req) => {
-    void (async () => {
-      const runtimeEngine = await resolveRuntimeEngine(engineHandle);
-      if (socket.readyState !== WebSocket.OPEN) {
+    const url = new URL(req.url ?? "/", "http://127.0.0.1");
+    const sendEventFrame = (message: unknown): boolean =>
+      sendJsonWithBackpressure(socket, message, {
+        closeReason: "Event client is too slow",
+      });
+    let runtimeEngine: RuntimeEngine | null = null;
+    let filter = eventSubscriptionFromUrl(url);
+    let unsubscribe: () => void = () => undefined;
+    let closed = false;
+    let queuedMessages: string[] = [];
+
+    const subscribe = () => {
+      if (!runtimeEngine || socket.readyState !== WebSocket.OPEN) {
         return;
       }
-      const url = new URL(req.url ?? "/", "http://127.0.0.1");
-      const replayFromSeq = url.searchParams.get("replayFromSeq");
-      const sendEventFrame = (message: unknown): boolean =>
-        sendJsonWithBackpressure(socket, message, {
-          closeReason: "Event client is too slow",
-        });
-      let filter: EventSubscriptionRequest = {};
-      if (replayFromSeq && Number.isFinite(Number.parseInt(replayFromSeq, 10))) {
-        filter.replayFromSeq = Number.parseInt(replayFromSeq, 10);
-      }
-
-      const initial = runtimeEngine.listEvents(filter);
-      const initialReplayGap = replayGapForSubscription(runtimeEngine, filter);
-      if (initial.length > 0 || initialReplayGap) {
-        sendEventFrame({
-          events: initial,
-          initial: true,
-          ...(initialReplayGap ? { replayGap: initialReplayGap } : {}),
-        });
-      }
-
-      let unsubscribe: () => void = () => undefined;
       unsubscribe = runtimeEngine.eventBus.subscribe(filter, (event) => {
         if (!sendEventFrame({ events: [event] })) {
           unsubscribe();
         }
       });
+    };
 
-      socket.on("message", (raw) => {
+    const sendReplay = (initial: boolean) => {
+      if (!runtimeEngine || socket.readyState !== WebSocket.OPEN) {
+        return;
+      }
+      const replay = runtimeEngine.listEvents(filter);
+      const replayGap = replayGapForSubscription(runtimeEngine, filter);
+      if (replay.length > 0 || replayGap) {
+        sendEventFrame({
+          events: replay,
+          ...(initial ? { initial: true } : {}),
+          ...(replayGap ? { replayGap } : {}),
+        });
+      }
+    };
+
+    const applySubscription = (nextFilter: EventSubscriptionRequest) => {
+      if (!runtimeEngine) {
+        return;
+      }
+      if (sameEventSubscription(filter, nextFilter)) {
+        return;
+      }
+      unsubscribe();
+      filter = nextFilter;
+      sendReplay(false);
+      subscribe();
+    };
+
+    const handleSubscriptionMessage = (raw: string) => {
+      if (!runtimeEngine) {
+        queuedMessages.push(raw);
+        return;
+      }
+      try {
+        applySubscription(JSON.parse(raw) as EventSubscriptionRequest);
+      } catch {
+        sendEventFrame({ error: "Invalid subscription payload" });
+      }
+    };
+
+    socket.on("message", (raw) => {
+      handleSubscriptionMessage(raw.toString("utf8"));
+    });
+    socket.on("close", () => {
+      closed = true;
+      queuedMessages = [];
+      unsubscribe();
+    });
+
+    void (async () => {
+      runtimeEngine = await resolveRuntimeEngine(engineHandle);
+      if (closed || socket.readyState !== WebSocket.OPEN) {
+        return;
+      }
+      const pending = queuedMessages;
+      queuedMessages = [];
+      if (pending.length > 0) {
         try {
-          const parsed = JSON.parse(raw.toString("utf8")) as EventSubscriptionRequest;
-          if (sameEventSubscription(filter, parsed)) {
-            return;
+          const firstSubscription = JSON.parse(pending[0]!) as EventSubscriptionRequest;
+          if (!sameEventSubscription(filter, firstSubscription)) {
+            filter = firstSubscription;
           }
-          unsubscribe();
-          filter = parsed;
-          const replay = runtimeEngine.listEvents(filter);
-          const replayGap = replayGapForSubscription(runtimeEngine, filter);
-          if (replay.length > 0 || replayGap) {
-            sendEventFrame({
-              events: replay,
-              ...(replayGap ? { replayGap } : {}),
-            });
-          }
-          unsubscribe = runtimeEngine.eventBus.subscribe(filter, (event) => {
-            if (!sendEventFrame({ events: [event] })) {
-              unsubscribe();
-            }
-          });
         } catch {
           sendEventFrame({ error: "Invalid subscription payload" });
         }
-      });
-
-      socket.on("close", () => {
-        unsubscribe();
-      });
+      }
+      sendReplay(true);
+      subscribe();
+      for (const raw of pending) {
+        handleSubscriptionMessage(raw);
+      }
     })().catch((error) => {
       sendJsonWithBackpressure(socket, {
         error: error instanceof Error ? error.message : String(error),
@@ -230,80 +292,144 @@ export function attachWebSocketHandlers(
   });
 
   wssPty.on("connection", (socket, req) => {
-    void (async () => {
-      const runtimeEngine = await resolveRuntimeEngine(engineHandle);
-      if (socket.readyState !== WebSocket.OPEN) {
+    const url = new URL(req.url ?? "/", "http://127.0.0.1");
+    const match = /^\/api\/pty\/([^/]+)$/.exec(url.pathname);
+    if (!match) {
+      socket.close();
+      return;
+    }
+    const sessionId = decodePathSegment(match[1]!);
+    const replay = url.searchParams.get("replay") !== "false";
+    const fromSeq = parsePtyReplaySeq(
+      url.searchParams.get("fromSeq") ?? url.searchParams.get("cursor"),
+    );
+    const tailBytes = parsePtyReplaySeq(url.searchParams.get("tailBytes"));
+    let runtimeEngine: RuntimeEngine | null = null;
+    let unsubscribe: () => void = () => undefined;
+    let closeAfterSubscribe = false;
+    let closed = false;
+    let surfaceClientId: string | null = null;
+    let pendingClientMessages: string[] = [];
+    let pendingOutput: Extract<PtyServerMessage, { type: "pty.output" }> | null = null;
+    let pendingOutputTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const sendFrame = (frame: PtyServerMessage): boolean =>
+      sendJsonWithBackpressure(socket, frame, {
+        closeReason: "PTY client is too slow",
+      });
+
+    const flushPendingOutput = () => {
+      if (pendingOutputTimer) {
+        clearTimeout(pendingOutputTimer);
+        pendingOutputTimer = null;
+      }
+      if (!pendingOutput) {
         return;
       }
-      const url = new URL(req.url ?? "/", "http://127.0.0.1");
-      const match = /^\/api\/pty\/([^/]+)$/.exec(url.pathname);
-      if (!match) {
-        socket.close();
-        return;
+      const output = pendingOutput;
+      pendingOutput = null;
+      const sent = sendFrame(output);
+      if (!sent) {
+        closeAfterSubscribe = true;
+        unsubscribe();
       }
-      const sessionId = decodePathSegment(match[1]!);
-      const replay = url.searchParams.get("replay") !== "false";
-      const fromSeq = parsePtyReplaySeq(
-        url.searchParams.get("fromSeq") ?? url.searchParams.get("cursor"),
-      );
-      const tailBytes = parsePtyReplaySeq(url.searchParams.get("tailBytes"));
-      let unsubscribe: () => void = () => undefined;
-      let closeAfterSubscribe = false;
-      let pendingOutput: Extract<PtyServerMessage, { type: "pty.output" }> | null = null;
-      let pendingOutputTimer: ReturnType<typeof setTimeout> | null = null;
+    };
 
-      const sendFrame = (frame: PtyServerMessage): boolean =>
-        sendJsonWithBackpressure(socket, frame, {
-          closeReason: "PTY client is too slow",
-        });
-
-      const flushPendingOutput = () => {
-        if (pendingOutputTimer) {
-          clearTimeout(pendingOutputTimer);
-          pendingOutputTimer = null;
-        }
-        if (!pendingOutput) {
-          return;
-        }
-        const output = pendingOutput;
-        pendingOutput = null;
-        const sent = sendFrame(output);
-        if (!sent) {
-          closeAfterSubscribe = true;
-          unsubscribe();
-        }
-      };
-
-      const sendPtyFrame = (frame: PtyServerMessage) => {
-        if (frame.type === "pty.output" && frame.replace !== true) {
-          if (pendingOutput) {
-            pendingOutput = {
-              ...pendingOutput,
-              data: `${pendingOutput.data}${frame.data}`,
-              ...(frame.seq !== undefined ? { seq: frame.seq } : {}),
-            };
-          } else {
-            pendingOutput = frame;
-          }
-          if (pendingOutput.data.length >= PTY_OUTPUT_MAX_BATCH_CHARS) {
-            flushPendingOutput();
-            return;
-          }
-          if (!pendingOutputTimer) {
-            pendingOutputTimer = setTimeout(flushPendingOutput, PTY_OUTPUT_FLUSH_DELAY_MS);
-          }
-          return;
-        }
+    const sendPtyFrame = (frame: PtyServerMessage) => {
+      if (frame.type === "pty.output" && frame.replace !== true) {
         if (pendingOutput) {
+          pendingOutput = {
+            ...pendingOutput,
+            data: `${pendingOutput.data}${frame.data}`,
+            ...(frame.seq !== undefined ? { seq: frame.seq } : {}),
+          };
+        } else {
+          pendingOutput = frame;
+        }
+        if (pendingOutput.data.length >= PTY_OUTPUT_MAX_BATCH_CHARS) {
           flushPendingOutput();
+          return;
         }
-        const sent = sendFrame(frame);
-        if (!sent) {
-          closeAfterSubscribe = true;
-          unsubscribe();
+        if (!pendingOutputTimer) {
+          pendingOutputTimer = setTimeout(flushPendingOutput, PTY_OUTPUT_FLUSH_DELAY_MS);
         }
-      };
+        return;
+      }
+      if (pendingOutput) {
+        flushPendingOutput();
+      }
+      const sent = sendFrame(frame);
+      if (!sent) {
+        closeAfterSubscribe = true;
+        unsubscribe();
+      }
+    };
 
+    const handlePtyClientMessage = (raw: string) => {
+      if (!runtimeEngine) {
+        pendingClientMessages.push(raw);
+        return;
+      }
+      try {
+        const parsed = JSON.parse(raw) as PtyClientMessage;
+        if (parsed.type === "pty.input") {
+          runtimeEngine.onPtyInput(sessionId, parsed.clientId, parsed.data);
+        } else if (parsed.type === "pty.resize") {
+          runtimeEngine.onPtyResize(sessionId, parsed.clientId, parsed.cols, parsed.rows);
+        } else if (parsed.type === "pty.surface.attach") {
+          surfaceClientId = parsed.clientId;
+          void runtimeEngine
+            .claimNativeTuiSurface(sessionId, {
+              clientId: parsed.clientId,
+              clientKind: parsed.clientKind,
+              cols: parsed.cols,
+              rows: parsed.rows,
+            })
+            .catch((error) => {
+              sendJsonWithBackpressure(socket, {
+                error: error instanceof Error ? error.message : String(error),
+              });
+            });
+        } else if (parsed.type === "pty.surface.detach") {
+          if (surfaceClientId === parsed.clientId) {
+            surfaceClientId = null;
+          }
+          void runtimeEngine
+            .releaseNativeTuiSurface(sessionId, { clientId: parsed.clientId })
+            .catch(() => undefined);
+        }
+      } catch (error) {
+        sendJsonWithBackpressure(socket, {
+          error: error instanceof Error ? error.message : "Invalid PTY client payload",
+        });
+      }
+    };
+
+    socket.on("message", (raw) => {
+      handlePtyClientMessage(raw.toString("utf8"));
+    });
+
+    socket.on("close", () => {
+      closed = true;
+      pendingClientMessages = [];
+      if (pendingOutputTimer) {
+        clearTimeout(pendingOutputTimer);
+        pendingOutputTimer = null;
+      }
+      pendingOutput = null;
+      unsubscribe();
+      if (surfaceClientId && runtimeEngine) {
+        void runtimeEngine
+          .releaseNativeTuiSurface(sessionId, { clientId: surfaceClientId })
+          .catch(() => undefined);
+      }
+    });
+
+    void (async () => {
+      runtimeEngine = await resolveRuntimeEngine(engineHandle);
+      if (closed || socket.readyState !== WebSocket.OPEN) {
+        return;
+      }
       unsubscribe = runtimeEngine.ptyHub.subscribe(sessionId, (frame) => {
         sendPtyFrame(frame);
       }, {
@@ -314,57 +440,11 @@ export function attachWebSocketHandlers(
       if (closeAfterSubscribe) {
         unsubscribe();
       }
-
-      let surfaceClientId: string | null = null;
-      socket.on("message", (raw) => {
-        try {
-          const parsed = JSON.parse(raw.toString("utf8")) as PtyClientMessage;
-          if (parsed.type === "pty.input") {
-            runtimeEngine.onPtyInput(sessionId, parsed.clientId, parsed.data);
-          } else if (parsed.type === "pty.resize") {
-            runtimeEngine.onPtyResize(sessionId, parsed.clientId, parsed.cols, parsed.rows);
-          } else if (parsed.type === "pty.surface.attach") {
-            surfaceClientId = parsed.clientId;
-            void runtimeEngine
-              .claimNativeTuiSurface(sessionId, {
-                clientId: parsed.clientId,
-                clientKind: parsed.clientKind,
-                cols: parsed.cols,
-                rows: parsed.rows,
-              })
-              .catch((error) => {
-                sendJsonWithBackpressure(socket, {
-                  error: error instanceof Error ? error.message : String(error),
-                });
-              });
-          } else if (parsed.type === "pty.surface.detach") {
-            if (surfaceClientId === parsed.clientId) {
-              surfaceClientId = null;
-            }
-            void runtimeEngine
-              .releaseNativeTuiSurface(sessionId, { clientId: parsed.clientId })
-              .catch(() => undefined);
-          }
-        } catch (error) {
-          sendJsonWithBackpressure(socket, {
-            error: error instanceof Error ? error.message : "Invalid PTY client payload",
-          });
-        }
-      });
-
-      socket.on("close", () => {
-        if (pendingOutputTimer) {
-          clearTimeout(pendingOutputTimer);
-          pendingOutputTimer = null;
-        }
-        pendingOutput = null;
-        unsubscribe();
-        if (surfaceClientId) {
-          void runtimeEngine
-            .releaseNativeTuiSurface(sessionId, { clientId: surfaceClientId })
-            .catch(() => undefined);
-        }
-      });
+      const pending = pendingClientMessages;
+      pendingClientMessages = [];
+      for (const raw of pending) {
+        handlePtyClientMessage(raw);
+      }
     })().catch((error) => {
       sendJsonWithBackpressure(socket, {
         error: error instanceof Error ? error.message : String(error),

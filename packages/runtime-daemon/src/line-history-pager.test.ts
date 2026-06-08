@@ -25,6 +25,22 @@ function historyEvent(text: string, seq: number): RahEvent {
   };
 }
 
+function userHistoryEvent(text: string, seq: number): RahEvent {
+  const base = historyEvent(text, seq);
+  if (base.type !== "timeline.item.added") {
+    return base;
+  }
+  return {
+    ...base,
+    payload: {
+      item: {
+        kind: "user_message",
+        text,
+      },
+    },
+  };
+}
+
 function identifiedHistoryEvent(text: string, seq: number): RahEvent {
   const event = historyEvent(text, seq);
   if (event.type !== "timeline.item.added") {
@@ -275,6 +291,48 @@ describe("line history pager", () => {
           : null,
       ),
       ["zero", "one"],
+    );
+  });
+
+  test("filtered paging still uses the provider semantic selector", () => {
+    const loader = createLineFrozenHistoryPageLoader({
+      boundary: {
+        kind: "frozen",
+        sourceRevision: "rev-1",
+      },
+      snapshotEndOffset: 20,
+      initialLineBudget: 4,
+      readWindow: () => ({
+        startOffset: 0,
+        events: [
+          userHistoryEvent("question", 1),
+          toolEvent(2),
+          historyEvent("answer", 3),
+        ],
+      }),
+      selectPage: (events, limit) => {
+        const page = events.slice(Math.max(0, events.length - limit));
+        const first = page[0];
+        if (
+          page.length === 1 &&
+          first?.type === "timeline.item.added" &&
+          first.payload.item.kind === "assistant_message"
+        ) {
+          return events.slice(Math.max(0, events.length - 2));
+        }
+        return page;
+      },
+    });
+
+    const initial = loader.loadInitialPage(1, {
+      eventFilter: (event) => event.type.startsWith("timeline."),
+    });
+
+    assert.deepEqual(
+      initial.events.map((event) =>
+        event.type === "timeline.item.added" ? event.payload.item.kind : null,
+      ),
+      ["user_message", "assistant_message"],
     );
   });
 });

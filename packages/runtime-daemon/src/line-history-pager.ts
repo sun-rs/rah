@@ -48,9 +48,7 @@ function selectPageFromCombined(args: {
   const candidates = args.eventFilter
     ? args.combined.filter(args.eventFilter)
     : args.combined;
-  const pageEvents = args.eventFilter
-    ? defaultSelectPage(candidates, args.limit)
-    : args.selectPage(candidates, args.limit);
+  const pageEvents = args.selectPage(candidates, args.limit);
   const firstPageEvent = pageEvents[0];
   if (!firstPageEvent) {
     return {

@@ -71,6 +71,14 @@ export function coalesceProjectionEvents(events: RahEvent[]): RahEvent[] {
   return result;
 }
 
+export function maxEventSeq(events: readonly RahEvent[]): number | null {
+  let maxSeq: number | null = null;
+  for (const event of events) {
+    maxSeq = maxSeq === null ? event.seq : Math.max(maxSeq, event.seq);
+  }
+  return maxSeq;
+}
+
 export async function recoverFromReplayGapCommand(args: {
   batch: EventBatch;
   get: () => SessionSyncState;
@@ -139,6 +147,7 @@ export function connectStoreSyncTransport(args: {
     current: Map<string, SessionProjection>,
     events: RahEvent[],
   ) => Map<string, SessionProjection>;
+  updateLastSeq: (seq: number) => void;
   computeUnreadSessionIds: (
     currentUnreadSessionIds: ReadonlySet<string>,
     selectedSessionId: string | null,
@@ -238,6 +247,10 @@ export function connectStoreSyncTransport(args: {
         batch.events?.filter((event) => event.type !== "session.discovery") ?? [];
       if (projectionEvents.length === 0) {
         return;
+      }
+      const newestSeq = maxEventSeq(projectionEvents);
+      if (newestSeq !== null) {
+        args.updateLastSeq(newestSeq);
       }
       pendingProjectionEvents = [...pendingProjectionEvents, ...projectionEvents];
       if (!batch.initial) {

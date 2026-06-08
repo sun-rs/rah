@@ -35,7 +35,10 @@ import {
   findDaemonRunningSessionForStoredRef,
   resolveHistoryActivationMode,
 } from "./session-store-workspace";
-import { updateSessionSummaryInProjectionMap } from "./session-store-projections";
+import {
+  rebindReadOnlyProjectionToLiveSession,
+  updateSessionSummaryInProjectionMap,
+} from "./session-store-projections";
 import { providerLabel, type SessionProjection } from "./types";
 
 type ProviderChoice = CoreLiveProvider;
@@ -513,10 +516,16 @@ export async function claimHistorySessionCommand(
         };
       }
       const existingProjection = next.get(claimedSession.session.id);
-      next.set(claimedSession.session.id, {
-        ...(existingProjection ?? preservedProjection),
-        summary: claimedSession,
-      });
+      const projectionForClaim = existingProjection ?? preservedProjection;
+      next.set(
+        claimedSession.session.id,
+        isReadOnlyReplay(projectionForClaim.summary)
+          ? rebindReadOnlyProjectionToLiveSession(projectionForClaim, claimedSession)
+          : {
+              ...projectionForClaim,
+              summary: claimedSession,
+            },
+      );
       pruneReadOnlyReplaysForClaimedProviderSession(next, claimedSession);
       return {
         projections: deps.applyEventsToMap(

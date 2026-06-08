@@ -237,8 +237,10 @@ function applyCodexLiveTranslatedItems(
           liveSession.interruptExternalTurnWhenStarts &&
           !liveSession.turnStartInFlight
         ) {
-          liveSession.interruptExternalTurnWhenStarts = false;
-          liveSession.requestTurnInterrupt?.(event.turnId);
+          if (liveSession.requestTurnInterrupt) {
+            liveSession.interruptExternalTurnWhenStarts = false;
+            liveSession.requestTurnInterrupt(event.turnId);
+          }
         }
       } else if (
         event.type === "turn.completed" ||

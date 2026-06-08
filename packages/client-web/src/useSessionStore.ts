@@ -24,7 +24,6 @@ import { isLabModeEnabled } from "./lab-mode";
 import { type PendingSessionTransition } from "./session-transition-contract";
 import {
   adoptExistingProjectionForProviderSession as adoptExistingProjectionForProviderSessionImpl,
-  applyEventBatchToProjection,
   applyEventsToProjectionMap as applyEventsToProjectionMapImpl,
   applySessionsResponse as applySessionsResponseImpl,
   computeUnreadSessionIds as computeUnreadSessionIdsImpl,
@@ -87,6 +86,7 @@ import {
   sameWorkspaceDirectory,
 } from "./session-store-workspace";
 import {
+  mergeHistoryItemDetailIntoProjection,
   type SessionProjection,
 } from "./types";
 import { isReadOnlyReplay } from "./session-capabilities";
@@ -564,6 +564,9 @@ function connectStoreTransport() {
     set: useSessionStore.setState as never,
     getNotificationProjections: () => useSessionStore.getState().projections,
     applyEventsToMap,
+    updateLastSeq: (seq) => {
+      lastEventSeq = Math.max(lastEventSeq, seq);
+    },
     computeUnreadSessionIds: computeUnreadSessionIdsImpl,
     notifyUnreadEvents: notifyForRahEvents,
     recoverFromReplayGap,
@@ -1246,7 +1249,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         return state;
       }
       const next = new Map(state.projections);
-      next.set(sessionId, applyEventBatchToProjection(current, response.events));
+      next.set(sessionId, mergeHistoryItemDetailIntoProjection(current, response.events));
       return { projections: next };
     });
   },

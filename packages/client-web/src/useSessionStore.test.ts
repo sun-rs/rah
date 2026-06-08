@@ -19,7 +19,11 @@ import {
   applySessionsResponse,
   updateSessionSummaryInProjectionMap,
 } from "./session-store-projections";
-import { initialHistorySyncState, type SessionProjection } from "./types";
+import {
+  initialHistorySyncState,
+  mergeHistoryItemDetailIntoProjection,
+  type SessionProjection,
+} from "./types";
 
 const originalFetch = globalThis.fetch;
 const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window;
@@ -360,6 +364,14 @@ describe("workspace response reconciliation", () => {
     const history = {
       ...readOnlyHistoryProjection("/workspace/history"),
       lastSeq: 1_000_000_111,
+      history: {
+        phase: "ready" as const,
+        nextCursor: "cursor-from-history",
+        nextBeforeTs: "2026-04-20T00:00:00.000Z",
+        generation: 2,
+        authoritativeApplied: true,
+        lastError: null,
+      },
     };
     const liveSummary: SessionSummary = {
       ...sessionSummary("/workspace/live"),
@@ -406,6 +418,7 @@ describe("workspace response reconciliation", () => {
     });
 
     assert.equal(adopted.get(liveSummary.session.id)?.lastSeq, 0);
+    assert.deepEqual(adopted.get(liveSummary.session.id)?.history, initialHistorySyncState());
     assert.equal(
       next.get(liveSummary.session.id)?.feed.some(
         (entry) =>
@@ -415,6 +428,62 @@ describe("workspace response reconciliation", () => {
       ),
       true,
     );
+  });
+
+  test("merges history item detail even when its original seq is already behind projection", () => {
+    const current: SessionProjection = {
+      ...projection("/workspace/history"),
+      lastSeq: 1_000_000_111,
+      feed: [
+        {
+          key: "tool:tool-1",
+          kind: "tool_call",
+          toolCall: {
+            id: "tool-1",
+            family: "shell",
+            providerToolName: "exec_command",
+            title: "Run command",
+            detailAvailable: true,
+            detailSizeBytes: 42,
+          },
+          status: "completed",
+          ts: "2026-04-21T00:00:01.000Z",
+        },
+      ],
+    };
+    const detailEvent: RahEvent = {
+      id: "tool-detail",
+      seq: 1,
+      ts: "2026-04-21T00:00:01.000Z",
+      sessionId: current.summary.session.id,
+      type: "tool.call.completed",
+      source: {
+        provider: "codex",
+        channel: "structured_persisted",
+        authority: "authoritative",
+      },
+      payload: {
+        toolCall: {
+          id: "tool-1",
+          family: "shell",
+          providerToolName: "exec_command",
+          title: "Run command",
+          detail: {
+            artifacts: [{ kind: "text", label: "stdout", text: "full output" }],
+          },
+        },
+      },
+    };
+
+    const next = mergeHistoryItemDetailIntoProjection(current, [detailEvent]);
+    const entry = next.feed[0];
+
+    assert.equal(next.lastSeq, current.lastSeq);
+    assert.equal(entry?.kind, "tool_call");
+    if (entry?.kind !== "tool_call") {
+      assert.fail("Expected tool call entry.");
+    }
+    assert.equal(entry.toolCall.detail?.artifacts[0]?.kind, "text");
   });
 
   test("resolves history activation as select, attach, or resume", () => {

@@ -1,7 +1,11 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import type { ListSessionsResponse, RahEvent } from "@rah/runtime-protocol";
-import { coalesceProjectionEvents, recoverTransportCommand } from "./session-store-sync";
+import {
+  coalesceProjectionEvents,
+  maxEventSeq,
+  recoverTransportCommand,
+} from "./session-store-sync";
 import { connectedTransportStatus } from "./transport-status";
 import type { SessionProjection } from "./types";
 
@@ -149,6 +153,22 @@ describe("session store recovery", () => {
 
     assert.equal(events.length, 1);
     assert.equal(events[0]?.seq, 3);
+  });
+
+  test("keeps raw batch cursor independent from hidden projection events", () => {
+    const events = [
+      event(7, {
+        type: "message.part.delta",
+        payload: { part: { messageId: "m1", partId: "p1", kind: "text", delta: "a" } },
+      }),
+      event(8, {
+        type: "message.part.delta",
+        payload: { part: { messageId: "m2", partId: "p2", kind: "reasoning", delta: "b" } },
+      }),
+    ];
+
+    assert.equal(coalesceProjectionEvents(events).length, 0);
+    assert.equal(maxEventSeq(events), 8);
   });
 
   test("coalesces concurrent foreground transport recoveries", async () => {

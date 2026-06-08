@@ -346,7 +346,13 @@ export type RahEventPayloadMap = {
   "tool.call.started": { toolCall: ToolCall };
   "tool.call.delta": { toolCallId: string; detail: ToolCallDetail };
   "tool.call.completed": { toolCall: ToolCall };
-  "tool.call.failed": { toolCallId: string; error: string; detail?: ToolCallDetail };
+  "tool.call.failed": {
+    toolCallId: string;
+    error: string;
+    detail?: ToolCallDetail;
+    detailAvailable?: boolean;
+    detailSizeBytes?: number;
+  };
 
   "observation.started": { observation: WorkbenchObservation };
   "observation.updated": { observation: WorkbenchObservation };

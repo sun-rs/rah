@@ -431,9 +431,9 @@ export async function startCodexLiveSession(params: {
       pendingQuestions: new Map(),
       pendingApprovals: new Map(),
     };
+    params.onLiveSessionReady(liveSession);
     bridge.activate(liveSession);
     attachRequestedClient(services, state.session.id, request.attach);
-    params.onLiveSessionReady(liveSession);
     return {
       sessionId: state.session.id,
       summary: toSessionSummary(services.sessionStore.getSession(state.session.id)!),
@@ -575,9 +575,9 @@ export async function startCodexLiveSession(params: {
     pendingQuestions: new Map(),
     pendingApprovals: new Map(),
   };
+  params.onLiveSessionReady(liveSession);
   bridge.activate(liveSession);
   attachRequestedClient(services, state.session.id, request.attach);
-  params.onLiveSessionReady(liveSession);
   return {
     sessionId: state.session.id,
     summary: toSessionSummary(services.sessionStore.getSession(state.session.id)!),
@@ -801,9 +801,9 @@ export async function resumeCodexLiveSession(params: {
       pendingQuestions: new Map(),
       pendingApprovals: new Map(),
     };
+    params.onLiveSessionReady(liveSession);
     bridge.activate(liveSession);
     attachRequestedClient(services, state.session.id, request.attach);
-    params.onLiveSessionReady(liveSession);
     return {
       sessionId: state.session.id,
       summary: toSessionSummary(services.sessionStore.getSession(state.session.id)!),

@@ -4,6 +4,7 @@ import type { RahEvent } from "@rah/runtime-protocol";
 import { HistorySnapshotStore, type FrozenHistoryPageLoader } from "./history-snapshots";
 import {
   historyEventMatchesItem,
+  matchesSessionHistoryScope,
   summarizeHistoryPage,
 } from "./history-event-projection";
 
@@ -63,6 +64,61 @@ test("history summary strips heavyweight tool details while preserving hydration
   assert.equal(summarized.payload.toolCall.detailAvailable, true);
   assert.ok((summarized.payload.toolCall.detailSizeBytes ?? 0) > 10_000);
   assert.ok((page.approximateBytes ?? 0) < 2_000);
+});
+
+test("history summary preserves failed tool hydration markers without payload detail", () => {
+  const full = event({
+    id: "event-tool-failed",
+    type: "tool.call.failed",
+    payload: {
+      toolCallId: "tool-1",
+      error: "command failed",
+      detail: {
+        artifacts: [{ kind: "text", label: "stderr", text: "z".repeat(10_000) }],
+      },
+    },
+  });
+
+  const page = summarizeHistoryPage({
+    sessionId: "session-1",
+    events: [full],
+  });
+  const summarized = page.events[0];
+
+  assert.equal(summarized?.type, "tool.call.failed");
+  if (summarized?.type !== "tool.call.failed") {
+    assert.fail("Expected failed tool event.");
+  }
+  assert.equal(summarized.payload.detail, undefined);
+  assert.equal(summarized.payload.detailAvailable, true);
+  assert.ok((summarized.payload.detailSizeBytes ?? 0) > 10_000);
+});
+
+test("conversation history scope excludes all tool and observation events", () => {
+  const failedTool = event({
+    type: "tool.call.failed",
+    payload: { toolCallId: "tool-1", error: "failed" },
+  });
+  const failedObservation = event({
+    type: "observation.failed",
+    payload: {
+      observation: {
+        id: "obs-1",
+        kind: "command.run",
+        status: "failed",
+        title: "Run command",
+      },
+      error: "failed",
+    },
+  });
+  const assistant = event({
+    type: "timeline.item.added",
+    payload: { item: { kind: "assistant_message", text: "done" } },
+  });
+
+  assert.equal(matchesSessionHistoryScope(failedTool, "conversation"), false);
+  assert.equal(matchesSessionHistoryScope(failedObservation, "conversation"), false);
+  assert.equal(matchesSessionHistoryScope(assistant, "conversation"), true);
 });
 
 test("history snapshot cache keeps full events available for item hydration", () => {

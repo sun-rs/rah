@@ -8,6 +8,8 @@ import {
 } from "./session-store-workspace";
 import { deriveSessionConversationActivityAt } from "./session-conversation-activity";
 import { initialHistorySyncState, type SessionProjection } from "./types";
+import { isReadOnlyReplay } from "./session-capabilities";
+import { rebindReadOnlyProjectionToLiveSession } from "./session-store-projections";
 
 type LifecycleState = {
   projections: Map<string, SessionProjection>;
@@ -228,10 +230,15 @@ export function applyClaimedHistorySessionState(
   );
   const workspaceVisibilityVersion = current.workspaceVisibilityVersion + 1;
   projections.delete(sessionId);
-  projections.set(responseSession.session.id, {
-    ...preservedProjection,
-    summary: responseSession,
-  });
+  projections.set(
+    responseSession.session.id,
+    isReadOnlyReplay(preservedProjection.summary)
+      ? rebindReadOnlyProjectionToLiveSession(preservedProjection, responseSession)
+      : {
+          ...preservedProjection,
+          summary: responseSession,
+        },
+  );
   return {
     projections,
     unreadSessionIds: new Set(

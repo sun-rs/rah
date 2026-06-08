@@ -104,6 +104,26 @@ async function openWebSocket(url: string): Promise<WebSocket> {
   });
 }
 
+async function waitForWebSocketJson(socket: WebSocket): Promise<unknown> {
+  return await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error("Timed out waiting for websocket message."));
+    }, 1_000);
+    socket.once("message", (raw) => {
+      clearTimeout(timer);
+      try {
+        resolve(JSON.parse(raw.toString("utf8")));
+      } catch (error) {
+        reject(error);
+      }
+    });
+    socket.once("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+  });
+}
+
 async function waitFor(predicate: () => void, timeoutMs = 3_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   let lastError: unknown;
@@ -300,6 +320,34 @@ describe("startRahDaemon", () => {
       unsubscribeSecond();
       await engine.closeIndependentTerminal(first.terminal.id);
       await engine.closeIndependentTerminal(second.terminal.id);
+    }
+  });
+
+  test("events websocket applies URL subscription before initial replay", async () => {
+    engine.eventBus.publish({
+      sessionId: "session-a",
+      type: "timeline.item.added",
+      source: { provider: "codex", channel: "structured_live", authority: "derived" },
+      payload: { item: { kind: "assistant_message", text: "visible" } },
+    });
+    engine.eventBus.publish({
+      sessionId: "session-b",
+      type: "timeline.item.added",
+      source: { provider: "codex", channel: "structured_live", authority: "derived" },
+      payload: { item: { kind: "assistant_message", text: "hidden" } },
+    });
+    const socket = new WebSocket(
+      `ws://127.0.0.1:${port}/api/events?sessionId=session-a&eventType=timeline.item.added`,
+    );
+    try {
+      const frame = await waitForWebSocketJson(socket) as {
+        events?: Array<{ sessionId: string }>;
+        initial?: boolean;
+      };
+      assert.equal(frame.initial, true);
+      assert.deepEqual(frame.events?.map((event) => event.sessionId), ["session-a"]);
+    } finally {
+      socket.close();
     }
   });
 
