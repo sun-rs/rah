@@ -1,5 +1,6 @@
 import type { SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
 import { isReadOnlyReplay } from "./session-capabilities";
+import { isStoredHistoryReplayShellSummary } from "./stored-history-replay";
 import type { SessionProjection } from "./types";
 
 export function normalizeWorkspaceDirectory(value: string | undefined): string | null {
@@ -194,6 +195,25 @@ export function findDaemonRunningSessionForStoredRef(
   for (const projection of projections.values()) {
     const summary = projection.summary;
     if (isReadOnlyReplay(summary)) {
+      continue;
+    }
+    if (
+      summary.session.provider === ref.provider &&
+      summary.session.providerSessionId === ref.providerSessionId
+    ) {
+      return summary;
+    }
+  }
+  return null;
+}
+
+export function findDaemonReplaySessionForStoredRef(
+  projections: Map<string, SessionProjection>,
+  ref: StoredSessionRef,
+): SessionSummary | null {
+  for (const projection of projections.values()) {
+    const summary = projection.summary;
+    if (!isReadOnlyReplay(summary) || isStoredHistoryReplayShellSummary(summary)) {
       continue;
     }
     if (

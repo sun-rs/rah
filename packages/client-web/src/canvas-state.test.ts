@@ -20,7 +20,10 @@ import {
   shouldInitializeCanvasPaneFromSelection,
   type CanvasPaneTarget,
 } from "./canvas-state";
-import { createEmptySessionProjection } from "./session-store-session-lifecycle";
+import {
+  createEmptySessionProjection,
+  createStoredHistoryReplayProjection,
+} from "./session-store-session-lifecycle";
 
 function summary(args: {
   id: string;
@@ -316,6 +319,26 @@ test("canvas stored refs prefer live projections over read-only history replays"
   );
 
   assert.equal(resolved?.summary.session.id, "live-1");
+});
+
+test("canvas stored refs prefer daemon replay projections over local history shells", () => {
+  const stored = ref("codex", "provider-1");
+  const shell = createStoredHistoryReplayProjection(stored);
+  const daemonReplay = summary({
+    id: "daemon-replay-1",
+    provider: "codex",
+    providerSessionId: "provider-1",
+    readOnlyReplay: true,
+  });
+  const resolved = resolveCanvasTargetProjection(
+    { kind: "stored", ref: stored },
+    new Map([
+      [shell.summary.session.id, shell],
+      ["daemon-replay-1", createEmptySessionProjection(daemonReplay)],
+    ]),
+  );
+
+  assert.equal(resolved?.summary.session.id, "daemon-replay-1");
 });
 
 test("canvas claim resolution prefers a live projection over a read-only history id", () => {

@@ -10,6 +10,12 @@ import { deriveSessionConversationActivityAt } from "./session-conversation-acti
 import { initialHistorySyncState, type SessionProjection } from "./types";
 import { isReadOnlyReplay } from "./session-capabilities";
 import { rebindReadOnlyProjectionToLiveSession } from "./session-store-projections";
+import { storedHistoryReplaySessionId } from "./stored-history-replay";
+
+export {
+  isStoredHistoryReplayShellSummary,
+  storedHistoryReplaySessionId,
+} from "./stored-history-replay";
 
 type LifecycleState = {
   projections: Map<string, SessionProjection>;
@@ -40,12 +46,6 @@ export function createEmptySessionProjection(summary: SessionSummary): SessionPr
     lastSeq: 0,
     history: initialHistorySyncState(),
   };
-}
-
-export function storedHistoryReplaySessionId(
-  ref: Pick<StoredSessionRef, "provider" | "providerSessionId">,
-): string {
-  return `history:${ref.provider}:${ref.providerSessionId}`;
 }
 
 export function createStoredHistoryReplayProjection(ref: StoredSessionRef): SessionProjection {

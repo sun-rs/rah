@@ -32,6 +32,7 @@ import {
   createPendingStartTransition,
 } from "./session-transition-contract";
 import {
+  findDaemonReplaySessionForStoredRef,
   findDaemonRunningSessionForStoredRef,
   resolveHistoryActivationMode,
 } from "./session-store-workspace";
@@ -287,6 +288,16 @@ export async function activateHistorySessionCommand(
   }
   if (mode === "attach" && existingRunning) {
     await deps.attachSession(existingRunning);
+    return;
+  }
+  const existingReplay = findDaemonReplaySessionForStoredRef(state.projections, ref);
+  if (existingReplay) {
+    deps.set({
+      selectedSessionId: existingReplay.session.id,
+      pendingSessionTransition: null,
+      error: null,
+    });
+    void deps.ensureSessionHistoryLoaded(existingReplay.session.id);
     return;
   }
   await deps.resumeStoredSession(ref, {

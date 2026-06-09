@@ -861,6 +861,52 @@ describe("session startup model and mode requests", () => {
     assert.equal(resumed, false);
   });
 
+  test("activating stored history reuses an existing daemon replay session", async () => {
+    const replay = summary({
+      id: "replay-existing",
+      provider: "codex",
+      providerSessionId: "provider-existing",
+      cwd: "/tmp/rah",
+      readOnlyReplay: true,
+    });
+    const projections = new Map([["replay-existing", createEmptySessionProjection(replay)]]);
+    const ref: StoredSessionRef = {
+      provider: "codex",
+      providerSessionId: "provider-existing",
+      cwd: "/tmp/rah",
+      rootDir: "/tmp/rah",
+      createdAt: "2026-04-29T00:00:00.000Z",
+    };
+    let attached = false;
+    let resumed = false;
+    let historyLoadSessionId: string | null = null;
+    const deps = startupDeps(
+      {
+        projections,
+        storedSessions: [ref],
+        recentSessions: [],
+      },
+      {
+        attachSession: async () => {
+          attached = true;
+        },
+        resumeStoredSession: async () => {
+          resumed = true;
+        },
+        ensureSessionHistoryLoaded: async (sessionId: string) => {
+          historyLoadSessionId = sessionId;
+        },
+      },
+    );
+
+    await activateHistorySessionCommand(deps, ref);
+
+    assert.equal(deps.get().selectedSessionId, "replay-existing");
+    assert.equal(historyLoadSessionId, "replay-existing");
+    assert.equal(attached, false);
+    assert.equal(resumed, false);
+  });
+
   test("claim history asks to create a missing stored workspace before launching", async () => {
     const history = summary({
       id: "history",

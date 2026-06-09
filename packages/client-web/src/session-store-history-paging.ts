@@ -4,6 +4,7 @@ import { takeDeferredBootstrapEvents } from "./session-store-history-bootstrap";
 import { mergeLatestHistoryPage, prependHistoryPage } from "./session-store-history";
 import { applyEventBatchToProjection } from "./session-store-projections";
 import { isReadOnlyReplay } from "./session-capabilities";
+import { isStoredHistoryReplayShellSummary } from "./stored-history-replay";
 import type { SessionProjection } from "./types";
 
 type HistoryPagingState = {
@@ -27,7 +28,8 @@ export async function ensureSessionHistoryLoadedCommand(args: {
   if (
     !projection ||
     projection.history.phase === "loading" ||
-    !projection.summary.session.providerSessionId
+    !projection.summary.session.providerSessionId ||
+    isStoredHistoryReplayShellSummary(projection.summary)
   ) {
     return;
   }
@@ -52,7 +54,10 @@ export async function refreshLatestHistoryCommand(args: {
   if (!projection) {
     return;
   }
-  if (!projection.summary.session.providerSessionId) {
+  if (
+    !projection.summary.session.providerSessionId ||
+    isStoredHistoryReplayShellSummary(projection.summary)
+  ) {
     return;
   }
 
@@ -111,7 +116,11 @@ export async function loadOlderHistoryCommand(args: {
   historyPageLimit: number;
 }) {
   const projection = args.get().projections.get(args.sessionId);
-  if (!projection || projection.history.phase === "loading") {
+  if (
+    !projection ||
+    projection.history.phase === "loading" ||
+    isStoredHistoryReplayShellSummary(projection.summary)
+  ) {
     return;
   }
 

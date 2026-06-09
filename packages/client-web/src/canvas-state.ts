@@ -2,6 +2,7 @@ import type { StoredSessionRef } from "@rah/runtime-protocol";
 import { isReadOnlyReplay } from "./session-capabilities";
 import type { CanvasLayout } from "./components/workbench/canvas/CanvasWorkbench";
 import type { PendingSessionTransition } from "./session-transition-contract";
+import { isStoredHistoryReplayShellSummary } from "./stored-history-replay";
 import type { SessionProjection } from "./types";
 
 export type CanvasPaneId = "canvas-1" | "canvas-2" | "canvas-3" | "canvas-4";
@@ -225,6 +226,7 @@ export function resolveCanvasStoredTargetProjection(
   projections: Map<string, SessionProjection>,
   ref: Pick<StoredSessionRef, "provider" | "providerSessionId">,
 ): SessionProjection | null {
+  let shellProjection: SessionProjection | null = null;
   let replayProjection: SessionProjection | null = null;
   for (const projection of projections.values()) {
     if (!canvasProjectionMatchesStoredRef(projection, ref)) {
@@ -233,9 +235,13 @@ export function resolveCanvasStoredTargetProjection(
     if (!isReadOnlyReplay(projection.summary)) {
       return projection;
     }
+    if (isStoredHistoryReplayShellSummary(projection.summary)) {
+      shellProjection ??= projection;
+      continue;
+    }
     replayProjection ??= projection;
   }
-  return replayProjection;
+  return replayProjection ?? shellProjection;
 }
 
 export function resolveCanvasLiveSessionIdForStoredRef(
