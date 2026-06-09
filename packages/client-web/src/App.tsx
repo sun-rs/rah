@@ -29,6 +29,7 @@ import { useWorkbenchComposerState } from "./hooks/useWorkbenchComposerState";
 import { useWorkbenchSelectionState } from "./hooks/useWorkbenchSelectionState";
 import { initializeTheme } from "./hooks/useTheme";
 import { useWorkbenchChromeState } from "./hooks/useWorkbenchChromeState";
+import { useSessionHistoryTailSync } from "./hooks/useSessionHistoryTailSync";
 import {
   useHistoryWorkspaceSortModeState,
   useWorkbenchSidebarPreferences,
@@ -44,7 +45,6 @@ import {
   canSessionShowInfo,
   isSessionGenerationActive,
   isReadOnlyReplay,
-  shouldPollSessionHistoryTail,
 } from "./session-capabilities";
 import {
   createDefaultModeDraft,
@@ -82,12 +82,12 @@ import {
   rememberCanvasState,
   replaceCanvasSessionTargetWithStoredRef,
   resolveCanvasClaimedSessionId,
-  resolveCanvasHistoryTailSessionIds,
   resolveCanvasTargetProjection as resolveCanvasTargetProjectionFromState,
   shouldInitializeCanvasPaneFromSelection,
   type CanvasPaneId,
   type CanvasPaneTarget,
 } from "./canvas-state";
+import { resolveVisibleSessionHistoryTailSessionIds } from "./session-history-tail-targets";
 
 const loadSettingsDialog = () =>
   importWithStaleReload(() => import("./components/workbench/dialogs/SettingsDialog"));
@@ -692,18 +692,6 @@ export function App() {
   const activeCanvasSummary = activeCanvasProjection?.summary ?? null;
   const activeCanvasCouncil = resolveCanvasCouncil(activeCanvasPaneId);
   const visibleCanvasPaneKey = visibleCanvasPaneIds.join(":");
-  const visibleCanvasHistoryTailSessionIds = useMemo(
-    () =>
-      workbenchMode === "canvas"
-        ? resolveCanvasHistoryTailSessionIds({
-            visiblePaneIds: visibleCanvasPaneIds,
-            targets: canvasPaneTargets,
-            projections,
-          })
-        : [],
-    [canvasPaneTargets, projections, visibleCanvasPaneKey, workbenchMode],
-  );
-  const visibleCanvasHistoryTailSessionKey = visibleCanvasHistoryTailSessionIds.join(":");
   const visibleNotificationTargets = useMemo<NotificationTarget[]>(() => {
     const targets: NotificationTarget[] = [];
     const seen = new Set<string>();
@@ -964,68 +952,23 @@ export function App() {
     ? canSessionRespondToPermissions(selectedSummary)
     : false;
   const selectedIsReadOnlyReplay = selectedSummary ? isReadOnlyReplay(selectedSummary) : false;
-  const shouldSyncSelectedHistoryTail = selectedSummary
-    ? shouldPollSessionHistoryTail(selectedSummary)
-    : false;
-
-  useEffect(() => {
-    if (workbenchMode === "canvas" || !selectedSessionId || !shouldSyncSelectedHistoryTail) {
-      return;
-    }
-    let cancelled = false;
-    let inFlight = false;
-    const syncLatestHistory = () => {
-      if (cancelled || inFlight) {
-        return;
-      }
-      inFlight = true;
-      void refreshLatestHistory(selectedSessionId)
-        .catch(() => undefined)
-        .finally(() => {
-          inFlight = false;
-        });
-    };
-    syncLatestHistory();
-    const interval = window.setInterval(syncLatestHistory, 1500);
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-    };
-  }, [refreshLatestHistory, selectedSessionId, shouldSyncSelectedHistoryTail, workbenchMode]);
-
-  useEffect(() => {
-    if (workbenchMode !== "canvas" || visibleCanvasHistoryTailSessionIds.length === 0) {
-      return;
-    }
-    let cancelled = false;
-    const inFlight = new Set<string>();
-    const syncSession = (sessionId: string) => {
-      if (cancelled || inFlight.has(sessionId)) {
-        return;
-      }
-      inFlight.add(sessionId);
-      void refreshLatestHistory(sessionId)
-        .catch(() => undefined)
-        .finally(() => {
-          inFlight.delete(sessionId);
-        });
-    };
-    const syncVisibleHistoryTails = () => {
-      for (const sessionId of visibleCanvasHistoryTailSessionIds) {
-        syncSession(sessionId);
-      }
-    };
-    syncVisibleHistoryTails();
-    const interval = window.setInterval(syncVisibleHistoryTails, 1500);
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-    };
-  }, [
+  const visibleSessionProjections = useMemo(
+    () =>
+      workbenchMode === "canvas"
+        ? visibleCanvasPaneIds.map((paneId) =>
+            resolveCanvasTargetProjectionFromState(canvasPaneTargets[paneId], projections),
+          )
+        : [selectedProjection],
+    [canvasPaneTargets, projections, selectedProjection, visibleCanvasPaneKey, workbenchMode],
+  );
+  const visibleHistoryTailSessionIds = useMemo(
+    () => resolveVisibleSessionHistoryTailSessionIds(visibleSessionProjections),
+    [visibleSessionProjections],
+  );
+  useSessionHistoryTailSync({
+    sessionIds: visibleHistoryTailSessionIds,
     refreshLatestHistory,
-    visibleCanvasHistoryTailSessionKey,
-    workbenchMode,
-  ]);
+  });
 
   const noticeState = deriveWorkbenchNoticeState({
     selectedSummary,

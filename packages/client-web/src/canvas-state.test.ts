@@ -15,7 +15,6 @@ import {
   rememberCanvasState,
   replaceCanvasSessionTargetWithStoredRef,
   resolveCanvasClaimedSessionId,
-  resolveCanvasHistoryTailSessionIds,
   resolveCanvasRunningUniquenessKey,
   resolveCanvasTargetProjection,
   shouldInitializeCanvasPaneFromSelection,
@@ -317,42 +316,6 @@ test("canvas stored refs prefer live projections over read-only history replays"
   );
 
   assert.equal(resolved?.summary.session.id, "live-1");
-});
-
-test("canvas visible panes derive history tail sync targets for non-structured live sessions", () => {
-  const tuiBacked = summary({
-    id: "claude-live",
-    provider: "claude",
-    providerSessionId: "claude-provider",
-    structuredLiveEvents: false,
-  });
-  const structured = summary({
-    id: "codex-live",
-    provider: "codex",
-    providerSessionId: "codex-provider",
-    structuredLiveEvents: true,
-  });
-  const history = summary({
-    id: "history-1",
-    provider: "claude",
-    providerSessionId: "history-provider",
-    readOnlyReplay: true,
-    structuredLiveEvents: false,
-  });
-  const targets = createEmptyCanvasTargets();
-  targets["canvas-1"] = { kind: "session", sessionId: "claude-live" };
-  targets["canvas-2"] = { kind: "session", sessionId: "codex-live" };
-  targets["canvas-3"] = { kind: "session", sessionId: "history-1" };
-  targets["canvas-4"] = { kind: "stored", ref: ref("claude", "claude-provider") };
-
-  assert.deepEqual(
-    resolveCanvasHistoryTailSessionIds({
-      visiblePaneIds: ["canvas-1", "canvas-2", "canvas-3", "canvas-4"],
-      targets,
-      projections: projections(tuiBacked, structured, history),
-    }),
-    ["claude-live"],
-  );
 });
 
 test("canvas claim resolution prefers a live projection over a read-only history id", () => {

@@ -1,5 +1,5 @@
 import type { StoredSessionRef } from "@rah/runtime-protocol";
-import { isReadOnlyReplay, shouldPollSessionHistoryTail } from "./session-capabilities";
+import { isReadOnlyReplay } from "./session-capabilities";
 import type { CanvasLayout } from "./components/workbench/canvas/CanvasWorkbench";
 import type { PendingSessionTransition } from "./session-transition-contract";
 import type { SessionProjection } from "./types";
@@ -209,28 +209,6 @@ export function resolveCanvasTargetProjection(
     return resolveCanvasStoredTargetProjection(projections, target.ref);
   }
   return null;
-}
-
-export function resolveCanvasHistoryTailSessionIds(args: {
-  visiblePaneIds: readonly CanvasPaneId[];
-  targets: Record<CanvasPaneId, CanvasPaneTarget>;
-  projections: Map<string, SessionProjection>;
-}): string[] {
-  const seen = new Set<string>();
-  const sessionIds: string[] = [];
-  for (const paneId of args.visiblePaneIds) {
-    const projection = resolveCanvasTargetProjection(args.targets[paneId], args.projections);
-    if (!projection || !shouldPollSessionHistoryTail(projection.summary)) {
-      continue;
-    }
-    const sessionId = projection.summary.session.id;
-    if (seen.has(sessionId)) {
-      continue;
-    }
-    seen.add(sessionId);
-    sessionIds.push(sessionId);
-  }
-  return sessionIds;
 }
 
 function canvasProjectionMatchesStoredRef(
