@@ -82,6 +82,7 @@ import {
   rememberCanvasState,
   replaceCanvasSessionTargetWithStoredRef,
   resolveCanvasClaimedSessionId,
+  resolveCanvasHistoryTailSessionIds,
   resolveCanvasTargetProjection as resolveCanvasTargetProjectionFromState,
   shouldInitializeCanvasPaneFromSelection,
   type CanvasPaneId,
@@ -691,6 +692,18 @@ export function App() {
   const activeCanvasSummary = activeCanvasProjection?.summary ?? null;
   const activeCanvasCouncil = resolveCanvasCouncil(activeCanvasPaneId);
   const visibleCanvasPaneKey = visibleCanvasPaneIds.join(":");
+  const visibleCanvasHistoryTailSessionIds = useMemo(
+    () =>
+      workbenchMode === "canvas"
+        ? resolveCanvasHistoryTailSessionIds({
+            visiblePaneIds: visibleCanvasPaneIds,
+            targets: canvasPaneTargets,
+            projections,
+          })
+        : [],
+    [canvasPaneTargets, projections, visibleCanvasPaneKey, workbenchMode],
+  );
+  const visibleCanvasHistoryTailSessionKey = visibleCanvasHistoryTailSessionIds.join(":");
   const visibleNotificationTargets = useMemo<NotificationTarget[]>(() => {
     const targets: NotificationTarget[] = [];
     const seen = new Set<string>();
@@ -956,7 +969,7 @@ export function App() {
     : false;
 
   useEffect(() => {
-    if (!selectedSessionId || !shouldSyncSelectedHistoryTail) {
+    if (workbenchMode === "canvas" || !selectedSessionId || !shouldSyncSelectedHistoryTail) {
       return;
     }
     let cancelled = false;
@@ -978,7 +991,41 @@ export function App() {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [refreshLatestHistory, selectedSessionId, shouldSyncSelectedHistoryTail]);
+  }, [refreshLatestHistory, selectedSessionId, shouldSyncSelectedHistoryTail, workbenchMode]);
+
+  useEffect(() => {
+    if (workbenchMode !== "canvas" || visibleCanvasHistoryTailSessionIds.length === 0) {
+      return;
+    }
+    let cancelled = false;
+    const inFlight = new Set<string>();
+    const syncSession = (sessionId: string) => {
+      if (cancelled || inFlight.has(sessionId)) {
+        return;
+      }
+      inFlight.add(sessionId);
+      void refreshLatestHistory(sessionId)
+        .catch(() => undefined)
+        .finally(() => {
+          inFlight.delete(sessionId);
+        });
+    };
+    const syncVisibleHistoryTails = () => {
+      for (const sessionId of visibleCanvasHistoryTailSessionIds) {
+        syncSession(sessionId);
+      }
+    };
+    syncVisibleHistoryTails();
+    const interval = window.setInterval(syncVisibleHistoryTails, 1500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [
+    refreshLatestHistory,
+    visibleCanvasHistoryTailSessionKey,
+    workbenchMode,
+  ]);
 
   const noticeState = deriveWorkbenchNoticeState({
     selectedSummary,
