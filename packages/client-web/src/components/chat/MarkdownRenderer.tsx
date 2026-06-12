@@ -1,4 +1,5 @@
 import {
+  default as React,
   Suspense,
   isValidElement,
   lazy,
@@ -79,7 +80,7 @@ function MarkdownPre({
   );
 }
 
-function createMarkdownComponents(
+export function createMarkdownComponents(
   onOpenLocalFile: ((path: string) => void) | undefined,
 ): Components {
   return {
@@ -108,7 +109,11 @@ function createMarkdownComponents(
           </button>
         );
       }
-      return <a {...anchorProps} href={href} target="_blank" rel="noreferrer" />;
+      return (
+        <a {...anchorProps} href={href} target="_blank" rel="noreferrer">
+          {children}
+        </a>
+      );
     },
     pre: MarkdownPre,
     table({ node: _node, ...tableProps }) {
