@@ -95,6 +95,35 @@ function withoutRaw<T extends RahEvent>(event: T): T {
   return rest as T;
 }
 
+function isTimelineHistoryEvent(
+  event: RahEvent,
+): event is Extract<RahEvent, { type: "timeline.item.added" | "timeline.item.updated" }> {
+  return event.type === "timeline.item.added" || event.type === "timeline.item.updated";
+}
+
+function isChatHistoryTimelineEvent(event: RahEvent): boolean {
+  if (!isTimelineHistoryEvent(event)) {
+    return false;
+  }
+  switch (event.payload.item.kind) {
+    case "user_message":
+    case "assistant_message":
+    case "reasoning":
+    case "plan":
+    case "step":
+    case "todo":
+    case "system":
+    case "error":
+    case "retry":
+    case "side_question":
+    case "attachment":
+    case "compaction":
+      return true;
+    default:
+      return false;
+  }
+}
+
 export function summarizeHistoryEvent(event: RahEvent): RahEvent {
   switch (event.type) {
     case "tool.call.started":
@@ -147,6 +176,18 @@ export function summarizeHistoryPage(page: SessionHistoryPageResponse): SessionH
     ...page,
     events,
     detailMode: "summary",
+    approximateBytes: jsonByteSize({ ...page, events }),
+  };
+}
+
+export function chatHistoryPage(page: SessionHistoryPageResponse): SessionHistoryPageResponse {
+  const events = page.events
+    .filter(isChatHistoryTimelineEvent)
+    .map(summarizeHistoryEvent);
+  return {
+    ...page,
+    events,
+    detailMode: "chat",
     approximateBytes: jsonByteSize({ ...page, events }),
   };
 }

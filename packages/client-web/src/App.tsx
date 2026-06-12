@@ -7,7 +7,6 @@ import { SessionSidebar } from "./SessionSidebar";
 import { useSessionStore } from "./useSessionStore";
 import { FileReferencePicker } from "./components/FileReferencePicker";
 import type { ProviderChoice } from "./components/ProviderSelector";
-import { ProviderLogo } from "./components/ProviderLogo";
 import { SessionHistoryDialog } from "./components/SessionHistoryDialog";
 import { GlobalWorkbenchCallout } from "./components/workbench/callouts/GlobalWorkbenchCallout";
 import { StopSessionDialog } from "./components/workbench/dialogs/StopSessionDialog";
@@ -360,7 +359,6 @@ export function App() {
     setSessionModel,
     claimHistorySession,
     removeHistorySession,
-    removeHistoryWorkspaceSessions,
     claimControl,
     interruptSession,
     sendInput,
@@ -407,7 +405,6 @@ export function App() {
       setSessionModel: state.setSessionModel,
       claimHistorySession: state.claimHistorySession,
       removeHistorySession: state.removeHistorySession,
-      removeHistoryWorkspaceSessions: state.removeHistoryWorkspaceSessions,
       claimControl: state.claimControl,
       interruptSession: state.interruptSession,
       sendInput: state.sendInput,
@@ -446,6 +443,7 @@ export function App() {
   const [floatingAnchorOffsetPx, setFloatingAnchorOffsetPx] = useState(96);
   const [workbenchMode, setWorkbenchMode] = useState<WorkbenchMode>("single");
   const [councils, setCouncils] = useState<CouncilSnapshot[]>([]);
+  const councilsRef = useRef<CouncilSnapshot[]>([]);
   const [selectedCouncilId, setSelectedCouncilId] = useState<string | null>(null);
   const [homeNewCouncilDialogOpen, setHomeNewCouncilDialogOpen] = useState(false);
   const [canvasLayout, setCanvasLayoutState] = useState<CanvasLayout>(
@@ -544,9 +542,11 @@ export function App() {
   const refreshCouncils = useCallback(async () => {
     try {
       const response = await api.listCouncils();
-      setCouncils((current) => mergeCouncilLists(current, response.councils));
+      const mergedCouncils = mergeCouncilLists(councilsRef.current, response.councils);
+      councilsRef.current = mergedCouncils;
+      setCouncils(mergedCouncils);
       setSelectedCouncilId((current) => {
-        if (!current || response.councils.some((council) => council.id === current)) {
+        if (!current || mergedCouncils.some((council) => council.id === current)) {
           return current;
         }
         return null;
@@ -563,27 +563,27 @@ export function App() {
 
   const renameCouncilFromChats = useCallback(async (councilId: string, title: string) => {
     const response = await api.renameCouncil(councilId, { title });
-    setCouncils((current) => {
-      const existingIndex = current.findIndex((candidate) => candidate.id === response.council.id);
-      if (existingIndex >= 0) {
-        const next = [...current];
-        next[existingIndex] = mergeCouncilSnapshot(next[existingIndex], response.council);
-        return next;
-      }
-      return [response.council, ...current];
-    });
+    const existingIndex = councilsRef.current.findIndex((candidate) => candidate.id === response.council.id);
+    const next = [...councilsRef.current];
+    if (existingIndex >= 0) {
+      next[existingIndex] = mergeCouncilSnapshot(next[existingIndex], response.council);
+    } else {
+      next.unshift(response.council);
+    }
+    councilsRef.current = next;
+    setCouncils(next);
   }, []);
 
   const openCreatedCouncil = useCallback((council: CouncilSnapshot) => {
-    setCouncils((current) => {
-      const existingIndex = current.findIndex((candidate) => candidate.id === council.id);
-      if (existingIndex >= 0) {
-        const next = [...current];
-        next[existingIndex] = mergeCouncilSnapshot(next[existingIndex], council);
-        return next;
-      }
-      return [council, ...current];
-    });
+    const existingIndex = councilsRef.current.findIndex((candidate) => candidate.id === council.id);
+    const next = [...councilsRef.current];
+    if (existingIndex >= 0) {
+      next[existingIndex] = mergeCouncilSnapshot(next[existingIndex], council);
+    } else {
+      next.unshift(council);
+    }
+    councilsRef.current = next;
+    setCouncils(next);
     setSelectedSessionId(null);
     setSelectedWorkspaceOnlyDir(null);
     setWorkspaceDir(council.workspace);
@@ -594,6 +594,10 @@ export function App() {
     setLeftOpen(false);
     void refreshCouncils();
   }, [refreshCouncils, setSelectedSessionId, setWorkspaceDir]);
+
+  useEffect(() => {
+    councilsRef.current = councils;
+  }, [councils]);
 
   useEffect(() => {
     void refreshCouncils();
@@ -704,20 +708,6 @@ export function App() {
     return () => setVisibleNotificationTargets([]);
   }, [visibleNotificationTargets]);
 
-  useEffect(() => {
-    if (!canvasMaximizedPaneId) {
-      return;
-    }
-    setCanvasPaneRightPanelsOpen((current) =>
-      current[canvasMaximizedPaneId]
-        ? current
-        : {
-            ...current,
-            [canvasMaximizedPaneId]: true,
-          },
-    );
-  }, [canvasMaximizedPaneId]);
-
   const setCanvasPaneRightPanelOpen = useCallback((paneId: CanvasPaneId, open: boolean) => {
     setCanvasPaneRightPanelsOpen((current) => ({
       ...current,
@@ -749,7 +739,6 @@ export function App() {
     setCanvasPaneTargets((current) =>
       applyCanvasPaneTarget(current, paneId, target, useSessionStore.getState().projections),
     );
-    setCanvasPaneRightPanelOpen(paneId, true);
     setActiveCanvasPaneId(paneId);
   };
 
@@ -823,6 +812,17 @@ export function App() {
     setCanvasPaneTargets((current) =>
       clearCanvasTargetsForStoredSession(current, session, options),
     );
+  };
+  const removeFilteredHistoryWorkspaceSessions = async (
+    _workspaceDir: string,
+    sessions: readonly StoredSessionRef[],
+  ) => {
+    if (sessions.length === 0) {
+      return;
+    }
+    for (const session of sessions) {
+      await removeHistorySessionAndClearCanvasTargets(session);
+    }
   };
 
   const stopSessionAndKeepCanvasHistory = async (
@@ -1109,11 +1109,23 @@ export function App() {
   const {
     composerRef,
     draft,
+    draftImageDataUrls,
+    draftImageCount,
     emptyStateComposerRef,
     emptyStateDraft,
+    emptyStateImageDataUrls,
+    emptyStateImageCount,
     sendPending,
     setDraft,
     setEmptyStateDraft,
+    handleDraftPaste,
+    handleEmptyStatePaste,
+    clearDraftImages,
+    clearEmptyStateImages,
+    removeDraftImage,
+    removeEmptyStateImage,
+    removeLastDraftImage,
+    removeLastEmptyStateImage,
     handleSend,
     handleEmptyStateSend,
     insertDraftReference,
@@ -1465,7 +1477,7 @@ export function App() {
     </WorkbenchErrorBoundary>
   ) : (
       <div className="flex h-full flex-col">
-      <div className="h-14 px-4 pr-12 flex items-center justify-between shrink-0">
+      <div className="h-14 px-4 pr-11 flex items-center justify-between shrink-0">
         <div className="min-w-0">
           <div className="text-sm font-medium text-[var(--app-fg)]">Inspector</div>
           <div className="text-xs text-[var(--app-hint)] truncate">No workspace or session selected</div>
@@ -1484,6 +1496,8 @@ export function App() {
   } as CSSProperties;
   const mobileCanvasEnabled = viewportWidthPx >= 700;
   const inspectorToggleOpen = rightSidebarOpen || rightOpen;
+  const reserveInspectorToggleSlot = !rightSidebarOpen && !rightOpen;
+  const showPrimaryLeftSidebarControls = !leftOpen;
   const toggleInspectorFromHeader = () => {
     if (typeof window !== "undefined" && window.matchMedia("(min-width: 768px)").matches) {
       setRightSidebarOpen((open) => !open);
@@ -1555,7 +1569,9 @@ export function App() {
         onRenameCouncil={(council) => setRenameDialogCouncilId(council.id)}
         onRemoveCouncil={removeCouncilFromChats}
         onRemoveHistorySession={(session) => void removeHistorySessionAndClearCanvasTargets(session)}
-        onRemoveHistoryWorkspace={(workspaceDir) => void removeHistoryWorkspaceSessions(workspaceDir)}
+        onRemoveHistoryWorkspace={(workspaceDir, sessions) =>
+          void removeFilteredHistoryWorkspaceSessions(workspaceDir, sessions)
+        }
         onHome={goHome}
         onOpenSettings={() => {
           setSettingsDialogMounted(true);
@@ -1772,6 +1788,7 @@ export function App() {
               sidebarOpen={sidebarOpen}
               onExpandSidebar={() => setSidebarOpen(true)}
               onOpenLeft={() => setLeftOpen(true)}
+              showLeftSidebarControls={showPrimaryLeftSidebarControls}
               onAddWorkspace={(dir) => void addWorkspace(dir)}
               onHide={hideCouncilMode}
             />
@@ -1807,17 +1824,9 @@ export function App() {
               }
               renderPaneToolbar={(paneId) => {
                 const typedPaneId = paneId as CanvasPaneId;
-                const projection = resolveCanvasProjection(typedPaneId);
                 const council = resolveCanvasCouncil(typedPaneId);
                 return (
                   <>
-                    {projection ? (
-                      <ProviderLogo
-                        provider={projection.summary.session.provider}
-                        className="h-4 w-4"
-                        variant="bare"
-                      />
-                    ) : null}
                     {council ? (
                       <UsersRound
                         size={15}
@@ -1838,7 +1847,7 @@ export function App() {
                 );
                 const paneExpanded = canvasMaximizedPaneId === typedPaneId;
                 const paneRightPanelOpen =
-                  paneExpanded && canvasPaneRightPanelsOpen[typedPaneId] !== false;
+                  paneExpanded && canvasPaneRightPanelsOpen[typedPaneId] === true;
                 if (target.kind === "council") {
                   return (
                     <CouncilPage
@@ -1852,7 +1861,10 @@ export function App() {
                           setCanvasPaneCouncil(typedPaneId, councilId);
                         }
                       }}
-                      onCouncilsChange={setCouncils}
+                      onCouncilsChange={(nextCouncils) => {
+                        councilsRef.current = nextCouncils;
+                        setCouncils(nextCouncils);
+                      }}
                       sidebarOpen
                       onExpandSidebar={() => undefined}
                       onOpenLeft={() => undefined}
@@ -2113,8 +2125,8 @@ export function App() {
                           onRemoveSession={(session) =>
                             void removeHistorySessionAndClearCanvasTargets(session)
                           }
-                          onRemoveWorkspace={(workspaceDir) =>
-                            void removeHistoryWorkspaceSessions(workspaceDir)
+                          onRemoveWorkspace={(workspaceDir, sessions) =>
+                            void removeFilteredHistoryWorkspaceSessions(workspaceDir, sessions)
                           }
                           defaultTab="active"
                         >
@@ -2332,9 +2344,11 @@ export function App() {
               showModelInfoInChat={showModelInfoInChat}
               canLoadOlderHistory={Boolean(
                 selectedSummary.session.providerSessionId &&
-                  selectedProjection?.history.authoritativeApplied &&
-                  (selectedProjection.history.nextCursor ||
-                    selectedProjection.history.nextBeforeTs),
+                  selectedProjection &&
+                  (selectedProjection.history.phase === "loading" ||
+                    (selectedProjection.history.authoritativeApplied &&
+                      (selectedProjection.history.nextCursor ||
+                        selectedProjection.history.nextBeforeTs))),
               )}
               historyLoading={selectedProjection?.history.phase === "loading"}
               canRespondToPermission={canRespondToPermission}
@@ -2346,8 +2360,14 @@ export function App() {
               composerSurface={composerSurface}
               composerRef={composerRef}
               draft={draft}
+              draftImageUrls={draftImageDataUrls}
+              draftImageCount={draftImageCount}
               sendPending={sendPending}
               onDraftChange={setDraft}
+              onComposerPaste={handleDraftPaste}
+              onClearDraftImages={clearDraftImages}
+              onRemoveDraftImage={removeDraftImage}
+              onRemoveLastDraftImage={removeLastDraftImage}
               onSend={() => void handleSend()}
               onClaimHistory={() => {
                 const sessionId = selectedSummary.session.id;
@@ -2518,6 +2538,7 @@ export function App() {
               onLoadOlderHistory={() => loadOlderHistory(selectedSummary.session.id)}
               onOpenLeft={() => setLeftOpen(true)}
               onExpandSidebar={() => setSidebarOpen(true)}
+              showLeftSidebarControls={showPrimaryLeftSidebarControls}
               onOpenRight={() => setRightOpen(true)}
               onExpandInspector={() => setRightSidebarOpen(true)}
               onToggleInspector={toggleInspectorFromHeader}
@@ -2599,6 +2620,8 @@ export function App() {
                 );
               }}
               showInspectorToggle={!rightOpen && !rightSidebarOpen}
+              inspectorToggleClassName="md:hidden"
+              reserveRightPanelToggleSpace={reserveInspectorToggleSlot}
             />
           ) : primaryPaneState.kind === "opening" && activeOpeningSession ? (
             <WorkbenchOpeningPane
@@ -2607,11 +2630,14 @@ export function App() {
               rightSidebarOpen={rightSidebarOpen}
               onOpenLeft={() => setLeftOpen(true)}
               onExpandSidebar={() => setSidebarOpen(true)}
+              showLeftSidebarControls={showPrimaryLeftSidebarControls}
               onOpenRight={() => setRightOpen(true)}
               onExpandInspector={() => setRightSidebarOpen(true)}
               onToggleInspector={toggleInspectorFromHeader}
               inspectorToggleOpen={inspectorToggleOpen}
               showInspectorToggle={!rightOpen && !rightSidebarOpen}
+              inspectorToggleClassName="md:hidden"
+              reserveRightPanelToggleSpace={reserveInspectorToggleSlot}
             />
           ) : (
             <WorkbenchEmptyPane
@@ -2619,14 +2645,23 @@ export function App() {
               rightSidebarOpen={rightSidebarOpen}
               onOpenLeft={() => setLeftOpen(true)}
               onExpandSidebar={() => setSidebarOpen(true)}
+              showLeftSidebarControls={showPrimaryLeftSidebarControls}
               onOpenRight={() => setRightOpen(true)}
               onExpandInspector={() => setRightSidebarOpen(true)}
               onToggleInspector={toggleInspectorFromHeader}
               inspectorToggleOpen={inspectorToggleOpen}
               showInspectorToggle={!rightOpen && !rightSidebarOpen}
+              inspectorToggleClassName="md:hidden"
+              reserveRightPanelToggleSpace={reserveInspectorToggleSlot}
               emptyStateComposerRef={emptyStateComposerRef}
               emptyStateDraft={emptyStateDraft}
+              emptyStateImageUrls={emptyStateImageDataUrls}
+              emptyStateImageCount={emptyStateImageCount}
               onEmptyStateDraftChange={setEmptyStateDraft}
+              onEmptyStatePaste={handleEmptyStatePaste}
+              onClearEmptyStateImages={clearEmptyStateImages}
+              onRemoveEmptyStateImage={removeEmptyStateImage}
+              onRemoveLastEmptyStateImage={removeLastEmptyStateImage}
               onEmptyStateSend={handleEmptyStateSend}
               workspacePickerRef={workspacePickerRef}
               onOpenFileReference={() => setFileReferenceOpen(true)}

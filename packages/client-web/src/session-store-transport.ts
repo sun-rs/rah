@@ -1,4 +1,4 @@
-import type { EventBatch } from "@rah/runtime-protocol";
+import type { EventBatch, RahEvent } from "@rah/runtime-protocol";
 import * as api from "./api";
 
 type SessionStoreTransportCallbacks = {
@@ -8,13 +8,14 @@ type SessionStoreTransportCallbacks = {
   onError: (error: Error) => void;
   onOpen: () => void;
   onReplayGap: (batch: EventBatch) => void;
-  onStoredSessionsRefresh: () => void;
+  onStoredSessionsRefresh: (events: RahEvent[]) => void;
 };
 
 let callbacks: SessionStoreTransportCallbacks | null = null;
 let eventsSocket: WebSocket | null = null;
 let reconnectTimer: number | null = null;
 let storedSessionsRefreshTimer: number | null = null;
+let pendingStoredSessionEvents: RahEvent[] = [];
 let suppressNextSocketCloseReconnect = false;
 let reconnectAttempt = 0;
 
@@ -31,13 +32,16 @@ function clearReconnectTimer() {
   }
 }
 
-function scheduleStoredSessionsRefresh() {
+function scheduleStoredSessionsRefresh(events: RahEvent[]) {
+  pendingStoredSessionEvents = [...pendingStoredSessionEvents, ...events];
   if (storedSessionsRefreshTimer !== null) {
     return;
   }
   storedSessionsRefreshTimer = window.setTimeout(() => {
     storedSessionsRefreshTimer = null;
-    callbacks?.onStoredSessionsRefresh();
+    const eventsToFlush = pendingStoredSessionEvents;
+    pendingStoredSessionEvents = [];
+    callbacks?.onStoredSessionsRefresh(eventsToFlush);
   }, 150);
 }
 
@@ -55,8 +59,9 @@ export function connectSessionStoreTransport(
       if (eventsSocket !== socket) {
         return;
       }
-      if (batch.events?.some((event) => event.type === "session.discovery")) {
-        scheduleStoredSessionsRefresh();
+      const storedSessionEvents = batch.events?.filter((event) => event.type === "session.discovery") ?? [];
+      if (storedSessionEvents.length > 0) {
+        scheduleStoredSessionsRefresh(storedSessionEvents);
       }
       if (batch.replayGap) {
         nextCallbacks.onReplayGap(batch);

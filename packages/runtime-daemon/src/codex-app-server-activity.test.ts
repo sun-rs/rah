@@ -630,6 +630,42 @@ describe("translateCodexAppServerNotification", () => {
     ]);
   });
 
+  test("maps live image user messages without exposing data urls as text", () => {
+    const state = createCodexAppServerTranslationState();
+    const activities = translateCodexAppServerNotification(
+      {
+        method: "item/completed",
+        params: {
+          turnId: "turn-1",
+          item: {
+            type: "userMessage",
+            id: "user-image",
+            content: [
+              { type: "text", text: "这是什么意思" },
+              { type: "image", url: "data:image/png;base64,abc123" },
+            ],
+          },
+        },
+      },
+      state,
+    );
+    const timeline = activities.find((item) => item.activity.type === "timeline_item")?.activity;
+
+    assert.deepEqual(activities.map((item) => item.activity.type), [
+      "message_part_added",
+      "timeline_item",
+    ]);
+    assert.deepEqual(
+      timeline?.type === "timeline_item" ? timeline.item : null,
+      {
+        kind: "user_message",
+        text: "这是什么意思",
+        messageId: "user-image",
+        imageCount: 1,
+      },
+    );
+  });
+
   test("preserves markdown structure while stripping contextual fragments from live assistant messages", () => {
     const state = createCodexAppServerTranslationState();
     const markdown = "会涉及抽象。\n\n- AgentAdapter\n- EventModel\n\n```text\nCouncil\n```";

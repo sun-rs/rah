@@ -2038,7 +2038,7 @@ describe("translateCodexRolloutLine", () => {
     assert.deepEqual(activities, []);
   });
 
-  test("ignores non-text user message payloads without surfacing provider noise", () => {
+  test("maps image-only user message payloads without exposing base64", () => {
     const state = createCodexRolloutTranslationState();
 
     const activities = translateCodexRolloutLine(
@@ -2054,7 +2054,11 @@ describe("translateCodexRolloutLine", () => {
       state,
     );
 
-    assert.deepEqual(activities, []);
+    assert.equal(activities.length, 1);
+    assert.deepEqual(activities[0]?.activity, {
+      type: "timeline_item",
+      item: { kind: "user_message", text: "", imageCount: 1 },
+    });
   });
 
   test("preserves markdown structure while stripping contextual fragments from assistant messages", () => {

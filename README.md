@@ -4,9 +4,9 @@ Runtime-owned AI workbench for local-first, cross-device session continuity.
 
 ## Current status
 
-Version: `1.0.0-rc.1`.
+Version: `1.0.0`.
 
-RAH `1.0.0-rc.1` is moving to a provider-native runtime boundary. The product
+RAH `1.0.0` is the first milestone release for the provider-native runtime boundary. The product
 boundary is intentionally narrow:
 
 - Codex, Claude, Gemini, and OpenCode are the first-class live provider CLIs.
@@ -293,9 +293,9 @@ RAH keeps the live runtime boundary explicit:
 - only explicit Web/PWA `TUI` view claims a TUI display surface.
 - provider-specific maintenance signals should remain adapter-owned or inspector-only.
 
-## 1.0 RC Scope
+## 1.0 Milestone Scope
 
-`1.0.0-rc.1` is considered feature-complete enough for the current runtime scope:
+`1.0.0` is the milestone release for the current runtime scope:
 
 - Codex native local-server WebSocket runtime is wired, and Codex 0.130.0 remote TUI cross-client
   sync has passed `scripts/native_local_server_probe.ts`. Codex `>=0.132.0` is now recommended for

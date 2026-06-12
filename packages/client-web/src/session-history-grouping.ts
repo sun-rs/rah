@@ -80,6 +80,63 @@ export function filterStoppedRecentSessions(
   return sessions.filter((session) => !runningIdentityKeys.has(sessionIdentityKey(session)));
 }
 
+export function storedSessionLineCount(session: StoredSessionRef): number | null {
+  const lines = session.historyMeta?.lines;
+  return typeof lines === "number" && Number.isFinite(lines) ? lines : null;
+}
+
+export function sessionMatchesMaxLineCount(
+  session: StoredSessionRef,
+  maxLineCount: number | null,
+): boolean {
+  if (maxLineCount === null) {
+    return true;
+  }
+  const lines = storedSessionLineCount(session);
+  return lines !== null && lines <= maxLineCount;
+}
+
+export function filterSessionHistoryGroups(
+  groups: readonly SessionHistoryGroup[],
+  options?: {
+    query?: string;
+    maxLineCount?: number | null;
+    matchesProvider?: (session: StoredSessionRef) => boolean;
+    matchesSessionQuery?: (session: StoredSessionRef, normalizedQuery: string) => boolean;
+  },
+): SessionHistoryGroup[] {
+  const q = options?.query?.trim().toLowerCase() ?? "";
+  const maxLineCount = options?.maxLineCount ?? null;
+  const matchesProvider = options?.matchesProvider ?? (() => true);
+  const matchesSessionQuery = options?.matchesSessionQuery ?? (() => false);
+  return groups
+    .map((group) => {
+      const providerMatchedItems = group.items
+        .filter(matchesProvider)
+        .filter((session) => sessionMatchesMaxLineCount(session, maxLineCount));
+      if (providerMatchedItems.length === 0) {
+        return null;
+      }
+      if (!q) {
+        return { ...group, items: providerMatchedItems };
+      }
+      const groupMatches =
+        group.displayName.toLowerCase().includes(q) ||
+        group.directory.toLowerCase().includes(q);
+      const matchedItems = providerMatchedItems.filter((session) =>
+        matchesSessionQuery(session, q),
+      );
+      if (groupMatches) {
+        return { ...group, items: providerMatchedItems };
+      }
+      if (matchedItems.length > 0) {
+        return { ...group, items: matchedItems };
+      }
+      return null;
+    })
+    .filter((group): group is SessionHistoryGroup => group !== null);
+}
+
 export function groupAllStoredSessionsByDirectory(
   sessions: StoredSessionRef[],
   options?: {

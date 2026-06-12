@@ -16,6 +16,7 @@ import type {
   SessionModelDescriptor,
   SessionModelSource,
   SessionModeDescriptor,
+  StoredSessionIdentity,
   StoredSessionRef,
   Workbench,
 } from "./session";
@@ -376,9 +377,18 @@ export interface ListSessionsResponse {
   sessions: SessionSummary[];
   storedSessions: StoredSessionRef[];
   recentSessions: StoredSessionRef[];
+  storedSessionsRevision?: number;
   workspaceDirs: string[];
   hiddenWorkspaces?: string[];
   activeWorkspaceDir?: string;
+}
+
+export interface StoredSessionsDeltaResponse {
+  fromRevision: number;
+  revision: number;
+  upsert: StoredSessionRef[];
+  remove: StoredSessionIdentity[];
+  resetRequired?: boolean;
 }
 
 export interface StartSessionResponse {
@@ -503,12 +513,14 @@ export interface SessionFileSearchResponse {
   files: SessionFileSearchItem[];
 }
 
+export type SessionHistoryDetailMode = "full" | "summary" | "chat";
+
 export interface SessionHistoryPageResponse {
   sessionId: string;
   events: RahEvent[];
   nextCursor?: string;
   nextBeforeTs?: string;
-  detailMode?: "full" | "summary";
+  detailMode?: SessionHistoryDetailMode;
   approximateBytes?: number;
 }
 

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import type { RahEvent } from "@rah/runtime-protocol";
 import { HistorySnapshotStore, type FrozenHistoryPageLoader } from "./history-snapshots";
 import {
+  chatHistoryPage,
   historyEventMatchesItem,
   summarizeHistoryPage,
 } from "./history-event-projection";
@@ -62,6 +63,70 @@ test("history summary strips heavyweight tool details while preserving hydration
   assert.equal(summarized.payload.toolCall.result, undefined);
   assert.equal(summarized.payload.toolCall.detailAvailable, true);
   assert.ok((summarized.payload.toolCall.detailSizeBytes ?? 0) > 10_000);
+  assert.ok((page.approximateBytes ?? 0) < 2_000);
+});
+
+test("chat history page keeps only lightweight timeline events", () => {
+  const user = event({
+    id: "event-user",
+    type: "timeline.item.added",
+    payload: {
+      item: { kind: "user_message", text: "Please inspect this." },
+    },
+  });
+  const assistant = event({
+    id: "event-assistant",
+    type: "timeline.item.updated",
+    raw: { payload: "raw".repeat(10_000) },
+    payload: {
+      item: { kind: "assistant_message", text: "Done." },
+    },
+  });
+  const tool = event({
+    id: "event-tool-completed",
+    type: "tool.call.completed",
+    payload: {
+      toolCall: {
+        id: "tool-1",
+        family: "shell",
+        providerToolName: "exec_command",
+        title: "Run tests",
+        detail: {
+          artifacts: [{ kind: "text", label: "stdout", text: "x".repeat(10_000) }],
+        },
+      },
+    },
+  });
+  const observation = event({
+    id: "event-observation",
+    type: "observation.completed",
+    payload: {
+      observation: {
+        id: "obs-1",
+        kind: "command.run",
+        status: "completed",
+        title: "Run tests",
+        detail: {
+          artifacts: [{ kind: "text", label: "stdout", text: "y".repeat(10_000) }],
+        },
+      },
+    },
+  });
+
+  const page = chatHistoryPage({
+    sessionId: "session-1",
+    events: [user, tool, observation, assistant],
+    nextCursor: "older",
+    nextBeforeTs: user.ts,
+  });
+
+  assert.equal(page.detailMode, "chat");
+  assert.equal(page.nextCursor, "older");
+  assert.deepEqual(page.events.map((candidate) => candidate.type), [
+    "timeline.item.added",
+    "timeline.item.updated",
+  ]);
+  assert.equal(page.events[1]?.raw, undefined);
   assert.ok((page.approximateBytes ?? 0) < 2_000);
 });
 

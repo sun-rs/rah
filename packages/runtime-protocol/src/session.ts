@@ -328,13 +328,16 @@ export interface StoredSessionProviderState {
   archivedAt?: string;
 }
 
+export interface StoredSessionIdentity {
+  provider: ProviderKind;
+  providerSessionId: string;
+}
+
 /**
  * A provider-owned persisted session reference that is known to the system but
  * is not currently running under runtime control.
  */
-export interface StoredSessionRef {
-  provider: ProviderKind;
-  providerSessionId: string;
+export interface StoredSessionRef extends StoredSessionIdentity {
   cwd?: string;
   rootDir?: string;
   title?: string;

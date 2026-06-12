@@ -4,7 +4,6 @@ import {
   useState,
   type CSSProperties,
   type TouchEvent as ReactTouchEvent,
-  type WheelEvent as ReactWheelEvent,
 } from "react";
 import { Terminal, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -13,6 +12,8 @@ import {
   mobileBridgeFocusOptionsForSource,
   type MobileBridgeFocusOptions,
 } from "./terminal-mobile-bridge";
+import { isTerminalProtocolResponse } from "./terminal-protocol-response";
+import { shouldRequestPtyReplay } from "./terminal-pty-replay-policy";
 import { ptySocketCloseNotice } from "./terminal-socket-close";
 import { TERMINAL_TUI_SHORTCUTS, type TerminalShortcut } from "./terminal-shortcuts";
 import { readTerminalViewportMetrics } from "./terminal-viewport";
@@ -51,6 +52,21 @@ type TerminalCssVar =
 const DEFAULT_MAX_TERMINAL_WRITE_BATCH_CHARS = 128 * 1024;
 const MAX_PAUSED_TERMINAL_OUTPUT_TAIL_CHARS = 256 * 1024;
 const TERMINAL_INPUT_FLUSH_DELAY_MS = 2;
+const TERMINAL_OUTPUT_FLUSH_DELAY_MS = 16;
+
+function stripTerminalControlText(data: string): string {
+  return data
+    .replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, "")
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/\x1b[()][A-Za-z0-9]/g, "")
+    .replace(/\r/g, "\n")
+    .trim();
+}
+
+function isMeaningfulTerminalOutput(data: string): boolean {
+  const text = stripTerminalControlText(data);
+  return text.length > 0 && !/^\[rah\]\s+Starting\b/.test(text);
+}
 
 function shouldShowMobileInputBridge(): boolean {
   if (typeof navigator === "undefined" || typeof window === "undefined") {
@@ -171,6 +187,11 @@ export function TerminalPane(props: TerminalPaneProps) {
   const [surfaceOwnerKind, setSurfaceOwnerKind] = useState<string | null>(null);
   const [localTuiClientActive, setLocalTuiClientActive] = useState(true);
   const [tuiClientClosing, setTuiClientClosing] = useState(false);
+  const [startupOverlayVisible, setStartupOverlayVisible] = useState(
+    props.initialReplay === false,
+  );
+  const startupOverlayVisibleRef = useRef(props.initialReplay === false);
+  const startupOverlayReleaseTimerRef = useRef<number | null>(null);
   const tuiClientCloseEnabled = props.tuiClientCloseEnabled === true;
   const tuiClientActive = tuiClientCloseEnabled
     ? props.tuiClientActive ?? localTuiClientActive
@@ -208,7 +229,8 @@ export function TerminalPane(props: TerminalPaneProps) {
     if (!socket || !terminal) {
       return;
     }
-    fitTerminalImmediatelyRef.current();
+    fitAddonRef.current?.fit();
+    terminal.refresh(0, Math.max(0, terminal.rows - 1));
     sendPtyMessage(socket, {
       type: "pty.surface.attach",
       sessionId: props.terminalId,
@@ -253,11 +275,10 @@ export function TerminalPane(props: TerminalPaneProps) {
       return;
     }
     if (claimSurfaceRef.current) {
-      fitTerminalImmediatelyRef.current();
+      claimCurrentSurface();
       flushPausedOutputRef.current();
       scheduleTerminalFitRef.current({ force: true });
       terminalRef.current?.refresh(0, Math.max(0, terminalRef.current.rows - 1));
-      claimCurrentSurface();
     } else {
       releaseCurrentSurface();
     }
@@ -307,13 +328,33 @@ export function TerminalPane(props: TerminalPaneProps) {
     setTuiClientClosing(false);
     setSurfaceOwnerKind(null);
     nextReplaySeqRef.current = 0;
+    const showStartupOverlay = props.initialReplay === false && tuiClientActive;
+    startupOverlayVisibleRef.current = showStartupOverlay;
+    setStartupOverlayVisible(showStartupOverlay);
   }, [props.terminalId, props.tuiClientActive]);
+
+  useEffect(() => {
+    const showStartupOverlay = props.initialReplay === false && tuiClientActive;
+    startupOverlayVisibleRef.current = showStartupOverlay;
+    setStartupOverlayVisible(showStartupOverlay);
+  }, [props.initialReplay, tuiClientActive]);
 
   const setTuiClientActiveState = (active: boolean) => {
     props.onTuiClientActiveChange?.(active);
     if (props.tuiClientActive === undefined) {
       setLocalTuiClientActive(active);
     }
+  };
+
+  const releaseStartupOverlaySoon = () => {
+    if (!startupOverlayVisibleRef.current || startupOverlayReleaseTimerRef.current) {
+      return;
+    }
+    startupOverlayReleaseTimerRef.current = window.setTimeout(() => {
+      startupOverlayReleaseTimerRef.current = null;
+      startupOverlayVisibleRef.current = false;
+      setStartupOverlayVisible(false);
+    }, 180);
   };
 
   useEffect(() => {
@@ -509,7 +550,7 @@ export function TerminalPane(props: TerminalPaneProps) {
           return;
         }
         writeScheduled = true;
-        queueMicrotask(() => {
+        window.setTimeout(() => {
           writeScheduled = false;
           if (disposed || writeInFlight || (pendingReplace === null && pendingWrite.length === 0)) {
             return;
@@ -547,7 +588,7 @@ export function TerminalPane(props: TerminalPaneProps) {
               scheduleTerminalWrite();
             }
           });
-        });
+        }, TERMINAL_OUTPUT_FLUSH_DELAY_MS);
       };
 
       const enqueueTerminalWrite = (data: string) => {
@@ -593,6 +634,13 @@ export function TerminalPane(props: TerminalPaneProps) {
         data: string,
         options?: { replace?: boolean; softReplace?: boolean },
       ) => {
+        if (
+          startupOverlayVisibleRef.current &&
+          !options?.replace &&
+          isMeaningfulTerminalOutput(data)
+        ) {
+          releaseStartupOverlaySoon();
+        }
         if (renderOutputRef.current) {
           if (options?.replace) {
             replaceTerminalContents(
@@ -668,7 +716,10 @@ export function TerminalPane(props: TerminalPaneProps) {
       },
         {
           ...(fromSeq !== undefined ? { fromSeq } : {}),
-          replay: props.initialReplay !== false,
+          replay: shouldRequestPtyReplay({
+            initialReplay: props.initialReplay !== false,
+            ...(fromSeq !== undefined ? { fromSeq } : {}),
+          }),
           ...(props.replayTailBytes !== undefined
             ? { replayTailBytes: props.replayTailBytes }
             : {}),
@@ -677,7 +728,6 @@ export function TerminalPane(props: TerminalPaneProps) {
       socketRef.current = socket;
       socket.addEventListener("open", () => {
         reconnectAttempt = 0;
-        fitImmediatelyAndNotifyResize();
         claimCurrentSurface();
         settleTerminalLayout();
       });
@@ -789,7 +839,14 @@ export function TerminalPane(props: TerminalPaneProps) {
     };
 
     const disposable = terminal.onData((data) => {
-      if (!claimSurfaceRef.current || !hasControlRef.current) {
+      if (!claimSurfaceRef.current) {
+        return;
+      }
+      if (!hasControlRef.current && isTerminalProtocolResponse(data)) {
+        sendPtyInputNow(data);
+        return;
+      }
+      if (!hasControlRef.current) {
         return;
       }
       sendDataRef.current(data, { focusTerminal: false });
@@ -813,6 +870,10 @@ export function TerminalPane(props: TerminalPaneProps) {
       if (inputFlushTimer) {
         clearTimeout(inputFlushTimer);
         inputFlushTimer = null;
+      }
+      if (startupOverlayReleaseTimerRef.current) {
+        window.clearTimeout(startupOverlayReleaseTimerRef.current);
+        startupOverlayReleaseTimerRef.current = null;
       }
       flushPendingInput();
       if (surfacePollTimer) {
@@ -968,22 +1029,33 @@ export function TerminalPane(props: TerminalPaneProps) {
     terminal.scrollLines(lines);
     return true;
   };
-  const handleTerminalWheelCapture = (event: ReactWheelEvent<HTMLDivElement>) => {
-    if (!tuiClientActive) {
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) {
       return;
     }
-    const linePx = terminalScrollLinePx();
-    const deltaY =
-      event.deltaMode === WheelEvent.DOM_DELTA_LINE
-        ? event.deltaY * linePx
-        : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
-          ? event.deltaY * linePx * Math.max(1, terminalRef.current?.rows ?? 24)
-          : event.deltaY;
-    if (scrollTerminalByPixels(deltaY)) {
-      event.preventDefault();
-      event.stopPropagation();
-    }
-  };
+    const handleWheel = (event: WheelEvent) => {
+      if (!tuiClientActive) {
+        return;
+      }
+      const linePx = terminalScrollLinePx();
+      const deltaY =
+        event.deltaMode === WheelEvent.DOM_DELTA_LINE
+          ? event.deltaY * linePx
+          : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+            ? event.deltaY * linePx * Math.max(1, terminalRef.current?.rows ?? 24)
+            : event.deltaY;
+      if (scrollTerminalByPixels(deltaY)) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    };
+    container.addEventListener("wheel", handleWheel, { capture: true, passive: false });
+    return () => {
+      container.removeEventListener("wheel", handleWheel, { capture: true });
+    };
+  }, [tuiClientActive]);
+
   const handleTerminalTouchStart = (event: ReactTouchEvent<HTMLDivElement>) => {
     if (!tuiClientActive || event.touches.length !== 1) {
       touchScrollRef.current = null;
@@ -1090,7 +1162,6 @@ export function TerminalPane(props: TerminalPaneProps) {
           ref={containerRef}
           className="terminal-canvas"
           data-testid="terminal-canvas"
-          onWheelCapture={handleTerminalWheelCapture}
           onTouchStart={handleTerminalTouchStart}
           onTouchMove={handleTerminalTouchMove}
           onTouchEnd={clearTerminalTouchScroll}
@@ -1124,6 +1195,16 @@ export function TerminalPane(props: TerminalPaneProps) {
               >
                 Activate TUI
               </button>
+            </div>
+          </div>
+        ) : null}
+        {startupOverlayVisible && tuiClientActive ? (
+          <div className="terminal-surface-overlay" data-testid="terminal-startup-overlay">
+            <div className="terminal-surface-overlay-card">
+              <div className="terminal-surface-overlay-title">Starting TUI</div>
+              <div className="terminal-surface-overlay-copy">
+                Waiting for the native terminal to draw its current screen.
+              </div>
             </div>
           </div>
         ) : null}

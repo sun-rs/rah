@@ -1,9 +1,15 @@
-import { useRef, useState } from "react";
+import { useRef, useState, type ClipboardEventHandler } from "react";
 import type { ProviderModelCatalog } from "@rah/runtime-protocol";
 import { History, UsersRound } from "lucide-react";
 import type { ProviderChoice } from "../../ProviderSelector";
 import type { SessionModeChoice } from "../../../session-mode-ui";
 import { NewSessionComposer } from "../panes/NewSessionComposer";
+import {
+  appendImageDataUrlsToText,
+  imageFilesFromClipboardData,
+  readImageDataUrlsFromClipboardData,
+} from "../../../composer-image-attachments";
+import { insertTextAtSelection } from "../../../composer-text-insertion";
 
 export function CanvasNewSessionPane(props: {
   workspaceDirs: string[];
@@ -32,10 +38,42 @@ export function CanvasNewSessionPane(props: {
   onCancel: () => void;
 }) {
   const [draft, setDraft] = useState("");
+  const [imageDataUrls, setImageDataUrls] = useState<string[]>([]);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const workspacePickerRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const canStart = Boolean(draft.trim() && props.availableWorkspaceDir && !props.startPending);
+  const outgoingDraft = appendImageDataUrlsToText(draft, imageDataUrls);
+  const canStart = Boolean(outgoingDraft && props.availableWorkspaceDir && !props.startPending);
+  const handlePaste: ClipboardEventHandler<HTMLTextAreaElement> = (event) => {
+    if (imageFilesFromClipboardData(event.clipboardData).length === 0) {
+      return;
+    }
+    event.preventDefault();
+    const pastedText = event.clipboardData.getData("text/plain");
+    if (pastedText) {
+      const textarea = textareaRef.current ?? event.currentTarget;
+      setDraft((current) => {
+        const { nextValue, caret } = insertTextAtSelection({
+          current,
+          selectionStart: textarea.selectionStart ?? current.length,
+          selectionEnd: textarea.selectionEnd ?? current.length,
+          insertedText: pastedText,
+        });
+        queueMicrotask(() => {
+          textarea.focus();
+          textarea.setSelectionRange(caret, caret);
+        });
+        return nextValue;
+      });
+    }
+    void readImageDataUrlsFromClipboardData(event.clipboardData)
+      .then((urls) => {
+        if (urls.length > 0) {
+          setImageDataUrls((current) => [...current, ...urls]);
+        }
+      })
+      .catch(() => undefined);
+  };
 
   return (
     <NewSessionComposer
@@ -43,8 +81,22 @@ export function CanvasNewSessionPane(props: {
       surfaceClassName="w-full max-w-2xl space-y-5 md:space-y-6"
       composerRef={textareaRef}
       draft={draft}
+      draftImageUrls={imageDataUrls}
+      draftImageCount={imageDataUrls.length}
       onDraftChange={setDraft}
-      onSend={() => props.onStart(draft.trim())}
+      onComposerPaste={handlePaste}
+      onClearDraftImages={() => setImageDataUrls([])}
+      onRemoveDraftImage={(index) =>
+        setImageDataUrls((current) =>
+          current.filter((_, candidateIndex) => candidateIndex !== index),
+        )
+      }
+      onRemoveLastDraftImage={() => setImageDataUrls((current) => current.slice(0, -1))}
+      onSend={() => {
+        props.onStart(outgoingDraft);
+        setDraft("");
+        setImageDataUrls([]);
+      }}
       canSend={canStart}
       sendPending={props.startPending}
       workspacePickerRef={workspacePickerRef}

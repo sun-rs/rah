@@ -22,11 +22,25 @@ export function resolveActiveSessionTuiSurface(args: {
   return { terminalId, clientId: args.clientId };
 }
 
-export function shouldDetachPreviousSessionTui(
-  previous: ActiveSessionTuiSurface,
-  current: ActiveSessionTuiSurface,
-): previous is NonNullable<ActiveSessionTuiSurface> {
-  return Boolean(previous && (!current || previous.terminalId !== current.terminalId));
+export function activateSessionTuiTerminal(args: {
+  terminalId: string;
+  openedTerminalIds: ReadonlySet<string>;
+  closedTerminalIds: ReadonlySet<string>;
+}): {
+  openedTerminalIds: Set<string>;
+  closedTerminalIds: Set<string>;
+} {
+  const openedTerminalIds = new Set(args.openedTerminalIds);
+  const closedTerminalIds = new Set(args.closedTerminalIds);
+  openedTerminalIds.add(args.terminalId);
+  closedTerminalIds.delete(args.terminalId);
+  return { openedTerminalIds, closedTerminalIds };
+}
+
+export function shouldReplayInitialSessionTuiOutput(args: {
+  liveBackend?: string | null | undefined;
+}): boolean {
+  return args.liveBackend !== "native_local_server";
 }
 
 export type CouncilTuiCacheState = {

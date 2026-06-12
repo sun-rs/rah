@@ -14,8 +14,15 @@ test("nativeLocalServerAttachSpec builds provider-native client attach commands"
     }),
     {
       command: "codex",
-      args: ["--remote", "ws://127.0.0.1:12345/", "resume", "thread-1"],
-      attachCommand: "codex --remote ws://127.0.0.1:12345/ resume thread-1",
+      args: [
+        "-c",
+        "check_for_update_on_startup=false",
+        "--remote",
+        "ws://127.0.0.1:12345/",
+        "resume",
+        "thread-1",
+      ],
+      attachCommand: "codex -c check_for_update_on_startup=false --remote ws://127.0.0.1:12345/ resume thread-1",
     },
   );
 
@@ -71,7 +78,7 @@ test("nativeLocalServerRuntimeDiagnostics includes attach command only when safe
     {
       serverEndpoint: "ws://127.0.0.1:12345/",
       serverPid: 123,
-      attachCommand: "codex --remote ws://127.0.0.1:12345/ resume thread-1",
+      attachCommand: "codex -c check_for_update_on_startup=false --remote ws://127.0.0.1:12345/ resume thread-1",
       attachState: "ready",
       lastEventCursor: "thread:thread-1",
     },
@@ -91,4 +98,3 @@ test("nativeLocalServerRuntimeDiagnostics includes attach command only when safe
     },
   );
 });
-

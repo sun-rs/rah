@@ -38,6 +38,7 @@ import { optionValueAsString, resolveModelOptionValues } from "../session-model-
 import {
   finalizeStoredReplayResume,
   prepareProviderSessionResume,
+  reuseExistingProviderSessionForResume,
 } from "../provider-resume";
 import { toSessionSummary } from "../session-store";
 import { mergeManualProviderModels } from "../manual-provider-models";
@@ -73,6 +74,18 @@ export class OpenCodeAdapter implements ProviderAdapter {
   }
 
   async resumeSession(request: ResumeSessionRequest): Promise<ResumeSessionResponse> {
+    const reused = reuseExistingProviderSessionForResume({
+      services: this.services,
+      provider: "opencode",
+      providerSessionId: request.providerSessionId,
+      preferStoredReplay: request.preferStoredReplay,
+      historySourceSessionId: request.historySourceSessionId,
+      rehydratedSessionIds: this.rehydratedSessionIds,
+      ...(request.attach !== undefined ? { attach: request.attach } : {}),
+    });
+    if (reused) {
+      return reused;
+    }
     const preparedResume = prepareProviderSessionResume({
       services: this.services,
       provider: "opencode",
@@ -81,15 +94,6 @@ export class OpenCodeAdapter implements ProviderAdapter {
       historySourceSessionId: request.historySourceSessionId,
       rehydratedSessionIds: this.rehydratedSessionIds,
     });
-    const existing = this.services.sessionStore.findManagedByProviderSession(
-      "opencode",
-      request.providerSessionId,
-    );
-    if (existing) {
-      throw new Error(
-        `Provider session opencode:${request.providerSessionId} is already running; attach instead of resume.`,
-      );
-    }
     const record = findOpenCodeStoredSessionRecord(request.providerSessionId);
     if (request.preferStoredReplay) {
       if (!record) {

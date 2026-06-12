@@ -76,7 +76,12 @@ describe("native TUI launch specs", () => {
       });
 
       assert.equal(start.command, fake.path);
-      assert.deepEqual(start.args, ["--cd", "/workspace/demo"]);
+      assert.deepEqual(start.args, [
+        "-c",
+        "check_for_update_on_startup=false",
+        "--cd",
+        "/workspace/demo",
+      ]);
       assert.equal(start.env, undefined);
 
       const resume = await nativeTuiResumeLaunchSpec({
@@ -85,7 +90,14 @@ describe("native TUI launch specs", () => {
         cwd: "/workspace/demo",
         liveBackend: "native_tui",
       });
-      assert.deepEqual(resume.args, ["resume", "--cd", "/workspace/demo", providerSessionId]);
+      assert.deepEqual(resume.args, [
+        "-c",
+        "check_for_update_on_startup=false",
+        "resume",
+        "--cd",
+        "/workspace/demo",
+        providerSessionId,
+      ]);
       assert.equal(resume.env, undefined);
     } finally {
       rmSync(fake.dir, { force: true, recursive: true });
@@ -226,6 +238,8 @@ describe("native TUI launch specs", () => {
         reasoningId: "ultra",
       });
       assert.deepEqual(codexStart.args, [
+        "-c",
+        "check_for_update_on_startup=false",
         "--cd",
         workspace,
         "--model",

@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
-import { ChevronUp, Folder, FolderOpen, HardDrive, Search, X } from "lucide-react";
+import { Folder, FolderOpen, HardDrive, Search, X } from "lucide-react";
 import { listDirectory, type DirectoryListingResponse } from "../api";
+import { DirectoryPathBackRow } from "./DirectoryPathBackRow";
 import { OverlayScrollArea } from "./OverlayScrollArea";
 
 const DEFAULT_WORKSPACE_PICKER_PATH = "~";
@@ -75,6 +76,8 @@ export function WorkspacePicker(props: {
 
   const displayCurrent = props.currentDir.trim() || "Choose workspace…";
   const labelText = props.triggerLabel !== undefined ? props.triggerLabel : displayCurrent;
+  const displayPath = listing?.path || currentPath;
+  const canGoUp = getParentPath(displayPath) !== displayPath;
 
   return (
     <Dialog.Root open={open} onOpenChange={setOpen}>
@@ -110,25 +113,12 @@ export function WorkspacePicker(props: {
             </Dialog.Close>
           </div>
 
-          {/* Breadcrumb / path bar */}
-          <div className="flex items-center gap-2 border-b border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-3 py-2 shrink-0">
-            <button
-              type="button"
-              onClick={() => setCurrentPath(getParentPath(listing?.path || currentPath))}
-              disabled={currentPath === "/"}
-              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)] disabled:opacity-30 transition-colors"
-              aria-label="Go up"
-              title="Go up"
-            >
-              <ChevronUp size={16} />
-            </button>
-            <div className="flex min-w-0 items-center gap-1.5 text-sm text-[var(--app-fg)]">
-              <HardDrive size={14} className="text-[var(--app-hint)] shrink-0" />
-              <span className="truncate font-medium" title={listing?.path || currentPath}>
-                {listing?.path || currentPath}
-              </span>
-            </div>
-          </div>
+          <DirectoryPathBackRow
+            path={displayPath}
+            canGoUp={canGoUp}
+            leadingIcon={<HardDrive size={14} className="shrink-0 text-[var(--app-hint)]" />}
+            onGoUp={() => setCurrentPath(getParentPath(displayPath))}
+          />
 
           {/* Search */}
           <div className="px-4 pt-3 pb-2 shrink-0">

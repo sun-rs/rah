@@ -13,7 +13,7 @@ import { CouncilsBrowser } from "../council/CouncilsBrowser";
 import { runningSessionActivityAt } from "../session-conversation-activity";
 import { usePwaDisplayMode } from "../hooks/usePwaDisplayMode";
 import {
-  dedupeStoredSessionsByIdentity,
+  filterSessionHistoryGroups,
   filterStoppedRecentSessions,
   groupAllStoredSessionsByDirectory,
   sessionIdentityKey,
@@ -30,10 +30,24 @@ function isHistoryProviderFilter(provider: StoredSessionRef["provider"]): provid
   return (HISTORY_PROVIDER_OPTIONS as readonly string[]).includes(provider);
 }
 
+function parseMaxLineCountFilter(value: string): number | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const parsed = Number.parseInt(trimmed, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return null;
+  }
+  return parsed;
+}
+
 function HistoryFilterMenu(props: {
   sortMode: WorkspaceSortMode;
   onSortModeChange: (value: WorkspaceSortMode) => void;
   showWorkspaceSort: boolean;
+  maxLineCount: string;
+  onMaxLineCountChange: (value: string) => void;
   selectedProviders: ReadonlySet<HistoryProviderFilter>;
   onToggleProvider: (provider: HistoryProviderFilter) => void;
   onToggleAllProviders: () => void;
@@ -71,7 +85,7 @@ function HistoryFilterMenu(props: {
   const menuTitle = props.showWorkspaceSort ? "Filter and sort sessions" : "Filter providers";
 
   return (
-    <div className="relative" data-history-sort-menu>
+    <div className="relative z-30" data-history-sort-menu>
       <button
         type="button"
         className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--app-border)] text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
@@ -86,7 +100,7 @@ function HistoryFilterMenu(props: {
         <ListFilter size={14} />
       </button>
       {open ? (
-        <div className="absolute right-0 top-9 z-10 w-56 rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] p-1 shadow-lg">
+        <div className="absolute right-0 top-9 z-40 w-56 rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] p-1 shadow-lg">
           {props.showWorkspaceSort ? (
             <>
               <div className="px-2 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--app-hint)]">
@@ -114,6 +128,22 @@ function HistoryFilterMenu(props: {
                   </span>
                 </button>
               ))}
+              <div className="my-1 h-px bg-[var(--app-border)]" />
+              <div className="px-2 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--app-hint)]">
+                Max lines
+              </div>
+              <label className="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-[var(--app-fg)]">
+                <input
+                  type="number"
+                  min={0}
+                  inputMode="numeric"
+                  className="h-8 min-w-0 flex-1 rounded-md border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-2 text-sm text-[var(--app-fg)] outline-none focus:border-[var(--ring)]"
+                  placeholder="No limit"
+                  value={props.maxLineCount}
+                  onChange={(event) => props.onMaxLineCountChange(event.currentTarget.value)}
+                />
+                <span className="shrink-0 text-xs text-[var(--app-hint)]">lines</span>
+              </label>
               <div className="my-1 h-px bg-[var(--app-border)]" />
             </>
           ) : null}
@@ -268,9 +298,47 @@ function chooseSessionHistoryRef(
   const currentHasMeta = hasHistoryMeta(current);
   const candidateHasMeta = hasHistoryMeta(candidate);
   if (candidateHasMeta !== currentHasMeta) {
-    return candidateHasMeta ? candidate : current;
+    const metadataSource = candidateHasMeta ? candidate : current;
+    const recencySource =
+      sessionHistoryTimestamp(candidate) > sessionHistoryTimestamp(current) ? candidate : current;
+    const merged: StoredSessionRef = {
+      ...metadataSource,
+    };
+    if (metadataSource.createdAt === undefined && recencySource.createdAt !== undefined) {
+      merged.createdAt = recencySource.createdAt;
+    }
+    if (recencySource.updatedAt !== undefined) {
+      merged.updatedAt = recencySource.updatedAt;
+    }
+    if (recencySource.lastUsedAt !== undefined) {
+      merged.lastUsedAt = recencySource.lastUsedAt;
+    }
+    if (metadataSource.title === undefined && recencySource.title !== undefined) {
+      merged.title = recencySource.title;
+    }
+    if (metadataSource.preview === undefined && recencySource.preview !== undefined) {
+      merged.preview = recencySource.preview;
+    }
+    if (metadataSource.cwd === undefined && recencySource.cwd !== undefined) {
+      merged.cwd = recencySource.cwd;
+    }
+    if (metadataSource.rootDir === undefined && recencySource.rootDir !== undefined) {
+      merged.rootDir = recencySource.rootDir;
+    }
+    return merged;
   }
   return sessionHistoryTimestamp(candidate) > sessionHistoryTimestamp(current) ? candidate : current;
+}
+
+function mergeSessionHistoryRefsByIdentity(
+  sessions: readonly StoredSessionRef[],
+): StoredSessionRef[] {
+  const byIdentity = new Map<string, StoredSessionRef>();
+  for (const session of sessions) {
+    const key = sessionIdentityKey(session);
+    byIdentity.set(key, chooseSessionHistoryRef(byIdentity.get(key), session));
+  }
+  return [...byIdentity.values()];
 }
 
 function runningSessionIdentityKey(summary: SessionSummary): string | null {
@@ -419,7 +487,7 @@ export function SessionHistoryDialog(props: {
   onRenameCouncil?: ((council: CouncilSnapshot) => void) | undefined;
   onRemoveCouncil?: ((councilId: string) => void | Promise<void>) | undefined;
   onRemoveSession: (ref: Pick<StoredSessionRef, "provider" | "providerSessionId">) => void;
-  onRemoveWorkspace: (workspaceDir: string) => void;
+  onRemoveWorkspace: (workspaceDir: string, sessions: readonly StoredSessionRef[]) => void;
   defaultTab?: ChatTab;
   children: React.ReactNode;
 }) {
@@ -429,13 +497,30 @@ export function SessionHistoryDialog(props: {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [visibleItemCounts, setVisibleItemCounts] = useState<Map<string, number>>(new Map());
   const [pendingRemoveSession, setPendingRemoveSession] = useState<StoredSessionRef | null>(null);
-  const [pendingRemoveWorkspaceDir, setPendingRemoveWorkspaceDir] = useState<string | null>(null);
+  const [pendingRemoveWorkspace, setPendingRemoveWorkspace] = useState<{
+    workspaceDir: string;
+    sessions: StoredSessionRef[];
+  } | null>(null);
   const [pendingRemoveCouncil, setPendingRemoveCouncil] = useState<CouncilSnapshot | null>(null);
   const [councilRefreshPending, setCouncilRefreshPending] = useState(false);
+  const [maxLineCountFilter, setMaxLineCountFilter] = useState("");
   const relativeTimeFormat: RelativeTimeFormat = usePwaDisplayMode() ? "compact" : "long";
   const [selectedProviders, setSelectedProviders] = useState<Set<HistoryProviderFilter>>(
     () => new Set(HISTORY_PROVIDER_OPTIONS),
   );
+  const handleOpenChange = (nextOpen: boolean) => {
+    if (nextOpen) {
+      setTab(props.defaultTab ?? "active");
+    }
+    setOpen(nextOpen);
+  };
+  const closeAfterActivation = () => {
+    if (typeof window === "undefined") {
+      setOpen(false);
+      return;
+    }
+    window.requestAnimationFrame(() => setOpen(false));
+  };
 
   const runningIdentityKeys = useMemo(
     () =>
@@ -466,58 +551,44 @@ export function SessionHistoryDialog(props: {
       ),
     [props.runningSessions],
   );
-  const historySessionByIdentity = useMemo(() => {
-    const sessions = [...props.storedSessions, ...props.recentSessions];
-    const byIdentity = new Map<string, StoredSessionRef>();
-    for (const session of sessions) {
-      const key = sessionIdentityKey(session);
-      byIdentity.set(key, chooseSessionHistoryRef(byIdentity.get(key), session));
-    }
-    return byIdentity;
-  }, [props.storedSessions, props.recentSessions]);
+  const mergedHistorySessions = useMemo(
+    () => mergeSessionHistoryRefsByIdentity([...props.storedSessions, ...props.recentSessions]),
+    [props.storedSessions, props.recentSessions],
+  );
+  const historySessionByIdentity = useMemo(
+    () => new Map(mergedHistorySessions.map((session) => [sessionIdentityKey(session), session] as const)),
+    [mergedHistorySessions],
+  );
 
   useEffect(() => {
-    if (open) {
-      setTab(props.defaultTab ?? "active");
+    if (open && tab === "all") {
       void props.onLoadStoredSessions?.();
     }
-  }, [open, props.defaultTab, props.onLoadStoredSessions]);
+  }, [open, props.onLoadStoredSessions, tab]);
 
   const groups = useMemo(
     () =>
-      groupAllStoredSessionsByDirectory(props.storedSessions, {
+      groupAllStoredSessionsByDirectory(mergedHistorySessions, {
         workspaceSortMode: props.workspaceSortMode,
       }),
-    [props.storedSessions, props.workspaceSortMode],
+    [mergedHistorySessions, props.workspaceSortMode],
   );
 
   const filteredGroups = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const parsedMaxLineCount = parseMaxLineCountFilter(maxLineCountFilter);
     const matchesProvider = (session: StoredSessionRef) => {
       if (!isHistoryProviderFilter(session.provider)) {
         return selectedProviders.size === HISTORY_PROVIDER_OPTIONS.length;
       }
       return selectedProviders.has(session.provider);
     };
-    return groups
-      .map((group) => {
-        const providerMatchedItems = group.items.filter(matchesProvider);
-        if (providerMatchedItems.length === 0) {
-          return null;
-        }
-        if (!q) {
-          return { ...group, items: providerMatchedItems };
-        }
-        const groupMatches =
-          group.displayName.toLowerCase().includes(q) ||
-          group.directory.toLowerCase().includes(q);
-        const matchedItems = providerMatchedItems.filter((session) => matchesQuery(session, q));
-        if (groupMatches) return { ...group, items: providerMatchedItems };
-        if (matchedItems.length > 0) return { ...group, items: matchedItems };
-        return null;
-      })
-      .filter((group): group is NonNullable<typeof group> => group !== null);
-  }, [groups, query, selectedProviders]);
+    return filterSessionHistoryGroups(groups, {
+      query,
+      maxLineCount: parsedMaxLineCount,
+      matchesProvider,
+      matchesSessionQuery: matchesQuery,
+    });
+  }, [groups, maxLineCountFilter, query, selectedProviders]);
 
   const matchesSelectedProvider = (provider: StoredSessionRef["provider"] | SessionSummary["session"]["provider"]) => {
     if (!isHistoryProviderFilter(provider)) {
@@ -529,13 +600,14 @@ export function SessionHistoryDialog(props: {
   const stoppedRecentSessions = useMemo(() => {
     const q = query.trim().toLowerCase();
     return filterStoppedRecentSessions(
-      dedupeStoredSessionsByIdentity(props.recentSessions),
+      mergeSessionHistoryRefsByIdentity(props.recentSessions)
+        .map((session) => historySessionByIdentity.get(sessionIdentityKey(session)) ?? session),
       runningIdentityKeys,
     )
       .filter((session) => matchesSelectedProvider(session.provider))
       .filter((session) => matchesQuery(session, q))
       .sort((a, b) => (b.lastUsedAt ?? b.updatedAt ?? "").localeCompare(a.lastUsedAt ?? a.updatedAt ?? ""));
-  }, [runningIdentityKeys, props.recentSessions, query, selectedProviders]);
+  }, [historySessionByIdentity, runningIdentityKeys, props.recentSessions, query, selectedProviders]);
 
   const runningSessions = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -566,15 +638,6 @@ export function SessionHistoryDialog(props: {
       setCouncilRefreshPending(false);
     }
   };
-
-  useEffect(() => {
-    if (query.trim()) {
-      setExpandedGroups(new Set(filteredGroups.map((group) => group.directory)));
-      setVisibleItemCounts(
-        new Map(filteredGroups.map((group) => [group.directory, group.items.length] as const)),
-      );
-    }
-  }, [filteredGroups, query]);
 
   const toggleGroup = (directory: string) => {
     setExpandedGroups((prev) => {
@@ -625,7 +688,7 @@ export function SessionHistoryDialog(props: {
 
   return (
     <>
-      <Dialog.Root open={open} onOpenChange={setOpen}>
+      <Dialog.Root open={open} onOpenChange={handleOpenChange}>
         <Dialog.Trigger asChild>{props.children}</Dialog.Trigger>
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 bg-black/40 z-40" />
@@ -659,7 +722,7 @@ export function SessionHistoryDialog(props: {
                 role="tab"
                 aria-selected={tab === "active"}
               >
-                <SegmentedButtonLabel size="dialog">Active</SegmentedButtonLabel>
+                <SegmentedButtonLabel size="dialog">Recent</SegmentedButtonLabel>
               </SegmentedButton>
               <SegmentedButton
                 size="dialog"
@@ -710,6 +773,8 @@ export function SessionHistoryDialog(props: {
                   onSortModeChange={props.onWorkspaceSortModeChange}
                   showWorkspaceSort={tab === "all"}
                   selectedProviders={selectedProviders}
+                  maxLineCount={maxLineCountFilter}
+                  onMaxLineCountChange={setMaxLineCountFilter}
                   onToggleProvider={toggleProvider}
                   onToggleAllProviders={toggleAllProviders}
                 />
@@ -725,7 +790,7 @@ export function SessionHistoryDialog(props: {
                 query={query}
                 onOpenCouncil={(council) => {
                   props.onActivateCouncil?.(council.id);
-                  setOpen(false);
+                  closeAfterActivation();
                 }}
                 onRequestDeleteCouncil={
                   props.onRemoveCouncil ? setPendingRemoveCouncil : undefined
@@ -758,7 +823,7 @@ export function SessionHistoryDialog(props: {
                             onActivate={props.onActivate}
                             onActivateRunning={(sessionId) => {
                               props.onActivateRunning?.(sessionId);
-                              setOpen(false);
+                              closeAfterActivation();
                             }}
                             onRequestRemove={setPendingRemoveSession}
                           />
@@ -775,7 +840,7 @@ export function SessionHistoryDialog(props: {
                 <section className="space-y-1.5">
                   <div className="flex items-center justify-between px-1">
                     <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--app-hint)]">
-                      Recent
+                      Stopped
                     </div>
                     <span className="rounded-full bg-[var(--app-subtle-bg)] px-2 py-0.5 text-[10px] font-semibold text-[var(--app-hint)]">
                       {stoppedRecentSessions.length}
@@ -790,7 +855,7 @@ export function SessionHistoryDialog(props: {
                           relativeTimeFormat={relativeTimeFormat}
                           onActivate={(ref) => {
                             props.onActivate(ref);
-                            setOpen(false);
+                            closeAfterActivation();
                           }}
                           onActivateRunning={props.onActivateRunning}
                           onRequestRemove={setPendingRemoveSession}
@@ -850,7 +915,8 @@ export function SessionHistoryDialog(props: {
                           {group.isWorkspaceGroup ? (
                             <WorkspaceRemoveButton
                               workspaceDir={group.directory}
-                              onRequestRemove={setPendingRemoveWorkspaceDir}
+                              sessions={group.items}
+                              onRequestRemove={setPendingRemoveWorkspace}
                             />
                           ) : null}
                         </div>
@@ -875,11 +941,11 @@ export function SessionHistoryDialog(props: {
                                 relativeTimeFormat={relativeTimeFormat}
                                 onActivate={(ref) => {
                                   props.onActivate(ref);
-                                  setOpen(false);
+                                  closeAfterActivation();
                                 }}
                                 onActivateRunning={(sessionId) => {
                                   props.onActivateRunning?.(sessionId);
-                                  setOpen(false);
+                                  closeAfterActivation();
                                 }}
                                 onRequestRemove={setPendingRemoveSession}
                               />
@@ -985,10 +1051,10 @@ export function SessionHistoryDialog(props: {
       </Dialog.Root>
 
       <Dialog.Root
-        open={pendingRemoveWorkspaceDir !== null}
+        open={pendingRemoveWorkspace !== null}
         onOpenChange={(nextOpen) => {
           if (!nextOpen) {
-            setPendingRemoveWorkspaceDir(null);
+            setPendingRemoveWorkspace(null);
           }
         }}
       >
@@ -1003,7 +1069,7 @@ export function SessionHistoryDialog(props: {
                 type="button"
                 onClick={(event) => {
                   event.stopPropagation();
-                  setPendingRemoveWorkspaceDir(null);
+                  setPendingRemoveWorkspace(null);
                 }}
                 className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] transition-colors"
                 aria-label="Close"
@@ -1012,11 +1078,15 @@ export function SessionHistoryDialog(props: {
               </button>
             </div>
             <div className="px-4 py-4 text-sm text-[var(--app-hint)]">
-              {pendingRemoveWorkspaceDir ? (
+              {pendingRemoveWorkspace ? (
                 <>
-                  Move all session history in{" "}
+                  Move{" "}
                   <span className="font-medium text-[var(--app-fg)]">
-                    {pendingRemoveWorkspaceDir}
+                    {pendingRemoveWorkspace.sessions.length}
+                  </span>{" "}
+                  filtered session{pendingRemoveWorkspace.sessions.length === 1 ? "" : "s"} in{" "}
+                  <span className="font-medium text-[var(--app-fg)]">
+                    {pendingRemoveWorkspace.workspaceDir}
                   </span>{" "}
                   to the trash?
                 </>
@@ -1027,7 +1097,7 @@ export function SessionHistoryDialog(props: {
                 type="button"
                 onClick={(event) => {
                   event.stopPropagation();
-                  setPendingRemoveWorkspaceDir(null);
+                  setPendingRemoveWorkspace(null);
                 }}
                 className="rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] px-3 py-2 text-xs font-medium text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)] transition-colors"
               >
@@ -1036,11 +1106,14 @@ export function SessionHistoryDialog(props: {
               <button
                 type="button"
                 onClick={() => {
-                  if (!pendingRemoveWorkspaceDir) {
+                  if (!pendingRemoveWorkspace) {
                     return;
                   }
-                  props.onRemoveWorkspace(pendingRemoveWorkspaceDir);
-                  setPendingRemoveWorkspaceDir(null);
+                  props.onRemoveWorkspace(
+                    pendingRemoveWorkspace.workspaceDir,
+                    pendingRemoveWorkspace.sessions,
+                  );
+                  setPendingRemoveWorkspace(null);
                   window.setTimeout(() => setOpen(true), 0);
                 }}
                 className="rounded-lg bg-[var(--app-danger)] px-3 py-2 text-xs font-medium text-white hover:opacity-90 transition-colors"
@@ -1125,18 +1198,22 @@ export function SessionHistoryDialog(props: {
 
 function WorkspaceRemoveButton(props: {
   workspaceDir: string;
-  onRequestRemove: (workspaceDir: string) => void;
+  sessions: StoredSessionRef[];
+  onRequestRemove: (request: { workspaceDir: string; sessions: StoredSessionRef[] }) => void;
 }) {
   return (
     <button
       type="button"
       onClick={(event) => {
         event.stopPropagation();
-        props.onRequestRemove(props.workspaceDir);
+        props.onRequestRemove({
+          workspaceDir: props.workspaceDir,
+          sessions: props.sessions,
+        });
       }}
       className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-danger)]"
-      aria-label="Delete workspace sessions"
-      title="Delete workspace sessions"
+      aria-label="Delete filtered workspace sessions"
+      title="Delete filtered workspace sessions"
     >
       <Trash2 size={14} />
     </button>

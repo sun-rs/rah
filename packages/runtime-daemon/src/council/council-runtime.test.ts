@@ -19,6 +19,8 @@ class FakeManagedSessionRunner {
   readonly interrupted: Array<{ sessionId: string; clientId: string }> = [];
   readonly closed: string[] = [];
   failOnStartIndex: number | null = null;
+  startDelayMs = 0;
+  onStartSession?: ((sessionId: string) => void) | undefined;
   private readonly sessions = new Set<string>();
 
   options(): Pick<
@@ -33,6 +35,10 @@ class FakeManagedSessionRunner {
         const id = `managed:${request.provider}:${this.started.length + 1}`;
         this.started.push(request);
         this.sessions.add(id);
+        this.onStartSession?.(id);
+        if (this.startDelayMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, this.startDelayMs));
+        }
         return {
           session: {
             session: {
@@ -960,6 +966,47 @@ test("CouncilRuntime exposes council managed agents through the existing session
   } finally {
     if (previousClaude === undefined) delete process.env.RAH_CLAUDE_BINARY;
     else process.env.RAH_CLAUDE_BINARY = previousClaude;
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test("CouncilRuntime stop closes an agent session that finishes launching after stop", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-runtime-stop-launch-race-"));
+  const previousCodex = process.env.RAH_CODEX_BINARY;
+  process.env.RAH_CODEX_BINARY = fakeBinary(root, "codex");
+  try {
+    const managed = new FakeManagedSessionRunner();
+    managed.startDelayMs = 50;
+    let launchStartedResolve: (() => void) | null = null;
+    const launchStarted = new Promise<void>((resolve) => {
+      launchStartedResolve = resolve;
+    });
+    managed.onStartSession = () => launchStartedResolve?.();
+    const store = new CouncilStore(path.join(root, "councils.json"));
+    const runtime = createCouncilRuntime({
+      store,
+    }, managed);
+    const response = await runtime.createCouncil({
+      workspace: root,
+      agents: [{ id: "codex-reviewer", provider: "codex", label: "Codex Reviewer" }],
+    });
+
+    await launchStarted;
+    await runtime.stopCouncil(response.council.id);
+    await waitForCondition(
+      () => managed.closed.includes("managed:codex:1"),
+      "expected late-launched managed session to close",
+    );
+
+    const stopped = runtime.listCouncils().councils.find((council) => council.id === response.council.id)!;
+    assert.equal(stopped.status, "stopped");
+    assert.equal(stopped.phase, "ended");
+    assert.equal(stopped.agents[0]!.status, "stopped");
+    assert.equal(stopped.agents[0]!.nativeSessionId, undefined);
+    assert.deepEqual(managed.inputs, []);
+  } finally {
+    if (previousCodex === undefined) delete process.env.RAH_CODEX_BINARY;
+    else process.env.RAH_CODEX_BINARY = previousCodex;
     rmSync(root, { force: true, recursive: true });
   }
 });

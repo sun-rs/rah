@@ -11,6 +11,7 @@ import {
   reconcileVisibleWorkspaceSelection,
   resolveHistoryActivationMode,
   resolveHiddenWorkspaceDirsFromSessionsResponse,
+  useSessionStore,
 } from "./useSessionStore";
 import { activateHistorySessionCommand } from "./session-store-session-startup";
 import {
@@ -202,6 +203,680 @@ describe("workspace response reconciliation", () => {
     });
 
     assert.deepEqual([...hiddenWorkspaceDirs], ["/workspace/a"]);
+  });
+
+  test("keeps Chats All catalog loading isolated from left sidebar workspaces", async () => {
+    const originalState = useSessionStore.getState();
+    const urls: string[] = [];
+    (globalThis as typeof globalThis & { window?: unknown }).window = undefined;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      urls.push(String(input));
+      return new Response(
+        JSON.stringify({
+          sessions: [],
+          storedSessions: [
+            {
+              provider: "codex",
+              providerSessionId: "provider:/workspace/all-only",
+              rootDir: "/workspace/all-only",
+              cwd: "/workspace/all-only",
+              title: "All-only session",
+            },
+          ],
+          recentSessions: [],
+          workspaceDirs: ["/workspace/current", "/workspace/all-only"],
+          activeWorkspaceDir: "/workspace/all-only",
+          hiddenWorkspaces: [],
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    }) as typeof fetch;
+    useSessionStore.setState({
+      projections: new Map(),
+      storedSessions: [],
+      recentSessions: [],
+      storedSessionsCatalogLoaded: false,
+      workspaceDirs: ["/workspace/current"],
+      hiddenWorkspaceDirs: new Set<string>(),
+      workspaceVisibilityVersion: 0,
+      workspaceDir: "/workspace/current",
+      selectedSessionId: null,
+      pendingSessionAction: null,
+      sessionTopologyVersion: 0,
+    });
+
+    try {
+      await useSessionStore.getState().loadStoredSessionsCatalog();
+
+      const state = useSessionStore.getState();
+      assert.deepEqual(urls.map((url) => new URL(url).pathname + new URL(url).search), [
+        "/api/sessions?storedSessions=all",
+      ]);
+      assert.deepEqual(state.workspaceDirs, ["/workspace/current"]);
+      assert.equal(state.workspaceDir, "/workspace/current");
+      assert.equal(state.storedSessionsCatalogLoaded, true);
+      assert.equal(state.storedSessions[0]?.rootDir, "/workspace/all-only");
+    } finally {
+      globalThis.fetch = originalFetch;
+      (globalThis as typeof globalThis & { window?: unknown }).window = originalWindow;
+      useSessionStore.setState(originalState, true);
+    }
+  });
+
+  test("reuses a clean Chats All catalog and refreshes it only when marked dirty", async () => {
+    const originalState = useSessionStore.getState();
+    const urls: string[] = [];
+    let responseIndex = 0;
+    const storedResponses: StoredSessionRef[][] = [
+      [
+        {
+          provider: "codex",
+          providerSessionId: "older",
+          rootDir: "/workspace/current",
+          cwd: "/workspace/current",
+          title: "Older session",
+          source: "provider_history",
+        },
+      ],
+      [
+        {
+          provider: "codex",
+          providerSessionId: "new-after-restart",
+          rootDir: "/workspace/current",
+          cwd: "/workspace/current",
+          title: "New after restart",
+          historyMeta: { lines: 12 },
+          source: "provider_history",
+        },
+      ],
+    ];
+    (globalThis as typeof globalThis & { window?: unknown }).window = undefined;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      urls.push(String(input));
+      const storedSessions = storedResponses[Math.min(responseIndex, storedResponses.length - 1)]!;
+      responseIndex += 1;
+      return new Response(
+        JSON.stringify({
+          sessions: [],
+          storedSessions,
+          recentSessions: [],
+          workspaceDirs: ["/workspace/current"],
+          activeWorkspaceDir: "/workspace/current",
+          hiddenWorkspaces: [],
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    }) as typeof fetch;
+    useSessionStore.setState({
+      projections: new Map(),
+      storedSessions: [],
+      recentSessions: [],
+      storedSessionsCatalogLoaded: false,
+      storedSessionsCatalogDirty: false,
+      workspaceDirs: ["/workspace/current"],
+      hiddenWorkspaceDirs: new Set<string>(),
+      workspaceVisibilityVersion: 0,
+      workspaceDir: "/workspace/current",
+      selectedSessionId: null,
+      pendingSessionAction: null,
+      sessionTopologyVersion: 0,
+    });
+
+    try {
+      await useSessionStore.getState().loadStoredSessionsCatalog();
+      assert.deepEqual(urls.map((url) => new URL(url).pathname + new URL(url).search), [
+        "/api/sessions?storedSessions=all",
+      ]);
+      assert.deepEqual(
+        useSessionStore.getState().storedSessions.map((session) => session.providerSessionId),
+        ["older"],
+      );
+
+      await useSessionStore.getState().loadStoredSessionsCatalog();
+      assert.deepEqual(urls.map((url) => new URL(url).pathname + new URL(url).search), [
+        "/api/sessions?storedSessions=all",
+      ]);
+
+      useSessionStore.setState({ storedSessionsCatalogDirty: true });
+      await useSessionStore.getState().loadStoredSessionsCatalog();
+
+      assert.deepEqual(urls.map((url) => new URL(url).pathname + new URL(url).search), [
+        "/api/sessions?storedSessions=all",
+        "/api/sessions?storedSessions=all",
+      ]);
+      const state = useSessionStore.getState();
+      assert.equal(state.storedSessionsCatalogLoaded, true);
+      assert.deepEqual(
+        state.storedSessions.map((session) => session.providerSessionId),
+        ["new-after-restart"],
+      );
+      assert.equal(state.storedSessions[0]?.historyMeta?.lines, 12);
+    } finally {
+      globalThis.fetch = originalFetch;
+      (globalThis as typeof globalThis & { window?: unknown }).window = originalWindow;
+      useSessionStore.setState(originalState, true);
+    }
+  });
+
+  test("normal workbench refresh remains recent-only after Chats All has been loaded", async () => {
+    const originalState = useSessionStore.getState();
+    const urls: string[] = [];
+    const existingAllRef: StoredSessionRef = {
+      provider: "codex",
+      providerSessionId: "all-only",
+      rootDir: "/workspace/archive",
+      cwd: "/workspace/archive",
+      title: "All only",
+      source: "provider_history",
+    };
+    const recentRef: StoredSessionRef = {
+      provider: "claude",
+      providerSessionId: "recent-one",
+      rootDir: "/workspace/current",
+      cwd: "/workspace/current",
+      title: "Recent one",
+      lastUsedAt: "2026-04-21T00:02:00.000Z",
+      source: "provider_history",
+    };
+    (globalThis as typeof globalThis & { window?: unknown }).window = undefined;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      urls.push(String(input));
+      return new Response(
+        JSON.stringify({
+          sessions: [],
+          storedSessions: [recentRef],
+          recentSessions: [recentRef],
+          workspaceDirs: ["/workspace/current"],
+          activeWorkspaceDir: "/workspace/current",
+          hiddenWorkspaces: [],
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    }) as typeof fetch;
+    useSessionStore.setState({
+      projections: new Map(),
+      storedSessions: [existingAllRef],
+      recentSessions: [],
+      storedSessionsCatalogLoaded: true,
+      storedSessionsCatalogDirty: false,
+      workspaceDirs: ["/workspace/current"],
+      hiddenWorkspaceDirs: new Set<string>(),
+      workspaceVisibilityVersion: 0,
+      workspaceDir: "/workspace/current",
+      selectedSessionId: null,
+      pendingSessionAction: null,
+      sessionTopologyVersion: 0,
+    });
+
+    try {
+      await useSessionStore.getState().refreshWorkbenchState();
+
+      assert.deepEqual(urls.map((url) => new URL(url).pathname + new URL(url).search), [
+        "/api/sessions?storedSessions=recent",
+      ]);
+      assert.deepEqual(
+        useSessionStore.getState().storedSessions.map((session) => session.providerSessionId),
+        ["recent-one", "all-only"],
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+      (globalThis as typeof globalThis & { window?: unknown }).window = originalWindow;
+      useSessionStore.setState(originalState, true);
+    }
+  });
+
+  test("dirty Chats All catalog updates from stored-session delta before falling back to full", async () => {
+    const originalState = useSessionStore.getState();
+    const urls: string[] = [];
+    const olderRef: StoredSessionRef = {
+      provider: "codex",
+      providerSessionId: "older",
+      rootDir: "/workspace/current",
+      cwd: "/workspace/current",
+      title: "Older session",
+      lastUsedAt: "2026-04-21T00:01:00.000Z",
+      source: "provider_history",
+    };
+    const nextRef: StoredSessionRef = {
+      provider: "gemini",
+      providerSessionId: "new-delta",
+      rootDir: "/workspace/current",
+      cwd: "/workspace/current",
+      title: "New from delta",
+      lastUsedAt: "2026-04-21T00:02:00.000Z",
+      historyMeta: { lines: 9 },
+      source: "provider_history",
+    };
+    (globalThis as typeof globalThis & { window?: unknown }).window = undefined;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      urls.push(url.pathname + url.search);
+      if (url.pathname === "/api/sessions/stored-delta") {
+        assert.equal(url.searchParams.get("since"), "7");
+        return new Response(
+          JSON.stringify({
+            fromRevision: 7,
+            revision: 8,
+            upsert: [nextRef],
+            remove: [{ provider: "codex", providerSessionId: "older" }],
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      throw new Error(`Unexpected request ${url.pathname}${url.search}`);
+    }) as typeof fetch;
+    useSessionStore.setState({
+      projections: new Map(),
+      storedSessions: [olderRef],
+      recentSessions: [],
+      storedSessionsCatalogLoaded: true,
+      storedSessionsCatalogDirty: true,
+      storedSessionsCatalogRevision: 7,
+      workspaceDirs: ["/workspace/current"],
+      hiddenWorkspaceDirs: new Set<string>(),
+      workspaceVisibilityVersion: 0,
+      workspaceDir: "/workspace/current",
+      selectedSessionId: null,
+      pendingSessionAction: null,
+      sessionTopologyVersion: 0,
+    });
+
+    try {
+      await useSessionStore.getState().loadStoredSessionsCatalog();
+
+      assert.deepEqual(urls, ["/api/sessions/stored-delta?since=7"]);
+      const state = useSessionStore.getState();
+      assert.equal(state.storedSessionsCatalogDirty, false);
+      assert.equal(state.storedSessionsCatalogRevision, 8);
+      assert.deepEqual(
+        state.storedSessions.map((session) => [session.provider, session.providerSessionId, session.historyMeta?.lines]),
+        [["gemini", "new-delta", 9]],
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+      (globalThis as typeof globalThis & { window?: unknown }).window = originalWindow;
+      useSessionStore.setState(originalState, true);
+    }
+  });
+
+  test("dirty Chats All catalog falls back to full load when delta requires reset", async () => {
+    const originalState = useSessionStore.getState();
+    const urls: string[] = [];
+    const rebuiltRef: StoredSessionRef = {
+      provider: "codex",
+      providerSessionId: "rebuilt",
+      rootDir: "/workspace/current",
+      cwd: "/workspace/current",
+      title: "Rebuilt session",
+      source: "provider_history",
+    };
+    (globalThis as typeof globalThis & { window?: unknown }).window = undefined;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      urls.push(url.pathname + url.search);
+      if (url.pathname === "/api/sessions/stored-delta") {
+        return new Response(
+          JSON.stringify({
+            fromRevision: 2,
+            revision: 5,
+            upsert: [],
+            remove: [],
+            resetRequired: true,
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      if (url.pathname === "/api/sessions") {
+        return new Response(
+          JSON.stringify({
+            sessions: [],
+            storedSessions: [rebuiltRef],
+            recentSessions: [rebuiltRef],
+            storedSessionsRevision: 5,
+            workspaceDirs: ["/workspace/current"],
+            activeWorkspaceDir: "/workspace/current",
+            hiddenWorkspaces: [],
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      throw new Error(`Unexpected request ${url.pathname}${url.search}`);
+    }) as typeof fetch;
+    useSessionStore.setState({
+      projections: new Map(),
+      storedSessions: [],
+      recentSessions: [],
+      storedSessionsCatalogLoaded: true,
+      storedSessionsCatalogDirty: true,
+      storedSessionsCatalogRevision: 2,
+      workspaceDirs: ["/workspace/current"],
+      hiddenWorkspaceDirs: new Set<string>(),
+      workspaceVisibilityVersion: 0,
+      workspaceDir: "/workspace/current",
+      selectedSessionId: null,
+      pendingSessionAction: null,
+      sessionTopologyVersion: 0,
+    });
+
+    try {
+      await useSessionStore.getState().loadStoredSessionsCatalog();
+
+      assert.deepEqual(urls, [
+        "/api/sessions/stored-delta?since=2",
+        "/api/sessions?storedSessions=all",
+      ]);
+      const state = useSessionStore.getState();
+      assert.equal(state.storedSessionsCatalogDirty, false);
+      assert.equal(state.storedSessionsCatalogRevision, 5);
+      assert.deepEqual(
+        state.storedSessions.map((session) => session.providerSessionId),
+        ["rebuilt"],
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+      (globalThis as typeof globalThis & { window?: unknown }).window = originalWindow;
+      useSessionStore.setState(originalState, true);
+    }
+  });
+
+  test("new stop All refresh and delete keep catalog accurate without background all reloads", async () => {
+    const originalState = useSessionStore.getState();
+    const urls: string[] = [];
+    const liveSummary: SessionSummary = {
+      session: {
+        id: "live-created-session",
+        provider: "codex",
+        providerSessionId: "provider-created-session",
+        launchSource: "web",
+        cwd: "/workspace/current",
+        rootDir: "/workspace/current",
+        title: "Created session",
+        runtimeState: "idle",
+        ptyId: "pty-created-session",
+        capabilities: {
+          liveAttach: true,
+          structuredTimeline: true,
+          livePermissions: true,
+          contextUsage: true,
+          resumeByProvider: true,
+          listProviderSessions: true,
+          steerInput: true,
+          queuedInput: false,
+          modelSwitch: false,
+          planMode: false,
+          subagents: false,
+        },
+        createdAt: "2026-04-21T00:00:00.000Z",
+        updatedAt: "2026-04-21T00:00:00.000Z",
+      },
+      attachedClients: [],
+      controlLease: {
+        sessionId: "live-created-session",
+        holderClientId: "web-user",
+      },
+    };
+    const stoppedRef: StoredSessionRef = {
+      provider: "codex",
+      providerSessionId: "provider-created-session",
+      rootDir: "/workspace/current",
+      cwd: "/workspace/current",
+      title: "Created session",
+      updatedAt: "2026-04-21T00:01:00.000Z",
+      lastUsedAt: "2026-04-21T00:01:00.000Z",
+      historyMeta: { lines: 12, bytes: 2048 },
+      source: "provider_history",
+    };
+    const listResponseWithStopped = {
+      sessions: [],
+      storedSessions: [stoppedRef],
+      recentSessions: [stoppedRef],
+      workspaceDirs: ["/workspace/current"],
+      activeWorkspaceDir: "/workspace/current",
+      hiddenWorkspaces: [],
+    };
+    const emptyListResponse = {
+      sessions: [],
+      storedSessions: [],
+      recentSessions: [],
+      workspaceDirs: ["/workspace/current"],
+      activeWorkspaceDir: "/workspace/current",
+      hiddenWorkspaces: [],
+    };
+    (globalThis as typeof globalThis & { window?: unknown }).window = undefined;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      const method = init?.method ?? "GET";
+      urls.push(`${method} ${url.pathname}${url.search}`);
+      if (method === "GET" && url.pathname === "/api/fs/list") {
+        return new Response(
+          JSON.stringify({
+            path: "/workspace/current",
+            entries: [],
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      if (method === "POST" && url.pathname === "/api/sessions/start") {
+        return new Response(JSON.stringify({ session: liveSummary }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (method === "POST" && url.pathname === "/api/sessions/live-created-session/close") {
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (method === "GET" && url.pathname === "/api/sessions") {
+        return new Response(JSON.stringify(listResponseWithStopped), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (method === "POST" && url.pathname === "/api/history/sessions/remove") {
+        return new Response(JSON.stringify(emptyListResponse), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      throw new Error(`Unexpected request ${method} ${url.pathname}${url.search}`);
+    }) as typeof fetch;
+    useSessionStore.setState({
+      projections: new Map(),
+      storedSessions: [],
+      recentSessions: [],
+      storedSessionsCatalogLoaded: true,
+      storedSessionsCatalogDirty: false,
+      workspaceDirs: ["/workspace/current"],
+      hiddenWorkspaceDirs: new Set<string>(),
+      workspaceVisibilityVersion: 0,
+      workspaceDir: "/workspace/current",
+      selectedSessionId: null,
+      pendingSessionAction: null,
+      sessionTopologyVersion: 0,
+      newSessionProvider: "codex",
+    });
+
+    try {
+      const sessionId = await useSessionStore.getState().startSession({
+        provider: "codex",
+        cwd: "/workspace/current",
+        title: "Created session",
+      });
+      assert.equal(sessionId, "live-created-session");
+
+      await useSessionStore.getState().closeSession("live-created-session");
+      assert.deepEqual(
+        useSessionStore.getState().recentSessions.map((session) => [
+          session.providerSessionId,
+          session.historyMeta?.lines,
+        ]),
+        [["provider-created-session", 12]],
+      );
+
+      await useSessionStore.getState().loadStoredSessionsCatalog();
+      assert.deepEqual(
+        useSessionStore.getState().storedSessions.map((session) => [
+          session.providerSessionId,
+          session.historyMeta?.lines,
+        ]),
+        [["provider-created-session", 12]],
+      );
+
+      await useSessionStore.getState().removeHistorySession(stoppedRef);
+      assert.deepEqual(useSessionStore.getState().storedSessions, []);
+      assert.deepEqual(useSessionStore.getState().recentSessions, []);
+
+      assert.deepEqual(urls, [
+        "GET /api/fs/list?path=%2Fworkspace%2Fcurrent",
+        "POST /api/sessions/start",
+        "POST /api/sessions/live-created-session/close",
+        "GET /api/sessions?storedSessions=recent",
+        "POST /api/history/sessions/remove?storedSessions=recent",
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+      (globalThis as typeof globalThis & { window?: unknown }).window = originalWindow;
+      useSessionStore.setState(originalState, true);
+    }
+  });
+
+  test("keeps a just-stopped local history ref visible across a normal refresh", async () => {
+    const originalState = useSessionStore.getState();
+    const stoppedRef: StoredSessionRef = {
+      provider: "codex",
+      providerSessionId: "just-stopped",
+      rootDir: "/workspace/current",
+      cwd: "/workspace/current",
+      title: "Just stopped",
+      updatedAt: "2026-04-21T00:00:00.000Z",
+      lastUsedAt: "2026-04-21T00:00:00.000Z",
+      source: "previous_running",
+    };
+    (globalThis as typeof globalThis & { window?: unknown }).window = undefined;
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          sessions: [],
+          storedSessions: [],
+          recentSessions: [],
+          workspaceDirs: ["/workspace/current"],
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      )) as typeof fetch;
+    useSessionStore.setState({
+      projections: new Map(),
+      storedSessions: [stoppedRef],
+      recentSessions: [stoppedRef],
+      storedSessionsCatalogLoaded: false,
+      workspaceDirs: ["/workspace/current"],
+      hiddenWorkspaceDirs: new Set<string>(),
+      workspaceVisibilityVersion: 0,
+      workspaceDir: "/workspace/current",
+      selectedSessionId: null,
+      pendingSessionAction: null,
+      sessionTopologyVersion: 0,
+    });
+
+    try {
+      await useSessionStore.getState().refreshWorkbenchState({ storedSessions: "recent" });
+
+      const state = useSessionStore.getState();
+      assert.equal(state.storedSessions[0]?.providerSessionId, "just-stopped");
+      assert.equal(state.recentSessions[0]?.providerSessionId, "just-stopped");
+    } finally {
+      globalThis.fetch = originalFetch;
+      (globalThis as typeof globalThis & { window?: unknown }).window = originalWindow;
+      useSessionStore.setState(originalState, true);
+    }
+  });
+
+  test("removing one history session preserves other local just-stopped refs", async () => {
+    const originalState = useSessionStore.getState();
+    const removedRef: StoredSessionRef = {
+      provider: "codex",
+      providerSessionId: "remove-me",
+      rootDir: "/workspace/current",
+      cwd: "/workspace/current",
+      source: "previous_running",
+    };
+    const keptRef: StoredSessionRef = {
+      provider: "codex",
+      providerSessionId: "keep-me",
+      rootDir: "/workspace/current",
+      cwd: "/workspace/current",
+      source: "previous_running",
+    };
+    (globalThis as typeof globalThis & { window?: unknown }).window = undefined;
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          sessions: [],
+          storedSessions: [],
+          recentSessions: [],
+          workspaceDirs: ["/workspace/current"],
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      )) as typeof fetch;
+    useSessionStore.setState({
+      projections: new Map(),
+      storedSessions: [removedRef, keptRef],
+      recentSessions: [removedRef, keptRef],
+      storedSessionsCatalogLoaded: false,
+      workspaceDirs: ["/workspace/current"],
+      hiddenWorkspaceDirs: new Set<string>(),
+      workspaceVisibilityVersion: 0,
+      workspaceDir: "/workspace/current",
+      selectedSessionId: null,
+      pendingSessionAction: null,
+      sessionTopologyVersion: 0,
+    });
+
+    try {
+      await useSessionStore.getState().removeHistorySession(removedRef);
+
+      const state = useSessionStore.getState();
+      assert.deepEqual(
+        state.storedSessions.map((session) => session.providerSessionId),
+        ["keep-me"],
+      );
+      assert.deepEqual(
+        state.recentSessions.map((session) => session.providerSessionId),
+        ["keep-me"],
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+      (globalThis as typeof globalThis & { window?: unknown }).window = originalWindow;
+      useSessionStore.setState(originalState, true);
+    }
   });
 
   test("marks unselected sessions unread for meaningful events and clears the selected session", () => {

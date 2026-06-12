@@ -114,6 +114,9 @@ test("normalizes daemon-owned PTY terminal environment", async () => {
       "  NO_COLOR: process.env.NO_COLOR ?? null,",
       "  TERM_PROGRAM: process.env.TERM_PROGRAM ?? null,",
       "  ITERM_SESSION_ID: process.env.ITERM_SESSION_ID ?? null,",
+      "  CODEX_CI: process.env.CODEX_CI ?? null,",
+      "  CODEX_THREAD_ID: process.env.CODEX_THREAD_ID ?? null,",
+      "  CODEX_HOME: process.env.CODEX_HOME ?? null,",
       "}) + '\\n');",
       "process.stdin.resume();",
     ].join("\n"),
@@ -133,6 +136,9 @@ test("normalizes daemon-owned PTY terminal environment", async () => {
       NO_COLOR: "1",
       TERM: "dumb",
       TERM_PROGRAM: "iTerm.app",
+      CODEX_CI: "1",
+      CODEX_THREAD_ID: "parent-codex-thread",
+      CODEX_HOME: "/tmp/rah-codex-home",
     },
     onData: (_id, data) => output.push(data),
     onExit: () => undefined,
@@ -150,6 +156,9 @@ test("normalizes daemon-owned PTY terminal environment", async () => {
     NO_COLOR: null,
     TERM_PROGRAM: null,
     ITERM_SESSION_ID: null,
+    CODEX_CI: null,
+    CODEX_THREAD_ID: null,
+    CODEX_HOME: "/tmp/rah-codex-home",
   });
 
   await runtime.close("pty-env-test");

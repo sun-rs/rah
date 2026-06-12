@@ -3,6 +3,8 @@ import type { ReactNode, PointerEvent as ReactPointerEvent } from "react";
 import { Columns2, Columns3, Eraser, Grid2X2, Maximize2, Menu, Minimize2, Rows2, X } from "lucide-react";
 import {
   HEADER_ACTION_GROUP_CLASS,
+  HEADER_EDGE_TOGGLE_BUTTON_CLASS,
+  HEADER_EDGE_TOGGLE_ICON_SIZE,
   HEADER_ICON_BUTTON_CLASS,
   HEADER_SEGMENTED_BUTTON_ACTIVE_CLASS,
   HEADER_SEGMENTED_BUTTON_BASE_CLASS,
@@ -213,17 +215,17 @@ export function CanvasWorkbench(props: {
 
   return (
     <div className="hidden h-full min-h-0 flex-1 flex-col bg-[var(--app-bg)] min-[700px]:flex">
-      <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[var(--app-border)] bg-[var(--app-bg)]/85 px-4 backdrop-blur-sm">
-        <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
+      <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[var(--app-border)] bg-[var(--app-bg)]/85 px-2 backdrop-blur-sm">
+        <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
           {!props.sidebarOpen ? (
             <button
               type="button"
-              className="icon-click-feedback hidden h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] min-[700px]:inline-flex"
+              className={`${HEADER_EDGE_TOGGLE_BUTTON_CLASS} hidden min-[700px]:inline-flex`}
               onClick={props.onExpandSidebar}
               aria-label="Expand sidebar"
               title="Expand sidebar"
             >
-              <Menu size={18} />
+              <Menu size={HEADER_EDGE_TOGGLE_ICON_SIZE} />
             </button>
           ) : null}
           <div className="min-w-0 flex-1">

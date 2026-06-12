@@ -503,11 +503,9 @@ export function SessionModelControls(props: {
     panelModel,
     draftReasoningId !== undefined ? draftReasoningId : reasoning?.id ?? null,
   );
-  const panelHasNoVariantOption =
-    panelModel?.defaultReasoningId === null && panelReasoningOptions.length > 0;
   const visibleOptionCount =
     panelView === "param-list"
-      ? Math.max(panelReasoningOptions.length + (panelHasNoVariantOption ? 1 : 0), 1)
+      ? Math.max(panelReasoningOptions.length, 1)
       : Math.max(models.length, props.loading ? 1 : 0);
 
   /* Reset to model-list when panel closes */
@@ -591,10 +589,10 @@ export function SessionModelControls(props: {
     const nextModel = models.find((m) => m.id === modelId);
     const nextReasoningOptions = nextModel?.reasoningOptions ?? [];
     const defaultReasoningId = defaultReasoningIdForModel(nextModel);
-    const hasNoVariantOption =
+    const requiresExplicitParameter =
       nextModel?.defaultReasoningId === null && nextReasoningOptions.length > 0;
 
-    if (nextReasoningOptions.length > 1 || hasNoVariantOption) {
+    if (nextReasoningOptions.length > 1 || requiresExplicitParameter) {
       setDraftModelId(modelId);
       setDraftReasoningId(defaultReasoningId);
       setPanelView("param-list");
@@ -755,25 +753,8 @@ export function SessionModelControls(props: {
                     contentRef={paramListRef}
                     scrollAriaLabel="Model parameter list"
                   >
-                    {panelReasoningOptions.length > 0 || panelHasNoVariantOption ? (
+                    {panelReasoningOptions.length > 0 ? (
                       <>
-                        {panelHasNoVariantOption ? (
-                          <button
-                            type="button"
-                            onClick={() => handleReasoningSelect(null)}
-                            className={joinClassNames(
-                              "flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors",
-                              panelReasoning === null
-                                ? "bg-[var(--app-subtle-bg)] text-[var(--app-fg)] font-medium"
-                                : "text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)]/60",
-                            )}
-                          >
-                            <span className="flex-1 truncate">No variant</span>
-                            {panelReasoning === null ? (
-                              <Check size={14} className="shrink-0 text-[var(--app-success)]" />
-                            ) : null}
-                          </button>
-                        ) : null}
                         {panelReasoningOptions.map((r) => (
                           <button
                             key={r.id}

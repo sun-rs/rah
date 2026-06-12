@@ -2,6 +2,11 @@ import type { PendingSessionTransition } from "../../../session-transition-contr
 import { LoaderCircle, Menu, PanelRight } from "lucide-react";
 import { ProviderLogo } from "../../ProviderLogo";
 import { providerLabel } from "../../../types";
+import {
+  HEADER_EDGE_TOGGLE_BUTTON_CLASS,
+  HEADER_EDGE_TOGGLE_ICON_SIZE,
+  HEADER_SIDE_PANEL_TOGGLE_BUTTON_CLASS,
+} from "../header-button-styles";
 
 export function WorkbenchOpeningPane(props: {
   openingSession: PendingSessionTransition;
@@ -9,6 +14,7 @@ export function WorkbenchOpeningPane(props: {
   rightSidebarOpen: boolean;
   onOpenLeft: () => void;
   onExpandSidebar: () => void;
+  showLeftSidebarControls?: boolean;
   onOpenRight: () => void;
   onExpandInspector: () => void;
   onToggleInspector: () => void;
@@ -17,35 +23,38 @@ export function WorkbenchOpeningPane(props: {
   inspectorToggleClassName?: string;
   reserveRightPanelToggleSpace?: boolean;
 }) {
+  const showLeftSidebarControls = props.showLeftSidebarControls ?? true;
   return (
     <>
       <header
-        className={`h-14 flex items-center justify-between gap-3 border-b border-[var(--app-border)] px-4 bg-[var(--app-bg)]/80 backdrop-blur-sm shrink-0 ${
+        className={`h-14 flex items-center justify-between gap-3 border-b border-[var(--app-border)] px-2 bg-[var(--app-bg)]/80 backdrop-blur-sm shrink-0 ${
           props.reserveRightPanelToggleSpace
-            ? "md:pr-[calc(max(1rem,env(safe-area-inset-right))+2.75rem)]"
+            ? "md:pr-11"
             : ""
         }`}
       >
-        <div className="flex items-center gap-2 min-w-0">
-          <button
-            type="button"
-            className="icon-click-feedback inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] md:hidden"
-            onClick={props.onOpenLeft}
-            aria-label="Open sidebar"
-          >
-            <Menu size={18} />
-          </button>
-          {!props.sidebarOpen && (
+        <div className="flex items-center gap-1.5 min-w-0">
+          {showLeftSidebarControls ? (
             <button
               type="button"
-              className="icon-click-feedback hidden h-8 w-8 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] md:inline-flex"
+              className={`${HEADER_EDGE_TOGGLE_BUTTON_CLASS} md:hidden`}
+              onClick={props.onOpenLeft}
+              aria-label="Open sidebar"
+            >
+              <Menu size={HEADER_EDGE_TOGGLE_ICON_SIZE} />
+            </button>
+          ) : null}
+          {showLeftSidebarControls && !props.sidebarOpen ? (
+            <button
+              type="button"
+              className={`${HEADER_EDGE_TOGGLE_BUTTON_CLASS} hidden md:inline-flex`}
               onClick={props.onExpandSidebar}
               aria-label="Expand sidebar"
               title="Expand sidebar"
             >
-              <Menu size={18} />
+              <Menu size={HEADER_EDGE_TOGGLE_ICON_SIZE} />
             </button>
-          )}
+          ) : null}
           <div className="min-w-0">
             <div className="text-sm font-medium text-[var(--app-fg)]">
               {props.openingSession.kind === "new"
@@ -62,12 +71,12 @@ export function WorkbenchOpeningPane(props: {
         {props.showInspectorToggle !== false ? (
           <button
             type="button"
-            className={`icon-click-feedback inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-[var(--app-border)] text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] ${props.inspectorToggleClassName ?? ""}`}
+            className={`${HEADER_SIDE_PANEL_TOGGLE_BUTTON_CLASS}${props.inspectorToggleClassName ? ` ${props.inspectorToggleClassName}` : ""}`}
             onClick={props.onToggleInspector}
             aria-label={props.inspectorToggleOpen ? "Collapse inspector" : "Expand inspector"}
             title={props.inspectorToggleOpen ? "Collapse inspector" : "Expand inspector"}
           >
-            <PanelRight size={16} />
+            <PanelRight size={HEADER_EDGE_TOGGLE_ICON_SIZE} />
           </button>
         ) : null}
       </header>

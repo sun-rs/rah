@@ -397,6 +397,26 @@ describe("composer contract", () => {
     );
   });
 
+  test("styles pasted image attachments as working-tone pills", () => {
+    const source = readSource("./components/ComposerImageAttachmentBadge.tsx");
+
+    assert.match(source, /border-2/);
+    assert.match(source, /border-sky-500\/35/);
+    assert.match(source, /bg-sky-500\/10/);
+    assert.match(source, /rounded-xl/);
+    assert.match(source, /overflow-visible/);
+    assert.match(source, /relative z-0/);
+    assert.match(source, /absolute -right-1\.5 -top-1\.5 z-10/);
+    assert.match(source, /h-4 w-4/);
+    assert.match(source, /rounded-full bg-sky-100/);
+    assert.match(source, /ring-sky-500\/25/);
+    assert.match(source, /<X size=\{9\}/);
+    assert.doesNotMatch(source, /overflow-hidden/);
+    assert.doesNotMatch(source, /border-primary/);
+    assert.doesNotMatch(source, /bg-primary/);
+    assert.doesNotMatch(source, /text-primary-foreground/);
+  });
+
   test("allows native TUI Chat composer submission while the provider prompt is dirty", () => {
     const composerSurface = {
       kind: "compose",
@@ -418,6 +438,16 @@ describe("composer contract", () => {
         draft: "send this",
         sendPending: false,
         nativeTuiPromptState: "prompt_dirty",
+      }),
+      true,
+    );
+    assert.equal(
+      canSubmitComposerInput({
+        composerSurface,
+        draft: "   ",
+        attachmentCount: 1,
+        sendPending: false,
+        nativeTuiPromptState: "prompt_clean",
       }),
       true,
     );

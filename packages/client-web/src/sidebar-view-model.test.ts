@@ -4,6 +4,7 @@ import type { CouncilSnapshot, SessionSummary } from "@rah/runtime-protocol";
 import { conversationStateFromRuntimeState } from "@rah/runtime-protocol";
 import { deriveSidebarWorkspaceViewModels } from "./sidebar-view-model";
 import { formatCompactRelativeTime, formatRelativeTime, type WorkspaceSection } from "./session-browser";
+import { mergeCouncilLists } from "./council/council-message-window";
 
 function session(args: {
   id: string;
@@ -387,5 +388,20 @@ describe("sidebar view model", () => {
     });
 
     assert.equal(items[0]?.sessions[0]?.status, "ready");
+  });
+
+  test("preserves locally active Councils across stale list refreshes", () => {
+    const active = council({ id: "active-council", status: "running", phase: "starting" });
+    const stopped = council({ id: "stopped-council", status: "stopped", phase: "ended" });
+    const incoming = [council({ id: "older-council", status: "stopped", phase: "ended" })];
+
+    const merged = mergeCouncilLists([active, stopped], incoming);
+
+    assert.deepEqual(
+      merged.map((entry) => entry.id),
+      ["older-council", "active-council"],
+    );
+    assert.equal(merged.find((entry) => entry.id === "active-council")?.status, "running");
+    assert.equal(merged.some((entry) => entry.id === "stopped-council"), false);
   });
 });

@@ -1,10 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import type { CouncilSnapshot, StoredSessionRef } from "@rah/runtime-protocol";
 import {
   dedupeStoredSessionsByIdentity,
+  filterSessionHistoryGroups,
   filterStoppedRecentSessions,
   groupAllStoredSessionsByDirectory,
+  sessionMatchesMaxLineCount,
   sessionIdentityKey,
 } from "./session-history-grouping";
 import {
@@ -28,6 +31,7 @@ function storedSession(overrides: Partial<StoredSessionRef> & Pick<StoredSession
     ...(overrides.createdAt ? { createdAt: overrides.createdAt } : {}),
     ...(overrides.updatedAt ? { updatedAt: overrides.updatedAt } : {}),
     ...(overrides.lastUsedAt ? { lastUsedAt: overrides.lastUsedAt } : {}),
+    ...(overrides.historyMeta ? { historyMeta: overrides.historyMeta } : {}),
   };
 }
 
@@ -73,6 +77,10 @@ function council(overrides: {
         ]
       : []),
   };
+}
+
+function readSource(relativePath: string): string {
+  return readFileSync(new URL(relativePath, import.meta.url), "utf8");
 }
 
 test("dedupes identical sessions by provider and providerSessionId", () => {
@@ -244,6 +252,86 @@ test("recent chats are stopped and omit current running identities", () => {
     ).map((session) => session.providerSessionId),
     ["recent-1"],
   );
+});
+
+test("line-count filtering only matches sessions with known lines below the limit", () => {
+  const small = storedSession({
+    provider: "codex",
+    providerSessionId: "small",
+    historyMeta: { lines: 8, bytes: 1024 },
+  });
+  const large = storedSession({
+    provider: "codex",
+    providerSessionId: "large",
+    historyMeta: { lines: 40, bytes: 4096 },
+  });
+  const unknown = storedSession({
+    provider: "codex",
+    providerSessionId: "unknown",
+  });
+
+  assert.equal(sessionMatchesMaxLineCount(small, 10), true);
+  assert.equal(sessionMatchesMaxLineCount(large, 10), false);
+  assert.equal(sessionMatchesMaxLineCount(unknown, 10), false);
+  assert.equal(sessionMatchesMaxLineCount(unknown, null), true);
+});
+
+test("filtered workspace deletion candidates honor provider and line-count filters", () => {
+  const groups = groupAllStoredSessionsByDirectory([
+    storedSession({
+      provider: "codex",
+      providerSessionId: "codex-small",
+      rootDir: "/Users/sun/Code/solars",
+      cwd: "/Users/sun/Code/solars",
+      title: "small codex",
+      updatedAt: "2026-04-20T10:00:00.000Z",
+      historyMeta: { lines: 5 },
+    }),
+    storedSession({
+      provider: "codex",
+      providerSessionId: "codex-large",
+      rootDir: "/Users/sun/Code/solars",
+      cwd: "/Users/sun/Code/solars",
+      title: "large codex",
+      updatedAt: "2026-04-20T10:01:00.000Z",
+      historyMeta: { lines: 50 },
+    }),
+    storedSession({
+      provider: "gemini",
+      providerSessionId: "gemini-small",
+      rootDir: "/Users/sun/Code/solars",
+      cwd: "/Users/sun/Code/solars",
+      title: "small gemini",
+      updatedAt: "2026-04-20T10:02:00.000Z",
+      historyMeta: { lines: 4 },
+    }),
+    storedSession({
+      provider: "codex",
+      providerSessionId: "codex-unknown-lines",
+      rootDir: "/Users/sun/Code/solars",
+      cwd: "/Users/sun/Code/solars",
+      title: "unknown lines",
+      updatedAt: "2026-04-20T10:03:00.000Z",
+    }),
+  ]);
+
+  const filtered = filterSessionHistoryGroups(groups, {
+    maxLineCount: 10,
+    matchesProvider: (session) => session.provider === "codex",
+    matchesSessionQuery: () => true,
+  });
+
+  assert.equal(filtered.length, 1);
+  assert.deepEqual(
+    filtered[0]?.items.map((session) => session.providerSessionId),
+    ["codex-small"],
+  );
+});
+
+test("Chats All filters do not mutate workspace expansion state", () => {
+  const source = readSource("./components/SessionHistoryDialog.tsx");
+  assert.doesNotMatch(source, /setExpandedGroups\(new Set\(filteredGroups/);
+  assert.doesNotMatch(source, /setVisibleItemCounts\(\s*new Map\(filteredGroups/s);
 });
 
 test("splits councils for the Chats council tab", () => {

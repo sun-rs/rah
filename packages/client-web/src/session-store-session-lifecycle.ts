@@ -15,6 +15,7 @@ type LifecycleState = {
   hiddenWorkspaceDirs: Set<string>;
   workspaceDirs: string[];
   workspaceVisibilityVersion: number;
+  sessionTopologyVersion: number;
   workspaceDir: string;
   selectedSessionId: string | null;
   newSessionProvider: "codex" | "claude" | "gemini" | "opencode";
@@ -37,6 +38,136 @@ export function createEmptySessionProjection(summary: SessionSummary): SessionPr
     events: [],
     lastSeq: 0,
     history: initialHistorySyncState(),
+  };
+}
+
+export function storedReplayPlaceholderSessionId(
+  ref: Pick<StoredSessionRef, "provider" | "providerSessionId">,
+): string {
+  return `history:${ref.provider}:${ref.providerSessionId}`;
+}
+
+function storedReplayCapabilities(provider: StoredSessionRef["provider"]): SessionSummary["session"]["capabilities"] {
+  const rename =
+    provider === "opencode" ? "none" : provider === "gemini" ? "local" : "native";
+  return {
+    liveAttach: false,
+    structuredTimeline: true,
+    nativeTui: false,
+    rawPtyInput: false,
+    chatMirror: false,
+    structuredControl: false,
+    livePermissions: false,
+    contextUsage: provider === "gemini",
+    resumeByProvider: true,
+    listProviderSessions: true,
+    renameSession: rename !== "none",
+    actions: {
+      info: true,
+      stop: false,
+      delete: true,
+      rename,
+    },
+    steerInput: false,
+    queuedInput: false,
+    modelSwitch: false,
+    planMode: false,
+    subagents: false,
+  };
+}
+
+export function createPendingStoredReplayProjection(ref: StoredSessionRef): SessionProjection {
+  const now = new Date().toISOString();
+  const sessionId = storedReplayPlaceholderSessionId(ref);
+  const cwd = ref.cwd ?? ref.rootDir ?? "";
+  const rootDir = ref.rootDir ?? ref.cwd ?? cwd;
+  const createdAt = ref.createdAt ?? ref.updatedAt ?? ref.lastUsedAt ?? now;
+  const updatedAt = ref.lastUsedAt ?? ref.updatedAt ?? ref.createdAt ?? now;
+  return {
+    summary: {
+      session: {
+        id: sessionId,
+        provider: ref.provider,
+        providerSessionId: ref.providerSessionId,
+        launchSource: "web",
+        status: "stopped",
+        phase: "ended",
+        cwd,
+        rootDir,
+        runtimeState: "stopped",
+        runtime: {
+          kind: "stored_history",
+          protocolStability: "project_native",
+          liveSource: "provider_history",
+          tuiRole: "none",
+          structuredLiveEvents: false,
+          tuiContinuity: false,
+          features: {
+            structuredLiveEvents: "unsupported",
+            structuredControl: "unsupported",
+            historyBackfill: "available",
+            tuiClientContinuity: "unsupported",
+            crossClientSync: "unsupported",
+            prelaunchConfig: "unsupported",
+            runtimeConfig: "unsupported",
+            interrupt: "unsupported",
+            stopLifecycle: "unsupported",
+          },
+        },
+        ptyId: sessionId,
+        ...(ref.title ? { title: ref.title } : {}),
+        ...(ref.preview ? { preview: ref.preview } : {}),
+        capabilities: storedReplayCapabilities(ref.provider),
+        createdAt,
+        updatedAt,
+      },
+      attachedClients: [],
+      controlLease: { sessionId },
+    },
+    feed: [],
+    events: [],
+    lastSeq: 0,
+    history: {
+      ...initialHistorySyncState(),
+      phase: "loading",
+    },
+  };
+}
+
+export function applyPendingStoredReplaySessionState(
+  current: LifecycleState,
+  ref: StoredSessionRef,
+): Partial<LifecycleState> {
+  const projection = createPendingStoredReplayProjection(ref);
+  const targetDir = ref.rootDir ?? ref.cwd;
+  const nextHiddenWorkspaceDirs = revealWorkspaceCandidates(
+    current.hiddenWorkspaceDirs,
+    ref.rootDir,
+    ref.cwd,
+  );
+  const next = new Map(current.projections);
+  next.set(projection.summary.session.id, projection);
+  return {
+    projections: next,
+    unreadSessionIds: new Set(
+      [...current.unreadSessionIds].filter(
+        (sessionId) => sessionId !== projection.summary.session.id,
+      ),
+    ),
+    hiddenWorkspaceDirs: nextHiddenWorkspaceDirs,
+    workspaceDirs: appendVisibleWorkspaceDir(
+      nextHiddenWorkspaceDirs,
+      current.workspaceDirs,
+      targetDir,
+    ),
+    workspaceVisibilityVersion: targetDir
+      ? current.workspaceVisibilityVersion + 1
+      : current.workspaceVisibilityVersion,
+    sessionTopologyVersion: current.sessionTopologyVersion + 1,
+    workspaceDir: targetDir ?? current.workspaceDir,
+    selectedSessionId: projection.summary.session.id,
+    pendingSessionTransition: null,
+    error: null,
   };
 }
 
@@ -64,6 +195,7 @@ export function applyStartedSessionState(
       args.cwd,
     ),
     workspaceVisibilityVersion,
+    sessionTopologyVersion: current.sessionTopologyVersion + 1,
     workspaceDir: args.cwd,
     ...(args.provider ? { newSessionProvider: args.provider } : {}),
     selectedSessionId: responseSession.session.id,
@@ -106,6 +238,8 @@ export function applyResumedStoredSessionState(
   args: {
     projections: Map<string, SessionProjection>;
     replayProjection?: SessionProjection;
+    replaceSessionId?: string;
+    selectSession?: boolean;
   },
 ): Partial<LifecycleState> {
   const nextHiddenWorkspaceDirs = revealWorkspaceCandidates(
@@ -114,6 +248,9 @@ export function applyResumedStoredSessionState(
     ref.cwd,
   );
   const workspaceVisibilityVersion = current.workspaceVisibilityVersion + 1;
+  if (args.replaceSessionId) {
+    args.projections.delete(args.replaceSessionId);
+  }
   args.projections.set(
     responseSession.session.id,
     args.replayProjection ?? createEmptySessionProjection(responseSession),
@@ -130,8 +267,10 @@ export function applyResumedStoredSessionState(
       ref.rootDir ?? ref.cwd,
     ),
     workspaceVisibilityVersion,
+    sessionTopologyVersion: current.sessionTopologyVersion + 1,
     workspaceDir: ref.rootDir ?? ref.cwd ?? current.workspaceDir,
-    selectedSessionId: responseSession.session.id,
+    selectedSessionId:
+      args.selectSession === false ? current.selectedSessionId : responseSession.session.id,
     pendingSessionTransition: null,
     error: null,
   };
@@ -142,15 +281,23 @@ export function mergeClaimedHistoryProjection(
   preservedProjection: SessionProjection,
   liveProjection?: SessionProjection,
 ): SessionProjection {
+  const feedByKey = new Map(preservedProjection.feed.map((entry) => [entry.key, entry] as const));
+  for (const entry of liveProjection?.feed ?? []) {
+    feedByKey.set(entry.key, entry);
+  }
+  const eventsById = new Map(preservedProjection.events.map((event) => [event.id, event] as const));
+  for (const event of liveProjection?.events ?? []) {
+    eventsById.set(event.id, event);
+  }
+  const pendingInterrupt =
+    liveProjection?.pendingInterrupt ?? preservedProjection.pendingInterrupt;
   return {
     ...(liveProjection ?? preservedProjection),
-    feed: preservedProjection.feed,
-    events: preservedProjection.events,
+    feed: [...feedByKey.values()],
+    events: [...eventsById.values()].sort((left, right) => left.seq - right.seq),
     lastSeq: Math.max(liveProjection?.lastSeq ?? 0, preservedProjection.lastSeq),
     history: preservedProjection.history,
-    ...(preservedProjection.pendingInterrupt
-      ? { pendingInterrupt: preservedProjection.pendingInterrupt }
-      : {}),
+    ...(pendingInterrupt ? { pendingInterrupt } : {}),
     ...(liveProjection?.currentRuntimeStatus
       ? { currentRuntimeStatus: liveProjection.currentRuntimeStatus }
       : preservedProjection.currentRuntimeStatus
@@ -198,6 +345,7 @@ export function applyClaimedHistorySessionState(
       ref.rootDir ?? ref.cwd,
     ),
     workspaceVisibilityVersion,
+    sessionTopologyVersion: current.sessionTopologyVersion + 1,
     workspaceDir: ref.rootDir ?? ref.cwd ?? current.workspaceDir,
     selectedSessionId: responseSession.session.id,
     pendingSessionAction: null,
@@ -219,6 +367,7 @@ export function applyClosedSessionState(
       [...current.unreadSessionIds].filter((id) => id !== sessionId),
     ),
     selectedSessionId: current.selectedSessionId === sessionId ? null : current.selectedSessionId,
+    sessionTopologyVersion: current.sessionTopologyVersion + 1,
     error: null,
   };
   const providerSessionId = summary?.session.providerSessionId;

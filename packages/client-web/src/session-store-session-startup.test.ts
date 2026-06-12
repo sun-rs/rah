@@ -7,7 +7,10 @@ import {
   resumeStoredSessionCommand,
   startSessionCommand,
 } from "./session-store-session-startup";
-import { createEmptySessionProjection } from "./session-store-session-lifecycle";
+import {
+  createEmptySessionProjection,
+  storedReplayPlaceholderSessionId,
+} from "./session-store-session-lifecycle";
 import type { FeedEntry } from "./types";
 
 type CapturedRequest = {
@@ -132,6 +135,7 @@ function startupDeps(
     hiddenWorkspaceDirs: new Set<string>(),
     workspaceDirs: ["/tmp/rah"],
     workspaceVisibilityVersion: 1,
+    sessionTopologyVersion: 0,
     workspaceDir: "/tmp/rah",
     selectedSessionId: null,
     newSessionProvider: "codex",
@@ -554,7 +558,7 @@ describe("session startup model and mode requests", () => {
     assert.equal(state.selectedSessionId, "claimed");
   });
 
-  test("claim history keeps a transition fallback without clearing the visible transcript", async () => {
+  test("claim history keeps the current history projection visible while resume is pending", async () => {
     const history = summary({
       id: "history",
       provider: "codex",
@@ -562,40 +566,9 @@ describe("session startup model and mode requests", () => {
       cwd: "/tmp/rah",
     });
     const projections = new Map([["history", createEmptySessionProjection(history)]]);
-    let deps!: ReturnType<typeof startupDeps>;
-    installWebApiMocks((request) => {
-      if (request.url.includes("/api/fs/list")) {
-        return { path: "/tmp/rah", entries: [] };
-      }
-      if (request.url.endsWith("/api/sessions/resume")) {
-        const state = deps.get() as {
-          pendingSessionAction: { kind: string; sessionId: string } | null;
-          pendingSessionTransition: { kind?: string; providerSessionId?: string } | null;
-          projections: Map<string, unknown>;
-          selectedSessionId: string | null;
-        };
-        assert.deepEqual(state.pendingSessionAction, {
-          kind: "claim_history",
-          sessionId: "history",
-        });
-        assert.equal(state.pendingSessionTransition?.kind, "claim_history");
-        assert.equal(state.pendingSessionTransition?.providerSessionId, "thread-1");
-        assert.equal(state.selectedSessionId, "history");
-        assert.equal(state.projections.has("history"), true);
-        return {
-          session: summary({
-            id: "claimed",
-            provider: "codex",
-            providerSessionId: "thread-1",
-            cwd: "/tmp/rah",
-          }),
-        };
-      }
-      throw new Error(`Unexpected request ${request.url}`);
-    });
-    deps = startupDeps({
-      selectedSessionId: "history",
+    const deps = startupDeps({
       projections,
+      selectedSessionId: "history",
       storedSessions: [
         {
           provider: "codex",
@@ -606,6 +579,37 @@ describe("session startup model and mode requests", () => {
         },
       ],
       recentSessions: [],
+    });
+    installWebApiMocks((request) => {
+      if (request.url.includes("/api/fs/list")) {
+        return { path: "/tmp/rah", entries: [] };
+      }
+      if (request.url.endsWith("/api/sessions/resume")) {
+        const state = (deps as {
+          get: () => {
+            selectedSessionId: string | null;
+            pendingSessionAction: unknown;
+            pendingSessionTransition: unknown;
+            projections: Map<string, unknown>;
+          };
+        }).get();
+        assert.equal(state.selectedSessionId, "history");
+        assert.equal(state.projections.has("history"), true);
+        assert.deepEqual(state.pendingSessionAction, {
+          kind: "claim_history",
+          sessionId: "history",
+        });
+        assert.equal(state.pendingSessionTransition, null);
+        return {
+          session: summary({
+            id: "claimed",
+            provider: "codex",
+            providerSessionId: "thread-1",
+            cwd: "/tmp/rah",
+          }),
+        };
+      }
+      throw new Error(`Unexpected request ${request.url}`);
     });
 
     await claimHistorySessionCommand(deps, "history");
@@ -1001,6 +1005,120 @@ describe("session startup model and mode requests", () => {
       cwd: "/tmp/missing",
     });
     assert.equal((requests[0]?.body as { liveBackend?: string }).liveBackend, undefined);
+  });
+
+  test("history replay does not show the session opening transition", async () => {
+    installWebApiMocks((request) => {
+      if (request.url.endsWith("/api/sessions/resume")) {
+        const body = request.body as {
+          provider: "codex";
+          providerSessionId: string;
+          cwd?: string;
+        };
+        return {
+          session: summary({
+            id: "resumed",
+            provider: body.provider,
+            providerSessionId: body.providerSessionId,
+            cwd: body.cwd,
+            readOnlyReplay: true,
+          }),
+        };
+      }
+      throw new Error(`Unexpected request ${request.url}`);
+    });
+    const deps = startupDeps();
+    const typedDeps = deps as unknown as {
+      get: () => { pendingSessionTransition: unknown };
+      set: (partial: unknown) => void;
+    };
+    const set = typedDeps.set;
+    const transitions: unknown[] = [];
+    typedDeps.set = (partial: unknown) => {
+      set(partial);
+      transitions.push(typedDeps.get().pendingSessionTransition);
+    };
+
+    await resumeStoredSessionCommand(
+      deps,
+      {
+        provider: "codex",
+        providerSessionId: "thread-1",
+        cwd: "/tmp/missing",
+        rootDir: "/tmp/missing",
+        createdAt: "2026-04-29T00:00:00.000Z",
+      },
+      { preferStoredReplay: true },
+    );
+
+    assert.equal(
+      transitions.some((transition) => transition !== null),
+      false,
+    );
+  });
+
+  test("history replay selects a provisional session before history is read", async () => {
+    const ref: StoredSessionRef = {
+      provider: "codex",
+      providerSessionId: "thread-1",
+      cwd: "/tmp/large-history",
+      rootDir: "/tmp/large-history",
+      title: "Large history",
+      preview: "tail preview",
+      createdAt: "2026-04-29T00:00:00.000Z",
+      updatedAt: "2026-04-30T00:00:00.000Z",
+    };
+    const deps = startupDeps();
+    const provisionalId = storedReplayPlaceholderSessionId(ref);
+    let provisionalAtResumeRequest:
+      | {
+          selectedSessionId: string | null;
+          phase: string | undefined;
+          title: string | undefined;
+        }
+      | null = null;
+    installWebApiMocks((request) => {
+      if (request.url.endsWith("/api/sessions/resume")) {
+        const state = (deps as {
+          get: () => {
+            selectedSessionId: string | null;
+            projections: Map<string, ReturnType<typeof createEmptySessionProjection>>;
+          };
+        }).get();
+        const projection = state.projections.get(provisionalId);
+        provisionalAtResumeRequest = {
+          selectedSessionId: state.selectedSessionId,
+          phase: projection?.history.phase,
+          title: projection?.summary.session.title,
+        };
+        return {
+          session: summary({
+            id: "resumed",
+            provider: "codex",
+            providerSessionId: "thread-1",
+            cwd: "/tmp/large-history",
+            readOnlyReplay: true,
+          }),
+        };
+      }
+      throw new Error(`Unexpected request ${request.url}`);
+    });
+
+    await resumeStoredSessionCommand(deps, ref, { preferStoredReplay: true });
+
+    assert.deepEqual(provisionalAtResumeRequest, {
+      selectedSessionId: provisionalId,
+      phase: "loading",
+      title: "Large history",
+    });
+    const state = (deps as {
+      get: () => {
+        selectedSessionId: string | null;
+        projections: Map<string, ReturnType<typeof createEmptySessionProjection>>;
+      };
+    }).get();
+    assert.equal(state.projections.has(provisionalId), false);
+    assert.equal(state.selectedSessionId, "resumed");
   });
 
   test("claiming history claims control when the provider session is already running", async () => {

@@ -2127,6 +2127,12 @@ function validateTimelineItem(item: TimelineItem, sink: IssueSink, path: string)
       if (!isOptionalString(item.clientTurnId)) {
         addIssue(sink, "error", "timeline.client_turn_id.invalid", "timeline clientTurnId must be a string", `${path}.clientTurnId`);
       }
+      if (
+        item.imageCount !== undefined &&
+        (!Number.isInteger(item.imageCount) || item.imageCount < 0)
+      ) {
+        addIssue(sink, "error", "timeline.image_count.invalid", "timeline imageCount must be a non-negative integer", `${path}.imageCount`);
+      }
       if (typeof item.text !== "string") {
         addIssue(sink, "error", "timeline.text.invalid", "timeline text must be a string", `${path}.text`);
       }
@@ -2652,6 +2658,33 @@ function validatePayload(event: RahEvent, sink: IssueSink) {
     case "session.discovery":
       if (!isOptionalInteger(payload.version)) {
         addIssue(sink, "error", "session.discovery.version.invalid", "session discovery version must be an integer", "payload.version");
+      }
+      if (payload.storedSessions !== undefined) {
+        if (!isRecord(payload.storedSessions)) {
+          addIssue(sink, "error", "session.discovery.stored_sessions.invalid", "storedSessions must be an object", "payload.storedSessions");
+          break;
+        }
+        if (!isOptionalInteger(payload.storedSessions.revision)) {
+          addIssue(sink, "error", "session.discovery.stored_sessions.revision.invalid", "storedSessions revision must be an integer", "payload.storedSessions.revision");
+        }
+        for (const field of ["upsert", "remove"] as const) {
+          const entries = payload.storedSessions[field];
+          if (entries !== undefined && !Array.isArray(entries)) {
+            addIssue(sink, "error", `session.discovery.stored_sessions.${field}.invalid`, `${field} must be an array`, `payload.storedSessions.${field}`);
+          }
+        }
+        const removed = payload.storedSessions.remove;
+        if (Array.isArray(removed)) {
+          removed.forEach((entry, index) => {
+            if (
+              !isRecord(entry) ||
+              !PROVIDERS.has(entry.provider as ProviderKind | "system") ||
+              !isNonEmptyString(entry.providerSessionId)
+            ) {
+              addIssue(sink, "error", "session.discovery.stored_sessions.remove.invalid", "removed stored session identity is invalid", `payload.storedSessions.remove.${index}`);
+            }
+          });
+        }
       }
       break;
     case "session.attached":

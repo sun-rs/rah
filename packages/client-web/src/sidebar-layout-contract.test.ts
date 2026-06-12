@@ -9,11 +9,17 @@ import {
   SEGMENTED_CONTROL_SIZE_CLASSES,
 } from "./components/segmented-control-styles";
 import {
+  HEADER_EDGE_TOGGLE_BUTTON_CLASS,
+  HEADER_EDGE_TOGGLE_ICON_SIZE,
+  HEADER_ICON_BUTTON_BASE_CLASS,
   HEADER_SEGMENTED_BUTTON_ACTIVE_CLASS,
   HEADER_SEGMENTED_BUTTON_BASE_CLASS,
   HEADER_SEGMENTED_BUTTON_INACTIVE_CLASS,
   HEADER_SEGMENTED_CONTROL_BASE_CLASS,
   HEADER_SEGMENTED_LABEL_CLASS,
+  HEADER_SIDE_PANEL_TOGGLE_BUTTON_CLASS,
+  HEADER_TEXT_BUTTON_BASE_CLASS,
+  HEADER_RESPONSIVE_TEXT_BUTTON_CLASS,
 } from "./components/workbench/header-button-styles";
 import {
   CONVERSATION_HEADER_META_ORDER,
@@ -64,19 +70,29 @@ describe("sidebar layout contract", () => {
     const cssSource = readSource("./index.css");
     const shellSource = readSource("./components/workbench/shells/WorkbenchSidebarShell.tsx");
     const desktopHeaderSource = readSource("./components/workbench/actions/DesktopWorkbenchSidebarHeader.tsx");
+    const mobileHeaderSource = readSource("./components/workbench/actions/MobileWorkbenchHeaderActions.tsx");
     const sidebarSource = readSource("./SessionSidebar.tsx");
 
     assert.match(shellSource, /rah-sidebar-header/);
-    assert.match(desktopHeaderSource, /rah-sidebar-header-brand/);
+    assert.match(shellSource, /aria-label="Collapse sidebar"/);
     assert.match(desktopHeaderSource, /rah-sidebar-header-actions/);
+    assert.doesNotMatch(desktopHeaderSource, /onCollapseSidebar/);
+    assert.doesNotMatch(desktopHeaderSource, /rah-sidebar-header-actions ml-auto/);
+    assert.doesNotMatch(desktopHeaderSource, /rah-sidebar-header-brand/);
+    assert.match(shellSource, /headerLayout="inline"/);
+    assert.match(shellSource, /closePlacement="start"/);
+    assert.match(shellSource, /viewportClassName="md:hidden"/);
+    assert.match(shellSource, /h-8 w-8 shrink-0/);
+    assert.match(mobileHeaderSource, /h-8 w-8/);
     assert.match(SIDEBAR_LAYOUT.rootClassName, /rah-sidebar-content/);
     assert.match(sidebarSource, /toolbarLabelFullClassName/);
     assert.match(sidebarSource, /toolbarLabelShortClassName/);
-    assert.match(shellSource, /gap-2/);
-    assert.match(desktopHeaderSource, /rah-sidebar-header-brand[^"]*shrink-0/);
+    assert.doesNotMatch(shellSource, /gap-1/);
+    assert.match(cssSource, /--rah-sidebar-header-gap/);
+    assert.match(cssSource, /calc\(\(var\(--rah-sidebar-width, 288px\) - 208px\) \/ 20\)/);
     assert.match(cssSource, /@container rah-sidebar-header \(max-width: 224px\)/);
-    assert.match(cssSource, /\.rah-sidebar-header-brand/);
-    assert.match(cssSource, /display: none/);
+    assert.doesNotMatch(cssSource, /\.rah-sidebar-header-brand/);
+    assert.match(cssSource, /justify-content:\s*flex-start/);
     assert.match(cssSource, /@container rah-sidebar-content \(max-width: 212px\)/);
     assert.match(cssSource, /\.rah-sidebar-workspaces-label-full/);
     assert.match(cssSource, /\.rah-sidebar-workspaces-label-short/);
@@ -89,12 +105,35 @@ describe("sidebar layout contract", () => {
     assert.match(shellSource, /var\(--rah-sidebar-width/);
     assert.match(shellSource, /props\.isResizing \? "duration-0" : "duration-200"/);
     assert.match(chromeStateSource, /SIDEBAR_WIDTH_CSS_VAR = "--rah-sidebar-width"/);
+    assert.match(chromeStateSource, /SIDEBAR_MIN_WIDTH = 208/);
     assert.match(chromeStateSource, /requestAnimationFrame/);
     assert.match(chromeStateSource, /applySidebarWidthCss\(nextWidth\)|pendingSidebarWidthRef/);
     assert.doesNotMatch(
       chromeStateSource,
       /setSidebarWidth\(Math\.max\(200,\s*Math\.min\(480,\s*event\.clientX\)\)\)/,
     );
+  });
+
+  test("keeps mobile sheets from coexisting with desktop sidebars after rotation", () => {
+    const appSource = readSource("./App.tsx");
+    const sheetSource = readSource("./components/Sheet.tsx");
+    const shellSource = readSource("./components/workbench/shells/WorkbenchSidebarShell.tsx");
+    const sidePanelSource = readSource("./components/workbench/shells/ConversationSidePanelShell.tsx");
+    const chromeStateSource = readSource("./hooks/useWorkbenchChromeState.ts");
+
+    assert.match(sheetSource, /viewportClassName/);
+    assert.match(sheetSource, /Dialog\.Overlay[\s\S]*props\.viewportClassName/);
+    assert.match(sheetSource, /Dialog\.Content[\s\S]*props\.viewportClassName/);
+    assert.match(shellSource, /viewportClassName="md:hidden"/);
+    assert.match(sidePanelSource, /mobileViewportClassName/);
+    assert.match(sidePanelSource, /breakpoint === "wide" \? "min-\[900px\]:hidden" : "md:hidden"/);
+    assert.match(sidePanelSource, /viewportClassName=\{mobileViewportClassName\}/);
+    assert.match(chromeStateSource, /DESKTOP_SHEET_BREAKPOINT_PX = 768/);
+    assert.match(chromeStateSource, /viewportWidthPx < DESKTOP_SHEET_BREAKPOINT_PX/);
+    assert.match(chromeStateSource, /setLeftOpen\(\(current\) => \(current \? false : current\)\)/);
+    assert.match(chromeStateSource, /setRightOpen\(\(current\) => \(current \? false : current\)\)/);
+    assert.match(appSource, /showPrimaryLeftSidebarControls = !leftOpen/);
+    assert.match(appSource, /showLeftSidebarControls=\{showPrimaryLeftSidebarControls\}/);
   });
 
   test("overlays the sidebar resize target on the boundary without a visible gutter", () => {
@@ -197,6 +236,86 @@ describe("sidebar layout contract", () => {
     assert.match(canvasSource, /HEADER_SEGMENTED_LABEL_CLASS/);
   });
 
+  test("keeps stable-border header buttons from drawing double borders", () => {
+    for (const className of [
+      HEADER_ICON_BUTTON_BASE_CLASS,
+      HEADER_TEXT_BUTTON_BASE_CLASS,
+      HEADER_RESPONSIVE_TEXT_BUTTON_CLASS,
+    ]) {
+      assert.match(className, /\brah-stable-border\b/);
+      assert.match(className, /\bborder-transparent\b/);
+      assert.doesNotMatch(className, /\bborder-\[var\(--app-border\)\]/);
+    }
+  });
+
+  test("uses one edge-toggle protocol for sidebar and side-panel controls", () => {
+    const appSource = readSource("./App.tsx");
+    const councilSource = readSource("./council/CouncilPage.tsx");
+    const sheetSource = readSource("./components/Sheet.tsx");
+    const shellSource = readSource("./components/workbench/shells/WorkbenchSidebarShell.tsx");
+    const headerSource = readSource("./components/workbench/shells/ConversationHeader.tsx");
+    const sidePanelSource = readSource("./components/workbench/shells/ConversationSidePanelShell.tsx");
+    const emptyPaneSource = readSource("./components/workbench/panes/WorkbenchEmptyPane.tsx");
+    const openingPaneSource = readSource("./components/workbench/panes/WorkbenchOpeningPane.tsx");
+    const canvasSource = readSource("./components/workbench/canvas/CanvasWorkbench.tsx");
+    const inspectorHeaderSource = readSource("./inspector/InspectorHeader.tsx");
+
+    assert.equal(HEADER_EDGE_TOGGLE_ICON_SIZE, 16);
+    assert.match(HEADER_EDGE_TOGGLE_BUTTON_CLASS, /\bh-8\b/);
+    assert.match(HEADER_EDGE_TOGGLE_BUTTON_CLASS, /\bw-8\b/);
+    assert.match(HEADER_EDGE_TOGGLE_BUTTON_CLASS, /\bshrink-0\b/);
+    assert.doesNotMatch(HEADER_EDGE_TOGGLE_BUTTON_CLASS, /\bborder\b/);
+    assert.doesNotMatch(HEADER_EDGE_TOGGLE_BUTTON_CLASS, /\brah-stable-border\b/);
+    assert.equal(HEADER_SIDE_PANEL_TOGGLE_BUTTON_CLASS, HEADER_EDGE_TOGGLE_BUTTON_CLASS);
+
+    for (const source of [
+      sheetSource,
+      shellSource,
+      headerSource,
+      sidePanelSource,
+      emptyPaneSource,
+      openingPaneSource,
+      canvasSource,
+    ]) {
+      assert.match(source, /HEADER_EDGE_TOGGLE_ICON_SIZE/);
+    }
+
+    assert.match(headerSource, /md:pr-11/);
+    assert.match(headerSource, /min-\[900px\]:pr-11/);
+    assert.match(emptyPaneSource, /md:pr-11/);
+    assert.match(openingPaneSource, /md:pr-11/);
+    assert.match(appSource, /pr-11/);
+    assert.match(councilSource, /pr-11/);
+    assert.match(inspectorHeaderSource, /pr-11/);
+
+    for (const source of [
+      appSource,
+      councilSource,
+      shellSource,
+      headerSource,
+      emptyPaneSource,
+      openingPaneSource,
+      canvasSource,
+      inspectorHeaderSource,
+    ]) {
+      assert.doesNotMatch(source, /<Menu size=\{18\}/);
+      assert.doesNotMatch(source, /pr-14/);
+      assert.doesNotMatch(source, /2\.75rem/);
+      assert.doesNotMatch(source, /safe-area-inset-right\)\+2\.75rem/);
+    }
+
+    for (const source of [
+      sheetSource,
+      headerSource,
+      sidePanelSource,
+      emptyPaneSource,
+      openingPaneSource,
+    ]) {
+      assert.doesNotMatch(source, /<PanelRight size=\{16\}/);
+      assert.doesNotMatch(source, /<X size=\{16\}/);
+    }
+  });
+
   test("uses shared segmented controls for dialog and panel tabs", () => {
     const sources = [
       readSource("./components/SessionHistoryDialog.tsx"),
@@ -228,17 +347,45 @@ describe("sidebar layout contract", () => {
     }
   });
 
-  test("keeps collapsed right-panel toggles inside the conversation header", () => {
+  test("keeps desktop right-panel toggles owned by the side panel shell", () => {
     const appSource = readSource("./App.tsx");
     const canvasSource = readSource("./components/workbench/canvas/CanvasSessionPane.tsx");
     const councilSource = readSource("./council/CouncilPage.tsx");
     const sidePanelSource = readSource("./components/workbench/shells/ConversationSidePanelShell.tsx");
+    const emptyPaneSource = readSource("./components/workbench/panes/WorkbenchEmptyPane.tsx");
+    const openingPaneSource = readSource("./components/workbench/panes/WorkbenchOpeningPane.tsx");
     const boundarySource = readSource("./components/workbench/WorkbenchErrorBoundary.tsx");
 
-    assert.match(sidePanelSource, /props\.onToggle && props\.desktopOpen/);
+    assert.match(sidePanelSource, /props\.onToggle \?/);
+    assert.doesNotMatch(sidePanelSource, /props\.onToggle && props\.desktopOpen/);
+    assert.match(sidePanelSource, /SIDE_PANEL_TOGGLE_STYLE/);
+    assert.match(sidePanelSource, /position:\s*"absolute"/);
+    assert.match(sidePanelSource, /aria-pressed=\{props\.desktopOpen\}/);
+    assert.match(sidePanelSource, /HEADER_SIDE_PANEL_TOGGLE_BUTTON_CLASS/);
+    assert.match(emptyPaneSource, /HEADER_SIDE_PANEL_TOGGLE_BUTTON_CLASS/);
+    assert.match(openingPaneSource, /HEADER_SIDE_PANEL_TOGGLE_BUTTON_CLASS/);
+    assert.doesNotMatch(sidePanelSource, /HEADER_ICON_BUTTON_CLASS/);
+    assert.doesNotMatch(emptyPaneSource, /border border-\[var\(--app-border\)\][\s\S]{0,160}PanelRight/);
+    assert.doesNotMatch(openingPaneSource, /border border-\[var\(--app-border\)\][\s\S]{0,160}PanelRight/);
+    assert.match(HEADER_SIDE_PANEL_TOGGLE_BUTTON_CLASS, /\bhover:bg-\[var\(--app-subtle-bg\)\]/);
+    assert.doesNotMatch(HEADER_SIDE_PANEL_TOGGLE_BUTTON_CLASS, /\bborder\b/);
+    assert.doesNotMatch(HEADER_SIDE_PANEL_TOGGLE_BUTTON_CLASS, /\brah-stable-border\b/);
     assert.match(appSource, /showInspectorToggle=\{!rightOpen && !rightSidebarOpen\}/);
+    assert.match(appSource, /inspectorToggleClassName="md:hidden"/);
+    assert.match(appSource, /reserveInspectorToggleSlot = !rightSidebarOpen && !rightOpen/);
+    assert.match(appSource, /reserveRightPanelToggleSpace=\{reserveInspectorToggleSlot\}/);
+    assert.doesNotMatch(appSource, /canvasMaximizedPaneId[\s\S]{0,320}setCanvasPaneRightPanelsOpen/);
+    assert.doesNotMatch(appSource, /ProviderLogo[\s\S]{0,120}renderPaneToolbar/);
+    assert.doesNotMatch(appSource, /renderPaneToolbar[\s\S]{0,360}ProviderLogo/);
     assert.match(canvasSource, /showInspectorToggle=\{!inspectorOpen\}/);
-    assert.match(councilSource, /showAgentsToggle && \(!isCouncilWide \|\| !councilSidebarOpen\)/);
+    assert.match(canvasSource, /inspectorToggleClassName=\{sidePanelAvailable \? "min-\[900px\]:hidden" : ""\}/);
+    assert.match(canvasSource, /reserveRightPanelToggleSpace=\{sidePanelAvailable && !inspectorOpen\}/);
+    assert.match(canvasSource, /reserveRightPanelBreakpoint="wide"/);
+    assert.match(councilSource, /showAgentsToggle && !isCouncilWide/);
+    assert.match(
+      councilSource,
+      /reserveRightPanelToggleSpace=\{showAgentsToggle && isCouncilWide && !councilSidebarOpen\}/,
+    );
     assert.match(appSource, /loadInspectorPane/);
     assert.match(appSource, /importWithStaleReload/);
     assert.match(appSource, /title="Inspector crashed"/);

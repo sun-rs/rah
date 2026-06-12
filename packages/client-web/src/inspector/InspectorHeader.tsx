@@ -11,7 +11,7 @@ export function InspectorHeader(props: {
 }) {
   return (
     <>
-      <div className="flex h-14 shrink-0 items-center gap-3 border-b border-[var(--app-border)] px-4 pr-14">
+      <div className="flex h-14 shrink-0 items-center gap-3 border-b border-[var(--app-border)] px-4 pr-11">
         <div className="min-w-0 flex-1">
           <div className="text-sm font-medium text-[var(--app-fg)]">Inspector</div>
           <div className="truncate text-xs text-[var(--app-hint)]" title={props.workspaceRoot}>

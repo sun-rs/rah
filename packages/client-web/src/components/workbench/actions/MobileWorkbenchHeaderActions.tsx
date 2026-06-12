@@ -4,7 +4,7 @@ import { SessionHistoryDialog } from "../../SessionHistoryDialog";
 import type { WorkspaceSortMode } from "../../../session-browser";
 
 const headerButtonClassName =
-  "icon-click-feedback inline-flex h-9 w-9 items-center justify-center rounded-md active:bg-[var(--app-bg)]";
+  "icon-click-feedback inline-flex h-8 w-8 items-center justify-center rounded-md active:bg-[var(--app-bg)]";
 const headerIconSize = 17;
 
 export function MobileWorkbenchHeaderActions(props: {
@@ -29,7 +29,7 @@ export function MobileWorkbenchHeaderActions(props: {
   onRenameCouncil: (council: CouncilSnapshot) => void;
   onRemoveCouncil: (councilId: string) => void | Promise<void>;
   onRemoveHistorySession: (session: Pick<StoredSessionRef, "provider" | "providerSessionId">) => void;
-  onRemoveHistoryWorkspace: (workspaceDir: string) => void;
+  onRemoveHistoryWorkspace: (workspaceDir: string, sessions: readonly StoredSessionRef[]) => void;
   onOpenSettings: () => void;
 }) {
   return (

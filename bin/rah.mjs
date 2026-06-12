@@ -25,11 +25,17 @@ const execFileAsync = promisify(execFile);
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_DAEMON_URL = "http://127.0.0.1:43111";
-const DEFAULT_DAEMON_HOST = process.env.RAH_HOST?.trim() || "127.0.0.1";
+const DEFAULT_DAEMON_HOST = process.env.RAH_HOST?.trim() || "0.0.0.0";
 const CORE_RUNNING_PROVIDERS = new Set(["codex", "claude", "gemini", "opencode"]);
 const SUPPORTED_PROVIDERS = CORE_RUNNING_PROVIDERS;
 const MANAGEMENT_COMMANDS = new Set(["start", "status", "stop", "restart", "logs", "attach", "close", "archive"]);
 const CLIENT_INDEX_PATH = join(ROOT_DIR, "packages", "client-web", "dist", "index.html");
+const VOLATILE_CODEX_PARENT_ENV_KEYS = new Set([
+  "CODEX_CI",
+  "CODEX_SESSION_ID",
+  "CODEX_THREAD_ID",
+  "CODEX_TURN_ID",
+]);
 const TERMINAL_MODE_RESET_SEQUENCE = [
   "\u001b[<1u",
   "\u001b[?1000l",
@@ -102,7 +108,8 @@ function printUsage() {
       "Source workflow:",
       "  `rah start` builds the web client, starts the daemon in the background,",
       "  and writes pid/log files under ~/.rah/runtime-daemon.",
-      "  Set RAH_HOST=0.0.0.0 only when direct LAN exposure is intended.",
+      "  By default RAH listens on all local interfaces for LAN access.",
+      "  Set RAH_HOST=127.0.0.1 to restrict it to this Mac only.",
       "",
     ].join("\n"),
   );
@@ -685,11 +692,7 @@ function startDaemonDetached(daemonUrl) {
   try {
     const child = spawn(process.execPath, daemonCommand, {
       cwd: ROOT_DIR,
-      env: {
-        ...process.env,
-        RAH_HOST: DEFAULT_DAEMON_HOST,
-        RAH_PORT: port,
-      },
+      env: daemonEnv(port),
       stdio: ["ignore", logFd, logFd],
       detached: true,
     });
@@ -703,6 +706,16 @@ function startDaemonDetached(daemonUrl) {
   } finally {
     closeSync(logFd);
   }
+}
+
+function daemonEnv(port) {
+  const env = { ...process.env };
+  for (const key of VOLATILE_CODEX_PARENT_ENV_KEYS) {
+    delete env[key];
+  }
+  env.RAH_HOST = DEFAULT_DAEMON_HOST;
+  env.RAH_PORT = port;
+  return env;
 }
 
 async function ensureDaemon(daemonUrl, options = {}) {

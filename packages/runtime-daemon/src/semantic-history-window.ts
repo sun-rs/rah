@@ -47,7 +47,10 @@ function carriesTurnContext(event: RahEvent): boolean {
  * Picks a more human-friendly "recent page" start inside an already translated
  * frozen event window. The goal is not to guarantee a perfect conversation
  * segment; it simply avoids obvious truncated endings such as "assistant only"
- * pages when the matching user turn is only a few events earlier.
+ * pages when the matching user turn is only a few events earlier. The returned
+ * page still stays within a tight event budget, allowing one extra event only
+ * when it is the matching user prompt. Excluded context remains in the pager
+ * carry and is returned by older-page reads.
  */
 export function selectSemanticRecentWindow(
   events: readonly RahEvent[],
@@ -87,5 +90,12 @@ export function selectSemanticRecentWindow(
     }
   }
 
-  return events.slice(start);
+  const selected = events.slice(start);
+  const contextLimit = selected[0] && isUserTimeline(selected[0])
+    ? safeLimit + 1
+    : safeLimit;
+  if (selected.length <= contextLimit) {
+    return selected;
+  }
+  return selected.slice(selected.length - safeLimit);
 }

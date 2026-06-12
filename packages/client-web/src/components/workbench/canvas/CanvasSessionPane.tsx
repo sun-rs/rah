@@ -157,8 +157,14 @@ export function CanvasSessionPane(props: {
   const {
     composerRef,
     draft,
+    draftImageDataUrls,
+    draftImageCount,
     sendPending,
     setDraft,
+    handleDraftPaste,
+    clearDraftImages,
+    removeDraftImage,
+    removeLastDraftImage,
     handleSend,
   } = useWorkbenchComposerState({
     selectedSummary: props.summary,
@@ -204,8 +210,10 @@ export function CanvasSessionPane(props: {
       showModelInfoInChat={props.showModelInfoInChat}
       canLoadOlderHistory={Boolean(
         props.summary.session.providerSessionId &&
-          props.projection?.history.authoritativeApplied &&
-          (props.projection.history.nextCursor || props.projection.history.nextBeforeTs),
+          props.projection &&
+          (props.projection.history.phase === "loading" ||
+            (props.projection.history.authoritativeApplied &&
+              (props.projection.history.nextCursor || props.projection.history.nextBeforeTs))),
       )}
       historyLoading={props.projection?.history.phase === "loading"}
       canRespondToPermission={canRespondToPermission}
@@ -224,8 +232,14 @@ export function CanvasSessionPane(props: {
       composerSurface={composerSurface}
       composerRef={composerRef}
       draft={draft}
+      draftImageUrls={draftImageDataUrls}
+      draftImageCount={draftImageCount}
       sendPending={sendPending}
       onDraftChange={setDraft}
+      onComposerPaste={handleDraftPaste}
+      onClearDraftImages={clearDraftImages}
+      onRemoveDraftImage={removeDraftImage}
+      onRemoveLastDraftImage={removeLastDraftImage}
       onSend={() => void handleSend()}
       onClaimHistory={() => {
         const modelDraft = props.claimModelDraft;
@@ -319,6 +333,7 @@ export function CanvasSessionPane(props: {
       onExpandInspector={() => undefined}
       onToggleInspector={props.onToggleSidePanel}
       showInspectorToggle={!inspectorOpen}
+      inspectorToggleClassName={sidePanelAvailable ? "min-[900px]:hidden" : ""}
       inspectorToggleOpen={inspectorOpen}
       inspectorToggleDisabled={props.sidePanelToggleDisabled}
       inspectorToggleTitle={
@@ -328,6 +343,8 @@ export function CanvasSessionPane(props: {
             ? "Collapse inspector"
             : "Expand inspector"
       }
+      reserveRightPanelToggleSpace={sidePanelAvailable && !inspectorOpen}
+      reserveRightPanelBreakpoint="wide"
       onFloatingAnchorOffsetChange={() => undefined}
       onStopOrClose={() => {
         if (selectedIsReadOnlyReplay) {

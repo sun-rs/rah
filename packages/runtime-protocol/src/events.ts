@@ -1,5 +1,12 @@
 import type { CouncilMessage, CouncilSnapshot } from "./council";
-import type { ClientKind, ManagedSession, NativeTuiPromptState, ProviderKind } from "./session";
+import type {
+  ClientKind,
+  ManagedSession,
+  NativeTuiPromptState,
+  ProviderKind,
+  StoredSessionIdentity,
+  StoredSessionRef,
+} from "./session";
 
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
@@ -89,7 +96,7 @@ export interface TimelineRuntimeModel {
 }
 
 export type TimelineItem =
-  | { kind: "user_message"; text: string; messageId?: string; clientMessageId?: string; clientTurnId?: string }
+  | { kind: "user_message"; text: string; imageCount?: number; messageId?: string; clientMessageId?: string; clientTurnId?: string }
   | { kind: "assistant_message"; text: string; messageId?: string; runtimeModel?: TimelineRuntimeModel }
   | { kind: "reasoning"; text: string; section?: string; runtimeModel?: TimelineRuntimeModel }
   | { kind: "plan"; text: string }
@@ -308,8 +315,15 @@ export interface RuntimeOperation {
   input?: JsonObject;
 }
 
+export interface StoredSessionDiscoveryDelta {
+  revision: number;
+  upsert?: StoredSessionRef[];
+  remove?: StoredSessionIdentity[];
+  resetRequired?: boolean;
+}
+
 export type RahEventPayloadMap = {
-  "session.discovery": { version: number };
+  "session.discovery": { version: number; storedSessions?: StoredSessionDiscoveryDelta };
   "session.created": { session: ManagedSession };
   "session.started": { session: ManagedSession };
   "session.attached": { clientId: string; clientKind: ClientKind };

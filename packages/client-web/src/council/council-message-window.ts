@@ -59,7 +59,14 @@ export function mergeCouncilLists(
   incoming: readonly CouncilSnapshot[],
 ): CouncilSnapshot[] {
   const currentById = new Map(current.map((council) => [council.id, council]));
-  return incoming.map((council) => mergeCouncilSnapshot(currentById.get(council.id), council));
+  const incomingIds = new Set(incoming.map((council) => council.id));
+  const preservedActive = current.filter(
+    (council) => council.status === "running" && !incomingIds.has(council.id),
+  );
+  return [
+    ...incoming.map((council) => mergeCouncilSnapshot(currentById.get(council.id), council)),
+    ...preservedActive,
+  ];
 }
 
 export function prependCouncilMessagesPage(

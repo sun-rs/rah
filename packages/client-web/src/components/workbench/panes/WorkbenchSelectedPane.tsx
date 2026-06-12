@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useEffect, useRef, useState, type ClipboardEventHandler, type RefObject } from "react";
 import type {
   ContextUsage,
   PermissionResponseRequest,
@@ -22,6 +22,7 @@ import { ChatThread } from "../../chat/ChatThread";
 import { ProviderLogo } from "../../ProviderLogo";
 import { SessionControlPopover } from "../../SessionControlPopover";
 import { TokenizedTextarea } from "../../TokenizedTextarea";
+import { ComposerImageAttachmentBadge } from "../../ComposerImageAttachmentBadge";
 import { canSubmitComposerInput, COMPOSER_LAYOUT, type ComposerSurface } from "../../../composer-contract";
 import {
   HEADER_MENU_DANGER_ITEM_CLASS,
@@ -63,13 +64,8 @@ import {
   isSessionControlLocked,
   shouldRequestInitialTuiReplay,
 } from "../../../session-capabilities";
-import { closeNativeTuiClient } from "../../../api";
 import { usePwaDisplayMode } from "../../../hooks/usePwaDisplayMode";
-import {
-  resolveActiveSessionTuiSurface,
-  shouldDetachPreviousSessionTui,
-  type ActiveSessionTuiSurface,
-} from "../../../tui-surface-lifecycle";
+import { activateSessionTuiTerminal } from "../../../tui-surface-lifecycle";
 import { providerLabel } from "../../../types";
 
 function formatContextPercent(value: number): string {
@@ -176,6 +172,8 @@ export function WorkbenchSelectedPane(props: {
   composerSurface: ComposerSurface;
   composerRef: RefObject<HTMLTextAreaElement | null>;
   draft: string;
+  draftImageUrls?: readonly string[] | undefined;
+  draftImageCount?: number | undefined;
   sendPending: boolean;
   claimAccessModes: SessionModeChoice[];
   selectedClaimAccessModeId: string | null;
@@ -185,6 +183,10 @@ export function WorkbenchSelectedPane(props: {
   selectedClaimModelId: string | null;
   selectedClaimReasoningId: string | null;
   onDraftChange: (value: string) => void;
+  onComposerPaste?: ClipboardEventHandler<HTMLTextAreaElement> | undefined;
+  onClearDraftImages?: (() => void) | undefined;
+  onRemoveDraftImage?: ((index: number) => void) | undefined;
+  onRemoveLastDraftImage?: (() => void) | undefined;
   onSend: () => void;
   onClaimHistory: () => void;
   onClaimAccessModeChange: (modeId: string) => void;
@@ -198,6 +200,7 @@ export function WorkbenchSelectedPane(props: {
   onLoadOlderHistory: () => void | Promise<void>;
   onOpenLeft: () => void;
   onExpandSidebar: () => void;
+  showLeftSidebarControls?: boolean;
   onOpenRight: () => void;
   onExpandInspector: () => void;
   onToggleInspector?: () => void;
@@ -228,6 +231,7 @@ export function WorkbenchSelectedPane(props: {
   inspectorToggleTitle?: string;
   inspectorToggleClassName?: string;
   reserveRightPanelToggleSpace?: boolean;
+  reserveRightPanelBreakpoint?: "md" | "wide";
 }) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const composerContainerRef = useRef<HTMLDivElement | null>(null);
@@ -250,7 +254,6 @@ export function WorkbenchSelectedPane(props: {
   const [sessionViewMode, setSessionViewMode] = useState<SessionViewMode>(preferredSessionViewMode);
   const [openedTuiTerminalIds, setOpenedTuiTerminalIds] = useState<Set<string>>(() => new Set());
   const [closedTuiTerminalIds, setClosedTuiTerminalIds] = useState<Set<string>>(() => new Set());
-  const activeSessionTuiRef = useRef<ActiveSessionTuiSurface>(null);
   const isPwaDisplayMode = usePwaDisplayMode();
   const effectivePaneWidth = paneWidth ?? Number.POSITIVE_INFINITY;
   const sessionMetaMode = props.compactSessionMeta ?? "auto";
@@ -352,19 +355,18 @@ export function WorkbenchSelectedPane(props: {
     ? !closedTuiTerminalIds.has(nativeTui.terminalId)
     : true;
   const terminalInitialReplay = shouldRequestInitialTuiReplay(props.selectedSummary);
-  const markCurrentTuiOpened = () => {
+  const activateCurrentTuiView = () => {
     if (!nativeTui) {
       return;
     }
     const terminalId = nativeTui.terminalId;
-    setOpenedTuiTerminalIds((current) => {
-      if (current.has(terminalId)) {
-        return current;
-      }
-      const next = new Set(current);
-      next.add(terminalId);
-      return next;
+    const current = activateSessionTuiTerminal({
+      terminalId,
+      openedTerminalIds: openedTuiTerminalIds,
+      closedTerminalIds: closedTuiTerminalIds,
     });
+    setOpenedTuiTerminalIds(current.openedTerminalIds);
+    setClosedTuiTerminalIds(current.closedTerminalIds);
   };
   const setTerminalTuiClientActive = (active: boolean) => {
     if (!nativeTui) {
@@ -425,6 +427,7 @@ export function WorkbenchSelectedPane(props: {
   const sendDisabled = !canSubmitComposerInput({
     composerSurface: props.composerSurface,
     draft: props.draft,
+    attachmentCount: props.draftImageCount ?? 0,
     sendPending: props.sendPending,
     nativeTuiPromptState: nativeTui?.promptState,
   });
@@ -494,31 +497,6 @@ export function WorkbenchSelectedPane(props: {
   ]);
 
   useEffect(() => {
-    const current = resolveActiveSessionTuiSurface({
-      terminalId: nativeTui?.terminalId ?? null,
-      clientId: props.clientId,
-      openedTerminalIds: openedTuiTerminalIds,
-      closedTerminalIds: closedTuiTerminalIds,
-    });
-    const previous = activeSessionTuiRef.current;
-    if (shouldDetachPreviousSessionTui(previous, current)) {
-      void closeNativeTuiClient(previous.terminalId, { clientId: previous.clientId }).catch(() => undefined);
-    }
-    activeSessionTuiRef.current = current;
-  }, [closedTuiTerminalIds, nativeTui, openedTuiTerminalIds, props.clientId, terminalTuiClientActive]);
-
-  useEffect(() => {
-    return () => {
-      const activeTui = activeSessionTuiRef.current;
-      if (!activeTui) {
-        return;
-      }
-      void closeNativeTuiClient(activeTui.terminalId, { clientId: activeTui.clientId }).catch(() => undefined);
-      activeSessionTuiRef.current = null;
-    };
-  }, []);
-
-  useEffect(() => {
     if (showComposer) {
       return;
     }
@@ -580,6 +558,8 @@ export function WorkbenchSelectedPane(props: {
   }, [sessionMenuOpen]);
 
   const inspectorToggleOpen = props.inspectorToggleOpen ?? props.rightSidebarOpen;
+  const draftImageUrls = props.draftImageUrls ?? [];
+  const textareaHasImages = draftImageUrls.length > 0;
 
   return (
     <ConversationPageShell rootRef={rootRef}>
@@ -587,7 +567,11 @@ export function WorkbenchSelectedPane(props: {
         sidebarOpen={props.sidebarOpen}
         onOpenLeft={props.onOpenLeft}
         onExpandSidebar={props.onExpandSidebar}
+        showLeftSidebarControls={props.showLeftSidebarControls ?? true}
         reserveRightPanelToggleSpace={Boolean(props.reserveRightPanelToggleSpace)}
+        {...(props.reserveRightPanelBreakpoint
+          ? { reserveRightPanelBreakpoint: props.reserveRightPanelBreakpoint }
+          : {})}
         compactCloseAction={isPwaDisplayMode}
         identity={
           <ProviderLogo provider={props.selectedSummary.session.provider} className="h-6 w-6" />
@@ -604,7 +588,7 @@ export function WorkbenchSelectedPane(props: {
                 onClick={() => {
                   const nextMode = effectiveSessionViewMode === "chat" ? "tui" : "chat";
                   if (nextMode === "tui") {
-                    markCurrentTuiOpened();
+                    activateCurrentTuiView();
                   }
                   setSessionViewMode(nextMode);
                 }}
@@ -630,7 +614,7 @@ export function WorkbenchSelectedPane(props: {
                       }`}
                       onClick={() => {
                         if (mode === "tui") {
-                          markCurrentTuiOpened();
+                          activateCurrentTuiView();
                         }
                         setSessionViewMode(mode);
                       }}
@@ -908,17 +892,34 @@ export function WorkbenchSelectedPane(props: {
                 />
 
                 <div className="relative min-w-0">
+                  <ComposerImageAttachmentBadge
+                    imageUrls={draftImageUrls}
+                    onRemove={props.onRemoveDraftImage}
+                    className="pointer-events-auto absolute left-2 top-1.5 z-20"
+                  />
                   <TokenizedTextarea
                     ref={props.composerRef}
-                    textareaClassName={COMPOSER_LAYOUT.textareaClassName}
+                    textareaClassName={`${COMPOSER_LAYOUT.textareaClassName} ${
+                      textareaHasImages ? "pt-12 md:pt-12 lg:pt-12" : ""
+                    }`}
                     contentClassName={COMPOSER_LAYOUT.textareaContentClassName}
                     value={props.draft}
                     ariaLabel="Message composer"
                     onChange={props.onDraftChange}
+                    onPaste={props.onComposerPaste}
                     placeholder=""
                     rows={1}
                     onKeyDown={(e) => {
                       const nativeEvent = e.nativeEvent as KeyboardEvent;
+                      if (
+                        e.key === "Backspace" &&
+                        props.draft.length === 0 &&
+                        draftImageUrls.length > 0
+                      ) {
+                        e.preventDefault();
+                        props.onRemoveLastDraftImage?.();
+                        return;
+                      }
                       if (
                         e.key === "Enter" &&
                         !e.shiftKey &&

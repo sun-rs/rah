@@ -10,6 +10,7 @@ import type {
   ListProvidersResponse,
   ProviderKind,
   RuntimeIdentityResponse,
+  SessionHistoryDetailMode,
 } from "@rah/runtime-protocol";
 import { RuntimeEngine } from "./runtime-engine";
 import { applyCorsHeaders, validateApiRequest } from "./http-server-cors";
@@ -74,6 +75,15 @@ function parseStoredSessionsModeFromUrl(url: URL): "all" | "recent" {
 
 function parseStoredSessionsModeFromRequest(req: IncomingMessage): "all" | "recent" {
   return parseStoredSessionsModeFromUrl(new URL(req.url ?? "", "http://127.0.0.1"));
+}
+
+function parseRevisionFromUrl(url: URL): number {
+  const raw = url.searchParams.get("since");
+  if (!raw) {
+    return 0;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
 }
 
 export function createPostRoutes(
@@ -346,7 +356,9 @@ export function createPostRoutes(
           req,
           res,
           200,
-          await engine.removeStoredSession(request.provider, request.providerSessionId),
+          await engine.removeStoredSession(request.provider, request.providerSessionId, {
+            storedSessionsMode: parseStoredSessionsModeFromRequest(req),
+          }),
         );
       },
     },
@@ -509,6 +521,11 @@ export async function handleHttpRequest(args: {
     if (req.method === "GET" && pathname === "/api/sessions") {
       const storedSessionsMode = parseStoredSessionsModeFromUrl(url);
       writeJson(req, res, 200, engine.listSessions({ storedSessionsMode }));
+      return;
+    }
+
+    if (req.method === "GET" && pathname === "/api/sessions/stored-delta") {
+      writeJson(req, res, 200, engine.getStoredSessionsDelta(parseRevisionFromUrl(url)));
       return;
     }
 
@@ -890,7 +907,8 @@ export async function handleHttpRequest(args: {
       const limitRaw = url.searchParams.get("limit");
       const limit = parseQueryLimit(limitRaw);
       const detailParam = url.searchParams.get("detail");
-      const detail: "full" | "summary" = detailParam === "full" ? "full" : "summary";
+      const detail: SessionHistoryDetailMode =
+        detailParam === "full" ? "full" : detailParam === "chat" ? "chat" : "summary";
       const options = {
         ...(beforeTs !== undefined ? { beforeTs } : {}),
         ...(cursor !== undefined ? { cursor } : {}),

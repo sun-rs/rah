@@ -314,6 +314,19 @@ function stringArrayField(record: Record<string, unknown>, key: string): string[
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
 
+function isImageInputPart(part: Record<string, unknown>): boolean {
+  const type = part.type;
+  return (
+    type === "image" ||
+    type === "input_image" ||
+    type === "inputImage" ||
+    type === "localImage" ||
+    (typeof part.url === "string" && part.url.startsWith("data:image/")) ||
+    (typeof part.image_url === "string" && part.image_url.startsWith("data:image/")) ||
+    (typeof part.imageUrl === "string" && part.imageUrl.startsWith("data:image/"))
+  );
+}
+
 function turnIdFromParams(params: Record<string, unknown>): string | undefined {
   return optionalStringField(params, "turnId") ?? optionalStringField(params, "turn_id");
 }
@@ -1233,12 +1246,17 @@ function mapThreadItem(
         return [];
       }
       const content = Array.isArray(item.content) ? item.content : [];
+      const contentParts = content.filter(
+        (part): part is Record<string, unknown> =>
+          Boolean(part) && typeof part === "object" && !Array.isArray(part),
+      );
+      const imageCount = contentParts.filter(isImageInputPart).length;
       const text = stripCodexContextualFragments(
-        content
-        .filter((part): part is Record<string, unknown> => Boolean(part) && typeof part === "object" && !Array.isArray(part))
-        .map((part) => stringField(part, "text") ?? stringField(part, "url") ?? stringField(part, "path") ?? "")
-        .filter(Boolean)
-        .join("\n"),
+        contentParts
+          .filter((part) => !isImageInputPart(part))
+          .map((part) => stringField(part, "text") ?? "")
+          .filter(Boolean)
+          .join("\n"),
       );
       if (text && isCodexInternalEnvironmentMessage(text)) {
         state.emittedUserMessageItemIds.add(id);
@@ -1251,13 +1269,20 @@ function mapThreadItem(
         providerItemKey: id,
         providerMessageId: id,
       });
-      const activities: ProviderActivity[] = text
+      const activities: ProviderActivity[] = text || imageCount > 0
         ? [
-            { type: "message_part_added", turnId, part: { messageId: id, partId: id, kind: "text", text } },
+            ...(text
+              ? [{ type: "message_part_added" as const, turnId, part: { messageId: id, partId: id, kind: "text" as const, text } }]
+              : []),
             {
               type: "timeline_item",
               turnId,
-              item: { kind: "user_message", text, messageId: id },
+              item: {
+                kind: "user_message",
+                text,
+                messageId: id,
+                ...(imageCount > 0 ? { imageCount } : {}),
+              },
               ...timelineIdentityProps(identity),
             },
           ]

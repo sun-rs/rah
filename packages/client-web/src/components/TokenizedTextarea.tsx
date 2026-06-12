@@ -5,6 +5,7 @@ import {
   useLayoutEffect,
   useRef,
   type KeyboardEventHandler,
+  type ClipboardEventHandler,
   type TextareaHTMLAttributes,
 } from "react";
 
@@ -18,6 +19,7 @@ export const TokenizedTextarea = forwardRef<
     value: string;
     onChange: (value: string) => void;
     onKeyDown?: KeyboardEventHandler<HTMLTextAreaElement>;
+    onPaste?: ClipboardEventHandler<HTMLTextAreaElement> | undefined;
     disabled?: boolean;
     rows?: number;
     placeholder?: string;
@@ -90,7 +92,7 @@ export const TokenizedTextarea = forwardRef<
 
   useLayoutEffect(() => {
     adjustHeight();
-  }, [adjustHeight, props.value]);
+  }, [adjustHeight, props.textareaClassName, props.value]);
 
   useLayoutEffect(() => {
     return () => {
@@ -111,6 +113,7 @@ export const TokenizedTextarea = forwardRef<
           props.onChange(event.currentTarget.value);
         }}
         onKeyDown={props.onKeyDown}
+        onPaste={props.onPaste}
         disabled={props.disabled}
         rows={props.rows}
         spellCheck={props.spellCheck}

@@ -132,13 +132,14 @@ function bestEffortEscTuiProviderLabel(provider: string): string | undefined {
 export function canSubmitComposerInput(args: {
   composerSurface: ComposerSurface;
   draft: string;
+  attachmentCount?: number | undefined;
   sendPending: boolean;
   nativeTuiPromptState?: NativeTuiPromptState | undefined;
 }): boolean {
   if (args.composerSurface.kind !== "compose") {
     return false;
   }
-  if (!args.draft.trim()) {
+  if (!args.draft.trim() && (args.attachmentCount ?? 0) <= 0) {
     return false;
   }
   if (args.sendPending && args.nativeTuiPromptState === undefined) {

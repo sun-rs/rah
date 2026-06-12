@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
+import { removeVolatileProviderParentEnv } from "./provider-process-env";
 
 const HOST_FRAME_READY = 1;
 const HOST_FRAME_OUTPUT = 2;
@@ -81,6 +82,7 @@ function normalizeTerminalEnvironment(env: Record<string, string>): void {
   for (const key of misleadingParentTerminalKeys) {
     delete env[key];
   }
+  removeVolatileProviderParentEnv(env);
   env.TERM = "xterm-256color";
   env.COLORTERM = "truecolor";
   env.CLICOLOR = "1";

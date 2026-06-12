@@ -7,6 +7,7 @@ import type {
   ReleaseControlRequest,
   SetSessionModelRequest,
   SessionSummary,
+  StoredSessionIdentity,
 } from "@rah/runtime-protocol";
 import type { HistorySnapshotStore } from "./history-snapshots";
 import type {
@@ -40,7 +41,7 @@ type RuntimeSessionLifecycleDeps = {
     title: string,
   ) => void;
   refreshRememberedState: () => void;
-  publishStoredSessionDiscovery: () => void;
+  publishStoredSessionDiscovery: (session?: StoredSessionIdentity) => void;
   removeStructuredSessionOwner: (sessionId: string) => void;
   requireStructuredLifecycleAdapter: (sessionId: string) => ProviderStructuredLifecycleAdapter;
   requireActionCapabilityAdapter: (sessionId: string) =>
@@ -137,18 +138,21 @@ export class RuntimeSessionLifecycle {
     if (!nextState) {
       throw new Error(`Unknown session ${sessionId}`);
     }
-    if (nextState.session.providerSessionId) {
-      this.deps.setSessionTitleOverride(
-        {
+    const renamedSession = nextState.session.providerSessionId
+      ? {
           provider: nextState.session.provider,
           providerSessionId: nextState.session.providerSessionId,
-        },
+        }
+      : undefined;
+    if (renamedSession) {
+      this.deps.setSessionTitleOverride(
+        renamedSession,
         nextTitle,
       );
     }
     this.deps.rememberSession(nextState);
     this.deps.refreshRememberedState();
-    this.deps.publishStoredSessionDiscovery();
+    this.deps.publishStoredSessionDiscovery(renamedSession);
     return toSessionSummary(nextState);
   }
 

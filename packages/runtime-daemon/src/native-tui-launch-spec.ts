@@ -65,6 +65,11 @@ type ModelRequest = {
 
 export type NativeTuiMcpServerSpec = ProviderMcpServerSpec;
 
+const CODEX_TUI_CONFIG_ARGS = [
+  "-c",
+  "check_for_update_on_startup=false",
+] as const;
+
 export type NativeTuiStartLaunchSpecRequest = StartSessionRequest & {
   extraMcpServers?: NativeTuiMcpServerSpec[];
   initialPrompt?: string;
@@ -320,6 +325,7 @@ function appendCodexCommonArgs(
   args: string[],
   request: Pick<StartSessionRequest, "cwd" | "model" | "reasoningId" | "optionValues">,
 ): void {
+  args.push(...CODEX_TUI_CONFIG_ARGS);
   args.push("--cd", request.cwd);
   if (request.model) {
     args.push("--model", request.model);
@@ -553,7 +559,7 @@ export async function nativeTuiResumeLaunchSpec(
   }
   if (request.provider === "codex") {
     const { command, args } = splitLaunchArgv(await codexLaunchSpec(), "codex");
-    args.push("resume", "--cd", request.cwd);
+    args.push(...CODEX_TUI_CONFIG_ARGS, "resume", "--cd", request.cwd);
     if (request.model) {
       args.push("--model", request.model);
     }

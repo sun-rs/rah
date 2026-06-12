@@ -159,6 +159,26 @@ function textFromContentItems(
   return parts.join("");
 }
 
+function imageCountFromContentItems(content: unknown): number {
+  if (!Array.isArray(content)) {
+    return 0;
+  }
+  return content
+    .filter((item) => item && typeof item === "object" && !Array.isArray(item))
+    .map((item) => item as Record<string, unknown>)
+    .filter((item) => {
+      const type = item.type;
+      return (
+        type === "input_image" ||
+        type === "inputImage" ||
+        type === "image" ||
+        (typeof item.image_url === "string" && item.image_url.startsWith("data:image/")) ||
+        (typeof item.imageUrl === "string" && item.imageUrl.startsWith("data:image/")) ||
+        (typeof item.url === "string" && item.url.startsWith("data:image/"))
+      );
+    }).length;
+}
+
 function extractSummaryText(summary: unknown): string | null {
   if (!Array.isArray(summary)) {
     return null;
@@ -1511,8 +1531,26 @@ export function translateCodexRolloutLine(
     }
     if (payload.role === "user") {
       const rawText = textFromContentItems(payload.content, "input_text");
-      if (rawText === null) {
+      const imageCount = imageCountFromContentItems(payload.content);
+      if (rawText === null && imageCount === 0) {
         return [];
+      }
+      if (rawText === null) {
+        const identity = createHistoryTimelineIdentity(state, {
+          itemKind: "user_message",
+          ...(typeof payload.id === "string" ? { providerMessageId: payload.id } : {}),
+        });
+        return [
+          persistedActivity(
+            record,
+            {
+              type: "timeline_item",
+              item: { kind: "user_message", text: "", imageCount },
+              ...timelineIdentityProps(identity),
+            },
+            "authoritative",
+          ),
+        ];
       }
       const goalObjective = extractCodexGoalObjective(rawText);
       if (goalObjective) {
@@ -1522,7 +1560,7 @@ export function translateCodexRolloutLine(
         return [];
       }
       const text = stripCodexContextualFragments(rawText);
-      if (!text) {
+      if (!text && imageCount === 0) {
         return [];
       }
       if (shouldSkipDuplicateTimelineText(state, record, "user_message", text)) {
@@ -1555,7 +1593,11 @@ export function translateCodexRolloutLine(
           record,
           {
             type: "timeline_item",
-            item: { kind: "user_message", text },
+            item: {
+              kind: "user_message",
+              text,
+              ...(imageCount > 0 ? { imageCount } : {}),
+            },
             ...timelineIdentityProps(identity),
           },
           "authoritative",

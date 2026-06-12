@@ -65,6 +65,7 @@ import type {
   SetSessionModelRequest,
   SessionFileResponse,
   SessionInputRequest,
+  SessionHistoryDetailMode,
   SessionHistoryItemDetailKind,
   SessionHistoryItemDetailResponse,
   SessionHistoryPageResponse,
@@ -72,6 +73,7 @@ import type {
   StartDebugScenarioRequest,
   StartSessionRequest,
   StartSessionResponse,
+  StoredSessionsDeltaResponse,
   StoredSessionRemoveRequest,
   WorkspaceDirectoryResponse,
   WorkspaceDirectoryRequest,
@@ -190,6 +192,12 @@ export async function listSessions(options?: {
   return requestJson<ListSessionsResponse>(`/api/sessions${suffix}`);
 }
 
+export async function listStoredSessionsDelta(sinceRevision: number): Promise<StoredSessionsDeltaResponse> {
+  const query = new URLSearchParams();
+  query.set("since", String(Math.max(0, Math.trunc(sinceRevision))));
+  return requestJson<StoredSessionsDeltaResponse>(`/api/sessions/stored-delta?${query.toString()}`);
+}
+
 function storedSessionsQuerySuffix(options?: { storedSessions?: StoredSessionsMode }): string {
   if (!options?.storedSessions) {
     return "";
@@ -259,8 +267,9 @@ export async function removeWorkspace(
 
 export async function removeStoredSession(
   request: StoredSessionRemoveRequest,
+  options?: { storedSessions?: StoredSessionsMode },
 ): Promise<ListSessionsResponse> {
-  return requestJson<ListSessionsResponse>("/api/history/sessions/remove", {
+  return requestJson<ListSessionsResponse>(`/api/history/sessions/remove${storedSessionsQuerySuffix(options)}`, {
     method: "POST",
     body: JSON.stringify(request),
   });
@@ -807,7 +816,7 @@ export async function searchWorkspaceFilesByDirectory(
 
 export async function readSessionHistory(
   sessionId: string,
-  options?: { beforeTs?: string; cursor?: string; limit?: number; detail?: "summary" | "full" },
+  options?: { beforeTs?: string; cursor?: string; limit?: number; detail?: SessionHistoryDetailMode },
 ): Promise<SessionHistoryPageResponse> {
   const query = new URLSearchParams();
   if (options?.beforeTs) {

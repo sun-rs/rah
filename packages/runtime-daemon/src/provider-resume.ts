@@ -1,4 +1,4 @@
-import type { ManagedSession, ResumeSessionResponse } from "@rah/runtime-protocol";
+import type { ManagedSession, ResumeSessionRequest, ResumeSessionResponse } from "@rah/runtime-protocol";
 import type { RuntimeServices } from "./provider-adapter";
 import { toSessionSummary, type StoredSessionState } from "./session-store";
 
@@ -7,6 +7,85 @@ const SYSTEM_SOURCE = {
   channel: "system" as const,
   authority: "authoritative" as const,
 };
+
+function isReplaceableProviderReplay(args: {
+  existing: StoredSessionState;
+  preferStoredReplay: boolean | undefined;
+  historySourceSessionId?: string | undefined;
+  rehydratedSessionIds: Set<string>;
+}): boolean {
+  if (args.preferStoredReplay) {
+    return false;
+  }
+  const isReplaceableHistorySource =
+    args.historySourceSessionId === args.existing.session.id &&
+    args.existing.session.capabilities.steerInput === false;
+  const isReplaceableStoredHistory =
+    args.existing.session.runtime?.kind === "stored_history";
+  return (
+    args.rehydratedSessionIds.has(args.existing.session.id) ||
+    isReplaceableHistorySource ||
+    isReplaceableStoredHistory
+  );
+}
+
+export function reuseExistingProviderSessionForResume(args: {
+  services: RuntimeServices;
+  provider: ManagedSession["provider"];
+  providerSessionId: string;
+  preferStoredReplay: boolean | undefined;
+  historySourceSessionId?: string | undefined;
+  rehydratedSessionIds: Set<string>;
+  attach?: ResumeSessionRequest["attach"] | undefined;
+}): ResumeSessionResponse | null {
+  const existing = args.services.sessionStore.findManagedByProviderSession(
+    args.provider,
+    args.providerSessionId,
+  );
+  if (!existing) {
+    return null;
+  }
+  if (isReplaceableProviderReplay({ ...args, existing })) {
+    return null;
+  }
+  if (args.attach) {
+    args.services.sessionStore.attachClient({
+      sessionId: existing.session.id,
+      clientId: args.attach.client.id,
+      kind: args.attach.client.kind,
+      connectionId: args.attach.client.connectionId,
+      attachMode: args.attach.mode,
+      focus: true,
+    });
+    args.services.eventBus.publish({
+      sessionId: existing.session.id,
+      type: "session.attached",
+      source: SYSTEM_SOURCE,
+      payload: {
+        clientId: args.attach.client.id,
+        clientKind: args.attach.client.kind,
+      },
+    });
+    if (args.attach.claimControl) {
+      args.services.sessionStore.claimControl(
+        existing.session.id,
+        args.attach.client.id,
+        args.attach.client.kind,
+      );
+      args.services.eventBus.publish({
+        sessionId: existing.session.id,
+        type: "control.claimed",
+        source: SYSTEM_SOURCE,
+        payload: {
+          clientId: args.attach.client.id,
+          clientKind: args.attach.client.kind,
+        },
+      });
+    }
+  }
+  const state = args.services.sessionStore.getSession(existing.session.id);
+  return state ? { session: toSessionSummary(state) } : null;
+}
 
 export function prepareProviderSessionResume(args: {
   services: RuntimeServices;
@@ -23,21 +102,7 @@ export function prepareProviderSessionResume(args: {
   if (!existing) {
     return { rollback: () => undefined };
   }
-  const isReplaceableHistorySource =
-    !args.preferStoredReplay &&
-    args.historySourceSessionId === existing.session.id &&
-    existing.session.capabilities.steerInput === false;
-  const isReplaceableStoredHistory =
-    !args.preferStoredReplay &&
-    existing.session.runtime?.kind === "stored_history";
-  if (
-    !args.preferStoredReplay &&
-    (
-      args.rehydratedSessionIds.has(existing.session.id) ||
-      isReplaceableHistorySource ||
-      isReplaceableStoredHistory
-    )
-  ) {
+  if (isReplaceableProviderReplay({ ...args, existing })) {
     const removed = existing;
     args.rehydratedSessionIds.delete(existing.session.id);
     args.services.sessionStore.removeSession(existing.session.id);

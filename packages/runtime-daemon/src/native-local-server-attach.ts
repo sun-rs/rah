@@ -9,6 +9,11 @@ export type NativeLocalServerAttachSpec = {
   attachCommand: string;
 };
 
+const CODEX_TUI_CLIENT_CONFIG_ARGS = [
+  "-c",
+  "check_for_update_on_startup=false",
+] as const;
+
 function providerBinary(provider: ProviderKind): string | null {
   if (provider === "codex") {
     return process.env.RAH_CODEX_BINARY || "codex";
@@ -39,7 +44,13 @@ export function nativeLocalServerAttachSpec(args: {
     if (!/^wss?:\/\//.test(endpoint)) {
       return null;
     }
-    const attachArgs = ["--remote", endpoint, "resume", providerSessionId];
+    const attachArgs = [
+      ...CODEX_TUI_CLIENT_CONFIG_ARGS,
+      "--remote",
+      endpoint,
+      "resume",
+      providerSessionId,
+    ];
     return {
       command,
       args: attachArgs,
@@ -80,4 +91,3 @@ export function nativeLocalServerRuntimeDiagnostics(args: {
     lastEventCursor: args.lastEventCursor,
   };
 }
-

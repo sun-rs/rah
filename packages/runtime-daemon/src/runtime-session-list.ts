@@ -73,7 +73,7 @@ export function sameStoredSessionRefs(
   return left.every((entry, index) => storedSessionRefKey(entry) === storedSessionRefKey(right[index]!));
 }
 
-function sessionProviderKey(session: Pick<StoredSessionRef, "provider" | "providerSessionId">): string {
+export function sessionProviderKey(session: Pick<StoredSessionRef, "provider" | "providerSessionId">): string {
   return `${session.provider}:${session.providerSessionId}`;
 }
 

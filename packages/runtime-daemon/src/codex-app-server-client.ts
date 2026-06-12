@@ -8,6 +8,7 @@ import {
   type CodexAppServerRpcClient,
 } from "./codex-live-rpc";
 import { rahNativeServerEnv } from "./native-local-server-orphans";
+import { providerProcessEnv } from "./provider-process-env";
 
 export { CodexJsonRpcClient, CodexWebSocketRpcClient, type CodexAppServerRpcClient } from "./codex-live-rpc";
 
@@ -32,10 +33,7 @@ export async function createCodexStdioAppServerClient(binary?: string): Promise<
   const resolvedBinary = binary ?? await resolveCodexBinary();
   const child = spawn(resolvedBinary, ["app-server"], {
     stdio: ["pipe", "pipe", "pipe"],
-    env: {
-      ...process.env,
-      ...rahNativeServerEnv("codex"),
-    },
+    env: providerProcessEnv(rahNativeServerEnv("codex")),
   });
   const client = new CodexJsonRpcClient(child);
   try {
@@ -118,10 +116,7 @@ export async function createCodexWebSocketAppServerClient(binary?: string): Prom
   const resolvedBinary = binary ?? await resolveCodexBinary();
   const child = spawn(resolvedBinary, ["app-server", "--listen", "ws://127.0.0.1:0"], {
     stdio: ["ignore", "ignore", "pipe"],
-    env: {
-      ...process.env,
-      ...rahNativeServerEnv("codex"),
-    },
+    env: providerProcessEnv(rahNativeServerEnv("codex")),
   });
   let client: CodexWebSocketRpcClient | undefined;
   try {
@@ -149,7 +144,7 @@ function shouldUseCodexWebSocketTransport(): boolean {
   if (configured === "websocket" || configured === "ws") {
     return true;
   }
-  return false;
+  return true;
 }
 
 export async function createCodexAppServerClient(): Promise<CodexAppServerRpcClient> {

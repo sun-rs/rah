@@ -304,6 +304,84 @@ rl.on('line', (line) => {
     rmSync(cwd, { recursive: true, force: true });
   });
 
+  test("pauses active Codex goals before claiming a history session live", async () => {
+    const cwd = mkdtempSync(path.join(os.tmpdir(), "rah-codex-goal-claim-cwd-"));
+    const sessionId = "019e3333-bbbb-7ccc-8ddd-eeeeffff0000";
+    const methodLog = path.join(tmpHome, "goal-claim-method-log.jsonl");
+    writeRollout(sessionId, cwd);
+    writeMockCodexServer(`
+const fs = require('node:fs');
+const readline = require('node:readline');
+const logPath = ${JSON.stringify(methodLog)};
+const cwd = ${JSON.stringify(cwd)};
+const sessionId = ${JSON.stringify(sessionId)};
+const rl = readline.createInterface({ input: process.stdin });
+function send(msg) { process.stdout.write(JSON.stringify(msg) + "\\n"); }
+function log(msg) { fs.appendFileSync(logPath, JSON.stringify({ method: msg.method, params: msg.params }) + "\\n"); }
+rl.on('line', (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method) log(msg);
+  if (msg.method === 'initialize') {
+    send({ id: msg.id, result: {} });
+    return;
+  }
+  if (msg.method === 'thread/goal/get') {
+    send({ id: msg.id, result: { goal: { threadId: sessionId, objective: 'continue work', status: 'active' } } });
+    return;
+  }
+  if (msg.method === 'thread/goal/set') {
+    send({ id: msg.id, result: { goal: { threadId: sessionId, objective: 'continue work', status: msg.params.status } } });
+    return;
+  }
+  if (msg.method === 'thread/resume') {
+    send({
+      id: msg.id,
+      result: {
+        thread: {
+          id: sessionId,
+          cwd,
+          name: 'Claimed safely',
+          status: { type: 'idle' }
+        },
+        cwd
+      }
+    });
+    return;
+  }
+  send({ id: msg.id, result: {} });
+});
+`);
+
+    const services = {
+      eventBus: new EventBus(),
+      ptyHub: new PtyHub(),
+      sessionStore: new SessionStore(),
+    };
+    const adapter = new CodexAdapter(services);
+
+    const resumed = await adapter.resumeSession({
+      provider: "codex",
+      providerSessionId: sessionId,
+      preferStoredReplay: false,
+      historySourceSessionId: "history-replay-session",
+    });
+
+    assert.equal(resumed.session.session.providerSessionId, sessionId);
+    const methods = readFileSync(methodLog, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { method: string; params?: Record<string, unknown> });
+    const goalGetIndex = methods.findIndex((entry) => entry.method === "thread/goal/get");
+    const goalSetIndex = methods.findIndex((entry) => entry.method === "thread/goal/set");
+    const resumeIndex = methods.findIndex((entry) => entry.method === "thread/resume");
+    assert.ok(goalGetIndex > -1);
+    assert.ok(goalSetIndex > goalGetIndex);
+    assert.ok(resumeIndex > goalSetIndex);
+    assert.equal(methods[goalSetIndex]?.params?.status, "paused");
+
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
   test("starts Codex threads without legacy params and sets title through native rename", async () => {
     const cwd = mkdtempSync(path.join(os.tmpdir(), "rah-codex-start-params-cwd-"));
     const paramsLog = path.join(tmpHome, "start-params.jsonl");

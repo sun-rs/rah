@@ -40,7 +40,10 @@ import {
   type LiveCodexSession,
 } from "../codex-live-types";
 import { optionValueAsString, resolveModelOptionValues } from "../session-model-options";
-import { nativeLocalServerRuntimeDiagnostics } from "../native-local-server-attach";
+import {
+  nativeLocalServerAttachSpec,
+  nativeLocalServerRuntimeDiagnostics,
+} from "../native-local-server-attach";
 import {
   codexConfigOverridesForMcpServers,
   extraMcpServersFromRequest,
@@ -48,6 +51,19 @@ import {
 import { resolveSessionTitleAndPreview } from "../session-title-resolver";
 
 export type { LiveCodexSession } from "../codex-live-types";
+
+function codexNativeTuiAttachAvailable(args: {
+  providerSessionId: string;
+  endpoint?: string | undefined;
+}): boolean {
+  return Boolean(
+    nativeLocalServerAttachSpec({
+      provider: "codex",
+      providerSessionId: args.providerSessionId,
+      endpoint: args.endpoint,
+    }),
+  );
+}
 
 function resolveCodexStartupMode(args: {
   modeId?: string | undefined;
@@ -222,6 +238,41 @@ async function unarchiveCodexThreadIfNeeded(args: {
     // Resume remains the authority. If the thread was already restored or the
     // server rejects unarchive, the normal resume error path will decide.
   }
+}
+
+export async function pauseActiveCodexThreadGoal(
+  client: CodexAppServerRpcClient,
+  threadId: string,
+  timeoutMs = TURN_START_TIMEOUT_MS,
+): Promise<boolean> {
+  const response = (await client.request("thread/goal/get", { threadId }, timeoutMs)) as {
+    goal?: {
+      status?: unknown;
+    } | null;
+  };
+  if (response.goal?.status !== "active") {
+    return false;
+  }
+  await client.request(
+    "thread/goal/set",
+    {
+      threadId,
+      status: "paused",
+    },
+    timeoutMs,
+  );
+  return true;
+}
+
+async function pauseActiveCodexGoalBeforeHistoryClaim(args: {
+  client: CodexAppServerRpcClient;
+  threadId: string;
+  request: ResumeSessionRequest;
+}): Promise<void> {
+  if (args.request.preferStoredReplay === true || !args.request.historySourceSessionId) {
+    return;
+  }
+  await pauseActiveCodexThreadGoal(args.client, args.threadId);
 }
 
 export async function loadCodexPlanCollaborationMode(client: CodexAppServerRpcClient): Promise<LiveCodexSession["planCollaborationMode"]> {
@@ -435,6 +486,10 @@ export async function startCodexLiveSession(params: {
     threadStart.reasoning_effort ??
     params.initialModelCatalog?.currentReasoningId ??
     null;
+  const nativeTuiAttachAvailable = codexNativeTuiAttachAvailable({
+    providerSessionId: threadId,
+    endpoint: client.endpoint,
+  });
 
   const state = services.sessionStore.createManagedSession({
     provider: "codex",
@@ -492,13 +547,13 @@ export async function startCodexLiveSession(params: {
   services.sessionStore.patchManagedSession(state.session.id, {
     nativeTui: {
       terminalId: state.session.id,
-      viewAvailable: true,
+      viewAvailable: nativeTuiAttachAvailable,
       promptState: "prompt_clean",
       queuedInputCount: 0,
     },
     capabilities: {
-      nativeTui: true,
-      rawPtyInput: true,
+      nativeTui: nativeTuiAttachAvailable,
+      rawPtyInput: nativeTuiAttachAvailable,
     },
   });
   services.ptyHub.ensureSession(state.session.id);
@@ -564,6 +619,11 @@ export async function resumeCodexLiveSession(params: {
       client,
       threadId: request.providerSessionId,
       ...(record ? { record } : {}),
+    });
+    await pauseActiveCodexGoalBeforeHistoryClaim({
+      client,
+      threadId: request.providerSessionId,
+      request,
     });
     const resumeResponse = (await client.request(
       "thread/resume",
@@ -664,6 +724,10 @@ export async function resumeCodexLiveSession(params: {
       providerPreview: threadPreview,
       fallbackPreview: recordPreview,
     });
+    const nativeTuiAttachAvailable = codexNativeTuiAttachAvailable({
+      providerSessionId: threadId,
+      endpoint: client.endpoint,
+    });
     if (resumedMode.activeModeId === "plan" && !planCollaborationMode) {
       throw new Error("Codex plan mode is not available for this session.");
     }
@@ -722,13 +786,13 @@ export async function resumeCodexLiveSession(params: {
     services.sessionStore.patchManagedSession(state.session.id, {
       nativeTui: {
         terminalId: state.session.id,
-        viewAvailable: true,
+        viewAvailable: nativeTuiAttachAvailable,
         promptState: "prompt_clean",
         queuedInputCount: 0,
       },
       capabilities: {
-        nativeTui: true,
-        rawPtyInput: true,
+        nativeTui: nativeTuiAttachAvailable,
+        rawPtyInput: nativeTuiAttachAvailable,
       },
     });
     services.ptyHub.ensureSession(state.session.id);

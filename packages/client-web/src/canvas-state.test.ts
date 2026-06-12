@@ -197,6 +197,7 @@ test("canvas state persistence sanitizes invalid saved values", () => {
       rightPanelsOpen: {
         ...createDefaultCanvasRightPanelsOpen(),
         "canvas-1": false,
+        "canvas-3": true,
       },
     },
   );

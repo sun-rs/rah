@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import {
-  ChevronUp,
   FileText,
   FolderOpen,
   Plus,
@@ -9,6 +8,7 @@ import {
   X,
 } from "lucide-react";
 import { listDirectory, type DirectoryListingResponse } from "../api";
+import { DirectoryPathBackRow } from "./DirectoryPathBackRow";
 import { OverlayScrollArea } from "./OverlayScrollArea";
 
 function normalizePath(value: string): string {
@@ -123,6 +123,8 @@ export function FileReferencePicker(props: {
     props.onPick(formatReference(preferredReferencePath(props.rootPath, path)));
     props.onOpenChange(false);
   };
+  const displayPath = listing?.path || currentPath;
+  const canGoUp = normalizePath(displayPath) !== "/";
 
   return (
     <Dialog.Root open={props.open} onOpenChange={props.onOpenChange}>
@@ -145,21 +147,11 @@ export function FileReferencePicker(props: {
             </Dialog.Close>
           </div>
 
-          <div className="flex items-center gap-2 border-b border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-3 py-2 shrink-0">
-            <button
-              type="button"
-              onClick={() => setCurrentPath(getParentPath(listing?.path || currentPath))}
-              disabled={normalizePath(currentPath) === "/"}
-              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)] disabled:opacity-30 transition-colors"
-              aria-label="Go up"
-              title="Go up"
-            >
-              <ChevronUp size={16} />
-            </button>
-            <div className="min-w-0 truncate text-sm text-[var(--app-fg)]" title={listing?.path || currentPath}>
-              {listing?.path || currentPath}
-            </div>
-          </div>
+          <DirectoryPathBackRow
+            path={displayPath}
+            canGoUp={canGoUp}
+            onGoUp={() => setCurrentPath(getParentPath(displayPath))}
+          />
 
           <div className="px-4 pt-3 pb-2 shrink-0">
             <div className="flex items-center gap-2 rounded-lg border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-3 py-2">

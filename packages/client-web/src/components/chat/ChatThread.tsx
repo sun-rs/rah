@@ -89,7 +89,7 @@ function renderTimelineItem(item: TimelineItem, options: {
 } = {}) {
   switch (item.kind) {
     case "user_message":
-      return <UserMessage content={item.text} entryKey={options.entryKey} />;
+      return <UserMessage content={item.text} imageCount={item.imageCount} entryKey={options.entryKey} />;
     case "assistant_message":
       return (
         <AssistantMessage

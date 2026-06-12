@@ -47,10 +47,10 @@ export function createEmptyCanvasTargets(): Record<CanvasPaneId, CanvasPaneTarge
 
 export function createDefaultCanvasRightPanelsOpen(): Record<CanvasPaneId, boolean> {
   return {
-    "canvas-1": true,
-    "canvas-2": true,
-    "canvas-3": true,
-    "canvas-4": true,
+    "canvas-1": false,
+    "canvas-2": false,
+    "canvas-3": false,
+    "canvas-4": false,
   };
 }
 

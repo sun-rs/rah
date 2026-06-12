@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  activateSessionTuiTerminal,
   pruneCouncilTuiCache,
   removeCouncilTuiAgent,
   resolveActiveSessionTuiSurface,
   resetCouncilTuiCache,
   setCouncilTuiDetached,
-  shouldDetachPreviousSessionTui,
+  shouldReplayInitialSessionTuiOutput,
   touchCouncilTuiCache,
   warmCouncilTuiCache,
 } from "./tui-surface-lifecycle";
@@ -43,17 +44,30 @@ test("session tui surface is active only after the current session TUI was opene
   );
 });
 
-test("session tui surface detaches only when the active main session target changes or closes", () => {
-  const previous = { terminalId: "session-a", clientId: "web" };
-  assert.equal(
-    shouldDetachPreviousSessionTui(previous, { terminalId: "session-a", clientId: "web" }),
-    false,
+test("session tui activation reopens a previously closed web TUI client", () => {
+  const state = activateSessionTuiTerminal({
+    terminalId: "session-a",
+    openedTerminalIds: new Set(["session-a"]),
+    closedTerminalIds: new Set(["session-a"]),
+  });
+
+  assert.equal(state.openedTerminalIds.has("session-a"), true);
+  assert.equal(state.closedTerminalIds.has("session-a"), false);
+  assert.deepEqual(
+    resolveActiveSessionTuiSurface({
+      terminalId: "session-a",
+      clientId: "web",
+      openedTerminalIds: state.openedTerminalIds,
+      closedTerminalIds: state.closedTerminalIds,
+    }),
+    { terminalId: "session-a", clientId: "web" },
   );
-  assert.equal(
-    shouldDetachPreviousSessionTui(previous, { terminalId: "session-b", clientId: "web" }),
-    true,
-  );
-  assert.equal(shouldDetachPreviousSessionTui(previous, null), true);
+});
+
+test("native local-server session tui opens without replaying old terminal output", () => {
+  assert.equal(shouldReplayInitialSessionTuiOutput({ liveBackend: "native_local_server" }), false);
+  assert.equal(shouldReplayInitialSessionTuiOutput({ liveBackend: "tui_mux" }), true);
+  assert.equal(shouldReplayInitialSessionTuiOutput({ liveBackend: null }), true);
 });
 
 test("council tui cache keeps at most the warm limit while preserving the active agent", () => {

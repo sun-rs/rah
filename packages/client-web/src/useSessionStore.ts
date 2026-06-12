@@ -8,7 +8,9 @@ import type {
   SessionConfigValue,
   SessionHistoryItemDetailKind,
   SessionSummary,
+  StoredSessionIdentity,
   StoredSessionRef,
+  StoredSessionsDeltaResponse,
 } from "@rah/runtime-protocol";
 import * as api from "./api";
 import {
@@ -145,6 +147,9 @@ type LoadProviderModelsOptions = {
 
 type RefreshWorkbenchStateOptions = {
   storedSessions?: StoredSessionsMode;
+  preserveWorkspaceNavigation?: boolean;
+  preserveLocalStoppedHistory?: boolean;
+  excludeLocalStoppedHistoryKeys?: ReadonlySet<string>;
 };
 
 interface SessionState {
@@ -155,9 +160,12 @@ interface SessionState {
   storedSessions: StoredSessionRef[];
   recentSessions: StoredSessionRef[];
   storedSessionsCatalogLoaded: boolean;
+  storedSessionsCatalogDirty: boolean;
+  storedSessionsCatalogRevision: number | null;
   workspaceDirs: string[];
   hiddenWorkspaceDirs: Set<string>;
   workspaceVisibilityVersion: number;
+  sessionTopologyVersion: number;
   debugScenarios: DebugScenarioDescriptor[];
   modelCatalogs: Partial<Record<ProviderChoice, ModelCatalogLoadState>>;
   selectedSessionId: string | null;
@@ -384,10 +392,17 @@ function applySessionsResponse(
     | "selectedSessionId"
     | "hiddenWorkspaceDirs"
     | "workspaceVisibilityVersion"
-  >,
+  > & {
+    workspaceDirs?: string[];
+    storedSessions?: StoredSessionRef[];
+    recentSessions?: StoredSessionRef[];
+  },
   sessionsResponse: Awaited<ReturnType<typeof api.listSessions>>,
   options?: {
     workspaceVisibilityVersionAtRequest?: number;
+    preserveWorkspaceNavigation?: boolean;
+    preserveLocalStoppedHistory?: boolean;
+    excludeLocalStoppedHistoryKeys?: ReadonlySet<string>;
   },
 ): Pick<
   SessionState,
@@ -400,17 +415,189 @@ function applySessionsResponse(
   | "workspaceDir"
   | "selectedSessionId"
 > {
-  return applySessionsResponseImpl(
+  const mergedSessionsResponse = options?.preserveLocalStoppedHistory
+    ? mergeLocalStoppedHistoryRefs(state, sessionsResponse, options.excludeLocalStoppedHistoryKeys)
+    : sessionsResponse;
+  const next = applySessionsResponseImpl(
     state,
-    sessionsResponse,
+    mergedSessionsResponse,
     createProjectionReplayHandling(),
     options,
   );
+  if (!options?.preserveWorkspaceNavigation || state.workspaceDirs === undefined) {
+    return next;
+  }
+  return {
+    ...next,
+    workspaceDirs: state.workspaceDirs,
+    hiddenWorkspaceDirs: state.hiddenWorkspaceDirs,
+    workspaceVisibilityVersion: state.workspaceVisibilityVersion,
+    workspaceDir: state.workspaceDir,
+  };
+}
+
+function storedSessionKey(session: Pick<StoredSessionRef, "provider" | "providerSessionId">): string {
+  return `${session.provider}:${session.providerSessionId}`;
+}
+
+function mergeLocalStoppedHistoryRefs(
+  state: {
+    storedSessions?: StoredSessionRef[];
+    recentSessions?: StoredSessionRef[];
+  },
+  sessionsResponse: Awaited<ReturnType<typeof api.listSessions>>,
+  excludedKeys: ReadonlySet<string> | undefined,
+): Awaited<ReturnType<typeof api.listSessions>> {
+  if (!state.storedSessions && !state.recentSessions) {
+    return sessionsResponse;
+  }
+  const runningKeys = new Set(
+    sessionsResponse.sessions
+      .map((summary) => {
+        const providerSessionId = summary.session.providerSessionId;
+        return providerSessionId
+          ? storedSessionKey({
+              provider: summary.session.provider,
+              providerSessionId,
+            })
+          : null;
+      })
+      .filter((key): key is string => key !== null),
+  );
+  const localStopped = [...(state.storedSessions ?? []), ...(state.recentSessions ?? [])].filter(
+    (session, index, sessions) =>
+      session.source === "previous_running" &&
+      !excludedKeys?.has(storedSessionKey(session)) &&
+      !runningKeys.has(storedSessionKey(session)) &&
+      sessions.findIndex((candidate) => storedSessionKey(candidate) === storedSessionKey(session)) === index,
+  );
+  if (localStopped.length === 0) {
+    return sessionsResponse;
+  }
+  const appendMissing = (sessions: StoredSessionRef[]) => {
+    const keys = new Set(sessions.map(storedSessionKey));
+    let changed = false;
+    const next = [...sessions];
+    for (const session of localStopped) {
+      const key = storedSessionKey(session);
+      if (keys.has(key)) {
+        continue;
+      }
+      keys.add(key);
+      next.push(session);
+      changed = true;
+    }
+    return changed ? next : sessions;
+  };
+  const storedSessions = appendMissing(sessionsResponse.storedSessions);
+  const recentSessions = appendMissing(sessionsResponse.recentSessions);
+  if (
+    storedSessions === sessionsResponse.storedSessions &&
+    recentSessions === sessionsResponse.recentSessions
+  ) {
+    return sessionsResponse;
+  }
+  return {
+    ...sessionsResponse,
+    storedSessions,
+    recentSessions,
+  };
+}
+
+function mergeStoredSessionCatalogRefs(
+  current: readonly StoredSessionRef[],
+  incoming: readonly StoredSessionRef[],
+): StoredSessionRef[] {
+  const byKey = new Map(current.map((session) => [storedSessionKey(session), session] as const));
+  for (const session of incoming) {
+    byKey.set(storedSessionKey(session), session);
+  }
+  return [...byKey.values()].sort((left, right) =>
+    (right.lastUsedAt ?? right.updatedAt ?? "").localeCompare(left.lastUsedAt ?? left.updatedAt ?? ""),
+  );
+}
+
+function omitStoredSessionCatalogRefs(
+  current: readonly StoredSessionRef[],
+  omittedKeys: ReadonlySet<string>,
+): StoredSessionRef[] {
+  if (omittedKeys.size === 0) {
+    return [...current];
+  }
+  return current.filter((session) => !omittedKeys.has(storedSessionKey(session)));
+}
+
+function sortStoredSessionCatalogRefs(sessions: Iterable<StoredSessionRef>): StoredSessionRef[] {
+  return [...sessions].sort((left, right) =>
+    (right.lastUsedAt ?? right.updatedAt ?? "").localeCompare(left.lastUsedAt ?? left.updatedAt ?? ""),
+  );
+}
+
+function applyStoredSessionsDeltaToCatalog(
+  current: readonly StoredSessionRef[],
+  delta: Pick<StoredSessionsDeltaResponse, "upsert" | "remove">,
+): StoredSessionRef[] {
+  const byKey = new Map(current.map((session) => [storedSessionKey(session), session] as const));
+  for (const removed of delta.remove) {
+    byKey.delete(storedSessionKey(removed));
+  }
+  for (const session of delta.upsert) {
+    byKey.set(storedSessionKey(session), session);
+  }
+  return sortStoredSessionCatalogRefs(byKey.values());
+}
+
+function discoveryDeltaFromEvents(events: readonly RahEvent[]): StoredSessionsDeltaResponse | null {
+  let fromRevision = 0;
+  let revision = 0;
+  const upsertByKey = new Map<string, StoredSessionRef>();
+  const removeByKey = new Map<string, StoredSessionIdentity>();
+  let sawDelta = false;
+  for (const event of events) {
+    if (event.type !== "session.discovery" || !event.payload.storedSessions) {
+      continue;
+    }
+    const delta = event.payload.storedSessions;
+    sawDelta = true;
+    if (revision === 0) {
+      fromRevision = Math.max(0, delta.revision - 1);
+    }
+    revision = Math.max(revision, delta.revision);
+    for (const removed of delta.remove ?? []) {
+      const key = storedSessionKey(removed);
+      upsertByKey.delete(key);
+      removeByKey.set(key, removed);
+    }
+    for (const session of delta.upsert ?? []) {
+      const key = storedSessionKey(session);
+      removeByKey.delete(key);
+      upsertByKey.set(key, session);
+    }
+    if (delta.resetRequired) {
+      return {
+        fromRevision,
+        revision,
+        upsert: [],
+        remove: [],
+        resetRequired: true,
+      };
+    }
+  }
+  if (!sawDelta) {
+    return null;
+  }
+  return {
+    fromRevision,
+    revision,
+    upsert: [...upsertByKey.values()],
+    remove: [...removeByKey.values()],
+  };
 }
 
 function replaceSessionsResponse(
   state: Pick<
     SessionState,
+    | "projections"
     | "workspaceDir"
     | "selectedSessionId"
     | "hiddenWorkspaceDirs"
@@ -458,6 +645,36 @@ function storedSessionsModeForState(
   state: Pick<SessionState, "storedSessionsCatalogLoaded">,
 ): StoredSessionsMode {
   return state.storedSessionsCatalogLoaded ? "all" : "recent";
+}
+
+function applyStoredSessionDiscoveryEvents(events: readonly RahEvent[]) {
+  const delta = discoveryDeltaFromEvents(events);
+  useSessionStore.setState((state) => {
+    if (!delta || delta.resetRequired) {
+      return { storedSessionsCatalogDirty: true };
+    }
+    if (!state.storedSessionsCatalogLoaded || state.storedSessionsCatalogRevision === null) {
+      return { storedSessionsCatalogDirty: true };
+    }
+    if (state.storedSessionsCatalogRevision !== delta.fromRevision) {
+      return { storedSessionsCatalogDirty: true };
+    }
+    return {
+      storedSessions: applyStoredSessionsDeltaToCatalog(state.storedSessions, delta),
+      storedSessionsCatalogRevision: delta.revision,
+      storedSessionsCatalogDirty: false,
+    };
+  });
+}
+
+function shouldSkipSessionsResponseForTopology(
+  state: Pick<SessionState, "sessionTopologyVersion" | "pendingSessionAction">,
+  sessionTopologyVersionAtRequest: number,
+): boolean {
+  return (
+    state.sessionTopologyVersion !== sessionTopologyVersionAtRequest ||
+    state.pendingSessionAction?.kind === "claim_history"
+  );
 }
 
 function updateSessionSummary(session: SessionSummary) {
@@ -547,7 +764,12 @@ function connectStoreTransport() {
     computeUnreadSessionIds: computeUnreadSessionIdsImpl,
     notifyUnreadEvents: notifyForRahEvents,
     recoverFromReplayGap,
-    refreshWorkbenchState: () => useSessionStore.getState().refreshWorkbenchState(),
+    refreshWorkbenchState: (events) => {
+      applyStoredSessionDiscoveryEvents(events);
+      return useSessionStore
+        .getState()
+        .refreshWorkbenchState({ storedSessions: "recent", preserveWorkspaceNavigation: true });
+    },
   });
 }
 
@@ -559,9 +781,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   storedSessions: [],
   recentSessions: [],
   storedSessionsCatalogLoaded: false,
+  storedSessionsCatalogDirty: false,
+  storedSessionsCatalogRevision: null,
   workspaceDirs: [],
   hiddenWorkspaceDirs: new Set(),
   workspaceVisibilityVersion: 0,
+  sessionTopologyVersion: 0,
   debugScenarios: [],
   modelCatalogs: {},
   selectedSessionId: null,
@@ -1008,22 +1233,47 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   refreshWorkbenchState: async (options = {}) => {
     try {
-      const workspaceVisibilityVersionAtRequest = get().workspaceVisibilityVersion;
-      const storedSessionsMode =
-        options.storedSessions ?? (get().storedSessionsCatalogLoaded ? "all" : "recent");
+      const requestState = get();
+      const workspaceVisibilityVersionAtRequest = requestState.workspaceVisibilityVersion;
+      const sessionTopologyVersionAtRequest = requestState.sessionTopologyVersion;
+      const storedSessionsMode = options.storedSessions ?? "recent";
       const [sessionsResponse, debugScenarios] = await Promise.all([
         api.listSessions({ storedSessions: storedSessionsMode }),
         isLabModeEnabled() ? api.listDebugScenarios() : Promise.resolve([]),
       ]);
-      set((state) => ({
-        ...applySessionsResponse(state, sessionsResponse, {
+      set((state) => {
+        const catalogLoadedPatch = {
+          storedSessionsCatalogLoaded:
+            storedSessionsMode === "all" ? true : state.storedSessionsCatalogLoaded,
+          storedSessionsCatalogDirty:
+            storedSessionsMode === "all" ? false : state.storedSessionsCatalogDirty,
+          storedSessionsCatalogRevision:
+            storedSessionsMode === "all"
+              ? sessionsResponse.storedSessionsRevision ?? state.storedSessionsCatalogRevision
+              : state.storedSessionsCatalogRevision,
+          debugScenarios,
+          error: null,
+        };
+        if (shouldSkipSessionsResponseForTopology(state, sessionTopologyVersionAtRequest)) {
+          return catalogLoadedPatch;
+        }
+        const applied = applySessionsResponse(state, sessionsResponse, {
           workspaceVisibilityVersionAtRequest,
-        }),
-        storedSessionsCatalogLoaded:
-          storedSessionsMode === "all" ? true : state.storedSessionsCatalogLoaded,
-        debugScenarios,
-        error: null,
-      }));
+          preserveLocalStoppedHistory: options.preserveLocalStoppedHistory ?? true,
+          ...(options.preserveWorkspaceNavigation !== undefined
+            ? { preserveWorkspaceNavigation: options.preserveWorkspaceNavigation }
+            : {}),
+        });
+        const storedSessions =
+          storedSessionsMode === "recent" && state.storedSessionsCatalogLoaded
+            ? mergeStoredSessionCatalogRefs(state.storedSessions, applied.storedSessions)
+            : applied.storedSessions;
+        return {
+          ...applied,
+          storedSessions,
+          ...catalogLoadedPatch,
+        };
+      });
       await maybeRestoreLastHistorySelection(sessionsResponse);
     } catch (error) {
       set({ error: readErrorMessage(error) });
@@ -1032,15 +1282,45 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   loadStoredSessionsCatalog: async () => {
-    if (get().storedSessionsCatalogLoaded) {
+    const state = get();
+    if (state.storedSessionsCatalogLoaded && !state.storedSessionsCatalogDirty) {
       return;
     }
     if (!storedSessionsCatalogLoadInFlight) {
-      storedSessionsCatalogLoadInFlight = get()
-        .refreshWorkbenchState({ storedSessions: "all" })
-        .finally(() => {
-          storedSessionsCatalogLoadInFlight = null;
-        });
+      storedSessionsCatalogLoadInFlight = (async () => {
+        const current = get();
+        if (
+          current.storedSessionsCatalogLoaded &&
+          current.storedSessionsCatalogDirty &&
+          current.storedSessionsCatalogRevision !== null
+        ) {
+          try {
+            const delta = await api.listStoredSessionsDelta(current.storedSessionsCatalogRevision);
+            if (!delta.resetRequired) {
+              set((state) => {
+                if (
+                  !state.storedSessionsCatalogLoaded ||
+                  state.storedSessionsCatalogRevision !== delta.fromRevision
+                ) {
+                  return { storedSessionsCatalogDirty: true };
+                }
+                return {
+                  storedSessions: applyStoredSessionsDeltaToCatalog(state.storedSessions, delta),
+                  storedSessionsCatalogRevision: delta.revision,
+                  storedSessionsCatalogDirty: false,
+                  error: null,
+                };
+              });
+              return;
+            }
+          } catch {
+            // Older daemons and transient delta failures fall back to the authoritative full catalog.
+          }
+        }
+        await get().refreshWorkbenchState({ storedSessions: "all", preserveWorkspaceNavigation: true });
+      })().finally(() => {
+        storedSessionsCatalogLoadInFlight = null;
+      });
     }
     await storedSessionsCatalogLoadInFlight;
   },
@@ -1099,13 +1379,28 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   removeHistorySession: async (session) => {
     try {
       const workspaceVisibilityVersionAtRequest = get().workspaceVisibilityVersion;
-      const sessionsResponse = await api.removeStoredSession(session);
-      set((state) => ({
-        ...applySessionsResponse(state, sessionsResponse, {
+      const removedKeys = new Set([storedSessionKey(session)]);
+      const sessionsResponse = await api.removeStoredSession(session, { storedSessions: "recent" });
+      set((state) => {
+        const applied = applySessionsResponse(state, sessionsResponse, {
           workspaceVisibilityVersionAtRequest,
-        }),
-        error: null,
-      }));
+          preserveLocalStoppedHistory: true,
+          excludeLocalStoppedHistoryKeys: removedKeys,
+        });
+        const recentSessions = omitStoredSessionCatalogRefs(applied.recentSessions, removedKeys);
+        const storedSessions = state.storedSessionsCatalogLoaded
+          ? mergeStoredSessionCatalogRefs(
+              omitStoredSessionCatalogRefs(state.storedSessions, removedKeys),
+              omitStoredSessionCatalogRefs(applied.storedSessions, removedKeys),
+            )
+          : omitStoredSessionCatalogRefs(applied.storedSessions, removedKeys);
+        return {
+          ...applied,
+          storedSessions,
+          recentSessions,
+          error: null,
+        };
+      });
     } catch (error) {
       set({ error: readErrorMessage(error) });
       throw error;
@@ -1142,7 +1437,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       get,
       set,
       sessionId,
-      refreshWorkbenchState: get().refreshWorkbenchState,
+      refreshWorkbenchState: () =>
+        get().refreshWorkbenchState({ storedSessions: "recent", preserveWorkspaceNavigation: true }),
     });
   },
 
@@ -1151,7 +1447,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       set,
       sessionId,
       title,
-      refreshWorkbenchState: get().refreshWorkbenchState,
+      refreshWorkbenchState: () =>
+        get().refreshWorkbenchState({ preserveWorkspaceNavigation: true }),
     });
   },
 

@@ -189,10 +189,11 @@ export class CouncilRuntime {
   }
 
   async stopCouncil(councilId: string): Promise<void> {
-    await this.closeCouncilAgentSessions(councilId);
+    this.pendingLaunchCouncils.delete(councilId);
     this.resolveCouncilMessageWaiters(councilId, null);
     this.clearMcpClientStates(councilId);
     this.store.stopCouncil(councilId);
+    await this.closeCouncilAgentSessions(councilId);
   }
 
   async shutdown(): Promise<void> {
@@ -827,6 +828,9 @@ export class CouncilRuntime {
     if (!this.startSession || !this.sendInput) {
       throw new Error("Council managed session runner is not configured.");
     }
+    if (!this.shouldContinueLaunchingCouncil(council.id)) {
+      return;
+    }
     const bootstrapViaInitialPrompt =
       agent.provider === "claude" || agent.provider === "gemini";
     const session = await this.startSession({
@@ -858,12 +862,20 @@ export class CouncilRuntime {
       },
     });
     const sessionId = session.session.session.id;
+    if (!this.shouldContinueLaunchingCouncil(council.id)) {
+      await this.closeAgentSession(sessionId);
+      return;
+    }
     this.store.updateAgent(council.id, agent.id, {
       status: "starting",
       nativeSessionId: sessionId,
       lastStatusDetail: "bootstrap prompt sent",
     });
     this.appendCouncilAgentStatusMessage(council.id, agent.id, "sent");
+    if (!this.shouldContinueLaunchingCouncil(council.id)) {
+      await this.closeAgentSession(sessionId);
+      return;
+    }
     if (!bootstrapViaInitialPrompt) {
       this.sendInput(sessionId, {
         clientId: councilSessionClientId(council.id, agent.id),
@@ -880,13 +892,16 @@ export class CouncilRuntime {
     } catch {
       snapshot = undefined;
     }
-    for (const agent of snapshot?.agents ?? []) {
-      const terminalId = agent.nativeSessionId ?? agent.terminalId;
-      if (terminalId && !closed.has(terminalId)) {
+    await Promise.all(
+      (snapshot?.agents ?? []).flatMap((agent) => {
+        const terminalId = agent.nativeSessionId ?? agent.terminalId;
+        if (!terminalId || closed.has(terminalId)) {
+          return [];
+        }
         closed.add(terminalId);
-        await this.closeAgentSession(terminalId);
-      }
-    }
+        return [this.closeAgentSession(terminalId)];
+      }),
+    );
   }
 
   private async closeAgentSession(terminalId: string): Promise<void> {

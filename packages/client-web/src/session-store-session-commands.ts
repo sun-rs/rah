@@ -27,6 +27,7 @@ type SessionCommandState = {
   hiddenWorkspaceDirs: Set<string>;
   workspaceDirs: string[];
   workspaceVisibilityVersion: number;
+  sessionTopologyVersion: number;
   workspaceDir: string;
   selectedSessionId: string | null;
   newSessionProvider: "codex" | "claude" | "gemini" | "opencode";

@@ -1,7 +1,10 @@
 import type { EventBatch, RahEvent } from "@rah/runtime-protocol";
 import * as api from "./api";
+import { isReadOnlyReplay } from "./session-capabilities";
 import { readErrorMessage } from "./session-store-bootstrap";
+import { mergeClaimedHistoryProjection } from "./session-store-session-lifecycle";
 import { connectSessionStoreTransport } from "./session-store-transport";
+import type { PendingSessionTransition } from "./session-transition-contract";
 import type { SessionProjection } from "./types";
 
 let recoverTransportInFlight: Promise<void> | null = null;
@@ -11,6 +14,14 @@ type SessionSyncState = {
   unreadSessionIds: Set<string>;
   selectedSessionId: string | null;
   workspaceVisibilityVersion: number;
+  sessionTopologyVersion: number;
+  pendingSessionTransition: PendingSessionTransition | null;
+  pendingSessionAction:
+    | {
+        kind: "attach_session" | "claim_control" | "claim_history";
+        sessionId: string;
+      }
+    | null;
   error: string | null;
 };
 
@@ -63,6 +74,116 @@ export function coalesceProjectionEvents(events: RahEvent[]): RahEvent[] {
   return result;
 }
 
+function selectedClaimedReplayClosedByEvents(
+  state: SessionSyncState,
+  events: readonly RahEvent[],
+): SessionProjection | null {
+  const pendingAction = state.pendingSessionAction;
+  if (
+    pendingAction?.kind !== "claim_history" ||
+    pendingAction.sessionId !== state.selectedSessionId
+  ) {
+    return null;
+  }
+  const selectedProjection = state.projections.get(pendingAction.sessionId);
+  if (!selectedProjection || !isReadOnlyReplay(selectedProjection.summary)) {
+    return null;
+  }
+  return events.some(
+    (event) =>
+      event.type === "session.closed" &&
+      event.sessionId === selectedProjection.summary.session.id,
+  )
+    ? selectedProjection
+    : null;
+}
+
+function findLiveProjectionForReplay(
+  projections: ReadonlyMap<string, SessionProjection>,
+  replayProjection: SessionProjection,
+): SessionProjection | null {
+  const providerSessionId = replayProjection.summary.session.providerSessionId;
+  if (!providerSessionId) {
+    return null;
+  }
+  for (const projection of projections.values()) {
+    if (
+      projection.summary.session.id !== replayProjection.summary.session.id &&
+      projection.summary.session.provider === replayProjection.summary.session.provider &&
+      projection.summary.session.providerSessionId === providerSessionId &&
+      !isReadOnlyReplay(projection.summary)
+    ) {
+      return projection;
+    }
+  }
+  return null;
+}
+
+function eventsMayChangeSessionTopology(events: readonly RahEvent[]): boolean {
+  return events.some(
+    (event) =>
+      event.type === "session.created" ||
+      event.type === "session.started" ||
+      event.type === "session.closed",
+  );
+}
+
+export function applyProjectionEventsToSyncState(args: {
+  state: SessionSyncState;
+  events: RahEvent[];
+  applyEventsToMap: (
+    current: Map<string, SessionProjection>,
+    events: RahEvent[],
+  ) => Map<string, SessionProjection>;
+}): Pick<SessionSyncState, "projections" | "selectedSessionId" | "sessionTopologyVersion"> {
+  const claimedReplay = selectedClaimedReplayClosedByEvents(args.state, args.events);
+  const projections = args.applyEventsToMap(args.state.projections, args.events);
+  const sessionTopologyVersion = eventsMayChangeSessionTopology(args.events)
+    ? args.state.sessionTopologyVersion + 1
+    : args.state.sessionTopologyVersion;
+  if (!claimedReplay) {
+    return {
+      projections,
+      selectedSessionId: args.state.selectedSessionId,
+      sessionTopologyVersion,
+    };
+  }
+  const liveProjection = findLiveProjectionForReplay(projections, claimedReplay);
+  if (liveProjection) {
+    const next = new Map(projections);
+    next.set(
+      liveProjection.summary.session.id,
+      mergeClaimedHistoryProjection(
+        liveProjection.summary,
+        claimedReplay,
+        liveProjection,
+      ),
+    );
+    return {
+      projections: next,
+      selectedSessionId: liveProjection.summary.session.id,
+      sessionTopologyVersion,
+    };
+  }
+  const next = new Map(projections);
+  next.set(claimedReplay.summary.session.id, claimedReplay);
+  return {
+    projections: next,
+    selectedSessionId: claimedReplay.summary.session.id,
+    sessionTopologyVersion,
+  };
+}
+
+function shouldSkipSessionsResponse(
+  state: SessionSyncState,
+  sessionTopologyVersionAtRequest: number,
+): boolean {
+  return (
+    state.sessionTopologyVersion !== sessionTopologyVersionAtRequest ||
+    state.pendingSessionAction?.kind === "claim_history"
+  );
+}
+
 export async function recoverFromReplayGapCommand(args: {
   batch: EventBatch;
   get: () => SessionSyncState;
@@ -103,14 +224,33 @@ export async function recoverFromReplayGapCommand(args: {
     args.updateLastSeq(args.batch.replayGap.newestAvailableSeq);
   }
   const workspaceVisibilityVersionAtRequest = args.get().workspaceVisibilityVersion;
+  const sessionTopologyVersionAtRequest = args.get().sessionTopologyVersion;
   const sessionsResponse = await api.listSessions();
   args.set((state) => {
+    if (shouldSkipSessionsResponse(state, sessionTopologyVersionAtRequest)) {
+      const projectionState = applyProjectionEventsToSyncState({
+        state,
+        events: args.batch.events,
+        applyEventsToMap: args.applyEventsToMap,
+      });
+      return {
+        ...projectionState,
+        error:
+          `Event stream replay gap detected. Requested seq ${args.batch.replayGap?.requestedFromSeq ?? "unknown"}, ` +
+          `oldest available ${args.batch.replayGap?.oldestAvailableSeq ?? "unknown"}. Session views kept the latest local session state.`,
+      };
+    }
     const nextState = args.replaceSessionsResponse(state as never, sessionsResponse, {
       workspaceVisibilityVersionAtRequest,
     });
+    const projectionState = applyProjectionEventsToSyncState({
+      state: { ...state, ...nextState } as SessionSyncState,
+      events: args.batch.events,
+      applyEventsToMap: args.applyEventsToMap,
+    });
     return {
       ...nextState,
-      projections: args.applyEventsToMap(nextState.projections, args.batch.events),
+      ...projectionState,
       error:
         `Event stream replay gap detected. Requested seq ${args.batch.replayGap?.requestedFromSeq ?? "unknown"}, ` +
         `oldest available ${args.batch.replayGap?.oldestAvailableSeq ?? "unknown"}. Session views were rebuilt from current state.`,
@@ -141,7 +281,7 @@ export function connectStoreSyncTransport(args: {
     events: readonly RahEvent[];
   }) => void;
   recoverFromReplayGap: (batch: EventBatch) => Promise<void>;
-  refreshWorkbenchState: () => Promise<void>;
+  refreshWorkbenchState: (events: RahEvent[]) => Promise<void>;
 }) {
   let pendingProjectionEvents: RahEvent[] = [];
   let pendingUnreadEvents: RahEvent[] = [];
@@ -170,18 +310,25 @@ export function connectStoreSyncTransport(args: {
         events: unreadEvents,
       });
     }
-    args.set((state) => ({
-      projections: args.applyEventsToMap(state.projections, projectionEvents),
-      unreadSessionIds:
-        unreadEvents.length === 0
-          ? state.unreadSessionIds
-          : args.computeUnreadSessionIds(
-              state.unreadSessionIds,
-              state.selectedSessionId,
-              unreadEvents,
-            ),
-      error: state.error === "Events socket failed" ? null : state.error,
-    }));
+    args.set((state) => {
+      const projectionState = applyProjectionEventsToSyncState({
+        state,
+        events: projectionEvents,
+        applyEventsToMap: args.applyEventsToMap,
+      });
+      return {
+        ...projectionState,
+        unreadSessionIds:
+          unreadEvents.length === 0
+            ? state.unreadSessionIds
+            : args.computeUnreadSessionIds(
+                state.unreadSessionIds,
+                projectionState.selectedSessionId,
+                unreadEvents,
+              ),
+        error: state.error === "Events socket failed" ? null : state.error,
+      };
+    });
   };
 
   const schedulePendingEventFlush = () => {
@@ -248,8 +395,8 @@ export function connectStoreSyncTransport(args: {
       flushPendingEvents();
       void args.recoverFromReplayGap(batch);
     },
-    onStoredSessionsRefresh: () => {
-      void args.refreshWorkbenchState();
+    onStoredSessionsRefresh: (events) => {
+      void args.refreshWorkbenchState(events);
     },
   });
 }
@@ -328,14 +475,21 @@ async function recoverTransportCommandInner(args: {
   listSessions?: typeof api.listSessions;
 }) {
   try {
-    const workspaceVisibilityVersionAtRequest = args.get().workspaceVisibilityVersion;
+    const requestState = args.get();
+    const workspaceVisibilityVersionAtRequest = requestState.workspaceVisibilityVersion;
+    const sessionTopologyVersionAtRequest = requestState.sessionTopologyVersion;
     const sessionsResponse = await (args.listSessions ?? api.listSessions)();
-    args.set((state) => ({
-      ...args.applySessionsResponse(state as never, sessionsResponse, {
-        workspaceVisibilityVersionAtRequest,
-      }),
-      error: null,
-    }));
+    args.set((state) => {
+      if (shouldSkipSessionsResponse(state, sessionTopologyVersionAtRequest)) {
+        return { error: null };
+      }
+      return {
+        ...args.applySessionsResponse(state as never, sessionsResponse, {
+          workspaceVisibilityVersionAtRequest,
+        }),
+        error: null,
+      };
+    });
     args.restartTransport();
     await args.maybeRestoreLastHistorySelection(sessionsResponse);
   } catch (error) {

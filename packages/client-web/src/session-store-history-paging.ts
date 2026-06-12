@@ -60,6 +60,7 @@ export async function refreshLatestHistoryCommand(args: {
 
   try {
     const page = await api.readSessionHistory(args.sessionId, {
+      detail: "chat",
       limit: args.historyPageLimit,
     });
     args.set((state) => {
@@ -141,6 +142,7 @@ export async function loadOlderHistoryCommand(args: {
 
   try {
     const page = await api.readSessionHistory(args.sessionId, {
+      detail: "chat",
       ...(cursor ? { cursor } : {}),
       ...(beforeTs ? { beforeTs } : {}),
       limit: args.historyPageLimit,

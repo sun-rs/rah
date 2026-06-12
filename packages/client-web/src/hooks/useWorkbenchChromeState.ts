@@ -35,10 +35,11 @@ function readViewportWidth(): number {
   return typeof window === "undefined" ? 1024 : window.innerWidth;
 }
 
-const SIDEBAR_MIN_WIDTH = 200;
+const SIDEBAR_MIN_WIDTH = 208;
 const SIDEBAR_MAX_WIDTH = 480;
 const SIDEBAR_DEFAULT_WIDTH = 288;
 const SIDEBAR_WIDTH_CSS_VAR = "--rah-sidebar-width";
+const DESKTOP_SHEET_BREAKPOINT_PX = 768;
 
 function clampSidebarWidth(value: number): number {
   return Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, value));
@@ -196,6 +197,14 @@ export function useWorkbenchChromeState() {
       }
     };
   }, []);
+
+  useEffect(() => {
+    if (viewportWidthPx < DESKTOP_SHEET_BREAKPOINT_PX) {
+      return;
+    }
+    setLeftOpen((current) => (current ? false : current));
+    setRightOpen((current) => (current ? false : current));
+  }, [viewportWidthPx]);
 
   const startSidebarResize = (event: ReactPointerEvent<HTMLDivElement>) => {
     event.preventDefault();

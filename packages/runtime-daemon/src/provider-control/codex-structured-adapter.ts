@@ -14,6 +14,7 @@ import type {
 import type { ProviderAdapter, RuntimeServices } from "../provider-adapter";
 import {
   loadCodexPlanCollaborationMode,
+  pauseActiveCodexThreadGoal,
   respondToCodexLivePermission,
   resumeCodexLiveSession,
   startCodexLiveSession,
@@ -32,6 +33,7 @@ import {
 import {
   finalizeStoredReplayResume,
   prepareProviderSessionResume,
+  reuseExistingProviderSessionForResume,
 } from "../provider-resume";
 import { codexLaunchSpec, probeProviderDiagnostic } from "../provider-diagnostics";
 import { toSessionSummary } from "../session-store";
@@ -52,6 +54,7 @@ const CODEX_EVENT_SOURCE = {
   authority: "derived" as const,
 };
 const CODEX_INTERRUPT_FALLBACK_MS = 1_500;
+const CODEX_SHUTDOWN_CONTROL_TIMEOUT_MS = 2_000;
 
 type CodexTurnCollaborationMode = {
   mode: "default" | "plan";
@@ -244,6 +247,65 @@ export class CodexAdapter implements ProviderAdapter {
     live.interruptFallbackTimer.unref?.();
   }
 
+  private async interruptLiveTurnBeforeDisposal(live: LiveCodexSession): Promise<void> {
+    live.queuedInputs.length = 0;
+    if (!live.threadId) {
+      return;
+    }
+    const turnId = live.currentTurnId;
+    if (!turnId) {
+      if (live.turnStartInFlight) {
+        live.interruptWhenTurnStarts = true;
+      }
+      return;
+    }
+    if (live.interruptingTurnIds.has(turnId)) {
+      return;
+    }
+    live.interruptingTurnIds.add(turnId);
+    try {
+      await live.client.request(
+        "turn/interrupt",
+        {
+          threadId: live.threadId,
+          turnId,
+        },
+        CODEX_SHUTDOWN_CONTROL_TIMEOUT_MS,
+      );
+    } catch (error) {
+      console.warn("[rah] failed to interrupt Codex turn before session disposal", {
+        sessionId: live.sessionId,
+        threadId: live.threadId,
+        turnId,
+        error,
+      });
+    }
+  }
+
+  private async pauseLiveGoalBeforeDisposal(live: LiveCodexSession): Promise<void> {
+    if (!live.threadId) {
+      return;
+    }
+    try {
+      await pauseActiveCodexThreadGoal(
+        live.client,
+        live.threadId,
+        CODEX_SHUTDOWN_CONTROL_TIMEOUT_MS,
+      );
+    } catch (error) {
+      console.warn("[rah] failed to pause Codex goal before session disposal", {
+        sessionId: live.sessionId,
+        threadId: live.threadId,
+        error,
+      });
+    }
+  }
+
+  private async prepareLiveSessionForDisposal(live: LiveCodexSession): Promise<void> {
+    await this.interruptLiveTurnBeforeDisposal(live);
+    await this.pauseLiveGoalBeforeDisposal(live);
+  }
+
   private startLiveTurn(live: LiveCodexSession, request: SessionInputRequest): void {
     if (!live.threadId) {
       live.queuedInputs.push(request);
@@ -358,6 +420,18 @@ export class CodexAdapter implements ProviderAdapter {
   }
 
   async resumeSession(request: ResumeSessionRequest): Promise<ResumeSessionResponse> {
+    const reused = reuseExistingProviderSessionForResume({
+      services: this.services,
+      provider: "codex",
+      providerSessionId: request.providerSessionId,
+      preferStoredReplay: request.preferStoredReplay,
+      historySourceSessionId: request.historySourceSessionId,
+      rehydratedSessionIds: this.rehydratedSessionIds,
+      ...(request.attach !== undefined ? { attach: request.attach } : {}),
+    });
+    if (reused) {
+      return reused;
+    }
     const preparedResume = prepareProviderSessionResume({
       services: this.services,
       provider: "codex",
@@ -366,16 +440,6 @@ export class CodexAdapter implements ProviderAdapter {
       historySourceSessionId: request.historySourceSessionId,
       rehydratedSessionIds: this.rehydratedSessionIds,
     });
-    const existing = this.services.sessionStore.findManagedByProviderSession(
-      "codex",
-      request.providerSessionId,
-    );
-    if (existing) {
-      throw new Error(
-        `Provider session codex:${request.providerSessionId} is already running; attach instead of resume.`,
-      );
-    }
-
     const record = findCodexStoredSessionRecord(request.providerSessionId);
     if (request.preferStoredReplay && !record) {
       throw new Error(`Unknown Codex session ${request.providerSessionId}.`);
@@ -613,6 +677,7 @@ export class CodexAdapter implements ProviderAdapter {
     if (live) {
       this.liveSessions.delete(sessionId);
       this.clearInterruptFallback(live);
+      await this.prepareLiveSessionForDisposal(live);
       await live.client.dispose();
     }
     this.rehydratedSessionIds.delete(sessionId);
@@ -623,6 +688,7 @@ export class CodexAdapter implements ProviderAdapter {
     if (live) {
       this.liveSessions.delete(sessionId);
       this.clearInterruptFallback(live);
+      await this.prepareLiveSessionForDisposal(live);
       await live.client.dispose();
     }
     this.rehydratedSessionIds.delete(sessionId);
@@ -712,7 +778,12 @@ export class CodexAdapter implements ProviderAdapter {
     const sessions = [...this.liveSessions.values()];
     this.liveSessions.clear();
     sessions.forEach((live) => this.clearInterruptFallback(live));
-    const results = await Promise.allSettled(sessions.map((live) => live.client.dispose()));
+    const results = await Promise.allSettled(
+      sessions.map(async (live) => {
+        await this.prepareLiveSessionForDisposal(live);
+        await live.client.dispose();
+      }),
+    );
     results.forEach((result, index) => {
       if (result.status === "rejected") {
         console.error("[rah] failed to dispose Codex running session during shutdown", {

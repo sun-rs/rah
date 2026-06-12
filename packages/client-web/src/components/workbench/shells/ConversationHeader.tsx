@@ -2,17 +2,20 @@ import type { ButtonHTMLAttributes, ReactNode } from "react";
 import { Ellipsis, Menu, PanelRight, Square, X } from "lucide-react";
 import {
   HEADER_ACTION_GROUP_CLASS,
+  HEADER_EDGE_TOGGLE_BUTTON_CLASS,
+  HEADER_EDGE_TOGGLE_ICON_SIZE,
   HEADER_IDENTITY_SLOT_CLASS,
   HEADER_ICON_BUTTON_CLASS,
   HEADER_RESPONSIVE_TEXT_BUTTON_CLASS,
+  HEADER_SIDE_PANEL_TOGGLE_BUTTON_CLASS,
 } from "../header-button-styles";
 
 type ReserveBreakpoint = "md" | "wide";
 
 function reserveClassName(breakpoint: ReserveBreakpoint): string {
   return breakpoint === "wide"
-    ? "min-[900px]:pr-[calc(max(1rem,env(safe-area-inset-right))+2.75rem)]"
-    : "md:pr-[calc(max(1rem,env(safe-area-inset-right))+2.75rem)]";
+    ? "min-[900px]:pr-11"
+    : "md:pr-11";
 }
 
 export function ConversationHeader(props: {
@@ -46,29 +49,29 @@ export function ConversationHeader(props: {
 
   return (
     <header
-      className={`relative z-20 flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[var(--app-border)] ${props.backgroundClassName ?? "bg-[var(--app-bg)]/80"} pl-4 pr-4 backdrop-blur-sm ${reserveRightPanelClassName} ${props.className ?? ""}`}
+      className={`relative z-20 flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[var(--app-border)] ${props.backgroundClassName ?? "bg-[var(--app-bg)]/80"} px-2 backdrop-blur-sm ${reserveRightPanelClassName} ${props.className ?? ""}`}
     >
-      <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
+      <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
         {showLeftSidebarControls ? (
           <button
             type="button"
-            className="icon-click-feedback inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] md:hidden"
+            className={`${HEADER_EDGE_TOGGLE_BUTTON_CLASS} md:hidden`}
             onClick={props.onOpenLeft}
             aria-label="Open sidebar"
             title="Open sidebar"
           >
-            <Menu size={18} />
+            <Menu size={HEADER_EDGE_TOGGLE_ICON_SIZE} />
           </button>
         ) : null}
         {showLeftSidebarControls && !props.sidebarOpen ? (
           <button
             type="button"
-            className="icon-click-feedback hidden h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] md:inline-flex"
+            className={`${HEADER_EDGE_TOGGLE_BUTTON_CLASS} hidden md:inline-flex`}
             onClick={props.onExpandSidebar}
             aria-label="Expand sidebar"
             title="Expand sidebar"
           >
-            <Menu size={18} />
+            <Menu size={HEADER_EDGE_TOGGLE_ICON_SIZE} />
           </button>
         ) : null}
         {props.identity ? (
@@ -181,15 +184,16 @@ export function ConversationHeaderPanelToggleButton(props: {
   className?: string;
 }) {
   return (
-    <ConversationHeaderIconButton
+    <button
+      type="button"
       disabled={props.disabled}
       onClick={props.onClick}
       aria-label={props.ariaLabel}
       aria-pressed={props.open}
       title={props.title}
-      className={props.className}
+      className={`${HEADER_SIDE_PANEL_TOGGLE_BUTTON_CLASS}${props.className ? ` ${props.className}` : ""}`}
     >
-      <PanelRight size={16} />
-    </ConversationHeaderIconButton>
+      <PanelRight size={HEADER_EDGE_TOGGLE_ICON_SIZE} />
+    </button>
   );
 }

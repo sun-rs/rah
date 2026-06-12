@@ -1,6 +1,10 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { PanelRight, X } from "lucide-react";
 import type { ReactNode } from "react";
+import {
+  HEADER_EDGE_TOGGLE_BUTTON_CLASS,
+  HEADER_EDGE_TOGGLE_ICON_SIZE,
+} from "./workbench/header-button-styles";
 
 export function Sheet(props: {
   open: boolean;
@@ -9,21 +13,38 @@ export function Sheet(props: {
   title: ReactNode;
   children: ReactNode;
   headerRight?: ReactNode;
+  headerLayout?: "spread" | "inline";
+  closePlacement?: "start" | "end";
   hideHeader?: boolean;
   modal?: boolean;
   floatingClose?: "panel" | "x";
   floatingCloseLabel?: string;
+  viewportClassName?: string;
 }) {
+  const closePlacement = props.closePlacement ?? "end";
+  const closeButton = (
+    <Dialog.Close asChild>
+      <button
+        type="button"
+        className={HEADER_EDGE_TOGGLE_BUTTON_CLASS}
+        aria-label="Close"
+        title="Close"
+      >
+        <X size={HEADER_EDGE_TOGGLE_ICON_SIZE} />
+      </button>
+    </Dialog.Close>
+  );
+
   return (
     <Dialog.Root open={props.open} onOpenChange={props.onOpenChange} modal={props.modal ?? true}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 bg-black/40 z-50" />
+        <Dialog.Overlay className={`fixed inset-0 bg-black/40 z-50 ${props.viewportClassName ?? ""}`} />
         <Dialog.Content
           className={`fixed top-0 bottom-0 z-50 w-80 max-w-[85vw] border-[var(--app-border)] shadow-xl outline-none pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] ${
             props.side === "left"
               ? "left-0 border-r bg-[var(--app-subtle-bg)]"
               : "right-0 border-l bg-[var(--app-bg)]"
-          } flex flex-col`}
+          } flex flex-col ${props.viewportClassName ?? ""}`}
         >
           {props.hideHeader ? (
             <>
@@ -32,15 +53,30 @@ export function Sheet(props: {
                 <Dialog.Close asChild>
                   <button
                     type="button"
-                    className="icon-click-feedback fixed right-[max(1rem,env(safe-area-inset-right))] top-[calc(env(safe-area-inset-top,0px)+0.75rem)] z-[60] inline-flex h-8 w-8 items-center justify-center rounded-md border border-[var(--app-border)] bg-[var(--app-bg)]/90 text-[var(--app-hint)] shadow-sm backdrop-blur transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)]"
+                    className={`${HEADER_EDGE_TOGGLE_BUTTON_CLASS} absolute right-2 top-[calc(env(safe-area-inset-top,0px)+0.75rem)] z-[60] bg-[var(--app-bg)]/90 backdrop-blur`}
                     aria-label={props.floatingCloseLabel ?? "Close"}
                     title={props.floatingCloseLabel ?? "Close"}
                   >
-                    {props.floatingClose === "panel" ? <PanelRight size={18} /> : <X size={16} />}
+                    {props.floatingClose === "panel" ? (
+                      <PanelRight size={HEADER_EDGE_TOGGLE_ICON_SIZE} />
+                    ) : (
+                      <X size={HEADER_EDGE_TOGGLE_ICON_SIZE} />
+                    )}
                   </button>
                 </Dialog.Close>
               ) : null}
             </>
+          ) : props.headerLayout === "inline" ? (
+            <div className="flex shrink-0 items-center gap-1 border-b border-[var(--app-border)] px-2 py-2">
+              {closePlacement === "start" ? closeButton : null}
+              <Dialog.Title className="shrink-0 text-sm font-semibold text-[var(--app-fg)]">
+                {props.title}
+              </Dialog.Title>
+              {props.headerRight ? (
+                <div className="flex min-w-0 shrink-0 items-center gap-1">{props.headerRight}</div>
+              ) : null}
+              {closePlacement === "end" ? closeButton : null}
+            </div>
           ) : (
             <div className="flex items-center justify-between border-b border-[var(--app-border)] px-4 py-3 shrink-0">
               <Dialog.Title className="text-sm font-semibold text-[var(--app-fg)]">
@@ -48,15 +84,7 @@ export function Sheet(props: {
               </Dialog.Title>
               <div className="flex items-center gap-1">
                 {props.headerRight}
-                <Dialog.Close asChild>
-                  <button
-                    type="button"
-                    className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-hint)] hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] transition-colors"
-                    aria-label="Close"
-                  >
-                    <X size={16} />
-                  </button>
-                </Dialog.Close>
+                {closeButton}
               </div>
             </div>
           )}

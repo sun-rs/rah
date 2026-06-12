@@ -8,7 +8,7 @@
 - [项目总览](./project-overview.zh-CN.md)
 - [Session 入口与权限边界](./session-entry-capability-boundary.zh-CN.md)
 - [历史浏览与分页边界](./history-browsing.zh-CN.md)
-- [RAH 1.0 RC 说明](./1.0-rc-notes.zh-CN.md)
+- [RAH 1.0 里程碑说明](./1.0-notes.zh-CN.md)
 - [Claude Tmux Native Mode 边界](./claude-tmux-native-mode.zh-CN.md)
 - [Council Listening Control 边界](./council-listening-control.zh-CN.md)
 - [Session Controls 重构设计](./session-controls-refactor-design.zh-CN.md)

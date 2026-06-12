@@ -395,6 +395,7 @@ export function CouncilPage(props: {
   const [councils, setCouncils] = useState<CouncilSnapshot[]>(() => [
     ...(props.initialCouncils ?? []),
   ]);
+  const councilsRef = useRef<CouncilSnapshot[]>([...(props.initialCouncils ?? [])]);
   const [selectedCouncilIdState, setSelectedCouncilIdState] = useState<string | null>(
     props.selectedCouncilId ?? null,
   );
@@ -479,6 +480,7 @@ export function CouncilPage(props: {
   }, [props.selectedCouncilId]);
 
   useEffect(() => {
+    councilsRef.current = councils;
     props.onCouncilsChange?.(councils);
   }, [props.onCouncilsChange, councils]);
 
@@ -718,13 +720,15 @@ export function CouncilPage(props: {
     setError(null);
     try {
       const response = await api.listCouncils();
-      setCouncils((current) => mergeCouncilLists(current, response.councils));
+      const mergedCouncils = mergeCouncilLists(councilsRef.current, response.councils);
+      councilsRef.current = mergedCouncils;
+      setCouncils(mergedCouncils);
       setSelectedCouncilId((current) => {
-        return reconcileCouncilSelection(current, response.councils, {
+        return reconcileCouncilSelection(current, mergedCouncils, {
           allowRunningDefault: options?.allowRunningDefault,
         });
       });
-      return response.councils;
+      return mergedCouncils;
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
       return [];
@@ -801,7 +805,9 @@ export function CouncilPage(props: {
       void api.listCouncils()
         .then((response) => {
           if (cancelled) return;
-          setCouncils((current) => mergeCouncilLists(current, response.councils));
+          const mergedCouncils = mergeCouncilLists(councilsRef.current, response.councils);
+          councilsRef.current = mergedCouncils;
+          setCouncils(mergedCouncils);
         })
         .catch(() => {
           // The normal 5s polling loop owns user-visible Council refresh errors.
@@ -887,10 +893,12 @@ export function CouncilPage(props: {
       void api.listCouncils()
         .then((response) => {
           if (cancelled) return;
-          setCouncils((current) => mergeCouncilLists(current, response.councils));
+          const mergedCouncils = mergeCouncilLists(councilsRef.current, response.councils);
+          councilsRef.current = mergedCouncils;
+          setCouncils(mergedCouncils);
           setError(null);
           setSelectedCouncilId((current) => {
-            return reconcileCouncilSelection(current, response.councils);
+            return reconcileCouncilSelection(current, mergedCouncils);
           });
         })
         .catch((caught) => {
@@ -999,15 +1007,15 @@ export function CouncilPage(props: {
   };
 
   const handleNewCouncilCreated = (council: CouncilSnapshot) => {
-    setCouncils((current) => {
-      const existingIndex = current.findIndex((candidate) => candidate.id === council.id);
-      if (existingIndex >= 0) {
-        const next = [...current];
-        next[existingIndex] = mergeCouncilSnapshot(next[existingIndex], council);
-        return next;
-      }
-      return [council, ...current];
-    });
+    const existingIndex = councilsRef.current.findIndex((candidate) => candidate.id === council.id);
+    const nextCouncils = [...councilsRef.current];
+    if (existingIndex >= 0) {
+      nextCouncils[existingIndex] = mergeCouncilSnapshot(nextCouncils[existingIndex], council);
+    } else {
+      nextCouncils.unshift(council);
+    }
+    councilsRef.current = nextCouncils;
+    setCouncils(nextCouncils);
     setSelectedCouncilId(council.id);
     setCouncilSidebarOpen(false);
     void refreshCouncils({ silent: true });
@@ -1309,13 +1317,15 @@ export function CouncilPage(props: {
   };
 
   const replaceCouncil = (council: CouncilSnapshot) => {
-    setCouncils((current) => {
-      const index = current.findIndex((item) => item.id === council.id);
-      if (index < 0) return [council, ...current];
-      const next = [...current];
+    const index = councilsRef.current.findIndex((item) => item.id === council.id);
+    const next = [...councilsRef.current];
+    if (index < 0) {
+      next.unshift(council);
+    } else {
       next[index] = mergeCouncilSnapshot(next[index], council);
-      return next;
-    });
+    }
+    councilsRef.current = next;
+    setCouncils(next);
     setSelectedCouncilId(council.id);
   };
 
@@ -1433,7 +1443,7 @@ export function CouncilPage(props: {
     : councilSidebarButtonLabel;
   const agentsSidebarContent = (
     <div className="flex h-full min-h-0 flex-col bg-[var(--app-subtle-bg)]">
-      <div className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[var(--app-border)] pl-4 pr-14">
+      <div className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[var(--app-border)] pl-4 pr-11">
         <div className="min-w-0">
           <div className="text-sm font-medium text-[var(--app-fg)]">Agents</div>
           <div className="truncate text-xs text-[var(--app-hint)]">
@@ -1763,7 +1773,7 @@ export function CouncilPage(props: {
                 : null
             }
             trailingActions={
-              showAgentsToggle && (!isCouncilWide || !councilSidebarOpen) ? (
+              showAgentsToggle && !isCouncilWide ? (
                 <ConversationHeaderPanelToggleButton
                   onClick={() => setCouncilSidebarOpen((open) => !open)}
                   disabled={agentsToggleDisabled}
@@ -1773,6 +1783,7 @@ export function CouncilPage(props: {
                 />
               ) : null
             }
+            reserveRightPanelToggleSpace={showAgentsToggle && isCouncilWide && !councilSidebarOpen}
           />
           {error ? (
             <div className="mx-4 mt-3 rounded-lg border border-[var(--app-danger)]/30 bg-[var(--app-danger)]/10 px-3 py-2 text-xs text-[var(--app-danger)]">

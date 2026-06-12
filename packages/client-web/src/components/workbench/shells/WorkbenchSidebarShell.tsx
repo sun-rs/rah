@@ -1,11 +1,16 @@
 import { type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import type { CouncilSnapshot, SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
+import { House, Menu } from "lucide-react";
 import { DesktopWorkbenchSidebarHeader } from "../actions/DesktopWorkbenchSidebarHeader";
 import { MobileWorkbenchHeaderActions } from "../actions/MobileWorkbenchHeaderActions";
 import { Sheet } from "../../Sheet";
 import { OverlayScrollArea } from "../../OverlayScrollArea";
 import { SIDEBAR_LAYOUT } from "../../../sidebar-layout-contract";
 import type { WorkspaceSortMode } from "../../../session-browser";
+import {
+  HEADER_EDGE_TOGGLE_BUTTON_CLASS,
+  HEADER_EDGE_TOGGLE_ICON_SIZE,
+} from "../header-button-styles";
 
 export function WorkbenchSidebarShell(props: {
   sidebarOpen: boolean;
@@ -37,7 +42,7 @@ export function WorkbenchSidebarShell(props: {
   onRenameCouncil: (council: CouncilSnapshot) => void;
   onRemoveCouncil: (councilId: string) => void | Promise<void>;
   onRemoveHistorySession: (session: Pick<StoredSessionRef, "provider" | "providerSessionId">) => void;
-  onRemoveHistoryWorkspace: (workspaceDir: string) => void;
+  onRemoveHistoryWorkspace: (workspaceDir: string, sessions: readonly StoredSessionRef[]) => void;
   onHome: () => void;
   onOpenSettings: () => void;
   onCollapseSidebar: () => void;
@@ -52,34 +57,44 @@ export function WorkbenchSidebarShell(props: {
           width: props.sidebarOpen ? `var(--rah-sidebar-width, ${props.sidebarWidth}px)` : 0,
         }}
       >
-        <div className="rah-sidebar-header h-14 pl-4 pr-2 flex min-w-0 items-center gap-2 shrink-0">
+        <div className="rah-sidebar-header h-14 px-2 flex min-w-0 items-center shrink-0">
           {props.sidebarOpen ? (
-            <DesktopWorkbenchSidebarHeader
-              storedSessions={props.storedSessions}
-              recentSessions={props.recentSessions}
-              runningSessions={props.runningSessions}
-              runningSessionActivityAtById={props.runningSessionActivityAtById}
-              councils={props.councils}
-              selectedCouncilId={props.selectedCouncilId}
-              workspaceSortMode={props.workspaceSortMode}
-              onWorkspaceSortModeChange={props.onWorkspaceSortModeChange}
-              canvasActive={props.canvasActive}
-              councilActive={props.councilActive}
-              onOpenCouncil={props.onOpenCouncil}
-              onToggleCanvas={props.onDesktopToggleCanvas}
-              onActivateHistory={props.onActivateHistory}
-              onActivateRunning={props.onActivateRunning}
-              onActivateCouncil={props.onActivateCouncil}
-              onLoadStoredSessions={props.onLoadStoredSessions}
-              onRefreshCouncils={props.onRefreshCouncils}
-              onRenameCouncil={props.onRenameCouncil}
-              onRemoveCouncil={props.onRemoveCouncil}
-              onRemoveHistorySession={props.onRemoveHistorySession}
-              onRemoveHistoryWorkspace={props.onRemoveHistoryWorkspace}
-              onHome={props.onHome}
-              onOpenSettings={props.onOpenSettings}
-              onCollapseSidebar={props.onCollapseSidebar}
-            />
+            <>
+              <button
+                type="button"
+                className={HEADER_EDGE_TOGGLE_BUTTON_CLASS}
+                onClick={props.onCollapseSidebar}
+                aria-label="Collapse sidebar"
+                title="Collapse sidebar"
+              >
+                <Menu size={HEADER_EDGE_TOGGLE_ICON_SIZE} />
+              </button>
+              <DesktopWorkbenchSidebarHeader
+                storedSessions={props.storedSessions}
+                recentSessions={props.recentSessions}
+                runningSessions={props.runningSessions}
+                runningSessionActivityAtById={props.runningSessionActivityAtById}
+                councils={props.councils}
+                selectedCouncilId={props.selectedCouncilId}
+                workspaceSortMode={props.workspaceSortMode}
+                onWorkspaceSortModeChange={props.onWorkspaceSortModeChange}
+                canvasActive={props.canvasActive}
+                councilActive={props.councilActive}
+                onOpenCouncil={props.onOpenCouncil}
+                onToggleCanvas={props.onDesktopToggleCanvas}
+                onActivateHistory={props.onActivateHistory}
+                onActivateRunning={props.onActivateRunning}
+                onActivateCouncil={props.onActivateCouncil}
+                onLoadStoredSessions={props.onLoadStoredSessions}
+                onRefreshCouncils={props.onRefreshCouncils}
+                onRenameCouncil={props.onRenameCouncil}
+                onRemoveCouncil={props.onRemoveCouncil}
+                onRemoveHistorySession={props.onRemoveHistorySession}
+                onRemoveHistoryWorkspace={props.onRemoveHistoryWorkspace}
+                onHome={props.onHome}
+                onOpenSettings={props.onOpenSettings}
+              />
+            </>
           ) : null}
         </div>
         <OverlayScrollArea
@@ -103,15 +118,18 @@ export function WorkbenchSidebarShell(props: {
         open={props.leftOpen}
         onOpenChange={props.onLeftOpenChange}
         side="left"
+        headerLayout="inline"
+        closePlacement="start"
+        viewportClassName="md:hidden"
         title={
           <button
             type="button"
             onClick={props.onHome}
-            className="icon-click-feedback rounded-md px-1 text-sm font-semibold text-[var(--app-fg)] transition-colors hover:bg-[var(--app-bg)]"
+            className="icon-click-feedback inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)]"
             aria-label="Home"
             title="Home"
           >
-            RAH
+            <House size={17} />
           </button>
         }
         headerRight={

@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { createCodexAppServerClient } from "./codex-app-server-client";
 import { CodexAdapter } from "./provider-control/codex-structured-adapter";
 import { EventBus } from "./event-bus";
 import { PtyHub } from "./pty-hub";
@@ -26,15 +28,21 @@ function waitFor(predicate: () => boolean, timeoutMs = 5000): Promise<void> {
   });
 }
 
+const requireFromHere = createRequire(import.meta.url);
+
 describe("Codex live permission flow", () => {
   let tmpDir: string;
   let previousBinary: string | undefined;
   let previousTransport: string | undefined;
+  let previousCodexCi: string | undefined;
+  let previousCodexThreadId: string | undefined;
 
   beforeEach(() => {
     tmpDir = mkdtempSync(path.join(os.tmpdir(), "rah-codex-live-"));
     previousBinary = process.env.RAH_CODEX_BINARY;
     previousTransport = process.env.RAH_CODEX_APP_SERVER_TRANSPORT;
+    previousCodexCi = process.env.CODEX_CI;
+    previousCodexThreadId = process.env.CODEX_THREAD_ID;
     process.env.RAH_CODEX_APP_SERVER_TRANSPORT = "stdio";
   });
 
@@ -49,7 +57,70 @@ describe("Codex live permission flow", () => {
     } else {
       process.env.RAH_CODEX_APP_SERVER_TRANSPORT = previousTransport;
     }
+    if (previousCodexCi === undefined) {
+      delete process.env.CODEX_CI;
+    } else {
+      process.env.CODEX_CI = previousCodexCi;
+    }
+    if (previousCodexThreadId === undefined) {
+      delete process.env.CODEX_THREAD_ID;
+    } else {
+      process.env.CODEX_THREAD_ID = previousCodexThreadId;
+    }
     rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test("defaults Codex app-server to websocket and strips parent Codex runtime env", async () => {
+    const serverJs = path.join(tmpDir, "mock-codex-ws-server.js");
+    const envLog = path.join(tmpDir, "env.json");
+    const wsModulePath = requireFromHere.resolve("ws");
+    writeFileSync(
+      serverJs,
+      `
+const fs = require('node:fs');
+const { WebSocketServer } = require(${JSON.stringify(wsModulePath)});
+fs.writeFileSync(${JSON.stringify(envLog)}, JSON.stringify({
+  CODEX_CI: process.env.CODEX_CI ?? null,
+  CODEX_THREAD_ID: process.env.CODEX_THREAD_ID ?? null,
+}));
+if (!process.argv.includes('--listen')) {
+  process.exit(12);
+}
+const wss = new WebSocketServer({ host: '127.0.0.1', port: 0 }, () => {
+  const address = wss.address();
+  process.stderr.write('listening ws://127.0.0.1:' + address.port + '/\\n');
+});
+wss.on('connection', (socket) => {
+  socket.on('message', (raw) => {
+    const msg = JSON.parse(raw.toString());
+    if (msg.method === 'initialize') {
+      socket.send(JSON.stringify({ id: msg.id, result: {} }));
+      return;
+    }
+    socket.send(JSON.stringify({ id: msg.id, result: {} }));
+  });
+});
+`,
+    );
+    const wrapper = path.join(tmpDir, "mock-codex-ws");
+    writeFileSync(wrapper, `#!/bin/sh\nexec node "${serverJs}" "$@"\n`);
+    chmodSync(wrapper, 0o755);
+    process.env.RAH_CODEX_BINARY = wrapper;
+    delete process.env.RAH_CODEX_APP_SERVER_TRANSPORT;
+    process.env.CODEX_CI = "1";
+    process.env.CODEX_THREAD_ID = "parent-thread";
+
+    const client = await createCodexAppServerClient();
+    try {
+      assert.match(client.endpoint ?? "", /^ws:\/\/127\.0\.0\.1:\d+\/?$/);
+      const seenEnv = JSON.parse(readFileSync(envLog, "utf8"));
+      assert.deepEqual(seenEnv, {
+        CODEX_CI: null,
+        CODEX_THREAD_ID: null,
+      });
+    } finally {
+      await client.dispose();
+    }
   });
 
   test("round-trips request_user_input through adapter responses", async () => {
@@ -146,8 +217,11 @@ rl.on('line', (line) => {
     assert.equal(started.session.session.capabilities.listProviderSessions, true);
     assert.equal(started.session.session.capabilities.queuedInput, true);
     assert.equal(started.session.session.capabilities.modelSwitch, true);
+    assert.equal(started.session.session.capabilities.nativeTui, false);
+    assert.equal(started.session.session.capabilities.rawPtyInput, false);
     assert.equal(started.session.session.capabilities.planMode, false);
     assert.equal(started.session.session.capabilities.subagents, false);
+    assert.equal(started.session.session.nativeTui?.viewAvailable, false);
     assert.equal(started.session.session.runtime?.kind, "native_local_server");
     assert.equal(started.session.session.runtime?.structuredLiveEvents, true);
     assert.equal(started.session.session.runtime?.tuiContinuity, true);
@@ -337,7 +411,7 @@ rl.on('line', (line) => {
     await adapter.shutdown?.();
   });
 
-  test("bridges exec command output into PTY frames for running sessions", async () => {
+  test("publishes exec command output without polluting client-view PTY replay", async () => {
     const serverJs = path.join(tmpDir, "mock-codex-exec-server.js");
     writeFileSync(
       serverJs,
@@ -431,11 +505,18 @@ rl.on('line', (line) => {
       text: "Run a command",
     });
 
-    await waitFor(() =>
-      frames.some((chunk) => chunk.includes("$ echo hello")) &&
-      frames.some((chunk) => chunk.includes("hello")) &&
-      frames.some((chunk) => chunk.includes("[exit 0]")),
-    );
+    await waitFor(() => {
+      const terminalChunks = services.eventBus
+        .list({ sessionIds: [started.session.session.id] })
+        .filter((event) => event.type === "terminal.output")
+        .map((event) => String(event.payload.data ?? ""));
+      return (
+        terminalChunks.some((chunk) => chunk.includes("$ echo hello")) &&
+        terminalChunks.some((chunk) => chunk.includes("hello")) &&
+        terminalChunks.some((chunk) => chunk.includes("[exit 0]"))
+      );
+    });
+    assert.deepEqual(frames, []);
 
     unsubscribe();
     await adapter.shutdown?.();
@@ -504,6 +585,100 @@ rl.on('line', (line) => {
     await waitFor(() => existsSync(marker));
 
     await adapter.shutdown?.();
+  });
+
+  test("shutdown interrupts active Codex turns and pauses active goals before disposal", async () => {
+    const methodLog = path.join(tmpDir, "codex-shutdown-control.jsonl");
+    const serverJs = path.join(tmpDir, "mock-codex-shutdown-control-server.js");
+    writeFileSync(
+      serverJs,
+      `
+const fs = require('node:fs');
+const readline = require('node:readline');
+const methodLog = ${JSON.stringify(methodLog)};
+const rl = readline.createInterface({ input: process.stdin });
+function send(msg) { process.stdout.write(JSON.stringify(msg) + "\\n"); }
+function log(msg) { fs.appendFileSync(methodLog, JSON.stringify({ method: msg.method, params: msg.params }) + "\\n"); }
+rl.on('line', (line) => {
+  const msg = JSON.parse(line);
+  if (msg.method) log(msg);
+  if (msg.method === 'initialize') {
+    send({ id: msg.id, result: {} });
+    return;
+  }
+  if (msg.method === 'thread/start') {
+    send({ id: msg.id, result: { thread: { id: 'thread-shutdown-control' } } });
+    return;
+  }
+  if (msg.method === 'turn/start') {
+    send({ id: msg.id, result: { turn: { id: 'turn-shutdown-control' } } });
+    send({ method: 'turn/started', params: { threadId: 'thread-shutdown-control', turn: { id: 'turn-shutdown-control' } } });
+    return;
+  }
+  if (msg.method === 'turn/interrupt') {
+    send({ id: msg.id, result: {} });
+    return;
+  }
+  if (msg.method === 'thread/goal/get') {
+    send({ id: msg.id, result: { goal: { threadId: 'thread-shutdown-control', objective: 'keep working', status: 'active' } } });
+    return;
+  }
+  if (msg.method === 'thread/goal/set') {
+    send({ id: msg.id, result: { goal: { threadId: 'thread-shutdown-control', objective: 'keep working', status: msg.params.status } } });
+    return;
+  }
+  send({ id: msg.id, result: {} });
+});
+`,
+    );
+    const wrapper = path.join(tmpDir, "mock-codex-shutdown-control");
+    writeFileSync(wrapper, `#!/bin/sh\nexec node "${serverJs}" "$@"\n`);
+    chmodSync(wrapper, 0o755);
+    process.env.RAH_CODEX_BINARY = wrapper;
+
+    const services = {
+      eventBus: new EventBus(),
+      ptyHub: new PtyHub(),
+      sessionStore: new SessionStore(),
+    };
+    const adapter = new CodexAdapter(services);
+
+    const started = await adapter.startSession({
+      provider: "codex",
+      cwd: tmpDir,
+      title: "shutdown control test",
+      attach: {
+        client: {
+          id: "test-client",
+          kind: "web",
+          connectionId: "test-client",
+        },
+        mode: "interactive",
+        claimControl: true,
+      },
+    });
+    adapter.sendInput(started.session.session.id, {
+      clientId: "test-client",
+      text: "run until daemon shutdown",
+    });
+    await waitFor(() =>
+      services.sessionStore.getSession(started.session.session.id)?.activeTurnId ===
+      "turn-shutdown-control",
+    );
+
+    await adapter.shutdown?.();
+
+    const methods = readFileSync(methodLog, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { method: string; params?: Record<string, unknown> });
+    const interruptIndex = methods.findIndex((entry) => entry.method === "turn/interrupt");
+    const goalGetIndex = methods.findIndex((entry) => entry.method === "thread/goal/get");
+    const goalSetIndex = methods.findIndex((entry) => entry.method === "thread/goal/set");
+    assert.ok(interruptIndex > -1);
+    assert.ok(goalGetIndex > interruptIndex);
+    assert.ok(goalSetIndex > goalGetIndex);
+    assert.equal(methods[goalSetIndex]?.params?.status, "paused");
   });
 
   test("unexpected Codex app-server exit marks the live session failed", async () => {

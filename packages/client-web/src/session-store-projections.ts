@@ -31,6 +31,73 @@ function projectionWithFreshSummary(
   return next;
 }
 
+function providerSessionKey(summary: SessionProjection["summary"]): string | null {
+  const providerSessionId = summary.session.providerSessionId;
+  if (!providerSessionId) {
+    return null;
+  }
+  return `${summary.session.provider}:${providerSessionId}`;
+}
+
+function isPendingStoredReplayProjection(
+  sessionId: string,
+  projection: SessionProjection,
+): boolean {
+  return (
+    sessionId.startsWith("history:") &&
+    projection.summary.session.runtime?.kind === "stored_history" &&
+    projection.history.phase === "loading"
+  );
+}
+
+function preservePendingStoredReplayProjections(
+  next: Map<string, SessionProjection>,
+  current: Map<string, SessionProjection>,
+): Map<string, SessionProjection> {
+  const serverProviderSessions = new Set(
+    [...next.values()]
+      .map((projection) => providerSessionKey(projection.summary))
+      .filter((key): key is string => key !== null),
+  );
+  let result = next;
+  for (const [sessionId, projection] of current) {
+    if (!isPendingStoredReplayProjection(sessionId, projection)) {
+      continue;
+    }
+    const key = providerSessionKey(projection.summary);
+    if (key && serverProviderSessions.has(key)) {
+      continue;
+    }
+    if (result === next) {
+      result = new Map(next);
+    }
+    result.set(sessionId, projection);
+  }
+  return result;
+}
+
+function coerceSelectedProjectionId(
+  projections: Map<string, SessionProjection>,
+  current: Map<string, SessionProjection>,
+  selectedSessionId: string | null,
+): string | null {
+  const direct = coerceSelectedSessionId(projections, selectedSessionId);
+  if (direct || !selectedSessionId) {
+    return direct;
+  }
+  const selected = current.get(selectedSessionId);
+  const selectedKey = selected ? providerSessionKey(selected.summary) : null;
+  if (!selectedKey) {
+    return null;
+  }
+  for (const projection of projections.values()) {
+    if (providerSessionKey(projection.summary) === selectedKey) {
+      return projection.summary.session.id;
+    }
+  }
+  return null;
+}
+
 type ProjectionStateSlice = {
   projections: Map<string, SessionProjection>;
   workspaceDir: string;
@@ -203,13 +270,14 @@ export function mergeSessionsIntoProjections(
   replay: ProjectionReplay,
 ): Map<string, SessionProjection> {
   const sessionMap = createSessionMap(sessionsResponse);
-  const next = new Map(sessionMap.sessions);
+  let next = new Map(sessionMap.sessions);
   for (const [sessionId, existing] of current) {
     const fresh = next.get(sessionId);
     if (fresh) {
       next.set(sessionId, projectionWithFreshSummary(existing, fresh.summary));
     }
   }
+  next = preservePendingStoredReplayProjections(next, current);
   return applyEventsToProjectionMap(
     next,
     replay.takePendingEventsForSessions(new Set(next.keys())),
@@ -260,13 +328,18 @@ export function applySessionsResponse(
     hiddenWorkspaceDirs,
     workspaceVisibilityVersion: state.workspaceVisibilityVersion,
     workspaceDir: workspace.workspaceDir,
-    selectedSessionId: coerceSelectedSessionId(projections, state.selectedSessionId),
+    selectedSessionId: coerceSelectedProjectionId(
+      projections,
+      state.projections,
+      state.selectedSessionId,
+    ),
   };
 }
 
 export function replaceSessionsResponse(
   state: Pick<
     ProjectionStateSlice,
+    | "projections"
     | "workspaceDir"
     | "selectedSessionId"
     | "hiddenWorkspaceDirs"
@@ -304,14 +377,22 @@ export function replaceSessionsResponse(
     hiddenWorkspaceDirs,
   });
   const sessionMap = createSessionMap(sessionsResponse);
+  const projections = preservePendingStoredReplayProjections(
+    sessionMap.sessions,
+    state.projections,
+  );
   return {
-    projections: sessionMap.sessions,
+    projections,
     storedSessions: sessionsResponse.storedSessions,
     recentSessions: sessionsResponse.recentSessions,
     workspaceDirs: workspace.workspaceDirs,
     hiddenWorkspaceDirs,
     workspaceVisibilityVersion: state.workspaceVisibilityVersion,
     workspaceDir: workspace.workspaceDir,
-    selectedSessionId: coerceSelectedSessionId(sessionMap.sessions, state.selectedSessionId),
+    selectedSessionId: coerceSelectedProjectionId(
+      projections,
+      state.projections,
+      state.selectedSessionId,
+    ),
   };
 }

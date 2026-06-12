@@ -1,9 +1,18 @@
 import type { CSSProperties, ReactNode } from "react";
 import { PanelRight } from "lucide-react";
 import { Sheet } from "../../Sheet";
-import { HEADER_ICON_BUTTON_CLASS } from "../header-button-styles";
+import {
+  HEADER_EDGE_TOGGLE_ICON_SIZE,
+  HEADER_SIDE_PANEL_TOGGLE_BUTTON_CLASS,
+} from "../header-button-styles";
 
 type ConversationSidePanelBreakpoint = "md" | "wide";
+
+const SIDE_PANEL_TOGGLE_STYLE: CSSProperties = {
+  position: "absolute",
+  right: "0.5rem",
+  top: "0.75rem",
+};
 
 function desktopClassNames(breakpoint: ConversationSidePanelBreakpoint): {
   aside: string;
@@ -43,6 +52,7 @@ export function ConversationSidePanelShell(props: {
   const desktopWidth = props.desktopWidth ?? "clamp(20rem, 28vw, 28rem)";
   const showDesktop = props.showDesktop ?? true;
   const showMobile = props.mobileOpen !== undefined && props.onMobileOpenChange !== undefined;
+  const mobileViewportClassName = breakpoint === "wide" ? "min-[900px]:hidden" : "md:hidden";
 
   return (
     <>
@@ -58,16 +68,18 @@ export function ConversationSidePanelShell(props: {
               ...props.desktopStyle,
             }}
           >
-            {props.onToggle && props.desktopOpen ? (
+            {props.onToggle ? (
               <button
                 type="button"
-                className={`${HEADER_ICON_BUTTON_CLASS} absolute right-4 top-3 z-20 bg-[var(--app-bg)]/90 shadow-sm backdrop-blur`}
+                className={`${HEADER_SIDE_PANEL_TOGGLE_BUTTON_CLASS} z-30 bg-[var(--app-bg)]/90 backdrop-blur`}
+                style={SIDE_PANEL_TOGGLE_STYLE}
                 onClick={props.onToggle}
                 disabled={props.toggleDisabled}
+                aria-pressed={props.desktopOpen}
                 aria-label={props.toggleLabel ?? "Hide panel"}
                 title={props.toggleLabel ?? "Hide panel"}
               >
-                <PanelRight size={16} />
+                <PanelRight size={HEADER_EDGE_TOGGLE_ICON_SIZE} />
               </button>
             ) : null}
             <div className="h-full min-w-0 overflow-hidden bg-[var(--app-subtle-bg)]">
@@ -84,8 +96,9 @@ export function ConversationSidePanelShell(props: {
           side="right"
           title={props.mobileTitle ?? "Details"}
           hideHeader
+          viewportClassName={mobileViewportClassName}
           {...(props.mobileModal !== undefined ? { modal: props.mobileModal } : {})}
-          floatingClose="panel"
+          floatingClose="x"
           floatingCloseLabel={props.mobileFloatingCloseLabel ?? "Hide panel"}
         >
           {props.children}

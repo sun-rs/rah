@@ -16,11 +16,13 @@ import { isReadOnlyReplay } from "./session-capabilities";
 import { readErrorMessage } from "./session-store-bootstrap";
 import {
   applyClaimedHistorySessionState,
+  applyPendingStoredReplaySessionState,
   applyResumedStoredSessionState,
   applyStartedSessionState,
   buildFallbackStoredSessionRef,
   createEmptySessionProjection,
   mergeClaimedHistoryProjection,
+  storedReplayPlaceholderSessionId,
 } from "./session-store-session-lifecycle";
 import {
   createInteractiveAttachRequest,
@@ -63,6 +65,7 @@ type SessionStartupState = {
   hiddenWorkspaceDirs: Set<string>;
   workspaceDirs: string[];
   workspaceVisibilityVersion: number;
+  sessionTopologyVersion: number;
   workspaceDir: string;
   selectedSessionId: string | null;
   newSessionProvider: ProviderChoice;
@@ -304,16 +307,23 @@ export async function resumeStoredSessionCommand(
     confirmCreateMissingWorkspace?: (dir: string) => Promise<boolean>;
   },
 ) {
+  const preferStoredReplay = options?.preferStoredReplay ?? true;
+  const provisionalSessionId = preferStoredReplay
+    ? storedReplayPlaceholderSessionId(ref)
+    : null;
   try {
-    const preferStoredReplay = options?.preferStoredReplay ?? true;
     const targetDir = ref.cwd ?? ref.rootDir;
     if (!preferStoredReplay && !(await ensureLaunchWorkspaceAvailable(deps, targetDir))) {
       return;
     }
-    deps.set({
-      pendingSessionTransition: createPendingStoredSessionTransition(ref, "history"),
-      error: null,
-    });
+    if (preferStoredReplay) {
+      deps.set((current) => applyPendingStoredReplaySessionState(current, ref));
+    } else {
+      deps.set({
+        pendingSessionTransition: createPendingStoredSessionTransition(ref, "history"),
+        error: null,
+      });
+    }
     if (ref.source === "previous_running") {
       const workspaceVisibilityVersionAtRequest = deps.get().workspaceVisibilityVersion;
       const sessionsResponse = await api.listSessions();
@@ -325,9 +335,17 @@ export async function resumeStoredSessionCommand(
       );
       if (running) {
         deps.set((state) => ({
-          ...deps.applySessionsResponse(state, sessionsResponse, {
-            workspaceVisibilityVersionAtRequest,
-          }),
+          ...(() => {
+            const next = deps.applySessionsResponse(state, sessionsResponse, {
+              workspaceVisibilityVersionAtRequest,
+            });
+            if (!provisionalSessionId) {
+              return next;
+            }
+            const projections = new Map(next.projections);
+            projections.delete(provisionalSessionId);
+            return { ...next, projections };
+          })(),
           workspaceDir:
             ref.rootDir ??
             ref.cwd ??
@@ -367,6 +385,10 @@ export async function resumeStoredSessionCommand(
         new Map(current.projections),
         response.session,
       );
+      const shouldSelectResponse =
+        !provisionalSessionId ||
+        current.selectedSessionId === provisionalSessionId ||
+        current.selectedSessionId === response.session.session.id;
       const resumedState = applyResumedStoredSessionState(
         current,
         response.session,
@@ -374,6 +396,8 @@ export async function resumeStoredSessionCommand(
         {
           projections: next,
           replayProjection: createEmptySessionProjection(response.session),
+          ...(provisionalSessionId ? { replaceSessionId: provisionalSessionId } : {}),
+          selectSession: shouldSelectResponse,
         },
       );
       return {
@@ -400,8 +424,13 @@ export async function resumeStoredSessionCommand(
           const next = deps.applySessionsResponse(state, sessionsResponse, {
             workspaceVisibilityVersionAtRequest,
           });
+          const projections = new Map(next.projections);
+          if (provisionalSessionId) {
+            projections.delete(provisionalSessionId);
+          }
           return {
             ...next,
+            projections,
             workspaceDir:
               ref.rootDir ??
               ref.cwd ??
@@ -416,7 +445,25 @@ export async function resumeStoredSessionCommand(
         return;
       }
     }
-    deps.set({ pendingSessionTransition: null, error: message });
+    deps.set((state) => {
+      if (!provisionalSessionId) {
+        return { pendingSessionTransition: null, error: message };
+      }
+      const current = state.projections.get(provisionalSessionId);
+      if (!current) {
+        return { pendingSessionTransition: null, error: message };
+      }
+      const next = new Map(state.projections);
+      next.set(provisionalSessionId, {
+        ...current,
+        history: {
+          ...current.history,
+          phase: "error",
+          lastError: message,
+        },
+      });
+      return { projections: next, pendingSessionTransition: null, error: message };
+    });
     throw error;
   }
 }
@@ -500,6 +547,7 @@ export async function claimHistorySessionCommand(
           ),
         ),
         selectedSessionId: claimedSession.session.id,
+        sessionTopologyVersion: current.sessionTopologyVersion + 1,
         pendingSessionAction: null,
         pendingSessionTransition: null,
         error: null,
@@ -530,7 +578,7 @@ export async function claimHistorySessionCommand(
         kind: "claim_history",
         sessionId,
       },
-      pendingSessionTransition: createPendingStoredSessionTransition(ref, "claim_history"),
+      pendingSessionTransition: null,
       error: null,
     });
     const request: ResumeSessionRequest = {
@@ -592,7 +640,6 @@ export async function claimHistorySessionCommand(
   } catch (error) {
     const message = readErrorMessage(error);
     if (message.includes("attach instead of resume")) {
-      const workspaceVisibilityVersionAtRequest = deps.get().workspaceVisibilityVersion;
       const sessionsResponse = await api.listSessions();
       const running = sessionsResponse.sessions.find(
         (candidate) =>
@@ -616,23 +663,6 @@ export async function claimHistorySessionCommand(
           });
           throw attachError;
         }
-        deps.set((current) => {
-          const next = deps.applySessionsResponse(current, sessionsResponse, {
-            workspaceVisibilityVersionAtRequest,
-          });
-          return {
-            ...next,
-            workspaceDir:
-              ref.rootDir ??
-              ref.cwd ??
-              running.session.rootDir ??
-              running.session.cwd ??
-              next.workspaceDir,
-            pendingSessionAction: null,
-            pendingSessionTransition: null,
-            error: null,
-          };
-        });
         applyClaimedSession(attached);
         return attached.session.id;
       }

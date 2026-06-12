@@ -1,7 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { EventBus } from "./event-bus";
-import { prepareProviderSessionResume } from "./provider-resume";
+import {
+  prepareProviderSessionResume,
+  reuseExistingProviderSessionForResume,
+} from "./provider-resume";
 import { PtyHub } from "./pty-hub";
 import { SessionStore } from "./session-store";
 import { runtimeDescriptorForStoredHistory } from "./session-runtime-descriptor";
@@ -224,4 +227,73 @@ test("prepareProviderSessionResume does not replace explicit history source when
       }),
     /already running; attach instead of resume/,
   );
+});
+
+test("reuseExistingProviderSessionForResume attaches to a live provider session instead of throwing", () => {
+  const services = createServices();
+  const live = services.sessionStore.createManagedSession({
+    provider: "codex",
+    providerSessionId: "provider-1",
+    launchSource: "web",
+    cwd: "/tmp/rah-provider-resume",
+    rootDir: "/tmp/rah-provider-resume",
+    capabilities: {
+      steerInput: true,
+    },
+  });
+
+  const reused = reuseExistingProviderSessionForResume({
+    services,
+    provider: "codex",
+    providerSessionId: "provider-1",
+    preferStoredReplay: false,
+    historySourceSessionId: live.session.id,
+    rehydratedSessionIds: new Set(),
+    attach: {
+      mode: "interactive",
+      claimControl: true,
+      client: {
+        id: "web-client",
+        kind: "web",
+        connectionId: "web-connection",
+      },
+    },
+  });
+
+  assert.equal(reused?.session.session.id, live.session.id);
+  assert.equal(
+    services.sessionStore.findManagedByProviderSession("codex", "provider-1")?.session.id,
+    live.session.id,
+  );
+  assert.equal(
+    services.eventBus.list({ sessionIds: [live.session.id] }).at(-1)?.type,
+    "control.claimed",
+  );
+});
+
+test("reuseExistingProviderSessionForResume lets live resume replace stored history", () => {
+  const services = createServices();
+  const replay = services.sessionStore.createManagedSession({
+    provider: "codex",
+    providerSessionId: "provider-1",
+    launchSource: "web",
+    cwd: "/tmp/rah-provider-resume",
+    rootDir: "/tmp/rah-provider-resume",
+    runtime: runtimeDescriptorForStoredHistory(),
+    capabilities: {
+      steerInput: false,
+    },
+  });
+
+  const reused = reuseExistingProviderSessionForResume({
+    services,
+    provider: "codex",
+    providerSessionId: "provider-1",
+    preferStoredReplay: false,
+    historySourceSessionId: replay.session.id,
+    rehydratedSessionIds: new Set(),
+  });
+
+  assert.equal(reused, null);
+  assert.equal(services.sessionStore.getSession(replay.session.id)?.session.id, replay.session.id);
 });

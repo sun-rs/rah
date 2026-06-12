@@ -281,20 +281,21 @@
 
   .rah-sidebar-header {
     container: rah-sidebar-header / inline-size;
+    --rah-sidebar-header-gap: clamp(0px, calc((var(--rah-sidebar-width, 288px) - 208px) / 20), 4px);
+    gap: var(--rah-sidebar-header-gap);
   }
 
   .rah-sidebar-content {
     container: rah-sidebar-content / inline-size;
   }
 
-  @container rah-sidebar-header (max-width: 224px) {
-    .rah-sidebar-header-brand {
-      display: none;
-    }
+  .rah-sidebar-header-actions {
+    gap: var(--rah-sidebar-header-gap);
+  }
 
+  @container rah-sidebar-header (max-width: 224px) {
     .rah-sidebar-header-actions {
-      width: 100%;
-      justify-content: flex-end;
+      justify-content: flex-start;
       margin-left: 0;
     }
   }

@@ -2,6 +2,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type ClipboardEventHandler,
   type ReactNode,
   type RefObject,
 } from "react";
@@ -14,6 +15,7 @@ import { SessionModeControls } from "../../SessionModeControls";
 import { OverlayScrollArea } from "../../OverlayScrollArea";
 import { TokenizedTextarea } from "../../TokenizedTextarea";
 import { WorkspacePicker } from "../../WorkspacePicker";
+import { ComposerImageAttachmentBadge } from "../../ComposerImageAttachmentBadge";
 import {
   EMPTY_STATE_COMPOSER_LAYOUT,
   shouldCompactEmptyStateSessionControls,
@@ -42,7 +44,13 @@ export function NewSessionComposer(props: {
   titleClassName?: string;
   composerRef: RefObject<HTMLTextAreaElement | null>;
   draft: string;
+  draftImageUrls?: readonly string[] | undefined;
+  draftImageCount?: number | undefined;
   onDraftChange: (value: string) => void;
+  onComposerPaste?: ClipboardEventHandler<HTMLTextAreaElement> | undefined;
+  onClearDraftImages?: (() => void) | undefined;
+  onRemoveDraftImage?: ((index: number) => void) | undefined;
+  onRemoveLastDraftImage?: (() => void) | undefined;
   onSend: () => void;
   canSend: boolean;
   sendPending?: boolean;
@@ -89,6 +97,8 @@ export function NewSessionComposer(props: {
         ? "icons"
         : "grid"
       : props.providerSelectorMode ?? "grid";
+  const draftImageUrls = props.draftImageUrls ?? [];
+  const textareaHasImages = draftImageUrls.length > 0;
 
   useLayoutEffect(() => {
     const nodes = [
@@ -150,17 +160,34 @@ export function NewSessionComposer(props: {
         </div>
 
         <div className="relative">
+          <ComposerImageAttachmentBadge
+            imageUrls={draftImageUrls}
+            onRemove={props.onRemoveDraftImage}
+            className="pointer-events-auto absolute left-4 top-3 z-20 md:left-5 md:top-4"
+          />
           <TokenizedTextarea
             ref={props.composerRef}
             wrapperClassName={EMPTY_STATE_COMPOSER_LAYOUT.textareaWrapperClassName}
-            textareaClassName={EMPTY_STATE_COMPOSER_LAYOUT.textareaClassName}
+            textareaClassName={`${EMPTY_STATE_COMPOSER_LAYOUT.textareaClassName} ${
+              textareaHasImages ? "pt-16 md:pt-[4.5rem]" : ""
+            }`}
             contentClassName={EMPTY_STATE_COMPOSER_LAYOUT.textareaContentClassName}
             placeholder="Message…"
             rows={3}
             value={props.draft}
             onChange={props.onDraftChange}
+            onPaste={props.onComposerPaste}
             onKeyDown={(event) => {
               const nativeEvent = event.nativeEvent as KeyboardEvent;
+              if (
+                event.key === "Backspace" &&
+                props.draft.length === 0 &&
+                draftImageUrls.length > 0
+              ) {
+                event.preventDefault();
+                props.onRemoveLastDraftImage?.();
+                return;
+              }
               if (
                 event.key === "Enter" &&
                 !event.shiftKey &&

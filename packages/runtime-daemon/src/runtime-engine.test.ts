@@ -14,6 +14,7 @@ import type {
   GitStatusResponse,
   InterruptSessionRequest,
   PermissionResponseRequest,
+  ProviderKind,
   RahEvent,
   ResumeSessionRequest,
   ResumeSessionResponse,
@@ -44,7 +45,7 @@ const hasSqlite = (() => {
 
 class CountingStoredSessionsAdapter implements ProviderAdapter {
   readonly id: string = "counting";
-  readonly providers: Array<"codex"> = ["codex"];
+  readonly providers: ProviderKind[] = ["codex"];
   storedSessionCalls = 0;
   removedSessionIds: string[] = [];
 
@@ -135,6 +136,142 @@ class CountingStoredSessionsAdapter implements ProviderAdapter {
 
   getContextUsage(_sessionId: string): ContextUsage | undefined {
     return undefined;
+  }
+}
+
+class CloseRefreshStoredSessionsAdapter extends CountingStoredSessionsAdapter {
+  override readonly id = "close-refresh";
+  engine: RuntimeEngine | undefined;
+  private refreshedSessions: StoredSessionRef[] = [];
+
+  constructor() {
+    super([]);
+  }
+
+  override listStoredSessions(): StoredSessionRef[] {
+    this.storedSessionCalls += 1;
+    return [...this.refreshedSessions];
+  }
+
+  override startSession(request: StartSessionRequest): StartSessionResponse {
+    if (!this.engine) {
+      throw new Error("engine missing");
+    }
+    let state = this.engine.sessionStore.createManagedSession({
+      provider: "codex",
+      providerSessionId: "closed-provider-session",
+      launchSource: "web",
+      cwd: request.cwd,
+      rootDir: request.cwd,
+      title: "Closing session",
+    });
+    if (request.attach) {
+      state = this.engine.sessionStore.attachClient({
+        sessionId: state.session.id,
+        clientId: request.attach.client.id,
+        kind: request.attach.client.kind,
+        connectionId: request.attach.client.connectionId,
+        attachMode: request.attach.mode,
+        focus: true,
+      });
+      if (request.attach.claimControl) {
+        state = this.engine.sessionStore.claimControl(
+          state.session.id,
+          request.attach.client.id,
+          request.attach.client.kind,
+        );
+      }
+    }
+    return { session: toSessionSummary(state) };
+  }
+
+  override async closeSession(sessionId: string, _request: CloseSessionRequest): Promise<void> {
+    if (!this.engine) {
+      throw new Error("engine missing");
+    }
+    const state = this.engine.sessionStore.getSession(sessionId);
+    if (!state?.session.providerSessionId) {
+      throw new Error("session missing provider session id");
+    }
+    this.refreshedSessions = [
+      {
+        provider: "codex",
+        providerSessionId: state.session.providerSessionId,
+        cwd: state.session.cwd,
+        rootDir: state.session.rootDir,
+        ...(state.session.title ? { title: state.session.title } : {}),
+        createdAt: state.session.createdAt,
+        updatedAt: "2026-06-12T10:00:00.000Z",
+        lastUsedAt: "2026-06-12T10:00:00.000Z",
+        historyMeta: {
+          lines: 12,
+          bytes: 512,
+        },
+        source: "provider_history",
+      },
+    ];
+  }
+}
+
+class RenameStoredSessionsAdapter extends CountingStoredSessionsAdapter {
+  override readonly id = "rename-stored-sessions";
+  engine: RuntimeEngine | undefined;
+
+  constructor() {
+    super([
+      {
+        provider: "codex",
+        providerSessionId: "rename-provider-session",
+        cwd: workDirGlobal,
+        rootDir: workDirGlobal,
+        title: "Old history title",
+        updatedAt: "2025-07-19T22:21:00.000Z",
+        source: "provider_history",
+      },
+    ]);
+  }
+
+  override startSession(request: StartSessionRequest): StartSessionResponse {
+    if (!this.engine) {
+      throw new Error("engine missing");
+    }
+    const state = this.engine.sessionStore.createManagedSession({
+      provider: "codex",
+      providerSessionId: "rename-provider-session",
+      launchSource: "web",
+      cwd: request.cwd,
+      rootDir: request.cwd,
+      title: "Old live title",
+      ...(request.origin ? { origin: request.origin } : {}),
+      capabilities: {
+        renameSession: true,
+        actions: {
+          info: true,
+          stop: true,
+          delete: true,
+          rename: "native",
+        },
+      },
+    });
+    return { session: toSessionSummary(state) };
+  }
+
+  async renameSession(sessionId: string, title: string): Promise<SessionSummary> {
+    if (!this.engine) {
+      throw new Error("engine missing");
+    }
+    return toSessionSummary(
+      this.engine.sessionStore.patchManagedSession(sessionId, { title }),
+    );
+  }
+}
+
+class GeminiStoredSessionsProbeAdapter extends CountingStoredSessionsAdapter {
+  override readonly id = "gemini-stored-sessions-probe";
+  override readonly providers: Array<"gemini"> = ["gemini"];
+
+  constructor() {
+    super([]);
   }
 }
 
@@ -1280,7 +1417,7 @@ describe("RuntimeEngine", () => {
       await waitFor(() => {
         assert.match(
           transcript,
-          /NATIVE_LOCAL_TUI_READY args=--remote\|ws:\/\/127\.0\.0\.1:65531\/\|resume\|native-local-start/,
+          /NATIVE_LOCAL_TUI_READY args=.*--remote\|ws:\/\/127\.0\.0\.1:65531\/\|resume\|native-local-start/,
         );
         assert.equal(engine.getSessionSummary(sessionId).controlLease.holderClientId, "web-user");
       });
@@ -1473,6 +1610,7 @@ describe("RuntimeEngine", () => {
     const initial = engine.listSessions();
     assert.equal(adapter.storedSessionCalls, 1);
     assert.equal(initial.storedSessions.length, 2);
+    assert.equal(typeof initial.storedSessionsRevision, "number");
 
     const secondList = engine.listSessions();
     assert.equal(adapter.storedSessionCalls, 1);
@@ -1481,10 +1619,17 @@ describe("RuntimeEngine", () => {
     const afterSingleRemoval = await engine.removeStoredSession("codex", "session-1");
     assert.equal(adapter.storedSessionCalls, 1);
     assert.deepEqual(adapter.removedSessionIds, ["session-1"]);
+    assert.ok((afterSingleRemoval.storedSessionsRevision ?? 0) > (initial.storedSessionsRevision ?? 0));
     assert.deepEqual(
       afterSingleRemoval.storedSessions.map((entry) => entry.providerSessionId),
       ["session-2"],
     );
+    assert.deepEqual(engine.getStoredSessionsDelta(initial.storedSessionsRevision ?? 0), {
+      fromRevision: initial.storedSessionsRevision,
+      revision: afterSingleRemoval.storedSessionsRevision,
+      upsert: [],
+      remove: [{ provider: "codex", providerSessionId: "session-1" }],
+    });
 
     const afterWorkspaceRemoval = await engine.removeStoredWorkspaceSessions(workDir);
     assert.equal(adapter.storedSessionCalls, 1);
@@ -1492,6 +1637,87 @@ describe("RuntimeEngine", () => {
     assert.equal(afterWorkspaceRemoval.storedSessions.length, 0);
 
     await engine.shutdown();
+  });
+
+  test("renaming a session publishes a stored-session upsert delta", async () => {
+    const adapter = new RenameStoredSessionsAdapter();
+    const engine = new RuntimeEngine([adapter]);
+    adapter.engine = engine;
+
+    try {
+      const initial = engine.listSessions({ storedSessionsMode: "all" });
+      assert.equal(initial.storedSessions[0]?.title, "Old history title");
+      assert.equal(typeof initial.storedSessionsRevision, "number");
+
+      const started = await engine.startSession({
+        provider: "codex",
+        cwd: workDirGlobal,
+      });
+
+      await engine.renameSession(started.session.session.id, "New canonical title");
+
+      const delta = engine.getStoredSessionsDelta(initial.storedSessionsRevision ?? 0);
+      assert.equal(delta.resetRequired, undefined);
+      assert.equal(delta.remove.length, 0);
+      assert.equal(delta.upsert.length, 1);
+      assert.equal(delta.upsert[0]?.provider, "codex");
+      assert.equal(delta.upsert[0]?.providerSessionId, "rename-provider-session");
+      assert.equal(delta.upsert[0]?.title, "New canonical title");
+
+      const current = engine.listSessions({ storedSessionsMode: "all" });
+      assert.equal(
+        current.storedSessions.find(
+          (session) => session.providerSessionId === "rename-provider-session",
+        )?.title,
+        "New canonical title",
+      );
+    } finally {
+      await engine.shutdown();
+    }
+  });
+
+  test("closing a session refreshes stored history metadata before the next list", async () => {
+    const adapter = new CloseRefreshStoredSessionsAdapter();
+    const otherProviderAdapter = new GeminiStoredSessionsProbeAdapter();
+    const engine = new RuntimeEngine([adapter, otherProviderAdapter]);
+    adapter.engine = engine;
+
+    try {
+      assert.equal(adapter.storedSessionCalls, 1);
+      assert.equal(otherProviderAdapter.storedSessionCalls, 1);
+      const started = await engine.startSession({
+        provider: "codex",
+        cwd: workDir,
+        attach: {
+          client: {
+            id: "web-user",
+            kind: "web",
+            connectionId: "close-refresh-client",
+          },
+          mode: "interactive",
+          claimControl: true,
+        },
+      });
+
+      await engine.closeSession(started.session.session.id, { clientId: "web-user" });
+
+      const sessions = engine.listSessions();
+      const stopped = sessions.storedSessions.find(
+        (session) => session.providerSessionId === "closed-provider-session",
+      );
+      assert.equal(stopped?.source, "provider_history");
+      assert.equal(stopped?.historyMeta?.lines, 12);
+      assert.equal(
+        sessions.recentSessions.find(
+          (session) => session.providerSessionId === "closed-provider-session",
+        )?.historyMeta?.lines,
+        12,
+      );
+      assert.equal(adapter.storedSessionCalls, 2);
+      assert.equal(otherProviderAdapter.storedSessionCalls, 1);
+    } finally {
+      await engine.shutdown();
+    }
   });
 
   test("history paging freezes a snapshot once loaded", async () => {
@@ -1641,7 +1867,13 @@ describe("RuntimeEngine", () => {
     assert.ok(
       engine
         .listEvents({ eventTypes: ["session.discovery"] })
-        .some((event) => event.type === "session.discovery"),
+        .some(
+          (event) =>
+            event.type === "session.discovery" &&
+            event.payload.storedSessions?.upsert?.some(
+              (session) => session.providerSessionId === "session-2",
+            ),
+        ),
     );
 
     adapter.storedSessions = adapter.storedSessions.filter(
