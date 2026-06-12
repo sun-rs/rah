@@ -9,7 +9,6 @@ import {
   isSessionControlLocked,
   isSessionGenerationActive,
   shouldPollSessionHistoryTail,
-  shouldRequestInitialTuiReplay,
 } from "./session-capabilities";
 
 function summaryWithSession(args?: Partial<SessionSummary["session"]>): SessionSummary {
@@ -304,43 +303,5 @@ test("history tail polling requires provider history and an interactive projecti
       }),
     ),
     false,
-  );
-});
-
-test("initial TUI replay waits for native local-server client readiness", () => {
-  assert.equal(
-    shouldRequestInitialTuiReplay(
-      summaryWithSession({
-        liveBackend: "native_local_server",
-        runtimeDiagnostics: { attachState: "unavailable" },
-      }),
-    ),
-    false,
-  );
-  assert.equal(
-    shouldRequestInitialTuiReplay(
-      summaryWithSession({
-        liveBackend: "native_local_server",
-        runtimeDiagnostics: { attachState: "unverified" },
-      }),
-    ),
-    false,
-  );
-  assert.equal(
-    shouldRequestInitialTuiReplay(
-      summaryWithSession({
-        liveBackend: "native_local_server",
-        runtimeDiagnostics: { attachState: "ready" },
-      }),
-    ),
-    true,
-  );
-});
-
-test("initial TUI replay stays enabled for terminal-owned sessions", () => {
-  assert.equal(shouldRequestInitialTuiReplay(summaryWithSession({ liveBackend: "tui_mux" })), true);
-  assert.equal(
-    shouldRequestInitialTuiReplay(summaryWithSession({ liveBackend: "native_tui" })),
-    true,
   );
 });

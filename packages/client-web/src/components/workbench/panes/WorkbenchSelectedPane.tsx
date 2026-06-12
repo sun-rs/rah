@@ -62,10 +62,12 @@ import {
 } from "../../../session-mode-ui";
 import {
   isSessionControlLocked,
-  shouldRequestInitialTuiReplay,
 } from "../../../session-capabilities";
 import { usePwaDisplayMode } from "../../../hooks/usePwaDisplayMode";
-import { activateSessionTuiTerminal } from "../../../tui-surface-lifecycle";
+import {
+  activateSessionTuiTerminal,
+  shouldReplayInitialSessionTuiOutput,
+} from "../../../tui-surface-lifecycle";
 import { providerLabel } from "../../../types";
 
 const SESSION_TUI_SCROLLBACK_LINES = 600;
@@ -357,7 +359,9 @@ export function WorkbenchSelectedPane(props: {
   const terminalTuiClientActive = nativeTui
     ? !closedTuiTerminalIds.has(nativeTui.terminalId)
     : true;
-  const terminalInitialReplay = shouldRequestInitialTuiReplay(props.selectedSummary);
+  const terminalInitialReplay = shouldReplayInitialSessionTuiOutput({
+    liveBackend: props.selectedSummary.session.liveBackend,
+  });
   const activateCurrentTuiView = () => {
     if (!nativeTui) {
       return;
