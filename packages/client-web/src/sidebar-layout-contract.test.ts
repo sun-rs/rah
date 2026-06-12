@@ -499,8 +499,9 @@ describe("sidebar layout contract", () => {
     assert.match(councilSource, /CONVERSATION_META_BADGE_TRAILING_SPACE_PADDING_CLASS/);
     assert.match(headerSource, /min-h-\[22px\]/);
     assert.match(councilSource, /const compactCouncilMeta = isPwaDisplayMode \|\| !isCouncilWide;/);
-    assert.match(councilSource, /icon=\{<CouncilLogo className="h-3\.5 w-3\.5" variant="bare" \/>\}/);
-    assert.doesNotMatch(councilSource, /identity=\{<CouncilLogo/);
+    assert.match(councilSource, /presentation=\{selectedCouncil \? "conversation" : "page"\}/);
+    assert.match(councilSource, /identity=\{selectedCouncil \? <CouncilLogo className="h-6 w-6" \/> : undefined\}/);
+    assert.match(councilSource, /icon=\{<Bot className="h-3\.5 w-3\.5" aria-hidden="true" \/>\}/);
     assert.match(
       councilSource,
       /label=\{compactCouncilMeta \? selectedCouncil\.agents\.length : selectedCouncilAgentCountLabel\}\s+paddingClassName=\{CONVERSATION_META_BADGE_TRAILING_SPACE_PADDING_CLASS\}/,
@@ -536,7 +537,7 @@ describe("sidebar layout contract", () => {
     assert.match(emptyPaneSource, /<CouncilLogo className="h-4 w-4" tone="black" variant="bare" \/>/);
     assert.match(canvasNewPaneSource, /<CouncilLogo className="h-4 w-4" tone="black" variant="bare" \/>/);
     assert.doesNotMatch(councilSource, /COUNCIL_HEADER_ICON_CLASSNAME/);
-    assert.doesNotMatch(councilSource, /identity=\{<CouncilLogo/);
+    assert.match(councilSource, /identity=\{selectedCouncil \? <CouncilLogo className="h-6 w-6" \/> : undefined\}/);
     assert.doesNotMatch(appSource, /CouncilLogo/);
     assert.doesNotMatch(appSource, /renderPaneToolbar/);
     assert.doesNotMatch(canvasSource, /CouncilLogo/);

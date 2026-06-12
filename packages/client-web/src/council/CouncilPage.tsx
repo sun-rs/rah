@@ -1614,7 +1614,7 @@ export function CouncilPage(props: {
                 tone="council"
                 title={selectedCouncilAgentCountLabel}
                 ariaLabel={selectedCouncilAgentCountLabel}
-                icon={<CouncilLogo className="h-3.5 w-3.5" variant="bare" />}
+                icon={<Bot className="h-3.5 w-3.5" aria-hidden="true" />}
                 label={compactCouncilMeta ? selectedCouncil.agents.length : selectedCouncilAgentCountLabel}
                 paddingClassName={CONVERSATION_META_BADGE_TRAILING_SPACE_PADDING_CLASS}
               />
@@ -1650,6 +1650,8 @@ export function CouncilPage(props: {
             onExpandSidebar={props.onExpandSidebar}
             compactCloseAction={isPwaDisplayMode}
             backgroundClassName="bg-[var(--app-bg)]/85"
+            presentation={selectedCouncil ? "conversation" : "page"}
+            identity={selectedCouncil ? <CouncilLogo className="h-6 w-6" /> : undefined}
             title={selectedCouncil?.title ?? "Council"}
             titleText={selectedCouncil?.title ?? "Council"}
             meta={councilHeaderMeta}

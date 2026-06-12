@@ -68,6 +68,9 @@ import { usePwaDisplayMode } from "../../../hooks/usePwaDisplayMode";
 import { activateSessionTuiTerminal } from "../../../tui-surface-lifecycle";
 import { providerLabel } from "../../../types";
 
+const SESSION_TUI_SCROLLBACK_LINES = 600;
+const SESSION_TUI_REPLAY_TAIL_BYTES = 96 * 1024;
+
 function formatContextPercent(value: number): string {
   const clamped = Math.max(0, Math.min(100, value));
   const rounded = Math.round(clamped * 10) / 10;
@@ -765,8 +768,8 @@ export function WorkbenchSelectedPane(props: {
             tuiClientActive={terminalTuiClientActive}
             onTuiClientActiveChange={setTerminalTuiClientActive}
             initialReplay={terminalInitialReplay}
-            scrollback={600}
-            replayTailBytes={512 * 1024}
+            scrollback={SESSION_TUI_SCROLLBACK_LINES}
+            replayTailBytes={SESSION_TUI_REPLAY_TAIL_BYTES}
             maxWriteBatchChars={128 * 1024}
           />
         </div>

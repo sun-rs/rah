@@ -41,11 +41,21 @@ export function ConversationHeader(props: {
   compactCloseAction?: boolean;
   backgroundClassName?: string;
   className?: string;
+  presentation?: "conversation" | "page";
 }) {
   const showLeftSidebarControls = props.showLeftSidebarControls ?? true;
+  const presentation = props.presentation ?? "conversation";
   const reserveRightPanelClassName = props.reserveRightPanelToggleSpace
     ? reserveClassName(props.reserveRightPanelBreakpoint ?? "md")
     : "";
+  const titleClassName =
+    presentation === "page"
+      ? "truncate text-sm font-semibold text-[var(--app-fg)]"
+      : "truncate text-sm font-medium text-[var(--app-fg)]";
+  const metaClassName =
+    presentation === "page"
+      ? "min-w-0 overflow-hidden text-xs text-[var(--app-hint)]"
+      : "mt-0.5 flex min-h-[22px] min-w-0 items-center gap-1.5 overflow-hidden text-[11px] text-[var(--app-hint)]";
 
   return (
     <header
@@ -78,11 +88,11 @@ export function ConversationHeader(props: {
           <span className={HEADER_IDENTITY_SLOT_CLASS}>{props.identity}</span>
         ) : null}
         <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-medium text-[var(--app-fg)]" title={props.titleText}>
+          <div className={titleClassName} title={props.titleText}>
             {props.title}
           </div>
           {props.meta ? (
-            <div className="mt-0.5 flex min-h-[22px] min-w-0 items-center gap-1.5 overflow-hidden text-[11px] text-[var(--app-hint)]">
+            <div className={metaClassName}>
               {props.meta}
             </div>
           ) : null}
