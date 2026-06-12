@@ -515,11 +515,7 @@ export function SessionHistoryDialog(props: {
     setOpen(nextOpen);
   };
   const closeAfterActivation = () => {
-    if (typeof window === "undefined") {
-      setOpen(false);
-      return;
-    }
-    window.requestAnimationFrame(() => setOpen(false));
+    setOpen(false);
   };
 
   const runningIdentityKeys = useMemo(

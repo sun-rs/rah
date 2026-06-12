@@ -96,6 +96,38 @@ function computeDefaultBaseUrl(): string {
   return `${protocol}//${hostname}:${DEFAULT_DAEMON_PORT}`;
 }
 
+function imagePreviewClientHint(): "local" | "remote" {
+  if (typeof window === "undefined") {
+    return "local";
+  }
+  const hostname = (window.location.hostname || "127.0.0.1").toLowerCase();
+  if (
+    hostname === "localhost" ||
+    hostname === "::1" ||
+    hostname === "0.0.0.0" ||
+    hostname.endsWith(".local") ||
+    hostname.startsWith("127.")
+  ) {
+    return "local";
+  }
+  const parts = hostname.split(".").map((part) => Number.parseInt(part, 10));
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+    return "remote";
+  }
+  const [a, b] = parts as [number, number, number, number];
+  return a === 10 ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 169 && b === 254)
+    ? "local"
+    : "remote";
+}
+
+function withImagePreviewClientHint(query: URLSearchParams): URLSearchParams {
+  query.set("imagePreviewClient", imagePreviewClientHint());
+  return query;
+}
+
 export function getBaseUrl(): string {
   let configured: string | null = null;
   try {
@@ -759,7 +791,7 @@ export async function readSessionFile(
   path: string,
   options?: { scopeRoot?: string },
 ): Promise<SessionFileResponse> {
-  const query = new URLSearchParams({ path });
+  const query = withImagePreviewClientHint(new URLSearchParams({ path }));
   if (options?.scopeRoot) {
     query.set("scopeRoot", options.scopeRoot);
   }
@@ -772,12 +804,12 @@ export async function readWorkspaceFile(
   dir: string,
   path: string,
 ): Promise<SessionFileResponse> {
-  const query = new URLSearchParams({ dir, path });
+  const query = withImagePreviewClientHint(new URLSearchParams({ dir, path }));
   return requestJson<SessionFileResponse>(`/api/workspace/file?${query.toString()}`);
 }
 
 export async function readHostFile(path: string): Promise<SessionFileResponse> {
-  const query = new URLSearchParams({ path });
+  const query = withImagePreviewClientHint(new URLSearchParams({ path }));
   return requestJson<SessionFileResponse>(`/api/host/file?${query.toString()}`);
 }
 

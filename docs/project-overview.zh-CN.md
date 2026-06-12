@@ -415,7 +415,7 @@ Codex 现在已经是 reference adapter，而不是 demo：
 
 ## 8. 当前 1.0 边界
 
-RAH 当前 `main` 可以按 1.0 RC 的边界维护：
+RAH 当前 `main` 按 1.0.0 里程碑边界维护：
 
 - canonical event / timeline / history paging 是稳定主线。
 - Codex、Claude、Gemini、OpenCode 是一等 live provider。

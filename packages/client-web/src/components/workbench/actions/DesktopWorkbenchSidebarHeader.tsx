@@ -1,6 +1,7 @@
 import type { CouncilSnapshot, SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
-import { Columns3, House, MessageCircleMore, Settings, UsersRound } from "lucide-react";
+import { Columns3, House, MessageCircleMore, Settings } from "lucide-react";
 import { SessionHistoryDialog } from "../../SessionHistoryDialog";
+import { CouncilLogo } from "../../CouncilLogo";
 import type { WorkspaceSortMode } from "../../../session-browser";
 
 const headerButtonClassName =
@@ -54,7 +55,7 @@ export function DesktopWorkbenchSidebarHeader(props: {
         aria-label={props.councilActive ? "Hide council" : "Open council"}
         title={props.councilActive ? "Hide council" : "Council"}
       >
-        <UsersRound size={headerIconSize} />
+        <CouncilLogo className="h-[18px] w-[18px]" tone="black" variant="bare" />
       </button>
       <button
         type="button"

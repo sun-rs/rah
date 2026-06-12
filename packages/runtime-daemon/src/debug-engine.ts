@@ -686,7 +686,7 @@ export class DebugEngine {
   async readSessionFile(
     sessionId: string,
     path: string,
-    _options?: { scopeRoot?: string },
+    _options?: { scopeRoot?: string; imagePreviewMode?: "bounded" | "full" },
   ): Promise<SessionFileResponse> {
     const session = this.sessionStore.getSession(sessionId)?.session;
     if (!session) {

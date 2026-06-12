@@ -106,7 +106,7 @@ export class DebugAdapter implements ProviderAdapter {
   async readSessionFile(
     sessionId: string,
     path: string,
-    options?: { scopeRoot?: string },
+    options?: { scopeRoot?: string; imagePreviewMode?: "bounded" | "full" },
   ): Promise<SessionFileResponse> {
     return await this.engine.readSessionFile(sessionId, path, options);
   }

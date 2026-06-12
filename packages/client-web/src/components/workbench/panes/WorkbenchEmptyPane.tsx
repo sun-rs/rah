@@ -1,9 +1,10 @@
 import type { ClipboardEventHandler, RefObject } from "react";
 import type { ProviderModelCatalog } from "@rah/runtime-protocol";
-import { Menu, PanelRight, UsersRound } from "lucide-react";
+import { Menu, PanelRight } from "lucide-react";
 import type { ProviderChoice } from "../../ProviderSelector";
 import type { SessionModeChoice } from "../../../session-mode-ui";
 import { NewSessionComposer } from "./NewSessionComposer";
+import { CouncilLogo } from "../../CouncilLogo";
 import {
   HEADER_EDGE_TOGGLE_BUTTON_CLASS,
   HEADER_EDGE_TOGGLE_ICON_SIZE,
@@ -159,7 +160,7 @@ export function WorkbenchEmptyPane(props: {
               aria-label="Start a Council"
               title="Start a Council"
             >
-              <UsersRound size={14} />
+              <CouncilLogo className="h-4 w-4" tone="black" variant="bare" />
               New Council
             </button>
           </div>

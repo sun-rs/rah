@@ -1,7 +1,8 @@
 import { useRef, useState, type ClipboardEventHandler } from "react";
 import type { ProviderModelCatalog } from "@rah/runtime-protocol";
-import { History, UsersRound } from "lucide-react";
+import { History } from "lucide-react";
 import type { ProviderChoice } from "../../ProviderSelector";
+import { CouncilLogo } from "../../CouncilLogo";
 import type { SessionModeChoice } from "../../../session-mode-ui";
 import { NewSessionComposer } from "../panes/NewSessionComposer";
 import {
@@ -135,7 +136,7 @@ export function CanvasNewSessionPane(props: {
               aria-label="Start a Council"
               title="Start a Council"
             >
-              <UsersRound size={14} />
+              <CouncilLogo className="h-4 w-4" tone="black" variant="bare" />
               New Council
             </button>
             <button

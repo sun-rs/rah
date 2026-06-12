@@ -52,7 +52,7 @@ export function WorkbenchSidebarShell(props: {
       <aside
         className={`hidden md:flex flex-col bg-[var(--app-subtle-bg)] shrink-0 transition-[width] ${
           props.isResizing ? "duration-0" : "duration-200"
-        } overflow-hidden`}
+        } ${props.sidebarOpen ? "border-r border-[var(--app-border)]" : "border-r-0"} overflow-hidden`}
         style={{
           width: props.sidebarOpen ? `var(--rah-sidebar-width, ${props.sidebarWidth}px)` : 0,
         }}

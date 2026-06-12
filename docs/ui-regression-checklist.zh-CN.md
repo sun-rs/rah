@@ -59,6 +59,8 @@ npm run test:smoke:history-long-browser
 - 选中 `workspace` 后手动打开 inspector，会显示该 workspace 的 `Files / Changes`
 - 选中 `session` 后 inspector 正常显示 `Files / Changes / Events`
 - iPad portrait / split 下，Inspector tab 不应换行、错位、撑高
+- session 标题栏 provider 图标和 Council 标题栏 Council 图标都应有一致的 pill/card 外壳；小型 badge/button 内可使用 bare 图标，但不能在标题栏裸放 SVG。
+- 左侧 sidebar 的 Council bare 图标应为黑色 glyph，尺寸接近同组功能按钮；非 sidebar 位置的 Council 图标应维持橙色 glyph，并与同位置 provider 图标同规格。不要为黑色状态引入单独图片资产。
 
 失败信号：
 
@@ -175,6 +177,8 @@ npm run test:smoke:history-long-browser
 - `Changes` 大 diff 不会卡死
 - `Load more` 可继续展开
 - `Diff / File` 切换正常
+- 从 Chat 回复点击图片或本地文件链接时，首次打开必须出现可见 preview/loading dialog，不能是一片空白。
+- 大图本地/LAN 打开应显示原图；远程/Tailscale/公网打开应显示 bounded preview，而不是 “too large or unavailable”。
 - `rename / binary / staged+unstaged` 都能正常显示
 - 窄屏 inspector 中 tab 条不乱
 

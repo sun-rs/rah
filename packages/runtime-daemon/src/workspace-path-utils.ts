@@ -1,5 +1,6 @@
 import { execFile, spawn } from "node:child_process";
 import { promises as fs, readdirSync, type Stats } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import type {
   NotebookPreviewData,
@@ -9,11 +10,16 @@ import type {
 
 const DEFAULT_MAX_READABLE_FILE_BYTES = 1_000_000;
 const NOTEBOOK_MAX_READABLE_FILE_BYTES = 8_000_000;
+const LARGE_IMAGE_PREVIEW_EDGE_PX = 1600;
 const MAX_NOTEBOOK_PREVIEW_CELLS = 80;
 const MAX_NOTEBOOK_OUTPUT_CHARS = 2000;
 const MAX_WORKSPACE_FILE_SEARCH_RESULTS = 500;
 const WORKSPACE_FILE_SEARCH_TIMEOUT_MS = 10_000;
 
+export type ImagePreviewMode = "bounded" | "full";
+export type FilePreviewReadOptions = {
+  imagePreviewMode?: ImagePreviewMode;
+};
 export type WorkspaceFileData = Omit<SessionFileResponse, "sessionId">;
 
 async function execFileUtf8(
@@ -144,20 +150,26 @@ async function searchWorkspaceFilesWithRipgrep(
 export async function readWorkspaceFileDataAsync(
   cwd: string,
   targetPath: string,
-  options?: { scopeRoot?: string },
+  options?: { scopeRoot?: string } & FilePreviewReadOptions,
 ): Promise<WorkspaceFileData> {
   const resolvedPath = await resolveWorkspacePathAsync(options?.scopeRoot ?? cwd, targetPath);
-  return await readFileDataAtResolvedPathAsync(resolvedPath);
+  return await readFileDataAtResolvedPathAsync(resolvedPath, options);
 }
 
-export async function readHostFileDataAsync(targetPath: string): Promise<WorkspaceFileData> {
+export async function readHostFileDataAsync(
+  targetPath: string,
+  options?: FilePreviewReadOptions,
+): Promise<WorkspaceFileData> {
   if (!path.isAbsolute(targetPath)) {
     throw new Error("Host file path must be absolute.");
   }
-  return await readFileDataAtResolvedPathAsync(path.resolve(targetPath));
+  return await readFileDataAtResolvedPathAsync(path.resolve(targetPath), options);
 }
 
-async function readFileDataAtResolvedPathAsync(resolvedPath: string): Promise<WorkspaceFileData> {
+async function readFileDataAtResolvedPathAsync(
+  resolvedPath: string,
+  options?: FilePreviewReadOptions,
+): Promise<WorkspaceFileData> {
   const resolved = await resolveFileLocationPathAsync(resolvedPath);
   const stats = resolved.stats;
   const filePath = resolved.path;
@@ -176,18 +188,74 @@ async function readFileDataAtResolvedPathAsync(resolvedPath: string): Promise<Wo
     truncated && notebookPreview ? compactNotebookPreviewContent(notebookPreview) : undefined;
   const contentBuffer = truncated && !contentOverride ? buffer.subarray(0, maxReadableBytes) : buffer;
   const binary = contentOverride ? false : isLikelyBinary(contentBuffer);
-  const includeBinaryContent =
-    !contentOverride && binary && !truncated && Boolean(mimeType?.startsWith("image/"));
+  const imageContent =
+    !contentOverride && binary && mimeType?.startsWith("image/")
+      ? await readImagePreviewContentBase64(filePath, buffer, {
+          mimeType,
+          truncated,
+          mode: options?.imagePreviewMode ?? "bounded",
+        })
+      : undefined;
+  const responseMimeType = imageContent?.mimeType ?? mimeType;
   return {
     path: filePath,
     content: binary ? "" : (contentOverride ?? contentBuffer.toString("utf8")),
     binary,
     sizeBytes: stats.size,
-    ...(mimeType ? { mimeType } : {}),
-    ...(includeBinaryContent ? { contentBase64: contentBuffer.toString("base64") } : {}),
+    ...(responseMimeType ? { mimeType: responseMimeType } : {}),
+    ...(imageContent ? { contentBase64: imageContent.contentBase64 } : {}),
     ...(truncated ? { truncated: true } : {}),
     ...(notebookPreview ? { notebookPreview } : {}),
   };
+}
+
+async function readImagePreviewContentBase64(
+  filePath: string,
+  originalBuffer: Buffer,
+  options: {
+    mimeType: string;
+    truncated: boolean;
+    mode: ImagePreviewMode;
+  },
+): Promise<{ contentBase64: string; mimeType: string } | undefined> {
+  if (!options.truncated || options.mode === "full" || options.mimeType === "image/svg+xml") {
+    return { contentBase64: originalBuffer.toString("base64"), mimeType: options.mimeType };
+  }
+
+  const preview = await tryCreateBoundedImagePreview(filePath);
+  if (preview) {
+    return preview;
+  }
+
+  return { contentBase64: originalBuffer.toString("base64"), mimeType: options.mimeType };
+}
+
+async function tryCreateBoundedImagePreview(
+  filePath: string,
+): Promise<{ contentBase64: string; mimeType: string } | undefined> {
+  const dir = await fs.mkdtemp(path.join(tmpdir(), "rah-image-preview-"));
+  const outPath = path.join(dir, "preview.jpg");
+  try {
+    await execFileUtf8("sips", [
+      "-s",
+      "format",
+      "jpeg",
+      "-s",
+      "formatOptions",
+      "80",
+      "-Z",
+      String(LARGE_IMAGE_PREVIEW_EDGE_PX),
+      filePath,
+      "--out",
+      outPath,
+    ]);
+    const preview = await fs.readFile(outPath);
+    return { contentBase64: preview.toString("base64"), mimeType: "image/jpeg" };
+  } catch {
+    return undefined;
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
+  }
 }
 
 async function resolveFileLocationPathAsync(
@@ -408,7 +476,7 @@ function resolvePreviewMimeType(filePath: string): string | undefined {
 export async function readWorkspaceFileFromDirectoryAsync(
   cwd: string,
   targetPath: string,
-  options?: { scopeRoot?: string },
+  options?: { scopeRoot?: string } & FilePreviewReadOptions,
 ): Promise<SessionFileResponse> {
   return {
     sessionId: "",

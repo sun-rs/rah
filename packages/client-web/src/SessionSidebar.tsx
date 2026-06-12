@@ -13,17 +13,14 @@ import {
   Pencil,
   Pin,
   PlusCircle,
-  UsersRound,
   X,
 } from "lucide-react";
 import { ProviderLogo } from "./components/ProviderLogo";
+import { CouncilLogo } from "./components/CouncilLogo";
 import { WorkspacePicker } from "./components/WorkspacePicker";
 import { SIDEBAR_LAYOUT } from "./sidebar-layout-contract";
 import { deriveSidebarWorkspaceViewModels, type SidebarWorkspaceViewModel } from "./sidebar-view-model";
-import {
-  COUNCIL_ACCENT_ICON_CLASSNAME,
-  COUNCIL_ACCENT_TITLE_CLASSNAME,
-} from "./council/council-theme";
+import { COUNCIL_ACCENT_TITLE_CLASSNAME } from "./council/council-theme";
 
 function WorkspaceSortMenu(props: {
   value: WorkspaceSortMode;
@@ -247,10 +244,7 @@ function CouncilRow(props: {
         >
           <div className={SIDEBAR_LAYOUT.sessionHeaderClassName}>
             <span className={SIDEBAR_LAYOUT.sessionIconSlotClassName}>
-              <UsersRound
-                size={16}
-                className={COUNCIL_ACCENT_ICON_CLASSNAME}
-              />
+              <CouncilLogo className="h-4 w-4" tone="black" variant="bare" />
             </span>
             <span className={`${SIDEBAR_LAYOUT.sessionTitleClassName} ${COUNCIL_ACCENT_TITLE_CLASSNAME}`}>
               {props.council.title}

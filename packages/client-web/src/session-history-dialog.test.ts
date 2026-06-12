@@ -332,6 +332,7 @@ test("Chats All filters do not mutate workspace expansion state", () => {
   const source = readSource("./components/SessionHistoryDialog.tsx");
   assert.doesNotMatch(source, /setExpandedGroups\(new Set\(filteredGroups/);
   assert.doesNotMatch(source, /setVisibleItemCounts\(\s*new Map\(filteredGroups/s);
+  assert.doesNotMatch(source, /requestAnimationFrame\(\(\) => setOpen\(false\)\)/);
 });
 
 test("splits councils for the Chats council tab", () => {

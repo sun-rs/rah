@@ -138,10 +138,14 @@ describe("sidebar layout contract", () => {
 
   test("overlays the sidebar resize target on the boundary without a visible gutter", () => {
     const cssSource = readSource("./index.css");
+    const shellSource = readSource("./components/workbench/shells/WorkbenchSidebarShell.tsx");
 
+    assert.match(shellSource, /props\.sidebarOpen \? "border-r border-\[var\(--app-border\)\]" : "border-r-0"/);
     assert.match(cssSource, /\.resize-handle\s*\{[^}]*margin-left:\s*-6px/s);
     assert.match(cssSource, /\.resize-handle\s*\{[^}]*margin-right:\s*-6px/s);
-    assert.match(cssSource, /\.resize-handle\s*\{[^}]*z-index:\s*20/s);
+    assert.match(cssSource, /\.resize-handle\s*\{[^}]*z-index:\s*30/s);
+    assert.match(cssSource, /\.resize-handle::after\s*\{[^}]*opacity:\s*0;/s);
+    assert.match(cssSource, /\.resize-handle:hover::after,\s*\.resize-handle\.dragging::after\s*\{[^}]*opacity:\s*0\.35;/s);
   });
 
   test("overlays shared right side panel dividers without a visible gutter", () => {
@@ -149,9 +153,11 @@ describe("sidebar layout contract", () => {
     const sidePanelSource = readSource("./components/workbench/shells/ConversationSidePanelShell.tsx");
 
     assert.match(sidePanelSource, /inspector-divider/);
+    assert.match(sidePanelSource, /props\.desktopOpen \? "border-l border-\[var\(--app-border\)\]" : "border-l-0"/);
     assert.match(cssSource, /\.inspector-divider\s*\{[^}]*margin-left:\s*-6px/s);
     assert.match(cssSource, /\.inspector-divider\s*\{[^}]*margin-right:\s*-6px/s);
-    assert.match(cssSource, /\.inspector-divider\s*\{[^}]*z-index:\s*20/s);
+    assert.match(cssSource, /\.inspector-divider\s*\{[^}]*z-index:\s*30/s);
+    assert.match(cssSource, /\.inspector-divider::after\s*\{[^}]*opacity:\s*0;/s);
   });
 
   test("locks sidebar indentation and meta width tokens", () => {
@@ -260,7 +266,7 @@ describe("sidebar layout contract", () => {
     const canvasSource = readSource("./components/workbench/canvas/CanvasWorkbench.tsx");
     const inspectorHeaderSource = readSource("./inspector/InspectorHeader.tsx");
 
-    assert.equal(HEADER_EDGE_TOGGLE_ICON_SIZE, 16);
+    assert.equal(HEADER_EDGE_TOGGLE_ICON_SIZE, 18);
     assert.match(HEADER_EDGE_TOGGLE_BUTTON_CLASS, /\bh-8\b/);
     assert.match(HEADER_EDGE_TOGGLE_BUTTON_CLASS, /\bw-8\b/);
     assert.match(HEADER_EDGE_TOGGLE_BUTTON_CLASS, /\bshrink-0\b/);
@@ -388,8 +394,16 @@ describe("sidebar layout contract", () => {
     );
     assert.match(appSource, /loadInspectorPane/);
     assert.match(appSource, /importWithStaleReload/);
+    assert.match(appSource, /function FilePreviewDialogLoadingFallback/);
+    assert.match(appSource, /<Suspense fallback=\{<FilePreviewDialogLoadingFallback \/>}/);
     assert.match(appSource, /title="Inspector crashed"/);
     assert.match(boundarySource, /isLikelyStaleDynamicImportError/);
+
+    const apiSource = readSource("./api.ts");
+    assert.match(apiSource, /function imagePreviewClientHint/);
+    assert.match(apiSource, /imagePreviewClient/);
+    assert.match(apiSource, /a === 192 && b === 168/);
+    assert.match(apiSource, /readHostFile\(path: string\)/);
   });
 
   test("keeps constrained desktop home and council layouts responsive", () => {
@@ -407,6 +421,7 @@ describe("sidebar layout contract", () => {
   test("routes session and council title pills through shared meta badge structure", () => {
     const sessionSource = readSource("./components/workbench/panes/WorkbenchSelectedPane.tsx");
     const councilSource = readSource("./council/CouncilPage.tsx");
+    const headerSource = readSource("./components/workbench/shells/ConversationHeader.tsx");
     const metaSource = readSource("./components/workbench/ConversationMetaBadge.tsx");
     const cssSource = readSource("./index.css");
 
@@ -480,9 +495,12 @@ describe("sidebar layout contract", () => {
     assert.match(councilSource, /ConversationHeaderMetaList/);
     assert.doesNotMatch(councilSource, /CONVERSATION_META_BADGE_PWA_CLASS/);
     assert.doesNotMatch(councilSource, /councilMetaBadgeClassName/);
+    assert.match(councilSource, /Start or open a Council to coordinate agents\./);
     assert.match(councilSource, /CONVERSATION_META_BADGE_TRAILING_SPACE_PADDING_CLASS/);
+    assert.match(headerSource, /min-h-\[22px\]/);
     assert.match(councilSource, /const compactCouncilMeta = isPwaDisplayMode \|\| !isCouncilWide;/);
-    assert.match(councilSource, /icon=\{<UsersRound size=\{10\} \/>\}/);
+    assert.match(councilSource, /icon=\{<CouncilLogo className="h-3\.5 w-3\.5" variant="bare" \/>\}/);
+    assert.doesNotMatch(councilSource, /identity=\{<CouncilLogo/);
     assert.match(
       councilSource,
       /label=\{compactCouncilMeta \? selectedCouncil\.agents\.length : selectedCouncilAgentCountLabel\}\s+paddingClassName=\{CONVERSATION_META_BADGE_TRAILING_SPACE_PADDING_CLASS\}/,
@@ -490,5 +508,37 @@ describe("sidebar layout contract", () => {
     assert.doesNotMatch(sessionSource, /function ConversationHeaderStateIconView/);
     assert.doesNotMatch(councilSource, /function ConversationHeaderStateIconView/);
     assert.match(metaSource, /ConversationHeaderStateIconView/);
+  });
+
+  test("keeps council icon tone scoped by surface", () => {
+    const councilLogoSource = readSource("./components/CouncilLogo.tsx");
+    const desktopHeaderSource = readSource("./components/workbench/actions/DesktopWorkbenchSidebarHeader.tsx");
+    const mobileHeaderSource = readSource("./components/workbench/actions/MobileWorkbenchHeaderActions.tsx");
+    const sidebarSource = readSource("./SessionSidebar.tsx");
+    const councilSource = readSource("./council/CouncilPage.tsx");
+    const appSource = readSource("./App.tsx");
+    const canvasSource = readSource("./components/workbench/canvas/CanvasWorkbench.tsx");
+    const emptyPaneSource = readSource("./components/workbench/panes/WorkbenchEmptyPane.tsx");
+    const canvasNewPaneSource = readSource("./components/workbench/canvas/CanvasNewSessionPane.tsx");
+
+    assert.match(councilLogoSource, /tone\?: "orange" \| "black"/);
+    assert.match(councilLogoSource, /const tone = props\.tone \?\? "orange"/);
+    assert.match(councilLogoSource, /import \{ UsersRound \} from "lucide-react"/);
+    assert.doesNotMatch(councilLogoSource, /council\.png/);
+    assert.match(councilLogoSource, /blackIconClassName/);
+    assert.match(councilLogoSource, /text-black\/90/);
+    assert.match(councilLogoSource, /h-full w-full text-current/);
+    assert.doesNotMatch(councilLogoSource, /h-full w-full text-black\/90/);
+    assert.match(councilLogoSource, /h-full w-full text-orange-700\/90/);
+    assert.match(desktopHeaderSource, /<CouncilLogo className="h-\[18px\] w-\[18px\]" tone="black" variant="bare" \/>/);
+    assert.match(mobileHeaderSource, /<CouncilLogo className="h-\[17px\] w-\[17px\]" tone="black" variant="bare" \/>/);
+    assert.match(sidebarSource, /<CouncilLogo className="h-4 w-4" tone="black" variant="bare" \/>/);
+    assert.match(emptyPaneSource, /<CouncilLogo className="h-4 w-4" tone="black" variant="bare" \/>/);
+    assert.match(canvasNewPaneSource, /<CouncilLogo className="h-4 w-4" tone="black" variant="bare" \/>/);
+    assert.doesNotMatch(councilSource, /COUNCIL_HEADER_ICON_CLASSNAME/);
+    assert.doesNotMatch(councilSource, /identity=\{<CouncilLogo/);
+    assert.doesNotMatch(appSource, /CouncilLogo/);
+    assert.doesNotMatch(appSource, /renderPaneToolbar/);
+    assert.doesNotMatch(canvasSource, /CouncilLogo/);
   });
 });

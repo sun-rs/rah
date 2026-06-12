@@ -224,7 +224,7 @@ export function ImageFilePreview(props: {
   if (!dataUrl) {
     return (
       <div className="rounded-lg border border-[var(--app-border)] bg-[var(--app-subtle-bg)] p-3 text-sm text-[var(--app-hint)]">
-        This image is too large or unavailable for inline preview.
+        This image is unavailable for inline preview.
       </div>
     );
   }

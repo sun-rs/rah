@@ -86,6 +86,57 @@ function parseRevisionFromUrl(url: URL): number {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
 }
 
+function parseImagePreviewModeFromRequest(
+  req: IncomingMessage,
+  url: URL,
+): "bounded" | "full" {
+  const clientHint = url.searchParams.get("imagePreviewClient");
+  if (clientHint === "local") {
+    return "full";
+  }
+  if (clientHint === "remote") {
+    return "bounded";
+  }
+  return isLocalPreviewHostname(hostnameFromHostHeader(req.headers.host)) ? "full" : "bounded";
+}
+
+function hostnameFromHostHeader(host: string | undefined): string {
+  const trimmed = host?.trim().toLowerCase() ?? "";
+  if (!trimmed) {
+    return "";
+  }
+  if (trimmed.startsWith("[")) {
+    const end = trimmed.indexOf("]");
+    return end > 0 ? trimmed.slice(1, end) : trimmed;
+  }
+  return trimmed.split(":")[0] ?? trimmed;
+}
+
+function isLocalPreviewHostname(hostname: string): boolean {
+  if (
+    hostname === "localhost" ||
+    hostname === "::1" ||
+    hostname === "0.0.0.0" ||
+    hostname.endsWith(".local")
+  ) {
+    return true;
+  }
+  if (hostname.startsWith("127.")) {
+    return true;
+  }
+  const parts = hostname.split(".").map((part) => Number.parseInt(part, 10));
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+    return false;
+  }
+  const [a, b] = parts as [number, number, number, number];
+  return (
+    a === 10 ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 169 && b === 254)
+  );
+}
+
 export function createPostRoutes(
   engine: RuntimeEngine,
 ): Array<{ pattern: RegExp; handler: JsonHandler }> {
@@ -811,6 +862,7 @@ export async function handleHttpRequest(args: {
         200,
         await engine.readSessionFile(fileMatch[1]!, filePath, {
           ...(scopeRoot ? { scopeRoot } : {}),
+          imagePreviewMode: parseImagePreviewModeFromRequest(req, url),
         }),
       );
       return;
@@ -873,7 +925,14 @@ export async function handleHttpRequest(args: {
         writeJson(req, res, 400, { error: "Workspace dir and file path are required." });
         return;
       }
-      writeJson(req, res, 200, await engine.readWorkspaceFile(dir, filePath));
+      writeJson(
+        req,
+        res,
+        200,
+        await engine.readWorkspaceFile(dir, filePath, {
+          imagePreviewMode: parseImagePreviewModeFromRequest(req, url),
+        }),
+      );
       return;
     }
 
@@ -883,7 +942,14 @@ export async function handleHttpRequest(args: {
         writeJson(req, res, 400, { error: "File path is required." });
         return;
       }
-      writeJson(req, res, 200, await engine.readHostFile(filePath));
+      writeJson(
+        req,
+        res,
+        200,
+        await engine.readHostFile(filePath, {
+          imagePreviewMode: parseImagePreviewModeFromRequest(req, url),
+        }),
+      );
       return;
     }
 

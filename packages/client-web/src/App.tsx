@@ -1,5 +1,5 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { MessageCircleMore, Plus, UsersRound } from "lucide-react";
+import { LoaderCircle, MessageCircleMore, Plus } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import type { CouncilSnapshot, PermissionResponseRequest, ProviderModelCatalog, SessionConfigValue, SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
 import * as api from "./api";
@@ -17,7 +17,6 @@ import { CanvasNewSessionPane } from "./components/workbench/canvas/CanvasNewSes
 import { CanvasSessionPane } from "./components/workbench/canvas/CanvasSessionPane";
 import { CanvasWorkbench, type CanvasLayout } from "./components/workbench/canvas/CanvasWorkbench";
 import { CouncilPage } from "./council/CouncilPage";
-import { COUNCIL_ACCENT_ICON_CLASSNAME } from "./council/council-theme";
 import { defaultRunningCouncilId } from "./council/CouncilsBrowser";
 import { mergeCouncilLists, mergeCouncilSnapshot } from "./council/council-message-window";
 import { NewCouncilDialog } from "./council/NewCouncilDialog";
@@ -107,6 +106,23 @@ const loadInspectorFileDetailDialog = () =>
 const InspectorFileDetailDialog = lazy(async () => ({
   default: (await loadInspectorFileDetailDialog()).InspectorFileDetailDialog,
 }));
+
+function FilePreviewDialogLoadingFallback() {
+  return (
+    <>
+      <div className="fixed inset-0 z-40 bg-black/45" />
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Opening file preview"
+        className="fixed left-1/2 top-1/2 z-50 flex w-[min(26rem,88vw)] -translate-x-1/2 -translate-y-1/2 items-center gap-3 rounded-2xl border border-[var(--app-border)] bg-[var(--app-bg)] px-4 py-3 text-sm text-[var(--app-fg)] shadow-2xl"
+      >
+        <LoaderCircle size={16} className="shrink-0 animate-spin text-[var(--app-hint)]" />
+        <span className="min-w-0 truncate">Opening preview...</span>
+      </div>
+    </>
+  );
+}
 
 type ModelDraft = {
   modelId?: string | null;
@@ -1822,20 +1838,6 @@ export function App() {
               onDropCouncil={(paneId, councilId) =>
                 setCanvasPaneCouncil(paneId as CanvasPaneId, councilId)
               }
-              renderPaneToolbar={(paneId) => {
-                const typedPaneId = paneId as CanvasPaneId;
-                const council = resolveCanvasCouncil(typedPaneId);
-                return (
-                  <>
-                    {council ? (
-                      <UsersRound
-                        size={15}
-                        className={COUNCIL_ACCENT_ICON_CLASSNAME}
-                      />
-                    ) : null}
-                  </>
-                );
-              }}
               renderPane={(paneId) => {
                 const typedPaneId = paneId as CanvasPaneId;
                 const target = canvasPaneTargets[typedPaneId];
@@ -2779,7 +2781,7 @@ export function App() {
       </WorkbenchErrorBoundary>
 
       {linkedFilePreviewPath ? (
-        <Suspense fallback={null}>
+        <Suspense fallback={<FilePreviewDialogLoadingFallback />}>
           <InspectorFileDetailDialog
             sessionId={selectedSummary?.session.id ?? null}
             workspaceRoot={selectedInspectorWorkspaceDir}

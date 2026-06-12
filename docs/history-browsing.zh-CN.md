@@ -183,6 +183,7 @@ Tail first 更符合真实使用：
 - 不可直接输入。
 - 不算 live。
 - 不算 provider 写手。
+- 从 Chats / Recent / All 打开历史时，前端应在同一 UI 批次内关闭弹窗并选中 read-only projection；不应先让主 workbench 在弹窗背后切换、下一帧再关闭弹窗，否则会表现成整页闪烁。
 
 点击 claim/resume 后：
 

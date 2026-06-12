@@ -52,7 +52,6 @@ export function CanvasWorkbench(props: {
   onExitCanvas: () => void;
   onDropSession: (paneId: string, sessionId: string) => void;
   onDropCouncil: (paneId: string, councilId: string) => void;
-  renderPaneToolbar: (paneId: string) => ReactNode;
   renderPane: (paneId: string) => ReactNode;
 }) {
   const linearRef = useRef<HTMLDivElement | null>(null);
@@ -175,7 +174,6 @@ export function CanvasWorkbench(props: {
             {pane.label}
           </button>
           <div className="flex shrink-0 items-center gap-1">
-            {props.renderPaneToolbar(pane.id)}
             <button
               type="button"
               className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)]"
@@ -193,18 +191,18 @@ export function CanvasWorkbench(props: {
               )}
             </button>
             {pane.clearable ? (
-            <button
-              type="button"
-              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)]"
-              onClick={(event) => {
-                event.stopPropagation();
-                props.onClearPane(pane.id);
-              }}
-              aria-label="Clear pane content"
-              title="Clear pane content"
-            >
-              <Eraser size={14} />
-            </button>
+              <button
+                type="button"
+                className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)]"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  props.onClearPane(pane.id);
+                }}
+                aria-label="Clear pane content"
+                title="Clear pane content"
+              >
+                <Eraser size={14} />
+              </button>
             ) : null}
           </div>
         </div>

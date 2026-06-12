@@ -82,7 +82,7 @@ export function ConversationHeader(props: {
             {props.title}
           </div>
           {props.meta ? (
-            <div className="mt-0.5 flex min-w-0 items-center gap-1.5 overflow-hidden text-[11px] text-[var(--app-hint)]">
+            <div className="mt-0.5 flex min-h-[22px] min-w-0 items-center gap-1.5 overflow-hidden text-[11px] text-[var(--app-hint)]">
               {props.meta}
             </div>
           ) : null}

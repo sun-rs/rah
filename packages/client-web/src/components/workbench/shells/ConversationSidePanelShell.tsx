@@ -62,7 +62,9 @@ export function ConversationSidePanelShell(props: {
             <div className={`inspector-divider ${classNames.divider}`} />
           ) : null}
           <aside
-            className={`${classNames.aside} relative shrink-0 flex-col overflow-visible bg-transparent transition-[width] duration-200 ${props.desktopClassName ?? ""}`}
+            className={`${classNames.aside} relative shrink-0 flex-col overflow-visible bg-transparent transition-[width] duration-200 ${
+              props.desktopOpen ? "border-l border-[var(--app-border)]" : "border-l-0"
+            } ${props.desktopClassName ?? ""}`}
             style={{
               width: props.desktopOpen ? desktopWidth : 0,
               ...props.desktopStyle,

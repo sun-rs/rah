@@ -122,6 +122,9 @@ Timeline identity 的硬约束：
 - 通过 `useSessionStore` 管 session projection、selected session、history paging、event sync。
 - 对长历史使用虚拟窗口和 measured row height，不把所有 DOM 一次性渲染。
 - mode/model/config 的 provider 差异必须由 adapter 通过 `ProviderModelCatalog`、`SessionModeState`、`ManagedSession.model/config/modelProfile` 暴露，前端不能把 mode 翻译成 provider-native 启动参数。
+- 图片粘贴是 composer 能力：前端把剪贴板图片保存为 data image URL 附加到 outgoing text；provider adapter 负责把它映射到 provider 可接受的 image input。Chat feed 中只展示“Image xN”标识，不把 base64 展开成正文。
+- 回复中的本地文件链接不作为普通 HTTP 链接跳转，而是进入 Inspector file preview。Host file preview 不受当前 workspace scope 限制；workspace/session Inspector 文件树仍保持 workspace boundary。图片 preview 按访问面分级：`localhost` / LAN private IP / `.local` 访问返回原图 data；远程访问返回 bounded preview data，后端优先用系统图像能力生成缩略图，不能把“大图”作为正常不可预览状态暴露给用户。
+- `ProviderLogo` 和 `CouncilLogo` 是标题栏、sidebar、Chats row、Canvas toolbar 的唯一图标入口。Session provider 标题图标默认是 card/pill；Council 标题图标也必须使用同样的 card/pill 外壳，小型 badge/button 再显式使用 `bare` 变体。左侧 sidebar 的 Council 图标使用黑色 glyph；其他 Council 图标默认使用橙色 glyph，并保持与同位置 provider 图标同规格。
 
 ### 3.4 Conversation State 顶层协议
 

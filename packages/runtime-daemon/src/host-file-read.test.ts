@@ -6,6 +6,11 @@ import assert from "node:assert/strict";
 import { readHostFileDataAsync } from "./workspace-utils";
 
 describe("host file reads", () => {
+  const pixelPng = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lz7c7wAAAABJRU5ErkJggg==",
+    "base64",
+  );
+
   test("reads absolute local files outside a workspace scope", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "rah-host-file-"));
     try {
@@ -28,10 +33,7 @@ describe("host file reads", () => {
     const dir = await mkdtemp(path.join(tmpdir(), "rah-host-file-image-"));
     try {
       const target = path.join(dir, "pixel.png");
-      const png = Buffer.from(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lz7c7wAAAABJRU5ErkJggg==",
-        "base64",
-      );
+      const png = pixelPng;
       await writeFile(target, png);
 
       const file = await readHostFileDataAsync(target);
@@ -41,6 +43,47 @@ describe("host file reads", () => {
       assert.equal(file.content, "");
       assert.equal(file.mimeType, "image/png");
       assert.equal(file.sizeBytes, png.byteLength);
+      assert.equal(file.contentBase64, png.toString("base64"));
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("returns a bounded inline preview for large host images", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "rah-host-file-large-image-"));
+    try {
+      const target = path.join(dir, "large.png");
+      const png = Buffer.concat([pixelPng, Buffer.alloc(1_100_000)]);
+      await writeFile(target, png);
+
+      const file = await readHostFileDataAsync(target, { imagePreviewMode: "bounded" });
+
+      assert.equal(file.path, target);
+      assert.equal(file.binary, true);
+      assert.equal(file.content, "");
+      assert.equal(file.truncated, true);
+      assert.ok(file.mimeType?.startsWith("image/"));
+      assert.ok(file.contentBase64);
+      if (file.mimeType === "image/jpeg") {
+        assert.ok(file.contentBase64.length < png.toString("base64").length);
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("returns original inline data for large host images in full preview mode", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "rah-host-file-full-image-"));
+    try {
+      const target = path.join(dir, "large.png");
+      const png = Buffer.concat([pixelPng, Buffer.alloc(1_100_000)]);
+      await writeFile(target, png);
+
+      const file = await readHostFileDataAsync(target, { imagePreviewMode: "full" });
+
+      assert.equal(file.binary, true);
+      assert.equal(file.mimeType, "image/png");
+      assert.equal(file.truncated, true);
       assert.equal(file.contentBase64, png.toString("base64"));
     } finally {
       await rm(dir, { recursive: true, force: true });

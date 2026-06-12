@@ -14,12 +14,12 @@ import {
   Plus,
   SquareTerminal,
   Trash2,
-  UsersRound,
 } from "lucide-react";
 import type { SessionProjection } from "../../../types";
 import { TerminalPane } from "../../../TerminalPane";
 import { ChatThread } from "../../chat/ChatThread";
 import { ProviderLogo } from "../../ProviderLogo";
+import { CouncilLogo } from "../../CouncilLogo";
 import { SessionControlPopover } from "../../SessionControlPopover";
 import { TokenizedTextarea } from "../../TokenizedTextarea";
 import { ComposerImageAttachmentBadge } from "../../ComposerImageAttachmentBadge";
@@ -326,7 +326,7 @@ export function WorkbenchSelectedPane(props: {
           tone="council"
           title="Council agent session"
           ariaLabel="Council agent session"
-          icon={<UsersRound size={10} />}
+          icon={<CouncilLogo className="h-3.5 w-3.5" variant="bare" />}
           label={compactSessionMeta ? undefined : "Council"}
           paddingClassName={
             compactSessionMeta

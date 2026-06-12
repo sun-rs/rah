@@ -133,7 +133,7 @@ export interface ProviderWorkspaceInspectionAdapter {
   readSessionFile(
     sessionId: string,
     path: string,
-    options?: { scopeRoot?: string },
+    options?: { scopeRoot?: string; imagePreviewMode?: "bounded" | "full" },
   ): SessionFileResponse | Promise<SessionFileResponse>;
 }
 

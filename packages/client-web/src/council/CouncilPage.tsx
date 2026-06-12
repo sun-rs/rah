@@ -14,7 +14,6 @@ import {
   Send,
   Trash2,
   Unplug,
-  UsersRound,
   X,
 } from "lucide-react";
 import type {
@@ -24,6 +23,7 @@ import type {
 } from "@rah/runtime-protocol";
 import * as api from "../api";
 import { ProviderLogo } from "../components/ProviderLogo";
+import { CouncilLogo } from "../components/CouncilLogo";
 import { MarkdownRenderer } from "../components/chat/MarkdownRenderer";
 import { TokenizedTextarea } from "../components/TokenizedTextarea";
 import {
@@ -98,7 +98,6 @@ import {
   isCouncilHistory,
   reconcileCouncilSelection,
 } from "./CouncilsBrowser";
-import { COUNCIL_HEADER_ICON_CLASSNAME } from "./council-theme";
 import {
   canLoadOlderCouncilMessages,
   mergeCouncilLists,
@@ -1615,7 +1614,7 @@ export function CouncilPage(props: {
                 tone="council"
                 title={selectedCouncilAgentCountLabel}
                 ariaLabel={selectedCouncilAgentCountLabel}
-                icon={<UsersRound size={10} />}
+                icon={<CouncilLogo className="h-3.5 w-3.5" variant="bare" />}
                 label={compactCouncilMeta ? selectedCouncil.agents.length : selectedCouncilAgentCountLabel}
                 paddingClassName={CONVERSATION_META_BADGE_TRAILING_SPACE_PADDING_CLASS}
               />
@@ -1632,6 +1631,13 @@ export function CouncilPage(props: {
         ? "Action in progress"
         : "Delete Council";
   const showCouncilOverflowMenu = selectedCouncil !== null || isCouncilHeaderCompact;
+  const councilHeaderMeta = selectedCouncil ? (
+    <ConversationHeaderMetaList items={selectedCouncilHeaderMetaItems} />
+  ) : (
+    <span className="block min-w-0 truncate">
+      Start or open a Council to coordinate agents.
+    </span>
+  );
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-[var(--app-bg)]">
@@ -1644,10 +1650,9 @@ export function CouncilPage(props: {
             onExpandSidebar={props.onExpandSidebar}
             compactCloseAction={isPwaDisplayMode}
             backgroundClassName="bg-[var(--app-bg)]/85"
-            identity={<UsersRound className={COUNCIL_HEADER_ICON_CLASSNAME} />}
             title={selectedCouncil?.title ?? "Council"}
             titleText={selectedCouncil?.title ?? "Council"}
-            meta={<ConversationHeaderMetaList items={selectedCouncilHeaderMetaItems} />}
+            meta={councilHeaderMeta}
             actions={
               <>
               <ConversationHeaderIconButton

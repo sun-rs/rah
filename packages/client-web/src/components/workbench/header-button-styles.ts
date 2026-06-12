@@ -14,7 +14,7 @@ export const HEADER_ICON_BUTTON_BASE_CLASS =
 
 export const HEADER_ICON_BUTTON_CLASS = `inline-flex ${HEADER_ICON_BUTTON_BASE_CLASS}`;
 
-export const HEADER_EDGE_TOGGLE_ICON_SIZE = 16;
+export const HEADER_EDGE_TOGGLE_ICON_SIZE = 18;
 
 export const HEADER_EDGE_TOGGLE_BUTTON_CLASS =
   "icon-click-feedback inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-subtle-bg)] hover:text-[var(--app-fg)] disabled:opacity-40";

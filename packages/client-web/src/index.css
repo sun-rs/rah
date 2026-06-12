@@ -499,7 +499,7 @@
     margin-left: -6px;
     margin-right: -6px;
     touch-action: none;
-    z-index: 20;
+    z-index: 30;
   }
   .resize-handle::after {
     content: '';
@@ -509,7 +509,7 @@
     left: 5px;
     width: 2px;
     background-color: var(--app-fg);
-    opacity: 0.12;
+    opacity: 0;
     transition: opacity 0.15s;
   }
   .resize-handle:hover::after,
@@ -525,7 +525,7 @@
     margin-left: -6px;
     margin-right: -6px;
     pointer-events: none;
-    z-index: 20;
+    z-index: 30;
   }
 
   .inspector-divider::after {
@@ -536,7 +536,7 @@
     left: 5px;
     width: 2px;
     background-color: var(--app-fg);
-    opacity: 0.12;
+    opacity: 0;
   }
 
   .icon-click-feedback {

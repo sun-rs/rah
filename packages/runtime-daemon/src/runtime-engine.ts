@@ -1393,7 +1393,11 @@ export class RuntimeEngine {
     return await adapter.applyGitHunkAction(sessionId, request);
   }
 
-  async readSessionFile(sessionId: string, path: string, options?: { scopeRoot?: string }) {
+  async readSessionFile(
+    sessionId: string,
+    path: string,
+    options?: { scopeRoot?: string; imagePreviewMode?: "bounded" | "full" },
+  ) {
     if (this.shouldUseStructuredWorkspaceInspection(sessionId)) {
       const scopeRoot = this.workspaceScopeAuthorizer.resolveAuthorizedSessionScopeRoot(
         sessionId,
@@ -1404,6 +1408,7 @@ export class RuntimeEngine {
         path,
         {
           ...(scopeRoot ? { scopeRoot } : {}),
+          ...(options?.imagePreviewMode ? { imagePreviewMode: options.imagePreviewMode } : {}),
         },
       );
     }
@@ -1415,22 +1420,28 @@ export class RuntimeEngine {
     return {
       ...(await readWorkspaceFileFromDirectoryAsync(session.cwd, path, {
         ...(scopeRoot ? { scopeRoot } : {}),
+        ...(options?.imagePreviewMode ? { imagePreviewMode: options.imagePreviewMode } : {}),
       })),
       sessionId,
     };
   }
 
-  async readWorkspaceFile(dir: string, path: string) {
+  async readWorkspaceFile(
+    dir: string,
+    path: string,
+    options?: { imagePreviewMode?: "bounded" | "full" },
+  ) {
     const workspaceDir = this.workspaceScopeAuthorizer.resolveAuthorizedWorkspaceDirectory(dir);
     return await readWorkspaceFileFromDirectoryAsync(workspaceDir, path, {
       scopeRoot: workspaceDir,
+      ...(options?.imagePreviewMode ? { imagePreviewMode: options.imagePreviewMode } : {}),
     });
   }
 
-  async readHostFile(path: string) {
+  async readHostFile(path: string, options?: { imagePreviewMode?: "bounded" | "full" }) {
     return {
       sessionId: "",
-      ...(await readHostFileDataAsync(path)),
+      ...(await readHostFileDataAsync(path, options)),
     };
   }
 
