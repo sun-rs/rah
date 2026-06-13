@@ -9,6 +9,7 @@ import type {
 import {
   AlertCircle,
   ArrowDown,
+  ArrowUpToLine,
   Circle,
   CircleCheckBig,
   CircleDashed,
@@ -30,6 +31,7 @@ import { SystemNotice } from "./SystemNotice";
 import { ToolCallCard } from "./ToolCallCard";
 import { UserMessage } from "./UserMessage";
 import { buildAssistantTurnHeaders } from "./assistant-turn-headers";
+import { resolveLatestReplyStartTarget } from "./latest-reply-navigation";
 import {
   buildVirtualFeedLayout,
   resolveVirtualFeedWindow,
@@ -442,6 +444,18 @@ export function ChatThread(props: {
     [entries.length, shouldVirtualize, virtualLayout, viewport.height, viewport.scrollTop],
   );
   const visibleEntriesWindow = entries.slice(virtualWindow.startIndex, virtualWindow.endIndex);
+  const latestReplyStartTarget = useMemo(
+    () =>
+      resolveLatestReplyStartTarget({
+        entries,
+        layout: virtualLayout,
+        measuredHeights: measuredHeightsRef.current,
+        scrollTop: viewport.scrollTop,
+        viewportHeight: viewport.height,
+        contentTopOffset: contentRef.current?.offsetTop ?? 0,
+      }),
+    [entries, measuredHeightsVersion, virtualLayout, viewport.height, viewport.scrollTop],
+  );
 
   const syncViewport = useCallback(() => {
     const node = containerRef.current;
@@ -1007,6 +1021,37 @@ export function ChatThread(props: {
     settleScrollToBottomOverFrames(BOTTOM_USER_JUMP_SETTLE_FRAMES);
   };
 
+  const handleScrollToLatestReplyStart = () => {
+    const node = containerRef.current;
+    if (!node || !latestReplyStartTarget) {
+      return;
+    }
+    stickToBottomRef.current = false;
+    userDetachedFromBottomRef.current = true;
+    sessionSwitchBottomLockRef.current = false;
+    returnToBottomOnVisibleRef.current = false;
+    pendingVisibleBottomRestoreRef.current = false;
+    prependAnchorRef.current = null;
+    if (bottomFollowRafRef.current !== null) {
+      cancelAnimationFrame(bottomFollowRafRef.current);
+      bottomFollowRafRef.current = null;
+    }
+
+    const containerTop = node.getBoundingClientRect().top;
+    const targetNode =
+      Array.from(node.querySelectorAll<HTMLElement>("[data-feed-entry-key]")).find(
+        (entryNode) => entryNode.dataset.feedEntryKey === latestReplyStartTarget.entryKey,
+      ) ?? null;
+    if (targetNode) {
+      node.scrollTop += targetNode.getBoundingClientRect().top - containerTop;
+    } else {
+      node.scrollTop = latestReplyStartTarget.targetScrollTop;
+    }
+    lastScrollTopRef.current = node.scrollTop;
+    setShowScrollToBottom(node.scrollHeight > node.clientHeight);
+    syncViewport();
+  };
+
   return (
     <div className="relative min-h-0 flex-1">
       <div
@@ -1067,16 +1112,31 @@ export function ChatThread(props: {
         </div>
       </div>
 
-      {/* Scroll-to-bottom button */}
-      {showScrollToBottom ? (
-        <button
-          type="button"
-          onClick={handleScrollToBottom}
-          className="absolute bottom-4 left-1/2 z-[30] flex h-9 w-9 -translate-x-1/2 items-center justify-center rounded-full border border-[var(--app-border)] bg-[var(--app-bg)] text-[var(--app-fg)] shadow-lg transition-all duration-200 hover:scale-110 hover:bg-[var(--app-subtle-bg)] active:scale-95"
-          aria-label="Scroll to bottom"
-        >
-          <ArrowDown size={16} />
-        </button>
+      {latestReplyStartTarget || showScrollToBottom ? (
+        <div className="absolute bottom-4 left-1/2 z-[30] flex -translate-x-1/2 flex-col items-center gap-2">
+          {latestReplyStartTarget ? (
+            <button
+              type="button"
+              onClick={handleScrollToLatestReplyStart}
+              className="flex h-9 w-9 items-center justify-center rounded-full border border-[var(--app-border)] bg-[var(--app-bg)] text-[var(--app-fg)] shadow-lg transition-all duration-200 hover:scale-110 hover:bg-[var(--app-subtle-bg)] active:scale-95"
+              aria-label="Read latest reply from start"
+              title="Read latest reply"
+            >
+              <ArrowUpToLine size={16} />
+            </button>
+          ) : null}
+          {showScrollToBottom ? (
+            <button
+              type="button"
+              onClick={handleScrollToBottom}
+              className="flex h-9 w-9 items-center justify-center rounded-full border border-[var(--app-border)] bg-[var(--app-bg)] text-[var(--app-fg)] shadow-lg transition-all duration-200 hover:scale-110 hover:bg-[var(--app-subtle-bg)] active:scale-95"
+              aria-label="Scroll to bottom"
+              title="Scroll to bottom"
+            >
+              <ArrowDown size={16} />
+            </button>
+          ) : null}
+        </div>
       ) : null}
     </div>
   );
