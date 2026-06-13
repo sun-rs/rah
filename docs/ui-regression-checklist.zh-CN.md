@@ -146,6 +146,9 @@ npm run test:smoke:history-long-browser
 检查：
 
 - thinking 时 `scroll-to-bottom` 按钮位置稳定
+- 最新 assistant 回复内容高于当前 chat 可视区时，贴底状态应显示 `Read latest reply`；点击后应跳到该最新回复内容顶部，并退出 bottom-follow
+- 如果最新 assistant 回复较短，即使上一条回复很长，也不应显示 `Read latest reply` 去跳回上一轮
+- Canvas pane、pane 最大化、普通 session/council 页面都应按各自 chat 滚动区高度触发，而不是按浏览器整窗高度触发
 - `GlobalWorkbenchCallout` 不和 `scroll-to-bottom` 重叠
 - 多行 composer、高 safe-area、error callout 同时出现时，底部元素仍然分层清楚
 
@@ -153,6 +156,7 @@ npm run test:smoke:history-long-browser
 
 - 两个浮层重叠
 - thinking 时浮层上下跳
+- `Read latest reply` 在短回复上频繁出现，或在长回复顶部已经可见时仍不消失
 
 ## 六、History
 

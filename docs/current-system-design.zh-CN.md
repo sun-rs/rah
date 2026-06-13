@@ -418,6 +418,19 @@ Stop 按钮语义：
 - live 与 history 的重复消除应优先依赖 `TimelineIdentity.canonicalItemId`，而不是靠文本相同、时间接近来猜。
 - 当前阶段是 Timeline Identity v2 的 MVP：协议、daemon 透传、前端 upsert、core provider 的 native/derived identity 已具备。后续如果继续增强，应在 daemon 侧增加 epoch/seq ledger 做 replay/gap/catch-up，而不是把 text/time window 重新变成主逻辑。
 
+### Chat 阅读导航
+
+Chat 主滚动区有两个不同的浮动导航动作：
+
+- `Scroll to bottom`：回到当前 timeline 底部，并恢复 bottom-follow。
+- `Read latest reply`：当最新 assistant 回复的内容块无法在当前 ChatThread 可滚动视口内完整阅读，且该回复内容顶部已经滚出视口时，滚回这条最新回复的内容顶部。
+
+`Read latest reply` 是纯前端阅读辅助，不触发历史加载、provider 请求或 session 状态变化。它只对最新 assistant 回复生效；如果后续出现新的 assistant 回复，即使新的回复很短，也不再跳回上一轮较长回复，避免跨 turn 乱序阅读。
+
+判定依据是当前 ChatThread 自己的可滚动视口高度，而不是浏览器窗口高度。普通 session/council 页面使用中间 chat 区域高度；Canvas pane 内使用该 pane 自己的 chat 区域高度；pane 最大化、右侧栏展开、composer 高度变化或浏览器 resize 后会重新计算。
+
+回复高度使用 `MeasuredFeedEntry` 内层内容容器的测量值，语义上是 assistant header + 回复内容本体的高度，不包含列表 row gap。不要改成外层 row / 气泡间距 / 整页高度判断，否则会让按钮对 padding、border 或 pane 外框过敏。
+
 ## 12. 常用开发命令
 
 首次 checkout 或依赖变化时：
