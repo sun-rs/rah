@@ -11,7 +11,7 @@ function isUserTimelineEntry(entry: FeedEntry): boolean {
   );
 }
 
-function isInternalUserReminder(text: string): boolean {
+export function isInternalUserReminder(text: string): boolean {
   if (/<!--\s*OMO_INTERNAL_INITIATOR\s*-->/.test(text)) {
     return true;
   }

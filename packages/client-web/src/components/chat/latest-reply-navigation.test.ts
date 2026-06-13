@@ -22,6 +22,15 @@ function userEntry(key: string): FeedEntry {
   };
 }
 
+function reasoningEntry(key: string): FeedEntry {
+  return {
+    key,
+    kind: "timeline",
+    item: { kind: "reasoning", text: key },
+    ts: "2026-06-13T00:00:00.000Z",
+  };
+}
+
 describe("latest reply navigation", () => {
   test("does not target short latest replies", () => {
     const entries = [userEntry("question"), assistantEntry("answer")];
@@ -125,6 +134,91 @@ describe("latest reply navigation", () => {
       }),
       null,
     );
+  });
+
+  test("does not target a long reply after a newer user message arrives", () => {
+    const entries = [
+      userEntry("question"),
+      assistantEntry("long-answer"),
+      userEntry("new-question"),
+    ];
+    const measuredHeights = new Map([
+      ["question", 80],
+      ["long-answer", 520],
+      ["new-question", 80],
+    ]);
+    const layout = buildVirtualFeedLayout(entries, measuredHeights);
+
+    assert.equal(
+      resolveLatestReplyStartTarget({
+        entries,
+        layout,
+        measuredHeights,
+        scrollTop: 740,
+        viewportHeight: 220,
+      }),
+      null,
+    );
+  });
+
+  test("ignores non-message entries after the latest long assistant reply", () => {
+    const entries = [
+      userEntry("question"),
+      assistantEntry("answer"),
+      reasoningEntry("reasoning-after-answer"),
+    ];
+    const measuredHeights = new Map([
+      ["question", 80],
+      ["answer", 520],
+      ["reasoning-after-answer", 80],
+    ]);
+    const layout = buildVirtualFeedLayout(entries, measuredHeights);
+
+    const target = resolveLatestReplyStartTarget({
+      entries,
+      layout,
+      measuredHeights,
+      scrollTop: 660,
+      viewportHeight: 220,
+    });
+
+    assert.equal(target?.entryKey, "answer");
+  });
+
+  test("ignores internal user reminders after the latest long assistant reply", () => {
+    const entries = [
+      userEntry("question"),
+      assistantEntry("answer"),
+      {
+        ...userEntry("internal-reminder"),
+        item: {
+          kind: "user_message" as const,
+          text: [
+            "<system-reminder>",
+            "[BACKGROUND TASK COMPLETED]",
+            "Use `background_output(task_id=\"bg_1\")` to retrieve this result when ready.",
+            "</system-reminder>",
+            "<!-- OMO_INTERNAL_INITIATOR -->",
+          ].join("\n"),
+        },
+      },
+    ];
+    const measuredHeights = new Map([
+      ["question", 80],
+      ["answer", 520],
+      ["internal-reminder", 80],
+    ]);
+    const layout = buildVirtualFeedLayout(entries, measuredHeights);
+
+    const target = resolveLatestReplyStartTarget({
+      entries,
+      layout,
+      measuredHeights,
+      scrollTop: 660,
+      viewportHeight: 220,
+    });
+
+    assert.equal(target?.entryKey, "answer");
   });
 
   test("hides the target once the latest long reply top is already visible", () => {

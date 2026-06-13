@@ -425,7 +425,9 @@ Chat 主滚动区有两个不同的浮动导航动作：
 - `Scroll to bottom`：回到当前 timeline 底部，并恢复 bottom-follow。
 - `Read latest reply`：当最新 assistant 回复的内容块无法在当前 ChatThread 可滚动视口内完整阅读，且该回复内容顶部已经滚出视口时，滚回这条最新回复的内容顶部。
 
-`Read latest reply` 是纯前端阅读辅助，不触发历史加载、provider 请求或 session 状态变化。它只对最新 assistant 回复生效；如果后续出现新的 assistant 回复，即使新的回复很短，也不再跳回上一轮较长回复，避免跨 turn 乱序阅读。
+`Read latest reply` 是纯前端阅读辅助，不触发历史加载、provider 请求或 session 状态变化。它只对最新可见对话气泡生效：最新 message 气泡必须是 assistant 回复，才允许继续做高度判断；如果用户已经发出新问题而新 assistant 回复还没出现，即使上一条 assistant 回复很长，也不显示该按钮。tool、reasoning、status 等非 message 事件不改变这个判定。
+
+如果后续出现新的 assistant 回复，即使新的回复很短，也不再跳回上一轮较长回复，避免跨 turn 乱序阅读。
 
 判定依据是当前 ChatThread 自己的可滚动视口高度，而不是浏览器窗口高度。普通 session/council 页面使用中间 chat 区域高度；Canvas pane 内使用该 pane 自己的 chat 区域高度；pane 最大化、右侧栏展开、composer 高度变化或浏览器 resize 后会重新计算。
 

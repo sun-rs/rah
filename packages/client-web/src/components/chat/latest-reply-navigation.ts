@@ -1,4 +1,5 @@
 import type { FeedEntry } from "../../types";
+import { isInternalUserReminder } from "./assistant-turn-headers";
 import type { VirtualFeedLayout } from "./virtualized-feed-layout";
 import { VIRTUAL_FEED_ROW_GAP_PX } from "./virtualized-feed-layout";
 
@@ -14,6 +15,27 @@ export type LatestReplyStartTarget = {
 
 function isAssistantReplyEntry(entry: FeedEntry): boolean {
   return entry.kind === "timeline" && entry.item.kind === "assistant_message";
+}
+
+function isVisibleConversationMessageEntry(entry: FeedEntry): boolean {
+  if (isAssistantReplyEntry(entry)) {
+    return true;
+  }
+  return (
+    entry.kind === "timeline" &&
+    entry.item.kind === "user_message" &&
+    !isInternalUserReminder(entry.item.text)
+  );
+}
+
+function latestVisibleConversationMessageIndex(entries: readonly FeedEntry[]): number {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (entry && isVisibleConversationMessageEntry(entry)) {
+      return index;
+    }
+  }
+  return -1;
 }
 
 function measuredReplyHeight(args: {
@@ -42,19 +64,16 @@ export function resolveLatestReplyStartTarget(args: {
   if (args.viewportHeight <= 0) {
     return null;
   }
-  let entryIndex = -1;
-  for (let index = args.entries.length - 1; index >= 0; index -= 1) {
-    if (isAssistantReplyEntry(args.entries[index]!)) {
-      entryIndex = index;
-      break;
-    }
-  }
+  const entryIndex = latestVisibleConversationMessageIndex(args.entries);
   if (entryIndex < 0) {
     return null;
   }
   const entry = args.entries[entryIndex];
   const row = args.layout.rows[entryIndex];
   if (!entry || !row) {
+    return null;
+  }
+  if (!isAssistantReplyEntry(entry)) {
     return null;
   }
 
