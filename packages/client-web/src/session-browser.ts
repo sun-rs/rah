@@ -153,8 +153,10 @@ export function deriveWorkspaceInfos(
   for (const session of blockingSessions) {
     const isInteractiveRunningSession = !isReadOnlyReplay(session);
     if (isInteractiveRunningSession) {
-      for (const workspace of map.values()) {
-        if (matchesWorkspace(session.session.rootDir || session.session.cwd, workspace.directory)) {
+      const owner = findOwningWorkspace(workspaceDirs, session.session.rootDir || session.session.cwd);
+      if (owner) {
+        const workspace = map.get(owner);
+        if (workspace) {
           workspace.hasBlockingRunningSessions = true;
         }
       }

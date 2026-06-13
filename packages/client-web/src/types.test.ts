@@ -2038,7 +2038,7 @@ describe("client projection", () => {
     assert.equal(current.feed.length, 0);
   });
 
-  test("marks parent workspaces as blocked when a descendant running session exists", () => {
+  test("only blocks the owning workspace when a descendant running session exists", () => {
     const workspaces = deriveWorkspaceInfos(
       ["/repo", "/repo/app"],
       [workspaceSummary({ id: "live-1", rootDir: "/repo/app" })],
@@ -2048,7 +2048,7 @@ describe("client projection", () => {
     assert.equal(workspaces.find((workspace) => workspace.directory === "/repo")?.runningCount, 0);
     assert.equal(
       workspaces.find((workspace) => workspace.directory === "/repo")?.hasBlockingRunningSessions,
-      true,
+      false,
     );
     assert.equal(
       workspaces.find((workspace) => workspace.directory === "/repo/app")?.hasBlockingRunningSessions,

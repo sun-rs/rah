@@ -104,6 +104,38 @@ describe("WorkbenchStateStore", () => {
     await engine.shutdown();
   });
 
+  test("can remove a parent workspace while a child workspace owns the active running session", async () => {
+    const engine = new RuntimeEngine();
+    engine.addWorkspace("/workspace");
+    engine.addWorkspace("/workspace/demo");
+    const state = engine.sessionStore.createManagedSession({
+      provider: "codex",
+      providerSessionId: "thread-live-child",
+      launchSource: "web",
+      cwd: "/workspace/demo",
+      rootDir: "/workspace/demo",
+      title: "live child",
+    });
+    engine.attachSession(state.session.id, {
+      client: {
+        id: "web-client",
+        kind: "web",
+        connectionId: "web-client",
+      },
+      mode: "observe",
+    });
+
+    const afterParentRemoval = engine.removeWorkspace("/workspace");
+    assert.deepEqual(afterParentRemoval.workspaceDirs, ["/workspace/demo"]);
+
+    assert.throws(
+      () => engine.removeWorkspace("/workspace/demo"),
+      /Cannot remove a workspace with active running sessions/,
+    );
+
+    await engine.shutdown();
+  });
+
   test("surfaces visible running sessions in global recent before control is claimed", async () => {
     const engine = new RuntimeEngine();
     const state = engine.sessionStore.createManagedSession({
@@ -197,7 +229,7 @@ describe("WorkbenchStateStore", () => {
     await second.shutdown();
   });
 
-  test("cannot remove a parent workspace when a descendant running session exists", async () => {
+  test("can remove a parent workspace when a descendant workspace owns the running session", async () => {
     const engine = new RuntimeEngine();
     engine.addWorkspace("/workspace/demo");
     engine.addWorkspace("/workspace/demo/app");
@@ -210,10 +242,8 @@ describe("WorkbenchStateStore", () => {
       title: "nested live",
     });
 
-    assert.throws(
-      () => engine.removeWorkspace("/workspace/demo"),
-      /Cannot remove a workspace with active running sessions/,
-    );
+    const afterRemoval = engine.removeWorkspace("/workspace/demo");
+    assert.deepEqual(afterRemoval.workspaceDirs, ["/workspace/demo/app"]);
 
     await engine.shutdown();
   });

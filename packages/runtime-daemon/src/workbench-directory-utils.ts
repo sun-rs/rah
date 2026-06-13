@@ -73,6 +73,32 @@ export function sessionBelongsToWorkspace(
   );
 }
 
+export function findOwningWorkspaceDirectory(
+  workspaceDirs: readonly string[],
+  sessionPath: string | undefined,
+): string | null {
+  const candidates = workspaceDirs
+    .map((workspaceDir) => {
+      const directory = normalizeDirectory(workspaceDir);
+      if (!directory) {
+        return null;
+      }
+      return {
+        directory,
+        key: canonicalDirectoryKey(directory) ?? directory,
+      };
+    })
+    .filter((candidate): candidate is { directory: string; key: string } => candidate !== null)
+    .sort((left, right) => right.key.length - left.key.length);
+
+  for (const candidate of candidates) {
+    if (sessionBelongsToWorkspace(sessionPath, candidate.directory)) {
+      return candidate.directory;
+    }
+  }
+  return null;
+}
+
 export function isReadOnlyReplaySession(state: StoredSessionState): boolean {
   return (
     state.session.providerSessionId !== undefined &&

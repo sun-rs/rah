@@ -132,10 +132,12 @@ import {
 } from "./native-tui-mirror-provider";
 import { WorkbenchStateStore } from "./workbench-state";
 import {
+  findOwningWorkspaceDirectory,
   isReadOnlyReplaySession,
   normalizeDirectory,
   resolveUserPath,
   sessionBelongsToWorkspace,
+  workspaceDirsFromState,
 } from "./workbench-directory-utils";
 import { WorkspaceScopeAuthorizer } from "./workspace-scope-authorizer";
 import { assertExistingWorkingDirectory } from "./provider-working-directory";
@@ -721,10 +723,19 @@ export class RuntimeEngine {
     if (!directory) {
       throw new Error("Workspace directory is required.");
     }
-    const hasRunningSessions = this.sessionStore.listSessions().some((state) =>
-      !isReadOnlyReplaySession(state) &&
-      sessionBelongsToWorkspace(state.session.rootDir || state.session.cwd, directory),
-    );
+    this.refreshRememberedState();
+    const liveStates = this.sessionStore.listSessions();
+    const workspaceDirs = workspaceDirsFromState(this.rememberedWorkspaceDirs, liveStates);
+    const hasRunningSessions = liveStates.some((state) => {
+      if (isReadOnlyReplaySession(state)) {
+        return false;
+      }
+      const owner = findOwningWorkspaceDirectory(
+        workspaceDirs,
+        state.session.rootDir || state.session.cwd,
+      );
+      return owner === directory;
+    });
     if (hasRunningSessions) {
       throw new Error("Cannot remove a workspace with active running sessions.");
     }
