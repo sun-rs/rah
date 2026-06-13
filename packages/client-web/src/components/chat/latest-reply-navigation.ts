@@ -2,9 +2,8 @@ import type { FeedEntry } from "../../types";
 import type { VirtualFeedLayout } from "./virtualized-feed-layout";
 import { VIRTUAL_FEED_ROW_GAP_PX } from "./virtualized-feed-layout";
 
-const LATEST_REPLY_MIN_HEIGHT_PX = 180;
-const LATEST_REPLY_VIEWPORT_RATIO = 0.8;
-const LATEST_REPLY_TOP_SCROLL_THRESHOLD_PX = 48;
+const LATEST_REPLY_VIEWPORT_MARGIN_PX = 24;
+const LATEST_REPLY_TOP_SCROLL_THRESHOLD_PX = 16;
 
 export type LatestReplyStartTarget = {
   entryKey: string;
@@ -66,11 +65,7 @@ export function resolveLatestReplyStartTarget(args: {
     rowHeight: row.height,
     measuredHeights: args.measuredHeights,
   });
-  const longReplyThreshold = Math.max(
-    LATEST_REPLY_MIN_HEIGHT_PX,
-    args.viewportHeight * LATEST_REPLY_VIEWPORT_RATIO,
-  );
-  if (replyHeight <= longReplyThreshold) {
+  if (replyHeight <= args.viewportHeight - LATEST_REPLY_VIEWPORT_MARGIN_PX) {
     return null;
   }
 

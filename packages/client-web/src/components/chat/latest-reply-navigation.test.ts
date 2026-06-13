@@ -61,6 +61,45 @@ describe("latest reply navigation", () => {
     assert.equal(target?.targetScrollTop, layout.rows[1]!.offsetTop + 12);
   });
 
+  test("targets a latest reply that barely exceeds the visible chat viewport", () => {
+    const entries = [userEntry("question"), assistantEntry("answer")];
+    const measuredHeights = new Map([
+      ["question", 80],
+      ["answer", 430],
+    ]);
+    const layout = buildVirtualFeedLayout(entries, measuredHeights);
+
+    const target = resolveLatestReplyStartTarget({
+      entries,
+      layout,
+      measuredHeights,
+      scrollTop: layout.rows[1]!.offsetTop + 28,
+      viewportHeight: 440,
+    });
+
+    assert.equal(target?.entryKey, "answer");
+  });
+
+  test("does not target a latest reply that fits inside the visible chat viewport", () => {
+    const entries = [userEntry("question"), assistantEntry("answer")];
+    const measuredHeights = new Map([
+      ["question", 80],
+      ["answer", 400],
+    ]);
+    const layout = buildVirtualFeedLayout(entries, measuredHeights);
+
+    assert.equal(
+      resolveLatestReplyStartTarget({
+        entries,
+        layout,
+        measuredHeights,
+        scrollTop: layout.rows[1]!.offsetTop + 28,
+        viewportHeight: 440,
+      }),
+      null,
+    );
+  });
+
   test("does not target an older long reply after a newer short reply arrives", () => {
     const entries = [
       userEntry("question"),
@@ -102,7 +141,7 @@ describe("latest reply navigation", () => {
         entries,
         layout,
         measuredHeights,
-        scrollTop: targetScrollTop + 24,
+        scrollTop: targetScrollTop + 12,
         viewportHeight: 220,
       }),
       null,
