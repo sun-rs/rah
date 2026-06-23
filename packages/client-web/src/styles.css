@@ -167,6 +167,22 @@ html[data-theme="light"] .code-block {
   border-radius: 0.25rem;
 }
 
+.prose-chat-local-file-code {
+  display: inline;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: var(--app-link);
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.prose-chat-local-file-code:hover {
+  opacity: 0.82;
+}
+
 .prose-chat p {
   margin-bottom: 0.6em;
 }

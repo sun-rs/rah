@@ -164,20 +164,20 @@ export function deriveComposerSurface(args: {
     return { kind: "unavailable" };
   }
 
-  const isClaimingControl =
+  const isResumingControl =
     pendingSessionAction?.kind === "claim_control" &&
     pendingSessionAction.sessionId === selectedSummary.session.id;
-  const isClaimingHistory =
+  const isResumingHistory =
     pendingSessionAction?.kind === "claim_history" &&
     pendingSessionAction.sessionId === selectedSummary.session.id;
 
   if (!canSessionSendInput(selectedSummary)) {
     return isReadOnlyReplay(selectedSummary) && selectedSummary.session.providerSessionId
-      ? {
-          kind: "history_claim",
-          actionLabel: isClaimingHistory ? "Claiming…" : "Claim control",
-          actionPending: isClaimingHistory,
-        }
+	      ? {
+	          kind: "history_claim",
+	          actionLabel: isResumingHistory ? "Resuming…" : "Resume",
+	          actionPending: isResumingHistory,
+	        }
       : { kind: "unavailable" };
   }
 
@@ -204,11 +204,11 @@ export function deriveComposerSurface(args: {
         stopTitle: "Interrupt the native TUI turn from Web.",
       };
     }
-    return {
-      kind: "claim_control",
-      actionLabel: isClaimingControl ? "Claiming…" : "Claim control",
-      actionPending: isClaimingControl,
-    };
+	    return {
+	      kind: "claim_control",
+	      actionLabel: isResumingControl ? "Resuming…" : "Resume",
+	      actionPending: isResumingControl,
+	    };
   }
 
   return {

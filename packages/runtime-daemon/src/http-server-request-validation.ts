@@ -194,8 +194,12 @@ export function parseNativeTuiSurfaceClaimRequest(
     clientId: requireString(record, "clientId"),
     clientKind: requireEnum(record, "clientKind", [...CLIENT_KINDS]) as NativeTuiSurfaceClaimRequest["clientKind"],
   };
+  const surfaceId = optionalString(record, "surfaceId");
   const cols = optionalNumber(record, "cols");
   const rows = optionalNumber(record, "rows");
+  if (surfaceId !== undefined) {
+    request.surfaceId = surfaceId;
+  }
   if (cols !== undefined) {
     request.cols = cols;
   }
@@ -209,14 +213,28 @@ export function parseNativeTuiSurfaceReleaseRequest(
   body: unknown,
 ): NativeTuiSurfaceReleaseRequest {
   const record = requireObjectBody(body);
-  return { clientId: requireString(record, "clientId") };
+  const request: NativeTuiSurfaceReleaseRequest = {
+    clientId: requireString(record, "clientId"),
+  };
+  const surfaceId = optionalString(record, "surfaceId");
+  if (surfaceId !== undefined) {
+    request.surfaceId = surfaceId;
+  }
+  return request;
 }
 
 export function parseNativeTuiClientCloseRequest(
   body: unknown,
 ): NativeTuiClientCloseRequest {
   const record = requireObjectBody(body);
-  return { clientId: requireString(record, "clientId") };
+  const request: NativeTuiClientCloseRequest = {
+    clientId: requireString(record, "clientId"),
+  };
+  const surfaceId = optionalString(record, "surfaceId");
+  if (surfaceId !== undefined) {
+    request.surfaceId = surfaceId;
+  }
+  return request;
 }
 
 export function parseDetachSessionRequest(body: unknown): DetachSessionRequest {

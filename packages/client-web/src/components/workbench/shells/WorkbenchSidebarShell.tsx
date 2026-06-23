@@ -10,6 +10,8 @@ import type { WorkspaceSortMode } from "../../../session-browser";
 import {
   HEADER_EDGE_TOGGLE_BUTTON_CLASS,
   HEADER_EDGE_TOGGLE_ICON_SIZE,
+  SIDEBAR_HEADER_ICON_BUTTON_CLASS,
+  SIDEBAR_HEADER_ICON_SIZE,
 } from "../header-button-styles";
 
 export function WorkbenchSidebarShell(props: {
@@ -125,11 +127,11 @@ export function WorkbenchSidebarShell(props: {
           <button
             type="button"
             onClick={props.onHome}
-            className="icon-click-feedback inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--app-hint)] transition-colors hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)]"
+            className={SIDEBAR_HEADER_ICON_BUTTON_CLASS}
             aria-label="Home"
             title="Home"
           >
-            <House size={17} />
+            <House size={SIDEBAR_HEADER_ICON_SIZE} />
           </button>
         }
         headerRight={

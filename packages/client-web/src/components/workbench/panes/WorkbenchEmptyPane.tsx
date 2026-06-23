@@ -41,7 +41,7 @@ export function WorkbenchEmptyPane(props: {
   workspacePickerOpen: boolean;
   onToggleWorkspacePicker: () => void;
   onSelectWorkspace: (dir: string) => void;
-  onAddWorkspace: (dir: string) => void;
+  onChooseNewWorkspace: (dir: string) => void;
   newSessionProvider: ProviderChoice;
   onChangeProvider: (provider: ProviderChoice) => void;
   modelCatalog: ProviderModelCatalog | null;
@@ -134,7 +134,7 @@ export function WorkbenchEmptyPane(props: {
         workspacePickerOpen={props.workspacePickerOpen}
         onToggleWorkspacePicker={props.onToggleWorkspacePicker}
         onSelectWorkspace={props.onSelectWorkspace}
-        onAddWorkspace={props.onAddWorkspace}
+        onChooseNewWorkspace={props.onChooseNewWorkspace}
         provider={props.newSessionProvider}
         onChangeProvider={props.onChangeProvider}
         providerSelectorMode="auto"

@@ -1,5 +1,6 @@
 export const COUNCIL_TUI_WARM_LIMIT = 8;
 export const COUNCIL_TUI_WARM_TTL_MS = 5 * 60 * 1000;
+export const PROVIDER_TUI_REPLAY_TAIL_BYTES = 96 * 1024;
 
 export type ActiveSessionTuiSurface = {
   terminalId: string;
@@ -40,7 +41,8 @@ export function activateSessionTuiTerminal(args: {
 export function shouldReplayInitialSessionTuiOutput(args: {
   liveBackend?: string | null | undefined;
 }): boolean {
-  return args.liveBackend !== "native_local_server";
+  void args;
+  return true;
 }
 
 export type CouncilTuiCacheState = {

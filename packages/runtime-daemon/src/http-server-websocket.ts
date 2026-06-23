@@ -293,6 +293,7 @@ export function attachWebSocketHandlers(
     }
 
     let surfaceClientId: string | null = null;
+    let surfaceId: string | undefined;
     socket.on("message", (raw) => {
       try {
         const parsed = JSON.parse(raw.toString("utf8")) as PtyClientMessage;
@@ -302,9 +303,11 @@ export function attachWebSocketHandlers(
           engine.onPtyResize(sessionId, parsed.clientId, parsed.cols, parsed.rows);
         } else if (parsed.type === "pty.surface.attach") {
           surfaceClientId = parsed.clientId;
+          surfaceId = parsed.surfaceId;
           void engine
             .claimNativeTuiSurface(sessionId, {
               clientId: parsed.clientId,
+              ...(parsed.surfaceId !== undefined ? { surfaceId: parsed.surfaceId } : {}),
               clientKind: parsed.clientKind,
               cols: parsed.cols,
               rows: parsed.rows,
@@ -317,9 +320,13 @@ export function attachWebSocketHandlers(
         } else if (parsed.type === "pty.surface.detach") {
           if (surfaceClientId === parsed.clientId) {
             surfaceClientId = null;
+            surfaceId = undefined;
           }
           void engine
-            .releaseNativeTuiSurface(sessionId, { clientId: parsed.clientId })
+            .releaseNativeTuiSurface(sessionId, {
+              clientId: parsed.clientId,
+              ...(parsed.surfaceId !== undefined ? { surfaceId: parsed.surfaceId } : {}),
+            })
             .catch(() => undefined);
         }
       } catch (error) {
@@ -338,7 +345,10 @@ export function attachWebSocketHandlers(
       unsubscribe();
       if (surfaceClientId) {
         void engine
-          .releaseNativeTuiSurface(sessionId, { clientId: surfaceClientId })
+          .releaseNativeTuiSurface(sessionId, {
+            clientId: surfaceClientId,
+            ...(surfaceId !== undefined ? { surfaceId } : {}),
+          })
           .catch(() => undefined);
       }
     });

@@ -276,7 +276,7 @@ function summaryWithTurnFailure(
   error: string,
   updatedAt: string,
 ): SessionProjection["summary"] {
-  const next = summaryWithRuntimeState(current, "failed", updatedAt);
+  const next = summaryWithRuntimeState(current, "idle", updatedAt);
   const previousError = current.summary.session.runtimeDiagnostics?.lastError?.trim();
   const nextError = error.trim();
   const lastError =
@@ -1600,11 +1600,47 @@ function applyRuntimeStatusEvent(
   feed: FeedEntry[],
   event: Extract<RahEvent, { type: "runtime.status" }>,
 ): FeedEntry[] {
-  void event;
+  if (event.payload.status === "error" && event.payload.detail?.trim()) {
+    return applyTurnFailedNoticeEvent(feed, event);
+  }
   // Runtime status is session chrome, not transcript content. Keeping retry /
   // reconnect state out of the feed prevents it from reordering around turn
   // notices when live and persisted events interleave.
   return feed;
+}
+
+function applyTurnFailedNoticeEvent(
+  feed: FeedEntry[],
+  event: Extract<RahEvent, { type: "runtime.status" }>,
+): FeedEntry[] {
+  const detail = event.payload.detail?.trim();
+  if (!detail) {
+    return feed;
+  }
+  const isStreamDisconnect = /stream disconnected before completion/i.test(detail);
+  const key = `${event.turnId ?? "session"}:runtime:error`;
+  const existingIndex = feed.findIndex(
+    (candidate) => candidate.kind === "notification" && candidate.key === key,
+  );
+  const entry = createNotificationEntry(
+    {
+      key,
+      kind: "notification",
+      level: "warning",
+      title: isStreamDisconnect ? "Provider stream disconnected" : "Response failed",
+      body: isStreamDisconnect
+        ? "The provider stream disconnected before completion. The session is still available; send a new message to continue."
+        : detail,
+      ts: event.ts,
+    },
+    event.turnId,
+  );
+  if (existingIndex < 0) {
+    return [...feed, entry];
+  }
+  const next = [...feed];
+  next[existingIndex] = entry;
+  return next;
 }
 
 function applyTurnStepEvent(

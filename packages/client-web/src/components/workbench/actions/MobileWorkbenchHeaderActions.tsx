@@ -3,10 +3,11 @@ import { Columns3, MessageCircleMore, Settings } from "lucide-react";
 import { SessionHistoryDialog } from "../../SessionHistoryDialog";
 import { CouncilLogo } from "../../CouncilLogo";
 import type { WorkspaceSortMode } from "../../../session-browser";
-
-const headerButtonClassName =
-  "icon-click-feedback inline-flex h-8 w-8 items-center justify-center rounded-md active:bg-[var(--app-bg)]";
-const headerIconSize = 17;
+import {
+  SIDEBAR_HEADER_ICON_BUTTON_CLASS,
+  SIDEBAR_HEADER_ICON_SIZE,
+  SIDEBAR_HEADER_LOGO_CLASS,
+} from "../header-button-styles";
 
 export function MobileWorkbenchHeaderActions(props: {
   storedSessions: StoredSessionRef[];
@@ -37,30 +38,30 @@ export function MobileWorkbenchHeaderActions(props: {
     <div className="flex items-center gap-1">
       <button
         type="button"
-        className={`${headerButtonClassName} ${
+        className={`${SIDEBAR_HEADER_ICON_BUTTON_CLASS} ${
           props.councilActive
             ? "bg-[var(--app-bg)] text-[var(--app-fg)]"
-            : "text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)]"
+            : ""
         }`}
         onClick={props.onOpenCouncil}
         aria-label={props.councilActive ? "Hide council" : "Open council"}
         title={props.councilActive ? "Hide council" : "Council"}
       >
-        <CouncilLogo className="h-[17px] w-[17px]" tone="black" variant="bare" />
+        <CouncilLogo className={SIDEBAR_HEADER_LOGO_CLASS} tone="black" variant="bare" />
       </button>
       <button
         type="button"
-        className={`${headerButtonClassName} ${
+        className={`${SIDEBAR_HEADER_ICON_BUTTON_CLASS} ${
           props.canvasActive
             ? "bg-[var(--app-bg)] text-[var(--app-fg)]"
-            : "text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)]"
+            : ""
         } ${props.canvasEnabled ? "" : "cursor-not-allowed opacity-35 hover:bg-transparent hover:text-[var(--app-hint)]"}`}
         onClick={props.canvasEnabled ? props.onToggleCanvas : undefined}
         disabled={!props.canvasEnabled}
         aria-label={props.canvasActive ? "Exit canvas" : "Open canvas"}
         title={props.canvasEnabled ? (props.canvasActive ? "Exit canvas" : "Canvas") : "Canvas needs a wider screen"}
       >
-        <Columns3 size={headerIconSize} />
+        <Columns3 size={SIDEBAR_HEADER_ICON_SIZE} />
       </button>
       <SessionHistoryDialog
         storedSessions={props.storedSessions}
@@ -83,21 +84,21 @@ export function MobileWorkbenchHeaderActions(props: {
       >
         <button
           type="button"
-          className={`${headerButtonClassName} text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)]`}
+          className={SIDEBAR_HEADER_ICON_BUTTON_CLASS}
           aria-label="Chats"
           title="Chats"
         >
-          <MessageCircleMore size={headerIconSize} />
+          <MessageCircleMore size={SIDEBAR_HEADER_ICON_SIZE} />
         </button>
       </SessionHistoryDialog>
       <button
         type="button"
-        className={`${headerButtonClassName} text-[var(--app-hint)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)]`}
+        className={SIDEBAR_HEADER_ICON_BUTTON_CLASS}
         onClick={props.onOpenSettings}
         aria-label="Open settings"
         title="Settings"
       >
-        <Settings size={headerIconSize} />
+        <Settings size={SIDEBAR_HEADER_ICON_SIZE} />
       </button>
     </div>
   );

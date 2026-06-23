@@ -32,6 +32,7 @@ export interface TerminalPaneProps {
   closeLabel?: string;
   closeTitle?: string;
   nativeSurfaceControl?: boolean;
+  exclusiveNativeSurfaceControl?: boolean;
   renderOutput?: boolean;
   tuiClientActive?: boolean;
   onTuiClientActiveChange?: (active: boolean) => void;
@@ -81,6 +82,13 @@ function shouldShowMobileInputBridge(): boolean {
     (/Macintosh/.test(userAgent) && (navigator.maxTouchPoints > 1 || coarsePointer));
   const touchSmallScreen = touchCapable && window.matchMedia("(max-width: 768px)").matches;
   return iosLike || touchSmallScreen;
+}
+
+function createTerminalSurfaceId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
 function commonPrefixLength(left: string, right: string): number {
@@ -160,6 +168,7 @@ export function TerminalPane(props: TerminalPaneProps) {
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
+  const surfaceIdRef = useRef<string | null>(null);
   const sendDataRef = useRef<(data: string, options?: { focusTerminal?: boolean }) => void>(() => undefined);
   const scheduleTerminalFitRef = useRef<(options?: { force?: boolean }) => void>(() => undefined);
   const fitTerminalImmediatelyRef = useRef<(options?: { force?: boolean }) => void>(() => undefined);
@@ -201,6 +210,17 @@ export function TerminalPane(props: TerminalPaneProps) {
   const bridgeInputRef = useRef<HTMLInputElement | null>(null);
   const isComposingRef = useRef(false);
 
+  if (surfaceIdRef.current === null) {
+    surfaceIdRef.current = createTerminalSurfaceId();
+  }
+
+  const currentSurfaceId = () => {
+    if (surfaceIdRef.current === null) {
+      surfaceIdRef.current = createTerminalSurfaceId();
+    }
+    return surfaceIdRef.current;
+  };
+
   const applyViewportMetrics = () => {
     const metrics = readTerminalViewportMetrics(shellRef.current);
     setKeyboardInsetPx(metrics.keyboardInsetPx);
@@ -235,6 +255,7 @@ export function TerminalPane(props: TerminalPaneProps) {
       type: "pty.surface.attach",
       sessionId: props.terminalId,
       clientId: clientIdRef.current,
+      surfaceId: currentSurfaceId(),
       clientKind: "web",
       cols: terminal.cols,
       rows: terminal.rows,
@@ -254,6 +275,7 @@ export function TerminalPane(props: TerminalPaneProps) {
         type: "pty.surface.detach",
         sessionId: props.terminalId,
         clientId: clientIdRef.current,
+        surfaceId: currentSurfaceId(),
       });
     }
     surfaceActiveRef.current = false;
@@ -418,6 +440,8 @@ export function TerminalPane(props: TerminalPaneProps) {
     let pendingInput = "";
     let inputFlushTimer: ReturnType<typeof setTimeout> | null = null;
     const nativeSurfaceControlEnabled = props.nativeSurfaceControl !== false;
+    const exclusiveNativeSurfaceControlEnabled =
+      nativeSurfaceControlEnabled && props.exclusiveNativeSurfaceControl !== false;
     nextReplaySeqRef.current = 0;
     pausedOutputTailRef.current = "";
     pausedOutputReplaceRef.current = false;
@@ -754,7 +778,7 @@ export function TerminalPane(props: TerminalPaneProps) {
     };
 
     connect();
-    if (nativeSurfaceControlEnabled) {
+    if (exclusiveNativeSurfaceControlEnabled) {
       surfacePollTimer = setInterval(() => {
         if (!claimSurfaceRef.current) {
           return;
@@ -896,6 +920,7 @@ export function TerminalPane(props: TerminalPaneProps) {
             type: "pty.surface.detach",
             sessionId: props.terminalId,
             clientId: clientIdRef.current,
+            surfaceId: currentSurfaceId(),
           });
         }
         socketRef.current.close();
@@ -908,7 +933,13 @@ export function TerminalPane(props: TerminalPaneProps) {
       scheduleTerminalFitRef.current = () => undefined;
       fitTerminalImmediatelyRef.current = () => undefined;
     };
-  }, [props.terminalId, props.nativeSurfaceControl, showIosInputBridge, tuiClientActive]);
+  }, [
+    props.terminalId,
+    props.nativeSurfaceControl,
+    props.exclusiveNativeSurfaceControl,
+    showIosInputBridge,
+    tuiClientActive,
+  ]);
 
   const closeCurrentTuiClient = () => {
     if (tuiClientClosing) {
@@ -919,7 +950,10 @@ export function TerminalPane(props: TerminalPaneProps) {
     setTuiClientActiveState(false);
     surfaceActiveRef.current = false;
     setSurfaceOwnerKind(null);
-    void closeNativeTuiClient(props.terminalId, { clientId: clientIdRef.current })
+    void closeNativeTuiClient(props.terminalId, {
+      clientId: clientIdRef.current,
+      surfaceId: currentSurfaceId(),
+    })
       .catch(() => undefined)
       .finally(() => {
         setTuiClientClosing(false);
@@ -1213,7 +1247,7 @@ export function TerminalPane(props: TerminalPaneProps) {
             <div className="terminal-surface-overlay-card">
               <div className="terminal-surface-overlay-title">TUI active on {surfaceOwnerKind}</div>
               <div className="terminal-surface-overlay-copy">
-                Reclaiming here will detach the other tmux viewer.
+                Reattaching here will detach the other tmux viewer.
               </div>
               <button type="button" className="terminal-surface-overlay-button" onClick={claimCurrentSurface}>
                 Reattach here

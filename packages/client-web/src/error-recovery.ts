@@ -31,15 +31,15 @@ export function describeWorkbenchError(
     };
   }
 
-  if (summary && lower.includes("does not hold input control") && canSessionSendInput(summary)) {
-    return {
-      title: "Control required",
-      body:
-        "Another client currently holds input control for this session. Claim control here before sending input or interrupting the turn.",
-      primaryAction: "claim_control",
-      primaryLabel: "Claim control",
-    };
-  }
+	  if (summary && lower.includes("does not hold input control") && canSessionSendInput(summary)) {
+	    return {
+	      title: "Control required",
+	      body:
+	        "Another client currently holds input control for this session. Resume here before sending input or interrupting the turn.",
+	      primaryAction: "claim_control",
+	      primaryLabel: "Resume",
+	    };
+	  }
 
   if (
     summary &&

@@ -10,6 +10,7 @@ import {
 import type { RuntimeServices } from "./provider-adapter";
 import { applyProviderActivity, type ProviderActivity } from "./provider-activity";
 import {
+  type CodexLiveTranslatedActivity,
   mapCodexQuestionRequestToActivities,
   translateCodexAppServerNotification,
   translateCodexAppServerThreadSnapshot,
@@ -182,6 +183,96 @@ function normalizeCurrentTurnLifecycle(
   } as ProviderActivity;
 }
 
+function isActiveRuntimeState(state: ManagedSession["runtimeState"]): boolean {
+  return (
+    state === "running" ||
+    state === "waiting_input" ||
+    state === "waiting_permission"
+  );
+}
+
+function isSubagentLifecycleObservation(activity: ProviderActivity): boolean {
+  return (
+    (activity.type === "observation_started" ||
+      activity.type === "observation_updated" ||
+      activity.type === "observation_completed" ||
+      activity.type === "observation_failed") &&
+    activity.observation.kind === "subagent.lifecycle"
+  );
+}
+
+function isForeignProviderSessionActivity(args: {
+  activity: ProviderActivity;
+  providerSessionId?: string | undefined;
+  mainProviderSessionId?: string | undefined;
+}): boolean {
+  if (
+    !args.providerSessionId ||
+    !args.mainProviderSessionId ||
+    args.providerSessionId === args.mainProviderSessionId
+  ) {
+    return false;
+  }
+  if (isSubagentLifecycleObservation(args.activity)) {
+    return false;
+  }
+  return true;
+}
+
+function isTurnLifecycleActivity(activity: ProviderActivity): activity is Extract<
+  ProviderActivity,
+  { type: "turn_started" | "turn_completed" | "turn_failed" | "turn_canceled" }
+> {
+  return (
+    activity.type === "turn_started" ||
+    activity.type === "turn_completed" ||
+    activity.type === "turn_failed" ||
+    activity.type === "turn_canceled"
+  );
+}
+
+function isOutOfBandTurnLifecycleActivity(args: {
+  activity: ProviderActivity;
+  currentTurnId: string | null;
+  providerSessionId?: string | undefined;
+  mainProviderSessionId?: string | undefined;
+}): boolean {
+  if (!args.currentTurnId || !isTurnLifecycleActivity(args.activity)) {
+    return false;
+  }
+  if (args.activity.turnId === args.currentTurnId || args.activity.turnId === "current-turn") {
+    return false;
+  }
+  // If Codex positively identifies the current main thread, let that lifecycle
+  // through; it may be recovering from a stale local currentTurnId after a
+  // reconnect. Unidentified different turn ids are treated as out-of-band,
+  // which prevents subagent lifecycle events from ending the main turn.
+  return !(args.providerSessionId && args.providerSessionId === args.mainProviderSessionId);
+}
+
+export function shouldApplyCodexTranslatedActivity(args: {
+  activity: ProviderActivity;
+  origin?: "notification" | "snapshot" | undefined;
+  currentTurnId: string | null;
+  providerSessionId?: string | undefined;
+  mainProviderSessionId?: string | undefined;
+}): boolean {
+  if (isForeignProviderSessionActivity(args)) {
+    return false;
+  }
+  if (isOutOfBandTurnLifecycleActivity(args)) {
+    return false;
+  }
+  if (
+    args.activity.type !== "session_state" ||
+    args.origin !== "snapshot" ||
+    !args.currentTurnId
+  ) {
+    return true;
+  }
+  return isActiveRuntimeState(args.activity.state);
+}
+
 export function publishSessionBootstrap(
   services: RuntimeServices,
   sessionId: string,
@@ -204,12 +295,23 @@ export function publishSessionBootstrap(
 function applyCodexLiveTranslatedItems(
   services: RuntimeServices,
   liveSession: LiveCodexSession,
-  items: ReturnType<typeof translateCodexAppServerNotification>,
+  items: CodexLiveTranslatedActivity[],
 ) {
   for (const item of items) {
     if (
       item.activity.type === "turn_started" &&
       liveSession.finishedTurnIds.has(item.activity.turnId)
+    ) {
+      continue;
+    }
+    if (
+      !shouldApplyCodexTranslatedActivity({
+        activity: item.activity,
+        origin: item.origin,
+        currentTurnId: liveSession.currentTurnId,
+        providerSessionId: item.providerSessionId,
+        mainProviderSessionId: liveSession.threadId,
+      })
     ) {
       continue;
     }
@@ -241,8 +343,10 @@ function applyCodexLiveTranslatedItems(
           liveSession.finishedTurnIds.add(event.turnId);
           liveSession.interruptingTurnIds.delete(event.turnId);
         }
-        liveSession.currentTurnId = null;
-        liveSession.drainQueuedInput?.();
+        if (!liveSession.currentTurnId || !event.turnId || event.turnId === liveSession.currentTurnId) {
+          liveSession.currentTurnId = null;
+          liveSession.drainQueuedInput?.();
+        }
       }
     }
   }
@@ -574,6 +678,25 @@ async function handleCodexLiveRequest(
     throw new Error("RAH does not manage ChatGPT auth token refresh requests.");
   }
 
+  if (rpcRequest.method === "attestation/generate") {
+    applyProviderActivity(
+      services,
+      liveSession.sessionId,
+      { provider: "codex", channel: "structured_live", authority: "derived", raw: rpcRequest },
+      {
+        type: "operation_requested",
+        operation: {
+          id: `attestation-${rpcRequest.id}`,
+          kind: "provider_internal",
+          name: "Generate client attestation",
+          target: "account",
+          input: (rpcRequest.params ?? {}) as never,
+        },
+      },
+    );
+    throw new Error("RAH does not provide Codex client attestation tokens.");
+  }
+
   return {};
 }
 
@@ -661,34 +784,6 @@ export function attachRequestedClient(
       },
     });
   }
-}
-
-export function runtimeStateFromThreadStatus(
-  status: unknown,
-): ManagedSession["runtimeState"] | undefined {
-  if (!status || typeof status !== "object" || Array.isArray(status)) {
-    return undefined;
-  }
-  const record = status as Record<string, unknown>;
-  if (record.type === "idle") {
-    return "idle";
-  }
-  if (record.type === "systemError") {
-    return "failed";
-  }
-  if (record.type === "active") {
-    const flags = Array.isArray(record.activeFlags)
-      ? record.activeFlags.filter((flag): flag is string => typeof flag === "string")
-      : [];
-    if (flags.includes("waitingOnApproval")) {
-      return "waiting_permission";
-    }
-    if (flags.includes("waitingOnUserInput")) {
-      return "waiting_input";
-    }
-    return "running";
-  }
-  return undefined;
 }
 
 export function isCodexInternalThreadMetadataText(value: string | null | undefined): boolean {

@@ -1432,7 +1432,7 @@ describe("RuntimeEngine", () => {
         engine.listPtyStats().find((stat) => stat.sessionId === sessionId)?.status,
         "open",
       );
-      assert.match(transcript, /Web TUI client closed/);
+      assert.doesNotMatch(transcript, /Web TUI client closed/);
 
       let reactivatedTranscript = "";
       const unsubscribeReactivated = engine.ptyHub.subscribe(sessionId, (frame) => {

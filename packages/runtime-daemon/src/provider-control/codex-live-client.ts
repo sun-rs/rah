@@ -29,8 +29,8 @@ import {
   isCodexInternalThreadMetadataText,
   publishSessionBootstrap,
   resolveCodexApprovalDecision,
-  runtimeStateFromThreadStatus,
 } from "../codex-live-helpers";
+import { runtimeStateFromCodexThreadStatus } from "../codex-thread-status";
 import {
   createCodexAppServerClient,
   type CodexAppServerRpcClient,
@@ -798,7 +798,7 @@ export async function resumeCodexLiveSession(params: {
     services.ptyHub.ensureSession(state.session.id);
     services.sessionStore.setRuntimeState(
       state.session.id,
-      runtimeStateFromThreadStatus(thread?.status) ?? "idle",
+      runtimeStateFromCodexThreadStatus(thread?.status) ?? "idle",
     );
     const runtimeSession = services.sessionStore.getSession(state.session.id);
     if (!runtimeSession) {

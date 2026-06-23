@@ -17,18 +17,29 @@ function getParentPath(path: string): string {
 
 export function WorkspacePicker(props: {
   currentDir: string;
+  hideTrigger?: boolean;
+  open?: boolean;
   triggerLabel?: string;
   triggerIcon?: ReactNode;
   triggerClassName?: string;
   triggerAriaLabel?: string;
+  onOpenChange?: (open: boolean) => void;
   onSelect: (dir: string) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [currentPath, setCurrentPath] = useState(DEFAULT_WORKSPACE_PICKER_PATH);
   const [listing, setListing] = useState<DirectoryListingResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const controlledOpen = props.open !== undefined;
+  const open = props.open ?? uncontrolledOpen;
+  const setOpen = (nextOpen: boolean) => {
+    if (!controlledOpen) {
+      setUncontrolledOpen(nextOpen);
+    }
+    props.onOpenChange?.(nextOpen);
+  };
 
   useEffect(() => {
     if (open) {
@@ -81,20 +92,22 @@ export function WorkspacePicker(props: {
 
   return (
     <Dialog.Root open={open} onOpenChange={setOpen}>
-      <Dialog.Trigger asChild>
-        <button
-          type="button"
-          aria-label={props.triggerAriaLabel}
-          className={props.triggerClassName ?? "w-full text-left rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] px-3 py-2 text-sm text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)] transition-colors"}
-        >
-          <div className="flex items-center gap-2">
-            {props.triggerIcon ?? (
-              <Folder size={16} className="text-[var(--app-hint)] shrink-0" />
-            )}
-            {labelText ? <span className="truncate">{labelText}</span> : null}
-          </div>
-        </button>
-      </Dialog.Trigger>
+      {props.hideTrigger ? null : (
+        <Dialog.Trigger asChild>
+          <button
+            type="button"
+            aria-label={props.triggerAriaLabel}
+            className={props.triggerClassName ?? "w-full text-left rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] px-3 py-2 text-sm text-[var(--app-fg)] hover:bg-[var(--app-subtle-bg)] transition-colors"}
+          >
+            <div className="flex items-center gap-2">
+              {props.triggerIcon ?? (
+                <Folder size={16} className="text-[var(--app-hint)] shrink-0" />
+              )}
+              {labelText ? <span className="truncate">{labelText}</span> : null}
+            </div>
+          </button>
+        </Dialog.Trigger>
+      )}
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 bg-black/40 z-40" />
         <Dialog.Content className="fixed left-1/2 top-1/2 z-50 flex max-h-[85dvh] w-[90vw] max-w-lg -translate-x-1/2 -translate-y-1/2 flex-col rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-0 shadow-xl focus:outline-none max-md:inset-0 max-md:h-[100dvh] max-md:max-h-[100dvh] max-md:w-screen max-md:max-w-none max-md:translate-x-0 max-md:translate-y-0 max-md:rounded-none max-md:border-0 max-md:pt-[env(safe-area-inset-top)] max-md:pb-[env(safe-area-inset-bottom)]">

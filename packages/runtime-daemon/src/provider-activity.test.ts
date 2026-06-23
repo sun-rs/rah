@@ -484,7 +484,7 @@ describe("applyProviderActivity", () => {
     });
   });
 
-  test("turn failures publish only turn failure events", () => {
+  test("turn failures publish chat-visible runtime errors without stopping the session", () => {
     const services = createServices();
     const sessionId = createSession(services);
 
@@ -526,13 +526,20 @@ describe("applyProviderActivity", () => {
       },
     );
 
+    const events = services.eventBus.list({ sessionIds: [sessionId] });
     assert.deepEqual(
-      services.eventBus
-        .list({ sessionIds: [sessionId] })
+      events
+        .filter((event) => event.type === "runtime.status")
+        .map((event) => event.payload),
+      [{ status: "error", detail: "model error" }],
+    );
+    assert.deepEqual(
+      events
         .filter((event) => event.type === "turn.failed")
         .map((event) => event.payload.error),
       ["model error"],
     );
+    assert.equal(services.sessionStore.getSession(sessionId)?.session.runtimeState, "idle");
   });
 
   test("mirrors terminal output into both PTY replay and canonical terminal events", () => {

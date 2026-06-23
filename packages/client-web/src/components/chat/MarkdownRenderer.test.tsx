@@ -23,4 +23,51 @@ describe("MarkdownRenderer", () => {
     assert.match(html, /href="https:\/\/www\.chinamoney\.com\.cn\/chinese\/bkcurvfxhis\/\?cfgItemType=72&amp;curveType=FR007"/);
     assert.match(html, /https:\/\/www\.chinamoney\.com\.cn\/chinese\/bkcurvfxhis\/\?cfgItemType=72&amp;curveType=FR007/);
   });
+
+  test("turns inline local file code spans into inspector buttons", () => {
+    const localPath =
+      "/Volumes/Data/strategy/research/bond_futures_strategy_research_20260614/bond_three_layer_combo_audit/three_layer_combo_curves.png";
+    const html = renderToStaticMarkup(
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, remarkBreaks]}
+        components={createMarkdownComponents(() => undefined)}
+      >
+        {`曲线图已生成：\n\n\`${localPath}\``}
+      </ReactMarkdown>,
+    );
+
+    assert.match(html, /<button/);
+    assert.match(html, /class="prose-chat-local-file-code"/);
+    assert.match(html, /Open in Inspector: \/Volumes\/Data\/strategy\/research/);
+    assert.match(html, /three_layer_combo_curves\.png/);
+  });
+
+  test("does not link ordinary inline code spans", () => {
+    const html = renderToStaticMarkup(
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, remarkBreaks]}
+        components={createMarkdownComponents(() => undefined)}
+      >
+        {"Agent wrote `what` as inline code."}
+      </ReactMarkdown>,
+    );
+
+    assert.doesNotMatch(html, /prose-chat-local-file-code/);
+    assert.match(html, /<code>what<\/code>/);
+  });
+
+  test("does not link local paths inside fenced code blocks", () => {
+    const localPath = "/Volumes/Data/example.png";
+    const html = renderToStaticMarkup(
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, remarkBreaks]}
+        components={createMarkdownComponents(() => undefined)}
+      >
+        {"```\n" + localPath + "\n```"}
+      </ReactMarkdown>,
+    );
+
+    assert.doesNotMatch(html, /prose-chat-local-file-code/);
+    assert.match(html, /<pre><code>/);
+  });
 });

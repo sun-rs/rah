@@ -1,9 +1,11 @@
 import type { RahEvent } from "@rah/runtime-protocol";
 import {
   coerceSelectedSessionId,
+  deriveVisibleWorkspaceDirs,
   reconcileVisibleWorkspaceSelection,
   resolveHiddenWorkspaceDirsFromSessionsResponse,
 } from "./session-store-workspace";
+import { isReadOnlyReplay } from "./session-capabilities";
 import {
   applyEventToProjection,
   createSessionMap,
@@ -74,6 +76,23 @@ function preservePendingStoredReplayProjections(
     result.set(sessionId, projection);
   }
   return result;
+}
+
+function isInteractiveRunningProjection(projection: SessionProjection): boolean {
+  return projection.summary.session.status === "running" && !isReadOnlyReplay(projection.summary);
+}
+
+function interactiveRunningWorkspaceRoots(
+  projections: ReadonlyMap<string, SessionProjection>,
+): Array<string | undefined> {
+  const roots: Array<string | undefined> = [];
+  for (const projection of projections.values()) {
+    if (!isInteractiveRunningProjection(projection)) {
+      continue;
+    }
+    roots.push(projection.summary.session.rootDir || projection.summary.session.cwd);
+  }
+  return roots;
 }
 
 function coerceSelectedProjectionId(
@@ -312,8 +331,13 @@ export function applySessionsResponse(
       options?.workspaceVisibilityVersionAtRequest ?? state.workspaceVisibilityVersion,
     hiddenWorkspaces: sessionsResponse.hiddenWorkspaces,
   });
+  const workspaceDirs = deriveVisibleWorkspaceDirs({
+    explicitWorkspaceDirs: sessionsResponse.workspaceDirs,
+    inferredWorkspaceDirs: interactiveRunningWorkspaceRoots(projections),
+    hiddenWorkspaceDirs,
+  });
   const workspace = reconcileVisibleWorkspaceSelection({
-    workspaceDirs: sessionsResponse.workspaceDirs,
+    workspaceDirs,
     sessions: sessionsResponse.sessions,
     storedSessions: sessionsResponse.storedSessions,
     activeWorkspaceDir: sessionsResponse.activeWorkspaceDir,
@@ -368,19 +392,24 @@ export function replaceSessionsResponse(
       options?.workspaceVisibilityVersionAtRequest ?? state.workspaceVisibilityVersion,
     hiddenWorkspaces: sessionsResponse.hiddenWorkspaces,
   });
+  const sessionMap = createSessionMap(sessionsResponse);
+  const projections = preservePendingStoredReplayProjections(
+    sessionMap.sessions,
+    state.projections,
+  );
+  const workspaceDirs = deriveVisibleWorkspaceDirs({
+    explicitWorkspaceDirs: sessionsResponse.workspaceDirs,
+    inferredWorkspaceDirs: interactiveRunningWorkspaceRoots(projections),
+    hiddenWorkspaceDirs,
+  });
   const workspace = reconcileVisibleWorkspaceSelection({
-    workspaceDirs: sessionsResponse.workspaceDirs,
+    workspaceDirs,
     sessions: sessionsResponse.sessions,
     storedSessions: sessionsResponse.storedSessions,
     activeWorkspaceDir: sessionsResponse.activeWorkspaceDir,
     currentWorkspaceDir: state.workspaceDir,
     hiddenWorkspaceDirs,
   });
-  const sessionMap = createSessionMap(sessionsResponse);
-  const projections = preservePendingStoredReplayProjections(
-    sessionMap.sessions,
-    state.projections,
-  );
   return {
     projections,
     storedSessions: sessionsResponse.storedSessions,

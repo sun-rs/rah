@@ -66,12 +66,12 @@ import {
 import { usePwaDisplayMode } from "../../../hooks/usePwaDisplayMode";
 import {
   activateSessionTuiTerminal,
+  PROVIDER_TUI_REPLAY_TAIL_BYTES,
   shouldReplayInitialSessionTuiOutput,
 } from "../../../tui-surface-lifecycle";
 import { providerLabel } from "../../../types";
 
 const SESSION_TUI_SCROLLBACK_LINES = 600;
-const SESSION_TUI_REPLAY_TAIL_BYTES = 96 * 1024;
 
 function formatContextPercent(value: number): string {
   const clamped = Math.max(0, Math.min(100, value));
@@ -140,7 +140,7 @@ function shouldRenderInteractionNotice(notice: InlineWorkbenchNotice | null): no
   // Generic read-only/observe states are already expressed by the composer
   // surface. Keep this banner for actionable native-TUI diagnostics, queued
   // input, stopped TUI, and warning states.
-  return notice.message !== "History only. Claim running control for input and approvals." &&
+  return notice.message !== "History only. Resume this session for input and approvals." &&
     notice.message !== "Observe only.";
 }
 
@@ -424,7 +424,7 @@ export function WorkbenchSelectedPane(props: {
   const sessionControlBusy = isSessionControlLocked(props.selectedSummary);
   const nativeTuiPromptDirty =
     props.composerSurface.kind === "compose" && nativeTui?.promptState === "prompt_dirty";
-  const claimSessionControlDisabled =
+  const resumeSessionControlDisabled =
     sessionControlBusy ||
     props.claimModePending ||
     props.modelChangePending ||
@@ -438,53 +438,53 @@ export function WorkbenchSelectedPane(props: {
     sendPending: props.sendPending,
     nativeTuiPromptState: nativeTui?.promptState,
   });
-  const claimComposerButtonClassName =
-    "inline-flex h-8 shrink-0 items-center justify-center rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground transition-colors hover:opacity-90 disabled:opacity-50";
-  const renderClaimComposer = (args: {
+  const resumeComposerButtonClassName =
+    "inline-flex h-8 w-[6.75rem] shrink-0 items-center justify-center rounded-lg bg-primary px-3 text-xs font-medium text-primary-foreground transition-colors hover:opacity-90 disabled:opacity-50";
+  const renderResumeComposer = (args: {
     title: string;
     actionLabel: string;
     actionPending: boolean;
-    onClaim: () => void;
+    onResume: () => void;
   }) => (
     <div className="flex min-h-10 w-full items-center justify-between gap-2 rounded-xl border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-2 py-1 md:min-h-9 lg:min-h-8">
       <div className="min-w-0 flex-1 truncate px-1">
         <span className="text-sm font-medium text-[var(--app-fg)]">{args.title}</span>
         {!compactComposerPrompts ? (
           <span className="ml-2 text-xs text-[var(--app-hint)]">
-            Claim control to continue here.
+            Resume to continue here.
           </span>
         ) : null}
       </div>
       <div className="flex shrink-0 items-center gap-2.5">
-      <SessionControlPopover
-        accessModes={props.claimAccessModes}
-        selectedAccessModeId={props.selectedClaimAccessModeId}
-        planModeAvailable={props.claimPlanModeAvailable}
-        planModeEnabled={props.claimPlanModeEnabled}
-        modeDisabled={props.claimModePending || args.actionPending}
-        modelCatalog={props.modelCatalog}
-        modelCatalogLoading={props.modelCatalogLoading}
-        selectedModelId={props.selectedClaimModelId}
-        selectedReasoningId={props.selectedClaimReasoningId}
-        modelDisabled={props.modelChangePending || args.actionPending}
-        disabled={claimSessionControlDisabled}
-        showModel
-        align="right"
-        buttonClassName={COMPOSER_LAYOUT.settingsButtonClassName}
-        onOpen={props.onRequestModelCatalogRefresh}
-        onAccessModeChange={props.onClaimAccessModeChange}
-        onPlanModeToggle={props.onClaimPlanModeToggle}
-        onModelChange={props.onClaimModelChange}
-        onReasoningChange={props.onClaimReasoningChange}
-      />
-      <button
-        type="button"
-        disabled={args.actionPending}
-        onClick={args.onClaim}
-        className={claimComposerButtonClassName}
-      >
-        {args.actionLabel}
-      </button>
+        <SessionControlPopover
+          accessModes={props.claimAccessModes}
+          selectedAccessModeId={props.selectedClaimAccessModeId}
+          planModeAvailable={props.claimPlanModeAvailable}
+          planModeEnabled={props.claimPlanModeEnabled}
+          modeDisabled={props.claimModePending || args.actionPending}
+          modelCatalog={props.modelCatalog}
+          modelCatalogLoading={props.modelCatalogLoading}
+          selectedModelId={props.selectedClaimModelId}
+          selectedReasoningId={props.selectedClaimReasoningId}
+          modelDisabled={props.modelChangePending || args.actionPending}
+          disabled={resumeSessionControlDisabled}
+          showModel
+          align="right"
+          buttonClassName={COMPOSER_LAYOUT.settingsButtonClassName}
+          onOpen={props.onRequestModelCatalogRefresh}
+          onAccessModeChange={props.onClaimAccessModeChange}
+          onPlanModeToggle={props.onClaimPlanModeToggle}
+          onModelChange={props.onClaimModelChange}
+          onReasoningChange={props.onClaimReasoningChange}
+        />
+        <button
+          type="button"
+          disabled={args.actionPending}
+          onClick={args.onResume}
+          className={resumeComposerButtonClassName}
+        >
+          {args.actionLabel}
+        </button>
       </div>
     </div>
   );
@@ -771,9 +771,10 @@ export function WorkbenchSelectedPane(props: {
             tuiClientCloseEnabled
             tuiClientActive={terminalTuiClientActive}
             onTuiClientActiveChange={setTerminalTuiClientActive}
+            exclusiveNativeSurfaceControl={props.selectedSummary.session.liveBackend !== "native_local_server"}
             initialReplay={terminalInitialReplay}
             scrollback={SESSION_TUI_SCROLLBACK_LINES}
-            replayTailBytes={SESSION_TUI_REPLAY_TAIL_BYTES}
+            replayTailBytes={PROVIDER_TUI_REPLAY_TAIL_BYTES}
             maxWriteBatchChars={128 * 1024}
           />
         </div>
@@ -807,22 +808,22 @@ export function WorkbenchSelectedPane(props: {
         >
         <div className="mx-auto max-w-3xl px-3 pt-2 md:px-4 md:pt-3">
           {props.composerSurface.kind === "history_claim" ? (
-            renderClaimComposer({
+            renderResumeComposer({
               title: "History only",
               actionLabel: props.composerSurface.actionLabel,
               actionPending: props.composerSurface.actionPending,
-              onClaim: props.onClaimHistory,
+              onResume: props.onClaimHistory,
             })
           ) : props.composerSurface.kind === "unavailable" ? (
             <div className="w-full rounded-xl border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-4 py-3 text-sm text-[var(--app-hint)]">
               Input is unavailable for this session.
             </div>
           ) : props.composerSurface.kind === "claim_control" ? (
-            renderClaimComposer({
-              title: "Claim control",
+            renderResumeComposer({
+              title: "Resume session",
               actionLabel: props.composerSurface.actionLabel,
               actionPending: props.composerSurface.actionPending,
-              onClaim: props.onClaimControl,
+              onResume: props.onClaimControl,
             })
           ) : (
             <div className="relative">

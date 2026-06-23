@@ -3,6 +3,8 @@ import { test } from "node:test";
 import type { SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
 import {
   applyCanvasPaneTarget,
+  clearCanvasCouncilTargets,
+  clearCanvasSessionTargets,
   clearCanvasTargetsForStoredSession,
   createCanvasLayoutRatios,
   createDefaultCanvasRightPanelsOpen,
@@ -12,7 +14,6 @@ import {
   normalizeRememberedCanvasState,
   readRememberedCanvasState,
   rememberCanvasState,
-  replaceCanvasSessionTargetWithStoredRef,
   resolveCanvasClaimedSessionId,
   resolveCanvasRunningUniquenessKey,
   resolveCanvasTargetProjection,
@@ -364,16 +365,26 @@ test("canvas claim resolution does not rebind to an explicit read-only history p
   assert.equal(resolved, null);
 });
 
-test("stopping a canvas session converts its pane target to stored history", () => {
+test("stopping a canvas session clears its pane target", () => {
   const current = createEmptyCanvasTargets();
   current["canvas-1"] = { kind: "session", sessionId: "live-1" };
   current["canvas-2"] = { kind: "session", sessionId: "live-2" };
-  const stoppedRef = ref("codex", "provider-1");
 
-  const next = replaceCanvasSessionTargetWithStoredRef(current, "live-1", stoppedRef);
+  const next = clearCanvasSessionTargets(current, "live-1");
 
-  assert.deepEqual(next["canvas-1"], { kind: "stored", ref: stoppedRef });
+  assert.deepEqual(next["canvas-1"], { kind: "empty" });
   assert.deepEqual(next["canvas-2"], { kind: "session", sessionId: "live-2" });
+});
+
+test("stopping a canvas council clears its pane target", () => {
+  const current = createEmptyCanvasTargets();
+  current["canvas-1"] = { kind: "council", councilId: "council-1" };
+  current["canvas-2"] = { kind: "council", councilId: "council-2" };
+
+  const next = clearCanvasCouncilTargets(current, "council-1");
+
+  assert.deepEqual(next["canvas-1"], { kind: "empty" });
+  assert.deepEqual(next["canvas-2"], { kind: "council", councilId: "council-2" });
 });
 
 test("deleting a stored session clears matching canvas targets", () => {

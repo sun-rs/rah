@@ -1535,7 +1535,7 @@ describe("client projection", () => {
     assert.equal(current.currentRuntimeStatus, undefined);
   });
 
-  test("stores turn failure errors on the projected session diagnostics", () => {
+  test("stores turn failure errors on diagnostics without stopping the projected session", () => {
     let current: SessionProjection = {
       ...projection(),
       summary: {
@@ -1561,7 +1561,9 @@ describe("client projection", () => {
       }),
     );
 
-    assert.equal(current.summary.session.runtimeState, "failed");
+    assert.equal(current.summary.session.runtimeState, "idle");
+    assert.equal(current.summary.session.status, "running");
+    assert.equal(current.summary.session.phase, "ready");
     assert.equal(
       current.summary.session.runtimeDiagnostics?.lastError,
       "Model not found: niubiwudi/.",
@@ -1583,6 +1585,47 @@ describe("client projection", () => {
       current.summary.session.runtimeDiagnostics?.lastError,
       "Model not found: niubiwudi/.",
     );
+  });
+
+  test("projects provider stream disconnects as chat timeline notices", () => {
+    let current = applyEventToProjection(
+      projection(),
+      event({
+        seq: 1,
+        turnId: "turn-1",
+        type: "runtime.status",
+        payload: {
+          status: "error",
+          detail:
+            "stream disconnected before completion: error sending request for url (https://chatgpt.com/backend-api/codex/responses)",
+        },
+      }),
+    );
+
+    current = applyEventToProjection(
+      current,
+      event({
+        seq: 2,
+        turnId: "turn-1",
+        type: "turn.failed",
+        payload: {
+          error:
+            "stream disconnected before completion: error sending request for url (https://chatgpt.com/backend-api/codex/responses)",
+        },
+      }),
+    );
+
+    assert.equal(current.summary.session.runtimeState, "idle");
+    assert.equal(current.feed.length, 1);
+    const notice = current.feed[0];
+    assert.equal(notice?.kind, "notification");
+    if (notice?.kind === "notification") {
+      assert.equal(notice.title, "Provider stream disconnected");
+      assert.equal(
+        notice.body,
+        "The provider stream disconnected before completion. The session is still available; send a new message to continue.",
+      );
+    }
   });
 
   test("does not collapse adjacent user messages without shared identity", () => {

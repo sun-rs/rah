@@ -2061,6 +2061,52 @@ describe("translateCodexRolloutLine", () => {
     });
   });
 
+  test("maps Codex multi-agent calls as sanitized subagent lifecycle observations", () => {
+    const state = createCodexRolloutTranslationState();
+
+    const started = translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-24T06:12:00.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "spawn_agent",
+          namespace: "multi_agent_v1",
+          call_id: "call-subagent",
+          arguments: JSON.stringify({
+            agent_type: "explorer",
+            fork_context: false,
+            message: "internal prompt that must not render as chat",
+          }),
+        },
+      },
+      state,
+    );
+    const completed = translateCodexRolloutLine(
+      {
+        timestamp: "2026-04-24T06:12:01.000Z",
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "call-subagent",
+          output: JSON.stringify({ agent_path: "agent-1" }),
+        },
+      },
+      state,
+    );
+
+    assert.deepEqual(started.map((item) => item.activity.type), ["observation_started"]);
+    assert.deepEqual(completed.map((item) => item.activity.type), ["observation_completed"]);
+    const observation =
+      started[0]?.activity.type === "observation_started"
+        ? started[0].activity.observation
+        : null;
+    assert.equal(observation?.kind, "subagent.lifecycle");
+    assert.equal(observation?.title, "Start subagent");
+    assert.equal(observation?.summary, "explorer");
+    assert.ok(!JSON.stringify(observation).includes("internal prompt"));
+  });
+
   test("preserves markdown structure while stripping contextual fragments from assistant messages", () => {
     const state = createCodexRolloutTranslationState();
     const markdown = "会涉及抽象。\n\n- AgentAdapter\n- EventModel\n\n```text\nCouncil\n```";

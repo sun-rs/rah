@@ -61,7 +61,7 @@ export function NewSessionComposer(props: {
   workspacePickerOpen: boolean;
   onToggleWorkspacePicker: () => void;
   onSelectWorkspace: (dir: string) => void;
-  onAddWorkspace: (dir: string) => void;
+  onChooseNewWorkspace: (dir: string) => void;
   provider: ProviderChoice;
   onChangeProvider: (provider: ProviderChoice) => void;
   providerSelectorMode?: "grid" | "icons" | "auto";
@@ -84,6 +84,7 @@ export function NewSessionComposer(props: {
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   const [controlsRowWidth, setControlsRowWidth] = useState<number | null>(null);
   const [surfaceWidth, setSurfaceWidth] = useState<number | null>(null);
+  const [addWorkspacePickerOpen, setAddWorkspacePickerOpen] = useState(false);
   const workspaceLabel = props.availableWorkspaceDir
     ? props.availableWorkspaceDir.split("/").filter(Boolean).pop() ?? props.availableWorkspaceDir
     : "Workspace";
@@ -146,6 +147,16 @@ export function NewSessionComposer(props: {
         "flex-1 flex flex-col items-center justify-center px-4 md:px-6 overflow-y-auto rah-scroll-panel rah-scroll-panel-y"
       }
     >
+      <WorkspacePicker
+        currentDir=""
+        hideTrigger
+        open={addWorkspacePickerOpen}
+        onOpenChange={setAddWorkspacePickerOpen}
+        onSelect={(dir) => {
+          props.onChooseNewWorkspace(dir);
+          setAddWorkspacePickerOpen(false);
+        }}
+      />
       <div
         ref={surfaceRef}
         className={
@@ -215,8 +226,10 @@ export function NewSessionComposer(props: {
 
               {props.workspaceDirs.length === 0 ? (
                 <WorkspacePicker
-                  currentDir=""
-                  triggerLabel={iconOnlyWorkspace ? "" : "Workspace"}
+                  currentDir={props.availableWorkspaceDir}
+                  triggerLabel={
+                    iconOnlyWorkspace ? "" : props.availableWorkspaceDir ? workspaceLabel : "Workspace"
+                  }
                   triggerIcon={<FolderPlus size={iconOnlyWorkspace ? 18 : 12} />}
                   triggerAriaLabel="Select workspace"
                   triggerClassName={
@@ -224,7 +237,7 @@ export function NewSessionComposer(props: {
                       ? EMPTY_STATE_COMPOSER_LAYOUT.attachButtonClassName
                       : EMPTY_STATE_COMPOSER_LAYOUT.pillClassName
                   }
-                  onSelect={props.onAddWorkspace}
+                  onSelect={props.onChooseNewWorkspace}
                 />
               ) : (
                 <div className="relative shrink-0" ref={props.workspacePickerRef}>
@@ -258,6 +271,18 @@ export function NewSessionComposer(props: {
                         contentClassName="p-1.5"
                         scrollAriaLabel="Workspaces"
                       >
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setAddWorkspacePickerOpen(true);
+                            props.onToggleWorkspacePicker();
+                          }}
+                          className="flex w-full min-w-0 items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]"
+                        >
+                          <FolderPlus size={13} className="shrink-0 text-[var(--app-hint)]" />
+                          <span className="truncate">Add workspace…</span>
+                        </button>
+                        <div className="my-1 h-px bg-[var(--app-border)]" />
                         {props.workspaceDirs.map((dir) => (
                           <button
                             key={dir}

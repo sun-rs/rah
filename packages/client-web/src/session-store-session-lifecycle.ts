@@ -31,6 +31,41 @@ type LifecycleState = {
   recentSessions: StoredSessionRef[];
 };
 
+function applySessionWorkspacePlacement(
+  current: Pick<
+    LifecycleState,
+    "hiddenWorkspaceDirs" | "workspaceDirs" | "workspaceVisibilityVersion" | "workspaceDir"
+  >,
+  ...workspaceCandidates: Array<string | undefined>
+): Pick<
+  LifecycleState,
+  "hiddenWorkspaceDirs" | "workspaceDirs" | "workspaceVisibilityVersion" | "workspaceDir"
+> {
+  const targetDir = workspaceCandidates.find((dir) => dir?.trim());
+  const hiddenWorkspaceDirs = revealWorkspaceCandidates(
+    current.hiddenWorkspaceDirs,
+    ...workspaceCandidates,
+  );
+  if (!targetDir) {
+    return {
+      hiddenWorkspaceDirs,
+      workspaceDirs: current.workspaceDirs,
+      workspaceVisibilityVersion: current.workspaceVisibilityVersion,
+      workspaceDir: current.workspaceDir,
+    };
+  }
+  return {
+    hiddenWorkspaceDirs,
+    workspaceDirs: appendVisibleWorkspaceDir(
+      hiddenWorkspaceDirs,
+      current.workspaceDirs,
+      targetDir,
+    ),
+    workspaceVisibilityVersion: current.workspaceVisibilityVersion + 1,
+    workspaceDir: targetDir,
+  };
+}
+
 export function createEmptySessionProjection(summary: SessionSummary): SessionProjection {
   return {
     summary,
@@ -139,9 +174,8 @@ export function applyPendingStoredReplaySessionState(
   ref: StoredSessionRef,
 ): Partial<LifecycleState> {
   const projection = createPendingStoredReplayProjection(ref);
-  const targetDir = ref.rootDir ?? ref.cwd;
-  const nextHiddenWorkspaceDirs = revealWorkspaceCandidates(
-    current.hiddenWorkspaceDirs,
+  const workspacePlacement = applySessionWorkspacePlacement(
+    current,
     ref.rootDir,
     ref.cwd,
   );
@@ -154,17 +188,8 @@ export function applyPendingStoredReplaySessionState(
         (sessionId) => sessionId !== projection.summary.session.id,
       ),
     ),
-    hiddenWorkspaceDirs: nextHiddenWorkspaceDirs,
-    workspaceDirs: appendVisibleWorkspaceDir(
-      nextHiddenWorkspaceDirs,
-      current.workspaceDirs,
-      targetDir,
-    ),
-    workspaceVisibilityVersion: targetDir
-      ? current.workspaceVisibilityVersion + 1
-      : current.workspaceVisibilityVersion,
+    ...workspacePlacement,
     sessionTopologyVersion: current.sessionTopologyVersion + 1,
-    workspaceDir: targetDir ?? current.workspaceDir,
     selectedSessionId: projection.summary.session.id,
     pendingSessionTransition: null,
     error: null,
@@ -180,23 +205,20 @@ export function applyStartedSessionState(
     projections: Map<string, SessionProjection>;
   },
 ): Partial<LifecycleState> {
-  const nextHiddenWorkspaceDirs = revealWorkspaceCandidates(current.hiddenWorkspaceDirs, args.cwd);
-  const workspaceVisibilityVersion = current.workspaceVisibilityVersion + 1;
+  const workspacePlacement = applySessionWorkspacePlacement(
+    current,
+    responseSession.session.rootDir,
+    responseSession.session.cwd,
+    args.cwd,
+  );
   args.projections.set(responseSession.session.id, createEmptySessionProjection(responseSession));
   return {
     projections: args.projections,
     unreadSessionIds: new Set(
       [...current.unreadSessionIds].filter((sessionId) => sessionId !== responseSession.session.id),
     ),
-    hiddenWorkspaceDirs: nextHiddenWorkspaceDirs,
-    workspaceDirs: appendVisibleWorkspaceDir(
-      nextHiddenWorkspaceDirs,
-      current.workspaceDirs,
-      args.cwd,
-    ),
-    workspaceVisibilityVersion,
+    ...workspacePlacement,
     sessionTopologyVersion: current.sessionTopologyVersion + 1,
-    workspaceDir: args.cwd,
     ...(args.provider ? { newSessionProvider: args.provider } : {}),
     selectedSessionId: responseSession.session.id,
     pendingSessionTransition: null,
@@ -211,21 +233,15 @@ export function applyAttachedSessionState(
 ): Partial<LifecycleState> {
   const unreadSessionIds = new Set(current.unreadSessionIds);
   unreadSessionIds.delete(summary.session.id);
-  const targetDir = responseSession.session.rootDir || responseSession.session.cwd;
-  const nextHiddenWorkspaceDirs = targetDir
-    ? revealWorkspaceCandidates(current.hiddenWorkspaceDirs, targetDir)
-    : current.hiddenWorkspaceDirs;
+  const workspacePlacement = applySessionWorkspacePlacement(
+    current,
+    responseSession.session.rootDir,
+    responseSession.session.cwd,
+  );
   return {
     selectedSessionId: responseSession.session.id,
     unreadSessionIds,
-    hiddenWorkspaceDirs: nextHiddenWorkspaceDirs,
-    workspaceDirs: targetDir
-      ? appendVisibleWorkspaceDir(nextHiddenWorkspaceDirs, current.workspaceDirs, targetDir)
-      : current.workspaceDirs,
-    workspaceVisibilityVersion: targetDir
-      ? current.workspaceVisibilityVersion + 1
-      : current.workspaceVisibilityVersion,
-    workspaceDir: targetDir ?? current.workspaceDir,
+    ...workspacePlacement,
     pendingSessionAction: null,
     error: null,
   };
@@ -242,12 +258,13 @@ export function applyResumedStoredSessionState(
     selectSession?: boolean;
   },
 ): Partial<LifecycleState> {
-  const nextHiddenWorkspaceDirs = revealWorkspaceCandidates(
-    current.hiddenWorkspaceDirs,
+  const workspacePlacement = applySessionWorkspacePlacement(
+    current,
+    responseSession.session.rootDir,
+    responseSession.session.cwd,
     ref.rootDir,
     ref.cwd,
   );
-  const workspaceVisibilityVersion = current.workspaceVisibilityVersion + 1;
   if (args.replaceSessionId) {
     args.projections.delete(args.replaceSessionId);
   }
@@ -260,15 +277,8 @@ export function applyResumedStoredSessionState(
     unreadSessionIds: new Set(
       [...current.unreadSessionIds].filter((sessionId) => sessionId !== responseSession.session.id),
     ),
-    hiddenWorkspaceDirs: nextHiddenWorkspaceDirs,
-    workspaceDirs: appendVisibleWorkspaceDir(
-      nextHiddenWorkspaceDirs,
-      current.workspaceDirs,
-      ref.rootDir ?? ref.cwd,
-    ),
-    workspaceVisibilityVersion,
+    ...workspacePlacement,
     sessionTopologyVersion: current.sessionTopologyVersion + 1,
-    workspaceDir: ref.rootDir ?? ref.cwd ?? current.workspaceDir,
     selectedSessionId:
       args.selectSession === false ? current.selectedSessionId : responseSession.session.id,
     pendingSessionTransition: null,
@@ -315,12 +325,13 @@ export function applyClaimedHistorySessionState(
   ref: Pick<StoredSessionRef, "rootDir" | "cwd">,
   projections: Map<string, SessionProjection>,
 ): Partial<LifecycleState> {
-  const nextHiddenWorkspaceDirs = revealWorkspaceCandidates(
-    current.hiddenWorkspaceDirs,
+  const workspacePlacement = applySessionWorkspacePlacement(
+    current,
+    responseSession.session.rootDir,
+    responseSession.session.cwd,
     ref.rootDir,
     ref.cwd,
   );
-  const workspaceVisibilityVersion = current.workspaceVisibilityVersion + 1;
   projections.delete(sessionId);
   projections.set(
     responseSession.session.id,
@@ -338,15 +349,8 @@ export function applyClaimedHistorySessionState(
           sessionIdValue !== sessionId && sessionIdValue !== responseSession.session.id,
       ),
     ),
-    hiddenWorkspaceDirs: nextHiddenWorkspaceDirs,
-    workspaceDirs: appendVisibleWorkspaceDir(
-      nextHiddenWorkspaceDirs,
-      current.workspaceDirs,
-      ref.rootDir ?? ref.cwd,
-    ),
-    workspaceVisibilityVersion,
+    ...workspacePlacement,
     sessionTopologyVersion: current.sessionTopologyVersion + 1,
-    workspaceDir: ref.rootDir ?? ref.cwd ?? current.workspaceDir,
     selectedSessionId: responseSession.session.id,
     pendingSessionAction: null,
     pendingSessionTransition: null,

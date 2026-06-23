@@ -7,6 +7,7 @@ import {
   mapCodexPermissionResolution,
   mapCodexQuestionRequestToActivities,
   translateCodexAppServerNotification,
+  translateCodexAppServerThreadSnapshot,
 } from "./codex-app-server-activity";
 import { createCodexTimelineIdentity } from "./codex-timeline-identity";
 
@@ -91,6 +92,86 @@ describe("translateCodexAppServerNotification", () => {
       assert.equal(interrupted[0].activity.turnId, "turn-1");
       assert.equal(interrupted[0].activity.identity?.providerSessionId, "thread-1");
       assert.equal(interrupted[0].activity.identity?.turnKey, "turn:turn-1");
+    }
+  });
+
+  test("preserves provider session id on thread-scoped lifecycle notifications", () => {
+    const state = createCodexAppServerTranslationState();
+    const started = translateCodexAppServerNotification(
+      {
+        method: "turn/started",
+        params: {
+          threadId: "thread-main",
+          turn: { id: "turn-main" },
+        },
+      },
+      state,
+    );
+    const completed = translateCodexAppServerNotification(
+      {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-subagent",
+          turn: { id: "turn-subagent", status: "completed" },
+        },
+      },
+      state,
+    );
+
+    assert.equal(started[0]?.providerSessionId, "thread-main");
+    assert.equal(completed[0]?.providerSessionId, "thread-subagent");
+  });
+
+  test("extracts provider session id from item scoped notifications", () => {
+    const state = createCodexAppServerTranslationState();
+    const translated = translateCodexAppServerNotification(
+      {
+        method: "item/completed",
+        params: {
+          turnId: "turn-subagent",
+          item: {
+            type: "userMessage",
+            id: "subagent-user-1",
+            threadId: "thread-subagent",
+            content: [{ type: "input_text", text: "internal subagent prompt" }],
+          },
+        },
+      },
+      state,
+    );
+
+    assert.equal(translated[0]?.providerSessionId, "thread-subagent");
+  });
+
+  test("sanitizes live subagent lifecycle observations", () => {
+    const state = createCodexAppServerTranslationState();
+    const translated = translateCodexAppServerNotification(
+      {
+        method: "item/started",
+        params: {
+          threadId: "thread-main",
+          turnId: "turn-main",
+          item: {
+            type: "collabAgentToolCall",
+            id: "subagent-1",
+            tool: "spawnAgent",
+            status: "inProgress",
+            senderThreadId: "thread-main",
+            receiverThreadIds: ["thread-subagent"],
+            prompt: "internal prompt that must not render as chat",
+            model: "gpt-5.5",
+            reasoningEffort: "xhigh",
+          },
+        },
+      },
+      state,
+    );
+
+    assert.equal(translated[0]?.activity.type, "observation_started");
+    if (translated[0]?.activity.type === "observation_started") {
+      assert.equal(translated[0].activity.observation.kind, "subagent.lifecycle");
+      assert.equal(translated[0].activity.observation.summary, "gpt-5.5 · xhigh · 1 target");
+      assert.ok(!JSON.stringify(translated[0].activity.observation).includes("internal prompt"));
     }
   });
 
@@ -1320,6 +1401,7 @@ describe("translateCodexAppServerNotification", () => {
       "thread/started": { method: "thread/started", params: { thread: { id: "thread-1" } } },
       "thread/status/changed": { method: "thread/status/changed", params: { threadId: "thread-1", status: { type: "active", activeFlags: ["waitingOnApproval"] } } },
       "thread/archived": { method: "thread/archived", params: { threadId: "thread-1" } },
+      "thread/deleted": { method: "thread/deleted", params: { threadId: "thread-1" } },
       "thread/unarchived": { method: "thread/unarchived", params: { threadId: "thread-1" } },
       "thread/closed": { method: "thread/closed", params: { threadId: "thread-1" } },
       "skills/changed": { method: "skills/changed", params: {} },
@@ -1372,6 +1454,7 @@ describe("translateCodexAppServerNotification", () => {
       "account/rateLimits/updated": { method: "account/rateLimits/updated", params: { rateLimits: { limitId: null, limitName: null, primary: null, secondary: null, credits: null, planType: null } } },
       "account/login/completed": { method: "account/login/completed", params: { loginId: "login-1", success: true, error: null } },
       "app/list/updated": { method: "app/list/updated", params: {} },
+      "externalAgentConfig/import/progress": { method: "externalAgentConfig/import/progress", params: { importId: "import-1", phase: "importing", processedItems: 1, totalItems: 2 } },
       "externalAgentConfig/import/completed": { method: "externalAgentConfig/import/completed", params: { success: true, error: null } },
       "fs/changed": { method: "fs/changed", params: { watchId: "watch-1", changedPaths: ["/workspace/a.ts"] } },
       "item/reasoning/summaryTextDelta": { method: "item/reasoning/summaryTextDelta", params: { threadId: "thread-1", turnId: "turn-1", itemId: "reason-1", delta: "thinking", summaryIndex: 0 } },
@@ -1380,6 +1463,8 @@ describe("translateCodexAppServerNotification", () => {
       "thread/compacted": { method: "thread/compacted", params: { threadId: "thread-1", turnId: "turn-1" } },
       "model/rerouted": { method: "model/rerouted", params: { threadId: "thread-1", turnId: "turn-1", fromModel: "a", toModel: "b", reason: "quota" } },
       "model/verification": { method: "model/verification", params: { provider: "openai", model: "gpt-5", status: "verified" } },
+      "turn/moderationMetadata": { method: "turn/moderationMetadata", params: { threadId: "thread-1", turnId: "turn-1", metadata: { policy: "ok" } } },
+      "model/safetyBuffering/updated": { method: "model/safetyBuffering/updated", params: { threadId: "thread-1", turnId: "turn-1", model: "gpt-5", useCases: [], reasons: [], showBufferingUi: false, fasterModel: null } },
       "warning": { method: "warning", params: { threadId: "thread-1", message: "Heads up" } },
       "guardianWarning": { method: "guardianWarning", params: { threadId: "thread-1", message: "Guardian warning" } },
       "deprecationNotice": { method: "deprecationNotice", params: { summary: "Deprecated", details: "Use v2" } },
@@ -1468,6 +1553,55 @@ describe("translateCodexAppServerNotification", () => {
       state,
     );
     assert.equal(hasInvalidStreamObservation(itemActivities), true);
+  });
+});
+
+describe("translateCodexAppServerThreadSnapshot", () => {
+  test("projects active thread status from resume snapshots after historical turns", () => {
+    const state = createCodexAppServerTranslationState();
+    const items = translateCodexAppServerThreadSnapshot(
+      {
+        id: "thread-active",
+        status: { type: "active", activeFlags: [] },
+        turns: [
+          {
+            id: "turn-history",
+            status: "completed",
+            items: [],
+          },
+        ],
+      },
+      state,
+    );
+
+    assert.deepEqual(items.map((item) => item.activity.type), [
+      "turn_started",
+      "turn_completed",
+      "session_state",
+    ]);
+    assert.deepEqual(items.at(-1)?.activity, {
+      type: "session_state",
+      state: "running",
+    });
+  });
+
+  test("projects idle thread status from metadata-only resume snapshots", () => {
+    const state = createCodexAppServerTranslationState();
+    const items = translateCodexAppServerThreadSnapshot(
+      {
+        id: "thread-idle",
+        status: { type: "idle" },
+        turns: [],
+      },
+      state,
+    );
+
+    assert.deepEqual(items.map((item) => item.activity), [
+      {
+        type: "session_state",
+        state: "idle",
+      },
+    ]);
   });
 });
 

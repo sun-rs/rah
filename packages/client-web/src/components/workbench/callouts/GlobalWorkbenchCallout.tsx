@@ -29,7 +29,7 @@ export function GlobalWorkbenchCallout(props: {
             }
           : props.errorDescriptor.primaryAction === "claim_control" && props.selectedSummary
             ? {
-                primaryLabel: props.errorDescriptor.primaryLabel ?? "Claim control",
+                primaryLabel: props.errorDescriptor.primaryLabel ?? "Resume",
                 onPrimary: () => props.onClaimControl(props.selectedSummary!.session.id),
               }
             : {})}

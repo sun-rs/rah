@@ -91,6 +91,18 @@ export function appendVisibleWorkspaceDir(
   return [...visibleWorkspaceDirs, normalized];
 }
 
+export function deriveVisibleWorkspaceDirs(args: {
+  explicitWorkspaceDirs: readonly string[];
+  inferredWorkspaceDirs: Iterable<string | undefined>;
+  hiddenWorkspaceDirs: ReadonlySet<string>;
+}): string[] {
+  let next = [...args.explicitWorkspaceDirs];
+  for (const dir of args.inferredWorkspaceDirs) {
+    next = appendVisibleWorkspaceDir(args.hiddenWorkspaceDirs, next, dir);
+  }
+  return next;
+}
+
 function normalizeHiddenWorkspaceDirs(hiddenWorkspaces: readonly string[] | undefined): Set<string> {
   return new Set(
     (hiddenWorkspaces ?? []).map((dir) => normalizeWorkspaceDirectory(dir)).filter(

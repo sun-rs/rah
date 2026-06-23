@@ -83,7 +83,7 @@ describe("workbench notice contract", () => {
 
     assert.deepEqual(state.interactionNotice, {
       tone: "info",
-        message: "History only. Claim running control for input and approvals.",
+      message: "History only. Resume this session for input and approvals.",
     });
   });
 
@@ -127,6 +127,28 @@ describe("workbench notice contract", () => {
       message:
         "Native TUI process is stopped. Reopen it from Chats to continue.",
     });
+  });
+
+  test("does not show generic TUI stopped notices for native local server sessions", () => {
+    const state = deriveWorkbenchNoticeState({
+      selectedSummary: summary({
+        liveBackend: "native_local_server",
+        runtimeState: "failed",
+        nativeTui: {
+          terminalId: "session-1",
+          viewAvailable: true,
+        },
+        runtimeDiagnostics: {
+          attachState: "ready",
+          lastError:
+            "stream disconnected before completion: error sending request for url (https://chatgpt.com/backend-api/codex/responses)",
+        },
+      }),
+      selectedProjection: projection(summary()),
+      error: null,
+    });
+
+    assert.equal(state.interactionNotice, null);
   });
 
   test("derives provider runtime error before generic stopped native TUI notice", () => {

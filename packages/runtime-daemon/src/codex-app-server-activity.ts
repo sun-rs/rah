@@ -20,6 +20,7 @@ import {
   createCodexTimelineIdentity,
   createCodexTimelineTurnIdentity,
 } from "./codex-timeline-identity";
+import { runtimeStateFromCodexThreadStatus } from "./codex-thread-status";
 import type { ProviderActivity } from "./provider-activity";
 import { timelineRuntimeModel } from "./timeline-runtime-model";
 
@@ -28,6 +29,8 @@ export interface CodexLiveTranslatedActivity {
   ts?: string;
   channel?: EventChannel;
   authority?: EventAuthority;
+  origin?: "notification" | "snapshot";
+  providerSessionId?: string;
   raw?: unknown;
 }
 
@@ -98,6 +101,7 @@ export const CODEX_APP_SERVER_NOTIFICATION_METHODS = [
   "thread/started",
   "thread/status/changed",
   "thread/archived",
+  "thread/deleted",
   "thread/unarchived",
   "thread/closed",
   "skills/changed",
@@ -134,6 +138,7 @@ export const CODEX_APP_SERVER_NOTIFICATION_METHODS = [
   "account/rateLimits/updated",
   "account/login/completed",
   "app/list/updated",
+  "externalAgentConfig/import/progress",
   "externalAgentConfig/import/completed",
   "fs/changed",
   "item/reasoning/summaryTextDelta",
@@ -142,6 +147,8 @@ export const CODEX_APP_SERVER_NOTIFICATION_METHODS = [
   "thread/compacted",
   "model/rerouted",
   "model/verification",
+  "turn/moderationMetadata",
+  "model/safetyBuffering/updated",
   "warning",
   "guardianWarning",
   "deprecationNotice",
@@ -182,10 +189,13 @@ export const CODEX_APP_SERVER_IGNORED_NOTIFICATION_METHODS = [
   "account/rateLimits/updated",
   "account/login/completed",
   "app/list/updated",
+  "externalAgentConfig/import/progress",
   "externalAgentConfig/import/completed",
   "fs/changed",
   "model/rerouted",
   "model/verification",
+  "turn/moderationMetadata",
+  "model/safetyBuffering/updated",
   "deprecationNotice",
   "configWarning",
   "fuzzyFileSearch/sessionUpdated",
@@ -232,6 +242,7 @@ export const CODEX_APP_SERVER_REQUEST_METHODS = [
   "item/permissions/requestApproval",
   "item/tool/call",
   "account/chatgptAuthTokens/refresh",
+  "attestation/generate",
   "applyPatchApproval",
   "execCommandApproval",
 ] as const;
@@ -245,12 +256,17 @@ function translated(
     ts?: string;
     channel?: EventChannel;
     authority?: EventAuthority;
+    origin?: "notification" | "snapshot";
   },
 ): CodexLiveTranslatedActivity {
   const result: CodexLiveTranslatedActivity = {
     activity,
     raw,
   };
+  const providerSessionId = providerSessionIdFromRaw(raw);
+  if (providerSessionId !== undefined) {
+    result.providerSessionId = providerSessionId;
+  }
   if (options?.ts !== undefined) {
     result.ts = options.ts;
   }
@@ -259,6 +275,9 @@ function translated(
   }
   if (options?.authority !== undefined) {
     result.authority = options.authority;
+  }
+  if (options?.origin !== undefined) {
+    result.origin = options.origin;
   }
   return result;
 }
@@ -285,6 +304,16 @@ function paramsRecord(notification: JsonRpcNotification): Record<string, unknown
     return null;
   }
   return notification.params as Record<string, unknown>;
+}
+
+function providerSessionIdFromRaw(raw: unknown): string | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return undefined;
+  }
+  const params = (raw as Record<string, unknown>).params;
+  return params && typeof params === "object" && !Array.isArray(params)
+    ? providerSessionIdFromParams(params as Record<string, unknown>)
+    : undefined;
 }
 
 function recordField(record: Record<string, unknown>, key: string): Record<string, unknown> | null {
@@ -335,11 +364,20 @@ function providerSessionIdFromParams(params: Record<string, unknown> | null | un
   if (!params) {
     return undefined;
   }
+  const thread = recordField(params, "thread");
+  const item = recordField(params, "item");
   return (
     optionalStringField(params, "threadId") ??
     optionalStringField(params, "thread_id") ??
     optionalStringField(params, "sessionId") ??
-    optionalStringField(params, "session_id")
+    optionalStringField(params, "session_id") ??
+    (thread ? optionalStringField(thread, "id") : undefined) ??
+    (item
+      ? optionalStringField(item, "threadId") ??
+        optionalStringField(item, "thread_id") ??
+        optionalStringField(item, "sessionId") ??
+        optionalStringField(item, "session_id")
+      : undefined)
   );
 }
 
@@ -941,30 +979,8 @@ function parseRetryCount(message: string): number | undefined {
 }
 
 function runtimeStatusFromThreadStatus(status: unknown): ProviderActivity | null {
-  if (!status || typeof status !== "object" || Array.isArray(status)) {
-    return null;
-  }
-  const record = status as Record<string, unknown>;
-  if (record.type === "notLoaded") {
-    return { type: "session_state", state: "starting" };
-  }
-  if (record.type === "idle") {
-    return { type: "session_state", state: "idle" };
-  }
-  if (record.type === "systemError") {
-    return { type: "session_state", state: "failed" };
-  }
-  if (record.type === "active") {
-    const flags = stringArrayField(record, "activeFlags");
-    if (flags.includes("waitingOnApproval")) {
-      return { type: "session_state", state: "waiting_permission" };
-    }
-    if (flags.includes("waitingOnUserInput")) {
-      return { type: "session_state", state: "waiting_input" };
-    }
-    return { type: "session_state", state: "running" };
-  }
-  return null;
+  const state = runtimeStateFromCodexThreadStatus(status);
+  return state ? { type: "session_state", state } : null;
 }
 
 function makeOperationFromRun(run: Record<string, unknown>, kind: "started" | "resolved"): ProviderActivity {
@@ -1227,6 +1243,44 @@ function makeGenericObservation(
     },
     detail: {
       artifacts: [{ kind: "json", label: "item", value: item }],
+    },
+  };
+}
+
+function makeSubagentLifecycleObservation(
+  item: Record<string, unknown>,
+  status: WorkbenchObservation["status"],
+): WorkbenchObservation {
+  const id = stringField(item, "id") ?? `subagent-${Date.now().toString(36)}`;
+  const tool = stringField(item, "tool") ?? "Subagent activity";
+  const receivers = stringArrayField(item, "receiverThreadIds");
+  const model = stringField(item, "model");
+  const effort = stringField(item, "reasoningEffort") ?? stringField(item, "reasoning_effort");
+  const summary = [
+    model,
+    effort,
+    receivers.length > 0 ? `${receivers.length} target${receivers.length === 1 ? "" : "s"}` : null,
+  ].filter((value): value is string => Boolean(value)).join(" · ");
+  const safeItem: Record<string, unknown> = {
+    tool,
+    ...(model ? { model } : {}),
+    ...(effort ? { reasoningEffort: effort } : {}),
+    ...(stringField(item, "senderThreadId") ? { senderThreadId: stringField(item, "senderThreadId") } : {}),
+    ...(receivers.length > 0 ? { receiverThreadIds: receivers } : {}),
+    ...(stringField(item, "status") ? { status: stringField(item, "status") } : {}),
+  };
+  return {
+    id: `obs-${id}`,
+    kind: "subagent.lifecycle",
+    status,
+    title: tool,
+    ...(summary ? { summary } : {}),
+    subject: {
+      providerCallId: id,
+      providerToolName: tool,
+    },
+    detail: {
+      artifacts: [{ kind: "json", label: "item", value: safeItem }],
     },
   };
 }
@@ -1521,12 +1575,7 @@ function mapThreadItem(
     case "collabAgentToolCall": {
       const status = stringField(item, "status");
       const phaseStatus = itemPhaseToObservationStatus(phase, status);
-      const observation = makeGenericObservation(
-        item,
-        "subagent.lifecycle",
-        stringField(item, "tool") ?? "Subagent activity",
-        phaseStatus,
-      );
+      const observation = makeSubagentLifecycleObservation(item, phaseStatus);
       return [
         phaseStatus === "running"
           ? { type: "observation_started", turnId, observation }
@@ -1680,6 +1729,16 @@ export function translateCodexAppServerThreadSnapshot(
       }));
     }
   }
+  const statusActivity = runtimeStatusFromThreadStatus(threadRecord.status);
+  if (statusActivity) {
+    translatedItems.push(
+      translated(raw, statusActivity, {
+        channel: "structured_live",
+        authority: "authoritative",
+        origin: "snapshot",
+      }),
+    );
+  }
   return translatedItems;
 }
 
@@ -1811,6 +1870,8 @@ export function translateCodexAppServerNotification(
       return activity ? [translated(notification, activity)] : invalidStreamActivities(notification, "thread status was not recognized");
     }
     case "thread/closed":
+      return [translated(notification, { type: "session_exited", exitCode: 0 })];
+    case "thread/deleted":
       return [translated(notification, { type: "session_exited", exitCode: 0 })];
     case "turn/started": {
       if (!notification.params || typeof notification.params !== "object" || Array.isArray(notification.params)) {

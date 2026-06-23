@@ -115,6 +115,38 @@ export function createMarkdownComponents(
         </a>
       );
     },
+    code({ node: _node, children, ...codeProps }) {
+      const codeText = textFromNode(children);
+      const trimmedCodeText = codeText.trim();
+      const localFilePath =
+        codeText === trimmedCodeText
+          ? resolveLocalFileLinkPath(trimmedCodeText)
+          : null;
+      if (localFilePath) {
+        if (!onOpenLocalFile) {
+          return (
+            <code {...codeProps} title={localFilePath}>
+              {children}
+            </code>
+          );
+        }
+        return (
+          <button
+            type="button"
+            className="prose-chat-local-file-code"
+            title={`Open in Inspector: ${localFilePath}`}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              onOpenLocalFile(localFilePath);
+            }}
+          >
+            <code {...codeProps}>{children}</code>
+          </button>
+        );
+      }
+      return <code {...codeProps}>{children}</code>;
+    },
     pre: MarkdownPre,
     table({ node: _node, ...tableProps }) {
       return (

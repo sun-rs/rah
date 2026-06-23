@@ -58,6 +58,7 @@ Covered in `CODEX_APP_SERVER_NOTIFICATION_METHODS` and
 | `thread/started` | `runtime.status: session_active` |
 | `thread/status/changed` | `session.state.changed` |
 | `thread/archived` | ignored by design |
+| `thread/deleted` | `session.exited` |
 | `thread/unarchived` | ignored by design |
 | `thread/closed` | `session.exited` |
 | `skills/changed` | ignored by design |
@@ -98,11 +99,14 @@ Covered in `CODEX_APP_SERVER_NOTIFICATION_METHODS` and
 | `account/login/completed` | ignored by design |
 | `app/list/updated` | ignored by design |
 | `remoteControl/status/changed` | ignored by design |
+| `externalAgentConfig/import/progress` | ignored by design |
 | `externalAgentConfig/import/completed` | ignored by design |
 | `fs/changed` | ignored by design |
 | `thread/compacted` | `timeline.item.added: compaction` |
 | `model/rerouted` | ignored by design |
 | `model/verification` | ignored by design |
+| `turn/moderationMetadata` | ignored by design |
+| `model/safetyBuffering/updated` | ignored by design |
 | `warning` | `notification.emitted: warning` |
 | `guardianWarning` | `notification.emitted: warning` |
 | `deprecationNotice` | ignored by design |
@@ -133,6 +137,7 @@ Covered in `CODEX_APP_SERVER_REQUEST_METHODS` and `handleCodexLiveRequest`.
 | `mcpServer/elicitation/request` | `permission.requested: question` | returns MCP accept/decline with content |
 | `item/tool/call` | `operation.requested` + `tool.call.failed` | returns explicit unsupported failure |
 | `account/chatgptAuthTokens/refresh` | `operation.requested` | returns JSON-RPC error; RAH does not manage host auth tokens |
+| `attestation/generate` | `operation.requested` | returns JSON-RPC error; RAH does not mint Codex client attestation tokens |
 | `applyPatchApproval` | `permission.requested: tool` | legacy compatibility |
 | `execCommandApproval` | `permission.requested: tool` | legacy compatibility |
 
@@ -143,7 +148,7 @@ Covered in `CODEX_APP_SERVER_REQUEST_METHODS` and `handleCodexLiveRequest`.
 - `codex-adapter.test.ts` asserts archived Codex sessions are unarchived before live resume, and
   new threads are started without legacy app-server params.
 - `codex-live-client.test.ts` asserts request/response round trips for user input, MCP
-  elicitation, and dynamic client tool requests.
+  elicitation, dynamic client tool requests, and unsupported client attestation requests.
 - `rah-event-contract.test.ts` asserts translated Codex events pass `validateRahEventSequence`.
 
 Current status: Codex is the reference adapter for RAH event conformance. Future Codex drift should

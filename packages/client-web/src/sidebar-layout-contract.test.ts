@@ -20,6 +20,9 @@ import {
   HEADER_SIDE_PANEL_TOGGLE_BUTTON_CLASS,
   HEADER_TEXT_BUTTON_BASE_CLASS,
   HEADER_RESPONSIVE_TEXT_BUTTON_CLASS,
+  SIDEBAR_HEADER_ICON_BUTTON_CLASS,
+  SIDEBAR_HEADER_ICON_SIZE,
+  SIDEBAR_HEADER_LOGO_CLASS,
 } from "./components/workbench/header-button-styles";
 import {
   CONVERSATION_HEADER_META_ORDER,
@@ -79,11 +82,22 @@ describe("sidebar layout contract", () => {
     assert.doesNotMatch(desktopHeaderSource, /onCollapseSidebar/);
     assert.doesNotMatch(desktopHeaderSource, /rah-sidebar-header-actions ml-auto/);
     assert.doesNotMatch(desktopHeaderSource, /rah-sidebar-header-brand/);
+    assert.match(desktopHeaderSource, /SIDEBAR_HEADER_ICON_BUTTON_CLASS/);
+    assert.match(desktopHeaderSource, /SIDEBAR_HEADER_ICON_SIZE/);
+    assert.match(desktopHeaderSource, /SIDEBAR_HEADER_LOGO_CLASS/);
+    assert.match(mobileHeaderSource, /SIDEBAR_HEADER_ICON_BUTTON_CLASS/);
+    assert.match(mobileHeaderSource, /SIDEBAR_HEADER_ICON_SIZE/);
+    assert.match(mobileHeaderSource, /SIDEBAR_HEADER_LOGO_CLASS/);
     assert.match(shellSource, /headerLayout="inline"/);
     assert.match(shellSource, /closePlacement="start"/);
     assert.match(shellSource, /viewportClassName="md:hidden"/);
-    assert.match(shellSource, /h-8 w-8 shrink-0/);
-    assert.match(mobileHeaderSource, /h-8 w-8/);
+    assert.match(shellSource, /SIDEBAR_HEADER_ICON_BUTTON_CLASS/);
+    assert.match(shellSource, /SIDEBAR_HEADER_ICON_SIZE/);
+    assert.match(SIDEBAR_HEADER_ICON_BUTTON_CLASS, /\bh-8\b/);
+    assert.match(SIDEBAR_HEADER_ICON_BUTTON_CLASS, /\bw-8\b/);
+    assert.match(SIDEBAR_HEADER_ICON_BUTTON_CLASS, /\bshrink-0\b/);
+    assert.equal(SIDEBAR_HEADER_ICON_SIZE, 20);
+    assert.equal(SIDEBAR_HEADER_LOGO_CLASS, "h-5 w-5");
     assert.match(SIDEBAR_LAYOUT.rootClassName, /rah-sidebar-content/);
     assert.match(sidebarSource, /toolbarLabelFullClassName/);
     assert.match(sidebarSource, /toolbarLabelShortClassName/);
@@ -266,7 +280,7 @@ describe("sidebar layout contract", () => {
     const canvasSource = readSource("./components/workbench/canvas/CanvasWorkbench.tsx");
     const inspectorHeaderSource = readSource("./inspector/InspectorHeader.tsx");
 
-    assert.equal(HEADER_EDGE_TOGGLE_ICON_SIZE, 18);
+    assert.equal(HEADER_EDGE_TOGGLE_ICON_SIZE, 20);
     assert.match(HEADER_EDGE_TOGGLE_BUTTON_CLASS, /\bh-8\b/);
     assert.match(HEADER_EDGE_TOGGLE_BUTTON_CLASS, /\bw-8\b/);
     assert.match(HEADER_EDGE_TOGGLE_BUTTON_CLASS, /\bshrink-0\b/);
@@ -394,8 +408,9 @@ describe("sidebar layout contract", () => {
     );
     assert.match(appSource, /loadInspectorPane/);
     assert.match(appSource, /importWithStaleReload/);
-    assert.match(appSource, /function FilePreviewDialogLoadingFallback/);
-    assert.match(appSource, /<Suspense fallback=\{<FilePreviewDialogLoadingFallback \/>}/);
+    assert.match(appSource, /FilePreviewDialogErrorBoundary/);
+    assert.doesNotMatch(appSource, /loadInspectorFileDetailDialog/);
+    assert.doesNotMatch(appSource, /FilePreviewDialogLoadingFallback/);
     assert.match(appSource, /title="Inspector crashed"/);
     assert.match(boundarySource, /isLikelyStaleDynamicImportError/);
 
@@ -531,8 +546,8 @@ describe("sidebar layout contract", () => {
     assert.match(councilLogoSource, /h-full w-full text-current/);
     assert.doesNotMatch(councilLogoSource, /h-full w-full text-black\/90/);
     assert.match(councilLogoSource, /h-full w-full text-orange-700\/90/);
-    assert.match(desktopHeaderSource, /<CouncilLogo className="h-\[18px\] w-\[18px\]" tone="black" variant="bare" \/>/);
-    assert.match(mobileHeaderSource, /<CouncilLogo className="h-\[17px\] w-\[17px\]" tone="black" variant="bare" \/>/);
+    assert.match(desktopHeaderSource, /<CouncilLogo className=\{SIDEBAR_HEADER_LOGO_CLASS\} tone="black" variant="bare" \/>/);
+    assert.match(mobileHeaderSource, /<CouncilLogo className=\{SIDEBAR_HEADER_LOGO_CLASS\} tone="black" variant="bare" \/>/);
     assert.match(sidebarSource, /<CouncilLogo className="h-4 w-4" tone="black" variant="bare" \/>/);
     assert.match(emptyPaneSource, /<CouncilLogo className="h-4 w-4" tone="black" variant="bare" \/>/);
     assert.match(canvasNewPaneSource, /<CouncilLogo className="h-4 w-4" tone="black" variant="bare" \/>/);

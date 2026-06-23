@@ -21,6 +21,7 @@ import type {
   CouncilSnapshot,
   ProviderModelCatalog,
 } from "@rah/runtime-protocol";
+import { isNativeLocalServerProvider } from "@rah/runtime-protocol";
 import * as api from "../api";
 import { ProviderLogo } from "../components/ProviderLogo";
 import { CouncilLogo } from "../components/CouncilLogo";
@@ -84,6 +85,7 @@ import {
 } from "./council-mentions";
 import {
   COUNCIL_TUI_WARM_TTL_MS,
+  PROVIDER_TUI_REPLAY_TAIL_BYTES,
   pruneCouncilTuiCache,
   removeCouncilTuiAgent,
   resetCouncilTuiCache,
@@ -384,6 +386,7 @@ export function CouncilPage(props: {
   onOpenLeft: () => void;
   onAddWorkspace: (dir: string) => void;
   onHide: () => void;
+  onStopped?: (councilId: string) => void;
   agentsPanelMode?: "open" | "closed";
   onAgentsPanelModeChange?: (mode: "open" | "closed") => void;
   agentsToggleDisabled?: boolean;
@@ -1099,7 +1102,11 @@ export function CouncilPage(props: {
       setStopConfirmOpen(false);
       setSelectedTerminalAgentId(null);
       const nextCouncils = await refreshCouncils();
-      setSelectedCouncilId(defaultRunningCouncilId(nextCouncils));
+      if (props.onStopped) {
+        props.onStopped(selectedCouncil.id);
+      } else {
+        setSelectedCouncilId(defaultRunningCouncilId(nextCouncils));
+      }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -2610,6 +2617,9 @@ export function CouncilPage(props: {
               autoFocus: terminalVisible,
               renderOutput: true,
               tuiClientCloseEnabled: true,
+              exclusiveNativeSurfaceControl: tabAgent
+                ? !isNativeLocalServerProvider(tabAgent.provider)
+                : true,
               tuiClientActive: tabAgent
                 ? !councilTuiCache.detachedAgentIds.has(tabAgent.id)
                 : true,
@@ -2628,7 +2638,7 @@ export function CouncilPage(props: {
                 );
               },
               initialReplay: true,
-              replayTailBytes: 512 * 1024,
+              replayTailBytes: PROVIDER_TUI_REPLAY_TAIL_BYTES,
               maxWriteBatchChars: 128 * 1024,
               scrollback: 180,
             };

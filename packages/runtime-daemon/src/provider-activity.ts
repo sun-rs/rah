@@ -519,7 +519,29 @@ export function applyProviderActivity(
           break;
         }
         services.sessionStore.setActiveTurn(sessionId, undefined);
-        services.sessionStore.setRuntimeState(sessionId, "failed");
+        services.sessionStore.setRuntimeState(sessionId, "idle");
+        published.push(
+          services.eventBus.publish(
+            withRaw(
+              withTurnId(
+                withTs(
+                  {
+                    sessionId,
+                    type: "runtime.status",
+                    source,
+                    payload: {
+                      status: "error",
+                      detail: reconciled.activity.error,
+                    },
+                  },
+                  ts,
+                ),
+                reconciled.activity.turnId,
+              ),
+              meta,
+            ),
+          ),
+        );
         published.push(
           services.eventBus.publish(
             withRaw(

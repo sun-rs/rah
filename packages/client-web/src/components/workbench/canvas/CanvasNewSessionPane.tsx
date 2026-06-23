@@ -26,14 +26,12 @@ export function CanvasNewSessionPane(props: {
   planModeAvailable: boolean;
   planModeEnabled: boolean;
   startPending: boolean;
-  onAddWorkspace: (dir: string) => void;
-  onSelectWorkspace: (dir: string) => void;
   onProviderChange: (provider: ProviderChoice) => void;
   onAccessModeChange: (modeId: string) => void;
   onPlanModeToggle: (enabled: boolean) => void;
   onModelChange: (modelId: string, defaultReasoningId?: string | null) => void;
   onReasoningChange: (reasoningId: string) => void;
-  onStart: (initialInput: string) => void;
+  onStart: (initialInput: string, workspaceDir: string) => void;
   onOpenNewCouncil: () => void;
   onBack: () => void;
   onCancel: () => void;
@@ -41,10 +39,12 @@ export function CanvasNewSessionPane(props: {
   const [draft, setDraft] = useState("");
   const [imageDataUrls, setImageDataUrls] = useState<string[]>([]);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
+  const [selectedWorkspaceDir, setSelectedWorkspaceDir] = useState<string | null>(null);
   const workspacePickerRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const outgoingDraft = appendImageDataUrlsToText(draft, imageDataUrls);
-  const canStart = Boolean(outgoingDraft && props.availableWorkspaceDir && !props.startPending);
+  const availableWorkspaceDir = selectedWorkspaceDir ?? props.availableWorkspaceDir;
+  const canStart = Boolean(outgoingDraft && availableWorkspaceDir && !props.startPending);
   const handlePaste: ClipboardEventHandler<HTMLTextAreaElement> = (event) => {
     if (imageFilesFromClipboardData(event.clipboardData).length === 0) {
       return;
@@ -94,22 +94,23 @@ export function CanvasNewSessionPane(props: {
       }
       onRemoveLastDraftImage={() => setImageDataUrls((current) => current.slice(0, -1))}
       onSend={() => {
-        props.onStart(outgoingDraft);
+        props.onStart(outgoingDraft, availableWorkspaceDir);
         setDraft("");
         setImageDataUrls([]);
+        setSelectedWorkspaceDir(null);
       }}
       canSend={canStart}
       sendPending={props.startPending}
       workspacePickerRef={workspacePickerRef}
       workspaceDirs={props.workspaceDirs}
-      availableWorkspaceDir={props.availableWorkspaceDir}
+      availableWorkspaceDir={availableWorkspaceDir}
       workspacePickerOpen={workspaceOpen}
       onToggleWorkspacePicker={() => setWorkspaceOpen((open) => !open)}
       onSelectWorkspace={(dir) => {
-        props.onSelectWorkspace(dir);
+        setSelectedWorkspaceDir(dir);
         setWorkspaceOpen(false);
       }}
-      onAddWorkspace={props.onAddWorkspace}
+      onChooseNewWorkspace={setSelectedWorkspaceDir}
       provider={props.provider}
       onChangeProvider={props.onProviderChange}
       providerSelectorMode="auto"

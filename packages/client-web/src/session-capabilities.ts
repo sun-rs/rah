@@ -132,7 +132,7 @@ export function sessionCapabilityTags(summary: SessionSummary): string[] {
 
 export function sessionInteractionNotice(summary: SessionSummary): string | null {
   if (isReadOnlyReplay(summary)) {
-    return "History only. Claim running control for input and approvals.";
+    return "History only. Resume this session for input and approvals.";
   }
   if (!canSessionSendInput(summary)) {
     return "Observe only.";

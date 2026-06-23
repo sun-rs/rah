@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   activateSessionTuiTerminal,
+  PROVIDER_TUI_REPLAY_TAIL_BYTES,
   pruneCouncilTuiCache,
   removeCouncilTuiAgent,
   resolveActiveSessionTuiSurface,
@@ -64,10 +65,11 @@ test("session tui activation reopens a previously closed web TUI client", () => 
   );
 });
 
-test("native local-server session tui opens without replaying old terminal output", () => {
-  assert.equal(shouldReplayInitialSessionTuiOutput({ liveBackend: "native_local_server" }), false);
+test("session tui opens with bounded PTY tail replay so remounts restore the current screen", () => {
+  assert.equal(shouldReplayInitialSessionTuiOutput({ liveBackend: "native_local_server" }), true);
   assert.equal(shouldReplayInitialSessionTuiOutput({ liveBackend: "tui_mux" }), true);
   assert.equal(shouldReplayInitialSessionTuiOutput({ liveBackend: null }), true);
+  assert.equal(PROVIDER_TUI_REPLAY_TAIL_BYTES, 96 * 1024);
 });
 
 test("council tui cache keeps at most the warm limit while preserving the active agent", () => {

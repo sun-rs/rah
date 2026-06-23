@@ -52,7 +52,7 @@ function summary(args?: Partial<SessionSummary["session"]>): SessionSummary {
 }
 
 describe("composer contract", () => {
-  test("derives history claim surface for read-only replay sessions", () => {
+  test("derives history resume surface for read-only replay sessions", () => {
     const surface = deriveComposerSurface({
       selectedSummary: summary({
         providerSessionId: "provider-1",
@@ -69,7 +69,7 @@ describe("composer contract", () => {
 
     assert.deepEqual(surface, {
       kind: "history_claim",
-      actionLabel: "Claim control",
+      actionLabel: "Resume",
       actionPending: false,
     });
   });
@@ -91,7 +91,7 @@ describe("composer contract", () => {
     assert.deepEqual(surface, { kind: "unavailable" });
   });
 
-  test("derives claim_control surface when input is possible but control is missing", () => {
+  test("derives resume surface when input is possible but control is missing", () => {
     const surface = deriveComposerSurface({
       selectedSummary: summary(),
       hasControl: false,
@@ -101,7 +101,7 @@ describe("composer contract", () => {
 
     assert.deepEqual(surface, {
       kind: "claim_control",
-      actionLabel: "Claim control",
+      actionLabel: "Resume",
       actionPending: false,
     });
   });
@@ -223,6 +223,18 @@ describe("composer contract", () => {
     assert.doesNotMatch(COMPOSER_LAYOUT.stopWarningButtonClassName, /inset-\[3px\]/);
   });
 
+  test("keeps composer workspace selection separate from sidebar workspace add", () => {
+    const composerSource = readSource("./components/workbench/panes/NewSessionComposer.tsx");
+    const emptyPaneSource = readSource("./components/workbench/panes/WorkbenchEmptyPane.tsx");
+    const appSource = readSource("./App.tsx");
+
+    assert.match(composerSource, /onChooseNewWorkspace/);
+    assert.doesNotMatch(composerSource, /onAddWorkspace/);
+    assert.match(emptyPaneSource, /onChooseNewWorkspace/);
+    assert.match(appSource, /pendingNewSessionWorkspaceDir/);
+    assert.match(appSource, /availableWorkspaceDir: emptyStateAvailableWorkspaceDir/);
+  });
+
   test("derives compose surface and preserves stop visibility while generating", () => {
     assert.deepEqual(
       deriveComposerSurface({
@@ -245,7 +257,7 @@ describe("composer contract", () => {
     );
   });
 
-  test("reflects pending claim actions in button label and disabled state", () => {
+  test("reflects pending resume actions in button label and disabled state", () => {
     assert.deepEqual(
       deriveComposerSurface({
         selectedSummary: summary(),
@@ -258,7 +270,7 @@ describe("composer contract", () => {
       }),
       {
         kind: "claim_control",
-        actionLabel: "Claiming…",
+        actionLabel: "Resuming…",
         actionPending: true,
       },
     );
@@ -282,7 +294,7 @@ describe("composer contract", () => {
       }),
       {
         kind: "history_claim",
-        actionLabel: "Claiming…",
+        actionLabel: "Resuming…",
         actionPending: true,
       },
     );

@@ -1,7 +1,7 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { Check, Copy, X } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
-import type { SessionSummary } from "@rah/runtime-protocol";
+import type { SessionLiveBackend, SessionSummary } from "@rah/runtime-protocol";
 import { conversationPhaseLabel } from "@rah/runtime-protocol";
 import { providerLabel, type SessionProjection } from "../../../types";
 import { writeHostClipboard } from "../../../api";
@@ -33,6 +33,40 @@ function InfoRow(props: { label: string; value: React.ReactNode; mono?: boolean 
       </div>
     </div>
   );
+}
+
+function InfoSectionHeader(props: { children: React.ReactNode }) {
+  return (
+    <div className="border-b border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--app-muted)] first:border-t-0">
+      {props.children}
+    </div>
+  );
+}
+
+function capitalizeValue(value: string): string {
+  return value.length > 0 ? value.slice(0, 1).toUpperCase() + value.slice(1) : value;
+}
+
+function formatStatus(session: SessionSummary["session"] | undefined): string {
+  if (!session) {
+    return "Unavailable";
+  }
+  return `${capitalizeValue(session.status)} · ${capitalizeValue(conversationPhaseLabel(session.phase))}`;
+}
+
+function formatBackend(value: SessionLiveBackend | undefined): string {
+  switch (value) {
+    case "structured":
+      return "Structured events";
+    case "native_local_server":
+      return "Native local server";
+    case "native_tui":
+      return "Native TUI";
+    case "tui_mux":
+      return "Terminal mux";
+    default:
+      return "Unavailable";
+  }
 }
 
 function formatSessionOrigin(session: SessionSummary["session"] | undefined): ReactNode | null {
@@ -195,6 +229,7 @@ export function SessionInfoDialog(props: {
       ? `rah ${session.provider} resume ${session.providerSessionId}`
       : null;
   const rahAttachCommand = session ? `rah attach ${session.id}` : null;
+  const isRunningSession = session?.status === "running";
   const launchSource =
     session?.launchSource === "terminal"
       ? "Terminal"
@@ -202,12 +237,6 @@ export function SessionInfoDialog(props: {
         ? "Web"
         : session?.launchSource ?? "Unavailable";
   const origin = formatSessionOrigin(session);
-  const runtimeSummary = session
-    ? [
-        session.liveBackend,
-        `${session.status} · ${conversationPhaseLabel(session.phase)}`,
-      ].filter(Boolean).join(" · ") || "Unavailable"
-    : "Unavailable";
   const showCwd = Boolean(session?.cwd && session.rootDir && session.cwd !== session.rootDir);
 
   return (
@@ -235,49 +264,22 @@ export function SessionInfoDialog(props: {
             </Dialog.Close>
           </div>
           <OverlayScrollArea className="min-h-0 flex-1" viewportClassName="h-full">
+            <InfoSectionHeader>Session</InfoSectionHeader>
             <InfoRow label="Provider" value={session ? providerLabel(session.provider) : "Unavailable"} />
-            <InfoRow
-              label="RAH session"
-              mono
-              value={
-                <div className="flex flex-wrap items-start gap-2">
-                  <span className="min-w-0 flex-1">{session?.id ?? "Unavailable"}</span>
-                  {session?.id ? (
-                    <CopyValueButton value={session.id} label="RAH session ID" />
-                  ) : null}
-                </div>
-              }
-            />
+            <InfoRow label="Status" value={formatStatus(session)} />
             {providerSessionId ? (
               <InfoRow
-                label="Provider ID"
+                label="Session ID"
                 mono
                 value={
                   <div className="flex flex-wrap items-start gap-2">
                     <span className="min-w-0 flex-1">{providerSessionId}</span>
-                    <CopyValueButton value={providerSessionId} label="provider session ID" />
+                    <CopyValueButton value={providerSessionId} label="session ID" />
                   </div>
                 }
               />
             ) : null}
-            <InfoRow label="Runtime" value={runtimeSummary} />
-            <InfoRow label="Launch" value={launchSource} />
-            {origin ? <InfoRow label="Origin" value={origin} /> : null}
-            <InfoRow
-              label="Attach"
-              mono
-              value={
-                rahAttachCommand ? (
-                  <div className="flex flex-wrap items-start gap-2">
-                    <span className="min-w-0 flex-1">{rahAttachCommand}</span>
-                    <CopyValueButton value={rahAttachCommand} label="attach command" />
-                  </div>
-                ) : (
-                  "Unavailable"
-                )
-              }
-            />
-            {resumeCommand ? (
+            {!isRunningSession && resumeCommand ? (
               <InfoRow
                 label="Resume"
                 mono
@@ -289,9 +291,43 @@ export function SessionInfoDialog(props: {
                 }
               />
             ) : null}
+            {origin ? <InfoRow label="Created by" value={origin} /> : null}
             <InfoRow label="Workspace" mono value={session?.rootDir ?? "Unavailable"} />
-            {showCwd ? <InfoRow label="Cwd" mono value={session?.cwd ?? "Unavailable"} /> : null}
-            <InfoRow label="Updated" value={formatDateTime(session?.updatedAt)} />
+            {showCwd ? <InfoRow label="Working dir" mono value={session?.cwd ?? "Unavailable"} /> : null}
+            <InfoRow label="Last updated" value={formatDateTime(session?.updatedAt)} />
+            {isRunningSession ? (
+              <>
+                <InfoSectionHeader>Runtime</InfoSectionHeader>
+                <InfoRow label="Backend" value={formatBackend(session?.liveBackend)} />
+                <InfoRow label="Started from" value={launchSource} />
+                <InfoRow
+                  label="Runtime ID"
+                  mono
+                  value={
+                    <div className="flex flex-wrap items-start gap-2">
+                      <span className="min-w-0 flex-1">{session?.id ?? "Unavailable"}</span>
+                      {session?.id ? (
+                        <CopyValueButton value={session.id} label="runtime ID" />
+                      ) : null}
+                    </div>
+                  }
+                />
+                <InfoRow
+                  label="Attach"
+                  mono
+                  value={
+                    rahAttachCommand ? (
+                      <div className="flex flex-wrap items-start gap-2">
+                        <span className="min-w-0 flex-1">{rahAttachCommand}</span>
+                        <CopyValueButton value={rahAttachCommand} label="attach command" />
+                      </div>
+                    ) : (
+                      "Unavailable"
+                    )
+                  }
+                />
+              </>
+            ) : null}
           </OverlayScrollArea>
         </Dialog.Content>
       </Dialog.Portal>

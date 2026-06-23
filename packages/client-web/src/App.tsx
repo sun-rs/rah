@@ -1,5 +1,17 @@
-import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { LoaderCircle, MessageCircleMore, Plus } from "lucide-react";
+import {
+  Component,
+  Suspense,
+  lazy,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ErrorInfo,
+  type ReactNode,
+} from "react";
+import { MessageCircleMore, Plus } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import type { CouncilSnapshot, PermissionResponseRequest, ProviderModelCatalog, SessionConfigValue, SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
 import * as api from "./api";
@@ -68,9 +80,12 @@ import { deriveWorkbenchNoticeState } from "./workbench-notice-contract";
 import { buildModelOptionValuesFromReasoning } from "./provider-capabilities";
 import { importWithStaleReload } from "./lazy-module-reload";
 import type { PendingSessionTransition } from "./session-transition-contract";
+import { InspectorFileDetailDialog } from "./inspector/InspectorFileDetailDialog";
 import {
   applyCanvasPaneTarget,
   CANVAS_PANE_IDS,
+  clearCanvasCouncilTargets,
+  clearCanvasSessionTargets,
   clearCanvasTargetsForStoredSession,
   createCanvasLayoutRatios,
   createDefaultCanvasRightPanelsOpen,
@@ -79,7 +94,6 @@ import {
   hasAnyCanvasPaneTarget,
   readRememberedCanvasState,
   rememberCanvasState,
-  replaceCanvasSessionTargetWithStoredRef,
   resolveCanvasClaimedSessionId,
   resolveCanvasTargetProjection as resolveCanvasTargetProjectionFromState,
   shouldInitializeCanvasPaneFromSelection,
@@ -101,29 +115,6 @@ const loadInspectorPane = () => importWithStaleReload(() => import("./InspectorP
 const InspectorPane = lazy(async () => ({
   default: (await loadInspectorPane()).InspectorPane,
 }));
-const loadInspectorFileDetailDialog = () =>
-  importWithStaleReload(() => import("./inspector/InspectorFileDetailDialog"));
-const InspectorFileDetailDialog = lazy(async () => ({
-  default: (await loadInspectorFileDetailDialog()).InspectorFileDetailDialog,
-}));
-
-function FilePreviewDialogLoadingFallback() {
-  return (
-    <>
-      <div className="fixed inset-0 z-40 bg-black/45" />
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label="Opening file preview"
-        className="fixed left-1/2 top-1/2 z-50 flex w-[min(26rem,88vw)] -translate-x-1/2 -translate-y-1/2 items-center gap-3 rounded-2xl border border-[var(--app-border)] bg-[var(--app-bg)] px-4 py-3 text-sm text-[var(--app-fg)] shadow-2xl"
-      >
-        <LoaderCircle size={16} className="shrink-0 animate-spin text-[var(--app-hint)]" />
-        <span className="min-w-0 truncate">Opening preview...</span>
-      </div>
-    </>
-  );
-}
-
 type ModelDraft = {
   modelId?: string | null;
   reasoningId?: string | null;
@@ -136,6 +127,72 @@ type CanvasNewSessionDraft = {
   modeDrafts: Record<ProviderChoice, SessionModeDraft>;
   modelDrafts: Record<ProviderChoice, ModelDraft>;
 };
+
+type FilePreviewDialogErrorBoundaryProps = {
+  resetKey: string;
+  onClose: () => void;
+  children: ReactNode;
+};
+
+type FilePreviewDialogErrorBoundaryState = {
+  error: Error | null;
+};
+
+class FilePreviewDialogErrorBoundary extends Component<
+  FilePreviewDialogErrorBoundaryProps,
+  FilePreviewDialogErrorBoundaryState
+> {
+  state: FilePreviewDialogErrorBoundaryState = {
+    error: null,
+  };
+
+  static getDerivedStateFromError(error: Error): FilePreviewDialogErrorBoundaryState {
+    return { error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error("File preview render failed", error, errorInfo);
+  }
+
+  componentDidUpdate(prevProps: FilePreviewDialogErrorBoundaryProps) {
+    if (prevProps.resetKey !== this.props.resetKey && this.state.error) {
+      this.setState({ error: null });
+    }
+  }
+
+  render() {
+    if (!this.state.error) {
+      return this.props.children;
+    }
+    return (
+      <>
+        <div className="fixed inset-0 z-40 bg-black/45" />
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="File preview failed"
+          className="fixed left-1/2 top-1/2 z-50 flex w-[min(30rem,88vw)] -translate-x-1/2 -translate-y-1/2 flex-col gap-3 rounded-2xl border border-[var(--app-border)] bg-[var(--app-bg)] px-4 py-4 text-sm text-[var(--app-fg)] shadow-2xl"
+        >
+          <div>
+            <div className="font-semibold">File preview failed</div>
+            <div className="mt-1 text-xs text-[var(--app-hint)]">
+              {this.state.error.message || "Unknown rendering error."}
+            </div>
+          </div>
+          <div className="flex justify-end">
+            <button
+              type="button"
+              className="rounded-lg border border-[var(--app-border)] bg-[var(--app-bg)] px-3 py-1.5 text-xs font-medium text-[var(--app-fg)] transition-colors hover:bg-[var(--app-subtle-bg)]"
+              onClick={this.props.onClose}
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      </>
+    );
+  }
+}
 
 const MODEL_DRAFT_STORAGE_KEY = "rah.modelDrafts.v2";
 const LEGACY_MODEL_DRAFT_STORAGE_KEYS = ["rah.modelDrafts.v1"];
@@ -462,6 +519,10 @@ export function App() {
   const councilsRef = useRef<CouncilSnapshot[]>([]);
   const [selectedCouncilId, setSelectedCouncilId] = useState<string | null>(null);
   const [homeNewCouncilDialogOpen, setHomeNewCouncilDialogOpen] = useState(false);
+  const [pendingNewSessionWorkspaceDir, setPendingNewSessionWorkspaceDir] = useState<string | null>(
+    null,
+  );
+  const previousWorkspaceDirRef = useRef(workspaceDir);
   const [canvasLayout, setCanvasLayoutState] = useState<CanvasLayout>(
     () => rememberedCanvasState?.layout ?? "two-horizontal",
   );
@@ -841,38 +902,33 @@ export function App() {
     }
   };
 
-  const stopSessionAndKeepCanvasHistory = async (
-    sessionId: string,
-    summary: SessionSummary | null,
-  ) => {
-    const ref = summary ? storedRefFromSessionSummary(summary) : null;
-    const affectsCanvasPane = CANVAS_PANE_IDS.some((paneId) => {
+  const stopSessionAndClearCanvasPane = async (sessionId: string) => {
+    const affectedPaneIds = CANVAS_PANE_IDS.filter((paneId) => {
       const target = canvasPaneTargets[paneId];
       return target.kind === "session" && target.sessionId === sessionId;
     });
-    await closeSession(sessionId);
-    if (!affectsCanvasPane) {
+    if (affectedPaneIds.length === 0) {
+      await closeSession(sessionId);
       return;
     }
-    if (!ref) {
+
+    setCanvasPaneTargets((current) => clearCanvasSessionTargets(current, sessionId));
+    try {
+      await closeSession(sessionId);
+    } catch (caught) {
       setCanvasPaneTargets((current) => {
         let changed = false;
         const next = { ...current };
-        for (const paneId of CANVAS_PANE_IDS) {
-          const target = current[paneId];
-          if (target.kind === "session" && target.sessionId === sessionId) {
-            next[paneId] = { kind: "empty" };
+        for (const paneId of affectedPaneIds) {
+          if (current[paneId].kind === "empty") {
+            next[paneId] = { kind: "session", sessionId };
             changed = true;
           }
         }
         return changed ? next : current;
       });
-      return;
+      throw caught;
     }
-    setCanvasPaneTargets((current) =>
-      replaceCanvasSessionTargetWithStoredRef(current, sessionId, ref),
-    );
-    await activateHistorySession(ref, { confirmCreateMissingWorkspace });
   };
 
   const toggleCanvasPaneMaximize = (paneId: CanvasPaneId) => {
@@ -1122,6 +1178,19 @@ export function App() {
         catalog: selectedModelCatalogState?.catalog ?? null,
       })
     : null;
+  const sidebarWorkspaceDir = workspaceDirs.length > 0 ? workspaceDir : "";
+  const emptyStateAvailableWorkspaceDir =
+    pendingNewSessionWorkspaceDir ?? sidebarWorkspaceDir;
+  useEffect(() => {
+    const previousWorkspaceDir = previousWorkspaceDirRef.current;
+    previousWorkspaceDirRef.current = workspaceDir;
+    if (previousWorkspaceDir === workspaceDir) {
+      return;
+    }
+    if (pendingNewSessionWorkspaceDir) {
+      setPendingNewSessionWorkspaceDir(null);
+    }
+  }, [pendingNewSessionWorkspaceDir, workspaceDir]);
   const {
     composerRef,
     draft,
@@ -1148,7 +1217,7 @@ export function App() {
     insertEmptyStateReference,
   } = useWorkbenchComposerState({
     selectedSummary,
-    availableWorkspaceDir: workspaceDirs.length > 0 ? workspaceDir : "",
+    availableWorkspaceDir: emptyStateAvailableWorkspaceDir,
     newSessionProvider: currentProvider,
     startModeId: startModeControl.effectiveModeId,
     startModelId,
@@ -1156,7 +1225,11 @@ export function App() {
     ...(startOptionValues !== undefined ? { startOptionValues } : {}),
     confirmCreateMissingWorkspace,
     sendInput,
-    startSession,
+    startSession: async (options) => {
+      const result = await startSession(options);
+      setPendingNewSessionWorkspaceDir(null);
+      return result;
+    },
   });
 
   useEffect(() => {
@@ -1333,7 +1406,7 @@ export function App() {
     }
   }, [primaryPaneState.kind, selectedSummary]);
 
-  const availableWorkspaceDir = workspaceDirs.length > 0 ? workspaceDir : "";
+  const availableWorkspaceDir = sidebarWorkspaceDir;
   const selectedCouncil =
     selectedCouncilId
       ? councils.find((council) => council.id === selectedCouncilId) ?? null
@@ -1640,7 +1713,7 @@ export function App() {
             return;
           }
           setStoppingSessionId(stopConfirmSessionId);
-          void stopSessionAndKeepCanvasHistory(stopConfirmSessionId, stopTargetSummary)
+          void stopSessionAndClearCanvasPane(stopConfirmSessionId)
             .then(() => setStopConfirmSessionId(null))
             .finally(() => setStoppingSessionId(null));
         }}
@@ -1765,14 +1838,14 @@ export function App() {
         onConfirm={() => resolveMissingWorkspacePrompt(true)}
       />
 
-      {workbenchMode === "single" && (selectedSummary || availableWorkspaceDir) ? (
+      {workbenchMode === "single" && (selectedSummary || emptyStateAvailableWorkspaceDir) ? (
         <FileReferencePicker
           open={fileReferenceOpen}
           onOpenChange={setFileReferenceOpen}
           rootPath={
             selectedSummary?.session.rootDir ||
             selectedSummary?.session.cwd ||
-            availableWorkspaceDir ||
+            emptyStateAvailableWorkspaceDir ||
             "/"
           }
           onPick={selectedSummary ? insertDraftReference : insertEmptyStateReference}
@@ -1872,6 +1945,14 @@ export function App() {
                       onOpenLeft={() => undefined}
                       onAddWorkspace={(dir) => void addWorkspace(dir)}
                       onHide={() => clearCanvasPane(typedPaneId)}
+                      onStopped={(councilId) => {
+                        setCanvasPaneTargets((current) =>
+                          clearCanvasCouncilTargets(current, councilId),
+                        );
+                        if (selectedCouncilId === councilId) {
+                          setSelectedCouncilId(null);
+                        }
+                      }}
                       agentsPanelMode={paneRightPanelOpen ? "open" : "closed"}
                       onAgentsPanelModeChange={(mode) =>
                         setCanvasPaneRightPanelOpen(typedPaneId, mode === "open")
@@ -1960,8 +2041,6 @@ export function App() {
                         planModeAvailable={paneModeControl.planModeAvailable}
                         planModeEnabled={paneModeControl.planModeEnabled}
                         startPending={pendingSessionTransition !== null}
-                        onAddWorkspace={(dir) => void addWorkspace(dir)}
-                        onSelectWorkspace={setWorkspaceDir}
                         onProviderChange={(provider) => {
                           void loadProviderModels(provider, {
                             background: true,
@@ -2070,10 +2149,10 @@ export function App() {
                             })(),
                           }));
                         }}
-                        onStart={(initialInput) => {
+                        onStart={(initialInput, selectedWorkspaceDir) => {
                           void startSession({
                             provider: paneProvider,
-                            cwd: availableWorkspaceDir,
+                            cwd: selectedWorkspaceDir,
                             title: initialInput.slice(0, 50),
                             initialInput,
                             ...(paneModeControl.effectiveModeId
@@ -2668,16 +2747,15 @@ export function App() {
               workspacePickerRef={workspacePickerRef}
               onOpenFileReference={() => setFileReferenceOpen(true)}
               workspaceDirs={workspaceDirs}
-              availableWorkspaceDir={availableWorkspaceDir}
+              availableWorkspaceDir={emptyStateAvailableWorkspaceDir}
               workspacePickerOpen={workspacePickerOpen}
               onToggleWorkspacePicker={() => setWorkspacePickerOpen((v) => !v)}
               onSelectWorkspace={(dir) => {
+                setPendingNewSessionWorkspaceDir(null);
                 setWorkspaceDir(dir);
                 setWorkspacePickerOpen(false);
               }}
-              onAddWorkspace={(dir) => {
-                void addWorkspace(dir);
-              }}
+              onChooseNewWorkspace={setPendingNewSessionWorkspaceDir}
               newSessionProvider={newSessionProvider as ProviderChoice}
               onChangeProvider={(value) => setNewSessionProvider(value)}
               modelCatalog={currentModelCatalogState?.catalog ?? null}
@@ -2781,7 +2859,10 @@ export function App() {
       </WorkbenchErrorBoundary>
 
       {linkedFilePreviewPath ? (
-        <Suspense fallback={<FilePreviewDialogLoadingFallback />}>
+        <FilePreviewDialogErrorBoundary
+          resetKey={linkedFilePreviewPath}
+          onClose={() => setLinkedFilePreviewPath(null)}
+        >
           <InspectorFileDetailDialog
             sessionId={selectedSummary?.session.id ?? null}
             workspaceRoot={selectedInspectorWorkspaceDir}
@@ -2792,7 +2873,7 @@ export function App() {
             onRefreshChanges={() => undefined}
             onClose={() => setLinkedFilePreviewPath(null)}
           />
-        </Suspense>
+        </FilePreviewDialogErrorBoundary>
       ) : null}
 
       <GlobalWorkbenchCallout

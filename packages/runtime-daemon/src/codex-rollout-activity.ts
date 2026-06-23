@@ -920,6 +920,72 @@ function makePatchObservation(callId: string, toolCall: ToolCall): WorkbenchObse
   };
 }
 
+function isCodexSubagentToolCall(
+  payload: Record<string, unknown>,
+): boolean {
+  if (payload.name !== "spawn_agent" && payload.name !== "wait_agent") {
+    return false;
+  }
+  return payload.namespace === undefined || payload.namespace === "multi_agent_v1";
+}
+
+function makeSubagentLifecycleToolCall(
+  callId: string,
+  name: string,
+): ToolCall {
+  return {
+    id: callId,
+    family: "other",
+    providerToolName: name,
+    title: name === "spawn_agent" ? "Start subagent" : "Wait for subagent",
+  };
+}
+
+function makeSubagentLifecycleObservation(
+  callId: string,
+  name: string,
+  args: Record<string, unknown> | null,
+  status: WorkbenchObservation["status"],
+): WorkbenchObservation {
+  const targetCount = Array.isArray(args?.targets) ? args.targets.length : undefined;
+  const agentType = stringField(args ?? {}, "agent_type");
+  const title = name === "spawn_agent" ? "Start subagent" : "Wait for subagent";
+  const summary =
+    name === "spawn_agent"
+      ? agentType ?? undefined
+      : targetCount !== undefined
+        ? `${targetCount} target${targetCount === 1 ? "" : "s"}`
+        : undefined;
+  const safeArguments: Record<string, unknown> = {};
+  if (agentType) {
+    safeArguments.agent_type = agentType;
+  }
+  if (typeof args?.fork_context === "boolean") {
+    safeArguments.fork_context = args.fork_context;
+  }
+  if (Array.isArray(args?.targets)) {
+    safeArguments.targets = args.targets.filter((item): item is string => typeof item === "string");
+  }
+  if (typeof args?.timeout_ms === "number") {
+    safeArguments.timeout_ms = args.timeout_ms;
+  }
+
+  return {
+    id: `obs-${callId}`,
+    kind: "subagent.lifecycle",
+    status,
+    title,
+    ...(summary !== undefined ? { summary } : {}),
+    subject: {
+      providerToolName: name,
+      providerCallId: callId,
+    },
+    ...(Object.keys(safeArguments).length > 0
+      ? { detail: { artifacts: [{ kind: "json", label: "arguments", value: safeArguments }] } }
+      : {}),
+  };
+}
+
 function completeObservation(
   observation: WorkbenchObservation,
   params: {
@@ -1685,6 +1751,21 @@ export function translateCodexRolloutLine(
       });
       return [];
     }
+    if (isCodexSubagentToolCall(payload)) {
+      const toolCall = makeSubagentLifecycleToolCall(callId, payload.name);
+      const observation = makeSubagentLifecycleObservation(callId, payload.name, args, "running");
+      state.pendingToolCalls.set(callId, { toolCall, observation, hidden: true });
+      return [
+        persistedActivity(
+          record,
+          {
+            type: "observation_started",
+            observation,
+          },
+          "derived",
+        ),
+      ];
+    }
     const terminalInteraction = args ? terminalInteractionFromArgs(payload.name, args) : null;
     if (terminalInteraction) {
       let terminalSession = state.terminalSessions.get(terminalInteraction.sessionId);
@@ -2010,6 +2091,21 @@ export function translateCodexRolloutLine(
     }
     if (pending.hidden) {
       state.pendingToolCalls.delete(payload.call_id);
+      if (pending.observation?.kind === "subagent.lifecycle") {
+        return [
+          persistedActivity(
+            record,
+            {
+              type: "observation_completed",
+              observation: {
+                ...pending.observation,
+                status: "completed",
+              },
+            },
+            "derived",
+          ),
+        ];
+      }
       if (!pending.councilMcpToolCall) {
         return [];
       }

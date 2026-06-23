@@ -66,6 +66,7 @@ function summary(args: {
   provider?: "codex" | "claude" | "gemini" | "opencode";
   providerSessionId?: string;
   cwd?: string;
+  rootDir?: string;
   modeId?: string;
   modelId?: string | null;
   reasoningId?: string | null;
@@ -80,7 +81,7 @@ function summary(args: {
       ...(args.providerSessionId ? { providerSessionId: args.providerSessionId } : {}),
       launchSource: "web",
       cwd,
-      rootDir: cwd,
+      rootDir: args.rootDir ?? cwd,
       runtimeState: "idle",
       ptyId: `pty-${args.id}`,
       capabilities: {
@@ -297,6 +298,42 @@ describe("session startup model and mode requests", () => {
     assert.deepEqual(calls, ["created:started", "send"]);
   });
 
+  test("new session sidebar placement uses daemon returned workspace metadata", async () => {
+    const requests = installWebApiMocks((request) => {
+      if (request.url.includes("/api/fs/list")) {
+        return { path: "/tmp/rah-link", entries: [] };
+      }
+      if (request.url.endsWith("/api/sessions/start")) {
+        return {
+          session: summary({
+            id: "started-normalized",
+            provider: "codex",
+            cwd: "/tmp/rah-link",
+            rootDir: "/private/tmp/rah-real",
+          }),
+        };
+      }
+      throw new Error(`Unexpected request ${request.url}`);
+    });
+    const deps = startupDeps({
+      workspaceDirs: ["/tmp/rah"],
+      workspaceDir: "/tmp/rah",
+    });
+
+    await startSessionCommand(deps, {
+      provider: "codex",
+      cwd: "/tmp/rah-link",
+      title: "test",
+    });
+
+    const startRequest = requests.find((request) => request.url.endsWith("/api/sessions/start"));
+    assert.equal((startRequest?.body as { cwd?: string } | null)?.cwd, "/tmp/rah-link");
+    const state = deps.get();
+    assert.equal(state.workspaceDir, "/private/tmp/rah-real");
+    assert.deepEqual(state.workspaceDirs, ["/tmp/rah", "/private/tmp/rah-real"]);
+    assert.equal(state.selectedSessionId, "started-normalized");
+  });
+
   test("Gemini new session passes first input as launch initialPrompt", async () => {
     const requests = installWebApiMocks((request) => {
       if (request.url.includes("/api/fs/list")) {
@@ -396,7 +433,7 @@ describe("session startup model and mode requests", () => {
     );
   });
 
-  test("claim history sends selected mode, model, and optionValues to resume", async () => {
+  test("resume history sends selected mode, model, and optionValues", async () => {
     const history = summary({
       id: "history",
       provider: "codex",
@@ -508,7 +545,7 @@ describe("session startup model and mode requests", () => {
     });
   });
 
-  test("claim history removes the read-only replay projection for the same provider session", async () => {
+  test("resume history removes the read-only replay projection for the same provider session", async () => {
     const history = summary({
       id: "history",
       provider: "codex",
@@ -558,7 +595,7 @@ describe("session startup model and mode requests", () => {
     assert.equal(state.selectedSessionId, "claimed");
   });
 
-  test("claim history keeps the current history projection visible while resume is pending", async () => {
+  test("resume history keeps the current history projection visible while resume is pending", async () => {
     const history = summary({
       id: "history",
       provider: "codex",
@@ -615,7 +652,7 @@ describe("session startup model and mode requests", () => {
     await claimHistorySessionCommand(deps, "history");
   });
 
-  test("claim history keeps the claimed session when post-claim control update fails", async () => {
+  test("resume history keeps the resumed session when post-resume control update fails", async () => {
     const history = summary({
       id: "history",
       provider: "codex",
@@ -676,10 +713,10 @@ describe("session startup model and mode requests", () => {
     assert.equal(state.selectedSessionId, "claimed");
     assert.equal(state.projections.has("claimed"), true);
     assert.equal(state.projections.has("history"), false);
-    assert.match(state.error ?? "", /Session was claimed/);
+    assert.match(state.error ?? "", /Session was resumed/);
   });
 
-  test("claim history selects native local-server backend for providers that support it", async () => {
+  test("resume history selects native local-server backend for providers that support it", async () => {
     const requests = installWebApiMocks((request) => {
       if (request.url.includes("/api/fs/list")) {
         return { path: "/tmp/rah", entries: [] };
@@ -745,7 +782,7 @@ describe("session startup model and mode requests", () => {
     );
   });
 
-  test("activating stored history opens read-only replay instead of claiming native live", async () => {
+  test("activating stored history opens read-only replay instead of resuming native live", async () => {
     type ResumeStoredOptions = {
       preferStoredReplay?: boolean;
       historyReplay?: "include" | "skip";
@@ -836,7 +873,7 @@ describe("session startup model and mode requests", () => {
     assert.equal(resumed, false);
   });
 
-  test("claim history asks to create a missing stored workspace before launching", async () => {
+  test("resume history asks to create a missing stored workspace before launching", async () => {
     const history = summary({
       id: "history",
       provider: "opencode",
@@ -1121,7 +1158,7 @@ describe("session startup model and mode requests", () => {
     assert.equal(state.selectedSessionId, "resumed");
   });
 
-  test("claiming history claims control when the provider session is already running", async () => {
+  test("resuming history takes control when the provider session is already running", async () => {
     const historySummary = summary({
       id: "history",
       provider: "codex",
@@ -1233,7 +1270,7 @@ describe("session startup model and mode requests", () => {
     assert.equal(state.projections.get("live")?.summary.controlLease.holderClientId, "web-client");
   });
 
-  test("claiming already-running history preserves the visible replay feed", async () => {
+  test("resuming already-running history preserves the visible replay feed", async () => {
     const historySummary = summary({
       id: "history",
       provider: "codex",
@@ -1346,7 +1383,7 @@ describe("session startup model and mode requests", () => {
     assert.equal(state.projections.get("live")?.summary.controlLease.holderClientId, "web-client");
   });
 
-  test("claiming history does not attach a read-only replay after an already-running response", async () => {
+  test("resuming history does not attach a read-only replay after an already-running response", async () => {
     const historySummary = summary({
       id: "history",
       provider: "codex",

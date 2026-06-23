@@ -513,17 +513,17 @@ describe("workbench selectors", () => {
     assert.equal(launchOpening.openingSession?.kind, "new");
     assert.equal(launchOpening.openingSession?.provider, "codex");
 
-    const claimFallback = derivePrimaryPaneState({
+    const resumeFallback = derivePrimaryPaneState({
       selectedSummary: null,
-      pendingSessionTransition: {
-        kind: "claim_history",
-        provider: "codex",
-        providerSessionId: "thread-1",
-        title: "Claiming history",
-      },
+	      pendingSessionTransition: {
+	        kind: "claim_history",
+	        provider: "codex",
+	        providerSessionId: "thread-1",
+	        title: "Resuming history",
+	      },
     });
-    assert.equal(claimFallback.kind, "opening");
-    assert.equal(claimFallback.openingSession?.kind, "claim_history");
+    assert.equal(resumeFallback.kind, "opening");
+    assert.equal(resumeFallback.openingSession?.kind, "claim_history");
 
     assert.equal(
       derivePrimaryPaneState({

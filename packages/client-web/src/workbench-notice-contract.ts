@@ -27,7 +27,9 @@ export function deriveWorkbenchNoticeState(args: {
     ? nativeTuiDiagnosticNoticeMessage(nativeTuiDiagnostics[0])
     : null;
   const nativeTuiStoppedMessage =
-    selectedSummary?.session.nativeTui && selectedSummary.session.status === "stopped"
+    selectedSummary?.session.nativeTui &&
+    selectedSummary.session.status === "stopped" &&
+    isProcessOwnedNativeTui(selectedSummary)
       ? stoppedNativeTuiNoticeMessage(selectedSummary)
       : null;
   const nativeTuiQueuedInputCount =
@@ -87,6 +89,11 @@ export function deriveWorkbenchNoticeState(args: {
     historyNotice,
     errorDescriptor: error ? describeWorkbenchError(error, selectedSummary) : null,
   };
+}
+
+function isProcessOwnedNativeTui(selectedSummary: SessionSummary): boolean {
+  const backend = selectedSummary.session.liveBackend;
+  return backend === "native_tui" || backend === "tui_mux";
 }
 
 function stoppedNativeTuiNoticeMessage(selectedSummary: SessionSummary): string {

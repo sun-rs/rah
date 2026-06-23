@@ -41,6 +41,14 @@ import {
 import type { NativeTuiMirrorProvider } from "./native-tui-mirror-provider";
 import { nativeLocalServerAttachSpec } from "./native-local-server-attach";
 import {
+  DEFAULT_NATIVE_LOCAL_TUI_IDLE_CLOSE_MS,
+  claimNativeLocalTuiWarmLease,
+  createNativeLocalTuiWarmState,
+  nativeLocalTuiWarmStateIdleExpired,
+  releaseNativeLocalTuiWarmLease,
+  type NativeLocalTuiWarmState,
+} from "./native-local-tui-warm-lifecycle";
+import {
   buildNativeTuiSessionCapabilities,
   buildStoppedNativeTuiSessionCapabilities,
   buildTuiMuxSessionCapabilities,
@@ -428,6 +436,8 @@ export class RuntimeTerminalCoordinator {
   private readonly nativeTuiSessionIds = new Set<string>();
   private readonly independentTerminals = new Map<string, IndependentTerminalStartResponse["terminal"]>();
   private readonly closingNativeTuiSessionIds = new Set<string>();
+  private readonly nativeLocalTuiWarmStates = new Map<string, NativeLocalTuiWarmState>();
+  private readonly nativeLocalTuiIdleCloseTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly nativeTuiDiagnostics = new NativeTuiDiagnosticStore();
   private readonly mirrorRuntime: NativeTuiMirrorRuntime;
 
@@ -699,6 +709,88 @@ export class RuntimeTerminalCoordinator {
     this.clearTuiMuxRuntimeState(sessionId);
     this.clearNativeTuiRuntimeState(sessionId);
     this.nativeTuiSessionIds.delete(sessionId);
+  }
+
+  private nativeLocalTuiWarmState(sessionId: string): NativeLocalTuiWarmState {
+    const existing = this.nativeLocalTuiWarmStates.get(sessionId);
+    if (existing) {
+      return existing;
+    }
+    const next = createNativeLocalTuiWarmState();
+    this.nativeLocalTuiWarmStates.set(sessionId, next);
+    return next;
+  }
+
+  private clearNativeLocalTuiIdleCloseTimer(sessionId: string): void {
+    const timer = this.nativeLocalTuiIdleCloseTimers.get(sessionId);
+    if (!timer) {
+      return;
+    }
+    clearTimeout(timer);
+    this.nativeLocalTuiIdleCloseTimers.delete(sessionId);
+  }
+
+  private clearNativeLocalTuiWarmState(sessionId: string): void {
+    this.clearNativeLocalTuiIdleCloseTimer(sessionId);
+    this.nativeLocalTuiWarmStates.delete(sessionId);
+  }
+
+  private claimNativeLocalTuiVisibleLease(
+    sessionId: string,
+    request: NativeTuiSurfaceClaimRequest,
+  ): void {
+    const state = this.nativeLocalTuiWarmState(sessionId);
+    this.clearNativeLocalTuiIdleCloseTimer(sessionId);
+    claimNativeLocalTuiWarmLease({
+      state,
+      sessionId,
+      request,
+      nowMs: Date.now(),
+      attachedAt: new Date().toISOString(),
+    });
+  }
+
+  private releaseNativeLocalTuiVisibleLease(
+    sessionId: string,
+    request: NativeTuiSurfaceReleaseRequest,
+  ): void {
+    const state = this.nativeLocalTuiWarmStates.get(sessionId);
+    if (!state) {
+      return;
+    }
+    releaseNativeLocalTuiWarmLease({
+      state,
+      request,
+      nowMs: Date.now(),
+      idleCloseMs: DEFAULT_NATIVE_LOCAL_TUI_IDLE_CLOSE_MS,
+    });
+    if (state.leases.size === 0 && this.ptySessions.has(sessionId)) {
+      this.scheduleNativeLocalTuiIdleClose(sessionId);
+    }
+  }
+
+  private scheduleNativeLocalTuiIdleClose(sessionId: string): void {
+    this.clearNativeLocalTuiIdleCloseTimer(sessionId);
+    const state = this.nativeLocalTuiWarmStates.get(sessionId);
+    if (!state?.closeAfterMs) {
+      return;
+    }
+    const delayMs = Math.max(1, state.closeAfterMs - Date.now());
+    const timer = setTimeout(() => {
+      this.nativeLocalTuiIdleCloseTimers.delete(sessionId);
+      const current = this.nativeLocalTuiWarmStates.get(sessionId);
+      if (!nativeLocalTuiWarmStateIdleExpired(current, Date.now())) {
+        return;
+      }
+      void this.closeNativeLocalServerTuiClient(sessionId).catch((error) => {
+        console.warn("[rah] failed to close idle native local TUI client", {
+          sessionId,
+          error,
+        });
+      });
+    }, delayMs);
+    timer.unref?.();
+    this.nativeLocalTuiIdleCloseTimers.set(sessionId, timer);
   }
 
   private clearTuiMuxRuntimeState(sessionId: string): void {
@@ -1275,7 +1367,8 @@ export class RuntimeTerminalCoordinator {
   }
 
   getNativeTuiSurface(sessionId: string): NativeTuiSurfaceResponse {
-    return this.tuiMuxSurfaceResponse(this.tuiMuxSessions.get(sessionId));
+    const tmux = this.tuiMuxSessions.get(sessionId);
+    return tmux ? this.tuiMuxSurfaceResponse(tmux) : {};
   }
 
   async claimNativeTuiSurface(
@@ -1285,6 +1378,7 @@ export class RuntimeTerminalCoordinator {
     const tmux = this.tuiMuxSessions.get(sessionId);
     if (!tmux) {
       if (await this.ensureNativeLocalServerTuiClient(sessionId, request)) {
+        this.claimNativeLocalTuiVisibleLease(sessionId, request);
         return {};
       }
       return {};
@@ -1317,6 +1411,7 @@ export class RuntimeTerminalCoordinator {
   ): Promise<NativeTuiSurfaceResponse> {
     const tmux = this.tuiMuxSessions.get(sessionId);
     if (!tmux) {
+      this.releaseNativeLocalTuiVisibleLease(sessionId, request);
       return {};
     }
     if (tmux.activeSurface?.clientId !== request.clientId) {
@@ -1338,22 +1433,7 @@ export class RuntimeTerminalCoordinator {
     if (current?.session.liveBackend !== "native_local_server") {
       return {};
     }
-    const closed = await this.closeNativeLocalServerTuiClient(sessionId);
-    if (closed) {
-      this.deps.ptyHub.resetSession(sessionId);
-      this.deps.ptyHub.appendOutput(
-        sessionId,
-        "\r\n[rah] Web TUI client closed. Activate TUI to attach a new native client.\r\n",
-      );
-    }
-    if (current) {
-      this.deps.sessionStore.patchManagedSession(sessionId, {
-        runtimeDiagnostics: {
-          ...(current.session.runtimeDiagnostics ?? {}),
-          attachState: "unavailable",
-        },
-      });
-    }
+    this.releaseNativeLocalTuiVisibleLease(sessionId, request);
     return {};
   }
 
@@ -1432,6 +1512,7 @@ export class RuntimeTerminalCoordinator {
           this.scheduleNativeTuiMirrorWake(terminalId);
         },
         onExit: (terminalId, exitArgs) => {
+          this.clearNativeLocalTuiWarmState(terminalId);
           this.deps.ptyHub.emitExit(terminalId, exitArgs.exitCode, exitArgs.signal);
           const current = this.deps.sessionStore.getSession(terminalId);
           if (!current) {
@@ -1502,6 +1583,7 @@ export class RuntimeTerminalCoordinator {
   }
 
   async closeNativeLocalServerTuiClient(sessionId: string): Promise<boolean> {
+    this.clearNativeLocalTuiWarmState(sessionId);
     if (!this.ptySessions.has(sessionId)) {
       return false;
     }
@@ -2493,6 +2575,9 @@ export class RuntimeTerminalCoordinator {
     }
     for (const sessionId of this.nativeTuiSessions.keys()) {
       this.clearNativeTuiRuntimeState(sessionId);
+    }
+    for (const sessionId of this.nativeLocalTuiWarmStates.keys()) {
+      this.clearNativeLocalTuiWarmState(sessionId);
     }
     this.nativeTuiSessionIds.clear();
     const results = await this.ptySessions.closeAll();

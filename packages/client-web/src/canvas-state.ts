@@ -312,17 +312,32 @@ export function canvasTargetMatchesStoredSession(
   );
 }
 
-export function replaceCanvasSessionTargetWithStoredRef(
+export function clearCanvasSessionTargets(
   current: Record<CanvasPaneId, CanvasPaneTarget>,
   sessionId: string,
-  ref: StoredSessionRef,
 ): Record<CanvasPaneId, CanvasPaneTarget> {
   let changed = false;
   const next = { ...current };
   for (const paneId of CANVAS_PANE_IDS) {
     const target = current[paneId];
     if (target.kind === "session" && target.sessionId === sessionId) {
-      next[paneId] = { kind: "stored", ref };
+      next[paneId] = { kind: "empty" };
+      changed = true;
+    }
+  }
+  return changed ? next : current;
+}
+
+export function clearCanvasCouncilTargets(
+  current: Record<CanvasPaneId, CanvasPaneTarget>,
+  councilId: string,
+): Record<CanvasPaneId, CanvasPaneTarget> {
+  let changed = false;
+  const next = { ...current };
+  for (const paneId of CANVAS_PANE_IDS) {
+    const target = current[paneId];
+    if (target.kind === "council" && target.councilId === councilId) {
+      next[paneId] = { kind: "empty" };
       changed = true;
     }
   }

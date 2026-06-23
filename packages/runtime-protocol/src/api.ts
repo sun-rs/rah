@@ -816,6 +816,7 @@ export type PtyClientMessage =
       type: "pty.surface.attach";
       sessionId: string;
       clientId: string;
+      surfaceId?: string;
       clientKind: ClientKind;
       cols: number;
       rows: number;
@@ -824,10 +825,12 @@ export type PtyClientMessage =
       type: "pty.surface.detach";
       sessionId: string;
       clientId: string;
+      surfaceId?: string;
     };
 
 export interface NativeTuiSurfaceState {
   sessionId: string;
+  surfaceId?: string;
   clientId: string;
   clientKind: ClientKind;
   cols?: number;
@@ -837,6 +840,7 @@ export interface NativeTuiSurfaceState {
 
 export interface NativeTuiSurfaceClaimRequest {
   clientId: string;
+  surfaceId?: string;
   clientKind: ClientKind;
   cols?: number;
   rows?: number;
@@ -844,10 +848,12 @@ export interface NativeTuiSurfaceClaimRequest {
 
 export interface NativeTuiSurfaceReleaseRequest {
   clientId: string;
+  surfaceId?: string;
 }
 
 export interface NativeTuiClientCloseRequest {
   clientId: string;
+  surfaceId?: string;
 }
 
 export interface NativeTuiSurfaceResponse {

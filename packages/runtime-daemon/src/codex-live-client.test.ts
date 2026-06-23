@@ -1136,6 +1136,7 @@ function send(msg) { process.stdout.write(JSON.stringify(msg) + "\\n"); }
 let pendingTurnId = null;
 let sawMcpResponse = false;
 let sawDynamicResponse = false;
+let sawAttestationError = false;
 rl.on('line', (line) => {
   const msg = JSON.parse(line);
   if (msg.method === 'initialize') {
@@ -1184,7 +1185,16 @@ rl.on('line', (line) => {
   }
   if (msg.id === 9101) {
     sawDynamicResponse = msg.result?.success === false;
-    send({ method: 'item/agentMessage/delta', params: { threadId: 'thread-live-requests-1', turnId: pendingTurnId, itemId: 'assistant-requests-1', delta: 'responses ' + sawMcpResponse + ' ' + sawDynamicResponse } });
+    send({
+      id: 9102,
+      method: 'attestation/generate',
+      params: {},
+    });
+    return;
+  }
+  if (msg.id === 9102) {
+    sawAttestationError = String(msg.error?.message || '').includes('attestation');
+    send({ method: 'item/agentMessage/delta', params: { threadId: 'thread-live-requests-1', turnId: pendingTurnId, itemId: 'assistant-requests-1', delta: 'responses ' + sawMcpResponse + ' ' + sawDynamicResponse + ' ' + sawAttestationError } });
     send({ method: 'turn/completed', params: { turn: { id: pendingTurnId, status: 'completed' } } });
     return;
   }
@@ -1247,7 +1257,7 @@ rl.on('line', (line) => {
         (event) =>
           event.type === "timeline.item.added" &&
           event.payload.item.kind === "assistant_message" &&
-          event.payload.item.text.includes("responses true true"),
+          event.payload.item.text.includes("responses true true true"),
       ),
     );
 

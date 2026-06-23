@@ -481,19 +481,19 @@ export async function claimHistorySessionCommand(
   const state = deps.get();
   const projection = state.projections.get(sessionId);
   const summary = projection?.summary;
-  const providerSessionId = summary?.session.providerSessionId;
-  if (!projection || !summary || !providerSessionId) {
-    const error = "Only persisted provider sessions can be claimed from history.";
-    deps.set({ error });
-    throw new Error(error);
-  }
+	  const providerSessionId = summary?.session.providerSessionId;
+	  if (!projection || !summary || !providerSessionId) {
+	    const error = "Only persisted provider sessions can be resumed from history.";
+	    deps.set({ error });
+	    throw new Error(error);
+	  }
 
-  const ref = buildFallbackStoredSessionRef(summary, state.recentSessions, state.storedSessions);
-  if (!ref) {
-    const error = "Only persisted provider sessions can be claimed from history.";
-    deps.set({ error });
-    throw new Error(error);
-  }
+	  const ref = buildFallbackStoredSessionRef(summary, state.recentSessions, state.storedSessions);
+	  if (!ref) {
+	    const error = "Only persisted provider sessions can be resumed from history.";
+	    deps.set({ error });
+	    throw new Error(error);
+	  }
   if (!isCoreLiveProvider(ref.provider)) {
     const error = historyOnlyRunningMessage(ref.provider);
     deps.set({ pendingSessionAction: null, pendingSessionTransition: null, error });
@@ -629,13 +629,13 @@ export async function claimHistorySessionCommand(
         });
         updateClaimedSessionSummary(session);
       }
-    } catch (configurationError) {
-      deps.set({
-        pendingSessionAction: null,
-        pendingSessionTransition: null,
-        error: `Session was claimed, but updating session controls failed: ${readErrorMessage(configurationError)}`,
-      });
-    }
+	    } catch (configurationError) {
+	      deps.set({
+	        pendingSessionAction: null,
+	        pendingSessionTransition: null,
+	        error: `Session was resumed, but updating session controls failed: ${readErrorMessage(configurationError)}`,
+	      });
+	    }
     return session.session.id;
   } catch (error) {
     const message = readErrorMessage(error);
