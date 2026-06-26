@@ -303,6 +303,50 @@ describe("startRahDaemon", () => {
     }
   });
 
+  test("PTY websocket heartbeat replies without reaching terminal stdin", async () => {
+    const terminal = await engine.startIndependentTerminal({ cwd: tempHome, cols: 80, rows: 24 });
+    let transcript = "";
+    const unsubscribe = engine.ptyHub.subscribe(terminal.terminal.id, (frame) => {
+      if (frame.type === "pty.output") {
+        transcript += frame.data;
+      } else if (frame.type === "pty.replay") {
+        transcript += frame.chunks.join("");
+      }
+    });
+    const socket = await openWebSocket(`ws://127.0.0.1:${port}/api/pty/${terminal.terminal.id}`);
+    try {
+      const pong = new Promise<unknown>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("Timed out waiting for PTY pong")), 1_000);
+        socket.on("message", (raw) => {
+          const parsed = JSON.parse(raw.toString("utf8")) as { type?: string };
+          if (parsed.type === "pty.server.pong") {
+            clearTimeout(timer);
+            resolve(parsed);
+          }
+        });
+      });
+      socket.send(
+        JSON.stringify({
+          type: "pty.client.ping",
+          sessionId: "payload-session-ignored",
+          clientId: "web-user",
+          nonce: "heartbeat-1",
+        }),
+      );
+      assert.deepEqual(await pong, {
+        type: "pty.server.pong",
+        sessionId: terminal.terminal.id,
+        nonce: "heartbeat-1",
+      });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      assert.doesNotMatch(transcript, /heartbeat-1/);
+    } finally {
+      socket.close();
+      unsubscribe();
+      await engine.closeIndependentTerminal(terminal.terminal.id);
+    }
+  });
+
   test("lists independent terminals so hidden dialogs can reattach", async () => {
     const first = await engine.startIndependentTerminal({
       cwd: tempHome,

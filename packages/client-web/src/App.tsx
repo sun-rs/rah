@@ -92,6 +92,9 @@ import {
   createEmptyCanvasTargets,
   getCanvasVisiblePaneIds,
   hasAnyCanvasPaneTarget,
+  MOBILE_CANVAS_LAYOUT,
+  MOBILE_CANVAS_LAYOUTS,
+  shouldUseMobileCanvasLayout,
   readRememberedCanvasState,
   rememberCanvasState,
   resolveCanvasClaimedSessionId,
@@ -534,6 +537,9 @@ export function App() {
     rememberedCanvasState?.ratios ??
     createCanvasLayoutRatios(rememberedCanvasState?.layout ?? "two-horizontal"),
   );
+  const [mobileCanvasRatios, setMobileCanvasRatios] = useState<number[]>(() =>
+    createCanvasLayoutRatios(MOBILE_CANVAS_LAYOUT),
+  );
   const [canvasPaneTargets, setCanvasPaneTargets] =
     useState<Record<CanvasPaneId, CanvasPaneTarget>>(
       () => rememberedCanvasState?.targets ?? createEmptyCanvasTargets(),
@@ -729,7 +735,16 @@ export function App() {
     [projections],
   );
 
-  const visibleCanvasPaneIds = getCanvasVisiblePaneIds(canvasLayout, canvasMaximizedPaneId);
+  const mobileCanvasLayoutOnly = shouldUseMobileCanvasLayout(viewportWidthPx);
+  const effectiveCanvasLayout = mobileCanvasLayoutOnly ? MOBILE_CANVAS_LAYOUT : canvasLayout;
+  const effectiveCanvasMaximizedPaneId = mobileCanvasLayoutOnly ? null : canvasMaximizedPaneId;
+  const effectiveCanvasRatios = mobileCanvasLayoutOnly
+    ? mobileCanvasRatios
+    : canvasRatios;
+  const visibleCanvasPaneIds = getCanvasVisiblePaneIds(
+    effectiveCanvasLayout,
+    effectiveCanvasMaximizedPaneId,
+  );
   const resolveCanvasProjection = (paneId: CanvasPaneId) => {
     const target = canvasPaneTargets[paneId];
     return resolveCanvasTargetProjectionFromState(target, projections);
@@ -784,6 +799,18 @@ export function App() {
     setVisibleNotificationTargets(visibleNotificationTargets);
     return () => setVisibleNotificationTargets([]);
   }, [visibleNotificationTargets]);
+
+  useEffect(() => {
+    if (!mobileCanvasLayoutOnly || workbenchMode !== "canvas") {
+      return;
+    }
+    if (canvasMaximizedPaneId !== null) {
+      setCanvasMaximizedPaneId(null);
+    }
+    if (!getCanvasVisiblePaneIds(MOBILE_CANVAS_LAYOUT).includes(activeCanvasPaneId)) {
+      setActiveCanvasPaneId("canvas-1");
+    }
+  }, [activeCanvasPaneId, canvasMaximizedPaneId, mobileCanvasLayoutOnly, workbenchMode]);
 
   const setCanvasPaneRightPanelOpen = useCallback((paneId: CanvasPaneId, open: boolean) => {
     setCanvasPaneRightPanelsOpen((current) => ({
@@ -1281,10 +1308,9 @@ export function App() {
   }, [
     canvasNewSessionDrafts,
     canvasPaneTargets,
-    canvasLayout,
-    canvasMaximizedPaneId,
     loadProviderModels,
     projections,
+    visibleCanvasPaneKey,
     workbenchMode,
   ]);
 
@@ -1583,7 +1609,7 @@ export function App() {
     "--workbench-floating-anchor": `calc(env(safe-area-inset-bottom, 0px) + ${floatingAnchorOffsetPx + visualViewportBottomInsetPx}px)`,
     "--workbench-callout-anchor": `calc(var(--workbench-floating-anchor) + 3.5rem)`,
   } as CSSProperties;
-  const mobileCanvasEnabled = viewportWidthPx >= 700;
+  const mobileCanvasEnabled = true;
   const inspectorToggleOpen = rightSidebarOpen || rightOpen;
   const reserveInspectorToggleSlot = !rightSidebarOpen && !rightOpen;
   const showPrimaryLeftSidebarControls = !leftOpen;
@@ -1639,9 +1665,6 @@ export function App() {
           }
         }}
         onMobileToggleCanvas={() => {
-          if (!mobileCanvasEnabled) {
-            return;
-          }
           if (workbenchMode === "canvas") {
             exitCanvasMode();
           } else {
@@ -1892,12 +1915,13 @@ export function App() {
                   clearable: target.kind !== "empty",
                 };
               })}
-              layout={canvasLayout}
-              maximizedPaneId={canvasMaximizedPaneId}
-              ratios={canvasRatios}
+              layout={effectiveCanvasLayout}
+              {...(mobileCanvasLayoutOnly ? { availableLayouts: MOBILE_CANVAS_LAYOUTS } : {})}
+              maximizedPaneId={effectiveCanvasMaximizedPaneId}
+              ratios={effectiveCanvasRatios}
               sidebarOpen={sidebarOpen}
               onLayoutChange={setCanvasLayout}
-              onResizeRatios={setCanvasRatios}
+              onResizeRatios={mobileCanvasLayoutOnly ? setMobileCanvasRatios : setCanvasRatios}
               onExpandSidebar={() => setSidebarOpen(true)}
               onActivatePane={(paneId) => setActiveCanvasPaneId(paneId as CanvasPaneId)}
               onToggleMaximize={(paneId) => toggleCanvasPaneMaximize(paneId as CanvasPaneId)}
@@ -1920,7 +1944,7 @@ export function App() {
                   pendingSessionAction,
                   pendingSessionTransition,
                 );
-                const paneExpanded = canvasMaximizedPaneId === typedPaneId;
+                const paneExpanded = effectiveCanvasMaximizedPaneId === typedPaneId;
                 const paneRightPanelOpen =
                   paneExpanded && canvasPaneRightPanelsOpen[typedPaneId] === true;
                 if (target.kind === "council") {

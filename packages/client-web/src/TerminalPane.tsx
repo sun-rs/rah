@@ -54,6 +54,8 @@ const DEFAULT_MAX_TERMINAL_WRITE_BATCH_CHARS = 128 * 1024;
 const MAX_PAUSED_TERMINAL_OUTPUT_TAIL_CHARS = 256 * 1024;
 const TERMINAL_INPUT_FLUSH_DELAY_MS = 2;
 const TERMINAL_OUTPUT_FLUSH_DELAY_MS = 16;
+const PTY_CLIENT_HEARTBEAT_INTERVAL_MS = 15_000;
+const PTY_CLIENT_HEARTBEAT_TIMEOUT_MS = 45_000;
 
 function stripTerminalControlText(data: string): string {
   return data
@@ -88,6 +90,10 @@ function createTerminalSurfaceId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID();
   }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+function createPtyHeartbeatNonce(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
@@ -566,6 +572,60 @@ export function TerminalPane(props: TerminalPaneProps) {
     });
 
     const connect = (fromSeq?: number) => {
+      let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+      let heartbeatSupported = false;
+      let pendingHeartbeatNonce: string | null = null;
+      let heartbeatSentAt = 0;
+
+      const stopPtyHeartbeat = () => {
+        if (heartbeatTimer) {
+          clearInterval(heartbeatTimer);
+          heartbeatTimer = null;
+        }
+        pendingHeartbeatNonce = null;
+        heartbeatSentAt = 0;
+      };
+
+      const sendPtyHeartbeat = (socket: WebSocket) => {
+        if (socket.readyState !== WebSocket.OPEN) {
+          return;
+        }
+        const now = Date.now();
+        if (
+          pendingHeartbeatNonce &&
+          now - heartbeatSentAt > PTY_CLIENT_HEARTBEAT_TIMEOUT_MS
+        ) {
+          if (heartbeatSupported) {
+            socket.close(4000, "PTY heartbeat timeout");
+          } else {
+            pendingHeartbeatNonce = null;
+            heartbeatSentAt = 0;
+          }
+          return;
+        }
+        if (pendingHeartbeatNonce) {
+          return;
+        }
+        const nonce = createPtyHeartbeatNonce();
+        pendingHeartbeatNonce = nonce;
+        heartbeatSentAt = now;
+        sendPtyMessage(socket, {
+          type: "pty.client.ping",
+          sessionId: props.terminalId,
+          clientId: clientIdRef.current,
+          nonce,
+        });
+      };
+
+      const startPtyHeartbeat = (socket: WebSocket) => {
+        stopPtyHeartbeat();
+        sendPtyHeartbeat(socket);
+        heartbeatTimer = setInterval(
+          () => sendPtyHeartbeat(socket),
+          PTY_CLIENT_HEARTBEAT_INTERVAL_MS,
+        );
+      };
+
       const scheduleTerminalWrite = () => {
         if (writeInFlight) {
           return;
@@ -699,45 +759,53 @@ export function TerminalPane(props: TerminalPaneProps) {
       const socket = createPtySocket(
         props.terminalId,
         (message) => {
-        if (message.type === "pty.replay") {
-          if (fromSeq === undefined || message.droppedBeforeSeq !== undefined) {
-            enqueueVisibleTerminalWrite(message.chunks.join(""), { replace: true });
-          } else {
-            enqueueVisibleTerminalWrite(message.chunks.join(""));
+          if (message.type === "pty.server.pong") {
+            heartbeatSupported = true;
+            if (!pendingHeartbeatNonce || message.nonce === pendingHeartbeatNonce) {
+              pendingHeartbeatNonce = null;
+              heartbeatSentAt = 0;
+            }
+            return;
           }
-          scheduleFitAndResize();
-          if (message.nextSeq !== undefined) {
-            nextReplaySeqRef.current = message.nextSeq;
+          if (message.type === "pty.replay") {
+            if (fromSeq === undefined || message.droppedBeforeSeq !== undefined) {
+              enqueueVisibleTerminalWrite(message.chunks.join(""), { replace: true });
+            } else {
+              enqueueVisibleTerminalWrite(message.chunks.join(""));
+            }
+            scheduleFitAndResize();
+            if (message.nextSeq !== undefined) {
+              nextReplaySeqRef.current = message.nextSeq;
+            }
+            return;
           }
-          return;
-        }
-        if (message.type === "pty.output") {
-          if (message.replace === true) {
-            enqueueVisibleTerminalWrite(message.data, { replace: true, softReplace: true });
-          } else {
-            enqueueVisibleTerminalWrite(message.data);
+          if (message.type === "pty.output") {
+            if (message.replace === true) {
+              enqueueVisibleTerminalWrite(message.data, { replace: true, softReplace: true });
+            } else {
+              enqueueVisibleTerminalWrite(message.data);
+            }
+            if (message.seq !== undefined) {
+              nextReplaySeqRef.current = Math.max(nextReplaySeqRef.current, message.seq + 1);
+            }
+            return;
           }
-          if (message.seq !== undefined) {
-            nextReplaySeqRef.current = Math.max(nextReplaySeqRef.current, message.seq + 1);
+          if (message.type === "pty.exited") {
+            exited = true;
+            if (message.seq !== undefined) {
+              nextReplaySeqRef.current = Math.max(nextReplaySeqRef.current, message.seq + 1);
+            }
+            enqueueVisibleTerminalWrite(
+              `\r\n[session exited${message.exitCode !== undefined ? ` code=${message.exitCode}` : ""}]\r\n`,
+            );
           }
-          return;
-        }
-        if (message.type === "pty.exited") {
-          exited = true;
-          if (message.seq !== undefined) {
-            nextReplaySeqRef.current = Math.max(nextReplaySeqRef.current, message.seq + 1);
+        },
+        (error) => {
+          if (error.message === "PTY socket failed") {
+            return;
           }
-          enqueueVisibleTerminalWrite(
-            `\r\n[session exited${message.exitCode !== undefined ? ` code=${message.exitCode}` : ""}]\r\n`,
-          );
-        }
-      },
-      (error) => {
-        if (error.message === "PTY socket failed") {
-          return;
-        }
-        enqueueVisibleTerminalWrite(`\r\n[pty error] ${error.message}\r\n`);
-      },
+          enqueueVisibleTerminalWrite(`\r\n[pty error] ${error.message}\r\n`);
+        },
         {
           ...(fromSeq !== undefined ? { fromSeq } : {}),
           replay: shouldRequestPtyReplay({
@@ -752,11 +820,13 @@ export function TerminalPane(props: TerminalPaneProps) {
       socketRef.current = socket;
       socket.addEventListener("open", () => {
         reconnectAttempt = 0;
+        startPtyHeartbeat(socket);
         claimCurrentSurface();
         settleTerminalLayout();
       });
       scheduleFitAndResize({ force: true });
       socket.addEventListener("close", (event) => {
+        stopPtyHeartbeat();
         const isCurrentSocket = socketRef.current === socket;
         if (!isCurrentSocket) {
           return;

@@ -796,6 +796,11 @@ export type PtyServerMessage =
       seq?: number;
       exitCode?: number;
       signal?: string;
+    }
+  | {
+      type: "pty.server.pong";
+      sessionId: string;
+      nonce: string;
     };
 
 export type PtyClientMessage =
@@ -826,6 +831,12 @@ export type PtyClientMessage =
       sessionId: string;
       clientId: string;
       surfaceId?: string;
+    }
+  | {
+      type: "pty.client.ping";
+      sessionId: string;
+      clientId: string;
+      nonce: string;
     };
 
 export interface NativeTuiSurfaceState {

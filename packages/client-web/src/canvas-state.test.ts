@@ -11,6 +11,8 @@ import {
   createEmptyCanvasTargets,
   getCanvasVisiblePaneIds,
   hasAnyCanvasPaneTarget,
+  MOBILE_CANVAS_LAYOUT,
+  MOBILE_CANVAS_LAYOUTS,
   normalizeRememberedCanvasState,
   readRememberedCanvasState,
   rememberCanvasState,
@@ -18,6 +20,7 @@ import {
   resolveCanvasRunningUniquenessKey,
   resolveCanvasTargetProjection,
   shouldInitializeCanvasPaneFromSelection,
+  shouldUseMobileCanvasLayout,
   type CanvasPaneTarget,
 } from "./canvas-state";
 import { createEmptySessionProjection } from "./session-store-session-lifecycle";
@@ -123,6 +126,14 @@ test("canvas layouts reveal fixed ordered pane slots without clearing hidden tar
     "canvas-4",
   ]);
   assert.deepEqual(getCanvasVisiblePaneIds("two-horizontal", "canvas-4"), ["canvas-4"]);
+});
+
+test("mobile canvas policy uses only stacked two-pane layout", () => {
+  assert.equal(MOBILE_CANVAS_LAYOUT, "two-vertical");
+  assert.deepEqual(MOBILE_CANVAS_LAYOUTS, ["two-vertical"]);
+  assert.equal(shouldUseMobileCanvasLayout(699), true);
+  assert.equal(shouldUseMobileCanvasLayout(700), false);
+  assert.deepEqual(getCanvasVisiblePaneIds(MOBILE_CANVAS_LAYOUT), ["canvas-1", "canvas-2"]);
 });
 
 test("canvas clear all availability is based on all fixed pane slots", () => {

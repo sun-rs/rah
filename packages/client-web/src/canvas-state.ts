@@ -19,6 +19,10 @@ export const CANVAS_PANE_IDS: CanvasPaneId[] = [
   "canvas-4",
 ];
 
+export const MOBILE_CANVAS_MAX_WIDTH_PX = 699;
+export const MOBILE_CANVAS_LAYOUT: CanvasLayout = "two-vertical";
+export const MOBILE_CANVAS_LAYOUTS: readonly CanvasLayout[] = [MOBILE_CANVAS_LAYOUT];
+
 export const CANVAS_LAYOUT_PANE_COUNT: Record<CanvasLayout, number> = {
   "two-horizontal": 2,
   "two-vertical": 2,
@@ -27,6 +31,10 @@ export const CANVAS_LAYOUT_PANE_COUNT: Record<CanvasLayout, number> = {
 };
 
 export const CANVAS_STATE_STORAGE_KEY = "rah-canvas-state-v1";
+
+export function shouldUseMobileCanvasLayout(viewportWidthPx: number): boolean {
+  return Number.isFinite(viewportWidthPx) && viewportWidthPx <= MOBILE_CANVAS_MAX_WIDTH_PX;
+}
 
 export type RememberedCanvasState = {
   layout: CanvasLayout;

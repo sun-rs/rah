@@ -301,6 +301,12 @@ export function attachWebSocketHandlers(
           engine.onPtyInput(sessionId, parsed.clientId, parsed.data);
         } else if (parsed.type === "pty.resize") {
           engine.onPtyResize(sessionId, parsed.clientId, parsed.cols, parsed.rows);
+        } else if (parsed.type === "pty.client.ping") {
+          sendJsonWithBackpressure(socket, {
+            type: "pty.server.pong",
+            sessionId,
+            nonce: parsed.nonce,
+          });
         } else if (parsed.type === "pty.surface.attach") {
           surfaceClientId = parsed.clientId;
           surfaceId = parsed.surfaceId;

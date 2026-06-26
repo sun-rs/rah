@@ -38,6 +38,7 @@ const LAYOUT_OPTIONS: Array<{
 export function CanvasWorkbench(props: {
   panes: CanvasPaneView[];
   layout: CanvasLayout;
+  availableLayouts?: readonly CanvasLayout[];
   maximizedPaneId: string | null;
   ratios: number[];
   sidebarOpen: boolean;
@@ -56,6 +57,8 @@ export function CanvasWorkbench(props: {
 }) {
   const linearRef = useRef<HTMLDivElement | null>(null);
   const gridRef = useRef<HTMLDivElement | null>(null);
+  const availableLayouts = props.availableLayouts ?? LAYOUT_OPTIONS.map((layout) => layout.id);
+  const layoutOptions = LAYOUT_OPTIONS.filter((layout) => availableLayouts.includes(layout.id));
 
   const startLinearResize = (
     axis: "column" | "row",
@@ -212,7 +215,7 @@ export function CanvasWorkbench(props: {
   );
 
   return (
-    <div className="hidden h-full min-h-0 flex-1 flex-col bg-[var(--app-bg)] min-[700px]:flex">
+    <div className="flex h-full min-h-0 flex-1 flex-col bg-[var(--app-bg)]">
       <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-[var(--app-border)] bg-[var(--app-bg)]/85 px-2 backdrop-blur-sm">
         <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
           {!props.sidebarOpen ? (
@@ -235,23 +238,23 @@ export function CanvasWorkbench(props: {
         </div>
         <div className={HEADER_ACTION_GROUP_CLASS}>
           <div className={HEADER_SEGMENTED_CONTROL_CLASS}>
-            {LAYOUT_OPTIONS.map((layout) => {
+            {layoutOptions.map((layout) => {
               const Icon = layout.icon;
               return (
-              <button
-                key={layout.id}
-                type="button"
-                className={`${HEADER_SEGMENTED_BUTTON_BASE_CLASS} gap-1 ${
-                  props.layout === layout.id && !props.maximizedPaneId
-                    ? HEADER_SEGMENTED_BUTTON_ACTIVE_CLASS
-                    : HEADER_SEGMENTED_BUTTON_INACTIVE_CLASS
-                }`}
-                onClick={() => props.onLayoutChange(layout.id)}
-                title={layout.title}
-              >
-                <Icon size={14} />
-                <span className={HEADER_SEGMENTED_LABEL_CLASS}>{layout.label}</span>
-              </button>
+                <button
+                  key={layout.id}
+                  type="button"
+                  className={`${HEADER_SEGMENTED_BUTTON_BASE_CLASS} gap-1 ${
+                    props.layout === layout.id && !props.maximizedPaneId
+                      ? HEADER_SEGMENTED_BUTTON_ACTIVE_CLASS
+                      : HEADER_SEGMENTED_BUTTON_INACTIVE_CLASS
+                  }`}
+                  onClick={() => props.onLayoutChange(layout.id)}
+                  title={layout.title}
+                >
+                  <Icon size={14} />
+                  <span className={HEADER_SEGMENTED_LABEL_CLASS}>{layout.label}</span>
+                </button>
               );
             })}
           </div>
