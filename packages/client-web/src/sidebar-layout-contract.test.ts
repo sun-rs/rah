@@ -433,6 +433,19 @@ describe("sidebar layout contract", () => {
     assert.match(councilSource, /mobileOpen=\{councilSidebarOpen && !isCouncilWide\}/);
   });
 
+  test("keeps mobile canvas layout constrained without disabling pane maximize", () => {
+    const appSource = readSource("./App.tsx");
+
+    assert.match(appSource, /const effectiveCanvasLayout = mobileCanvasLayoutOnly \? MOBILE_CANVAS_LAYOUT : canvasLayout;/);
+    assert.match(appSource, /const effectiveCanvasMaximizedPaneId = canvasMaximizedPaneId;/);
+    assert.match(appSource, /availableLayouts: MOBILE_CANVAS_LAYOUTS/);
+    assert.doesNotMatch(appSource, /mobileCanvasLayoutOnly \? null : canvasMaximizedPaneId/);
+    assert.doesNotMatch(
+      appSource,
+      /canvasMaximizedPaneId !== null[\s\S]{0,120}setCanvasMaximizedPaneId\(null\)/,
+    );
+  });
+
   test("routes session and council title pills through shared meta badge structure", () => {
     const sessionSource = readSource("./components/workbench/panes/WorkbenchSelectedPane.tsx");
     const councilSource = readSource("./council/CouncilPage.tsx");

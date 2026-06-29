@@ -17,6 +17,7 @@ import { shouldRequestPtyReplay } from "./terminal-pty-replay-policy";
 import { ptySocketCloseNotice } from "./terminal-socket-close";
 import { TERMINAL_TUI_SHORTCUTS, type TerminalShortcut } from "./terminal-shortcuts";
 import { readTerminalViewportMetrics } from "./terminal-viewport";
+import { TERMINAL_LAYOUT_SETTLE_DELAYS_MS } from "./tui-surface-lifecycle";
 
 export interface TerminalPaneProps {
   terminalId: string;
@@ -436,6 +437,7 @@ export function TerminalPane(props: TerminalPaneProps) {
     let reconnectAttempt = 0;
     let surfacePollTimer: ReturnType<typeof setInterval> | null = null;
     const settleTimers = new Set<number>();
+    const settleFrames = new Set<number>();
     let fitFrame: number | null = null;
     let forceNextResize = false;
     let writeScheduled = false;
@@ -529,31 +531,51 @@ export function TerminalPane(props: TerminalPaneProps) {
     scheduleTerminalFitRef.current = scheduleFitAndResize;
     fitTerminalImmediatelyRef.current = fitImmediatelyAndNotifyResize;
 
-    const settleTerminalLayout = () => {
-      scheduleFitAndResize({ force: true });
-      if (!nativeSurfaceControlEnabled) {
-        return;
+    const refreshVisibleTerminal = () => {
+      terminal.refresh(0, Math.max(0, terminal.rows - 1));
+    };
+
+    const clearTerminalLayoutSettle = () => {
+      for (const frame of settleFrames) {
+        window.cancelAnimationFrame(frame);
       }
-      window.requestAnimationFrame(() => {
+      settleFrames.clear();
+      for (const timer of settleTimers) {
+        window.clearTimeout(timer);
+      }
+      settleTimers.clear();
+    };
+
+    const requestSettleFrame = (callback: () => void) => {
+      const frame = window.requestAnimationFrame(() => {
+        settleFrames.delete(frame);
         if (disposed) {
           return;
         }
-        scheduleFitAndResize({ force: true });
-        window.requestAnimationFrame(() => {
-          if (disposed) {
-            return;
-          }
-          scheduleFitAndResize({ force: true });
-        });
+        callback();
       });
-      for (const delay of [80, 160]) {
+      settleFrames.add(frame);
+    };
+
+    const forceTerminalLayoutPass = () => {
+      scheduleFitAndResize({ force: true });
+      refreshVisibleTerminal();
+    };
+
+    const settleTerminalLayout = () => {
+      clearTerminalLayoutSettle();
+      forceTerminalLayoutPass();
+      requestSettleFrame(() => {
+        forceTerminalLayoutPass();
+        requestSettleFrame(forceTerminalLayoutPass);
+      });
+      for (const delay of TERMINAL_LAYOUT_SETTLE_DELAYS_MS) {
         const timer = window.setTimeout(() => {
           settleTimers.delete(timer);
           if (disposed) {
             return;
           }
-          scheduleFitAndResize({ force: true });
-          terminal.refresh(0, Math.max(0, terminal.rows - 1));
+          forceTerminalLayoutPass();
         }, delay);
         settleTimers.add(timer);
       }
@@ -564,12 +586,36 @@ export function TerminalPane(props: TerminalPaneProps) {
     const applyTheme = () => {
       terminal.options.fontFamily = readRahTerminalFontFamily();
       terminal.options.theme = readRahTerminalTheme();
+      settleTerminalLayout();
     };
     const themeObserver = new MutationObserver(applyTheme);
     themeObserver.observe(document.documentElement, {
       attributes: true,
       attributeFilter: ["class", "data-theme"],
     });
+
+    void document.fonts?.ready.then(() => {
+      if (!disposed) {
+        settleTerminalLayout();
+      }
+    });
+
+    const handleTerminalViewportChanged = () => {
+      if (!disposed) {
+        settleTerminalLayout();
+      }
+    };
+    const handleTerminalVisibilityChanged = () => {
+      if (!document.hidden) {
+        handleTerminalViewportChanged();
+      }
+    };
+    window.addEventListener("resize", handleTerminalViewportChanged);
+    window.addEventListener("orientationchange", handleTerminalViewportChanged);
+    window.addEventListener("pageshow", handleTerminalViewportChanged);
+    window.visualViewport?.addEventListener("resize", handleTerminalViewportChanged);
+    window.visualViewport?.addEventListener("scroll", handleTerminalViewportChanged);
+    document.addEventListener("visibilitychange", handleTerminalVisibilityChanged);
 
     const connect = (fromSeq?: number) => {
       let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
@@ -668,6 +714,9 @@ export function TerminalPane(props: TerminalPaneProps) {
           writeInFlight = true;
           terminal.write(chunk, () => {
             writeInFlight = false;
+            if (!disposed) {
+              refreshVisibleTerminal();
+            }
             if (!disposed && (pendingReplace !== null || pendingWrite.length > 0)) {
               scheduleTerminalWrite();
             }
@@ -973,15 +1022,18 @@ export function TerminalPane(props: TerminalPaneProps) {
       if (surfacePollTimer) {
         clearInterval(surfacePollTimer);
       }
-      for (const timer of settleTimers) {
-        window.clearTimeout(timer);
-      }
-      settleTimers.clear();
+      clearTerminalLayoutSettle();
       pausedOutputTailRef.current = "";
       pausedOutputReplaceRef.current = false;
       pausedOutputSoftReplaceRef.current = false;
       flushPausedOutputRef.current = () => undefined;
       themeObserver.disconnect();
+      window.removeEventListener("resize", handleTerminalViewportChanged);
+      window.removeEventListener("orientationchange", handleTerminalViewportChanged);
+      window.removeEventListener("pageshow", handleTerminalViewportChanged);
+      window.visualViewport?.removeEventListener("resize", handleTerminalViewportChanged);
+      window.visualViewport?.removeEventListener("scroll", handleTerminalViewportChanged);
+      document.removeEventListener("visibilitychange", handleTerminalVisibilityChanged);
       resizeObserver.disconnect();
       disposable.dispose();
       if (socketRef.current) {

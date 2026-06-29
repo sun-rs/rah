@@ -1,6 +1,7 @@
 export const COUNCIL_TUI_WARM_LIMIT = 8;
 export const COUNCIL_TUI_WARM_TTL_MS = 5 * 60 * 1000;
 export const PROVIDER_TUI_REPLAY_TAIL_BYTES = 96 * 1024;
+export const TERMINAL_LAYOUT_SETTLE_DELAYS_MS = [80, 160, 320, 640, 1_200] as const;
 
 export type ActiveSessionTuiSurface = {
   terminalId: string;

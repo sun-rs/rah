@@ -9,6 +9,7 @@ import {
   resetCouncilTuiCache,
   setCouncilTuiDetached,
   shouldReplayInitialSessionTuiOutput,
+  TERMINAL_LAYOUT_SETTLE_DELAYS_MS,
   touchCouncilTuiCache,
   warmCouncilTuiCache,
 } from "./tui-surface-lifecycle";
@@ -70,6 +71,11 @@ test("session tui opens with bounded PTY tail replay so remounts restore the cur
   assert.equal(shouldReplayInitialSessionTuiOutput({ liveBackend: "tui_mux" }), true);
   assert.equal(shouldReplayInitialSessionTuiOutput({ liveBackend: null }), true);
   assert.equal(PROVIDER_TUI_REPLAY_TAIL_BYTES, 96 * 1024);
+});
+
+test("terminal layout settle spans delayed mobile and canvas paints", () => {
+  assert.deepEqual([...TERMINAL_LAYOUT_SETTLE_DELAYS_MS], [80, 160, 320, 640, 1_200]);
+  assert.equal(TERMINAL_LAYOUT_SETTLE_DELAYS_MS.at(-1)! >= 1_000, true);
 });
 
 test("council tui cache keeps at most the warm limit while preserving the active agent", () => {

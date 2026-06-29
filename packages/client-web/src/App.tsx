@@ -737,7 +737,7 @@ export function App() {
 
   const mobileCanvasLayoutOnly = shouldUseMobileCanvasLayout(viewportWidthPx);
   const effectiveCanvasLayout = mobileCanvasLayoutOnly ? MOBILE_CANVAS_LAYOUT : canvasLayout;
-  const effectiveCanvasMaximizedPaneId = mobileCanvasLayoutOnly ? null : canvasMaximizedPaneId;
+  const effectiveCanvasMaximizedPaneId = canvasMaximizedPaneId;
   const effectiveCanvasRatios = mobileCanvasLayoutOnly
     ? mobileCanvasRatios
     : canvasRatios;
@@ -804,13 +804,10 @@ export function App() {
     if (!mobileCanvasLayoutOnly || workbenchMode !== "canvas") {
       return;
     }
-    if (canvasMaximizedPaneId !== null) {
-      setCanvasMaximizedPaneId(null);
-    }
     if (!getCanvasVisiblePaneIds(MOBILE_CANVAS_LAYOUT).includes(activeCanvasPaneId)) {
       setActiveCanvasPaneId("canvas-1");
     }
-  }, [activeCanvasPaneId, canvasMaximizedPaneId, mobileCanvasLayoutOnly, workbenchMode]);
+  }, [activeCanvasPaneId, mobileCanvasLayoutOnly, workbenchMode]);
 
   const setCanvasPaneRightPanelOpen = useCallback((paneId: CanvasPaneId, open: boolean) => {
     setCanvasPaneRightPanelsOpen((current) => ({
