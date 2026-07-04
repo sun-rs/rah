@@ -19,6 +19,7 @@ import {
   resolveCanvasClaimedSessionId,
   resolveCanvasRunningUniquenessKey,
   resolveCanvasTargetProjection,
+  resolveCanvasVisibleSessionId,
   shouldInitializeCanvasPaneFromSelection,
   shouldUseMobileCanvasLayout,
   type CanvasPaneTarget,
@@ -319,6 +320,31 @@ test("canvas stored refs prefer live projections over read-only history replays"
   );
 
   assert.equal(resolved?.summary.session.id, "live-1");
+});
+
+test("canvas stored refs expose the resolved session as a visible session", () => {
+  const history = summary({
+    id: "history-1",
+    provider: "codex",
+    providerSessionId: "provider-1",
+    readOnlyReplay: true,
+  });
+  const live = summary({ id: "live-1", provider: "codex", providerSessionId: "provider-1" });
+
+  assert.equal(
+    resolveCanvasVisibleSessionId(
+      { kind: "stored", ref: ref("codex", "provider-1") },
+      projections(history, live),
+    ),
+    "live-1",
+  );
+  assert.equal(
+    resolveCanvasVisibleSessionId(
+      { kind: "stored", ref: ref("codex", "missing-provider") },
+      projections(history, live),
+    ),
+    null,
+  );
 });
 
 test("canvas claim resolution prefers a live projection over a read-only history id", () => {

@@ -99,6 +99,7 @@ import {
   rememberCanvasState,
   resolveCanvasClaimedSessionId,
   resolveCanvasTargetProjection as resolveCanvasTargetProjectionFromState,
+  resolveCanvasVisibleSessionId,
   shouldInitializeCanvasPaneFromSelection,
   type CanvasPaneId,
   type CanvasPaneTarget,
@@ -200,6 +201,8 @@ class FilePreviewDialogErrorBoundary extends Component<
 const MODEL_DRAFT_STORAGE_KEY = "rah.modelDrafts.v2";
 const LEGACY_MODEL_DRAFT_STORAGE_KEYS = ["rah.modelDrafts.v1"];
 const PROVIDER_CHOICES: ProviderChoice[] = ["codex", "claude", "gemini", "opencode"];
+const FOREGROUND_RECOVERY_DEBOUNCE_MS = 120;
+const VISIBLE_HISTORY_CATCHUP_FRESH_MS = 2_000;
 
 function emptyModelDrafts(): Record<ProviderChoice, ModelDraft> {
   return {
@@ -417,6 +420,7 @@ export function App() {
     pendingSessionAction,
     clientId,
     isInitialLoaded,
+    eventStreamOpenRevision,
     error,
     clearError,
     setWorkspaceDir,
@@ -435,6 +439,9 @@ export function App() {
     setSessionModel,
     claimHistorySession,
     removeHistorySession,
+    setVisibleSessionIds,
+    markSessionsRead,
+    reconcileUnreadFromLastSeen,
     claimControl,
     interruptSession,
     sendInput,
@@ -463,6 +470,7 @@ export function App() {
       pendingSessionAction: state.pendingSessionAction,
       clientId: state.clientId,
       isInitialLoaded: state.isInitialLoaded,
+      eventStreamOpenRevision: state.eventStreamOpenRevision,
       error: state.error,
       clearError: state.clearError,
       setWorkspaceDir: state.setWorkspaceDir,
@@ -481,6 +489,9 @@ export function App() {
       setSessionModel: state.setSessionModel,
       claimHistorySession: state.claimHistorySession,
       removeHistorySession: state.removeHistorySession,
+      setVisibleSessionIds: state.setVisibleSessionIds,
+      markSessionsRead: state.markSessionsRead,
+      reconcileUnreadFromLastSeen: state.reconcileUnreadFromLastSeen,
       claimControl: state.claimControl,
       interruptSession: state.interruptSession,
       sendInput: state.sendInput,
@@ -775,8 +786,9 @@ export function App() {
     if (workbenchMode === "canvas") {
       for (const paneId of visibleCanvasPaneIds) {
         const target = canvasPaneTargets[paneId];
-        if (target.kind === "session") {
-          addTarget({ kind: "session", id: target.sessionId });
+        const sessionId = resolveCanvasVisibleSessionId(target, projections);
+        if (sessionId) {
+          addTarget({ kind: "session", id: sessionId });
         } else if (target.kind === "council") {
           addTarget({ kind: "council", id: target.councilId });
         }
@@ -793,12 +805,151 @@ export function App() {
       addTarget({ kind: "session", id: selectedSessionId });
     }
     return targets;
-  }, [canvasPaneTargets, selectedCouncilId, selectedSessionId, visibleCanvasPaneKey, workbenchMode]);
+  }, [
+    canvasPaneTargets,
+    projections,
+    selectedCouncilId,
+    selectedSessionId,
+    visibleCanvasPaneKey,
+    workbenchMode,
+  ]);
+  const visibleSessionIds = useMemo(
+    () =>
+      visibleNotificationTargets.flatMap((target) =>
+        target.kind === "session" ? [target.id] : [],
+      ),
+    [visibleNotificationTargets],
+  );
+  const visibleSessionIdsRef = useRef(visibleSessionIds);
+  const projectionsRef = useRef(projections);
+  const isInitialLoadedRef = useRef(isInitialLoaded);
+  const visibleHistoryCatchupInFlightRef = useRef(new Map<string, Promise<void>>());
+  const visibleHistoryCatchupFreshRef = useRef(new Map<string, { key: string; at: number }>());
+  const foregroundRecoveryTimerRef = useRef<number | null>(null);
+  const foregroundRecoveryInFlightRef = useRef<Promise<void> | null>(null);
+
+  useEffect(() => {
+    visibleSessionIdsRef.current = visibleSessionIds;
+    setVisibleSessionIds(visibleSessionIds);
+  }, [setVisibleSessionIds, visibleSessionIds]);
+
+  useEffect(() => {
+    projectionsRef.current = projections;
+  }, [projections]);
+
+  useEffect(() => {
+    isInitialLoadedRef.current = isInitialLoaded;
+  }, [isInitialLoaded]);
+
+  const workbenchHasForegroundAttention = useCallback(() => {
+    if (typeof document === "undefined") {
+      return true;
+    }
+    return document.visibilityState === "visible" && document.hasFocus();
+  }, []);
+
+  const catchUpVisibleSessionHistory = useCallback(async () => {
+    if (!isInitialLoadedRef.current) {
+      return;
+    }
+    const requests: Promise<void>[] = [];
+    for (const sessionId of visibleSessionIdsRef.current) {
+      const inFlight = visibleHistoryCatchupInFlightRef.current.get(sessionId);
+      if (inFlight) {
+        requests.push(inFlight);
+        continue;
+      }
+      const projection = projectionsRef.current.get(sessionId);
+      if (!projection?.summary.session.providerSessionId) {
+        continue;
+      }
+      const freshnessKey = `${projection.summary.session.updatedAt ?? ""}:${projection.lastSeq}`;
+      const fresh = visibleHistoryCatchupFreshRef.current.get(sessionId);
+      if (
+        fresh?.key === freshnessKey &&
+        Date.now() - fresh.at < VISIBLE_HISTORY_CATCHUP_FRESH_MS
+      ) {
+        continue;
+      }
+      const request = ensureSessionHistoryLoaded(sessionId)
+        .catch(() => undefined)
+        .finally(() => {
+          visibleHistoryCatchupFreshRef.current.set(sessionId, {
+            key: freshnessKey,
+            at: Date.now(),
+          });
+          visibleHistoryCatchupInFlightRef.current.delete(sessionId);
+        });
+      visibleHistoryCatchupInFlightRef.current.set(sessionId, request);
+      requests.push(request);
+    }
+    await Promise.all(requests);
+  }, [ensureSessionHistoryLoaded]);
+
+  const reconcileVisibleUnreadState = useCallback(async () => {
+    await catchUpVisibleSessionHistory();
+    const activeVisibleSessionIds = workbenchHasForegroundAttention()
+      ? visibleSessionIdsRef.current
+      : [];
+    reconcileUnreadFromLastSeen(activeVisibleSessionIds);
+  }, [
+    catchUpVisibleSessionHistory,
+    reconcileUnreadFromLastSeen,
+    workbenchHasForegroundAttention,
+  ]);
+
+  const runForegroundRecovery = useCallback(async () => {
+    if (foregroundRecoveryInFlightRef.current) {
+      return foregroundRecoveryInFlightRef.current;
+    }
+    const request = recoverTransport()
+      .catch(() => undefined)
+      .then(() => reconcileVisibleUnreadState())
+      .finally(() => {
+        if (foregroundRecoveryInFlightRef.current === request) {
+          foregroundRecoveryInFlightRef.current = null;
+        }
+      });
+    foregroundRecoveryInFlightRef.current = request;
+    return request;
+  }, [reconcileVisibleUnreadState, recoverTransport]);
+
+  const scheduleForegroundRecovery = useCallback(() => {
+    if (typeof document !== "undefined" && document.visibilityState !== "visible") {
+      return;
+    }
+    if (foregroundRecoveryTimerRef.current !== null) {
+      window.clearTimeout(foregroundRecoveryTimerRef.current);
+    }
+    foregroundRecoveryTimerRef.current = window.setTimeout(() => {
+      foregroundRecoveryTimerRef.current = null;
+      void runForegroundRecovery();
+    }, FOREGROUND_RECOVERY_DEBOUNCE_MS);
+  }, [runForegroundRecovery]);
 
   useEffect(() => {
     setVisibleNotificationTargets(visibleNotificationTargets);
     return () => setVisibleNotificationTargets([]);
   }, [visibleNotificationTargets]);
+
+  useEffect(() => {
+    if (eventStreamOpenRevision <= 0) {
+      return;
+    }
+    scheduleForegroundRecovery();
+  }, [eventStreamOpenRevision, scheduleForegroundRecovery]);
+
+  useEffect(() => {
+    if (!workbenchHasForegroundAttention()) {
+      return;
+    }
+    markSessionsRead(visibleSessionIds);
+  }, [
+    markSessionsRead,
+    projections,
+    visibleSessionIds,
+    workbenchHasForegroundAttention,
+  ]);
 
   useEffect(() => {
     if (!mobileCanvasLayoutOnly || workbenchMode !== "canvas") {
@@ -1398,18 +1549,9 @@ export function App() {
   }, [attachSession, isAttached, selectedSummary]);
 
   useEffect(() => {
-    const handleForegroundResume = () => {
-      if (document.visibilityState !== "visible") {
-        return;
-      }
-      void recoverTransport();
-    };
-    const handlePageShow = () => {
-      void recoverTransport();
-    };
-    const handleOnline = () => {
-      void recoverTransport();
-    };
+    const handleForegroundResume = () => scheduleForegroundRecovery();
+    const handlePageShow = () => scheduleForegroundRecovery();
+    const handleOnline = () => scheduleForegroundRecovery();
 
     document.addEventListener("visibilitychange", handleForegroundResume);
     window.addEventListener("focus", handleForegroundResume);
@@ -1420,8 +1562,12 @@ export function App() {
       window.removeEventListener("focus", handleForegroundResume);
       window.removeEventListener("pageshow", handlePageShow);
       window.removeEventListener("online", handleOnline);
+      if (foregroundRecoveryTimerRef.current !== null) {
+        window.clearTimeout(foregroundRecoveryTimerRef.current);
+        foregroundRecoveryTimerRef.current = null;
+      }
     };
-  }, [recoverTransport]);
+  }, [scheduleForegroundRecovery]);
 
   useEffect(() => {
     if (primaryPaneState.kind !== "active" || !selectedSummary) {
@@ -2440,6 +2586,7 @@ export function App() {
               isAttached={isAttached}
               interactionNotice={interactionNotice}
               historyNotice={historyNotice}
+              generationActive={isGenerating}
               hideToolCallsInChat={hideToolCallsInChat}
               hideOpenCodeReasoningInChat={hideOpenCodeReasoningInChat}
               hideGeminiReasoningInChat={hideGeminiReasoningInChat}

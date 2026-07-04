@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type {
   PermissionResponseRequest,
   ProviderModelCatalog,
@@ -32,6 +32,7 @@ import { deriveWorkbenchNoticeState } from "../../../workbench-notice-contract";
 import { isSessionAttachedToClient } from "../../../workbench-selectors";
 import type { SessionProjection } from "../../../types";
 import type { ProviderChoice } from "../../ProviderSelector";
+import { FileReferencePicker } from "../../FileReferencePicker";
 import { WorkbenchSelectedPane } from "../panes/WorkbenchSelectedPane";
 import { ConversationSidePanelShell } from "../shells/ConversationSidePanelShell";
 
@@ -114,6 +115,7 @@ export function CanvasSessionPane(props: {
   const isAttached = isSessionAttachedToClient(props.summary, props.clientId);
   const hasControl = props.summary.controlLease.holderClientId === props.clientId;
   const canRespondToPermission = canSessionRespondToPermissions(props.summary);
+  const [fileReferenceOpen, setFileReferenceOpen] = useState(false);
   const isGenerating = isSessionGenerationActive(
     props.summary,
     props.projection?.currentRuntimeStatus,
@@ -166,6 +168,7 @@ export function CanvasSessionPane(props: {
     removeDraftImage,
     removeLastDraftImage,
     handleSend,
+    insertDraftReference,
   } = useWorkbenchComposerState({
     selectedSummary: props.summary,
     availableWorkspaceDir: "",
@@ -191,7 +194,8 @@ export function CanvasSessionPane(props: {
   };
 
   const selectedPane = (
-    <WorkbenchSelectedPane
+    <>
+      <WorkbenchSelectedPane
       selectedSummary={props.summary}
       clientId={props.clientId}
       selectedProjection={props.projection}
@@ -204,6 +208,7 @@ export function CanvasSessionPane(props: {
       isAttached={isAttached}
       interactionNotice={noticeState.interactionNotice}
       historyNotice={noticeState.historyNotice}
+      generationActive={isGenerating}
       hideToolCallsInChat={props.hideToolCallsInChat}
       hideOpenCodeReasoningInChat={props.hideOpenCodeReasoningInChat}
       hideGeminiReasoningInChat={props.hideGeminiReasoningInChat}
@@ -324,8 +329,7 @@ export function CanvasSessionPane(props: {
         })();
       }}
       onInterrupt={() => props.onInterrupt(props.summary.session.id)}
-      onOpenFileReference={() => undefined}
-      fileReferenceDisabled
+      onOpenFileReference={() => setFileReferenceOpen(true)}
       onLoadOlderHistory={() => props.onLoadOlderHistory(props.summary.session.id)}
       onOpenLeft={() => undefined}
       onExpandSidebar={() => undefined}
@@ -383,7 +387,14 @@ export function CanvasSessionPane(props: {
         props.onRememberModelDraft(provider, next);
         void props.onSetSessionModel(props.summary.session.id, modelId, reasoningId, optionValues);
       }}
-    />
+      />
+      <FileReferencePicker
+        open={fileReferenceOpen}
+        onOpenChange={setFileReferenceOpen}
+        rootPath={props.summary.session.rootDir || props.summary.session.cwd || "/"}
+        onPick={insertDraftReference}
+      />
+    </>
   );
 
   if (sidePanelAvailable && props.inspector) {

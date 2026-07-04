@@ -15,6 +15,7 @@ type SessionSyncState = {
   selectedSessionId: string | null;
   workspaceVisibilityVersion: number;
   sessionTopologyVersion: number;
+  eventStreamOpenRevision: number;
   pendingSessionTransition: PendingSessionTransition | null;
   pendingSessionAction:
     | {
@@ -273,9 +274,10 @@ export function connectStoreSyncTransport(args: {
   ) => Map<string, SessionProjection>;
   computeUnreadSessionIds: (
     currentUnreadSessionIds: ReadonlySet<string>,
-    selectedSessionId: string | null,
+    visibleSessionIds: ReadonlySet<string>,
     events: readonly RahEvent[],
   ) => Set<string>;
+  getVisibleSessionIds: () => ReadonlySet<string>;
   notifyUnreadEvents?: (args: {
     projections: ReadonlyMap<string, SessionProjection>;
     events: readonly RahEvent[];
@@ -323,7 +325,7 @@ export function connectStoreSyncTransport(args: {
             ? state.unreadSessionIds
             : args.computeUnreadSessionIds(
                 state.unreadSessionIds,
-                projectionState.selectedSessionId,
+                args.getVisibleSessionIds(),
                 unreadEvents,
               ),
         error: state.error === "Events socket failed" ? null : state.error,
@@ -388,6 +390,7 @@ export function connectStoreSyncTransport(args: {
     },
     onOpen: () => {
       args.set((state) => ({
+        eventStreamOpenRevision: state.eventStreamOpenRevision + 1,
         error: state.error === "Events socket failed" ? null : state.error,
       }));
     },

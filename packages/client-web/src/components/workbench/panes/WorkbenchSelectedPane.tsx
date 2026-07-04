@@ -161,6 +161,7 @@ export function WorkbenchSelectedPane(props: {
   isAttached: boolean;
   interactionNotice: InlineWorkbenchNotice | null;
   historyNotice: InlineWorkbenchNotice | null;
+  generationActive: boolean;
   hideToolCallsInChat: boolean;
   hideOpenCodeReasoningInChat: boolean;
   hideGeminiReasoningInChat: boolean;
@@ -790,6 +791,7 @@ export function WorkbenchSelectedPane(props: {
           provider={props.selectedSummary.session.provider}
           canLoadOlderHistory={props.canLoadOlderHistory}
           historyLoading={props.historyLoading}
+          generationActive={props.generationActive}
           onLoadOlderHistory={props.onLoadOlderHistory}
           {...(props.onLoadHistoryItemDetail
             ? { onLoadHistoryItemDetail: props.onLoadHistoryItemDetail }

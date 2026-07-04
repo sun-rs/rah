@@ -70,6 +70,13 @@ import {
   refreshLatestHistoryCommand,
 } from "./session-store-history-paging";
 import {
+  ensureSessionReadStateInitialized,
+  hasUnreadSinceReadState,
+  markProjectionSeenInState,
+  readSessionReadState,
+  writeSessionReadState,
+} from "./session-read-state";
+import {
   connectStoreSyncTransport,
   recoverFromReplayGapCommand,
   recoverTransportCommand,
@@ -166,6 +173,8 @@ interface SessionState {
   hiddenWorkspaceDirs: Set<string>;
   workspaceVisibilityVersion: number;
   sessionTopologyVersion: number;
+  eventStreamOpenRevision: number;
+  visibleSessionIds: Set<string>;
   debugScenarios: DebugScenarioDescriptor[];
   modelCatalogs: Partial<Record<ProviderChoice, ModelCatalogLoadState>>;
   selectedSessionId: string | null;
@@ -229,6 +238,9 @@ interface SessionState {
   ) => Promise<string | null>;
   removeHistorySession: (session: Pick<StoredSessionRef, "provider" | "providerSessionId">) => Promise<void>;
   removeHistoryWorkspaceSessions: (workspaceDir: string) => Promise<void>;
+  setVisibleSessionIds: (sessionIds: readonly string[]) => void;
+  markSessionsRead: (sessionIds: readonly string[]) => void;
+  reconcileUnreadFromLastSeen: (visibleSessionIds?: readonly string[]) => void;
   claimControl: (sessionId: string) => Promise<void>;
   releaseControl: (sessionId: string) => Promise<void>;
   interruptSession: (sessionId: string) => Promise<void>;
@@ -762,6 +774,7 @@ function connectStoreTransport() {
     getNotificationProjections: () => useSessionStore.getState().projections,
     applyEventsToMap,
     computeUnreadSessionIds: computeUnreadSessionIdsImpl,
+    getVisibleSessionIds: () => useSessionStore.getState().visibleSessionIds,
     notifyUnreadEvents: notifyForRahEvents,
     recoverFromReplayGap,
     refreshWorkbenchState: (events) => {
@@ -787,6 +800,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   hiddenWorkspaceDirs: new Set(),
   workspaceVisibilityVersion: 0,
   sessionTopologyVersion: 0,
+  eventStreamOpenRevision: 0,
+  visibleSessionIds: new Set<string>(),
   debugScenarios: [],
   modelCatalogs: {},
   selectedSessionId: null,
@@ -1421,6 +1436,78 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       set({ error: readErrorMessage(error) });
       throw error;
     }
+  },
+
+  setVisibleSessionIds: (sessionIds) => {
+    const nextVisibleSessionIds = new Set(sessionIds);
+    set((state) => {
+      if (
+        state.visibleSessionIds.size === nextVisibleSessionIds.size &&
+        [...nextVisibleSessionIds].every((sessionId) => state.visibleSessionIds.has(sessionId))
+      ) {
+        return state;
+      }
+      return { visibleSessionIds: nextVisibleSessionIds };
+    });
+  },
+
+  markSessionsRead: (sessionIds) => {
+    if (sessionIds.length === 0) {
+      return;
+    }
+    const sessionIdSet = new Set(sessionIds);
+    const readState = readSessionReadState();
+    let readStateChanged = readState ? ensureSessionReadStateInitialized(readState) : false;
+    for (const sessionId of sessionIdSet) {
+      const projection = get().projections.get(sessionId);
+      if (projection && readState) {
+        readStateChanged = markProjectionSeenInState(readState, projection) || readStateChanged;
+      }
+    }
+    if (readState && readStateChanged) {
+      writeSessionReadState(readState);
+    }
+    set((state) => {
+      let changed = false;
+      const unreadSessionIds = new Set(state.unreadSessionIds);
+      for (const sessionId of sessionIdSet) {
+        if (unreadSessionIds.delete(sessionId)) {
+          changed = true;
+        }
+      }
+      return changed ? { unreadSessionIds } : state;
+    });
+  },
+
+  reconcileUnreadFromLastSeen: (visibleSessionIds = []) => {
+    const visibleSessionIdSet = new Set(visibleSessionIds);
+    set((state) => {
+      const readState = readSessionReadState();
+      let readStateChanged = readState ? ensureSessionReadStateInitialized(readState) : false;
+      const unreadSessionIds = new Set(state.unreadSessionIds);
+      let changed = false;
+      for (const [sessionId, projection] of state.projections) {
+        if (visibleSessionIdSet.has(sessionId)) {
+          if (readState) {
+            readStateChanged = markProjectionSeenInState(readState, projection) || readStateChanged;
+          }
+          if (unreadSessionIds.delete(sessionId)) {
+            changed = true;
+          }
+          continue;
+        }
+        if (hasUnreadSinceReadState(projection, readState)) {
+          if (!unreadSessionIds.has(sessionId)) {
+            unreadSessionIds.add(sessionId);
+            changed = true;
+          }
+        }
+      }
+      if (readState && readStateChanged) {
+        writeSessionReadState(readState);
+      }
+      return changed ? { unreadSessionIds } : state;
+    });
   },
 
   attachSession: async (summary) => {

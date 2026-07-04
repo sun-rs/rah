@@ -218,6 +218,19 @@ export function resolveCanvasTargetProjection(
   return null;
 }
 
+export function resolveCanvasVisibleSessionId(
+  target: CanvasPaneTarget,
+  projections: Map<string, SessionProjection>,
+): string | null {
+  if (target.kind === "session") {
+    return resolveCanvasTargetProjection(target, projections)?.summary.session.id ?? target.sessionId;
+  }
+  if (target.kind === "stored") {
+    return resolveCanvasTargetProjection(target, projections)?.summary.session.id ?? null;
+  }
+  return null;
+}
+
 function canvasProjectionMatchesStoredRef(
   projection: SessionProjection,
   ref: Pick<StoredSessionRef, "provider" | "providerSessionId">,

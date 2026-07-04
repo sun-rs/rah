@@ -161,7 +161,7 @@ function shouldMarkSessionUnread(event: RahEvent): boolean {
 
 export function computeUnreadSessionIds(
   currentUnreadSessionIds: ReadonlySet<string>,
-  selectedSessionId: string | null,
+  visibleSessionIds: ReadonlySet<string>,
   events: readonly RahEvent[],
 ): Set<string> {
   const nextUnreadSessionIds = new Set(currentUnreadSessionIds);
@@ -170,12 +170,12 @@ export function computeUnreadSessionIds(
       nextUnreadSessionIds.delete(event.sessionId);
       continue;
     }
-    if (selectedSessionId !== event.sessionId && shouldMarkSessionUnread(event)) {
+    if (!visibleSessionIds.has(event.sessionId) && shouldMarkSessionUnread(event)) {
       nextUnreadSessionIds.add(event.sessionId);
     }
   }
-  if (selectedSessionId) {
-    nextUnreadSessionIds.delete(selectedSessionId);
+  for (const sessionId of visibleSessionIds) {
+    nextUnreadSessionIds.delete(sessionId);
   }
   return nextUnreadSessionIds;
 }

@@ -23,6 +23,31 @@ import { initialHistorySyncState, type SessionProjection } from "./types";
 const originalFetch = globalThis.fetch;
 const originalWindow = (globalThis as typeof globalThis & { window?: unknown }).window;
 
+function installLocalStorageMock() {
+  const store = new Map<string, string>();
+  (globalThis as typeof globalThis & { window?: unknown }).window = {
+    localStorage: {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        store.set(key, value);
+      },
+      removeItem: (key: string) => {
+        store.delete(key);
+      },
+    },
+  };
+}
+
+function withMockedNow<T>(iso: string, run: () => T): T {
+  const originalNow = Date.now;
+  Date.now = () => Date.parse(iso);
+  try {
+    return run();
+  } finally {
+    Date.now = originalNow;
+  }
+}
+
 function sessionSummary(rootDir: string): SessionSummary {
   return {
     session: {
@@ -882,7 +907,7 @@ describe("workspace response reconciliation", () => {
   test("marks unselected sessions unread for meaningful events and clears the selected session", () => {
     const unread = computeUnreadSessionIds(
       new Set<string>(["session:selected"]),
-      "session:selected",
+      new Set<string>(["session:selected"]),
       [
         event("timeline.item.added", "session:other"),
         event("tool.call.completed", "session:other"),
@@ -891,6 +916,100 @@ describe("workspace response reconciliation", () => {
     );
 
     assert.deepEqual([...unread], ["session:other"]);
+  });
+
+  test("uses visible sessions instead of stale selection to suppress unread", () => {
+    const unread = computeUnreadSessionIds(
+      new Set<string>(),
+      new Set<string>(["session:visible"]),
+      [
+        event("timeline.item.added", "session:stale-selected"),
+        event("timeline.item.added", "session:visible"),
+      ],
+    );
+
+    assert.deepEqual([...unread], ["session:stale-selected"]);
+  });
+
+  test("rebuilds unread from this browser last-seen state after foreground catch-up", () => {
+    const originalState = useSessionStore.getState();
+    installLocalStorageMock();
+    try {
+      const unreadProjection = projection("/workspace/unread");
+      unreadProjection.feed = [
+        {
+          key: "assistant:unread",
+          kind: "timeline",
+          item: { kind: "assistant_message", text: "new reply" },
+          ts: "2026-04-21T00:01:00.000Z",
+        },
+      ];
+      const visibleProjection = projection("/workspace/visible");
+      visibleProjection.feed = [
+        {
+          key: "assistant:visible",
+          kind: "timeline",
+          item: { kind: "assistant_message", text: "visible reply" },
+          ts: "2026-04-21T00:02:00.000Z",
+        },
+      ];
+      useSessionStore.setState({
+        ...originalState,
+        projections: new Map([
+          [unreadProjection.summary.session.id, unreadProjection],
+          [visibleProjection.summary.session.id, visibleProjection],
+        ]),
+        unreadSessionIds: new Set<string>(),
+      });
+
+      withMockedNow("2026-04-21T00:00:30.000Z", () => {
+        useSessionStore
+          .getState()
+          .reconcileUnreadFromLastSeen([visibleProjection.summary.session.id]);
+      });
+
+      assert.deepEqual(
+        [...useSessionStore.getState().unreadSessionIds],
+        [unreadProjection.summary.session.id],
+      );
+
+      useSessionStore.getState().markSessionsRead([unreadProjection.summary.session.id]);
+
+      assert.deepEqual([...useSessionStore.getState().unreadSessionIds], []);
+    } finally {
+      useSessionStore.setState(originalState, true);
+      (globalThis as typeof globalThis & { window?: unknown }).window = originalWindow;
+    }
+  });
+
+  test("does not mark stale transcript history unread on a fresh browser baseline", () => {
+    const originalState = useSessionStore.getState();
+    installLocalStorageMock();
+    try {
+      const staleProjection = projection("/workspace/stale");
+      staleProjection.feed = [
+        {
+          key: "assistant:stale",
+          kind: "timeline",
+          item: { kind: "assistant_message", text: "old reply" },
+          ts: "2026-04-21T00:01:00.000Z",
+        },
+      ];
+      useSessionStore.setState({
+        ...originalState,
+        projections: new Map([[staleProjection.summary.session.id, staleProjection]]),
+        unreadSessionIds: new Set<string>(),
+      });
+
+      withMockedNow("2026-04-21T00:05:00.000Z", () => {
+        useSessionStore.getState().reconcileUnreadFromLastSeen([]);
+      });
+
+      assert.deepEqual([...useSessionStore.getState().unreadSessionIds], []);
+    } finally {
+      useSessionStore.setState(originalState, true);
+      (globalThis as typeof globalThis & { window?: unknown }).window = originalWindow;
+    }
   });
 
   test("keeps selectedSessionId as the only selection truth", () => {

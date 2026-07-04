@@ -362,6 +362,7 @@ export function ChatThread(props: {
   provider?: ProviderKind;
   canLoadOlderHistory?: boolean;
   historyLoading?: boolean;
+  generationActive?: boolean;
   onLoadOlderHistory?: () => void | Promise<void>;
   onLoadHistoryItemDetail?: (
     kind: SessionHistoryItemDetailKind,
@@ -398,6 +399,11 @@ export function ChatThread(props: {
   const bottomFollowRafRef = useRef<number | null>(null);
   const measuredHeightsRafRef = useRef<number | null>(null);
   const topHistoryLoadRafRef = useRef<number | null>(null);
+  const latestReplyStartTargetRef = useRef<ReturnType<typeof resolveLatestReplyStartTarget>>(null);
+  const previousGenerationActiveRef = useRef(Boolean(props.generationActive));
+  const autoLatestReplyRafRef = useRef<number | null>(null);
+  const pendingAutoLatestReplyScrollRef = useRef(false);
+  const autoNavigatedLatestReplyKeysRef = useRef(new Set<string>());
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [measuredHeightsVersion, setMeasuredHeightsVersion] = useState(0);
   const [viewport, setViewport] = useState({ scrollTop: 0, height: 0 });
@@ -456,6 +462,10 @@ export function ChatThread(props: {
       }),
     [entries, measuredHeightsVersion, virtualLayout, viewport.height, viewport.scrollTop],
   );
+
+  useEffect(() => {
+    latestReplyStartTargetRef.current = latestReplyStartTarget;
+  }, [latestReplyStartTarget]);
 
   const syncViewport = useCallback(() => {
     const node = containerRef.current;
@@ -663,6 +673,13 @@ export function ChatThread(props: {
       cancelAnimationFrame(topHistoryLoadRafRef.current);
       topHistoryLoadRafRef.current = null;
     }
+    if (autoLatestReplyRafRef.current !== null) {
+      cancelAnimationFrame(autoLatestReplyRafRef.current);
+      autoLatestReplyRafRef.current = null;
+    }
+    pendingAutoLatestReplyScrollRef.current = false;
+    previousGenerationActiveRef.current = Boolean(props.generationActive);
+    autoNavigatedLatestReplyKeysRef.current = new Set();
     setMeasuredHeightsVersion(0);
     setViewport({ scrollTop: 0, height: 0 });
     setShowScrollToBottom(false);
@@ -686,6 +703,11 @@ export function ChatThread(props: {
         cancelAnimationFrame(topHistoryLoadRafRef.current);
         topHistoryLoadRafRef.current = null;
       }
+      if (autoLatestReplyRafRef.current !== null) {
+        cancelAnimationFrame(autoLatestReplyRafRef.current);
+        autoLatestReplyRafRef.current = null;
+      }
+      pendingAutoLatestReplyScrollRef.current = false;
     };
   }, []);
 
@@ -1021,9 +1043,9 @@ export function ChatThread(props: {
     settleScrollToBottomOverFrames(BOTTOM_USER_JUMP_SETTLE_FRAMES);
   };
 
-  const handleScrollToLatestReplyStart = () => {
+  const scrollToLatestReplyStart = useCallback((target: NonNullable<ReturnType<typeof resolveLatestReplyStartTarget>>) => {
     const node = containerRef.current;
-    if (!node || !latestReplyStartTarget) {
+    if (!node) {
       return;
     }
     stickToBottomRef.current = false;
@@ -1040,17 +1062,93 @@ export function ChatThread(props: {
     const containerTop = node.getBoundingClientRect().top;
     const targetNode =
       Array.from(node.querySelectorAll<HTMLElement>("[data-feed-entry-key]")).find(
-        (entryNode) => entryNode.dataset.feedEntryKey === latestReplyStartTarget.entryKey,
+        (entryNode) => entryNode.dataset.feedEntryKey === target.entryKey,
       ) ?? null;
     if (targetNode) {
       node.scrollTop += targetNode.getBoundingClientRect().top - containerTop;
     } else {
-      node.scrollTop = latestReplyStartTarget.targetScrollTop;
+      node.scrollTop = target.targetScrollTop;
     }
     lastScrollTopRef.current = node.scrollTop;
     setShowScrollToBottom(node.scrollHeight > node.clientHeight);
     syncViewport();
+  }, [syncViewport]);
+
+  const handleScrollToLatestReplyStart = () => {
+    if (!latestReplyStartTarget) {
+      return;
+    }
+    scrollToLatestReplyStart(latestReplyStartTarget);
   };
+
+  const consumePendingAutoLatestReplyScroll = useCallback(() => {
+    if (!pendingAutoLatestReplyScrollRef.current) {
+      return true;
+    }
+    if (
+      isDocumentHidden() ||
+      userDetachedFromBottomRef.current ||
+      (!stickToBottomRef.current &&
+        !returnToBottomOnVisibleRef.current &&
+        !sessionSwitchBottomLockRef.current)
+    ) {
+      pendingAutoLatestReplyScrollRef.current = false;
+      return true;
+    }
+    const target = latestReplyStartTargetRef.current;
+    if (!target) {
+      return false;
+    }
+    pendingAutoLatestReplyScrollRef.current = false;
+    if (autoNavigatedLatestReplyKeysRef.current.has(target.entryKey)) {
+      return true;
+    }
+    autoNavigatedLatestReplyKeysRef.current.add(target.entryKey);
+    scrollToLatestReplyStart(target);
+    return true;
+  }, [scrollToLatestReplyStart]);
+
+  useEffect(() => {
+    const wasActive = previousGenerationActiveRef.current;
+    const isActive = Boolean(props.generationActive);
+    previousGenerationActiveRef.current = isActive;
+    if (!wasActive || isActive) {
+      return;
+    }
+    if (isDocumentHidden()) {
+      return;
+    }
+    if (
+      userDetachedFromBottomRef.current ||
+      (!stickToBottomRef.current &&
+        !returnToBottomOnVisibleRef.current &&
+        !sessionSwitchBottomLockRef.current)
+    ) {
+      return;
+    }
+
+    pendingAutoLatestReplyScrollRef.current = true;
+    let remainingFrames = 8;
+    const tryScroll = () => {
+      autoLatestReplyRafRef.current = null;
+      if (consumePendingAutoLatestReplyScroll()) {
+        return;
+      }
+      remainingFrames -= 1;
+      if (remainingFrames > 0) {
+        autoLatestReplyRafRef.current = requestAnimationFrame(tryScroll);
+      }
+    };
+
+    if (autoLatestReplyRafRef.current !== null) {
+      cancelAnimationFrame(autoLatestReplyRafRef.current);
+    }
+    autoLatestReplyRafRef.current = requestAnimationFrame(tryScroll);
+  }, [consumePendingAutoLatestReplyScroll, props.generationActive]);
+
+  useEffect(() => {
+    consumePendingAutoLatestReplyScroll();
+  }, [consumePendingAutoLatestReplyScroll, latestReplyStartTarget]);
 
   return (
     <div className="relative min-h-0 flex-1">

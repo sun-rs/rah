@@ -112,6 +112,7 @@ function createRecoverHarness(listSessions: NonNullable<RecoverArgs["listSession
     selectedSessionId: null,
     workspaceVisibilityVersion: 0,
     sessionTopologyVersion: 0,
+    eventStreamOpenRevision: 0,
     pendingSessionAction: null,
     pendingSessionTransition: null,
     error: null,
@@ -239,6 +240,7 @@ describe("session store recovery", () => {
         selectedSessionId: "history",
         workspaceVisibilityVersion: 0,
         sessionTopologyVersion: 0,
+        eventStreamOpenRevision: 0,
         pendingSessionAction: { kind: "claim_history", sessionId: "history" },
         pendingSessionTransition: {
           kind: "claim_history",
@@ -285,6 +287,7 @@ describe("session store recovery", () => {
         selectedSessionId: "history",
         workspaceVisibilityVersion: 0,
         sessionTopologyVersion: 0,
+        eventStreamOpenRevision: 0,
         pendingSessionAction: { kind: "claim_history", sessionId: "history" },
         pendingSessionTransition: {
           kind: "claim_history",
@@ -338,6 +341,7 @@ describe("session store recovery", () => {
       selectedSessionId: null,
       workspaceVisibilityVersion: 0,
       sessionTopologyVersion: 0,
+      eventStreamOpenRevision: 0,
       pendingSessionAction: null,
       pendingSessionTransition: null,
       error: null,
@@ -366,6 +370,7 @@ describe("session store recovery", () => {
           projections: new Map([["live", live]]),
           selectedSessionId: "live",
           sessionTopologyVersion: 1,
+          eventStreamOpenRevision: state.eventStreamOpenRevision,
         };
         return emptySessionsResponse();
       },
