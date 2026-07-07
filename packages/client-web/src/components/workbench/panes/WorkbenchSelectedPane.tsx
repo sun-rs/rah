@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ClipboardEventHandler, type RefObject } from "react";
+import { useCallback, useEffect, useRef, useState, type ClipboardEventHandler, type RefObject } from "react";
 import type {
   ContextUsage,
   PermissionResponseRequest,
@@ -23,6 +23,7 @@ import { CouncilLogo } from "../../CouncilLogo";
 import { SessionControlPopover } from "../../SessionControlPopover";
 import { TokenizedTextarea } from "../../TokenizedTextarea";
 import { ComposerImageAttachmentBadge } from "../../ComposerImageAttachmentBadge";
+import { shouldSubmitComposerOnEnter } from "../../../composer-keyboard";
 import { canSubmitComposerInput, COMPOSER_LAYOUT, type ComposerSurface } from "../../../composer-contract";
 import {
   HEADER_MENU_DANGER_ITEM_CLASS,
@@ -260,6 +261,35 @@ export function WorkbenchSelectedPane(props: {
   const [sessionViewMode, setSessionViewMode] = useState<SessionViewMode>(preferredSessionViewMode);
   const [openedTuiTerminalIds, setOpenedTuiTerminalIds] = useState<Set<string>>(() => new Set());
   const [closedTuiTerminalIds, setClosedTuiTerminalIds] = useState<Set<string>>(() => new Set());
+  const onLoadOlderHistoryRef = useRef(props.onLoadOlderHistory);
+  const onLoadHistoryItemDetailRef = useRef(props.onLoadHistoryItemDetail);
+  const onPermissionRespondRef = useRef(props.onPermissionRespond);
+  const onOpenLocalFileRef = useRef(props.onOpenLocalFile);
+
+  onLoadOlderHistoryRef.current = props.onLoadOlderHistory;
+  onLoadHistoryItemDetailRef.current = props.onLoadHistoryItemDetail;
+  onPermissionRespondRef.current = props.onPermissionRespond;
+  onOpenLocalFileRef.current = props.onOpenLocalFile;
+
+  const handleChatLoadOlderHistory = useCallback(() => {
+    return onLoadOlderHistoryRef.current();
+  }, []);
+
+  const handleChatLoadHistoryItemDetail = useCallback(
+    (kind: SessionHistoryItemDetailKind, itemId: string) =>
+      onLoadHistoryItemDetailRef.current?.(kind, itemId),
+    [],
+  );
+
+  const handleChatPermissionRespond = useCallback(
+    (requestId: string, response: PermissionResponseRequest) =>
+      onPermissionRespondRef.current(requestId, response),
+    [],
+  );
+
+  const handleChatOpenLocalFile = useCallback((path: string) => {
+    onOpenLocalFileRef.current?.(path);
+  }, []);
   const isPwaDisplayMode = usePwaDisplayMode();
   const effectivePaneWidth = paneWidth ?? Number.POSITIVE_INFINITY;
   const sessionMetaMode = props.compactSessionMeta ?? "auto";
@@ -792,13 +822,13 @@ export function WorkbenchSelectedPane(props: {
           canLoadOlderHistory={props.canLoadOlderHistory}
           historyLoading={props.historyLoading}
           generationActive={props.generationActive}
-          onLoadOlderHistory={props.onLoadOlderHistory}
+          onLoadOlderHistory={handleChatLoadOlderHistory}
           {...(props.onLoadHistoryItemDetail
-            ? { onLoadHistoryItemDetail: props.onLoadHistoryItemDetail }
+            ? { onLoadHistoryItemDetail: handleChatLoadHistoryItemDetail }
             : {})}
           canRespondToPermission={props.canRespondToPermission}
-          onPermissionRespond={props.onPermissionRespond}
-          {...(props.onOpenLocalFile ? { onOpenLocalFile: props.onOpenLocalFile } : {})}
+          onPermissionRespond={handleChatPermissionRespond}
+          {...(props.onOpenLocalFile ? { onOpenLocalFile: handleChatOpenLocalFile } : {})}
         />
       )}
 
@@ -914,13 +944,13 @@ export function WorkbenchSelectedPane(props: {
                     }`}
                     contentClassName={COMPOSER_LAYOUT.textareaContentClassName}
                     value={props.draft}
+                    scopeKey={`session:${props.selectedSummary.session.id}`}
                     ariaLabel="Message composer"
                     onChange={props.onDraftChange}
                     onPaste={props.onComposerPaste}
                     placeholder=""
                     rows={1}
                     onKeyDown={(e) => {
-                      const nativeEvent = e.nativeEvent as KeyboardEvent;
                       if (
                         e.key === "Backspace" &&
                         props.draft.length === 0 &&
@@ -930,12 +960,7 @@ export function WorkbenchSelectedPane(props: {
                         props.onRemoveLastDraftImage?.();
                         return;
                       }
-                      if (
-                        e.key === "Enter" &&
-                        !e.shiftKey &&
-                        !nativeEvent.isComposing &&
-                        nativeEvent.keyCode !== 229
-                      ) {
+                      if (shouldSubmitComposerOnEnter(e)) {
                         e.preventDefault();
                         if (!sendDisabled) {
                           props.onSend();

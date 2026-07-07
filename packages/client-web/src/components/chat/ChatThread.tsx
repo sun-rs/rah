@@ -1,4 +1,13 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
 import type { FeedEntry } from "../../types";
 import type {
   PermissionResponseRequest,
@@ -352,7 +361,7 @@ function MeasuredFeedEntry(props: {
   );
 }
 
-export function ChatThread(props: {
+export const ChatThread = memo(function ChatThread(props: {
   sessionId: string;
   feed: FeedEntry[];
   hideToolCalls?: boolean;
@@ -394,6 +403,9 @@ export function ChatThread(props: {
   const lastClientHeightRef = useRef(0);
   const touchScrollYRef = useRef<number | null>(null);
   const topHistoryAutoLoadArmedRef = useRef(true);
+  const textSelectionDragActiveRef = useRef(false);
+  const textSelectionListenerCleanupRef = useRef<(() => void) | null>(null);
+  const pendingMeasuredHeightUpdateRef = useRef(false);
   const measuredHeightsRef = useRef<Map<string, number>>(new Map());
   const scrollRafRef = useRef<number | null>(null);
   const bottomFollowRafRef = useRef<number | null>(null);
@@ -407,6 +419,7 @@ export function ChatThread(props: {
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [measuredHeightsVersion, setMeasuredHeightsVersion] = useState(0);
   const [viewport, setViewport] = useState({ scrollTop: 0, height: 0 });
+  const [textSelectionDragActive, setTextSelectionDragActive] = useState(false);
   const entries = useMemo(
     () =>
       visibleFeedEntries(
@@ -432,7 +445,8 @@ export function ChatThread(props: {
     () => buildVirtualFeedLayout(entries, measuredHeightsRef.current),
     [entries, measuredHeightsVersion],
   );
-  const shouldVirtualize = entries.length > 140 && viewport.height > 0;
+  const shouldVirtualize =
+    entries.length > 140 && viewport.height > 0 && !textSelectionDragActive;
   const virtualWindow = useMemo(
     () =>
       shouldVirtualize
@@ -488,6 +502,10 @@ export function ChatThread(props: {
       return;
     }
     measuredHeightsRef.current.set(entryKey, roundedHeight);
+    if (textSelectionDragActiveRef.current) {
+      pendingMeasuredHeightUpdateRef.current = true;
+      return;
+    }
     if (measuredHeightsRafRef.current !== null) {
       return;
     }
@@ -614,6 +632,7 @@ export function ChatThread(props: {
       !props.onLoadOlderHistory ||
       props.historyLoading ||
       loadingOlderRef.current ||
+      textSelectionDragActiveRef.current ||
       !topHistoryAutoLoadArmedRef.current ||
       !isInTopHistoryLoadZone(node)
     ) {
@@ -656,6 +675,11 @@ export function ChatThread(props: {
     lastClientHeightRef.current = 0;
     touchScrollYRef.current = null;
     topHistoryAutoLoadArmedRef.current = true;
+    textSelectionDragActiveRef.current = false;
+    textSelectionListenerCleanupRef.current?.();
+    textSelectionListenerCleanupRef.current = null;
+    pendingMeasuredHeightUpdateRef.current = false;
+    setTextSelectionDragActive(false);
     measuredHeightsRef.current = new Map();
     if (scrollRafRef.current !== null) {
       cancelAnimationFrame(scrollRafRef.current);
@@ -707,9 +731,68 @@ export function ChatThread(props: {
         cancelAnimationFrame(autoLatestReplyRafRef.current);
         autoLatestReplyRafRef.current = null;
       }
+      textSelectionListenerCleanupRef.current?.();
+      textSelectionListenerCleanupRef.current = null;
       pendingAutoLatestReplyScrollRef.current = false;
     };
   }, []);
+
+  const finishTextSelectionDrag = useCallback(() => {
+    textSelectionListenerCleanupRef.current?.();
+    textSelectionListenerCleanupRef.current = null;
+    if (!textSelectionDragActiveRef.current) {
+      return;
+    }
+    textSelectionDragActiveRef.current = false;
+    setTextSelectionDragActive(false);
+    if (pendingMeasuredHeightUpdateRef.current) {
+      pendingMeasuredHeightUpdateRef.current = false;
+      setMeasuredHeightsVersion((version) => version + 1);
+    }
+    syncViewport();
+  }, [syncViewport]);
+
+  const handlePotentialTextSelectionStart = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+    if (event.button !== 0 || event.defaultPrevented) {
+      return;
+    }
+    const target = event.target as HTMLElement | null;
+    if (
+      target?.closest(
+        "button,a,input,textarea,select,summary,[role='button'],[contenteditable='true']",
+      )
+    ) {
+      return;
+    }
+
+    finishTextSelectionDrag();
+    const startX = event.clientX;
+    const startY = event.clientY;
+
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      if (textSelectionDragActiveRef.current) {
+        return;
+      }
+      const distance =
+        Math.abs(moveEvent.clientX - startX) + Math.abs(moveEvent.clientY - startY);
+      if (distance < 4) {
+        return;
+      }
+      textSelectionDragActiveRef.current = true;
+      setTextSelectionDragActive(true);
+    };
+
+    const cleanup = () => {
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", finishTextSelectionDrag);
+      window.removeEventListener("blur", finishTextSelectionDrag);
+    };
+
+    textSelectionListenerCleanupRef.current = cleanup;
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", finishTextSelectionDrag);
+    window.addEventListener("blur", finishTextSelectionDrag);
+  }, [finishTextSelectionDrag]);
 
   useEffect(() => {
     const node = containerRef.current;
@@ -718,6 +801,10 @@ export function ChatThread(props: {
     }
 
     const updateStickiness = () => {
+      if (textSelectionDragActiveRef.current) {
+        lastScrollTopRef.current = node.scrollTop;
+        return;
+      }
       const previousStickToBottom = stickToBottomRef.current;
       const previousReturnToBottom = returnToBottomOnVisibleRef.current;
       const scrollingUp = node.scrollTop < lastScrollTopRef.current;
@@ -913,6 +1000,9 @@ export function ChatThread(props: {
       if (prependAnchorRef.current) {
         return;
       }
+      if (textSelectionDragActiveRef.current) {
+        return;
+      }
       if (userDetachedFromBottomRef.current) {
         return;
       }
@@ -935,6 +1025,10 @@ export function ChatThread(props: {
   useLayoutEffect(() => {
     const node = containerRef.current;
     if (!node) {
+      return;
+    }
+    if (textSelectionDragActiveRef.current) {
+      previousEntryCountRef.current = entries.length;
       return;
     }
     const anchor = prependAnchorRef.current;
@@ -1156,6 +1250,7 @@ export function ChatThread(props: {
         ref={containerRef}
         data-testid="chat-thread-scroll-container"
         className="h-full overflow-y-scroll overflow-x-hidden rah-scroll-main scrollbar-stable px-4 py-5 [overflow-anchor:none]"
+        onMouseDownCapture={handlePotentialTextSelectionStart}
       >
         <div ref={contentRef} className="mx-auto w-full min-w-0 max-w-3xl">
           {props.historyLoading && props.canLoadOlderHistory ? (
@@ -1238,4 +1333,4 @@ export function ChatThread(props: {
       ) : null}
     </div>
   );
-}
+});

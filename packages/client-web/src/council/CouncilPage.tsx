@@ -27,6 +27,7 @@ import { ProviderLogo } from "../components/ProviderLogo";
 import { CouncilLogo } from "../components/CouncilLogo";
 import { MarkdownRenderer } from "../components/chat/MarkdownRenderer";
 import { TokenizedTextarea } from "../components/TokenizedTextarea";
+import { shouldSubmitComposerOnEnter } from "../composer-keyboard";
 import {
   TerminalDialogFrame,
   TerminalPaneStack,
@@ -2001,6 +2002,7 @@ export function CouncilPage(props: {
                     textareaClassName={COMPOSER_LAYOUT.textareaClassName}
                     contentClassName={COMPOSER_LAYOUT.textareaContentClassName}
                     value={composer}
+                    scopeKey={`council:${selectedCouncil?.id ?? "none"}`}
                     ariaLabel="Council message composer"
                     disabled={!councilCanReceiveMessages}
                     onChange={(value) => {
@@ -2009,7 +2011,6 @@ export function CouncilPage(props: {
                     }}
                     rows={1}
                     onKeyDown={(event) => {
-                      const nativeEvent = event.nativeEvent as KeyboardEvent;
                       const textarea = composerRef.current;
                       const currentTrigger = findCouncilMentionTrigger(
                         composer,
@@ -2042,12 +2043,7 @@ export function CouncilPage(props: {
                         setMentionTrigger(null);
                         return;
                       }
-                      if (
-                        event.key === "Enter" &&
-                        !event.shiftKey &&
-                        !nativeEvent.isComposing &&
-                        nativeEvent.keyCode !== 229
-                      ) {
+                      if (shouldSubmitComposerOnEnter(event)) {
                         event.preventDefault();
                         if (!sendDisabled) {
                           void sendMessage();

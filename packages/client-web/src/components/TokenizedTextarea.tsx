@@ -1,9 +1,11 @@
 import {
   forwardRef,
   useCallback,
+  useEffect,
   useImperativeHandle,
   useLayoutEffect,
   useRef,
+  useState,
   type KeyboardEventHandler,
   type ClipboardEventHandler,
   type TextareaHTMLAttributes,
@@ -17,6 +19,7 @@ export const TokenizedTextarea = forwardRef<
   HTMLTextAreaElement,
   {
     value: string;
+    scopeKey: string;
     onChange: (value: string) => void;
     onKeyDown?: KeyboardEventHandler<HTMLTextAreaElement>;
     onPaste?: ClipboardEventHandler<HTMLTextAreaElement> | undefined;
@@ -31,8 +34,47 @@ export const TokenizedTextarea = forwardRef<
 >(function TokenizedTextarea(props, forwardedRef) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const measurementRef = useRef<HTMLTextAreaElement | null>(null);
+  const [localValue, setLocalValue] = useState(props.value);
+  const lastEmittedValueRef = useRef(props.value);
+  const isComposingRef = useRef(false);
+  const pendingExternalValueRef = useRef<string | null>(null);
+  const scopeKeyRef = useRef(props.scopeKey);
 
   useImperativeHandle(forwardedRef, () => textareaRef.current as HTMLTextAreaElement, []);
+
+  const setLocalTextareaValue = useCallback((value: string) => {
+    setLocalValue(value);
+  }, []);
+
+  const emitChange = useCallback((value: string) => {
+    lastEmittedValueRef.current = value;
+    props.onChange(value);
+  }, [props.onChange]);
+
+  useLayoutEffect(() => {
+    if (scopeKeyRef.current === props.scopeKey) {
+      return;
+    }
+    scopeKeyRef.current = props.scopeKey;
+    isComposingRef.current = false;
+    pendingExternalValueRef.current = null;
+    lastEmittedValueRef.current = props.value;
+    setLocalTextareaValue(props.value);
+  }, [props.scopeKey, props.value, setLocalTextareaValue]);
+
+  useEffect(() => {
+    if (isComposingRef.current) {
+      if (props.value !== lastEmittedValueRef.current) {
+        pendingExternalValueRef.current = props.value;
+      }
+      return;
+    }
+    if (props.value === lastEmittedValueRef.current) {
+      return;
+    }
+    lastEmittedValueRef.current = props.value;
+    setLocalTextareaValue(props.value);
+  }, [props.value, setLocalTextareaValue]);
 
   const measureRequiredContentHeight = useCallback((el: HTMLTextAreaElement) => {
     let measurement = measurementRef.current;
@@ -92,7 +134,7 @@ export const TokenizedTextarea = forwardRef<
 
   useLayoutEffect(() => {
     adjustHeight();
-  }, [adjustHeight, props.textareaClassName, props.value]);
+  }, [adjustHeight, props.textareaClassName, localValue]);
 
   useLayoutEffect(() => {
     return () => {
@@ -106,13 +148,45 @@ export const TokenizedTextarea = forwardRef<
       <textarea
         ref={textareaRef}
         className={`${props.textareaClassName} ${TEXTAREA_TEXT_LAYOUT_CLASS_NAME} text-[var(--app-fg)] caret-[var(--app-fg)] selection:bg-primary/20`}
-        value={props.value}
+        value={localValue}
         aria-label={props.ariaLabel}
         placeholder={props.placeholder}
         onChange={(event) => {
-          props.onChange(event.currentTarget.value);
+          const nextValue = event.currentTarget.value;
+          const nativeEvent = event.nativeEvent as InputEvent;
+          setLocalTextareaValue(nextValue);
+          if (!isComposingRef.current && !nativeEvent.isComposing) {
+            emitChange(nextValue);
+          }
         }}
-        onKeyDown={props.onKeyDown}
+        onCompositionStart={() => {
+          isComposingRef.current = true;
+          pendingExternalValueRef.current = null;
+        }}
+        onCompositionEnd={(event) => {
+          isComposingRef.current = false;
+          const pendingExternalValue = pendingExternalValueRef.current;
+          if (pendingExternalValue !== null) {
+            pendingExternalValueRef.current = null;
+            lastEmittedValueRef.current = pendingExternalValue;
+            setLocalTextareaValue(pendingExternalValue);
+            return;
+          }
+          const nextValue = event.currentTarget.value;
+          setLocalTextareaValue(nextValue);
+          emitChange(nextValue);
+        }}
+        onKeyDown={(event) => {
+          const nativeEvent = event.nativeEvent as KeyboardEvent;
+          if (
+            isComposingRef.current ||
+            nativeEvent.isComposing ||
+            nativeEvent.keyCode === 229
+          ) {
+            return;
+          }
+          props.onKeyDown?.(event);
+        }}
         onPaste={props.onPaste}
         disabled={props.disabled}
         rows={props.rows}

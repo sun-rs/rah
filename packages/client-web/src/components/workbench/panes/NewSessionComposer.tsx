@@ -14,6 +14,7 @@ import { SessionModelControls } from "../../SessionModelControls";
 import { SessionModeControls } from "../../SessionModeControls";
 import { OverlayScrollArea } from "../../OverlayScrollArea";
 import { TokenizedTextarea } from "../../TokenizedTextarea";
+import { shouldSubmitComposerOnEnter } from "../../../composer-keyboard";
 import { WorkspacePicker } from "../../WorkspacePicker";
 import { ComposerImageAttachmentBadge } from "../../ComposerImageAttachmentBadge";
 import {
@@ -186,10 +187,10 @@ export function NewSessionComposer(props: {
             placeholder="Message…"
             rows={3}
             value={props.draft}
+            scopeKey={`new-session:${props.availableWorkspaceDir}:${props.provider}`}
             onChange={props.onDraftChange}
             onPaste={props.onComposerPaste}
             onKeyDown={(event) => {
-              const nativeEvent = event.nativeEvent as KeyboardEvent;
               if (
                 event.key === "Backspace" &&
                 props.draft.length === 0 &&
@@ -199,12 +200,7 @@ export function NewSessionComposer(props: {
                 props.onRemoveLastDraftImage?.();
                 return;
               }
-              if (
-                event.key === "Enter" &&
-                !event.shiftKey &&
-                !nativeEvent.isComposing &&
-                nativeEvent.keyCode !== 229
-              ) {
+              if (shouldSubmitComposerOnEnter(event)) {
                 event.preventDefault();
                 submit();
               }
