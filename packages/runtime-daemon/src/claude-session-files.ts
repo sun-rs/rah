@@ -513,11 +513,18 @@ function createStoredClaudeIdentity(
   itemKind: "user_message" | "assistant_message" | "system",
   providerSessionId?: string,
   partIndex?: number,
+  turnId?: string,
 ): TimelineIdentity {
   const recordUuid = record.type === "summary" ? record.leafUuid : record.uuid;
+  const turnRecordUuid = turnId?.startsWith("turn:")
+    ? turnId.slice("turn:".length)
+    : record.type === "user"
+      ? record.uuid
+      : undefined;
   return createClaudeTimelineIdentity({
     providerSessionId: providerSessionId ?? record.sessionId,
     recordUuid,
+    ...(turnRecordUuid ? { turnRecordUuid } : {}),
     itemKind,
     origin: "history",
     ...(partIndex !== undefined ? { partIndex } : {}),
@@ -743,6 +750,7 @@ function translateClaudeRecordsToActivities(
                       projection.activity.item.kind === "user_message" ? "user_message" : "assistant_message",
                       options.providerSessionId,
                       pending.partIndex,
+                      pending.turnId,
                     ),
                   ),
                 }
@@ -783,6 +791,9 @@ function translateClaudeRecordsToActivities(
         activity: {
           type: "turn_started",
           turnId,
+          ...turnIdentityProps(
+            createStoredClaudeTurnIdentity(turnId, options.providerSessionId ?? record.sessionId),
+          ),
         },
       });
       activities.push({
@@ -802,7 +813,15 @@ function translateClaudeRecordsToActivities(
             text,
             messageId: record.uuid,
           },
-          ...timelineIdentityProps(createStoredClaudeIdentity(record, "user_message", options.providerSessionId)),
+          ...timelineIdentityProps(
+            createStoredClaudeIdentity(
+              record,
+              "user_message",
+              options.providerSessionId,
+              undefined,
+              turnId,
+            ),
+          ),
         },
       });
       continue;
@@ -924,7 +943,15 @@ function translateClaudeRecordsToActivities(
                 }
               : {}),
           },
-          ...timelineIdentityProps(createStoredClaudeIdentity(record, "assistant_message", options.providerSessionId)),
+          ...timelineIdentityProps(
+            createStoredClaudeIdentity(
+              record,
+              "assistant_message",
+              options.providerSessionId,
+              undefined,
+              latestTurnId,
+            ),
+          ),
         },
       });
       continue;

@@ -29,6 +29,22 @@ import {
 import { movePathToTrash } from "./trash";
 import { CodexTurnDirectoryStore } from "./codex-turn-directory";
 import { readCodexTurnHistory } from "./codex-turn-history";
+import { createCodexAppServerClient } from "./codex-app-server-client";
+import type { CodexAppServerRpcClient } from "./codex-live-rpc";
+import {
+  materializeCodexAppServerTurnsPage,
+  type CodexAppServerTurnsPage,
+} from "./codex-app-server-turns-page";
+
+function isUnsupportedTurnsListError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /method not found|unknown method|experimental api/i.test(message);
+}
+
+function isBrokenPagingTransport(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /timed out|closed|exited|ECONN|socket|websocket/i.test(message);
+}
 
 export class CodexStoredHistoryAdapter
   implements ProviderAdapter, ProviderStoredHistoryAdapter, ProviderShutdownAdapter
@@ -39,8 +55,14 @@ export class CodexStoredHistoryAdapter
   private storedSessionIndex = new Map<string, CodexStoredSessionRecord>();
   private readonly rehydratedSessionIds = new Set<string>();
   private readonly turnDirectories = new CodexTurnDirectoryStore();
+  private turnsListSupport: "unknown" | "available" | "unavailable" = "unknown";
+  private pagingClient: CodexAppServerRpcClient | undefined;
+  private pagingClientPromise: Promise<CodexAppServerRpcClient> | undefined;
 
-  constructor(private readonly services: RuntimeServices) {}
+  constructor(
+    private readonly services: RuntimeServices,
+    private readonly createPagingClient: () => Promise<CodexAppServerRpcClient> = createCodexAppServerClient,
+  ) {}
 
   resumeStoredSession(request: ResumeSessionRequest): ResumeSessionResponse {
     const preparedResume = prepareProviderSessionResume({
@@ -90,6 +112,50 @@ export class CodexStoredHistoryAdapter
       finalizeUnterminatedTools: this.canFinalizeStoredHistory(record),
       ...options,
     });
+  }
+
+  async getSessionConversationHistoryPage(
+    sessionId: string,
+    options: { cursor?: string; limit?: number } = {},
+  ): Promise<SessionHistoryPageResponse | undefined> {
+    if (this.turnsListSupport === "unavailable") {
+      return undefined;
+    }
+    const record = this.findRecordForRuntimeSession(sessionId);
+    if (!record) {
+      return undefined;
+    }
+    try {
+      const client = await this.getPagingClient();
+      const raw = (await client.request(
+        "thread/turns/list",
+        {
+          threadId: record.ref.providerSessionId,
+          ...(options.cursor ? { cursor: options.cursor } : {}),
+          limit: Math.max(1, Math.min(options.limit ?? 20, 100)),
+          sortDirection: "desc",
+          itemsView: "summary",
+        },
+        30_000,
+      )) as CodexAppServerTurnsPage;
+      if (!Array.isArray(raw?.data)) {
+        throw new Error("Codex thread/turns/list returned an invalid page.");
+      }
+      this.turnsListSupport = "available";
+      return materializeCodexAppServerTurnsPage({
+        sessionId,
+        providerSessionId: record.ref.providerSessionId,
+        page: raw,
+      });
+    } catch (error) {
+      if (isUnsupportedTurnsListError(error)) {
+        this.turnsListSupport = "unavailable";
+      }
+      if (isBrokenPagingTransport(error)) {
+        await this.resetPagingClient();
+      }
+      return undefined;
+    }
   }
 
   createFrozenHistoryPageLoader(sessionId: string) {
@@ -162,7 +228,31 @@ export class CodexStoredHistoryAdapter
   }
 
   async shutdown(): Promise<void> {
+    await this.resetPagingClient();
     await this.turnDirectories.shutdown();
+  }
+
+  private async getPagingClient(): Promise<CodexAppServerRpcClient> {
+    if (this.pagingClient) {
+      return this.pagingClient;
+    }
+    this.pagingClientPromise ??= this.createPagingClient();
+    try {
+      this.pagingClient = await this.pagingClientPromise;
+      return this.pagingClient;
+    } finally {
+      this.pagingClientPromise = undefined;
+    }
+  }
+
+  private async resetPagingClient(): Promise<void> {
+    const pendingClient = this.pagingClientPromise;
+    const client =
+      this.pagingClient ??
+      (pendingClient ? await pendingClient.catch(() => undefined) : undefined);
+    this.pagingClient = undefined;
+    this.pagingClientPromise = undefined;
+    await client?.dispose().catch(() => undefined);
   }
 
   private findRecordForRuntimeSession(sessionId: string): CodexStoredSessionRecord | undefined {

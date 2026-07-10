@@ -1,5 +1,6 @@
 export * from "./session";
 export * from "./conversation-state";
+export * from "./conversation";
 export * from "./live-backend-policy";
 export * from "./council";
 export * from "./events";

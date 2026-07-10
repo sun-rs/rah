@@ -9,6 +9,7 @@ import type {
   AttachSessionResponse,
   ClaimControlRequest,
   CloseSessionRequest,
+  ConversationTurnsPageResponse,
   CouncilAgentTuiResponse,
   CouncilMessagesPageResponse,
   CouncilMcpRequest,
@@ -72,6 +73,7 @@ import {
   liveBackendSupportedByProvider,
 } from "@rah/runtime-protocol";
 import { createDefaultProviderAdapters } from "./default-provider-adapters";
+import { projectConversation } from "./conversation-projector";
 import {
   applyWorkspaceGitFileActionAsync,
   applyWorkspaceGitHunkActionAsync,
@@ -1518,6 +1520,57 @@ export class RuntimeEngine {
       return chatHistoryPage(filtered);
     }
     return summarizeHistoryPage(filtered);
+  }
+
+  async getSessionConversationTurns(
+    sessionId: string,
+    options?: { cursor?: string; limit?: number },
+  ): Promise<ConversationTurnsPageResponse> {
+    const turnLimit = Math.max(1, Math.min(options?.limit ?? 20, 100));
+    const historyEventLimit = Math.min(500, Math.max(100, turnLimit * 40));
+    const adapter = this.storedHistoryAdapterForSession(sessionId);
+    const nativeTurnPage = await adapter?.getSessionConversationHistoryPage?.(sessionId, {
+      ...(options?.cursor ? { cursor: options.cursor } : {}),
+      limit: turnLimit,
+    });
+    const historyPage =
+      nativeTurnPage ??
+      this.getSessionHistoryPage(sessionId, {
+        ...(options?.cursor ? { cursor: options.cursor } : {}),
+        limit: historyEventLimit,
+        detail: "summary",
+      });
+    const liveEvents = options?.cursor
+      ? []
+      : this.eventBus.list({ sessionIds: [sessionId] });
+    const seenEventIds = new Set<string>();
+    const events = [...historyPage.events, ...liveEvents]
+      .filter((event) => {
+        if (event.turnId === undefined || seenEventIds.has(event.id)) {
+          return false;
+        }
+        seenEventIds.add(event.id);
+        return true;
+      })
+      // Stored history and the live EventBus own independent sequence spaces.
+      // History establishes the base; live events then authoritatively upsert it.
+      .map((event, index) => ({ ...event, seq: index + 1 }) as RahEvent);
+    const session = this.sessionStore.getSession(sessionId)?.session;
+    const projection = projectConversation(sessionId, events, {
+      assumeSettled: session?.status === "stopped",
+      partial: Boolean(historyPage.nextCursor ?? historyPage.nextBeforeTs),
+    });
+    const response: ConversationTurnsPageResponse = {
+      ...projection,
+      // A native page owns its cursor boundary. A live turn may be appended on
+      // top of that page, so trimming it again could create a pagination gap.
+      turns: nativeTurnPage ? projection.turns : projection.turns.slice(-turnLimit),
+      ...(historyPage.nextCursor || historyPage.nextBeforeTs
+        ? { nextCursor: historyPage.nextCursor ?? historyPage.nextBeforeTs }
+        : {}),
+    };
+    response.approximateBytes = Buffer.byteLength(JSON.stringify(response), "utf8");
+    return response;
   }
 
   async getSessionTurnDirectory(sessionId: string): Promise<SessionTurnDirectoryResponse> {

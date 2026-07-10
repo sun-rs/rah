@@ -11,6 +11,7 @@ import { EventBus } from "./event-bus";
 import { resetDefaultManualProviderModelStoreForTests } from "./manual-provider-models";
 import { PtyHub } from "./pty-hub";
 import { SessionStore } from "./session-store";
+import type { CodexAppServerRpcClient } from "./codex-live-rpc";
 
 function waitFor(predicate: () => boolean, timeoutMs = 5000): Promise<void> {
   const started = Date.now();
@@ -229,6 +230,102 @@ rl.on('line', (line) => {
     rmSync(cwd, { recursive: true, force: true });
   });
 
+  test("pages Codex conversation history through official thread/turns/list", async () => {
+    const cwd = mkdtempSync(path.join(os.tmpdir(), "rah-codex-turn-page-cwd-"));
+    const sessionId = "019d9999-turns-7bbb-8ccc-ddddeeeeffff";
+    writeRollout(sessionId, cwd);
+    const requests: Array<{ method: string; params: unknown }> = [];
+    let disposed = false;
+    const client: CodexAppServerRpcClient = {
+      setNotificationHandler() {},
+      setRequestHandler() {},
+      setCloseHandler() {},
+      async request(method, params) {
+        requests.push({ method, params });
+        return {
+          data: [
+            {
+              id: "turn-native-1",
+              status: "completed",
+              startedAt: 1_783_641_601,
+              completedAt: 1_783_641_606,
+              durationMs: 5_000,
+              itemsView: "summary",
+              items: [
+                {
+                  type: "userMessage",
+                  id: "user-native-1",
+                  content: [{ type: "text", text: "Use official history" }],
+                },
+                {
+                  type: "agentMessage",
+                  id: "assistant-native-1",
+                  text: "Official history loaded.",
+                  phase: "final_answer",
+                },
+              ],
+            },
+          ],
+          nextCursor: "older-native-turns",
+          backwardsCursor: "newer-native-turns",
+        };
+      },
+      notify() {},
+      async dispose() {
+        disposed = true;
+      },
+    };
+    const services = {
+      eventBus: new EventBus(),
+      ptyHub: new PtyHub(),
+      sessionStore: new SessionStore(),
+    };
+    const storedHistory = new CodexStoredHistoryAdapter(services, async () => client);
+    storedHistory.listStoredSessions();
+    const managed = services.sessionStore.createManagedSession({
+      provider: "codex",
+      providerSessionId: sessionId,
+      launchSource: "web",
+      cwd,
+      rootDir: cwd,
+    });
+
+    const page = await storedHistory.getSessionConversationHistoryPage(managed.session.id, {
+      cursor: "native-cursor",
+      limit: 12,
+    });
+    assert.ok(page);
+    assert.equal(page.nextCursor, "older-native-turns");
+    assert.deepEqual(requests, [
+      {
+        method: "thread/turns/list",
+        params: {
+          threadId: sessionId,
+          cursor: "native-cursor",
+          limit: 12,
+          sortDirection: "desc",
+          itemsView: "summary",
+        },
+      },
+    ]);
+    assert.ok(
+      page.events.some(
+        (event) =>
+          event.type === "timeline.item.added" &&
+          event.payload.item.kind === "assistant_message" &&
+          event.payload.item.phase === "final_answer",
+      ),
+    );
+    assert.ok(
+      page.events.some(
+        (event) => event.type === "turn.completed" && event.payload.durationMs === 5_000,
+      ),
+    );
+    await storedHistory.shutdown();
+    assert.equal(disposed, true);
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
   test("unarchives archived Codex sessions before live resume", async () => {
     const cwd = mkdtempSync(path.join(os.tmpdir(), "rah-codex-archived-cwd-"));
     const sessionId = "019e3333-aaaa-7bbb-8ccc-ddddeeeeffff";
@@ -378,6 +475,7 @@ rl.on('line', (line) => {
     assert.ok(goalSetIndex > goalGetIndex);
     assert.ok(resumeIndex > goalSetIndex);
     assert.equal(methods[goalSetIndex]?.params?.status, "paused");
+    assert.equal(methods[resumeIndex]?.params?.excludeTurns, true);
 
     rmSync(cwd, { recursive: true, force: true });
   });

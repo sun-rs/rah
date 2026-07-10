@@ -268,6 +268,7 @@ describe("Claude session files", () => {
         createClaudeTimelineIdentity({
           providerSessionId: "session-council-post",
           recordUuid: "assistant-council-tool",
+          turnRecordUuid: "user-council-1",
           itemKind: "assistant_message",
           origin: "history",
           partIndex: 1,
@@ -685,9 +686,16 @@ describe("Claude session files", () => {
         createClaudeTimelineIdentity({
           providerSessionId: "session-2",
           recordUuid: "assistant-1",
+          turnRecordUuid: "user-1",
           itemKind: "assistant_message",
           origin: "live",
         }).canonicalItemId,
+      );
+      assert.equal(
+        firstAssistant.payload.identity?.canonicalTurnId,
+        onlyUser?.type === "timeline.item.added"
+          ? onlyUser.payload.identity?.canonicalTurnId
+          : undefined,
       );
     }
     assert.ok(

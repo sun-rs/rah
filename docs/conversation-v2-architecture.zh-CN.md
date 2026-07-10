@@ -1,6 +1,6 @@
 # RAH Conversation V2 架构
 
-状态：批准的目标架构，待分阶段落地
+状态：批准的目标架构；Phase 0-2 后端基础已落地，旧 UI 尚未切换
 
 复核日期：2026-07-10
 
@@ -204,6 +204,18 @@ Live delta 通过现有 WS 增加 turn/item projection delta，不再让浏览�
 - Council agent TUI 和普通 session TUI 共享 surface/lifecycle，但不改变 conversation projection。
 
 ## 10. 落地顺序
+
+当前实现进度（2026-07-10）：
+
+- 已定义 provider-neutral `ConversationTurnProjection` / `ConversationItemProjection`。
+- 已实现纯 `RahEvent -> ConversationProjection` projector。
+- 已修正 Claude 同轮 user/assistant canonical turn identity。
+- 已保存 Codex turn/item lifecycle timing。
+- 已让 Codex resume 与 external mirror 使用 `excludeTurns: true`。
+- 已接入 `thread/turns/list(itemsView: summary)`，旧版本自动回退 rollout pager。
+- 已提供只读 `GET /api/sessions/:id/conversation/turns`，尚未替换旧 renderer。
+- 已增加 Codex、Claude、OpenCode 同构 projection tests。
+- `thread/items/list`、WS projection delta 和 V2 renderer 仍待后续阶段。
 
 ### Phase 0：协议夹具
 

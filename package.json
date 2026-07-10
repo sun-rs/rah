@@ -11,6 +11,7 @@
     "packages/*"
   ],
   "scripts": {
+    "test:conversation": "node --import tsx --test --test-force-exit packages/runtime-daemon/src/conversation-projector.test.ts packages/runtime-daemon/src/codex-app-server-resume.test.ts",
     "rah": "node ./bin/rah.mjs",
     "build:web": "npm --prefix packages/client-web run build",
     "dev:web": "npm --prefix packages/client-web run dev",

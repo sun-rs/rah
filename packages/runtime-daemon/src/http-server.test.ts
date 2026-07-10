@@ -208,6 +208,64 @@ describe("startRahDaemon", () => {
     assert.equal(typeof identity.startedAt, "string");
   });
 
+  test("serves the provider-neutral conversation turn projection", async () => {
+    const state = engine.sessionStore.createManagedSession({
+      provider: "custom",
+      launchSource: "web",
+      cwd: tempHome,
+      rootDir: tempHome,
+    });
+    const source = {
+      provider: "custom" as const,
+      channel: "structured_live" as const,
+      authority: "authoritative" as const,
+    };
+    engine.eventBus.publish({
+      sessionId: state.session.id,
+      turnId: "turn-1",
+      type: "turn.started",
+      source,
+      payload: {},
+    });
+    engine.eventBus.publish({
+      sessionId: state.session.id,
+      turnId: "turn-1",
+      type: "timeline.item.added",
+      source,
+      payload: {
+        item: {
+          kind: "assistant_message",
+          text: "Conversation V2 is ready.",
+          phase: "final_answer",
+          messageId: "assistant-1",
+        },
+      },
+    });
+    engine.eventBus.publish({
+      sessionId: state.session.id,
+      turnId: "turn-1",
+      type: "turn.completed",
+      source,
+      payload: {},
+    });
+
+    const response = await requestJson({
+      port,
+      path: `/api/sessions/${state.session.id}/conversation/turns?limit=10`,
+      headers: { Origin: `http://127.0.0.1:${port}` },
+    });
+    assert.equal(response.status, 200);
+    assert.ok(response.json && typeof response.json === "object" && !Array.isArray(response.json));
+    const body = response.json as Record<string, unknown>;
+    assert.equal(body.sessionId, state.session.id);
+    assert.equal(body.sourceEventCount, 3);
+    assert.equal(typeof body.approximateBytes, "number");
+    assert.ok(Array.isArray(body.turns));
+    const turn = body.turns[0] as Record<string, unknown>;
+    assert.equal(turn.status, "completed");
+    assert.equal(typeof turn.finalAnswerItemId, "string");
+  });
+
   test("serves native TUI diagnostics", async () => {
     const response = await requestJson({
       port,

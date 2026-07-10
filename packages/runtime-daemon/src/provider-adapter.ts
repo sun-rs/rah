@@ -147,6 +147,10 @@ export interface ProviderStoredHistoryAdapter {
     sessionId: string,
     options?: { beforeTs?: string; cursor?: string; limit?: number },
   ): SessionHistoryPageResponse;
+  getSessionConversationHistoryPage?(
+    sessionId: string,
+    options?: { cursor?: string; limit?: number },
+  ): SessionHistoryPageResponse | undefined | Promise<SessionHistoryPageResponse | undefined>;
   createFrozenHistoryPageLoader?(sessionId: string): FrozenHistoryPageLoader | undefined;
   getSessionTurnDirectory?(
     sessionId: string,

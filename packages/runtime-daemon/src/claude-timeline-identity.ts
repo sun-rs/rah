@@ -9,6 +9,7 @@ type ClaudeTimelineItemKind = Extract<
 export function createClaudeTimelineIdentity(args: {
   providerSessionId?: string | undefined;
   recordUuid: string;
+  turnRecordUuid?: string;
   itemKind: ClaudeTimelineItemKind;
   origin: "live" | "history";
   partIndex?: number;
@@ -18,7 +19,7 @@ export function createClaudeTimelineIdentity(args: {
   return createTimelineIdentity({
     provider: "claude",
     ...(args.providerSessionId !== undefined ? { providerSessionId: args.providerSessionId } : {}),
-    turnKey: `record:${args.recordUuid}`,
+    turnKey: `record:${args.turnRecordUuid ?? args.recordUuid}`,
     itemKind: args.itemKind,
     itemKey: partIndex === 0 ? args.recordUuid : `${args.recordUuid}:part:${partIndex}`,
     origin: args.origin,

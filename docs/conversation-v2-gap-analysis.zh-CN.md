@@ -67,20 +67,20 @@ provider live/history
 
 这些代码不是无价值，但同一语义被重复实现，导致修复往往要同时触碰多层。
 
-### 未使用 Codex 官方分页
+### Codex 官方分页（已补齐后端基础）
 
-当前 `thread/resume` 没有发送 `excludeTurns` 或 `initialTurnsPage`，而 snapshot translator 会遍历返回的全部 `thread.turns`。
+当前 `thread/resume` 和 external mirror resume 均发送 `excludeTurns: true`，避免 claim/resume
+先重建完整 transcript。只读 Conversation V2 接口优先调用 `thread/turns/list(itemsView:
+summary)`，保留 native cursor；能力不存在或调用失败时回退 rollout pager。
 
-RAH 的轻量 HTTP history 减少了浏览器传输量，但 daemon 与 app-server 之间仍可能先接收和重建大量历史。这是大 session resume 仍可能慢的一个结构性原因。
+尚未切换的旧 `/history` API 仍走 rollout pager；`thread/items/list` 的 canonical item detail
+寻址也尚未开放。这两项属于后续 renderer/detail 迁移，而不是 resume 阻塞项。
 
 ### 新协议事实没有完整进入 RAH
 
-当前 mapper 还存在这些缺口：
+当前 mapper 已保存 item/turn lifecycle 时间。剩余缺口：
 
-- 没有保存 item `startedAtMs/completedAtMs`。
-- 没有保存 Turn `startedAt/completedAt/durationMs`。
 - `subAgentActivity`、`sleep` 等新版 item 会落到 unknown。
-- command item 自带 `durationMs`，当前 command observation 没直接采用。
 - 一部分通知进入静态 ignored 列表，没有 capability/version 层解释。
 
 ### Flat event 是传输格式，也是视图模型

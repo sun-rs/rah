@@ -979,6 +979,24 @@ export async function handleHttpRequest(args: {
       return;
     }
 
+    const conversationTurnsMatch = /^\/api\/sessions\/([^/]+)\/conversation\/turns$/.exec(
+      pathname,
+    );
+    if (req.method === "GET" && conversationTurnsMatch) {
+      const cursor = url.searchParams.get("cursor") ?? undefined;
+      const limit = parseQueryLimit(url.searchParams.get("limit"), 20) ?? 20;
+      writeJson(
+        req,
+        res,
+        200,
+        await engine.getSessionConversationTurns(conversationTurnsMatch[1]!, {
+          ...(cursor ? { cursor } : {}),
+          limit,
+        }),
+      );
+      return;
+    }
+
     const turnHistoryMatch = /^\/api\/sessions\/([^/]+)\/history\/turn$/.exec(pathname);
     if (req.method === "GET" && turnHistoryMatch) {
       const turnId = url.searchParams.get("turnId");
