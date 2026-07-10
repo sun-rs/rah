@@ -2,7 +2,7 @@
 
 日期：2026-05-08
 
-本文件记录当前 PTY-first 主线下的历史浏览质量边界。当前历史浏览覆盖 Codex、Claude、Gemini、OpenCode；Kimi CLI 一等支持仍移除。
+本文件记录当前 PTY-first 主线下的历史浏览质量边界。当前历史浏览覆盖 Codex、Claude、OpenCode；Kimi CLI 一等支持仍移除。
 
 ## 当前目标
 
@@ -19,7 +19,6 @@
 |---|---|---|
 | Codex | rollout JSONL / Codex session metadata | core live + history mirror |
 | Claude | Claude Code JSONL session files | core live + history mirror |
-| Gemini | Gemini CLI JSON session files under `~/.gemini/tmp/**/chats` | core live + history mirror |
 | OpenCode | OpenCode SQLite / session records | core live + API-key 聚合入口 |
 
 Kimi 模型的新工作通过 OpenCode/API provider 承载，不再维护 Kimi CLI 的独立 history parser、cache、paging 或 QA gate。
@@ -38,7 +37,6 @@ Kimi 模型的新工作通过 OpenCode/API provider 承载，不再维护 Kimi C
 - Older page cursor 不因为滚动补页导致视口跳到新页顶部。
 - Live/history echo 通过 canonical identity 和前端 upsert 防重复。
 - Chat mirror 失败进入 diagnostics，不关闭 PTY/TUI。
-- Gemini CLI 历史质量项恢复到 release gate 的 launch/history 层；Kimi CLI 相关历史质量项仍从 release gate 中移除。
 
 ## 后续关注
 

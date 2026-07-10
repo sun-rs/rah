@@ -6,10 +6,9 @@
 
 - Codex
 - Claude
-- Gemini
 - OpenCode
 
-Gemini CLI 已恢复为 `tui_mux` provider，历史浏览读取 `~/.gemini/tmp/**/chats/session-*.json`。Kimi CLI 一等支持仍移除；相关模型通过 OpenCode/API provider 承载。
+其它模型家族通过 OpenCode/API provider 承载，不维护独立历史解析器。
 
 ## 1. 前端加载模型
 
@@ -29,7 +28,7 @@ read-only history/up-scroll -> load older page -> prepend -> keep scroll anchor
 新建 live session 的首要数据源是当前 provider runtime：
 
 - Codex/OpenCode：native local-server event/client push。
-- Claude/Gemini：tmux/TUI fallback + provider transcript mirror。
+- Claude：tmux/TUI fallback + provider transcript mirror。
 
 新建 live session 不应触发可见的 older-history 加载，也不应在顶部显示 `Loading older history`。创建时 feed 可以为空，然后由 optimistic user message、provider live event、provider transcript mirror 逐步填充。
 

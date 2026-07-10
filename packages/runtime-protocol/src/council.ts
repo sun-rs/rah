@@ -4,7 +4,7 @@ import type {
   SessionConfigValue,
 } from "./session";
 
-export type CouncilAgentProvider = Extract<ProviderKind, "codex" | "claude" | "gemini" | "opencode">;
+export type CouncilAgentProvider = Extract<ProviderKind, "codex" | "claude" | "opencode">;
 
 export type CouncilStatus = ConversationStatus;
 export type CouncilPhase = ConversationPhase;

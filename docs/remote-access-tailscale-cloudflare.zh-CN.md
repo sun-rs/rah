@@ -7,14 +7,14 @@
 RAH 的运行体仍在 Mac 本机：
 
 - daemon 默认端口是 `43111`。
-- provider runtime、tmux/TUI、Codex/OpenCode local server、Claude/Gemini TUI mux 都由本机 daemon 持有。
+- provider runtime、tmux/TUI、Codex/OpenCode local server、Claude TUI mux 都由本机 daemon 持有。
 - 手机/PWA 只是远程 client。断网后恢复访问，依赖浏览器和 RAH WebSocket/HTTP 重连；不会也不应该把 provider runtime 搬到云端。
 
 远程访问要满足：
 
 - 不再依赖 iOS SSH app 手工做 `43111 -> 127.0.0.1:43111` 端口转发。
 - 网络短暂中断后，恢复信号即可重新连接，不需要重新开 SSH tunnel。
-- Mac 仍可保留 Surge/TUN 翻墙能力，避免影响 Codex/Gemini/Google 登录。
+- Mac 仍可保留 Surge/TUN 翻墙能力，避免影响 Codex 和 provider OAuth 登录。
 - 默认只对自己 tailnet 内设备暴露 RAH，不使用公网匿名入口。
 
 ## 2. 结论
@@ -142,7 +142,7 @@ tailscale serve status
 
 ## 5. Surge 共存原则
 
-本机使用 Surge 的原因是 Codex/Gemini/Google 等 provider 仍需要稳定外网能力。Tailscale 的目标只是提供“设备之间的私有通道”，不应该接管普通互联网流量。
+本机使用 Surge 的原因是 Codex 和 provider OAuth 仍需要稳定外网能力。Tailscale 的目标只是提供“设备之间的私有通道”，不应该接管普通互联网流量。
 
 原则：
 
@@ -168,7 +168,7 @@ DOMAIN-SUFFIX,tailscale.com,DIRECT
 - `*.ts.net` 是 MagicDNS/HTTPS cert 相关域名。
 - 如果某个地区直连 `tailscale.com` 控制面不稳定，可以不要强制 `tailscale.com` 走 DIRECT；但 tailnet IP 和 MagicDNS 访问 RAH 的流量必须 DIRECT。
 
-如果开启 Surge TUN/enhanced mode 后 Google/Gemini 登录异常，优先检查：
+如果开启 Surge TUN/enhanced mode 后 provider OAuth 登录异常，优先检查：
 
 - 是否启用了 Tailscale exit node。
 - 是否让 Tailscale 接管了默认路由或 DNS 到不合适的出口。

@@ -3,7 +3,6 @@ import type { ConversationPhase, ConversationStatus } from "./conversation-state
 export type ProviderKind =
   | "codex"
   | "claude"
-  | "gemini"
   | "opencode"
   | "custom";
 

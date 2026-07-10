@@ -337,6 +337,15 @@ describe("WorkbenchStateStore", () => {
               source: "previous_running",
             },
             {
+              provider: "removed-provider",
+              providerSessionId: "removed-session-1",
+              cwd: "/workspace/removed",
+              rootDir: "/workspace/removed",
+              title: "Removed provider",
+              updatedAt: "2026-04-23T13:26:21.939Z",
+              source: "provider_history",
+            },
+            {
               provider: "codex",
               providerSessionId: "thread-visible-1",
               cwd: "/workspace/demo",
@@ -353,6 +362,16 @@ describe("WorkbenchStateStore", () => {
               cwd: "/workspace/debug",
               rootDir: "/workspace/debug",
               title: "Refactor mobile workbench",
+              updatedAt: "2026-04-23T13:26:21.939Z",
+              lastUsedAt: "2026-04-23T13:26:21.939Z",
+              source: "previous_running",
+            },
+            {
+              provider: "removed-provider",
+              providerSessionId: "removed-session-1",
+              cwd: "/workspace/removed",
+              rootDir: "/workspace/removed",
+              title: "Removed provider",
               updatedAt: "2026-04-23T13:26:21.939Z",
               lastUsedAt: "2026-04-23T13:26:21.939Z",
               source: "previous_running",
@@ -374,8 +393,8 @@ describe("WorkbenchStateStore", () => {
     assert.deepEqual(snapshot.pendingSessionTitleOverrides, {
       "pending-live-id": "pending title",
     });
-    assert.ok(snapshot.sessions.every((session) => session.provider !== "custom"));
-    assert.ok(snapshot.recentSessions.every((session) => session.provider !== "custom"));
+    assert.deepEqual(snapshot.sessions.map((session) => session.provider), ["codex"]);
+    assert.deepEqual(snapshot.recentSessions, []);
   });
 
   test("closing a managed session removes it from running sessions and unblocks workspace removal", async () => {

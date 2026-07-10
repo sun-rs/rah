@@ -1,7 +1,7 @@
 import type { ProviderKind, SessionLiveBackend } from "./session";
 
 export type NativeLocalServerProvider = "codex" | "opencode";
-export type TuiMuxFallbackProvider = "claude" | "gemini";
+export type TuiMuxFallbackProvider = "claude";
 export type CoreLiveProvider = NativeLocalServerProvider | TuiMuxFallbackProvider;
 
 export const NATIVE_LOCAL_SERVER_PROVIDERS = [
@@ -11,7 +11,6 @@ export const NATIVE_LOCAL_SERVER_PROVIDERS = [
 
 export const TUI_MUX_FALLBACK_PROVIDERS = [
   "claude",
-  "gemini",
 ] as const satisfies readonly ProviderKind[];
 
 export const CORE_LIVE_PROVIDERS = [

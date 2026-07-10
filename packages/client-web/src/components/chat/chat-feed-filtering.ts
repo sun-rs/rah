@@ -25,7 +25,6 @@ export function visibleFeedEntries(
   feed: FeedEntry[],
   hideToolCalls: boolean,
   hideOpenCodeReasoning = false,
-  hideGeminiReasoning = false,
   provider?: ProviderKind,
 ): FeedEntry[] {
   const toolStatusById = new Map(
@@ -43,10 +42,7 @@ export function visibleFeedEntries(
       entry.item.kind === "reasoning"
     ) {
       const sourceProvider = entry.sourceProvider ?? provider;
-      if (
-        (hideOpenCodeReasoning && sourceProvider === "opencode") ||
-        (hideGeminiReasoning && sourceProvider === "gemini")
-      ) {
+      if (hideOpenCodeReasoning && sourceProvider === "opencode") {
         return false;
       }
     }

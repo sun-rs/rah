@@ -30,7 +30,7 @@ type SessionCommandState = {
   sessionTopologyVersion: number;
   workspaceDir: string;
   selectedSessionId: string | null;
-  newSessionProvider: "codex" | "claude" | "gemini" | "opencode";
+  newSessionProvider: "codex" | "claude" | "opencode";
   pendingSessionTransition: {
     kind: "new" | "history" | "claim_history";
     provider: StoredSessionRef["provider"];

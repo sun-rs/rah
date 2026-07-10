@@ -17,7 +17,7 @@ import type {
 
 const STORAGE_VERSION = 1;
 const SNAPSHOT_FILE = "manual-provider-models.json";
-const CORE_PROVIDERS = new Set<ProviderKind>(["codex", "claude", "gemini", "opencode"]);
+const CORE_PROVIDERS = new Set<ProviderKind>(["codex", "claude", "opencode"]);
 const OPTION_ORDER = new Map([
   ["default", 0],
   ["none", 1],
@@ -120,7 +120,6 @@ function providerOptionSpec(provider: ProviderKind): ProviderManualOptionSpec | 
         reasoningKind: "model_variant",
         traits: { supportsReasoningVariant: true },
       };
-    case "gemini":
     case "custom":
       return null;
   }

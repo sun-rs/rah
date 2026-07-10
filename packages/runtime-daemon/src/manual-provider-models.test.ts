@@ -54,10 +54,10 @@ test("manual models supplement provider catalogs with fixed provider option keys
 
 test("native models shadow manual supplements with the same id", async () => {
   const store = await tempStore();
-  await store.add("gemini", { id: "gemma-4-31b-it" });
+  await store.add("opencode", { id: "vendor/native-model" });
   const nativeCatalog: ProviderModelCatalog = {
-    provider: "gemini",
-    models: [{ id: "gemma-4-31b-it" }],
+    provider: "opencode",
+    models: [{ id: "vendor/native-model" }],
     fetchedAt: new Date().toISOString(),
     source: "native",
     sourceDetail: "native_online",
@@ -66,7 +66,7 @@ test("native models shadow manual supplements with the same id", async () => {
     optionsExact: true,
     modelProfiles: [
       {
-        modelId: "gemma-4-31b-it",
+        modelId: "vendor/native-model",
         source: "native_online",
         freshness: "authoritative",
         configOptions: [],
@@ -76,8 +76,8 @@ test("native models shadow manual supplements with the same id", async () => {
 
   const merged = mergeManualProviderModels(nativeCatalog, store);
 
-  assert.equal(merged.models.filter((model) => model.id === "gemma-4-31b-it").length, 1);
-  assert.equal(merged.models[0]?.id, "gemma-4-31b-it");
+  assert.equal(merged.models.filter((model) => model.id === "vendor/native-model").length, 1);
+  assert.equal(merged.models[0]?.id, "vendor/native-model");
   assert.equal(merged.modelProfiles?.[0]?.source, "native_online");
   assert.equal(merged.modelsExact, true);
 });

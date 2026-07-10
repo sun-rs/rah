@@ -202,7 +202,7 @@ class FilePreviewDialogErrorBoundary extends Component<
 
 const MODEL_DRAFT_STORAGE_KEY = "rah.modelDrafts.v2";
 const LEGACY_MODEL_DRAFT_STORAGE_KEYS = ["rah.modelDrafts.v1"];
-const PROVIDER_CHOICES: ProviderChoice[] = ["codex", "claude", "gemini", "opencode"];
+const PROVIDER_CHOICES: ProviderChoice[] = ["codex", "claude", "opencode"];
 const FOREGROUND_RECOVERY_DEBOUNCE_MS = 120;
 const VISIBLE_HISTORY_CATCHUP_FRESH_MS = 2_000;
 
@@ -210,7 +210,6 @@ function emptyModelDrafts(): Record<ProviderChoice, ModelDraft> {
   return {
     codex: {},
     claude: {},
-    gemini: {},
     opencode: {},
   };
 }
@@ -219,7 +218,6 @@ function createDefaultModeDrafts(): Record<ProviderChoice, SessionModeDraft> {
   return {
     codex: createDefaultModeDraft("codex"),
     claude: createDefaultModeDraft("claude"),
-    gemini: createDefaultModeDraft("gemini"),
     opencode: createDefaultModeDraft("opencode"),
   };
 }
@@ -548,7 +546,6 @@ export function App() {
   const {
     hideToolCallsInChat,
     hideOpenCodeReasoningInChat,
-    hideGeminiReasoningInChat,
     showModelInfoInChat,
   } = useChatPreferences();
   const { setWorkspaceSortMode, workspaceSortMode } = useWorkspaceSortModeState();
@@ -2473,7 +2470,6 @@ export function App() {
                     clientId={clientId}
                     hideToolCallsInChat={hideToolCallsInChat}
                     hideOpenCodeReasoningInChat={hideOpenCodeReasoningInChat}
-                    hideGeminiReasoningInChat={hideGeminiReasoningInChat}
                     showModelInfoInChat={showModelInfoInChat}
                     pendingSessionAction={
                       canvasPendingSessionActions[summary.session.id] ??
@@ -2624,7 +2620,6 @@ export function App() {
               generationActive={isGenerating}
               hideToolCallsInChat={hideToolCallsInChat}
               hideOpenCodeReasoningInChat={hideOpenCodeReasoningInChat}
-              hideGeminiReasoningInChat={hideGeminiReasoningInChat}
               showModelInfoInChat={showModelInfoInChat}
               canLoadOlderHistory={Boolean(
                 selectedSummary.session.providerSessionId &&

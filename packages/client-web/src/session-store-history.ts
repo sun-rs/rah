@@ -12,7 +12,6 @@ import {
 } from "./types";
 
 const PROVISIONAL_USER_ECHO_WINDOW_MS = 5_000;
-const COMPOSITE_USER_ECHO_WINDOW_MS = 15_000;
 
 type HistorySelectionState = Pick<
   {
@@ -471,10 +470,6 @@ function mergeLatestHistoryFeed(
   );
   const matchedHistoryIndexes = new Set<number>();
   const latestHistoryMs = latestFeedTimestampMs(nextFeed);
-  const compositeCoveredOptimisticKeys = findCompositeCoveredOptimisticKeys(
-    currentFeed,
-    historyFeed,
-  );
 
   for (const current of currentFeed) {
     const existingIndex = currentKeyIndex.get(current.key);
@@ -512,9 +507,6 @@ function mergeLatestHistoryFeed(
     if (isOptimisticPlaceholderCoveredByHistory(current, nextFeed, latestHistoryMs)) {
       continue;
     }
-    if (compositeCoveredOptimisticKeys.has(current.key)) {
-      continue;
-    }
     nextFeed = insertFeedEntryByTimestamp(nextFeed, current);
   }
 
@@ -534,55 +526,6 @@ function insertFeedEntryByTimestamp(feed: FeedEntry[], entry: FeedEntry): FeedEn
     return [...feed, entry];
   }
   return [...feed.slice(0, insertIndex), entry, ...feed.slice(insertIndex)];
-}
-
-function findCompositeCoveredOptimisticKeys(
-  currentFeed: readonly FeedEntry[],
-  historyFeed: readonly FeedEntry[],
-): Set<string> {
-  const covered = new Set<string>();
-  const candidates = currentFeed
-    .filter(isOptimisticUserPlaceholder)
-    .map((entry) => ({ entry, tsMs: Date.parse(entry.ts) }))
-    .filter(({ tsMs }) => Number.isFinite(tsMs));
-  if (candidates.length < 2) {
-    return covered;
-  }
-
-  for (const historyEntry of historyFeed) {
-    if (!isAuthoritativeUserHistoryEntry(historyEntry) || historyEntry.sourceProvider !== "gemini") {
-      continue;
-    }
-    const historyText = historyEntry.item.text;
-    if (!historyText.includes("\n\n")) {
-      continue;
-    }
-    const historyMs = Date.parse(historyEntry.ts);
-    if (!Number.isFinite(historyMs)) {
-      continue;
-    }
-    for (let start = 0; start < candidates.length; start += 1) {
-      const keys: string[] = [];
-      const parts: string[] = [];
-      for (let cursor = start; cursor < candidates.length; cursor += 1) {
-        const candidate = candidates[cursor]!;
-        if (Math.abs(candidate.tsMs - historyMs) > COMPOSITE_USER_ECHO_WINDOW_MS) {
-          continue;
-        }
-        keys.push(candidate.entry.key);
-        parts.push(candidate.entry.item.text);
-        const joined = parts.join("\n\n");
-        if (joined === historyText && keys.length > 1) {
-          keys.forEach((key) => covered.add(key));
-          break;
-        }
-        if (!historyText.startsWith(joined)) {
-          break;
-        }
-      }
-    }
-  }
-  return covered;
 }
 
 function isOptimisticPlaceholderCoveredByHistory(
@@ -619,18 +562,6 @@ function isOptimisticUserPlaceholder(
     entry.kind === "timeline" &&
     entry.item.kind === "user_message" &&
     entry.key.startsWith("optimistic:user:")
-  );
-}
-
-function isAuthoritativeUserHistoryEntry(
-  entry: FeedEntry,
-): entry is Extract<FeedEntry, { kind: "timeline" }> & {
-  item: Extract<FeedEntry, { kind: "timeline" }>["item"] & { kind: "user_message" };
-} {
-  return (
-    entry.kind === "timeline" &&
-    entry.item.kind === "user_message" &&
-    (entry.canonicalItemId !== undefined || entry.item.messageId !== undefined)
   );
 }
 

@@ -119,25 +119,6 @@ OpenCode 的事件和 DB 历史以 message/part 为核心。OpenCode adapter 的
 
 OpenCode 的 reasoning、step、tool part 仍走 OpenCode adapter 原有逻辑；Council projection 只处理 RAH Council MCP 的语义。
 
-### Gemini
-
-Gemini CLI 的 Council 接入走 `tui_mux`，启动时 RAH 通过临时 `GEMINI_CLI_SYSTEM_SETTINGS_PATH` 注入 `rah_council` MCP server，避免改写用户 `~/.gemini/settings.json`，也不隔离用户登录态和原生 history。这个临时 system settings 会保留已有 Gemini system settings，并为 Council MCP session 写入 `model.disableLoopDetection=true`；原因是 Council agent 会长期重复调用 `channel_wait_new`，Gemini CLI 的通用 loop detector 会把这种监听循环误判为潜在循环并弹出交互确认，阻断 MCP listen。
-
-Gemini CLI 的 MCP 工具全名是 `mcp_<server>_<tool>`，因此 `rah_council.channel_post` 在 Gemini session 文件中表现为：
-
-```text
-mcp_rah_council_channel_post
-```
-
-Gemini adapter 的职责是：
-
-- 在 `toolCalls` 上识别 `mcp_rah_council_*` 工具名。
-- 隐藏 `channel_wait_new`、`channel_set_status`、`channel_peek_control` 等轮询/状态工具。
-- 对成功的 `mcp_rah_council_channel_post` 投影为 `assistant_message`。
-- 使用该 Gemini message 自带的 native `model` metadata 补回气泡。
-
-Gemini 没有 native local server；Council 与普通 live session 一样使用 tmux/TUI mux + 原生 JSON session history mirror。
-
 ## Model Resolver 边界
 
 Council `channel_post` 通常没有直接的 model metadata。当前规则是：

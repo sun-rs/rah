@@ -9,14 +9,14 @@ Version: `1.0.0`.
 RAH `1.0.0` is the first milestone release for the provider-native runtime boundary. The product
 boundary is intentionally narrow:
 
-- Codex, Claude, Gemini, and OpenCode are the first-class live provider CLIs.
+- Codex, Claude, and OpenCode are the first-class live provider CLIs.
 - Codex and OpenCode default to provider `native_local_server` runtimes. RAH talks to the
   provider server for structured live events/control, and the local terminal uses the
   provider-native TUI attach client.
-- Claude and Gemini default to the tmux/TUI mux fallback because they have no stable Codex/OpenCode-style
+- Claude defaults to the tmux/TUI mux fallback because it has no stable Codex/OpenCode-style
   local app-server path for RAH.
 - Web New/Claim/Resume follows provider runtime capabilities: Codex/OpenCode use native local server;
-  Claude/Gemini use the TUI mux fallback.
+  Claude uses the TUI mux fallback.
 - structured Chat uses provider server events where available and provider-native history files/DBs
   for backfill/history. It is not ANSI screen scraping.
 - Session sync has a fixed boundary: new live sessions do not show older-history loading; selecting an
@@ -71,17 +71,17 @@ Important behavior:
 - `start` does not replace a daemon that is already running.
 - `restart` is the command that shuts down the old daemon and starts the updated code.
 - `restart` interrupts currently managed core live provider runtimes (`rah codex`, `rah claude`,
-  `rah gemini`, `rah opencode`) because the old daemon is stopped.
+  `rah opencode`) because the old daemon is stopped.
 - `npm install` is not needed for normal code changes.
 - daemon pid/log files live under `~/.rah/runtime-daemon`.
 - `rah codex` and `rah opencode` now default to native local-server sessions and attach the current
   terminal with the provider-native TUI client (`codex --remote ... resume ...` or
   `opencode attach ... --session ...`).
-- `rah claude` and `rah gemini` default to the tmux/TUI fallback.
+- `rah claude` defaults to the tmux/TUI fallback.
 - There is no public `--mux` CLI switch. Provider runtime selection is fixed by provider:
-  Codex/OpenCode use native local-server; Claude/Gemini use tmux/TUI fallback.
-- Core live providers are `codex`, `claude`, `gemini`, and `opencode`. Kimi CLI first-class support
-  has been removed; use OpenCode + API providers for Kimi/Grok/DeepSeek-style work. See
+  Codex/OpenCode use native local-server; Claude uses tmux/TUI fallback.
+- Core live providers are `codex`, `claude`, and `opencode`. Other model families are available
+  through OpenCode + API providers rather than separate CLI adapters. See
   [`docs/provider-scope-codex-claude-opencode.zh-CN.md`](docs/provider-scope-codex-claude-opencode.zh-CN.md).
 
 Optional: if you want the global `rah` command to point at this checkout, link it once:
@@ -153,14 +153,14 @@ RAH now uses four test tiers:
   - `npm run test:runtime`
 - provider contracts
   - `npm run test:provider-contracts`
-  - deterministic contract coverage for Codex, Claude, Gemini, and OpenCode live paths
+  - deterministic contract coverage for Codex, Claude, and OpenCode live paths
   - protects queued input, no duplicate live/history merge, Stop state convergence, model/mode/permission propagation, and Markdown/timeline rendering contracts on the core live path
 - native TUI gate
   - `npm run test:native-tui`
   - exercises the PTY-first lifecycle, fake native provider TUIs, browser replay/reconnect,
     WebKit browser smoke, mobile input bridge contracts, mirror diagnostics, and native-TUI-specific regression cases
   - includes `test:manual-qa-status` so the human QA evidence verifier cannot silently weaken
-  - core live provider expectations are Codex, Claude, Gemini, and OpenCode
+  - core live provider expectations are Codex, Claude, and OpenCode
 - provider smoke
   - `native-browser`
   - `native-codex-browser`
@@ -246,9 +246,9 @@ packages/
   backed sessions.
 - `ProviderAdapter` is the seam where concrete providers plug into the runtime.
 - `ProviderActivity` is the adapter-facing normalization layer.
-- Codex, Claude, Gemini, and OpenCode are the core live native TUI providers.
-- Gemini is a tmux/TUI fallback provider with Gemini JSON session history projection. Kimi CLI provider code
-  remains removed; new Kimi-family live work should go through OpenCode/API-provider configuration.
+- Codex, Claude, and OpenCode are the core live providers.
+- Lower-frequency model families are accessed through OpenCode/API-provider configuration instead of
+  separate RAH CLI adapters.
 - `DebugAdapter` remains useful for structured scenario replay and non-provider UI exercise.
 - `client-web` consumes the canonical API/events boundary and should not depend on provider-native
   event names.
@@ -268,8 +268,7 @@ Diagnostics intentionally report only:
 - basic runtime status
 - Codex `doctor --json` summary when available
 
-Provider diagnostics are scoped to the core live providers: Codex, Claude, Gemini, and OpenCode. Kimi
-CLI binaries are no longer probed in Settings.
+Provider diagnostics are scoped to the core live providers: Codex, Claude, and OpenCode.
 
 They intentionally do **not** claim that provider authentication is valid. Codex diagnostics may show
 whether Codex reports configured ChatGPT/API-key credentials, app-server status, and reachability via
@@ -311,7 +310,7 @@ Known RC boundaries:
 
 - Codex/OpenCode real model turn interrupt/archive behavior still requires provider-version QA after
   CLI upgrades.
-- tmux is the only supported mux backend for Claude, Gemini, and future TUI-only fallback providers.
+- tmux is the only supported mux backend for Claude and future TUI-only fallback providers.
 - real provider auth, quota, trust-folder prompts, and slash-command behavior remain owned by the provider TUI.
 - iOS/PWA terminal keyboard behavior is still a product QA area, not a protocol guarantee.
 - Kimi CLI will not return as a first-class provider unless there is a new product decision; use OpenCode/API-provider configuration instead.

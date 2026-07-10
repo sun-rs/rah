@@ -132,7 +132,6 @@ def start_daemon(port: int, temp_root: pathlib.Path) -> subprocess.Popen[str]:
         "RAH_HOME": str(temp_root / "rah-home"),
         "CODEX_HOME": str(temp_root / "codex-home"),
         "CLAUDE_CONFIG_DIR": str(temp_root / "claude-home"),
-        "GEMINI_CLI_HOME": str(temp_root / "gemini-home"),
         "XDG_DATA_HOME": str(temp_root / "xdg-data"),
     }
     return subprocess.Popen(

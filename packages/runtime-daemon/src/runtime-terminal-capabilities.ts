@@ -6,7 +6,6 @@ export function buildNativeTuiSessionCapabilities(
   const hasStructuredMirror =
     provider === "codex" ||
     provider === "claude" ||
-    provider === "gemini" ||
     provider === "opencode";
   return {
     liveAttach: true,

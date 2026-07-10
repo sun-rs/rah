@@ -692,7 +692,7 @@ export function TerminalPane(props: TerminalPaneProps) {
           if (pendingReplace !== null) {
             if (pendingReplaceSoft) {
               // tmux snapshot streams replace the visible terminal frequently while
-              // Claude/Gemini are animating. A full xterm reset on every snapshot
+              // Claude is animated. A full xterm reset on every snapshot
               // visibly flashes; a soft screen replacement keeps terminal state
               // stable while still presenting the latest captured frame.
               chunk = `\u001b[H\u001b[2J${pendingReplace}`;

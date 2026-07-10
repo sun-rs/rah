@@ -182,7 +182,7 @@ RAH 现在应当把测试分成三层理解：
 
 它们不应被粗暴视为“所有开发者本机默认必须通过”的检查。
 
-当前 live smoke 主矩阵覆盖 Codex、Claude、Gemini、OpenCode 的公共入口；Gemini 真实长流程仍以 `tui_mux` 人工 QA 为主。Kimi CLI 一等支持已移除；相关模型通过 OpenCode/API provider 验证。
+当前 live smoke 主矩阵覆盖 Codex、Claude、OpenCode 的公共入口；其它模型家族通过 OpenCode/API provider 验证。
 
 RAH 不应定义一个“所有 provider smoke 在任何机器上都必须全部跑完”的统一命令。
 
@@ -244,12 +244,12 @@ packages/
 - `EventBus`
 - `PtyHub`
 - identity-only `ProviderAdapter` seam + explicit capability slices/maps
-- Codex / Claude / Gemini / OpenCode native TUI launch、binding、mirror handler
-- Codex / Claude / Gemini / OpenCode stored-history adapter
+- Codex / Claude / OpenCode native TUI launch、binding、mirror handler
+- Codex / Claude / OpenCode stored-history adapter
 - `DebugAdapter`
 
 这一层的职责是把 provider-native 行为翻译成 canonical runtime surface。当前 live 主矩阵为
-Codex、Claude、Gemini、OpenCode；Kimi CLI 一等支持仍移除，相关模型通过 OpenCode/API provider 承载。
+Codex、Claude、OpenCode；Kimi CLI 一等支持仍移除，相关模型通过 OpenCode/API provider 承载。
 
 Provider 的 rename/delete/archive/info、权限 mode、plan mode、model list、model option/config 参数、permission response、历史解析和 workspace metadata recovery 都应通过显式 capability slice 暴露，而不是塞回一个大号 `ProviderAdapter`。前端只提交 `modeId/model/optionValues` 等 RAH 标准字段，不解释 provider-native 参数；旧 `reasoningId` 只是兼容别名。
 
@@ -418,8 +418,8 @@ Codex 现在已经是 reference adapter，而不是 demo：
 RAH 当前 `main` 按 1.0.0 里程碑边界维护：
 
 - canonical event / timeline / history paging 是稳定主线。
-- Codex、Claude、Gemini、OpenCode 是一等 live provider。
-- Codex/OpenCode 走 provider native local server；Claude/Gemini 走 tmux/TUI fallback。
+- Codex、Claude、OpenCode 是一等 live provider。
+- Codex/OpenCode 走 provider native local server；Claude 走 tmux/TUI fallback。
 - Kimi/Grok/DeepSeek/GLM/MiniMax 等低频模型通过 OpenCode/API provider 承载。
 - Debug/fake provider 只服务测试和 UI exercise，不是产品 provider。
 

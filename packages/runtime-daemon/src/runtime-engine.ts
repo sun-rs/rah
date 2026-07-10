@@ -1065,7 +1065,7 @@ export class RuntimeEngine {
       return;
     }
     throw new Error(
-      `Provider ${request.provider} is not a supported live provider. Use Codex, Claude, Gemini, or OpenCode.`,
+      `Provider ${request.provider} is not a supported live provider. Use Codex, Claude, or OpenCode.`,
     );
   }
 

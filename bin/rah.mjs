@@ -26,7 +26,7 @@ const execFileAsync = promisify(execFile);
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_DAEMON_URL = "http://127.0.0.1:43111";
 const DEFAULT_DAEMON_HOST = process.env.RAH_HOST?.trim() || "0.0.0.0";
-const CORE_RUNNING_PROVIDERS = new Set(["codex", "claude", "gemini", "opencode"]);
+const CORE_RUNNING_PROVIDERS = new Set(["codex", "claude", "opencode"]);
 const SUPPORTED_PROVIDERS = CORE_RUNNING_PROVIDERS;
 const MANAGEMENT_COMMANDS = new Set(["start", "status", "stop", "restart", "logs", "attach", "close", "archive"]);
 const CLIENT_INDEX_PATH = join(ROOT_DIR, "packages", "client-web", "dist", "index.html");
@@ -83,7 +83,7 @@ function printUsage() {
       "  rah <provider> resume <providerSessionId>",
       "",
       "Providers:",
-      "  codex | claude | gemini | opencode",
+      "  codex | claude | opencode",
       "",
       "Options:",
       "  --cwd <dir>         Override working directory",
@@ -98,11 +98,10 @@ function printUsage() {
       "",
     "Current status:",
     "  codex/opencode: native local-server with provider-native TUI clients",
-    "  claude/gemini: tmux native TUI fallback",
+    "  claude: tmux native TUI fallback",
       "",
       "TUI mux note:",
       "  `rah claude resume <providerSessionId>` maps to `claude --resume <id>`.",
-      "  `rah gemini resume <providerSessionId>` maps to `gemini --resume <id>`.",
       "  Bare provider session-picker modes are intentionally unsupported.",
       "",
       "Source workflow:",
@@ -1087,7 +1086,7 @@ function defaultLiveBackendForProvider(provider) {
   if (provider === "codex" || provider === "opencode") {
     return "native_local_server";
   }
-  if (provider === "claude" || provider === "gemini") {
+  if (provider === "claude") {
     return "tui_mux";
   }
   return undefined;

@@ -153,6 +153,10 @@ function isRememberableLiveSession(state: StoredSessionState): boolean {
   return state.session.provider !== "custom" && !isReadOnlyReplaySession(state);
 }
 
+function isSupportedPersistedProvider(provider: unknown): provider is StoredSessionRef["provider"] {
+  return provider === "codex" || provider === "claude" || provider === "opencode";
+}
+
 function isRecentEligibleLiveSession(state: StoredSessionState): boolean {
   return isRememberableLiveSession(state) && state.controlLease.holderClientId !== undefined;
 }
@@ -174,7 +178,7 @@ function isPersistedTuiMuxLiveSession(value: unknown): value is ManagedSession {
   const mux = session.mux;
   return (
     typeof session.id === "string" &&
-    typeof session.provider === "string" &&
+    isSupportedPersistedProvider(session.provider) &&
     session.liveBackend === "tui_mux" &&
     typeof session.cwd === "string" &&
     typeof session.rootDir === "string" &&
@@ -407,7 +411,7 @@ export class WorkbenchStateStore {
           Boolean(
             value &&
               typeof value === "object" &&
-              typeof value.provider === "string" &&
+              isSupportedPersistedProvider(value.provider) &&
               typeof value.providerSessionId === "string",
           ),
       ).filter((session) => !isInternalDebugStoredSessionRef(session));
@@ -417,7 +421,7 @@ export class WorkbenchStateStore {
               Boolean(
                 value &&
                   typeof value === "object" &&
-                  typeof value.provider === "string" &&
+                  isSupportedPersistedProvider(value.provider) &&
                   typeof value.providerSessionId === "string",
               ),
             )

@@ -831,8 +831,7 @@ export class CouncilRuntime {
     if (!this.shouldContinueLaunchingCouncil(council.id)) {
       return;
     }
-    const bootstrapViaInitialPrompt =
-      agent.provider === "claude" || agent.provider === "gemini";
+    const bootstrapViaInitialPrompt = agent.provider === "claude";
     const session = await this.startSession({
       provider: agent.provider,
       cwd: council.workspace,
@@ -1062,9 +1061,6 @@ function councilBootstrapPrompt(council: CouncilSnapshot, actorId: string): stri
     if (agent?.provider === "claude") {
       return `mcp__rah_council__${name}`;
     }
-    if (agent?.provider === "gemini") {
-      return `mcp_rah_council_${name}`;
-    }
     return name;
   };
   const councilId = council.id;
@@ -1074,9 +1070,6 @@ function councilBootstrapPrompt(council: CouncilSnapshot, actorId: string): stri
     role ? `你的角色: ${role}。` : null,
     agent?.provider === "claude"
       ? "在 Claude Code 里，rah_council MCP 工具名带 mcp__rah_council__ 前缀；请直接调用这些 MCP 工具。"
-      : null,
-    agent?.provider === "gemini"
-      ? "在 Gemini CLI 里，rah_council MCP 工具名带 mcp_rah_council_ 前缀；请直接调用这些 MCP 工具。"
       : null,
     "不要用 Bash、echo、curl、ps、node 或任何终端命令去测试 MCP 工具；这不是任务。必须先实际调用下面的 MCP 工具，不要根据自然语言里的“工具列表是否可见”自行判断不可用。只有真实 tool call 返回错误时，才报告一次工具调用失败并停止。",
     "只能处理 rah_council 工具返回的 recent_messages 或 msg。不要引用、续写或响应 terminal transcript、主对话、旧会话、模型缓存里的任何内容；如果没有新的 council msg，就只能继续等待。",

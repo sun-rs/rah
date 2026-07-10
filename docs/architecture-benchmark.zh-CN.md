@@ -14,9 +14,9 @@ RAH 现在已经完成了：
 
 - canonical event contract
 - runtime-owned workbench
-- PTY-first core live 主线：Codex / Claude / Gemini / OpenCode
+- PTY-first core live 主线：Codex / Claude / OpenCode
 - history replay / claim / live attach / tool-flow mirror / browser smoke
-- Gemini CLI 已恢复为 `tui_mux` provider；Kimi CLI 仍通过 OpenCode/API provider 承载
+- 低频模型家族统一通过 OpenCode/API provider 承载
 
 因此，RAH 当前已经不是“架构是否成立”的阶段，而是“如何继续强化”的阶段。
 
@@ -116,7 +116,7 @@ AionUi ACP 2.0 的价值不在“它能替代一切”，而在：
 
 ### 5.1 不该把所有 provider 都统一迁到 ACP-first
 
-现在 RAH 的 core live provider-native 路线已经收敛到 `Codex / Claude / Gemini / OpenCode`。Gemini 不恢复 ACP-first，而是使用与 Claude 同类的 `tui_mux` 路线；Kimi CLI 仍通过 OpenCode/API provider 承载。
+现在 RAH 的 core live provider-native 路线已经收敛到 `Codex / Claude / OpenCode`。其它模型家族通过 OpenCode/API provider 承载，不再增加独立 CLI adapter。
 
 因此不应该为了“架构统一感”就把它们全部塞进 ACP runtime。
 

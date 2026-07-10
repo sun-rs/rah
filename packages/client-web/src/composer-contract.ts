@@ -123,9 +123,6 @@ function bestEffortEscTuiProviderLabel(provider: string): string | undefined {
   if (provider === "claude") {
     return "Claude";
   }
-  if (provider === "gemini") {
-    return "Gemini";
-  }
   return undefined;
 }
 

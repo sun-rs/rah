@@ -170,7 +170,7 @@ function initialTuiMuxPromptState(provider: ProviderKind): NativeTuiPromptState 
   // authoritative send gate for Claude mux sessions.
   return provider === "claude"
     ? "prompt_clean"
-    : provider === "codex" || provider === "opencode" || provider === "gemini"
+    : provider === "codex" || provider === "opencode"
     ? "agent_busy"
     : "prompt_clean";
 }
@@ -181,8 +181,6 @@ function providerPrimaryModelOptionId(provider: ProviderKind): string | null {
       return "model_reasoning_effort";
     case "claude":
       return "effort";
-    case "gemini":
-      return null;
     case "opencode":
       return "model_reasoning_variant";
     case "custom":
@@ -276,7 +274,7 @@ function isClaudeNativeTuiPassthrough(native: NativeTuiSessionState): boolean {
 }
 
 function usesBestEffortEscNativeTuiInterrupt(native: NativeTuiSessionState): boolean {
-  return native.provider === "claude" || native.provider === "gemini";
+  return native.provider === "claude";
 }
 
 function syntheticNativeTuiInterruptTurnId(sessionId: string): string {

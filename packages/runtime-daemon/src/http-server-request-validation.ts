@@ -33,8 +33,8 @@ import type {
 
 type JsonRecord = Record<string, unknown>;
 
-const PROVIDERS = new Set<ProviderKind>(["codex", "claude", "gemini", "opencode", "custom"]);
-const COUNCIL_PROVIDERS = new Set<ProviderKind>(["codex", "claude", "gemini", "opencode"]);
+const PROVIDERS = new Set<ProviderKind>(["codex", "claude", "opencode", "custom"]);
+const COUNCIL_PROVIDERS = new Set<ProviderKind>(["codex", "claude", "opencode"]);
 const CLIENT_KINDS = new Set(["terminal", "web", "ios", "ipad", "api"]);
 const APPROVAL_POLICIES = new Set(["default", "on-request", "never", "auto_edit", "yolo"]);
 const PUBLIC_LIVE_BACKENDS = new Set([
@@ -497,7 +497,7 @@ function parseCouncilAgentConfig(value: unknown, index: number): CouncilAgentCon
   const record = requireObject(value, `agents[${index}]`);
   const provider = requireProvider(record, "provider");
   if (!COUNCIL_PROVIDERS.has(provider)) {
-    throw badRequest("Council agent provider must be codex, claude, gemini, or opencode.");
+    throw badRequest("Council agent provider must be codex, claude, or opencode.");
   }
   const agent: CouncilAgentConfig = {
     provider: provider as CouncilAgentConfig["provider"],

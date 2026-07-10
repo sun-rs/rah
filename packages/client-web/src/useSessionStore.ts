@@ -113,7 +113,7 @@ export {
   sameWorkspaceDirectory,
 } from "./session-store-workspace";
 
-type ProviderChoice = "codex" | "claude" | "gemini" | "opencode";
+type ProviderChoice = "codex" | "claude" | "opencode";
 type StoredSessionsMode = "all" | "recent";
 
 interface StartSessionOptions {
@@ -151,8 +151,6 @@ type LoadProviderModelsOptions = {
   forceRefresh?: boolean;
   staleMs?: number;
   background?: boolean;
-  pollUntilFetchedAt?: string;
-  pollUntilRevision?: string;
   reason?: string;
 };
 
@@ -272,16 +270,11 @@ const HISTORY_PAGE_LIMIT = 60;
 const MODEL_CATALOG_PROVIDERS = new Set<ProviderChoice>([
   "codex",
   "claude",
-  "gemini",
   "opencode",
 ]);
 const MODEL_CATALOG_TTL_MS = 5 * 60 * 1000;
 const MODEL_CATALOG_FAILURE_RETRY_MS = 10 * 1000;
-const GEMINI_CATALOG_BACKGROUND_POLL_MS = 1_000;
-const GEMINI_CATALOG_BACKGROUND_MAX_ATTEMPTS = 20;
 const MODEL_CATALOG_BACKGROUND_REFRESH_MS = 30 * 60 * 1_000;
-const geminiCatalogBackgroundAttempts = new Map<string, number>();
-const geminiCatalogBackgroundTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const modelCatalogBackgroundInFlight = new Map<string, Promise<void>>();
 let modelCatalogBackgroundRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 let modelCatalogFocusListenerInstalled = false;
@@ -294,49 +287,12 @@ function logModelCatalog(message: string, details?: Record<string, unknown>): vo
   console.info(`[rah] model catalog ${message}`);
 }
 
-function geminiCatalogBackgroundKey(cwd?: string): string {
-  return cwd?.trim() || "default";
-}
-
 function modelCatalogBackgroundKey(provider: ProviderChoice, cwd?: string): string {
   return `${provider}:${cwd?.trim() || "default"}`;
 }
 
-function geminiCatalogNeedsNativeRefresh(
-  provider: ProviderChoice,
-  catalog: ProviderModelCatalog,
-): boolean {
-  return (
-    provider === "gemini" &&
-    (catalog.source !== "native" ||
-      catalog.modelsExact !== true ||
-      catalog.optionsExact !== true ||
-      catalog.freshness !== "authoritative")
-  );
-}
-
 function isSuccessfulModelCatalog(catalog: ProviderModelCatalog): boolean {
   return catalog.source === "native" && catalog.freshness === "authoritative";
-}
-
-function geminiCatalogMatchesSnapshot(
-  catalog: ProviderModelCatalog,
-  snapshot: { fetchedAt?: string; revision?: string },
-): boolean {
-  return (
-    (snapshot.revision === undefined || catalog.revision === snapshot.revision) &&
-    (snapshot.fetchedAt === undefined || catalog.fetchedAt === snapshot.fetchedAt)
-  );
-}
-
-function clearGeminiCatalogBackgroundPoll(cwd?: string): void {
-  const key = geminiCatalogBackgroundKey(cwd);
-  const timer = geminiCatalogBackgroundTimers.get(key);
-  if (timer) {
-    clearTimeout(timer);
-    geminiCatalogBackgroundTimers.delete(key);
-  }
-  geminiCatalogBackgroundAttempts.delete(key);
 }
 
 function prewarmProviderModelCatalogs(
@@ -1018,101 +974,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
     const current = get().modelCatalogs[provider];
     const staleMs = options?.staleMs ?? MODEL_CATALOG_TTL_MS;
-    const isStale =
-      current?.catalog !== undefined &&
-      current?.loadedAt !== null &&
-      (current?.loadedAt === undefined || Date.now() - current.loadedAt >= staleMs);
-    const pollUntilRevision =
-      options?.pollUntilRevision ??
-      (provider === "gemini" && options?.background && isStale
-        ? current?.catalog?.revision
-        : undefined);
-    const pollUntilFetchedAt =
-      options?.pollUntilFetchedAt ??
-      (provider === "gemini" && options?.background && isStale
-        ? current?.catalog?.fetchedAt
-        : undefined);
-    const scheduleGeminiBackgroundPoll = (catalog: ProviderModelCatalog) => {
-      const pollSnapshot = {
-        ...(pollUntilRevision !== undefined ? { revision: pollUntilRevision } : {}),
-        ...(pollUntilFetchedAt !== undefined ? { fetchedAt: pollUntilFetchedAt } : {}),
-      };
-      const pollingForChangedCatalog =
-        provider === "gemini" &&
-        (pollSnapshot.revision !== undefined || pollSnapshot.fetchedAt !== undefined);
-      const needsNativeRefresh = geminiCatalogNeedsNativeRefresh(provider, catalog);
-      if (
-        pollingForChangedCatalog &&
-        !geminiCatalogMatchesSnapshot(catalog, pollSnapshot)
-      ) {
-        clearGeminiCatalogBackgroundPoll(options?.cwd);
-        if (options?.reason === "gemini-cache-poll") {
-          logModelCatalog("gemini cache upgraded", {
-            source: catalog.source,
-            revision: catalog.revision ?? null,
-            fetchedAt: catalog.fetchedAt,
-            models: catalog.models.length,
-          });
-        }
-        return;
-      }
-      if (!needsNativeRefresh && !pollingForChangedCatalog) {
-        clearGeminiCatalogBackgroundPoll(options?.cwd);
-        return;
-      }
-      if (options?.forceRefresh) {
-        return;
-      }
-      const key = geminiCatalogBackgroundKey(options?.cwd);
-      const attempts = geminiCatalogBackgroundAttempts.get(key) ?? 0;
-      if (
-        attempts >= GEMINI_CATALOG_BACKGROUND_MAX_ATTEMPTS ||
-        geminiCatalogBackgroundTimers.has(key)
-      ) {
-        return;
-      }
-      const timer = setTimeout(() => {
-        geminiCatalogBackgroundTimers.delete(key);
-        geminiCatalogBackgroundAttempts.set(key, attempts + 1);
-        const currentCatalog = get().modelCatalogs.gemini?.catalog;
-        if (
-          currentCatalog &&
-          pollingForChangedCatalog &&
-          !geminiCatalogMatchesSnapshot(currentCatalog, pollSnapshot)
-        ) {
-          clearGeminiCatalogBackgroundPoll(options?.cwd);
-          logModelCatalog("gemini cache upgraded", {
-            source: currentCatalog.source,
-            revision: currentCatalog.revision ?? null,
-            fetchedAt: currentCatalog.fetchedAt,
-            models: currentCatalog.models.length,
-          });
-          return;
-        }
-        if (
-          currentCatalog &&
-          !pollingForChangedCatalog &&
-          !geminiCatalogNeedsNativeRefresh("gemini", currentCatalog)
-        ) {
-          clearGeminiCatalogBackgroundPoll(options?.cwd);
-          return;
-        }
-        void get()
-          .loadProviderModels("gemini", {
-            ...(options?.cwd ? { cwd: options.cwd } : {}),
-            background: true,
-            pollUntilFetchedAt: pollUntilFetchedAt ?? catalog.fetchedAt,
-            ...(pollUntilRevision ?? catalog.revision
-              ? { pollUntilRevision: pollUntilRevision ?? catalog.revision }
-              : {}),
-            reason: "gemini-cache-poll",
-            staleMs: 0,
-          })
-          .catch(() => undefined);
-      }, GEMINI_CATALOG_BACKGROUND_POLL_MS);
-      (timer as { unref?: () => void }).unref?.();
-      geminiCatalogBackgroundTimers.set(key, timer);
-    };
     if (current?.loading) {
       return;
     }
@@ -1160,7 +1021,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         },
       }));
     }
-    if (options?.background && options.reason !== "gemini-cache-poll") {
+    if (options?.background) {
       logModelCatalog("refresh start", {
         provider,
         reason: options.reason ?? "background",
@@ -1203,11 +1064,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       const changed =
         !current?.catalog ||
         catalog.source !== current.catalog.source ||
-        !geminiCatalogMatchesSnapshot(catalog, {
-          fetchedAt: current.catalog.fetchedAt,
-          ...(current.catalog.revision ? { revision: current.catalog.revision } : {}),
-        });
-      if (options?.background && (options.reason !== "gemini-cache-poll" || changed)) {
+        catalog.fetchedAt !== current.catalog.fetchedAt ||
+        catalog.revision !== current.catalog.revision;
+      if (options?.background && changed) {
         logModelCatalog("refresh complete", {
           provider,
           reason: options.reason ?? "background",
@@ -1218,16 +1077,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           elapsedMs: Date.now() - startedAt,
         });
       }
-      scheduleGeminiBackgroundPoll(catalog);
     } catch (error) {
       if (options?.background) {
-        if (options.reason !== "gemini-cache-poll") {
-          console.warn("[rah] model catalog refresh failed", {
-            provider,
-            reason: options.reason ?? "background",
-            error: readErrorMessage(error),
-          });
-        }
+        console.warn("[rah] model catalog refresh failed", {
+          provider,
+          reason: options.reason ?? "background",
+          error: readErrorMessage(error),
+        });
         set((state) => {
           const currentState = state.modelCatalogs[provider];
           return {

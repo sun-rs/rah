@@ -9,7 +9,7 @@ import { nativeTuiInterruptDataForProvider } from "./runtime-terminal-coordinato
 
 describe("runtime terminal capabilities", () => {
   test("native TUI sessions expose terminal-first capabilities for core running providers", () => {
-    const providers: ProviderKind[] = ["codex", "claude", "gemini", "opencode"];
+    const providers: ProviderKind[] = ["codex", "claude", "opencode"];
 
     for (const provider of providers) {
       const capabilities = buildNativeTuiSessionCapabilities(provider);
@@ -50,7 +50,6 @@ describe("runtime terminal capabilities", () => {
   test("native TUI interrupt keys follow provider-native stop semantics", () => {
     assert.equal(nativeTuiInterruptDataForProvider("codex"), "\u001b");
     assert.equal(nativeTuiInterruptDataForProvider("claude"), "\u001b");
-    assert.equal(nativeTuiInterruptDataForProvider("gemini"), "\u001b");
     assert.equal(nativeTuiInterruptDataForProvider("opencode"), "\u001b\u001b");
   });
 });

@@ -141,12 +141,10 @@ test("CouncilRuntime launches managed agent sessions with provider launch specs 
   const root = mkdtempSync(path.join(os.tmpdir(), "rah-council-runtime-"));
   const previousCodex = process.env.RAH_CODEX_BINARY;
   const previousClaude = process.env.RAH_CLAUDE_BINARY;
-  const previousGemini = process.env.RAH_GEMINI_BINARY;
   const previousOpenCode = process.env.RAH_OPENCODE_BINARY;
   const previousRahHome = process.env.RAH_HOME;
   process.env.RAH_CODEX_BINARY = fakeBinary(root, "codex");
   process.env.RAH_CLAUDE_BINARY = fakeBinary(root, "claude");
-  process.env.RAH_GEMINI_BINARY = fakeBinary(root, "gemini");
   process.env.RAH_OPENCODE_BINARY = fakeBinary(root, "opencode");
   process.env.RAH_HOME = path.join(root, "rah-home");
   try {
@@ -179,14 +177,6 @@ test("CouncilRuntime launches managed agent sessions with provider launch specs 
           modeId: "bypassPermissions",
         },
         {
-          id: "gemini-planner",
-          provider: "gemini",
-          label: "Gemini Planner",
-          role: "Plan implementation options with Gemini.",
-          modelId: "gemini-2.5-pro",
-          modeId: "yolo",
-        },
-        {
           id: "opencode-builder",
           provider: "opencode",
           label: "OpenCode Builder",
@@ -197,13 +187,12 @@ test("CouncilRuntime launches managed agent sessions with provider launch specs 
 
     assert.equal(response.council.status, "running");
     assert.equal(response.council.phase, "starting");
-    assert.deepEqual(response.council.agents.map((agent) => agent.status), ["starting", "starting", "starting", "starting"]);
+    assert.deepEqual(response.council.agents.map((agent) => agent.status), ["starting", "starting", "starting"]);
     const codexId = response.council.agents[0]!.id;
     const claudeId = response.council.agents[1]!.id;
-    const geminiId = response.council.agents[2]!.id;
-    const opencodeId = response.council.agents[3]!.id;
-    assert.deepEqual([codexId, claudeId, geminiId, opencodeId], ["Codex Lead", "Claude Reviewer", "Gemini Planner", "OpenCode Builder"]);
-    await waitForCondition(() => managed.started.length === 4, "expected all council agents to launch as managed sessions");
+    const opencodeId = response.council.agents[2]!.id;
+    assert.deepEqual([codexId, claudeId, opencodeId], ["Codex Lead", "Claude Reviewer", "OpenCode Builder"]);
+    await waitForCondition(() => managed.started.length === 3, "expected all council agents to launch as managed sessions");
     const launchedCouncil = runtime.listCouncils().councils.find((council) => council.id === response.council.id)!;
     assert.equal(launchedCouncil.status, "running");
     assert.equal(managed.started[0]!.provider, "codex");
@@ -255,27 +244,10 @@ test("CouncilRuntime launches managed agent sessions with provider launch specs 
       .find((council) => council.id === response.council.id)?.messages
       .some((message) => message.parts.some((part) => part.kind === "text" && part.text === `${claudeId} sent`));
     assert.equal(claudeSentMessage, true);
-    assert.equal(managed.started[2]!.provider, "gemini");
-    assert.equal(managed.started[2]!.liveBackend, "tui_mux");
-    assert.equal(managed.started[2]!.model, "gemini-2.5-pro");
-    assert.equal(managed.started[2]!.modeId, "yolo");
+    assert.equal(managed.started[2]!.provider, "opencode");
+    assert.equal(managed.started[2]!.liveBackend, "native_local_server");
     assert.equal(managed.started[2]!.extraMcpServers?.[0]?.name, "rah_council");
-    assert.deepEqual(managed.started[2]!.origin, {
-      kind: "council",
-      councilId: response.council.id,
-      councilTitle: "Launch Council",
-      agentId: geminiId,
-      agentLabel: "Gemini Planner",
-    });
-    const geminiPrompt = managed.started[2]!.initialPrompt ?? "";
-    assert.match(geminiPrompt, /你的唯一名字是 'Gemini Planner'/);
-    assert.match(geminiPrompt, /你的角色: Plan implementation options with Gemini\./);
-    assert.match(geminiPrompt, /mcp_rah_council_channel_join/);
-    assert.doesNotMatch(geminiPrompt, /mcp__rah_council__channel_join/);
-    assert.equal(managed.started[3]!.provider, "opencode");
-    assert.equal(managed.started[3]!.liveBackend, "native_local_server");
-    assert.equal(managed.started[3]!.extraMcpServers?.[0]?.name, "rah_council");
-    const openCodePrompt = managed.inputs.find((input) => input.sessionId === "managed:opencode:4")?.request.text ?? "";
+    const openCodePrompt = managed.inputs.find((input) => input.sessionId === "managed:opencode:3")?.request.text ?? "";
     assert.match(openCodePrompt, /你的唯一名字是 'OpenCode Builder'/);
     assert.match(openCodePrompt, /你的角色: Inspect implementation details and report exact findings\./);
     assert.match(openCodePrompt, /timeout_s=120/);
@@ -284,14 +256,13 @@ test("CouncilRuntime launches managed agent sessions with provider launch specs 
     );
     assert.equal(initialStatusTexts.includes(`${codexId} sent`), true);
     assert.equal(initialStatusTexts.includes(`${claudeId} sent`), true);
-    assert.equal(initialStatusTexts.includes(`${geminiId} sent`), true);
     assert.equal(initialStatusTexts.includes(`${opencodeId} sent`), true);
     assert.equal(
       eventBus.list({
         sessionIds: [response.council.id],
         eventTypes: ["council.message.created"],
       }).length,
-      5,
+      4,
     );
     await runtime.callMcpTool({
       councilId: response.council.id,
@@ -303,7 +274,7 @@ test("CouncilRuntime launches managed agent sessions with provider launch specs 
       sessionIds: [response.council.id],
       eventTypes: ["council.message.created"],
     });
-    assert.equal(councilEvents.length, 6);
+    assert.equal(councilEvents.length, 5);
     const agentMessageEvent = councilEvents.at(-1)!;
     assert.equal(agentMessageEvent.type, "council.message.created");
     if (agentMessageEvent.type === "council.message.created") {
@@ -315,15 +286,13 @@ test("CouncilRuntime launches managed agent sessions with provider launch specs 
     assert.equal(tui.screen, undefined);
 
     await runtime.stopCouncil(response.council.id);
-    assert.deepEqual(managed.closed, ["managed:codex:1", "managed:claude:2", "managed:gemini:3", "managed:opencode:4"]);
+    assert.deepEqual(managed.closed, ["managed:codex:1", "managed:claude:2", "managed:opencode:3"]);
     assert.equal(runtime.listCouncils().councils[0]!.status, "stopped");
   } finally {
     if (previousCodex === undefined) delete process.env.RAH_CODEX_BINARY;
     else process.env.RAH_CODEX_BINARY = previousCodex;
     if (previousClaude === undefined) delete process.env.RAH_CLAUDE_BINARY;
     else process.env.RAH_CLAUDE_BINARY = previousClaude;
-    if (previousGemini === undefined) delete process.env.RAH_GEMINI_BINARY;
-    else process.env.RAH_GEMINI_BINARY = previousGemini;
     if (previousOpenCode === undefined) delete process.env.RAH_OPENCODE_BINARY;
     else process.env.RAH_OPENCODE_BINARY = previousOpenCode;
     if (previousRahHome === undefined) delete process.env.RAH_HOME;

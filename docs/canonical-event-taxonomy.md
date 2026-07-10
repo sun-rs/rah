@@ -8,8 +8,8 @@ RAH previously explored a broad canonical event abstraction across many agent CL
 
 - Live truth is the daemon-owned real PTY/TUI session.
 - Structured Chat/mirror data comes from provider-owned jsonl/db/session history files.
-- The current core live providers are Codex, Claude, Gemini, and OpenCode.
-- Gemini CLI is a `tui_mux` provider with JSON session history projection. Kimi CLI first-class provider support remains removed; Kimi-family models are expected to run through OpenCode/API provider configuration when needed.
+- The current core live providers are Codex, Claude, and OpenCode.
+- Model families without a first-class RAH adapter are expected to run through OpenCode/API provider configuration.
 
 ## Current Event Families
 
@@ -42,4 +42,4 @@ The PTY-first runtime should preserve these invariants:
 
 ## Historical Note
 
-Older revisions of this document referenced Gemini CLI and Kimi CLI internals as research evidence. Those references are no longer part of the current RAH provider surface. Use git history if that research is needed again.
+Older provider research is no longer part of the current RAH surface. Use git history if it is needed again.

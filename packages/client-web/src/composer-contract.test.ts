@@ -169,34 +169,6 @@ describe("composer contract", () => {
     assert.match(surface.stopTitle ?? "", /best-effort/);
   });
 
-  test("shows Gemini native TUI Esc control as best-effort instead of generating stop", () => {
-    const surface = deriveComposerSurface({
-      selectedSummary: summary({
-        provider: "gemini",
-        liveBackend: "tui_mux",
-        nativeTui: {
-          terminalId: "terminal-gemini-1",
-          viewAvailable: true,
-          promptState: "agent_busy",
-          queuedInputCount: 0,
-        },
-      }),
-      hasControl: false,
-      isGenerating: true,
-      pendingSessionAction: null,
-    });
-
-    assert.equal(surface.kind, "compose");
-    if (surface.kind !== "compose") {
-      return;
-    }
-    assert.equal(surface.showStopButton, true);
-    assert.equal(surface.stopTone, "warning");
-    assert.equal(surface.stopSpinner, false);
-    assert.equal(surface.stopAriaLabel, "Send Esc to Gemini TUI");
-    assert.match(surface.stopTitle ?? "", /best-effort/);
-  });
-
   test("shows Claude Esc control even before live backend and native TUI metadata are refreshed", () => {
     const surface = deriveComposerSurface({
       selectedSummary: summary({

@@ -461,7 +461,7 @@ describe("startRahDaemon", () => {
     });
     assert.equal(start.status, 400);
     assert.deepEqual(start.json, {
-      error: "Provider custom is not a supported live provider. Use Codex, Claude, Gemini, or OpenCode.",
+      error: "Provider custom is not a supported live provider. Use Codex, Claude, or OpenCode.",
     });
 
     const resume = await requestJson({
@@ -480,7 +480,7 @@ describe("startRahDaemon", () => {
     });
     assert.equal(resume.status, 400);
     assert.deepEqual(resume.json, {
-      error: "Provider custom is not a supported live provider. Use Codex, Claude, Gemini, or OpenCode.",
+      error: "Provider custom is not a supported live provider. Use Codex, Claude, or OpenCode.",
     });
   });
 

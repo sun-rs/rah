@@ -81,8 +81,7 @@ Run when release touches:
 
 ### 2.4 OpenCode
 
-OpenCode is the API-key aggregation entry for lower-frequency Gemini/Kimi/Grok/DeepSeek/GLM-style
-models.
+OpenCode is the API-key aggregation entry for lower-frequency model families.
 
 ```bash
 npm run test:smoke:opencode-browser
@@ -103,13 +102,10 @@ Run when release touches:
 - shared runtime status or Stop-button semantics
 - shared Markdown/projection merge logic
 
-### 2.5 Gemini / Kimi Models
+### 2.5 OpenCode Model Families
 
-Gemini CLI has been restored as a first-class `tui_mux` provider with Gemini JSON session history
-projection. Gemini release validation should cover launch args, stored history discovery, and real
-CLI smoke/manual QA. Kimi CLI remains out of the first-class provider surface; Kimi-family model
-work should be validated through OpenCode/API-provider configuration rather than a Kimi-specific RAH
-CLI adapter.
+Model families without a first-class RAH CLI adapter are validated through OpenCode/API-provider
+configuration. They do not add provider-specific launch, history, diagnostics, or release gates.
 
 ## 3. Recommended Release Order
 
@@ -206,5 +202,5 @@ This checklist does **not** imply:
 - Kimi CLI is a first-class running launch target
 
 It is specifically for the current workbench boundary: Codex and OpenCode use native local-server
-runtimes; Claude and Gemini use `tui_mux`; Kimi-family models are handled through OpenCode/API-provider
+runtimes; Claude use `tui_mux`; Kimi-family models are handled through OpenCode/API-provider
 configuration.

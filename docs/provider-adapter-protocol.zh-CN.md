@@ -2,16 +2,15 @@
 
 日期：2026-05-08
 
-本文记录当前 provider runtime 主线下 provider adapter 的边界。公开 live 主路径只有 Codex/OpenCode native local server 与 Claude/Gemini tmux/TUI fallback；`liveBackend: "structured"` 只作为测试注入 surface 保留。
+本文记录当前 provider runtime 主线下 provider adapter 的边界。公开 live 主路径只有 Codex/OpenCode native local server 与 Claude tmux/TUI fallback；`liveBackend: "structured"` 只作为测试注入 surface 保留。
 
 当前 core live provider：
 
 - Codex
 - Claude
-- Gemini
 - OpenCode
 
-Gemini CLI 已恢复为 `tui_mux` provider，历史解析读取当前 Gemini CLI JSON session 文件；Kimi CLI 一等支持仍移除，相关模型通过 OpenCode/API provider 承载。
+其它模型家族通过 OpenCode/API provider 承载，不维护独立 adapter。
 
 ## 1. 总原则
 

@@ -60,13 +60,11 @@ Prefer assertions such as:
 
 over hard-coding one exact reply unless that exact reply is the actual feature contract.
 
-## 3. Gemini Restored, Kimi CLI Removed
+## 3. Provider Scope
 
-Gemini CLI has been restored as a first-class `tui_mux` provider. It must reuse the same native TUI
-session/mirror boundary as Claude: tmux owns the official TUI surface, and RAH projects structured
-Chat from Gemini JSON session files. Kimi CLI first-class provider code remains removed from runtime,
-client, scripts, diagnostics, and default tests. New Kimi-family live work should go through
-OpenCode/API provider configuration.
+The maintained provider surface is Codex, Claude, and OpenCode. Lower-frequency model families go
+through OpenCode/API provider configuration instead of separate CLI adapters. This keeps launch,
+history, diagnostics, and QA obligations proportional to actual use.
 
 The rationale and OpenCode variant boundary are recorded in
 [`provider-scope-codex-claude-opencode.zh-CN.md`](./provider-scope-codex-claude-opencode.zh-CN.md).

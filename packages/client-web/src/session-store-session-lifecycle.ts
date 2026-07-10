@@ -18,7 +18,7 @@ type LifecycleState = {
   sessionTopologyVersion: number;
   workspaceDir: string;
   selectedSessionId: string | null;
-  newSessionProvider: "codex" | "claude" | "gemini" | "opencode";
+  newSessionProvider: "codex" | "claude" | "opencode";
   error: string | null;
   pendingSessionTransition: PendingSessionTransition | null;
   pendingSessionAction:
@@ -83,8 +83,7 @@ export function storedReplayPlaceholderSessionId(
 }
 
 function storedReplayCapabilities(provider: StoredSessionRef["provider"]): SessionSummary["session"]["capabilities"] {
-  const rename =
-    provider === "opencode" ? "none" : provider === "gemini" ? "local" : "native";
+  const rename = provider === "opencode" ? "none" : "native";
   return {
     liveAttach: false,
     structuredTimeline: true,
@@ -93,7 +92,7 @@ function storedReplayCapabilities(provider: StoredSessionRef["provider"]): Sessi
     chatMirror: false,
     structuredControl: false,
     livePermissions: false,
-    contextUsage: provider === "gemini",
+    contextUsage: false,
     resumeByProvider: true,
     listProviderSessions: true,
     renameSession: rename !== "none",

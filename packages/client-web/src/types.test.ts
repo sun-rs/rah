@@ -216,68 +216,6 @@ describe("client projection", () => {
     );
   });
 
-  test("replaces Gemini optimistic user burst with provider composite user message", () => {
-    let current = appendOptimisticUserMessage(projection(), "厉害了", {
-      clientMessageId: "client-message-1",
-      clientTurnId: "client-turn-1",
-    });
-    current = appendOptimisticUserMessage(current, "现在几点", {
-      clientMessageId: "client-message-2",
-      clientTurnId: "client-turn-2",
-    });
-    current = appendOptimisticUserMessage(current, "你无敌", {
-      clientMessageId: "client-message-3",
-      clientTurnId: "client-turn-3",
-    });
-    current = {
-      ...current,
-      feed: current.feed.map((entry, index) =>
-        entry.kind === "timeline" && entry.key.startsWith("optimistic:user:")
-          ? { ...entry, ts: `2026-04-15T00:00:0${index + 1}.000Z` }
-          : entry,
-      ),
-    };
-
-    current = applyEventToProjection(
-      current,
-      event({
-        seq: 1,
-        turnId: "gemini:provider-user-1",
-        source: { provider: "gemini", channel: "structured_persisted", authority: "authoritative" },
-        type: "timeline.item.added",
-        payload: {
-          item: {
-            kind: "user_message",
-            text: "厉害了\n\n现在几点\n\n你无敌",
-            messageId: "provider-user-1",
-          },
-          identity: {
-            canonicalItemId: "gemini-user-1",
-            canonicalTurnId: "gemini-turn-1",
-            provider: "gemini",
-            providerSessionId: "provider-session-1",
-            turnKey: "message:provider-user-1",
-            itemKind: "user_message",
-            itemKey: "provider-user-1",
-            origin: "live",
-            confidence: "native",
-          },
-        },
-      }),
-    );
-
-    const userMessages = current.feed.filter(
-      (entry) => entry.kind === "timeline" && entry.item.kind === "user_message",
-    );
-    assert.equal(userMessages.length, 1);
-    const only = userMessages[0];
-    assert.equal(only?.kind === "timeline" ? only.canonicalItemId : null, "gemini-user-1");
-    assert.equal(
-      only?.kind === "timeline" && only.item.kind === "user_message" ? only.item.text : null,
-      "厉害了\n\n现在几点\n\n你无敌",
-    );
-  });
-
   test("dedupes same-turn user echoes even when they arrive after assistant output", () => {
     let current = projection();
     current = applyEventToProjection(

@@ -266,9 +266,9 @@ class RenameStoredSessionsAdapter extends CountingStoredSessionsAdapter {
   }
 }
 
-class GeminiStoredSessionsProbeAdapter extends CountingStoredSessionsAdapter {
-  override readonly id = "gemini-stored-sessions-probe";
-  override readonly providers: Array<"gemini"> = ["gemini"];
+class ClaudeStoredSessionsProbeAdapter extends CountingStoredSessionsAdapter {
+  override readonly id = "claude-stored-sessions-probe";
+  override readonly providers: Array<"claude"> = ["claude"];
 
   constructor() {
     super([]);
@@ -1678,7 +1678,7 @@ describe("RuntimeEngine", () => {
 
   test("closing a session refreshes stored history metadata before the next list", async () => {
     const adapter = new CloseRefreshStoredSessionsAdapter();
-    const otherProviderAdapter = new GeminiStoredSessionsProbeAdapter();
+    const otherProviderAdapter = new ClaudeStoredSessionsProbeAdapter();
     const engine = new RuntimeEngine([adapter, otherProviderAdapter]);
     adapter.engine = engine;
 

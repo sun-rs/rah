@@ -253,16 +253,13 @@ if (process.argv.includes("doctor")) {
   test("only core running providers expose launch specs for diagnostics", async () => {
     const previousCodexBinary = process.env.RAH_CODEX_BINARY;
     const previousClaudeBinary = process.env.RAH_CLAUDE_BINARY;
-    const previousGeminiBinary = process.env.RAH_GEMINI_BINARY;
     const previousOpenCodeBinary = process.env.RAH_OPENCODE_BINARY;
     try {
       process.env.RAH_CODEX_BINARY = process.execPath;
       process.env.RAH_CLAUDE_BINARY = process.execPath;
-      process.env.RAH_GEMINI_BINARY = process.execPath;
       process.env.RAH_OPENCODE_BINARY = process.execPath;
       assert.deepEqual(await launchSpecForProvider("codex"), { argv: [process.execPath] });
       assert.deepEqual(await launchSpecForProvider("claude"), { argv: [process.execPath] });
-      assert.deepEqual(await launchSpecForProvider("gemini"), { argv: [process.execPath] });
       assert.deepEqual(await launchSpecForProvider("opencode"), { argv: [process.execPath] });
     } finally {
       if (previousCodexBinary === undefined) {
@@ -274,11 +271,6 @@ if (process.argv.includes("doctor")) {
         delete process.env.RAH_CLAUDE_BINARY;
       } else {
         process.env.RAH_CLAUDE_BINARY = previousClaudeBinary;
-      }
-      if (previousGeminiBinary === undefined) {
-        delete process.env.RAH_GEMINI_BINARY;
-      } else {
-        process.env.RAH_GEMINI_BINARY = previousGeminiBinary;
       }
       if (previousOpenCodeBinary === undefined) {
         delete process.env.RAH_OPENCODE_BINARY;

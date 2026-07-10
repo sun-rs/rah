@@ -137,7 +137,7 @@ type SessionStartupDeps = {
 
 function historyOnlyRunningMessage(provider: string): string {
   const label = isCoreLiveProvider(provider) ? providerLabel(provider) : provider;
-  return `${label} is not a supported running provider. Use Codex, Claude, Gemini, or OpenCode.`;
+  return `${label} is not a supported running provider. Use Codex, Claude, or OpenCode.`;
 }
 
 function pruneReadOnlyReplaysForClaimedProviderSession(
@@ -190,12 +190,6 @@ export async function startSessionCommand(
     });
     const initialInput = options?.initialInput?.trim();
     const liveBackend = options?.liveBackend ?? defaultLiveBackendForProvider(provider);
-    const launchInitialPrompt =
-      provider === "gemini" &&
-      (liveBackend === "tui_mux" || liveBackend === "native_tui") &&
-      initialInput
-        ? initialInput
-        : undefined;
     const response = await api.startSession({
       provider,
       cwd,
@@ -205,7 +199,6 @@ export async function startSessionCommand(
       ...(options?.optionValues !== undefined ? { optionValues: options.optionValues } : {}),
       ...(options?.reasoningId ? { reasoningId: options.reasoningId } : {}),
       ...(options?.modeId ? { modeId: options.modeId } : {}),
-      ...(launchInitialPrompt ? { initialPrompt: launchInitialPrompt } : {}),
       attach: createInteractiveAttachRequest(state.clientId, state.connectionId),
     });
     const session =
@@ -233,7 +226,7 @@ export async function startSessionCommand(
       };
     });
     options?.onSessionCreated?.(session.session.id);
-    if (initialInput && !launchInitialPrompt) {
+    if (initialInput) {
       await deps.sendInput(session.session.id, initialInput);
     }
     return session.session.id;

@@ -297,11 +297,11 @@ test("filtered workspace deletion candidates honor provider and line-count filte
       historyMeta: { lines: 50 },
     }),
     storedSession({
-      provider: "gemini",
-      providerSessionId: "gemini-small",
+      provider: "claude",
+      providerSessionId: "claude-small",
       rootDir: "/Users/sun/Code/solars",
       cwd: "/Users/sun/Code/solars",
-      title: "small gemini",
+      title: "small claude",
       updatedAt: "2026-04-20T10:02:00.000Z",
       historyMeta: { lines: 4 },
     }),
@@ -432,7 +432,7 @@ test("filters councils by workspace and agent metadata", () => {
       agentLabel: "Architect",
     }),
     council({
-      id: "gemini-council",
+      id: "review-council",
       title: "Review",
       workspace: "/Users/sun/Code/valar",
       status: "stopped",
@@ -443,7 +443,7 @@ test("filters councils by workspace and agent metadata", () => {
 
   assert.deepEqual(
     splitCouncils(councils, "valar").historyCouncils.map((council) => council.id),
-    ["gemini-council"],
+    ["review-council"],
   );
   assert.deepEqual(
     splitCouncils(councils, "architect").activeCouncils.map((council) => council.id),

@@ -18,7 +18,7 @@
 
 ## 2. Provider 与能力边界
 
-- [Provider Scope: Codex + Claude + Gemini + OpenCode](./provider-scope-codex-claude-opencode.zh-CN.md)
+- [Provider Scope: Codex + Claude + OpenCode](./provider-scope-codex-claude-opencode.zh-CN.md)
 - [Provider Capability Matrix](./provider-capability-matrix.md)
 - [Provider Adapter 协议与能力边界](./provider-adapter-protocol.zh-CN.md)
 - [Provider Adapter Maintenance](./provider-adapter-maintenance.md)

@@ -65,7 +65,7 @@ test("rah help documents core running providers", async () => {
   });
 
   assert.equal(exitCode, 0, stderr);
-  assert.match(stdout, /codex \| claude \| gemini \| opencode/);
+  assert.match(stdout, /codex \| claude \| opencode/);
   assert.doesNotMatch(stdout, /unknown-provider/);
   assert.doesNotMatch(stdout, /approval-mode/);
   assert.doesNotMatch(stdout, /RAH_ENABLE_ARCHIVED_PROVIDER_LIVE/);

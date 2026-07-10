@@ -472,7 +472,7 @@ describe("workspace response reconciliation", () => {
       source: "provider_history",
     };
     const nextRef: StoredSessionRef = {
-      provider: "gemini",
+      provider: "opencode",
       providerSessionId: "new-delta",
       rootDir: "/workspace/current",
       cwd: "/workspace/current",
@@ -527,7 +527,7 @@ describe("workspace response reconciliation", () => {
       assert.equal(state.storedSessionsCatalogRevision, 8);
       assert.deepEqual(
         state.storedSessions.map((session) => [session.provider, session.providerSessionId, session.historyMeta?.lines]),
-        [["gemini", "new-delta", 9]],
+        [["opencode", "new-delta", 9]],
       );
     } finally {
       globalThis.fetch = originalFetch;

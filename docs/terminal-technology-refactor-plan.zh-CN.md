@@ -89,7 +89,7 @@ Claude：
 RAH 当前采用一条固定策略：
 
 - Codex / OpenCode：默认 `native_local_server`。provider server 是 session runner，本地 TUI、Web TUI、PWA 都只是 client surface。
-- Claude / Gemini：默认 `tui_mux`。两者暂时没有 RAH 可用的等价 native local server，tmux TUI 是 session runner fallback。
+- Claude：默认 `tui_mux`。两者暂时没有 RAH 可用的等价 native local server，tmux TUI 是 session runner fallback。
 - 其它 provider：不进入 live session 主线，只能作为 stored history/custom 扩展处理。
 
 这条策略必须由协议层共享，而不是在前端、daemon、CLI、Council 各自写一遍判断。当前代码中的权威入口是 `packages/runtime-protocol/src/live-backend-policy.ts`：
@@ -146,11 +146,11 @@ Codex/OpenCode：
 - chat 历史、工具调用、reasoning、token usage 来自 provider structured events/history，不来自 terminal replay。
 - 因此 terminal 可以只显示当前 client 画面，不需要重放完整 session transcript。
 
-Claude/Gemini：
+Claude：
 
-- Claude/Gemini 暂时依赖 persistent real TUI runner，建议继续由 tmux 这类成熟 multiplexer 承担长期 TUI 状态。
+- Claude 暂时依赖 persistent real TUI runner，建议继续由 tmux 这类成熟 multiplexer 承担长期 TUI 状态。
 - Web terminal attach 时只取当前屏幕/近期 tail，不读取完整 multiplexer scrollback。
-- Claude/Gemini 的 transcript 仍应从 provider history/structured parser 进入 RAH timeline，不能靠终端画面解析。
+- Claude 的 transcript 仍应从 provider history/structured parser 进入 RAH timeline，不能靠终端画面解析。
 
 性能边界：
 
@@ -222,10 +222,10 @@ Claude/Gemini：
 
 已完成：
 
-- 在 `runtime-protocol` 增加 live backend policy，统一定义 Codex/OpenCode -> `native_local_server`、Claude/Gemini -> `tui_mux`。
+- 在 `runtime-protocol` 增加 live backend policy，统一定义 Codex/OpenCode -> `native_local_server`、Claude -> `tui_mux`。
 - 前端 new/resume 入口改用共享策略，不再本地硬编码 provider/backend 对应关系。
 - daemon runtime engine 改用共享策略验证 provider/backend 组合，避免 Claude 被误接 native local server、Codex/OpenCode 被误接 mux fallback。
-- runtime descriptor 默认值改为共享策略：缺省 backend 时，Codex/OpenCode 仍描述为 native local server，Claude/Gemini 描述为 mux fallback。
+- runtime descriptor 默认值改为共享策略：缺省 backend 时，Codex/OpenCode 仍描述为 native local server，Claude 描述为 mux fallback。
 - native local server attach 命令集中到 `native-local-server-attach.ts`，Codex/OpenCode diagnostics 与 Web TUI client 启动不再各自拼命令。
 - Council 的 Codex/OpenCode agent 已切到普通 session 的 native local server runner，不再用独立的 `startAgentPty` 路径启动 provider TUI。
 - 新增 `MuxRuntime` 的 tmux backend，实现 session/window/pane 创建、pane capture、输入、控制键、resize、关闭和诊断基础能力。

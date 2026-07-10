@@ -271,7 +271,7 @@ test("history tail polling stays enabled for non-structured TUI-backed sessions"
     },
   });
   const nativeTuiSummary = summaryWithSession({
-    provider: "gemini",
+    provider: "claude",
     providerSessionId: "provider-session-1",
     liveBackend: "native_tui",
     runtime: {

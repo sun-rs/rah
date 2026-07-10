@@ -366,7 +366,7 @@ export class TmuxMuxBackend implements MuxRuntime {
     cols: number,
     rows: number,
   ): Promise<void> {
-    // RAH's Claude/Gemini mux sessions are detached single-pane tmux windows.
+    // RAH's Claude mux sessions are detached single-pane tmux windows.
     // In that shape `resize-pane -x/-y` cannot grow the pane beyond the
     // window's current 80x24-ish size; the window itself must be resized.
     await this.exec([

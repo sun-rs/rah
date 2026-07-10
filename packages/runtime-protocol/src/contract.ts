@@ -148,7 +148,6 @@ export function isCoreWorkbenchEvent(event: RahEvent): boolean {
 const PROVIDERS = new Set<ProviderKind | "system">([
   "codex",
   "claude",
-  "gemini",
   "opencode",
   "custom",
   "system",

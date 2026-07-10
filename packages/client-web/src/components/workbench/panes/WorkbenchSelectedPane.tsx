@@ -166,7 +166,6 @@ export function WorkbenchSelectedPane(props: {
   generationActive: boolean;
   hideToolCallsInChat: boolean;
   hideOpenCodeReasoningInChat: boolean;
-  hideGeminiReasoningInChat: boolean;
   showModelInfoInChat: boolean;
   canLoadOlderHistory: boolean;
   historyLoading: boolean;
@@ -820,7 +819,6 @@ export function WorkbenchSelectedPane(props: {
           feed={props.selectedProjection?.feed ?? []}
           hideToolCalls={props.hideToolCallsInChat}
           hideOpenCodeReasoning={props.hideOpenCodeReasoningInChat}
-          hideGeminiReasoning={props.hideGeminiReasoningInChat}
           showModelInfo={props.showModelInfoInChat}
           provider={props.selectedSummary.session.provider}
           canLoadOlderHistory={props.canLoadOlderHistory}

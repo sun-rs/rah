@@ -49,7 +49,7 @@ const TABS: { id: SettingsTab; label: string; icon: typeof Palette }[] = [
   { id: "about", label: "About", icon: Info },
 ];
 
-const MODEL_PROVIDERS: ProviderChoice[] = ["codex", "claude", "gemini", "opencode"];
+const MODEL_PROVIDERS: ProviderChoice[] = ["codex", "claude", "opencode"];
 const MODEL_REFRESH_STATUS_RESET_MS = 2400;
 const MODEL_REFRESH_POLL_INTERVAL_MS = 1000;
 const MODEL_REFRESH_POLL_ATTEMPTS = 20;
@@ -178,10 +178,6 @@ function manualModelIsActive(catalog: ProviderModelCatalog | undefined, modelId:
   ) === true;
 }
 
-function providerSupportsManualOptions(provider: ProviderChoice): boolean {
-  return provider !== "gemini";
-}
-
 export function SettingsPane() {
   const [activeTab, setActiveTab] = useState<SettingsTab>("chat");
   const workspaceDir = useSessionStore((state) => state.workspaceDir);
@@ -192,8 +188,6 @@ export function SettingsPane() {
     setHideToolCallsInChat,
     hideOpenCodeReasoningInChat,
     setHideOpenCodeReasoningInChat,
-    hideGeminiReasoningInChat,
-    setHideGeminiReasoningInChat,
     showModelInfoInChat,
     setShowModelInfoInChat,
   } = useChatPreferences();
@@ -208,7 +202,6 @@ export function SettingsPane() {
   const [manualModelForms, setManualModelForms] = useState<Record<ProviderChoice, ManualModelFormState>>(() => ({
     codex: emptyManualModelForm(),
     claude: emptyManualModelForm(),
-    gemini: emptyManualModelForm(),
     opencode: emptyManualModelForm(),
   }));
   const [manualModelActions, setManualModelActions] = useState<Partial<Record<ProviderChoice, ManualModelActionState>>>({});
@@ -421,9 +414,7 @@ export function SettingsPane() {
     try {
       const response = await addManualProviderModel(provider, {
         id: modelId,
-        ...(providerSupportsManualOptions(provider)
-          ? { optionIds: parseManualOptionIds(form.options) }
-          : {}),
+        optionIds: parseManualOptionIds(form.options),
         ...(workspaceDir ? { cwd: workspaceDir } : {}),
       });
       const nextManualModels = await listManualProviderModels(provider);
@@ -633,7 +624,6 @@ export function SettingsPane() {
     const refreshState = modelRefreshStates[provider] ?? { status: "idle" as const };
     const form = manualModelForms[provider];
     const action = manualModelActions[provider] ?? {};
-    const supportsOptions = providerSupportsManualOptions(provider);
     const localCatalog = modelCatalogs[provider];
     const localUpdatedAt = localCatalog && isAuthoritativeModelCatalog(localCatalog)
       ? localCatalog.fetchedAt
@@ -753,18 +743,12 @@ export function SettingsPane() {
                     placeholder={provider === "opencode" ? "openai/gpt-5.6" : "gpt-5.6"}
                     className="min-w-0 rounded-md border border-[var(--app-border)] bg-[var(--app-bg)] px-2 py-1.5 text-xs text-[var(--app-fg)] outline-none transition-colors placeholder:text-[var(--app-hint)] focus:border-primary"
                   />
-                  {supportsOptions ? (
-                    <input
-                      value={form.options}
-                      onChange={(event) => updateManualModelForm(provider, { options: event.target.value })}
-                      placeholder={provider === "opencode" ? "low high max" : "low high"}
-                      className="min-w-0 rounded-md border border-[var(--app-border)] bg-[var(--app-bg)] px-2 py-1.5 text-xs text-[var(--app-fg)] outline-none transition-colors placeholder:text-[var(--app-hint)] focus:border-primary"
-                    />
-                  ) : (
-                    <div className="rounded-md border border-[var(--app-border)] bg-[var(--app-subtle-bg)] px-2 py-1.5 text-xs text-[var(--app-hint)]">
-                      No parameters
-                    </div>
-                  )}
+                  <input
+                    value={form.options}
+                    onChange={(event) => updateManualModelForm(provider, { options: event.target.value })}
+                    placeholder={provider === "opencode" ? "low high max" : "low high"}
+                    className="min-w-0 rounded-md border border-[var(--app-border)] bg-[var(--app-bg)] px-2 py-1.5 text-xs text-[var(--app-fg)] outline-none transition-colors placeholder:text-[var(--app-hint)] focus:border-primary"
+                  />
                   <button
                     type="button"
                     onClick={() => void addManualModel(provider)}
@@ -882,31 +866,6 @@ export function SettingsPane() {
                   <span
                     className={`absolute top-0.5 h-4.5 w-4.5 rounded-full bg-white shadow-sm transition-transform ${
                       hideOpenCodeReasoningInChat ? "translate-x-5" : "translate-x-0.5"
-                    }`}
-                  />
-                </button>
-              </div>
-              <div className="mt-5 flex items-start justify-between gap-4 border-t border-[var(--app-border)] pt-5">
-                <div className="min-w-0">
-                  <div className="text-sm font-medium text-[var(--app-fg)]">Hide Gemini reasoning</div>
-                  <div className="mt-1 text-xs text-[var(--app-hint)]">
-                    Gemini thinking entries stay in the timeline data but are hidden from chat by default.
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={hideGeminiReasoningInChat}
-                  onClick={() => setHideGeminiReasoningInChat(!hideGeminiReasoningInChat)}
-                  className={`relative inline-flex h-6 w-11 shrink-0 rounded-full border transition-colors ${
-                    hideGeminiReasoningInChat
-                      ? "border-primary bg-primary"
-                      : "border-[var(--app-border)] bg-[var(--app-subtle-bg)]"
-                  }`}
-                >
-                  <span
-                    className={`absolute top-0.5 h-4.5 w-4.5 rounded-full bg-white shadow-sm transition-transform ${
-                      hideGeminiReasoningInChat ? "translate-x-5" : "translate-x-0.5"
                     }`}
                   />
                 </button>

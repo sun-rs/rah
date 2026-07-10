@@ -84,37 +84,6 @@ function writeFakeClaudeBinary(filePath: string): void {
   chmodSync(filePath, 0o755);
 }
 
-function writeFakeGeminiBinary(filePath: string): void {
-  writeFileSync(
-    filePath,
-    [
-      "#!/usr/bin/env node",
-      "process.stdout.write('TMUX_GEMINI_BOOTING\\r\\n');",
-      "process.stdin.setEncoding('utf8');",
-      "if (process.stdin.isTTY && process.stdin.setRawMode) process.stdin.setRawMode(true);",
-      "process.stdin.resume();",
-      "let buffer = '';",
-      "setTimeout(() => process.stdout.write('TMUX_GEMINI_READY\\r\\n>   Type your message or @path/to/file\\r\\n'), 600);",
-      "process.stdin.on('data', (chunk) => {",
-      "  if (chunk.includes('\\u001b')) {",
-      "    chunk = chunk.replace(/\\u001b/g, '');",
-      "    process.stdout.write('TMUX_GEMINI_INTERRUPTED\\r\\n>   Type your message or @path/to/file\\r\\n');",
-      "  }",
-      "  buffer += chunk;",
-      "  const parts = buffer.split(/\\r|\\n/);",
-      "  buffer = parts.pop() ?? '';",
-      "  for (const part of parts) {",
-      "    if (!part.trim()) continue;",
-      "    process.stdout.write(`TMUX_GEMINI_INPUT:${part.trim()}\\r\\n>   Type your message or @path/to/file\\r\\n`);",
-      "  }",
-      "});",
-      "setInterval(() => undefined, 1000);",
-      "",
-    ].join("\n"),
-  );
-  chmodSync(filePath, 0o755);
-}
-
 function writeFailingTuiBinary(filePath: string, message: string): void {
   writeFileSync(
     filePath,
@@ -212,102 +181,28 @@ test("tui_mux fallback uses tmux as the managed mux backend", async (t) => {
   }
 });
 
-test("Gemini tui_mux queues Web input until the prompt is visible", async (t) => {
-  if (await skipIfTmuxUnavailable(t)) {
-    return;
-  }
-  const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-tmux-gemini-"));
-  const fakeGemini = path.join(workspace, "fake-gemini.js");
-  writeFakeGeminiBinary(fakeGemini);
-  const restoreRahHome = setEnv("RAH_HOME", path.join(workspace, "rah-home"));
-  const restoreMux = setEnv("RAH_TUI_MUX", "tmux");
-  const restoreGemini = setEnv("RAH_GEMINI_BINARY", fakeGemini);
-  const engine = new RuntimeEngine();
-  try {
-    const started = await engine.startSession({
-      provider: "gemini",
-      cwd: workspace,
-      liveBackend: "tui_mux",
-      attach: {
-        client: {
-          id: "web-tmux-gemini",
-          kind: "web",
-          connectionId: "web-tmux-gemini",
-        },
-        mode: "interactive",
-        claimControl: true,
-      },
-    });
-    const sessionId = started.session.session.id;
-    assert.equal(started.session.session.nativeTui?.promptState, "agent_busy");
-    let transcript = "";
-    const unsubscribe = engine.ptyHub.subscribe(sessionId, (frame) => {
-      if (frame.type === "pty.replay") {
-        transcript += frame.chunks.join("");
-      } else if (frame.type === "pty.output") {
-        transcript += frame.data;
-      }
-    });
-    try {
-      engine.sendInput(sessionId, {
-        clientId: "web-tmux-gemini",
-        text: "first gemini prompt",
-      });
-      await waitFor(() => {
-        assert.equal(engine.getSessionSummary(sessionId).session.nativeTui?.queuedInputCount, 1);
-      });
-      await delay(250);
-      assert.doesNotMatch(transcript, /TMUX_GEMINI_INPUT:first gemini prompt/);
-
-      await waitFor(() => {
-        assert.match(transcript, /TMUX_GEMINI_READY/);
-        assert.match(transcript, /TMUX_GEMINI_INPUT:first gemini prompt/);
-        assert.ok(
-          transcript.indexOf("TMUX_GEMINI_INPUT:first gemini prompt") >
-            transcript.indexOf("TMUX_GEMINI_READY"),
-        );
-      });
-
-      engine.interruptSession(sessionId, { clientId: "web-tmux-gemini" });
-      await waitFor(() => {
-        assert.match(transcript, /TMUX_GEMINI_INTERRUPTED/);
-        assert.equal(engine.getSessionSummary(sessionId).session.runtimeState, "idle");
-      });
-    } finally {
-      unsubscribe();
-    }
-    await engine.closeSession(sessionId, { clientId: "web-tmux-gemini" });
-  } finally {
-    await engine.shutdown();
-    restoreGemini();
-    restoreMux();
-    restoreRahHome();
-    rmSync(workspace, { force: true, recursive: true });
-  }
-});
-
 test("tui_mux startup failures keep the provider error on a failed session", async (t) => {
   if (await skipIfTmuxUnavailable(t)) {
     return;
   }
-  const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-tmux-failing-gemini-"));
-  const fakeGemini = path.join(workspace, "fake-gemini-failing.js");
-  writeFailingTuiBinary(fakeGemini, "Error: unsupported model gemini-wrong-model");
+  const workspace = mkdtempSync(path.join(os.tmpdir(), "rah-tmux-failing-claude-"));
+  const fakeClaude = path.join(workspace, "fake-claude-failing.js");
+  writeFailingTuiBinary(fakeClaude, "Error: unsupported model claude-wrong-model");
   const restoreRahHome = setEnv("RAH_HOME", path.join(workspace, "rah-home"));
   const restoreMux = setEnv("RAH_TUI_MUX", "tmux");
-  const restoreGemini = setEnv("RAH_GEMINI_BINARY", fakeGemini);
+  const restoreClaude = setEnv("RAH_CLAUDE_BINARY", fakeClaude);
   const engine = new RuntimeEngine();
   try {
     const started = await engine.startSession({
-      provider: "gemini",
+      provider: "claude",
       cwd: workspace,
       liveBackend: "tui_mux",
-      model: "gemini-wrong-model",
+      model: "claude-wrong-model",
       attach: {
         client: {
-          id: "web-tmux-failing-gemini",
+          id: "web-tmux-failing-claude",
           kind: "web",
-          connectionId: "web-tmux-failing-gemini",
+          connectionId: "web-tmux-failing-claude",
         },
         mode: "interactive",
         claimControl: true,
@@ -324,16 +219,16 @@ test("tui_mux startup failures keep the provider error on a failed session", asy
       assert.equal(summary.phase, "failed");
       assert.match(
         summary.runtimeDiagnostics?.lastError ?? "",
-        /unsupported model gemini-wrong-model/,
+        /unsupported model claude-wrong-model/,
       );
     }, 7_000);
     await waitFor(async () => {
       await assertTmuxSessionGone(muxSessionName);
     });
-    await engine.closeSession(sessionId, { clientId: "web-tmux-failing-gemini" });
+    await engine.closeSession(sessionId, { clientId: "web-tmux-failing-claude" });
   } finally {
     await engine.shutdown();
-    restoreGemini();
+    restoreClaude();
     restoreMux();
     restoreRahHome();
     rmSync(workspace, { force: true, recursive: true });

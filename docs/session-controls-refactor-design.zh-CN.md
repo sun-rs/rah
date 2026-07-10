@@ -169,7 +169,7 @@ RAH 应吸收这个模式，但命名更准确：OpenCode 这里叫 `Agent`，�
 
 ```ts
 type SessionControlsDescriptor = {
-  provider: "codex" | "claude" | "gemini" | "opencode";
+  provider: "codex" | "claude" | "opencode";
   context: "prelaunch" | "live" | "history";
   source: CapabilitySource;
   groups: SessionControlGroup[];
@@ -808,9 +808,9 @@ OpenCode controls 走 server / ACP：
 - OpenCode 接 model / variant provider config。
 - Codex 接 model / effort capability。
 - Claude 接可获得的 model / effort 信息；无法探知时只显示 provider default 或缓存。
-- Web 启动后立即静默预热 Codex、Claude、Gemini、OpenCode 四家 provider catalog；预热不得阻塞 app 初始化、session 创建、composer 输入或 TUI attach。
-- Web 前端每 30 分钟静默全量刷新四家 provider catalog。这是固定后台预热循环，和 picker 的 TTL、Settings 手动刷新互相独立。
-- 用户打开 provider/model picker、Session Control 或 Council 需要展示某家模型列表时，只检查这家 provider。当前实现使用 5 分钟 TTL；TTL 内复用缓存，过期后只后台刷新该 provider，不触发四家全量刷新。
+- Web 启动后立即静默预热 Codex、Claude、OpenCode 三家 provider catalog；预热不得阻塞 app 初始化、session 创建、composer 输入或 TUI attach。
+- Web 前端每 30 分钟静默全量刷新三家 provider catalog。这是固定后台预热循环，和 picker 的 TTL、Settings 手动刷新互相独立。
+- 用户打开 provider/model picker、Session Control 或 Council 需要展示某家模型列表时，只检查这家 provider。当前实现使用 5 分钟 TTL；TTL 内复用缓存，过期后只后台刷新该 provider，不触发三家全量刷新。
 - Settings Models tab 的手动刷新是第三种入口：用户点击某家 provider 的 refresh 后强刷这一家，不受 5 分钟 TTL 限制，也不等待 30 分钟周期。刷新关闭 Settings 后仍继续；成功后同步 Settings last-success、daemon catalog cache/TTL、前端全局 model store；失败或 fallback 不更新 last-success。
 - Settings Models tab 按 provider 纵向展示为可折叠行；折叠标题行显示 provider 图标、名称、effective model 数量、last-success、catalog source 和 refresh 按钮。展开后显示当前 effective model list，也就是 provider 探测结果加 active manual supplements；这里复用 Session Control / Council model picker 的模型行语义，但在 Settings 中只读。
 - Manual supplement 模型在所有 effective model picker/list 中都有颜色标识。若后续 native probe 返回同一个 model id，则 native entry 是事实来源，manual entry 从 effective list 中被 shadow，不再按 active manual 标识展示。

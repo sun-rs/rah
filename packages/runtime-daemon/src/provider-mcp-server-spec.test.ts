@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   codexConfigOverridesForMcpServers,
-  geminiSettingsForMcpServers,
   normalizeMcpServerName,
   opencodeConfigForMcpServers,
   opencodeEnvForMcpServers,
@@ -35,20 +34,6 @@ test("provider MCP helpers translate Council MCP servers into provider startup c
         enabled: true,
         timeout: 300_000,
         environment: { RAH_DAEMON_URL: "http://127.0.0.1:43111" },
-      },
-    },
-  });
-
-  assert.deepEqual(geminiSettingsForMcpServers(servers), {
-    model: {
-      disableLoopDetection: true,
-    },
-    mcpServers: {
-      rah_council: {
-        command: "/usr/bin/node",
-        args: ["/repo/bin/rah.mjs", "council-mcp"],
-        env: { RAH_DAEMON_URL: "http://127.0.0.1:43111" },
-        trust: true,
       },
     },
   });

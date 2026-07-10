@@ -80,7 +80,7 @@ export class RuntimeStructuredProviderCoordinator {
   }
 
   async listProviderDiagnostics(options?: { forceRefresh?: boolean }): Promise<ProviderDiagnostic[]> {
-    const providers: CoreLiveDiagnosticProvider[] = ["codex", "claude", "gemini", "opencode"];
+    const providers: CoreLiveDiagnosticProvider[] = ["codex", "claude", "opencode"];
     return Promise.all(
       providers.map(async (provider) => {
         const adapter = this.deps.diagnosticAdaptersByProvider.get(provider);

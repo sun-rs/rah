@@ -47,13 +47,13 @@ Council terminal 是多 agent 观察/控制工具，不能每次切 tab 都销�
 - 关闭 terminal dialog 只是 hide，不改变 attach/detach 语义；当前 tab 会刷新 last-seen 时间后进入 TTL。
 - Remove/Stop agent 才会结束该 agent 进程，并从 terminal 列表移除。
 
-Council agent TUI 和 session TUI 使用同一个后端 visible lease 协议。Codex/OpenCode agent 的 native local-server TUI 在没有可见 surface 后同样进入 10 分钟 idle TTL；Claude/Gemini tmux agent 不需要这个 warm client TTL，因为 tmux attach/detach 成本低，且 tmux surface 本身是互斥的。
+Council agent TUI 和 session TUI 使用同一个后端 visible lease 协议。Codex/OpenCode agent 的 native local-server TUI 在没有可见 surface 后同样进入 10 分钟 idle TTL；Claude tmux agent 不需要这个 warm client TTL，因为 tmux attach/detach 成本低，且 tmux surface 本身是互斥的。
 
 Council agent TUI 同样只请求 96KB PTY tail，避免打开 agent terminal 时把长历史重新刷入 Web 终端。
 
 ## Exclusive 与 Multi-client
 
-- Claude/Gemini 当前走 tmux fallback，属于 exclusive TUI surface：同一时间只能有一个真实 attach。Web attach 会让其他 tmux viewer 退出显示控制，反之亦然。
+- Claude 当前走 tmux fallback，属于 exclusive TUI surface：同一时间只能有一个真实 attach。Web attach 会让其他 tmux viewer 退出显示控制，反之亦然。
 - Codex/OpenCode native local server 属于 multi-client：Web chat、Web TUI、本地 terminal client 和多个 Canvas pane 可以共存。
 - 如果 Codex/OpenCode 未来落入 tmux fallback，则按 exclusive 处理。
 

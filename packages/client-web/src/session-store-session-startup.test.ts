@@ -63,7 +63,7 @@ function restoreWebApiMocks(): void {
 
 function summary(args: {
   id: string;
-  provider?: "codex" | "claude" | "gemini" | "opencode";
+  provider?: "codex" | "claude" | "opencode";
   providerSessionId?: string;
   cwd?: string;
   rootDir?: string;
@@ -334,55 +334,6 @@ describe("session startup model and mode requests", () => {
     assert.equal(state.selectedSessionId, "started-normalized");
   });
 
-  test("Gemini new session passes first input as launch initialPrompt", async () => {
-    const requests = installWebApiMocks((request) => {
-      if (request.url.includes("/api/fs/list")) {
-        return { path: "/tmp/rah", entries: [] };
-      }
-      if (request.url.endsWith("/api/sessions/start")) {
-        const body = request.body as { provider: "gemini"; cwd: string };
-        return {
-          session: summary({
-            id: "started-gemini",
-            provider: body.provider,
-            cwd: body.cwd,
-          }),
-        };
-      }
-      throw new Error(`Unexpected request ${request.url}`);
-    });
-    const calls: string[] = [];
-
-    await startSessionCommand(
-      startupDeps(
-        { newSessionProvider: "gemini" },
-        {
-          sendInput: async () => {
-            calls.push("send");
-            throw new Error("Gemini first prompt should launch with the session.");
-          },
-        },
-      ),
-      {
-        provider: "gemini",
-        cwd: "/tmp/rah",
-        title: "hello",
-        initialInput: "hello gemini",
-        onSessionCreated: (sessionId) => {
-          calls.push(`created:${sessionId}`);
-        },
-      },
-    );
-
-    const startRequest = requests.find((request) =>
-      request.url.endsWith("/api/sessions/start"),
-    );
-    const body = startRequest?.body as { initialPrompt?: string; liveBackend?: string };
-    assert.equal(body.initialPrompt, "hello gemini");
-    assert.equal(body.liveBackend, "tui_mux");
-    assert.deepEqual(calls, ["created:started-gemini"]);
-  });
-
   test("new session selects native local-server backend for providers that support it", async () => {
     const requests = installWebApiMocks((request) => {
       if (request.url.includes("/api/fs/list")) {
@@ -390,7 +341,7 @@ describe("session startup model and mode requests", () => {
       }
       if (request.url.endsWith("/api/sessions/start")) {
         const body = request.body as {
-          provider: "codex" | "claude" | "gemini" | "opencode";
+          provider: "codex" | "claude" | "opencode";
           cwd: string;
         };
         return {
@@ -404,7 +355,7 @@ describe("session startup model and mode requests", () => {
       throw new Error(`Unexpected request ${request.url}`);
     });
 
-    for (const provider of ["codex", "claude", "gemini", "opencode"] as const) {
+    for (const provider of ["codex", "claude", "opencode"] as const) {
       await startSessionCommand(
         startupDeps({ newSessionProvider: provider }),
         {
@@ -427,7 +378,6 @@ describe("session startup model and mode requests", () => {
       [
         ["codex", "native_local_server"],
         ["claude", "tui_mux"],
-        ["gemini", "tui_mux"],
         ["opencode", "native_local_server"],
       ],
     );
@@ -723,7 +673,7 @@ describe("session startup model and mode requests", () => {
       }
       if (request.url.endsWith("/api/sessions/resume")) {
         const body = request.body as {
-          provider: "codex" | "claude" | "gemini" | "opencode";
+          provider: "codex" | "claude" | "opencode";
           providerSessionId: string;
           cwd?: string;
         };
@@ -739,7 +689,7 @@ describe("session startup model and mode requests", () => {
       throw new Error(`Unexpected request ${request.url}`);
     });
 
-    for (const provider of ["codex", "claude", "gemini", "opencode"] as const) {
+    for (const provider of ["codex", "claude", "opencode"] as const) {
       const history = summary({
         id: `history-${provider}`,
         provider,
@@ -776,7 +726,6 @@ describe("session startup model and mode requests", () => {
       [
         ["codex", "native_local_server"],
         ["claude", "tui_mux"],
-        ["gemini", "tui_mux"],
         ["opencode", "native_local_server"],
       ],
     );

@@ -10,25 +10,24 @@ RAH 是一个本地优先的 AI 工作台。它不是要替所有 CLI 重写完�
 
 - Codex / OpenCode 默认走 `native_local_server`，RAH 通过 provider 官方本地 server 获取结构化 live event、发送 turn、执行 interrupt/stop。
 - Codex / OpenCode 的本地 TUI 是 provider 官方 client/view，例如 Codex `codex --remote ... resume <threadId>`、OpenCode `opencode attach ... --session <id>`。
-- Claude / Gemini 默认走 `tui_mux_fallback`，tmux/TUI mux 负责原生 TUI 工作现场，结构化 Chat 来自 provider 原厂历史文件 mirror。
+- Claude 默认走 `tui_mux_fallback`，tmux/TUI mux 负责原生 TUI 工作现场，结构化 Chat 来自 provider 原厂历史文件 mirror。
 - Web/PWA 只有显式打开 `TUI` 视图才 claim TUI display surface；普通 Chat 浏览不应触发 TUI attach。
 
-当前 running 主线收敛为四家 provider：
+当前 running 主线收敛为三家 provider：
 
 - Codex
 - Claude
-- Gemini
 - OpenCode
 
-Gemini CLI 已恢复为 `tui_mux_fallback` provider，历史解析读取当前 Gemini CLI JSON session 文件。Kimi CLI 一等 provider 代码仍移除；Kimi、GLM、MiniMax、Grok、DeepSeek 等低频 API-key 模型优先通过 OpenCode + API provider / 中转站承载。
+其它低频 API-key 模型优先通过 OpenCode + API provider / 中转站承载，不维护独立 CLI adapter。
 
 当前核心目标：
 
 - 本机 daemon 统一持有 provider runtime、事件、控制权和 provider launch/mirror adapter。
-- Codex/OpenCode 的实时 truth 是 provider native local server event；Claude/Gemini fallback 的现场连续性由 tmux/TUI mux 维持。
+- Codex/OpenCode 的实时 truth 是 provider native local server event；Claude fallback 的现场连续性由 tmux/TUI mux 维持。
 - 结构化 Chat/Timeline 来自 provider server event 与原厂 jsonl/db/session history mirror，不从 ANSI/TUI 输出反推。
 - Web UI 只消费 RAH canonical protocol，不直接依赖 provider-native 事件。
-- `rah codex/opencode`、Web New、Canvas New、Web Claim History 对 Codex/OpenCode 默认进入 native local server runtime；`rah claude/gemini` 和 Claude/Gemini Web running session 默认进入 tmux/TUI mux fallback。
+- `rah codex/opencode`、Web New、Canvas New、Web Claim History 对 Codex/OpenCode 默认进入 native local server runtime；`rah claude` 和 Claude Web running session 默认进入 tmux/TUI mux fallback。
 - 历史浏览先加载最近 tail，再按上滚分页加载更早内容，不一次性把完整历史塞进前端。
 
 ## 2. 包结构
@@ -194,7 +193,7 @@ RAH 里需要区分四类 session 视角。
 | 类型 | 含义 | 可输入 | 可 Stop/Close | 历史来源 |
 | --- | --- | --- | --- | --- |
 | Native local server running | daemon 启动并持有 provider 官方本地 server session；Codex/OpenCode 默认走该路径 | 可以，走 provider structured control | 显式 stop/close 才关闭或解除 RAH 管理 | provider server event + provider history backfill |
-| TUI mux fallback running | daemon 启动并持有真实 provider TUI；Claude/Gemini 默认走 tmux mux | 可以，但需要 control/surface lease | 显式 stop/close 才关闭 TUI/tmux pane | provider history mirror + TUI diagnostics |
+| TUI mux fallback running | daemon 启动并持有真实 provider TUI；Claude 默认走 tmux mux | 可以，但需要 control/surface lease | 显式 stop/close 才关闭 TUI/tmux pane | provider history mirror + TUI diagnostics |
 | Read-only replay | 打开 provider 历史形成的只读 projection | 不可以，需 claim | 只关闭 UI projection | provider history |
 | Structured test running | 只允许测试注入 adapter 直接调用 engine；公开 HTTP API 拒绝 `liveBackend: "structured"` | 可以 | 关闭 provider adapter client | injected adapter event + history |
 
@@ -203,7 +202,7 @@ Structured test running 的保留决策：
 - 保留它作为内部测试 harness，而不是生产 running 主链路。
 - 普通 daemon 不构造 Claude SDK/headless structured live adapter；该旧路径已删除。
 - Codex/OpenCode 的 provider-server control adapter 是当前生产路径的一部分，虽然仍提供 structured event/control 能力，但默认 backend 是 `native_local_server`。
-- 公开 Web/CLI/canvas running 入口只进入 provider runtime descriptor 声明的主路径：Codex/OpenCode 是 native local server，Claude/Gemini 是 tmux/TUI mux fallback。
+- 公开 Web/CLI/canvas running 入口只进入 provider runtime descriptor 声明的主路径：Codex/OpenCode 是 native local server，Claude 是 tmux/TUI mux fallback。
 - 旧 wrapper-control / terminal handoff runtime 已删除，不再作为测试或兼容面存在。
 
 重要边界：
@@ -276,7 +275,7 @@ Native local server 与 tmux attach 的目标是：
 - terminal 画面是用户体验 surface，不是 canonical data source。
 - Codex/OpenCode Chat composer 走 provider structured control，不通过键盘注入普通 turn。
 - Claude fallback Chat composer 是 TUI 文本注入桥；如果 TUI prompt dirty，应排队或阻止注入，避免污染用户正在 TUI 里编辑的草稿。
-- Stop/Close 必须关闭 provider native server session 或 Claude/Gemini 对应 tmux session，避免孤儿 runtime。
+- Stop/Close 必须关闭 provider native server session 或 Claude 对应 tmux session，避免孤儿 runtime。
 
 当前不承诺：
 
@@ -306,7 +305,7 @@ RAH 对“一退全退”的设计目标是：正常退出时尽量在事前同�
 6. 清理未被当前 daemon 管理的 `rah-*` tmux session。
 7. flush workbench state。
 
-Council runtime 退出时先把仍处于 active/running 的 council 持久化为 stopped，并 resolve 等待中的 Council message waiter、清理 MCP client state；随后并行关闭这些 council 下的 agent session。关闭 Council agent session 时，runtime 会先尝试 native TUI/tmux close；如果不是 native TUI/tmux session，再走 structured lifecycle adapter 的 destroySession。这保证 Council Claude/Gemini 的 `tui_mux` session、以及 Codex/OpenCode native local server session 都走各自真实的 runtime close 路径。
+Council runtime 退出时先把仍处于 active/running 的 council 持久化为 stopped，并 resolve 等待中的 Council message waiter、清理 MCP client state；随后并行关闭这些 council 下的 agent session。关闭 Council agent session 时，runtime 会先尝试 native TUI/tmux close；如果不是 native TUI/tmux session，再走 structured lifecycle adapter 的 destroySession。这保证 Council Claude 的 `tui_mux` session、以及 Codex/OpenCode native local server session 都走各自真实的 runtime close 路径。
 
 Terminal runtime 退出时会并行关闭当前进程内管理的 tmux session，然后扫描并清理未被当前 daemon 管理的 `rah-*` tmux session。Codex/OpenCode native local server 启动时会注入 `RAH_NATIVE_SERVER_OWNER=rah`、`RAH_NATIVE_SERVER_PROVIDER=codex|opencode`、`RAH_NATIVE_SERVER_DAEMON_PID=<pid>`，因此 orphan janitor 只清理 RAH 明确拥有的 provider server，不会按进程名误杀用户自己启动的 Codex/OpenCode。
 
@@ -325,7 +324,7 @@ RAH 明确区分两件事：
 - `refreshLatestHistory`：静默同步当前 session 的最新 tail，用于 live Chat 补齐 focus/reload/PWA 切后台期间错过的消息。
 - `loadOlderHistory`：加载更早历史页，用于 read-only replay 首屏和用户向上翻旧历史。
 
-新建 running session 不应触发可见的 older-history 加载，也不应在 Chat 顶部显示 `Loading older history`。创建后 feed 可以先为空，再由 optimistic user message、Codex/OpenCode native server event、Claude/Gemini transcript mirror 或静默 latest-tail sync 填充。
+新建 running session 不应触发可见的 older-history 加载，也不应在 Chat 顶部显示 `Loading older history`。创建后 feed 可以先为空，再由 optimistic user message、Codex/OpenCode native server event、Claude transcript mirror 或静默 latest-tail sync 填充。
 
 选中已有 running session 时可以触发一次静默 latest-tail sync，但它不是历史翻页：
 
@@ -351,7 +350,7 @@ RAH 明确区分两件事：
 
 - live/native-mirror event 不能被 history bootstrap 挡住。
 - Codex/OpenCode Chat 的当前回复优先来自 native local-server event/client push，不依赖 rollout/SQLite 全量回读。
-- Claude/Gemini fallback Chat 的当前回复优先来自 provider transcript mirror，不从 ANSI 屏幕解析主内容。
+- Claude fallback Chat 的当前回复优先来自 provider transcript mirror，不从 ANSI 屏幕解析主内容。
 - provider history 文件/DB 是 backfill 和 read-only history 的依据，不是新 live turn 的唯一实时来源。
 
 各 provider 的底层分页实现和前端函数边界见 [历史浏览与分页边界](./history-browsing.zh-CN.md)。
@@ -514,7 +513,7 @@ npm run test:smoke:native-browser
 npm run test:smoke:native-browser-webkit
 ```
 
-`test:smoke:native-browser` 是默认浏览器 smoke，会用 deterministic fake provider 跑 Codex、Claude、OpenCode 的 Chat/TUI/replay/stop/foreground recovery/Web resume 关键路径，并保存 Chat mirror、Web TUI、reload replay、Web resume history 截图。它会断言 Chat 中问题在回答之前、回答不重复、新 running session 不显示 `Loading older history` / `Unhandled provider event` 噪声、Stop 出现后可回到 idle、TUI dirty prompt 不会误注入 Chat 文本。旧的 `test:smoke:codex-browser`、`test:smoke:claude-browser`、`test:smoke:opencode-browser` 仍可作为真实 provider smoke 辅助；需要一次性跑真实三家时使用 `test:smoke:real-browser-providers`。Gemini 当前有 launch/history 单元回归，真实 CLI smoke 仍需补齐后才能进入默认 gate。Kimi CLI smoke 已删除，不属于默认 gate。
+`test:smoke:native-browser` 是默认浏览器 smoke，会用 deterministic fake provider 跑 Codex、Claude、OpenCode 的 Chat/TUI/replay/stop/foreground recovery/Web resume 关键路径，并保存 Chat mirror、Web TUI、reload replay、Web resume history 截图。它会断言 Chat 中问题在回答之前、回答不重复、新 running session 不显示 `Loading older history` / `Unhandled provider event` 噪声、Stop 出现后可回到 idle、TUI dirty prompt 不会误注入 Chat 文本。旧的 `test:smoke:codex-browser`、`test:smoke:claude-browser`、`test:smoke:opencode-browser` 仍可作为真实 provider smoke 辅助；需要一次性跑真实三家时使用 `test:smoke:real-browser-providers`。
 
 `npm run serve:workbench`、`npm run dev:daemon`、`npm run dev:web` 仅用于前台调试或拆分调试。Provider smoke 不是所有机器默认门禁。
 
@@ -522,8 +521,8 @@ npm run test:smoke:native-browser-webkit
 
 改 session/control/history/provider 行为时，至少检查：
 
-- Web new / Web claim / Canvas new 是否按 provider runtime 进入 Codex/OpenCode native local server 或 Claude/Gemini tmux/TUI mux fallback。
-- Codex/OpenCode Chat 输入是否走 provider structured control；Claude/Gemini fallback Chat 输入是否只在 TUI prompt clean 时注入，prompt dirty / agent busy 时必须阻止误注入。
+- Web new / Web claim / Canvas new 是否按 provider runtime 进入 Codex/OpenCode native local server 或 Claude tmux/TUI mux fallback。
+- Codex/OpenCode Chat 输入是否走 provider structured control；Claude fallback Chat 输入是否只在 TUI prompt clean 时注入，prompt dirty / agent busy 时必须阻止误注入。
 - `rah xxx` 是否能出现在左侧 running session。
 - Web 接管是否能 single-writer 发送、结束、恢复 idle。
 - Stop/Close 是否能关闭对应 running 执行体。

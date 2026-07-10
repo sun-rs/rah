@@ -3,7 +3,6 @@ import auggieLogo from "./brand/auggie.svg";
 import droidLogo from "./brand/droid.svg";
 import hermesLogo from "./brand/hermes.svg";
 import claudeLogo from "./ai-major/claude.svg";
-import geminiLogo from "./ai-major/gemini.svg";
 import mistralLogo from "./ai-major/mistral.svg";
 import qwenLogo from "./ai-china/qwen.svg";
 import githubLogo from "./tools/github.svg";
@@ -22,7 +21,6 @@ import qoderLogo from "./tools/coding/qoder.png";
 export const implementedProviderLogoRegistry = {
   codex: codexLogo,
   claude: claudeLogo,
-  gemini: geminiLogo,
   opencode: opencodeLogo,
   opencodeLight: opencodeLightLogo,
   opencodeDark: opencodeDarkLogo,

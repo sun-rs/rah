@@ -411,7 +411,6 @@ export const ChatThread = memo(function ChatThread(props: {
   feed: FeedEntry[];
   hideToolCalls?: boolean;
   hideOpenCodeReasoning?: boolean;
-  hideGeminiReasoning?: boolean;
   showModelInfo?: boolean;
   provider?: ProviderKind;
   canLoadOlderHistory?: boolean;
@@ -481,14 +480,12 @@ export const ChatThread = memo(function ChatThread(props: {
         props.feed,
         props.hideToolCalls ?? false,
         props.hideOpenCodeReasoning ?? false,
-        props.hideGeminiReasoning ?? false,
         props.provider,
       ),
     [
       props.feed,
       props.hideToolCalls,
       props.hideOpenCodeReasoning,
-      props.hideGeminiReasoning,
       props.provider,
     ],
   );
