@@ -182,9 +182,9 @@ Canvas pane 的持久化语义是固定槽位模型：
 - Pane 外层标题只表达固定槽位身份，显示为 `Pane 1` 到 `Pane 4`；session / Council 的真实标题、状态、操作只由内部对象标题栏负责。
 - 布局按钮只决定当前可见 pane 数量和排列；2 pane 显示前两个槽位，3 pane 显示前三个槽位，4 pane 显示全部槽位。
 - 缩小布局不会销毁隐藏 pane，也不会清掉 hidden pane 上绑定的 running session、history replay 或 Council。
-- 只有 pane 橡皮擦、Clear all、删除对应 session / Council 这类显式动作才会清除 pane 绑定。
+- Pane 橡皮擦、Clear all、删除对应对象，以及在 pane 内显式 Stop session/Council 会清除该 pane 绑定。
 - Clear all 必须清掉全部 4 个 pane，而不是只清掉当前布局下可见的 pane。
-- Stop running session 不等同于清 pane；如果该 session 在 Canvas pane 中，Stop 后 pane 应保留并转成对应 stopped/history 视图，方便继续浏览和 resume / claim control。
+- 在 pane 内 Stop running session/Council 后回到 `Empty pane`；历史仍可从 Chats 再次打开，Stop 不删除 provider 历史。
 
 ## 4. Session 类型
 
@@ -194,7 +194,7 @@ RAH 里需要区分四类 session 视角。
 | --- | --- | --- | --- | --- |
 | Native local server running | daemon 启动并持有 provider 官方本地 server session；Codex/OpenCode 默认走该路径 | 可以，走 provider structured control | 显式 stop/close 才关闭或解除 RAH 管理 | provider server event + provider history backfill |
 | TUI mux fallback running | daemon 启动并持有真实 provider TUI；Claude 默认走 tmux mux | 可以，但需要 control/surface lease | 显式 stop/close 才关闭 TUI/tmux pane | provider history mirror + TUI diagnostics |
-| Read-only replay | 打开 provider 历史形成的只读 projection | 不可以，需 claim | 只关闭 UI projection | provider history |
+| Read-only replay | 打开 provider 历史形成的只读 projection | 不可以，需 Resume | 只关闭 UI projection | provider history |
 | Structured test running | 只允许测试注入 adapter 直接调用 engine；公开 HTTP API 拒绝 `liveBackend: "structured"` | 可以 | 关闭 provider adapter client | injected adapter event + history |
 
 Structured test running 的保留决策：
@@ -202,7 +202,7 @@ Structured test running 的保留决策：
 - 保留它作为内部测试 harness，而不是生产 running 主链路。
 - 普通 daemon 不构造 Claude SDK/headless structured live adapter；该旧路径已删除。
 - Codex/OpenCode 的 provider-server control adapter 是当前生产路径的一部分，虽然仍提供 structured event/control 能力，但默认 backend 是 `native_local_server`。
-- 公开 Web/CLI/canvas running 入口只进入 provider runtime descriptor 声明的主路径：Codex/OpenCode 是 native local server，Claude 是 tmux/TUI mux fallback。
+- 公开 Web/PWA/Canvas running 入口只进入 provider runtime descriptor 声明的主路径：Codex/OpenCode 是 native local server，Claude 是 tmux/TUI mux fallback。
 - 旧 wrapper-control / terminal handoff runtime 已删除，不再作为测试或兼容面存在。
 
 重要边界：
@@ -210,7 +210,7 @@ Structured test running 的保留决策：
 - 只要 provider session 被 daemon-owned runtime 拉起，就是 `running`；没有 client attach 时也仍然 `running`。
 - `ready`、`working`、`waiting_input`、`waiting_permission` 都属于 `phase`，不是 `running/stopped` 边界。
 - 只读打开历史不算 `running`，也不算写手。
-- Web `claim/resume` 默认把 provider history 升级成 daemon-owned running session；只读浏览不触发 resume。
+- Web `Resume` 把 provider history 升级成 daemon-owned running session；只读浏览不触发 resume。
 - client detach、浏览器 reload、PWA 切后台只应影响 attach 状态，不能隐式 stop/close/kill session。
 
 ## 5. Provider 当前实现
@@ -255,15 +255,15 @@ Provider 原生 mode id 仍可作为 `id` 保留，但前端只用 `role` 做稳
 
 `SessionModeDescriptor.applyTiming` 是 mode 的应用时机语义层，用来区分 `immediate`、`next_turn`、`idle_only`、`restart_required`、`startup_only`。在当前 provider runtime 范围内，Codex/OpenCode 的 mode 多数是下一 turn 或 native local server/ACP 边界生效；Claude 以官方 TUI/CLI 当前能力为准。
 
-## 6. Native Server / Tmux Attach 原则
+## 6. Native Server / Tmux TUI Surface 原则
 
 Native local server 与 tmux attach 的目标是：
 
-- 普通 running session 中，Codex/OpenCode 的 provider session 始终由 daemon 管理的 native local server 持有；本地 TUI 和 Web 都是 client/view。
-- Claude 的真实 provider TUI 始终运行在 daemon 管理的 tmux session/pane 中；本地终端、Web terminal、PWA/iPad/iPhone、Canvas pane 都只是 attach client。
+- 普通 running session 中，Codex/OpenCode 的 provider session 始终由 daemon 管理的 native local server 持有；Chat 与 Web TUI 都是 client/view。
+- Claude 的真实 provider TUI 始终运行在 daemon 管理的 tmux session/pane 中；Web terminal、PWA/iPad/iPhone、Canvas pane 都只是 view client。
 - Council 是例外：Council agent 以 provider TUI + MCP bootstrap 形式运行在 RAH 管理的 agent PTY 中，用来保持 agent 自己的工具循环；它不代表普通 Codex/OpenCode session 的 runtime 边界。
-- `rah xxx` 默认不再拥有 provider 进程生命周期；它请求 daemon 创建/resume running session，然后按 provider runtime 接入 official client 或 tmux mux。
-- 桌面 terminal 断开只 detach，不杀 session；显式 stop/close 才关闭或解除 RAH 管理。
+- provider session 只从 Web/PWA/Canvas 创建或 resume；公开 CLI 不再提供 provider session handoff。
+- Web TUI view 断开只 detach，不杀 session；显式 stop/close 才关闭或解除 RAH 管理。
 - Web UI 可以立即看到 running session，并在 reload/focus 后通过 provider event/history 或 tmux replay 追上。
 
 当前锁定原则：
@@ -521,9 +521,9 @@ npm run test:smoke:native-browser-webkit
 
 改 session/control/history/provider 行为时，至少检查：
 
-- Web new / Web claim / Canvas new 是否按 provider runtime 进入 Codex/OpenCode native local server 或 Claude tmux/TUI mux fallback。
+- Web new / Web resume / Canvas new 是否按 provider runtime 进入 Codex/OpenCode native local server 或 Claude tmux/TUI mux fallback。
 - Codex/OpenCode Chat 输入是否走 provider structured control；Claude fallback Chat 输入是否只在 TUI prompt clean 时注入，prompt dirty / agent busy 时必须阻止误注入。
-- `rah xxx` 是否能出现在左侧 running session。
+- Web/PWA/Canvas 新建或 resume 后，session 是否及时出现在左侧 running 列表。
 - Web 接管是否能 single-writer 发送、结束、恢复 idle。
 - Stop/Close 是否能关闭对应 running 执行体。
 - Detach / reload / hide canvas 是否不会关闭真实 TUI。

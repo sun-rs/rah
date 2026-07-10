@@ -17,7 +17,7 @@ RAH 是一个 **runtime-owned、本地优先、跨设备连续性** 的 AI 工�
 - Codex reference adapter
 - provider-native runtime 工作台主线（Codex / Claude / OpenCode）
 
-当前 runtime 边界不是“一切 PTY-first”：
+当前 runtime 边界是 provider-native，而不是强行统一为 TUI/PTY：
 
 - Codex 使用 `native_local_server`，以官方 app-server 的结构化事件和控制协议作为 live source of truth；RAH 预创建 thread，再让官方 TUI remote client attach 到同一 thread。
 - OpenCode 使用 `native_local_server`，以官方 serve/session API 作为 live source of truth；官方 TUI attach 到同一 provider session。

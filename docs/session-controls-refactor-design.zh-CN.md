@@ -574,7 +574,7 @@ This session is owned by the native TUI. Change this in the terminal TUI.
 `history readonly`：
 
 ```text
-History view is read-only. Resume or claim the session to change controls.
+History view is read-only. Resume the session to change controls.
 ```
 
 ## 9. 后端 API 设计

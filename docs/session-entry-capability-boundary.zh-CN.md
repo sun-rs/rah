@@ -43,9 +43,9 @@ Native local server / TUI fallback 分层后，权限、模型、effort、thinki
 
 启动前：
 
-- Web New、Canvas New、Web Claim 可以把 `modeId`、`model`、`optionValues` 传给 provider runtime。
+- Web New、Canvas New、Web Resume 可以把 `modeId`、`model`、`optionValues` 传给 provider runtime。
 - daemon 尽量把 Web/Canvas 选择翻译成 provider-native 启动或 server config，例如 Codex app-server config、Claude `--model` / `--permission-mode`、OpenCode model/variant config。
-- OpenCode 的 `opencode run --variant` 和 ACP `provider/model/variant` 是已验证路径；OpenCode TUI 入口没有稳定 `--variant` 参数，所以 PTY-first core 不把 variant/effort 当作启动成功条件。
+- OpenCode Web 主链路通过 server API 传递 `provider/model/variant`；TUI 只是同一 session 的辅助视图，不作为 variant 生效与否的判断来源。
 - 如果 provider CLI 改名、废弃或改变某个参数，RAH 不应因此破坏 PTY create/attach/replay/close 主链路。
 
 启动后：

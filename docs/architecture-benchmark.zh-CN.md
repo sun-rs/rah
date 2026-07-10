@@ -14,8 +14,8 @@ RAH 现在已经完成了：
 
 - canonical event contract
 - runtime-owned workbench
-- PTY-first core live 主线：Codex / Claude / OpenCode
-- history replay / claim / live attach / tool-flow mirror / browser smoke
+- provider-native core live 主线：Codex app-server / Claude tmux / OpenCode server
+- paged history / resume / structured tool-flow / browser smoke
 - 低频模型家族统一通过 OpenCode/API provider 承载
 
 因此，RAH 当前已经不是“架构是否成立”的阶段，而是“如何继续强化”的阶段。

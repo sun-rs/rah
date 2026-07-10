@@ -25,21 +25,9 @@ Kimi CLI 对当前 RAH 的投入产出不成立：
 
 ## OpenCode 模型与 Variant 边界
 
-OpenCode native TUI 当前稳定公开的启动参数是：
+OpenCode 的 Web 主链路使用本地 server/session API。RAH 通过结构化请求传递 `provider/model/variant`，并用 provider session 的实际状态更新界面。
 
-```text
-opencode --model provider/model <project>
-```
-
-所以 RAH 的 PTY-first native TUI 启动只保证基础 `provider/model` 会进入 OpenCode TUI。
-
-OpenCode 的 reasoning/variant 能力仍属于 OpenCode 自己的 provider-specific enhancement：
-
-- `opencode run --variant` 是 OpenCode run 路径能力。
-- ACP / structured OpenCode 路径可以传 `provider/model/variant`，RAH 对该路径保留测试断言。
-- PTY-first native TUI 不把 `variant` 拼进 `--model`，也不把未公开的 `--variant` 当作稳定启动参数。
-
-这条边界避免 RAH 伪装支持 OpenCode TUI 尚未稳定公开的能力。需要严格 variant 的任务，应走 OpenCode 原生支持的路径或在 TUI 内自行选择。
+TUI 是同一 session 的辅助视图，不是新建或 resume 的第二条用户入口。RAH 不通过猜测 TUI 启动参数来宣称 variant 生效；variant 的正确性由 server API 请求与回归测试保证。
 
 ## OpenCode 权限边界
 

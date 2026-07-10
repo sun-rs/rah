@@ -201,7 +201,7 @@ RAH 不再创建或扫描 provider-specific 独立 home。Codex / Claude 历史�
 
 但正文 tail first 不等于导航也只能看到 tail。Turn Directory 对全文件做轻量索引，使用户能立即理解完整会话结构并直接定位任意 turn；只有真正点击后才把目标正文加入 feed。这是 RAH 对 Codex Desktop“完整导航与正文按需绘制”思路的本地存储实现，而不是重新全量 materialize Chat。
 
-## 7. Read-only Replay 与 Claim
+## 7. Read-only Replay 与 Resume
 
 打开历史 session 默认是 read-only replay：
 
@@ -211,11 +211,11 @@ RAH 不再创建或扫描 provider-specific 独立 home。Codex / Claude 历史�
 - 不算 provider 写手。
 - 从 Chats / Recent / All 打开历史时，前端应在同一 UI 批次内关闭弹窗并选中 read-only projection；不应先让主 workbench 在弹窗背后切换、下一帧再关闭弹窗，否则会表现成整页闪烁。
 
-点击 claim/resume 后：
+点击 Resume 后：
 
-- daemon 使用对应 provider launch/resume spec 拉起 live native TUI session。
+- daemon 使用对应 provider resume spec 拉起 live provider session；TUI 仍是可选辅助视图。
 - 当前 provider history 可以作为 live session 初始上下文或 replay 来源。
-- 如果已有 frozen snapshot，runtime 可以 transfer，避免 claim 前后历史抖动。
+- 如果已有 frozen snapshot，runtime 可以 transfer，避免 resume 前后历史抖动。
 
 ## 8. 回归检查
 

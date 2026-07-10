@@ -17,7 +17,7 @@ npm run test:provider-contracts
 - 不调用真实模型 API。
 - 使用 mock CLI / fake native TUI / fake provider-server / fake ACP server。
 - 必须适合作为日常代码更新后的快速 gate。
-- 主要验证 RAH 自己的 PTY-first/session mirror 协议、事件合并、队列、权限/模型参数传递、Markdown 渲染、Stop 状态收敛。
+- 主要验证 RAH 自己的 provider-native session 协议、事件投影、队列、权限/模型参数传递、Markdown 渲染、Stop 状态收敛。
 
 ### 2. 全量本地单元测试
 
@@ -58,8 +58,8 @@ npm run test:smoke:native-local-server
 | 3 | 用户问题与回答不重复 | canonicalItemId upsert、history/live echo 合并、Codex/Claude/OpenCode 回归 | browser smoke 统计 user event/bubble 数量 |
 | 4 | 连续追问不丢 | Codex/OpenCode 队列或 provider-server turn 回归；Claude tmux 走 TUI passthrough，不维护 RAH hidden queue | provider-flows 连续发送第一问/第二问并验证文件/marker |
 | 5 | web session 发送后立即 Stop | adapter interrupt 单测覆盖 active/pending turn 状态；真实 provider 仍需 smoke 验证 | browser/manual smoke 应在新 session 首问后立即 stop |
-| 6 | `rah xxx` 新 session 立即 Stop | native TUI / native local-server browser smoke 覆盖当前公共路径；真实 TUI 仍需手测 | `test:native-tui` + 手动 TUI |
-| 7 | `rah xxx resume` thinking 中 web Stop 传回 TUI | native TUI / native local-server browser smoke 覆盖当前公共路径；真实 interrupt 仍需手测 | terminal-browser / `test:native-tui` |
+| 6 | Web 新 session 立即 Stop | native local-server / Claude tmux browser smoke 覆盖当前公共路径 | provider browser smoke + 手动 TUI surface QA |
+| 7 | Resume 后 thinking 中 Web Stop | provider-native interrupt 与 Claude tmux interrupt 回归 | history-resume/browser smoke |
 | 8 | 启动前/启动后修改模型、参数、权限有效 | Core live provider 断言 native argv/ACP/CLI options | provider-flows 可用模型自述或 provider UI/log 验证 |
 | 9 | 各权限行为符合预期 | OpenCode permission payload、Claude 原生权限模式、Codex sandbox/approval 参数 | 真实 CLI 版本可能变化，必须用 smoke/手测确认 |
 | 10 | Markdown/流式输出是一条递增气泡 | web Markdown block 测试；canonical upsert 测试 | browser smoke 观察最终 UI |

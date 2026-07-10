@@ -153,8 +153,8 @@ Before release, verify these manually on:
 ### 4.2 Session semantics
 
 - opening history opens read-only replay
-- `Claim control` upgrades the replay in place
-- old history is not replayed again after claim
+- `Resume` upgrades the replay in place
+- old history is not replayed again after resume
 - new turns are not duplicated
 - `Stop` / `Close` really moves the running session to stopped without deleting provider history
 - user-visible lifecycle copy uses `Running` / `Stopped`; `Live` / `Archive` only appears for provider technical names or stored-history archive/trash semantics

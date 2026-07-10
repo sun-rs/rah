@@ -1,45 +1,54 @@
 # RAH Canonical Event Taxonomy
 
-Status: historical research reference, narrowed for PTY-first
+Status: current event-ledger contract; Conversation V2 read model is defined separately
 
-Date: 2026-05-08
+Date: 2026-07-10
 
-RAH previously explored a broad canonical event abstraction across many agent CLIs. The current PTY-first product boundary is narrower:
+## Purpose
 
-- Live truth is the daemon-owned real PTY/TUI session.
-- Structured Chat/mirror data comes from provider-owned jsonl/db/session history files.
-- The current core live providers are Codex, Claude, and OpenCode.
-- Model families without a first-class RAH adapter are expected to run through OpenCode/API provider configuration.
+`RahEvent` is RAH's append-only transport and evidence contract. Provider adapters translate native live or persisted evidence into these event families so Web/PWA clients do not parse provider payloads directly.
 
-## Current Event Families
+It is intentionally not the final conversation view model. Turn grouping, process/final separation, duration, and activity summaries belong to the daemon-owned Conversation V2 projection.
 
-The frontend should consume RAH-level event families instead of provider-specific raw events:
+## Event Families
 
-- Session lifecycle: created, attached, detached, exited, archived.
-- PTY stream: replay, output, input, resize, exit.
-- Provider activity mirror: user message, assistant message, reasoning, tool call, tool result, error, usage.
-- Diagnostics: mirror source missing, mirror failed, unsupported provider capability, invalid provider stream.
-- Control: control lease, interrupt, close/archive/kill.
+- Session lifecycle: create, start, attach, detach, close, exit, failure.
+- Control: claim/release and provider-native interrupt/stop outcomes.
+- Turn lifecycle: start, complete, fail, cancel, step, appended input.
+- Timeline: user, assistant commentary/final, reasoning, plan, compaction, notices.
+- Message parts: add, update, delta, remove.
+- Tools and observations: command, test, build, file, patch, web, MCP, subagent.
+- Permission and governance: request, resolution, policy updates.
+- Usage and runtime status.
+- PTY stream: output and exit for the TUI surface.
+- Diagnostics and transport state.
 
-## Design Rules
+## Identity Rules
 
-- PTY/TUI output is infrastructure for terminal display, not the source for structured Chat.
-- Provider-specific names stay in parser/adapter code or diagnostics.
-- Unknown provider activity should be preserved as diagnostics/raw evidence instead of creating unstable frontend branches.
-- `origin` such as live/history is metadata and must not participate in canonical item identity.
-- Content hash can help compare evidence but must not be the primary identity because repeated user text is valid.
+- Provider-native `(session, turn, item)` identity is preferred.
+- `origin` (`live` or `history`) never participates in canonical item identity.
+- Content hashes are comparison evidence, not primary identity; repeated text is valid.
+- The same canonical item is upserted across started/delta/completed and live/history evidence.
+- A main turn is terminal only after its own terminal lifecycle event; a subagent item cannot finish it.
 
-## Current Contract
+## Authority Rules
 
-The code-level contract lives in `packages/runtime-protocol/src/contract.ts`.
+- `structured_live + authoritative`: provider server lifecycle/result facts.
+- `structured_persisted + authoritative`: provider-owned persisted facts.
+- `derived`: lossless or strongly grounded canonical translation.
+- `heuristic`: compatibility fallback when provider semantics are absent.
+- `pty`: terminal display only, never a structured Chat parser source.
 
-The PTY-first runtime should preserve these invariants:
+Unknown provider evidence is retained as diagnostics when it can affect correctness. Internal maintenance noise should be normalized in the adapter rather than surfaced as ordinary chat.
 
-- Replaying the same provider history page must not duplicate Chat items.
-- Live mirror followed by history backfill must converge to the same feed.
-- Mirror failure must not kill or pause the real TUI.
-- Frontend upsert should prefer canonical item identity when present.
+## Separation From Conversation V2
 
-## Historical Note
+The event ledger answers: "What evidence arrived, in what order?"
 
-Older provider research is no longer part of the current RAH surface. Use git history if it is needed again.
+The Conversation V2 projection answers: "What is the current canonical thread/turn/item state, and how should a client page it?"
+
+See:
+
+- [Conversation V2 Architecture](./conversation-v2-architecture.zh-CN.md)
+- [Conversation V2 Gap Analysis](./conversation-v2-gap-analysis.zh-CN.md)
+- [Codex App Server Protocol Map](./codex-app-server-protocol-map.zh-CN.md)

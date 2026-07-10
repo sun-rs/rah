@@ -15,7 +15,7 @@ boundary is intentionally narrow:
   provider-native TUI attach client.
 - Claude defaults to the tmux/TUI mux fallback because it has no stable Codex/OpenCode-style
   local app-server path for RAH.
-- Web New/Claim/Resume follows provider runtime capabilities: Codex/OpenCode use native local server;
+- Web New/Resume follows provider runtime capabilities: Codex/OpenCode use native local server;
   Claude uses the TUI mux fallback.
 - structured Chat uses provider server events where available and provider-native history files/DBs
   for backfill/history. It is not ANSI screen scraping.
@@ -154,7 +154,7 @@ RAH now uses four test tiers:
   - protects queued input, no duplicate live/history merge, Stop state convergence, model/mode/permission propagation, and Markdown/timeline rendering contracts on the core live path
 - native TUI gate
   - `npm run test:native-tui`
-  - exercises the PTY-first lifecycle, fake native provider TUIs, browser replay/reconnect,
+  - exercises the TUI surface lifecycle, fake native provider TUIs, browser replay/reconnect,
     WebKit browser smoke, mobile input bridge contracts, mirror diagnostics, and native-TUI-specific regression cases
   - includes `test:manual-qa-status` so the human QA evidence verifier cannot silently weaken
   - core live provider expectations are Codex, Claude, and OpenCode
