@@ -82,6 +82,12 @@ export interface TimelineTurnIdentity {
   confidence: TimelineIdentityConfidence;
 }
 
+export type TurnLifecycleTiming = {
+  startedAt?: string;
+  completedAt?: string;
+  durationMs?: number;
+};
+
 export type TimelineRuntimeModelSource =
   | "native"
   | "request"
@@ -348,10 +354,10 @@ export type RahEventPayloadMap = {
   "control.claimed": { clientId: string; clientKind: ClientKind };
   "control.released": { clientId?: string };
 
-  "turn.started": Record<string, never>;
-  "turn.completed": { usage?: ContextUsage; identity?: TimelineTurnIdentity };
-  "turn.failed": { error: string; code?: string; identity?: TimelineTurnIdentity };
-  "turn.canceled": { reason: string; identity?: TimelineTurnIdentity };
+  "turn.started": { identity?: TimelineTurnIdentity; startedAt?: string };
+  "turn.completed": TurnLifecycleTiming & { usage?: ContextUsage; identity?: TimelineTurnIdentity };
+  "turn.failed": TurnLifecycleTiming & { error: string; code?: string; identity?: TimelineTurnIdentity };
+  "turn.canceled": TurnLifecycleTiming & { reason: string; identity?: TimelineTurnIdentity };
   "turn.step.started": { index?: number; title?: string; runtimeModel?: TimelineRuntimeModel };
   "turn.step.completed": { index?: number; reason?: string; runtimeModel?: TimelineRuntimeModel };
   "turn.step.interrupted": { index?: number; reason?: string; runtimeModel?: TimelineRuntimeModel };

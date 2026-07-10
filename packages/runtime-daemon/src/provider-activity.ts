@@ -12,6 +12,7 @@ import type {
   RuntimeOperation,
   TimelineIdentity,
   TimelineRuntimeModel,
+  TurnLifecycleTiming,
   TimelineTurnIdentity,
   TimelineItem,
   ToolCall,
@@ -66,26 +67,28 @@ export type ProviderActivity =
   | {
       type: "turn_started";
       turnId: string;
+      identity?: TimelineTurnIdentity;
+      startedAt?: string;
     }
-  | {
+  | (TurnLifecycleTiming & {
       type: "turn_completed";
       turnId: string;
       usage?: ContextUsage;
       identity?: TimelineTurnIdentity;
-    }
-  | {
+    })
+  | (TurnLifecycleTiming & {
       type: "turn_failed";
       turnId: string;
       error: string;
       code?: string;
       identity?: TimelineTurnIdentity;
-    }
-  | {
+    })
+  | (TurnLifecycleTiming & {
       type: "turn_canceled";
       turnId: string;
       reason: string;
       identity?: TimelineTurnIdentity;
-    }
+    })
   | {
       type: "turn_step_started";
       turnId: string;
@@ -468,7 +471,10 @@ export function applyProviderActivity(
                 sessionId,
                 type: "turn.started",
                 source,
-                payload: {},
+                payload: {
+                  ...(activity.identity !== undefined ? { identity: activity.identity } : {}),
+                  ...(activity.startedAt !== undefined ? { startedAt: activity.startedAt } : {}),
+                },
                 turnId: activity.turnId,
               },
               ts,
@@ -501,6 +507,15 @@ export function applyProviderActivity(
                   payload: {
                     ...(completedUsage ? { usage: completedUsage } : {}),
                     ...(reconciled.identity !== undefined ? { identity: reconciled.identity } : {}),
+                    ...(reconciled.activity.startedAt !== undefined
+                      ? { startedAt: reconciled.activity.startedAt }
+                      : {}),
+                    ...(reconciled.activity.completedAt !== undefined
+                      ? { completedAt: reconciled.activity.completedAt }
+                      : {}),
+                    ...(reconciled.activity.durationMs !== undefined
+                      ? { durationMs: reconciled.activity.durationMs }
+                      : {}),
                   },
                   turnId: reconciled.activity.turnId,
                 },
@@ -554,6 +569,15 @@ export function applyProviderActivity(
                     error: reconciled.activity.error,
                     ...(reconciled.activity.code !== undefined ? { code: reconciled.activity.code } : {}),
                     ...(reconciled.identity !== undefined ? { identity: reconciled.identity } : {}),
+                    ...(reconciled.activity.startedAt !== undefined
+                      ? { startedAt: reconciled.activity.startedAt }
+                      : {}),
+                    ...(reconciled.activity.completedAt !== undefined
+                      ? { completedAt: reconciled.activity.completedAt }
+                      : {}),
+                    ...(reconciled.activity.durationMs !== undefined
+                      ? { durationMs: reconciled.activity.durationMs }
+                      : {}),
                   },
                   turnId: reconciled.activity.turnId,
                 },
@@ -584,6 +608,15 @@ export function applyProviderActivity(
                   payload: {
                     reason: reconciled.activity.reason,
                     ...(reconciled.identity !== undefined ? { identity: reconciled.identity } : {}),
+                    ...(reconciled.activity.startedAt !== undefined
+                      ? { startedAt: reconciled.activity.startedAt }
+                      : {}),
+                    ...(reconciled.activity.completedAt !== undefined
+                      ? { completedAt: reconciled.activity.completedAt }
+                      : {}),
+                    ...(reconciled.activity.durationMs !== undefined
+                      ? { durationMs: reconciled.activity.durationMs }
+                      : {}),
                   },
                   turnId: reconciled.activity.turnId,
                 },

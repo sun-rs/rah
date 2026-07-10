@@ -49,6 +49,7 @@ import {
   extraMcpServersFromRequest,
 } from "../provider-mcp-server-spec";
 import { resolveSessionTitleAndPreview } from "../session-title-resolver";
+import { requestCodexThreadResumeWithoutTranscript } from "../codex-app-server-resume";
 
 export type { LiveCodexSession } from "../codex-live-types";
 
@@ -503,9 +504,9 @@ export async function resumeCodexLiveSession(params: {
       threadId: request.providerSessionId,
       request,
     });
-    const resumeResponse = (await client.request(
-      "thread/resume",
-      {
+    const resumeResponse = (await requestCodexThreadResumeWithoutTranscript({
+      client,
+      params: {
         threadId: request.providerSessionId,
         ...(resumeModeOverride
           ? {
@@ -517,8 +518,8 @@ export async function resumeCodexLiveSession(params: {
             }
           : {}),
       },
-      TURN_START_TIMEOUT_MS,
-    )) as {
+      timeoutMs: TURN_START_TIMEOUT_MS,
+    })) as {
       thread?: {
         id?: string;
         cwd?: string;

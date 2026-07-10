@@ -2500,13 +2500,28 @@ function validatePayload(event: RahEvent, sink: IssueSink) {
       if (!isNonEmptyString(event.turnId)) {
         addIssue(sink, "error", "turn.id.missing", "turn events must carry turnId", "turnId");
       }
-      if (
-        (event.type === "turn.completed" ||
-          event.type === "turn.failed" ||
-          event.type === "turn.canceled") &&
-        payload.identity !== undefined
-      ) {
+      if (payload.identity !== undefined) {
         validateTimelineTurnIdentity(payload.identity, sink, "payload.identity");
+      }
+      if (
+        payload.startedAt !== undefined &&
+        (!isNonEmptyString(payload.startedAt) || Number.isNaN(Date.parse(payload.startedAt)))
+      ) {
+        addIssue(sink, "error", "turn.started_at.invalid", "turn startedAt must be a valid timestamp", "payload.startedAt");
+      }
+      if (
+        payload.completedAt !== undefined &&
+        (!isNonEmptyString(payload.completedAt) || Number.isNaN(Date.parse(payload.completedAt)))
+      ) {
+        addIssue(sink, "error", "turn.completed_at.invalid", "turn completedAt must be a valid timestamp", "payload.completedAt");
+      }
+      if (
+        payload.durationMs !== undefined &&
+        (typeof payload.durationMs !== "number" ||
+          !Number.isFinite(payload.durationMs) ||
+          payload.durationMs < 0)
+      ) {
+        addIssue(sink, "error", "turn.duration.invalid", "turn durationMs must be a non-negative finite number", "payload.durationMs");
       }
       if (
         (event.type === "turn.step.started" ||

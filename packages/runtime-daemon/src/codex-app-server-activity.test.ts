@@ -95,6 +95,86 @@ describe("translateCodexAppServerNotification", () => {
     }
   });
 
+  test("preserves authoritative Codex turn and item lifecycle timing", () => {
+    const state = createCodexAppServerTranslationState();
+    const started = translateCodexAppServerNotification(
+      {
+        method: "turn/started",
+        params: {
+          threadId: "thread-timing",
+          turn: { id: "turn-timing", startedAt: 1_788_888_800 },
+        },
+      },
+      state,
+    );
+    const item = translateCodexAppServerNotification(
+      {
+        method: "item/completed",
+        params: {
+          threadId: "thread-timing",
+          turnId: "turn-timing",
+          completedAtMs: 1_788_888_802_500,
+          item: {
+            type: "commandExecution",
+            id: "command-timing",
+            command: "echo ok",
+            cwd: "/workspace",
+            status: "completed",
+            aggregatedOutput: "ok",
+            exitCode: 0,
+            durationMs: 2_500,
+          },
+        },
+      },
+      state,
+    );
+    const completed = translateCodexAppServerNotification(
+      {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-timing",
+          turn: {
+            id: "turn-timing",
+            status: "completed",
+            startedAt: 1_788_888_800,
+            completedAt: 1_788_888_803,
+            durationMs: 3_000,
+          },
+        },
+      },
+      state,
+    );
+
+    assert.equal(started[0]?.activity.type, "turn_started");
+    if (started[0]?.activity.type === "turn_started") {
+      assert.equal(started[0].activity.startedAt, "2026-09-08T17:33:20.000Z");
+      assert.equal(started[0].activity.identity?.canonicalTurnId.length, 64);
+    }
+    assert.equal(item[0]?.ts, "2026-09-08T17:33:22.500Z");
+    const commandObservation = item.find(
+      (entry) => entry.activity.type === "observation_completed",
+    );
+    assert.equal(commandObservation?.activity.type, "observation_completed");
+    if (commandObservation?.activity.type === "observation_completed") {
+      assert.equal(commandObservation.activity.observation.durationMs, 2_500);
+    }
+    assert.equal(completed[0]?.activity.type, "turn_completed");
+    if (completed[0]?.activity.type === "turn_completed") {
+      assert.deepEqual(
+        {
+          startedAt: completed[0].activity.startedAt,
+          completedAt: completed[0].activity.completedAt,
+          durationMs: completed[0].activity.durationMs,
+        },
+        {
+          startedAt: "2026-09-08T17:33:20.000Z",
+          completedAt: "2026-09-08T17:33:23.000Z",
+          durationMs: 3_000,
+        },
+      );
+    }
+  });
+
   test("preserves provider session id on thread-scoped lifecycle notifications", () => {
     const state = createCodexAppServerTranslationState();
     const started = translateCodexAppServerNotification(

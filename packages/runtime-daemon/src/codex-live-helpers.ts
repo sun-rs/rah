@@ -22,6 +22,7 @@ import {
   type JsonRpcRequest,
   type LiveCodexSession,
 } from "./codex-live-types";
+import { requestCodexThreadResumeWithoutTranscript } from "./codex-app-server-resume";
 
 type BufferedServerRequest = {
   request: JsonRpcRequest;
@@ -401,11 +402,11 @@ function subscribeExternalCodexThreadForMirror(
           return;
         }
         try {
-          const response = await liveSession.client.request(
-            "thread/resume",
-            { threadId: liveSession.threadId },
-            30_000,
-          );
+          const response = await requestCodexThreadResumeWithoutTranscript({
+            client: liveSession.client,
+            params: { threadId: liveSession.threadId },
+            timeoutMs: 30_000,
+          });
           liveSession.externalThreadMirrorSubscribed = true;
           applyCodexLiveTranslatedItems(
             services,

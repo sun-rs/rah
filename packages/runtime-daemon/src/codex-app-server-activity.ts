@@ -339,6 +339,65 @@ function numberField(record: Record<string, unknown>, key: string): number | und
   return typeof value === "number" ? value : undefined;
 }
 
+function firstFiniteNumberField(
+  record: Record<string, unknown>,
+  ...keys: string[]
+): number | undefined {
+  for (const key of keys) {
+    const value = numberField(record, key);
+    if (value !== undefined && Number.isFinite(value)) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function epochSecondsToIso(value: number | undefined): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const timestamp = new Date(value * 1_000);
+  return Number.isFinite(timestamp.getTime()) ? timestamp.toISOString() : undefined;
+}
+
+function epochMillisecondsToIso(value: number | undefined): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const timestamp = new Date(value);
+  return Number.isFinite(timestamp.getTime()) ? timestamp.toISOString() : undefined;
+}
+
+function turnLifecycleTiming(turn: Record<string, unknown>): {
+  startedAt?: string;
+  completedAt?: string;
+  durationMs?: number;
+} {
+  const startedAt = epochSecondsToIso(
+    firstFiniteNumberField(turn, "startedAt", "started_at"),
+  );
+  const completedAt = epochSecondsToIso(
+    firstFiniteNumberField(turn, "completedAt", "completed_at"),
+  );
+  const durationMs = firstFiniteNumberField(turn, "durationMs", "duration_ms");
+  return {
+    ...(startedAt !== undefined ? { startedAt } : {}),
+    ...(completedAt !== undefined ? { completedAt } : {}),
+    ...(durationMs !== undefined && durationMs >= 0 ? { durationMs } : {}),
+  };
+}
+
+function itemLifecycleTimestamp(
+  params: Record<string, unknown>,
+  phase: "started" | "completed",
+): string | undefined {
+  return epochMillisecondsToIso(
+    phase === "started"
+      ? firstFiniteNumberField(params, "startedAtMs", "started_at_ms")
+      : firstFiniteNumberField(params, "completedAtMs", "completed_at_ms"),
+  );
+}
+
 function stringArrayField(record: Record<string, unknown>, key: string): string[] {
   const value = record[key];
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
@@ -849,7 +908,7 @@ function makeCommandObservation(callId: string, command: string, cwd?: string): 
 
 function completeObservation(
   observation: WorkbenchObservation,
-  params: { output?: string; stderr?: string; exitCode?: number },
+  params: { output?: string; stderr?: string; exitCode?: number; durationMs?: number },
 ): WorkbenchObservation {
   const resultDisposition = classifyCodexCommandResult({
     kind: observation.kind,
@@ -872,6 +931,7 @@ function completeObservation(
       : {}),
     ...(resultDisposition.summary !== undefined ? { summary: resultDisposition.summary } : {}),
     ...(resultDisposition.metrics !== undefined ? { metrics: resultDisposition.metrics } : {}),
+    ...(params.durationMs !== undefined ? { durationMs: params.durationMs } : {}),
     detail: { artifacts },
   };
 }
@@ -1484,6 +1544,7 @@ function mapThreadItem(
       const exitCode = numberField(item, "exitCode");
       const output = optionalStringField(item, "aggregatedOutput");
       const stderr = optionalStringField(item, "stderr");
+      const durationMs = firstFiniteNumberField(item, "durationMs", "duration_ms");
       const toolCall = makeCommandToolCall(id, command, cwd, output, exitCode);
       const status = stringField(item, "status");
       const phaseStatus = itemPhaseToObservationStatus(phase, status);
@@ -1491,6 +1552,7 @@ function mapThreadItem(
         ...(output !== undefined ? { output } : {}),
         ...(stderr !== undefined ? { stderr } : {}),
         ...(exitCode !== undefined ? { exitCode } : {}),
+        ...(durationMs !== undefined && durationMs >= 0 ? { durationMs } : {}),
       });
       const isSemanticSuccess = completedObservation.metrics?.semanticStatus === "search_no_matches";
       const observation =
@@ -1687,7 +1749,23 @@ export function translateCodexAppServerThreadSnapshot(
     if (runtimeModel) {
       state.runtimeModelByTurnId.set(turnId, runtimeModel);
     }
-    translatedItems.push(translated(raw, { type: "turn_started", turnId }));
+    const lifecycleIdentity = providerSessionId
+      ? createCodexTimelineTurnIdentity({
+          providerSessionId,
+          turnId,
+          origin: "history",
+          confidence: "derived",
+        })
+      : undefined;
+    const timing = turnLifecycleTiming(turnRecord);
+    translatedItems.push(
+      translated(raw, {
+        type: "turn_started",
+        turnId,
+        ...turnIdentityProps(lifecycleIdentity),
+        ...(timing.startedAt !== undefined ? { startedAt: timing.startedAt } : {}),
+      }),
+    );
     const turnItems = Array.isArray(turnRecord.items) ? turnRecord.items : [];
     for (const item of turnItems) {
       if (!item || typeof item !== "object" || Array.isArray(item)) {
@@ -1704,17 +1782,14 @@ export function translateCodexAppServerThreadSnapshot(
       );
     }
     const status = stringField(turnRecord, "status");
-    const lifecycleIdentity = providerSessionId
-      ? createCodexTimelineTurnIdentity({
-          providerSessionId,
-          turnId,
-          origin: "history",
-          confidence: "derived",
-        })
-      : undefined;
     if (status === "completed") {
       translatedItems.push(
-        translated(raw, { type: "turn_completed", turnId, ...turnIdentityProps(lifecycleIdentity) }),
+        translated(raw, {
+          type: "turn_completed",
+          turnId,
+          ...turnIdentityProps(lifecycleIdentity),
+          ...timing,
+        }),
       );
     } else if (status === "interrupted") {
       translatedItems.push(
@@ -1723,6 +1798,7 @@ export function translateCodexAppServerThreadSnapshot(
           turnId,
           reason: "interrupted",
           ...turnIdentityProps(lifecycleIdentity),
+          ...timing,
         }),
       );
     } else if (status === "failed") {
@@ -1735,6 +1811,7 @@ export function translateCodexAppServerThreadSnapshot(
         turnId,
         error: error ?? "Codex turn failed",
         ...turnIdentityProps(lifecycleIdentity),
+        ...timing,
       }));
     }
   }
@@ -1899,7 +1976,24 @@ export function translateCodexAppServerNotification(
         state.runtimeModelByTurnId.set(turn.id, runtimeModel);
       }
       delete state.pendingRuntimeModel;
-      return [translated(notification, { type: "turn_started", turnId: turn.id })];
+      const providerSessionId = providerSessionIdFromParams(params);
+      const identity = providerSessionId
+        ? createCodexTimelineTurnIdentity({
+            providerSessionId,
+            turnId: turn.id,
+            origin: "live",
+            confidence: "derived",
+          })
+        : undefined;
+      const timing = turnLifecycleTiming(turn);
+      return [
+        translated(notification, {
+          type: "turn_started",
+          turnId: turn.id,
+          ...turnIdentityProps(identity),
+          ...(timing.startedAt !== undefined ? { startedAt: timing.startedAt } : {}),
+        }),
+      ];
     }
     case "hook/started": {
       const params = paramsRecord(notification);
@@ -1923,6 +2017,7 @@ export function translateCodexAppServerNotification(
         return invalidStreamActivities(notification, "turn/completed did not include turn.status");
       }
       const turnId = typeof turn.id === "string" ? turn.id : "current-turn";
+      const timing = turnLifecycleTiming(turn);
       const providerSessionId = providerSessionIdFromParams(params);
       const identity = providerSessionId
         ? createCodexTimelineTurnIdentity({
@@ -1943,6 +2038,7 @@ export function translateCodexAppServerNotification(
             turnId,
             error: typeof error?.message === "string" ? error.message : "Codex turn failed",
             ...turnIdentityProps(identity),
+            ...timing,
           }),
         ];
       }
@@ -1953,10 +2049,18 @@ export function translateCodexAppServerNotification(
             turnId,
             reason: "interrupted",
             ...turnIdentityProps(identity),
+            ...timing,
           }),
         ];
       }
-      return [translated(notification, { type: "turn_completed", turnId, ...turnIdentityProps(identity) })];
+      return [
+        translated(notification, {
+          type: "turn_completed",
+          turnId,
+          ...turnIdentityProps(identity),
+          ...timing,
+        }),
+      ];
     }
     case "hook/completed": {
       const params = paramsRecord(notification);
@@ -1984,17 +2088,18 @@ export function translateCodexAppServerNotification(
       const params = paramsRecord(notification);
       const item = params ? recordField(params, "item") : null;
       const turnId = params ? turnIdFromParams(params) : undefined;
-      if (!item || !turnId) {
+      if (!params || !item || !turnId) {
         return invalidStreamActivities(notification, `${notification.method} did not include item and turnId`);
       }
       const phase = notification.method === "item/started" ? "started" : "completed";
+      const ts = itemLifecycleTimestamp(params, phase);
       return mapThreadItem(
         item,
         phase,
         turnId,
         state,
         providerSessionIdFromParams(params),
-      ).map((activity) => translated(notification, activity));
+      ).map((activity) => translated(notification, activity, ts ? { ts } : undefined));
     }
     case "item/autoApprovalReview/started": {
       const params = paramsRecord(notification);
