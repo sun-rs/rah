@@ -13,7 +13,7 @@ RAH 需要把这种“已经结束的历史”显示成 interrupted/failed，但
 
 ## 定义
 
-- RAH 管理写手：RAH 自己拉起并仍可继续控制的 Codex session，例如 web live session、`rah codex` native local-server session。
+- RAH 管理写手：由 Web/PWA 启动或恢复、并仍由当前 daemon 控制的 Codex native local-server session。
 - RAH 历史读取：Web 打开历史、翻页、replay provider history。它只读 rollout，不算 live，也不算写手。
 - 外部写手：非 RAH 当前进程对 rollout 文件持有写或读写 fd，通常是用户自己开的裸 `codex` TUI。
 - 活跃外部写手：外部 Codex 写手仍有子进程在运行，通常意味着 shell/tool 还没结束。
@@ -55,7 +55,7 @@ RAH 会用 `lsof` 判断 rollout 是否有外部写手，并用 `ps` 区分“�
 
 精确 liveness 的强保证只能来自：
 
-- 通过 `rah codex` 启动，由 RAH 管理生命周期。
+- 通过 Web/PWA 启动或恢复，由 RAH daemon 管理生命周期。
 - provider 在历史文件里记录 pid/session owner。
 - provider 提供 app-server/thread status。
 

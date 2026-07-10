@@ -4,7 +4,7 @@
 
 ## 1. 项目定位
 
-RAH 是一个本地优先的 AI 工作台。它不是要替所有 CLI 重写完整 Web agent，而是让 running session 由本机 daemon 持有，并让桌面 Terminal、Web、PWA、iPad/iPhone、Canvas pane 能接入同一个 provider session。
+RAH 是一个本地优先的 AI 工作台。它让 running session 由本机 daemon 持有，并让 Web、PWA、iPad/iPhone 与 Canvas pane 接入同一个 provider session；原生 TUI 作为工作台内的可选视图提供。
 
 当前 `main` 把 running 主线拆成 provider runtime：
 
@@ -27,7 +27,7 @@ RAH 是一个本地优先的 AI 工作台。它不是要替所有 CLI 重写完�
 - Codex/OpenCode 的实时 truth 是 provider native local server event；Claude fallback 的现场连续性由 tmux/TUI mux 维持。
 - 结构化 Chat/Timeline 来自 provider server event 与原厂 jsonl/db/session history mirror，不从 ANSI/TUI 输出反推。
 - Web UI 只消费 RAH canonical protocol，不直接依赖 provider-native 事件。
-- `rah codex/opencode`、Web New、Canvas New、Web Claim History 对 Codex/OpenCode 默认进入 native local server runtime；`rah claude` 和 Claude Web running session 默认进入 tmux/TUI mux fallback。
+- Web/PWA New、Canvas New 和 Resume 对 Codex/OpenCode 默认进入 native local server runtime；Claude 默认进入 tmux/TUI mux fallback。
 - 历史浏览先加载最近 tail，再按上滚分页加载更早内容，不一次性把完整历史塞进前端。
 
 ## 2. 包结构
@@ -475,7 +475,7 @@ node bin/rah.mjs restart --no-open
 node bin/rah.mjs restart --no-build --no-open
 ```
 
-`restart` 会停止当前 managed daemon，再用当前 checkout 的源码启动新 daemon。它会中断当前由 daemon 管理的 running TUIs（例如 `rah codex`、`rah claude`、`rah opencode`），因为旧 daemon 会被关闭。`start` 只保证 daemon 正在运行；如果旧 daemon 已经 ready，它不会替换成新代码。普通代码更新不需要 `npm install`。
+`restart` 会停止当前 managed daemon，再用当前 checkout 的源码启动新 daemon。它会中断当前由 daemon 管理的 running provider runtimes，因为旧 daemon 会被关闭。`start` 只保证 daemon 正在运行；如果旧 daemon 已经 ready，它不会替换成新代码。普通代码更新不需要 `npm install`。
 
 后台 daemon 管理命令：
 

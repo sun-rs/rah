@@ -106,23 +106,6 @@ describe("composer contract", () => {
     });
   });
 
-  test("allows terminal-launched running sessions to compose without an explicit control claim", () => {
-    const surface = deriveComposerSurface({
-      selectedSummary: summary({
-        launchSource: "terminal",
-      }),
-      hasControl: false,
-      isGenerating: true,
-      pendingSessionAction: null,
-    });
-
-    assert.deepEqual(surface, {
-      kind: "compose",
-      showStopButton: true,
-      stopTitle: "Interrupt the native TUI turn from Web.",
-    });
-  });
-
   test("allows native local-server Chat to compose even when TUI control belongs elsewhere", () => {
     const surface = deriveComposerSurface({
       selectedSummary: summary({

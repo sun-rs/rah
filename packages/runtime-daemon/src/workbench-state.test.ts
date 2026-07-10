@@ -384,7 +384,7 @@ describe("WorkbenchStateStore", () => {
       "utf8",
     );
 
-    const snapshot = new WorkbenchStateStore().load();
+    const snapshot = new WorkbenchStateStore(daemonDir).load();
 
     assert.deepEqual(snapshot.hiddenSessionKeys, ["codex:thread-visible-1"]);
     assert.deepEqual(snapshot.sessionTitleOverrides, {
@@ -393,8 +393,49 @@ describe("WorkbenchStateStore", () => {
     assert.deepEqual(snapshot.pendingSessionTitleOverrides, {
       "pending-live-id": "pending title",
     });
-    assert.deepEqual(snapshot.sessions.map((session) => session.provider), ["codex"]);
+    assert.deepEqual(snapshot.sessions, []);
     assert.deepEqual(snapshot.recentSessions, []);
+  });
+
+  test("normalizes recovered terminal-owned mux sessions to Web ownership", () => {
+    const daemonDir = path.join(tmpRoot, "runtime-daemon");
+    mkdirSync(daemonDir, { recursive: true });
+    writeFileSync(
+      path.join(daemonDir, "workbench-state.json"),
+      JSON.stringify({
+        version: 2,
+        updatedAt: new Date().toISOString(),
+        workspaces: ["/workspace/demo"],
+        sessions: [],
+        recentSessions: [],
+        tuiMuxLiveSessions: [
+          {
+            id: "legacy-terminal-session",
+            provider: "claude",
+            providerSessionId: "provider-session-1",
+            launchSource: "terminal",
+            liveBackend: "tui_mux",
+            cwd: "/workspace/demo",
+            rootDir: "/workspace/demo",
+            ptyId: "legacy-terminal-session",
+            runtimeState: "idle",
+            capabilities: {},
+            mux: {
+              backend: "tmux",
+              sessionName: "rah-legacy-terminal-session",
+              paneId: "0.0",
+            },
+            createdAt: "2026-04-23T13:26:21.939Z",
+            updatedAt: "2026-04-23T13:26:21.939Z",
+          },
+        ],
+      }),
+      "utf8",
+    );
+
+    const snapshot = new WorkbenchStateStore(daemonDir).load();
+
+    assert.equal(snapshot.tuiMuxLiveSessions[0]?.launchSource, "web");
   });
 
   test("closing a managed session removes it from running sessions and unblocks workspace removal", async () => {

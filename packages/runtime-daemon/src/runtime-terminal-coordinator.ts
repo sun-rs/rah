@@ -1,5 +1,4 @@
 import type {
-  ClientKind,
   IndependentTerminalStartRequest,
   IndependentTerminalStartResponse,
   NativeTuiDiagnostic,
@@ -1652,10 +1651,6 @@ export class RuntimeTerminalCoordinator {
     }
   }
 
-  private shouldUseTuiMuxSizingClient(kind: ClientKind): boolean {
-    return kind !== "terminal";
-  }
-
   private tuiMuxSurfaceResponse(tmux?: TuiMuxSessionState): NativeTuiSurfaceResponse {
     if (!tmux?.activeSurface) {
       return {};
@@ -1741,14 +1736,13 @@ export class RuntimeTerminalCoordinator {
     const sessionId = crypto.randomUUID();
     const providerSessionId = args.providerSessionId ?? args.launch.providerSessionId;
     const startupTimestampMs = Date.now();
-    const launchSource = args.attach?.client.kind === "terminal" ? "terminal" : "web";
     const initialPromptState = initialNativeTuiPromptState(args.launch.provider);
     this.deps.sessionStore.createManagedSession({
       id: sessionId,
       provider: args.launch.provider,
       ...(providerSessionId ? { providerSessionId } : {}),
       ...(args.origin ? { origin: args.origin } : {}),
-      launchSource,
+      launchSource: "web",
       liveBackend: "native_tui",
       cwd: args.launch.cwd,
       rootDir: args.launch.cwd,
@@ -1880,7 +1874,6 @@ export class RuntimeTerminalCoordinator {
     const sessionId = crypto.randomUUID();
     const providerSessionId = args.providerSessionId ?? launch.providerSessionId;
     const startupTimestampMs = Date.now();
-    const launchSource = args.attach?.client.kind === "terminal" ? "terminal" : "web";
     const initialPromptState = initialTuiMuxPromptState(launch.provider);
     const muxBackendKind = this.preferredTuiMuxBackendKind;
     const muxRuntime = this.muxRuntimeForKind(muxBackendKind);
@@ -1895,7 +1888,7 @@ export class RuntimeTerminalCoordinator {
       provider: launch.provider,
       ...(providerSessionId ? { providerSessionId } : {}),
       ...(args.origin ? { origin: args.origin } : {}),
-      launchSource,
+      launchSource: "web",
       liveBackend: "tui_mux",
       cwd: launch.cwd,
       rootDir: launch.cwd,
@@ -2269,8 +2262,8 @@ export class RuntimeTerminalCoordinator {
     action: () => Promise<T>,
   ): Promise<T> {
     // Chat and control actions target the tmux pane directly. They do not need
-    // an attach/sizing client, so they cannot steal redraw ownership from a
-    // visible terminal attach.
+    // a sizing client, so they cannot steal redraw ownership from a visible
+    // Web TUI surface.
     return await action();
   }
 

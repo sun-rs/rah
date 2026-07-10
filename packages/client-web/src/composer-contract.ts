@@ -191,10 +191,7 @@ export function deriveComposerSurface(args: {
   }
 
   if (!hasControl) {
-    if (
-      selectedSummary.session.launchSource === "terminal" ||
-      selectedSummary.session.liveBackend === "native_local_server"
-    ) {
+    if (selectedSummary.session.liveBackend === "native_local_server") {
       return {
         kind: "compose",
         showStopButton: isGenerating,

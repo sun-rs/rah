@@ -156,7 +156,7 @@ ACP 可以作为某个 provider 的传输/控制实现，例如 OpenCode ACP。�
 
 原因：
 
-- ACP 不覆盖 RAH 的 terminal attach、history replay、workspace metadata、canvas/workbench 行为。
+- ACP 不覆盖 RAH 的 Web TUI surface、history replay、workspace metadata、canvas/workbench 行为。
 - RAH 需要同时管理 PTY live truth 和 structured mirror truth。
 - OpenCode ACP 是 provider-specific implementation，不应反向定义整个 RAH 协议。
 

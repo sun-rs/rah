@@ -70,16 +70,13 @@ Important behavior:
 
 - `start` does not replace a daemon that is already running.
 - `restart` is the command that shuts down the old daemon and starts the updated code.
-- `restart` interrupts currently managed core live provider runtimes (`rah codex`, `rah claude`,
-  `rah opencode`) because the old daemon is stopped.
+- `restart` interrupts currently managed live provider runtimes because the old daemon is stopped.
 - `npm install` is not needed for normal code changes.
 - daemon pid/log files live under `~/.rah/runtime-daemon`.
-- `rah codex` and `rah opencode` now default to native local-server sessions and attach the current
-  terminal with the provider-native TUI client (`codex --remote ... resume ...` or
-  `opencode attach ... --session ...`).
-- `rah claude` defaults to the tmux/TUI fallback.
-- There is no public `--mux` CLI switch. Provider runtime selection is fixed by provider:
-  Codex/OpenCode use native local-server; Claude uses tmux/TUI fallback.
+- Session creation, resume, Chat, and TUI access live in the Web/PWA workbench. The public CLI no
+  longer starts provider sessions or hands them off to the current terminal.
+- Provider runtime selection remains fixed by provider: Codex/OpenCode use native local-server;
+  Claude uses the tmux/TUI fallback behind the Web TUI surface.
 - Core live providers are `codex`, `claude`, and `opencode`. Other model families are available
   through OpenCode + API providers rather than separate CLI adapters. See
   [`docs/provider-scope-codex-claude-opencode.zh-CN.md`](docs/provider-scope-codex-claude-opencode.zh-CN.md).

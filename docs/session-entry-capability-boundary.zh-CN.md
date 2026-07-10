@@ -13,30 +13,27 @@
 - Core live provider：Codex、Claude、OpenCode。
 - 其它模型家族不再维护独立 CLI adapter；按量模型优先通过 OpenCode 配置使用。
 
-## 1. 四种入口
+## 1. 用户入口
 
 | 入口 | Owner | 语义 | 是否有原生 TUI / Client |
 | --- | --- | --- | --- |
-| `rah codex` / `rah opencode` | provider native local server + official client | 请求 daemon 创建 native local server session，然后本地终端用官方 remote/attach client 接入同一 provider session | 有，provider client view |
-| `rah claude` | tmux/TUI mux fallback + terminal attach client | 请求 daemon 启动 Claude TUI，然后当前终端 attach 到 tmux surface | 有，TUI owner surface |
-| `rah codex/claude/opencode resume <providerSessionId>` | 按 provider runtime 选择 owner | 请求 daemon resume 指定 provider session；Codex/OpenCode 接 native server，Claude 接 tmux fallback | Core provider 有 |
-| `web new` | 按 provider runtime 选择 owner | Codex/OpenCode 走 provider native local server；Claude 走 tmux/TUI fallback；可在 Chat/TUI 视图间切换 | Core provider 有 |
-| `web resume` / claim history | 按 provider runtime 选择 owner | Web 从历史 session claim/resume 成 live session；只读浏览不触发 live | Core provider 有 |
+| Web/PWA New | 按 provider runtime 选择 owner | Codex/OpenCode 走 provider native local server；Claude 走 tmux/TUI fallback；可在 Chat/TUI 视图间切换 | Core provider 有 |
+| Web/PWA Resume | 按 provider runtime 选择 owner | 从历史 session 恢复为 live session；只读浏览不触发 runtime | Core provider 有 |
+| Canvas pane New/Resume | 与普通 Web 页面共享同一 session lifecycle | pane 只是容器，不创建第二套启动、控制或 TUI 协议 | Core provider 有 |
 
 关键边界：
 
 - 入口不再强行进入同一个 PTY runtime；Codex/OpenCode 的普通 Chat control 进入 provider server，Claude 进入 TUI mux。
-- `rah xxx resume <id>` 必须是显式 provider session id，不支持 provider 原生 picker 模式。
 - 如果用户在原生 TUI 内部 `/new` / `/resume` 切到另一个 session，当前不承诺所有 provider 都能自动 rebind。
 - `livePermissions` 只表示 web 能回答运行时 approval/request，不等于 web 能修改该 session 的全局权限模式。
 - `native_local_server` session 的运行中权限/模型/plan 只有 provider transport 明确支持时才开放；Claude TUI fallback 的全局权限/模型/plan 以 provider 原生 TUI 为最终事实。
-- 公开 `rah xxx` 入口不再提供旧 terminal wrapper handoff 逃生口。
+- daemon CLI 只负责 start/status/stop/restart/logs、非交互 close/archive 和 Council MCP；不再创建或接管 provider session。
 
 ## 2. Provider 能力矩阵
 
 | Provider | 默认 runtime | Structured source | Approval / 权限边界 |
 | --- | --- | --- | --- |
-| Codex | `native_local_server`，Codex app-server + `codex --remote ... resume <threadId>` | app-server event + rollout/session history backfill | mode/model 可走启动前和 next-turn/runtime config；具体能力以 runtime feature 为准 |
+| Codex | `native_local_server`，Codex app-server + Web TUI client view | app-server event + rollout/session history backfill | mode/model 可走启动前和 next-turn/runtime config；具体能力以 runtime feature 为准 |
 | Claude | `tui_mux_fallback`，Claude TUI + tmux | `.claude/projects/**/*.jsonl` | permission/model/effort 尽量作为启动参数；运行中以原生 TUI 为准 |
 | OpenCode | `native_local_server`，OpenCode serve/session/attach | OpenCode server/session event + SQLite backfill | model/permission/variant 通过 OpenCode API/ACP 能力；UI 只能展示 capability 声明的可变项 |
 
@@ -47,7 +44,6 @@ Native local server / TUI fallback 分层后，权限、模型、effort、thinki
 启动前：
 
 - Web New、Canvas New、Web Claim 可以把 `modeId`、`model`、`optionValues` 传给 provider runtime。
-- `rah xxx` CLI 当前只暴露稳定的启动参数子集，主要是 provider、cwd、mux backend，以及 Claude 的 `--permission-mode` / `modeId`。
 - daemon 尽量把 Web/Canvas 选择翻译成 provider-native 启动或 server config，例如 Codex app-server config、Claude `--model` / `--permission-mode`、OpenCode model/variant config。
 - OpenCode 的 `opencode run --variant` 和 ACP `provider/model/variant` 是已验证路径；OpenCode TUI 入口没有稳定 `--variant` 参数，所以 PTY-first core 不把 variant/effort 当作启动成功条件。
 - 如果 provider CLI 改名、废弃或改变某个参数，RAH 不应因此破坏 PTY create/attach/replay/close 主链路。

@@ -271,12 +271,12 @@ test("sendInputToOpenCodeLiveSession queues consecutive inputs", async () => {
   services.sessionStore.attachClient({
     sessionId: session.session.id,
     clientId: "terminal-client",
-    kind: "terminal",
-    connectionId: "pid:test-terminal",
+    kind: "web",
+    connectionId: "test-web",
     attachMode: "interactive",
     focus: true,
   });
-  services.sessionStore.claimControl(session.session.id, "terminal-client", "terminal");
+  services.sessionStore.claimControl(session.session.id, "terminal-client", "web");
 
   const liveSession = {
     sessionId: session.session.id,

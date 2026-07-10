@@ -46,7 +46,7 @@ class FakeManagedSessionRunner {
               provider: request.provider,
               providerSessionId: id,
               ...(request.origin !== undefined ? { origin: request.origin } : {}),
-              launchSource: request.attach?.client.kind === "terminal" ? "terminal" : "web",
+              launchSource: "web",
               liveBackend: request.liveBackend ?? "native_local_server",
               cwd: request.cwd,
               rootDir: request.cwd,

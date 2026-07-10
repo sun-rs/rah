@@ -54,7 +54,7 @@ Council agent TUI 同样只请求 96KB PTY tail，避免打开 agent terminal �
 ## Exclusive 与 Multi-client
 
 - Claude 当前走 tmux fallback，属于 exclusive TUI surface：同一时间只能有一个真实 attach。Web attach 会让其他 tmux viewer 退出显示控制，反之亦然。
-- Codex/OpenCode native local server 属于 multi-client：Web chat、Web TUI、本地 terminal client 和多个 Canvas pane 可以共存。
+- Codex/OpenCode native local server 属于 multi-view：Web Chat、Web TUI 和多个 Canvas pane 可以共存，并共享同一 provider session。
 - 如果 Codex/OpenCode 未来落入 tmux fallback，则按 exclusive 处理。
 
 ## 实现原则

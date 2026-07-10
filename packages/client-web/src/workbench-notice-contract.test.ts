@@ -87,27 +87,6 @@ describe("workbench notice contract", () => {
     });
   });
 
-  test("does not show a special terminal-owned running notice", () => {
-    const state = deriveWorkbenchNoticeState({
-      selectedSummary: {
-        ...summary({
-          provider: "claude",
-          launchSource: "terminal",
-          runtimeState: "running",
-        }),
-        controlLease: {
-          sessionId: "session-1",
-          holderClientId: "terminal-surface-1",
-          holderKind: "terminal",
-        },
-      },
-      selectedProjection: projection(summary()),
-      error: null,
-    });
-
-    assert.equal(state.interactionNotice, null);
-  });
-
   test("derives warning notice for stopped native TUI sessions", () => {
     const state = deriveWorkbenchNoticeState({
       selectedSummary: summary({

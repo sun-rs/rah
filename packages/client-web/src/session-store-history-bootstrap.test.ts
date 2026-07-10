@@ -9,7 +9,7 @@ function summary(): SessionSummary {
     session: {
       id: "session-1",
       provider: "claude",
-      launchSource: "terminal",
+      launchSource: "web",
       cwd: "/workspace/rah",
       rootDir: "/workspace/rah",
       runtimeState: "running",

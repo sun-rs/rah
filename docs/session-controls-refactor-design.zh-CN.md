@@ -287,7 +287,7 @@ Codex `--help` 可以作为辅助探针，但不能作为 RAH Web/live controls 
 这些可用于：
 
 - 验证本机 Codex CLI 是否支持某个启动参数。
-- 为 `rah codex` 真实 TUI client 启动参数提供 fallback。
+- 为 Web TUI client view 的 provider 启动参数提供 fallback。
 - 作为 static fallback 的诊断来源。
 
 不能只靠 `--help` 的部分：

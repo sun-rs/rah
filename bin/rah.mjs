@@ -19,16 +19,13 @@ import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
-import WebSocket from "ws";
 
 const execFileAsync = promisify(execFile);
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_DAEMON_URL = "http://127.0.0.1:43111";
 const DEFAULT_DAEMON_HOST = process.env.RAH_HOST?.trim() || "0.0.0.0";
-const CORE_RUNNING_PROVIDERS = new Set(["codex", "claude", "opencode"]);
-const SUPPORTED_PROVIDERS = CORE_RUNNING_PROVIDERS;
-const MANAGEMENT_COMMANDS = new Set(["start", "status", "stop", "restart", "logs", "attach", "close", "archive"]);
+const MANAGEMENT_COMMANDS = new Set(["start", "status", "stop", "restart", "logs", "close", "archive"]);
 const CLIENT_INDEX_PATH = join(ROOT_DIR, "packages", "client-web", "dist", "index.html");
 const VOLATILE_CODEX_PARENT_ENV_KEYS = new Set([
   "CODEX_CI",
@@ -36,36 +33,6 @@ const VOLATILE_CODEX_PARENT_ENV_KEYS = new Set([
   "CODEX_THREAD_ID",
   "CODEX_TURN_ID",
 ]);
-const TERMINAL_MODE_RESET_SEQUENCE = [
-  "\u001b[<1u",
-  "\u001b[?1000l",
-  "\u001b[?1002l",
-  "\u001b[?1003l",
-  "\u001b[?1005l",
-  "\u001b[?1006l",
-  "\u001b[?1015l",
-  "\u001b[?1004l",
-  "\u001b[?2004l",
-  "\u001b[?2026l",
-  "\u001b[?25h",
-  "\u001b[0m",
-].join("");
-const CLAUDE_PERMISSION_MODES = new Set([
-  "acceptEdits",
-  "auto",
-  "bypassPermissions",
-  "default",
-  "plan",
-]);
-
-function restoreTerminalApplicationModes(stdout) {
-  if (!stdout.isTTY) {
-    return;
-  }
-  stdout.write(TERMINAL_MODE_RESET_SEQUENCE);
-  stdout.write("\r");
-}
-
 function printUsage() {
   process.stdout.write(
     [
@@ -75,34 +42,15 @@ function printUsage() {
       "  rah stop",
       "  rah restart",
       "  rah logs [--follow]",
-      "  rah attach <rahSessionId>",
       "  rah close <rahSessionId>",
       "  rah council-mcp --council <councilId> --actor <actorId>",
-      "  rah <provider>",
-      "  rah <provider> attach <providerSessionId>",
-      "  rah <provider> resume <providerSessionId>",
-      "",
-      "Providers:",
-      "  codex | claude | opencode",
       "",
       "Options:",
-      "  --cwd <dir>         Override working directory",
       "  --daemon-url <url>  Override daemon base URL",
       "  --no-build          Skip web build for rah start",
       "  --no-open           Do not open the browser for rah start",
       "  --follow, -f        Follow logs for rah logs",
-      "  --permission-mode <mode>",
-      "                      Claude native TUI launch mode (default: bypassPermissions)",
-      "                      Values: default | acceptEdits | auto | bypassPermissions | plan",
       "  --help              Show this help",
-      "",
-    "Current status:",
-    "  codex/opencode: native local-server with provider-native TUI clients",
-    "  claude: tmux native TUI fallback",
-      "",
-      "TUI mux note:",
-      "  `rah claude resume <providerSessionId>` maps to `claude --resume <id>`.",
-      "  Bare provider session-picker modes are intentionally unsupported.",
       "",
       "Source workflow:",
       "  `rah start` builds the web client, starts the daemon in the background,",
@@ -122,7 +70,7 @@ function parseManagementArgs(command, argv) {
   let follow = false;
   let sessionId;
   const rest = [...argv];
-  if (command === "attach" || command === "close" || command === "archive") {
+  if (command === "close" || command === "archive") {
     sessionId = rest.shift();
     if (!sessionId) {
       throw new Error(`Missing RAH session id after \`${command}\`.`);
@@ -205,109 +153,23 @@ function parseCouncilMcpArgs(argv) {
   };
 }
 
-function parseProviderAttachArgs(provider, argv) {
-  let daemonUrl = DEFAULT_DAEMON_URL;
-  let daemonUrlExplicit = false;
-  const rest = [...argv];
-  const providerSessionId = rest.shift();
-  if (!providerSessionId) {
-    throw new Error("Missing provider session id after `attach`.");
-  }
-  while (rest.length > 0) {
-    const option = rest.shift();
-    if (option === "--daemon-url" || option === "--daemon") {
-      daemonUrl = rest.shift() ?? daemonUrl;
-      daemonUrlExplicit = true;
-      continue;
-    }
-    throw new Error(`Unknown argument: ${option}`);
-  }
-  return {
-    help: false,
-    command: "attach",
-    provider,
-    providerSessionId,
-    daemonUrl,
-    daemonUrlExplicit,
-  };
-}
-
 function parseArgs(argv) {
   if (argv.length === 0 || argv.includes("--help")) {
     return { help: true };
   }
 
-  const provider = argv[0];
-  if (provider === "council-mcp") {
+  const command = argv[0];
+  if (command === "council-mcp") {
     return parseCouncilMcpArgs(argv.slice(1));
   }
-  if (MANAGEMENT_COMMANDS.has(provider)) {
+  if (MANAGEMENT_COMMANDS.has(command)) {
     return {
       help: false,
-      ...parseManagementArgs(provider, argv.slice(1)),
+      ...parseManagementArgs(command, argv.slice(1)),
     };
   }
 
-  if (!SUPPORTED_PROVIDERS.has(provider)) {
-    throw new Error(`Unsupported provider: ${provider}`);
-  }
-
-  let resumeProviderSessionId;
-  let cwd = process.cwd();
-  let daemonUrl = DEFAULT_DAEMON_URL;
-  let daemonUrlExplicit = false;
-  let claudePermissionMode;
-
-  const rest = [...argv.slice(1)];
-  if (rest[0] === "attach") {
-    rest.shift();
-    return parseProviderAttachArgs(provider, rest);
-  }
-  if (rest[0] === "resume") {
-    rest.shift();
-    resumeProviderSessionId = rest.shift();
-    if (!resumeProviderSessionId) {
-      throw new Error("Missing provider session id after `resume`.");
-    }
-  }
-
-  while (rest.length > 0) {
-    const option = rest.shift();
-    if (option === "--cwd") {
-      cwd = rest.shift() ?? cwd;
-      continue;
-    }
-    if (option === "--daemon-url") {
-      daemonUrl = rest.shift() ?? daemonUrl;
-      daemonUrlExplicit = true;
-      continue;
-    }
-    if (option === "--permission-mode") {
-      if (provider !== "claude") {
-        throw new Error("`--permission-mode` is only supported for `rah claude`.");
-      }
-      const value = rest.shift();
-      if (!value || !CLAUDE_PERMISSION_MODES.has(value)) {
-        throw new Error(
-          `Unsupported Claude permission mode: ${value ?? "<missing>"}. ` +
-            "Use default, acceptEdits, auto, bypassPermissions, or plan.",
-        );
-      }
-      claudePermissionMode = value;
-      continue;
-    }
-    throw new Error(`Unknown argument: ${option}`);
-  }
-
-  return {
-    help: false,
-    provider,
-    cwd: resolve(cwd),
-    daemonUrl,
-    daemonUrlExplicit,
-    ...(resumeProviderSessionId ? { resumeProviderSessionId } : {}),
-    ...(claudePermissionMode ? { claudePermissionMode } : {}),
-  };
+  throw new Error(`Unsupported command: ${command}`);
 }
 
 async function daemonReady(daemonUrl) {
@@ -979,10 +841,6 @@ async function handleManagementCommand(parsed) {
     await showLogs(parsed.daemonUrl, parsed.follow);
     return;
   }
-  if (parsed.command === "attach") {
-    await attachExistingRahSession(parsed);
-    return;
-  }
   if (parsed.command === "close" || parsed.command === "archive") {
     await closeRahSession(parsed.daemonUrl, parsed.sessionId);
     process.stdout.write(`[rah] stopped session ${parsed.sessionId}\n`);
@@ -1010,14 +868,6 @@ function apiUrl(daemonUrl, pathname) {
   return new URL(pathname, daemonUrl).toString();
 }
 
-function ptyWebSocketUrl(daemonUrl, sessionId) {
-  const url = new URL(daemonUrl);
-  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  url.pathname = `/api/pty/${encodeURIComponent(sessionId)}`;
-  url.search = "replay=true";
-  return url.toString();
-}
-
 async function postJson(daemonUrl, pathname, body) {
   const response = await fetch(apiUrl(daemonUrl, pathname), {
     method: "POST",
@@ -1032,113 +882,6 @@ async function postJson(daemonUrl, pathname, body) {
     throw new Error(`Request failed: ${response.status} ${response.statusText}${text ? `\n${text}` : ""}`);
   }
   return await response.json();
-}
-
-async function getJson(daemonUrl, pathname) {
-  const response = await fetch(apiUrl(daemonUrl, pathname), {
-    headers: {
-      "x-rah-client": "web",
-    },
-  });
-  if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    throw new Error(`Request failed: ${response.status} ${response.statusText}${text ? `\n${text}` : ""}`);
-  }
-  return await response.json();
-}
-
-async function findRunningSessionSummary(daemonUrl, sessionId) {
-  const response = await getJson(daemonUrl, "/api/sessions");
-  return (response.sessions ?? []).find((summary) => summary?.session?.id === sessionId) ?? null;
-}
-
-async function findRunningProviderSessionSummary(daemonUrl, provider, providerSessionId) {
-  const response = await getJson(daemonUrl, "/api/sessions");
-  const matches = (response.sessions ?? []).filter(
-    (summary) =>
-      summary?.session?.provider === provider &&
-      summary?.session?.providerSessionId === providerSessionId,
-  );
-  if (matches.length > 1) {
-    throw new Error(
-      `Multiple running RAH sessions match ${provider}:${providerSessionId}. Use \`rah attach <rahSessionId>\` to choose one explicitly.`,
-    );
-  }
-  return matches[0] ?? null;
-}
-
-async function runningSessionExists(daemonUrl, sessionId) {
-  try {
-    return (await findRunningSessionSummary(daemonUrl, sessionId)) !== null;
-  } catch {
-    return true;
-  }
-}
-
-function providerModeId(parsed) {
-  if (parsed.provider === "claude") {
-    return parsed.claudePermissionMode;
-  }
-  return undefined;
-}
-
-function defaultLiveBackendForProvider(provider) {
-  if (provider === "codex" || provider === "opencode") {
-    return "native_local_server";
-  }
-  if (provider === "claude") {
-    return "tui_mux";
-  }
-  return undefined;
-}
-
-function terminalClientDescriptor() {
-  const clientId = `terminal:${process.pid}:${Date.now()}`;
-  return {
-    clientId,
-    client: {
-      id: clientId,
-      kind: "terminal",
-      connectionId: `pid:${process.pid}`,
-      cols: process.stdout.columns || 100,
-      rows: process.stdout.rows || 32,
-    },
-  };
-}
-
-async function startOrResumePtyFirstSession(parsed, client) {
-  const modeId = providerModeId(parsed);
-  const liveBackend = defaultLiveBackendForProvider(parsed.provider);
-  if (!liveBackend) {
-    throw new Error(`Provider ${parsed.provider} is not supported for live attach.`);
-  }
-  if (parsed.resumeProviderSessionId) {
-    const result = await postJson(parsed.daemonUrl, "/api/sessions/resume", {
-      provider: parsed.provider,
-      providerSessionId: parsed.resumeProviderSessionId,
-      cwd: parsed.cwd,
-      liveBackend,
-      ...(modeId ? { modeId } : {}),
-      attach: {
-        client: client.client,
-        mode: "interactive",
-        claimControl: true,
-      },
-    });
-    return result.session;
-  }
-  const result = await postJson(parsed.daemonUrl, "/api/sessions/start", {
-    provider: parsed.provider,
-    cwd: parsed.cwd,
-    liveBackend,
-    ...(modeId ? { modeId } : {}),
-    attach: {
-      client: client.client,
-      mode: "interactive",
-      claimControl: true,
-    },
-  });
-  return result.session;
 }
 
 function councilMcpTools() {
@@ -1352,497 +1095,28 @@ async function handleCouncilMcpLine(parsed, line) {
   }
 }
 
-function managedSessionFromSummary(summary) {
-  if (summary?.session?.id) {
-    return summary.session;
-  }
-  // Compatibility for older synthetic tests or callers that returned the
-  // ManagedSession directly instead of the canonical SessionSummary envelope.
-  if (summary?.id) {
-    return summary;
-  }
-  throw new Error("Daemon returned an invalid session summary.");
+function apiClientDescriptor() {
+  const clientId = `api:${process.pid}:${Date.now()}`;
+  return {
+    clientId,
+    client: {
+      id: clientId,
+      kind: "api",
+      connectionId: `pid:${process.pid}`,
+    },
+  };
 }
 
-function ptyIdFromSessionSummary(summary) {
-  const session = managedSessionFromSummary(summary);
-  return session.nativeTui?.terminalId || session.ptyId || session.id;
-}
-
-async function detachPtyFirstClient(daemonUrl, sessionId, clientId) {
-  try {
-    await postJson(daemonUrl, `/api/sessions/${encodeURIComponent(sessionId)}/detach`, {
-      clientId,
-    });
-  } catch {
-    // Detach is best-effort cleanup for a local terminal client. Failure must
-    // not close or otherwise disturb the daemon-owned TUI session.
-  }
-}
-
-async function closeRahSession(daemonUrl, sessionId, client = terminalClientDescriptor()) {
-  await attachRahClient(daemonUrl, sessionId, client, {
+async function closeRahSession(daemonUrl, sessionId) {
+  const client = apiClientDescriptor();
+  await postJson(daemonUrl, `/api/sessions/${encodeURIComponent(sessionId)}/attach`, {
+    client: client.client,
     mode: "interactive",
     claimControl: false,
   });
   await postJson(daemonUrl, `/api/sessions/${encodeURIComponent(sessionId)}/close`, {
     clientId: client.clientId,
   });
-}
-
-async function printRunningSessionExitHint(daemonUrl, session) {
-  if (!(await runningSessionExists(daemonUrl, session.id))) {
-    return;
-  }
-  const provider = session.provider ?? "provider";
-  const providerSessionId = session.providerSessionId;
-  const attachCommand = providerSessionId
-    ? `rah ${provider} attach ${providerSessionId}`
-    : `rah attach ${session.id}`;
-  process.stdout.write(
-    [
-      "",
-      `[rah] Terminal client detached. RAH session is still running: ${session.id}`,
-      `[rah] Reattach: ${attachCommand}`,
-      `[rah] End everywhere: rah close ${session.id}`,
-      "",
-    ].join("\n"),
-  );
-}
-
-function sendPtyResize(socket, sessionId, clientId) {
-  if (socket.readyState !== WebSocket.OPEN) {
-    return;
-  }
-  socket.send(JSON.stringify({
-    type: "pty.resize",
-    sessionId,
-    clientId,
-    cols: process.stdout.columns || 100,
-    rows: process.stdout.rows || 32,
-  }));
-}
-
-async function attachLocalTerminalToPty(daemonUrl, sessionId, clientId) {
-  const socket = new WebSocket(ptyWebSocketUrl(daemonUrl, sessionId));
-  const stdin = process.stdin;
-  const stdout = process.stdout;
-  const canUseRawMode = Boolean(stdin.isTTY && typeof stdin.setRawMode === "function");
-  const inputDecoder = new StringDecoder("utf8");
-  let cleanedUp = false;
-
-  await new Promise((resolve, reject) => {
-    const cleanup = () => {
-      if (cleanedUp) {
-        return;
-      }
-      cleanedUp = true;
-      stdin.off("data", onInput);
-      stdout.off?.("resize", onResize);
-      if (canUseRawMode) {
-        stdin.setRawMode(false);
-      }
-      restoreTerminalApplicationModes(stdout);
-      stdin.pause();
-    };
-
-    const send = (payload) => {
-      if (socket.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify(payload));
-      }
-    };
-
-    const onInput = (chunk) => {
-      const data = inputDecoder.write(chunk);
-      if (!data) {
-        return;
-      }
-      send({
-        type: "pty.input",
-        sessionId,
-        clientId,
-        data,
-      });
-    };
-
-    const onResize = () => {
-      sendPtyResize(socket, sessionId, clientId);
-    };
-
-    socket.on("open", () => {
-      if (canUseRawMode) {
-        stdin.setRawMode(true);
-      }
-      stdin.resume();
-      stdin.on("data", onInput);
-      stdout.on?.("resize", onResize);
-      sendPtyResize(socket, sessionId, clientId);
-    });
-
-    socket.on("message", (raw) => {
-      let frame;
-      try {
-        frame = JSON.parse(raw.toString("utf8"));
-      } catch {
-        return;
-      }
-      if (frame.type === "pty.replay") {
-        for (const chunk of frame.chunks ?? []) {
-          stdout.write(chunk);
-        }
-        if (frame.status === "exited") {
-          cleanup();
-          socket.close();
-          resolve(undefined);
-        }
-        return;
-      }
-      if (frame.type === "pty.output") {
-        stdout.write(frame.data);
-        return;
-      }
-      if (frame.type === "pty.exited") {
-        cleanup();
-        socket.close();
-        if (typeof frame.exitCode === "number") {
-          process.exitCode = frame.exitCode;
-        }
-        resolve(undefined);
-      }
-    });
-
-    socket.on("close", () => {
-      cleanup();
-      resolve(undefined);
-    });
-
-    socket.on("error", (error) => {
-      cleanup();
-      reject(error);
-    });
-  });
-}
-
-function terminalSurfaceSize() {
-  return {
-    cols: process.stdout.columns || 100,
-    rows: process.stdout.rows || 32,
-  };
-}
-
-async function claimLocalTuiSurface(daemonUrl, sessionId, client) {
-  const size = terminalSurfaceSize();
-  await postJson(
-    daemonUrl,
-    `/api/sessions/${encodeURIComponent(sessionId)}/tui-surface/claim`,
-    {
-      clientId: client.clientId,
-      clientKind: "terminal",
-      cols: size.cols,
-      rows: size.rows,
-    },
-  );
-}
-
-async function releaseLocalTuiSurface(daemonUrl, sessionId, clientId) {
-  try {
-    await postJson(
-      daemonUrl,
-      `/api/sessions/${encodeURIComponent(sessionId)}/tui-surface/release`,
-      { clientId },
-    );
-  } catch {
-    // Surface release is best-effort; the session itself remains daemon-owned.
-  }
-}
-
-async function getTuiSurface(daemonUrl, sessionId) {
-  try {
-    return await getJson(daemonUrl, `/api/sessions/${encodeURIComponent(sessionId)}/tui-surface`);
-  } catch {
-    return {};
-  }
-}
-
-async function waitForLocalMuxReattachKey(daemonUrl, sessionId) {
-  const stdin = process.stdin;
-  const stdout = process.stdout;
-  if (!stdin.isTTY || typeof stdin.setRawMode !== "function") {
-    stdout.write(`\r\n[rah] TUI is active in Web. Run \`rah attach ${sessionId}\` to reattach here.\r\n`);
-    return false;
-  }
-  restoreTerminalApplicationModes(stdout);
-  stdout.write("\r\n[rah] TUI is active in Web. Press Esc or Enter to reattach here, Ctrl-C to leave.\r\n");
-  return await new Promise((resolve) => {
-    const cleanup = () => {
-      clearInterval(sessionPollTimer);
-      stdin.off("data", onInput);
-      stdin.setRawMode(false);
-      stdin.pause();
-    };
-    const sessionPollTimer = setInterval(() => {
-      void runningSessionExists(daemonUrl, sessionId).then((exists) => {
-        if (exists) {
-          return;
-        }
-        cleanup();
-        stdout.write("\r\n[rah] Session was stopped from another client.\r\n");
-        resolve(false);
-      });
-    }, 750);
-    sessionPollTimer.unref?.();
-    const onInput = (chunk) => {
-      const data = chunk.toString("utf8");
-      if (data.includes("\u0003")) {
-        cleanup();
-        resolve(false);
-        return;
-      }
-      if (data.includes("\u001b") || data.includes("\r") || data.includes("\n")) {
-        cleanup();
-        resolve(true);
-      }
-    };
-    stdin.setRawMode(true);
-    stdin.resume();
-    stdin.on("data", onInput);
-  });
-}
-
-async function runTmuxAttachUntilExitOrRevoked(daemonUrl, session, client) {
-  const child = spawn(
-    "tmux",
-    ["attach-session", "-d", "-t", session.mux.sessionName],
-    {
-      cwd: session.cwd || ROOT_DIR,
-      env: process.env,
-      stdio: "inherit",
-    },
-  );
-  let revoked = false;
-  let sessionGone = false;
-  let completed = false;
-  const pollTimer = setInterval(() => {
-    void (async () => {
-      if (!(await runningSessionExists(daemonUrl, session.id))) {
-        sessionGone = true;
-        child.kill("SIGHUP");
-        setTimeout(() => {
-          if (!completed) {
-            child.kill("SIGTERM");
-          }
-        }, 500).unref?.();
-        return;
-      }
-      const { surface } = await getTuiSurface(daemonUrl, session.id);
-      if (!surface || surface.clientId === client.clientId) {
-        return;
-      }
-      revoked = true;
-      child.kill("SIGHUP");
-      setTimeout(() => {
-        if (!completed) {
-          child.kill("SIGTERM");
-        }
-      }, 500).unref?.();
-    })();
-  }, 250);
-  pollTimer.unref?.();
-
-  return await new Promise((resolve, reject) => {
-    child.on("error", reject);
-    child.on("exit", (code, signal) => {
-      completed = true;
-      clearInterval(pollTimer);
-      restoreTerminalApplicationModes(process.stdout);
-      if (revoked) {
-        resolve({ revoked: true });
-        return;
-      }
-      if (sessionGone) {
-        resolve({ revoked: false, sessionGone: true });
-        return;
-      }
-      if (signal) {
-        resolve({ revoked: false, signal });
-        return;
-      }
-      if (code && code !== 0) {
-        reject(new Error(`tmux attach exited with code ${code}`));
-        return;
-      }
-      resolve({ revoked: false });
-    });
-  });
-}
-
-async function runMuxAttachUntilExitOrRevoked(daemonUrl, session, client) {
-  if (session.mux.backend === "tmux") {
-    return await runTmuxAttachUntilExitOrRevoked(daemonUrl, session, client);
-  }
-  throw new Error(`Unsupported mux backend: ${session.mux.backend}`);
-}
-
-async function attachLocalTerminalToMux(daemonUrl, session, client) {
-  if (!session?.mux || session.mux.backend !== "tmux") {
-    throw new Error("Session does not expose TUI mux metadata.");
-  }
-  while (true) {
-    await claimLocalTuiSurface(daemonUrl, session.id, client);
-    const result = await runMuxAttachUntilExitOrRevoked(daemonUrl, session, client);
-    if (!result.revoked) {
-      await releaseLocalTuiSurface(daemonUrl, session.id, client.clientId);
-      return;
-    }
-    const shouldReattach = await waitForLocalMuxReattachKey(daemonUrl, session.id);
-    if (!shouldReattach) {
-      await releaseLocalTuiSurface(daemonUrl, session.id, client.clientId);
-      return;
-    }
-  }
-}
-
-async function attachRahClient(daemonUrl, sessionId, client, options = {}) {
-  await postJson(daemonUrl, `/api/sessions/${encodeURIComponent(sessionId)}/attach`, {
-    client: client.client,
-    mode: options.mode ?? "interactive",
-    claimControl: options.claimControl === true,
-  });
-}
-
-async function runProviderAttachUntilExitOrClosed(daemonUrl, session, child) {
-  let sessionGone = false;
-  let completed = false;
-  const pollTimer = setInterval(() => {
-    void runningSessionExists(daemonUrl, session.id).then((exists) => {
-      if (exists) {
-        return;
-      }
-      sessionGone = true;
-      child.kill("SIGHUP");
-      setTimeout(() => {
-        if (!completed) {
-          child.kill("SIGTERM");
-        }
-      }, 500).unref?.();
-    });
-  }, 750);
-  pollTimer.unref?.();
-
-  return await new Promise((resolve, reject) => {
-    child.on("error", reject);
-    child.on("exit", (code, signal) => {
-      completed = true;
-      clearInterval(pollTimer);
-      restoreTerminalApplicationModes(process.stdout);
-      if (sessionGone) {
-        resolve(undefined);
-        return;
-      }
-      if (signal) {
-        resolve(undefined);
-        return;
-      }
-      if (code && code !== 0) {
-        reject(new Error(`provider attach exited with code ${code}`));
-        return;
-      }
-      resolve(undefined);
-    });
-  });
-}
-
-async function attachLocalTerminalToNativeLocalServer(daemonUrl, session, client) {
-  const endpoint = session.runtimeDiagnostics?.serverEndpoint;
-  if (!endpoint) {
-    throw new Error("Session does not expose a native local-server endpoint.");
-  }
-  if (session.provider !== "opencode" && session.provider !== "codex") {
-    throw new Error(`Provider ${session.provider} does not expose a stable native TUI attach client yet.`);
-  }
-  if (session.provider === "codex" && !/^wss?:\/\//.test(endpoint)) {
-    throw new Error("Codex native TUI attach requires a websocket app-server endpoint.");
-  }
-  await attachRahClient(daemonUrl, session.id, client, {
-    mode: "interactive",
-    claimControl: false,
-  });
-  const binary =
-    session.provider === "codex"
-      ? process.env.RAH_CODEX_BINARY || "codex"
-      : process.env.RAH_OPENCODE_BINARY || "opencode";
-  const attachArgs =
-    session.provider === "codex"
-      ? ["--remote", endpoint]
-      : ["attach", endpoint];
-  if (session.providerSessionId && session.provider === "opencode") {
-    attachArgs.push("--session", session.providerSessionId);
-  } else if (session.providerSessionId && session.provider === "codex") {
-    attachArgs.push("resume", session.providerSessionId);
-  }
-  const child = spawn(binary, attachArgs, {
-    cwd: session.cwd || ROOT_DIR,
-    env: process.env,
-    stdio: "inherit",
-  });
-  await runProviderAttachUntilExitOrClosed(daemonUrl, session, child);
-}
-
-async function attachExistingRahSession(parsed) {
-  await ensureDaemon(parsed.daemonUrl, {
-    allowUnidentifiedReady: parsed.daemonUrlExplicit === true,
-  });
-  const summary = parsed.provider && parsed.providerSessionId
-    ? await findRunningProviderSessionSummary(
-        parsed.daemonUrl,
-        parsed.provider,
-        parsed.providerSessionId,
-      )
-    : await findRunningSessionSummary(parsed.daemonUrl, parsed.sessionId);
-  if (!summary) {
-    if (parsed.provider && parsed.providerSessionId) {
-      throw new Error(
-        `No live ${parsed.provider} session found for provider session ${parsed.providerSessionId}. Use \`rah ${parsed.provider} resume ${parsed.providerSessionId}\` to start it.`,
-      );
-    }
-    throw new Error(`No running RAH session found for ${parsed.sessionId}.`);
-  }
-  const session = managedSessionFromSummary(summary);
-  const client = terminalClientDescriptor();
-  try {
-    if (session.liveBackend === "native_local_server") {
-      await attachLocalTerminalToNativeLocalServer(parsed.daemonUrl, session, client);
-    } else if (session.mux?.backend === "tmux") {
-      await attachLocalTerminalToMux(parsed.daemonUrl, session, client);
-    } else {
-      await attachLocalTerminalToPty(parsed.daemonUrl, ptyIdFromSessionSummary(summary), client.clientId);
-    }
-  } finally {
-    await detachPtyFirstClient(parsed.daemonUrl, session.id, client.clientId);
-  }
-  await printRunningSessionExitHint(parsed.daemonUrl, session);
-}
-
-async function runPtyFirstProviderCommand(parsed) {
-  await ensureDaemon(parsed.daemonUrl, {
-    allowUnidentifiedReady: parsed.daemonUrlExplicit === true,
-  });
-  const client = terminalClientDescriptor();
-  const summary = await startOrResumePtyFirstSession(parsed, client);
-  const session = managedSessionFromSummary(summary);
-  const ptyId = ptyIdFromSessionSummary(summary);
-  try {
-    if (session.liveBackend === "native_local_server") {
-      await attachLocalTerminalToNativeLocalServer(parsed.daemonUrl, session, client);
-    } else if (session.mux?.backend === "tmux") {
-      await attachLocalTerminalToMux(parsed.daemonUrl, session, client);
-    } else {
-      await attachLocalTerminalToPty(parsed.daemonUrl, ptyId, client.clientId);
-    }
-  } finally {
-    await detachPtyFirstClient(parsed.daemonUrl, session.id, client.clientId);
-  }
-  await printRunningSessionExitHint(parsed.daemonUrl, session);
 }
 
 async function main() {
@@ -1870,10 +1144,6 @@ async function main() {
     return;
   }
 
-  if (parsed.provider) {
-    await runPtyFirstProviderCommand(parsed);
-    return;
-  }
 }
 
 void main().catch((error) => {

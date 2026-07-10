@@ -38,7 +38,7 @@ Codex/OpenCode：
 
 - 使用 server/app-server 作为 session runner。
 - agent turn 和 MCP wait 可以在 server 侧无头运行。
-- 本地 terminal TUI、Web terminal、手机 PWA 都只是 attach/client surface。
+- Web TUI、手机 PWA 和 Canvas TUI pane 都只是 client view。
 - 关闭可见 TUI 不应该终止 session runner。
 - 已验证 OpenCode 和 Codex：无 TUI client 时，server 仍能 `channel_wait_new -> channel_post -> channel_wait_new`。
 
@@ -141,15 +141,15 @@ Native local server 的 TUI client attach 命令也必须集中生成。当前 d
 
 Codex/OpenCode：
 
-- runner 在 provider server/app-server 中，terminal client 不是状态源。
-- 打开 terminal 时 attach 到 server session 或启动轻量 client；关闭 terminal 不影响 runner。
+- runner 在 provider server/app-server 中，Web TUI client view 不是状态源。
+- 打开 Web TUI 时连接 server session 或启动轻量 client；关闭视图不影响 runner。
 - chat 历史、工具调用、reasoning、token usage 来自 provider structured events/history，不来自 terminal replay。
 - 因此 terminal 可以只显示当前 client 画面，不需要重放完整 session transcript。
 
 Claude：
 
 - Claude 暂时依赖 persistent real TUI runner，建议继续由 tmux 这类成熟 multiplexer 承担长期 TUI 状态。
-- Web terminal attach 时只取当前屏幕/近期 tail，不读取完整 multiplexer scrollback。
+- Web TUI 连接时只取当前屏幕/近期 tail，不读取完整 multiplexer scrollback。
 - Claude 的 transcript 仍应从 provider history/structured parser 进入 RAH timeline，不能靠终端画面解析。
 
 性能边界：
@@ -161,7 +161,7 @@ Claude：
 
 稳定策略：
 
-- Codex/OpenCode Council agent 默认 headless runner；terminal 只在用户需要调试时 attach。
+- Codex/OpenCode Council agent 默认 headless runner；TUI 只在用户需要调试时打开。
 - Claude Council agent 暂时 persistent TUI runner。
 - Council 的权威输出是 council log/MCP event，不是 terminal transcript。
 - terminal dialog 内访问过的 tab 保留 xterm instance；切 tab 只切可见层。
@@ -230,7 +230,7 @@ Claude：
 - Council 的 Codex/OpenCode agent 已切到普通 session 的 native local server runner，不再用独立的 `startAgentPty` 路径启动 provider TUI。
 - 新增 `MuxRuntime` 的 tmux backend，实现 session/window/pane 创建、pane capture、输入、控制键、resize、关闭和诊断基础能力。
 - `tui_mux` fallback 的底层 mux backend 只有 `tmux`。不再提供其它 mux backend 入口。
-- CLI `rah attach` / `rah claude` 只使用 tmux attach。
+- 该阶段曾规划终端 attach；当前产品已移除公共终端接入，统一由 Web/PWA TUI 使用 mux surface。
 
 仍未完成：
 
@@ -249,7 +249,7 @@ Claude：
 - agent 是否继续工作不能依赖 terminal 是否打开。
 - Web UI 的 session/council 状态来自 daemon/provider events，不来自 terminal transcript。
 - 对长期运行 terminal，不允许通过全量历史 replay 重建屏幕。
-- provider runner 崩溃、terminal attach 断开、council 停止必须是不同状态，不能混成一种 stopped。
+- provider runner 崩溃、Web TUI client 断开、Council 停止必须是不同状态，不能混成一种 stopped。
 
 ## 仍需验证
 
@@ -257,4 +257,4 @@ Claude：
 - Codex/OpenCode server 崩溃后的 council/session 恢复策略。
 - 多 agent 同时 wait/post 的竞争与顺序一致性。
 - Claude 是否有可替代 tmux/TUI runner 的 headless 方案。
-- iPad/PWA 后台切换后 terminal attach 与后台 PTY 的状态恢复。
+- iPad/PWA 后台切换后 Web TUI 与后台 PTY 的状态恢复。

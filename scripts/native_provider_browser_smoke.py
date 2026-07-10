@@ -135,14 +135,6 @@ CONFIGS = (
     ),
 )
 
-def cli_mode_providers() -> frozenset[str]:
-    raw = os.environ.get("RAH_NATIVE_PROVIDER_BROWSER_EXERCISE_CLI", "").strip()
-    if not raw:
-        return frozenset()
-    if raw.lower() in {"1", "true", "all"}:
-        return frozenset(config.provider for config in CONFIGS)
-    return frozenset(part.strip() for part in raw.split(",") if part.strip())
-
 STARTED_SESSIONS: list[tuple[str, str]] = []
 
 
@@ -177,59 +169,6 @@ def live_session_ids(base_url: str, provider: str) -> set[str]:
         if session.get("provider") == provider:
             result.add(str(session.get("id")))
     return result
-
-
-def wait_for_new_live_session(
-    base_url: str,
-    provider: str,
-    before: set[str],
-    timeout_s: int = 20,
-) -> str:
-    started = time.time()
-    last_sessions: list[dict[str, Any]] = []
-    while time.time() - started < timeout_s:
-        response = request_json(base_url, "/api/sessions")
-        sessions = [
-            entry.get("session", {})
-            for entry in response.get("sessions", [])
-            if entry.get("session", {}).get("provider") == provider
-            and str(entry.get("session", {}).get("id")) not in before
-        ]
-        last_sessions = sessions
-        if sessions:
-            sessions.sort(key=lambda item: str(item.get("createdAt", "")), reverse=True)
-            return str(sessions[0]["id"])
-        time.sleep(0.2)
-    raise AssertionError(f"new {provider} live session did not appear; last={last_sessions}")
-
-
-def spawn_rah_cli(
-    base_url: str,
-    workspace: pathlib.Path,
-    provider: str,
-    provider_session_id: str | None = None,
-) -> subprocess.Popen[str]:
-    args = ["node", "bin/rah.mjs", provider]
-    if provider_session_id:
-        args.extend(["resume", provider_session_id])
-    args.extend(["--daemon-url", base_url, "--cwd", str(workspace)])
-    return subprocess.Popen(
-        args,
-        cwd=ROOT_DIR,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        env=os.environ,
-    )
-
-
-def terminate_cli_process(proc: subprocess.Popen[str] | None) -> None:
-    if not proc:
-        return
-    if proc.poll() is not None:
-        return
-    terminate_process_tree(proc)
 
 
 def free_port() -> int:
@@ -1097,110 +1036,6 @@ def exercise_provider_archive(
         mark_session_closed(base_url, session_id)
 
 
-def exercise_provider_cli_modes(
-    page,
-    base_url: str,
-    workspace: pathlib.Path,
-    config: ProviderConfig,
-) -> dict[str, str]:
-    before = live_session_ids(base_url, config.provider)
-    cli_proc: subprocess.Popen[str] | None = spawn_rah_cli(base_url, workspace, config.provider)
-    session_id: str | None = None
-    resume_session_id: str | None = None
-    resume_proc: subprocess.Popen[str] | None = None
-    try:
-        session_id = wait_for_new_live_session(base_url, config.provider, before)
-        STARTED_SESSIONS.append((base_url, session_id))
-        wait_for_provider_binding(base_url, session_id, config.provider)
-        page.goto(base_url, wait_until="domcontentloaded")
-        page.reload(wait_until="domcontentloaded")
-        select_live_session(page, session_id)
-        page.get_by_role("button", name="TUI", exact=True).click(timeout=30_000)
-        panel = page.locator(".terminal-panel").last
-        expect(panel).to_be_visible(timeout=10_000)
-        wait_for_terminal_text(panel, config.ready_marker)
-        cli_prompt = f"rah cli {config.provider} browser native"
-        assert cli_proc.stdin is not None
-        cli_proc.stdin.write(f"{cli_prompt}\n")
-        cli_proc.stdin.flush()
-        wait_for_terminal_text(panel, f"{config.input_marker}:{cli_prompt}", timeout_s=20)
-        page.get_by_role("button", name="Chat", exact=True).click(timeout=30_000)
-        cli_answer = dynamic_answer_for(config, cli_prompt)
-        expect(page.get_by_text(cli_answer, exact=True)).to_be_visible(timeout=20_000)
-        assert_page_text_order(page, cli_prompt, cli_answer)
-        assert_page_text_absent(page, "Unhandled provider event")
-        artifact_dir = getattr(page, "_rah_artifact_dir", None)
-        if artifact_dir:
-            save_browser_screenshot(page, artifact_dir, f"{config.provider}-rah-cli-chat-mirror")
-
-        page.get_by_role("button", name="TUI", exact=True).click(timeout=30_000)
-        panel = page.locator(".terminal-panel").last
-        cli_stop_prompt = f"chat composer {config.provider} rah cli stop"
-        interrupted_count = count_terminal_text(panel, config.interrupt_marker)
-        cli_proc.stdin.write(f"{cli_stop_prompt}\n")
-        cli_proc.stdin.flush()
-        wait_for_terminal_text(panel, f"{config.input_marker}:{cli_stop_prompt}", timeout_s=20)
-        cli_proc.stdin.write("\x1b\x1b" if config.provider == "opencode" else "\x1b")
-        cli_proc.stdin.flush()
-        wait_for_terminal_text_count(
-            panel,
-            config.interrupt_marker,
-            interrupted_count + 1,
-        )
-        wait_for_session_idle(base_url, session_id, config.provider)
-        if artifact_dir:
-            save_browser_screenshot(page, artifact_dir, f"{config.provider}-rah-cli-terminal-stop")
-
-        provider_session_id = session_provider_session_id(base_url, session_id)
-        close_session_quietly(base_url, session_id)
-        mark_session_closed(base_url, session_id)
-        terminate_cli_process(cli_proc)
-        cli_proc = None
-
-        before_resume = live_session_ids(base_url, config.provider)
-        resume_proc = spawn_rah_cli(base_url, workspace, config.provider, provider_session_id)
-        resume_session_id = wait_for_new_live_session(base_url, config.provider, before_resume)
-        STARTED_SESSIONS.append((base_url, resume_session_id))
-        wait_for_provider_binding(base_url, resume_session_id, config.provider)
-        page.reload(wait_until="domcontentloaded")
-        select_live_session(page, resume_session_id)
-        page.get_by_role("button", name="Chat", exact=True).click(timeout=30_000)
-        resume_history_text = config.expected_mirror_text or cli_answer
-        expect(page.get_by_text(resume_history_text, exact=True)).to_be_visible(timeout=20_000)
-        cli_resume_matches = session_history_timeline_text_matches(
-            base_url,
-            resume_session_id,
-            "assistant_message",
-            resume_history_text,
-        )
-        if len(cli_resume_matches) > 1:
-            raise AssertionError(
-                f"{config.provider} rah cli resume duplicated {resume_history_text!r}: "
-                f"count={len(cli_resume_matches)}"
-            )
-        assert_page_text_absent(page, "Unhandled provider event")
-        if artifact_dir:
-            save_browser_screenshot(page, artifact_dir, f"{config.provider}-rah-cli-resume-chat-history")
-        close_session_quietly(base_url, resume_session_id)
-        mark_session_closed(base_url, resume_session_id)
-        terminate_cli_process(resume_proc)
-        resume_proc = None
-        return {
-            "provider": config.provider,
-            "cliSessionId": session_id,
-            "cliResumeSessionId": resume_session_id,
-        }
-    finally:
-        terminate_cli_process(cli_proc)
-        terminate_cli_process(resume_proc)
-        close_session_quietly(base_url, session_id)
-        close_session_quietly(base_url, resume_session_id)
-        if session_id:
-            mark_session_closed(base_url, session_id)
-        if resume_session_id:
-            mark_session_closed(base_url, resume_session_id)
-
-
 def exercise_provider(page, base_url: str, workspace: pathlib.Path, config: ProviderConfig) -> dict[str, str]:
     session_id = start_native_session(base_url, workspace, config)
     page.goto(base_url, wait_until="domcontentloaded")
@@ -1483,12 +1318,6 @@ def main() -> int:
                 "localStorage.setItem('rah-hide-tool-calls-in-chat', 'false');"
             )
             results = [exercise_provider(page, base_url, workspace, config) for config in CONFIGS]
-            cli_providers = cli_mode_providers()
-            cli_results = [
-                exercise_provider_cli_modes(page, base_url, workspace, config)
-                for config in CONFIGS
-                if config.provider in cli_providers
-            ]
             for config in CONFIGS:
                 exercise_provider_tui_exit(page, base_url, workspace, config)
                 exercise_provider_archive(page, base_url, workspace, config)
@@ -1522,12 +1351,10 @@ def main() -> int:
                         "TUI replay survives page reload for provider sessions",
                         "Foreground recovery catches up provider native TUI output without reselection",
                         "Web resume opens provider history without duplicating existing assistant messages",
-                        "rah <provider> terminal launch/resume smoke is opt-in because real terminal attach needs a TTY",
                         "provider TUI process exit marks PTY as exited and leaves the session not running",
                         "Archive closes provider live sessions and PTY state while retaining provider history",
                     ],
                     "results": results,
-                    "cliResults": cli_results,
                 },
                 ensure_ascii=False,
                 indent=2,

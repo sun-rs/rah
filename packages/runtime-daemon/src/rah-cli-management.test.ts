@@ -34,6 +34,27 @@ async function closeServer(server: ReturnType<typeof createServer>): Promise<voi
   });
 }
 
+test("rah CLI exposes daemon management without local terminal attach commands", async () => {
+  const rootDir = process.cwd();
+  const { stdout } = await execFileAsync(process.execPath, ["bin/rah.mjs", "--help"], {
+    cwd: rootDir,
+  });
+
+  assert.match(stdout, /rah start/);
+  assert.match(stdout, /rah close <rahSessionId>/);
+  assert.doesNotMatch(stdout, /rah attach/);
+  assert.doesNotMatch(stdout, /rah <provider>/);
+
+  await assert.rejects(
+    execFileAsync(process.execPath, ["bin/rah.mjs", "codex"], { cwd: rootDir }),
+    (error: unknown) => {
+      assert.ok(error && typeof error === "object");
+      assert.match((error as { stderr?: string }).stderr ?? "", /Unsupported command: codex/);
+      return true;
+    },
+  );
+});
+
 test("rah status trusts daemon runtime identity and writes a structured pid record", async () => {
   const rahHome = mkdtempSync(path.join(os.tmpdir(), "rah-cli-management-"));
   const rootDir = process.cwd();

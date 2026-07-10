@@ -137,89 +137,6 @@ def live_session_ids(base_url: str) -> set[str]:
     }
 
 
-def wait_for_new_live_session(
-    base_url: str,
-    before: set[str],
-    timeout_s: int = 60,
-    proc: subprocess.Popen[str] | None = None,
-) -> str:
-    started = time.time()
-    last_sessions: list[dict[str, Any]] = []
-    while time.time() - started < timeout_s:
-        response = request_json(base_url, "/api/sessions")
-        sessions = [
-            entry.get("session", {})
-            for entry in response.get("sessions", [])
-            if entry.get("session", {}).get("provider") == "codex"
-            and str(entry.get("session", {}).get("id")) not in before
-        ]
-        last_sessions = sessions
-        if sessions:
-            sessions.sort(key=lambda item: str(item.get("createdAt", "")), reverse=True)
-            return str(sessions[0]["id"])
-        if proc is not None and proc.poll() is not None:
-            stdout = ""
-            stderr = ""
-            try:
-                stdout, stderr = proc.communicate(timeout=1)
-            except Exception:
-                pass
-            raise AssertionError(
-                "new Codex live session did not appear before rah codex exited; "
-                f"code={proc.returncode} stdout={stdout[-2000:]} stderr={stderr[-2000:]} "
-                f"last={last_sessions}"
-            )
-        time.sleep(0.2)
-    raise AssertionError(f"new Codex live session did not appear; last={last_sessions}")
-
-
-def spawn_rah_codex_cli(
-    base_url: str,
-    workspace: pathlib.Path,
-    provider_session_id: str | None = None,
-) -> subprocess.Popen[str]:
-    args = ["node", "bin/rah.mjs", "codex"]
-    if provider_session_id:
-        args.extend(["resume", provider_session_id])
-    args.extend(["--daemon-url", base_url, "--cwd", str(workspace)])
-    return subprocess.Popen(
-        args,
-        cwd=ROOT_DIR,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        env=os.environ,
-    )
-
-
-def terminate_cli_process(proc: subprocess.Popen[str] | None) -> None:
-    if not proc or proc.poll() is not None:
-        return
-    terminate_process_tree(proc)
-
-
-def start_rah_codex_cli_session(
-    base_url: str,
-    workspace: pathlib.Path,
-    before: set[str],
-) -> tuple[subprocess.Popen[str], str]:
-    last_error: AssertionError | None = None
-    for attempt in range(2):
-        proc = spawn_rah_codex_cli(base_url, workspace)
-        try:
-            return proc, wait_for_new_live_session(base_url, before, proc=proc)
-        except AssertionError as exc:
-            last_error = exc
-            terminate_cli_process(proc)
-            message = str(exc)
-            if "Codex app-server request timed out: initialize" not in message or attempt > 0:
-                raise
-            time.sleep(1)
-    assert last_error is not None
-    raise last_error
-
-
 def open_live_session(page, session_id: str) -> None:
     page.locator('button[aria-label="Sessions"]:visible').first.click(timeout=30_000)
     page.get_by_role("button", name="Live", exact=True).click(timeout=30_000)
@@ -1047,108 +964,6 @@ def print_browser_preflight_error(exc: Exception) -> int:
     return 1
 
 
-def exercise_codex_cli_modes(
-    page,
-    base_url: str,
-    workspace: pathlib.Path,
-    provider_session_id: str,
-    artifact_dir: pathlib.Path,
-) -> dict[str, str]:
-    cli_session_id: str | None = None
-    cli_resume_session_id: str | None = None
-    cli_proc: subprocess.Popen[str] | None = None
-    resume_proc: subprocess.Popen[str] | None = None
-    try:
-        before = live_session_ids(base_url)
-        cli_proc, cli_session_id = start_rah_codex_cli_session(base_url, workspace, before)
-        cli_provider_session_id = wait_for_session_provider_id(base_url, cli_session_id, None)
-        page.goto(base_url, wait_until="domcontentloaded")
-        page.reload(wait_until="domcontentloaded")
-        open_live_session(page, cli_session_id)
-        page.get_by_role("button", name="TUI", exact=True).click(timeout=30_000)
-        panel = page.locator(".terminal-panel").last
-        expect(panel).to_be_visible(timeout=10_000)
-        wait_for_terminal_text(panel, "RAH_NATIVE_CODEX_BROWSER_READY")
-
-        cli_prompt = "rah cli codex browser native"
-        assert cli_proc.stdin is not None
-        cli_proc.stdin.write(f"{cli_prompt}\n")
-        cli_proc.stdin.flush()
-        wait_for_terminal_text(panel, f"RAH_NATIVE_CODEX_BROWSER_INPUT:{cli_prompt}", timeout_s=20)
-        cli_answer = "RAH_NATIVE_CODEX_BROWSER_CLI_ANSWER"
-        wait_for_terminal_text(panel, f"RAH_NATIVE_CODEX_BROWSER_ANSWER:{cli_answer}", timeout_s=20)
-        wait_for_session_history_timeline_text(
-            base_url,
-            cli_session_id,
-            "assistant_message",
-            cli_answer,
-        )
-        page.get_by_role("button", name="Chat", exact=True).click(timeout=30_000)
-        expect(page.get_by_text(cli_answer, exact=True)).to_be_visible(timeout=20_000)
-        assert_page_text_order(page, cli_prompt, cli_answer)
-        assert_page_text_absent(page, "Unhandled provider event")
-        assert_page_text_absent(page, "Loading older history")
-        save_browser_screenshot(page, artifact_dir, "codex-rah-cli-chat-mirror")
-
-        page.get_by_role("button", name="TUI", exact=True).click(timeout=30_000)
-        panel = page.locator(".terminal-panel").last
-        expect(panel).to_be_visible(timeout=10_000)
-        cli_stop_prompt = "STOP_NATIVE_BROWSER rah cli codex stop"
-        interrupted_count = count_terminal_text(panel, "RAH_NATIVE_CODEX_BROWSER_INTERRUPTED")
-        cli_proc.stdin.write(f"{cli_stop_prompt}\n")
-        cli_proc.stdin.flush()
-        wait_for_terminal_text(panel, f"RAH_NATIVE_CODEX_BROWSER_INPUT:{cli_stop_prompt}", timeout_s=20)
-        cli_proc.stdin.write("\x1b")
-        cli_proc.stdin.flush()
-        wait_for_terminal_text_count(
-            panel,
-            "RAH_NATIVE_CODEX_BROWSER_INTERRUPTED",
-            interrupted_count + 1,
-        )
-        assert_session_idle(base_url, cli_session_id)
-        save_browser_screenshot(page, artifact_dir, "codex-rah-cli-terminal-stop")
-
-        close_session_quietly(base_url, cli_session_id)
-        terminate_cli_process(cli_proc)
-        cli_proc = None
-
-        before_resume = live_session_ids(base_url)
-        resume_proc = spawn_rah_codex_cli(base_url, workspace, cli_provider_session_id)
-        cli_resume_session_id = wait_for_new_live_session(base_url, before_resume)
-        wait_for_session_provider_id(base_url, cli_resume_session_id, cli_provider_session_id)
-        page.reload(wait_until="domcontentloaded")
-        open_live_session(page, cli_resume_session_id)
-        page.get_by_role("button", name="Chat", exact=True).click(timeout=30_000)
-        expect(page.get_by_text(cli_answer, exact=True)).to_be_visible(timeout=20_000)
-        answer_count, answer_matches = count_session_history_timeline_text(
-            base_url,
-            cli_resume_session_id,
-            "assistant_message",
-            cli_answer,
-        )
-        if answer_count != 1:
-            raise AssertionError(
-                "Codex rah cli resume duplicated CLI assistant answer; "
-                f"count={answer_count} matches={answer_matches}"
-            )
-        assert_page_text_absent(page, "Unhandled provider event")
-        assert_page_text_absent(page, "Loading older history")
-        save_browser_screenshot(page, artifact_dir, "codex-rah-cli-resume-chat-history")
-
-        close_session_quietly(base_url, cli_resume_session_id)
-        terminate_cli_process(resume_proc)
-        resume_proc = None
-        return {
-            "cliSessionId": cli_session_id,
-            "cliResumeSessionId": cli_resume_session_id,
-        }
-    finally:
-        terminate_cli_process(cli_proc)
-        terminate_cli_process(resume_proc)
-        close_session_quietly(base_url, cli_session_id)
-        close_session_quietly(base_url, cli_resume_session_id)
-
-
 def main() -> int:
     try:
         preflight_browser_runtime()
@@ -1184,7 +999,6 @@ def main() -> int:
     artifact_dir = browser_artifact_dir("native-codex-browser")
     daemon: subprocess.Popen[str] | None = None
     session_id: str | None = None
-    cli_modes_result: dict[str, str] | None = None
 
     try:
         workspace.mkdir(parents=True)
@@ -1767,23 +1581,6 @@ def main() -> int:
 
             close_session_quietly(base_url, session_id)
             session_id = None
-            if os.environ.get("RAH_NATIVE_CODEX_BROWSER_EXERCISE_CLI") == "1":
-                cli_modes_result = exercise_codex_cli_modes(
-                    page,
-                    base_url,
-                    workspace,
-                    provider_session_id,
-                    artifact_dir,
-                )
-            else:
-                cli_modes_result = {
-                    "skipped": (
-                        "rah codex defaults to native_local_server and requires a real Codex "
-                        "app-server; this fake native_tui browser smoke covers explicit "
-                        "native_tui only. Use test:smoke:native-local-server for the default "
-                        "rah codex provider-server path."
-                    ),
-                }
             exercise_codex_history_paging(
                 page,
                 base_url,
@@ -1814,7 +1611,6 @@ def main() -> int:
                     "headless": browser_headless(),
                     "caseIds": CASE_IDS,
                     "screenshots": SCREENSHOTS,
-                    "cliResult": cli_modes_result,
                     "asserted": [
                         "Web can select native Codex live session",
                         "Chat/TUI toggle is rendered",
@@ -1836,7 +1632,7 @@ def main() -> int:
                         "Web resume opens Codex history without duplicating existing assistant messages",
                         "Stored Codex history loads the latest page first and preserves scroll anchor when older pages prepend",
                         "Missing-cwd history browsing does not prompt until Claim control",
-                        "Explicit native_tui browser flow stays separate from rah codex native_local_server default",
+                        "Explicit native_tui browser flow stays separate from the Web native_local_server default",
                         "Settings Status shows PTY terminal replay health for native TUI sessions",
                         "Settings Status refresh shows PTY terminal replay deltas",
                         "Canvas panes render native TUI and preserve replay across layout changes",

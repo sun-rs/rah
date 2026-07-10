@@ -35,7 +35,7 @@ type JsonRecord = Record<string, unknown>;
 
 const PROVIDERS = new Set<ProviderKind>(["codex", "claude", "opencode", "custom"]);
 const COUNCIL_PROVIDERS = new Set<ProviderKind>(["codex", "claude", "opencode"]);
-const CLIENT_KINDS = new Set(["terminal", "web", "ios", "ipad", "api"]);
+const CLIENT_KINDS = new Set(["web", "ios", "ipad", "api"]);
 const APPROVAL_POLICIES = new Set(["default", "on-request", "never", "auto_edit", "yolo"]);
 const PUBLIC_LIVE_BACKENDS = new Set([
   "native_tui",

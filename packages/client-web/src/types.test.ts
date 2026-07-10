@@ -1050,13 +1050,13 @@ describe("client projection", () => {
     );
   });
 
-  test("resets live projection when the same terminal session rebinds to a new provider session", () => {
+  test("resets live projection when the same runtime session rebinds to a new provider session", () => {
     let current = projection();
     current.summary = {
       ...current.summary,
       session: {
         ...current.summary.session,
-        launchSource: "terminal",
+        launchSource: "web",
         providerSessionId: "thread-1",
       },
     };

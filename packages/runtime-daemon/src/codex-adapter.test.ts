@@ -493,7 +493,7 @@ rl.on('line', (line) => {
     const managed = services.sessionStore.createManagedSession({
       provider: "codex",
       providerSessionId: sessionId,
-      launchSource: "terminal",
+      launchSource: "web",
       cwd,
       rootDir: cwd,
       capabilities: {

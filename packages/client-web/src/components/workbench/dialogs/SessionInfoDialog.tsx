@@ -137,18 +137,7 @@ export function SessionInfoDialog(props: {
   const summary = props.summary;
   const session = summary?.session;
   const providerSessionId = session?.providerSessionId ?? null;
-  const resumeCommand =
-    session?.providerSessionId && session.provider !== "custom"
-      ? `rah ${session.provider} resume ${session.providerSessionId}`
-      : null;
-  const rahAttachCommand = session ? `rah attach ${session.id}` : null;
   const isRunningSession = session?.status === "running";
-  const launchSource =
-    session?.launchSource === "terminal"
-      ? "Terminal"
-      : session?.launchSource === "web"
-        ? "Web"
-        : session?.launchSource ?? "Unavailable";
   const origin = formatSessionOrigin(session);
   const showCwd = Boolean(session?.cwd && session.rootDir && session.cwd !== session.rootDir);
 
@@ -192,18 +181,6 @@ export function SessionInfoDialog(props: {
                 }
               />
             ) : null}
-            {!isRunningSession && resumeCommand ? (
-              <InfoRow
-                label="Resume"
-                mono
-                value={
-                  <div className="flex flex-wrap items-start gap-2">
-                    <span className="min-w-0 flex-1">{resumeCommand}</span>
-                    <CopyValueButton value={resumeCommand} label="resume command" />
-                  </div>
-                }
-              />
-            ) : null}
             {origin ? <InfoRow label="Created by" value={origin} /> : null}
             <InfoRow label="Workspace" mono value={session?.rootDir ?? "Unavailable"} />
             {showCwd ? <InfoRow label="Working dir" mono value={session?.cwd ?? "Unavailable"} /> : null}
@@ -212,7 +189,6 @@ export function SessionInfoDialog(props: {
               <>
                 <InfoSectionHeader>Runtime</InfoSectionHeader>
                 <InfoRow label="Backend" value={formatBackend(session?.liveBackend)} />
-                <InfoRow label="Started from" value={launchSource} />
                 <InfoRow
                   label="Runtime ID"
                   mono
@@ -223,20 +199,6 @@ export function SessionInfoDialog(props: {
                         <CopyValueButton value={session.id} label="runtime ID" />
                       ) : null}
                     </div>
-                  }
-                />
-                <InfoRow
-                  label="Attach"
-                  mono
-                  value={
-                    rahAttachCommand ? (
-                      <div className="flex flex-wrap items-start gap-2">
-                        <span className="min-w-0 flex-1">{rahAttachCommand}</span>
-                        <CopyValueButton value={rahAttachCommand} label="attach command" />
-                      </div>
-                    ) : (
-                      "Unavailable"
-                    )
                   }
                 />
               </>

@@ -6,7 +6,7 @@ export type ProviderKind =
   | "opencode"
   | "custom";
 
-export type SessionLaunchSource = "web" | "terminal";
+export type SessionLaunchSource = "web";
 export type SessionLiveBackend =
   | "structured"
   | "native_local_server"
@@ -59,7 +59,7 @@ export type SessionRuntimeState =
   | "stopped"
   | "failed";
 
-export type ClientKind = "terminal" | "web" | "ios" | "ipad" | "api";
+export type ClientKind = "web" | "ios" | "ipad" | "api";
 
 export type AttachMode = "observe" | "interactive";
 

@@ -166,7 +166,7 @@ const EVENT_AUTHORITIES = new Set<EventAuthority>([
   "heuristic",
 ]);
 
-const CLIENT_KINDS = new Set<ClientKind>(["terminal", "web", "ios", "ipad", "api"]);
+const CLIENT_KINDS = new Set<ClientKind>(["web", "ios", "ipad", "api"]);
 
 const SESSION_RUNTIME_STATES = new Set<SessionRuntimeState>([
   "starting",
@@ -189,7 +189,7 @@ const CONVERSATION_PHASES = new Set<ConversationPhase>([
   "ended",
 ]);
 
-const SESSION_LAUNCH_SOURCES = new Set<SessionLaunchSource>(["web", "terminal"]);
+const SESSION_LAUNCH_SOURCES = new Set<SessionLaunchSource>(["web"]);
 const SESSION_LIVE_BACKENDS = new Set<SessionLiveBackend>([
   "structured",
   "native_local_server",

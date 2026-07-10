@@ -1204,8 +1204,8 @@ describe("RuntimeEngine", () => {
       engine.claimControl(sessionId, {
         client: {
           id: "terminal-client",
-          kind: "terminal",
-          connectionId: "pid:test-terminal",
+          kind: "web",
+          connectionId: "test-web",
         },
       });
       assert.doesNotThrow(() =>

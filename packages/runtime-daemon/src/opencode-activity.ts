@@ -30,9 +30,9 @@ type OpenCodeMessageRole = "user" | "assistant";
 
 interface OpenCodeActivityStateOptions {
   /**
-   * Terminal-owned sessions need provider user messages to open turns. Web-owned
-   * sessions already open turns before calling OpenCode, so late user events must
-   * not resurrect a completed turn.
+   * History and provider-driven mirror streams need provider user messages to
+   * open turns. Structured live sessions already open turns before calling
+   * OpenCode, so late user events must not resurrect a completed turn.
    */
   userMessagesStartTurns?: boolean;
   emitUserMessages?: boolean;

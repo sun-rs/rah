@@ -176,6 +176,16 @@ test("session events accept canonical runtime diagnostics", () => {
   assert.equal(issues.some((issue) => issue.severity === "error"), false);
 });
 
+test("session events reject the removed terminal launch source", () => {
+  const issues = validateRahEvent(
+    buildSessionCreatedEvent({ launchSource: "terminal" }),
+  );
+  assert.equal(
+    issues.some((issue) => issue.code === "session.launch_source.invalid"),
+    true,
+  );
+});
+
 test("session events accept tmux mux metadata", () => {
   const issues = validateRahEvent(
     buildSessionCreatedEvent({

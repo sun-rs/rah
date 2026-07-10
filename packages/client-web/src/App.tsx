@@ -1553,16 +1553,6 @@ export function App() {
   };
 
   useEffect(() => {
-    if (!selectedSummary) {
-      return;
-    }
-    if (selectedSummary.session.launchSource !== "terminal" || isAttached) {
-      return;
-    }
-    void attachSession(selectedSummary);
-  }, [attachSession, isAttached, selectedSummary]);
-
-  useEffect(() => {
     const handleForegroundResume = () => scheduleForegroundRecovery();
     const handlePageShow = () => scheduleForegroundRecovery();
     const handleOnline = () => scheduleForegroundRecovery();

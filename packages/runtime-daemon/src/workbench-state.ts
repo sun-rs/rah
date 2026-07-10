@@ -204,6 +204,9 @@ function normalizePersistedManagedSession(session: ManagedSession): ManagedSessi
       : conversationStateFromRuntimeState(session.runtimeState);
   return {
     ...session,
+    // Terminal-owned sessions were removed in RAH 1.x. Recovered tmux sessions
+    // now re-enter through the same Web/PWA ownership model as new sessions.
+    launchSource: "web",
     ...state,
   };
 }
