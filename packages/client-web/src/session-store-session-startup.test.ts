@@ -1270,6 +1270,158 @@ describe("session startup model and mode requests", () => {
     assert.equal(state.projections.get("live")?.summary.controlLease.holderClientId, "web-client");
   });
 
+  test("resuming history uses an existing live projection without calling provider resume", async () => {
+    const historySummary = summary({
+      id: "history",
+      provider: "codex",
+      providerSessionId: "thread-running",
+      cwd: "/tmp/rah",
+      readOnlyReplay: true,
+    });
+    const liveSummary = summary({
+      id: "live",
+      provider: "codex",
+      providerSessionId: "thread-running",
+      cwd: "/tmp/rah",
+    });
+    const attachedSummary: SessionSummary = {
+      ...liveSummary,
+      attachedClients: [
+        {
+          id: "web-client",
+          kind: "web",
+          sessionId: "live",
+          connectionId: "web-connection",
+          attachMode: "interactive",
+          focus: true,
+          lastSeenAt: "2026-04-29T00:00:00.000Z",
+        },
+      ],
+      controlLease: {
+        sessionId: "live",
+        holderClientId: "web-client",
+        holderKind: "web",
+        grantedAt: "2026-04-29T00:00:00.000Z",
+      },
+    };
+    const historyProjection = createEmptySessionProjection(historySummary);
+    historyProjection.feed = [
+      {
+        key: "assistant:history-answer",
+        kind: "timeline",
+        item: { kind: "assistant_message", text: "visible history answer" },
+        ts: "2026-04-29T00:01:00.000Z",
+      } as FeedEntry,
+    ];
+    const liveProjection = createEmptySessionProjection(liveSummary);
+    const requests = installWebApiMocks((request) => {
+      if (request.url.endsWith("/api/sessions/live/attach")) {
+        return { session: attachedSummary };
+      }
+      throw new Error(`Unexpected request ${request.url}`);
+    });
+    const deps = startupDeps({
+      selectedSessionId: "history",
+      projections: new Map([
+        ["history", historyProjection],
+        ["live", liveProjection],
+      ]),
+      recentSessions: [
+        {
+          provider: "codex",
+          providerSessionId: "thread-running",
+          cwd: "/tmp/rah",
+          rootDir: "/tmp/rah",
+          createdAt: "2026-04-29T00:00:00.000Z",
+        },
+      ],
+    });
+
+    await claimHistorySessionCommand(deps, "history");
+
+    assert.deepEqual(
+      requests.map((request) => request.url.replace(/^http:\/\/127\.0\.0\.1:43111/, "")),
+      ["/api/sessions/live/attach"],
+    );
+    const state = (deps as { get: () => {
+      projections: Map<string, ReturnType<typeof createEmptySessionProjection>>;
+      pendingSessionAction: unknown;
+      selectedSessionId: string | null;
+    } }).get();
+    assert.equal(state.selectedSessionId, "live");
+    assert.equal(state.pendingSessionAction, null);
+    assert.equal(state.projections.has("history"), false);
+    assert.deepEqual(
+      state.projections.get("live")?.feed.map((entry) => entry.key),
+      ["assistant:history-answer"],
+    );
+    assert.equal(state.projections.get("live")?.summary.controlLease.holderClientId, "web-client");
+  });
+
+  test("resuming history selects an already controlled live projection without network calls", async () => {
+    const historySummary = summary({
+      id: "history",
+      provider: "codex",
+      providerSessionId: "thread-running",
+      cwd: "/tmp/rah",
+      readOnlyReplay: true,
+    });
+    const liveSummary: SessionSummary = {
+      ...summary({
+        id: "live",
+        provider: "codex",
+        providerSessionId: "thread-running",
+        cwd: "/tmp/rah",
+      }),
+      attachedClients: [
+        {
+          id: "web-client",
+          kind: "web",
+          sessionId: "live",
+          connectionId: "web-connection",
+          attachMode: "interactive",
+          focus: true,
+          lastSeenAt: "2026-04-29T00:00:00.000Z",
+        },
+      ],
+      controlLease: {
+        sessionId: "live",
+        holderClientId: "web-client",
+        holderKind: "web",
+        grantedAt: "2026-04-29T00:00:00.000Z",
+      },
+    };
+    const requests = installWebApiMocks((request) => {
+      throw new Error(`Unexpected request ${request.url}`);
+    });
+    const deps = startupDeps({
+      selectedSessionId: "history",
+      projections: new Map([
+        ["history", createEmptySessionProjection(historySummary)],
+        ["live", createEmptySessionProjection(liveSummary)],
+      ]),
+      recentSessions: [
+        {
+          provider: "codex",
+          providerSessionId: "thread-running",
+          cwd: "/tmp/rah",
+          rootDir: "/tmp/rah",
+          createdAt: "2026-04-29T00:00:00.000Z",
+        },
+      ],
+    });
+
+    await claimHistorySessionCommand(deps, "history");
+
+    assert.equal(requests.length, 0);
+    const state = (deps as { get: () => {
+      projections: Map<string, ReturnType<typeof createEmptySessionProjection>>;
+      selectedSessionId: string | null;
+    } }).get();
+    assert.equal(state.selectedSessionId, "live");
+    assert.equal(state.projections.has("history"), false);
+  });
+
   test("resuming already-running history preserves the visible replay feed", async () => {
     const historySummary = summary({
       id: "history",

@@ -1,7 +1,9 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { createGzip, constants as zlibConstants } from "node:zlib";
 import { applyCorsHeaders } from "./http-server-cors";
 
 export const MAX_JSON_BODY_BYTES = 5 * 1024 * 1024;
+const MIN_GZIP_RESPONSE_BYTES = 16 * 1024;
 
 export type JsonHandler = (
   req: IncomingMessage,
@@ -118,13 +120,40 @@ export function writeJson(
   status: number,
   payload: unknown,
 ): void {
-  const body = JSON.stringify(payload);
+  const body = Buffer.from(JSON.stringify(payload));
   applyCorsHeaders(req, res);
+  if (body.byteLength >= MIN_GZIP_RESPONSE_BYTES && requestAcceptsGzip(req)) {
+    res.writeHead(status, {
+      "content-type": "application/json; charset=utf-8",
+      "content-encoding": "gzip",
+      vary: "accept-encoding",
+    });
+    const gzip = createGzip({ level: zlibConstants.Z_BEST_SPEED });
+    gzip.once("error", () => res.destroy());
+    gzip.pipe(res);
+    gzip.end(body);
+    return;
+  }
   res.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
-    "content-length": Buffer.byteLength(body),
+    "content-length": body.byteLength,
+    ...(body.byteLength >= MIN_GZIP_RESPONSE_BYTES ? { vary: "accept-encoding" } : {}),
   });
   res.end(body);
+}
+
+function requestAcceptsGzip(req: IncomingMessage): boolean {
+  const header = req.headers["accept-encoding"];
+  if (typeof header !== "string") {
+    return false;
+  }
+  return header.split(",").some((entry) => {
+    const [coding, ...parameters] = entry.trim().toLowerCase().split(";");
+    if (coding !== "gzip" && coding !== "*") {
+      return false;
+    }
+    return !parameters.some((parameter) => /^q\s*=\s*0(?:\.0*)?$/.test(parameter.trim()));
+  });
 }
 
 export function writeText(

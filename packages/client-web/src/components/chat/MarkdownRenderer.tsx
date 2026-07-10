@@ -13,6 +13,7 @@ import type { Components } from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { Check, Copy } from "lucide-react";
+import { copyTextToClipboard } from "../../clipboard";
 import { importWithStaleReload } from "../../lazy-module-reload";
 import { splitMarkdownBlocks } from "./markdown-blocks";
 import { resolveLocalFileLinkPath } from "./local-file-link";
@@ -57,24 +58,36 @@ function MarkdownPre({
   const code = useMemo(() => textFromNode(children), [children]);
   const language = useMemo(() => languageFromNode(children), [children]);
 
-  const copyCode = () => {
-    if (!code || typeof navigator === "undefined" || !navigator.clipboard) {
+  const copyCode = async () => {
+    if (!code) {
       return;
     }
-    void navigator.clipboard.writeText(code).then(() => {
+    if ((await copyTextToClipboard(code)) === "copied") {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1200);
-    });
+    }
   };
+  const showHeader = language !== null && language !== "text" && language !== "plain";
 
   return (
-    <div className="prose-chat-codeblock">
-      <div className="prose-chat-codeblock-header">
-        <span>{language ?? "text"}</span>
-        <button type="button" onClick={copyCode} title="Copy code">
+    <div className={`prose-chat-codeblock${showHeader ? "" : " prose-chat-codeblock-plain"}`}>
+      {showHeader ? (
+        <div className="prose-chat-codeblock-header">
+          <span>{language}</span>
+          <button type="button" onClick={() => void copyCode()} title="Copy code">
+            {copied ? <Check size={13} /> : <Copy size={13} />}
+          </button>
+        </div>
+      ) : (
+        <button
+          type="button"
+          className="prose-chat-codeblock-copy"
+          onClick={() => void copyCode()}
+          title="Copy code"
+        >
           {copied ? <Check size={13} /> : <Copy size={13} />}
         </button>
-      </div>
+      )}
       <pre {...preProps}>{children}</pre>
     </div>
   );

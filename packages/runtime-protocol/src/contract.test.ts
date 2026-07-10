@@ -318,3 +318,32 @@ test("native TUI prompt state events use canonical values", () => {
     true,
   );
 });
+
+test("assistant timeline messages accept only canonical message phases", () => {
+  const baseEvent = {
+    id: "evt-assistant-phase",
+    seq: 1,
+    ts: "2026-07-10T00:00:00.000Z",
+    sessionId: "session-1",
+    type: "timeline.item.added" as const,
+    source: { provider: "codex" as const, channel: "structured_persisted" as const, authority: "authoritative" as const },
+  };
+  const valid = validateRahEvent({
+    ...baseEvent,
+    payload: {
+      item: { kind: "assistant_message", text: "Working", phase: "commentary" },
+    },
+  });
+  assert.equal(valid.some((issue) => issue.severity === "error"), false);
+
+  const invalid = validateRahEvent({
+    ...baseEvent,
+    payload: {
+      item: { kind: "assistant_message", text: "Working", phase: "thinking" },
+    },
+  } as never);
+  assert.equal(
+    invalid.some((issue) => issue.code === "timeline.assistant_phase.invalid"),
+    true,
+  );
+});

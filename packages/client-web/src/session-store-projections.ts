@@ -6,6 +6,7 @@ import {
   resolveHiddenWorkspaceDirsFromSessionsResponse,
 } from "./session-store-workspace";
 import { isReadOnlyReplay } from "./session-capabilities";
+import { compactRecoverableLiveProjectionFeed } from "./session-feed-retention";
 import {
   applyEventToProjection,
   createSessionMap,
@@ -188,7 +189,7 @@ export function applyEventBatchToProjection(
   for (const event of [...events].sort((a, b) => a.seq - b.seq)) {
     next = applyEventToProjection(next, event);
   }
-  return next;
+  return compactRecoverableLiveProjectionFeed(next);
 }
 
 function createProjectionFromSessionEvent(
@@ -255,6 +256,7 @@ export function applyEventsToProjectionMap(
     return current;
   }
   const next = new Map(current);
+  const touchedSessionIds = new Set<string>();
   for (const event of [...events].sort((a, b) => a.seq - b.seq)) {
     handling.updateLastSeq(event.seq);
     if (event.type === "session.closed") {
@@ -279,6 +281,14 @@ export function applyEventsToProjectionMap(
       continue;
     }
     next.set(event.sessionId, applyEventToProjection(projection, event));
+    touchedSessionIds.add(event.sessionId);
+  }
+  for (const sessionId of touchedSessionIds) {
+    const projection = next.get(sessionId);
+    if (!projection) {
+      continue;
+    }
+    next.set(sessionId, compactRecoverableLiveProjectionFeed(projection));
   }
   return next;
 }

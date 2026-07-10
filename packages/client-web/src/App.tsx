@@ -79,11 +79,12 @@ import {
 import { deriveWorkbenchNoticeState } from "./workbench-notice-contract";
 import { buildModelOptionValuesFromReasoning } from "./provider-capabilities";
 import { importWithStaleReload } from "./lazy-module-reload";
-import type { PendingSessionTransition } from "./session-transition-contract";
 import { InspectorFileDetailDialog } from "./inspector/InspectorFileDetailDialog";
 import {
   applyCanvasPaneTarget,
   CANVAS_PANE_IDS,
+  canvasOpeningTransitionForTarget,
+  canvasStoredRefKey,
   clearCanvasCouncilTargets,
   clearCanvasSessionTargets,
   clearCanvasTargetsForStoredSession,
@@ -101,6 +102,7 @@ import {
   resolveCanvasTargetProjection as resolveCanvasTargetProjectionFromState,
   resolveCanvasVisibleSessionId,
   shouldInitializeCanvasPaneFromSelection,
+  type CanvasPendingSessionAction,
   type CanvasPaneId,
   type CanvasPaneTarget,
 } from "./canvas-state";
@@ -369,37 +371,6 @@ function storedRefFromSessionSummary(summary: SessionSummary): StoredSessionRef 
   };
 }
 
-function canvasOpeningTransitionForTarget(
-  target: CanvasPaneTarget,
-  pendingSessionAction:
-    | {
-        kind: "attach_session" | "claim_control" | "claim_history";
-        sessionId: string;
-      }
-    | null,
-  pendingSessionTransition: PendingSessionTransition | null,
-): PendingSessionTransition | null {
-  if (!pendingSessionTransition) {
-    return null;
-  }
-  if (
-    target.kind === "session" &&
-    pendingSessionTransition.kind === "claim_history" &&
-    pendingSessionAction?.kind === "claim_history" &&
-    pendingSessionAction.sessionId === target.sessionId
-  ) {
-    return pendingSessionTransition;
-  }
-  if (
-    target.kind === "stored" &&
-    pendingSessionTransition.provider === target.ref.provider &&
-    pendingSessionTransition.providerSessionId === target.ref.providerSessionId
-  ) {
-    return pendingSessionTransition;
-  }
-  return null;
-}
-
 export function App() {
   const {
     init,
@@ -420,7 +391,6 @@ export function App() {
     pendingSessionAction,
     clientId,
     isInitialLoaded,
-    eventStreamOpenRevision,
     error,
     clearError,
     setWorkspaceDir,
@@ -448,6 +418,8 @@ export function App() {
     ensureSessionHistoryLoaded,
     refreshLatestHistory,
     loadOlderHistory,
+    ensureSessionTurnDirectory,
+    loadSessionTurnHistory,
     loadHistoryItemDetail,
     respondToPermission,
   } = useSessionStore(
@@ -470,7 +442,6 @@ export function App() {
       pendingSessionAction: state.pendingSessionAction,
       clientId: state.clientId,
       isInitialLoaded: state.isInitialLoaded,
-      eventStreamOpenRevision: state.eventStreamOpenRevision,
       error: state.error,
       clearError: state.clearError,
       setWorkspaceDir: state.setWorkspaceDir,
@@ -498,6 +469,8 @@ export function App() {
       ensureSessionHistoryLoaded: state.ensureSessionHistoryLoaded,
       refreshLatestHistory: state.refreshLatestHistory,
       loadOlderHistory: state.loadOlderHistory,
+      ensureSessionTurnDirectory: state.ensureSessionTurnDirectory,
+      loadSessionTurnHistory: state.loadSessionTurnHistory,
       loadHistoryItemDetail: state.loadHistoryItemDetail,
       respondToPermission: state.respondToPermission,
     })),
@@ -559,6 +532,12 @@ export function App() {
     Record<CanvasPaneId, boolean>
   >(() => rememberedCanvasState?.rightPanelsOpen ?? createDefaultCanvasRightPanelsOpen());
   const canvasStoredActivationInFlightRef = useRef<Set<string>>(new Set());
+  const canvasClaimingStoredKeysRef = useRef<Set<string>>(new Set());
+  const [canvasClaimingStoredKeys, setCanvasClaimingStoredKeys] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [canvasPendingSessionActions, setCanvasPendingSessionActions] =
+    useState<Record<string, CanvasPendingSessionAction>>({});
   const [canvasNewSessionDrafts, setCanvasNewSessionDrafts] =
     useState<Record<CanvasPaneId, CanvasNewSessionDraft>>(() =>
       createEmptyCanvasNewSessionDrafts(),
@@ -933,13 +912,6 @@ export function App() {
   }, [visibleNotificationTargets]);
 
   useEffect(() => {
-    if (eventStreamOpenRevision <= 0) {
-      return;
-    }
-    scheduleForegroundRecovery();
-  }, [eventStreamOpenRevision, scheduleForegroundRecovery]);
-
-  useEffect(() => {
     if (!workbenchHasForegroundAttention()) {
       return;
     }
@@ -976,6 +948,49 @@ export function App() {
       ...current,
       [paneId]: !current[paneId],
     }));
+  }, []);
+
+  const markCanvasClaimPending = useCallback((sessionId: string, ref: StoredSessionRef) => {
+    const key = canvasStoredRefKey(ref);
+    canvasClaimingStoredKeysRef.current.add(key);
+    setCanvasClaimingStoredKeys((current) => {
+      if (current.has(key)) {
+        return current;
+      }
+      const next = new Set(current);
+      next.add(key);
+      return next;
+    });
+    setCanvasPendingSessionActions((current) => {
+      if (current[sessionId]?.kind === "claim_history") {
+        return current;
+      }
+      return {
+        ...current,
+        [sessionId]: { kind: "claim_history", sessionId },
+      };
+    });
+  }, []);
+
+  const clearCanvasClaimPending = useCallback((sessionId: string, ref: StoredSessionRef) => {
+    const key = canvasStoredRefKey(ref);
+    canvasClaimingStoredKeysRef.current.delete(key);
+    setCanvasClaimingStoredKeys((current) => {
+      if (!current.has(key)) {
+        return current;
+      }
+      const next = new Set(current);
+      next.delete(key);
+      return next;
+    });
+    setCanvasPendingSessionActions((current) => {
+      if (!current[sessionId]) {
+        return current;
+      }
+      const next = { ...current };
+      delete next[sessionId];
+      return next;
+    });
   }, []);
 
   const setCanvasLayout = (layout: CanvasLayout) => {
@@ -1251,6 +1266,7 @@ export function App() {
           target,
           pendingSessionAction,
           pendingSessionTransition,
+          canvasClaimingStoredKeys,
         );
         if (globalOpeningTransition?.kind === "claim_history") {
           continue;
@@ -1277,6 +1293,7 @@ export function App() {
     }
   }, [
     activateHistorySession,
+    canvasClaimingStoredKeys,
     canvasPaneTargets,
     ensureSessionHistoryLoaded,
     pendingSessionAction,
@@ -2086,6 +2103,7 @@ export function App() {
                   target,
                   pendingSessionAction,
                   pendingSessionTransition,
+                  canvasClaimingStoredKeys,
                 );
                 const paneExpanded = effectiveCanvasMaximizedPaneId === typedPaneId;
                 const paneRightPanelOpen =
@@ -2458,9 +2476,10 @@ export function App() {
                     hideGeminiReasoningInChat={hideGeminiReasoningInChat}
                     showModelInfoInChat={showModelInfoInChat}
                     pendingSessionAction={
-                      pendingSessionAction?.sessionId === summary.session.id
+                      canvasPendingSessionActions[summary.session.id] ??
+                      (pendingSessionAction?.sessionId === summary.session.id
                         ? pendingSessionAction
-                        : null
+                        : null)
                     }
                     modelCatalog={modelCatalogState?.catalog ?? null}
                     modelCatalogLoading={modelCatalogState?.loading ?? false}
@@ -2506,6 +2525,14 @@ export function App() {
                     }
                     onClaimHistory={(sessionId, request) => {
                       const ref = storedRefFromSessionSummary(summary);
+                      if (!ref) {
+                        return;
+                      }
+                      const claimKey = canvasStoredRefKey(ref);
+                      if (canvasClaimingStoredKeysRef.current.has(claimKey)) {
+                        return;
+                      }
+                      markCanvasClaimPending(sessionId, ref);
                       void (async () => {
                         let claimedSessionId: string | null = null;
                         try {
@@ -2537,6 +2564,8 @@ export function App() {
                           ) {
                             setCanvasPaneSession(typedPaneId, resolvedSessionId);
                           }
+                        } finally {
+                          clearCanvasClaimPending(sessionId, ref);
                         }
                       })();
                     }}
@@ -2547,6 +2576,12 @@ export function App() {
                     }
                     onInterrupt={(sessionId) => void interruptSession(sessionId)}
                     onLoadOlderHistory={(sessionId) => loadOlderHistory(sessionId)}
+                    onEnsureTurnDirectory={(sessionId) =>
+                      ensureSessionTurnDirectory(sessionId)
+                    }
+                    onLoadTurnHistory={(sessionId, turnId) =>
+                      loadSessionTurnHistory(sessionId, turnId)
+                    }
                     onStop={(sessionId) => setStopConfirmSessionId(sessionId)}
                     onCloseHistory={() => clearCanvasPane(typedPaneId)}
                     onDelete={(sessionId) => setDeleteConfirmSessionId(sessionId)}
@@ -2600,6 +2635,13 @@ export function App() {
                         selectedProjection.history.nextBeforeTs))),
               )}
               historyLoading={selectedProjection?.history.phase === "loading"}
+              turnDirectory={selectedProjection?.turnDirectory?.items}
+              onEnsureTurnDirectory={() =>
+                ensureSessionTurnDirectory(selectedSummary.session.id)
+              }
+              onLoadTurnHistory={(turnId) =>
+                loadSessionTurnHistory(selectedSummary.session.id, turnId)
+              }
               canRespondToPermission={canRespondToPermission}
               onPermissionRespond={handlePermissionResponse}
               onOpenLocalFile={openLinkedFilePreview}

@@ -86,6 +86,27 @@ older-history paging 使用 `loadOlderHistory`：
 - 没有 `canonicalItemId` 的旧事件才退回到 `messageId`、turnId、text/time window 等兼容性去重。
 - `origin` 不参与 canonical key；连续两次相同文本的真实消息不能因为 text hash 被合并。
 
+### 1.6 正文窗口与 Turn Directory
+
+长历史使用两个互不替代的数据层：
+
+```text
+Chat body      -> 最近正文 tail + older page，控制 React feed 和网络正文体积
+Turn Directory -> 全文件轻量索引，只保存 turn 边界、状态、时间和短摘要
+```
+
+打开 Chat 时正文 tail 先进入可用状态，Turn Directory 在后台加载，不能阻塞首屏。当前 Codex 实现由 worker thread 顺序扫描 rollout JSONL：
+
+- 只解析 user/assistant、turn lifecycle 和 rollback 行；大 tool output 行不会 `JSON.parse`。
+- 每个 turn 记录 provider turn id、byte range、状态、时间和 bounded preview。
+- 索引持久化在 RAH runtime cache；同一 inode 追加时从 `scannedBytes` 增量追平，替换、截断或同大小改写时重建。
+- 扫描期间 rollout 继续增长时，缓存只能绑定 worker 实际看到的 source revision，不能把旧快照冒充最新文件。
+- HTTP 大 JSON 在客户端支持时使用 gzip，降低远程/PWA 目录传输体积。
+
+Turn Navigator 可以立即显示完整目录。点击尚未进入正文窗口的 turn 时，只按其 byte range 调用 target-turn API；后端只翻译该 turn 的 message/reasoning 正文，合并到现有 projection 后再精确滚动。点击刻度不触发全历史正文 materialize，也不加载工具详情。
+
+Codex 是第一阶段支持 provider。其他 provider 没有 Turn Directory adapter 时继续使用当前已加载正文派生目录，不影响既有 history paging。
+
 ## 2. Timeline Identity
 
 硬约束：
@@ -114,6 +135,8 @@ GET /api/sessions/:sessionId/history?cursor=...&limit=60
 GET /api/sessions/:sessionId/history?beforeTs=...&limit=60
 GET /api/sessions/:sessionId/history/detail?kind=tool_call&itemId=...
 GET /api/sessions/:sessionId/history/detail?kind=observation&itemId=...
+GET /api/sessions/:sessionId/history/turn-directory
+GET /api/sessions/:sessionId/history/turn?turnId=...
 ```
 
 后端返回：
@@ -133,6 +156,8 @@ GET /api/sessions/:sessionId/history/detail?kind=observation&itemId=...
 - `history` 默认返回 `detailMode = summary`，用于 Chat 首屏和 older-page 浏览；summary 事件必须剥离 provider `raw`、大 `toolCall.detail`、大 `toolCall.input/result`、大 `observation.detail`。
 - summary 中的 `ToolCall` / `WorkbenchObservation` 可以带 `detailAvailable` 和 `detailSizeBytes`。用户展开工具卡片时，前端再调用 `/history/detail` 拉取该 tool / observation 的完整 cached events，并合并回当前 projection。
 - `/history?detail=full` 只保留给调试或内部验证；普通 Chat UI 不应使用 full history 首屏。
+- `/history/turn-directory` 返回轻量全 turn 索引与 source revision，不返回正文 events。
+- `/history/turn` 只返回指定 turn 的正文 events；未知或已 rollback 的 turn 返回 404。
 
 ## 4. 后端 Snapshot 模型
 
@@ -154,13 +179,13 @@ frozen snapshot 的目标：
 
 | Provider | 历史存储 | 首屏 tail | older page |
 | --- | --- | --- | --- |
-| Codex | `~/.codex/sessions/**/rollout-*.jsonl` / `~/.codex/archived_sessions/**/rollout-*.jsonl` | 从 rollout 尾部窗口读取并翻译 | line cursor + safe boundary + semantic recent window |
+| Codex | `~/.codex/sessions/**/rollout-*.jsonl` / `~/.codex/archived_sessions/**/rollout-*.jsonl` | 从 rollout 尾部窗口读取并翻译；后台建立 Turn Directory | line cursor + safe boundary；目录点击可按 byte range 读取单 turn |
 | Claude | `~/.claude/projects/**/*.jsonl` | 从 transcript 尾部窗口读取并翻译 | line cursor + user boundary + semantic recent window |
 | OpenCode | OpenCode SQLite message store | 按 message time 读取最近窗口并翻译 | `beforeTs` cursor |
 
 RAH 不再创建或扫描 provider-specific 独立 home。Codex / Claude 历史发现只读取 provider 原生 home；旧隔离目录数据需要先迁移回原生目录，才会继续出现在 RAH 历史里。
 
-## 6. Tail First 的原因
+## 6. 正文 Tail First 与目录 Full Index
 
 历史 session 通常很长。直接全量加载会造成：
 
@@ -169,11 +194,13 @@ RAH 不再创建或扫描 provider-specific 独立 home。Codex / Claude 历史�
 - iOS / iPad 打开长历史明显卡顿。
 - live projection 与 history replay 更容易重复或错序。
 
-Tail first 更符合真实使用：
+正文 tail first 更符合真实使用：
 
 - 打开时先看最近上下文。
 - 需要追溯时再向上翻。
 - Provider 原始文件增长时也能通过 frozen snapshot 稳定翻页。
+
+但正文 tail first 不等于导航也只能看到 tail。Turn Directory 对全文件做轻量索引，使用户能立即理解完整会话结构并直接定位任意 turn；只有真正点击后才把目标正文加入 feed。这是 RAH 对 Codex Desktop“完整导航与正文按需绘制”思路的本地存储实现，而不是重新全量 materialize Chat。
 
 ## 7. Read-only Replay 与 Claim
 

@@ -810,6 +810,40 @@ describe("translateCodexAppServerNotification", () => {
     ]);
   });
 
+  test("preserves the app-server assistant message phase on completion", () => {
+    const state = createCodexAppServerTranslationState();
+    const completed = translateCodexAppServerNotification(
+      {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "agentMessage",
+            id: "assistant-commentary-1",
+            text: "Checking the workspace.",
+            phase: "commentary",
+          },
+        },
+      },
+      state,
+    );
+
+    const timeline = completed.find(
+      (item) => item.activity.type === "timeline_item",
+    );
+    assert.equal(timeline?.activity.type, "timeline_item");
+    if (timeline?.activity.type === "timeline_item") {
+      assert.equal(timeline.activity.turnId, "turn-1");
+      assert.deepEqual(timeline.activity.item, {
+        kind: "assistant_message",
+        text: "Checking the workspace.",
+        messageId: "assistant-commentary-1",
+        phase: "commentary",
+      });
+    }
+  });
+
   test("publishes accumulated assistant markdown snapshots without trimming delta whitespace", () => {
     const state = createCodexAppServerTranslationState();
 

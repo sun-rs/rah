@@ -377,6 +377,7 @@ export interface ListSessionsResponse {
   sessions: SessionSummary[];
   storedSessions: StoredSessionRef[];
   recentSessions: StoredSessionRef[];
+  eventSeq?: number;
   storedSessionsRevision?: number;
   workspaceDirs: string[];
   hiddenWorkspaces?: string[];
@@ -522,6 +523,38 @@ export interface SessionHistoryPageResponse {
   nextBeforeTs?: string;
   detailMode?: SessionHistoryDetailMode;
   approximateBytes?: number;
+}
+
+export type SessionTurnDirectoryStatus =
+  | "in_progress"
+  | "completed"
+  | "interrupted"
+  | "failed";
+
+export interface SessionTurnDirectoryItem {
+  id: string;
+  ordinal: number;
+  userPreview: string;
+  assistantPreview?: string;
+  startedAt: string;
+  completedAt?: string;
+  durationMs?: number;
+  status: SessionTurnDirectoryStatus;
+}
+
+export interface SessionTurnDirectoryResponse {
+  sessionId: string;
+  revision: string;
+  items: SessionTurnDirectoryItem[];
+  complete: boolean;
+  sourceBytes?: number;
+  generatedAt: string;
+}
+
+export interface SessionTurnHistoryResponse {
+  sessionId: string;
+  turnId: string;
+  events: RahEvent[];
 }
 
 export type SessionHistoryItemDetailKind = "tool_call" | "observation";

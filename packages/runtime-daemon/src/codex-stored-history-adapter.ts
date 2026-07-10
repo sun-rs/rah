@@ -2,6 +2,8 @@ import type {
   ResumeSessionRequest,
   ResumeSessionResponse,
   SessionHistoryPageResponse,
+  SessionTurnDirectoryResponse,
+  SessionTurnHistoryResponse,
   StoredSessionRef,
 } from "@rah/runtime-protocol";
 import { canFinalizeCodexStoredHistory } from "./codex-history-liveness";
@@ -16,6 +18,7 @@ import {
 } from "./codex-stored-sessions";
 import type {
   ProviderAdapter,
+  ProviderShutdownAdapter,
   ProviderStoredHistoryAdapter,
   RuntimeServices,
 } from "./provider-adapter";
@@ -24,13 +27,18 @@ import {
   prepareProviderSessionResume,
 } from "./provider-resume";
 import { movePathToTrash } from "./trash";
+import { CodexTurnDirectoryStore } from "./codex-turn-directory";
+import { readCodexTurnHistory } from "./codex-turn-history";
 
-export class CodexStoredHistoryAdapter implements ProviderAdapter, ProviderStoredHistoryAdapter {
+export class CodexStoredHistoryAdapter
+  implements ProviderAdapter, ProviderStoredHistoryAdapter, ProviderShutdownAdapter
+{
   readonly id = "codex-stored-history";
   readonly providers: Array<"codex"> = ["codex"];
 
   private storedSessionIndex = new Map<string, CodexStoredSessionRecord>();
   private readonly rehydratedSessionIds = new Set<string>();
+  private readonly turnDirectories = new CodexTurnDirectoryStore();
 
   constructor(private readonly services: RuntimeServices) {}
 
@@ -96,6 +104,35 @@ export class CodexStoredHistoryAdapter implements ProviderAdapter, ProviderStore
     });
   }
 
+  async getSessionTurnDirectory(sessionId: string): Promise<SessionTurnDirectoryResponse> {
+    const record = this.findRecordForRuntimeSession(sessionId);
+    if (!record) {
+      return {
+        sessionId,
+        revision: "unavailable",
+        items: [],
+        complete: false,
+        generatedAt: new Date().toISOString(),
+      };
+    }
+    return this.turnDirectories.getDirectory(sessionId, record);
+  }
+
+  async getSessionTurnHistory(
+    sessionId: string,
+    turnId: string,
+  ): Promise<SessionTurnHistoryResponse> {
+    const record = this.findRecordForRuntimeSession(sessionId);
+    if (!record) {
+      return { sessionId, turnId, events: [] };
+    }
+    const range = await this.turnDirectories.getTurnRange(record, turnId);
+    if (!range) {
+      return { sessionId, turnId, events: [] };
+    }
+    return readCodexTurnHistory({ sessionId, turnId, record, range });
+  }
+
   listStoredSessions(): StoredSessionRef[] {
     if (this.storedSessionIndex.size === 0) {
       this.refreshStoredSessionIndex();
@@ -120,7 +157,12 @@ export class CodexStoredHistoryAdapter implements ProviderAdapter, ProviderStore
       throw new Error(`Could not find a stored Codex history file for ${session.providerSessionId}.`);
     }
     await movePathToTrash(record.rolloutPath);
+    this.turnDirectories.clear(session.providerSessionId);
     this.storedSessionIndex.delete(session.providerSessionId);
+  }
+
+  async shutdown(): Promise<void> {
+    await this.turnDirectories.shutdown();
   }
 
   private findRecordForRuntimeSession(sessionId: string): CodexStoredSessionRecord | undefined {

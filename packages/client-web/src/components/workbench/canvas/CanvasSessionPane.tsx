@@ -95,6 +95,8 @@ export function CanvasSessionPane(props: {
   onClaimControl: (sessionId: string) => Promise<void>;
   onInterrupt: (sessionId: string) => void;
   onLoadOlderHistory: (sessionId: string) => void | Promise<void>;
+  onEnsureTurnDirectory: (sessionId: string) => void | Promise<void>;
+  onLoadTurnHistory: (sessionId: string, turnId: string) => void | Promise<void>;
   onStop: (sessionId: string) => void;
   onCloseHistory: (sessionId: string) => void;
   onDelete: (sessionId: string) => void;
@@ -221,6 +223,11 @@ export function CanvasSessionPane(props: {
               (props.projection.history.nextCursor || props.projection.history.nextBeforeTs))),
       )}
       historyLoading={props.projection?.history.phase === "loading"}
+      turnDirectory={props.projection?.turnDirectory?.items}
+      onEnsureTurnDirectory={() => props.onEnsureTurnDirectory(props.summary.session.id)}
+      onLoadTurnHistory={(turnId) =>
+        props.onLoadTurnHistory(props.summary.session.id, turnId)
+      }
       canRespondToPermission={canRespondToPermission}
       onPermissionRespond={(requestId, response) => {
         void props.onRespondToPermission(props.summary.session.id, requestId, response);

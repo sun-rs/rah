@@ -1,5 +1,6 @@
 import { Check, Copy, Image as ImageIcon } from "lucide-react";
 import { useMemo, useState } from "react";
+import { copyTextToClipboard } from "../../clipboard";
 import { DATA_IMAGE_URL_PATTERN } from "../../composer-image-attachments";
 
 function visibleUserMessageContent(content: string): { text: string; imageCount: number } {
@@ -30,9 +31,10 @@ export function UserMessage(props: {
   const imageCount = Math.max(props.imageCount ?? 0, visibleContent.imageCount);
 
   const handleCopy = async () => {
-    await navigator.clipboard.writeText(visibleContent.text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+    if ((await copyTextToClipboard(visibleContent.text)) === "copied") {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    }
   };
 
   return (

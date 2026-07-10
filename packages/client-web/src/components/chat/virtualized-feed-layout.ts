@@ -3,6 +3,12 @@ import type { FeedEntry } from "../../types";
 export const VIRTUAL_FEED_OVERSCAN = 6;
 export const VIRTUAL_FEED_ROW_GAP_PX = 20;
 
+export type VirtualFeedRowGapResolver<T extends { key: string } = FeedEntry> = (
+  entry: T,
+  index: number,
+  entries: readonly T[],
+) => number;
+
 type VirtualFeedRowLayout = {
   key: string;
   height: number;
@@ -46,7 +52,7 @@ function estimateTimelineHeight(entry: Extract<FeedEntry, { kind: "timeline" }>)
   }
 }
 
-function estimateFeedEntryHeight(entry: FeedEntry): number {
+export function estimateFeedEntryHeight(entry: FeedEntry): number {
   switch (entry.kind) {
     case "timeline":
       return estimateTimelineHeight(entry);
@@ -65,14 +71,24 @@ function estimateFeedEntryHeight(entry: FeedEntry): number {
   }
 }
 
-export function buildVirtualFeedLayout(
-  entries: readonly FeedEntry[],
+export function buildVirtualFeedLayout<T extends { key: string } = FeedEntry>(
+  entries: readonly T[],
   measuredHeights: ReadonlyMap<string, number>,
+  rowGapResolver?: VirtualFeedRowGapResolver<T>,
+  estimateHeight?: (entry: T) => number,
 ): VirtualFeedLayout {
   let offsetTop = 0;
   const rows = entries.map((entry, index) => {
-    const rowGap = index < entries.length - 1 ? VIRTUAL_FEED_ROW_GAP_PX : 0;
-    const height = (measuredHeights.get(entry.key) ?? estimateFeedEntryHeight(entry)) + rowGap;
+    const rowGap =
+      index < entries.length - 1
+        ? Math.max(0, rowGapResolver?.(entry, index, entries) ?? VIRTUAL_FEED_ROW_GAP_PX)
+        : 0;
+    const height =
+      (measuredHeights.get(entry.key) ??
+        (estimateHeight
+          ? estimateHeight(entry)
+          : estimateFeedEntryHeight(entry as unknown as FeedEntry))) +
+      rowGap;
     const row = {
       key: entry.key,
       height,

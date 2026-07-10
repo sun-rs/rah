@@ -1084,6 +1084,52 @@ describe("translateCodexRolloutLine", () => {
     });
   });
 
+  test("preserves Codex commentary and final answer phases from rollout history", () => {
+    const state = createCodexRolloutTranslationState();
+    const commentary = translateCodexRolloutLine(
+      {
+        timestamp: "2026-05-25T08:32:37.001Z",
+        type: "event_msg",
+        payload: {
+          type: "agent_message",
+          message: "Checking the affected runtimes.",
+          phase: "commentary",
+        },
+      },
+      state,
+    );
+    const finalAnswer = translateCodexRolloutLine(
+      {
+        timestamp: "2026-05-25T08:33:28.085Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Cleanup complete." }],
+          phase: "final_answer",
+        },
+      },
+      state,
+    );
+
+    assert.deepEqual(commentary[0]?.activity, {
+      type: "timeline_item",
+      item: {
+        kind: "assistant_message",
+        text: "Checking the affected runtimes.",
+        phase: "commentary",
+      },
+    });
+    assert.deepEqual(finalAnswer.at(-1)?.activity, {
+      type: "timeline_item",
+      item: {
+        kind: "assistant_message",
+        text: "Cleanup complete.",
+        phase: "final_answer",
+      },
+    });
+  });
+
   test("attaches Codex turn model metadata to persisted assistant replies", () => {
     const state = createCodexRolloutTranslationState();
     translateCodexRolloutLine(

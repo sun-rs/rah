@@ -13,6 +13,7 @@ import type {
   PermissionResponseRequest,
   ProviderKind,
   SessionHistoryItemDetailKind,
+  SessionTurnDirectoryItem,
   TimelineItem,
 } from "@rah/runtime-protocol";
 import {
@@ -29,7 +30,9 @@ import {
   Sparkles,
 } from "lucide-react";
 import { AssistantMessage } from "./AssistantMessage";
+import { AssistantProcessGroup } from "./AssistantProcessGroup";
 import { AssistantTurnHeader } from "./AssistantTurnHeader";
+import { ConversationTurnNavigator } from "./ConversationTurnNavigator";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { MessagePartCard } from "./MessagePartCard";
 import { ObservationCard } from "./ObservationCard";
@@ -39,10 +42,21 @@ import { Reasoning } from "./Reasoning";
 import { SystemNotice } from "./SystemNotice";
 import { ToolCallCard } from "./ToolCallCard";
 import { UserMessage } from "./UserMessage";
+import { copyableAssistantMessageKeys } from "./assistant-copy-actions";
+import {
+  buildAssistantProcessRows,
+  type ChatDisplayRow,
+} from "./assistant-process-groups";
 import { buildAssistantTurnHeaders } from "./assistant-turn-headers";
+import {
+  buildConversationTurnNavigationItems,
+  visibleConversationTurnKeys,
+  type ConversationTurnNavigationItem,
+} from "./conversation-turn-navigation";
 import { resolveLatestReplyStartTarget } from "./latest-reply-navigation";
 import {
   buildVirtualFeedLayout,
+  estimateFeedEntryHeight,
   resolveVirtualFeedWindow,
   VIRTUAL_FEED_ROW_GAP_PX,
 } from "./virtualized-feed-layout";
@@ -62,6 +76,25 @@ function isDocumentHidden(): boolean {
 
 function isScrollNearBottom(node: HTMLElement): boolean {
   return node.scrollHeight - node.clientHeight - node.scrollTop <= BOTTOM_STICK_THRESHOLD_PX;
+}
+
+function chatDisplayRowGapPx(
+  row: ChatDisplayRow,
+  index: number,
+  rows: readonly ChatDisplayRow[],
+): number {
+  const nextRow = rows[index + 1];
+  if (row.kind === "assistant_process_group" && nextRow?.kind === "feed_entry") {
+    return 14;
+  }
+  return VIRTUAL_FEED_ROW_GAP_PX;
+}
+
+function estimateChatDisplayRowHeight(row: ChatDisplayRow): number {
+  if (row.kind === "assistant_process_group") {
+    return row.completed ? 44 : 180;
+  }
+  return estimateFeedEntryHeight(row.entry);
 }
 
 function TimelineCard(props: {
@@ -96,6 +129,7 @@ function TimelineCard(props: {
 
 function renderTimelineItem(item: TimelineItem, options: {
   entryKey?: string;
+  canCopyAssistant?: boolean;
   onOpenLocalFile?: (path: string) => void;
 } = {}) {
   switch (item.kind) {
@@ -105,6 +139,12 @@ function renderTimelineItem(item: TimelineItem, options: {
       return (
         <AssistantMessage
           content={item.text}
+          copyable={options.canCopyAssistant ?? false}
+          variant={
+            item.phase === "final_answer" || options.canCopyAssistant
+              ? "final"
+              : "process"
+          }
           {...(options.onOpenLocalFile ? { onOpenLocalFile: options.onOpenLocalFile } : {})}
         />
       );
@@ -248,11 +288,13 @@ function renderEntry(
   onLoadHistoryItemDetail:
     | ((kind: SessionHistoryItemDetailKind, itemId: string) => Promise<void> | void)
     | undefined,
+  copyableAssistantKeys: ReadonlySet<string>,
 ) {
   switch (entry.kind) {
     case "timeline":
       return renderTimelineItem(entry.item, {
         entryKey: entry.key,
+        canCopyAssistant: copyableAssistantKeys.has(entry.key),
         ...(onOpenLocalFile ? { onOpenLocalFile } : {}),
       });
     case "tool_call":
@@ -319,6 +361,7 @@ function renderEntry(
 function MeasuredFeedEntry(props: {
   entryKey: string;
   isLastEntry: boolean;
+  rowGapPx: number;
   onHeightChange: (entryKey: string, height: number) => void;
   children: React.ReactNode;
 }) {
@@ -351,7 +394,9 @@ function MeasuredFeedEntry(props: {
       data-feed-entry-key={props.entryKey}
       className="min-w-0 max-w-full"
       style={
-        props.isLastEntry ? undefined : { paddingBottom: `${VIRTUAL_FEED_ROW_GAP_PX}px` }
+        props.isLastEntry || props.rowGapPx <= 0
+          ? undefined
+          : { paddingBottom: `${props.rowGapPx}px` }
       }
     >
       <div ref={contentRef} className="min-w-0 max-w-full">
@@ -373,6 +418,9 @@ export const ChatThread = memo(function ChatThread(props: {
   historyLoading?: boolean;
   generationActive?: boolean;
   onLoadOlderHistory?: () => void | Promise<void>;
+  turnDirectory?: readonly SessionTurnDirectoryItem[] | undefined;
+  onEnsureTurnDirectory?: (() => void | Promise<void>) | undefined;
+  onLoadTurnHistory?: ((turnId: string) => void | Promise<void>) | undefined;
   onLoadHistoryItemDetail?: (
     kind: SessionHistoryItemDetailKind,
     itemId: string,
@@ -391,6 +439,7 @@ export const ChatThread = memo(function ChatThread(props: {
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
+  const rowsOriginRef = useRef<HTMLDivElement | null>(null);
   const previousEntryCountRef = useRef(0);
   const loadingOlderRef = useRef(false);
   const stickToBottomRef = useRef(true);
@@ -414,12 +463,18 @@ export const ChatThread = memo(function ChatThread(props: {
   const latestReplyStartTargetRef = useRef<ReturnType<typeof resolveLatestReplyStartTarget>>(null);
   const previousGenerationActiveRef = useRef(Boolean(props.generationActive));
   const autoLatestReplyRafRef = useRef<number | null>(null);
+  const turnNavigationRafRef = useRef<number | null>(null);
+  const pendingTurnNavigationIdRef = useRef<string | null>(null);
+  const ensureTurnDirectoryRef = useRef(props.onEnsureTurnDirectory);
   const pendingAutoLatestReplyScrollRef = useRef(false);
   const autoNavigatedLatestReplyKeysRef = useRef(new Set<string>());
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [measuredHeightsVersion, setMeasuredHeightsVersion] = useState(0);
-  const [viewport, setViewport] = useState({ scrollTop: 0, height: 0 });
+  const [viewport, setViewport] = useState({ scrollTop: 0, height: 0, contentTopOffset: 0 });
   const [textSelectionDragActive, setTextSelectionDragActive] = useState(false);
+  const [processGroupExpansionOverrides, setProcessGroupExpansionOverrides] = useState(
+    () => new Map<string, boolean>(),
+  );
   const entries = useMemo(
     () =>
       visibleFeedEntries(
@@ -441,12 +496,49 @@ export const ChatThread = memo(function ChatThread(props: {
     () => buildAssistantTurnHeaders(entries),
     [entries],
   );
+  const copyableAssistantKeys = useMemo(
+    () => copyableAssistantMessageKeys(entries, { generationActive: props.generationActive ?? false }),
+    [entries, props.generationActive],
+  );
+  const displayRows = useMemo(
+    () =>
+      buildAssistantProcessRows(entries, {
+        finalAssistantKeys: copyableAssistantKeys,
+        generationActive: props.generationActive ?? false,
+      }),
+    [copyableAssistantKeys, entries, props.generationActive],
+  );
   const virtualLayout = useMemo(
-    () => buildVirtualFeedLayout(entries, measuredHeightsRef.current),
-    [entries, measuredHeightsVersion],
+    () =>
+      buildVirtualFeedLayout(
+        displayRows,
+        measuredHeightsRef.current,
+        chatDisplayRowGapPx,
+        estimateChatDisplayRowHeight,
+      ),
+    [displayRows, measuredHeightsVersion],
+  );
+  const turnNavigationItems = useMemo(
+    () =>
+      buildConversationTurnNavigationItems(
+        entries,
+        virtualLayout,
+        props.turnDirectory ?? [],
+      ),
+    [entries, props.turnDirectory, virtualLayout],
+  );
+  const activeTurnNavigationKeys = useMemo(
+    () =>
+      visibleConversationTurnKeys({
+        items: turnNavigationItems,
+        scrollTop: viewport.scrollTop,
+        viewportHeight: viewport.height,
+        contentTopOffset: viewport.contentTopOffset,
+      }),
+    [turnNavigationItems, viewport.contentTopOffset, viewport.height, viewport.scrollTop],
   );
   const shouldVirtualize =
-    entries.length > 140 && viewport.height > 0 && !textSelectionDragActive;
+    displayRows.length > 140 && viewport.height > 0 && !textSelectionDragActive;
   const virtualWindow = useMemo(
     () =>
       shouldVirtualize
@@ -457,13 +549,13 @@ export const ChatThread = memo(function ChatThread(props: {
           })
         : {
             startIndex: 0,
-            endIndex: entries.length,
+            endIndex: displayRows.length,
             topSpacerHeight: 0,
             bottomSpacerHeight: 0,
           },
-    [entries.length, shouldVirtualize, virtualLayout, viewport.height, viewport.scrollTop],
+    [displayRows.length, shouldVirtualize, virtualLayout, viewport.height, viewport.scrollTop],
   );
-  const visibleEntriesWindow = entries.slice(virtualWindow.startIndex, virtualWindow.endIndex);
+  const visibleRowsWindow = displayRows.slice(virtualWindow.startIndex, virtualWindow.endIndex);
   const latestReplyStartTarget = useMemo(
     () =>
       resolveLatestReplyStartTarget({
@@ -472,10 +564,19 @@ export const ChatThread = memo(function ChatThread(props: {
         measuredHeights: measuredHeightsRef.current,
         scrollTop: viewport.scrollTop,
         viewportHeight: viewport.height,
-        contentTopOffset: contentRef.current?.offsetTop ?? 0,
+        contentTopOffset: viewport.contentTopOffset,
+        navigableAssistantKeys: copyableAssistantKeys,
       }),
-    [entries, measuredHeightsVersion, virtualLayout, viewport.height, viewport.scrollTop],
+    [copyableAssistantKeys, entries, measuredHeightsVersion, virtualLayout, viewport.contentTopOffset, viewport.height, viewport.scrollTop],
   );
+
+  useEffect(() => {
+    ensureTurnDirectoryRef.current = props.onEnsureTurnDirectory;
+  }, [props.onEnsureTurnDirectory]);
+
+  useEffect(() => {
+    void ensureTurnDirectoryRef.current?.();
+  }, [props.sessionId]);
 
   useEffect(() => {
     latestReplyStartTargetRef.current = latestReplyStartTarget;
@@ -486,12 +587,19 @@ export const ChatThread = memo(function ChatThread(props: {
     if (!node) {
       return;
     }
+    const rowsOrigin = rowsOriginRef.current;
+    const contentTopOffset = rowsOrigin
+      ? node.scrollTop + rowsOrigin.getBoundingClientRect().top - node.getBoundingClientRect().top
+      : 0;
     setViewport((current) =>
-      current.scrollTop === node.scrollTop && current.height === node.clientHeight
+      current.scrollTop === node.scrollTop &&
+      current.height === node.clientHeight &&
+      Math.abs(current.contentTopOffset - contentTopOffset) < 0.5
         ? current
         : {
             scrollTop: node.scrollTop,
             height: node.clientHeight,
+            contentTopOffset,
           },
     );
   }, []);
@@ -701,12 +809,18 @@ export const ChatThread = memo(function ChatThread(props: {
       cancelAnimationFrame(autoLatestReplyRafRef.current);
       autoLatestReplyRafRef.current = null;
     }
+    if (turnNavigationRafRef.current !== null) {
+      cancelAnimationFrame(turnNavigationRafRef.current);
+      turnNavigationRafRef.current = null;
+    }
     pendingAutoLatestReplyScrollRef.current = false;
     previousGenerationActiveRef.current = Boolean(props.generationActive);
     autoNavigatedLatestReplyKeysRef.current = new Set();
+    pendingTurnNavigationIdRef.current = null;
     setMeasuredHeightsVersion(0);
-    setViewport({ scrollTop: 0, height: 0 });
+    setViewport({ scrollTop: 0, height: 0, contentTopOffset: 0 });
     setShowScrollToBottom(false);
+    setProcessGroupExpansionOverrides(new Map());
   }, [props.sessionId]);
 
   useEffect(() => {
@@ -730,6 +844,10 @@ export const ChatThread = memo(function ChatThread(props: {
       if (autoLatestReplyRafRef.current !== null) {
         cancelAnimationFrame(autoLatestReplyRafRef.current);
         autoLatestReplyRafRef.current = null;
+      }
+      if (turnNavigationRafRef.current !== null) {
+        cancelAnimationFrame(turnNavigationRafRef.current);
+        turnNavigationRafRef.current = null;
       }
       textSelectionListenerCleanupRef.current?.();
       textSelectionListenerCleanupRef.current = null;
@@ -1028,7 +1146,7 @@ export const ChatThread = memo(function ChatThread(props: {
       return;
     }
     if (textSelectionDragActiveRef.current) {
-      previousEntryCountRef.current = entries.length;
+      previousEntryCountRef.current = displayRows.length;
       return;
     }
     const anchor = prependAnchorRef.current;
@@ -1084,7 +1202,7 @@ export const ChatThread = memo(function ChatThread(props: {
         prependAnchorRef.current = null;
         loadingOlderRef.current = false;
       }
-      previousEntryCountRef.current = entries.length;
+      previousEntryCountRef.current = displayRows.length;
       return;
     }
 
@@ -1092,7 +1210,7 @@ export const ChatThread = memo(function ChatThread(props: {
     if (shouldForceBottom) {
       if (isDocumentHidden()) {
         pendingVisibleBottomRestoreRef.current = true;
-        previousEntryCountRef.current = entries.length;
+        previousEntryCountRef.current = displayRows.length;
         return;
       }
       node.scrollTop = node.scrollHeight;
@@ -1104,17 +1222,17 @@ export const ChatThread = memo(function ChatThread(props: {
       if (!props.historyLoading) {
         sessionSwitchBottomLockRef.current = false;
       }
-    } else if (entries.length > previousEntryCountRef.current && stickToBottomRef.current) {
+    } else if (displayRows.length > previousEntryCountRef.current && stickToBottomRef.current) {
       if (isDocumentHidden()) {
         pendingVisibleBottomRestoreRef.current = true;
-        previousEntryCountRef.current = entries.length;
+        previousEntryCountRef.current = displayRows.length;
         return;
       }
       scrollToBottomNow();
     }
-    previousEntryCountRef.current = entries.length;
+    previousEntryCountRef.current = displayRows.length;
   }, [
-    entries,
+    displayRows,
     hasTooLittleHistoryContent,
     isInTopHistoryLoadZone,
     measuredHeightsVersion,
@@ -1244,12 +1362,103 @@ export const ChatThread = memo(function ChatThread(props: {
     consumePendingAutoLatestReplyScroll();
   }, [consumePendingAutoLatestReplyScroll, latestReplyStartTarget]);
 
+  const navigateToLoadedTurn = useCallback((item: ConversationTurnNavigationItem) => {
+    const node = containerRef.current;
+    if (!node || !item.userEntryKey || item.startOffset === undefined) {
+      return;
+    }
+    detachBottomFollowing();
+    prependAnchorRef.current = null;
+    const findTargetNode = () =>
+      Array.from(node.querySelectorAll<HTMLElement>("[data-feed-entry-key]")).find(
+        (entryNode) => entryNode.dataset.feedEntryKey === item.userEntryKey,
+      ) ?? null;
+    const alignTargetNode = (targetNode: HTMLElement) => {
+      const delta = targetNode.getBoundingClientRect().top - node.getBoundingClientRect().top;
+      if (Math.abs(delta) >= 0.5) {
+        node.scrollTop += delta;
+      }
+      lastScrollTopRef.current = node.scrollTop;
+      setShowScrollToBottom(node.scrollHeight > node.clientHeight);
+      syncViewport();
+    };
+    const mountedTarget = findTargetNode();
+    if (mountedTarget) {
+      alignTargetNode(mountedTarget);
+      return;
+    }
+
+    node.scrollTop = item.startOffset + viewport.contentTopOffset;
+    lastScrollTopRef.current = node.scrollTop;
+    setShowScrollToBottom(node.scrollHeight > node.clientHeight);
+    syncViewport();
+    if (turnNavigationRafRef.current !== null) {
+      cancelAnimationFrame(turnNavigationRafRef.current);
+    }
+    let attemptsRemaining = 5;
+    const settle = () => {
+      turnNavigationRafRef.current = null;
+      if (containerRef.current !== node) {
+        return;
+      }
+      const targetNode = findTargetNode();
+      if (targetNode) {
+        alignTargetNode(targetNode);
+        return;
+      }
+      attemptsRemaining -= 1;
+      if (attemptsRemaining > 0) {
+        turnNavigationRafRef.current = requestAnimationFrame(settle);
+      }
+    };
+    turnNavigationRafRef.current = requestAnimationFrame(settle);
+  }, [detachBottomFollowing, syncViewport, viewport.contentTopOffset]);
+
+  const handleNavigateToTurn = useCallback(
+    (item: ConversationTurnNavigationItem) => {
+      if (item.userEntryKey && item.startOffset !== undefined) {
+        pendingTurnNavigationIdRef.current = null;
+        navigateToLoadedTurn(item);
+        return;
+      }
+      if (!item.turnId || !props.onLoadTurnHistory) {
+        return;
+      }
+      detachBottomFollowing();
+      pendingTurnNavigationIdRef.current = item.turnId;
+      void Promise.resolve(props.onLoadTurnHistory(item.turnId)).catch(() => {
+        if (pendingTurnNavigationIdRef.current === item.turnId) {
+          pendingTurnNavigationIdRef.current = null;
+        }
+      });
+    },
+    [detachBottomFollowing, navigateToLoadedTurn, props.onLoadTurnHistory],
+  );
+
+  useEffect(() => {
+    const turnId = pendingTurnNavigationIdRef.current;
+    if (!turnId) {
+      return;
+    }
+    const item = turnNavigationItems.find(
+      (candidate) =>
+        candidate.turnId === turnId &&
+        candidate.userEntryKey !== undefined &&
+        candidate.startOffset !== undefined,
+    );
+    if (!item) {
+      return;
+    }
+    pendingTurnNavigationIdRef.current = null;
+    navigateToLoadedTurn(item);
+  }, [navigateToLoadedTurn, turnNavigationItems]);
+
   return (
-    <div className="relative min-h-0 flex-1">
+    <div className="chat-thread-shell relative min-h-0 flex-1">
       <div
         ref={containerRef}
         data-testid="chat-thread-scroll-container"
-        className="h-full overflow-y-scroll overflow-x-hidden rah-scroll-main scrollbar-stable px-4 py-5 [overflow-anchor:none]"
+        className="chat-thread-scroll-container h-full overflow-y-scroll overflow-x-hidden rah-scroll-main scrollbar-stable px-4 py-5 [overflow-anchor:none]"
         onMouseDownCapture={handlePotentialTextSelectionStart}
       >
         <div ref={contentRef} className="mx-auto w-full min-w-0 max-w-3xl">
@@ -1260,23 +1469,38 @@ export const ChatThread = memo(function ChatThread(props: {
               </div>
             </div>
           ) : null}
+          <div ref={rowsOriginRef} aria-hidden="true" />
           {virtualWindow.topSpacerHeight > 0 ? (
             <div
               aria-hidden="true"
               style={{ height: `${virtualWindow.topSpacerHeight}px` }}
             />
           ) : null}
-          {visibleEntriesWindow.map((entry, windowIndex) => {
+          {visibleRowsWindow.map((row, windowIndex) => {
             const absoluteEntryIndex = virtualWindow.startIndex + windowIndex;
+            const assistantHeaderKey =
+              row.kind === "feed_entry"
+                ? row.key
+                : row.entries.find((entry) => assistantTurnHeaders.has(entry.key))?.key;
             const showAssistantTurnHeader =
               Boolean(props.showModelInfo && props.provider) &&
-              assistantTurnHeaders.has(entry.key);
-            const runtimeModel = assistantTurnHeaders.get(entry.key);
+              assistantHeaderKey !== undefined &&
+              assistantTurnHeaders.has(assistantHeaderKey);
+            const runtimeModel =
+              row.kind === "assistant_process_group"
+                ? row.runtimeModel ??
+                  (assistantHeaderKey ? assistantTurnHeaders.get(assistantHeaderKey) : undefined)
+                : assistantTurnHeaders.get(row.key);
+            const rowGapPx =
+              absoluteEntryIndex >= displayRows.length - 1
+                ? 0
+                : chatDisplayRowGapPx(row, absoluteEntryIndex, displayRows);
             return (
               <MeasuredFeedEntry
-                key={entry.key}
-                entryKey={entry.key}
-                isLastEntry={absoluteEntryIndex >= entries.length - 1}
+                key={row.key}
+                entryKey={row.key}
+                isLastEntry={absoluteEntryIndex >= displayRows.length - 1}
+                rowGapPx={rowGapPx}
                 onHeightChange={handleEntryHeightChange}
               >
                 {showAssistantTurnHeader && props.provider ? (
@@ -1285,12 +1509,41 @@ export const ChatThread = memo(function ChatThread(props: {
                     {...(runtimeModel ? { runtimeModel } : {})}
                   />
                 ) : null}
-                {renderEntry(
-                  entry,
-                  props.canRespondToPermission,
-                  props.onPermissionRespond,
-                  props.onOpenLocalFile,
-                  props.onLoadHistoryItemDetail,
+                {row.kind === "assistant_process_group" ? (
+                  <AssistantProcessGroup
+                    group={row}
+                    expanded={
+                      row.completed
+                        ? processGroupExpansionOverrides.get(row.key) ?? false
+                        : true
+                    }
+                    onExpandedChange={(expanded) => {
+                      setProcessGroupExpansionOverrides((current) => {
+                        const next = new Map(current);
+                        next.set(row.key, expanded);
+                        return next;
+                      });
+                    }}
+                    renderEntry={(entry) =>
+                      renderEntry(
+                        entry,
+                        props.canRespondToPermission,
+                        props.onPermissionRespond,
+                        props.onOpenLocalFile,
+                        props.onLoadHistoryItemDetail,
+                        copyableAssistantKeys,
+                      )
+                    }
+                  />
+                ) : (
+                  renderEntry(
+                    row.entry,
+                    props.canRespondToPermission,
+                    props.onPermissionRespond,
+                    props.onOpenLocalFile,
+                    props.onLoadHistoryItemDetail,
+                    copyableAssistantKeys,
+                  )
                 )}
               </MeasuredFeedEntry>
             );
@@ -1304,6 +1557,12 @@ export const ChatThread = memo(function ChatThread(props: {
           <div ref={bottomRef} />
         </div>
       </div>
+
+      <ConversationTurnNavigator
+        items={turnNavigationItems}
+        activeKeys={activeTurnNavigationKeys}
+        onNavigate={handleNavigateToTurn}
+      />
 
       {latestReplyStartTarget || showScrollToBottom ? (
         <div className="absolute bottom-4 left-1/2 z-[30] flex -translate-x-1/2 flex-col items-center gap-2">

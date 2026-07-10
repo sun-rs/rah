@@ -70,6 +70,10 @@ import {
   refreshLatestHistoryCommand,
 } from "./session-store-history-paging";
 import {
+  ensureSessionTurnDirectoryCommand,
+  loadSessionTurnHistoryCommand,
+} from "./session-store-turn-directory";
+import {
   ensureSessionReadStateInitialized,
   hasUnreadSinceReadState,
   markProjectionSeenInState,
@@ -248,6 +252,8 @@ interface SessionState {
   ensureSessionHistoryLoaded: (sessionId: string) => Promise<void>;
   refreshLatestHistory: (sessionId: string) => Promise<void>;
   loadOlderHistory: (sessionId: string) => Promise<void>;
+  ensureSessionTurnDirectory: (sessionId: string) => Promise<void>;
+  loadSessionTurnHistory: (sessionId: string, turnId: string) => Promise<void>;
   loadHistoryItemDetail: (
     sessionId: string,
     kind: SessionHistoryItemDetailKind,
@@ -396,6 +402,14 @@ function createProjectionReplayHandling() {
   };
 }
 
+function rememberSessionsResponseEventSeq(
+  sessionsResponse: Awaited<ReturnType<typeof api.listSessions>>,
+) {
+  if (typeof sessionsResponse.eventSeq === "number" && Number.isFinite(sessionsResponse.eventSeq)) {
+    lastEventSeq = Math.max(lastEventSeq, sessionsResponse.eventSeq);
+  }
+}
+
 function applySessionsResponse(
   state: Pick<
     SessionState,
@@ -427,6 +441,7 @@ function applySessionsResponse(
   | "workspaceDir"
   | "selectedSessionId"
 > {
+  rememberSessionsResponseEventSeq(sessionsResponse);
   const mergedSessionsResponse = options?.preserveLocalStoppedHistory
     ? mergeLocalStoppedHistoryRefs(state, sessionsResponse, options.excludeLocalStoppedHistoryKeys)
     : sessionsResponse;
@@ -630,6 +645,7 @@ function replaceSessionsResponse(
   | "workspaceDir"
   | "selectedSessionId"
 > {
+  rememberSessionsResponseEventSeq(sessionsResponse);
   return replaceSessionsResponseImpl(state, sessionsResponse, options);
 }
 
@@ -1598,6 +1614,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       sessionId,
       historyPageLimit: HISTORY_PAGE_LIMIT,
     });
+  },
+
+  ensureSessionTurnDirectory: async (sessionId) => {
+    await ensureSessionTurnDirectoryCommand({ get, set, sessionId });
+  },
+
+  loadSessionTurnHistory: async (sessionId, turnId) => {
+    await loadSessionTurnHistoryCommand({ get, set, sessionId, turnId });
   },
 
   loadHistoryItemDetail: async (sessionId, kind, itemId) => {

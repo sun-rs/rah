@@ -95,9 +95,17 @@ export interface TimelineRuntimeModel {
   source: TimelineRuntimeModelSource;
 }
 
+export type AssistantMessagePhase = "commentary" | "final_answer";
+
 export type TimelineItem =
   | { kind: "user_message"; text: string; imageCount?: number; messageId?: string; clientMessageId?: string; clientTurnId?: string }
-  | { kind: "assistant_message"; text: string; messageId?: string; runtimeModel?: TimelineRuntimeModel }
+  | {
+      kind: "assistant_message";
+      text: string;
+      messageId?: string;
+      phase?: AssistantMessagePhase;
+      runtimeModel?: TimelineRuntimeModel;
+    }
   | { kind: "reasoning"; text: string; section?: string; runtimeModel?: TimelineRuntimeModel }
   | { kind: "plan"; text: string }
   | { kind: "step"; title: string; status: "started" | "completed" | "interrupted"; text?: string; runtimeModel?: TimelineRuntimeModel }

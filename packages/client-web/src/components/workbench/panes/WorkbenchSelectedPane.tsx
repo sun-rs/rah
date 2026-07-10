@@ -5,6 +5,7 @@ import type {
   ProviderModelCatalog,
   SessionHistoryItemDetailKind,
   SessionSummary,
+  SessionTurnDirectoryItem,
 } from "@rah/runtime-protocol";
 import {
   ArrowUp,
@@ -169,6 +170,9 @@ export function WorkbenchSelectedPane(props: {
   showModelInfoInChat: boolean;
   canLoadOlderHistory: boolean;
   historyLoading: boolean;
+  turnDirectory?: readonly SessionTurnDirectoryItem[] | undefined;
+  onEnsureTurnDirectory?: () => void | Promise<void>;
+  onLoadTurnHistory?: (turnId: string) => void | Promise<void>;
   canRespondToPermission: boolean;
   onPermissionRespond: (requestId: string, response: PermissionResponseRequest) => void;
   onOpenLocalFile?: (path: string) => void;
@@ -821,6 +825,9 @@ export function WorkbenchSelectedPane(props: {
           provider={props.selectedSummary.session.provider}
           canLoadOlderHistory={props.canLoadOlderHistory}
           historyLoading={props.historyLoading}
+          turnDirectory={props.turnDirectory}
+          onEnsureTurnDirectory={props.onEnsureTurnDirectory}
+          onLoadTurnHistory={props.onLoadTurnHistory}
           generationActive={props.generationActive}
           onLoadOlderHistory={handleChatLoadOlderHistory}
           {...(props.onLoadHistoryItemDetail

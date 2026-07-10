@@ -568,6 +568,62 @@ export async function claimHistorySessionCommand(
   };
 
   const targetDir = ref.cwd ?? ref.rootDir ?? null;
+  const findExistingRunningForClaim = (): SessionSummary | null => {
+    for (const projection of deps.get().projections.values()) {
+      const summary = projection.summary;
+      if (summary.session.id === sessionId || isReadOnlyReplay(summary)) {
+        continue;
+      }
+      if (
+        summary.session.provider === ref.provider &&
+        summary.session.providerSessionId === ref.providerSessionId
+      ) {
+        return summary;
+      }
+    }
+    return null;
+  };
+  const claimExistingRunning = async (
+    running: SessionSummary,
+  ): Promise<string> => {
+    const mode = resolveHistoryActivationMode({
+      existingRunningSummary: running,
+      clientId: state.clientId,
+    });
+    if (mode === "select") {
+      applyClaimedSession(running);
+      return running.session.id;
+    }
+    deps.set({
+      pendingSessionAction: {
+        kind: "claim_history",
+        sessionId,
+      },
+      pendingSessionTransition: null,
+      error: null,
+    });
+    try {
+      const attachResponse = await api.attachSession(
+        running.session.id,
+        createInteractiveAttachRequest(deps.get().clientId, deps.get().connectionId),
+      );
+      applyClaimedSession(attachResponse.session);
+      return attachResponse.session.session.id;
+    } catch (attachError) {
+      deps.set({
+        pendingSessionAction: null,
+        pendingSessionTransition: null,
+        error: readErrorMessage(attachError),
+      });
+      throw attachError;
+    }
+  };
+
+  const existingRunning = findExistingRunningForClaim();
+  if (existingRunning) {
+    return await claimExistingRunning(existingRunning);
+  }
+
   if (!(await ensureLaunchWorkspaceAvailable(deps, targetDir))) {
     return null;
   }
@@ -629,13 +685,13 @@ export async function claimHistorySessionCommand(
         });
         updateClaimedSessionSummary(session);
       }
-	    } catch (configurationError) {
-	      deps.set({
-	        pendingSessionAction: null,
-	        pendingSessionTransition: null,
-	        error: `Session was resumed, but updating session controls failed: ${readErrorMessage(configurationError)}`,
-	      });
-	    }
+    } catch (configurationError) {
+      deps.set({
+        pendingSessionAction: null,
+        pendingSessionTransition: null,
+        error: `Session was resumed, but updating session controls failed: ${readErrorMessage(configurationError)}`,
+      });
+    }
     return session.session.id;
   } catch (error) {
     const message = readErrorMessage(error);
@@ -648,23 +704,7 @@ export async function claimHistorySessionCommand(
           candidate.session.providerSessionId === ref.providerSessionId,
       );
       if (running) {
-        let attached: SessionSummary;
-        try {
-          const attachResponse = await api.attachSession(
-            running.session.id,
-            createInteractiveAttachRequest(deps.get().clientId, deps.get().connectionId),
-          );
-          attached = attachResponse.session;
-        } catch (attachError) {
-          deps.set({
-            pendingSessionAction: null,
-            pendingSessionTransition: null,
-            error: readErrorMessage(attachError),
-          });
-          throw attachError;
-        }
-        applyClaimedSession(attached);
-        return attached.session.id;
+        return await claimExistingRunning(running);
       }
     }
     deps.set({

@@ -52,7 +52,7 @@ function selectedReasoning(
   );
 }
 
-function defaultReasoningIdForModel(
+function strongestReasoningIdForModel(
   model: SessionModelDescriptor | undefined,
 ): string | null {
   if (!model) {
@@ -62,12 +62,28 @@ function defaultReasoningIdForModel(
   if (options.length === 0) {
     return null;
   }
-  if ("defaultReasoningId" in model) {
-    const defaultReasoningId = model.defaultReasoningId ?? null;
-    const option = options.find((entry) => entry.id === defaultReasoningId);
-    return option && isImplicitDefaultVariant(option) ? null : defaultReasoningId;
-  }
   return visibleParameterOptions(options, true).at(-1)?.id ?? null;
+}
+
+export function reasoningIdForModelSelection(args: {
+  nextModel: SessionModelDescriptor | undefined;
+  currentModelId?: string | null | undefined;
+  currentReasoningId?: string | null | undefined;
+}): string | null {
+  const visibleOptions = visibleParameterOptions(
+    args.nextModel?.reasoningOptions ?? [],
+    true,
+  );
+  if (visibleOptions.length === 0) {
+    return null;
+  }
+  if (args.nextModel?.id === args.currentModelId && args.currentReasoningId) {
+    const current = visibleOptions.find((option) => option.id === args.currentReasoningId);
+    if (current) {
+      return current.id;
+    }
+  }
+  return strongestReasoningIdForModel(args.nextModel);
 }
 
 function joinClassNames(...values: Array<string | false | null | undefined>): string {
@@ -588,7 +604,11 @@ export function SessionModelControls(props: {
   const handleModelSelect = (modelId: string) => {
     const nextModel = models.find((m) => m.id === modelId);
     const nextReasoningOptions = nextModel?.reasoningOptions ?? [];
-    const defaultReasoningId = defaultReasoningIdForModel(nextModel);
+    const defaultReasoningId = reasoningIdForModelSelection({
+      nextModel,
+      currentModelId: model?.id,
+      currentReasoningId: reasoning?.id,
+    });
     const requiresExplicitParameter =
       nextModel?.defaultReasoningId === null && nextReasoningOptions.length > 0;
 

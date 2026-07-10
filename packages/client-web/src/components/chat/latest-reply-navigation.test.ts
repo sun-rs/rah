@@ -161,6 +161,32 @@ describe("latest reply navigation", () => {
     );
   });
 
+  test("does not target process assistant messages excluded from final reply actions", () => {
+    const entries = [
+      userEntry("question"),
+      assistantEntry("final-answer"),
+      assistantEntry("process-update"),
+    ];
+    const measuredHeights = new Map([
+      ["question", 80],
+      ["final-answer", 120],
+      ["process-update", 520],
+    ]);
+    const layout = buildVirtualFeedLayout(entries, measuredHeights);
+
+    assert.equal(
+      resolveLatestReplyStartTarget({
+        entries,
+        layout,
+        measuredHeights,
+        scrollTop: 740,
+        viewportHeight: 220,
+        navigableAssistantKeys: new Set(["final-answer"]),
+      }),
+      null,
+    );
+  });
+
   test("ignores non-message entries after the latest long assistant reply", () => {
     const entries = [
       userEntry("question"),

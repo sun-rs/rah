@@ -1,5 +1,36 @@
 /* Minimal custom CSS for code/diff and things Tailwind utilities don't cover cleanly */
 
+.chat-thread-shell {
+  container: chat-thread / inline-size;
+}
+
+.chat-turn-navigator {
+  display: block;
+  left: 0;
+  width: 2rem;
+}
+
+.chat-thread-scroll-container {
+  padding-left: 2.25rem !important;
+}
+
+@container chat-thread (min-width: 40rem) {
+  .chat-turn-navigator {
+    left: 0.25rem;
+    width: 3rem;
+  }
+
+  .chat-thread-scroll-container {
+    padding-left: 3.5rem !important;
+  }
+}
+
+@media (hover: none), (pointer: coarse) {
+  .chat-turn-navigator-preview {
+    display: none;
+  }
+}
+
 /* Diff viewer */
 .diff-viewer {
   overflow: auto;
@@ -97,6 +128,21 @@ html[data-theme="light"] .code-block {
   word-break: break-word;
 }
 
+.assistant-process-message {
+  max-width: min(100%, 42rem);
+  border-radius: 0.9rem;
+  background: color-mix(in oklab, var(--app-subtle-bg) 72%, transparent);
+  padding: 0.55rem 0.75rem;
+}
+
+.prose-chat-process .prose-chat-block {
+  margin-bottom: 0.45rem;
+}
+
+.prose-chat-process p {
+  margin-bottom: 0.35em;
+}
+
 .prose-chat-block {
   margin-bottom: 0.9rem;
 }
@@ -105,9 +151,15 @@ html[data-theme="light"] .code-block {
   max-width: 100%;
   margin: 0.75rem 0;
   overflow: hidden;
+  position: relative;
   background: var(--app-code-bg);
-  border: 1px solid var(--app-border);
-  border-radius: 0.5rem;
+  border: 1px solid color-mix(in srgb, var(--app-border) 70%, transparent);
+  border-radius: 1.25rem;
+}
+
+.prose-chat-codeblock-plain {
+  background: var(--app-subtle-bg);
+  border-color: transparent;
 }
 
 .prose-chat-codeblock-header {
@@ -139,14 +191,61 @@ html[data-theme="light"] .code-block {
   color: var(--app-fg);
 }
 
+.prose-chat-codeblock-copy {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 3.25rem;
+  height: 3rem;
+  border-radius: 0 1.25rem 0 0.9rem;
+  padding: 0;
+  background: radial-gradient(
+    circle at center,
+    color-mix(in oklab, var(--app-subtle-bg) 82%, transparent) 0%,
+    color-mix(in oklab, var(--app-subtle-bg) 62%, transparent) 46%,
+    color-mix(in oklab, var(--app-subtle-bg) 0%, transparent) 78%
+  );
+  color: var(--app-hint);
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    background-color 150ms ease,
+    color 150ms ease,
+    opacity 150ms ease;
+}
+
+.prose-chat-codeblock:hover .prose-chat-codeblock-copy,
+.prose-chat-codeblock:focus-within .prose-chat-codeblock-copy {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.prose-chat-codeblock-copy:hover {
+  color: var(--app-fg);
+}
+
+@media (hover: none), (pointer: coarse) {
+  .prose-chat-codeblock-copy {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
 .prose-chat pre {
   max-width: 100%;
-  padding: 0.75rem 1rem;
+  padding: 0.9rem 1.05rem;
   overflow-x: auto;
   margin: 0;
   white-space: pre;
   overflow-wrap: normal;
   word-break: normal;
+}
+
+.prose-chat-codeblock-plain pre {
+  padding-right: 3.75rem;
 }
 
 .prose-chat code {
@@ -240,7 +339,18 @@ html[data-theme="light"] .code-block {
 .prose-chat h3,
 .prose-chat h4 {
   font-weight: 600;
-  margin: 1rem 0 0.5rem;
+  margin: 1.2rem 0 0.6rem;
+}
+
+.prose-chat h1:not(:first-child),
+.prose-chat h2:not(:first-child),
+.prose-chat h3:not(:first-child),
+.prose-chat-block:not(:first-child) > h1:first-child,
+.prose-chat-block:not(:first-child) > h2:first-child,
+.prose-chat-block:not(:first-child) > h3:first-child {
+  border-top: 1px solid var(--app-border);
+  padding-top: 1.15rem;
+  margin-top: 1.35rem;
 }
 
 .prose-chat a {

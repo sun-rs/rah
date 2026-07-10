@@ -74,4 +74,26 @@ describe("virtualized feed layout", () => {
       bottomSpacerHeight: 1300,
     });
   });
+
+  test("uses custom row gaps in cumulative offsets", () => {
+    const entries = [
+      messageEntry("a", "short"),
+      messageEntry("b", "short"),
+      messageEntry("c", "short"),
+    ];
+    const measuredHeights = new Map(entries.map((entry) => [entry.key, 100] as const));
+    const layout = buildVirtualFeedLayout(entries, measuredHeights, (_entry, index) =>
+      index === 0 ? 8 : VIRTUAL_FEED_ROW_GAP_PX,
+    );
+
+    assert.deepEqual(
+      layout.rows.map((row) => ({ key: row.key, height: row.height, offsetTop: row.offsetTop })),
+      [
+        { key: "a", height: 108, offsetTop: 0 },
+        { key: "b", height: 120, offsetTop: 108 },
+        { key: "c", height: 100, offsetTop: 228 },
+      ],
+    );
+    assert.equal(layout.totalHeight, 328);
+  });
 });

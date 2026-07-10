@@ -1,4 +1,5 @@
 import type {
+  AssistantMessagePhase,
   EventAuthority,
   EventChannel,
   ContextUsage,
@@ -411,6 +412,11 @@ function runtimeModelForTurn(
   turnId: string | undefined,
 ): TimelineRuntimeModel | undefined {
   return turnId ? state.runtimeModelByTurnId.get(turnId) : undefined;
+}
+
+function assistantMessagePhase(record: Record<string, unknown>): AssistantMessagePhase | undefined {
+  const phase = stringField(record, "phase");
+  return phase === "commentary" || phase === "final_answer" ? phase : undefined;
 }
 
 function turnIdentityProps(identity: TimelineTurnIdentity | undefined): { identity?: TimelineTurnIdentity } {
@@ -1368,6 +1374,7 @@ function mapThreadItem(
         providerMessageId: id,
       });
       const runtimeModel = runtimeModelForTurn(state, turnId);
+      const messagePhase = assistantMessagePhase(item);
       if (state.emittedAgentMessageDeltaItemIds.has(id)) {
         return [
           { type: "message_part_updated", turnId, part: { messageId: id, partId: id, kind: "text", text: finalText } },
@@ -1378,6 +1385,7 @@ function mapThreadItem(
               kind: "assistant_message",
               text: finalText,
               messageId: id,
+              ...(messagePhase ? { phase: messagePhase } : {}),
               ...(runtimeModel ? { runtimeModel } : {}),
             },
             ...timelineIdentityProps(identity),
@@ -1393,6 +1401,7 @@ function mapThreadItem(
             kind: "assistant_message",
             text: finalText,
             messageId: id,
+            ...(messagePhase ? { phase: messagePhase } : {}),
             ...(runtimeModel ? { runtimeModel } : {}),
           },
           ...timelineIdentityProps(identity),

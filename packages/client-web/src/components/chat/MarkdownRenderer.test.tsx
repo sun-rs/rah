@@ -70,4 +70,20 @@ describe("MarkdownRenderer", () => {
     assert.doesNotMatch(html, /prose-chat-local-file-code/);
     assert.match(html, /<pre><code>/);
   });
+
+  test("renders plain text code blocks without a text header", () => {
+    const html = renderToStaticMarkup(
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, remarkBreaks]}
+        components={createMarkdownComponents(undefined)}
+      >
+        {"```text\nplain text\n```"}
+      </ReactMarkdown>,
+    );
+
+    assert.match(html, /prose-chat-codeblock-plain/);
+    assert.match(html, /prose-chat-codeblock-copy/);
+    assert.doesNotMatch(html, /prose-chat-codeblock-header/);
+    assert.doesNotMatch(html, />text<\/span>/);
+  });
 });

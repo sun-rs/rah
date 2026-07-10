@@ -392,6 +392,7 @@ describe("client projection", () => {
     const [entry] = current.feed;
     assert.equal(entry?.kind, "timeline");
     assert.equal(entry?.kind === "timeline" ? entry.canonicalItemId : null, "codex-history-user-1");
+    assert.equal(entry?.kind === "timeline" ? entry.providerTurnId : null, "provider-turn-1");
   });
 
   test("keeps non-transcript message parts as structured cards", () => {
@@ -456,7 +457,12 @@ describe("client projection", () => {
         turnId: "turn-1",
         type: "timeline.item.added",
         payload: {
-          item: { kind: "assistant_message", text: "我是 Codex", messageId: "assistant-1" },
+          item: {
+            kind: "assistant_message",
+            text: "我是 Codex",
+            messageId: "assistant-1",
+            phase: "final_answer",
+          },
         },
       }),
     );
@@ -467,6 +473,7 @@ describe("client projection", () => {
     if (only?.kind === "timeline" && only.item.kind === "assistant_message") {
       assert.equal(only.item.text, "我是 Codex");
       assert.equal(only.item.messageId, "assistant-1");
+      assert.equal(only.item.phase, "final_answer");
       assert.deepEqual(only.item.runtimeModel, {
         modelId: "gpt-5.5",
         optionId: "xhigh",

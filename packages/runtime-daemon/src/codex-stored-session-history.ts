@@ -16,6 +16,7 @@ import { applyProviderActivity } from "./provider-activity";
 import {
   createCodexRolloutTranslationState,
   finalizeCodexRolloutTranslationState,
+  sanitizeCodexReasoningText,
   translateCodexRolloutLine,
 } from "./codex-rollout-activity";
 import { createLineHistoryWindowTranslator } from "./line-history-checkpoint";
@@ -152,10 +153,57 @@ function sameTimelineText(
   return false;
 }
 
-function collapseDuplicateTimelineEvents(events: RahEvent[]): RahEvent[] {
+export function collapseDuplicateCodexTimelineEvents(events: RahEvent[]): RahEvent[] {
   const next: RahEvent[] = [];
   const seenCanonicalItemIds = new Set<string>();
-  for (const event of events) {
+  const reasoningTextsByTurn = new Map<string, Set<string>>();
+  let fallbackTurnIndex = 0;
+  for (const originalEvent of events) {
+    let event = originalEvent;
+    if (
+      event.type === "timeline.item.added" &&
+      event.payload.item.kind === "user_message"
+    ) {
+      fallbackTurnIndex += 1;
+    }
+    if (
+      event.type === "timeline.item.added" &&
+      event.payload.item.kind === "reasoning"
+    ) {
+      const text = sanitizeCodexReasoningText(event.payload.item.text);
+      if (!text) {
+        continue;
+      }
+      const turnScope =
+        event.payload.identity?.canonicalTurnId ??
+        event.turnId ??
+        event.payload.identity?.turnKey ??
+        `fallback:${fallbackTurnIndex}`;
+      const seenTexts = reasoningTextsByTurn.get(turnScope) ?? new Set<string>();
+      if (seenTexts.has(text)) {
+        const previous = next.at(-1);
+        if (
+          previous?.type === "message.part.added" &&
+          previous.payload.part.kind === "reasoning" &&
+          typeof previous.payload.part.text === "string" &&
+          sanitizeCodexReasoningText(previous.payload.part.text) === text
+        ) {
+          next.pop();
+        }
+        continue;
+      }
+      seenTexts.add(text);
+      reasoningTextsByTurn.set(turnScope, seenTexts);
+      if (text !== event.payload.item.text) {
+        event = {
+          ...event,
+          payload: {
+            ...event.payload,
+            item: { ...event.payload.item, text },
+          },
+        };
+      }
+    }
     if (
       event.type === "timeline.item.added" &&
       typeof event.payload.identity?.canonicalItemId === "string"
@@ -187,7 +235,7 @@ function codexHistoryPageHasStableTimelineIdentities(events: readonly RahEvent[]
   });
 }
 
-function translateCodexRolloutWindowToHistoryEvents(args: {
+export function translateCodexRolloutWindowToHistoryEvents(args: {
   sessionId: string;
   providerSessionId: string;
   cwd: string;
@@ -263,7 +311,7 @@ function translateCodexRolloutWindowToHistoryEvents(args: {
       );
     }
   }
-  return collapseDuplicateTimelineEvents(
+  return collapseDuplicateCodexTimelineEvents(
     services.eventBus
       .list({ sessionIds: [temp.session.id] })
       .map((event) => ({
@@ -466,7 +514,7 @@ export function getCodexStoredSessionHistoryPage(params: {
       sessionId: params.sessionId,
     }))
     .sort((a, b) => a.ts.localeCompare(b.ts) || a.seq - b.seq);
-  const collapsed = collapseDuplicateTimelineEvents(all);
+  const collapsed = collapseDuplicateCodexTimelineEvents(all);
 
   const limit = Math.max(1, params.limit ?? 1000);
   const start = Math.max(0, collapsed.length - limit);

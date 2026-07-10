@@ -17,6 +17,13 @@ function isAssistantReplyEntry(entry: FeedEntry): boolean {
   return entry.kind === "timeline" && entry.item.kind === "assistant_message";
 }
 
+function isNavigableAssistantReplyEntry(
+  entry: FeedEntry,
+  navigableAssistantKeys: ReadonlySet<string> | undefined,
+): boolean {
+  return isAssistantReplyEntry(entry) && (navigableAssistantKeys?.has(entry.key) ?? true);
+}
+
 function isVisibleConversationMessageEntry(entry: FeedEntry): boolean {
   if (isAssistantReplyEntry(entry)) {
     return true;
@@ -40,8 +47,8 @@ function latestVisibleConversationMessageIndex(entries: readonly FeedEntry[]): n
 
 function measuredReplyHeight(args: {
   entryKey: string;
-  entryIndex: number;
-  entryCount: number;
+  rowIndex: number;
+  rowCount: number;
   rowHeight: number;
   measuredHeights: ReadonlyMap<string, number>;
 }): number {
@@ -49,7 +56,7 @@ function measuredReplyHeight(args: {
   if (measuredHeight !== undefined) {
     return measuredHeight;
   }
-  const rowGap = args.entryIndex < args.entryCount - 1 ? VIRTUAL_FEED_ROW_GAP_PX : 0;
+  const rowGap = args.rowIndex < args.rowCount - 1 ? VIRTUAL_FEED_ROW_GAP_PX : 0;
   return Math.max(1, args.rowHeight - rowGap);
 }
 
@@ -60,6 +67,7 @@ export function resolveLatestReplyStartTarget(args: {
   scrollTop: number;
   viewportHeight: number;
   contentTopOffset?: number;
+  navigableAssistantKeys?: ReadonlySet<string>;
 }): LatestReplyStartTarget | null {
   if (args.viewportHeight <= 0) {
     return null;
@@ -69,18 +77,22 @@ export function resolveLatestReplyStartTarget(args: {
     return null;
   }
   const entry = args.entries[entryIndex];
-  const row = args.layout.rows[entryIndex];
-  if (!entry || !row) {
+  if (!entry) {
     return null;
   }
-  if (!isAssistantReplyEntry(entry)) {
+  const rowIndex = args.layout.rows.findIndex((candidate) => candidate.key === entry.key);
+  const row = rowIndex >= 0 ? args.layout.rows[rowIndex] : undefined;
+  if (!row) {
+    return null;
+  }
+  if (!isNavigableAssistantReplyEntry(entry, args.navigableAssistantKeys)) {
     return null;
   }
 
   const replyHeight = measuredReplyHeight({
     entryKey: entry.key,
-    entryIndex,
-    entryCount: args.entries.length,
+    rowIndex,
+    rowCount: args.layout.rows.length,
     rowHeight: row.height,
     measuredHeights: args.measuredHeights,
   });

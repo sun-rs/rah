@@ -966,6 +966,35 @@ export async function handleHttpRequest(args: {
       return;
     }
 
+    const turnDirectoryMatch = /^\/api\/sessions\/([^/]+)\/history\/turn-directory$/.exec(
+      pathname,
+    );
+    if (req.method === "GET" && turnDirectoryMatch) {
+      writeJson(
+        req,
+        res,
+        200,
+        await engine.getSessionTurnDirectory(turnDirectoryMatch[1]!),
+      );
+      return;
+    }
+
+    const turnHistoryMatch = /^\/api\/sessions\/([^/]+)\/history\/turn$/.exec(pathname);
+    if (req.method === "GET" && turnHistoryMatch) {
+      const turnId = url.searchParams.get("turnId");
+      if (!turnId) {
+        writeJson(req, res, 400, { error: "History turnId is required." });
+        return;
+      }
+      const turn = await engine.getSessionTurnHistory(turnHistoryMatch[1]!, turnId);
+      if (turn.events.length === 0) {
+        writeJson(req, res, 404, { error: "History is not available for this turn." });
+        return;
+      }
+      writeJson(req, res, 200, turn);
+      return;
+    }
+
     const historyMatch = /^\/api\/sessions\/([^/]+)\/history$/.exec(pathname);
     if (req.method === "GET" && historyMatch) {
       const beforeTs = url.searchParams.get("beforeTs") ?? undefined;

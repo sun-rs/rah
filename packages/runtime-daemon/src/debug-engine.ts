@@ -84,10 +84,12 @@ export class DebugEngine {
   }
 
   listSessions(): ListSessionsResponse {
+    const eventSeq = this.eventBus.newestSeq();
     return {
       sessions: this.sessionStore.listSessions().map((state) => this.toSummary(state)),
       storedSessions: [...this.storedSessions],
       recentSessions: [],
+      ...(eventSeq !== null ? { eventSeq } : {}),
       workspaceDirs: [],
     };
   }

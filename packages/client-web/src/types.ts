@@ -8,6 +8,7 @@ import type {
   RahEvent,
   RuntimeOperation,
   SessionSummary,
+  SessionTurnDirectoryItem,
   TimelineIdentity,
   TimelineItem,
   TimelineRuntimeModel,
@@ -32,6 +33,7 @@ export type FeedEntry =
       turnId?: string;
       canonicalItemId?: TimelineIdentity["canonicalItemId"];
       canonicalTurnId?: TimelineIdentity["canonicalTurnId"];
+      providerTurnId?: string;
       sourceProvider?: ProviderKind | "system";
     }
   | {
@@ -112,7 +114,18 @@ export interface SessionProjection {
   lastSeq: number;
   currentRuntimeStatus?: Extract<RahEvent, { type: "runtime.status" }>["payload"]["status"];
   history: HistorySyncState;
+  turnDirectory?: SessionTurnDirectoryState;
   pendingInterrupt?: InterruptIntent;
+}
+
+export interface SessionTurnDirectoryState {
+  phase: "idle" | "loading" | "ready" | "error";
+  revision: string | null;
+  items: SessionTurnDirectoryItem[];
+  complete: boolean;
+  sourceBytes: number | null;
+  generatedAt: string | null;
+  lastError: string | null;
 }
 
 export interface HistorySyncState {
@@ -173,7 +186,10 @@ type MergeableTimelineItem = Extract<
   | { kind: "reasoning"; text: string }
 >;
 type TimelineEntry = Extract<FeedEntry, { kind: "timeline" }>;
-type TimelineIdentityFields = Pick<TimelineEntry, "canonicalItemId" | "canonicalTurnId">;
+type TimelineIdentityFields = Pick<
+  TimelineEntry,
+  "canonicalItemId" | "canonicalTurnId" | "providerTurnId"
+>;
 
 export function createSessionMap(response: SessionsResponse): SessionMap {
   const sessions = new Map<string, SessionProjection>();
@@ -632,7 +648,7 @@ function applyTimelineEvent(
           latestEntry.item as MergeableTimelineItem,
           event.payload.item as MergeableTimelineItem,
         ),
-        ...assistantRuntimeModelPatch(latestEntry.item, event.payload.item),
+        ...assistantTimelineMetadataPatch(latestEntry.item, event.payload.item),
       },
       ts: event.ts,
       sourceProvider: event.source.provider,
@@ -879,6 +895,9 @@ function readTimelineIdentityFields(
   return {
     canonicalItemId: identity.canonicalItemId,
     canonicalTurnId: identity.canonicalTurnId,
+    ...(identity.turnKey.startsWith("turn:")
+      ? { providerTurnId: identity.turnKey.slice("turn:".length) }
+      : {}),
   };
 }
 
@@ -889,6 +908,7 @@ function mergeTimelineIdentityFields(
   return {
     ...(current.canonicalItemId !== undefined ? { canonicalItemId: current.canonicalItemId } : {}),
     ...(current.canonicalTurnId !== undefined ? { canonicalTurnId: current.canonicalTurnId } : {}),
+    ...(current.providerTurnId !== undefined ? { providerTurnId: current.providerTurnId } : {}),
     ...incoming,
   };
 }
@@ -913,10 +933,10 @@ function mergeOrReplaceTimelineItem(
   eventType: "timeline.item.added" | "timeline.item.updated",
 ): TimelineItem {
   if (eventType === "timeline.item.updated") {
-    return preserveAssistantRuntimeModel(current, incoming);
+    return preserveAssistantTimelineMetadata(current, incoming);
   }
   if (!canMergeTimelineText(current, incoming)) {
-    return preserveAssistantRuntimeModel(current, incoming);
+    return preserveAssistantTimelineMetadata(current, incoming);
   }
   const mergeableIncoming = incoming as MergeableTimelineItem;
   const mergeableCurrent = current as MergeableTimelineItem;
@@ -924,14 +944,21 @@ function mergeOrReplaceTimelineItem(
     ...mergeableCurrent,
     ...mergeableIncoming,
     text: mergeTimelineText(mergeableCurrent, mergeableIncoming),
-    ...assistantRuntimeModelPatch(current, incoming),
+    ...assistantTimelineMetadataPatch(current, incoming),
   };
 }
 
-function assistantRuntimeModelPatch(current: TimelineItem, incoming: TimelineItem) {
+function assistantTimelineMetadataPatch(current: TimelineItem, incoming: TimelineItem) {
   const runtimeModel =
     timelineItemRuntimeModel(incoming) ?? timelineItemRuntimeModel(current);
-  return runtimeModel ? { runtimeModel } : {};
+  const phase =
+    incoming.kind === "assistant_message"
+      ? incoming.phase ?? (current.kind === "assistant_message" ? current.phase : undefined)
+      : undefined;
+  return {
+    ...(runtimeModel ? { runtimeModel } : {}),
+    ...(phase ? { phase } : {}),
+  };
 }
 
 type RuntimeModelTimelineItem =
@@ -939,18 +966,16 @@ type RuntimeModelTimelineItem =
   | Extract<TimelineItem, { kind: "reasoning" }>
   | Extract<TimelineItem, { kind: "step" }>;
 
-function preserveAssistantRuntimeModel(current: TimelineItem, incoming: TimelineItem): TimelineItem {
+function preserveAssistantTimelineMetadata(current: TimelineItem, incoming: TimelineItem): TimelineItem {
   if (
     !timelineItemSupportsRuntimeModel(current) ||
-    !timelineItemSupportsRuntimeModel(incoming) ||
-    incoming.runtimeModel !== undefined
+    !timelineItemSupportsRuntimeModel(incoming)
   ) {
     return incoming;
   }
-  const runtimeModel = timelineItemRuntimeModel(current);
   return {
     ...incoming,
-    ...(runtimeModel !== undefined ? { runtimeModel } : {}),
+    ...assistantTimelineMetadataPatch(current, incoming),
   };
 }
 

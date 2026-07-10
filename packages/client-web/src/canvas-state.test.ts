@@ -3,6 +3,8 @@ import { test } from "node:test";
 import type { SessionSummary, StoredSessionRef } from "@rah/runtime-protocol";
 import {
   applyCanvasPaneTarget,
+  canvasOpeningTransitionForTarget,
+  canvasStoredRefKey,
   clearCanvasCouncilTargets,
   clearCanvasSessionTargets,
   clearCanvasTargetsForStoredSession,
@@ -143,6 +145,36 @@ test("canvas clear all availability is based on all fixed pane slots", () => {
 
   targets["canvas-3"] = { kind: "stored", ref: ref("codex", "hidden-history") };
   assert.equal(hasAnyCanvasPaneTarget(targets), true);
+});
+
+test("canvas claiming stored targets suppresses automatic history activation", () => {
+  const storedRef = ref("codex", "claiming-provider-session");
+  const transition = canvasOpeningTransitionForTarget(
+    { kind: "stored", ref: storedRef },
+    null,
+    null,
+    new Set([canvasStoredRefKey(storedRef)]),
+  );
+
+  assert.equal(transition?.kind, "claim_history");
+  assert.equal(transition?.providerSessionId, "claiming-provider-session");
+});
+
+test("canvas local claiming state survives unrelated global claim transitions", () => {
+  const storedRef = ref("codex", "pane-provider-session");
+  const transition = canvasOpeningTransitionForTarget(
+    { kind: "stored", ref: storedRef },
+    { kind: "claim_history", sessionId: "other-history" },
+    {
+      kind: "claim_history",
+      provider: "codex",
+      providerSessionId: "other-provider-session",
+    },
+    new Set([canvasStoredRefKey(storedRef)]),
+  );
+
+  assert.equal(transition?.kind, "claim_history");
+  assert.equal(transition?.providerSessionId, "pane-provider-session");
 });
 
 test("canvas entry only initializes empty panes from the global selection", () => {

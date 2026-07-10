@@ -4,6 +4,7 @@ import { takeDeferredBootstrapEvents } from "./session-store-history-bootstrap";
 import { mergeLatestHistoryPage, prependHistoryPage } from "./session-store-history";
 import { applyEventBatchToProjection } from "./session-store-projections";
 import { isReadOnlyReplay } from "./session-capabilities";
+import { compactRecoverableLiveProjectionFeed } from "./session-feed-retention";
 import type { SessionProjection } from "./types";
 
 type HistoryPagingState = {
@@ -77,7 +78,7 @@ export async function refreshLatestHistoryCommand(args: {
         withHistory,
         takeDeferredBootstrapEvents(args.sessionId),
       );
-      next.set(args.sessionId, replayed);
+      next.set(args.sessionId, compactRecoverableLiveProjectionFeed(replayed));
       return { projections: next, error: null };
     });
   } catch (error) {

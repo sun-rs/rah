@@ -594,7 +594,8 @@ rl.on('line', (line) => {
         model: 'gpt-beta',
         hidden: false,
         supportedReasoningEfforts: [
-          { reasoningEffort: 'low', description: 'Fast' }
+          { reasoningEffort: 'low', description: 'Fast' },
+          { reasoningEffort: 'xhigh', description: 'Deepest' }
         ],
         defaultReasoningEffort: 'low',
         isDefault: false
@@ -697,12 +698,12 @@ rl.on('line', (line) => {
 
     const updated = await adapter.setSessionModel?.(started.session.session.id, {
       modelId: "gpt-beta",
-      optionValues: { model_reasoning_effort: "low" },
+      optionValues: { model_reasoning_effort: "xhigh" },
     });
     assert.equal(updated?.session.model?.currentModelId, "gpt-beta");
-    assert.equal(updated?.session.model?.currentReasoningId, "low");
+    assert.equal(updated?.session.model?.currentReasoningId, "xhigh");
     assert.equal(updated?.session.modelProfile?.modelId, "gpt-beta");
-    assert.equal(updated?.session.config?.values.model_reasoning_effort, "low");
+    assert.equal(updated?.session.config?.values.model_reasoning_effort, "xhigh");
 
     await assert.rejects(
       async () => {
@@ -716,10 +717,10 @@ rl.on('line', (line) => {
       async () => {
         await adapter.setSessionModel!(started.session.session.id, {
           modelId: "gpt-beta",
-          optionValues: { model_reasoning_effort: "high" },
+          optionValues: { model_reasoning_effort: "ultra" },
         });
       },
-      /Unsupported value 'high' for model option 'model_reasoning_effort'/,
+      /Unsupported value 'ultra' for model option 'model_reasoning_effort'/,
     );
     assert.equal(
       services.sessionStore.getSession(started.session.session.id)?.session.model?.currentModelId,
@@ -728,7 +729,7 @@ rl.on('line', (line) => {
     assert.equal(
       services.sessionStore.getSession(started.session.session.id)?.session.config?.values
         .model_reasoning_effort,
-      "low",
+      "xhigh",
     );
 
     const planned = await adapter.setSessionMode?.(
@@ -752,8 +753,8 @@ rl.on('line', (line) => {
         (event) =>
           event.type === "timeline.item.added" &&
           event.payload.item.kind === "assistant_message" &&
-          event.payload.item.text.includes("model=gpt-beta;effort=low") &&
-          event.payload.item.text.includes("collab=plan/gpt-beta/low") &&
+          event.payload.item.text.includes("model=gpt-beta;effort=xhigh") &&
+          event.payload.item.text.includes("collab=plan/gpt-beta/xhigh") &&
           event.payload.item.text.includes("approval=on-request") &&
           event.payload.item.text.includes("reviewer=auto_review"),
       ),
@@ -785,8 +786,8 @@ rl.on('line', (line) => {
         (event) =>
           event.type === "timeline.item.added" &&
           event.payload.item.kind === "assistant_message" &&
-          event.payload.item.text.includes("model=gpt-beta;effort=low") &&
-          event.payload.item.text.includes("collab=default/gpt-beta/low"),
+          event.payload.item.text.includes("model=gpt-beta;effort=xhigh") &&
+          event.payload.item.text.includes("collab=default/gpt-beta/xhigh"),
       ),
     ).catch((error) => {
       throw new Error(`default wait failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -1060,6 +1061,33 @@ rl.on('line', (line) => {
       JSON.stringify({
         timestamp: "2026-04-15T01:00:04.000Z",
         type: "event_msg",
+        payload: { type: "agent_reasoning", text: "**Inspecting**\n\n<!-- -->" },
+      }),
+      JSON.stringify({
+        timestamp: "2026-04-15T01:00:04.100Z",
+        type: "event_msg",
+        payload: { type: "agent_reasoning", text: "**Planning**\n\n<!-- -->" },
+      }),
+      JSON.stringify({
+        timestamp: "2026-04-15T01:00:04.200Z",
+        type: "response_item",
+        payload: {
+          type: "reasoning",
+          id: "reasoning-1",
+          summary: [
+            { type: "summary_text", text: "**Inspecting**\n\n<!-- -->" },
+            { type: "summary_text", text: "**Planning**\n\n<!-- -->" },
+          ],
+        },
+      }),
+      JSON.stringify({
+        timestamp: "2026-04-15T01:00:04.300Z",
+        type: "event_msg",
+        payload: { type: "agent_reasoning", text: "**Inspecting**\n\n<!-- -->" },
+      }),
+      JSON.stringify({
+        timestamp: "2026-04-15T01:00:04.400Z",
+        type: "event_msg",
         payload: { type: "agent_message", message: "我是 Codex" },
       }),
       JSON.stringify({
@@ -1127,9 +1155,17 @@ rl.on('line', (line) => {
       })),
       [
         { type: "timeline.item.added", kind: "user_message" },
+        { type: "timeline.item.added", kind: "reasoning" },
+        { type: "timeline.item.added", kind: "reasoning" },
         { type: "timeline.item.added", kind: "assistant_message" },
       ],
     );
+    const reasoningTexts = page.events.flatMap((event) =>
+      event.type === "timeline.item.added" && event.payload.item.kind === "reasoning"
+        ? [event.payload.item.text]
+        : [],
+    );
+    assert.deepEqual(reasoningTexts, ["**Inspecting**", "**Planning**"]);
 
     rmSync(cwd, { recursive: true, force: true });
   });

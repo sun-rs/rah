@@ -18,6 +18,8 @@ import type {
   SetSessionModelRequest,
   SessionFileResponse,
   SessionHistoryPageResponse,
+  SessionTurnDirectoryResponse,
+  SessionTurnHistoryResponse,
   SessionInputRequest,
   SessionSummary,
   StartSessionRequest,
@@ -146,6 +148,13 @@ export interface ProviderStoredHistoryAdapter {
     options?: { beforeTs?: string; cursor?: string; limit?: number },
   ): SessionHistoryPageResponse;
   createFrozenHistoryPageLoader?(sessionId: string): FrozenHistoryPageLoader | undefined;
+  getSessionTurnDirectory?(
+    sessionId: string,
+  ): SessionTurnDirectoryResponse | Promise<SessionTurnDirectoryResponse>;
+  getSessionTurnHistory?(
+    sessionId: string,
+    turnId: string,
+  ): SessionTurnHistoryResponse | Promise<SessionTurnHistoryResponse>;
   listStoredSessions?(): StoredSessionRef[];
   refreshStoredSessionsCatalog?(): StoredSessionRef[];
   listStoredSessionWatchRoots?(): string[];

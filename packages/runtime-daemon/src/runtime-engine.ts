@@ -54,6 +54,8 @@ import type {
   SessionFileSearchResponse,
   SessionHistoryDetailMode,
   SessionHistoryPageResponse,
+  SessionTurnDirectoryResponse,
+  SessionTurnHistoryResponse,
   SessionInputRequest,
   SessionSummary,
   StartSessionRequest,
@@ -1490,15 +1492,7 @@ export class RuntimeEngine {
     sessionId: string,
     options?: { beforeTs?: string; cursor?: string; limit?: number; detail?: SessionHistoryDetailMode },
   ): SessionHistoryPageResponse {
-    const ownerProvider = this.structuredSessionOwners.get(sessionId);
-    const adapter = ownerProvider
-      ? this.storedHistoryAdaptersByProvider.get(ownerProvider)
-      : (() => {
-          const session = this.sessionStore.getSession(sessionId);
-          return session
-            ? this.storedHistoryAdaptersByProvider.get(session.session.provider)
-            : undefined;
-        })();
+    const adapter = this.storedHistoryAdapterForSession(sessionId);
     if (!adapter?.getSessionHistoryPage) {
       return { sessionId, events: [] };
     }
@@ -1526,6 +1520,31 @@ export class RuntimeEngine {
     return summarizeHistoryPage(filtered);
   }
 
+  async getSessionTurnDirectory(sessionId: string): Promise<SessionTurnDirectoryResponse> {
+    const adapter = this.storedHistoryAdapterForSession(sessionId);
+    if (!adapter?.getSessionTurnDirectory) {
+      return {
+        sessionId,
+        revision: "unsupported",
+        items: [],
+        complete: false,
+        generatedAt: new Date().toISOString(),
+      };
+    }
+    return adapter.getSessionTurnDirectory(sessionId);
+  }
+
+  async getSessionTurnHistory(
+    sessionId: string,
+    turnId: string,
+  ): Promise<SessionTurnHistoryResponse> {
+    const adapter = this.storedHistoryAdapterForSession(sessionId);
+    if (!adapter?.getSessionTurnHistory) {
+      return { sessionId, turnId, events: [] };
+    }
+    return adapter.getSessionTurnHistory(sessionId, turnId);
+  }
+
   getSessionHistoryItemDetail(
     sessionId: string,
     options: { kind: "tool_call" | "observation"; itemId: string },
@@ -1538,6 +1557,19 @@ export class RuntimeEngine {
         historyEventMatchesItem(event, options.kind, options.itemId),
       ),
     };
+  }
+
+  private storedHistoryAdapterForSession(
+    sessionId: string,
+  ): ProviderStoredHistoryAdapter | undefined {
+    const ownerProvider = this.structuredSessionOwners.get(sessionId);
+    if (ownerProvider) {
+      return this.storedHistoryAdaptersByProvider.get(ownerProvider);
+    }
+    const session = this.sessionStore.getSession(sessionId);
+    return session
+      ? this.storedHistoryAdaptersByProvider.get(session.session.provider)
+      : undefined;
   }
 
   getContextUsage(sessionId: string) {
@@ -2001,6 +2033,7 @@ export class RuntimeEngine {
     discoveredStoredSessions: readonly StoredSessionRef[],
     options?: { storedSessionsMode?: StoredSessionsResponseMode },
   ): ListSessionsResponse {
+    const eventSeq = this.eventBus.newestSeq();
     return {
       ...buildRuntimeSessionsResponse({
         liveStates,
@@ -2019,6 +2052,7 @@ export class RuntimeEngine {
         isClosingSession: () => false,
         ...(options?.storedSessionsMode ? { storedSessionsMode: options.storedSessionsMode } : {}),
       }),
+      ...(eventSeq !== null ? { eventSeq } : {}),
       storedSessionsRevision: this.storedSessionDiscoveryVersion,
     };
   }

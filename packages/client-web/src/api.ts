@@ -69,6 +69,8 @@ import type {
   SessionHistoryItemDetailKind,
   SessionHistoryItemDetailResponse,
   SessionHistoryPageResponse,
+  SessionTurnDirectoryResponse,
+  SessionTurnHistoryResponse,
   SessionSummary,
   StartDebugScenarioRequest,
   StartSessionRequest,
@@ -878,6 +880,24 @@ export async function readSessionHistoryItemDetail(
   query.set("itemId", options.itemId);
   return requestJson<SessionHistoryItemDetailResponse>(
     `/api/sessions/${sessionId}/history/detail?${query.toString()}`,
+  );
+}
+
+export async function readSessionTurnDirectory(
+  sessionId: string,
+): Promise<SessionTurnDirectoryResponse> {
+  return requestJson<SessionTurnDirectoryResponse>(
+    `/api/sessions/${sessionId}/history/turn-directory`,
+  );
+}
+
+export async function readSessionTurnHistory(
+  sessionId: string,
+  turnId: string,
+): Promise<SessionTurnHistoryResponse> {
+  const query = new URLSearchParams({ turnId });
+  return requestJson<SessionTurnHistoryResponse>(
+    `/api/sessions/${sessionId}/history/turn?${query.toString()}`,
   );
 }
 

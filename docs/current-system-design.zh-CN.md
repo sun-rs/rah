@@ -121,6 +121,7 @@ Timeline identity 的硬约束：
 - 如果 timeline event 有 `canonicalItemId`，projection 必须按该 id upsert；`messageId` 和 text/time 去重只作为旧事件 fallback。
 - 通过 `useSessionStore` 管 session projection、selected session、history paging、event sync。
 - 对长历史使用虚拟窗口和 measured row height，不把所有 DOM 一次性渲染。
+- 桌面宽容器的 ChatThread 提供按用户轮次派生的 `Turn Navigator`。每个刻度代表一条用户消息及其后续 assistant 处理过程/最终回答；Codex 后台 `Turn Directory` 可以提供尚未载入正文的完整 turn 列表，点击未加载刻度只请求对应 byte range。可见状态和已加载 turn 的定位只使用当前虚拟布局，不扫描整页 DOM。窄 pane 和 coarse-pointer 设备不展示该控件。
 - mode/model/config 的 provider 差异必须由 adapter 通过 `ProviderModelCatalog`、`SessionModeState`、`ManagedSession.model/config/modelProfile` 暴露，前端不能把 mode 翻译成 provider-native 启动参数。
 - 图片粘贴是 composer 能力：前端把剪贴板图片保存为 data image URL 附加到 outgoing text；provider adapter 负责把它映射到 provider 可接受的 image input。Chat feed 中只展示“Image xN”标识，不把 base64 展开成正文。
 - 回复中的本地文件链接不作为普通 HTTP 链接跳转，而是进入 Inspector file preview。Host file preview 不受当前 workspace scope 限制；workspace/session Inspector 文件树仍保持 workspace boundary。图片 preview 按访问面分级：`localhost` / LAN private IP / `.local` 访问返回原图 data；远程访问返回 bounded preview data，后端优先用系统图像能力生成缩略图，不能把“大图”作为正常不可预览状态暴露给用户。
@@ -418,6 +419,26 @@ Stop 按钮语义：
 - live 与 history 的重复消除应优先依赖 `TimelineIdentity.canonicalItemId`，而不是靠文本相同、时间接近来猜。
 - 当前阶段是 Timeline Identity v2 的 MVP：协议、daemon 透传、前端 upsert、core provider 的 native/derived identity 已具备。后续如果继续增强，应在 daemon 侧增加 epoch/seq ledger 做 replay/gap/catch-up，而不是把 text/time window 重新变成主逻辑。
 
+### Assistant 处理过程与最终回答
+
+`TimelineItem.assistant_message.phase` 用来区分一次 turn 中的两类 assistant 文本：
+
+- `commentary`：中间说明、进度播报和工具调用前后的工作叙述。
+- `final_answer`：该 turn 面向用户的最终回答。
+
+Codex rollout JSONL 与 app-server `agentMessage.phase` 都属于结构化事实，adapter 必须原样保留。前端不能根据颜色、文本内容或“后面是否还有 tool call”重新猜 Codex phase。provider 或旧历史没有 phase 时，才允许使用“同一可见用户 turn 的最后一条 assistant message”为 final answer 的兼容规则。
+
+Chat 展示按 turn 聚合：
+
+- commentary、reasoning、compaction、tool call、observation 和内部 operation 进入同一个处理过程区域。
+- 只有已经出现 final answer 的 turn 才算展示层完成，其处理过程自动折叠为 `Worked …`；最终回答保持为常驻正文。`generationActive`、`ready` 或重连状态都不能替代 final answer 作为折叠证据。
+- 尚无 final answer 的处理过程必须保持展开且不可手工折叠。当前执行中的 turn 显示为 `Working`；已中断但没有 final answer 的历史过程显示为 `Work interrupted`，同样保留展开内容。
+- 展开处理过程后，连续 command/test/build/lint 调用再聚合为默认折叠的 `Ran multiple commands`。
+- 折叠区域如果包含失败工具，外层摘要必须保留失败数量和 warning tone，不能因为折叠而让失败不可见。
+- pending permission 不进入折叠处理组，必须始终留在主 timeline 等待用户操作。
+
+`Worked` 的兼容耗时使用该可见 turn 的 user message 时间到 final answer 时间；这与 Codex persisted `task_started/task_complete` 的用户可感知区间一致，也避免为纯展示再维护第二套计时状态。分页尚未加载到 user message 时可以退化为首个已知 process item 时间，加载完整边界后应自动校正。
+
 ### Chat 阅读导航
 
 Chat 主滚动区有两个不同的浮动导航动作：
@@ -426,6 +447,8 @@ Chat 主滚动区有两个不同的浮动导航动作：
 - `Read latest reply`：当最新 assistant 回复的内容块无法在当前 ChatThread 可滚动视口内完整阅读，且该回复内容顶部已经滚出视口时，滚回这条最新回复的内容顶部。
 
 `Read latest reply` 是纯前端阅读辅助，不触发历史加载、provider 请求或 session 状态变化。它只对最新可见对话气泡生效：最新 message 气泡必须是 assistant 回复，才允许继续做高度判断；如果用户已经发出新问题而新 assistant 回复还没出现，即使上一条 assistant 回复很长，也不显示该按钮。tool、reasoning、status 等非 message 事件不改变这个判定。
+
+`Turn Navigator` 是阅读辅助而不是第二套 Chat feed。轮次以非内部 reminder 的 `user_message` 为唯一边界；当前视口和多个已加载轮次相交时同时激活多个刻度。悬停摘要优先显示 `final_answer`，未完成轮次才回退到最近 assistant 过程消息。点击已加载 turn 先按虚拟布局定位，再在目标行挂载后做一次 DOM 精确校正；点击未加载的 Codex turn 只读取目录记录的 byte range，合并该 turn 正文后再定位。悬停本身不触发 provider 请求。
 
 如果后续出现新的 assistant 回复，即使新的回复很短，也不再跳回上一轮较长回复，避免跨 turn 乱序阅读。
 

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type {
+  AssistantMessagePhase,
   EventAuthority,
   EventChannel,
   TimelineIdentity,
@@ -179,18 +180,27 @@ function imageCountFromContentItems(content: unknown): number {
     }).length;
 }
 
+export function sanitizeCodexReasoningText(text: string): string | null {
+  const normalized = text
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return normalized || null;
+}
+
 function extractSummaryText(summary: unknown): string | null {
   if (!Array.isArray(summary)) {
     return null;
   }
-  const text = summary
+  const summaries = summary
     .filter((item) => item && typeof item === "object" && !Array.isArray(item))
     .map((item) => item as Record<string, unknown>)
     .filter((item) => item.type === "summary_text" && typeof item.text === "string")
-    .map((item) => item.text as string)
-    .join("\n")
-    .trim();
-  return text || null;
+    .map((item) => sanitizeCodexReasoningText(item.text as string))
+    .filter((text): text is string => text !== null);
+  // Codex persists cumulative summary arrays. The final element is the newly
+  // added section; replaying the whole array duplicates every earlier section.
+  return summaries.at(-1) ?? null;
 }
 
 function extractAgentMessageText(message: unknown): string | null {
@@ -255,6 +265,11 @@ function stringField(record: Record<string, unknown>, ...keys: string[]): string
     }
   }
   return null;
+}
+
+function assistantMessagePhase(record: Record<string, unknown>): AssistantMessagePhase | undefined {
+  const phase = stringField(record, "phase");
+  return phase === "commentary" || phase === "final_answer" ? phase : undefined;
 }
 
 function numberField(record: Record<string, unknown>, ...keys: string[]): number | null {
@@ -1443,7 +1458,8 @@ export function translateCodexRolloutLine(
       ];
     }
     if (payload.type === "agent_reasoning" && typeof payload.text === "string") {
-      if (shouldSkipDuplicateTimelineText(state, record, "reasoning", payload.text)) {
+      const text = sanitizeCodexReasoningText(payload.text);
+      if (!text || shouldSkipDuplicateTimelineText(state, record, "reasoning", text)) {
         return [];
       }
       const identity = createHistoryTimelineIdentity(state, {
@@ -1454,7 +1470,7 @@ export function translateCodexRolloutLine(
           record,
           {
             type: "timeline_item",
-            item: { kind: "reasoning", text: payload.text },
+            item: { kind: "reasoning", text },
             ...timelineIdentityProps(identity),
           },
           "authoritative",
@@ -1475,6 +1491,7 @@ export function translateCodexRolloutLine(
       const identity = createHistoryTimelineIdentity(state, {
         itemKind: "assistant_message",
       });
+      const phase = assistantMessagePhase(payload);
       return [
         persistedActivity(
           record,
@@ -1483,6 +1500,7 @@ export function translateCodexRolloutLine(
             item: {
               kind: "assistant_message",
               text,
+              ...(phase ? { phase } : {}),
               ...(state.currentRuntimeModel ? { runtimeModel: state.currentRuntimeModel } : {}),
             },
             ...timelineIdentityProps(identity),
@@ -1544,7 +1562,7 @@ export function translateCodexRolloutLine(
   if (payload.type === "reasoning") {
     const text =
       extractSummaryText(payload.summary) ??
-      (typeof payload.text === "string" ? payload.text.trim() : null);
+      (typeof payload.text === "string" ? sanitizeCodexReasoningText(payload.text) : null);
     if (!text) {
       if (typeof payload.encrypted_content === "string") {
         return [];
@@ -1689,6 +1707,7 @@ export function translateCodexRolloutLine(
         itemKind: "assistant_message",
         ...(messageId !== null ? { providerMessageId: messageId } : {}),
       });
+      const phase = assistantMessagePhase(payload);
       return [
         ...(messageId
           ? [
@@ -1714,6 +1733,7 @@ export function translateCodexRolloutLine(
             item: {
               kind: "assistant_message",
               text,
+              ...(phase ? { phase } : {}),
               ...(state.currentRuntimeModel ? { runtimeModel: state.currentRuntimeModel } : {}),
             },
             ...timelineIdentityProps(identity),

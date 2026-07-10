@@ -24,6 +24,10 @@ export function hasStoredHistoryCapability(
       "function" ||
     typeof (adapter as Partial<ProviderStoredHistoryAdapter>).createFrozenHistoryPageLoader ===
       "function" ||
+    typeof (adapter as Partial<ProviderStoredHistoryAdapter>).getSessionTurnDirectory ===
+      "function" ||
+    typeof (adapter as Partial<ProviderStoredHistoryAdapter>).getSessionTurnHistory ===
+      "function" ||
     typeof (adapter as Partial<ProviderStoredHistoryAdapter>).listStoredSessions === "function" ||
     typeof (adapter as Partial<ProviderStoredHistoryAdapter>).refreshStoredSessionsCatalog ===
       "function" ||
@@ -45,6 +49,12 @@ export function bindStoredHistoryCapability(
       : {}),
     ...(adapter.createFrozenHistoryPageLoader
       ? { createFrozenHistoryPageLoader: adapter.createFrozenHistoryPageLoader.bind(adapter) }
+      : {}),
+    ...(adapter.getSessionTurnDirectory
+      ? { getSessionTurnDirectory: adapter.getSessionTurnDirectory.bind(adapter) }
+      : {}),
+    ...(adapter.getSessionTurnHistory
+      ? { getSessionTurnHistory: adapter.getSessionTurnHistory.bind(adapter) }
       : {}),
     ...(adapter.listStoredSessions
       ? { listStoredSessions: adapter.listStoredSessions.bind(adapter) }

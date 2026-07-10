@@ -2139,6 +2139,19 @@ function validateTimelineItem(item: TimelineItem, sink: IssueSink, path: string)
       break;
     case "assistant_message":
       validateTimelineRuntimeModel(item.runtimeModel, sink, `${path}.runtimeModel`);
+      if (
+        item.phase !== undefined &&
+        item.phase !== "commentary" &&
+        item.phase !== "final_answer"
+      ) {
+        addIssue(
+          sink,
+          "error",
+          "timeline.assistant_phase.invalid",
+          "assistant message phase must be commentary or final_answer",
+          `${path}.phase`,
+        );
+      }
       if (typeof item.text !== "string") {
         addIssue(sink, "error", "timeline.text.invalid", "timeline text must be a string", `${path}.text`);
       }

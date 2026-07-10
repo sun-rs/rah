@@ -6,6 +6,7 @@ import {
 } from "./session-mode-ui";
 import {
   isManualSupplementModel,
+  reasoningIdForModelSelection,
   resolveSelectedModelDraft,
 } from "./components/SessionModelControls";
 import type { ProviderKind, ProviderModelCatalog, SessionSummary } from "@rah/runtime-protocol";
@@ -389,6 +390,34 @@ describe("session model UI defaults", () => {
 
     assert.equal(state.model?.id, "gpt-default");
     assert.equal(state.reasoning?.id, "high");
+  });
+
+  test("keeps the selected effort when reopening parameters for the current model", () => {
+    const catalog = modelCatalog({});
+    const model = catalog.models.find((entry) => entry.id === "gpt-current");
+
+    assert.equal(
+      reasoningIdForModelSelection({
+        nextModel: model,
+        currentModelId: "gpt-current",
+        currentReasoningId: "medium",
+      }),
+      "medium",
+    );
+  });
+
+  test("selects the strongest visible effort when switching models", () => {
+    const catalog = modelCatalog({});
+    const model = catalog.models.find((entry) => entry.id === "gpt-current");
+
+    assert.equal(
+      reasoningIdForModelSelection({
+        nextModel: model,
+        currentModelId: "gpt-default",
+        currentReasoningId: "high",
+      }),
+      "xhigh",
+    );
   });
 
   test("identifies manual supplement models from catalog profiles", () => {

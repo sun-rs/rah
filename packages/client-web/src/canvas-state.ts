@@ -1,6 +1,10 @@
 import type { StoredSessionRef } from "@rah/runtime-protocol";
 import { isReadOnlyReplay } from "./session-capabilities";
 import type { CanvasLayout } from "./components/workbench/canvas/CanvasWorkbench";
+import {
+  createPendingStoredSessionTransition,
+  type PendingSessionTransition,
+} from "./session-transition-contract";
 import type { SessionProjection } from "./types";
 
 export type CanvasPaneId = "canvas-1" | "canvas-2" | "canvas-3" | "canvas-4";
@@ -11,6 +15,11 @@ export type CanvasPaneTarget =
   | { kind: "council"; councilId: string }
   | { kind: "session"; sessionId: string }
   | { kind: "stored"; ref: StoredSessionRef };
+
+export type CanvasPendingSessionAction = {
+  kind: "attach_session" | "claim_control" | "claim_history";
+  sessionId: string;
+};
 
 export const CANVAS_PANE_IDS: CanvasPaneId[] = [
   "canvas-1",
@@ -79,6 +88,51 @@ export function hasAnyCanvasPaneTarget(
   targets: Record<CanvasPaneId, CanvasPaneTarget>,
 ): boolean {
   return CANVAS_PANE_IDS.some((paneId) => targets[paneId].kind !== "empty");
+}
+
+export function canvasStoredRefKey(
+  ref: Pick<StoredSessionRef, "provider" | "providerSessionId">,
+): string {
+  return `${ref.provider}:${ref.providerSessionId}`;
+}
+
+export function canvasOpeningTransitionForTarget(
+  target: CanvasPaneTarget,
+  pendingSessionAction: CanvasPendingSessionAction | null,
+  pendingSessionTransition: PendingSessionTransition | null,
+  canvasClaimingStoredKeys: ReadonlySet<string> = new Set(),
+): PendingSessionTransition | null {
+  if (!pendingSessionTransition) {
+    if (
+      target.kind === "stored" &&
+      canvasClaimingStoredKeys.has(canvasStoredRefKey(target.ref))
+    ) {
+      return createPendingStoredSessionTransition(target.ref, "claim_history");
+    }
+    return null;
+  }
+  if (
+    target.kind === "session" &&
+    pendingSessionTransition.kind === "claim_history" &&
+    pendingSessionAction?.kind === "claim_history" &&
+    pendingSessionAction.sessionId === target.sessionId
+  ) {
+    return pendingSessionTransition;
+  }
+  if (
+    target.kind === "stored" &&
+    pendingSessionTransition.provider === target.ref.provider &&
+    pendingSessionTransition.providerSessionId === target.ref.providerSessionId
+  ) {
+    return pendingSessionTransition;
+  }
+  if (
+    target.kind === "stored" &&
+    canvasClaimingStoredKeys.has(canvasStoredRefKey(target.ref))
+  ) {
+    return createPendingStoredSessionTransition(target.ref, "claim_history");
+  }
+  return null;
 }
 
 function isCanvasLayout(value: unknown): value is CanvasLayout {
