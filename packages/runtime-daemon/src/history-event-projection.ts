@@ -223,7 +223,10 @@ export function historyEventMatchesItem(
       case "observation.updated":
       case "observation.completed":
       case "observation.failed":
-        return event.payload.observation.id === itemId;
+        return (
+          event.payload.observation.id === itemId ||
+          event.payload.observation.subject?.providerCallId === itemId
+        );
       default:
         return false;
     }

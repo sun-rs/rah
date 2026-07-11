@@ -241,6 +241,33 @@ describe("conversation projector", () => {
     assert.equal(settled.turns[1]?.finalAnswerItemId, itemIdentity("user-2", "assistant-2", "assistant_message").canonicalItemId);
   });
 
+  test("settles completed-looking persisted turns without provider-specific rules", () => {
+    const identity = createTimelineIdentity({
+      provider: "codex",
+      providerSessionId: "thread-history",
+      turnKey: "turn-history",
+      itemKind: "assistant_message",
+      itemKey: "assistant-final",
+      origin: "history",
+      confidence: "native",
+    });
+    const events: RahEvent[] = [
+      event(1, "timeline.item.added", CODEX_SOURCE, "turn-history", {
+        identity,
+        item: {
+          kind: "assistant_message",
+          text: "Stored final answer",
+          phase: "final_answer",
+        },
+      }),
+    ];
+
+    assert.equal(projectConversation("session-1", events).turns[0]?.status, "in_progress");
+    const settled = projectConversation("session-1", events, { assumeSettled: true });
+    assert.equal(settled.turns[0]?.status, "completed");
+    assert.equal(settled.turns[0]?.finalAnswerItemId, identity.canonicalItemId);
+  });
+
   test("prefers normalized observations over duplicate tool calls and localizes failures", () => {
     const events: RahEvent[] = [
       event(1, "turn.started", CODEX_SOURCE, "turn-1", {}),
@@ -311,5 +338,29 @@ describe("conversation projector", () => {
         : undefined,
       0,
     );
+  });
+
+  test("settles open process items when their owning turn is interrupted", () => {
+    const events: RahEvent[] = [
+      event(1, "turn.started", CODEX_SOURCE, "turn-1", {}),
+      event(2, "observation.started", CODEX_SOURCE, "turn-1", {
+        observation: {
+          id: "obs-call-1",
+          kind: "command.run",
+          status: "running",
+          title: "Run command",
+          subject: { providerCallId: "call-1" },
+        },
+      }),
+      event(3, "turn.canceled", CODEX_SOURCE, "turn-1", {
+        reason: "Interrupted by user",
+      }),
+    ];
+
+    const turn = projectConversation("session-1", events).turns[0];
+    assert.equal(turn?.status, "interrupted");
+    assert.equal(turn?.items[0]?.status, "interrupted");
+    assert.equal(turn?.items[0]?.completedAt, events[2]?.ts);
+    assert.equal(turn?.failedItemCount, 0);
   });
 });

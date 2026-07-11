@@ -4,6 +4,7 @@ import type {
   EventSubscriptionRequest,
   PtyClientMessage,
   PtyServerMessage,
+  RahEvent,
   ReplayGapNotice,
 } from "@rah/runtime-protocol";
 import { RuntimeEngine } from "./runtime-engine";
@@ -142,6 +143,12 @@ function decodePathSegment(value: string): string {
   }
 }
 
+function conversationDeltasForEvents(engine: RuntimeEngine, events: readonly RahEvent[]) {
+  return events
+    .map((event) => engine.conversationStore.deltaForSourceSeq(event.seq))
+    .filter((delta) => delta !== undefined);
+}
+
 export function attachWebSocketHandlers(
   server: Server,
   engine: RuntimeEngine,
@@ -166,8 +173,10 @@ export function attachWebSocketHandlers(
     const initial = engine.listEvents(filter);
     const initialReplayGap = replayGapForSubscription(engine, filter);
     if (initial.length > 0 || initialReplayGap) {
+      const conversationDeltas = conversationDeltasForEvents(engine, initial);
       sendEventFrame({
         events: initial,
+        ...(conversationDeltas.length > 0 ? { conversationDeltas } : {}),
         initial: true,
         ...(initialReplayGap ? { replayGap: initialReplayGap } : {}),
       });
@@ -175,7 +184,11 @@ export function attachWebSocketHandlers(
 
     let unsubscribe: () => void = () => undefined;
     unsubscribe = engine.eventBus.subscribe(filter, (event) => {
-      if (!sendEventFrame({ events: [event] })) {
+      const conversationDelta = engine.conversationStore.deltaForSourceSeq(event.seq);
+      if (!sendEventFrame({
+        events: [event],
+        ...(conversationDelta ? { conversationDeltas: [conversationDelta] } : {}),
+      })) {
         unsubscribe();
       }
     });
@@ -191,13 +204,19 @@ export function attachWebSocketHandlers(
         const replay = engine.listEvents(filter);
         const replayGap = replayGapForSubscription(engine, filter);
         if (replay.length > 0 || replayGap) {
+          const conversationDeltas = conversationDeltasForEvents(engine, replay);
           sendEventFrame({
             events: replay,
+            ...(conversationDeltas.length > 0 ? { conversationDeltas } : {}),
             ...(replayGap ? { replayGap } : {}),
           });
         }
         unsubscribe = engine.eventBus.subscribe(filter, (event) => {
-          if (!sendEventFrame({ events: [event] })) {
+          const conversationDelta = engine.conversationStore.deltaForSourceSeq(event.seq);
+          if (!sendEventFrame({
+            events: [event],
+            ...(conversationDelta ? { conversationDeltas: [conversationDelta] } : {}),
+          })) {
             unsubscribe();
           }
         });

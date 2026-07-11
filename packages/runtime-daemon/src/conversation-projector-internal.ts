@@ -242,6 +242,23 @@ export function closeTurn(
   if (turn.projection.durationMs === undefined && derivedDuration !== undefined) {
     turn.projection.durationMs = derivedDuration;
   }
+  const itemStatus =
+    status === "completed"
+      ? "completed"
+      : status === "interrupted"
+        ? "interrupted"
+        : "failed";
+  for (const item of turn.items.values()) {
+    if (item.status !== "pending" && item.status !== "running") {
+      continue;
+    }
+    item.status = itemStatus;
+    item.completedAt = completedAt;
+    const itemDuration = durationBetween(item.startedAt, completedAt);
+    if (item.durationMs === undefined && itemDuration !== undefined) {
+      item.durationMs = itemDuration;
+    }
+  }
   if (status === "completed") {
     chooseFinalAnswer(turn);
   }

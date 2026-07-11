@@ -244,6 +244,24 @@ describe("startRahDaemon", () => {
     engine.eventBus.publish({
       sessionId: state.session.id,
       turnId: "turn-1",
+      type: "observation.completed",
+      source,
+      payload: {
+        observation: {
+          id: "observation-1",
+          kind: "command.run",
+          status: "completed",
+          title: "Run command",
+          subject: { providerCallId: "call-1" },
+          detail: {
+            artifacts: [{ kind: "text", label: "Output", text: "complete output" }],
+          },
+        },
+      },
+    });
+    engine.eventBus.publish({
+      sessionId: state.session.id,
+      turnId: "turn-1",
       type: "turn.completed",
       source,
       payload: {},
@@ -258,12 +276,90 @@ describe("startRahDaemon", () => {
     assert.ok(response.json && typeof response.json === "object" && !Array.isArray(response.json));
     const body = response.json as Record<string, unknown>;
     assert.equal(body.sessionId, state.session.id);
-    assert.equal(body.sourceEventCount, 3);
+    assert.equal(body.sourceEventCount, 4);
     assert.equal(typeof body.approximateBytes, "number");
     assert.ok(Array.isArray(body.turns));
     const turn = body.turns[0] as Record<string, unknown>;
     assert.equal(turn.status, "completed");
     assert.equal(typeof turn.finalAnswerItemId, "string");
+    const items = turn.items as Array<Record<string, unknown>>;
+    const observation = items.find(
+      (item) => (item.content as Record<string, unknown>)?.kind === "observation",
+    );
+    assert.ok(observation);
+    const providerItemId = observation.providerItemId as string;
+    const detailResponse = await requestJson({
+      port,
+      path:
+        `/api/sessions/${state.session.id}/conversation/items/${encodeURIComponent(observation.id as string)}/detail` +
+        `?providerTurnId=turn-1&providerItemId=${encodeURIComponent(providerItemId)}`,
+      headers: { Origin: `http://127.0.0.1:${port}` },
+    });
+    assert.equal(detailResponse.status, 200);
+    const detailBody = detailResponse.json as Record<string, unknown>;
+    const detailedItem = detailBody.item as Record<string, unknown>;
+    const detailedContent = detailedItem.content as Record<string, unknown>;
+    const detailedObservation = detailedContent.observation as Record<string, unknown>;
+    assert.equal(
+      ((detailedObservation.detail as Record<string, unknown>).artifacts as Array<Record<string, unknown>>)[0]?.text,
+      "complete output",
+    );
+
+    const liveOnlyResponse = await requestJson({
+      port,
+      path: `/api/sessions/${state.session.id}/conversation/turns?limit=10&liveOnly=true`,
+      headers: { Origin: `http://127.0.0.1:${port}` },
+    });
+    assert.equal(liveOnlyResponse.status, 200);
+    const liveOnlyBody = liveOnlyResponse.json as Record<string, unknown>;
+    assert.equal(liveOnlyBody.sessionId, state.session.id);
+    assert.ok(Array.isArray(liveOnlyBody.turns));
+    assert.equal((liveOnlyBody.turns as unknown[]).length, 1);
+  });
+
+  test("streams canonical conversation deltas with live events", async () => {
+    const state = engine.sessionStore.createManagedSession({
+      provider: "custom",
+      launchSource: "web",
+      cwd: tempHome,
+      rootDir: tempHome,
+    });
+    const socket = await openWebSocket(`ws://127.0.0.1:${port}/api/events`);
+    const batchPromise = new Promise<Record<string, unknown>>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error("Timed out waiting for a conversation delta."));
+      }, 1_000);
+      socket.on("message", (raw) => {
+        const parsed = JSON.parse(raw.toString("utf8")) as Record<string, unknown>;
+        if (!Array.isArray(parsed.conversationDeltas)) {
+          return;
+        }
+        clearTimeout(timer);
+        resolve(parsed);
+      });
+    });
+    const published = engine.eventBus.publish({
+      sessionId: state.session.id,
+      turnId: "turn-live",
+      type: "turn.started",
+      source: {
+        provider: "custom",
+        channel: "structured_live",
+        authority: "authoritative",
+      },
+      payload: {},
+    });
+
+    const batch = await batchPromise;
+    socket.close();
+    assert.ok(Array.isArray(batch.events));
+    const streamedEvent = batch.events[0] as Record<string, unknown>;
+    assert.equal(streamedEvent.seq, published.seq);
+    const streamedDelta = (batch.conversationDeltas as Array<Record<string, unknown>>)[0];
+    assert.equal(streamedDelta?.sessionId, state.session.id);
+    assert.equal(streamedDelta?.sourceSeq, published.seq);
+    assert.equal(streamedDelta?.baseRevision, 0);
+    assert.equal(streamedDelta?.revision, 1);
   });
 
   test("serves native TUI diagnostics", async () => {

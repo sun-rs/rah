@@ -151,6 +151,14 @@ export interface ProviderStoredHistoryAdapter {
     sessionId: string,
     options?: { cursor?: string; limit?: number },
   ): SessionHistoryPageResponse | undefined | Promise<SessionHistoryPageResponse | undefined>;
+  getSessionConversationItemDetail?(
+    sessionId: string,
+    options: { providerTurnId: string; providerItemId: string },
+  ): SessionHistoryPageResponse | undefined | Promise<SessionHistoryPageResponse | undefined>;
+  getSessionConversationTurnDetail?(
+    sessionId: string,
+    options: { providerTurnId: string },
+  ): SessionHistoryPageResponse | undefined | Promise<SessionHistoryPageResponse | undefined>;
   createFrozenHistoryPageLoader?(sessionId: string): FrozenHistoryPageLoader | undefined;
   getSessionTurnDirectory?(
     sessionId: string,

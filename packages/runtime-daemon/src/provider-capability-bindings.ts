@@ -22,6 +22,12 @@ export function hasStoredHistoryCapability(
       "function" ||
     typeof (adapter as Partial<ProviderStoredHistoryAdapter>).getSessionHistoryPage ===
       "function" ||
+    typeof (adapter as Partial<ProviderStoredHistoryAdapter>)
+      .getSessionConversationHistoryPage === "function" ||
+    typeof (adapter as Partial<ProviderStoredHistoryAdapter>)
+      .getSessionConversationItemDetail === "function" ||
+    typeof (adapter as Partial<ProviderStoredHistoryAdapter>)
+      .getSessionConversationTurnDetail === "function" ||
     typeof (adapter as Partial<ProviderStoredHistoryAdapter>).createFrozenHistoryPageLoader ===
       "function" ||
     typeof (adapter as Partial<ProviderStoredHistoryAdapter>).getSessionTurnDirectory ===
@@ -46,6 +52,24 @@ export function bindStoredHistoryCapability(
       : {}),
     ...(adapter.getSessionHistoryPage
       ? { getSessionHistoryPage: adapter.getSessionHistoryPage.bind(adapter) }
+      : {}),
+    ...(adapter.getSessionConversationHistoryPage
+      ? {
+          getSessionConversationHistoryPage:
+            adapter.getSessionConversationHistoryPage.bind(adapter),
+        }
+      : {}),
+    ...(adapter.getSessionConversationItemDetail
+      ? {
+          getSessionConversationItemDetail:
+            adapter.getSessionConversationItemDetail.bind(adapter),
+        }
+      : {}),
+    ...(adapter.getSessionConversationTurnDetail
+      ? {
+          getSessionConversationTurnDetail:
+            adapter.getSessionConversationTurnDetail.bind(adapter),
+        }
       : {}),
     ...(adapter.createFrozenHistoryPageLoader
       ? { createFrozenHistoryPageLoader: adapter.createFrozenHistoryPageLoader.bind(adapter) }

@@ -454,23 +454,25 @@ export function projectConversation(
     }
   }
 
-  if (options.assumeSettled && lastClaudeTurnId) {
-    const lastClaudeTurn = turns.get(lastClaudeTurnId);
-    if (
-      lastClaudeTurn?.projection.status === "in_progress" &&
-      [...lastClaudeTurn.items.values()].some(
-        (item) =>
-          item.content.kind === "timeline" &&
-          item.content.item.kind === "assistant_message",
-      )
-    ) {
+  if (options.assumeSettled) {
+    for (const turn of turns.values()) {
+      if (
+        turn.projection.status !== "in_progress" ||
+        ![...turn.items.values()].some(
+          (item) =>
+            item.content.kind === "timeline" &&
+            item.content.item.kind === "assistant_message",
+        )
+      ) {
+        continue;
+      }
       const lastTimestamp =
-        [...lastClaudeTurn.items.values()]
+        [...turn.items.values()]
           .map((item) => item.completedAt ?? item.startedAt)
           .filter((value): value is string => Boolean(value))
           .sort()
-          .at(-1) ?? lastClaudeTurn.projection.startedAt ?? options.generatedAt ?? new Date().toISOString();
-      closeTurn(lastClaudeTurn, "completed", lastTimestamp, "derived");
+          .at(-1) ?? turn.projection.startedAt ?? options.generatedAt ?? new Date().toISOString();
+      closeTurn(turn, "completed", lastTimestamp, "derived");
     }
   }
 
@@ -495,4 +497,3 @@ export function projectConversation(
     ...(options.partial ? { partial: true } : {}),
   };
 }
-

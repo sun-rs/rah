@@ -39,6 +39,7 @@ import type {
   RenameCouncilResponse,
 } from "./council";
 import type { ContextUsage, EventEnvelope, JsonObject, RahEvent, RahEventType } from "./events";
+import type { ConversationProjectionDelta } from "./conversation";
 
 export interface RuntimeIdentityResponse {
   name: "rah";
@@ -580,6 +581,7 @@ export interface ReplayGapNotice {
 
 export interface EventBatch {
   events: RahEvent[];
+  conversationDeltas?: ConversationProjectionDelta[];
   replayGap?: ReplayGapNotice;
   initial?: boolean;
 }

@@ -985,6 +985,7 @@ export async function handleHttpRequest(args: {
     if (req.method === "GET" && conversationTurnsMatch) {
       const cursor = url.searchParams.get("cursor") ?? undefined;
       const limit = parseQueryLimit(url.searchParams.get("limit"), 20) ?? 20;
+      const liveOnly = url.searchParams.get("liveOnly") === "true";
       writeJson(
         req,
         res,
@@ -992,8 +993,72 @@ export async function handleHttpRequest(args: {
         await engine.getSessionConversationTurns(conversationTurnsMatch[1]!, {
           ...(cursor ? { cursor } : {}),
           limit,
+          ...(liveOnly ? { liveOnly: true } : {}),
         }),
       );
+      return;
+    }
+
+    const conversationTurnDetailMatch =
+      /^\/api\/sessions\/([^/]+)\/conversation\/turns\/([^/]+)\/detail$/.exec(pathname);
+    if (req.method === "GET" && conversationTurnDetailMatch) {
+      let turnId: string;
+      try {
+        turnId = decodeURIComponent(conversationTurnDetailMatch[2]!);
+      } catch {
+        writeJson(req, res, 400, { error: "Conversation turn id is invalid." });
+        return;
+      }
+      const providerTurnId = url.searchParams.get("providerTurnId");
+      if (!providerTurnId) {
+        writeJson(req, res, 400, {
+          error: "Conversation turn detail requires providerTurnId.",
+        });
+        return;
+      }
+      const detail = await engine.getSessionConversationTurnDetail(
+        conversationTurnDetailMatch[1]!,
+        { turnId, providerTurnId },
+      );
+      if (!detail) {
+        writeJson(req, res, 404, { error: "Conversation turn detail is not available." });
+        return;
+      }
+      writeJson(req, res, 200, detail);
+      return;
+    }
+
+    const conversationItemDetailMatch =
+      /^\/api\/sessions\/([^/]+)\/conversation\/items\/([^/]+)\/detail$/.exec(pathname);
+    if (req.method === "GET" && conversationItemDetailMatch) {
+      let itemId: string;
+      try {
+        itemId = decodeURIComponent(conversationItemDetailMatch[2]!);
+      } catch {
+        writeJson(req, res, 400, { error: "Conversation item id is invalid." });
+        return;
+      }
+      const providerTurnId = url.searchParams.get("providerTurnId");
+      const providerItemId = url.searchParams.get("providerItemId");
+      if (!providerTurnId || !providerItemId) {
+        writeJson(req, res, 400, {
+          error: "Conversation detail requires providerTurnId and providerItemId.",
+        });
+        return;
+      }
+      const detail = await engine.getSessionConversationItemDetail(
+        conversationItemDetailMatch[1]!,
+        {
+          itemId,
+          providerTurnId,
+          providerItemId,
+        },
+      );
+      if (!detail) {
+        writeJson(req, res, 404, { error: "Conversation item detail is not available." });
+        return;
+      }
+      writeJson(req, res, 200, detail);
       return;
     }
 

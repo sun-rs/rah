@@ -82,6 +82,8 @@ export interface ConversationTurnProjection {
   items: ConversationItemProjection[];
   finalAnswerItemId?: string;
   failedItemCount: number;
+  /** Whether this turn contains only a lightweight item summary or hydrated items. */
+  itemsView?: "summary" | "full";
   usage?: ContextUsage;
   error?: ConversationError;
   identityConfidence?: TimelineIdentityConfidence;
@@ -99,5 +101,39 @@ export interface ConversationProjection {
 
 export interface ConversationTurnsPageResponse extends ConversationProjection {
   nextCursor?: string;
+  approximateBytes?: number;
+  /** Monotonic revision for live deltas; history cache expansion does not advance it. */
+  liveRevision?: number;
+}
+
+export type ConversationTurnStateProjection = Omit<ConversationTurnProjection, "items">;
+
+export interface ConversationTurnDelta {
+  turn: ConversationTurnStateProjection;
+  upsertItems: ConversationItemProjection[];
+  removeItemIds?: string[];
+}
+
+export interface ConversationProjectionDelta {
+  sessionId: string;
+  baseRevision: number;
+  revision: number;
+  sourceSeq?: number;
+  upsertTurns: ConversationTurnDelta[];
+  removeTurnIds?: string[];
+}
+
+export interface ConversationItemDetailResponse {
+  sessionId: string;
+  turnId: string;
+  itemId: string;
+  item: ConversationItemProjection;
+  approximateBytes?: number;
+}
+
+export interface ConversationTurnDetailResponse {
+  sessionId: string;
+  turnId: string;
+  turn: ConversationTurnProjection;
   approximateBytes?: number;
 }

@@ -72,9 +72,18 @@ export function selectSemanticRecentWindow(
     .find(({ event }) => carriesTurnContext(event));
 
   if (lastTurnEvent?.event.turnId) {
-    const turnStart = events.findIndex(
-      (event, index) => index >= rewindFloor && event.turnId === lastTurnEvent.event.turnId,
+    const matchingTurnId = lastTurnEvent.event.turnId;
+    const turnUserStart = events.findIndex(
+      (event, index) =>
+        index >= rewindFloor &&
+        event.turnId === matchingTurnId &&
+        isUserTimeline(event),
     );
+    const turnStart = turnUserStart >= 0
+      ? turnUserStart
+      : events.findIndex(
+          (event, index) => index >= rewindFloor && event.turnId === matchingTurnId,
+        );
     if (turnStart >= 0) {
       start = Math.min(start, turnStart);
     }

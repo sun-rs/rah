@@ -9,6 +9,8 @@ import type {
   AttachSessionResponse,
   ClaimControlRequest,
   CloseSessionRequest,
+  ConversationItemDetailResponse,
+  ConversationTurnDetailResponse,
   ConversationTurnsPageResponse,
   CouncilAgentTuiResponse,
   CouncilMessagesPageResponse,
@@ -74,6 +76,8 @@ import {
 } from "@rah/runtime-protocol";
 import { createDefaultProviderAdapters } from "./default-provider-adapters";
 import { projectConversation } from "./conversation-projector";
+import { ConversationProjectionStore } from "./conversation-projection-store";
+import { conversationEventBelongsToLiveProjection } from "./conversation-live-policy";
 import {
   applyWorkspaceGitFileActionAsync,
   applyWorkspaceGitHunkActionAsync,
@@ -236,6 +240,7 @@ async function runShutdownStep(label: string, task: () => Promise<unknown> | unk
 
 export class RuntimeEngine {
   readonly eventBus: EventBus;
+  readonly conversationStore: ConversationProjectionStore;
   readonly ptyHub: PtyHub;
   readonly sessionStore: SessionStore;
   readonly workbenchState: WorkbenchStateStore;
@@ -333,6 +338,13 @@ export class RuntimeEngine {
         this.workbenchState.persistLiveSessions(states);
         this.refreshRememberedState();
       },
+    });
+    this.conversationStore = new ConversationProjectionStore(this.eventBus, {
+      eventFilter: (event) =>
+        conversationEventBelongsToLiveProjection(
+          this.sessionStore.getSession(event.sessionId)?.session,
+          event,
+        ),
     });
     const restored = this.workbenchState.load();
     this.rememberedSessions = restored.sessions;
@@ -1524,9 +1536,19 @@ export class RuntimeEngine {
 
   async getSessionConversationTurns(
     sessionId: string,
-    options?: { cursor?: string; limit?: number },
+    options?: { cursor?: string; limit?: number; liveOnly?: boolean },
   ): Promise<ConversationTurnsPageResponse> {
     const turnLimit = Math.max(1, Math.min(options?.limit ?? 20, 100));
+    if (options?.liveOnly) {
+      const resident = this.conversationStore.snapshot(sessionId);
+      const response: ConversationTurnsPageResponse = {
+        ...resident,
+        turns: resident.turns.slice(-turnLimit),
+        liveRevision: resident.liveRevision,
+      };
+      response.approximateBytes = Buffer.byteLength(JSON.stringify(response), "utf8");
+      return response;
+    }
     const historyEventLimit = Math.min(500, Math.max(100, turnLimit * 40));
     const adapter = this.storedHistoryAdapterForSession(sessionId);
     const nativeTurnPage = await adapter?.getSessionConversationHistoryPage?.(sessionId, {
@@ -1540,11 +1562,9 @@ export class RuntimeEngine {
         limit: historyEventLimit,
         detail: "summary",
       });
-    const liveEvents = options?.cursor
-      ? []
-      : this.eventBus.list({ sessionIds: [sessionId] });
+    const session = this.sessionStore.getSession(sessionId)?.session;
     const seenEventIds = new Set<string>();
-    const events = [...historyPage.events, ...liveEvents]
+    const events = historyPage.events
       .filter((event) => {
         if (event.turnId === undefined || seenEventIds.has(event.id)) {
           return false;
@@ -1553,21 +1573,142 @@ export class RuntimeEngine {
         return true;
       })
       // Stored history and the live EventBus own independent sequence spaces.
-      // History establishes the base; live events then authoritatively upsert it.
+      // The history page establishes an isolated baseline projection.
       .map((event, index) => ({ ...event, seq: index + 1 }) as RahEvent);
-    const session = this.sessionStore.getSession(sessionId)?.session;
-    const projection = projectConversation(sessionId, events, {
-      assumeSettled: session?.status === "stopped",
+    const projectedHistory = projectConversation(sessionId, events, {
+      assumeSettled: session?.status === "stopped" || session?.runtime?.kind === "stored_history",
       partial: Boolean(historyPage.nextCursor ?? historyPage.nextBeforeTs),
     });
+    const projection = nativeTurnPage
+      ? {
+          ...projectedHistory,
+          turns: projectedHistory.turns.map((turn) => ({
+            ...turn,
+            itemsView: "summary" as const,
+          })),
+        }
+      : projectedHistory;
+    // History paging may await provider I/O. Read the resident overlay only
+    // after that await, and return its content plus live revision atomically.
+    const liveSnapshot = options?.cursor
+      ? {
+          ...projection,
+          liveRevision: this.conversationStore.snapshot(sessionId).liveRevision,
+        }
+      : this.conversationStore.overlayLiveSnapshot(projection);
+    const { liveRevision, ...responseProjection } = liveSnapshot;
     const response: ConversationTurnsPageResponse = {
-      ...projection,
+      ...responseProjection,
+      liveRevision,
       // A native page owns its cursor boundary. A live turn may be appended on
       // top of that page, so trimming it again could create a pagination gap.
-      turns: nativeTurnPage ? projection.turns : projection.turns.slice(-turnLimit),
+      turns: nativeTurnPage
+        ? responseProjection.turns
+        : responseProjection.turns.slice(-turnLimit),
       ...(historyPage.nextCursor || historyPage.nextBeforeTs
         ? { nextCursor: historyPage.nextCursor ?? historyPage.nextBeforeTs }
         : {}),
+    };
+    response.approximateBytes = Buffer.byteLength(JSON.stringify(response), "utf8");
+    return response;
+  }
+
+  async getSessionConversationTurnDetail(
+    sessionId: string,
+    options: { turnId: string; providerTurnId: string },
+  ): Promise<ConversationTurnDetailResponse | undefined> {
+    const adapter = this.storedHistoryAdapterForSession(sessionId);
+    const nativePage = await adapter?.getSessionConversationTurnDetail?.(sessionId, {
+      providerTurnId: options.providerTurnId,
+    });
+    const fallbackTurn = nativePage
+      ? undefined
+      : await adapter?.getSessionTurnHistory?.(sessionId, options.providerTurnId);
+    const page = nativePage ??
+      (fallbackTurn
+        ? { sessionId, events: fallbackTurn.events }
+        : undefined);
+    if (!page) {
+      return undefined;
+    }
+    const events = page.events
+      .filter((event) => event.turnId !== undefined)
+      .map((event, index) => ({ ...event, seq: index + 1 }) as RahEvent);
+    const projection = projectConversation(sessionId, events, {
+      assumeSettled: true,
+      partial: true,
+    });
+    const projectedTurn = projection.turns.find(
+      (candidate) => candidate.providerTurnId === options.providerTurnId,
+    );
+    if (!projectedTurn) {
+      return undefined;
+    }
+    const turn = {
+      ...projectedTurn,
+      id: options.turnId,
+      itemsView: "full" as const,
+      items: projectedTurn.items.map((item) => ({ ...item, turnId: options.turnId })),
+    };
+    const response: ConversationTurnDetailResponse = {
+      sessionId,
+      turnId: options.turnId,
+      turn,
+    };
+    response.approximateBytes = Buffer.byteLength(JSON.stringify(response), "utf8");
+    return response;
+  }
+
+  async getSessionConversationItemDetail(
+    sessionId: string,
+    options: {
+      itemId: string;
+      providerTurnId: string;
+      providerItemId: string;
+    },
+  ): Promise<ConversationItemDetailResponse | undefined> {
+    const adapter = this.storedHistoryAdapterForSession(sessionId);
+    const nativePage = await adapter?.getSessionConversationItemDetail?.(sessionId, {
+      providerTurnId: options.providerTurnId,
+      providerItemId: options.providerItemId,
+    });
+    const page = nativePage ?? (() => {
+      const eventsById = new Map<string, RahEvent>();
+      for (const kind of ["tool_call", "observation"] as const) {
+        for (const event of this.getSessionHistoryItemDetail(sessionId, {
+          kind,
+          itemId: options.providerItemId,
+        }).events) {
+          eventsById.set(event.id, event);
+        }
+      }
+      return eventsById.size > 0
+        ? { sessionId, events: [...eventsById.values()] }
+        : undefined;
+    })();
+    if (!page) {
+      return undefined;
+    }
+    const events = page.events
+      .filter((event) => event.turnId !== undefined)
+      .map((event, index) => ({ ...event, seq: index + 1 }) as RahEvent);
+    const projection = projectConversation(sessionId, events, { partial: true });
+    const turn = projection.turns.find(
+      (candidate) => candidate.providerTurnId === options.providerTurnId,
+    );
+    const item = turn?.items.find(
+      (candidate) =>
+        candidate.id === options.itemId ||
+        candidate.providerItemId === options.providerItemId,
+    );
+    if (!turn || !item) {
+      return undefined;
+    }
+    const response: ConversationItemDetailResponse = {
+      sessionId,
+      turnId: turn.id,
+      itemId: options.itemId,
+      item: item.id === options.itemId ? item : { ...item, id: options.itemId },
     };
     response.approximateBytes = Buffer.byteLength(JSON.stringify(response), "utf8");
     return response;
@@ -1602,13 +1743,22 @@ export class RuntimeEngine {
     sessionId: string,
     options: { kind: "tool_call" | "observation"; itemId: string },
   ) {
+    const eventsById = new Map<string, RahEvent>();
+    const matches = (event: RahEvent) =>
+      historyEventMatchesItem(event, options.kind, options.itemId);
+    for (const event of this.historySnapshots.findCachedEvents(sessionId, matches)) {
+      eventsById.set(event.id, event);
+    }
+    for (const event of this.eventBus.list({ sessionIds: [sessionId] })) {
+      if (matches(event)) {
+        eventsById.set(event.id, event);
+      }
+    }
     return {
       sessionId,
       kind: options.kind,
       itemId: options.itemId,
-      events: this.historySnapshots.findCachedEvents(sessionId, (event) =>
-        historyEventMatchesItem(event, options.kind, options.itemId),
-      ),
+      events: [...eventsById.values()],
     };
   }
 
@@ -1698,6 +1848,7 @@ export class RuntimeEngine {
   }
 
   async shutdown(): Promise<void> {
+    this.conversationStore.close();
     await runShutdownStep("stored session monitor", () => this.storedSessionMonitor.shutdown());
     await runShutdownStep("council runtime", () => this.council.shutdown());
     await runShutdownStep("terminal sessions", () => this.terminals.shutdown());
