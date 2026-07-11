@@ -1,4 +1,8 @@
-import type { EventBatch, RahEvent } from "@rah/runtime-protocol";
+import type {
+  ConversationProjectionDelta,
+  EventBatch,
+  RahEvent,
+} from "@rah/runtime-protocol";
 import * as api from "./api";
 import { isReadOnlyReplay } from "./session-capabilities";
 import { readErrorMessage } from "./session-store-bootstrap";
@@ -73,6 +77,21 @@ export function coalesceProjectionEvents(events: RahEvent[]): RahEvent[] {
   }
 
   return result;
+}
+
+export function coalesceConversationProjectionDeltas(
+  deltas: readonly ConversationProjectionDelta[],
+): ConversationProjectionDelta[] {
+  const bySessionRevision = new Map<string, ConversationProjectionDelta>();
+  for (const delta of deltas) {
+    bySessionRevision.set(`${delta.sessionId}:${delta.revision}`, delta);
+  }
+  return [...bySessionRevision.values()].sort((left, right) => {
+    if (left.sessionId !== right.sessionId) {
+      return left.sessionId.localeCompare(right.sessionId);
+    }
+    return left.revision - right.revision;
+  });
 }
 
 function selectedClaimedReplayClosedByEvents(
@@ -272,6 +291,10 @@ export function connectStoreSyncTransport(args: {
     current: Map<string, SessionProjection>,
     events: RahEvent[],
   ) => Map<string, SessionProjection>;
+  applyConversationDeltasToMap: (
+    current: Map<string, SessionProjection>,
+    deltas: readonly ConversationProjectionDelta[],
+  ) => Map<string, SessionProjection>;
   computeUnreadSessionIds: (
     currentUnreadSessionIds: ReadonlySet<string>,
     visibleSessionIds: ReadonlySet<string>,
@@ -282,11 +305,15 @@ export function connectStoreSyncTransport(args: {
     projections: ReadonlyMap<string, SessionProjection>;
     events: readonly RahEvent[];
   }) => void;
+  onConversationDeltasApplied?: (
+    deltas: readonly ConversationProjectionDelta[],
+  ) => void;
   recoverFromReplayGap: (batch: EventBatch) => Promise<void>;
   refreshWorkbenchState: (events: RahEvent[]) => Promise<void>;
 }) {
   let pendingProjectionEvents: RahEvent[] = [];
   let pendingUnreadEvents: RahEvent[] = [];
+  let pendingConversationDeltas: ConversationProjectionDelta[] = [];
   let pendingFlush: { kind: "frame" | "timer"; id: number } | null = null;
 
   const flushPendingEvents = () => {
@@ -298,14 +325,18 @@ export function connectStoreSyncTransport(args: {
       }
       pendingFlush = null;
     }
-    if (pendingProjectionEvents.length === 0) {
+    if (pendingProjectionEvents.length === 0 && pendingConversationDeltas.length === 0) {
       pendingUnreadEvents = [];
       return;
     }
     const projectionEvents = coalesceProjectionEvents(pendingProjectionEvents);
     const unreadEvents = coalesceProjectionEvents(pendingUnreadEvents);
+    const conversationDeltas = coalesceConversationProjectionDeltas(
+      pendingConversationDeltas,
+    );
     pendingProjectionEvents = [];
     pendingUnreadEvents = [];
+    pendingConversationDeltas = [];
     if (unreadEvents.length > 0) {
       args.notifyUnreadEvents?.({
         projections: args.getNotificationProjections(),
@@ -313,13 +344,28 @@ export function connectStoreSyncTransport(args: {
       });
     }
     args.set((state) => {
-      const projectionState = applyProjectionEventsToSyncState({
-        state,
-        events: projectionEvents,
-        applyEventsToMap: args.applyEventsToMap,
-      });
+      const projectionState =
+        projectionEvents.length > 0
+          ? applyProjectionEventsToSyncState({
+              state,
+              events: projectionEvents,
+              applyEventsToMap: args.applyEventsToMap,
+            })
+          : {
+              projections: state.projections,
+              selectedSessionId: state.selectedSessionId,
+              sessionTopologyVersion: state.sessionTopologyVersion,
+            };
+      const projections =
+        conversationDeltas.length > 0
+          ? args.applyConversationDeltasToMap(
+              projectionState.projections,
+              conversationDeltas,
+            )
+          : projectionState.projections;
       return {
         ...projectionState,
+        projections,
         unreadSessionIds:
           unreadEvents.length === 0
             ? state.unreadSessionIds
@@ -331,6 +377,7 @@ export function connectStoreSyncTransport(args: {
         error: state.error === "Events socket failed" ? null : state.error,
       };
     });
+    args.onConversationDeltasApplied?.(conversationDeltas);
   };
 
   const schedulePendingEventFlush = () => {
@@ -376,10 +423,15 @@ export function connectStoreSyncTransport(args: {
     onBatch: (batch) => {
       const projectionEvents =
         batch.events?.filter((event) => event.type !== "session.discovery") ?? [];
-      if (projectionEvents.length === 0) {
+      const conversationDeltas = batch.conversationDeltas ?? [];
+      if (projectionEvents.length === 0 && conversationDeltas.length === 0) {
         return;
       }
       pendingProjectionEvents = [...pendingProjectionEvents, ...projectionEvents];
+      pendingConversationDeltas = [
+        ...pendingConversationDeltas,
+        ...conversationDeltas,
+      ];
       if (!batch.initial) {
         pendingUnreadEvents = [...pendingUnreadEvents, ...projectionEvents];
       }

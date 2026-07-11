@@ -4,6 +4,7 @@ import {
   Activity,
   AlertTriangle,
   CheckCircle2,
+  CircleStop,
   Clock3,
   FileText,
   GitBranch,
@@ -21,7 +22,10 @@ function isSearchNoMatches(observation: WorkbenchObservation) {
   return observation.metrics?.semanticStatus === "search_no_matches";
 }
 
-function statusMeta(status: "running" | "completed" | "failed", observation: WorkbenchObservation) {
+function statusMeta(
+  status: "running" | "completed" | "interrupted" | "failed",
+  observation: WorkbenchObservation,
+) {
   if (status === "completed" && isSearchNoMatches(observation)) {
     return {
       label: "No matches",
@@ -43,6 +47,12 @@ function statusMeta(status: "running" | "completed" | "failed", observation: Wor
         className:
           "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20",
         icon: <CheckCircle2 size={12} />,
+      };
+    case "interrupted":
+      return {
+        label: "Interrupted",
+        className: "bg-neutral-500/10 text-[var(--app-hint)] border-[var(--app-border)]",
+        icon: <CircleStop size={12} />,
       };
     case "failed":
       return {
@@ -141,7 +151,7 @@ function shouldShowErrorBlock(observation: WorkbenchObservation, error: string |
 
 export function ObservationCard(props: {
   observation: WorkbenchObservation;
-  status: "running" | "completed" | "failed";
+  status: "running" | "completed" | "interrupted" | "failed";
   error?: string;
   onLoadDetail?: () => Promise<void> | void;
 }) {

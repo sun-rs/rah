@@ -10,6 +10,7 @@ import {
 } from "react";
 import type { FeedEntry } from "../../types";
 import type {
+  ConversationTurnProjection,
   PermissionResponseRequest,
   ProviderKind,
   SessionHistoryItemDetailKind,
@@ -61,6 +62,10 @@ import {
   VIRTUAL_FEED_ROW_GAP_PX,
 } from "./virtualized-feed-layout";
 import { visibleFeedEntries } from "./chat-feed-filtering";
+import {
+  conversationV2DisplayRows,
+  conversationV2FinalAssistantKeys,
+} from "../../conversation-v2-feed";
 
 const BOTTOM_STICK_THRESHOLD_PX = 120;
 const TOP_HISTORY_TRIGGER_PX = 96;
@@ -409,6 +414,7 @@ function MeasuredFeedEntry(props: {
 export const ChatThread = memo(function ChatThread(props: {
   sessionId: string;
   feed: FeedEntry[];
+  conversationTurns?: readonly ConversationTurnProjection[];
   hideToolCalls?: boolean;
   hideOpenCodeReasoning?: boolean;
   showModelInfo?: boolean;
@@ -424,6 +430,7 @@ export const ChatThread = memo(function ChatThread(props: {
     kind: SessionHistoryItemDetailKind,
     itemId: string,
   ) => Promise<void> | void;
+  onLoadConversationTurnDetail?: (turnId: string) => Promise<void> | void;
   canRespondToPermission?: boolean;
   onPermissionRespond: (requestId: string, response: PermissionResponseRequest) => void;
   onOpenLocalFile?: (path: string) => void;
@@ -474,6 +481,9 @@ export const ChatThread = memo(function ChatThread(props: {
   const [processGroupExpansionOverrides, setProcessGroupExpansionOverrides] = useState(
     () => new Map<string, boolean>(),
   );
+  const [loadingProcessTurnIds, setLoadingProcessTurnIds] = useState(
+    () => new Set<string>(),
+  );
   const entries = useMemo(
     () =>
       visibleFeedEntries(
@@ -494,16 +504,23 @@ export const ChatThread = memo(function ChatThread(props: {
     [entries],
   );
   const copyableAssistantKeys = useMemo(
-    () => copyableAssistantMessageKeys(entries, { generationActive: props.generationActive ?? false }),
-    [entries, props.generationActive],
+    () =>
+      props.conversationTurns
+        ? conversationV2FinalAssistantKeys(props.conversationTurns)
+        : copyableAssistantMessageKeys(entries, {
+            generationActive: props.generationActive ?? false,
+          }),
+    [entries, props.conversationTurns, props.generationActive],
   );
   const displayRows = useMemo(
     () =>
-      buildAssistantProcessRows(entries, {
-        finalAssistantKeys: copyableAssistantKeys,
-        generationActive: props.generationActive ?? false,
-      }),
-    [copyableAssistantKeys, entries, props.generationActive],
+      props.conversationTurns
+        ? conversationV2DisplayRows(props.conversationTurns, entries)
+        : buildAssistantProcessRows(entries, {
+            finalAssistantKeys: copyableAssistantKeys,
+            generationActive: props.generationActive ?? false,
+          }),
+    [copyableAssistantKeys, entries, props.conversationTurns, props.generationActive],
   );
   const virtualLayout = useMemo(
     () =>
@@ -1451,7 +1468,10 @@ export const ChatThread = memo(function ChatThread(props: {
   }, [navigateToLoadedTurn, turnNavigationItems]);
 
   return (
-    <div className="chat-thread-shell relative min-h-0 flex-1">
+    <div
+      className="chat-thread-shell relative min-h-0 flex-1"
+      data-conversation-source={props.conversationTurns ? "v2" : "legacy"}
+    >
       <div
         ref={containerRef}
         data-testid="chat-thread-scroll-container"
@@ -1509,6 +1529,9 @@ export const ChatThread = memo(function ChatThread(props: {
                 {row.kind === "assistant_process_group" ? (
                   <AssistantProcessGroup
                     group={row}
+                    detailLoading={Boolean(
+                      row.turnId && loadingProcessTurnIds.has(row.turnId)
+                    )}
                     expanded={
                       row.completed
                         ? processGroupExpansionOverrides.get(row.key) ?? false
@@ -1520,6 +1543,25 @@ export const ChatThread = memo(function ChatThread(props: {
                         next.set(row.key, expanded);
                         return next;
                       });
+                      if (
+                        expanded &&
+                        row.detailsAvailable &&
+                        row.turnId &&
+                        props.onLoadConversationTurnDetail &&
+                        !loadingProcessTurnIds.has(row.turnId)
+                      ) {
+                        const turnId = row.turnId;
+                        setLoadingProcessTurnIds((current) => new Set(current).add(turnId));
+                        void Promise.resolve(props.onLoadConversationTurnDetail(turnId)).finally(
+                          () => {
+                            setLoadingProcessTurnIds((current) => {
+                              const next = new Set(current);
+                              next.delete(turnId);
+                              return next;
+                            });
+                          },
+                        );
+                      }
                     }}
                     renderEntry={(entry) =>
                       renderEntry(

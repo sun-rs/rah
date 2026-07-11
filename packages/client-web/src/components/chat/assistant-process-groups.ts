@@ -1,4 +1,4 @@
-import type { TimelineRuntimeModel } from "@rah/runtime-protocol";
+import type { ConversationTurnStatus, TimelineRuntimeModel } from "@rah/runtime-protocol";
 import type { FeedEntry } from "../../types";
 import { isInternalUserReminder } from "./assistant-turn-headers";
 
@@ -13,6 +13,9 @@ export type AssistantProcessGroup = {
   durationMs?: number;
   failedCount: number;
   runtimeModel?: TimelineRuntimeModel;
+  turnStatus?: ConversationTurnStatus;
+  turnId?: string;
+  detailsAvailable?: boolean;
 };
 
 export type ChatDisplayRow =
@@ -30,7 +33,7 @@ export type ProcessDetailRow =
       kind: "command_batch";
       key: string;
       entries: FeedEntry[];
-      status: "running" | "completed" | "failed";
+      status: "running" | "completed" | "interrupted" | "failed";
     };
 
 function isVisibleUserBoundary(entry: FeedEntry): boolean {
@@ -231,7 +234,9 @@ function isReasoningEntry(
   return entry.kind === "timeline" && entry.item.kind === "reasoning";
 }
 
-function commandBatchStatus(entries: readonly FeedEntry[]): "running" | "completed" | "failed" {
+function commandBatchStatus(
+  entries: readonly FeedEntry[],
+): "running" | "completed" | "interrupted" | "failed" {
   if (
     entries.some(
       (entry) =>
@@ -249,6 +254,15 @@ function commandBatchStatus(entries: readonly FeedEntry[]): "running" | "complet
     )
   ) {
     return "running";
+  }
+  if (
+    entries.some(
+      (entry) =>
+        (entry.kind === "tool_call" || entry.kind === "observation") &&
+        entry.status === "interrupted",
+    )
+  ) {
+    return "interrupted";
   }
   return "completed";
 }

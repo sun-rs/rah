@@ -1,4 +1,6 @@
 import type {
+  ConversationProjectionDelta,
+  ConversationTurnProjection,
   ListSessionsResponse,
   ManagedSession,
   MessagePartRef,
@@ -39,7 +41,7 @@ export type FeedEntry =
       key: string;
       kind: "tool_call";
       toolCall: ToolCall;
-      status: "running" | "completed" | "failed";
+      status: "running" | "completed" | "interrupted" | "failed";
       error?: string;
       ts: string;
       turnId?: string;
@@ -56,7 +58,7 @@ export type FeedEntry =
       key: string;
       kind: "observation";
       observation: WorkbenchObservation;
-      status: "running" | "completed" | "failed";
+      status: "running" | "completed" | "interrupted" | "failed";
       error?: string;
       ts: string;
       turnId?: string;
@@ -113,8 +115,39 @@ export interface SessionProjection {
   lastSeq: number;
   currentRuntimeStatus?: Extract<RahEvent, { type: "runtime.status" }>["payload"]["status"];
   history: HistorySyncState;
+  conversationV2?: ConversationV2SyncState;
   turnDirectory?: SessionTurnDirectoryState;
   pendingInterrupt?: InterruptIntent;
+}
+
+export interface ConversationV2SyncState {
+  phase: "idle" | "loading" | "ready" | "error";
+  loadedScope: "none" | "live" | "history";
+  turns: ConversationTurnProjection[];
+  nextCursor: string | null;
+  revision: number;
+  daemonRevision: number | null;
+  pendingDeltas: ConversationProjectionDelta[];
+  needsRefresh: boolean;
+  approximateBytes: number | null;
+  loadedAt: string | null;
+  lastError: string | null;
+}
+
+export function initialConversationV2SyncState(): ConversationV2SyncState {
+  return {
+    phase: "idle",
+    loadedScope: "none",
+    turns: [],
+    nextCursor: null,
+    revision: 0,
+    daemonRevision: null,
+    pendingDeltas: [],
+    needsRefresh: false,
+    approximateBytes: null,
+    loadedAt: null,
+    lastError: null,
+  };
 }
 
 export interface SessionTurnDirectoryState {
@@ -2175,6 +2208,12 @@ export function applyEventToProjection(
     lastSeq: event.seq,
     ...(nextRuntimeStatus !== undefined ? { currentRuntimeStatus: nextRuntimeStatus } : {}),
     history: current.history,
+    ...(current.conversationV2 !== undefined
+      ? { conversationV2: current.conversationV2 }
+      : {}),
+    ...(current.turnDirectory !== undefined
+      ? { turnDirectory: current.turnDirectory }
+      : {}),
     ...(nextPendingInterrupt !== undefined ? { pendingInterrupt: nextPendingInterrupt } : {}),
   };
 }

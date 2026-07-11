@@ -70,6 +70,18 @@ import {
   refreshLatestHistoryCommand,
 } from "./session-store-history-paging";
 import {
+  applyConversationV2DeltasToProjectionMap,
+  conversationV2LegacyDetailId,
+  ensureConversationV2LoadedCommand,
+  initializeLiveConversationV2Command,
+  loadPreferredConversationHistory,
+  loadConversationV2ItemDetailCommand,
+  loadConversationV2TurnDetailCommand,
+  loadOlderConversationV2Command,
+  refreshConversationV2Command,
+} from "./session-store-conversation-v2";
+import { conversationV2Enabled } from "./conversation-v2-feature";
+import {
   ensureSessionTurnDirectoryCommand,
   loadSessionTurnHistoryCommand,
 } from "./session-store-turn-directory";
@@ -248,6 +260,11 @@ interface SessionState {
   interruptSession: (sessionId: string) => Promise<void>;
   sendInput: (sessionId: string, text: string) => Promise<void>;
   ensureSessionHistoryLoaded: (sessionId: string) => Promise<void>;
+  ensureConversationV2Loaded: (sessionId: string) => Promise<boolean>;
+  initializeLiveConversationV2: (sessionId: string) => Promise<boolean>;
+  refreshConversationV2: (sessionId: string) => Promise<void>;
+  loadOlderConversationV2: (sessionId: string) => Promise<void>;
+  loadConversationV2TurnDetail: (sessionId: string, turnId: string) => Promise<void>;
   refreshLatestHistory: (sessionId: string) => Promise<void>;
   loadOlderHistory: (sessionId: string) => Promise<void>;
   ensureSessionTurnDirectory: (sessionId: string) => Promise<void>;
@@ -278,6 +295,7 @@ const MODEL_CATALOG_BACKGROUND_REFRESH_MS = 30 * 60 * 1_000;
 const modelCatalogBackgroundInFlight = new Map<string, Promise<void>>();
 let modelCatalogBackgroundRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 let modelCatalogFocusListenerInstalled = false;
+const conversationV2RefreshInFlight = new Map<string, Promise<boolean>>();
 
 function logModelCatalog(message: string, details?: Record<string, unknown>): void {
   if (details) {
@@ -669,13 +687,79 @@ function updateSessionSummary(session: SessionSummary) {
   });
 }
 
-async function ensureSessionHistoryLoaded(sessionId: string) {
-  await ensureSessionHistoryLoadedCommand({
+async function refreshLegacySessionHistory(sessionId: string): Promise<void> {
+  await refreshLatestHistoryCommand({
     get: useSessionStore.getState,
-    loadOlderHistory: useSessionStore.getState().loadOlderHistory,
-    refreshLatestHistory: useSessionStore.getState().refreshLatestHistory,
+    set: useSessionStore.setState,
     sessionId,
+    historyPageLimit: HISTORY_PAGE_LIMIT,
   });
+}
+
+async function loadOlderLegacySessionHistory(sessionId: string): Promise<void> {
+  await loadOlderHistoryCommand({
+    get: useSessionStore.getState,
+    set: useSessionStore.setState,
+    sessionId,
+    historyPageLimit: HISTORY_PAGE_LIMIT,
+  });
+}
+
+async function ensureSessionHistoryLoaded(sessionId: string) {
+  const loadLegacy = () =>
+    ensureSessionHistoryLoadedCommand({
+      get: useSessionStore.getState,
+      loadOlderHistory: loadOlderLegacySessionHistory,
+      refreshLatestHistory: refreshLegacySessionHistory,
+      sessionId,
+    });
+  await loadPreferredConversationHistory({
+    conversationV2Enabled: conversationV2Enabled(),
+    loadConversationV2: () =>
+      useSessionStore.getState().ensureConversationV2Loaded(sessionId),
+    loadLegacy,
+  });
+}
+
+function refreshConversationV2Baseline(sessionId: string): Promise<boolean> {
+  const existing = conversationV2RefreshInFlight.get(sessionId);
+  if (existing) {
+    return existing;
+  }
+  const request = refreshConversationV2Command(
+    {
+      get: useSessionStore.getState,
+      set: useSessionStore.setState,
+    },
+    sessionId,
+  ).finally(() => {
+    conversationV2RefreshInFlight.delete(sessionId);
+  });
+  conversationV2RefreshInFlight.set(sessionId, request);
+  return request;
+}
+
+function refreshConversationV2GapIfNeeded(sessionId: string): void {
+  const state = useSessionStore.getState();
+  const conversation = state.projections.get(sessionId)?.conversationV2;
+  if (
+    !conversationV2Enabled() ||
+    !conversation ||
+    !conversation.needsRefresh ||
+    conversation.phase === "loading" ||
+    conversationV2RefreshInFlight.has(sessionId)
+  ) {
+    return;
+  }
+  void refreshConversationV2Baseline(sessionId);
+}
+
+function recoverConversationV2DeltaGaps(
+  deltas: readonly { sessionId: string }[],
+): void {
+  for (const sessionId of new Set(deltas.map((delta) => delta.sessionId))) {
+    refreshConversationV2GapIfNeeded(sessionId);
+  }
 }
 
 function createStartupDeps(
@@ -691,6 +775,12 @@ function createStartupDeps(
     get,
     set,
     ensureSessionHistoryLoaded,
+    initializeLiveConversationProjection: async (sessionId: string) => {
+      if (!conversationV2Enabled()) {
+        return;
+      }
+      await get().initializeLiveConversationV2(sessionId);
+    },
     sendInput: get().sendInput,
     attachSession: get().attachSession,
     resumeStoredSession: get().resumeStoredSession,
@@ -736,6 +826,13 @@ async function recoverFromReplayGap(batch: EventBatch) {
     applyEventsToMap,
     ensureSessionHistoryLoaded,
   });
+  if (!conversationV2Enabled()) {
+    return;
+  }
+  const loadedSessionIds = [...useSessionStore.getState().projections.entries()]
+    .filter(([, projection]) => projection.conversationV2?.phase === "ready")
+    .map(([sessionId]) => sessionId);
+  await Promise.all(loadedSessionIds.map((sessionId) => refreshConversationV2Baseline(sessionId)));
 }
 
 function connectStoreTransport() {
@@ -745,9 +842,14 @@ function connectStoreTransport() {
     set: useSessionStore.setState as never,
     getNotificationProjections: () => useSessionStore.getState().projections,
     applyEventsToMap,
+    applyConversationDeltasToMap: (current, deltas) =>
+      conversationV2Enabled()
+        ? applyConversationV2DeltasToProjectionMap(current, deltas)
+        : current,
     computeUnreadSessionIds: computeUnreadSessionIdsImpl,
     getVisibleSessionIds: () => useSessionStore.getState().visibleSessionIds,
     notifyUnreadEvents: notifyForRahEvents,
+    onConversationDeltasApplied: recoverConversationV2DeltaGaps,
     recoverFromReplayGap,
     refreshWorkbenchState: (events) => {
       applyStoredSessionDiscoveryEvents(events);
@@ -1454,22 +1556,51 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     await ensureSessionHistoryLoaded(sessionId);
   },
 
+  ensureConversationV2Loaded: async (sessionId) => {
+    const loaded = await ensureConversationV2LoadedCommand({ get, set }, sessionId);
+    refreshConversationV2GapIfNeeded(sessionId);
+    return loaded;
+  },
+
+  initializeLiveConversationV2: async (sessionId) => {
+    const loaded = await initializeLiveConversationV2Command({ get, set }, sessionId);
+    refreshConversationV2GapIfNeeded(sessionId);
+    return loaded;
+  },
+
+  refreshConversationV2: async (sessionId) => {
+    await refreshConversationV2Baseline(sessionId);
+  },
+
+  loadOlderConversationV2: async (sessionId) => {
+    await loadOlderConversationV2Command({ get, set }, sessionId);
+    refreshConversationV2GapIfNeeded(sessionId);
+  },
+
+  loadConversationV2TurnDetail: async (sessionId, turnId) => {
+    await loadConversationV2TurnDetailCommand({ get, set }, sessionId, turnId);
+  },
+
   refreshLatestHistory: async (sessionId) => {
-    await refreshLatestHistoryCommand({
-      get,
-      set,
-      sessionId,
-      historyPageLimit: HISTORY_PAGE_LIMIT,
-    });
+    if (conversationV2Enabled()) {
+      const refreshed = await refreshConversationV2Baseline(sessionId);
+      const conversation = get().projections.get(sessionId)?.conversationV2;
+      if (refreshed || conversation?.turns.length) {
+        return;
+      }
+    }
+    await refreshLegacySessionHistory(sessionId);
   },
 
   loadOlderHistory: async (sessionId) => {
-    await loadOlderHistoryCommand({
-      get,
-      set,
-      sessionId,
-      historyPageLimit: HISTORY_PAGE_LIMIT,
-    });
+    if (
+      conversationV2Enabled() &&
+      get().projections.get(sessionId)?.conversationV2?.phase === "ready"
+    ) {
+      await loadOlderConversationV2Command({ get, set }, sessionId);
+      return;
+    }
+    await loadOlderLegacySessionHistory(sessionId);
   },
 
   ensureSessionTurnDirectory: async (sessionId) => {
@@ -1481,7 +1612,23 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   loadHistoryItemDetail: async (sessionId, kind, itemId) => {
-    const response = await api.readSessionHistoryItemDetail(sessionId, { kind, itemId });
+    const projection = get().projections.get(sessionId);
+    const legacyItemId = projection
+      ? conversationV2LegacyDetailId(projection, kind, itemId)
+      : itemId;
+    if (
+      conversationV2Enabled() &&
+      projection?.conversationV2?.phase === "ready"
+    ) {
+      const loaded = await loadConversationV2ItemDetailCommand({ get, set }, sessionId, itemId);
+      if (loaded) {
+        return;
+      }
+    }
+    const response = await api.readSessionHistoryItemDetail(sessionId, {
+      kind,
+      itemId: legacyItemId,
+    });
     set((state) => {
       const current = state.projections.get(sessionId);
       if (!current) {

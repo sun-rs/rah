@@ -4,6 +4,7 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
+  CircleStop,
   LoaderCircle,
   Terminal,
   Wrench,
@@ -11,7 +12,7 @@ import {
 } from "lucide-react";
 import { ActivityArtifacts } from "./ActivityArtifacts";
 
-function statusBadge(status: "running" | "completed" | "failed") {
+function statusBadge(status: "running" | "completed" | "interrupted" | "failed") {
   switch (status) {
     case "running":
       return {
@@ -24,6 +25,12 @@ function statusBadge(status: "running" | "completed" | "failed") {
         label: "Completed",
         className: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20",
         icon: <CheckCircle2 size={12} />,
+      };
+    case "interrupted":
+      return {
+        label: "Interrupted",
+        className: "bg-neutral-500/10 text-[var(--app-hint)] border-[var(--app-border)]",
+        icon: <CircleStop size={12} />,
       };
     case "failed":
       return {
@@ -61,7 +68,7 @@ function toolIcon(toolCall: ToolCall) {
 
 export function ToolCallCard(props: {
   toolCall: ToolCall;
-  status: "running" | "completed" | "failed";
+  status: "running" | "completed" | "interrupted" | "failed";
   error?: string;
   onLoadDetail?: () => Promise<void> | void;
 }) {

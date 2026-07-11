@@ -15,11 +15,16 @@ import {
 
 function CommandBatch(props: {
   entries: FeedEntry[];
-  status: "running" | "completed" | "failed";
+  status: "running" | "completed" | "interrupted" | "failed";
   renderEntry: (entry: FeedEntry) => ReactNode;
 }) {
   const [open, setOpen] = useState(false);
-  const label = props.status === "running" ? "Running multiple commands" : "Ran multiple commands";
+  const label =
+    props.status === "running"
+      ? "Running multiple commands"
+      : props.status === "interrupted"
+        ? "Commands interrupted"
+        : "Ran multiple commands";
   const tone =
     props.status === "failed"
       ? "text-[var(--app-warning)]"
@@ -36,6 +41,9 @@ function CommandBatch(props: {
         <Terminal size={13} className="shrink-0" />
         <span className="min-w-0 flex-1 truncate">{label}</span>
         {props.status === "failed" ? <span className="shrink-0">Failed</span> : null}
+        {props.status === "interrupted" ? (
+          <span className="shrink-0">Interrupted</span>
+        ) : null}
         {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
       </button>
       {open ? (
@@ -53,18 +61,31 @@ export function AssistantProcessGroup(props: {
   group: AssistantProcessGroupModel;
   expanded: boolean;
   onExpandedChange: (expanded: boolean) => void;
+  detailLoading?: boolean;
   renderEntry: (entry: FeedEntry) => ReactNode;
 }) {
   const detailRows = buildProcessDetailRows(props.group.entries);
   const duration = formatAssistantProcessDuration(props.group.durationMs);
-  const label = props.group.completed
-    ? duration
-      ? `Worked ${duration}`
-      : "Work details"
-    : props.group.active
-      ? "Working"
-      : "Work interrupted";
-  const canCollapse = props.group.completed;
+  const label =
+    props.group.turnStatus === "failed"
+      ? duration
+        ? `Failed after ${duration}`
+        : "Work failed"
+      : props.group.turnStatus === "interrupted"
+        ? duration
+          ? `Interrupted after ${duration}`
+          : "Work interrupted"
+        : props.group.completed
+          ? duration
+            ? `Worked ${duration}`
+            : "Work details"
+          : props.group.active
+            ? "Working"
+            : "Work interrupted";
+  const canCollapse =
+    props.group.completed ||
+    props.group.turnStatus === "interrupted" ||
+    props.group.turnStatus === "failed";
 
   return (
     <section className="min-w-0" data-testid="assistant-process-group">
@@ -98,7 +119,14 @@ export function AssistantProcessGroup(props: {
       </button>
       {props.expanded ? (
         <div className="mt-3 space-y-2.5">
-          {detailRows.map((row) =>
+          {props.detailLoading ? (
+            <div className="flex min-h-8 items-center gap-2 text-xs text-[var(--app-hint)]">
+              <LoaderCircle size={13} className="animate-spin" />
+              <span>Loading work details...</span>
+            </div>
+          ) : detailRows.length === 0 && props.group.detailsAvailable ? (
+            <div className="text-xs text-[var(--app-hint)]">Work details unavailable.</div>
+          ) : detailRows.map((row) =>
             row.kind === "command_batch" ? (
               <CommandBatch
                 key={row.key}

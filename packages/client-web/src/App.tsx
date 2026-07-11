@@ -419,6 +419,7 @@ export function App() {
     ensureSessionTurnDirectory,
     loadSessionTurnHistory,
     loadHistoryItemDetail,
+    loadConversationV2TurnDetail,
     respondToPermission,
   } = useSessionStore(
     useShallow((state) => ({
@@ -470,6 +471,7 @@ export function App() {
       ensureSessionTurnDirectory: state.ensureSessionTurnDirectory,
       loadSessionTurnHistory: state.loadSessionTurnHistory,
       loadHistoryItemDetail: state.loadHistoryItemDetail,
+      loadConversationV2TurnDetail: state.loadConversationV2TurnDetail,
       respondToPermission: state.respondToPermission,
     })),
   );
@@ -2509,6 +2511,9 @@ export function App() {
                     onLoadHistoryItemDetail={(sessionId, kind, itemId) =>
                       loadHistoryItemDetail(sessionId, kind, itemId)
                     }
+                    onLoadConversationTurnDetail={(sessionId, turnId) =>
+                      loadConversationV2TurnDetail(sessionId, turnId)
+                    }
                     onClaimHistory={(sessionId, request) => {
                       const ref = storedRefFromSessionSummary(summary);
                       if (!ref) {
@@ -2632,6 +2637,9 @@ export function App() {
               onOpenLocalFile={openLinkedFilePreview}
               onLoadHistoryItemDetail={(kind, itemId) =>
                 loadHistoryItemDetail(selectedSummary.session.id, kind, itemId)
+              }
+              onLoadConversationTurnDetail={(turnId) =>
+                loadConversationV2TurnDetail(selectedSummary.session.id, turnId)
               }
               composerSurface={composerSurface}
               composerRef={composerRef}

@@ -11,7 +11,7 @@ import {
   createEmptySessionProjection,
   storedReplayPlaceholderSessionId,
 } from "./session-store-session-lifecycle";
-import type { FeedEntry } from "./types";
+import { initialConversationV2SyncState, type FeedEntry } from "./types";
 
 type CapturedRequest = {
   url: string;
@@ -156,6 +156,7 @@ function startupDeps(
       );
     },
     ensureSessionHistoryLoaded: async () => undefined,
+    initializeLiveConversationProjection: async () => undefined,
     sendInput: async () => undefined,
     attachSession: async () => undefined,
     resumeStoredSession: async () => undefined,
@@ -205,6 +206,7 @@ describe("session startup model and mode requests", () => {
       throw new Error(`Unexpected request ${request.url}`);
     });
     const historyLoads: string[] = [];
+    const liveProjectionLoads: string[] = [];
 
     await startSessionCommand(
       startupDeps(
@@ -212,6 +214,9 @@ describe("session startup model and mode requests", () => {
         {
           ensureSessionHistoryLoaded: async (sessionId: string) => {
             historyLoads.push(sessionId);
+          },
+          initializeLiveConversationProjection: async (sessionId: string) => {
+            liveProjectionLoads.push(sessionId);
           },
         },
       ),
@@ -250,6 +255,7 @@ describe("session startup model and mode requests", () => {
       },
     });
     assert.deepEqual(historyLoads, []);
+    assert.deepEqual(liveProjectionLoads, ["started"]);
   });
 
   test("new session exposes created session id before initial input finishes", async () => {
@@ -270,12 +276,25 @@ describe("session startup model and mode requests", () => {
     });
 
     const calls: string[] = [];
+    let releaseConversation!: () => void;
+    let markConversationStarted!: () => void;
+    const conversationGate = new Promise<void>((resolve) => {
+      releaseConversation = resolve;
+    });
+    const conversationStarted = new Promise<void>((resolve) => {
+      markConversationStarted = resolve;
+    });
 
-    await assert.rejects(
+    const command = assert.rejects(
       startSessionCommand(
         startupDeps(
           {},
           {
+            initializeLiveConversationProjection: async () => {
+              calls.push("conversation");
+              markConversationStarted();
+              await conversationGate;
+            },
             sendInput: async () => {
               calls.push("send");
               throw new Error("send failed");
@@ -295,7 +314,11 @@ describe("session startup model and mode requests", () => {
       /send failed/,
     );
 
-    assert.deepEqual(calls, ["created:started", "send"]);
+    await conversationStarted;
+    assert.deepEqual(calls, ["created:started", "conversation"]);
+    releaseConversation();
+    await command;
+    assert.deepEqual(calls, ["created:started", "conversation", "send"]);
   });
 
   test("new session sidebar placement uses daemon returned workspace metadata", async () => {
@@ -1254,6 +1277,13 @@ describe("session startup model and mode requests", () => {
       },
     };
     const historyProjection = createEmptySessionProjection(historySummary);
+    const preservedConversationV2 = {
+      ...initialConversationV2SyncState(),
+      phase: "ready" as const,
+      loadedScope: "history" as const,
+      revision: 7,
+    };
+    historyProjection.conversationV2 = preservedConversationV2;
     historyProjection.feed = [
       {
         key: "assistant:history-answer",
@@ -1305,6 +1335,7 @@ describe("session startup model and mode requests", () => {
       ["assistant:history-answer"],
     );
     assert.equal(state.projections.get("live")?.summary.controlLease.holderClientId, "web-client");
+    assert.equal(state.projections.get("live")?.conversationV2, preservedConversationV2);
   });
 
   test("resuming history selects an already controlled live projection without network calls", async () => {

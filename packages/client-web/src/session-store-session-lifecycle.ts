@@ -300,12 +300,18 @@ export function mergeClaimedHistoryProjection(
   }
   const pendingInterrupt =
     liveProjection?.pendingInterrupt ?? preservedProjection.pendingInterrupt;
+  const conversationV2 =
+    preservedProjection.conversationV2 ?? liveProjection?.conversationV2;
+  const turnDirectory =
+    preservedProjection.turnDirectory ?? liveProjection?.turnDirectory;
   return {
     ...(liveProjection ?? preservedProjection),
     feed: [...feedByKey.values()],
     events: [...eventsById.values()].sort((left, right) => left.seq - right.seq),
     lastSeq: Math.max(liveProjection?.lastSeq ?? 0, preservedProjection.lastSeq),
     history: preservedProjection.history,
+    ...(conversationV2 ? { conversationV2 } : {}),
+    ...(turnDirectory ? { turnDirectory } : {}),
     ...(pendingInterrupt ? { pendingInterrupt } : {}),
     ...(liveProjection?.currentRuntimeStatus
       ? { currentRuntimeStatus: liveProjection.currentRuntimeStatus }

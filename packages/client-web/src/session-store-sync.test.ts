@@ -1,8 +1,14 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import type { ListSessionsResponse, RahEvent, SessionSummary } from "@rah/runtime-protocol";
+import type {
+  ConversationProjectionDelta,
+  ListSessionsResponse,
+  RahEvent,
+  SessionSummary,
+} from "@rah/runtime-protocol";
 import {
   applyProjectionEventsToSyncState,
+  coalesceConversationProjectionDeltas,
   coalesceProjectionEvents,
   recoverTransportCommand,
 } from "./session-store-sync";
@@ -160,6 +166,35 @@ function createRecoverHarness(listSessions: NonNullable<RecoverArgs["listSession
 }
 
 describe("session store recovery", () => {
+  test("orders and deduplicates conversation deltas by session revision", () => {
+    const projectionDelta = (
+      sessionId: string,
+      revision: number,
+      sourceSeq: number,
+    ): ConversationProjectionDelta => ({
+      sessionId,
+      baseRevision: revision - 1,
+      revision,
+      sourceSeq,
+      upsertTurns: [],
+    });
+    const deltas = coalesceConversationProjectionDeltas([
+      projectionDelta("session-2", 2, 20),
+      projectionDelta("session-1", 2, 10),
+      projectionDelta("session-1", 1, 9),
+      projectionDelta("session-1", 2, 11),
+    ]);
+
+    assert.deepEqual(
+      deltas.map((delta) => [delta.sessionId, delta.revision, delta.sourceSeq]),
+      [
+        ["session-1", 1, 9],
+        ["session-1", 2, 11],
+        ["session-2", 2, 20],
+      ],
+    );
+  });
+
   test("coalesces high-frequency timeline updates before projection apply", () => {
     const events = coalesceProjectionEvents([
       event(1, {

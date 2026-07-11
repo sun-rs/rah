@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ClipboardEventHandler, type RefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ClipboardEventHandler, type RefObject } from "react";
 import type {
   ContextUsage,
   PermissionResponseRequest,
@@ -72,6 +72,8 @@ import {
   shouldReplayInitialSessionTuiOutput,
 } from "../../../tui-surface-lifecycle";
 import { providerLabel } from "../../../types";
+import { conversationV2Enabled } from "../../../conversation-v2-feature";
+import { conversationV2TurnsToFeed } from "../../../conversation-v2-feed";
 
 const SESSION_TUI_SCROLLBACK_LINES = 600;
 
@@ -179,6 +181,7 @@ export function WorkbenchSelectedPane(props: {
     kind: SessionHistoryItemDetailKind,
     itemId: string,
   ) => Promise<void> | void;
+  onLoadConversationTurnDetail?: (turnId: string) => Promise<void> | void;
   composerSurface: ComposerSurface;
   composerRef: RefObject<HTMLTextAreaElement | null>;
   draft: string;
@@ -315,6 +318,29 @@ export function WorkbenchSelectedPane(props: {
   });
   const contextUsageDisplay = resolveContextUsageDisplay(props.selectedSummary.usage);
   const chatThreadKey = chatThreadKeyForSession(props.selectedSummary);
+  const conversationV2 = props.selectedProjection?.conversationV2;
+  const useConversationV2 =
+    conversationV2Enabled() &&
+    conversationV2 !== undefined &&
+    (conversationV2.phase === "ready" || conversationV2.turns.length > 0);
+  const chatFeed = useMemo(
+    () =>
+      useConversationV2
+        ? conversationV2TurnsToFeed(conversationV2?.turns ?? [])
+        : props.selectedProjection?.feed ?? [],
+    [
+      conversationV2?.revision,
+      conversationV2?.turns,
+      props.selectedProjection?.feed,
+      useConversationV2,
+    ],
+  );
+  const chatCanLoadOlderHistory = useConversationV2
+    ? Boolean(conversationV2?.nextCursor)
+    : props.canLoadOlderHistory;
+  const chatHistoryLoading = useConversationV2
+    ? conversationV2?.phase === "loading"
+    : props.historyLoading;
   const isCouncilSession = props.selectedSummary.session.origin?.kind === "council";
   const sessionLifecycleStatus = props.selectedIsReadOnlyReplay
     ? "stopped"
@@ -816,13 +842,16 @@ export function WorkbenchSelectedPane(props: {
         <ChatThread
           key={chatThreadKey}
           sessionId={props.selectedSummary.session.id}
-          feed={props.selectedProjection?.feed ?? []}
+          feed={chatFeed}
+          {...(useConversationV2 && conversationV2
+            ? { conversationTurns: conversationV2.turns }
+            : {})}
           hideToolCalls={props.hideToolCallsInChat}
           hideOpenCodeReasoning={props.hideOpenCodeReasoningInChat}
           showModelInfo={props.showModelInfoInChat}
           provider={props.selectedSummary.session.provider}
-          canLoadOlderHistory={props.canLoadOlderHistory}
-          historyLoading={props.historyLoading}
+          canLoadOlderHistory={chatCanLoadOlderHistory}
+          historyLoading={chatHistoryLoading}
           turnDirectory={props.turnDirectory}
           onEnsureTurnDirectory={props.onEnsureTurnDirectory}
           onLoadTurnHistory={props.onLoadTurnHistory}
@@ -830,6 +859,9 @@ export function WorkbenchSelectedPane(props: {
           onLoadOlderHistory={handleChatLoadOlderHistory}
           {...(props.onLoadHistoryItemDetail
             ? { onLoadHistoryItemDetail: handleChatLoadHistoryItemDetail }
+            : {})}
+          {...(useConversationV2 && props.onLoadConversationTurnDetail
+            ? { onLoadConversationTurnDetail: props.onLoadConversationTurnDetail }
             : {})}
           canRespondToPermission={props.canRespondToPermission}
           onPermissionRespond={handleChatPermissionRespond}

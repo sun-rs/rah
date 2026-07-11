@@ -82,6 +82,7 @@ export function CanvasSessionPane(props: {
     kind: SessionHistoryItemDetailKind,
     itemId: string,
   ) => Promise<void> | void;
+  onLoadConversationTurnDetail?: (sessionId: string, turnId: string) => Promise<void> | void;
   onClaimHistory: (
     sessionId: string,
     request: {
@@ -232,6 +233,9 @@ export function CanvasSessionPane(props: {
       }}
       onLoadHistoryItemDetail={(kind, itemId) =>
         props.onLoadHistoryItemDetail?.(props.summary.session.id, kind, itemId)
+      }
+      onLoadConversationTurnDetail={(turnId) =>
+        props.onLoadConversationTurnDetail?.(props.summary.session.id, turnId)
       }
       {...(props.onOpenLocalFile
         ? {

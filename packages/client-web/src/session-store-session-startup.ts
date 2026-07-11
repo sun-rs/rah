@@ -91,6 +91,7 @@ type SessionStartupDeps = {
   get: () => SessionStartupState;
   set: SessionStartupSetState;
   ensureSessionHistoryLoaded: (sessionId: string) => Promise<void>;
+  initializeLiveConversationProjection: (sessionId: string) => Promise<void>;
   sendInput: (sessionId: string, text: string) => Promise<void>;
   attachSession: (summary: SessionSummary) => Promise<void>;
   resumeStoredSession: (
@@ -226,6 +227,7 @@ export async function startSessionCommand(
       };
     });
     options?.onSessionCreated?.(session.session.id);
+    await deps.initializeLiveConversationProjection(session.session.id);
     if (initialInput) {
       await deps.sendInput(session.session.id, initialInput);
     }

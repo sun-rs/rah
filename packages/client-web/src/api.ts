@@ -16,6 +16,9 @@ import type {
   CouncilReinjectAgentsResponse,
   CouncilRemoveAgentResponse,
   CouncilStopAgentResponse,
+  ConversationItemDetailResponse,
+  ConversationTurnDetailResponse,
+  ConversationTurnsPageResponse,
   CreateCouncilRequest,
   CreateCouncilResponse,
   DeleteManualProviderModelOptionResponse,
@@ -880,6 +883,53 @@ export async function readSessionHistoryItemDetail(
   query.set("itemId", options.itemId);
   return requestJson<SessionHistoryItemDetailResponse>(
     `/api/sessions/${sessionId}/history/detail?${query.toString()}`,
+  );
+}
+
+export async function readSessionConversationTurns(
+  sessionId: string,
+  options?: { cursor?: string; limit?: number; liveOnly?: boolean },
+): Promise<ConversationTurnsPageResponse> {
+  const query = new URLSearchParams();
+  if (options?.cursor) {
+    query.set("cursor", options.cursor);
+  }
+  if (options?.limit !== undefined) {
+    query.set("limit", String(options.limit));
+  }
+  if (options?.liveOnly) {
+    query.set("liveOnly", "true");
+  }
+  const suffix = query.size > 0 ? `?${query.toString()}` : "";
+  return requestJson<ConversationTurnsPageResponse>(
+    `/api/sessions/${sessionId}/conversation/turns${suffix}`,
+  );
+}
+
+export async function readSessionConversationItemDetail(
+  sessionId: string,
+  options: {
+    itemId: string;
+    providerTurnId: string;
+    providerItemId: string;
+  },
+): Promise<ConversationItemDetailResponse> {
+  const query = new URLSearchParams({
+    providerTurnId: options.providerTurnId,
+    providerItemId: options.providerItemId,
+  });
+  return requestJson<ConversationItemDetailResponse>(
+    `/api/sessions/${sessionId}/conversation/items/${encodeURIComponent(options.itemId)}/detail?${query.toString()}`,
+  );
+}
+
+export async function readSessionConversationTurnDetail(
+  sessionId: string,
+  options: { turnId: string; providerTurnId: string },
+): Promise<ConversationTurnDetailResponse> {
+  const query = new URLSearchParams({ providerTurnId: options.providerTurnId });
+  return requestJson<ConversationTurnDetailResponse>(
+    `/api/sessions/${sessionId}/conversation/turns/${encodeURIComponent(options.turnId)}/detail?${query.toString()}`,
   );
 }
 

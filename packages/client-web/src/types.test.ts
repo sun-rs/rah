@@ -5,6 +5,7 @@ import { deriveWorkspaceInfos, sortWorkspaceInfos } from "./session-browser";
 import {
   appendOptimisticUserMessage,
   applyEventToProjection,
+  initialConversationV2SyncState,
   initialHistorySyncState,
   markPendingInterruptIntent,
   removeOptimisticUserMessage,
@@ -96,6 +97,41 @@ function workspaceSummary(args: {
 }
 
 describe("client projection", () => {
+  test("ordinary session events preserve auxiliary conversation projections", () => {
+    const conversationV2 = {
+      ...initialConversationV2SyncState(),
+      phase: "ready" as const,
+      daemonRevision: 3,
+    };
+    const turnDirectory: NonNullable<SessionProjection["turnDirectory"]> = {
+      phase: "ready",
+      revision: "directory-1",
+      items: [],
+      complete: true,
+      sourceBytes: 0,
+      generatedAt: "2026-04-15T00:00:00.000Z",
+      lastError: null,
+    };
+    const current: SessionProjection = {
+      ...projection(),
+      conversationV2,
+      turnDirectory,
+    };
+
+    const next = applyEventToProjection(
+      current,
+      event({
+        seq: 1,
+        turnId: "turn-1",
+        type: "turn.canceled",
+        payload: { reason: "Interrupted by user" },
+      }),
+    );
+
+    assert.equal(next.conversationV2, conversationV2);
+    assert.equal(next.turnDirectory, turnDirectory);
+  });
+
   test("does not duplicate optimistic user text or transcript message parts", () => {
     let current = appendOptimisticUserMessage(projection(), "你是谁");
 
