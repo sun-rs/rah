@@ -12,7 +12,7 @@ import type {
 import type { RuntimeServices } from "./provider-adapter";
 import { EventBus } from "./event-bus";
 import { PtyHub } from "./pty-hub";
-import { applyProviderActivity } from "./provider-activity";
+import { applyProviderActivity, type ProviderActivity } from "./provider-activity";
 import {
   createCodexRolloutTranslationState,
   finalizeCodexRolloutTranslationState,
@@ -35,6 +35,30 @@ const SYSTEM_SOURCE = {
   channel: "system" as const,
   authority: "authoritative" as const,
 };
+
+function scopeCodexHistoryActivityToTurn(
+  activity: ProviderActivity,
+  currentTurnId: string | undefined,
+): ProviderActivity {
+  if (!currentTurnId) {
+    return activity;
+  }
+  switch (activity.type) {
+    case "session_state":
+    case "session_failed":
+    case "session_exited":
+    case "host_updated":
+    case "transport_changed":
+    case "heartbeat":
+    case "terminal_output":
+    case "terminal_exited":
+      return activity;
+    default:
+      return "turnId" in activity && activity.turnId
+        ? activity
+        : ({ ...activity, turnId: currentTurnId } as ProviderActivity);
+  }
+}
 
 function makeCodexFrozenHistoryBoundary(
   rolloutPath: string,
@@ -288,7 +312,7 @@ export function translateCodexRolloutWindowToHistoryEvents(args: {
           ...(item.raw !== undefined ? { raw: item.raw } : {}),
           ...(item.ts !== undefined ? { ts: item.ts } : {}),
         },
-        item.activity,
+        scopeCodexHistoryActivityToTurn(item.activity, translationState.currentTurnId),
       );
     }
   }
@@ -307,7 +331,7 @@ export function translateCodexRolloutWindowToHistoryEvents(args: {
           ...(item.raw !== undefined ? { raw: item.raw } : {}),
           ...(item.ts !== undefined ? { ts: item.ts } : {}),
         },
-        item.activity,
+        scopeCodexHistoryActivityToTurn(item.activity, translationState.currentTurnId),
       );
     }
   }
@@ -388,7 +412,7 @@ export function replayCodexStoredSessionRollout(params: {
           ...(item.raw !== undefined ? { raw: item.raw } : {}),
           ...(item.ts !== undefined ? { ts: item.ts } : {}),
         },
-        item.activity,
+        scopeCodexHistoryActivityToTurn(item.activity, translationState.currentTurnId),
       );
     }
   }
@@ -407,7 +431,7 @@ export function replayCodexStoredSessionRollout(params: {
           ...(item.raw !== undefined ? { raw: item.raw } : {}),
           ...(item.ts !== undefined ? { ts: item.ts } : {}),
         },
-        item.activity,
+        scopeCodexHistoryActivityToTurn(item.activity, translationState.currentTurnId),
       );
     }
   }

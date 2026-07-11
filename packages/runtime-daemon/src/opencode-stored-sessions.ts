@@ -491,6 +491,7 @@ export function resumeOpenCodeStoredSession(params: {
     rootDir: params.record.ref.rootDir ?? cwd,
     ...(params.record.ref.title ? { title: params.record.ref.title } : {}),
     ...(params.record.ref.preview ? { preview: params.record.ref.preview } : {}),
+    runtime: runtimeDescriptorForStoredHistory(),
     capabilities: REHYDRATED_CAPABILITIES,
   });
   params.services.sessionStore.setRuntimeState(state.session.id, "idle");

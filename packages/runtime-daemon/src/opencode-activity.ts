@@ -35,6 +35,7 @@ interface OpenCodeActivityStateOptions {
    * OpenCode, so late user events must not resurrect a completed turn.
    */
   userMessagesStartTurns?: boolean;
+  statusStartsTurns?: boolean;
   emitUserMessages?: boolean;
   origin?: "live" | "history";
 }
@@ -43,6 +44,7 @@ export interface OpenCodeActivityState {
   readonly provider: Extract<ProviderKind, "opencode">;
   readonly providerSessionId: string;
   readonly userMessagesStartTurns: boolean;
+  readonly statusStartsTurns: boolean;
   readonly emitUserMessages: boolean;
   readonly origin: "live" | "history";
   currentTurnId?: string;
@@ -154,6 +156,7 @@ export function createOpenCodeActivityState(
     provider: "opencode",
     providerSessionId,
     userMessagesStartTurns: options.userMessagesStartTurns ?? true,
+    statusStartsTurns: options.statusStartsTurns ?? true,
     emitUserMessages: options.emitUserMessages ?? true,
     origin: options.origin ?? "live",
     turnByMessageId: new Map(),
@@ -292,6 +295,9 @@ function translateStatus(
   if (type === "busy") {
     if (state.currentTurnId) {
       return [{ type: "runtime_status", status: "thinking", turnId: state.currentTurnId }];
+    }
+    if (!state.statusStartsTurns) {
+      return [];
     }
     return startOpenCodeTurn(state);
   }

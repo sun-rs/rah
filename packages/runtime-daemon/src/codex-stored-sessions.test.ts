@@ -743,6 +743,11 @@ describe("codex stored session path resolution", () => {
       rolloutPath,
       `${[
         {
+          type: "turn_context",
+          timestamp: "2025-07-19T21:59:59.000Z",
+          payload: { turn_id: "turn-interrupted" },
+        },
+        {
           type: "response_item",
           timestamp: "2025-07-19T22:00:00.000Z",
           payload: {
@@ -798,6 +803,15 @@ describe("codex stored session path resolution", () => {
     assert.equal(
       openPage.events.some((event) => event.type === "tool.call.failed"),
       false,
+    );
+    assert.ok(
+      openPage.events
+        .filter((event) =>
+          event.type === "timeline.item.added" ||
+          event.type === "tool.call.started" ||
+          event.type === "tool.call.completed",
+        )
+        .every((event) => event.turnId === "turn-interrupted"),
     );
 
     const page = getCodexStoredSessionHistoryPage({

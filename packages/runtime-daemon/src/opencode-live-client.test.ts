@@ -469,6 +469,91 @@ test("interruptOpenCodeLiveSession settles the turn when OpenCode accepts abort"
   }
 });
 
+test("interruptOpenCodeLiveSession treats a racing prompt error as cancellation", async () => {
+  let pendingPromptResponse: http.ServerResponse | undefined;
+  const server = http.createServer((req, res) => {
+    req.resume();
+    req.on("end", () => {
+      if (/\/message(?:\?|$)/.test(req.url ?? "")) {
+        pendingPromptResponse = res;
+        return;
+      }
+      if (/\/abort(?:\?|$)/.test(req.url ?? "")) {
+        const promptResponse = pendingPromptResponse;
+        if (promptResponse && !promptResponse.writableEnded) {
+          promptResponse.statusCode = 500;
+          promptResponse.setHeader("Content-Type", "application/json");
+          promptResponse.end(JSON.stringify({ error: "Aborted" }));
+        }
+        setTimeout(() => {
+          res.setHeader("Content-Type", "application/json");
+          res.end("true");
+        }, 100);
+        return;
+      }
+      res.statusCode = 404;
+      res.end();
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+
+  try {
+    const services = {
+      eventBus: new EventBus(),
+      ptyHub: new PtyHub(),
+      sessionStore: new SessionStore(),
+    };
+    const session = services.sessionStore.createManagedSession({
+      provider: "opencode",
+      providerSessionId: "opencode-stop-race",
+      launchSource: "web",
+      cwd: "/tmp/rah-opencode",
+      rootDir: "/tmp/rah-opencode",
+    });
+    const liveSession = {
+      sessionId: session.session.id,
+      providerSessionId: "opencode-stop-race",
+      cwd: "/tmp/rah-opencode",
+      modeId: "build",
+      activityState: createOpenCodeActivityState("opencode-stop-race"),
+      queuedInputs: [],
+      server: {
+        baseUrl: `http://127.0.0.1:${address.port}`,
+        cwd: "/tmp/rah-opencode",
+      },
+    } as unknown as LiveOpenCodeSession;
+
+    sendInputToOpenCodeLiveSession({
+      services,
+      liveSession,
+      request: { clientId: "web-client", text: "stop during prompt response" },
+    });
+    await waitFor(() => pendingPromptResponse !== undefined);
+    interruptOpenCodeLiveSession({
+      services,
+      liveSession,
+      request: { clientId: "web-client" },
+    });
+    await waitFor(() =>
+      services.eventBus
+        .list({ sessionIds: [session.session.id] })
+        .some((event) => event.type === "turn.canceled"),
+    );
+
+    const events = services.eventBus.list({ sessionIds: [session.session.id] });
+    assert.equal(events.filter((event) => event.type === "turn.canceled").length, 1);
+    assert.equal(events.some((event) => event.type === "turn.failed"), false);
+    assert.equal(services.sessionStore.getSession(session.session.id)?.activeTurnId, undefined);
+  } finally {
+    if (pendingPromptResponse && !pendingPromptResponse.writableEnded) {
+      pendingPromptResponse.destroy();
+    }
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
 test("setOpenCodeLiveSessionMode updates the OpenCode mode used by later prompts", async () => {
   const services = {
     eventBus: new EventBus(),

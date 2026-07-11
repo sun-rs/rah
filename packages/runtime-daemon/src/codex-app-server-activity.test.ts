@@ -255,6 +255,68 @@ describe("translateCodexAppServerNotification", () => {
     }
   });
 
+  test("maps official subAgentActivity items without exposing them as unknown", () => {
+    const state = createCodexAppServerTranslationState();
+    const translated = translateCodexAppServerNotification(
+      {
+        method: "item/completed",
+        params: {
+          threadId: "thread-main",
+          turnId: "turn-main",
+          item: {
+            type: "subAgentActivity",
+            id: "subagent-activity-1",
+            kind: "interrupted",
+            agentThreadId: "thread-subagent",
+            agentPath: "reviewer",
+          },
+        },
+      },
+      state,
+    );
+
+    assert.equal(translated[0]?.activity.type, "observation_completed");
+    if (translated[0]?.activity.type === "observation_completed") {
+      assert.equal(translated[0].activity.observation.kind, "subagent.lifecycle");
+      assert.equal(translated[0].activity.observation.status, "canceled");
+      assert.equal(translated[0].activity.observation.title, "Subagent interrupted");
+      assert.ok(!translated[0].activity.observation.title.includes("Unhandled"));
+    }
+  });
+
+  test("maps official sleep items into bounded process activity", () => {
+    const state = createCodexAppServerTranslationState();
+    const started = translateCodexAppServerNotification(
+      {
+        method: "item/started",
+        params: {
+          threadId: "thread-main",
+          turnId: "turn-main",
+          item: { type: "sleep", id: "sleep-1", durationMs: 5_000 },
+        },
+      },
+      state,
+    );
+    const completed = translateCodexAppServerNotification(
+      {
+        method: "item/completed",
+        params: {
+          threadId: "thread-main",
+          turnId: "turn-main",
+          item: { type: "sleep", id: "sleep-1", durationMs: 5_000 },
+        },
+      },
+      state,
+    );
+
+    assert.equal(started[0]?.activity.type, "observation_started");
+    assert.equal(completed[0]?.activity.type, "observation_completed");
+    if (completed[0]?.activity.type === "observation_completed") {
+      assert.equal(completed[0].activity.observation.kind, "automation.run");
+      assert.equal(completed[0].activity.observation.title, "Wait 5000ms");
+    }
+  });
+
   test("extracts retry count from reconnecting runtime errors", () => {
     const state = createCodexAppServerTranslationState();
     const retry = translateCodexAppServerNotification(

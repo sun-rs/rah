@@ -1318,8 +1318,21 @@ function makeSubagentLifecycleObservation(
   status: WorkbenchObservation["status"],
 ): WorkbenchObservation {
   const id = stringField(item, "id") ?? `subagent-${Date.now().toString(36)}`;
-  const tool = stringField(item, "tool") ?? "Subagent activity";
-  const receivers = stringArrayField(item, "receiverThreadIds");
+  const activityKind = stringField(item, "kind");
+  const tool =
+    stringField(item, "tool") ??
+    (activityKind === "started"
+      ? "Subagent started"
+      : activityKind === "interacted"
+        ? "Subagent interaction"
+        : activityKind === "interrupted"
+          ? "Subagent interrupted"
+          : "Subagent activity");
+  const agentThreadId = stringField(item, "agentThreadId");
+  const receivers = [
+    ...stringArrayField(item, "receiverThreadIds"),
+    ...(agentThreadId ? [agentThreadId] : []),
+  ];
   const model = stringField(item, "model");
   const effort = stringField(item, "reasoningEffort") ?? stringField(item, "reasoning_effort");
   const summary = [
@@ -1334,6 +1347,8 @@ function makeSubagentLifecycleObservation(
     ...(stringField(item, "senderThreadId") ? { senderThreadId: stringField(item, "senderThreadId") } : {}),
     ...(receivers.length > 0 ? { receiverThreadIds: receivers } : {}),
     ...(stringField(item, "status") ? { status: stringField(item, "status") } : {}),
+    ...(activityKind ? { kind: activityKind } : {}),
+    ...(stringField(item, "agentPath") ? { agentPath: stringField(item, "agentPath") } : {}),
   };
   return {
     id: `obs-${id}`,
@@ -1655,6 +1670,21 @@ function mapThreadItem(
             : { type: "observation_completed", turnId, observation },
       ];
     }
+    case "subAgentActivity": {
+      const activityKind = stringField(item, "kind");
+      const phaseStatus =
+        phase === "started"
+          ? "running"
+          : activityKind === "interrupted"
+            ? "canceled"
+            : "completed";
+      const observation = makeSubagentLifecycleObservation(item, phaseStatus);
+      return [
+        phase === "started"
+          ? { type: "observation_started", turnId, observation }
+          : { type: "observation_completed", turnId, observation },
+      ];
+    }
     case "webSearch": {
       const observation = makeGenericObservation(item, "web.search", "Web search", phase === "started" ? "running" : "completed");
       return [
@@ -1666,6 +1696,21 @@ function mapThreadItem(
     case "imageView":
     case "imageGeneration": {
       const observation = makeGenericObservation(item, "media.read", itemType === "imageView" ? "View image" : "Generate image", phase === "started" ? "running" : "completed");
+      return [
+        phase === "started"
+          ? { type: "observation_started", turnId, observation }
+          : { type: "observation_completed", turnId, observation },
+      ];
+    }
+    case "sleep": {
+      const durationMs = numberField(item, "durationMs");
+      const title = durationMs !== undefined ? `Wait ${durationMs}ms` : "Wait";
+      const observation = makeGenericObservation(
+        item,
+        "automation.run",
+        title,
+        phase === "started" ? "running" : "completed",
+      );
       return [
         phase === "started"
           ? { type: "observation_started", turnId, observation }

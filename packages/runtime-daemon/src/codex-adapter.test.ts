@@ -242,6 +242,24 @@ rl.on('line', (line) => {
       setCloseHandler() {},
       async request(method, params) {
         requests.push({ method, params });
+        if (method === "thread/items/list") {
+          return {
+            data: [
+              {
+                type: "commandExecution",
+                id: "command-native-1",
+                command: "npm test",
+                cwd,
+                status: "completed",
+                aggregatedOutput: "all tests passed",
+                exitCode: 0,
+                durationMs: 1_250,
+              },
+            ],
+            nextCursor: null,
+            backwardsCursor: "newer-native-items",
+          };
+        }
         return {
           data: [
             {
@@ -321,6 +339,48 @@ rl.on('line', (line) => {
         (event) => event.type === "turn.completed" && event.payload.durationMs === 5_000,
       ),
     );
+    const detail = await storedHistory.getSessionConversationItemDetail(managed.session.id, {
+      providerTurnId: "turn-native-1",
+      providerItemId: "command-native-1",
+    });
+    assert.ok(detail);
+    assert.ok(
+      detail.events.some(
+        (event) =>
+          event.type === "observation.completed" &&
+          event.payload.observation.subject?.providerCallId === "command-native-1" &&
+          event.payload.observation.durationMs === 1_250,
+      ),
+    );
+    assert.deepEqual(requests.at(-1), {
+      method: "thread/items/list",
+      params: {
+        threadId: sessionId,
+        turnId: "turn-native-1",
+        limit: 100,
+        sortDirection: "asc",
+      },
+    });
+    const turnDetail = await storedHistory.getSessionConversationTurnDetail(managed.session.id, {
+      providerTurnId: "turn-native-1",
+    });
+    assert.ok(turnDetail);
+    assert.ok(
+      turnDetail.events.some(
+        (event) =>
+          event.type === "observation.completed" &&
+          event.payload.observation.subject?.providerCallId === "command-native-1",
+      ),
+    );
+    assert.deepEqual(requests.at(-1), {
+      method: "thread/items/list",
+      params: {
+        threadId: sessionId,
+        turnId: "turn-native-1",
+        limit: 100,
+        sortDirection: "asc",
+      },
+    });
     await storedHistory.shutdown();
     assert.equal(disposed, true);
     rmSync(cwd, { recursive: true, force: true });
@@ -390,11 +450,15 @@ rl.on('line', (line) => {
       providerSessionId: sessionId,
     });
 
+    const methods = readFileSync(methodLog, "utf8").trim().split("\n");
     assert.equal(resumed.session.session.providerSessionId, sessionId);
     assert.equal(resumed.session.session.title, "Fix the resume bug");
-    assert.equal(resumed.session.session.mode?.currentModeId, "auto-review/workspace-write");
+    assert.equal(
+      resumed.session.session.mode?.currentModeId,
+      "auto-review/workspace-write",
+      `Unexpected Codex RPC sequence: ${methods.join(", ")}`,
+    );
     assert.equal(resumed.session.session.runtime?.kind, "native_local_server");
-    const methods = readFileSync(methodLog, "utf8").trim().split("\n");
     assert.ok(methods.indexOf("thread/unarchive") > -1);
     assert.ok(methods.indexOf("thread/resume") > methods.indexOf("thread/unarchive"));
 

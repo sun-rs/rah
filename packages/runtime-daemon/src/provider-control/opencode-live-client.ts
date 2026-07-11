@@ -485,7 +485,10 @@ export async function startOpenCodeLiveSession(params: {
     providerSessionId: providerSession.id,
     cwd: request.cwd,
     server,
-    activityState: createOpenCodeActivityState(providerSession.id),
+    activityState: createOpenCodeActivityState(providerSession.id, {
+      userMessagesStartTurns: false,
+      statusStartsTurns: false,
+    }),
     stopEvents: () => undefined,
     stopHistoryMirror: () => undefined,
     mirroredMessageRevisions: new Map(),
@@ -641,7 +644,10 @@ export async function resumeOpenCodeLiveSession(params: {
     providerSessionId: params.providerSessionId,
     cwd: params.cwd,
     server,
-    activityState: createOpenCodeActivityState(params.providerSessionId),
+    activityState: createOpenCodeActivityState(params.providerSessionId, {
+      userMessagesStartTurns: false,
+      statusStartsTurns: false,
+    }),
     stopEvents: () => undefined,
     stopHistoryMirror: () => undefined,
     mirroredMessageRevisions: new Map(),
@@ -750,6 +756,20 @@ function submitOpenCodePrompt(params: {
       drainQueuedOpenCodeInput(services, liveSession);
     })
     .catch((error) => {
+      if (liveSession.abortPendingTurnId === turnId) {
+        clearOpenCodePendingAbort(liveSession);
+        if (liveSession.activityState.currentTurnId === turnId) {
+          delete liveSession.activityState.currentTurnId;
+        }
+        markOpenCodeTurnLocallyCanceled(liveSession, turnId);
+        applyActivity(services, liveSession.sessionId, {
+          type: "turn_canceled",
+          turnId,
+          reason: "interrupted",
+        });
+        drainQueuedOpenCodeInput(services, liveSession);
+        return;
+      }
       patchOpenCodeRuntimeError(services, liveSession, error);
       if (liveSession.activityState.currentTurnId !== turnId) {
         drainQueuedOpenCodeInput(services, liveSession);
@@ -787,7 +807,10 @@ function attachOpenCodeEventSink(params: {
   return subscribeOpenCodeEvents({
     handle: liveSession.server,
     onEvent: (event) => {
-      const activities = translateOpenCodeEvent(liveSession.activityState, event);
+      const activities = normalizeOpenCodeAbortActivities(
+        liveSession,
+        translateOpenCodeEvent(liveSession.activityState, event),
+      );
       for (const activity of activities) {
         if (shouldSuppressMirroredOpenCodeActivity(liveSession, activity)) {
           continue;
@@ -846,6 +869,25 @@ function activityFinishesOpenCodeTurn(activity: ProviderActivity, turnId: string
   );
 }
 
+function normalizeOpenCodeAbortActivities(
+  liveSession: LiveOpenCodeSession,
+  activities: readonly ProviderActivity[],
+): ProviderActivity[] {
+  const abortTurnId = liveSession.abortPendingTurnId;
+  if (!abortTurnId) {
+    return [...activities];
+  }
+  return activities.map((activity) =>
+    activity.type === "turn_failed" && activity.turnId === abortTurnId
+      ? {
+          type: "turn_canceled",
+          turnId: abortTurnId,
+          reason: "interrupted",
+        }
+      : activity,
+  );
+}
+
 function reconcileOpenCodeAbortProgress(
   liveSession: LiveOpenCodeSession,
   activities: readonly ProviderActivity[],
@@ -853,6 +895,13 @@ function reconcileOpenCodeAbortProgress(
   const abortTurnId = liveSession.abortPendingTurnId;
   if (!abortTurnId) {
     return;
+  }
+  if (
+    activities.some(
+      (activity) => activity.type === "turn_canceled" && activity.turnId === abortTurnId,
+    )
+  ) {
+    markOpenCodeTurnLocallyCanceled(liveSession, abortTurnId);
   }
   if (activities.some((activity) => activityFinishesOpenCodeTurn(activity, abortTurnId))) {
     clearOpenCodePendingAbort(liveSession);

@@ -14,6 +14,12 @@ export interface CodexAppServerTurnsPage {
   backwardsCursor?: string | null;
 }
 
+export interface CodexAppServerItemsPage {
+  data: unknown[];
+  nextCursor?: string | null;
+  backwardsCursor?: string | null;
+}
+
 export function materializeCodexAppServerTurnsPage(args: {
   sessionId: string;
   providerSessionId: string;
@@ -74,4 +80,40 @@ export function materializeCodexAppServerTurnsPage(args: {
   };
   response.approximateBytes = Buffer.byteLength(JSON.stringify(response), "utf8");
   return response;
+}
+
+export function materializeCodexAppServerItemDetail(args: {
+  sessionId: string;
+  providerSessionId: string;
+  providerTurnId: string;
+  item: unknown;
+}): SessionHistoryPageResponse {
+  return materializeCodexAppServerTurnItems({
+    sessionId: args.sessionId,
+    providerSessionId: args.providerSessionId,
+    providerTurnId: args.providerTurnId,
+    items: [args.item],
+  });
+}
+
+export function materializeCodexAppServerTurnItems(args: {
+  sessionId: string;
+  providerSessionId: string;
+  providerTurnId: string;
+  items: unknown[];
+}): SessionHistoryPageResponse {
+  return materializeCodexAppServerTurnsPage({
+    sessionId: args.sessionId,
+    providerSessionId: args.providerSessionId,
+    page: {
+      data: [
+        {
+          id: args.providerTurnId,
+          status: "completed",
+          itemsView: "full",
+          items: args.items,
+        },
+      ],
+    },
+  });
 }

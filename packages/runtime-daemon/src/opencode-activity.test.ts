@@ -1,6 +1,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  completeOpenCodeTurn,
   createOpenCodeActivityState,
   recordOpenCodeSubmittedUserMessage,
   startOpenCodeTurn,
@@ -86,6 +87,27 @@ describe("translateOpenCodeEvent", () => {
         turnId: busy[0]?.type === "turn_started" ? busy[0].turnId : undefined,
       },
     ]);
+  });
+
+  test("web-owned sessions ignore a late busy status after their turn completed", () => {
+    const state = createOpenCodeActivityState("session-1", {
+      userMessagesStartTurns: false,
+      statusStartsTurns: false,
+    });
+    const turnId = "11111111-1111-4111-8111-111111111111";
+    startOpenCodeTurn(state, turnId);
+    completeOpenCodeTurn(state, turnId);
+
+    const lateBusy = translateOpenCodeEvent(state, {
+      type: "session.status",
+      properties: {
+        sessionID: "session-1",
+        status: { type: "busy" },
+      },
+    });
+
+    assert.deepEqual(lateBusy, []);
+    assert.equal(state.currentTurnId, undefined);
   });
 
   test("maps OpenCode aborted assistant messages into canceled turns", () => {

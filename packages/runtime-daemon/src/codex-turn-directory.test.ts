@@ -4,7 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { CodexTurnDirectoryStore } from "./codex-turn-directory";
-import { readCodexTurnHistory } from "./codex-turn-history";
+import {
+  readCodexConversationTurnDetail,
+  readCodexTurnHistory,
+} from "./codex-turn-history";
 import type { CodexStoredSessionRecord } from "./codex-stored-session-types";
 
 function line(timestamp: string, type: string, payload: Record<string, unknown>): string {
@@ -56,6 +59,12 @@ test("Codex turn directory scans incrementally and applies rollback markers", as
       content: [{ type: "input_text", text: "First question" }],
     }),
     userMessage("2026-07-10T00:00:00.003Z", "First question"),
+    line("2026-07-10T00:00:00.400Z", "response_item", {
+      type: "function_call",
+      name: "exec_command",
+      arguments: '{"cmd":"echo hello","workdir":"/tmp/project"}',
+      call_id: "large-tool-output",
+    }),
     line("2026-07-10T00:00:00.500Z", "response_item", {
       type: "function_call_output",
       call_id: "large-tool-output",
@@ -160,6 +169,22 @@ test("Codex turn directory scans incrementally and applies rollback markers", as
       }),
       true,
     );
+
+    const detail = await readCodexConversationTurnDetail({
+      sessionId: "rah-session-1",
+      turnId: "turn-1",
+      record,
+      range,
+    });
+    const detailJson = JSON.stringify(detail);
+    assert.equal(
+      detail.events.some((event) => event.type.startsWith("tool.call.")),
+      true,
+      detailJson,
+    );
+    assert.equal(detailJson.includes("Checking"), true);
+    assert.equal(detailJson.includes("x".repeat(4_096)), false);
+    assert.ok((detail.approximateBytes ?? Number.POSITIVE_INFINITY) < 64 * 1024);
   } finally {
     await store.shutdown();
     if (previousRahHome === undefined) {

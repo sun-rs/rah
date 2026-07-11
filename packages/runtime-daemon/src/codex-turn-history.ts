@@ -1,11 +1,15 @@
-import type { RahEvent, SessionTurnHistoryResponse } from "@rah/runtime-protocol";
+import type {
+  RahEvent,
+  SessionHistoryPageResponse,
+  SessionTurnHistoryResponse,
+} from "@rah/runtime-protocol";
 import { scanSelectedJsonlLines } from "./bounded-jsonl-reader";
 import type { CodexStoredSessionRecord } from "./codex-stored-session-types";
 import {
   collapseDuplicateCodexTimelineEvents,
   translateCodexRolloutWindowToHistoryEvents,
 } from "./codex-stored-session-history";
-import { chatHistoryPage } from "./history-event-projection";
+import { chatHistoryPage, summarizeHistoryPage } from "./history-event-projection";
 
 function shouldTranslateLine(line: string): boolean {
   const head = line.slice(0, 1_024);
@@ -20,10 +24,24 @@ function shouldTranslateLine(line: string): boolean {
   return /"type"\s*:\s*"(?:message|reasoning)"/.test(head);
 }
 
+function shouldTranslateConversationLine(line: string): boolean {
+  const head = line.slice(0, 1_024);
+  if (/"type"\s*:\s*"response_item"/.test(head)) {
+    return true;
+  }
+  if (!/"type"\s*:\s*"event_msg"/.test(head)) {
+    return false;
+  }
+  return /"type"\s*:\s*"(?:task_started|task_complete|turn_aborted|user_message|agent_message|agent_reasoning|context_compacted)"/.test(
+    head,
+  );
+}
+
 async function readRelevantTurnLines(args: {
   rolloutPath: string;
   startOffset: number;
   endOffset: number;
+  includeProcess?: boolean;
 }): Promise<string[]> {
   if (args.endOffset <= args.startOffset) {
     return [];
@@ -37,10 +55,39 @@ async function readRelevantTurnLines(args: {
     // Irrelevant tool lines are discarded after their head, so this larger
     // bound applies only to message/reasoning lines inside one requested turn.
     maxSelectedLineBytes: 16 * 1024 * 1024,
-    selectHead: shouldTranslateLine,
+    selectHead: args.includeProcess ? shouldTranslateConversationLine : shouldTranslateLine,
     onLine: ({ text }) => lines.push(text),
   });
   return lines;
+}
+
+async function translatedTurnEvents(args: {
+  sessionId: string;
+  turnId: string;
+  record: CodexStoredSessionRecord;
+  range: { startOffset: number; endOffset: number };
+  includeProcess: boolean;
+}): Promise<RahEvent[]> {
+  const lines = await readRelevantTurnLines({
+    rolloutPath: args.record.rolloutPath,
+    ...args.range,
+    includeProcess: args.includeProcess,
+  });
+  const translated = translateCodexRolloutWindowToHistoryEvents({
+    sessionId: args.sessionId,
+    providerSessionId: args.record.ref.providerSessionId,
+    cwd: args.record.ref.cwd ?? process.cwd(),
+    rootDir: args.record.ref.rootDir ?? args.record.ref.cwd ?? process.cwd(),
+    ...(args.record.ref.title !== undefined ? { title: args.record.ref.title } : {}),
+    ...(args.record.ref.preview !== undefined ? { preview: args.record.ref.preview } : {}),
+    lines,
+    finalizePendingTools: false,
+  });
+  return reanchorTurnEvents(
+    args.sessionId,
+    args.turnId,
+    collapseDuplicateCodexTimelineEvents(translated),
+  );
 }
 
 function reanchorTurnEvents(
@@ -77,31 +124,27 @@ export async function readCodexTurnHistory(args: {
   record: CodexStoredSessionRecord;
   range: { startOffset: number; endOffset: number };
 }): Promise<SessionTurnHistoryResponse> {
-  const lines = await readRelevantTurnLines({
-    rolloutPath: args.record.rolloutPath,
-    ...args.range,
-  });
-  const translated = translateCodexRolloutWindowToHistoryEvents({
-    sessionId: args.sessionId,
-    providerSessionId: args.record.ref.providerSessionId,
-    cwd: args.record.ref.cwd ?? process.cwd(),
-    rootDir: args.record.ref.rootDir ?? args.record.ref.cwd ?? process.cwd(),
-    ...(args.record.ref.title !== undefined ? { title: args.record.ref.title } : {}),
-    ...(args.record.ref.preview !== undefined ? { preview: args.record.ref.preview } : {}),
-    lines,
-    finalizePendingTools: false,
-  });
+  const translated = await translatedTurnEvents({ ...args, includeProcess: false });
   const events = chatHistoryPage({
     sessionId: args.sessionId,
-    events: reanchorTurnEvents(
-      args.sessionId,
-      args.turnId,
-      collapseDuplicateCodexTimelineEvents(translated),
-    ),
+    events: translated,
   }).events;
   return {
     sessionId: args.sessionId,
     turnId: args.turnId,
     events,
   };
+}
+
+export async function readCodexConversationTurnDetail(args: {
+  sessionId: string;
+  turnId: string;
+  record: CodexStoredSessionRecord;
+  range: { startOffset: number; endOffset: number };
+}): Promise<SessionHistoryPageResponse> {
+  const events = await translatedTurnEvents({ ...args, includeProcess: true });
+  return summarizeHistoryPage({
+    sessionId: args.sessionId,
+    events,
+  });
 }

@@ -191,6 +191,70 @@ describe("Claude session files", () => {
     }
   });
 
+  test("maps Claude end_turn text and turn_duration records to a completed final answer", () => {
+    writeClaudeSession("session-completed-turn.jsonl", [
+      {
+        type: "user",
+        uuid: "user-completed-turn",
+        cwd: workDir,
+        sessionId: "session-completed-turn",
+        timestamp: "2026-07-11T04:28:43.579Z",
+        message: {
+          content: "reply once",
+        },
+      },
+      {
+        type: "assistant",
+        uuid: "assistant-completed-turn",
+        parentUuid: "user-completed-turn",
+        cwd: workDir,
+        sessionId: "session-completed-turn",
+        timestamp: "2026-07-11T04:28:46.801Z",
+        message: {
+          model: "claude-opus-4-7",
+          stop_reason: "end_turn",
+          content: [{ type: "text", text: "done" }],
+        },
+      },
+      {
+        type: "system",
+        uuid: "turn-duration-completed-turn",
+        parentUuid: "assistant-completed-turn",
+        cwd: workDir,
+        sessionId: "session-completed-turn",
+        timestamp: "2026-07-11T04:28:46.808Z",
+        subtype: "turn_duration",
+        durationMs: 3_217,
+      },
+    ]);
+
+    const record = findClaudeStoredSessionRecord("session-completed-turn", workDir);
+    assert.ok(record);
+    const page = getClaudeStoredSessionHistoryPage({
+      sessionId: "replay-completed-turn",
+      record,
+      limit: 100,
+    });
+    const assistant = page.events.find(
+      (event) =>
+        event.type === "timeline.item.added" &&
+        event.payload.item.kind === "assistant_message",
+    );
+    assert.ok(assistant);
+    if (
+      assistant.type === "timeline.item.added" &&
+      assistant.payload.item.kind === "assistant_message"
+    ) {
+      assert.equal(assistant.payload.item.phase, "final_answer");
+    }
+    const completed = page.events.find((event) => event.type === "turn.completed");
+    assert.ok(completed);
+    if (completed.type === "turn.completed") {
+      assert.equal(completed.payload.durationMs, 3_217);
+      assert.equal(completed.payload.completedAt, "2026-07-11T04:28:46.808Z");
+    }
+  });
+
   test("projects Claude Council channel_post tool results as assistant messages with native model", () => {
     writeClaudeSession("session-council-post.jsonl", [
       {
@@ -859,7 +923,7 @@ describe("Claude session files", () => {
     );
   });
 
-  test("filters Claude interrupt placeholders instead of creating chat notices", () => {
+  test("maps Claude interrupt placeholders to lifecycle without creating chat notices", () => {
     writeClaudeSession("session-interrupted.jsonl", [
       {
         type: "user",
@@ -872,13 +936,14 @@ describe("Claude session files", () => {
         },
       },
       {
-        type: "assistant",
-        uuid: "assistant-interrupted",
+        type: "user",
+        uuid: "user-interrupted-marker",
         cwd: workDir,
         sessionId: "session-interrupted",
         timestamp: "2025-07-19T22:33:01.000Z",
         message: {
-          content: [{ type: "text", text: "[Request interrupted by user]" }],
+          role: "user",
+          content: [{ type: "text", text: "[Request interrupted by user for tool use]" }],
         },
       },
     ]);
@@ -891,7 +956,9 @@ describe("Claude session files", () => {
       limit: 100,
     });
 
-    assert.equal(page.events.some((event) => event.type === "turn.canceled"), false);
+    const canceled = page.events.filter((event) => event.type === "turn.canceled");
+    assert.equal(canceled.length, 1);
+    assert.equal(canceled[0]?.payload.reason, "interrupted");
     assert.equal(
       page.events.some(
         (event) =>

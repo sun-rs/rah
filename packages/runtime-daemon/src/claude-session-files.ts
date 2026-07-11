@@ -113,6 +113,7 @@ type ClaudeRawRecord =
         role?: string;
         content: unknown;
         model?: string;
+        stop_reason?: string | null;
         usage?: ClaudeUsage;
       };
     }
@@ -683,6 +684,32 @@ function translateClaudeRecordsToActivities(
     lastEmittedTimestampMs = nextMs;
     return new Date(nextMs).toISOString();
   };
+  const appendInterruptedTurn = (record: ClaudeRawRecord, recordKeyValue: string): void => {
+    if (latestTurnId === undefined) {
+      return;
+    }
+    activities.push({
+      recordKey: recordKeyValue,
+      meta: {
+        provider: "claude",
+        channel: "structured_persisted",
+        authority: "derived",
+        raw: record,
+        ts: nextTimestamp(record.timestamp),
+      },
+      activity: {
+        type: "turn_canceled",
+        turnId: latestTurnId,
+        reason: "interrupted",
+        ...turnIdentityProps(
+          createStoredClaudeTurnIdentity(
+            latestTurnId,
+            options.providerSessionId ?? record.sessionId,
+          ),
+        ),
+      },
+    });
+  };
   for (const record of records) {
     const key = recordKey(record);
     if (seenKeys.has(key)) {
@@ -768,6 +795,12 @@ function translateClaudeRecordsToActivities(
             activity: projectedActivity,
           });
         }
+      }
+      if (isClaudeInterruptPlaceholderContent(record.message.content)) {
+        if (!alreadyProcessed) {
+          appendInterruptedTurn(record, key);
+        }
+        continue;
       }
       const text = extractUserMessageText(record.message.content);
       if (!text) {
@@ -899,6 +932,7 @@ function translateClaudeRecordsToActivities(
       }
 
       if (isClaudeInterruptPlaceholderContent(record.message.content)) {
+        appendInterruptedTurn(record, key);
         continue;
       }
 
@@ -934,6 +968,9 @@ function translateClaudeRecordsToActivities(
             kind: "assistant_message",
             text,
             messageId: record.uuid,
+            ...(record.message.stop_reason === "end_turn"
+              ? { phase: "final_answer" as const }
+              : {}),
             ...(record.message?.model
               ? {
                   runtimeModel: {
@@ -950,6 +987,36 @@ function translateClaudeRecordsToActivities(
               options.providerSessionId,
               undefined,
               latestTurnId,
+            ),
+          ),
+        },
+      });
+      continue;
+    }
+
+    if (
+      record.type === "system" &&
+      record.subtype === "turn_duration" &&
+      latestTurnId !== undefined
+    ) {
+      activities.push({
+        recordKey: key,
+        meta: {
+          provider: "claude",
+          channel: "structured_persisted",
+          authority: "derived",
+          raw: record,
+          ts: nextTimestamp(record.timestamp),
+        },
+        activity: {
+          type: "turn_completed",
+          turnId: latestTurnId,
+          ...(record.timestamp ? { completedAt: record.timestamp } : {}),
+          ...(record.durationMs !== undefined ? { durationMs: record.durationMs } : {}),
+          ...turnIdentityProps(
+            createStoredClaudeTurnIdentity(
+              latestTurnId,
+              options.providerSessionId ?? record.sessionId,
             ),
           ),
         },

@@ -6,6 +6,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { RuntimeServices } from "./provider-adapter";
 import { OpenCodeStoredHistoryAdapter } from "./opencode-stored-history-adapter";
+import { EventBus } from "./event-bus";
+import { PtyHub } from "./pty-hub";
+import { SessionStore } from "./session-store";
 import {
   archiveOpenCodeStoredSession,
   createOpenCodeStoredSessionFrozenHistoryPageLoader,
@@ -13,6 +16,7 @@ import {
   findOpenCodeStoredSessionRecord,
   getOpenCodeStoredSessionHistoryPage,
   loadOpenCodeStoredMessages,
+  resumeOpenCodeStoredSession,
 } from "./opencode-stored-sessions";
 
 const hasSqlite = (() => {
@@ -132,6 +136,27 @@ test("pages OpenCode stored history through a frozen loader", { skip: !hasSqlite
     assert.deepEqual(timelineItems, [
       { kind: "user_message", text: "Hello", messageId: "msg_user" },
     ]);
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("rehydrates OpenCode history with the stored-history runtime boundary", { skip: !hasSqlite }, () => {
+  const dataDir = createOpenCodeFixture();
+  try {
+    const record = findOpenCodeStoredSessionRecord("ses_active", { dataDir });
+    assert.ok(record);
+    const services = {
+      eventBus: new EventBus(),
+      ptyHub: new PtyHub(),
+      sessionStore: new SessionStore(),
+    };
+    const resumed = resumeOpenCodeStoredSession({ services, record });
+    const session = services.sessionStore.getSession(resumed.sessionId)?.session;
+
+    assert.equal(session?.runtime?.kind, "stored_history");
+    assert.equal(session?.runtime?.structuredLiveEvents, false);
+    assert.equal(session?.runtime?.liveSource, "provider_history");
   } finally {
     rmSync(dataDir, { recursive: true, force: true });
   }

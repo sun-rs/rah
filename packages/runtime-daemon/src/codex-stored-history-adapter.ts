@@ -28,17 +28,23 @@ import {
 } from "./provider-resume";
 import { movePathToTrash } from "./trash";
 import { CodexTurnDirectoryStore } from "./codex-turn-directory";
-import { readCodexTurnHistory } from "./codex-turn-history";
+import {
+  readCodexConversationTurnDetail,
+  readCodexTurnHistory,
+} from "./codex-turn-history";
 import { createCodexAppServerClient } from "./codex-app-server-client";
 import type { CodexAppServerRpcClient } from "./codex-live-rpc";
 import {
   materializeCodexAppServerTurnsPage,
+  materializeCodexAppServerItemDetail,
+  materializeCodexAppServerTurnItems,
+  type CodexAppServerItemsPage,
   type CodexAppServerTurnsPage,
 } from "./codex-app-server-turns-page";
 
-function isUnsupportedTurnsListError(error: unknown): boolean {
+function isUnsupportedExperimentalListError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  return /method not found|unknown method|experimental api/i.test(message);
+  return /method not found|unknown method|not supported|experimental api/i.test(message);
 }
 
 function isBrokenPagingTransport(error: unknown): boolean {
@@ -56,6 +62,7 @@ export class CodexStoredHistoryAdapter
   private readonly rehydratedSessionIds = new Set<string>();
   private readonly turnDirectories = new CodexTurnDirectoryStore();
   private turnsListSupport: "unknown" | "available" | "unavailable" = "unknown";
+  private itemsListSupport: "unknown" | "available" | "unavailable" = "unknown";
   private pagingClient: CodexAppServerRpcClient | undefined;
   private pagingClientPromise: Promise<CodexAppServerRpcClient> | undefined;
 
@@ -136,7 +143,7 @@ export class CodexStoredHistoryAdapter
           sortDirection: "desc",
           itemsView: "summary",
         },
-        30_000,
+        8_000,
       )) as CodexAppServerTurnsPage;
       if (!Array.isArray(raw?.data)) {
         throw new Error("Codex thread/turns/list returned an invalid page.");
@@ -148,14 +155,83 @@ export class CodexStoredHistoryAdapter
         page: raw,
       });
     } catch (error) {
-      if (isUnsupportedTurnsListError(error)) {
+      if (isUnsupportedExperimentalListError(error)) {
         this.turnsListSupport = "unavailable";
+        console.warn("[rah] Codex native turn paging is unavailable; using rollout fallback", {
+          providerSessionId: record.ref.providerSessionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      } else {
+        console.warn("[rah] Codex native turn paging failed; using rollout fallback", {
+          providerSessionId: record.ref.providerSessionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
       if (isBrokenPagingTransport(error)) {
         await this.resetPagingClient();
       }
       return undefined;
     }
+  }
+
+  async getSessionConversationItemDetail(
+    sessionId: string,
+    options: { providerTurnId: string; providerItemId: string },
+  ): Promise<SessionHistoryPageResponse | undefined> {
+    const record = this.findRecordForRuntimeSession(sessionId);
+    if (!record) {
+      return undefined;
+    }
+    const items = await this.listNativeTurnItems(
+      record,
+      options.providerTurnId,
+      options.providerItemId,
+    );
+    const item = items?.find(
+      (candidate) =>
+        candidate !== null &&
+        typeof candidate === "object" &&
+        !Array.isArray(candidate) &&
+        (candidate as Record<string, unknown>).id === options.providerItemId,
+    );
+    if (item === undefined) {
+      return undefined;
+    }
+    return materializeCodexAppServerItemDetail({
+      sessionId,
+      providerSessionId: record.ref.providerSessionId,
+      providerTurnId: options.providerTurnId,
+      item,
+    });
+  }
+
+  async getSessionConversationTurnDetail(
+    sessionId: string,
+    options: { providerTurnId: string },
+  ): Promise<SessionHistoryPageResponse | undefined> {
+    const record = this.findRecordForRuntimeSession(sessionId);
+    if (!record) {
+      return undefined;
+    }
+    const nativeItems = await this.listNativeTurnItems(record, options.providerTurnId);
+    if (nativeItems !== undefined) {
+      return materializeCodexAppServerTurnItems({
+        sessionId,
+        providerSessionId: record.ref.providerSessionId,
+        providerTurnId: options.providerTurnId,
+        items: nativeItems,
+      });
+    }
+    const range = await this.turnDirectories.getTurnRange(record, options.providerTurnId);
+    if (!range) {
+      return undefined;
+    }
+    return await readCodexConversationTurnDetail({
+      sessionId,
+      turnId: options.providerTurnId,
+      record,
+      range,
+    });
   }
 
   createFrozenHistoryPageLoader(sessionId: string) {
@@ -253,6 +329,75 @@ export class CodexStoredHistoryAdapter
     this.pagingClient = undefined;
     this.pagingClientPromise = undefined;
     await client?.dispose().catch(() => undefined);
+  }
+
+  private async listNativeTurnItems(
+    record: CodexStoredSessionRecord,
+    providerTurnId: string,
+    stopAtItemId?: string,
+  ): Promise<unknown[] | undefined> {
+    if (this.itemsListSupport === "unavailable") {
+      return undefined;
+    }
+    try {
+      const client = await this.getPagingClient();
+      const items: unknown[] = [];
+      let cursor: string | undefined;
+      const seenCursors = new Set<string>();
+      for (let pageIndex = 0; pageIndex < 100; pageIndex += 1) {
+        const raw = (await client.request(
+          "thread/items/list",
+          {
+            threadId: record.ref.providerSessionId,
+            turnId: providerTurnId,
+            ...(cursor ? { cursor } : {}),
+            limit: 100,
+            sortDirection: "asc",
+          },
+          8_000,
+        )) as CodexAppServerItemsPage;
+        if (!Array.isArray(raw?.data)) {
+          throw new Error("Codex thread/items/list returned an invalid page.");
+        }
+        this.itemsListSupport = "available";
+        items.push(...raw.data);
+        if (
+          stopAtItemId &&
+          raw.data.some(
+            (candidate) =>
+              candidate !== null &&
+              typeof candidate === "object" &&
+              !Array.isArray(candidate) &&
+              (candidate as Record<string, unknown>).id === stopAtItemId,
+          )
+        ) {
+          return items;
+        }
+        cursor = typeof raw.nextCursor === "string" && raw.nextCursor ? raw.nextCursor : undefined;
+        if (!cursor) {
+          return items;
+        }
+        if (seenCursors.has(cursor)) {
+          throw new Error("Codex thread/items/list returned a repeated cursor.");
+        }
+        seenCursors.add(cursor);
+      }
+      throw new Error("Codex thread/items/list exceeded the paging limit.");
+    } catch (error) {
+      if (isUnsupportedExperimentalListError(error)) {
+        this.itemsListSupport = "unavailable";
+      }
+      console.warn("[rah] Codex native item paging failed; using rollout fallback", {
+        providerSessionId: record.ref.providerSessionId,
+        providerTurnId,
+        ...(stopAtItemId ? { providerItemId: stopAtItemId } : {}),
+        error: error instanceof Error ? error.message : String(error),
+      });
+      if (isBrokenPagingTransport(error)) {
+        await this.resetPagingClient();
+      }
+      return undefined;
+    }
   }
 
   private findRecordForRuntimeSession(sessionId: string): CodexStoredSessionRecord | undefined {
